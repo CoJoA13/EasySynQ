@@ -169,11 +169,20 @@ async def test_decision_idempotency(
     # Exactly one signature_event despite the replay — no double-write.
     assert await _signature_count(version_id, SignatureMeaning.approval) == 1
 
-    # A different decision (no/!= key) on the now-DONE task conflicts.
+    # A second decision with NO key on the now-DONE task conflicts.
     conflict = await app_client.post(
         f"/api/v1/tasks/{task_id}/decision", headers=hb, json={"outcome": "approve"}
     )
     assert conflict.status_code == 409, conflict.text
+    # A second decision with a DIFFERENT key also conflicts (it is not a replay of the original).
+    other = await app_client.post(
+        f"/api/v1/tasks/{task_id}/decision",
+        headers={**hb, "Idempotency-Key": uuid.uuid4().hex},
+        json={"outcome": "approve"},
+    )
+    assert other.status_code == 409, other.text
+    # Still exactly one signature — neither conflicting retry wrote a second.
+    assert await _signature_count(version_id, SignatureMeaning.approval) == 1
 
 
 async def test_changes_requested_returns_to_draft_without_signature(
@@ -221,8 +230,10 @@ async def test_decision_rolls_back_as_one_unit(
     token_factory: Callable[..., str],
     subj: SimpleNamespace,
 ) -> None:
-    """A fault after the signature is added (before commit) rolls the WHOLE decision back: no
-    signature_event, no task_outcome, the version still InReview, the task still PENDING."""
+    """A fault raised after the signature_event is staged (and after approve() mutated the version
+    in-session) but before commit rolls the unit back. The load-bearing assertions: the staged
+    signature_event did NOT persist and the version is still InReview (the FSM mutation reverted).
+    The task_outcome/PENDING checks corroborate (those writes had not run at fault time)."""
     from easysynq_api.services.vault import DbSignatureEventSink, get_vault_signature_sink
 
     class _FaultSink:

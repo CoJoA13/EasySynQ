@@ -185,9 +185,10 @@ async def approve(
     *,
     effective_from: datetime.datetime | None = None,
 ) -> TransitionResult:
-    """T4 (InReview → Approved). Records the planned ``effective_from`` (R8: stored ``timestamptz``
-    in UTC; defaults to now → immediate release). **Mutate-only** — the decision handler commits,
-    emits ``signature_event(meaning=approval)``, writes the ``task_outcome``, and audits."""
+    """T4 (InReview → Approved). Records an optional *scheduled* ``effective_from`` (R8: stored
+    ``timestamptz`` in UTC); left NULL for an immediate approval (release is then a separate
+    SoD-2-gated act, not a Beat auto-release). **Mutate-only** — the decision handler commits, emits
+    ``signature_event(meaning=approval)``, writes the ``task_outcome``, and audits."""
     transition = apply_transition(doc.current_state, Action.approve)
     version = await repository.latest_version(session, doc.id)
     new_state = transition.to_version_state
@@ -200,7 +201,11 @@ async def approve(
             Action.approve, doc.current_state, allowed_actions(doc.current_state)
         )
     version.version_state = new_state
-    version.effective_from = effective_from or _now()
+    # Only a *scheduled* (explicit future) effective_from makes a version Beat-eligible. Immediate
+    # approval leaves it NULL, so the Beat sweep (which filters effective_from IS NOT NULL) never
+    # auto-releases it — release stays a separate SoD-2-gated act (else allow_approver_release=False
+    # is defeated by the sweep). The cutover sets effective_from at release.
+    version.effective_from = effective_from
     doc.current_state = transition.to_doc_state
     doc.updated_by = actor.id
     return TransitionResult(doc=doc, version=version, event_type="APPROVED")

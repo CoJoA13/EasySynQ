@@ -17,7 +17,8 @@ invariant* rather than a discipline problem.
   - **S2 — authorization** ✅ — deny-wins PDP/PEP, the closed permission catalog + 8 seeded roles, two-tier grant guard.
   - **S3 — vault** ✅ — document create + the check-out → presigned CAS upload → immutable check-in cycle (MinIO WORM, Redis lock).
   - **S4 — lifecycle** ✅ — the document FSM (Draft→…→Effective) + the atomic single-Effective cutover (SERIALIZABLE + INV-1), 6 named lifecycle actions, R25 singleton index, future-dated Beat sweep.
-  - **S5 — approval + SoD** (next) — the task/route/quorum approval workflow, `signature_event` emission, the separation-of-duties gate.
+  - **S5 — approval + SoD** ✅ — the task/decision approval workflow (`POST /tasks/{id}/decision` writes `signature_event`+`task_outcome`+audit in one txn; tasks-canonical), append-only `signature_event` emission on approve/release/obsolete, and the deny-wins separation-of-duties gate (SoD-1 no self-approval, SoD-2 no self-release, SoD-3 auditor independence).
+  - **S6 — audit** (next) — the partitioned, hash-chained `audit_event` table + off-host checkpoint anchor.
 
   Run it: `just up s`, then open **http://localhost** (dev login `demo` / `Demo-Password-1`).
 

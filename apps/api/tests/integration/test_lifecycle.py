@@ -228,6 +228,49 @@ async def test_future_dated_stays_approved_then_beat_sweep_releases(
     after = await s5.get_version(v["id"])
     assert after.version_state is VersionState.Effective
     assert await _signature_count(uuid.UUID(v["id"]), SignatureMeaning.release) == 1
+    # The Beat release runs as the system principal — no human signer (nullable), system context.
+    async with get_sessionmaker()() as s:
+        sig = (
+            await s.execute(
+                select(SignatureEventRow).where(
+                    SignatureEventRow.signed_object_id == uuid.UUID(v["id"]),
+                    SignatureEventRow.meaning == SignatureMeaning.release,
+                )
+            )
+        ).scalar_one()
+        assert sig.signer_user_id is None
+        assert (sig.auth_context or {}).get("system") is True
+
+
+async def test_immediate_approval_is_not_auto_released_by_beat(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    """SoD-2 guard: an immediately-approved version (no effective_from) is NOT Beat-eligible —
+    release stays a separate, SoD-gated act so allow_approver_release=False requires a separate
+    releaser (the Beat must not auto-release what the sole approver was just 403'd from)."""
+    await s5.grant_lifecycle(subj.a)
+    await s5.grant_role(subj.b, "Approver")
+    await s5.set_approver_release(await s5.default_org_id(), False)
+    ha, hb = _auth(token_factory, subj.a), _auth(token_factory, subj.b)
+    did = await s5.drive_to_approved(app_client, ha, hb, await s5.type_id("SOP"), b"beat-guard")
+
+    from easysynq_api.services.vault import release_due
+
+    released = await release_due()
+
+    async with get_sessionmaker()() as s:
+        version_id = (
+            await s.execute(
+                select(DocumentVersion.id)
+                .where(DocumentVersion.document_id == uuid.UUID(did))
+                .order_by(DocumentVersion.version_seq.desc())
+                .limit(1)
+            )
+        ).scalar_one()
+        doc = await s.get(DocumentedInformation, uuid.UUID(did))
+    assert version_id not in released
+    assert doc.current_state is DocumentCurrentState.Approved  # NOT auto-released
+    assert await s5.effective_count(did) == 0
 
 
 async def test_start_revision_opens_under_revision(
