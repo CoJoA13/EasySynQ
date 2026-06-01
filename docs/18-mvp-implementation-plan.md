@@ -1,10 +1,11 @@
 # EasySynQ — MVP Implementation Plan (for approval)
 
-> **Status: APPROVED (2026-05-31) and IN BUILD.** Slices **S0–S3 are shipped to `main`** (each via PR, all CI
-> green, validated on the real Docker stack); **S4 (Lifecycle) is next.** This document is the build guide; the
+> **Status: APPROVED (2026-05-31) and IN BUILD.** Slices **S0–S4 are shipped to `main`** (each via PR, all CI
+> green, validated on the real Docker stack); **S5 (Approval + SoD) is next.** This document is the build guide; the
 > Decisions Register remains authoritative where they differ, and a few canon reconciliations were made during the
 > build (see CLAUDE.md "Current status" and the per-slice memory for the exact decisions, e.g. `documented_information`
-> collapse, `role_grant`/`role_assignment` naming, INV-1/R25 indexes deferred to S4, folder_path-as-text).
+> collapse, `role_grant`/`role_assignment` naming, the INV-1/R25 partial indexes (built in S4 with `::enum`-cast
+> predicates to keep `alembic check` clean), folder_path-as-text, and the S4 permission-key reconciliation noted in §1).
 > This turns the `16-roadmap.md` **MVP ("The Controlled Vault, Proven")** into a concrete build plan:
 > repo/monorepo layout + tooling, the Docker Compose dev stack, the Alembic schema derived from
 > `14-data-model.md`, the FastAPI/OpenAPI surface from `15-api-design.md`, the ordered vertical
@@ -50,6 +51,7 @@ seed or the OpenAPI enums becomes a *destructive* migration later.
 | C9 | Authz as a single flat `permission_grant` table | Doc 14 §3 specifies a **richer, already-reconciled** model: `role` + `role_grant` + `role_assignment` + `permission` + `permission_override` (carries `valid_from/valid_until/predicates/require_reason`) + `scope` (ABAC predicates) + `delegation` + `guest_grant` + `sod_constraint`. The "missing time-box columns" the drafts flagged already exist here. **Build the doc-14 model** (see §11 D-2 for the MVP reduction). | doc 14 §3 |
 | C10 | `change_reason` the only mandatory check-in field | **INV-3** requires **both** non-empty `change_reason` **and** `change_significance` (enum `MAJOR`/`MINOR`) at check-in, else 422. | doc 14 §5.3; doc 15 line 337 |
 | C11 | docs/11 cited as UI source-of-truth | **docs/11 is the one section NOT back-propagated by the reconcile pass** (per docs/17): it still carries the old 8-step wizard, 24h lock, 5-state palette. Use **R4+doc 08** (10-step wizard), **R24** (8h lock), **R1** (7-state). The Register supersedes docs/11 wherever they conflict. | docs/17; R1/R4/R24 |
+| C12 | doc-15 §8.5 lists `document.edit` for `submit-review` and `document.checkout + document.revise` for `start-revision` | **Surfaced + fixed in the S4 build.** `submit-review` uses **`document.submit`** (doc-07 has the dedicated key; doc-04 T2/T9 uses it — doc-15 §8.5 corrected). `start-revision` uses **`document.edit`** — there is **no `document.revise`** key in the closed catalog (per C8), and the lock is acquired mechanically. The six S4 actions therefore use doc-07-catalog keys verbatim: submit/approve/review/release/edit/obsolete. | doc 07 §3.1; doc 04 T2/T7/T9; doc 15 §8.5 (corrected) |
 
 ---
 

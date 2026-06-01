@@ -47,9 +47,20 @@ Docker stack):**
   endpoints; PEP async resource-scope resolvers. Proofs: re-checkin-identical-bytes=no-new-version, INV-3 422,
   double-checkout 409 lock_conflict, break-lock-preserves-scratch + LOCK_BROKEN, WORM-before-version, presigned I/O.
 
-**Next slice: S4 — Lifecycle [AC#1]** (FSM `Draft→InReview→Approved→Effective`; the atomic single-Effective cutover
-+ INV-1 partial unique index — created in S4 where it's exercised; two parallel `release` txns → exactly one Effective;
-submit-review requires ≥1 `clause_mapping`). S4 also adds the R25 singleton index and the reserved-now lifecycle FKs.
+- **S4 — Lifecycle [AC#1]** ✅ — the document FSM + the single-Effective invariant. Pure FSM (`domain/vault/lifecycle.py`,
+  doc-state-keyed) for T1–T4/T6/T7/T9–T12 (T5/T8 deferred); 6 named POST actions (submit-review/approve/request-changes/
+  release/start-revision/obsolete, doc-07 keys, never PATCH status=); the **atomic release cutover** in a dedicated
+  SERIALIZABLE session (`SELECT … FOR UPDATE` + flush-prior-before-promote + the INV-1 partial unique index → 409 on the
+  concurrent loser); `0007_lifecycle` wires the lifecycle FKs + the INV-1 and R25 partial indexes (enum-cast predicates,
+  `alembic check` clean); a minimal Celery **Beat sweep** activates future-dated releases. Seams kept clean: `signature_event`
+  emission + SoD → **S5** (no-op `SignatureEventSink` wired); the ≥1 `clause_mapping` submit gate → **S9** (`# S9:` seam);
+  `audit_event` writer → **S6**. Proofs: `test_release_supersedes` [AC#1a], `test_two_effective_impossible` [AC#1b, real
+  concurrent connections], + the pure-FSM unit suite, illegal-transition 409, future-dated+Beat, start-revision, obsolete, R25 singleton.
+
+**Next slice: S5 — Approval + SoD** (the task/route/quorum approval workflow via `POST /tasks/{id}/decision`; the
+`signature_event` table + its emission on approve/release/obsolete; the **SoD gate** wired into the PDP's currently no-op
+`_evaluate_sod` step; the `record` extension table). S4 left the clean seams (the `SignatureEventSink`, `sig_hook` keys,
+and the direct approve/request-changes actions S5's task flow becomes the richer trigger for).
 
 ## Building the MVP (dev workflow)
 
