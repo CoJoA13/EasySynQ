@@ -64,6 +64,22 @@ def _body(
 
 
 def register_exception_handlers(app: FastAPI) -> None:
+    from .domain.vault.lifecycle import IllegalTransition
+
+    @app.exception_handler(IllegalTransition)
+    async def _illegal_transition(request: Request, exc: Exception) -> JSONResponse:
+        illegal = cast(IllegalTransition, exc)
+        body = _body(
+            status=409,
+            code="invalid_state_transition",
+            title=f"Illegal lifecycle transition: {illegal.action.value}",
+            instance=str(request.url.path),
+            detail=f"not legal from current_state={illegal.doc_state.value}",
+        )
+        # allowed_transitions lets the client correct without guessing (doc 15 §4).
+        body["allowed_transitions"] = illegal.allowed
+        return JSONResponse(status_code=409, media_type=PROBLEM_MEDIA_TYPE, content=body)
+
     @app.exception_handler(ProblemException)
     async def _problem(request: Request, exc: Exception) -> JSONResponse:
         problem = cast(ProblemException, exc)

@@ -14,7 +14,17 @@ import datetime
 import uuid
 from typing import Any
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Text, UniqueConstraint, func
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    Text,
+    UniqueConstraint,
+    func,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -32,6 +42,16 @@ class DocumentVersion(Base):
     __table_args__ = (
         UniqueConstraint(
             "document_id", "version_seq", name="uq_document_version_document_id_version_seq"
+        ),
+        # INV-1 (single-Effective): at most one Effective version per document. The hard
+        # concurrency backstop for AC#1b — two parallel releases cannot both commit Effective.
+        # The predicate carries the explicit ``::version_state`` cast PostgreSQL stores, so this
+        # declaration matches the live index byte-for-byte and ``alembic check`` stays clean.
+        Index(
+            "uq_document_version_one_effective",
+            "document_id",
+            unique=True,
+            postgresql_where=text("version_state = 'Effective'::version_state"),
         ),
     )
 
@@ -68,8 +88,10 @@ class DocumentVersion(Base):
         DateTime(timezone=True), nullable=True
     )  # reserved (S4)
     superseded_by_version_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), nullable=True
-    )  # reserved (S4): self-FK + supersession chain land with the lifecycle slice
+        UUID(as_uuid=True),
+        ForeignKey("document_version.id", ondelete="RESTRICT"),
+        nullable=True,
+    )  # S4: forward link in the supersession chain (set on the prior version at cutover)
     imported: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     author_user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("app_user.id", ondelete="RESTRICT"), nullable=False

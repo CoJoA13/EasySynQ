@@ -18,5 +18,11 @@ app.conf.update(
     task_acks_late=True,
     timezone="UTC",
     enable_utc=True,
-    beat_schedule={},  # populated in S6/S7 (cutover sweep, chain-linker, partition roll, backup)
+    beat_schedule={
+        # S4: future-dated release sweep — activate Approved versions whose effective_from arrived.
+        "release-due-versions": {
+            "task": "easysynq.release_due_versions",
+            "schedule": 300.0,  # every 5 minutes
+        },
+    },
 )

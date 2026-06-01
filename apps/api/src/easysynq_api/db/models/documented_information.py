@@ -15,7 +15,7 @@ from __future__ import annotations
 import datetime
 import uuid
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Text, UniqueConstraint, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Text, UniqueConstraint, func, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -35,6 +35,18 @@ class DocumentedInformation(Base):
     __table_args__ = (
         UniqueConstraint(
             "org_id", "identifier", name="uq_documented_information_org_id_identifier"
+        ),
+        # R25 singleton: at most one Effective instance per (org, document_type) AT A TIME
+        # (Quality Policy / Scope Statement) — a draft successor may coexist while the current
+        # governs. The predicate carries the explicit enum cast PG stores so alembic check is clean.
+        Index(
+            "uq_doc_info_singleton_effective",
+            "org_id",
+            "document_type_id",
+            unique=True,
+            postgresql_where=text(
+                "current_state = 'Effective'::document_current_state AND is_singleton = true"
+            ),
         ),
     )
 
@@ -62,8 +74,17 @@ class DocumentedInformation(Base):
     )
     is_singleton: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     current_effective_version_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), nullable=True
-    )  # reserved (S4): the FK + single-Effective cutover land with the lifecycle slice
+        UUID(as_uuid=True),
+        # Explicit name: the convention's fk_{table}_{col}_{reftable} would be 71 chars (> PG's
+        # 63-char identifier limit), so name it here and identically in 0007 (54 chars).
+        ForeignKey(
+            "document_version.id",
+            ondelete="RESTRICT",
+            name="fk_documented_information_current_effective_version_id",
+            use_alter=True,  # cycle-closing back edge (doc↔version) — break the metadata sort cycle
+        ),
+        nullable=True,
+    )  # S4: the single governing Effective version (set atomically at the release cutover)
     classification: Mapped[Classification] = mapped_column(
         classification_enum, default=Classification.Internal, nullable=False
     )

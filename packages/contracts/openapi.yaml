@@ -527,6 +527,170 @@ paths:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
 
+  # --- lifecycle (S4): named POST action sub-resources; never PATCH status= -----------------
+  /documents/{document_id}/submit-review:
+    post:
+      tags: [documents]
+      operationId: submitReview
+      summary: "Draft→InReview (T2) / UnderRevision→InReview (T9). Needs document.submit."
+      description: "The >=1 clause_mapping precondition (doc 15 §8.5) lands with the IA slice (S9); not enforced in S4."
+      parameters:
+        - { name: document_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: The document.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Document" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409":
+          description: Illegal transition (invalid_state_transition; body includes allowed_transitions).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  /documents/{document_id}/approve:
+    post:
+      tags: [documents]
+      operationId: approveDocument
+      summary: "InReview→Approved (T4); records planned effective_from. Needs document.approve."
+      parameters:
+        - { name: document_id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Approve" }
+      responses:
+        "200":
+          description: The document.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Document" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409":
+          description: Illegal transition (invalid_state_transition; body includes allowed_transitions).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  /documents/{document_id}/request-changes:
+    post:
+      tags: [documents]
+      operationId: requestChanges
+      summary: "InReview→Draft (T3) with a required reviewer comment. Needs document.review."
+      parameters:
+        - { name: document_id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RequestChanges" }
+      responses:
+        "200":
+          description: The document.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Document" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409":
+          description: Illegal transition (invalid_state_transition; body includes allowed_transitions).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "422":
+          description: Missing comment (validation_error).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  /documents/{document_id}/release:
+    post:
+      tags: [documents]
+      operationId: releaseDocument
+      summary: "Approved→Effective (T6) — atomic single-Effective cutover (SERIALIZABLE + INV-1). Needs document.release."
+      description: "Supersedes the prior Effective version in one transaction; future-dated versions stay Approved (the Beat sweep activates them). Only Released versions reach the FS mirror."
+      parameters:
+        - { name: document_id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Release" }
+      responses:
+        "200":
+          description: The document (now Effective).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Document" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409":
+          description: Illegal transition (invalid_state_transition), or a concurrent release won (conflict).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "422":
+          description: effective_from is in the future (validation_error) — the version stays Approved.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  /documents/{document_id}/start-revision:
+    post:
+      tags: [documents]
+      operationId: startRevision
+      summary: "Effective→UnderRevision (T7) — opens a working draft while the Effective version keeps governing. Needs document.edit."
+      parameters:
+        - { name: document_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: The document (now UnderRevision).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Document" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409":
+          description: Illegal transition (invalid_state_transition), or already checked out (lock_conflict).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  /documents/{document_id}/obsolete:
+    post:
+      tags: [documents]
+      operationId: obsoleteDocument
+      summary: "Effective→Obsolete (T11), or archive a Superseded version (T12) via version_id. Needs document.obsolete."
+      parameters:
+        - { name: document_id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Obsolete" }
+      responses:
+        "200":
+          description: The document.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Document" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409":
+          description: Illegal transition (invalid_state_transition; body includes allowed_transitions).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "422":
+          description: Missing reason (validation_error).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
   /documents/{document_id}/versions:
     get:
       tags: [documents]
@@ -865,6 +1029,10 @@ components:
         is_singleton: { type: boolean }
         owner_user_id: { type: string, format: uuid }
         framework_id: { type: string, format: uuid }
+        current_effective_version_id:
+          type: [string, "null"]
+          format: uuid
+          description: The single governing Effective version (set at the release cutover), or null.
         created_at: { type: [string, "null"], format: date-time }
 
     DocumentCreate:
@@ -903,6 +1071,18 @@ components:
         source_blob_sha256: { type: string, description: Lowercase-hex SHA-256 (content address). }
         metadata_snapshot: { type: object, additionalProperties: true }
         author_user_id: { type: string, format: uuid }
+        effective_from:
+          type: [string, "null"]
+          format: date-time
+          description: Planned/actual go-live (UTC; R8). Set at approval; the window starts here once Effective.
+        effective_to:
+          type: [string, "null"]
+          format: date-time
+          description: When this version ceased governing — set only when superseded.
+        superseded_by_version_id:
+          type: [string, "null"]
+          format: uuid
+          description: The successor that superseded this version (supersession chain), or null.
         created_at: { type: [string, "null"], format: date-time }
 
     CheckInResult:
@@ -942,6 +1122,42 @@ components:
         change_reason: { type: string, description: "Mandatory, non-empty (INV-3)." }
         change_significance: { type: string, enum: [MAJOR, MINOR], description: Mandatory (INV-3). }
         mime_type: { type: string, default: application/octet-stream }
+
+    Approve:
+      type: object
+      additionalProperties: false
+      properties:
+        effective_from:
+          type: [string, "null"]
+          format: date-time
+          description: "Planned go-live (R8; stored UTC). Omit for immediate release on /release."
+
+    RequestChanges:
+      type: object
+      additionalProperties: false
+      required: [comment]
+      properties:
+        comment: { type: string, description: "Reviewer comment (required, non-empty)." }
+
+    Obsolete:
+      type: object
+      additionalProperties: false
+      required: [reason]
+      properties:
+        reason: { type: string, description: "Obsolescence reason (required, non-empty)." }
+        version_id:
+          type: [string, "null"]
+          format: uuid
+          description: "A Superseded version to archive (T12); omit to obsolete the Effective document (T11)."
+
+    Release:
+      type: object
+      additionalProperties: false
+      properties:
+        version_id:
+          type: [string, "null"]
+          format: uuid
+          description: "The Approved version to release; omit to release the sole Approved version."
 
     WorkingDraft:
       type: object
