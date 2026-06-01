@@ -1,11 +1,13 @@
 # EasySynQ — MVP Implementation Plan (for approval)
 
-> **Status: APPROVED (2026-05-31) and IN BUILD.** Slices **S0–S5 are shipped to `main`** (each via PR, all CI
-> green, validated on the real Docker stack); **S6 (Audit) is next.** This document is the build guide; the
+> **Status: APPROVED (2026-05-31) and IN BUILD.** Slices **S0–S6 are shipped to `main`** (each via PR, all CI
+> green, validated on the real Docker stack); **S7 (Mirror) is next.** This document is the build guide; the
 > Decisions Register remains authoritative where they differ, and a few canon reconciliations were made during the
 > build (see CLAUDE.md "Current status" and the per-slice memory for the exact decisions, e.g. `documented_information`
 > collapse, `role_grant`/`role_assignment` naming, the INV-1/R25 partial indexes (built in S4 with `::enum`-cast
-> predicates to keep `alembic check` clean), folder_path-as-text, and the S4 permission-key reconciliation noted in §1).
+> predicates to keep `alembic check` clean), folder_path-as-text, the S4 permission-key reconciliation noted in §1,
+> and the **S6 DB role separation** — the app/worker/beat run as a non-owner `easysynq_app` role + a dedicated
+> `easysynq_linker`, the structural foundation that makes the append-only audit grant actually bite (AC#6a)).
 > This turns the `16-roadmap.md` **MVP ("The Controlled Vault, Proven")** into a concrete build plan:
 > repo/monorepo layout + tooling, the Docker Compose dev stack, the Alembic schema derived from
 > `14-data-model.md`, the FastAPI/OpenAPI surface from `15-api-design.md`, the ordered vertical

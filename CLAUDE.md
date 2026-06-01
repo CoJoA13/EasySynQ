@@ -120,6 +120,17 @@ vault → atomic swap, mounted read-only; an edited mirror file overwritten on n
   up -d --build`). Open **http://localhost**. Stop with `just down`. A gitignored `.env` holds dev secrets +
   `OIDC_ISSUER=http://localhost/realms/easysynq`. OpenSearch + gotenberg are intentionally not run in MVP dev
   (R34 / not needed until S7).
+- **⚠ S6 `.env` role separation (do this before bringing the stack up for S6+):** `0010` adds DB role separation, so
+  the gitignored `.env` must now point the app at the **non-owner** role (else the running stack still connects as the
+  owner and the append-only grant is a no-op — though CI proves AC#6a regardless). Set
+  `DATABASE_URL=postgresql+psycopg://easysynq_app:<APP_DB_PASSWORD>@postgres:5432/easysynq`, keep
+  `DATABASE_URL_SYNC` on the **owner** `easysynq` (alembic CREATEs the roles), and add
+  `AUDIT_LINKER_DATABASE_URL` (the `easysynq_linker` DSN) + `APP_DB_PASSWORD`/`LINKER_DB_PASSWORD` (matching the
+  DSNs) + `S3_BUCKET_AUDIT_CHECKPOINTS`/`AUDIT_SINK_ACCESS_KEY`/`AUDIT_SINK_SECRET_KEY` — see `.env.example`. Then
+  `just up s --build` (the `migrate` service runs `0010` as the owner → creates `easysynq_app`/`easysynq_linker`
+  before `api`/`worker`/`beat` start as the app role). `minio-init.sh` provisions the `audit-checkpoints` bucket +
+  the scoped `audit-sink` user. The `worker`/`beat` containers now run real tasks (the S6 chain-linker/verify/
+  checkpoint/roll-partitions Beat jobs).
 - **Dev login:** `demo` / `Demo-Password-1` (created at runtime in Keycloak, **not committed**; realm policy
   requires ≥12-char passwords). After a Keycloak container reset, recreate with `kcadm.sh` (`create users -r
   easysynq -s username=demo -s enabled=true` then `set-password`).
