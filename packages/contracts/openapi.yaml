@@ -14,6 +14,7 @@ info:
     document, version, lock, task, audit, and search routers.
   license:
     name: Proprietary
+    identifier: LicenseRef-Proprietary
 servers:
   - url: /api/v1
     description: Versioned QMS surface (behind Caddy; same origin as the SPA).
@@ -28,6 +29,12 @@ tags:
       Authorization admin — the permission catalog, roles, and per-user role/override
       grants. Deny-by-default, deny-wins; reads need role.read/user.read, grants need
       permission.grant (two-tier guard).
+  - name: documents
+    description: >-
+      The controlled vault — documents, the check-out → presigned CAS upload → immutable
+      check-in cycle, break-lock, and version reads. Content I/O is presigned (never proxied);
+      check-in is content-addressed (identical bytes create no new version) and requires a
+      change reason + significance (INV-3).
 
 paths:
   /healthz:
@@ -329,6 +336,247 @@ paths:
         "403": { $ref: "#/components/responses/ProblemResponse" }
         "404": { $ref: "#/components/responses/ProblemResponse" }
 
+  /documents:
+    get:
+      tags: [documents]
+      operationId: listDocuments
+      summary: List documents the caller may read (row-filtered by scope).
+      parameters:
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
+      responses:
+        "200":
+          description: Documents.
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/Document" } }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+    post:
+      tags: [documents]
+      operationId: createDocument
+      summary: Create a Draft document; allocates a {TYPE}-{AREA}-{SEQ} identifier. Needs document.create.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DocumentCreate" }
+      responses:
+        "201":
+          description: The created document.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Document" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "422":
+          description: Validation error.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  /documents/{document_id}:
+    parameters:
+      - { name: document_id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [documents]
+      operationId: getDocument
+      summary: A document's metadata. Needs document.read.
+      responses:
+        "200":
+          description: The document.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Document" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+    patch:
+      tags: [documents]
+      operationId: updateDocumentMetadata
+      summary: Edit metadata (title/folder/classification). Needs document.manage_metadata.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MetadataUpdate" }
+      responses:
+        "200":
+          description: The updated document.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Document" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+
+  /documents/{document_id}/checkout:
+    post:
+      tags: [documents]
+      operationId: checkoutDocument
+      summary: Acquire the exclusive 8h check-out lock. Needs document.checkout.
+      parameters:
+        - { name: document_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: The check-out (working draft).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WorkingDraft" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409":
+          description: Already checked out by another user (lock_conflict).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  /documents/{document_id}/versions:init-upload:
+    post:
+      tags: [documents]
+      operationId: initVersionUpload
+      summary: Step 1 of upload — get a presigned PUT URL (or a dedup hit). Needs document.checkout.
+      parameters:
+        - { name: document_id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/InitUpload" }
+      responses:
+        "200":
+          description: Presigned upload, or a dedup result.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/InitUploadResult" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+
+  /documents/{document_id}/checkin:
+    post:
+      tags: [documents]
+      operationId: checkinDocument
+      summary: Freeze an immutable Draft version (or detect no change). Needs document.edit.
+      parameters:
+        - { name: document_id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CheckIn" }
+      responses:
+        "201":
+          description: The version (change_detected=false means dedup, no new version).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CheckInResult" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409":
+          description: Caller does not hold the check-out (lock_conflict).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "422":
+          description: INV-3 — missing change_reason or change_significance.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  /documents/{document_id}/break-lock:
+    post:
+      tags: [documents]
+      operationId: breakDocumentLock
+      summary: Release the lock without check-in, preserving scratch (R9). Needs document.checkout.
+      parameters:
+        - { name: document_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Lock broken.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [document_id, lock_broken]
+                properties:
+                  document_id: { type: string, format: uuid }
+                  lock_broken: { type: boolean }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+
+  /documents/{document_id}/heartbeat:
+    post:
+      tags: [documents]
+      operationId: heartbeatCheckout
+      summary: Refresh the 8h check-out lock (R24) for a long edit. Needs document.checkout.
+      parameters:
+        - { name: document_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: The refreshed lock TTL.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [document_id, lock_ttl_seconds]
+                properties:
+                  document_id: { type: string, format: uuid }
+                  lock_ttl_seconds: { type: integer, example: 28800 }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409":
+          description: Caller does not hold the check-out (lock_conflict).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  /documents/{document_id}/versions:
+    get:
+      tags: [documents]
+      operationId: listVersions
+      summary: A document's versions, newest first. Needs document.read_draft.
+      parameters:
+        - { name: document_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Versions.
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/DocumentVersion" } }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+
+  /documents/{document_id}/versions/{version_id}:
+    get:
+      tags: [documents]
+      operationId: getVersion
+      summary: A single immutable version. Needs document.read_draft.
+      parameters:
+        - { name: document_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: version_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: The version.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DocumentVersion" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+
+  /documents/{document_id}/versions/{version_id}/download:
+    get:
+      tags: [documents]
+      operationId: downloadVersion
+      summary: A presigned GET URL for a version's bytes (never proxied). Needs document.read_draft.
+      parameters:
+        - { name: document_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: version_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: A short-lived presigned download URL.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VersionDownload" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+
 components:
   securitySchemes:
     keycloak:
@@ -345,32 +593,6 @@ components:
       content:
         application/problem+json:
           schema: { $ref: "#/components/schemas/Problem" }
-
-  parameters:
-    IdempotencyKey:
-      name: Idempotency-Key
-      in: header
-      required: false
-      description: Client-supplied UUID; replays of a mutating POST return the original result.
-      schema: { type: string, format: uuid }
-    IfMatch:
-      name: If-Match
-      in: header
-      required: false
-      description: Strong ETag for optimistic concurrency on metadata updates (412 on mismatch).
-      schema: { type: string }
-    Cursor:
-      name: cursor
-      in: query
-      required: false
-      description: Opaque keyset cursor over (created_at DESC, id DESC).
-      schema: { type: string }
-    Limit:
-      name: limit
-      in: query
-      required: false
-      description: Page size (max 100).
-      schema: { type: integer, minimum: 1, maximum: 100, default: 25 }
 
   schemas:
     Health:
@@ -623,6 +845,124 @@ components:
         permissions:
           type: array
           items: { $ref: "#/components/schemas/EffectivePermissionEntry" }
+
+    Document:
+      type: object
+      additionalProperties: false
+      required: [id, identifier, kind, title, current_state, classification, is_singleton, owner_user_id, framework_id]
+      properties:
+        id: { type: string, format: uuid }
+        identifier: { type: string, example: SOP-PUR-014 }
+        kind: { type: string, enum: [DOCUMENT, RECORD] }
+        title: { type: string }
+        document_type_id: { type: [string, "null"], format: uuid }
+        area_code: { type: [string, "null"] }
+        folder_path: { type: [string, "null"], description: Dotted scope path (e.g. SOPs.Purchasing). }
+        current_state:
+          type: string
+          enum: [Draft, InReview, Approved, Effective, UnderRevision, Superseded, Obsolete]
+        classification: { type: string, enum: [Public, Internal, Confidential, Restricted] }
+        is_singleton: { type: boolean }
+        owner_user_id: { type: string, format: uuid }
+        framework_id: { type: string, format: uuid }
+        created_at: { type: [string, "null"], format: date-time }
+
+    DocumentCreate:
+      type: object
+      additionalProperties: false
+      required: [title, document_type_id]
+      properties:
+        title: { type: string }
+        document_type_id: { type: string, format: uuid }
+        area_code: { type: [string, "null"] }
+        folder_path: { type: [string, "null"] }
+        classification: { type: string, enum: [Public, Internal, Confidential, Restricted], default: Internal }
+
+    MetadataUpdate:
+      type: object
+      additionalProperties: false
+      properties:
+        title: { type: [string, "null"] }
+        folder_path: { type: [string, "null"] }
+        classification: { type: [string, "null"], enum: [Public, Internal, Confidential, Restricted, null] }
+
+    DocumentVersion:
+      type: object
+      additionalProperties: false
+      required: [id, document_id, version_seq, revision_label, version_state, change_significance, change_reason, source_blob_sha256, author_user_id]
+      properties:
+        id: { type: string, format: uuid }
+        document_id: { type: string, format: uuid }
+        version_seq: { type: integer }
+        revision_label: { type: string, example: Rev A }
+        version_state:
+          type: string
+          enum: [Draft, InReview, Approved, Effective, Superseded, Obsolete]
+        change_significance: { type: string, enum: [MAJOR, MINOR] }
+        change_reason: { type: string }
+        source_blob_sha256: { type: string, description: Lowercase-hex SHA-256 (content address). }
+        metadata_snapshot: { type: object, additionalProperties: true }
+        author_user_id: { type: string, format: uuid }
+        created_at: { type: [string, "null"], format: date-time }
+
+    CheckInResult:
+      allOf:
+        - $ref: "#/components/schemas/DocumentVersion"
+        - type: object
+          properties:
+            change_detected:
+              type: boolean
+              description: false means identical bytes were re-checked-in — no new version.
+
+    InitUpload:
+      type: object
+      additionalProperties: false
+      required: [sha256]
+      properties:
+        sha256: { type: string, description: Client-computed lowercase-hex SHA-256 of the bytes. }
+        content_type: { type: string, default: application/octet-stream }
+
+    InitUploadResult:
+      type: object
+      additionalProperties: false
+      required: [dedup, object_key]
+      properties:
+        dedup: { type: boolean, description: true means the bytes are already vaulted — skip the upload. }
+        object_key: { type: string }
+        upload_url:
+          type: [string, "null"]
+          description: A short-lived presigned PUT URL (null when dedup=true). Points at MinIO, not the api.
+
+    CheckIn:
+      type: object
+      additionalProperties: false
+      required: [sha256]
+      properties:
+        sha256: { type: string }
+        change_reason: { type: string, description: "Mandatory, non-empty (INV-3)." }
+        change_significance: { type: string, enum: [MAJOR, MINOR], description: Mandatory (INV-3). }
+        mime_type: { type: string, default: application/octet-stream }
+
+    WorkingDraft:
+      type: object
+      additionalProperties: false
+      required: [id, document_id, checked_out_by, lock_ttl_seconds]
+      properties:
+        id: { type: string, format: uuid }
+        document_id: { type: string, format: uuid }
+        checked_out_by: { type: string, format: uuid }
+        checked_out_at: { type: [string, "null"], format: date-time }
+        source_version_id: { type: [string, "null"], format: uuid }
+        lock_ttl_seconds: { type: integer, example: 28800 }
+
+    VersionDownload:
+      type: object
+      additionalProperties: false
+      required: [download_url]
+      properties:
+        download_url: { type: string, description: "Short-lived presigned GET URL (MinIO, not the api)." }
+        content_type: { type: string }
+        sha256: { type: string }
 
 security:
   - keycloak: []

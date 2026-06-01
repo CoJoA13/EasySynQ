@@ -1,0 +1,81 @@
+"""The documented-information spine (doc 14 §5.1, doc 18 M13).
+
+A single ``kind``-discriminated table; in S3 only ``kind=DOCUMENT`` rows exist. It carries the
+document headline fields (``current_state``, ``is_singleton``, ``classification``) plus the
+identity/scope fields (``identifier``, ``folder_path``, ``document_type_id``). The ``record``
+extension table (record-only columns) lands in S5. ``current_effective_version_id`` is a
+reserved S4 hook (the FK + single-Effective cutover land with the lifecycle slice).
+
+``folder_path`` is stored as ltree-compatible dotted text in S3 (the PDP matches it in Python,
+exactly as in S2); the real ``ltree`` column type + GiST index are an additive later change.
+"""
+
+from __future__ import annotations
+
+import datetime
+import uuid
+
+from sqlalchemy import Boolean, DateTime, ForeignKey, Text, UniqueConstraint, func
+from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.orm import Mapped, mapped_column
+
+from ..base import Base
+from ._vault_enums import (
+    Classification,
+    DocumentCurrentState,
+    DocumentKind,
+    classification_enum,
+    document_current_state_enum,
+    document_kind_enum,
+)
+
+
+class DocumentedInformation(Base):
+    __tablename__ = "documented_information"
+    __table_args__ = (
+        UniqueConstraint(
+            "org_id", "identifier", name="uq_documented_information_org_id_identifier"
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("organization.id", ondelete="RESTRICT"), nullable=False
+    )
+    framework_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("framework.id", ondelete="RESTRICT"), nullable=False
+    )
+    kind: Mapped[DocumentKind] = mapped_column(document_kind_enum, nullable=False)
+    identifier: Mapped[str] = mapped_column(Text, nullable=False)
+    legacy_identifier: Mapped[str | None] = mapped_column(Text, nullable=True)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    document_type_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("document_type.id", ondelete="RESTRICT"), nullable=True
+    )
+    area_code: Mapped[str | None] = mapped_column(Text, nullable=True)
+    owner_user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("app_user.id", ondelete="RESTRICT"), nullable=False
+    )
+    folder_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    current_state: Mapped[DocumentCurrentState] = mapped_column(
+        document_current_state_enum, default=DocumentCurrentState.Draft, nullable=False
+    )
+    is_singleton: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    current_effective_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), nullable=True
+    )  # reserved (S4): the FK + single-Effective cutover land with the lifecycle slice
+    classification: Mapped[Classification] = mapped_column(
+        classification_enum, default=Classification.Internal, nullable=False
+    )
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    created_by: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("app_user.id", ondelete="RESTRICT"), nullable=False
+    )
+    updated_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, onupdate=func.now()
+    )
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("app_user.id", ondelete="RESTRICT"), nullable=True
+    )

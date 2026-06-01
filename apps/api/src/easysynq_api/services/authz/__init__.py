@@ -8,6 +8,7 @@ from .audit import AuthzAuditEvent, AuthzAuditSink, CapturingAuthzAuditSink, Log
 from .pep import (
     assert_can_assign_role,
     assert_can_grant,
+    enforce,
     evaluate,
     get_authz_audit_sink,
     invalidate_user_permissions,
@@ -22,6 +23,7 @@ __all__ = [
     "LoggingAuthzAuditSink",
     "assert_can_assign_role",
     "assert_can_grant",
+    "enforce",
     "evaluate",
     "gather_grants",
     "get_authz_audit_sink",

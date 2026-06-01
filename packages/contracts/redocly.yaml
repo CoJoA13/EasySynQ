@@ -8,6 +8,7 @@ rules:
   operation-operationId: error          # every operation needs a stable operationId (codegen)
   operation-operationId-unique: error
   operation-2xx-response: error
+  operation-4xx-response: off            # health/public probes intentionally declare 2xx only
   no-unused-components: warn
   security-defined: error
 

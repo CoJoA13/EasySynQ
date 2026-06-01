@@ -29,6 +29,7 @@ from .audit import AuthzAuditEvent, AuthzAuditSink, LoggingAuthzAuditSink
 from .repository import gather_grants, get_permission, role_system_domain_keys
 
 ScopeResolver = Callable[[Request], ResourceContext]
+AsyncScopeResolver = Callable[[Request, AsyncSession], Awaitable[ResourceContext]]
 
 _default_sink: AuthzAuditSink = LoggingAuthzAuditSink()
 
@@ -88,13 +89,41 @@ async def evaluate(
     return decision
 
 
+async def enforce(
+    session: AsyncSession,
+    sink: AuthzAuditSink,
+    request: Request,
+    user: AppUser,
+    permission_key: str,
+    resource: ResourceContext,
+    *,
+    sig_hook: bool = False,
+) -> None:
+    """In-handler authorization check (for routes whose scope comes from the request body, e.g.
+    ``POST /documents``): evaluate + audit, raise 403 on deny."""
+    decision = await evaluate(
+        session, sink, request, user, permission_key, resource, sig_hook=sig_hook
+    )
+    if not decision.allow:
+        raise ProblemException(
+            status=403,
+            code="permission_denied",
+            title="Permission denied",
+            detail=f"{permission_key} on {_scope_ref(resource)}",
+        )
+
+
 def require(
     permission_key: str,
     scope_resolver: ScopeResolver = _system_scope,
     *,
     sig_hook: bool = False,
+    async_scope_resolver: AsyncScopeResolver | None = None,
 ) -> Callable[..., Awaitable[AppUser]]:
-    """Build a dependency that enforces ``permission_key`` and returns the caller on allow."""
+    """Build a dependency that enforces ``permission_key`` and returns the caller on allow.
+
+    ``async_scope_resolver`` (when given) loads the resource's scope from the DB — e.g. a
+    document's ARTIFACT id + folder_path + doc-class — before the handler runs."""
 
     async def _dependency(
         request: Request,
@@ -102,17 +131,11 @@ def require(
         session: AsyncSession = Depends(get_session),
         sink: AuthzAuditSink = Depends(get_authz_audit_sink),
     ) -> AppUser:
-        resource = scope_resolver(request)
-        decision = await evaluate(
-            session, sink, request, user, permission_key, resource, sig_hook=sig_hook
-        )
-        if not decision.allow:
-            raise ProblemException(
-                status=403,
-                code="permission_denied",
-                title="Permission denied",
-                detail=f"{permission_key} on {_scope_ref(resource)}",
-            )
+        if async_scope_resolver is not None:
+            resource = await async_scope_resolver(request, session)
+        else:
+            resource = scope_resolver(request)
+        await enforce(session, sink, request, user, permission_key, resource, sig_hook=sig_hook)
         return user
 
     return _dependency

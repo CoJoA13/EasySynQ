@@ -30,6 +30,7 @@ dev = [
   "testcontainers>=4.8",
   "schemathesis>=3.36",
   "datamodel-code-generator>=0.26",
+  "minio>=7.2.20",
 ]
 
 [build-system]
@@ -68,7 +69,7 @@ explicit_package_bases = true
 
 # Third-party libs without bundled type stubs (mypy --strict would otherwise error).
 [[tool.mypy.overrides]]
-module = ["boto3", "boto3.*", "celery", "celery.*", "alembic", "alembic.*", "redis", "redis.*"]
+module = ["boto3", "boto3.*", "botocore", "botocore.*", "celery", "celery.*", "alembic", "alembic.*", "redis", "redis.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
