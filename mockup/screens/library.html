@@ -1,0 +1,298 @@
+<section class="screen" id="screen-library" data-screen="library">
+  <!-- ── PAGE HEADER ─────────────────────────────────────────────────── -->
+  <header class="es-page-header">
+    <div class="es-page-header__main">
+      <nav class="es-breadcrumb">
+        <a>Home</a>
+        <span class="es-breadcrumb__sep">›</span>
+        <a>Library</a>
+        <span class="es-breadcrumb__sep">›</span>
+        <span class="es-breadcrumb__current">All Documents</span>
+      </nav>
+      <h1 class="es-page-header__title">Document Library <span class="es-tag">All Documents</span></h1>
+      <p class="es-page-header__subtitle">Every controlled document — one QMS, viewed through three lenses. Filter by clause, process or lifecycle state.</p>
+    </div>
+    <div class="es-page-header__actions">
+      <button class="es-btn es-btn--secondary">⌕ Find a clause</button>
+      <button class="es-btn es-btn--primary">＋ New Document</button>
+    </div>
+  </header>
+
+  <!-- ── THREE-LENS SWITCHER + DENSITY ──────────────────────────────── -->
+  <div class="es-row es-row--between es-row--wrap es-items-center es-mb-4">
+    <div class="es-segmented" role="tablist" aria-label="Navigation lens">
+      <button class="es-segmented__item is-active" aria-selected="true">⬚ Clause spine</button>
+      <button class="es-segmented__item">⬡ Process map</button>
+      <button class="es-segmented__item">◷ PDCA</button>
+    </div>
+    <div class="es-row es-items-center es-gap-3">
+      <span class="es-caption es-text-muted">Showing 6 of 128 controlled documents</span>
+      <div class="es-segmented" role="group" aria-label="Row density">
+        <button class="es-segmented__item is-active">Comfortable</button>
+        <button class="es-segmented__item">Compact</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── TWO-COLUMN: CLAUSE TREE  +  TABLE ──────────────────────────── -->
+  <div class="es-grid" style="grid-template-columns:264px 1fr;align-items:start;gap:var(--es-gap-5,20px)">
+
+    <!-- ── LEFT: CLAUSE SPINE TREE ─────────────────────────────────── -->
+    <aside class="es-card es-card--flat">
+      <div class="es-card__header">
+        <div class="es-card__title">Clause spine</div>
+        <div class="es-card__subtitle">ISO 9001:2015 · Cl 4–10</div>
+      </div>
+      <div class="es-card__body es-card__body--tight">
+
+        <div class="es-pdca es-pdca--plan es-mb-2">Plan · Cl 4–7</div>
+        <div class="es-clause-item">
+          <span class="es-clause-item__num">4</span>
+          <span class="es-clause-item__main"><span class="es-clause-item__title">Context</span><span class="es-clause-item__sub">9 docs</span></span>
+        </div>
+        <div class="es-clause-item">
+          <span class="es-clause-item__num">5</span>
+          <span class="es-clause-item__main"><span class="es-clause-item__title">Leadership</span><span class="es-clause-item__sub">7 docs</span></span>
+        </div>
+        <div class="es-clause-item">
+          <span class="es-clause-item__num">6</span>
+          <span class="es-clause-item__main"><span class="es-clause-item__title">Planning</span><span class="es-clause-item__sub">11 docs</span></span>
+        </div>
+        <div class="es-clause-item">
+          <span class="es-clause-item__num">7</span>
+          <span class="es-clause-item__main"><span class="es-clause-item__title">Support</span><span class="es-clause-item__sub">23 docs</span></span>
+        </div>
+
+        <div class="es-pdca es-pdca--do es-mt-3 es-mb-2">Do · Cl 8</div>
+        <div class="es-clause-item is-selected" aria-current="true" style="background:var(--es-accent-soft,rgba(80,120,255,.10));border-radius:8px">
+          <span class="es-clause-item__num">8</span>
+          <span class="es-clause-item__main"><span class="es-clause-item__title">Operation</span><span class="es-clause-item__sub">41 docs · open</span></span>
+        </div>
+        <div class="es-stack es-gap-1" style="margin-left:30px">
+          <div class="es-clause-item">
+            <span class="es-clause-item__num">8.4</span>
+            <span class="es-clause-item__main"><span class="es-clause-item__title">External providers <span class="es-text-warning" title="ISO mandatory">★</span></span><span class="es-clause-item__sub">6 docs</span></span>
+          </div>
+          <div class="es-clause-item">
+            <span class="es-clause-item__num">8.5</span>
+            <span class="es-clause-item__main"><span class="es-clause-item__title">Production &amp; service</span><span class="es-clause-item__sub">14 docs</span></span>
+          </div>
+          <div class="es-clause-item">
+            <span class="es-clause-item__num">8.6</span>
+            <span class="es-clause-item__main"><span class="es-clause-item__title">Release of products</span><span class="es-clause-item__sub">5 docs</span></span>
+          </div>
+        </div>
+
+        <div class="es-pdca es-pdca--check es-mt-3 es-mb-2">Check · Cl 9</div>
+        <div class="es-clause-item">
+          <span class="es-clause-item__num">9</span>
+          <span class="es-clause-item__main"><span class="es-clause-item__title">Performance eval</span><span class="es-clause-item__sub">18 docs</span></span>
+        </div>
+
+        <div class="es-pdca es-pdca--act es-mt-3 es-mb-2">Act · Cl 10</div>
+        <div class="es-clause-item">
+          <span class="es-clause-item__num">10</span>
+          <span class="es-clause-item__main"><span class="es-clause-item__title">Improvement</span><span class="es-clause-item__sub">8 docs</span></span>
+        </div>
+      </div>
+    </aside>
+
+    <!-- ── RIGHT: FACETED FILTERS + TABLE ──────────────────────────── -->
+    <div class="es-stack es-gap-4">
+
+      <!-- Faceted filter bar -->
+      <div class="es-panel">
+        <div class="es-row es-row--wrap es-items-center es-gap-3">
+          <span class="es-caption es-text-muted es-mono">Filters</span>
+          <div class="es-field" style="min-width:140px;margin:0">
+            <select class="es-select es-select--sm" aria-label="Type">
+              <option>Type: All</option><option>Policy</option><option>Procedure (SOP)</option><option>Work Instruction</option><option>Form</option>
+            </select>
+          </div>
+          <div class="es-field" style="min-width:140px;margin:0">
+            <select class="es-select es-select--sm" aria-label="Status">
+              <option>Status: All</option><option>Draft</option><option>In Review</option><option>Approved</option><option>Effective</option><option>Under Revision</option><option>Superseded</option><option>Obsolete</option>
+            </select>
+          </div>
+          <div class="es-field" style="min-width:140px;margin:0">
+            <select class="es-select es-select--sm" aria-label="Owner">
+              <option>Owner: All</option><option>Diego (Process Owner)</option><option>Priya (Author)</option><option>Mara (Quality Mgr)</option>
+            </select>
+          </div>
+          <div class="es-field" style="min-width:130px;margin:0">
+            <select class="es-select es-select--sm" aria-label="Clause">
+              <option>Clause: 8.x</option><option>8.4</option><option>8.5</option><option>8.6</option>
+            </select>
+          </div>
+          <div class="es-field" style="min-width:150px;margin:0">
+            <select class="es-select es-select--sm" aria-label="Date">
+              <option>Effective: Any time</option><option>Last 30 days</option><option>This quarter</option><option>This year</option>
+            </select>
+          </div>
+          <div class="es-grow"></div>
+          <button class="es-btn es-btn--ghost es-btn--sm">Advanced ▾</button>
+        </div>
+
+        <!-- Active filter shelf -->
+        <div class="es-divider"></div>
+        <div class="es-row es-row--wrap es-items-center es-gap-2">
+          <span class="es-caption es-text-muted">Active:</span>
+          <span class="es-tag es-tag--accent">Lens: Clause 8 · Operation <button class="es-tag__remove" aria-label="Remove">✕</button></span>
+          <span class="es-tag">State: Effective <button class="es-tag__remove" aria-label="Remove">✕</button></span>
+          <span class="es-tag">Process: Order Fulfilment <button class="es-tag__remove" aria-label="Remove">✕</button></span>
+          <button class="es-btn es-btn--ghost es-btn--sm es-text-muted">Clear all</button>
+        </div>
+      </div>
+
+      <!-- Documents table -->
+      <div class="es-table-wrap es-table-wrap--scroll">
+        <table class="es-table es-table--zebra">
+          <thead>
+            <tr>
+              <th scope="col" style="width:34px"><input class="es-checkbox" type="checkbox" aria-label="Select all"></th>
+              <th scope="col">Identifier</th>
+              <th scope="col">Title</th>
+              <th scope="col">Type</th>
+              <th scope="col">Owner</th>
+              <th scope="col" aria-sort="none">Clause</th>
+              <th scope="col">State</th>
+              <th scope="col" class="es-td-right">Rev</th>
+              <th scope="col" class="es-td-right" aria-sort="descending">Effective</th>
+              <th scope="col" class="es-td-right">Next review</th>
+            </tr>
+          </thead>
+          <tbody>
+            <!-- Effective -->
+            <tr class="is-selected">
+              <td><input class="es-checkbox" type="checkbox" checked aria-label="Select SOP-PUR-014"></td>
+              <td><span class="es-cell-id">SOP-PUR-014</span></td>
+              <td class="es-table__primary">Purchasing &amp; Supplier Control Procedure
+                <div class="es-table__meta">Order Fulfilment · ISO mandatory ★</div>
+              </td>
+              <td><span class="es-badge es-badge--neutral es-badge--nodot">Procedure</span></td>
+              <td><span class="es-cell-user"><span class="es-avatar es-avatar--xs es-avatar--c1">DG</span> Diego</span></td>
+              <td><span class="es-tag">8.4</span></td>
+              <td><span class="es-badge es-badge--effective">Effective</span></td>
+              <td class="es-td-right es-num es-mono">Rev D</td>
+              <td class="es-td-right es-num">2026-04-02</td>
+              <td class="es-td-right es-num">2027-04-02</td>
+            </tr>
+
+            <!-- In Review -->
+            <tr>
+              <td><input class="es-checkbox" type="checkbox" aria-label="Select WI-PRD-022"></td>
+              <td><span class="es-cell-id">WI-PRD-022</span></td>
+              <td class="es-table__primary">Final Inspection Work Instruction
+                <div class="es-table__meta">Awaiting Ken (Approver) · sent 2026-05-26</div>
+              </td>
+              <td><span class="es-badge es-badge--neutral es-badge--nodot">Work Instruction</span></td>
+              <td><span class="es-cell-user"><span class="es-avatar es-avatar--xs es-avatar--c2">PR</span> Priya</span></td>
+              <td><span class="es-tag">8.6</span></td>
+              <td><span class="es-badge es-badge--inreview">In Review</span></td>
+              <td class="es-td-right es-num es-mono es-text-muted">—</td>
+              <td class="es-td-right es-num es-text-muted">—</td>
+              <td class="es-td-right es-num es-text-muted">—</td>
+            </tr>
+
+            <!-- Draft -->
+            <tr>
+              <td><input class="es-checkbox" type="checkbox" aria-label="Select SOP-PRD-007"></td>
+              <td><span class="es-cell-id">SOP-PRD-007</span></td>
+              <td class="es-table__primary">Production Control SOP
+                <div class="es-table__meta">Checked out by Priya · 2 days</div>
+              </td>
+              <td><span class="es-badge es-badge--neutral es-badge--nodot">Procedure</span></td>
+              <td><span class="es-cell-user"><span class="es-avatar es-avatar--xs es-avatar--c2">PR</span> Priya</span></td>
+              <td><span class="es-tag">8.5</span></td>
+              <td><span class="es-badge es-badge--draft">Draft</span></td>
+              <td class="es-td-right es-num es-mono">Rev 0.3</td>
+              <td class="es-td-right es-num es-text-muted">—</td>
+              <td class="es-td-right es-num es-text-muted">—</td>
+            </tr>
+
+            <!-- Approved -->
+            <tr>
+              <td><input class="es-checkbox" type="checkbox" aria-label="Select WI-PRD-031"></td>
+              <td><span class="es-cell-id">WI-PRD-031</span></td>
+              <td class="es-table__primary">Packaging &amp; Labelling Work Instruction
+                <div class="es-table__meta">Approved by Ken · release scheduled 2026-06-03</div>
+              </td>
+              <td><span class="es-badge es-badge--neutral es-badge--nodot">Work Instruction</span></td>
+              <td><span class="es-cell-user"><span class="es-avatar es-avatar--xs es-avatar--c1">DG</span> Diego</span></td>
+              <td><span class="es-tag">8.5</span></td>
+              <td><span class="es-badge es-badge--approved">Approved</span></td>
+              <td class="es-td-right es-num es-mono">Rev 2.0</td>
+              <td class="es-td-right es-num es-text-muted">pending</td>
+              <td class="es-td-right es-num">2027-06-03</td>
+            </tr>
+
+            <!-- Under Revision -->
+            <tr>
+              <td><input class="es-checkbox" type="checkbox" aria-label="Select POL-QMS-001"></td>
+              <td><span class="es-cell-id">POL-QMS-001</span></td>
+              <td class="es-table__primary">Quality Policy
+                <div class="es-table__meta">Revision opened after Management Review · Mara</div>
+              </td>
+              <td><span class="es-badge es-badge--neutral es-badge--nodot">Policy</span></td>
+              <td><span class="es-cell-user"><span class="es-avatar es-avatar--xs es-avatar--c3">MA</span> Mara</span></td>
+              <td><span class="es-tag">5.2</span></td>
+              <td><span class="es-badge es-badge--underrevision">Under Revision</span></td>
+              <td class="es-td-right es-num es-mono">Rev C</td>
+              <td class="es-td-right es-num">2025-01-15</td>
+              <td class="es-td-right es-num es-text-warning">overdue</td>
+            </tr>
+
+            <!-- Superseded -->
+            <tr>
+              <td><input class="es-checkbox" type="checkbox" aria-label="Select SOP-PUR-014 Rev C"></td>
+              <td><span class="es-cell-id">SOP-PUR-014</span></td>
+              <td class="es-table__primary">Purchasing &amp; Supplier Control Procedure
+                <div class="es-table__meta">Replaced by Rev D · retained for traceability</div>
+              </td>
+              <td><span class="es-badge es-badge--neutral es-badge--nodot">Procedure</span></td>
+              <td><span class="es-cell-user"><span class="es-avatar es-avatar--xs es-avatar--c1">DG</span> Diego</span></td>
+              <td><span class="es-tag">8.4</span></td>
+              <td><span class="es-badge es-badge--superseded">Superseded</span></td>
+              <td class="es-td-right es-num es-mono">Rev C</td>
+              <td class="es-td-right es-num">2025-09-10</td>
+              <td class="es-td-right es-num es-text-muted">—</td>
+            </tr>
+
+            <!-- Obsolete -->
+            <tr>
+              <td><input class="es-checkbox" type="checkbox" aria-label="Select FRM-HR-007"></td>
+              <td><span class="es-cell-id">FRM-HR-007</span></td>
+              <td class="es-table__primary">Training Competency Matrix (legacy)
+                <div class="es-table__meta">Withdrawn 2024-11-30 · read-only</div>
+              </td>
+              <td><span class="es-badge es-badge--neutral es-badge--nodot">Form</span></td>
+              <td><span class="es-cell-user"><span class="es-avatar es-avatar--xs es-avatar--c3">MA</span> Mara</span></td>
+              <td><span class="es-tag">7.2</span></td>
+              <td><span class="es-badge es-badge--obsolete">Obsolete</span></td>
+              <td class="es-td-right es-num es-mono">Rev A</td>
+              <td class="es-td-right es-num es-text-muted">2023-03-01</td>
+              <td class="es-td-right es-num es-text-muted">—</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Pagination footer -->
+      <div class="es-row es-row--between es-items-center es-wrap">
+        <span class="es-caption es-text-muted">Click any row to open the detail drawer · Space to select</span>
+        <div class="es-row es-items-center es-gap-3">
+          <div class="es-field" style="margin:0">
+            <select class="es-select es-select--sm" aria-label="Page size"><option>25 per page</option><option>50 per page</option><option>100 per page</option></select>
+          </div>
+          <div class="es-segmented" role="group" aria-label="Pagination">
+            <button class="es-segmented__item" aria-label="Previous">◂</button>
+            <button class="es-segmented__item is-active">1</button>
+            <button class="es-segmented__item">2</button>
+            <button class="es-segmented__item">3</button>
+            <button class="es-segmented__item" aria-label="Next">▸</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>

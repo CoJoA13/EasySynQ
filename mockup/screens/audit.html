@@ -1,0 +1,362 @@
+<section class="screen" id="screen-audit" data-screen="audit">
+
+  <!-- ============ PAGE HEADER ============ -->
+  <header class="es-page-header">
+    <div class="es-page-header__main">
+      <nav class="es-breadcrumb">
+        <a>Home</a><span class="es-breadcrumb__sep">›</span>
+        <a>CHECK</a><span class="es-breadcrumb__sep">›</span>
+        <a>Performance</a><span class="es-breadcrumb__sep">›</span>
+        <span class="es-breadcrumb__current">Internal Audit</span>
+      </nav>
+      <h1 class="es-page-header__title">
+        Internal Audit Program
+        <span class="es-pdca es-pdca--check">Check</span>
+      </h1>
+      <p class="es-page-header__subtitle">
+        Clause 9.2 — the audit program is maintained as a controlled document; each audit and finding is captured as an immutable record.
+      </p>
+    </div>
+    <div class="es-page-header__actions">
+      <button class="es-btn es-btn--secondary">Audit Program <span class="es-badge es-badge--effective es-badge--nodot">POL-QMS-009 · Rev C</span></button>
+      <button class="es-btn es-btn--primary">＋ Plan audit</button>
+    </div>
+  </header>
+
+  <!-- ============ SUMMARY METRICS ============ -->
+  <div class="es-grid es-grid--4 es-mb-5">
+    <div class="es-metric">
+      <div class="es-metric__top">
+        <span class="es-metric__label">Audits this year</span>
+        <span class="es-metric__icon">◷</span>
+      </div>
+      <div class="es-metric__value">12</div>
+      <div class="es-metric__sub"><span class="es-text-success">5 closed</span> · 1 in progress · 6 planned</div>
+    </div>
+    <div class="es-metric">
+      <div class="es-metric__top">
+        <span class="es-metric__label">Program coverage</span>
+        <span class="es-metric__icon">◌</span>
+      </div>
+      <div class="es-metric__value">42<span class="es-text-muted" style="font-size:0.5em">%</span></div>
+      <div class="es-metric__sub">Clauses 4–10 · on schedule</div>
+    </div>
+    <div class="es-metric">
+      <div class="es-metric__top">
+        <span class="es-metric__label">Open findings</span>
+        <span class="es-metric__icon">⚑</span>
+      </div>
+      <div class="es-metric__value">7</div>
+      <div class="es-metric__sub"><span class="es-metric__delta es-metric__delta--up">▲ 2</span> since last audit</div>
+    </div>
+    <div class="es-metric">
+      <div class="es-metric__top">
+        <span class="es-metric__label">NC → CAPA closure</span>
+        <span class="es-metric__icon">★</span>
+      </div>
+      <div class="es-metric__value">88<span class="es-text-muted" style="font-size:0.5em">%</span></div>
+      <div class="es-metric__sub"><span class="es-text-warning">2 CAPA</span> awaiting verification</div>
+    </div>
+  </div>
+
+  <!-- ============ PROGRAM CALENDAR STRIP ============ -->
+  <div class="es-card es-mb-5">
+    <div class="es-card__header">
+      <div>
+        <div class="es-card__title">Audit Program 2026 — Schedule</div>
+        <div class="es-card__subtitle">Quarterly coverage across processes; one strip per month.</div>
+      </div>
+      <div class="es-row es-gap-3 es-items-center">
+        <span class="es-badge es-badge--success">Q1 complete</span>
+        <span class="es-badge es-badge--info">Q2 in progress</span>
+        <span class="es-badge es-badge--neutral">Q3–Q4 planned</span>
+      </div>
+    </div>
+    <div class="es-card__body">
+      <div class="es-program">
+        <div class="es-program__month">
+          <div class="es-program__label">Jan</div>
+          <div class="es-program__cell">
+            <span class="es-program__event--check es-program__event">A-26-01 · Cl 7.5</span>
+          </div>
+        </div>
+        <div class="es-program__month">
+          <div class="es-program__label">Feb</div>
+          <div class="es-program__cell">
+            <span class="es-program__event--check es-program__event">A-26-02 · Cl 9.1</span>
+          </div>
+        </div>
+        <div class="es-program__month">
+          <div class="es-program__label">Mar</div>
+          <div class="es-program__cell">
+            <span class="es-program__event--check es-program__event">A-26-03 · Cl 8.5</span>
+          </div>
+        </div>
+        <div class="es-program__month is-now">
+          <div class="es-program__label is-now">May · now</div>
+          <div class="es-program__cell">
+            <span class="es-program__event">A-26-07 · Cl 8.4</span>
+          </div>
+        </div>
+        <div class="es-program__month">
+          <div class="es-program__label">Jun</div>
+          <div class="es-program__cell">
+            <span class="es-program__event">A-26-08 · Cl 6.1</span>
+          </div>
+        </div>
+        <div class="es-program__month">
+          <div class="es-program__label">Aug</div>
+          <div class="es-program__cell">
+            <span class="es-program__event">A-26-09 · Cl 8.7</span>
+          </div>
+        </div>
+        <div class="es-program__month">
+          <div class="es-program__label">Oct</div>
+          <div class="es-program__cell">
+            <span class="es-program__event">A-26-10 · Cl 4.4</span>
+          </div>
+        </div>
+        <div class="es-program__month">
+          <div class="es-program__label">Dec</div>
+          <div class="es-program__cell">
+            <span class="es-program__event--act es-program__event">A-26-12 · Cl 10.2</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ TWO-COLUMN: AUDIT LIST + DETAIL ============ -->
+  <div class="es-grid" style="grid-template-columns:1.4fr 1fr">
+
+    <!-- ---- AUDIT LIST ---- -->
+    <div class="es-card">
+      <div class="es-card__header">
+        <div class="es-card__title">Audits</div>
+        <div class="es-segmented">
+          <button class="es-segmented__item is-active">All</button>
+          <button class="es-segmented__item">Active</button>
+          <button class="es-segmented__item">Closed</button>
+        </div>
+      </div>
+      <div class="es-card__body es-card__body--tight">
+        <div class="es-table-wrap">
+          <table class="es-table es-table--zebra">
+            <thead>
+              <tr>
+                <th>Audit</th>
+                <th>Scope</th>
+                <th>Lead</th>
+                <th>State</th>
+                <th class="es-td-right">Date</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr class="is-selected">
+                <td><span class="es-cell-id">A-2026-07</span></td>
+                <td class="es-table__primary">Purchasing &amp; Suppliers
+                  <div class="es-table__meta">Clause 8.4 · SOP-PUR-014</div>
+                </td>
+                <td>
+                  <span class="es-cell-user"><span class="es-avatar es-avatar--xs es-avatar--c2">IN</span>Ingrid</span>
+                </td>
+                <td><span class="es-badge es-badge--info">InProgress</span></td>
+                <td class="es-td-right es-num">May 28</td>
+              </tr>
+              <tr>
+                <td><span class="es-cell-id">A-2026-06</span></td>
+                <td class="es-table__primary">Production Work Instructions
+                  <div class="es-table__meta">Clause 8.5 · WI-PRD-022</div>
+                </td>
+                <td>
+                  <span class="es-cell-user"><span class="es-avatar es-avatar--xs es-avatar--c2">IN</span>Ingrid</span>
+                </td>
+                <td><span class="es-badge es-badge--warning">FindingsDraft</span></td>
+                <td class="es-td-right es-num">May 14</td>
+              </tr>
+              <tr>
+                <td><span class="es-cell-id">A-2026-05</span></td>
+                <td class="es-table__primary">Document Control
+                  <div class="es-table__meta">Clause 7.5 · POL-QMS-001</div>
+                </td>
+                <td>
+                  <span class="es-cell-user"><span class="es-avatar es-avatar--xs es-avatar--c3">OL</span>Olsen</span>
+                </td>
+                <td><span class="es-badge es-badge--accent">Reported</span></td>
+                <td class="es-td-right es-num">Apr 30</td>
+              </tr>
+              <tr>
+                <td><span class="es-cell-id">A-2026-04</span></td>
+                <td class="es-table__primary">Competence &amp; Training
+                  <div class="es-table__meta">Clause 7.2 · FRM-HR-007</div>
+                </td>
+                <td>
+                  <span class="es-cell-user"><span class="es-avatar es-avatar--xs es-avatar--c2">IN</span>Ingrid</span>
+                </td>
+                <td><span class="es-badge es-badge--neutral">Closing</span></td>
+                <td class="es-td-right es-num">Apr 09</td>
+              </tr>
+              <tr>
+                <td><span class="es-cell-id">A-2026-03</span></td>
+                <td class="es-table__primary">Process Performance
+                  <div class="es-table__meta">Clause 9.1 · POL-QMS-009</div>
+                </td>
+                <td>
+                  <span class="es-cell-user"><span class="es-avatar es-avatar--xs es-avatar--c2">IN</span>Ingrid</span>
+                </td>
+                <td><span class="es-badge es-badge--success">Closed</span></td>
+                <td class="es-td-right es-num">Mar 18</td>
+              </tr>
+              <tr>
+                <td><span class="es-cell-id">A-2026-08</span></td>
+                <td class="es-table__primary">Risk &amp; Opportunity
+                  <div class="es-table__meta">Clause 6.1 · POL-QMS-004</div>
+                </td>
+                <td>
+                  <span class="es-cell-user"><span class="es-avatar es-avatar--xs es-avatar--c2">IN</span>Ingrid</span>
+                </td>
+                <td><span class="es-badge es-badge--neutral">Planned</span></td>
+                <td class="es-td-right es-num">Jun 11</td>
+              </tr>
+              <tr>
+                <td><span class="es-cell-id">A-2026-09</span></td>
+                <td class="es-table__primary">Nonconforming Output
+                  <div class="es-table__meta">Clause 8.7 · SOP-QA-031</div>
+                </td>
+                <td>
+                  <span class="es-cell-user"><span class="es-avatar es-avatar--xs es-avatar--c2">IN</span>Ingrid</span>
+                </td>
+                <td><span class="es-badge es-badge--neutral">Scheduled</span></td>
+                <td class="es-td-right es-num">Aug 06</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div class="es-card__footer">
+        <span class="es-small es-text-muted">7 of 12 audits shown · program owner Mara (Quality Manager)</span>
+        <button class="es-btn es-btn--ghost es-btn--sm">View all ▸</button>
+      </div>
+    </div>
+
+    <!-- ---- AUDIT DETAIL SNIPPET ---- -->
+    <div class="es-card es-accent-check">
+      <div class="es-card__header">
+        <div>
+          <div class="es-caption es-text-muted">Audit · A-2026-07</div>
+          <div class="es-card__title">Purchasing &amp; Suppliers</div>
+          <div class="es-card__subtitle">Clause 8.4 · Lead auditor Ingrid · Auditee Diego (Process Owner)</div>
+        </div>
+        <span class="es-badge es-badge--info es-badge--lg">InProgress</span>
+      </div>
+      <div class="es-card__body">
+
+        <!-- record skin: locked / captured-at metadata, no edit -->
+        <dl class="es-dl">
+          <dt>Record</dt>
+          <dd><span class="es-badge es-badge--neutral">🔒 Locked record</span></dd>
+          <dt>Opened</dt>
+          <dd class="es-num">2026-05-28</dd>
+          <dt>Checklist</dt>
+          <dd><span class="es-cell-id">FRM-AUD-002</span> Rev B</dd>
+          <dt>Coverage</dt>
+          <dd><span class="es-confidence-chip es-confidence-chip--medium">●●○ 64% sampled</span></dd>
+        </dl>
+
+        <div class="es-divider"></div>
+
+        <!-- findings list with progressive disclosure -->
+        <div class="es-row es-justify-between es-items-center es-mb-3">
+          <span class="es-h3">Findings <span class="es-text-muted">(3)</span></span>
+          <button class="es-btn es-btn--ghost es-btn--sm">＋ Log finding</button>
+        </div>
+
+        <div class="es-stack es-gap-3">
+
+          <!-- Major NC -> CAPA -->
+          <div class="es-panel">
+            <div class="es-row es-justify-between es-items-center">
+              <span class="es-cell-id">AF-118</span>
+              <span class="es-badge es-badge--danger">Major NC</span>
+            </div>
+            <p class="es-body es-mt-2">Supplier re-evaluation overdue for 2 approved vendors; no objective evidence of periodic review.</p>
+            <div class="es-row es-justify-between es-items-center es-wrap es-mt-2">
+              <span class="es-row es-gap-2"><span class="es-tag">8.4</span><span class="es-tag">SOP-PUR-014</span></span>
+              <a class="es-badge es-badge--accent es-badge--nodot">→ CAPA-031</a>
+            </div>
+          </div>
+
+          <!-- Minor NC -> CAPA -->
+          <div class="es-panel">
+            <div class="es-row es-justify-between es-items-center">
+              <span class="es-cell-id">AF-119</span>
+              <span class="es-badge es-badge--warning">Minor NC</span>
+            </div>
+            <p class="es-body es-mt-2">Approval evidence not consistently linked to the originating purchase order.</p>
+            <div class="es-row es-justify-between es-items-center es-wrap es-mt-2">
+              <span class="es-row es-gap-2"><span class="es-tag">8.4</span><span class="es-tag">FRM-PUR-003</span></span>
+              <a class="es-badge es-badge--accent es-badge--nodot">→ CAPA-033</a>
+            </div>
+          </div>
+
+          <!-- OFI -->
+          <div class="es-panel">
+            <div class="es-row es-justify-between es-items-center">
+              <span class="es-cell-id">AF-120</span>
+              <span class="es-badge es-badge--info">OFI</span>
+            </div>
+            <p class="es-body es-mt-2">Consider automating the supplier scorecard to flag re-evaluation due dates.</p>
+            <div class="es-row es-justify-between es-items-center es-wrap es-mt-2">
+              <span class="es-row es-gap-2"><span class="es-tag">8.4</span></span>
+              <span class="es-small es-text-muted">No CAPA required</span>
+            </div>
+          </div>
+
+          <!-- Observation -->
+          <div class="es-panel">
+            <div class="es-row es-justify-between es-items-center">
+              <span class="es-cell-id">AF-121</span>
+              <span class="es-badge es-badge--neutral">Observation</span>
+            </div>
+            <p class="es-body es-mt-2">Vendor file index is current but stored outside the controlled library.</p>
+            <div class="es-row es-justify-between es-items-center es-wrap es-mt-2">
+              <span class="es-row es-gap-2"><span class="es-tag">8.4</span></span>
+              <span class="es-small es-text-muted">Noted for trend review</span>
+            </div>
+          </div>
+
+        </div>
+
+        <div class="es-divider"></div>
+
+        <!-- audit lifecycle stepper (Scheduled → Closed) -->
+        <div class="es-caption es-text-muted es-mb-3">Audit lifecycle</div>
+        <div class="es-stepper">
+          <div class="es-stepper__step is-done">
+            <div class="es-stepper__rail"><div class="es-stepper__marker">✓</div><div class="es-stepper__line"></div></div>
+            <div class="es-stepper__body"><div class="es-stepper__title">Scheduled &amp; Planned</div><div class="es-stepper__sub">Mara · May 12</div></div>
+          </div>
+          <div class="es-stepper__step is-current">
+            <div class="es-stepper__rail"><div class="es-stepper__marker">2</div><div class="es-stepper__line"></div></div>
+            <div class="es-stepper__body"><div class="es-stepper__title">InProgress — fieldwork &amp; findings</div><div class="es-stepper__sub">Ingrid · since May 28</div></div>
+          </div>
+          <div class="es-stepper__step is-pending">
+            <div class="es-stepper__rail"><div class="es-stepper__marker">3</div><div class="es-stepper__line"></div></div>
+            <div class="es-stepper__body"><div class="es-stepper__title">FindingsDraft → Reported</div></div>
+          </div>
+          <div class="es-stepper__step is-pending">
+            <div class="es-stepper__rail"><div class="es-stepper__marker">4</div></div>
+            <div class="es-stepper__body"><div class="es-stepper__title">Closing → Closed</div><div class="es-stepper__sub">Blocked until NC-CAPAs verified</div></div>
+          </div>
+        </div>
+
+      </div>
+      <div class="es-card__footer">
+        <button class="es-btn es-btn--secondary">View record</button>
+        <button class="es-btn es-btn--primary">Open audit ▸</button>
+      </div>
+    </div>
+
+  </div>
+
+</section>

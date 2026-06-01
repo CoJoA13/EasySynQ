@@ -1,0 +1,329 @@
+<section class="screen" id="screen-dashboard" data-screen="dashboard">
+  <!-- page header -->
+  <header class="es-page-header">
+    <div class="es-page-header__main">
+      <nav class="es-breadcrumb">
+        <a>Home</a>
+        <span class="es-breadcrumb__sep">›</span>
+        <span class="es-breadcrumb__current">Dashboard</span>
+      </nav>
+      <h1 class="es-page-header__title">QMS Health <span class="es-badge es-badge--success es-badge--lg">● Certified-ready</span></h1>
+      <p class="es-page-header__subtitle">Good morning, Mara — a calm PDCA overview of the quality system. Next management review in <b class="es-text-primary">18 days</b> (2026-06-18).</p>
+    </div>
+    <div class="es-page-header__actions">
+      <button class="es-btn es-btn--secondary">Density ▾</button>
+      <button class="es-btn es-btn--primary">＋ New Document</button>
+    </div>
+  </header>
+
+  <!-- ── ROW 1 · metric tiles (summary first) ───────────────────────── -->
+  <div class="es-grid es-grid--4 es-mb-5">
+    <div class="es-metric">
+      <div class="es-metric__top">
+        <span class="es-metric__label">Effective documents</span>
+        <span class="es-metric__icon">★</span>
+      </div>
+      <div class="es-metric__value">128</div>
+      <div class="es-metric__sub"><span class="es-metric__delta es-metric__delta--up">▲ 4</span> released this month</div>
+    </div>
+
+    <div class="es-metric">
+      <div class="es-metric__top">
+        <span class="es-metric__label">Overdue reviews</span>
+        <span class="es-metric__icon">⏱</span>
+      </div>
+      <div class="es-metric__value es-text-warning">2</div>
+      <div class="es-metric__sub"><span class="es-metric__delta es-metric__delta--down">▼ 1</span> vs. last period</div>
+    </div>
+
+    <div class="es-metric">
+      <div class="es-metric__top">
+        <span class="es-metric__label">Pending approvals</span>
+        <span class="es-metric__icon">☑</span>
+      </div>
+      <div class="es-metric__value">3</div>
+      <div class="es-metric__sub"><span class="es-metric__delta es-metric__delta--flat">●</span> oldest waiting 3 days</div>
+    </div>
+
+    <div class="es-metric">
+      <div class="es-metric__top">
+        <span class="es-metric__label">Open CAPAs</span>
+        <span class="es-metric__icon">⚑</span>
+      </div>
+      <div class="es-metric__value es-text-danger">4</div>
+      <div class="es-metric__sub"><span class="es-text-danger">1 aging &gt; 30d</span> · avg age 14d</div>
+    </div>
+  </div>
+
+  <!-- ── ROW 2 · PDCA wheel (counts + RAG only) + side rail ──────────── -->
+  <div class="es-grid es-mb-5" style="grid-template-columns: 1.55fr 1fr;">
+
+    <!-- PDCA wheel: four labelled regions, RAG by icon + text -->
+    <nav class="es-pdca-wheel" aria-label="PDCA health wheel">
+
+      <!-- PLAN -->
+      <div class="es-quadrant es-accent-plan">
+        <div class="es-quadrant__head">
+          <div class="es-quadrant__id">
+            <span class="es-quadrant__letter">P</span>
+            <div>
+              <div class="es-quadrant__phase">Plan · Cl 4–7</div>
+              <div class="es-quadrant__title">Context &amp; Objectives</div>
+            </div>
+          </div>
+          <button class="es-btn es-btn--ghost es-btn--sm">Open ▸</button>
+        </div>
+        <div class="es-quadrant__body">
+          <ul class="es-quadrant__list">
+            <li class="es-quadrant__item"><span>● Quality objectives on target</span><span class="es-badge es-badge--success">6 / 7</span></li>
+            <li class="es-quadrant__item"><span>▲ Document reviews overdue</span><span class="es-badge es-badge--warning">2</span></li>
+            <li class="es-quadrant__item"><span>● High risks open (6.1)</span><span class="es-badge es-badge--success es-badge--nodot">0</span></li>
+          </ul>
+        </div>
+      </div>
+
+      <!-- DO -->
+      <div class="es-quadrant es-accent-do">
+        <div class="es-quadrant__head">
+          <div class="es-quadrant__id">
+            <span class="es-quadrant__letter">D</span>
+            <div>
+              <div class="es-quadrant__phase">Do · Cl 7–8</div>
+              <div class="es-quadrant__title">Operation</div>
+            </div>
+          </div>
+          <button class="es-btn es-btn--ghost es-btn--sm">Open ▸</button>
+        </div>
+        <div class="es-quadrant__body">
+          <ul class="es-quadrant__list">
+            <li class="es-quadrant__item"><span>▲ Documents pending approval</span><span class="es-badge es-badge--warning">3</span></li>
+            <li class="es-quadrant__item"><span>▲ Checked out 9d — drift risk</span><span class="es-badge es-badge--warning">1</span></li>
+            <li class="es-quadrant__item"><span>● Acknowledgements complete</span><span class="es-badge es-badge--success es-badge--nodot">92%</span></li>
+          </ul>
+        </div>
+      </div>
+
+      <!-- CHECK -->
+      <div class="es-quadrant es-accent-check">
+        <div class="es-quadrant__head">
+          <div class="es-quadrant__id">
+            <span class="es-quadrant__letter">C</span>
+            <div>
+              <div class="es-quadrant__phase">Check · Cl 9</div>
+              <div class="es-quadrant__title">Performance Evaluation</div>
+            </div>
+          </div>
+          <button class="es-btn es-btn--ghost es-btn--sm">Open ▸</button>
+        </div>
+        <div class="es-quadrant__body">
+          <ul class="es-quadrant__list">
+            <li class="es-quadrant__item"><span>● Next internal audit</span><span class="es-badge es-badge--info es-badge--nodot">in 12d</span></li>
+            <li class="es-quadrant__item"><span>▲ KPI breaches (9.1)</span><span class="es-badge es-badge--warning">1</span></li>
+            <li class="es-quadrant__item"><span>● Audit findings closed</span><span class="es-badge es-badge--success es-badge--nodot">7 / 9</span></li>
+          </ul>
+        </div>
+      </div>
+
+      <!-- ACT -->
+      <div class="es-quadrant es-accent-act">
+        <div class="es-quadrant__head">
+          <div class="es-quadrant__id">
+            <span class="es-quadrant__letter">A</span>
+            <div>
+              <div class="es-quadrant__phase">Act · Cl 10</div>
+              <div class="es-quadrant__title">Improvement</div>
+            </div>
+          </div>
+          <button class="es-btn es-btn--ghost es-btn--sm">Open ▸</button>
+        </div>
+        <div class="es-quadrant__body">
+          <ul class="es-quadrant__list">
+            <li class="es-quadrant__item"><span>▲ CAPAs open</span><span class="es-badge es-badge--warning">4</span></li>
+            <li class="es-quadrant__item"><span>✕ Corrective action overdue</span><span class="es-badge es-badge--danger">1</span></li>
+            <li class="es-quadrant__item"><span>● Verified &amp; effective</span><span class="es-badge es-badge--success es-badge--nodot">11</span></li>
+          </ul>
+        </div>
+      </div>
+    </nav>
+
+    <!-- Right rail: documents-by-state + program readiness rings -->
+    <div class="es-stack es-gap-4">
+      <div class="es-card es-card--flat">
+        <div class="es-card__header">
+          <div class="es-card__title">Documents by state</div>
+          <div class="es-card__subtitle">163 controlled documents</div>
+        </div>
+        <div class="es-card__body es-card__body--tight es-stack es-gap-3">
+          <div class="es-progress-row">
+            <span class="es-badge es-badge--effective">Effective</span>
+            <div class="es-progress"><div class="es-progress__bar es-progress__bar--success" style="width:79%"></div></div>
+            <span class="es-progress-row__val es-num">128</span>
+          </div>
+          <div class="es-progress-row">
+            <span class="es-badge es-badge--inreview">InReview</span>
+            <div class="es-progress"><div class="es-progress__bar es-progress__bar--warning" style="width:9%"></div></div>
+            <span class="es-progress-row__val es-num">9</span>
+          </div>
+          <div class="es-progress-row">
+            <span class="es-badge es-badge--draft">Draft</span>
+            <div class="es-progress"><div class="es-progress__bar" style="width:7%"></div></div>
+            <span class="es-progress-row__val es-num">7</span>
+          </div>
+          <div class="es-progress-row">
+            <span class="es-badge es-badge--underrevision">UnderRevision</span>
+            <div class="es-progress"><div class="es-progress__bar es-progress__bar--act" style="width:6%"></div></div>
+            <span class="es-progress-row__val es-num">6</span>
+          </div>
+          <div class="es-progress-row">
+            <span class="es-badge es-badge--obsolete">Obsolete</span>
+            <div class="es-progress"><div class="es-progress__bar" style="width:8%"></div></div>
+            <span class="es-progress-row__val es-num">13</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="es-card es-card--flat">
+        <div class="es-card__header">
+          <div class="es-card__title">Program readiness</div>
+        </div>
+        <div class="es-card__body es-card__body--tight">
+          <div class="es-row es-row--between es-items-center es-gap-4">
+            <div class="es-stack es-items-center" style="flex:1">
+              <div class="es-ring es-ring--success es-ring--sm" style="--es-ring-val:92"><span class="es-ring__label">92%</span></div>
+              <div class="es-caption es-text-secondary es-mt-2">Acknowledgements</div>
+            </div>
+            <div class="es-divider es-divider--v"></div>
+            <div class="es-stack es-items-center" style="flex:1">
+              <div class="es-ring es-ring--warning es-ring--sm" style="--es-ring-val:78"><span class="es-ring__label">78%</span></div>
+              <div class="es-caption es-text-secondary es-mt-2">Objectives on track</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── ROW 3 · My Tasks preview  +  Recent activity feed ──────────── -->
+  <div class="es-grid" style="grid-template-columns: 1.35fr 1fr;">
+
+    <!-- My Tasks (top items only; full list one click away) -->
+    <div class="es-card">
+      <div class="es-card__header">
+        <div>
+          <div class="es-card__title">My Tasks <span class="es-badge es-badge--accent es-badge--nodot">5</span></div>
+          <div class="es-card__subtitle">Assigned to Mara K. · sorted by due date</div>
+        </div>
+        <button class="es-btn es-btn--ghost es-btn--sm">See all my tasks ▸</button>
+      </div>
+      <div class="es-card__body es-card__body--tight">
+        <div class="es-table-wrap">
+          <table class="es-table">
+            <thead>
+              <tr>
+                <th>Task</th>
+                <th>Document</th>
+                <th>State</th>
+                <th class="es-td-right">Due</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td class="es-table__primary">◔ Periodic review</td>
+                <td><span class="es-cell-id">SOP-PUR-014</span> <span class="es-table__meta">Supplier Evaluation · Cl 8.4</span></td>
+                <td><span class="es-badge es-badge--effective">Effective</span></td>
+                <td class="es-td-right"><span class="es-badge es-badge--warning es-badge--nodot">in 2d</span></td>
+              </tr>
+              <tr>
+                <td class="es-table__primary">☑ Final approval</td>
+                <td><span class="es-cell-id">WI-PRD-022</span> <span class="es-table__meta">Final Inspection WI · Cl 8.6</span></td>
+                <td><span class="es-badge es-badge--inreview">InReview</span></td>
+                <td class="es-td-right"><span class="es-badge es-badge--neutral es-badge--nodot">in 4d</span></td>
+              </tr>
+              <tr>
+                <td class="es-table__primary">⚑ Root-cause sign-off</td>
+                <td><span class="es-cell-id">CAPA-2026-031</span> <span class="es-table__meta">Supplier re-eval · Cl 10.2</span></td>
+                <td><span class="es-badge es-badge--danger es-badge--nodot">NC</span></td>
+                <td class="es-td-right"><span class="es-badge es-badge--danger es-badge--nodot">tomorrow</span></td>
+              </tr>
+              <tr>
+                <td class="es-table__primary">✓ Verify effectiveness</td>
+                <td><span class="es-cell-id">FRM-HR-007</span> <span class="es-table__meta">Competence Record · Cl 7.2</span></td>
+                <td><span class="es-badge es-badge--neutral es-badge--nodot">🔒 Record</span></td>
+                <td class="es-td-right"><span class="es-badge es-badge--neutral es-badge--nodot">in 6d</span></td>
+              </tr>
+              <tr>
+                <td class="es-table__primary">◔ Periodic review</td>
+                <td><span class="es-cell-id">POL-QMS-001</span> <span class="es-table__meta">Quality Policy · Cl 5.2</span></td>
+                <td><span class="es-badge es-badge--effective">Effective</span></td>
+                <td class="es-td-right"><span class="es-badge es-badge--neutral es-badge--nodot">in 9d</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div class="es-card__footer">
+        <div class="es-row es-gap-3">
+          <button class="es-btn es-btn--secondary es-btn--sm">Process Map ▸</button>
+          <button class="es-btn es-btn--secondary es-btn--sm">Compliance Checklist ▸</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Recent activity feed (timeline) -->
+    <div class="es-card">
+      <div class="es-card__header">
+        <div class="es-card__title">Recent activity</div>
+        <button class="es-icon-btn es-icon-btn--sm" aria-label="Activity settings">⋯</button>
+      </div>
+      <div class="es-card__body">
+        <ol class="es-timeline">
+          <li class="es-timeline__item es-timeline__item--accent">
+            <span class="es-timeline__dot"></span>
+            <div class="es-timeline__head">
+              <span class="es-timeline__ver">SOP-PUR-014 · Rev C</span>
+              <span class="es-badge es-badge--effective">Effective</span>
+            </div>
+            <p class="es-timeline__meta">Released by <b>Ken</b> after approval — "Updated supplier scoring per audit AF-118."</p>
+            <span class="es-timeline__time">Today · 09:12 · Ken</span>
+          </li>
+          <li class="es-timeline__item">
+            <span class="es-timeline__dot"></span>
+            <div class="es-timeline__head">
+              <span class="es-timeline__ver">WI-PRD-022 · Rev 2.0</span>
+              <span class="es-badge es-badge--inreview">InReview</span>
+            </div>
+            <p class="es-timeline__meta">Submitted for approval by <b>Priya</b>; awaiting Ken.</p>
+            <span class="es-timeline__time">Yesterday · 16:41 · Priya</span>
+          </li>
+          <li class="es-timeline__item es-timeline__item--success">
+            <span class="es-timeline__dot"></span>
+            <div class="es-timeline__head">
+              <span class="es-timeline__ver">CAPA-2026-028</span>
+              <span class="es-badge es-badge--success es-badge--nodot">Verified</span>
+            </div>
+            <p class="es-timeline__meta">Corrective action verified effective by <b>Ingrid</b> (Internal Auditor).</p>
+            <span class="es-timeline__time">2026-05-29 · 11:05 · Ingrid</span>
+          </li>
+          <li class="es-timeline__item">
+            <span class="es-timeline__dot"></span>
+            <div class="es-timeline__head">
+              <span class="es-timeline__ver">POL-QMS-001 · Rev D</span>
+              <span class="es-badge es-badge--underrevision">UnderRevision</span>
+            </div>
+            <p class="es-timeline__meta">Checked out by <b>Diego</b> to align Quality Policy with new scope (Cl 4.3).</p>
+            <span class="es-timeline__time">2026-05-28 · 14:22 · Diego</span>
+          </li>
+          <li class="es-timeline__item">
+            <span class="es-timeline__dot"></span>
+            <div class="es-timeline__head">
+              <span class="es-timeline__ver">Audit AF-119</span>
+              <span class="es-badge es-badge--info es-badge--nodot">Scheduled</span>
+            </div>
+            <p class="es-timeline__meta">Internal audit of Clause 8 (Operation) scheduled with <b>Ingrid</b>; stage-2 observer <b>Olsen</b>.</p>
+            <span class="es-timeline__time">2026-05-27 · 10:00 · Mara</span>
+          </li>
+        </ol>
+      </div>
+    </div>
+  </div>
+</section>

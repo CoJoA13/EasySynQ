@@ -1,0 +1,345 @@
+<section class="screen" id="screen-setup" data-screen="setup">
+  <!-- page header -->
+  <header class="es-page-header">
+    <div class="es-page-header__main">
+      <nav class="es-breadcrumb">
+        <a>Home</a><span class="es-breadcrumb__sep">›</span>
+        <a>Admin</a><span class="es-breadcrumb__sep">›</span>
+        <span class="es-breadcrumb__current">First-Run Setup</span>
+      </nav>
+      <h1 class="es-page-header__title">First-Run Setup <span class="es-tag">Step 4 of 11</span></h1>
+      <p class="es-page-header__subtitle">Guided, resumable provisioning of your EasySynQ instance — system gates first, the QMS shell after. You are signed in as Avery (System Admin), outside the QMS.</p>
+    </div>
+    <div class="es-page-header__actions">
+      <button class="es-btn es-btn--ghost">Save &amp; exit</button>
+      <button class="es-btn es-btn--secondary">◂ Back</button>
+      <button class="es-btn es-btn--primary" disabled title="Gate G-C blocks Next until restore-test PASSES">Next ▸</button>
+    </div>
+  </header>
+
+  <!-- horizontal progress overview (calm, scannable) -->
+  <div class="es-card es-card--flat es-mb-5">
+    <div class="es-card__body es-card__body--tight">
+      <div class="es-wizard-rail">
+        <div class="es-wizard-rail__step is-done"><span class="es-wizard-rail__num">✓</span><span class="es-wizard-rail__label">Bootstrap</span></div>
+        <span class="es-wizard-rail__connector"></span>
+        <div class="es-wizard-rail__step is-done"><span class="es-wizard-rail__num">✓</span><span class="es-wizard-rail__label">Admin</span></div>
+        <span class="es-wizard-rail__connector"></span>
+        <div class="es-wizard-rail__step is-done"><span class="es-wizard-rail__num">✓</span><span class="es-wizard-rail__label">Organization</span></div>
+        <span class="es-wizard-rail__connector"></span>
+        <div class="es-wizard-rail__step is-done"><span class="es-wizard-rail__num">✓</span><span class="es-wizard-rail__label">Storage</span></div>
+        <span class="es-wizard-rail__connector"></span>
+        <div class="es-wizard-rail__step is-current"><span class="es-wizard-rail__num">4</span><span class="es-wizard-rail__label">Backup</span></div>
+        <span class="es-wizard-rail__connector"></span>
+        <div class="es-wizard-rail__step"><span class="es-wizard-rail__num">5</span><span class="es-wizard-rail__label">Auth</span></div>
+        <span class="es-wizard-rail__connector"></span>
+        <div class="es-wizard-rail__step"><span class="es-wizard-rail__num">6</span><span class="es-wizard-rail__label">Roles</span></div>
+        <span class="es-wizard-rail__connector"></span>
+        <div class="es-wizard-rail__step"><span class="es-wizard-rail__num">7</span><span class="es-wizard-rail__label">Users</span></div>
+        <span class="es-wizard-rail__connector"></span>
+        <div class="es-wizard-rail__step"><span class="es-wizard-rail__num">8</span><span class="es-wizard-rail__label">Scope</span></div>
+        <span class="es-wizard-rail__connector"></span>
+        <div class="es-wizard-rail__step"><span class="es-wizard-rail__num">9</span><span class="es-wizard-rail__label">Import</span></div>
+        <span class="es-wizard-rail__connector"></span>
+        <div class="es-wizard-rail__step"><span class="es-wizard-rail__num">10</span><span class="es-wizard-rail__label">Finalize</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- two-column work area: vertical rail (gates) + active step -->
+  <div class="es-grid" style="grid-template-columns:300px 1fr;align-items:start;gap:var(--es-gap-6, 24px)">
+
+    <!-- LEFT: vertical wizard rail with gate semantics -->
+    <aside class="es-card">
+      <div class="es-card__header">
+        <div class="es-card__title">Setup gates</div>
+        <div class="es-card__subtitle">G-A…G-E are blocking system gates. Steps 6–9 are deferrable.</div>
+      </div>
+      <div class="es-card__body es-card__body--tight">
+        <div class="es-wizard">
+          <div class="es-wizard__step is-done">
+            <div class="es-wizard__num">✓</div>
+            <div class="es-wizard__main"><div class="es-wizard__title">Bootstrap &amp; Welcome</div><div class="es-wizard__desc">Install secret consumed</div></div>
+          </div>
+          <div class="es-wizard__step is-done">
+            <div class="es-wizard__num">✓</div>
+            <div class="es-wizard__main"><div class="es-wizard__title">Create Admin</div><div class="es-wizard__desc es-text-success">Gate G-A · passed</div></div>
+          </div>
+          <div class="es-wizard__step is-done">
+            <div class="es-wizard__num">✓</div>
+            <div class="es-wizard__main"><div class="es-wizard__title">Organization Profile</div><div class="es-wizard__desc es-text-success">Gate G-E · passed</div></div>
+          </div>
+          <div class="es-wizard__step is-done">
+            <div class="es-wizard__num">✓</div>
+            <div class="es-wizard__main"><div class="es-wizard__title">Vault &amp; Mirror Storage</div><div class="es-wizard__desc es-text-success">Gate G-B · passed</div></div>
+          </div>
+
+          <div class="es-wizard__gate">⚠ Gate G-C blocks Next until a restore-test PASSES</div>
+
+          <div class="es-wizard__step is-current" aria-current="step">
+            <div class="es-wizard__num">4</div>
+            <div class="es-wizard__main"><div class="es-wizard__title">Backup + Restore-Test</div><div class="es-wizard__desc es-text-warning">Gate G-C · not yet verified</div></div>
+          </div>
+          <div class="es-wizard__step is-locked">
+            <div class="es-wizard__num">5</div>
+            <div class="es-wizard__main"><div class="es-wizard__title">Authentication</div><div class="es-wizard__desc">Gate G-D · local / LDAP / OIDC</div></div>
+          </div>
+
+          <div class="es-divider"></div>
+
+          <div class="es-wizard__step is-locked" style="opacity:.62">
+            <div class="es-wizard__num">6</div>
+            <div class="es-wizard__main"><div class="es-wizard__title">Roles &amp; Permissions</div><div class="es-wizard__desc"><span class="es-pdca es-pdca--plan">Deferrable</span></div></div>
+          </div>
+          <div class="es-wizard__step is-locked" style="opacity:.62">
+            <div class="es-wizard__num">7</div>
+            <div class="es-wizard__main"><div class="es-wizard__title">Users</div><div class="es-wizard__desc"><span class="es-pdca es-pdca--plan">Deferrable</span></div></div>
+          </div>
+          <div class="es-wizard__step is-locked" style="opacity:.62">
+            <div class="es-wizard__num">8</div>
+            <div class="es-wizard__main"><div class="es-wizard__title">QMS Scope &amp; Process Map</div><div class="es-wizard__desc"><span class="es-pdca es-pdca--plan">Deferrable · Mara</span></div></div>
+          </div>
+          <div class="es-wizard__step is-locked" style="opacity:.62">
+            <div class="es-wizard__num">9</div>
+            <div class="es-wizard__main"><div class="es-wizard__title">Import existing QMS</div><div class="es-wizard__desc"><span class="es-pdca es-pdca--plan">Deferrable · UJ-2</span></div></div>
+          </div>
+          <div class="es-wizard__step is-locked" style="opacity:.62">
+            <div class="es-wizard__num">10</div>
+            <div class="es-wizard__main"><div class="es-wizard__title">Review &amp; Finalize</div><div class="es-wizard__desc">Hand-off to Mara</div></div>
+          </div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- RIGHT: active step (Step 4) -->
+    <div class="es-stack">
+
+      <!-- step intro -->
+      <div class="es-card es-accent-plan">
+        <div class="es-card__header es-row es-justify-between es-items-center">
+          <div>
+            <div class="es-caption es-text-muted">Step 4 · blocking gate G-C</div>
+            <h2 class="es-h2" style="margin:2px 0 0">Backup + Restore-Test</h2>
+          </div>
+          <span class="es-badge es-badge--warning es-badge--lg">Verification required</span>
+        </div>
+        <div class="es-card__body">
+          <p class="es-body es-text-secondary" style="margin:0">
+            A backup is only trustworthy once it has been restored. Before you can proceed, EasySynQ runs an end-to-end backup <b>and</b> restores it into an isolated scratch namespace — a temporary PostgreSQL schema and a scratch MinIO bucket that never touch live data. <em>“Configured but never verified” is not enough.</em>
+          </p>
+        </div>
+      </div>
+
+      <!-- configuration form -->
+      <div class="es-card">
+        <div class="es-card__header">
+          <div class="es-card__title">Backup configuration</div>
+          <div class="es-card__subtitle">Captured into a <span class="es-mono">BackupPolicy</span> on PASS; a Celery Beat schedule is then provisioned.</div>
+        </div>
+        <div class="es-card__body">
+
+          <div class="es-grid es-grid--2">
+            <div class="es-field">
+              <label class="es-label">Backup destination</label>
+              <input class="es-input es-mono" value="s3://offsite-easysynq/acme-mfg/backups" placeholder="Local path / NFS mount / S3-compatible bucket">
+              <div class="es-hint es-row es-items-center es-gap-2"><span class="es-text-success">●</span> Reachable · writable · 412 GB free</div>
+            </div>
+            <div class="es-field">
+              <label class="es-label">Schedule <span class="es-label__opt">cron · org tz Europe/Oslo</span></label>
+              <input class="es-input es-mono" value="0 2 * * *" placeholder="0 2 * * *">
+              <div class="es-hint">Full backup nightly at 02:00. Interpreted in the organization timezone set in Step 2.</div>
+            </div>
+          </div>
+
+          <div class="es-grid es-grid--3 es-mt-4">
+            <div class="es-field">
+              <label class="es-label">Keep daily</label>
+              <input class="es-input es-num" value="7">
+            </div>
+            <div class="es-field">
+              <label class="es-label">Keep weekly</label>
+              <input class="es-input es-num" value="4">
+            </div>
+            <div class="es-field">
+              <label class="es-label">Keep monthly</label>
+              <input class="es-input es-num" value="6">
+            </div>
+          </div>
+
+          <div class="es-grid es-grid--2 es-mt-4">
+            <div class="es-field">
+              <label class="es-label">Encryption at rest</label>
+              <select class="es-select">
+                <option selected>AES-256 · passphrase key</option>
+                <option>AES-256 · key file</option>
+                <option>Off (not recommended)</option>
+              </select>
+              <div class="es-hint es-row es-items-center es-gap-2">
+                <span class="es-confidence-chip es-confidence-chip--high"><span class="es-confidence__bars"><span class="es-confidence__bar"></span><span class="es-confidence__bar"></span><span class="es-confidence__bar"></span></span><span class="es-confidence__label">Strong</span></span>
+                Passphrase strength verified — archive will be decryptable with this key.
+              </div>
+            </div>
+            <div class="es-field">
+              <label class="es-label">Failure alerting</label>
+              <input class="es-input" value="avery@acme-mfg.example  ·  + webhook" placeholder="Email / webhook on backup failure">
+              <div class="es-hint">Uses the admin email captured in Step 1. Notifies on any backup or restore-test failure.</div>
+            </div>
+          </div>
+
+          <div class="es-panel es-mt-4">
+            <div class="es-stack" style="gap:14px">
+              <div class="es-row es-justify-between es-items-center es-wrap" style="gap:12px">
+                <div class="es-row es-items-center es-gap-3">
+                  <span class="es-switch is-on"><span class="es-switch__track"></span></span>
+                  <div>
+                    <div class="es-body" style="font-weight:600">WAL / point-in-time recovery (PITR)</div>
+                    <div class="es-small es-text-muted">Streams write-ahead logs for sub-day recovery. Requires reachable WAL archive.</div>
+                  </div>
+                </div>
+                <span class="es-badge es-badge--success">Archive reachable</span>
+              </div>
+              <div class="es-divider"></div>
+              <div class="es-row es-justify-between es-items-center es-wrap" style="gap:12px">
+                <div class="es-row es-items-center es-gap-3">
+                  <span class="es-switch is-on"><span class="es-switch__track"></span></span>
+                  <div>
+                    <div class="es-body" style="font-weight:600">Include append-only audit checkpoint</div>
+                    <div class="es-small es-text-muted">Anchors the tamper-evident audit chain into the archive.</div>
+                  </div>
+                </div>
+                <span class="es-badge es-badge--info">Recommended</span>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- backup scope (read-only invariant) -->
+      <div class="es-card es-card--flat">
+        <div class="es-card__header">
+          <div class="es-card__title">What gets backed up</div>
+          <div class="es-card__subtitle">Only PostgreSQL + MinIO are the source of truth and are backup-critical. The OpenSearch index and the filesystem mirror are regenerable and excluded.</div>
+        </div>
+        <div class="es-card__body es-card__body--tight">
+          <div class="es-row es-wrap es-gap-2">
+            <span class="es-badge es-badge--neutral">⛁ PostgreSQL dump</span>
+            <span class="es-badge es-badge--neutral">⛁ MinIO object manifest</span>
+            <span class="es-badge es-badge--neutral">⛁ Keycloak realm export</span>
+            <span class="es-badge es-badge--neutral">⛁ Encrypted config</span>
+            <span class="es-badge es-badge--obsolete es-badge--nodot">OpenSearch index · excluded</span>
+            <span class="es-badge es-badge--obsolete es-badge--nodot">Filesystem mirror · excluded</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- the gate: restore-test -->
+      <div class="es-card">
+        <div class="es-card__header es-row es-justify-between es-items-center es-wrap" style="gap:12px">
+          <div>
+            <div class="es-card__title">Mandatory restore-test <span class="es-tag es-tag--accent">Gate G-C</span></div>
+            <div class="es-card__subtitle">The gate is not “a backup ran” — it is “a backup was restored and verified.”</div>
+          </div>
+          <span class="es-badge es-badge--warning">Pending verification</span>
+        </div>
+        <div class="es-card__body">
+
+          <!-- live drill progress (in-flight) -->
+          <div class="es-panel es-mb-4">
+            <div class="es-row es-justify-between es-items-center es-mb-2">
+              <div class="es-body" style="font-weight:600">Drill in progress — restoring to scratch namespace…</div>
+              <span class="es-small es-text-muted es-mono">63%</span>
+            </div>
+            <div class="es-progress es-mb-3"><div class="es-progress__bar es-progress__bar--check" style="width:63%"></div></div>
+            <div class="es-stepper">
+              <div class="es-stepper__step is-done">
+                <div class="es-stepper__rail"><div class="es-stepper__marker">✓</div><div class="es-stepper__line"></div></div>
+                <div class="es-stepper__body"><div class="es-stepper__title">Test archive written &amp; encrypted</div><div class="es-stepper__sub">Checksum verified · decryptable with provided key</div></div>
+              </div>
+              <div class="es-stepper__step is-done">
+                <div class="es-stepper__rail"><div class="es-stepper__marker">✓</div><div class="es-stepper__line"></div></div>
+                <div class="es-stepper__body"><div class="es-stepper__title">Restore PG dump + MinIO objects into scratch</div><div class="es-stepper__sub">Temporary schema <span class="es-mono">_scratch_restore</span> · scratch bucket created</div></div>
+              </div>
+              <div class="es-stepper__step is-current">
+                <div class="es-stepper__rail"><div class="es-stepper__marker">3</div><div class="es-stepper__line"></div></div>
+                <div class="es-stepper__body"><div class="es-stepper__title">Integrity assertions</div><div class="es-stepper__sub">Row counts · blob SHA-256 re-hash · FK / constraint checks · running…</div></div>
+              </div>
+              <div class="es-stepper__step is-pending">
+                <div class="es-stepper__rail"><div class="es-stepper__marker">4</div></div>
+                <div class="es-stepper__body"><div class="es-stepper__title">Tear down scratch &amp; report RPO / RTO</div><div class="es-stepper__sub">PASS marks gate G-C green; FAIL shows diagnostics &amp; allows retry</div></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- measured estimates -->
+          <div class="es-grid es-grid--3 es-mb-4">
+            <div class="es-metric">
+              <div class="es-metric__top"><span class="es-metric__label">Est. RPO</span><span class="es-metric__icon">↺</span></div>
+              <div class="es-metric__value">~ 24h</div>
+              <div class="es-metric__sub">nightly full · PITR narrows to minutes</div>
+            </div>
+            <div class="es-metric">
+              <div class="es-metric__top"><span class="es-metric__label">Est. RTO</span><span class="es-metric__icon">◷</span></div>
+              <div class="es-metric__value es-num">1h 18m</div>
+              <div class="es-metric__sub"><span class="es-metric__delta es-metric__delta--up">▲</span> within M-profile target (≤ 2h)</div>
+            </div>
+            <div class="es-metric">
+              <div class="es-metric__top"><span class="es-metric__label">Archive size</span><span class="es-metric__icon">⛁</span></div>
+              <div class="es-metric__value es-num">2.4 GB</div>
+              <div class="es-metric__sub">checksummed · AES-256</div>
+            </div>
+          </div>
+
+          <div class="es-row es-items-center es-gap-3 es-wrap">
+            <button class="es-btn es-btn--secondary" disabled>◔ Running backup + restore-test…</button>
+            <button class="es-btn es-btn--ghost">View live job log</button>
+            <span class="es-small es-text-muted">Drill runs in an isolated scratch namespace — live data is never touched.</span>
+          </div>
+
+        </div>
+        <div class="es-card__footer">
+          <div class="es-wizard__gate es-w-full">⚠ Gate G-C turns green ONLY on a verified restore-test PASS — the wizard cannot advance otherwise.</div>
+        </div>
+      </div>
+
+      <!-- soft gate: off-host audit checkpoint anchor -->
+      <div class="es-card es-card--flat">
+        <div class="es-card__header es-row es-justify-between es-items-center es-wrap" style="gap:12px">
+          <div>
+            <div class="es-card__title">Off-host audit-checkpoint anchor <span class="es-tag">soft gate · G-soft</span></div>
+            <div class="es-card__subtitle">Required to claim tamper-evidence / Part-11 readiness — does not block Finalize, but the warning persists until configured.</div>
+          </div>
+          <span class="es-badge es-badge--warning">Not configured</span>
+        </div>
+        <div class="es-card__body es-card__body--tight">
+          <div class="es-row es-justify-between es-items-center es-wrap" style="gap:12px">
+            <p class="es-small es-text-secondary" style="margin:0;max-width:60ch">Configure at least one off-host or append-only sink (WORM bucket, external object store, or append-only syslog) so the audit chain can be anchored outside the primary vault. Until then, this install <b>cannot claim tamper-evidence</b>.</p>
+            <button class="es-btn es-btn--secondary es-btn--sm">Configure sink</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- step footer nav -->
+      <div class="es-row es-justify-between es-items-center es-wrap" style="gap:12px">
+        <button class="es-btn es-btn--ghost">Save &amp; exit — resume later</button>
+        <div class="es-row es-gap-2">
+          <button class="es-btn es-btn--secondary">◂ Back to Storage</button>
+          <button class="es-btn es-btn--primary" disabled title="Blocked by gate G-C — awaiting a verified restore-test PASS">Next ▸ Authentication</button>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- toast: drill phase update -->
+  <div class="es-toast-region">
+    <div class="es-toast es-toast--info">
+      <span class="es-toast__icon">◔</span>
+      <div class="es-toast__body">
+        <div class="es-toast__title">Restore-test running</div>
+        <div class="es-toast__msg">Phase 3 of 4 — verifying integrity in scratch namespace. <span class="es-mono">RESTORE_TEST</span> in progress.</div>
+      </div>
+      <button class="es-toast__close">✕</button>
+    </div>
+  </div>
+</section>

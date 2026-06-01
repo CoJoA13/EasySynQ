@@ -1,0 +1,311 @@
+<section class="screen" id="screen-review" data-screen="review">
+  <!-- page header -->
+  <header class="es-page-header">
+    <div class="es-page-header__main">
+      <nav class="es-breadcrumb">
+        <a>Home</a><span class="es-breadcrumb__sep">›</span>
+        <a>My Tasks</a><span class="es-breadcrumb__sep">›</span>
+        <a>DCR-2026-0042</a><span class="es-breadcrumb__sep">›</span>
+        <span class="es-breadcrumb__current">Review &amp; Approve</span>
+      </nav>
+      <h1 class="es-page-header__title">
+        Review &amp; Approve <span class="es-tag es-tag--accent">DCR-2026-0042</span>
+        <span class="es-badge es-badge--inreview">InReview</span>
+      </h1>
+      <p class="es-page-header__subtitle">
+        <span class="es-cell-id">SOP-PUR-014</span> · Supplier Evaluation &amp; Re-evaluation Procedure —
+        proposed <span class="es-mono">Rev D</span>, awaiting your approval decision.
+      </p>
+    </div>
+    <div class="es-page-header__actions">
+      <button class="es-btn es-btn--secondary">⤢ Open full redline</button>
+      <button class="es-btn es-btn--ghost">↩ Back to tasks</button>
+    </div>
+  </header>
+
+  <!-- assignment / SoD bar -->
+  <div class="es-row es-row--between es-row--wrap es-items-center es-gap-3 es-mb-4">
+    <div class="es-row es-items-center es-gap-3 es-wrap">
+      <span class="es-pdca es-pdca--do">Do · Cl 8.4</span>
+      <span class="es-small es-text-secondary">Assigned to</span>
+      <span class="es-cell-user"><span class="es-avatar es-avatar--xs es-avatar--c2">KE</span> Ken — Approver</span>
+      <span class="es-divider es-divider--v"></span>
+      <span class="es-small es-text-secondary">Author</span>
+      <span class="es-cell-user"><span class="es-avatar es-avatar--xs es-avatar--c4">PR</span> Priya — submitted 2 days ago (2026-05-29)</span>
+    </div>
+    <span class="es-badge es-badge--success es-badge--nodot">⚖ SoD OK — You are not the author · approval permitted</span>
+  </div>
+
+  <!-- two-pane focus: left = what changed · right = the decision -->
+  <div class="es-grid" style="grid-template-columns:1.55fr 1fr;align-items:start;gap:var(--es-space-5,1.25rem)">
+
+    <!-- ───────────────── LEFT: what changed ───────────────── -->
+    <div class="es-stack es-gap-4">
+
+      <!-- redline / diff card (the focus) -->
+      <div class="es-card">
+        <div class="es-card__header">
+          <div>
+            <div class="es-card__title">Redline · Rev C → Rev D</div>
+            <div class="es-card__subtitle">Word-level text redline · additions in green, deletions struck red.</div>
+          </div>
+          <div class="es-row es-items-center es-gap-2">
+            <span class="es-badge es-badge--success es-badge--nodot es-badge--sm">+12 added</span>
+            <span class="es-badge es-badge--danger es-badge--nodot es-badge--sm">−5 removed</span>
+          </div>
+        </div>
+        <div class="es-card__body es-card__body--tight">
+          <div class="es-diff">
+            <div class="es-diff__col">
+              <div class="es-diff__head">
+                <span class="es-timeline__ver">Rev C</span>
+                <span class="es-badge es-badge--superseded es-badge--sm">will be Superseded</span>
+                <span class="es-tag">previous · Effective 2025-06-18</span>
+              </div>
+              <div class="es-diff__body">
+                <div class="es-diff__line"><span class="es-diff__gutter">5.1</span><span class="es-diff__text">Purchasing shall select suppliers from the approved supplier list.</span></div>
+                <div class="es-diff__line es-diff__line--del"><span class="es-diff__gutter">5.2</span><span class="es-diff__text">New suppliers are evaluated on price and delivery before first order.</span></div>
+                <div class="es-diff__line"><span class="es-diff__gutter">5.3</span><span class="es-diff__text">Approved suppliers are recorded on <span class="es-mono">FRM-PUR-003</span>.</span></div>
+                <div class="es-diff__line es-diff__line--del"><span class="es-diff__gutter">6.1</span><span class="es-diff__text">Re-evaluation is performed annually by the Process Owner.</span></div>
+                <div class="es-diff__line"><span class="es-diff__gutter">6.2</span><span class="es-diff__text">Nonconforming deliveries are logged and reviewed.</span></div>
+                <div class="es-diff__line"><span class="es-diff__gutter">7.1</span><span class="es-diff__text">Records are retained for 3 years.</span></div>
+              </div>
+            </div>
+            <div class="es-diff__col">
+              <div class="es-diff__head">
+                <span class="es-timeline__ver">Rev D</span>
+                <span class="es-badge es-badge--inreview es-badge--sm">InReview</span>
+                <span class="es-tag es-tag--accent">proposed</span>
+              </div>
+              <div class="es-diff__body">
+                <div class="es-diff__line"><span class="es-diff__gutter">5.1</span><span class="es-diff__text">Purchasing shall select suppliers from the approved supplier list.</span></div>
+                <div class="es-diff__line es-diff__line--add"><span class="es-diff__gutter">5.2</span><span class="es-diff__text">New suppliers are evaluated on price, delivery, <span class="es-ins">quality system status and on-time-delivery KPI</span> before first order.</span></div>
+                <div class="es-diff__line"><span class="es-diff__gutter">5.3</span><span class="es-diff__text">Approved suppliers are recorded on <span class="es-mono">FRM-PUR-003</span>.</span></div>
+                <div class="es-diff__line es-diff__line--add"><span class="es-diff__gutter">6.1</span><span class="es-diff__text">Re-evaluation is performed <span class="es-ins">semi-annually for critical suppliers and annually for all others</span> by the Process Owner.</span></div>
+                <div class="es-diff__line es-diff__line--add"><span class="es-diff__gutter">6.2</span><span class="es-diff__text"><span class="es-ins">A supplier scorecard threshold of 85% triggers a re-evaluation review.</span></span></div>
+                <div class="es-diff__line"><span class="es-diff__gutter">6.3</span><span class="es-diff__text">Nonconforming deliveries are logged and reviewed.</span></div>
+                <div class="es-diff__line"><span class="es-diff__gutter">7.1</span><span class="es-diff__text">Records are retained for 3 years.</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="es-card__footer">
+          <span class="es-small es-text-muted">Showing redline summary. Press <kbd class="es-kbd">n</kbd> / <kbd class="es-kbd">p</kbd> to jump between changes.</span>
+          <button class="es-btn es-btn--ghost es-btn--sm">⤢ Open full redline</button>
+        </div>
+      </div>
+
+      <!-- reason for change + impact (progressive disclosure) -->
+      <div class="es-grid es-grid--2">
+        <div class="es-card es-card--flat">
+          <div class="es-card__header">
+            <div class="es-card__title">Reason for change</div>
+          </div>
+          <div class="es-card__body es-card__body--tight">
+            <p class="es-body">
+              Tighten supplier controls following internal audit finding
+              <span class="es-mono">AF-2026-118</span> (Cl 8.4): the prior annual cycle did not
+              detect quality decline at two critical suppliers in time. Adds KPI-driven scorecard
+              triggers and semi-annual re-evaluation for critical suppliers.
+            </p>
+            <dl class="es-dl es-mt-3">
+              <dt>Linked finding</dt><dd><span class="es-mono">AF-2026-118</span> · <span class="es-text-secondary">Ingrid (Internal Auditor)</span></dd>
+              <dt>Linked CAPA</dt><dd><span class="es-mono">CAPA-031</span> <span class="es-badge es-badge--warning es-badge--sm es-badge--nodot">In progress</span></dd>
+              <dt>ISO clauses</dt><dd><span class="es-tag">8.4</span> <span class="es-tag">8.4.1</span> <span class="es-tag">7.5</span></dd>
+              <dt>Change class</dt><dd>Functional — content change (not editorial)</dd>
+            </dl>
+          </div>
+        </div>
+
+        <div class="es-card es-card--flat">
+          <div class="es-card__header">
+            <div class="es-card__title">Impact assessment</div>
+            <span class="es-badge es-badge--warning es-badge--sm">Medium</span>
+          </div>
+          <div class="es-card__body es-card__body--tight">
+            <dl class="es-dl">
+              <dt>Process</dt><dd>Purchasing &amp; Supplier Mgmt · <span class="es-text-secondary">Owner: Diego</span></dd>
+              <dt>Training</dt><dd>Re-acknowledgement required — Purchasing team (6 people)</dd>
+              <dt>Effective date</dt><dd>2026-06-15 (on release)</dd>
+              <dt>Next review</dt><dd>2027-06-15</dd>
+            </dl>
+          </div>
+        </div>
+      </div>
+
+      <!-- where-used summary (expandable depth) -->
+      <details class="es-card es-card--flat">
+        <summary class="es-card__header" style="cursor:pointer;list-style:none">
+          <div>
+            <div class="es-card__title">Where-used &amp; downstream impact <span class="es-badge es-badge--neutral es-badge--sm es-badge--nodot">5 links</span></div>
+            <div class="es-card__subtitle">Documents and records that reference SOP-PUR-014. Expand to inspect.</div>
+          </div>
+          <span class="es-text-muted">▾</span>
+        </summary>
+        <div class="es-card__body es-card__body--tight">
+          <div class="es-table-wrap">
+            <table class="es-table es-table--zebra">
+              <thead>
+                <tr><th>Identifier</th><th>Title</th><th>Link type</th><th>State</th><th class="es-td-right">Rev</th></tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><span class="es-cell-id">POL-QMS-001</span></td>
+                  <td class="es-table__primary">Quality Policy</td>
+                  <td class="es-table__meta">references</td>
+                  <td><span class="es-badge es-badge--effective">Effective</span></td>
+                  <td class="es-td-right es-num">2.0</td>
+                </tr>
+                <tr>
+                  <td><span class="es-cell-id">WI-PRD-022</span></td>
+                  <td class="es-table__primary">Incoming Inspection Work Instruction</td>
+                  <td class="es-table__meta">child-of</td>
+                  <td><span class="es-badge es-badge--effective">Effective</span></td>
+                  <td class="es-td-right es-num">B</td>
+                </tr>
+                <tr>
+                  <td><span class="es-cell-id">FRM-PUR-003</span></td>
+                  <td class="es-table__primary">Approved Supplier List (record template)</td>
+                  <td class="es-table__meta">uses-form</td>
+                  <td><span class="es-badge es-badge--effective">Effective</span></td>
+                  <td class="es-td-right es-num">C</td>
+                </tr>
+                <tr>
+                  <td><span class="es-cell-id">FRM-HR-007</span></td>
+                  <td class="es-table__primary">Training Acknowledgement Record</td>
+                  <td class="es-table__meta">training-trigger</td>
+                  <td><span class="es-badge es-badge--effective">Effective</span></td>
+                  <td class="es-td-right es-num">A</td>
+                </tr>
+                <tr>
+                  <td><span class="es-cell-id">SOP-PUR-014</span></td>
+                  <td class="es-table__primary">Supplier Evaluation Procedure — Rev C</td>
+                  <td class="es-table__meta">supersedes</td>
+                  <td><span class="es-badge es-badge--effective">Effective</span></td>
+                  <td class="es-td-right es-num">C</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </details>
+
+      <!-- approval progress -->
+      <div class="es-card es-card--flat">
+        <div class="es-card__header"><div class="es-card__title">Approval flow</div></div>
+        <div class="es-card__body es-card__body--tight">
+          <div class="es-stepper">
+            <div class="es-stepper__step is-done">
+              <div class="es-stepper__rail"><div class="es-stepper__marker">✓</div><div class="es-stepper__line"></div></div>
+              <div class="es-stepper__body"><div class="es-stepper__title">Author submitted</div><div class="es-stepper__sub">Priya · 2026-05-29</div></div>
+            </div>
+            <div class="es-stepper__step is-done">
+              <div class="es-stepper__rail"><div class="es-stepper__marker">✓</div><div class="es-stepper__line"></div></div>
+              <div class="es-stepper__body"><div class="es-stepper__title">Quality review</div><div class="es-stepper__sub">Mara · 2026-05-30 · endorsed</div></div>
+            </div>
+            <div class="es-stepper__step is-current">
+              <div class="es-stepper__rail"><div class="es-stepper__marker">3</div><div class="es-stepper__line"></div></div>
+              <div class="es-stepper__body"><div class="es-stepper__title">Approver decision</div><div class="es-stepper__sub">Ken · awaiting you</div></div>
+            </div>
+            <div class="es-stepper__step is-pending">
+              <div class="es-stepper__rail"><div class="es-stepper__marker">4</div></div>
+              <div class="es-stepper__body"><div class="es-stepper__title">Release as Effective</div><div class="es-stepper__sub">on 2026-06-15</div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ───────────────── RIGHT: the decision ───────────────── -->
+    <div class="es-card es-accent-do" style="position:sticky;top:1rem">
+      <div class="es-card__header">
+        <div>
+          <div class="es-card__title">Your decision</div>
+          <div class="es-card__subtitle">Record an approval decision for <span class="es-mono">Rev D</span>.</div>
+        </div>
+      </div>
+      <div class="es-card__body">
+
+        <!-- decision radio group -->
+        <fieldset class="es-stack es-gap-2" style="border:0;margin:0;padding:0" aria-describedby="decision-hint">
+          <legend class="es-label">Decision</legend>
+
+          <label class="es-card es-card--interactive es-row es-items-center es-gap-3" style="padding:.7rem .85rem;cursor:pointer">
+            <input class="es-radio" type="radio" name="decision" value="approve" checked>
+            <span class="es-grow">
+              <span class="es-body"><b>Approve</b></span>
+              <span class="es-small es-text-secondary es-block">Release Rev D as the governing version.</span>
+            </span>
+            <span class="es-badge es-badge--approved es-badge--sm es-badge--nodot">Approve</span>
+          </label>
+
+          <label class="es-card es-card--interactive es-row es-items-center es-gap-3" style="padding:.7rem .85rem;cursor:pointer">
+            <input class="es-radio" type="radio" name="decision" value="changes">
+            <span class="es-grow">
+              <span class="es-body"><b>Request changes</b></span>
+              <span class="es-small es-text-secondary es-block">Return to Priya with comments.</span>
+            </span>
+            <span class="es-badge es-badge--warning es-badge--sm es-badge--nodot">Revise</span>
+          </label>
+
+          <label class="es-card es-card--interactive es-row es-items-center es-gap-3" style="padding:.7rem .85rem;cursor:pointer">
+            <input class="es-radio" type="radio" name="decision" value="reject">
+            <span class="es-grow">
+              <span class="es-body"><b>Reject</b></span>
+              <span class="es-small es-text-secondary es-block">Withdraw this change request entirely.</span>
+            </span>
+            <span class="es-badge es-badge--danger es-badge--sm es-badge--nodot">Reject</span>
+          </label>
+        </fieldset>
+
+        <div class="es-divider"></div>
+
+        <!-- required comment -->
+        <div class="es-field">
+          <label class="es-label" for="review-comment">
+            Comment
+            <span class="es-text-secondary es-small">— required if not Approve; optional otherwise</span>
+          </label>
+          <textarea class="es-textarea" id="review-comment" rows="3"
+            placeholder="Add a note for the record (e.g. rationale, conditions, or required corrections)…"
+            aria-describedby="comment-hint"></textarea>
+          <div class="es-hint" id="comment-hint">Your comment is appended to the document history and the signature event.</div>
+        </div>
+
+        <div class="es-divider"></div>
+
+        <!-- signature slot (DP-10) -->
+        <div class="es-panel">
+          <div class="es-row es-row--between es-items-center es-mb-2">
+            <span class="es-label" style="margin:0">Signature — meaning</span>
+            <span class="es-badge es-badge--neutral es-badge--sm es-badge--nodot">v1 · logged-in confirmation</span>
+          </div>
+          <div class="es-cell-user es-mb-2">
+            <span class="es-avatar es-avatar--sm es-avatar--c2">KE</span>
+            <span>
+              <span class="es-body">Signing as <b>Ken</b> · Approver</span>
+              <span class="es-small es-text-muted es-block">cojo.jones1308@gmail.com · 2026-05-31 14:20 UTC</span>
+            </span>
+          </div>
+          <label class="es-row es-items-center es-gap-2" style="cursor:pointer">
+            <input class="es-checkbox" type="checkbox" id="sig-meaning">
+            <span class="es-small">
+              By approving, I sign with meaning = <b>approval</b>. I confirm I have reviewed Rev D
+              and authorize its release as Effective.
+            </span>
+          </label>
+        </div>
+
+        <!-- SoD reassurance -->
+        <p class="es-caption es-text-success es-mt-2">⚖ Separation of duties verified — you are not the author of this revision; approval is permitted.</p>
+
+      </div>
+      <div class="es-card__footer">
+        <button class="es-btn es-btn--secondary">Save &amp; close</button>
+        <button class="es-btn es-btn--primary">Submit decision</button>
+      </div>
+    </div>
+
+  </div>
+</section>

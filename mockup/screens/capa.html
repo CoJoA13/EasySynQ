@@ -1,0 +1,485 @@
+<section class="screen" id="screen-capa" data-screen="capa">
+  <!-- page header -->
+  <header class="es-page-header">
+    <div class="es-page-header__main">
+      <nav class="es-breadcrumb">
+        <a>Home</a><span class="es-breadcrumb__sep">›</span>
+        <a>ACT</a><span class="es-breadcrumb__sep">›</span>
+        <a>Improvement</a><span class="es-breadcrumb__sep">›</span>
+        <span class="es-breadcrumb__current">Nonconformity &amp; CAPA</span>
+      </nav>
+      <h1 class="es-page-header__title">CAPA Board <span class="es-pdca es-pdca--act">Act</span> <span class="es-tag es-tag--accent">Clause 10.2</span></h1>
+      <p class="es-page-header__subtitle">The closed-loop process, made visible. Every nonconformity travels NC → Correction → Root Cause → Corrective Action → Verify before it can close.</p>
+    </div>
+    <div class="es-page-header__actions">
+      <div class="es-segmented">
+        <button class="es-segmented__item is-active">Board</button>
+        <button class="es-segmented__item">List</button>
+      </div>
+      <button class="es-btn es-btn--secondary">Filters</button>
+      <button class="es-btn es-btn--primary">＋ Raise CAPA</button>
+    </div>
+  </header>
+
+  <!-- summary strip -->
+  <div class="es-grid es-grid--4 es-mb-5">
+    <div class="es-metric">
+      <div class="es-metric__top"><span class="es-metric__label">Open CAPAs</span><span class="es-metric__icon">⚑</span></div>
+      <div class="es-metric__value">11</div>
+      <div class="es-metric__sub"><span class="es-metric__delta es-metric__delta--down">▼ 2</span> vs. last month</div>
+    </div>
+    <div class="es-metric">
+      <div class="es-metric__top"><span class="es-metric__label">Overdue</span><span class="es-metric__icon es-text-danger">●</span></div>
+      <div class="es-metric__value es-text-danger">3</div>
+      <div class="es-metric__sub">RCA &amp; action milestones past due</div>
+    </div>
+    <div class="es-metric">
+      <div class="es-metric__top"><span class="es-metric__label">Avg. cycle time</span><span class="es-metric__icon">◷</span></div>
+      <div class="es-metric__value">19<span class="es-small es-text-muted"> days</span></div>
+      <div class="es-metric__sub"><span class="es-metric__delta es-metric__delta--down">▼ 3d</span> faster to close</div>
+    </div>
+    <div class="es-metric">
+      <div class="es-metric__top"><span class="es-metric__label">By source</span><span class="es-metric__icon">⬡</span></div>
+      <div class="es-row es-gap-2 es-wrap es-mt-2">
+        <span class="es-badge es-badge--neutral es-badge--nodot">Audit · 5</span>
+        <span class="es-badge es-badge--neutral es-badge--nodot">Complaint · 3</span>
+        <span class="es-badge es-badge--neutral es-badge--nodot">NCR · 2</span>
+        <span class="es-badge es-badge--neutral es-badge--nodot">Mgmt Rev · 1</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- filter row -->
+  <div class="es-row es-row--between es-wrap es-gap-3 es-mb-4">
+    <div class="es-row es-gap-2 es-wrap">
+      <span class="es-tag">Owner ▾</span>
+      <span class="es-tag">Process ▾</span>
+      <span class="es-tag">Age ▾</span>
+      <span class="es-tag">Source ▾</span>
+    </div>
+    <span class="es-small es-text-muted">Close gate active · root cause + action + effectiveness evidence required before Closed</span>
+  </div>
+
+  <!-- KANBAN -->
+  <div class="es-kanban">
+
+    <!-- OPEN / NC -->
+    <div class="es-kanban__col">
+      <div class="es-kanban__col-head">
+        <span class="es-kanban__col-dot" style="background:var(--es-danger)"></span>
+        <span class="es-kanban__col-title">Open / NC</span>
+        <span class="es-kanban__col-count">3</span>
+      </div>
+      <div class="es-kanban__list">
+
+        <div class="es-kanban-card es-card--interactive">
+          <div class="es-kanban-card__top">
+            <span class="es-kanban-card__id">CAPA-2026-031</span>
+            <span class="es-badge es-badge--danger">NC</span>
+          </div>
+          <div class="es-kanban-card__title">Supplier re-evaluation overdue for 2 approved vendors</div>
+          <div class="es-row es-gap-2 es-wrap es-mt-2">
+            <span class="es-tag es-tag--accent">Audit · AF-118</span>
+            <span class="es-tag">8.4</span>
+          </div>
+          <div class="es-kanban-card__foot">
+            <div class="es-kanban-card__tags">
+              <span class="es-badge es-badge--danger es-badge--nodot">Overdue 2d</span>
+            </div>
+            <span class="es-avatar es-avatar--xs es-avatar--c2" title="Diego · Process Owner">DG</span>
+          </div>
+        </div>
+
+        <div class="es-kanban-card es-card--interactive">
+          <div class="es-kanban-card__top">
+            <span class="es-kanban-card__id">CAPA-2026-034</span>
+            <span class="es-badge es-badge--warning">High risk</span>
+          </div>
+          <div class="es-kanban-card__title">Customer complaint — delivered batch missing CoA documents</div>
+          <div class="es-row es-gap-2 es-wrap es-mt-2">
+            <span class="es-tag es-tag--accent">Complaint · CMP-2026-007</span>
+            <span class="es-tag">8.2</span>
+          </div>
+          <div class="es-kanban-card__foot">
+            <div class="es-kanban-card__tags">
+              <span class="es-badge es-badge--warning es-badge--nodot">Due in 1d</span>
+            </div>
+            <span class="es-avatar es-avatar--xs es-avatar--c1" title="Mara · Quality Manager">MA</span>
+          </div>
+        </div>
+
+        <div class="es-kanban-card es-card--interactive">
+          <div class="es-kanban-card__top">
+            <span class="es-kanban-card__id">CAPA-2026-035</span>
+            <span class="es-badge es-badge--neutral">Low risk</span>
+          </div>
+          <div class="es-kanban-card__title">Calibration label missing on torque wrench TW-04</div>
+          <div class="es-row es-gap-2 es-wrap es-mt-2">
+            <span class="es-tag es-tag--accent">NCR · NCR-2026-052</span>
+            <span class="es-tag">7.1.5</span>
+          </div>
+          <div class="es-kanban-card__foot">
+            <div class="es-kanban-card__tags">
+              <span class="es-badge es-badge--neutral es-badge--nodot">Due Jun 12</span>
+            </div>
+            <span class="es-avatar es-avatar--xs es-avatar--c3" title="Sam · Employee">SM</span>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- CORRECTION -->
+    <div class="es-kanban__col">
+      <div class="es-kanban__col-head">
+        <span class="es-kanban__col-dot" style="background:var(--es-warning)"></span>
+        <span class="es-kanban__col-title">Correction</span>
+        <span class="es-kanban__col-count">2</span>
+      </div>
+      <div class="es-kanban__list">
+
+        <div class="es-kanban-card es-card--interactive">
+          <div class="es-kanban-card__top">
+            <span class="es-kanban-card__id">CAPA-2026-028</span>
+            <span class="es-badge es-badge--warning">Medium risk</span>
+          </div>
+          <div class="es-kanban-card__title">Scrap rate spike on Line 2 — segregate &amp; rework affected lot</div>
+          <div class="es-row es-gap-2 es-wrap es-mt-2">
+            <span class="es-tag es-tag--accent">NCR · NCR-2026-049</span>
+            <span class="es-tag">8.5</span>
+          </div>
+          <div class="es-kanban-card__foot">
+            <div class="es-kanban-card__tags">
+              <span class="es-badge es-badge--neutral es-badge--nodot">Due Jun 09</span>
+            </div>
+            <span class="es-avatar es-avatar--xs es-avatar--c3" title="Sam · Employee">SM</span>
+          </div>
+        </div>
+
+        <div class="es-kanban-card es-card--interactive">
+          <div class="es-kanban-card__top">
+            <span class="es-kanban-card__id">CAPA-2026-033</span>
+            <span class="es-badge es-badge--warning">High risk</span>
+          </div>
+          <div class="es-kanban-card__title">Customer complaint — late delivery on PO-44821, expedite shipment</div>
+          <div class="es-row es-gap-2 es-wrap es-mt-2">
+            <span class="es-tag es-tag--accent">Complaint · CMP-2026-006</span>
+            <span class="es-tag">8.4</span>
+          </div>
+          <div class="es-kanban-card__foot">
+            <div class="es-kanban-card__tags">
+              <span class="es-badge es-badge--neutral es-badge--nodot">Due Jun 05</span>
+            </div>
+            <span class="es-avatar es-avatar--xs es-avatar--c2" title="Diego · Process Owner">DG</span>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- ROOT CAUSE -->
+    <div class="es-kanban__col">
+      <div class="es-kanban__col-head">
+        <span class="es-kanban__col-dot" style="background:var(--es-accent)"></span>
+        <span class="es-kanban__col-title">Root Cause</span>
+        <span class="es-kanban__col-count">2</span>
+      </div>
+      <div class="es-kanban__list">
+
+        <div class="es-kanban-card es-card--interactive">
+          <div class="es-kanban-card__top">
+            <span class="es-kanban-card__id">CAPA-2026-025</span>
+            <span class="es-badge es-badge--warning">Medium risk</span>
+          </div>
+          <div class="es-kanban-card__title">Recurring late deliveries — 5-Why on planning hand-off</div>
+          <div class="es-row es-gap-2 es-wrap es-mt-2">
+            <span class="es-tag es-tag--accent">Audit · AF-101</span>
+            <span class="es-tag">8.4</span>
+          </div>
+          <div class="es-kanban-card__foot">
+            <div class="es-kanban-card__tags">
+              <span class="es-badge es-badge--danger es-badge--nodot">⚑ RCA due tomorrow</span>
+            </div>
+            <span class="es-avatar es-avatar--xs es-avatar--c1" title="Mara · Quality Manager">MA</span>
+          </div>
+        </div>
+
+        <div class="es-kanban-card es-card--interactive">
+          <div class="es-kanban-card__top">
+            <span class="es-kanban-card__id">CAPA-2026-030</span>
+            <span class="es-badge es-badge--neutral">Low risk</span>
+          </div>
+          <div class="es-kanban-card__title">Training records not retained for 3 new hires</div>
+          <div class="es-row es-gap-2 es-wrap es-mt-2">
+            <span class="es-tag es-tag--accent">Mgmt Rev · MR-2026-Q1</span>
+            <span class="es-tag">7.2</span>
+          </div>
+          <div class="es-kanban-card__foot">
+            <div class="es-kanban-card__tags">
+              <span class="es-badge es-badge--neutral es-badge--nodot">Due Jun 18</span>
+            </div>
+            <span class="es-avatar es-avatar--xs es-avatar--c4" title="Priya · Author">PR</span>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- CORRECTIVE ACTION -->
+    <div class="es-kanban__col">
+      <div class="es-kanban__col-head">
+        <span class="es-kanban__col-dot" style="background:var(--es-info)"></span>
+        <span class="es-kanban__col-title">Corrective Action</span>
+        <span class="es-kanban__col-count">2</span>
+      </div>
+      <div class="es-kanban__list">
+
+        <div class="es-kanban-card es-card--interactive">
+          <div class="es-kanban-card__top">
+            <span class="es-kanban-card__id">CAPA-2026-019</span>
+            <span class="es-badge es-badge--warning">Medium risk</span>
+          </div>
+          <div class="es-kanban-card__title">Competence gap — revise WI-PRD-022 &amp; retrain operators</div>
+          <div class="es-row es-gap-2 es-wrap es-mt-2">
+            <span class="es-tag es-tag--accent">Audit · AF-092</span>
+            <span class="es-tag">7.2</span>
+          </div>
+          <div class="es-kanban-card__foot">
+            <div class="es-kanban-card__tags">
+              <span class="es-badge es-badge--inreview">WI-PRD-022 InReview</span>
+            </div>
+            <span class="es-avatar es-avatar--xs es-avatar--c1" title="Mara · Quality Manager">MA</span>
+          </div>
+        </div>
+
+        <div class="es-kanban-card es-card--interactive">
+          <div class="es-kanban-card__top">
+            <span class="es-kanban-card__id">CAPA-2026-029</span>
+            <span class="es-badge es-badge--warning">High risk</span>
+          </div>
+          <div class="es-kanban-card__title">Customer complaint — labelling error, update SOP-PUR-014 controls</div>
+          <div class="es-row es-gap-2 es-wrap es-mt-2">
+            <span class="es-tag es-tag--accent">Complaint · CMP-2026-004</span>
+            <span class="es-tag">8.5.1</span>
+          </div>
+          <div class="es-kanban-card__foot">
+            <div class="es-kanban-card__tags">
+              <span class="es-badge es-badge--underrevision">SOP-PUR-014 Rev D</span>
+            </div>
+            <span class="es-avatar es-avatar--xs es-avatar--c2" title="Diego · Process Owner">DG</span>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- VERIFY EFFECTIVENESS -->
+    <div class="es-kanban__col">
+      <div class="es-kanban__col-head">
+        <span class="es-kanban__col-dot" style="background:var(--es-success)"></span>
+        <span class="es-kanban__col-title">Verify Effectiveness</span>
+        <span class="es-kanban__col-count">2</span>
+      </div>
+      <div class="es-kanban__list">
+
+        <div class="es-kanban-card es-card--interactive">
+          <div class="es-kanban-card__top">
+            <span class="es-kanban-card__id">CAPA-2026-012</span>
+            <span class="es-badge es-badge--success">Verifying</span>
+          </div>
+          <div class="es-kanban-card__title">Document control gaps — measure approval-cycle KPI for 60 days</div>
+          <div class="es-row es-gap-2 es-wrap es-mt-2">
+            <span class="es-tag es-tag--accent">Audit · AF-077</span>
+            <span class="es-tag">7.5</span>
+          </div>
+          <div class="es-panel es-mt-2">
+            <div class="es-progress-row">
+              <span class="es-small es-text-secondary">Effectiveness window</span>
+              <div class="es-progress"><div class="es-progress__bar es-progress__bar--success" style="width:78%"></div></div>
+              <span class="es-progress-row__val">47/60d</span>
+            </div>
+          </div>
+          <div class="es-kanban-card__foot">
+            <div class="es-kanban-card__tags">
+              <span class="es-badge es-badge--neutral es-badge--nodot">Check Jun 25</span>
+            </div>
+            <span class="es-avatar es-avatar--xs es-avatar--c1" title="Mara · Quality Manager">MA</span>
+          </div>
+        </div>
+
+        <div class="es-kanban-card es-card--interactive">
+          <div class="es-kanban-card__top">
+            <span class="es-kanban-card__id">CAPA-2026-021</span>
+            <span class="es-badge es-badge--success">Verifying</span>
+          </div>
+          <div class="es-kanban-card__title">Internal audit independence — verify auditor assignment control</div>
+          <div class="es-row es-gap-2 es-wrap es-mt-2">
+            <span class="es-tag es-tag--accent">Mgmt Rev · MR-2025-Q4</span>
+            <span class="es-tag">9.2</span>
+          </div>
+          <div class="es-kanban-card__foot">
+            <div class="es-kanban-card__tags">
+              <span class="es-badge es-badge--neutral es-badge--nodot">Verifier · Ingrid</span>
+            </div>
+            <span class="es-avatar es-avatar--xs es-avatar--c4" title="Ingrid · Internal Auditor">IN</span>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- CLOSED -->
+    <div class="es-kanban__col">
+      <div class="es-kanban__col-head">
+        <span class="es-kanban__col-dot" style="background:var(--es-text-muted)"></span>
+        <span class="es-kanban__col-title">Closed</span>
+        <span class="es-kanban__col-count">2</span>
+      </div>
+      <div class="es-kanban__list">
+
+        <div class="es-kanban-card es-card--interactive">
+          <div class="es-kanban-card__top">
+            <span class="es-kanban-card__id">CAPA-2026-008</span>
+            <span class="es-badge es-badge--neutral">🔒 Closed</span>
+          </div>
+          <div class="es-kanban-card__title">PPE non-compliance on packing floor — closed effective</div>
+          <div class="es-row es-gap-2 es-wrap es-mt-2">
+            <span class="es-tag es-tag--accent">Complaint · CMP-2026-001</span>
+            <span class="es-tag">8.5</span>
+          </div>
+          <div class="es-kanban-card__foot">
+            <div class="es-kanban-card__tags">
+              <span class="es-badge es-badge--success es-badge--nodot">✓ Effective</span>
+            </div>
+            <span class="es-avatar es-avatar--xs es-avatar--c2" title="Ken · Approver">KN</span>
+          </div>
+        </div>
+
+        <div class="es-kanban-card es-card--interactive">
+          <div class="es-kanban-card__top">
+            <span class="es-kanban-card__id">CAPA-2026-015</span>
+            <span class="es-badge es-badge--neutral">🔒 Closed</span>
+          </div>
+          <div class="es-kanban-card__title">Record retention schedule clarified in FRM-HR-007</div>
+          <div class="es-row es-gap-2 es-wrap es-mt-2">
+            <span class="es-tag es-tag--accent">Audit · AF-066</span>
+            <span class="es-tag">7.5.3</span>
+          </div>
+          <div class="es-kanban-card__foot">
+            <div class="es-kanban-card__tags">
+              <span class="es-badge es-badge--success es-badge--nodot">✓ Effective</span>
+            </div>
+            <span class="es-avatar es-avatar--xs es-avatar--c1" title="Mara · Quality Manager">MA</span>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ===================================================================== -->
+  <!-- DETAIL DRAWER (progressive disclosure: full closed-loop thread) -->
+  <!-- Default hidden by shell; shown here to demonstrate the disclosure ladder -->
+  <!-- ===================================================================== -->
+  <div class="es-scrim"></div>
+  <aside class="es-drawer">
+    <div class="es-drawer__header">
+      <div>
+        <div class="es-drawer__eyebrow">CAPA · CAPA-2026-034 · <span class="es-text-accent">Customer Complaint</span></div>
+        <h2 class="es-drawer__title">Delivered batch missing CoA documents</h2>
+      </div>
+      <button class="es-icon-btn" aria-label="Close">✕</button>
+    </div>
+
+    <div class="es-drawer__body">
+      <dl class="es-dl">
+        <dt>Stage</dt><dd><span class="es-badge es-badge--danger">Open / NC</span></dd>
+        <dt>Source</dt><dd><span class="es-tag es-tag--accent">Complaint · CMP-2026-007</span> <span class="es-text-secondary">Northwind Foods Ltd.</span></dd>
+        <dt>Clause</dt><dd>8.2 — Requirements for products and services</dd>
+        <dt>Process</dt><dd>Order Fulfilment</dd>
+        <dt>Owner</dt><dd><span class="es-cell-user"><span class="es-avatar es-avatar--xs es-avatar--c1">MA</span> Mara · Quality Manager</span></dd>
+        <dt>Risk</dt><dd><span class="es-badge es-badge--warning">High</span></dd>
+        <dt>Raised</dt><dd>2026-05-28</dd>
+        <dt>Next due</dt><dd><span class="es-text-warning">Containment due 2026-06-01 (1 day)</span></dd>
+      </dl>
+
+      <div class="es-divider"></div>
+
+      <h3 class="es-h3 es-mb-3">Closed-loop thread</h3>
+      <ol class="es-timeline">
+        <li class="es-timeline__item es-timeline__item--accent">
+          <span class="es-timeline__dot"></span>
+          <div class="es-timeline__head">
+            <span class="es-timeline__ver">Complaint logged</span>
+            <span class="es-badge es-badge--danger">NC</span>
+            <span class="es-timeline__time">2026-05-28 · Sam</span>
+          </div>
+          <p class="es-timeline__meta">"Northwind reported batch B-2291 arrived without Certificates of Analysis. Quarantine requested."</p>
+        </li>
+        <li class="es-timeline__item">
+          <span class="es-timeline__dot"></span>
+          <div class="es-timeline__head">
+            <span class="es-timeline__ver">Containment</span>
+            <span class="es-badge es-badge--warning es-badge--nodot">In progress</span>
+            <span class="es-timeline__time">due 2026-06-01 · Diego</span>
+          </div>
+          <p class="es-timeline__meta">Re-issue CoA pack to customer; hold remaining stock of B-2291 pending review.</p>
+        </li>
+        <li class="es-timeline__item">
+          <span class="es-timeline__dot"></span>
+          <div class="es-timeline__head">
+            <span class="es-timeline__ver">Root cause</span>
+            <span class="es-badge es-badge--neutral es-badge--nodot">Pending</span>
+          </div>
+          <p class="es-timeline__meta">Awaiting 5-Why on dispatch checklist gap.</p>
+        </li>
+      </ol>
+
+      <div class="es-divider"></div>
+
+      <h3 class="es-h3 es-mb-3">Close gate</h3>
+      <div class="es-stepper">
+        <div class="es-stepper__step is-current">
+          <div class="es-stepper__rail"><div class="es-stepper__marker">!</div><div class="es-stepper__line"></div></div>
+          <div class="es-stepper__body"><div class="es-stepper__title">Root cause documented</div><div class="es-stepper__sub">Required · not yet captured</div></div>
+        </div>
+        <div class="es-stepper__step is-pending">
+          <div class="es-stepper__rail"><div class="es-stepper__marker">2</div><div class="es-stepper__line"></div></div>
+          <div class="es-stepper__body"><div class="es-stepper__title">Corrective action defined</div><div class="es-stepper__sub">Required</div></div>
+        </div>
+        <div class="es-stepper__step is-pending">
+          <div class="es-stepper__rail"><div class="es-stepper__marker">3</div></div>
+          <div class="es-stepper__body"><div class="es-stepper__title">Effectiveness evidence</div><div class="es-stepper__sub">Required before Closed</div></div>
+        </div>
+      </div>
+      <p class="es-small es-text-warning es-mt-2">⚠ Cannot move to Closed — root cause, corrective action and effectiveness evidence are all still missing (DP-9).</p>
+
+      <div class="es-divider"></div>
+
+      <h3 class="es-h3 es-mb-3">Linked records &amp; documents</h3>
+      <ul class="es-stack">
+        <li class="es-clause-item">
+          <span class="es-clause-item__num">CMP-007</span>
+          <div class="es-clause-item__main">
+            <div class="es-clause-item__title">Complaint record <span class="es-badge es-badge--neutral es-badge--nodot">🔒 Record</span></div>
+            <div class="es-clause-item__sub">Captured 2026-05-28 · retained 7 yrs · read-only</div>
+          </div>
+        </li>
+        <li class="es-clause-item">
+          <span class="es-clause-item__num">SOP-PUR-014</span>
+          <div class="es-clause-item__main">
+            <div class="es-clause-item__title">Dispatch &amp; CoA Procedure <span class="es-badge es-badge--effective">Effective · Rev C</span></div>
+            <div class="es-clause-item__sub">Candidate for revision once corrective action is defined</div>
+          </div>
+        </li>
+      </ul>
+    </div>
+
+    <div class="es-drawer__footer">
+      <button class="es-btn es-btn--secondary">Open full record</button>
+      <button class="es-btn es-btn--primary">Move to ▾</button>
+    </div>
+  </aside>
+
+</section>
