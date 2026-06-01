@@ -29,15 +29,23 @@ from ..domain.authz import RequestContext, ResourceContext, authorize
 from ..problems import ProblemException
 from ..services.authz import AuthzAuditSink, enforce, gather_grants, get_authz_audit_sink, require
 from ..services.vault import (
+    SignatureEventSink,
     VaultAuditSink,
+    approve,
     break_lock,
     checkin,
     checkout,
     create_document,
     get_vault_audit_sink,
+    get_vault_signature_sink,
     heartbeat,
     init_upload,
+    obsolete,
+    release,
+    request_changes,
+    start_revision,
     storage,
+    submit_review,
 )
 from ..services.vault import repository as vault_repo
 from ..services.vault.locks import LOCK_TTL_SECONDS
@@ -74,6 +82,23 @@ class CheckIn(BaseModel):
     mime_type: str = "application/octet-stream"
 
 
+class Approve(BaseModel):
+    effective_from: datetime.datetime | None = None
+
+
+class RequestChanges(BaseModel):
+    comment: str
+
+
+class Obsolete(BaseModel):
+    reason: str
+    version_id: uuid.UUID | None = None
+
+
+class Release(BaseModel):
+    version_id: uuid.UUID | None = None
+
+
 # --- representations --------------------------------------------------------------------
 
 
@@ -91,6 +116,9 @@ def _document(d: DocumentedInformation) -> dict[str, Any]:
         "is_singleton": d.is_singleton,
         "owner_user_id": str(d.owner_user_id),
         "framework_id": str(d.framework_id),
+        "current_effective_version_id": (
+            str(d.current_effective_version_id) if d.current_effective_version_id else None
+        ),
         "created_at": d.created_at.isoformat() if d.created_at else None,
     }
 
@@ -107,6 +135,11 @@ def _version(v: DocumentVersion) -> dict[str, Any]:
         "source_blob_sha256": v.source_blob_sha256,
         "metadata_snapshot": v.metadata_snapshot,
         "author_user_id": str(v.author_user_id),
+        "effective_from": v.effective_from.isoformat() if v.effective_from else None,
+        "effective_to": v.effective_to.isoformat() if v.effective_to else None,
+        "superseded_by_version_id": (
+            str(v.superseded_by_version_id) if v.superseded_by_version_id else None
+        ),
         "created_at": v.created_at.isoformat() if v.created_at else None,
     }
 
@@ -142,7 +175,10 @@ async def _document_scope(request: Request, session: AsyncSession) -> ResourceCo
         dt = await session.get(DocumentType, doc.document_type_id)
         level = dt.document_level.value if dt else None
     return ResourceContext(
-        artifact_id=str(doc.id), folder_path=doc.folder_path, document_level=level
+        artifact_id=str(doc.id),
+        folder_path=doc.folder_path,
+        document_level=level,
+        lifecycle_state=doc.current_state.value,
     )
 
 
@@ -160,6 +196,13 @@ _read_draft = require("document.read_draft", async_scope_resolver=_document_scop
 _checkout = require("document.checkout", async_scope_resolver=_document_scope)
 _edit = require("document.edit", async_scope_resolver=_document_scope)
 _manage_metadata = require("document.manage_metadata", async_scope_resolver=_document_scope)
+# Lifecycle actions (S4). approve/release/obsolete are signature-hook actions (the Part-11 step-up
+# seam; no-op in v1). start-revision reuses ``document.edit`` (no ``document.revise`` key exists).
+_submit = require("document.submit", async_scope_resolver=_document_scope)
+_review = require("document.review", async_scope_resolver=_document_scope)
+_approve = require("document.approve", async_scope_resolver=_document_scope, sig_hook=True)
+_release = require("document.release", async_scope_resolver=_document_scope, sig_hook=True)
+_obsolete = require("document.obsolete", async_scope_resolver=_document_scope, sig_hook=True)
 
 
 # --- documents --------------------------------------------------------------------------
@@ -338,6 +381,89 @@ async def heartbeat_endpoint(
     doc = await _load_document(session, caller, document_id)
     remaining = await heartbeat(session, caller, doc)
     return {"document_id": str(doc.id), "lock_ttl_seconds": remaining}
+
+
+# --- lifecycle (S4): named POST action sub-resources; never PATCH status= -----------------
+
+
+@router.post("/documents/{document_id}/submit-review")
+async def submit_review_endpoint(
+    document_id: uuid.UUID,
+    caller: AppUser = Depends(_submit),
+    session: AsyncSession = Depends(get_session),
+    vault_sink: VaultAuditSink = Depends(get_vault_audit_sink),
+) -> dict[str, Any]:
+    doc = await _load_document(session, caller, document_id)
+    return _document(await submit_review(session, vault_sink, caller, doc))
+
+
+@router.post("/documents/{document_id}/approve")
+async def approve_endpoint(
+    document_id: uuid.UUID,
+    body: Approve,
+    caller: AppUser = Depends(_approve),
+    session: AsyncSession = Depends(get_session),
+    vault_sink: VaultAuditSink = Depends(get_vault_audit_sink),
+) -> dict[str, Any]:
+    doc = await _load_document(session, caller, document_id)
+    return _document(
+        await approve(session, vault_sink, caller, doc, effective_from=body.effective_from)
+    )
+
+
+@router.post("/documents/{document_id}/request-changes")
+async def request_changes_endpoint(
+    document_id: uuid.UUID,
+    body: RequestChanges,
+    caller: AppUser = Depends(_review),
+    session: AsyncSession = Depends(get_session),
+    vault_sink: VaultAuditSink = Depends(get_vault_audit_sink),
+) -> dict[str, Any]:
+    doc = await _load_document(session, caller, document_id)
+    return _document(await request_changes(session, vault_sink, caller, doc, comment=body.comment))
+
+
+@router.post("/documents/{document_id}/release")
+async def release_endpoint(
+    document_id: uuid.UUID,
+    body: Release,
+    caller: AppUser = Depends(_release),
+    session: AsyncSession = Depends(get_session),
+    vault_sink: VaultAuditSink = Depends(get_vault_audit_sink),
+    sig_sink: SignatureEventSink = Depends(get_vault_signature_sink),
+) -> dict[str, Any]:
+    # _load_document is the 404/authz guard on the request session; the cutover re-reads the
+    # document authoritatively under a row lock in its own SERIALIZABLE session.
+    await _load_document(session, caller, document_id)
+    doc = await release(caller, document_id, vault_sink, sig_sink, version_id=body.version_id)
+    return _document(doc)
+
+
+@router.post("/documents/{document_id}/start-revision")
+async def start_revision_endpoint(
+    document_id: uuid.UUID,
+    caller: AppUser = Depends(_edit),
+    session: AsyncSession = Depends(get_session),
+    vault_sink: VaultAuditSink = Depends(get_vault_audit_sink),
+) -> dict[str, Any]:
+    doc = await _load_document(session, caller, document_id)
+    return _document(await start_revision(session, vault_sink, caller, doc))
+
+
+@router.post("/documents/{document_id}/obsolete")
+async def obsolete_endpoint(
+    document_id: uuid.UUID,
+    body: Obsolete,
+    caller: AppUser = Depends(_obsolete),
+    session: AsyncSession = Depends(get_session),
+    vault_sink: VaultAuditSink = Depends(get_vault_audit_sink),
+) -> dict[str, Any]:
+    doc = await _load_document(session, caller, document_id)
+    return _document(
+        await obsolete(
+            session, vault_sink, caller, doc, reason=body.reason, version_id=body.version_id
+        )
+    )
 
 
 # --- versions ---------------------------------------------------------------------------
