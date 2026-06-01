@@ -62,6 +62,17 @@ jobs:
         working-directory: apps/api
         run: uv run alembic check
 
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+      - working-directory: apps/api
+        run: uv sync --frozen
+      - name: integration tests (testcontainers spin their own Postgres)
+        working-directory: apps/api
+        run: uv run pytest -m integration
+
   web:
     runs-on: ubuntu-latest
     steps:

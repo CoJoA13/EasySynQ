@@ -36,6 +36,7 @@ class Settings(BaseSettings):
     oidc_issuer: str = ""
     oidc_audience: str = "easysynq-api"
     oidc_jwks_url: str = ""
+    oidc_client_id: str = "easysynq-web"
 
     # renderer + mirror
     gotenberg_url: str = "http://localhost:3000"

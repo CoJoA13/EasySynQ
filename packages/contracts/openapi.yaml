@@ -21,6 +21,8 @@ servers:
 tags:
   - name: health
     description: Liveness and readiness. Public, unversioned-friendly probes.
+  - name: auth
+    description: Authentication & session. Keycloak OIDC + PKCE; the API is a resource server.
 
 paths:
   /healthz:
@@ -61,6 +63,50 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Readiness" }
+
+  /auth/config:
+    get:
+      tags: [auth]
+      operationId: getAuthConfig
+      summary: Public OIDC config the SPA needs to start Authorization-Code + PKCE.
+      security: []
+      responses:
+        "200":
+          description: Realm / client / audience.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuthConfig" }
+
+  /me:
+    get:
+      tags: [auth]
+      operationId: getMe
+      summary: The authenticated user, JIT-provisioned from the Keycloak subject.
+      responses:
+        "200":
+          description: Current user.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AppUser" }
+        "401":
+          description: Missing, invalid, or expired token.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  /auth/step-up:
+    post:
+      tags: [auth]
+      operationId: postAuthStepUp
+      summary: Reserved Part-11 re-auth seam (declared; not enforced in v1).
+      responses:
+        "200":
+          description: Step-up acknowledgement.
+        "401":
+          description: Missing, invalid, or expired token.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
 
 components:
   securitySchemes:
@@ -147,6 +193,9 @@ components:
             - validation_error
             - not_found
             - permission_denied
+            - unauthenticated
+            - token_expired
+            - token_invalid
             - illegal_transition
             - lock_conflict
             - etag_mismatch
@@ -170,6 +219,29 @@ components:
               field: { type: string }
               code: { type: string }
               message: { type: string }
+
+    AuthConfig:
+      type: object
+      additionalProperties: false
+      required: [issuer, client_id, audience]
+      properties:
+        issuer: { type: string }
+        client_id: { type: string }
+        audience: { type: string }
+
+    AppUser:
+      type: object
+      additionalProperties: false
+      required: [id, keycloak_subject, status, is_guest]
+      properties:
+        id: { type: string, format: uuid }
+        keycloak_subject: { type: string }
+        display_name: { type: [string, "null"] }
+        email: { type: [string, "null"] }
+        status:
+          type: string
+          enum: [INVITED, ACTIVE, LOCKED, DISABLED, RETIRED]
+        is_guest: { type: boolean }
 
 security:
   - keycloak: []

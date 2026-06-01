@@ -23,6 +23,14 @@
 		reverse_proxy api:8000
 	}
 
+	# Keycloak is reached by the browser through the proxy (so its issuer is the
+	# host-facing http://localhost) while the API validates tokens against it on the
+	# internal network. Caddy forwards X-Forwarded-* so Keycloak derives the right host.
+	@keycloak path /realms/* /resources/*
+	handle @keycloak {
+		reverse_proxy keycloak:8080
+	}
+
 	# Everything else is the SPA.
 	handle {
 		reverse_proxy web:5173
