@@ -45,7 +45,7 @@ line-length = 100
 src = ["src", "tests"]
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B", "ASYNC", "S", "RUF"]
+select = ["E", "F", "I", "UP", "B", "BLE", "ASYNC", "S", "RUF"]
 # S101 (assert) is fine in tests
 per-file-ignores = { "tests/**" = ["S101"] }
 
@@ -55,6 +55,11 @@ strict = true
 plugins = ["pydantic.mypy"]
 mypy_path = "src"
 explicit_package_bases = true
+
+# Third-party libs without bundled type stubs (mypy --strict would otherwise error).
+[[tool.mypy.overrides]]
+module = ["boto3", "boto3.*", "celery", "celery.*", "alembic", "alembic.*", "redis", "redis.*"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 addopts = "-ra --strict-markers"

@@ -6,7 +6,7 @@ on. The canonical code set mirrors ``packages/contracts/openapi.yaml`` and doc 1
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -40,8 +40,13 @@ class ProblemException(Exception):
 
 
 def _body(
-    *, status: int, code: str, title: str, instance: str,
-    detail: str | None = None, errors: list[dict[str, Any]] | None = None,
+    *,
+    status: int,
+    code: str,
+    title: str,
+    instance: str,
+    detail: str | None = None,
+    errors: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     body: dict[str, Any] = {
         "type": f"{_TYPE_BASE}{code}",
@@ -60,41 +65,56 @@ def _body(
 
 def register_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(ProblemException)
-    async def _problem(request: Request, exc: ProblemException) -> JSONResponse:
+    async def _problem(request: Request, exc: Exception) -> JSONResponse:
+        problem = cast(ProblemException, exc)
         return JSONResponse(
-            status_code=exc.status,
+            status_code=problem.status,
             media_type=PROBLEM_MEDIA_TYPE,
             content=_body(
-                status=exc.status, code=exc.code, title=exc.title,
-                instance=str(request.url.path), detail=exc.detail, errors=exc.errors,
+                status=problem.status,
+                code=problem.code,
+                title=problem.title,
+                instance=str(request.url.path),
+                detail=problem.detail,
+                errors=problem.errors,
             ),
         )
 
     @app.exception_handler(RequestValidationError)
-    async def _validation(request: Request, exc: RequestValidationError) -> JSONResponse:
+    async def _validation(request: Request, exc: Exception) -> JSONResponse:
+        validation = cast(RequestValidationError, exc)
         errors = [
-            {"field": ".".join(str(p) for p in e.get("loc", [])), "code": e.get("type", ""),
-             "message": e.get("msg", "")}
-            for e in exc.errors()
+            {
+                "field": ".".join(str(p) for p in err.get("loc", [])),
+                "code": err.get("type", ""),
+                "message": err.get("msg", ""),
+            }
+            for err in validation.errors()
         ]
         return JSONResponse(
             status_code=422,
             media_type=PROBLEM_MEDIA_TYPE,
             content=_body(
-                status=422, code="validation_error", title="Request failed validation",
-                instance=str(request.url.path), detail=f"{len(errors)} field(s) invalid.",
+                status=422,
+                code="validation_error",
+                title="Request failed validation",
+                instance=str(request.url.path),
+                detail=f"{len(errors)} field(s) invalid.",
                 errors=errors,
             ),
         )
 
     @app.exception_handler(StarletteHTTPException)
-    async def _http(request: Request, exc: StarletteHTTPException) -> JSONResponse:
-        code = "not_found" if exc.status_code == 404 else "internal_error"
+    async def _http(request: Request, exc: Exception) -> JSONResponse:
+        http = cast(StarletteHTTPException, exc)
+        code = "not_found" if http.status_code == 404 else "internal_error"
         return JSONResponse(
-            status_code=exc.status_code,
+            status_code=http.status_code,
             media_type=PROBLEM_MEDIA_TYPE,
             content=_body(
-                status=exc.status_code, code=code, title=str(exc.detail),
+                status=http.status_code,
+                code=code,
+                title=str(http.detail),
                 instance=str(request.url.path),
             ),
         )

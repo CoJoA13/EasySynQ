@@ -15,9 +15,14 @@ from ..base import Base
 class Organization(Base):
     __tablename__ = "organization"
 
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+    )
     legal_name: Mapped[str] = mapped_column(String(255))
     short_code: Mapped[str] = mapped_column(String(32), unique=True)  # [A-Z0-9-]
     created_at: Mapped[datetime.datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
+        DateTime(timezone=True),
+        server_default=func.now(),
     )

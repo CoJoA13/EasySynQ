@@ -44,15 +44,25 @@ class SystemConfig(Base):
         primary_key=True,
     )
     setup_state: Mapped[SetupState] = mapped_column(
-        setup_state_enum, default=SetupState.UNINITIALIZED, nullable=False
+        setup_state_enum,
+        default=SetupState.UNINITIALIZED,
+        nullable=False,
     )
-    canonical_serialize_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    canonical_serialize_version: Mapped[int] = mapped_column(
+        Integer,
+        default=1,
+        nullable=False,
+    )
     finalized_at: Mapped[datetime.datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
+        DateTime(timezone=True),
+        nullable=True,
     )
     created_at: Mapped[datetime.datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
+        DateTime(timezone=True),
+        server_default=func.now(),
     )
     updated_at: Mapped[datetime.datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
     )

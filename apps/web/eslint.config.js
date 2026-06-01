@@ -3,7 +3,7 @@ import jsxA11y from "eslint-plugin-jsx-a11y";
 import tseslint from "typescript-eslint";
 
 export default tseslint.config(
-  { ignores: ["dist", "src/api/_generated"] },
+  { ignores: ["dist", "src/api/_generated", "**/*.config.{ts,cts,mts,js,cjs,mjs}"] },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {

@@ -12,6 +12,8 @@ info:
     Slice S0 (walking skeleton) covers only the health surface + the shared
     RFC 9457 problem model and standard parameters. Later slices add the auth,
     document, version, lock, task, audit, and search routers.
+  license:
+    name: Proprietary
 servers:
   - url: /api/v1
     description: Versioned QMS surface (behind Caddy; same origin as the SPA).
@@ -64,7 +66,7 @@ components:
   securitySchemes:
     keycloak:
       type: openIdConnect
-      openIdConnectUrl: /api/v1/auth/config
+      openIdConnectUrl: https://auth.example/realms/easysynq/.well-known/openid-configuration
       description: >-
         OIDC Authorization Code + PKCE via Keycloak. The API validates the access
         JWT against Keycloak's JWKS; permissions are resolved server-side per
@@ -115,7 +117,7 @@ components:
           type: string
           enum: [postgres, minio, redis, keycloak, alembic]
         ready: { type: boolean }
-        detail: { type: string, nullable: true }
+        detail: { type: [string, "null"] }
 
     Readiness:
       type: object
@@ -156,12 +158,11 @@ components:
             - idempotency_replay
             - internal_error
             - dependency_unavailable
-        detail: { type: string, nullable: true }
-        instance: { type: string, nullable: true }
-        request_id: { type: string, nullable: true }
+        detail: { type: [string, "null"] }
+        instance: { type: [string, "null"] }
+        request_id: { type: [string, "null"] }
         errors:
-          type: array
-          nullable: true
+          type: [array, "null"]
           items:
             type: object
             additionalProperties: false
@@ -169,17 +170,6 @@ components:
               field: { type: string }
               code: { type: string }
               message: { type: string }
-
-  responses:
-    NotFound:
-      description: Resource absent, or hidden by row-level visibility.
-      content: { application/problem+json: { schema: { $ref: "#/components/schemas/Problem" } } }
-    ValidationError:
-      description: Well-formed but semantically invalid request.
-      content: { application/problem+json: { schema: { $ref: "#/components/schemas/Problem" } } }
-    PermissionDenied:
-      description: Authenticated but the policy engine denies (deny-by-default, deny-wins).
-      content: { application/problem+json: { schema: { $ref: "#/components/schemas/Problem" } } }
 
 security:
   - keycloak: []
