@@ -14,7 +14,9 @@ invariant* rather than a discipline problem.
 - **Code:** building the MVP foundation-first, slice by slice (each via a PR with green CI on protected `main`).
   - **S0 — walking skeleton** ✅ — Compose stack, `/healthz`+`/readyz`, reversible Alembic baseline, OpenAPI→client pipeline.
   - **S1 — authentication** ✅ — Keycloak OIDC/PKCE, JWT-vs-JWKS validation, `app_user` + JIT provisioning, `/me`.
-  - **S2 — authorization** (next) — deny-wins PDP/PEP, permission catalog, seeded roles.
+  - **S2 — authorization** ✅ — deny-wins PDP/PEP, the closed permission catalog + 8 seeded roles, two-tier grant guard.
+  - **S3 — vault** ✅ — document create + the check-out → presigned CAS upload → immutable check-in cycle (MinIO WORM, Redis lock).
+  - **S4 — lifecycle** (next) — the document state machine + the atomic single-Effective cutover.
 
   Run it: `just up s`, then open **http://localhost** (dev login `demo` / `Demo-Password-1`).
 
