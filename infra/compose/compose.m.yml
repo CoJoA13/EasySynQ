@@ -1,0 +1,15 @@
+# M profile (small-to-mid, ≤100 users; default target). 2× the stateless tiers;
+# stateful services and the scheduler stay single. OpenSearch still omitted in MVP.
+services:
+  api:
+    deploy:
+      replicas: 2
+  worker:
+    deploy:
+      replicas: 2
+  renderer:
+    deploy:
+      replicas: 2
+  beat:
+    deploy:
+      replicas: 1      # EXACTLY ONE (R14 SPOF; fast-restart runbook).

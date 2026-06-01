@@ -1,0 +1,42 @@
+# --- secrets / env (D1: no secrets in git) ---
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+infra/compose/.env
+**/secrets/
+
+# --- generated code (regenerated from packages/contracts/openapi.yaml) ---
+packages/contracts/dist/
+apps/api/src/easysynq_api/_generated/
+apps/web/src/api/_generated/
+
+# --- python ---
+__pycache__/
+*.py[cod]
+.venv/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+.coverage
+htmlcov/
+
+# --- node / web ---
+node_modules/
+apps/web/dist/
+apps/web/.vite/
+*.log
+npm-debug.log*
+
+# --- os / editor ---
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# --- runtime data (never committed) ---
+infra/data/
+qms-mirror/
+backups/

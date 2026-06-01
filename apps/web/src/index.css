@@ -1,0 +1,13 @@
+/* Mantine styles are imported first in main.tsx; Tailwind layers come after so the
+   reset does not clobber Mantine component styles (doc 18 §2 ordering caveat). */
+@import "./theme/tokens.css";
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  margin: 0;
+  background: var(--es-bg-surface);
+  color: var(--es-fg);
+}

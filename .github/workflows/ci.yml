@@ -1,0 +1,74 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "22" }
+      - name: lint + bundle OpenAPI
+        run: npx --yes @redocly/cli lint packages/contracts/openapi.yaml
+
+  api:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: install uv
+        uses: astral-sh/setup-uv@v3
+      - name: sync
+        working-directory: apps/api
+        run: uv sync
+      - name: lint
+        working-directory: apps/api
+        run: uv run ruff check . && uv run ruff format --check .
+      - name: types
+        working-directory: apps/api
+        run: uv run mypy src
+      - name: unit tests
+        working-directory: apps/api
+        run: uv run pytest -m unit
+
+  migrations:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: easysynq
+          POSTGRES_PASSWORD: easysynq
+          POSTGRES_DB: easysynq
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U easysynq" --health-interval 5s
+          --health-timeout 3s --health-retries 20
+    env:
+      DATABASE_URL_SYNC: postgresql+psycopg://easysynq:easysynq@localhost:5432/easysynq
+      DATABASE_URL: postgresql+psycopg://easysynq:easysynq@localhost:5432/easysynq
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+      - working-directory: apps/api
+        run: uv sync
+      - name: upgrade head then downgrade base (reversible) then back to head
+        working-directory: apps/api
+        run: uv run alembic upgrade head && uv run alembic downgrade base && uv run alembic upgrade head
+      - name: autogenerate drift check (models == migrations)
+        working-directory: apps/api
+        run: uv run alembic check
+
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "22" }
+      - working-directory: apps/web
+        run: npm install
+      - working-directory: apps/web
+        run: npm run lint && npm run typecheck && npm run build

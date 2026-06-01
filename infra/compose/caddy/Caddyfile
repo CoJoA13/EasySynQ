@@ -1,0 +1,30 @@
+# EasySynQ edge: TLS termination, static SPA, /api routing, security headers.
+# SITE_ADDRESS defaults to :80 (plain HTTP) for the dev skeleton; in production set
+# it to your domain for automatic TLS, or use the internal issuer when air-gapped.
+{
+	admin off
+}
+
+{$SITE_ADDRESS::80} {
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+		Permissions-Policy "geolocation=(), microphone=(), camera=()"
+		# A strict nonce-based Content-Security-Policy is finalized in slice S11.
+		-Server
+	}
+
+	# API surface, health probes, and the SSE stream go to the FastAPI service.
+	@api path /api/* /healthz /readyz /events
+	handle @api {
+		reverse_proxy api:8000
+	}
+
+	# Everything else is the SPA.
+	handle {
+		reverse_proxy web:5173
+	}
+}

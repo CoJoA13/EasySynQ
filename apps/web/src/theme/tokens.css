@@ -1,0 +1,14 @@
+/* Design tokens — the single source consumed by BOTH Mantine and Tailwind (doc 11 §3). */
+:root {
+  --es-accent: #0d9488; /* teal-600 */
+  --es-bg-surface: #ffffff;
+  --es-fg: #0f172a;
+  --es-state-effective: #16a34a; /* green */
+  --es-state-draft: #64748b; /* slate */
+  --es-radius: 8px;
+}
+
+:root[data-mantine-color-scheme="dark"] {
+  --es-bg-surface: #0f172a;
+  --es-fg: #e2e8f0;
+}

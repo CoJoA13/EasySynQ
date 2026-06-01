@@ -1,0 +1,16 @@
+# Redocly CLI config: lint + bundle the OpenAPI-first contract.
+# `redocly bundle openapi.yaml -o dist/openapi.json` produces the artifact that
+# datamodel-code-generator (Pydantic v2) and openapi-typescript consume.
+extends:
+  - recommended
+
+rules:
+  operation-operationId: error          # every operation needs a stable operationId (codegen)
+  operation-operationId-unique: error
+  operation-2xx-response: error
+  no-unused-components: warn
+  security-defined: error
+
+apis:
+  main:
+    root: ./openapi.yaml

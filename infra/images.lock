@@ -1,0 +1,15 @@
+# Single source of pinned container images (doc 03 §15; compose.yml references these).
+#
+# NOTE: digests must be resolved on a host with Docker via `just images-update`
+# (docker buildx imagetools inspect / docker manifest inspect). Until then these
+# are tag-pinned; PRODUCTION RELEASES MUST PIN BY @sha256 DIGEST, never a floating tag.
+#
+# service   image:tag                                   # @sha256:... (pin before release)
+postgres    postgres:16
+minio       minio/minio:RELEASE.2024-09-13T20-26-02Z
+redis       redis:7
+keycloak    quay.io/keycloak/keycloak:26.0
+caddy       caddy:2
+renderer    gotenberg/gotenberg:8
+mailpit     axllent/mailpit:latest                       # dev profile only
+# opensearch — intentionally OMITTED in MVP (R34); v1 drop-in via the Indexer interface.

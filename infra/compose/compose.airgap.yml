@@ -1,0 +1,9 @@
+# Air-gapped overlay: no outbound, no ACME. TLS must be admin-supplied or the
+# Caddy internal self-signed CA (set SITE_ADDRESS to a name + mount certs, or use
+# the internal issuer). Images must be loaded from the air-gapped bundle
+# (scripts/airgap-bundle.sh) and pinned by digest in infra/images.lock.
+services:
+  proxy:
+    environment:
+      # Force the internal (self-signed) issuer; never reach Let's Encrypt offline.
+      CADDY_TLS_INTERNAL: "1"

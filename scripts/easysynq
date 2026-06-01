@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# EasySynQ admin CLI (host-side). Dispatches to backup / restore / mirror / upgrade.
+# In S0 these are skeletons; the real implementations land in slice S11 (backup/restore,
+# WORM-aware restore R37) and S7 (mirror rebuild).
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+COMPOSE=(docker compose -f "$ROOT/infra/compose/compose.yml")
+
+usage() {
+  cat <<'EOF'
+usage: easysynq <command>
+
+  backup            Create a checksummed, optionally-encrypted archive (PG + MinIO
+                    manifest + Keycloak realm + config).                 [S11]
+  restore <file>    WORM-aware restore into a fresh bucket; PITR<->blob aligned;
+                    audit-checkpoint-not-ahead check.                    [S11]
+  mirror rebuild    Regenerate the read-only filesystem mirror from the vault. [S7]
+  upgrade           Backup -> migrate -> health-gate -> (rollback on failure). [S11]
+  migrate           Run 'alembic upgrade head' inside the api image.
+EOF
+}
+
+cmd="${1:-}"; shift || true
+case "$cmd" in
+  migrate)
+    "${COMPOSE[@]}" run --rm migrate
+    ;;
+  backup|restore|upgrade)
+    echo "easysynq $cmd: not implemented in S0 — lands in slice S11 (see docs/18 §9)." >&2
+    exit 3
+    ;;
+  mirror)
+    echo "easysynq mirror: not implemented in S0 — lands in slice S7." >&2
+    exit 3
+    ;;
+  ""|-h|--help|help)
+    usage
+    ;;
+  *)
+    echo "unknown command: $cmd" >&2
+    usage
+    exit 2
+    ;;
+esac

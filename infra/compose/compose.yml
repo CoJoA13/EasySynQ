@@ -1,0 +1,179 @@
+# EasySynQ — single-host Docker Compose stack (base). Profiles in compose.{s,m}.yml.
+# Only the `proxy` (Caddy) publishes host ports; everything else is on the internal
+# network (D1). OpenSearch is intentionally absent in the MVP (R34).
+#
+#   docker compose -f infra/compose/compose.yml -f infra/compose/compose.s.yml up -d
+#
+# Healthchecks use tooling guaranteed present in each image (pg_isready, redis-cli,
+# python in the api image, node in the web image). MinIO/Keycloak/Gotenberg lack a
+# bundled http client, so they use service_started ordering + in-script retries; the
+# app's own /readyz reports their true reachability.
+name: easysynq
+
+x-api-build: &api-build
+  context: ../..
+  dockerfile: apps/api/Dockerfile
+
+x-api-env: &api-env
+  env_file: ../../.env
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-easysynq}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-easysynq}
+      POSTGRES_DB: ${POSTGRES_DB:-easysynq}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-easysynq} -d ${POSTGRES_DB:-easysynq}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks: [internal]
+
+  redis:
+    image: redis:7
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks: [internal]
+
+  minio:
+    image: minio/minio:RELEASE.2024-09-13T20-26-02Z
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY:-easysynq}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-easysynqsecret}
+    volumes:
+      - miniodata:/data
+    networks: [internal]
+
+  # One-shot: create buckets with object-lock (WORM) + the GOVERNANCE retention default (D-7).
+  minio-init:
+    image: minio/mc:latest
+    depends_on: [minio]
+    entrypoint: ["/bin/sh", "/init/minio-init.sh"]
+    environment:
+      MC_HOST_local: http://${S3_ACCESS_KEY:-easysynq}:${S3_SECRET_KEY:-easysynqsecret}@minio:9000
+    volumes:
+      - ./minio:/init:ro
+    networks: [internal]
+    restart: "no"
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    command: ["start-dev", "--import-realm"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN:-admin}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
+      KC_HEALTH_ENABLED: "true"
+    volumes:
+      - ./keycloak:/opt/keycloak/data/import:ro
+    networks: [internal]
+
+  renderer:
+    image: gotenberg/gotenberg:8
+    command: ["gotenberg", "--api-port=3000"]
+    networks: [internal]
+
+  # Run migrations to head, then exit. The api waits for this to complete.
+  migrate:
+    build: *api-build
+    <<: *api-env
+    command: ["uv", "run", "alembic", "upgrade", "head"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [internal]
+    restart: "no"
+
+  api:
+    build: *api-build
+    <<: *api-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      minio:
+        condition: service_started
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/healthz').status==200 else 1)\""
+      interval: 10s
+      timeout: 3s
+      retries: 12
+    networks: [internal]
+
+  worker:
+    build: *api-build
+    <<: *api-env
+    command: ["uv", "run", "celery", "-A", "easysynq_api.tasks.app", "worker", "-l", "info"]
+    depends_on:
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    volumes:
+      - mirror:/var/lib/easysynq/qms-mirror   # worker writes the read-only mirror (R11)
+    networks: [internal]
+
+  # Scheduler — EXACTLY ONE replica (two would double-fire). Asserted in profile overlays.
+  beat:
+    build: *api-build
+    <<: *api-env
+    command: ["uv", "run", "celery", "-A", "easysynq_api.tasks.app", "beat", "-l", "info"]
+    depends_on:
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    networks: [internal]
+
+  web:
+    build:
+      context: ../../apps/web
+      dockerfile: Dockerfile
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://localhost:5173').then(()=>process.exit(0)).catch(()=>process.exit(1))\""]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+    networks: [internal]
+
+  proxy:
+    image: caddy:2
+    depends_on: [api, web]
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddydata:/data
+      - caddyconfig:/config
+    networks: [internal]
+
+  # Dev-only SMTP catcher (email is best-effort in MVP). Enable with --profile dev.
+  mailpit:
+    image: axllent/mailpit:latest
+    profiles: [dev]
+    networks: [internal]
+
+networks:
+  internal:
+    driver: bridge
+
+volumes:
+  pgdata:
+  miniodata:
+  mirror:
+  caddydata:
+  caddyconfig:

@@ -1,0 +1,16 @@
+# S profile (tiny / pilot, ≤25 users). Single replica of everything; OpenSearch
+# absent (R34, Postgres-FTS only). This is the default shape — base already runs
+# one replica per service. `beat` is exactly 1 by design (never scale it).
+services:
+  api:
+    deploy:
+      replicas: 1
+  worker:
+    deploy:
+      replicas: 1
+  renderer:
+    deploy:
+      replicas: 1
+  beat:
+    deploy:
+      replicas: 1      # NEVER more than 1 — two schedulers double-fire.

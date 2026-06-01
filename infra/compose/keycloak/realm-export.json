@@ -1,0 +1,34 @@
+{
+  "realm": "easysynq",
+  "enabled": true,
+  "sslRequired": "external",
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": true,
+  "bruteForceProtected": true,
+  "permanentLockout": false,
+  "failureFactor": 5,
+  "waitIncrementSeconds": 900,
+  "maxFailureWaitSeconds": 900,
+  "passwordPolicy": "length(12) and notUsername(undefined)",
+  "clients": [
+    {
+      "clientId": "easysynq-web",
+      "name": "EasySynQ SPA",
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "redirectUris": ["http://localhost/*", "https://localhost/*"],
+      "webOrigins": ["+"],
+      "attributes": {
+        "pkce.code.challenge.method": "S256"
+      }
+    },
+    {
+      "clientId": "easysynq-api",
+      "name": "EasySynQ API (resource server)",
+      "bearerOnly": true,
+      "publicClient": false
+    }
+  ],
+  "defaultDefaultClientScopes": ["profile", "email", "roles"]
+}

@@ -1,0 +1,185 @@
+openapi: 3.1.0
+info:
+  title: EasySynQ API
+  version: 0.1.0
+  description: >-
+    The external HTTP contract for the EasySynQ self-hosted ISO 9001:2015 QMS.
+    OpenAPI-first source of truth (doc 15): the FastAPI server models and the TS
+    client are generated from THIS document; the running server is proven to
+    conform via schemathesis. Lifecycle transitions are named action sub-resources,
+    never `PATCH status=`. Immutability shows up as the absence of write verbs.
+
+    Slice S0 (walking skeleton) covers only the health surface + the shared
+    RFC 9457 problem model and standard parameters. Later slices add the auth,
+    document, version, lock, task, audit, and search routers.
+servers:
+  - url: /api/v1
+    description: Versioned QMS surface (behind Caddy; same origin as the SPA).
+
+tags:
+  - name: health
+    description: Liveness and readiness. Public, unversioned-friendly probes.
+
+paths:
+  /healthz:
+    get:
+      tags: [health]
+      operationId: getHealthz
+      summary: Liveness probe
+      description: Process is up. Does not check dependencies. Always cheap.
+      security: []
+      responses:
+        "200":
+          description: The service process is alive.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
+              example: { status: ok, service: api, version: "0.1.0" }
+
+  /readyz:
+    get:
+      tags: [health]
+      operationId: getReadyz
+      summary: Readiness probe
+      description: >-
+        Reports reachability of every backing dependency (PostgreSQL, MinIO,
+        Redis, Keycloak) plus the Alembic migration head. OpenSearch is NOT
+        checked in the MVP (omitted per Decisions Register R34). Returns 200 when
+        all required dependencies are ready, 503 otherwise.
+      security: []
+      responses:
+        "200":
+          description: All required dependencies are ready.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Readiness" }
+        "503":
+          description: One or more required dependencies are not ready.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Readiness" }
+
+components:
+  securitySchemes:
+    keycloak:
+      type: openIdConnect
+      openIdConnectUrl: /api/v1/auth/config
+      description: >-
+        OIDC Authorization Code + PKCE via Keycloak. The API validates the access
+        JWT against Keycloak's JWKS; permissions are resolved server-side per
+        request, never taken from the token.
+
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: Client-supplied UUID; replays of a mutating POST return the original result.
+      schema: { type: string, format: uuid }
+    IfMatch:
+      name: If-Match
+      in: header
+      required: false
+      description: Strong ETag for optimistic concurrency on metadata updates (412 on mismatch).
+      schema: { type: string }
+    Cursor:
+      name: cursor
+      in: query
+      required: false
+      description: Opaque keyset cursor over (created_at DESC, id DESC).
+      schema: { type: string }
+    Limit:
+      name: limit
+      in: query
+      required: false
+      description: Page size (max 100).
+      schema: { type: integer, minimum: 1, maximum: 100, default: 25 }
+
+  schemas:
+    Health:
+      type: object
+      additionalProperties: false
+      required: [status, service, version]
+      properties:
+        status: { type: string, enum: [ok] }
+        service: { type: string, example: api }
+        version: { type: string, example: "0.1.0" }
+
+    DependencyStatus:
+      type: object
+      additionalProperties: false
+      required: [name, ready]
+      properties:
+        name:
+          type: string
+          enum: [postgres, minio, redis, keycloak, alembic]
+        ready: { type: boolean }
+        detail: { type: string, nullable: true }
+
+    Readiness:
+      type: object
+      additionalProperties: false
+      required: [ready, dependencies]
+      properties:
+        ready:
+          type: boolean
+          description: True iff every required dependency is ready.
+        dependencies:
+          type: array
+          items: { $ref: "#/components/schemas/DependencyStatus" }
+
+    Problem:
+      type: object
+      description: RFC 9457 application/problem+json. HTTP status is authoritative; `code` is the stable machine string.
+      additionalProperties: true
+      required: [type, title, status, code]
+      properties:
+        type: { type: string, format: uri, example: "https://errors.easysynq.local/validation_error" }
+        title: { type: string }
+        status: { type: integer }
+        code:
+          type: string
+          description: Stable machine-readable error code clients branch on.
+          enum:
+            - validation_error
+            - not_found
+            - permission_denied
+            - illegal_transition
+            - lock_conflict
+            - etag_mismatch
+            - worm_required
+            - two_tier_violation
+            - sod_violation
+            - setup_incomplete
+            - rate_limited
+            - idempotency_replay
+            - internal_error
+            - dependency_unavailable
+        detail: { type: string, nullable: true }
+        instance: { type: string, nullable: true }
+        request_id: { type: string, nullable: true }
+        errors:
+          type: array
+          nullable: true
+          items:
+            type: object
+            additionalProperties: false
+            properties:
+              field: { type: string }
+              code: { type: string }
+              message: { type: string }
+
+  responses:
+    NotFound:
+      description: Resource absent, or hidden by row-level visibility.
+      content: { application/problem+json: { schema: { $ref: "#/components/schemas/Problem" } } }
+    ValidationError:
+      description: Well-formed but semantically invalid request.
+      content: { application/problem+json: { schema: { $ref: "#/components/schemas/Problem" } } }
+    PermissionDenied:
+      description: Authenticated but the policy engine denies (deny-by-default, deny-wins).
+      content: { application/problem+json: { schema: { $ref: "#/components/schemas/Problem" } } }
+
+security:
+  - keycloak: []

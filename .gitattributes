@@ -1,0 +1,10 @@
+* text=auto eol=lf
+
+# Generated artifacts — mark so diffs/reviews de-emphasize them
+packages/contracts/dist/**      linguist-generated=true
+apps/api/src/easysynq_api/_generated/**  linguist-generated=true
+apps/web/src/api/_generated/**  linguist-generated=true
+
+# Lockfiles are text but rarely hand-reviewed
+uv.lock          -diff
+package-lock.json -diff
