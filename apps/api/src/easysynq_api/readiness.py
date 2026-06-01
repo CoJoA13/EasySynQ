@@ -57,7 +57,7 @@ async def _check_redis(settings: Settings) -> DependencyStatus:
     try:
         import redis.asyncio as aioredis
 
-        client = aioredis.from_url(settings.redis_url)
+        client = aioredis.from_url(settings.redis_url)  # type: ignore[no-untyped-call]
         try:
             await client.ping()
         finally:
