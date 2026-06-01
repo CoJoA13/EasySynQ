@@ -1,0 +1,281 @@
+"""S6 integration proofs — the append-only, hash-chained, tamper-evident audit trail.
+
+[AC#6a] every gated state-change writes exactly one ``audit_event`` row in the same transaction,
+and the running app (the non-owner ``easysynq_app`` role) is **structurally** denied UPDATE/DELETE
+on ``audit_event`` AND ``signature_event`` (SQLSTATE 42501 — the REVOKE actually bites).
+
+[AC#6b] the chain-linker (the dedicated ``easysynq_linker`` role) stamps prev_hash/row_hash/
+chained_at; ``verify-chain`` recomputes and matches; a row mutated out-of-band by a privileged
+operator is detected as the **first broken link**; the linker is idempotent. Plus the off-host
+checkpoint push lands a signed object, and the tamper-evidence soft-gate (R13) stays false on a
+same-host sink.
+
+The app runs as ``easysynq_app`` (see conftest); tests open dedicated engines as the ``app`` /
+``linker`` / ``owner`` roles via the ``dsns`` fixture to exercise the real grants.
+"""
+
+from __future__ import annotations
+
+import uuid
+from collections.abc import Callable
+from types import SimpleNamespace
+from typing import Any
+
+import pytest
+from httpx import AsyncClient
+from sqlalchemy import func, select, text
+from sqlalchemy.exc import DBAPIError
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+from easysynq_api.db.models._audit_enums import CheckpointSinkKind
+from easysynq_api.db.models.audit_checkpoint import AuditCheckpoint
+from easysynq_api.db.models.audit_checkpoint_sink import AuditCheckpointSink
+from easysynq_api.db.models.audit_event import AuditEvent
+from easysynq_api.db.models.permission import Permission
+from easysynq_api.db.models.scope import Scope
+from easysynq_api.db.session import get_sessionmaker
+from easysynq_api.domain.authz.types import Effect, ScopeLevel
+from easysynq_api.services.audit.checkpoint import (
+    anchor_checkpoint,
+    load_signing_key,
+    tamper_evidence_attested,
+)
+from easysynq_api.services.audit.linker import link_all
+
+from . import s5_helpers as s5
+from .test_vault import _auth, _ensure_user
+
+pytestmark = pytest.mark.integration
+
+_EXPECTED_STEPS = {
+    "DOCUMENT_CREATED",
+    "CHECKOUT",
+    "CHECKIN",
+    "SUBMITTED_FOR_REVIEW",
+    "APPROVED",
+    "RELEASED",
+}
+
+
+@pytest.fixture
+def subj() -> SimpleNamespace:
+    salt = uuid.uuid4().hex[:10]
+    return SimpleNamespace(a=f"kc-author-{salt}", b=f"kc-approver-{salt}")
+
+
+async def _grant_audit_read(subject: str) -> None:
+    """Grant ``system.audit_log.read`` at SYSTEM scope so the actor can read the trail."""
+    async with get_sessionmaker()() as s:
+        from easysynq_api.db.models.authz_grant import PermissionOverride
+
+        user = await _ensure_user(s, subject)
+        perm = (
+            await s.execute(select(Permission).where(Permission.key == "system.audit_log.read"))
+        ).scalar_one()
+        scope = Scope(org_id=user.org_id, level=ScopeLevel.SYSTEM)
+        s.add(scope)
+        await s.flush()
+        s.add(
+            PermissionOverride(
+                org_id=user.org_id,
+                user_id=user.id,
+                permission_id=perm.id,
+                effect=Effect.ALLOW,
+                scope_id=scope.id,
+            )
+        )
+        await s.commit()
+
+
+async def _drive_to_effective(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> str:
+    await s5.grant_lifecycle(subj.a)
+    await s5.grant_lifecycle(subj.b)
+    await s5.set_approver_release(await s5.default_org_id(), True)
+    ha, hb = _auth(token_factory, subj.a), _auth(token_factory, subj.b)
+    type_id = await s5.type_id("SOP")
+    rel = await s5.drive_to_effective(app_client, ha, hb, hb, type_id, b"audit-trail-content")
+    return str(rel["id"]) if "id" in rel else ""
+
+
+async def _link_as_linker(dsns: dict[str, str]) -> int:
+    engine = create_async_engine(dsns["linker"])
+    try:
+        async with async_sessionmaker(engine, expire_on_commit=False)() as session:
+            result = await link_all(session)
+            return result.linked
+    finally:
+        await engine.dispose()
+
+
+# --- AC#6a -------------------------------------------------------------------------------
+
+
+async def test_ac6a_every_step_writes_a_row_and_trail_is_immutable(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    subj: SimpleNamespace,
+    dsns: dict[str, str],
+) -> None:
+    """[AC#6a] Every gated lifecycle step produces a row (read via the API), and the running app
+    role is denied UPDATE/DELETE on audit_event AND signature_event at the DB layer (42501)."""
+    await _drive_to_effective(app_client, token_factory, subj)
+    await _grant_audit_read(subj.a)
+
+    listing = await app_client.get(
+        "/api/v1/audit-events?limit=200", headers=_auth(token_factory, subj.a)
+    )
+    assert listing.status_code == 200, listing.text
+    event_types = {e["event_type"] for e in listing.json()["events"]}
+    assert _EXPECTED_STEPS <= event_types, f"missing audit rows: {_EXPECTED_STEPS - event_types}"
+
+    # The running app connects as the NON-OWNER easysynq_app role → REVOKE actually bites.
+    engine = create_async_engine(dsns["app"])
+    try:
+        async with async_sessionmaker(engine, expire_on_commit=False)() as session:
+            for stmt in (
+                "UPDATE audit_event SET reason = 'forged'",
+                "DELETE FROM audit_event",
+                "UPDATE signature_event SET intent = 'forged'",
+                "DELETE FROM signature_event",
+            ):
+                with pytest.raises(DBAPIError) as exc:
+                    await session.execute(text(stmt))
+                    await session.commit()
+                assert getattr(exc.value.orig, "sqlstate", None) == "42501", stmt
+                await session.rollback()
+    finally:
+        await engine.dispose()
+
+
+async def test_ac6a_no_write_verbs_on_the_api(app_client: AsyncClient) -> None:
+    """[AC#6a] The audit API exposes no write verbs — append-only is a system invariant."""
+    for method, path in (
+        ("post", "/api/v1/audit-events"),
+        ("patch", "/api/v1/audit-events/1"),
+        ("delete", "/api/v1/audit-events/1"),
+    ):
+        resp = await app_client.request(method, path)
+        assert resp.status_code in (404, 405), f"{method} {path} -> {resp.status_code}"
+
+
+# --- AC#6b -------------------------------------------------------------------------------
+
+
+async def test_ac6b_linker_chains_verify_matches_and_tamper_is_first_broken_link(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    subj: SimpleNamespace,
+    dsns: dict[str, str],
+) -> None:
+    """[AC#6b] The linker stamps the hash columns; verify-chain matches; a mutated row is detected
+    as the first broken link; the linker is idempotent."""
+    await _drive_to_effective(app_client, token_factory, subj)
+    await _grant_audit_read(subj.a)
+    headers = _auth(token_factory, subj.a)
+
+    linked = await _link_as_linker(dsns)
+    assert linked >= len(_EXPECTED_STEPS)
+    assert await _link_as_linker(dsns) == 0  # idempotent: nothing left unchained
+
+    async with get_sessionmaker()() as s:
+        rows = (
+            (
+                await s.execute(
+                    select(AuditEvent.id)
+                    .where(AuditEvent.chained_at.is_not(None))
+                    .order_by(AuditEvent.id)
+                )
+            )
+            .scalars()
+            .all()
+        )
+    assert rows, "no chained rows after linking"
+
+    ok = await app_client.get("/api/v1/audit-events/verify-chain", headers=headers)
+    assert ok.status_code == 200, ok.text
+    assert ok.json() == {"verified": True, "checked": len(rows), "pending": 0, "breaks": []}
+
+    # A privileged operator (the OWNER role) mutates a row out-of-band — bypassing the app grant.
+    victim = rows[len(rows) // 2]
+    owner_engine = create_async_engine(dsns["owner"])
+    try:
+        async with async_sessionmaker(owner_engine, expire_on_commit=False)() as session:
+            await session.execute(
+                text("UPDATE audit_event SET reason = 'TAMPERED' WHERE id = :id"), {"id": victim}
+            )
+            await session.commit()
+    finally:
+        await owner_engine.dispose()
+
+    broken = await app_client.get("/api/v1/audit-events/verify-chain", headers=headers)
+    body = broken.json()
+    assert body["verified"] is False
+    assert body["breaks"], "tamper not detected"
+    assert body["breaks"][0]["at_id"] == victim, "tamper not reported as the first broken link"
+
+
+async def test_ac6b_checkpoint_push_and_soft_gate(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    subj: SimpleNamespace,
+    dsns: dict[str, str],
+) -> None:
+    """[AC#6b/R13] A worm_bucket checkpoint push lands a signed object; the tamper-evidence
+    soft-gate is false for a same-host (off_host=false) sink and true once off-host is asserted."""
+    import boto3
+
+    from easysynq_api.config import get_settings
+
+    await _drive_to_effective(app_client, token_factory, subj)
+    await _grant_audit_read(subj.a)
+    await _link_as_linker(dsns)
+    org_id = await s5.default_org_id()
+
+    async with get_sessionmaker()() as s:
+        s.add(
+            AuditCheckpointSink(
+                org_id=org_id,
+                kind=CheckpointSinkKind.worm_bucket,
+                connection={"bucket": "audit-checkpoints", "off_host": False},
+                enabled=True,
+            )
+        )
+        await s.commit()
+
+    async with get_sessionmaker()() as s:
+        checkpoint = await anchor_checkpoint(s, org_id, signing_key=load_signing_key())
+    assert checkpoint is not None
+
+    async with get_sessionmaker()() as s:
+        cp_count = (await s.execute(select(func.count()).select_from(AuditCheckpoint))).scalar_one()
+        assert cp_count == 1
+        attested_same_host = await tamper_evidence_attested(s, org_id)
+    assert attested_same_host is False  # same-host bucket must NOT attest tamper-evidence (R13)
+
+    # The signed object actually landed in the off-host bucket.
+    settings = get_settings()
+    client = boto3.client(
+        "s3",
+        endpoint_url=settings.s3_endpoint,
+        aws_access_key_id=settings.s3_access_key,
+        aws_secret_access_key=settings.s3_secret_key,
+        region_name=settings.s3_region,
+    )
+    listed = client.list_objects_v2(Bucket="audit-checkpoints", Prefix=f"checkpoints/{org_id}/")
+    assert listed.get("KeyCount", 0) >= 1, "no checkpoint object pushed to the off-host bucket"
+
+    # GET /audit/status reflects the soft-gate (false on a same-host sink).
+    status = await app_client.get("/api/v1/audit/status", headers=_auth(token_factory, subj.a))
+    assert status.status_code == 200, status.text
+    sbody: dict[str, Any] = status.json()
+    assert sbody["sink_enabled"] is True
+    assert sbody["tamper_evidence_attested"] is False
+
+    # Asserting a genuinely off-host endpoint flips the gate true (fresh last_anchored_at).
+    async with get_sessionmaker()() as s:
+        sink = (await s.execute(select(AuditCheckpointSink))).scalars().one()
+        sink.connection = {"bucket": "audit-checkpoints", "off_host": True}
+        await s.commit()
+        assert await tamper_evidence_attested(s, org_id) is True

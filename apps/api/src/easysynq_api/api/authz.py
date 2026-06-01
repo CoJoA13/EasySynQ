@@ -17,7 +17,9 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..db.models._audit_enums import ActorType, AuditObjectType, EventType
 from ..db.models.app_user import AppUser
+from ..db.models.audit_event import AuditEvent
 from ..db.models.authz_grant import PermissionOverride
 from ..db.models.permission import Permission
 from ..db.models.role import Role, RoleAssignment, RoleGrant
@@ -25,6 +27,7 @@ from ..db.models.scope import Scope
 from ..db.session import get_session
 from ..domain.authz import RequestContext, ResourceContext, authorize
 from ..domain.authz.types import Effect, ScopeLevel
+from ..logging import request_id_var
 from ..problems import ProblemException
 from ..services.authz import (
     AuthzAuditSink,
@@ -43,6 +46,46 @@ router = APIRouter(prefix="/api/v1", tags=["authz"])
 _role_read = require("role.read")
 _user_read = require("user.read")
 _permission_grant = require("permission.grant")
+
+
+def _rid() -> uuid.UUID | None:
+    raw = request_id_var.get()
+    if not raw:
+        return None
+    try:
+        return uuid.UUID(raw)
+    except ValueError:
+        return None
+
+
+def _audit_authz_change(
+    session: AsyncSession,
+    granter: AppUser,
+    event_type: EventType,
+    object_id: uuid.UUID,
+    target_user_id: uuid.UUID,
+    *,
+    before: dict[str, Any] | None = None,
+    after: dict[str, Any] | None = None,
+) -> None:
+    """Append an authorization state-change ``audit_event`` row (doc 12 §4.1) to ``session`` BEFORE
+    its commit, so the grant/revoke and its audit row commit atomically (object_type=permission,
+    object_id = the affected assignment/override, scope_ref names the target user)."""
+    session.add(
+        AuditEvent(
+            org_id=granter.org_id,
+            occurred_at=datetime.datetime.now(datetime.UTC),
+            actor_id=granter.id,
+            actor_type=ActorType.user,
+            event_type=event_type,
+            object_type=AuditObjectType.permission,
+            object_id=object_id,
+            scope_ref=f"user:{target_user_id}",
+            before=before,
+            after=after,
+            request_id=_rid(),
+        )
+    )
 
 
 # --- request bodies ---------------------------------------------------------------------
@@ -255,6 +298,15 @@ async def assign_user_role(
         org_id=target.org_id, user_id=target.id, role_id=role.id, bound_scope=body.bound_scope
     )
     session.add(assignment)
+    await session.flush()  # populate assignment.id for the audit row's object_id
+    _audit_authz_change(
+        session,
+        granter,
+        EventType.ROLE_ASSIGN,
+        assignment.id,
+        target.id,
+        after={"role_id": str(role.id), "role_name": role.name, "bound_scope": body.bound_scope},
+    )
     await session.commit()
     await session.refresh(assignment)
     await invalidate_user_permissions(target.id)
@@ -271,6 +323,14 @@ async def revoke_user_role(
     assignment = await session.get(RoleAssignment, assignment_id)
     if assignment is None or assignment.user_id != user_id or assignment.org_id != granter.org_id:
         raise ProblemException(status=404, code="not_found", title="Role assignment not found")
+    _audit_authz_change(
+        session,
+        granter,
+        EventType.ROLE_REVOKE,
+        assignment.id,
+        user_id,
+        before={"role_id": str(assignment.role_id)},
+    )
     await session.delete(assignment)
     await session.commit()
     await invalidate_user_permissions(user_id)
@@ -343,6 +403,19 @@ async def create_user_override(
         created_by=granter.id,
     )
     session.add(override)
+    await session.flush()  # populate override.id for the audit row's object_id
+    _audit_authz_change(
+        session,
+        granter,
+        EventType.OVERRIDE_ADD,
+        override.id,
+        target.id,
+        after={
+            "permission_key": permission.key,
+            "effect": body.effect,
+            "scope_level": body.scope.level,
+        },
+    )
     await session.commit()
     await session.refresh(override)
     await invalidate_user_permissions(target.id)
@@ -360,6 +433,14 @@ async def delete_user_override(
     if override is None or override.user_id != user_id or override.org_id != granter.org_id:
         raise ProblemException(status=404, code="not_found", title="Override not found")
     scope_id = override.scope_id
+    _audit_authz_change(
+        session,
+        granter,
+        EventType.OVERRIDE_REMOVE,
+        override.id,
+        user_id,
+        before={"permission_id": str(override.permission_id)},
+    )
     await session.delete(override)
     await session.flush()
     scope = await session.get(Scope, scope_id)

@@ -4,8 +4,8 @@
 document is submitted for review. ``decide`` is the canonical approval/review trigger
 (``POST /tasks/{id}/decision``): under a ``SELECT … FOR UPDATE`` task lock it dispatches to the
 reused vault lifecycle FSM (``approve`` / ``request_changes``), emits the ``signature_event``
-(approve only), writes the ``task_outcome``, flips the task to DONE, and commits — all in **one
-transaction** — then audits post-commit. Idempotency: a repeat decision on a DONE task replays the
+(approve only), writes the ``task_outcome``, flips the task to DONE, appends the ``audit_event``,
+and commits — all in **one transaction** (in-txn audit, S6). Idempotency: a repeat decision replays
 recorded outcome when the ``Idempotency-Key`` matches, else 409 (``UNIQUE(task_outcome.task_id)``
 backstops it).
 """
@@ -229,6 +229,8 @@ async def decide(
     locked.assignee_user_id = actor.id
     locked.client_token = idempotency_key
 
-    await session.commit()  # task_outcome + signature_event + FSM mutation commit atomically
-    lifecycle.audit_transition(audit_sink, result, actor)
+    lifecycle.audit_transition(session, audit_sink, result, actor)
+    await (
+        session.commit()
+    )  # task_outcome + signature_event + FSM mutation + audit commit atomically
     return _decision_response(locked, decision_outcome, sig_row)

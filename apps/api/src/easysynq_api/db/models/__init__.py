@@ -1,5 +1,11 @@
 """ORM models. Imported here so ``Base.metadata`` is fully populated for Alembic."""
 
+from ._audit_enums import (
+    ActorType,
+    AuditObjectType,
+    CheckpointSinkKind,
+    EventType,
+)
 from ._authz_enums import SodSeverity, SodTargetBinding
 from ._record_enums import RecordDispositionState, RecordType
 from ._signature_enums import SignatureMeaning, SignatureMethod, SignedObjectType
@@ -19,6 +25,9 @@ from ._workflow_enums import (
     WorkflowSubjectType,
 )
 from .app_user import AppUser, UserStatus
+from .audit_checkpoint import AuditCheckpoint
+from .audit_checkpoint_sink import AuditCheckpointSink
+from .audit_event import AuditEvent
 from .authz_grant import PermissionOverride
 from .blob import Blob
 from .document_type import DocumentType
@@ -45,9 +54,15 @@ from .workflow import (
 from .working_draft import WorkingDraft
 
 __all__ = [
+    "ActorType",
     "AppUser",
+    "AuditCheckpoint",
+    "AuditCheckpointSink",
+    "AuditEvent",
+    "AuditObjectType",
     "Blob",
     "ChangeSignificance",
+    "CheckpointSinkKind",
     "Classification",
     "DocumentCurrentState",
     "DocumentKind",
@@ -55,6 +70,7 @@ __all__ = [
     "DocumentType",
     "DocumentVersion",
     "DocumentedInformation",
+    "EventType",
     "Framework",
     "NumberingCounter",
     "Organization",

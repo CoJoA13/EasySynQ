@@ -15,6 +15,7 @@ from fastapi import FastAPI, Request
 from starlette.middleware.base import RequestResponseEndpoint
 from starlette.responses import Response
 
+from .api.audit import router as audit_router
 from .api.auth import router as auth_router
 from .api.authz import router as authz_router
 from .api.documents import router as documents_router
@@ -65,6 +66,7 @@ def create_app() -> FastAPI:
     app.include_router(authz_router)
     app.include_router(documents_router)
     app.include_router(workflow_router)
+    app.include_router(audit_router)
     return app
 
 

@@ -456,15 +456,15 @@ async def submit_review_endpoint(
     session: AsyncSession = Depends(get_session),
     vault_sink: VaultAuditSink = Depends(get_vault_audit_sink),
 ) -> dict[str, Any]:
-    # T2/T9 + the approval workflow instantiation commit together; the audit fires post-commit.
-    # Approval itself routes through POST /tasks/{id}/decision (C7) — there is no direct /approve.
+    # T2/T9 + the approval workflow instantiation + the audit row all commit together (in-txn
+    # audit, S6). Approval routes through POST /tasks/{id}/decision (C7) — no direct /approve.
     # FOR UPDATE serializes concurrent submit-review on the same document, so two callers cannot
     # both pass the Draft→InReview FSM check and create duplicate workflow instances/tasks.
     doc = await _load_document(session, caller, document_id, for_update=True)
     result = await submit_review(session, caller, doc)
     await instantiate_approval(session, result.doc, caller)
-    await session.commit()
-    audit_transition(vault_sink, result, caller)
+    audit_transition(session, vault_sink, result, caller)
+    await session.commit()  # T2/T9 + workflow instantiation + audit commit atomically
     return _document(result.doc)
 
 

@@ -272,7 +272,7 @@ The audit trail is the **spine of ISO 9001 traceability** and the **evidentiary 
 | `actor_id` | uuid (nullable) | The authenticated subject; null only for system/`beat` jobs (then `actor_type='system'`) |
 | `actor_type` | enum | `user` \| `system` \| `external_auditor` \| `admin` |
 | `on_behalf_of` | uuid (nullable) | Reserved for delegated/impersonation (must be empty in v1; column reserved) |
-| `event_type` | enum | e.g., `DOC_APPROVE`, `PERM_GRANT`, `LOGIN_FAIL` |
+| `event_type` | enum (**extensible**) | A native PG enum, extended via `ALTER TYPE … ADD VALUE` so new categories (incl. the deferred Keycloak auth events) are additive, never a schema rewrite. v1 emits the vault/lifecycle set (`DOCUMENT_CREATED`/`CHECKOUT`/`CHECKIN`/`NO_CHANGE`/`LOCK_BROKEN`/`SUBMITTED_FOR_REVIEW`/`APPROVED`/`CHANGES_REQUESTED`/`RELEASED`/`SUPERSEDED`/`REVISION_STARTED`/`MADE_OBSOLETE`), authorization (`ACCESS_DENIED`/`ACCESS_ALLOWED`/`TWO_TIER_VIOLATION`/`PERM_GRANT`/`PERM_REVOKE`/`ROLE_ASSIGN`/`ROLE_REVOKE`/`OVERRIDE_ADD`/`OVERRIDE_REMOVE`), and integrity (`CHAIN_VERIFY_PASS`/`CHAIN_VERIFY_FAIL`/`CHECKPOINT_ANCHORED`). |
 | `object_type` | enum | `document` \| `version` \| `record` \| `permission` \| `user` \| `session` \| `config` \| `audit` |
 | `object_id` | uuid (nullable) | The affected entity |
 | `scope_ref` | text (nullable) | Process/folder/document scope context |

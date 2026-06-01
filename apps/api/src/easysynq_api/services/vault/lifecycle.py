@@ -49,6 +49,7 @@ def _now() -> datetime.datetime:
 
 
 def _audit(
+    session: AsyncSession,
     sink: VaultAuditSink,
     event_type: str,
     actor: AppUser | None,
@@ -59,7 +60,10 @@ def _audit(
     identifier: str | None = None,
     reason: str | None = None,
 ) -> None:
+    """Append the lifecycle ``audit_event`` row to ``session`` BEFORE its commit (doc 12 §4.4 /
+    AC#6). ``actor=None`` is a system/Beat actor (release sweep) → ``actor_type='system'``."""
     sink.record(
+        session,
         VaultAuditEvent(
             occurred_at=_now(),
             event_type=event_type,
@@ -70,7 +74,7 @@ def _audit(
             identifier=identifier,
             reason=reason,
             request_id=request_id_var.get(),
-        )
+        ),
     )
 
 
@@ -89,8 +93,9 @@ def _is_race_loss(exc: DBAPIError) -> bool:
 @dataclasses.dataclass(frozen=True, slots=True)
 class TransitionResult:
     """A completed FSM mutation that has NOT been committed or audited yet. The caller (the decision
-    handler / the submit-review endpoint) commits the unit of work and then calls
-    :func:`audit_transition` AFTER the commit, so a rollback never leaves a phantom audit row."""
+    handler / the submit-review endpoint) calls :func:`audit_transition` to append the audit row to
+    the session and then commits the unit of work, so the FSM mutation + its audit row commit (or
+    roll back) atomically — no action without its audit row, no phantom (doc 12 §4.4 / AC#6)."""
 
     doc: DocumentedInformation
     version: DocumentVersion
@@ -98,9 +103,13 @@ class TransitionResult:
     reason: str | None = None
 
 
-def audit_transition(sink: VaultAuditSink, result: TransitionResult, actor: AppUser) -> None:
-    """Emit the vault audit event for a committed :class:`TransitionResult` (call AFTER commit)."""
+def audit_transition(
+    session: AsyncSession, sink: VaultAuditSink, result: TransitionResult, actor: AppUser
+) -> None:
+    """Append the vault audit event for a :class:`TransitionResult` to ``session`` BEFORE its
+    commit, so it commits atomically with the FSM mutation it records (doc 12 §4.4 / AC#6)."""
     _audit(
+        session,
         sink,
         result.event_type,
         actor,
@@ -275,11 +284,18 @@ async def start_revision(
         wd.checked_out_at = _now()
     doc.current_state = transition.to_doc_state
     doc.updated_by = actor.id
+    _audit(
+        session,
+        sink,
+        "REVISION_STARTED",
+        actor,
+        doc.org_id,
+        "document",
+        doc.id,
+        identifier=doc.identifier,
+    )
     await session.commit()
     await session.refresh(doc)
-    _audit(
-        sink, "REVISION_STARTED", actor, doc.org_id, "document", doc.id, identifier=doc.identifier
-    )
     return doc
 
 
@@ -313,9 +329,8 @@ async def obsolete(
             version.version_state = VersionState.Obsolete
             doc.updated_by = actor.id
             _emit_signature(sig_sink, session, version, "obsolete", actor, intent=reason)
-            await session.commit()
-            await session.refresh(doc)
             _audit(
+                session,
                 sink,
                 "MADE_OBSOLETE",
                 actor,
@@ -325,6 +340,8 @@ async def obsolete(
                 identifier=doc.identifier,
                 reason=reason,
             )
+            await session.commit()
+            await session.refresh(doc)
             return doc
         if version.version_state is not VersionState.Effective:
             # A version-targeted obsolete only makes sense for a Superseded (T12) or the Effective
@@ -353,9 +370,8 @@ async def obsolete(
     doc.current_state = transition.to_doc_state
     doc.updated_by = actor.id
     _emit_signature(sig_sink, session, effective, "obsolete", actor, intent=reason)
-    await session.commit()
-    await session.refresh(doc)
     _audit(
+        session,
         sink,
         "MADE_OBSOLETE",
         actor,
@@ -365,6 +381,8 @@ async def obsolete(
         identifier=doc.identifier,
         reason=reason,
     )
+    await session.commit()
+    await session.refresh(doc)
     return doc
 
 
@@ -451,14 +469,13 @@ async def _cutover(
     if actor is not None:
         doc.updated_by = actor.id
 
-    # T6: append the release signature INSIDE the cutover txn (before commit) so it is atomic with
-    # the promotion and rolls back with a race loser. ``actor=None`` is the system/Beat release.
+    # T6: append the release signature + the RELEASED/SUPERSEDED audit rows INSIDE the cutover txn
+    # (before commit) so they are atomic with the promotion and roll back with a race loser — no
+    # phantom RELEASED row for the loser of a concurrent release (AC#6 / AC#1b). ``actor=None`` is
+    # the system/Beat release.
     _emit_signature(sig_sink, session, version, "release", actor)
-
-    await session.commit()  # INV-1 + SERIALIZABLE adjudicate the race here
-    await session.refresh(doc)
-
     _audit(
+        session,
         sink,
         "RELEASED",
         actor,
@@ -469,6 +486,7 @@ async def _cutover(
     )
     if prior is not None and prior.id != version.id:
         _audit(
+            session,
             sink,
             "SUPERSEDED",
             actor,
@@ -477,6 +495,9 @@ async def _cutover(
             prior.id,
             identifier=doc.identifier,
         )
+
+    await session.commit()  # INV-1 + SERIALIZABLE adjudicate the race here
+    await session.refresh(doc)
     return doc
 
 
