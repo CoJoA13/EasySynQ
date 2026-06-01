@@ -23,6 +23,11 @@ tags:
     description: Liveness and readiness. Public, unversioned-friendly probes.
   - name: auth
     description: Authentication & session. Keycloak OIDC + PKCE; the API is a resource server.
+  - name: authz
+    description: >-
+      Authorization admin — the permission catalog, roles, and per-user role/override
+      grants. Deny-by-default, deny-wins; reads need role.read/user.read, grants need
+      permission.grant (two-tier guard).
 
 paths:
   /healthz:
@@ -108,6 +113,222 @@ paths:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
 
+  /permissions:
+    get:
+      tags: [authz]
+      operationId: listPermissions
+      summary: Read the closed v1 permission catalog (reference data).
+      responses:
+        "200":
+          description: The full permission catalog.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Permission" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+
+  /roles:
+    get:
+      tags: [authz]
+      operationId: listRoles
+      summary: List the org's roles (seeded starter roles plus any org-defined).
+      responses:
+        "200":
+          description: Roles.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Role" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+
+  /roles/{role_id}:
+    get:
+      tags: [authz]
+      operationId: getRole
+      summary: A role with its resolved permission grants.
+      parameters:
+        - name: role_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: The role and its grants.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RoleDetail" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+
+  /users/{user_id}/roles:
+    get:
+      tags: [authz]
+      operationId: listUserRoles
+      summary: A user's role assignments.
+      parameters:
+        - name: user_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Role assignments.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/RoleAssignment" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+    post:
+      tags: [authz]
+      operationId: assignUserRole
+      summary: Assign a role to a user. Needs permission.grant; two-tier guard (R35).
+      parameters:
+        - name: user_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RoleAssignmentCreate" }
+      responses:
+        "201":
+          description: The created role assignment.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RoleAssignment" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "422":
+          description: Validation or two_tier_violation (system-domain role at content tier).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  /users/{user_id}/roles/{assignment_id}:
+    delete:
+      tags: [authz]
+      operationId: revokeUserRole
+      summary: Revoke a role assignment. Needs permission.grant.
+      parameters:
+        - name: user_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: assignment_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "204":
+          description: Assignment revoked.
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+
+  /users/{user_id}/overrides:
+    get:
+      tags: [authz]
+      operationId: listUserOverrides
+      summary: A user's direct permission overrides.
+      parameters:
+        - name: user_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Overrides.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/PermissionOverride" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+    post:
+      tags: [authz]
+      operationId: createUserOverride
+      summary: Grant a direct ALLOW/DENY override. Needs permission.grant; two-tier guard.
+      parameters:
+        - name: user_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PermissionOverrideCreate" }
+      responses:
+        "201":
+          description: The created override.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PermissionOverride" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "422":
+          description: Validation or two_tier_violation (system-domain key at content tier).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  /users/{user_id}/overrides/{override_id}:
+    delete:
+      tags: [authz]
+      operationId: deleteUserOverride
+      summary: Remove a direct override. Needs permission.grant.
+      parameters:
+        - name: user_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: override_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "204":
+          description: Override removed.
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+
+  /users/{user_id}/effective-permissions:
+    get:
+      tags: [authz]
+      operationId: getEffectivePermissions
+      summary: The user's resolved effective permissions (with provenance) at a scope.
+      parameters:
+        - name: user_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: scope_level
+          in: query
+          required: false
+          description: Scope to resolve at (default SYSTEM).
+          schema:
+            type: string
+            enum: [SYSTEM, FRAMEWORK, PROCESS, FOLDER, DOC_CLASS, ARTIFACT]
+        - name: scope_id
+          in: query
+          required: false
+          description: The scope selector value (process id / folder path / artifact id / doc class).
+          schema: { type: string }
+      responses:
+        "200":
+          description: Effective permissions with provenance.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EffectivePermissions" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+
 components:
   securitySchemes:
     keycloak:
@@ -117,6 +338,13 @@ components:
         OIDC Authorization Code + PKCE via Keycloak. The API validates the access
         JWT against Keycloak's JWKS; permissions are resolved server-side per
         request, never taken from the token.
+
+  responses:
+    ProblemResponse:
+      description: An error, as RFC 9457 application/problem+json.
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
 
   parameters:
     IdempotencyKey:
@@ -242,6 +470,159 @@ components:
           type: string
           enum: [INVITED, ACTIVE, LOCKED, DISABLED, RETIRED]
         is_guest: { type: boolean }
+
+    ScopeLevel:
+      type: string
+      enum: [SYSTEM, FRAMEWORK, PROCESS, FOLDER, DOC_CLASS, ARTIFACT]
+
+    Permission:
+      type: object
+      additionalProperties: false
+      required: [key, resource, action, is_system_domain, sod_sensitive, sig_hook, finest_scope]
+      properties:
+        key: { type: string, example: document.approve }
+        resource: { type: string, example: document }
+        action: { type: string, example: approve }
+        is_system_domain:
+          type: boolean
+          description: True for system-administration domains; drives the two-tier grant guard (R35).
+        sod_sensitive: { type: boolean }
+        sig_hook:
+          type: boolean
+          description: True for signature-hook actions (approve/release/obsolete/dispose/verify/close).
+        finest_scope: { $ref: "#/components/schemas/ScopeLevel" }
+
+    Role:
+      type: object
+      additionalProperties: false
+      required: [id, name, is_reserved]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        description: { type: [string, "null"] }
+        is_reserved: { type: boolean, description: Seeded ADMIN / QMS-Owner roles cannot be deleted. }
+
+    RoleGrantEntry:
+      type: object
+      additionalProperties: false
+      required: [permission_key]
+      properties:
+        permission_key: { type: string }
+        scope_template:
+          type: [object, "null"]
+          additionalProperties: true
+          description: Parameterized default scope, concretized by bound_scope at assignment.
+
+    RoleDetail:
+      type: object
+      additionalProperties: false
+      required: [id, name, is_reserved, grants]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        description: { type: [string, "null"] }
+        is_reserved: { type: boolean }
+        grants:
+          type: array
+          items: { $ref: "#/components/schemas/RoleGrantEntry" }
+
+    RoleAssignment:
+      type: object
+      additionalProperties: false
+      required: [id, role_id, role_name]
+      properties:
+        id: { type: string, format: uuid }
+        role_id: { type: string, format: uuid }
+        role_name: { type: string }
+        bound_scope:
+          type: [object, "null"]
+          additionalProperties: true
+          description: Concrete scope binding the role's scope_template for this user.
+
+    RoleAssignmentCreate:
+      type: object
+      additionalProperties: false
+      description: Provide exactly one of role_id or role_name.
+      properties:
+        role_id: { type: string, format: uuid }
+        role_name: { type: string }
+        bound_scope:
+          type: [object, "null"]
+          additionalProperties: true
+
+    ScopeInput:
+      type: object
+      additionalProperties: false
+      required: [level]
+      properties:
+        level: { $ref: "#/components/schemas/ScopeLevel" }
+        selector:
+          type: [object, "null"]
+          additionalProperties: true
+          description: e.g. { process_id } / { folder_path } / { document_level } / { artifact_id }.
+        predicates:
+          type: [object, "null"]
+          additionalProperties: true
+          description: Narrowing-only ABAC predicates (read_only, lifecycle_state, ip_allow, ...).
+
+    ScopeRepr:
+      type: object
+      additionalProperties: false
+      required: [level]
+      properties:
+        level: { $ref: "#/components/schemas/ScopeLevel" }
+        selector: { type: [object, "null"], additionalProperties: true }
+        predicates: { type: [object, "null"], additionalProperties: true }
+
+    PermissionOverride:
+      type: object
+      additionalProperties: false
+      required: [id, permission_key, effect, scope, require_reason]
+      properties:
+        id: { type: string, format: uuid }
+        permission_key: { type: string }
+        effect: { type: string, enum: [ALLOW, DENY] }
+        scope: { $ref: "#/components/schemas/ScopeRepr" }
+        valid_from: { type: [string, "null"], format: date-time }
+        valid_until: { type: [string, "null"], format: date-time }
+        require_reason: { type: boolean }
+
+    PermissionOverrideCreate:
+      type: object
+      additionalProperties: false
+      required: [permission_key, effect, scope]
+      properties:
+        permission_key: { type: string }
+        effect: { type: string, enum: [ALLOW, DENY] }
+        scope: { $ref: "#/components/schemas/ScopeInput" }
+        valid_from: { type: [string, "null"], format: date-time }
+        valid_until: { type: [string, "null"], format: date-time }
+        require_reason: { type: boolean, default: false }
+        reason: { type: [string, "null"] }
+
+    EffectivePermissionEntry:
+      type: object
+      additionalProperties: false
+      required: [key, effect]
+      properties:
+        key: { type: string }
+        effect: { type: string, enum: [ALLOW, DENY] }
+        source:
+          type: [string, "null"]
+          description: Provenance, e.g. "role:Author" or "user_override".
+
+    EffectivePermissions:
+      type: object
+      additionalProperties: false
+      required: [scope, permissions]
+      properties:
+        scope:
+          type: object
+          additionalProperties: true
+          description: The scope the permissions were resolved at.
+        permissions:
+          type: array
+          items: { $ref: "#/components/schemas/EffectivePermissionEntry" }
 
 security:
   - keycloak: []

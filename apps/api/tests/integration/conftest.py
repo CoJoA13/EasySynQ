@@ -7,6 +7,7 @@ from __future__ import annotations
 import datetime
 import json
 from collections.abc import AsyncIterator, Callable, Iterator
+from typing import Any
 
 import jwt
 import pytest
@@ -56,7 +57,10 @@ def _pg() -> Iterator[str]:
 
 
 @pytest.fixture
-async def app_client(_pg: str, monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[AsyncClient]:
+async def app_under_test(_pg: str, monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[Any]:
+    """The migrated FastAPI app wired to the testcontainer DB, with JWKS stubbed. Exposed so
+    a test can install dependency overrides (e.g. a capturing audit sink) before issuing
+    requests; most tests use ``app_client`` instead."""
     monkeypatch.setenv("DATABASE_URL", _pg)
     monkeypatch.setenv("DATABASE_URL_SYNC", _pg)
     monkeypatch.setenv("OIDC_ISSUER", ISSUER)
@@ -81,9 +85,14 @@ async def app_client(_pg: str, monkeypatch: pytest.MonkeyPatch) -> AsyncIterator
     app = create_app()
     app.dependency_overrides[get_jwks_cache] = lambda: JWKSCache("", static_jwks=JWKS)
 
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        yield client
+    yield app
 
     await db_session.dispose_engine()
     get_settings.cache_clear()
+
+
+@pytest.fixture
+async def app_client(app_under_test: Any) -> AsyncIterator[AsyncClient]:
+    transport = ASGITransport(app=app_under_test)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        yield client

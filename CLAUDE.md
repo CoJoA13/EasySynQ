@@ -34,9 +34,14 @@ admin-bypass on for the solo owner). **Shipped so far (each merged via PR, all C
 Docker stack):**
 - **S0 — walking skeleton** ✅ — Compose stack, `/healthz`+`/readyz`, reversible Alembic baseline, OpenAPI→client pipeline
 - **S1 — AuthN** ✅ — Keycloak OIDC/PKCE, RS256 JWT validation vs JWKS, `app_user` + JIT provisioning, `GET /me`, `/auth/config`
+- **S2 — AuthZ** ✅ — reduced doc-14 RBAC/ABAC schema (`permission`/`role`/`role_grant`/`role_assignment`/`scope`/
+  `permission_override`/`sod_constraint`), the closed doc-07 96-key catalog + 8 seeded roles, a pure deny-wins **PDP**
+  (register R3), a FastAPI **PEP** that audits allow+deny, the two-tier grant guard (422, R35), and `/permissions` +
+  `/roles` + `/users/{id}/{roles,overrides,effective-permissions}`. Proofs: `test_per_user_deny_beats_role_allow` [AC#3],
+  `test_admin_system_star_denied_content` [AC#4], `test_two_tier_violation`, `test_specificity_allow_only`.
 
-**Next slice: S2 — Authorization** (permission catalog seed, deny-wins PDP/PEP, the 8 seeded roles; acceptance
-proofs: per-user-deny-beats-role-allow, and `system.*` ≠ content boundary).
+**Next slice: S3 — Vault** (create doc, check-out via Redis lock, upload CAS blob, check-in immutable version;
+proofs: identical-bytes re-checkin = no new version, INV-3 422, double-checkout 409, break-lock preserves scratch).
 
 ## Building the MVP (dev workflow)
 
@@ -61,6 +66,10 @@ proofs: per-user-deny-beats-role-allow, and `system.*` ≠ content boundary).
 - **Dev login:** `demo` / `Demo-Password-1` (created at runtime in Keycloak, **not committed**; realm policy
   requires ≥12-char passwords). After a Keycloak container reset, recreate with `kcadm.sh` (`create users -r
   easysynq -s username=demo -s enabled=true` then `set-password`).
+- **Authz bootstrap (pre-S8):** since the first-run wizard that grants the first admin is S8, the authz admin API is
+  deny-by-default for everyone until a role is assigned. Bootstrap with `easysynq grant-role <keycloak-subject>
+  ["Role Name"]` (default "System Administrator"; idempotent; JIT-creates the `app_user`). It runs
+  `easysynq_api.cli.grant_role` inside the api container — an explicit operator action, not an app-logic auto-grant.
 - **No Docker?** Every slice is still buildable + unit-testable on the uv/3.12 loop; CI runs the stack-dependent
   proofs.
 
