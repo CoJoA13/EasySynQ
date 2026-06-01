@@ -16,7 +16,8 @@ invariant* rather than a discipline problem.
   - **S1 — authentication** ✅ — Keycloak OIDC/PKCE, JWT-vs-JWKS validation, `app_user` + JIT provisioning, `/me`.
   - **S2 — authorization** ✅ — deny-wins PDP/PEP, the closed permission catalog + 8 seeded roles, two-tier grant guard.
   - **S3 — vault** ✅ — document create + the check-out → presigned CAS upload → immutable check-in cycle (MinIO WORM, Redis lock).
-  - **S4 — lifecycle** (next) — the document state machine + the atomic single-Effective cutover.
+  - **S4 — lifecycle** ✅ — the document FSM (Draft→…→Effective) + the atomic single-Effective cutover (SERIALIZABLE + INV-1), 6 named lifecycle actions, R25 singleton index, future-dated Beat sweep.
+  - **S5 — approval + SoD** (next) — the task/route/quorum approval workflow, `signature_event` emission, the separation-of-duties gate.
 
   Run it: `just up s`, then open **http://localhost** (dev login `demo` / `Demo-Password-1`).
 
