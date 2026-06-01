@@ -19,6 +19,8 @@ from ...db.models.authz_grant import PermissionOverride
 from ...db.models.permission import Permission
 from ...db.models.role import Role, RoleAssignment, RoleGrant
 from ...db.models.scope import Scope
+from ...db.models.sod import SodConstraint
+from ...db.models.system_config import SystemConfig
 from ...domain.authz.types import Effect, ResolvedGrant, ScopeLevel
 
 
@@ -110,6 +112,26 @@ async def gather_grants(
     grants.extend(_grant_from_override(ov, sc) for ov, sc in override_rows)
 
     return grants
+
+
+async def gather_sod_constraints(session: AsyncSession, org_id: uuid.UUID) -> list[SodConstraint]:
+    """The org's separation-of-duties constraints, passed to the PDP for sig-hook actions (S5)."""
+    return list(
+        (await session.execute(select(SodConstraint).where(SodConstraint.org_id == org_id)))
+        .scalars()
+        .all()
+    )
+
+
+async def get_allow_approver_release(session: AsyncSession, org_id: uuid.UUID) -> bool:
+    """The org's SoD-2 approver-release relaxation flag; ``False`` when no config row exists yet
+    (the strict default — the first-run wizard that writes ``system_config`` is S8)."""
+    value = (
+        await session.execute(
+            select(SystemConfig.allow_approver_release).where(SystemConfig.org_id == org_id)
+        )
+    ).scalar_one_or_none()
+    return bool(value)
 
 
 async def granted_permission_keys(

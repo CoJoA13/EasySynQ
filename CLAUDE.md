@@ -57,10 +57,27 @@ Docker stack):**
   `audit_event` writer → **S6**. Proofs: `test_release_supersedes` [AC#1a], `test_two_effective_impossible` [AC#1b, real
   concurrent connections], + the pure-FSM unit suite, illegal-transition 409, future-dated+Beat, start-revision, obsolete, R25 singleton.
 
-**Next slice: S5 — Approval + SoD** (the task/route/quorum approval workflow via `POST /tasks/{id}/decision`; the
-`signature_event` table + its emission on approve/release/obsolete; the **SoD gate** wired into the PDP's currently no-op
-`_evaluate_sod` step; the `record` extension table). S4 left the clean seams (the `SignatureEventSink`, `sig_hook` keys,
-and the direct approve/request-changes actions S5's task flow becomes the richer trigger for).
+- **S5 — Approval + SoD [AC#1 re-driven]** ✅ — the task/decision approval workflow + the deny-wins SoD gate.
+  `0008` builds the minimal workflow cluster (`workflow_definition`/`workflow_stage`/`workflow_instance`/`task`/
+  `task_outcome`), the append-only `signature_event` (polymorphic `signed_object_type`/`signed_object_id` per doc 14 §8,
+  Part-11 cols NULL), and the `record` shared-PK subtype; `0009` seeds the `document_approval` workflow + the SoD-1/SoD-2
+  constraints; `system_config.allow_approver_release`. **`POST /tasks/{id}/decision`** is the canonical approval/review
+  trigger — writes `task_outcome` + `signature_event` + audit in ONE txn (`SELECT … FOR UPDATE` + `UNIQUE(task_outcome.
+  task_id)` + `Idempotency-Key` replay); `submit-review` instantiates the instance + APPROVE task; the **direct
+  `/approve`+`/request-changes` endpoints were removed** (tasks-canonical, C7). Signature emission on approve (decision txn),
+  release (manual + Beat, inside the SERIALIZABLE cutover; nullable system signer) and obsolete. The **SoD gate** in the PDP
+  `_evaluate_sod` (deny-overlay on a would-be ALLOW): SoD-1 (author≠approver, non-overridable) + SoD-2 (author never
+  self-releases; approver-release behind `allow_approver_release`) read the immutable `document_version.author_user_id` +
+  prior approval signatures → **403 `sod_violation`** + `conflicting_duty`; SoD-3 = the Internal Auditor role's structural
+  exclusion (RBAC). Reconciliations: 403 over doc-18 §7's 409 (doc 15 §8.8 governs); polymorphic `signed_object_id` over
+  doc-18 §15.4's typed FKs (doc 14 §8); `record` brought forward from S21 per owner scope. Proofs: SoD-1/2/3, one-txn +
+  rollback atomicity, idempotency, My-Tasks, `test_release_supersedes` [AC#1a] + `test_two_effective_impossible` [AC#1b]
+  re-driven multi-actor through the task flow.
+
+**Next slice: S6 — Audit** (the real partitioned, hash-chained `audit_event` table behind the S2 `AuthzAuditSink` + S3
+`VaultAuditSink` seams; the reserved `audit_event.signature_event_id` FK; the mandatory off-host/append-only
+audit-checkpoint anchor). S5 left the clean seams: the logging audit sinks still front a deferred DB writer, and
+`signature_event` is append-only at the app layer until the S6 DB-grant REVOKE makes it structural.
 
 ## Building the MVP (dev workflow)
 

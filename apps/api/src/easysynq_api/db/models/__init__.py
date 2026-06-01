@@ -1,6 +1,8 @@
 """ORM models. Imported here so ``Base.metadata`` is fully populated for Alembic."""
 
 from ._authz_enums import SodSeverity, SodTargetBinding
+from ._record_enums import RecordDispositionState, RecordType
+from ._signature_enums import SignatureMeaning, SignatureMethod, SignedObjectType
 from ._vault_enums import (
     ChangeSignificance,
     Classification,
@@ -8,6 +10,13 @@ from ._vault_enums import (
     DocumentKind,
     DocumentLevel,
     VersionState,
+)
+from ._workflow_enums import (
+    TaskOutcomeKind,
+    TaskState,
+    TaskType,
+    WorkflowStageMode,
+    WorkflowSubjectType,
 )
 from .app_user import AppUser, UserStatus
 from .authz_grant import PermissionOverride
@@ -19,11 +28,20 @@ from .framework import Framework
 from .numbering_counter import NumberingCounter
 from .organization import Organization
 from .permission import Permission
+from .record import Record
 from .retention_policy import RetentionPolicy
 from .role import Role, RoleAssignment, RoleGrant
 from .scope import Scope
+from .signature_event import SignatureEvent
 from .sod import SodConstraint
 from .system_config import SetupState, SystemConfig
+from .workflow import (
+    Task,
+    TaskOutcome,
+    WorkflowDefinition,
+    WorkflowInstance,
+    WorkflowStage,
+)
 from .working_draft import WorkingDraft
 
 __all__ = [
@@ -42,17 +60,34 @@ __all__ = [
     "Organization",
     "Permission",
     "PermissionOverride",
+    "Record",
+    "RecordDispositionState",
+    "RecordType",
     "RetentionPolicy",
     "Role",
     "RoleAssignment",
     "RoleGrant",
     "Scope",
     "SetupState",
+    "SignatureEvent",
+    "SignatureMeaning",
+    "SignatureMethod",
+    "SignedObjectType",
     "SodConstraint",
     "SodSeverity",
     "SodTargetBinding",
     "SystemConfig",
+    "Task",
+    "TaskOutcome",
+    "TaskOutcomeKind",
+    "TaskState",
+    "TaskType",
     "UserStatus",
     "VersionState",
+    "WorkflowDefinition",
+    "WorkflowInstance",
+    "WorkflowStage",
+    "WorkflowStageMode",
+    "WorkflowSubjectType",
     "WorkingDraft",
 ]

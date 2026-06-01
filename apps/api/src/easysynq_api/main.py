@@ -19,6 +19,7 @@ from .api.auth import router as auth_router
 from .api.authz import router as authz_router
 from .api.documents import router as documents_router
 from .api.health import router as health_router
+from .api.workflow import router as workflow_router
 from .config import get_settings
 from .db.session import dispose_engine
 from .logging import configure_logging, request_id_var
@@ -63,6 +64,7 @@ def create_app() -> FastAPI:
     app.include_router(auth_router)
     app.include_router(authz_router)
     app.include_router(documents_router)
+    app.include_router(workflow_router)
     return app
 
 

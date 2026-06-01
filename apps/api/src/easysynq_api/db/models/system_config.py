@@ -11,7 +11,7 @@ import datetime
 import enum
 import uuid
 
-from sqlalchemy import DateTime, ForeignKey, Integer, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, false, func
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -51,6 +51,14 @@ class SystemConfig(Base):
     canonical_serialize_version: Mapped[int] = mapped_column(
         Integer,
         default=1,
+        nullable=False,
+    )
+    # SoD-2 relaxation flag (doc 07 §7.1): when true, the sole approver may also release
+    # (the author may *never* release their own edit, regardless). Org-level; defaults strict.
+    allow_approver_release: Mapped[bool] = mapped_column(
+        Boolean,
+        server_default=false(),
+        default=False,
         nullable=False,
     )
     finalized_at: Mapped[datetime.datetime | None] = mapped_column(

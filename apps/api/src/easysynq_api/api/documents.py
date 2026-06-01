@@ -9,6 +9,7 @@ from the body in-handler; the list is row-filtered to what the caller may ``docu
 
 from __future__ import annotations
 
+import dataclasses
 import datetime
 import uuid
 from typing import Any
@@ -19,10 +20,13 @@ from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..auth.dependencies import get_current_user
+from ..db.models._signature_enums import SignatureMeaning
+from ..db.models._vault_enums import VersionState
 from ..db.models.app_user import AppUser
 from ..db.models.document_type import DocumentType
 from ..db.models.document_version import DocumentVersion
 from ..db.models.documented_information import DocumentedInformation
+from ..db.models.signature_event import SignatureEvent as SignatureEventRow
 from ..db.models.working_draft import WorkingDraft
 from ..db.session import get_session
 from ..domain.authz import RequestContext, ResourceContext, authorize
@@ -31,7 +35,7 @@ from ..services.authz import AuthzAuditSink, enforce, gather_grants, get_authz_a
 from ..services.vault import (
     SignatureEventSink,
     VaultAuditSink,
-    approve,
+    audit_transition,
     break_lock,
     checkin,
     checkout,
@@ -42,13 +46,13 @@ from ..services.vault import (
     init_upload,
     obsolete,
     release,
-    request_changes,
     start_revision,
     storage,
     submit_review,
 )
 from ..services.vault import repository as vault_repo
 from ..services.vault.locks import LOCK_TTL_SECONDS
+from ..services.workflow import instantiate_approval
 
 router = APIRouter(prefix="/api/v1", tags=["documents"])
 
@@ -80,14 +84,6 @@ class CheckIn(BaseModel):
     change_reason: str = ""
     change_significance: str = ""
     mime_type: str = "application/octet-stream"
-
-
-class Approve(BaseModel):
-    effective_from: datetime.datetime | None = None
-
-
-class RequestChanges(BaseModel):
-    comment: str
 
 
 class Obsolete(BaseModel):
@@ -167,6 +163,10 @@ async def _document_scope(request: Request, session: AsyncSession) -> ResourceCo
         doc_id = uuid.UUID(str(raw))
     except ValueError:
         return ResourceContext.system()
+    return await _document_scope_by_id(session, doc_id)
+
+
+async def _document_scope_by_id(session: AsyncSession, doc_id: uuid.UUID) -> ResourceContext:
     doc = await session.get(DocumentedInformation, doc_id)
     if doc is None:
         return ResourceContext(artifact_id=str(doc_id))
@@ -182,10 +182,73 @@ async def _document_scope(request: Request, session: AsyncSession) -> ResourceCo
     )
 
 
+async def _release_scope(
+    session: AsyncSession, doc_id: uuid.UUID, version_id: uuid.UUID | None
+) -> ResourceContext:
+    """Release scope = the base document scope PLUS the SoD-2 inputs for the **exact version the
+    cutover will promote** (``version_id`` if supplied, else the latest Approved) — its immutable
+    author + prior approval signers. SoD-2 blocks the author from releasing their own edit and
+    (unless ``allow_approver_release``) the sole approver. Resolving the SAME version the handler
+    passes to the cutover keeps the guard sound even if multiple Approved versions ever coexist.
+    Degrades to the base scope when there is no Approved version (the FSM 409 fires)."""
+    base = await _document_scope_by_id(session, doc_id)
+    version: DocumentVersion | None
+    if version_id is not None:
+        version = await session.get(DocumentVersion, version_id)
+        if version is None or version.document_id != doc_id:
+            return base
+    else:
+        version = (
+            await session.execute(
+                select(DocumentVersion)
+                .where(
+                    DocumentVersion.document_id == doc_id,
+                    DocumentVersion.version_state == VersionState.Approved,
+                )
+                .order_by(DocumentVersion.version_seq.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+    if version is None:
+        return base
+    # approver_user_ids comes from the version's recorded approval signatures. The author-side block
+    # (actor == author_user_id) is the robust, signature-independent backstop; the approver-side
+    # (sole-approver release) is only as strong as in-band signature emission (the decide() path
+    # always emits it). A signature-less Approved version (only reachable by direct DB seeding) thus
+    # leaves the approver-set empty — acceptable since the author-side block still holds.
+    signers = (
+        (
+            await session.execute(
+                select(SignatureEventRow.signer_user_id).where(
+                    SignatureEventRow.signed_object_id == version.id,
+                    SignatureEventRow.meaning == SignatureMeaning.approval,
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return dataclasses.replace(
+        base,
+        version_id=str(version.id),
+        author_user_id=str(version.author_user_id),
+        approver_user_ids=frozenset(str(s) for s in signers if s is not None),
+    )
+
+
 async def _load_document(
-    session: AsyncSession, caller: AppUser, raw_id: uuid.UUID
+    session: AsyncSession, caller: AppUser, raw_id: uuid.UUID, *, for_update: bool = False
 ) -> DocumentedInformation:
-    doc = await vault_repo.get_document(session, raw_id)
+    if for_update:
+        doc = (
+            await session.execute(
+                select(DocumentedInformation)
+                .where(DocumentedInformation.id == raw_id)
+                .with_for_update()
+            )
+        ).scalar_one_or_none()
+    else:
+        doc = await vault_repo.get_document(session, raw_id)
     if doc is None or doc.org_id != caller.org_id:
         raise ProblemException(status=404, code="not_found", title="Document not found")
     return doc
@@ -196,12 +259,12 @@ _read_draft = require("document.read_draft", async_scope_resolver=_document_scop
 _checkout = require("document.checkout", async_scope_resolver=_document_scope)
 _edit = require("document.edit", async_scope_resolver=_document_scope)
 _manage_metadata = require("document.manage_metadata", async_scope_resolver=_document_scope)
-# Lifecycle actions (S4). approve/release/obsolete are signature-hook actions (the Part-11 step-up
-# seam; no-op in v1). start-revision reuses ``document.edit`` (no ``document.revise`` key exists).
+# Lifecycle actions. submit-review (S4) instantiates the approval workflow; approve/request-changes
+# route through POST /tasks/{id}/decision now (S5, removed from here). release is a flat sig-hook
+# action but enforces imperatively in-handler (its SoD-2 scope needs the body's version_id, which a
+# path-only dependency cannot see). obsolete is a flat sig-hook action; start-revision reuses
+# ``document.edit`` (no ``document.revise`` key exists).
 _submit = require("document.submit", async_scope_resolver=_document_scope)
-_review = require("document.review", async_scope_resolver=_document_scope)
-_approve = require("document.approve", async_scope_resolver=_document_scope, sig_hook=True)
-_release = require("document.release", async_scope_resolver=_document_scope, sig_hook=True)
 _obsolete = require("document.obsolete", async_scope_resolver=_document_scope, sig_hook=True)
 
 
@@ -393,48 +456,35 @@ async def submit_review_endpoint(
     session: AsyncSession = Depends(get_session),
     vault_sink: VaultAuditSink = Depends(get_vault_audit_sink),
 ) -> dict[str, Any]:
-    doc = await _load_document(session, caller, document_id)
-    return _document(await submit_review(session, vault_sink, caller, doc))
-
-
-@router.post("/documents/{document_id}/approve")
-async def approve_endpoint(
-    document_id: uuid.UUID,
-    body: Approve,
-    caller: AppUser = Depends(_approve),
-    session: AsyncSession = Depends(get_session),
-    vault_sink: VaultAuditSink = Depends(get_vault_audit_sink),
-) -> dict[str, Any]:
-    doc = await _load_document(session, caller, document_id)
-    return _document(
-        await approve(session, vault_sink, caller, doc, effective_from=body.effective_from)
-    )
-
-
-@router.post("/documents/{document_id}/request-changes")
-async def request_changes_endpoint(
-    document_id: uuid.UUID,
-    body: RequestChanges,
-    caller: AppUser = Depends(_review),
-    session: AsyncSession = Depends(get_session),
-    vault_sink: VaultAuditSink = Depends(get_vault_audit_sink),
-) -> dict[str, Any]:
-    doc = await _load_document(session, caller, document_id)
-    return _document(await request_changes(session, vault_sink, caller, doc, comment=body.comment))
+    # T2/T9 + the approval workflow instantiation commit together; the audit fires post-commit.
+    # Approval itself routes through POST /tasks/{id}/decision (C7) — there is no direct /approve.
+    # FOR UPDATE serializes concurrent submit-review on the same document, so two callers cannot
+    # both pass the Draft→InReview FSM check and create duplicate workflow instances/tasks.
+    doc = await _load_document(session, caller, document_id, for_update=True)
+    result = await submit_review(session, caller, doc)
+    await instantiate_approval(session, result.doc, caller)
+    await session.commit()
+    audit_transition(vault_sink, result, caller)
+    return _document(result.doc)
 
 
 @router.post("/documents/{document_id}/release")
 async def release_endpoint(
     document_id: uuid.UUID,
     body: Release,
-    caller: AppUser = Depends(_release),
+    request: Request,
+    caller: AppUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
+    authz_sink: AuthzAuditSink = Depends(get_authz_audit_sink),
     vault_sink: VaultAuditSink = Depends(get_vault_audit_sink),
     sig_sink: SignatureEventSink = Depends(get_vault_signature_sink),
 ) -> dict[str, Any]:
-    # _load_document is the 404/authz guard on the request session; the cutover re-reads the
-    # document authoritatively under a row lock in its own SERIALIZABLE session.
-    await _load_document(session, caller, document_id)
+    # Enforce imperatively (not via a path-only dependency): the SoD-2 scope must resolve for the
+    # SAME version the cutover will promote (body.version_id, else the latest Approved). The cutover
+    # then re-reads the document authoritatively under a row lock in its own SERIALIZABLE session.
+    await _load_document(session, caller, document_id)  # 404 + org guard
+    resource = await _release_scope(session, document_id, body.version_id)
+    await enforce(session, authz_sink, request, caller, "document.release", resource, sig_hook=True)
     doc = await release(caller, document_id, vault_sink, sig_sink, version_id=body.version_id)
     return _document(doc)
 
@@ -457,11 +507,18 @@ async def obsolete_endpoint(
     caller: AppUser = Depends(_obsolete),
     session: AsyncSession = Depends(get_session),
     vault_sink: VaultAuditSink = Depends(get_vault_audit_sink),
+    sig_sink: SignatureEventSink = Depends(get_vault_signature_sink),
 ) -> dict[str, Any]:
     doc = await _load_document(session, caller, document_id)
     return _document(
         await obsolete(
-            session, vault_sink, caller, doc, reason=body.reason, version_id=body.version_id
+            session,
+            vault_sink,
+            sig_sink,
+            caller,
+            doc,
+            reason=body.reason,
+            version_id=body.version_id,
         )
     )
 

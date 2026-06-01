@@ -30,12 +30,16 @@ class ProblemException(Exception):
         title: str,
         detail: str | None = None,
         errors: list[dict[str, Any]] | None = None,
+        members: dict[str, Any] | None = None,
     ) -> None:
         self.status = status
         self.code = code
         self.title = title
         self.detail = detail
         self.errors = errors
+        # Extra top-level problem members (RFC 9457 §3.2) — e.g. ``conflicting_duty`` on a
+        # ``sod_violation`` so the client can correct without guessing (doc 15 §9.5).
+        self.members = members
         super().__init__(title)
 
 
@@ -47,6 +51,7 @@ def _body(
     instance: str,
     detail: str | None = None,
     errors: list[dict[str, Any]] | None = None,
+    members: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     body: dict[str, Any] = {
         "type": f"{_TYPE_BASE}{code}",
@@ -60,6 +65,8 @@ def _body(
         body["detail"] = detail
     if errors:
         body["errors"] = errors
+    if members:
+        body.update(members)
     return body
 
 
@@ -93,6 +100,7 @@ def register_exception_handlers(app: FastAPI) -> None:
                 instance=str(request.url.path),
                 detail=problem.detail,
                 errors=problem.errors,
+                members=problem.members,
             ),
         )
 

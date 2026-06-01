@@ -18,6 +18,7 @@ unique violation (23505) → rolled back → ``409`` (register R8 / doc 18 §5.2
 
 from __future__ import annotations
 
+import dataclasses
 import datetime
 import logging
 import uuid
@@ -38,7 +39,7 @@ from ...logging import request_id_var
 from ...problems import ProblemException
 from . import locks, repository
 from .audit import VaultAuditEvent, VaultAuditSink, get_vault_audit_sink
-from .signature import SignatureEventSink
+from .signature import SignatureEvent, SignatureEventSink, get_vault_signature_sink
 
 logger = logging.getLogger("easysynq.vault")
 
@@ -85,19 +86,70 @@ def _is_race_loss(exc: DBAPIError) -> bool:
     return sqlstate in ("40001", "40P01", "23505")
 
 
+@dataclasses.dataclass(frozen=True, slots=True)
+class TransitionResult:
+    """A completed FSM mutation that has NOT been committed or audited yet. The caller (the decision
+    handler / the submit-review endpoint) commits the unit of work and then calls
+    :func:`audit_transition` AFTER the commit, so a rollback never leaves a phantom audit row."""
+
+    doc: DocumentedInformation
+    version: DocumentVersion
+    event_type: str
+    reason: str | None = None
+
+
+def audit_transition(sink: VaultAuditSink, result: TransitionResult, actor: AppUser) -> None:
+    """Emit the vault audit event for a committed :class:`TransitionResult` (call AFTER commit)."""
+    _audit(
+        sink,
+        result.event_type,
+        actor,
+        result.doc.org_id,
+        "document_version",
+        result.version.id,
+        identifier=result.doc.identifier,
+        reason=result.reason,
+    )
+
+
+def _emit_signature(
+    sig_sink: SignatureEventSink,
+    session: AsyncSession,
+    version: DocumentVersion,
+    meaning: str,
+    actor: AppUser | None,
+    *,
+    intent: str | None = None,
+) -> None:
+    """Append a ``signature_event`` for a version-level decision to the active session (no commit;
+    flushed atomically with the surrounding txn). ``actor=None`` is a system/Beat release."""
+    sig_sink.record(
+        session,
+        SignatureEvent(
+            org_id=version.org_id,
+            signer_user_id=actor.id if actor else None,
+            signed_object_id=version.id,
+            meaning=meaning,
+            content_digest=version.source_blob_sha256,
+            intent=intent,
+            auth_context={"acr": "SESSION"} if actor else {"acr": "SESSION", "system": True},
+        ),
+    )
+
+
 async def _advance_active_version(
     session: AsyncSession,
-    sink: VaultAuditSink,
     actor: AppUser,
     doc: DocumentedInformation,
     action: Action,
     event_type: str,
     *,
     reason: str | None = None,
-) -> DocumentedInformation:
+) -> TransitionResult:
     """Advance the document's active (latest) version through a single-version transition
-    (submit-review / approve via the wrapper / request-changes). The FSM validates against the
-    document's ``current_state``; a state/version mismatch is a defensive illegal transition."""
+    (submit-review / request-changes). The FSM validates against the document's ``current_state``;
+    a state/version mismatch is a defensive illegal transition. **Mutate-only** — the caller commits
+    and audits."""
     transition = apply_transition(doc.current_state, action)
     version = await repository.latest_version(session, doc.id)
     new_state = transition.to_version_state
@@ -110,43 +162,33 @@ async def _advance_active_version(
     version.version_state = new_state
     doc.current_state = transition.to_doc_state
     doc.updated_by = actor.id
-    await session.commit()
-    await session.refresh(doc)
-    _audit(
-        sink,
-        event_type,
-        actor,
-        doc.org_id,
-        "document_version",
-        version.id,
-        identifier=doc.identifier,
-        reason=reason,
-    )
-    return doc
+    return TransitionResult(doc=doc, version=version, event_type=event_type, reason=reason)
 
 
 async def submit_review(
-    session: AsyncSession, sink: VaultAuditSink, actor: AppUser, doc: DocumentedInformation
-) -> DocumentedInformation:
+    session: AsyncSession, actor: AppUser, doc: DocumentedInformation
+) -> TransitionResult:
     """T2 (Draft → InReview) / T9 (UnderRevision → InReview). Acts on the latest checked-in Draft
-    version (the check-in already released the edit lock, so this is lock-free)."""
+    version (the check-in already released the edit lock, so this is lock-free). **Mutate-only** —
+    the submit-review endpoint commits, instantiates the approval workflow, and audits."""
     # S9: enforce the ">=1 clause_mapping else 422" precondition here (doc 15 §8.5). The
     # clause/clause_mapping schema + ISO seed + mapping UX land in the IA slice; deferred per owner.
     return await _advance_active_version(
-        session, sink, actor, doc, Action.submit_review, "SUBMITTED_FOR_REVIEW"
+        session, actor, doc, Action.submit_review, "SUBMITTED_FOR_REVIEW"
     )
 
 
 async def approve(
     session: AsyncSession,
-    sink: VaultAuditSink,
     actor: AppUser,
     doc: DocumentedInformation,
     *,
     effective_from: datetime.datetime | None = None,
-) -> DocumentedInformation:
-    """T4 (InReview → Approved). Records the planned ``effective_from`` (R8: stored ``timestamptz``
-    in UTC; defaults to now → immediate release). **No ``signature_event``** (S5)."""
+) -> TransitionResult:
+    """T4 (InReview → Approved). Records an optional *scheduled* ``effective_from`` (R8: stored
+    ``timestamptz`` in UTC); left NULL for an immediate approval (release is then a separate
+    SoD-2-gated act, not a Beat auto-release). **Mutate-only** — the decision handler commits, emits
+    ``signature_event(meaning=approval)``, writes the ``task_outcome``, and audits."""
     transition = apply_transition(doc.current_state, Action.approve)
     version = await repository.latest_version(session, doc.id)
     new_state = transition.to_version_state
@@ -159,33 +201,26 @@ async def approve(
             Action.approve, doc.current_state, allowed_actions(doc.current_state)
         )
     version.version_state = new_state
-    version.effective_from = effective_from or _now()
+    # Only a *scheduled* (explicit future) effective_from makes a version Beat-eligible. Immediate
+    # approval leaves it NULL, so the Beat sweep (which filters effective_from IS NOT NULL) never
+    # auto-releases it — release stays a separate SoD-2-gated act (else allow_approver_release=False
+    # is defeated by the sweep). The cutover sets effective_from at release.
+    version.effective_from = effective_from
     doc.current_state = transition.to_doc_state
     doc.updated_by = actor.id
-    await session.commit()
-    await session.refresh(doc)
-    _audit(
-        sink,
-        "APPROVED",
-        actor,
-        doc.org_id,
-        "document_version",
-        version.id,
-        identifier=doc.identifier,
-    )
-    return doc
+    return TransitionResult(doc=doc, version=version, event_type="APPROVED")
 
 
 async def request_changes(
     session: AsyncSession,
-    sink: VaultAuditSink,
     actor: AppUser,
     doc: DocumentedInformation,
     *,
     comment: str,
-) -> DocumentedInformation:
+) -> TransitionResult:
     """T3 (InReview → Draft). Returns the document to Draft with a required reviewer comment; the
-    version's ``version_state`` reverts to Draft (a fresh check-out creates the next version)."""
+    version's ``version_state`` reverts to Draft (a fresh check-out creates the next version).
+    **Mutate-only** — the decision handler commits + audits (no signature on request-changes)."""
     if not comment or not comment.strip():
         raise ProblemException(
             status=422,
@@ -194,13 +229,7 @@ async def request_changes(
             errors=[{"field": "comment", "code": "required", "message": "must be non-empty"}],
         )
     return await _advance_active_version(
-        session,
-        sink,
-        actor,
-        doc,
-        Action.request_changes,
-        "CHANGES_REQUESTED",
-        reason=comment.strip(),
+        session, actor, doc, Action.request_changes, "CHANGES_REQUESTED", reason=comment.strip()
     )
 
 
@@ -257,6 +286,7 @@ async def start_revision(
 async def obsolete(
     session: AsyncSession,
     sink: VaultAuditSink,
+    sig_sink: SignatureEventSink,
     actor: AppUser,
     doc: DocumentedInformation,
     *,
@@ -264,7 +294,8 @@ async def obsolete(
     version_id: uuid.UUID | None = None,
 ) -> DocumentedInformation:
     """T11 (Effective → Obsolete; clears the effective pointer) or, when a Superseded ``version_id``
-    is given, the version-level T12 (Superseded version → Obsolete; document state unchanged)."""
+    is given, the version-level T12 (Superseded version → Obsolete; document state unchanged).
+    Emits ``signature_event(meaning=obsolete)`` in the same transaction (S5)."""
     if not reason or not reason.strip():
         raise ProblemException(
             status=422,
@@ -281,6 +312,7 @@ async def obsolete(
         if version.version_state is VersionState.Superseded:  # T12 — version-level archive
             version.version_state = VersionState.Obsolete
             doc.updated_by = actor.id
+            _emit_signature(sig_sink, session, version, "obsolete", actor, intent=reason)
             await session.commit()
             await session.refresh(doc)
             _audit(
@@ -320,6 +352,7 @@ async def obsolete(
     doc.current_effective_version_id = None
     doc.current_state = transition.to_doc_state
     doc.updated_by = actor.id
+    _emit_signature(sig_sink, session, effective, "obsolete", actor, intent=reason)
     await session.commit()
     await session.refresh(doc)
     _audit(
@@ -341,6 +374,7 @@ async def obsolete(
 async def _cutover(
     session: AsyncSession,
     sink: VaultAuditSink,
+    sig_sink: SignatureEventSink,
     doc_id: uuid.UUID,
     version_id: uuid.UUID | None,
     actor: AppUser | None,
@@ -417,6 +451,10 @@ async def _cutover(
     if actor is not None:
         doc.updated_by = actor.id
 
+    # T6: append the release signature INSIDE the cutover txn (before commit) so it is atomic with
+    # the promotion and rolls back with a race loser. ``actor=None`` is the system/Beat release.
+    _emit_signature(sig_sink, session, version, "release", actor)
+
     await session.commit()  # INV-1 + SERIALIZABLE adjudicate the race here
     await session.refresh(doc)
 
@@ -439,8 +477,6 @@ async def _cutover(
             prior.id,
             identifier=doc.identifier,
         )
-    # signature_event(meaning='release') is emitted in S5 (the SignatureEventSink seam is wired but
-    # deliberately not called in S4).
     return doc
 
 
@@ -453,14 +489,14 @@ async def release(
     version_id: uuid.UUID | None = None,
 ) -> DocumentedInformation:
     """T6 (Approved → Effective). Runs :func:`_cutover` in a dedicated SERIALIZABLE session; a
-    concurrent-release loser (40001/40P01/INV-1 23505) is rolled back and surfaced as 409."""
-    del sig_sink  # S5 seam — not emitted in S4
+    concurrent-release loser (40001/40P01/INV-1 23505) is rolled back and surfaced as 409. The
+    ``signature_event(meaning=release)`` is emitted inside the cutover txn (S5)."""
     now = _now()
     async with get_sessionmaker()() as session:
         # Raise isolation before any statement opens the transaction.
         await session.connection(execution_options={"isolation_level": "SERIALIZABLE"})
         try:
-            return await _cutover(session, sink, doc_id, version_id, actor, now)
+            return await _cutover(session, sink, sig_sink, doc_id, version_id, actor, now)
         except DBAPIError as exc:
             await session.rollback()
             if _is_race_loss(exc):
@@ -480,6 +516,7 @@ async def release_due(now: datetime.datetime | None = None) -> list[uuid.UUID]:
     dedicated, disposed engine so it is safe to call inside a Celery task's ``asyncio.run``."""
     now = now or _now()
     sink = get_vault_audit_sink()
+    sig_sink = get_vault_signature_sink()
     engine = create_async_engine(get_settings().database_url)
     sessionmaker: async_sessionmaker[AsyncSession] = async_sessionmaker(
         engine, expire_on_commit=False
@@ -500,7 +537,7 @@ async def release_due(now: datetime.datetime | None = None) -> list[uuid.UUID]:
             async with sessionmaker() as session:
                 await session.connection(execution_options={"isolation_level": "SERIALIZABLE"})
                 try:
-                    await _cutover(session, sink, doc_id, version_id, None, now)
+                    await _cutover(session, sink, sig_sink, doc_id, version_id, None, now)
                     released.append(version_id)
                 except DBAPIError as exc:
                     await session.rollback()

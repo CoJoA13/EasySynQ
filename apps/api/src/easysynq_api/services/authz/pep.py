@@ -13,6 +13,7 @@ import contextlib
 import datetime
 import uuid
 from collections.abc import Awaitable, Callable
+from typing import Any
 
 from fastapi import Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -26,10 +27,21 @@ from ...domain.authz.types import Decision, Effect
 from ...logging import request_id_var
 from ...problems import ProblemException
 from .audit import AuthzAuditEvent, AuthzAuditSink, LoggingAuthzAuditSink
-from .repository import gather_grants, get_permission, role_system_domain_keys
+from .repository import (
+    gather_grants,
+    gather_sod_constraints,
+    get_allow_approver_release,
+    get_permission,
+    role_system_domain_keys,
+)
 
 ScopeResolver = Callable[[Request], ResourceContext]
 AsyncScopeResolver = Callable[[Request, AsyncSession], Awaitable[ResourceContext]]
+
+# The sig-hook content actions the SoD gate applies to (doc 07 §7.1). Loading SoD constraints +
+# the approver-release flag is scoped to these keys so the authz hot path (read/edit/list/…)
+# stays a single grant query.
+_SOD_KEYS = frozenset({"document.approve", "document.release"})
 
 _default_sink: AuthzAuditSink = LoggingAuthzAuditSink()
 
@@ -71,8 +83,19 @@ async def evaluate(
 ) -> Decision:
     """Resolve grants, run the PDP, and emit the audit hook (allow AND deny)."""
     grants = await gather_grants(session, user.id, user.org_id, permission_key)
-    ctx = RequestContext(now=_now(), source_ip=request.client.host if request.client else None)
-    decision = authorize(grants, permission_key, resource, ctx, sig_hook=sig_hook)
+    sod: list[Any] = []
+    allow_approver_release = False
+    if permission_key in _SOD_KEYS:
+        sod = await gather_sod_constraints(session, user.org_id)
+        if permission_key == "document.release":
+            allow_approver_release = await get_allow_approver_release(session, user.org_id)
+    ctx = RequestContext(
+        now=_now(),
+        source_ip=request.client.host if request.client else None,
+        actor_user_id=str(user.id),
+        allow_approver_release=allow_approver_release,
+    )
+    decision = authorize(grants, permission_key, resource, ctx, sig_hook=sig_hook, sod=sod)
     sink.record(
         AuthzAuditEvent(
             occurred_at=ctx.now,
@@ -105,6 +128,27 @@ async def enforce(
         session, sink, request, user, permission_key, resource, sig_hook=sig_hook
     )
     if not decision.allow:
+        # A SoD violation and a missing step-up are distinct 403 codes (doc 15 §8.8); everything
+        # else is the generic permission_denied. SoD surfaces the violated duty pair.
+        if decision.reason == "sod_violation":
+            raise ProblemException(
+                status=403,
+                code="sod_violation",
+                title="Separation-of-duties violation",
+                detail=f"{permission_key} on {_scope_ref(resource)}",
+                members=(
+                    {"conflicting_duty": dict(decision.conflicting_duty)}
+                    if decision.conflicting_duty
+                    else None
+                ),
+            )
+        if decision.reason == "step_up_required":
+            raise ProblemException(
+                status=403,
+                code="step_up_required",
+                title="Step-up authentication required",
+                detail=f"{permission_key} on {_scope_ref(resource)}",
+            )
         raise ProblemException(
             status=403,
             code="permission_denied",

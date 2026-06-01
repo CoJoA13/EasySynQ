@@ -1,10 +1,11 @@
-"""S4 integration proofs — the document lifecycle FSM + the atomic single-Effective cutover,
-exercised over HTTP against testcontainer Postgres + MinIO + Redis.
+"""S4/S5 integration proofs — the document lifecycle FSM + the atomic single-Effective cutover,
+now driven through the S5 task/approval flow under separation of duties.
 
-The two headline proofs are AC#1a (``test_release_supersedes`` — a release atomically supersedes the
-prior Effective version) and AC#1b (``test_two_effective_impossible`` — two parallel releases under
-real concurrent connections yield exactly one Effective; the loser rolls back to 409). Vault
-mechanics (check-out/upload/check-in) are reused from S3; here the variable under test is lifecycle.
+The headline proofs are AC#1a (``test_release_supersedes``) and AC#1b
+(``test_two_effective_impossible``). Under SoD (S5) these are multi-actor: the author (a) checks in
++ submits; the approver (b) decides approve via ``POST /tasks/{id}/decision``; release is by a
+non-author (b with ``allow_approver_release`` on, or a third party). SoD itself is proven in
+``test_sod.py``; here the variable under test is the FSM + cutover + signature emission.
 """
 
 from __future__ import annotations
@@ -20,116 +21,37 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy import func, select
 
+from easysynq_api.db.models._signature_enums import SignatureMeaning
 from easysynq_api.db.models._vault_enums import DocumentCurrentState, VersionState
-from easysynq_api.db.models.authz_grant import PermissionOverride
-from easysynq_api.db.models.document_type import DocumentType
 from easysynq_api.db.models.document_version import DocumentVersion
 from easysynq_api.db.models.documented_information import DocumentedInformation
-from easysynq_api.db.models.permission import Permission
-from easysynq_api.db.models.scope import Scope
+from easysynq_api.db.models.signature_event import SignatureEvent as SignatureEventRow
 from easysynq_api.db.session import get_sessionmaker
-from easysynq_api.domain.authz.types import Effect, ScopeLevel
 
-from .test_vault import _auth, _checkin, _create, _ensure_user, _sop_type_id, _upload
+from . import s5_helpers as s5
+from .test_vault import _auth, _checkin, _create, _upload
 
 pytestmark = pytest.mark.integration
-
-# The full set a lifecycle actor needs (S3 vault perms + the S4 lifecycle keys, doc 07 §3.1).
-_PERMS = (
-    "document.read",
-    "document.read_draft",
-    "document.create",
-    "document.checkout",
-    "document.edit",
-    "document.manage_metadata",
-    "document.submit",
-    "document.review",
-    "document.approve",
-    "document.release",
-    "document.obsolete",
-)
 
 
 @pytest.fixture
 def subj() -> SimpleNamespace:
     salt = uuid.uuid4().hex[:10]
-    return SimpleNamespace(a=f"kc-author-{salt}", b=f"kc-other-{salt}")
+    return SimpleNamespace(a=f"kc-author-{salt}", b=f"kc-approver-{salt}", c=f"kc-releaser-{salt}")
 
 
-async def _grant(subject: str) -> uuid.UUID:
-    """Grant the actor every lifecycle permission at SYSTEM scope (authz is proven in S2)."""
-    async with get_sessionmaker()() as s:
-        user = await _ensure_user(s, subject)
-        for key in _PERMS:
-            perm = (await s.execute(select(Permission).where(Permission.key == key))).scalar_one()
-            scope = Scope(org_id=user.org_id, level=ScopeLevel.SYSTEM)
-            s.add(scope)
-            await s.flush()
-            s.add(
-                PermissionOverride(
-                    org_id=user.org_id,
-                    user_id=user.id,
-                    permission_id=perm.id,
-                    effect=Effect.ALLOW,
-                    scope_id=scope.id,
-                )
-            )
-        await s.commit()
-        return user.id
-
-
-async def _effective_count(doc_id: str) -> int:
+async def _signature_count(version_id: uuid.UUID, meaning: SignatureMeaning) -> int:
     async with get_sessionmaker()() as s:
         return (
             await s.execute(
                 select(func.count())
-                .select_from(DocumentVersion)
+                .select_from(SignatureEventRow)
                 .where(
-                    DocumentVersion.document_id == uuid.UUID(doc_id),
-                    DocumentVersion.version_state == VersionState.Effective,
+                    SignatureEventRow.signed_object_id == version_id,
+                    SignatureEventRow.meaning == meaning,
                 )
             )
         ).scalar_one()
-
-
-async def _pol_type_id() -> str:
-    """The seeded singleton Quality Policy (POL) type — ``is_singleton=true`` (R25)."""
-    async with get_sessionmaker()() as s:
-        return str(
-            (await s.execute(select(DocumentType).where(DocumentType.code == "POL")))
-            .scalar_one()
-            .id
-        )
-
-
-async def _version(version_id: str) -> DocumentVersion:
-    async with get_sessionmaker()() as s:
-        return (
-            await s.execute(
-                select(DocumentVersion).where(DocumentVersion.id == uuid.UUID(version_id))
-            )
-        ).scalar_one()
-
-
-async def _make_effective(
-    client: AsyncClient, h: dict[str, str], type_id: str, content: bytes
-) -> dict:
-    """Drive a fresh document Draft → InReview → Approved → Effective over HTTP."""
-    doc = await _create(client, h, type_id)
-    did = doc["id"]
-    await client.post(f"/api/v1/documents/{did}/checkout", headers=h)
-    sha = await _upload(client, h, did, content)
-    ci = await _checkin(client, h, did, sha, change_reason="v1", change_significance="MAJOR")
-    assert ci.status_code == 201, ci.text
-    assert (
-        await client.post(f"/api/v1/documents/{did}/submit-review", headers=h)
-    ).status_code == 200
-    assert (
-        await client.post(f"/api/v1/documents/{did}/approve", headers=h, json={})
-    ).status_code == 200
-    rel = await client.post(f"/api/v1/documents/{did}/release", headers=h, json={})
-    assert rel.status_code == 200, rel.text
-    return rel.json()
 
 
 # --- AC#1a -------------------------------------------------------------------------------
@@ -138,41 +60,52 @@ async def _make_effective(
 async def test_release_supersedes(
     app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
 ) -> None:
-    """[AC#1a] Draft→InReview→Approved→Effective, then a revision's release atomically supersedes
-    the prior Effective version. (signature_event accuracy is an S5 proof; S4 proves the FSM +
-    atomic supersession.)"""
-    await _grant(subj.a)
-    h = _auth(token_factory, subj.a)
-    type_id = await _sop_type_id()
+    """[AC#1a] Draft→…→Effective (author a, approver/releaser b), then a revision's release
+    atomically supersedes the prior Effective version. Approval + both releases sign (S5)."""
+    await s5.grant_lifecycle(subj.a)
+    await s5.grant_lifecycle(subj.b)
+    await s5.set_approver_release(await s5.default_org_id(), True)  # b approves AND releases
+    ha, hb = _auth(token_factory, subj.a), _auth(token_factory, subj.b)
+    type_id = await s5.type_id("SOP")
 
-    doc = await _make_effective(app_client, h, type_id, f"ac1a-v1-{subj.a}".encode())
+    doc = await s5.drive_to_effective(app_client, ha, hb, hb, type_id, f"ac1a-v1-{subj.a}".encode())
     did = doc["id"]
     assert doc["current_state"] == "Effective"
     v1_id = doc["current_effective_version_id"]
     assert v1_id is not None
 
-    # Open a revision, check in v2, and run it through to release.
-    sr = await app_client.post(f"/api/v1/documents/{did}/start-revision", headers=h)
+    # Open a revision (author a), check in v2, run it through approve (b) → release (b).
+    sr = await app_client.post(f"/api/v1/documents/{did}/start-revision", headers=ha)
     assert sr.status_code == 200, sr.text
     assert sr.json()["current_state"] == "UnderRevision"
-    sha2 = await _upload(app_client, h, did, f"ac1a-v2-{subj.a}".encode())
-    ci2 = await _checkin(app_client, h, did, sha2, change_reason="v2", change_significance="MINOR")
+    sha2 = await _upload(app_client, ha, did, f"ac1a-v2-{subj.a}".encode())
+    ci2 = await _checkin(app_client, ha, did, sha2, change_reason="v2", change_significance="MINOR")
     v2_id = ci2.json()["id"]
-    await app_client.post(f"/api/v1/documents/{did}/submit-review", headers=h)
-    await app_client.post(f"/api/v1/documents/{did}/approve", headers=h, json={})
-    rel2 = await app_client.post(f"/api/v1/documents/{did}/release", headers=h, json={})
+    assert (
+        await app_client.post(f"/api/v1/documents/{did}/submit-review", headers=ha)
+    ).status_code == 200
+    task_id = await s5.task_for_doc(did)
+    assert (
+        await app_client.post(
+            f"/api/v1/tasks/{task_id}/decision", headers=hb, json={"outcome": "approve"}
+        )
+    ).status_code == 200
+    rel2 = await app_client.post(f"/api/v1/documents/{did}/release", headers=hb, json={})
     assert rel2.status_code == 200, rel2.text
     after = rel2.json()
     assert after["current_state"] == "Effective"
     assert after["current_effective_version_id"] == v2_id
 
-    v1, v2 = await _version(v1_id), await _version(v2_id)
+    v1, v2 = await s5.get_version(v1_id), await s5.get_version(v2_id)
     assert v1.version_state is VersionState.Superseded
     assert v1.effective_to is not None
     assert v1.superseded_by_version_id == uuid.UUID(v2_id)
     assert v2.version_state is VersionState.Effective
     assert v2.effective_to is None
-    assert await _effective_count(did) == 1
+    assert await s5.effective_count(did) == 1
+    # Each release emitted a signature_event(meaning=release).
+    assert await _signature_count(uuid.UUID(v1_id), SignatureMeaning.release) == 1
+    assert await _signature_count(uuid.UUID(v2_id), SignatureMeaning.release) == 1
 
 
 # --- AC#1b -------------------------------------------------------------------------------
@@ -182,25 +115,26 @@ async def test_two_effective_impossible(
     app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
 ) -> None:
     """[AC#1b] Two parallel releases targeting two distinct Approved versions of one document →
-    exactly one Effective. The loser rolls back (serialization failure 40001 or INV-1 unique
-    violation 23505) and surfaces as 409; the FOR UPDATE row lock keeps it deadlock-free."""
-    await _grant(subj.a)
-    h = _auth(token_factory, subj.a)
-    did = (await _create(app_client, h, await _sop_type_id()))["id"]
+    exactly one Effective. Released by the non-author ``b`` (SoD-2: the author may never release;
+    the direct-seeded versions carry no approval signature, so b is not blocked as approver)."""
+    await s5.grant_lifecycle(subj.a)  # author of both versions
+    await s5.grant_lifecycle(subj.b)  # the releaser (≠ author)
+    ha = _auth(token_factory, subj.a)
+    hb = _auth(token_factory, subj.b)
+    did = (await _create(app_client, ha, await s5.type_id("SOP")))["id"]
 
-    # Two checked-in Draft versions on the one document.
-    await app_client.post(f"/api/v1/documents/{did}/checkout", headers=h)
-    sha1 = await _upload(app_client, h, did, f"ac1b-v1-{subj.a}".encode())
+    await app_client.post(f"/api/v1/documents/{did}/checkout", headers=ha)
+    sha1 = await _upload(app_client, ha, did, f"ac1b-v1-{subj.a}".encode())
     v1 = (
-        await _checkin(app_client, h, did, sha1, change_reason="v1", change_significance="MAJOR")
+        await _checkin(app_client, ha, did, sha1, change_reason="v1", change_significance="MAJOR")
     ).json()
-    await app_client.post(f"/api/v1/documents/{did}/checkout", headers=h)
-    sha2 = await _upload(app_client, h, did, f"ac1b-v2-{subj.a}".encode())
+    await app_client.post(f"/api/v1/documents/{did}/checkout", headers=ha)
+    sha2 = await _upload(app_client, ha, did, f"ac1b-v2-{subj.a}".encode())
     v2 = (
-        await _checkin(app_client, h, did, sha2, change_reason="v2", change_significance="MAJOR")
+        await _checkin(app_client, ha, did, sha2, change_reason="v2", change_significance="MAJOR")
     ).json()
 
-    # Seed both versions Approved + due (bypassing the single-active-version FSM) so they race.
+    # Seed both versions Approved + due (bypassing the FSM) so they race; no approval signature.
     now = datetime.datetime.now(datetime.UTC)
     async with get_sessionmaker()() as s:
         for vid in (v1["id"], v2["id"]):
@@ -219,29 +153,30 @@ async def test_two_effective_impossible(
 
     r1, r2 = await asyncio.gather(
         app_client.post(
-            f"/api/v1/documents/{did}/release", headers=h, json={"version_id": v1["id"]}
+            f"/api/v1/documents/{did}/release", headers=hb, json={"version_id": v1["id"]}
         ),
         app_client.post(
-            f"/api/v1/documents/{did}/release", headers=h, json={"version_id": v2["id"]}
+            f"/api/v1/documents/{did}/release", headers=hb, json={"version_id": v2["id"]}
         ),
         return_exceptions=True,
     )
     statuses = sorted(r.status_code for r in (r1, r2) if isinstance(r, httpx.Response))
     assert statuses == [200, 409], f"expected one 200 + one 409, got {(r1, r2)}"
-    assert await _effective_count(did) == 1  # the invariant holds regardless of who won
+    assert await s5.effective_count(did) == 1
 
 
-# --- illegal transition + future-dated + revision + obsolete + signature seam -----------
+# --- illegal transition + future-dated + revision + obsolete + signatures ----------------
 
 
 async def test_illegal_transition_returns_409_with_allowed(
     app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
 ) -> None:
-    await _grant(subj.a)
-    h = _auth(token_factory, subj.a)
-    did = (await _create(app_client, h, await _sop_type_id()))["id"]
-    # Release a freshly-created Draft (nothing Approved) → 409 invalid_state_transition.
-    r = await app_client.post(f"/api/v1/documents/{did}/release", headers=h, json={})
+    await s5.grant_lifecycle(subj.a)
+    ha = _auth(token_factory, subj.a)
+    did = (await _create(app_client, ha, await s5.type_id("SOP")))["id"]
+    # Release a freshly-created Draft (nothing Approved) → 409 invalid_state_transition. No Approved
+    # version exists, so the release SoD scope degrades and the FSM 409 is reached.
+    r = await app_client.post(f"/api/v1/documents/{did}/release", headers=ha, json={})
     assert r.status_code == 409, r.text
     body = r.json()
     assert body["code"] == "invalid_state_transition"
@@ -251,29 +186,34 @@ async def test_illegal_transition_returns_409_with_allowed(
 async def test_future_dated_stays_approved_then_beat_sweep_releases(
     app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
 ) -> None:
-    await _grant(subj.a)
-    h = _auth(token_factory, subj.a)
-    did = (await _create(app_client, h, await _sop_type_id()))["id"]
-    await app_client.post(f"/api/v1/documents/{did}/checkout", headers=h)
-    sha = await _upload(app_client, h, did, f"future-{subj.a}".encode())
+    await s5.grant_lifecycle(subj.a)
+    await s5.grant_lifecycle(subj.b)
+    await s5.set_approver_release(await s5.default_org_id(), True)
+    ha, hb = _auth(token_factory, subj.a), _auth(token_factory, subj.b)
+    did = (await _create(app_client, ha, await s5.type_id("SOP")))["id"]
+    await app_client.post(f"/api/v1/documents/{did}/checkout", headers=ha)
+    sha = await _upload(app_client, ha, did, f"future-{subj.a}".encode())
     v = (
-        await _checkin(app_client, h, did, sha, change_reason="v1", change_significance="MAJOR")
+        await _checkin(app_client, ha, did, sha, change_reason="v1", change_significance="MAJOR")
     ).json()
-    await app_client.post(f"/api/v1/documents/{did}/submit-review", headers=h)
+    await app_client.post(f"/api/v1/documents/{did}/submit-review", headers=ha)
 
+    # Approve (b) with a future go-live — carried on the decision body (replaces /approve's body).
     future = (datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=7)).isoformat()
+    task_id = await s5.task_for_doc(did)
     ap = await app_client.post(
-        f"/api/v1/documents/{did}/approve", headers=h, json={"effective_from": future}
+        f"/api/v1/tasks/{task_id}/decision",
+        headers=hb,
+        json={"outcome": "approve", "effective_from": future},
     )
-    assert ap.status_code == 200
-    assert ap.json()["current_state"] == "Approved"
+    assert ap.status_code == 200, ap.text
 
     # Manual release of a future-dated version is refused — it stays Approved (Beat releases it).
-    rel = await app_client.post(f"/api/v1/documents/{did}/release", headers=h, json={})
+    rel = await app_client.post(f"/api/v1/documents/{did}/release", headers=hb, json={})
     assert rel.status_code == 422, rel.text
     assert rel.json()["code"] == "validation_error"
 
-    # Make it due, then run the Beat sweep → it becomes Effective.
+    # Make it due, then run the Beat sweep → it becomes Effective (with a system release signature).
     async with get_sessionmaker()() as s:
         ver = (
             await s.execute(select(DocumentVersion).where(DocumentVersion.id == uuid.UUID(v["id"])))
@@ -285,92 +225,140 @@ async def test_future_dated_stays_approved_then_beat_sweep_releases(
 
     released = await release_due()
     assert uuid.UUID(v["id"]) in released
-    after = await _version(v["id"])
+    after = await s5.get_version(v["id"])
     assert after.version_state is VersionState.Effective
+    assert await _signature_count(uuid.UUID(v["id"]), SignatureMeaning.release) == 1
+    # The Beat release runs as the system principal — no human signer (nullable), system context.
+    async with get_sessionmaker()() as s:
+        sig = (
+            await s.execute(
+                select(SignatureEventRow).where(
+                    SignatureEventRow.signed_object_id == uuid.UUID(v["id"]),
+                    SignatureEventRow.meaning == SignatureMeaning.release,
+                )
+            )
+        ).scalar_one()
+        assert sig.signer_user_id is None
+        assert (sig.auth_context or {}).get("system") is True
+
+
+async def test_immediate_approval_is_not_auto_released_by_beat(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    """SoD-2 guard: an immediately-approved version (no effective_from) is NOT Beat-eligible —
+    release stays a separate, SoD-gated act so allow_approver_release=False requires a separate
+    releaser (the Beat must not auto-release what the sole approver was just 403'd from)."""
+    await s5.grant_lifecycle(subj.a)
+    await s5.grant_role(subj.b, "Approver")
+    await s5.set_approver_release(await s5.default_org_id(), False)
+    ha, hb = _auth(token_factory, subj.a), _auth(token_factory, subj.b)
+    did = await s5.drive_to_approved(app_client, ha, hb, await s5.type_id("SOP"), b"beat-guard")
+
+    from easysynq_api.services.vault import release_due
+
+    released = await release_due()
+
+    async with get_sessionmaker()() as s:
+        version_id = (
+            await s.execute(
+                select(DocumentVersion.id)
+                .where(DocumentVersion.document_id == uuid.UUID(did))
+                .order_by(DocumentVersion.version_seq.desc())
+                .limit(1)
+            )
+        ).scalar_one()
+        doc = await s.get(DocumentedInformation, uuid.UUID(did))
+    assert version_id not in released
+    assert doc.current_state is DocumentCurrentState.Approved  # NOT auto-released
+    assert await s5.effective_count(did) == 0
 
 
 async def test_start_revision_opens_under_revision(
     app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
 ) -> None:
-    await _grant(subj.a)
-    h = _auth(token_factory, subj.a)
-    doc = await _make_effective(app_client, h, await _sop_type_id(), f"rev-{subj.a}".encode())
+    await s5.grant_lifecycle(subj.a)
+    await s5.grant_lifecycle(subj.b)
+    await s5.set_approver_release(await s5.default_org_id(), True)
+    ha, hb = _auth(token_factory, subj.a), _auth(token_factory, subj.b)
+    doc = await s5.drive_to_effective(app_client, ha, hb, hb, await s5.type_id("SOP"), b"rev")
     did = doc["id"]
     eff_v = doc["current_effective_version_id"]
 
-    sr = await app_client.post(f"/api/v1/documents/{did}/start-revision", headers=h)
+    sr = await app_client.post(f"/api/v1/documents/{did}/start-revision", headers=ha)
     assert sr.status_code == 200, sr.text
     assert sr.json()["current_state"] == "UnderRevision"
     assert sr.json()["current_effective_version_id"] == eff_v  # the Effective version still governs
 
-    # A second start-revision (already UnderRevision) is illegal.
-    sr2 = await app_client.post(f"/api/v1/documents/{did}/start-revision", headers=h)
+    sr2 = await app_client.post(f"/api/v1/documents/{did}/start-revision", headers=ha)
     assert sr2.status_code == 409
     assert sr2.json()["allowed_transitions"] == ["submit_review"]
 
 
-async def test_obsolete_clears_effective_pointer(
+async def test_obsolete_clears_effective_pointer_and_signs(
     app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
 ) -> None:
-    await _grant(subj.a)
-    h = _auth(token_factory, subj.a)
-    doc = await _make_effective(app_client, h, await _sop_type_id(), f"obs-{subj.a}".encode())
+    await s5.grant_lifecycle(subj.a)
+    await s5.grant_lifecycle(subj.b)
+    await s5.set_approver_release(await s5.default_org_id(), True)
+    ha, hb = _auth(token_factory, subj.a), _auth(token_factory, subj.b)
+    doc = await s5.drive_to_effective(app_client, ha, hb, hb, await s5.type_id("SOP"), b"obs")
     did = doc["id"]
     eff_v = doc["current_effective_version_id"]
 
     blank = await app_client.post(
-        f"/api/v1/documents/{did}/obsolete", headers=h, json={"reason": "  "}
+        f"/api/v1/documents/{did}/obsolete", headers=ha, json={"reason": "  "}
     )
     assert blank.status_code == 422  # reason required
 
     ob = await app_client.post(
-        f"/api/v1/documents/{did}/obsolete", headers=h, json={"reason": "withdrawn"}
+        f"/api/v1/documents/{did}/obsolete", headers=ha, json={"reason": "withdrawn"}
     )
     assert ob.status_code == 200, ob.text
     assert ob.json()["current_state"] == "Obsolete"
     assert ob.json()["current_effective_version_id"] is None
-    assert (await _version(eff_v)).version_state is VersionState.Obsolete
+    assert (await s5.get_version(eff_v)).version_state is VersionState.Obsolete
+    assert await _signature_count(uuid.UUID(eff_v), SignatureMeaning.obsolete) == 1
 
 
 async def test_singleton_one_effective_per_type(
     app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
 ) -> None:
-    """[R25] Only one Effective singleton (Quality Policy) per (org, type) at a time. A second
-    Quality Policy's release hits the R25 partial unique index → surfaced as 409 conflict."""
-    await _grant(subj.a)
-    h = _auth(token_factory, subj.a)
-    pol = await _pol_type_id()
+    """[R25] Only one Effective singleton (Quality Policy) per (org, type). A second's release hits
+    the R25 partial unique index → 409 conflict."""
+    await s5.grant_lifecycle(subj.a)
+    await s5.grant_lifecycle(subj.b)
+    await s5.set_approver_release(await s5.default_org_id(), True)
+    ha, hb = _auth(token_factory, subj.a), _auth(token_factory, subj.b)
+    pol = await s5.type_id("POL")
 
-    first = await _make_effective(app_client, h, pol, f"pol-A-{subj.a}".encode())
+    first = await s5.drive_to_effective(app_client, ha, hb, hb, pol, f"pol-A-{subj.a}".encode())
     assert first["current_state"] == "Effective"
     assert first["is_singleton"] is True
 
     # A second Quality Policy: drive to Approved, then release → R25 conflict.
-    bid = (await _create(app_client, h, pol))["id"]
-    await app_client.post(f"/api/v1/documents/{bid}/checkout", headers=h)
-    sha = await _upload(app_client, h, bid, f"pol-B-{subj.a}".encode())
-    await _checkin(app_client, h, bid, sha, change_reason="v1", change_significance="MAJOR")
-    await app_client.post(f"/api/v1/documents/{bid}/submit-review", headers=h)
-    await app_client.post(f"/api/v1/documents/{bid}/approve", headers=h, json={})
-    rel = await app_client.post(f"/api/v1/documents/{bid}/release", headers=h, json={})
+    bid = await s5.drive_to_approved(app_client, ha, hb, pol, f"pol-B-{subj.a}".encode())
+    rel = await app_client.post(f"/api/v1/documents/{bid}/release", headers=hb, json={})
     assert rel.status_code == 409, rel.text
     assert rel.json()["code"] == "conflict"
 
 
-async def test_signature_sink_injectable_but_not_emitted(
-    app_client: AsyncClient,
-    app_under_test: object,
-    token_factory: Callable[..., str],
-    subj: SimpleNamespace,
+async def test_approval_emits_signature(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
 ) -> None:
-    """The S5 seam is wired (injectable) but S4 emits no signature_event."""
-    from easysynq_api.services.vault import CapturingSignatureEventSink, get_vault_signature_sink
+    """S5 emits signature_events (replacing the S4 'injectable but not emitted' seam test):
+    the approval decision signs the version (meaning=approval)."""
+    await s5.grant_lifecycle(subj.a)
+    await s5.grant_role(subj.b, "Approver")
+    ha, hb = _auth(token_factory, subj.a), _auth(token_factory, subj.b)
+    did = await s5.drive_to_approved(app_client, ha, hb, await s5.type_id("SOP"), b"sig")
 
-    sink = CapturingSignatureEventSink()
-    app_under_test.dependency_overrides[get_vault_signature_sink] = lambda: sink  # type: ignore[attr-defined]
-
-    await _grant(subj.a)
-    h = _auth(token_factory, subj.a)
-    doc = await _make_effective(app_client, h, await _sop_type_id(), f"sig-{subj.a}".encode())
-    assert doc["current_state"] == "Effective"
-    assert sink.events == []  # no signature_event in S4 (S5 wires emission)
+    async with get_sessionmaker()() as s:
+        version_id = (
+            await s.execute(
+                select(DocumentVersion.id)
+                .where(DocumentVersion.document_id == uuid.UUID(did))
+                .order_by(DocumentVersion.version_seq.desc())
+                .limit(1)
+            )
+        ).scalar_one()
+    assert await _signature_count(version_id, SignatureMeaning.approval) == 1

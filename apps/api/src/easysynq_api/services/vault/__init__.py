@@ -9,7 +9,9 @@ from .audit import (
     get_vault_audit_sink,
 )
 from .lifecycle import (
+    TransitionResult,
     approve,
+    audit_transition,
     obsolete,
     release,
     release_due,
@@ -20,6 +22,7 @@ from .lifecycle import (
 from .service import break_lock, checkin, checkout, create_document, heartbeat, init_upload
 from .signature import (
     CapturingSignatureEventSink,
+    DbSignatureEventSink,
     LoggingSignatureEventSink,
     SignatureEvent,
     SignatureEventSink,
@@ -29,13 +32,16 @@ from .signature import (
 __all__ = [
     "CapturingSignatureEventSink",
     "CapturingVaultAuditSink",
+    "DbSignatureEventSink",
     "LoggingSignatureEventSink",
     "LoggingVaultAuditSink",
     "SignatureEvent",
     "SignatureEventSink",
+    "TransitionResult",
     "VaultAuditEvent",
     "VaultAuditSink",
     "approve",
+    "audit_transition",
     "break_lock",
     "checkin",
     "checkout",
