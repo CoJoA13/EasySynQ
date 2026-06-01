@@ -3,4 +3,4 @@
 from .organization import Organization
 from .system_config import SetupState, SystemConfig
 
-__all__ = ["Organization", "SystemConfig", "SetupState"]
+__all__ = ["Organization", "SetupState", "SystemConfig"]
