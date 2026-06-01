@@ -17,9 +17,23 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     version: str = "0.1.0"
 
-    # database (async runtime + sync for Alembic)
+    # database (async runtime + sync for Alembic).
+    # In a real deploy the app/worker/beat connect as the NON-OWNER ``easysynq_app`` role
+    # (INSERT/SELECT-only on audit_event + signature_event, so the append-only trail is
+    # structurally enforced — AC#6a); ``database_url_sync`` (Alembic) runs as the OWNER so the
+    # 0010 migration can CREATE ROLE + GRANT/REVOKE (doc 18 §136/§150).
     database_url: str = "postgresql+psycopg://easysynq:easysynq@localhost:5432/easysynq"
     database_url_sync: str | None = None
+    # The chain-linker (R12) connects as a dedicated role with column-scoped UPDATE on
+    # audit_event(prev_hash,row_hash,chained_at) — the app role has no UPDATE there.
+    audit_linker_database_url: str = (
+        "postgresql+psycopg://easysynq_linker:easysynq_linker@localhost:5432/easysynq"
+    )
+    # Passwords the 0010 migration uses to CREATE the app + linker roles (owner runs the
+    # migration). Dev defaults; prod operators set APP_DB_PASSWORD / LINKER_DB_PASSWORD before
+    # ``migrate``. CI + testcontainers use the defaults so the AC#6a role-grant proof works.
+    app_db_password: str = "easysynq_app"  # noqa: S105 — dev default, overridden in prod
+    linker_db_password: str = "easysynq_linker"  # noqa: S105 — dev default, overridden in prod
 
     # redis
     redis_url: str = "redis://localhost:6379/0"
@@ -36,6 +50,20 @@ class Settings(BaseSettings):
     s3_bucket_staging: str = "staging"
     s3_object_lock_mode: str = "GOVERNANCE"
     s3_presign_expiry_seconds: int = 900  # presigned PUT/GET validity (doc 18 §5.2)
+
+    # S6 off-host audit-checkpoint sink (worm_bucket kind, R13/D-8): a SEPARATE object-lock
+    # bucket reached with DISTINCT, write-only credentials held apart from the vault root, so
+    # the same operator cannot control both the live chain and its off-host anchor. Empty creds
+    # fall back to the vault s3 creds (dev only — NOT honest custody separation).
+    s3_bucket_audit_checkpoints: str = "audit-checkpoints"
+    audit_sink_access_key: str = ""
+    audit_sink_secret_key: str = ""
+    # Ed25519 private key (PEM) that signs checkpoints — a beat-only secret (dev-grade; the
+    # Part-11 crypto path stays reserved). Generated + persisted here on first use if absent.
+    audit_checkpoint_signing_key_path: str = "/run/secrets/audit_ckpt_key"
+    # Configurable-verbosity knob (doc 12 §4.1): also persist routine authz ALLOW decisions.
+    # Off in v1 — only denies + state-changes persist (avoids an audit row per read request).
+    audit_persist_allows: bool = False
 
     # auth (Keycloak)
     oidc_issuer: str = ""

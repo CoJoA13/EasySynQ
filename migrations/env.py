@@ -27,6 +27,18 @@ config.set_main_option("sqlalchemy.url", _DSN)
 target_metadata = Base.metadata
 
 
+def _include_object(
+    obj: object, name: str | None, type_: str, reflected: bool, compare_to: object
+) -> bool:
+    """Exclude the monthly ``audit_event_YYYY_MM`` child partitions (and their PG-named child
+    indexes) from autogenerate / ``alembic check``. They are created dynamically by the 0010
+    migration + the ``roll_partitions`` Beat job — never modelled in ``Base.metadata`` — so without
+    this filter ``alembic check`` would try to drop them. The parent ``audit_event`` (and its
+    explicitly-named ``brin_*`` / ``ix_*`` indexes) are NOT excluded, so column drift is still
+    caught (slice S6)."""
+    return not (name is not None and name.startswith("audit_event_"))
+
+
 def run_migrations_offline() -> None:
     context.configure(
         url=_DSN,
@@ -34,6 +46,7 @@ def run_migrations_offline() -> None:
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
         compare_type=True,
+        include_object=_include_object,
     )
     with context.begin_transaction():
         context.run_migrations()
@@ -42,12 +55,15 @@ def run_migrations_offline() -> None:
 def run_migrations_online() -> None:
     section = config.get_section(config.config_ini_section) or {}
     section["sqlalchemy.url"] = _DSN
-    connectable = engine_from_config(section, prefix="sqlalchemy.", poolclass=pool.NullPool)
+    connectable = engine_from_config(
+        section, prefix="sqlalchemy.", poolclass=pool.NullPool
+    )
     with connectable.connect() as connection:
         context.configure(
             connection=connection,
             target_metadata=target_metadata,
             compare_type=True,
+            include_object=_include_object,
         )
         with context.begin_transaction():
             context.run_migrations()

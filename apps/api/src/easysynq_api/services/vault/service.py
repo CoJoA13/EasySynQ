@@ -51,6 +51,7 @@ async def _release_after_commit(document_id: uuid.UUID, token: str) -> None:
 
 
 def _emit(
+    session: AsyncSession,
     sink: VaultAuditSink,
     event_type: str,
     actor: AppUser,
@@ -60,7 +61,10 @@ def _emit(
     identifier: str | None = None,
     reason: str | None = None,
 ) -> None:
+    """Append the vault ``audit_event`` row to ``session`` BEFORE its commit, so the row commits (or
+    rolls back) atomically with the action it records (doc 12 §4.4 / AC#6)."""
     sink.record(
+        session,
         VaultAuditEvent(
             occurred_at=_now(),
             event_type=event_type,
@@ -71,7 +75,7 @@ def _emit(
             identifier=identifier,
             reason=reason,
             request_id=request_id_var.get(),
-        )
+        ),
     )
 
 
@@ -133,9 +137,10 @@ async def create_document(
         created_by=actor.id,
     )
     session.add(doc)
+    await session.flush()  # populate doc.id for the audit row's object_id
+    _emit(session, sink, "DOCUMENT_CREATED", actor, "document", doc.id, identifier=doc.identifier)
     await session.commit()
     await session.refresh(doc)
-    _emit(sink, "DOCUMENT_CREATED", actor, "document", doc.id, identifier=doc.identifier)
     return doc
 
 
@@ -168,9 +173,9 @@ async def checkout(
         wd.source_version_id = latest.id if latest else None
         wd.lock_token = token
         wd.checked_out_at = _now()
+    _emit(session, sink, "CHECKOUT", actor, "document", doc.id, identifier=doc.identifier)
     await session.commit()
     await session.refresh(wd)
-    _emit(sink, "CHECKOUT", actor, "document", doc.id, identifier=doc.identifier)
     return wd
 
 
@@ -237,9 +242,9 @@ async def checkin(
     latest = await repository.latest_version(session, doc.id)
     if latest is not None and latest.source_blob_sha256 == sha256:
         await session.delete(wd)
+        _emit(session, sink, "NO_CHANGE", actor, "document", doc.id, identifier=doc.identifier)
         await session.commit()
         await _release_after_commit(doc.id, token)
-        _emit(sink, "NO_CHANGE", actor, "document", doc.id, identifier=doc.identifier)
         return latest, False
 
     # Promote the staged upload into the WORM documents bucket BEFORE the version commits.
@@ -294,10 +299,8 @@ async def checkin(
     )
     session.add(version)
     await session.delete(wd)
-    await session.commit()  # commit FIRST; release the lock only on success
-    await session.refresh(version)
-    await _release_after_commit(doc.id, token)
     _emit(
+        session,
         sink,
         "CHECKIN",
         actor,
@@ -306,6 +309,9 @@ async def checkin(
         identifier=doc.identifier,
         reason=change_reason.strip(),
     )
+    await session.commit()  # version + audit commit atomically; release the lock only on success
+    await session.refresh(version)
+    await _release_after_commit(doc.id, token)
     return version, True
 
 
@@ -314,8 +320,11 @@ async def break_lock(
 ) -> None:
     """Release the lock WITHOUT check-in, preserving the displaced editor's scratch (R9)."""
     await locks.force_release(doc.id)
-    # The working_draft row (and its scratch_blob_ref) is deliberately NOT deleted.
-    _emit(sink, "LOCK_BROKEN", actor, "document", doc.id, identifier=doc.identifier)
+    # The working_draft row (and its scratch_blob_ref) is deliberately NOT deleted. LOCK_BROKEN has
+    # no SQL state-change to be atomic with, so the audit row gets its own dedicated one-row commit
+    # (the request session is clean here — break_lock issues no other SQL). doc 12 §4.4 carve-out.
+    _emit(session, sink, "LOCK_BROKEN", actor, "document", doc.id, identifier=doc.identifier)
+    await session.commit()
 
 
 async def heartbeat(session: AsyncSession, actor: AppUser, doc: DocumentedInformation) -> int:

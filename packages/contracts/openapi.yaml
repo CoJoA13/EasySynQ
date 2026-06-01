@@ -35,6 +35,12 @@ tags:
       check-in cycle, break-lock, and version reads. Content I/O is presigned (never proxied);
       check-in is content-addressed (identical bytes create no new version) and requires a
       change reason + significance (INV-3).
+  - name: audit
+    description: >-
+      The append-only, hash-chained audit trail (read-only). No POST/PATCH/DELETE ever —
+      append-only + hash-chained is a system invariant, not an API capability (the app DB role
+      lacks UPDATE/DELETE on audit_event). Gated by system.audit_log.read. verify-chain recomputes
+      the chain on demand; /audit/status surfaces the tamper-evidence soft-gate (R13).
 
 paths:
   /healthz:
@@ -781,6 +787,108 @@ paths:
         "403": { $ref: "#/components/responses/ProblemResponse" }
         "404": { $ref: "#/components/responses/ProblemResponse" }
 
+  /audit-events:
+    get:
+      tags: [audit]
+      operationId: listAuditEvents
+      summary: "Org-wide audit trail, newest first (keyset-paginated). Gated by system.audit_log.read."
+      parameters:
+        - { name: cursor, in: query, required: false, schema: { type: integer, format: int64 }, description: "Page rows with id < cursor (keyset, desc)." }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+        - { name: actor_id, in: query, required: false, schema: { type: string, format: uuid } }
+        - { name: actor_type, in: query, required: false, schema: { type: string } }
+        - { name: event_type, in: query, required: false, schema: { type: string } }
+        - { name: object_type, in: query, required: false, schema: { type: string } }
+        - { name: object_id, in: query, required: false, schema: { type: string, format: uuid } }
+        - { name: occurred_from, in: query, required: false, schema: { type: string, format: date-time } }
+        - { name: occurred_to, in: query, required: false, schema: { type: string, format: date-time } }
+      responses:
+        "200":
+          description: A page of audit events.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuditEventPage" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "422": { $ref: "#/components/responses/ProblemResponse" }
+
+  /audit-events/verify-chain:
+    get:
+      tags: [audit]
+      operationId: verifyAuditChain
+      summary: "Recompute + verify the hash chain; reports the first broken link (AC#6b)."
+      parameters:
+        - { name: from, in: query, required: false, schema: { type: integer, format: int64 }, description: "Lower bound audit_event id." }
+        - { name: to, in: query, required: false, schema: { type: integer, format: int64 }, description: "Upper bound audit_event id." }
+      responses:
+        "200":
+          description: The verification result.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VerifyChainResult" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+
+  /audit-events/export:
+    get:
+      tags: [audit]
+      operationId: exportAuditEvents
+      summary: "Async export (CSV/JSON) for evidence packs. DEFERRED in MVP (omit-with-schema, D-9)."
+      parameters:
+        - { name: format, in: query, required: false, schema: { type: string, enum: [csv, json], default: json } }
+      responses:
+        "202":
+          description: Export job accepted; poll the job link.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuditExportJob" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+
+  /audit/status:
+    get:
+      tags: [audit]
+      operationId: getAuditStatus
+      summary: "The tamper-evidence soft-gate (R13) + chain lag the SPA reads."
+      responses:
+        "200":
+          description: Audit subsystem status.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuditStatus" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+
+  /audit-events/{event_id}:
+    get:
+      tags: [audit]
+      operationId: getAuditEvent
+      summary: "A single audit event incl. before/after, reason, auth_context, prev_hash/row_hash."
+      parameters:
+        - { name: event_id, in: path, required: true, schema: { type: integer, format: int64 } }
+      responses:
+        "200":
+          description: The audit event.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuditEvent" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+
+  /documents/{document_id}/audit-events:
+    get:
+      tags: [audit]
+      operationId: listDocumentAuditEvents
+      summary: "One document's full trail (doc + version events), newest first."
+      parameters:
+        - { name: document_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: cursor, in: query, required: false, schema: { type: integer, format: int64 } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+      responses:
+        "200":
+          description: A page of the document's audit events.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuditEventPage" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+
 components:
   securitySchemes:
     keycloak:
@@ -1317,6 +1425,79 @@ components:
             - { type: "null" }
           description: "Present for an approval; null for changes_requested/reject."
         comment: { type: [string, "null"] }
+
+    AuditEvent:
+      type: object
+      additionalProperties: false
+      description: "One immutable, attributed, hash-chained audit row (doc 12 §4.2)."
+      required: [id, org_id, occurred_at, actor_type, event_type, object_type]
+      properties:
+        id: { type: integer, format: int64, description: "Monotonic identity; a gap is a tamper signal." }
+        org_id: { type: string, format: uuid }
+        occurred_at: { type: string, format: date-time }
+        actor_id: { type: [string, "null"], format: uuid, description: "Null for system/Beat jobs." }
+        actor_type: { type: string, enum: [user, system, external_auditor, admin] }
+        event_type: { type: string, description: "Extensible enum (clients tolerate unknown values)." }
+        object_type: { type: string, enum: [document, version, record, permission, user, session, config, audit] }
+        object_id: { type: [string, "null"], format: uuid }
+        scope_ref: { type: [string, "null"] }
+        reason: { type: [string, "null"], description: "Mandatory Change Reason for content-changing events." }
+        before: { type: [object, "null"], additionalProperties: true }
+        after: { type: [object, "null"], additionalProperties: true }
+        request_id: { type: [string, "null"], format: uuid }
+        client_ip: { type: [string, "null"] }
+        user_agent: { type: [string, "null"] }
+        auth_context: { type: [object, "null"], additionalProperties: true }
+        prev_hash: { type: [string, "null"], description: "Lowercase-hex SHA-256; null until linked." }
+        row_hash: { type: [string, "null"], description: "Lowercase-hex SHA-256; null until linked." }
+        chained_at: { type: [string, "null"], format: date-time, description: "Null = written-but-not-yet-chained." }
+        signature_event_id: { type: [string, "null"], format: uuid, description: "Reserved Part-11 hook (null in v1)." }
+
+    AuditEventPage:
+      type: object
+      additionalProperties: false
+      required: [events, next_cursor]
+      properties:
+        events:
+          type: array
+          items: { $ref: "#/components/schemas/AuditEvent" }
+        next_cursor: { type: [integer, "null"], format: int64, description: "Pass as ?cursor= for the next page; null at the end." }
+
+    VerifyChainResult:
+      type: object
+      additionalProperties: false
+      required: [verified, checked, pending, breaks]
+      properties:
+        verified: { type: boolean }
+        checked: { type: integer, description: "Linked rows re-walked." }
+        pending: { type: integer, description: "Unchained tail (not a break)." }
+        breaks:
+          type: array
+          description: "Empty when verified; the first entry is the root cause."
+          items:
+            type: object
+            additionalProperties: false
+            required: [at_id, reason]
+            properties:
+              at_id: { type: integer, format: int64 }
+              reason: { type: string }
+
+    AuditExportJob:
+      type: object
+      additionalProperties: false
+      required: [job_id, status_url]
+      properties:
+        job_id: { type: string }
+        status_url: { type: string }
+
+    AuditStatus:
+      type: object
+      additionalProperties: false
+      required: [tamper_evidence_attested, sink_enabled, chain_lag_seconds]
+      properties:
+        tamper_evidence_attested: { type: boolean, description: "False until a genuinely off-host anchor exists (R13)." }
+        sink_enabled: { type: boolean }
+        chain_lag_seconds: { type: number, description: "now − oldest unchained row's occurred_at (0 if fully linked)." }
 
 security:
   - keycloak: []

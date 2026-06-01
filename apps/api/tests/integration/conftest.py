@@ -7,7 +7,9 @@ from __future__ import annotations
 import datetime
 import json
 from collections.abc import AsyncIterator, Callable, Iterator
+from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 import jwt
 import pytest
@@ -56,6 +58,26 @@ def _pg() -> Iterator[str]:
         yield pg.get_connection_url()
 
 
+def _swap_role(dsn: str, user: str, password: str) -> str:
+    """Re-point a DSN at a different role (same host/db). Used to connect as the non-owner
+    ``easysynq_app`` / ``easysynq_linker`` roles the 0010 migration creates, so AC#6a's DB-grant
+    rejection is exercised by the real grant (not bypassed by the superuser)."""
+    parts = urlsplit(dsn)
+    netloc = f"{user}:{password}@{parts.hostname}:{parts.port}"
+    return urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
+
+
+@pytest.fixture
+def dsns(_pg: str) -> dict[str, str]:
+    """The owner / app / linker DSNs. Depend on ``app_under_test`` first so the roles exist (they
+    are created by the migration). Passwords match the 0010 migration's dev defaults."""
+    return {
+        "owner": _pg,
+        "app": _swap_role(_pg, "easysynq_app", "easysynq_app"),
+        "linker": _swap_role(_pg, "easysynq_linker", "easysynq_linker"),
+    }
+
+
 @pytest.fixture(scope="session")
 def _minio() -> Iterator[dict[str, str]]:
     """A MinIO container with the ``documents`` bucket created object-lock-enabled + a
@@ -82,6 +104,8 @@ def _minio() -> Iterator[dict[str, str]]:
             },
         )
         client.create_bucket(Bucket="staging")  # plain bucket for presigned uploads
+        # S6 off-host audit-checkpoint anchor bucket (object-lock, R13).
+        client.create_bucket(Bucket="audit-checkpoints", ObjectLockEnabledForBucket=True)
         yield {
             "endpoint": endpoint,
             "access_key": cfg["access_key"],
@@ -101,19 +125,31 @@ def _redis() -> Iterator[str]:
 
 @pytest.fixture
 async def app_under_test(
-    _pg: str, _minio: dict[str, str], _redis: str, monkeypatch: pytest.MonkeyPatch
+    _pg: str,
+    _minio: dict[str, str],
+    _redis: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> AsyncIterator[Any]:
     """The migrated FastAPI app wired to the testcontainer DB/MinIO/Redis, with JWKS stubbed.
-    Exposed so a test can install dependency overrides (e.g. a capturing audit sink) before
-    issuing requests; most tests use ``app_client`` instead."""
-    monkeypatch.setenv("DATABASE_URL", _pg)
-    monkeypatch.setenv("DATABASE_URL_SYNC", _pg)
+
+    Migrations run as the OWNER (``DATABASE_URL_SYNC`` = the container superuser), which is what
+    creates the ``easysynq_app`` / ``easysynq_linker`` roles. The app itself then connects as the
+    NON-OWNER ``easysynq_app`` (``DATABASE_URL``), so the append-only DB grants are real — AC#6a's
+    UPDATE/DELETE rejection is exercised, not bypassed by a superuser."""
+    app_dsn = _swap_role(_pg, "easysynq_app", "easysynq_app")
+    linker_dsn = _swap_role(_pg, "easysynq_linker", "easysynq_linker")
+    monkeypatch.setenv("DATABASE_URL", app_dsn)  # app/worker = non-owner role (AC#6a)
+    monkeypatch.setenv("DATABASE_URL_SYNC", _pg)  # alembic = owner (creates roles + grants)
+    monkeypatch.setenv("AUDIT_LINKER_DATABASE_URL", linker_dsn)
     monkeypatch.setenv("OIDC_ISSUER", ISSUER)
     monkeypatch.setenv("OIDC_AUDIENCE", AUDIENCE)
     monkeypatch.setenv("S3_ENDPOINT", _minio["endpoint"])
     monkeypatch.setenv("S3_ACCESS_KEY", _minio["access_key"])
     monkeypatch.setenv("S3_SECRET_KEY", _minio["secret_key"])
     monkeypatch.setenv("S3_BUCKET_DOCUMENTS", "documents")
+    monkeypatch.setenv("S3_BUCKET_AUDIT_CHECKPOINTS", "audit-checkpoints")
+    monkeypatch.setenv("AUDIT_CHECKPOINT_SIGNING_KEY_PATH", str(tmp_path / "audit_ckpt.pem"))
     monkeypatch.setenv("REDIS_URL", _redis)
 
     from alembic import command

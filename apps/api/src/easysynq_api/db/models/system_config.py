@@ -53,6 +53,14 @@ class SystemConfig(Base):
         default=1,
         nullable=False,
     )
+    # S6 chain-linker bounded-lag alarm threshold (doc 12 §4.4): a written-but-not-yet-chained
+    # tail older than this (seconds) raises a high-severity alarm. Target ≤5 s; default 60 s.
+    audit_chain_lag_alarm_seconds: Mapped[int] = mapped_column(
+        Integer,
+        server_default="60",
+        default=60,
+        nullable=False,
+    )
     # SoD-2 relaxation flag (doc 07 §7.1): when true, the sole approver may also release
     # (the author may *never* release their own edit, regardless). Org-level; defaults strict.
     allow_approver_release: Mapped[bool] = mapped_column(

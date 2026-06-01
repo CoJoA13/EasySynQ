@@ -26,7 +26,7 @@ from ...domain.authz import RequestContext, ResourceContext, authorize
 from ...domain.authz.types import Decision, Effect
 from ...logging import request_id_var
 from ...problems import ProblemException
-from .audit import AuthzAuditEvent, AuthzAuditSink, LoggingAuthzAuditSink
+from .audit import AuthzAuditEvent, AuthzAuditSink, DbAuthzAuditSink
 from .repository import (
     gather_grants,
     gather_sod_constraints,
@@ -43,7 +43,7 @@ AsyncScopeResolver = Callable[[Request, AsyncSession], Awaitable[ResourceContext
 # stays a single grant query.
 _SOD_KEYS = frozenset({"document.approve", "document.release"})
 
-_default_sink: AuthzAuditSink = LoggingAuthzAuditSink()
+_default_sink: AuthzAuditSink = DbAuthzAuditSink()
 
 
 def get_authz_audit_sink() -> AuthzAuditSink:
@@ -96,7 +96,7 @@ async def evaluate(
         allow_approver_release=allow_approver_release,
     )
     decision = authorize(grants, permission_key, resource, ctx, sig_hook=sig_hook, sod=sod)
-    sink.record(
+    await sink.record(
         AuthzAuditEvent(
             occurred_at=ctx.now,
             actor_id=str(user.id),
@@ -194,8 +194,10 @@ async def _is_system_tier(session: AsyncSession, granter: AppUser) -> bool:
     )
 
 
-def _two_tier_deny(sink: AuthzAuditSink, granter: AppUser, scope_ref: str, detail: str) -> None:
-    sink.record(
+async def _two_tier_deny(
+    sink: AuthzAuditSink, granter: AppUser, scope_ref: str, detail: str
+) -> None:
+    await sink.record(
         AuthzAuditEvent(
             occurred_at=_now(),
             actor_id=str(granter.id),
@@ -237,7 +239,7 @@ async def assert_can_grant(
     if not target.is_system_domain:
         return  # CONTENT target — any permission.grant holder may grant it.
     if not await _is_system_tier(session, granter):
-        _two_tier_deny(
+        await _two_tier_deny(
             sink,
             granter,
             f"target:{target_permission_key}",
@@ -255,7 +257,7 @@ async def assert_can_assign_role(
     if not system_keys:
         return
     if not await _is_system_tier(session, granter):
-        _two_tier_deny(
+        await _two_tier_deny(
             sink,
             granter,
             f"role:{role_id}",

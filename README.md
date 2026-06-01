@@ -18,7 +18,8 @@ invariant* rather than a discipline problem.
   - **S3 — vault** ✅ — document create + the check-out → presigned CAS upload → immutable check-in cycle (MinIO WORM, Redis lock).
   - **S4 — lifecycle** ✅ — the document FSM (Draft→…→Effective) + the atomic single-Effective cutover (SERIALIZABLE + INV-1), 6 named lifecycle actions, R25 singleton index, future-dated Beat sweep.
   - **S5 — approval + SoD** ✅ — the task/decision approval workflow (`POST /tasks/{id}/decision` writes `signature_event`+`task_outcome`+audit in one txn; tasks-canonical), append-only `signature_event` emission on approve/release/obsolete, and the deny-wins separation-of-duties gate (SoD-1 no self-approval, SoD-2 no self-release, SoD-3 auditor independence).
-  - **S6 — audit** (next) — the partitioned, hash-chained `audit_event` table + off-host checkpoint anchor.
+  - **S6 — audit** ✅ — the append-only, monthly-partitioned, hash-chained `audit_event` trail behind DB **role separation** (a non-owner `easysynq_app` role with INSERT/SELECT-only on `audit_event`+`signature_event`, so append-only is structurally enforced — AC#6a); the in-transaction audit writer; the decoupled chain-linker (a dedicated `easysynq_linker` role, advisory-locked, bounded-lag alarm) with a frozen `canonical_serialize` + golden vector; `verify-chain` (detects a mutated row as the first broken link — AC#6b); the off-host `worm_bucket` checkpoint anchor with an honest tamper-evidence soft-gate (R13); and the read-only `/audit-events` API.
+  - **S7 — mirror** (next) — the read-only filesystem mirror of Effective-only versions, regenerated from the vault.
 
   Run it: `just up s`, then open **http://localhost** (dev login `demo` / `Demo-Password-1`).
 

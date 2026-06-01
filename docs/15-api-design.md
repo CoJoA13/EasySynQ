@@ -544,6 +544,8 @@ PDCA "Check" (`14 §9`). The program is a **maintained document**; an `audit` an
 
 Read-only projection of `audit_event` (`14 §12`). The auditor's primary evidence surface. **No POST/PATCH/DELETE ever** — append-only and hash-chained is a *system invariant*, not an API capability; the app DB role lacks UPDATE/DELETE on this table.
 
+> **S6 reconciliation (perm key):** the trail endpoints below are gated by **`system.audit_log.read`** (and export by `system.audit_log.export`) — the purpose-built SYSTEM-domain keys seeded in the doc-07 catalog for the immutable security trail. The `audit.read`/`audit.export` spellings in the table are the pre-catalog-split shorthand; `audit.read` (PROCESS scope) is the *ISO-9001 internal-audit content* permission, a different concept. `GET /audit-events/export` is **deferred** in the MVP (needs the §8.18 async-job pattern — D-9): its schema stays in `openapi.yaml`, the route is not mounted. `GET /documents/{id}/audit-events` ships; the generic `/{resource}/{id}/audit-events` form follows as resources land.
+
 | Method | Path | Perm | Notes |
 |---|---|---|---|
 | GET | `/audit-events` | `audit.read` | Org-wide trail. Filter `actor_id`, `actor_type`, `event_type`, `object_type`, `object_id`, `occurred_at` range. Sort `occurred_at` (default desc). Served from OpenSearch mirror, PG-authoritative (`03 §10`). |

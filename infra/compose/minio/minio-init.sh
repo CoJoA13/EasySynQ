@@ -20,4 +20,29 @@ RETENTION="${WORM_RETENTION:-30d}"
 mc retention set --default GOVERNANCE "$RETENTION" local/documents
 mc retention set --default GOVERNANCE "$RETENTION" local/records
 
-echo "minio-init: buckets ready (documents, records [WORM/${RETENTION}], renditions, staging)"
+# S6 off-host audit-checkpoint anchor (R13/D-8): a SEPARATE object-lock bucket reached with a
+# DISTINCT, write-only credential held apart from the vault root, so the same operator cannot
+# silently control both the live chain and its off-host anchor. The bucket is on the same host in
+# dev — the tamper_evidence_attested soft-gate stays FALSE until an operator points it off-host.
+mc mb --with-lock --ignore-existing local/audit-checkpoints
+mc retention set --default GOVERNANCE "$RETENTION" local/audit-checkpoints
+
+AUDIT_SINK_KEY="${AUDIT_SINK_ACCESS_KEY:-audit-sink}"
+AUDIT_SINK_SECRET="${AUDIT_SINK_SECRET_KEY:-audit-sink-secret-change-me}"
+mc admin user add local "$AUDIT_SINK_KEY" "$AUDIT_SINK_SECRET" || true
+cat > /tmp/audit-sink-writeonly.json <<'EOF'
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": ["s3:PutObject", "s3:GetBucketLocation", "s3:ListBucket"],
+      "Resource": ["arn:aws:s3:::audit-checkpoints", "arn:aws:s3:::audit-checkpoints/*"]
+    }
+  ]
+}
+EOF
+mc admin policy create local audit-sink-writeonly /tmp/audit-sink-writeonly.json || true
+mc admin policy attach local audit-sink-writeonly --user "$AUDIT_SINK_KEY" || true
+
+echo "minio-init: buckets ready (documents, records [WORM/${RETENTION}], renditions, staging, audit-checkpoints)"

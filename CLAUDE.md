@@ -74,10 +74,31 @@ Docker stack):**
   rollback atomicity, idempotency, My-Tasks, `test_release_supersedes` [AC#1a] + `test_two_effective_impossible` [AC#1b]
   re-driven multi-actor through the task flow.
 
-**Next slice: S6 — Audit** (the real partitioned, hash-chained `audit_event` table behind the S2 `AuthzAuditSink` + S3
-`VaultAuditSink` seams; the reserved `audit_event.signature_event_id` FK; the mandatory off-host/append-only
-audit-checkpoint anchor). S5 left the clean seams: the logging audit sinks still front a deferred DB writer, and
-`signature_event` is append-only at the app layer until the S6 DB-grant REVOKE makes it structural.
+- **S6 — Audit [AC#6]** ✅ — the append-only, hash-chained, tamper-evident trail. `0010` introduces **DB role
+  separation** (the decisive AC#6a foundation: the app/worker/beat run as the non-owner `easysynq_app` role with
+  INSERT/SELECT-only on `audit_event`+`signature_event` — so the REVOKE actually bites; the migrate service stays the
+  owner; a dedicated `easysynq_linker` role holds the only `UPDATE(prev_hash,row_hash,chained_at)` grant) + the
+  monthly RANGE-partitioned `audit_event` (`bigint GENERATED ALWAYS AS IDENTITY`, PK `(id,occurred_at)`, BRIN+btree,
+  reserved `signature_event_id` FK; a SECURITY-DEFINER partition factory the non-owner Beat calls) + `audit_checkpoint`/
+  `audit_checkpoint_sink`. The **in-transaction audit writer** swaps the logging sinks for `DbVaultAuditSink`
+  (`record(session,event)`, mirrors the signature sink) and `DbAuthzAuditSink` (own short txn; persists denies +
+  state-changes, allows log-only per §4.1) — every vault/lifecycle emit moved **pre-commit** (the cutover RELEASED/
+  SUPERSEDED rows now roll back with a race loser — no phantom). `canonical_serialize` v1 is **frozen** (length-prefixed
+  TLV over the doc-12 §4.3 fields, RFC-8785 JCS for jsonb, 32-zero genesis) + a committed golden vector (D-4). The
+  decoupled chain-linker (`easysynq_linker` DSN, `pg_try_advisory_lock`, bounded-lag alarm, R12), `verify-chain`
+  (first-broken-link detection), the signed off-host `worm_bucket` checkpoint anchor + the honest `tamper_evidence_attested`
+  soft-gate (false on a same-host sink — R13), and Beat tasks (link ~30s, verify nightly, anchor ~15m, roll-partitions
+  daily) + `easysynq audit {ensure-partitions,verify-chain}` CLI. Read-only `/audit-events` API (list/detail/per-document/
+  verify-chain/status, `system.audit_log.read`, no write verbs). Deferred with seams: Keycloak SPI, `/audit-events/export`
+  (D-9), content-access auditing. Reconciliations back-propagated (doc 15 §8.13 perm key, doc 12 §4.2 extensible `event_type`,
+  doc 14 §12 D-8 credential). Proofs: `test_ac6a_*` (every gated step → a row; app-role UPDATE/DELETE on `audit_event`+
+  `signature_event` rejected with SQLSTATE 42501, incl. a partitioned row; no write verbs), `test_ac6b_*` (linker chains +
+  is idempotent; verify matches; a tampered row is the first broken link; checkpoint push + soft-gate), golden vector.
+
+**Next slice: S7 — Mirror [AC#2]** (the read-only filesystem mirror of Effective-only versions, regenerated from the
+vault → atomic swap, mounted read-only; an edited mirror file overwritten on next sync). S6 left clean seams: the
+`event_type` enum reserves the Keycloak auth-event values (the SPI ships them later, out-of-band), and
+`/audit-events/export` keeps its `openapi.yaml` schema while the route stays unmounted until the async-job pattern lands.
 
 ## Building the MVP (dev workflow)
 
