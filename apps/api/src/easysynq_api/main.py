@@ -17,6 +17,7 @@ from starlette.responses import Response
 
 from .api.auth import router as auth_router
 from .api.authz import router as authz_router
+from .api.documents import router as documents_router
 from .api.health import router as health_router
 from .config import get_settings
 from .db.session import dispose_engine
@@ -61,6 +62,7 @@ def create_app() -> FastAPI:
     app.include_router(health_router)
     app.include_router(auth_router)
     app.include_router(authz_router)
+    app.include_router(documents_router)
     return app
 
 

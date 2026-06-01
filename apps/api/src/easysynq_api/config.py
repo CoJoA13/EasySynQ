@@ -26,11 +26,16 @@ class Settings(BaseSettings):
 
     # object store (S3 API via boto3)
     s3_endpoint: str = "http://localhost:9000"
+    # Browser-reachable MinIO origin for presigned URLs (behind Caddy in real deploys); the
+    # internal s3_endpoint is not reachable from a client. Empty → use s3_endpoint (dev/CI).
+    s3_public_endpoint: str = ""
     s3_region: str = "us-east-1"
     s3_access_key: str = ""
     s3_secret_key: str = ""
     s3_bucket_documents: str = "documents"
+    s3_bucket_staging: str = "staging"
     s3_object_lock_mode: str = "GOVERNANCE"
+    s3_presign_expiry_seconds: int = 900  # presigned PUT/GET validity (doc 18 §5.2)
 
     # auth (Keycloak)
     oidc_issuer: str = ""

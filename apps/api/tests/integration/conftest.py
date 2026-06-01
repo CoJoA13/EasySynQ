@@ -56,15 +56,65 @@ def _pg() -> Iterator[str]:
         yield pg.get_connection_url()
 
 
+@pytest.fixture(scope="session")
+def _minio() -> Iterator[dict[str, str]]:
+    """A MinIO container with the ``documents`` bucket created object-lock-enabled + a
+    GOVERNANCE default retention (mirrors infra/compose/minio-init.sh), so every PUT auto-WORMs."""
+    import boto3
+    from testcontainers.minio import MinioContainer
+
+    with MinioContainer() as mc:
+        cfg = mc.get_config()
+        endpoint = f"http://{cfg['endpoint']}"
+        client = boto3.client(
+            "s3",
+            endpoint_url=endpoint,
+            aws_access_key_id=cfg["access_key"],
+            aws_secret_access_key=cfg["secret_key"],
+            region_name="us-east-1",
+        )
+        client.create_bucket(Bucket="documents", ObjectLockEnabledForBucket=True)
+        client.put_object_lock_configuration(
+            Bucket="documents",
+            ObjectLockConfiguration={
+                "ObjectLockEnabled": "Enabled",
+                "Rule": {"DefaultRetention": {"Mode": "GOVERNANCE", "Days": 30}},
+            },
+        )
+        client.create_bucket(Bucket="staging")  # plain bucket for presigned uploads
+        yield {
+            "endpoint": endpoint,
+            "access_key": cfg["access_key"],
+            "secret_key": cfg["secret_key"],
+        }
+
+
+@pytest.fixture(scope="session")
+def _redis() -> Iterator[str]:
+    from testcontainers.redis import RedisContainer
+
+    with RedisContainer() as rc:
+        host = rc.get_container_host_ip()
+        port = rc.get_exposed_port(6379)
+        yield f"redis://{host}:{port}/0"
+
+
 @pytest.fixture
-async def app_under_test(_pg: str, monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[Any]:
-    """The migrated FastAPI app wired to the testcontainer DB, with JWKS stubbed. Exposed so
-    a test can install dependency overrides (e.g. a capturing audit sink) before issuing
-    requests; most tests use ``app_client`` instead."""
+async def app_under_test(
+    _pg: str, _minio: dict[str, str], _redis: str, monkeypatch: pytest.MonkeyPatch
+) -> AsyncIterator[Any]:
+    """The migrated FastAPI app wired to the testcontainer DB/MinIO/Redis, with JWKS stubbed.
+    Exposed so a test can install dependency overrides (e.g. a capturing audit sink) before
+    issuing requests; most tests use ``app_client`` instead."""
     monkeypatch.setenv("DATABASE_URL", _pg)
     monkeypatch.setenv("DATABASE_URL_SYNC", _pg)
     monkeypatch.setenv("OIDC_ISSUER", ISSUER)
     monkeypatch.setenv("OIDC_AUDIENCE", AUDIENCE)
+    monkeypatch.setenv("S3_ENDPOINT", _minio["endpoint"])
+    monkeypatch.setenv("S3_ACCESS_KEY", _minio["access_key"])
+    monkeypatch.setenv("S3_SECRET_KEY", _minio["secret_key"])
+    monkeypatch.setenv("S3_BUCKET_DOCUMENTS", "documents")
+    monkeypatch.setenv("REDIS_URL", _redis)
 
     from alembic import command
     from alembic.config import Config

@@ -40,8 +40,16 @@ Docker stack):**
   `/roles` + `/users/{id}/{roles,overrides,effective-permissions}`. Proofs: `test_per_user_deny_beats_role_allow` [AC#3],
   `test_admin_system_star_denied_content` [AC#4], `test_two_tier_violation`, `test_specificity_allow_only`.
 
-**Next slice: S3 — Vault** (create doc, check-out via Redis lock, upload CAS blob, check-in immutable version;
-proofs: identical-bytes re-checkin = no new version, INV-3 422, double-checkout 409, break-lock preserves scratch).
+- **S3 — Vault** ✅ — the controlled-vault spine (D2): `framework`/`document_type`/`blob`/`documented_information`/
+  `document_version`/`working_draft`/`numbering_counter` schema; atomic `{TYPE}-{AREA}-{SEQ}` identifiers; the
+  check-out (Redis 8h lock + heartbeat) → presigned MinIO upload (staging) → server-side WORM copy → immutable
+  `document_version` check-in cycle; content-addressed dedup; INV-3; break-lock (scratch preserved); 13 `/documents`
+  endpoints; PEP async resource-scope resolvers. Proofs: re-checkin-identical-bytes=no-new-version, INV-3 422,
+  double-checkout 409 lock_conflict, break-lock-preserves-scratch + LOCK_BROKEN, WORM-before-version, presigned I/O.
+
+**Next slice: S4 — Lifecycle [AC#1]** (FSM `Draft→InReview→Approved→Effective`; the atomic single-Effective cutover
++ INV-1 partial unique index — created in S4 where it's exercised; two parallel `release` txns → exactly one Effective;
+submit-review requires ≥1 `clause_mapping`). S4 also adds the R25 singleton index and the reserved-now lifecycle FKs.
 
 ## Building the MVP (dev workflow)
 
