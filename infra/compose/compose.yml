@@ -72,6 +72,9 @@ services:
       KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN:-admin}
       KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
       KC_HEALTH_ENABLED: "true"
+      # Honor Caddy's X-Forwarded-* so tokens are issued for the browser-facing host.
+      KC_PROXY_HEADERS: xforwarded
+      KC_HTTP_ENABLED: "true"
     volumes:
       - ./keycloak:/opt/keycloak/data/import:ro
     networks: [internal]
