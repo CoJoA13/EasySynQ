@@ -1,6 +1,10 @@
 # EasySynQ — MVP Implementation Plan (for approval)
 
-> **Status: PROPOSED — awaiting owner approval. No application code has been written.**
+> **Status: APPROVED (2026-05-31) and IN BUILD.** Slices **S0–S3 are shipped to `main`** (each via PR, all CI
+> green, validated on the real Docker stack); **S4 (Lifecycle) is next.** This document is the build guide; the
+> Decisions Register remains authoritative where they differ, and a few canon reconciliations were made during the
+> build (see CLAUDE.md "Current status" and the per-slice memory for the exact decisions, e.g. `documented_information`
+> collapse, `role_grant`/`role_assignment` naming, INV-1/R25 indexes deferred to S4, folder_path-as-text).
 > This turns the `16-roadmap.md` **MVP ("The Controlled Vault, Proven")** into a concrete build plan:
 > repo/monorepo layout + tooling, the Docker Compose dev stack, the Alembic schema derived from
 > `14-data-model.md`, the FastAPI/OpenAPI surface from `15-api-design.md`, the ordered vertical
