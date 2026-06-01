@@ -86,6 +86,11 @@ class ResourceContext:
     lifecycle_state: str | None = None
     requirement_source: str | None = None
     framework_id: str | None = None
+    # SoD inputs (doc 07 §7, S5): the version under decision + its immutable author, and the prior
+    # approvers (read from signature_event history) used by SoD-2's approver-side release check.
+    version_id: str | None = None
+    author_user_id: str | None = None
+    approver_user_ids: frozenset[str] = dataclasses.field(default_factory=frozenset)
 
     @classmethod
     def system(cls) -> ResourceContext:
@@ -104,6 +109,10 @@ class RequestContext:
     now: Any  # datetime.datetime; typed loosely so the PDP stays import-light
     source_ip: str | None = None
     step_up_satisfied: bool = True
+    # SoD inputs (S5): the acting principal (app_user id, the stable internal identity SoD compares
+    # by) and the org's SoD-2 approver-release relaxation flag.
+    actor_user_id: str | None = None
+    allow_approver_release: bool = False
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -116,3 +125,6 @@ class Decision:
     reason: str
     source: str | None = None
     require_reason: bool = False
+    # On a ``sod_violation`` deny, the violated constraint's duty pair (doc 15 §9.5) so the PEP can
+    # surface ``conflicting_duty`` in the 403 body.
+    conflicting_duty: Mapping[str, Any] | None = None

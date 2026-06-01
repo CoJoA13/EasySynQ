@@ -550,62 +550,8 @@ paths:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
 
-  /documents/{document_id}/approve:
-    post:
-      tags: [documents]
-      operationId: approveDocument
-      summary: "InReview→Approved (T4); records planned effective_from. Needs document.approve."
-      parameters:
-        - { name: document_id, in: path, required: true, schema: { type: string, format: uuid } }
-      requestBody:
-        required: false
-        content:
-          application/json:
-            schema: { $ref: "#/components/schemas/Approve" }
-      responses:
-        "200":
-          description: The document.
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Document" }
-        "403": { $ref: "#/components/responses/ProblemResponse" }
-        "404": { $ref: "#/components/responses/ProblemResponse" }
-        "409":
-          description: Illegal transition (invalid_state_transition; body includes allowed_transitions).
-          content:
-            application/problem+json:
-              schema: { $ref: "#/components/schemas/Problem" }
-
-  /documents/{document_id}/request-changes:
-    post:
-      tags: [documents]
-      operationId: requestChanges
-      summary: "InReview→Draft (T3) with a required reviewer comment. Needs document.review."
-      parameters:
-        - { name: document_id, in: path, required: true, schema: { type: string, format: uuid } }
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: "#/components/schemas/RequestChanges" }
-      responses:
-        "200":
-          description: The document.
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Document" }
-        "403": { $ref: "#/components/responses/ProblemResponse" }
-        "404": { $ref: "#/components/responses/ProblemResponse" }
-        "409":
-          description: Illegal transition (invalid_state_transition; body includes allowed_transitions).
-          content:
-            application/problem+json:
-              schema: { $ref: "#/components/schemas/Problem" }
-        "422":
-          description: Missing comment (validation_error).
-          content:
-            application/problem+json:
-              schema: { $ref: "#/components/schemas/Problem" }
+  # Approval/review is NOT a direct document action — it routes through POST /tasks/{id}/decision
+  # (C7). There is intentionally no /documents/{id}/approve or /request-changes endpoint.
 
   /documents/{document_id}/release:
     post:
@@ -741,6 +687,100 @@ paths:
         "403": { $ref: "#/components/responses/ProblemResponse" }
         "404": { $ref: "#/components/responses/ProblemResponse" }
 
+  /tasks:
+    get:
+      tags: [tasks]
+      operationId: listTasks
+      summary: "My Tasks — tasks assigned to the caller or where the caller is a candidate (self-scoped)."
+      parameters:
+        - { name: assignee, in: query, required: false, schema: { type: string, enum: [me] } }
+        - name: state
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [PENDING, CLAIMED, DONE, SKIPPED, ESCALATED, EXPIRED]
+        - { name: type, in: query, required: false, schema: { type: string } }
+        - { name: instance_id, in: query, required: false, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: The caller's tasks.
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/Task" } }
+        "422": { $ref: "#/components/responses/ProblemResponse" }
+
+  /tasks/{task_id}:
+    get:
+      tags: [tasks]
+      operationId: getTask
+      summary: "A single task the caller may see (assignee or candidate); else 404 (sensitive collapse)."
+      parameters:
+        - { name: task_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: The task.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Task" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+
+  /tasks/{task_id}/decision:
+    post:
+      tags: [tasks]
+      operationId: decideTask
+      summary: "The canonical approval/review trigger — writes signature_event + task_outcome + audit in one txn."
+      description: >-
+        Permission is derived from the subject + outcome: approve → document.approve (sig-hook,
+        SoD-1/2 enforced → 403 sod_violation with conflicting_duty); changes_requested/reject →
+        document.review. Idempotent via the Idempotency-Key header (replay on match, else 409).
+      parameters:
+        - { name: task_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - name: Idempotency-Key
+          in: header
+          required: false
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Decision" }
+      responses:
+        "200":
+          description: The recorded decision (+ the signature_event for an approval).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DecisionResult" }
+        "403":
+          description: "permission_denied, or sod_violation (with conflicting_duty), or step_up_required."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409":
+          description: "Task already decided (conflict), or an illegal lifecycle transition."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "422": { $ref: "#/components/responses/ProblemResponse" }
+
+  /workflow-instances/{instance_id}:
+    get:
+      tags: [tasks]
+      operationId: getWorkflowInstance
+      summary: "An approval instance (expand=tasks for its tasks). Gated by document.read on the subject."
+      parameters:
+        - { name: instance_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: expand, in: query, required: false, schema: { type: string, enum: [tasks] } }
+      responses:
+        "200":
+          description: The workflow instance.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WorkflowInstance" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+
 components:
   securitySchemes:
     keycloak:
@@ -810,12 +850,14 @@ components:
             - unauthenticated
             - token_expired
             - token_invalid
-            - illegal_transition
+            - invalid_state_transition
+            - conflict
             - lock_conflict
             - etag_mismatch
             - worm_required
             - two_tier_violation
             - sod_violation
+            - step_up_required
             - setup_incomplete
             - rate_limited
             - idempotency_replay
@@ -833,6 +875,13 @@ components:
               field: { type: string }
               code: { type: string }
               message: { type: string }
+        allowed_transitions:
+          type: [array, "null"]
+          items: { type: string }
+          description: "On invalid_state_transition: the lifecycle actions legal from the current state."
+        conflicting_duty:
+          type: [object, "null"]
+          description: "On sod_violation: the violated duty pair (duty_a/duty_b/target_binding)."
 
     AuthConfig:
       type: object
@@ -1123,22 +1172,6 @@ components:
         change_significance: { type: string, enum: [MAJOR, MINOR], description: Mandatory (INV-3). }
         mime_type: { type: string, default: application/octet-stream }
 
-    Approve:
-      type: object
-      additionalProperties: false
-      properties:
-        effective_from:
-          type: [string, "null"]
-          format: date-time
-          description: "Planned go-live (R8; stored UTC). Omit for immediate release on /release."
-
-    RequestChanges:
-      type: object
-      additionalProperties: false
-      required: [comment]
-      properties:
-        comment: { type: string, description: "Reviewer comment (required, non-empty)." }
-
     Obsolete:
       type: object
       additionalProperties: false
@@ -1179,6 +1212,111 @@ components:
         download_url: { type: string, description: "Short-lived presigned GET URL (MinIO, not the api)." }
         content_type: { type: string }
         sha256: { type: string }
+
+    Task:
+      type: object
+      additionalProperties: false
+      required: [id, instance_id, stage_key, type, state]
+      properties:
+        id: { type: string, format: uuid }
+        instance_id: { type: string, format: uuid }
+        stage_key: { type: string, example: quality_approval }
+        type:
+          type: string
+          enum:
+            - APPROVE
+            - REVIEW
+            - PERIODIC_REVIEW
+            - AUDIT_TASK
+            - FINDING_ACK
+            - CAPA_STAGE
+            - CAPA_ACTION
+            - VERIFY
+            - MR_INPUT
+            - MR_ACTION
+            - DCR_TRIAGE
+        state:
+          type: string
+          enum: [PENDING, CLAIMED, DONE, SKIPPED, ESCALATED, EXPIRED]
+        assignee_user_id: { type: [string, "null"], format: uuid }
+        candidate_pool:
+          type: [array, "null"]
+          items: { type: string, format: uuid }
+          description: "Resolved candidate approver ids (role-derived); My-Tasks filters containment."
+        action_expected: { type: [string, "null"] }
+        due_at: { type: [string, "null"], format: date-time }
+
+    WorkflowInstance:
+      type: object
+      additionalProperties: false
+      required: [id, definition_id, definition_version, subject_type, subject_id, current_state]
+      properties:
+        id: { type: string, format: uuid }
+        definition_id: { type: string, format: uuid }
+        definition_version: { type: integer, description: "Pinned at instantiation." }
+        subject_type:
+          type: string
+          enum: [DOCUMENT, DCR, CAPA, AUDIT, MGMT_REVIEW, PERIODIC_REVIEW]
+        subject_id: { type: string, format: uuid }
+        current_state:
+          type: string
+          description: "IN_APPROVAL | APPROVED | REJECTED_TO_DRAFT | NEEDS_ATTENTION (MVP approval-only)."
+        started_at: { type: [string, "null"], format: date-time }
+        revision: { type: integer }
+        tasks:
+          type: array
+          items: { $ref: "#/components/schemas/Task" }
+          description: "Present only with ?expand=tasks."
+
+    Decision:
+      type: object
+      additionalProperties: false
+      required: [outcome]
+      properties:
+        outcome:
+          type: string
+          enum: [approve, changes_requested, reject]
+          description: "approve signs (document.approve); changes_requested/reject returns to Draft (document.review)."
+        comment:
+          type: [string, "null"]
+          description: "Required (non-empty) for changes_requested/reject; recorded as the decision intent."
+        effective_from:
+          type: [string, "null"]
+          format: date-time
+          description: "Planned go-live on approve (R8, UTC); future dates stay Approved until the Beat sweep."
+
+    SignatureEventSummary:
+      type: object
+      additionalProperties: false
+      required: [id, meaning, method]
+      properties:
+        id: { type: string, format: uuid }
+        meaning:
+          type: string
+          enum: [review, approval, release, obsolete, verify, disposition, import_baseline, review_confirmed]
+        method: { type: string, enum: [app_click, SESSION], example: SESSION }
+        content_digest: { type: [string, "null"] }
+        auth_context: { type: [object, "null"], description: "OIDC acr/amr." }
+        reauth_at: { type: [string, "null"], format: date-time, description: "Reserved (Part-11); NULL in v1." }
+        crypto_signature: { type: [string, "null"], description: "Reserved (Part-11); NULL in v1." }
+
+    DecisionResult:
+      type: object
+      additionalProperties: false
+      required: [task_id, instance_id, stage_key, outcome, decided_at, decided_by]
+      properties:
+        task_id: { type: string, format: uuid }
+        instance_id: { type: string, format: uuid }
+        stage_key: { type: string }
+        outcome: { type: string, enum: [approve, changes_requested, reject] }
+        decided_at: { type: [string, "null"], format: date-time }
+        decided_by: { type: string, format: uuid }
+        signature_event:
+          oneOf:
+            - { $ref: "#/components/schemas/SignatureEventSummary" }
+            - { type: "null" }
+          description: "Present for an approval; null for changes_requested/reject."
+        comment: { type: [string, "null"] }
 
 security:
   - keycloak: []

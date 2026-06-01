@@ -10,8 +10,10 @@ Resolution order (doc 07 §6.3, register R3):
   1. scope-filter: keep grants whose scope matches X and whose predicates pass
      (predicates only ever *narrow* — AZ-INV-8).
   2. any matching DENY -> DENY immediately (deny-wins; independent of specificity/SoD).
-  3. SoD constraints (no-op in S2; gate wired in S5) — independent of scope.
-  4. no matching ALLOW -> DENY (deny-by-default).
+  3. no matching ALLOW -> DENY (deny-by-default).
+  4. SoD constraints (S5) — a DENY overlay on the would-be ALLOW (fires only once an ALLOW
+     survives; independent of scope), so a user lacking the permission is denied-by-default, not
+     told they have a duty conflict.
   5. specificity breaks ALLOW-vs-ALLOW ties only (provenance + which predicate applies);
      a per-user override outranks a role grant within the same level.
   6. sig-hook step-up gate (v1: authenticated session) -> ALLOW.
@@ -166,15 +168,21 @@ def authorize(
         chosen = max(denies, key=_rank)
         return Decision(allow=False, reason="explicit_deny", source=chosen.source)
 
-    # 3. SoD constraints (independent of scope). No-op in S2 — the gate lands in S5.
-    sod_block = _evaluate_sod(sod, permission_key, resource, context)
-    if sod_block is not None:
-        return Decision(allow=False, reason="sod_violation", source=sod_block)
-
-    # 4. allow-present? else deny-by-default (AZ-INV-1).
+    # 3. allow-present? else deny-by-default (AZ-INV-1).
     allows = [g for g in matching if g.effect is Effect.ALLOW]
     if not allows:
         return Decision(allow=False, reason="deny_by_default", source=None)
+
+    # 4. SoD — a DENY overlay on the would-be ALLOW (independent of scope; S5). Evaluated only now
+    # so a user without the permission is denied-by-default, not told about a duty conflict.
+    sod_block = _evaluate_sod(sod, permission_key, resource, context)
+    if sod_block is not None:
+        return Decision(
+            allow=False,
+            reason="sod_violation",
+            source=str(sod_block.get("constraint")),
+            conflicting_duty=sod_block,
+        )
 
     # 5. specificity breaks ALLOW-vs-ALLOW ties (provenance + which constraint applies).
     winner = max(allows, key=_rank)
@@ -192,8 +200,41 @@ def _evaluate_sod(
     permission_key: str,
     resource: ResourceContext,
     context: RequestContext,
-) -> str | None:
-    """Separation-of-duties gate. **No-op in S2** (constraints are seeded and enforced
-    against immutable version/audit history in S5 — doc 18 §7 S5 row, doc 07 §7). The
-    seam exists so S5 wires the check here without touching the precedence pipeline."""
+) -> dict[str, Any] | None:
+    """Separation-of-duties gate (doc 07 §7, S5). Evaluated against the **immutable version/audit
+    history** surfaced on the resource — never a single current field (INV-4).
+
+    A constraint matches when its ``duty_b.permission`` is the action being attempted on a
+    ``SAME_VERSION`` target. The duty_a principal is the version's author (``author_user_id``, the
+    immutable check-in actor). HARD_DENY when the acting principal is that author (the author-side
+    block — unconditional, ignores ``org_overridable``), or — for the release approver-side — when
+    the actor is one of the prior approvers and ``allow_approver_release`` is off. Returns the
+    violated duty pair (``conflicting_duty``) or ``None``. FLAG_AND_REQUIRE_REASON has no MVP
+    constraint and is treated as a no-op here."""
+    actor = context.actor_user_id
+    if actor is None:
+        return None
+    for constraint in sod:
+        duty_b = getattr(constraint, "duty_b", None) or {}
+        if duty_b.get("permission") != permission_key:
+            continue
+        severity = getattr(constraint, "severity", None)
+        severity_val = getattr(severity, "value", severity)
+        if severity_val != "HARD_DENY":
+            continue
+        binding = getattr(constraint, "target_binding", None)
+        binding_val = getattr(binding, "value", binding)
+        if binding_val != "SAME_VERSION":
+            continue  # SAME_DOCUMENT/PROCESS/CAPA engines are later slices (RBAC covers SoD-3)
+        author_conflict = resource.author_user_id is not None and actor == resource.author_user_id
+        approver_conflict = (
+            actor in resource.approver_user_ids and not context.allow_approver_release
+        )
+        if author_conflict or approver_conflict:
+            return {
+                "constraint": getattr(constraint, "description", None) or "sod",
+                "duty_a": getattr(constraint, "duty_a", None),
+                "duty_b": duty_b,
+                "target_binding": binding_val,
+            }
     return None

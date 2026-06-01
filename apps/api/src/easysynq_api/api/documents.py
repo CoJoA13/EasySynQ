@@ -9,6 +9,7 @@ from the body in-handler; the list is row-filtered to what the caller may ``docu
 
 from __future__ import annotations
 
+import dataclasses
 import datetime
 import uuid
 from typing import Any
@@ -19,10 +20,13 @@ from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..auth.dependencies import get_current_user
+from ..db.models._signature_enums import SignatureMeaning
+from ..db.models._vault_enums import VersionState
 from ..db.models.app_user import AppUser
 from ..db.models.document_type import DocumentType
 from ..db.models.document_version import DocumentVersion
 from ..db.models.documented_information import DocumentedInformation
+from ..db.models.signature_event import SignatureEvent as SignatureEventRow
 from ..db.models.working_draft import WorkingDraft
 from ..db.session import get_session
 from ..domain.authz import RequestContext, ResourceContext, authorize
@@ -31,7 +35,7 @@ from ..services.authz import AuthzAuditSink, enforce, gather_grants, get_authz_a
 from ..services.vault import (
     SignatureEventSink,
     VaultAuditSink,
-    approve,
+    audit_transition,
     break_lock,
     checkin,
     checkout,
@@ -42,13 +46,13 @@ from ..services.vault import (
     init_upload,
     obsolete,
     release,
-    request_changes,
     start_revision,
     storage,
     submit_review,
 )
 from ..services.vault import repository as vault_repo
 from ..services.vault.locks import LOCK_TTL_SECONDS
+from ..services.workflow import instantiate_approval
 
 router = APIRouter(prefix="/api/v1", tags=["documents"])
 
@@ -80,14 +84,6 @@ class CheckIn(BaseModel):
     change_reason: str = ""
     change_significance: str = ""
     mime_type: str = "application/octet-stream"
-
-
-class Approve(BaseModel):
-    effective_from: datetime.datetime | None = None
-
-
-class RequestChanges(BaseModel):
-    comment: str
 
 
 class Obsolete(BaseModel):
@@ -182,6 +178,49 @@ async def _document_scope(request: Request, session: AsyncSession) -> ResourceCo
     )
 
 
+async def _release_scope(request: Request, session: AsyncSession) -> ResourceContext:
+    """Release scope = the base document scope PLUS the SoD-2 inputs: the version about to go
+    Effective (the latest Approved) and its immutable author + prior approval signers. SoD-2 blocks
+    the author from releasing their own edit and (unless ``allow_approver_release``) the sole
+    approver. Degrades to the base scope when there is no Approved version (the FSM 409 fires).
+    """
+    base = await _document_scope(request, session)
+    if base.artifact_id is None:
+        return base
+    doc_id = uuid.UUID(base.artifact_id)
+    version = (
+        await session.execute(
+            select(DocumentVersion)
+            .where(
+                DocumentVersion.document_id == doc_id,
+                DocumentVersion.version_state == VersionState.Approved,
+            )
+            .order_by(DocumentVersion.version_seq.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if version is None:
+        return base
+    signers = (
+        (
+            await session.execute(
+                select(SignatureEventRow.signer_user_id).where(
+                    SignatureEventRow.signed_object_id == version.id,
+                    SignatureEventRow.meaning == SignatureMeaning.approval,
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return dataclasses.replace(
+        base,
+        version_id=str(version.id),
+        author_user_id=str(version.author_user_id),
+        approver_user_ids=frozenset(str(s) for s in signers if s is not None),
+    )
+
+
 async def _load_document(
     session: AsyncSession, caller: AppUser, raw_id: uuid.UUID
 ) -> DocumentedInformation:
@@ -196,12 +235,12 @@ _read_draft = require("document.read_draft", async_scope_resolver=_document_scop
 _checkout = require("document.checkout", async_scope_resolver=_document_scope)
 _edit = require("document.edit", async_scope_resolver=_document_scope)
 _manage_metadata = require("document.manage_metadata", async_scope_resolver=_document_scope)
-# Lifecycle actions (S4). approve/release/obsolete are signature-hook actions (the Part-11 step-up
-# seam; no-op in v1). start-revision reuses ``document.edit`` (no ``document.revise`` key exists).
+# Lifecycle actions. submit-review (S4) instantiates the approval workflow; approve/request-changes
+# route through POST /tasks/{id}/decision now (S5, removed from here). release/obsolete are flat
+# sig-hook actions (C7); release uses the SoD-aware ``_release_scope``. start-revision reuses
+# ``document.edit`` (no ``document.revise`` key exists).
 _submit = require("document.submit", async_scope_resolver=_document_scope)
-_review = require("document.review", async_scope_resolver=_document_scope)
-_approve = require("document.approve", async_scope_resolver=_document_scope, sig_hook=True)
-_release = require("document.release", async_scope_resolver=_document_scope, sig_hook=True)
+_release = require("document.release", async_scope_resolver=_release_scope, sig_hook=True)
 _obsolete = require("document.obsolete", async_scope_resolver=_document_scope, sig_hook=True)
 
 
@@ -393,34 +432,14 @@ async def submit_review_endpoint(
     session: AsyncSession = Depends(get_session),
     vault_sink: VaultAuditSink = Depends(get_vault_audit_sink),
 ) -> dict[str, Any]:
+    # T2/T9 + the approval workflow instantiation commit together; the audit fires post-commit.
+    # Approval itself routes through POST /tasks/{id}/decision (C7) — there is no direct /approve.
     doc = await _load_document(session, caller, document_id)
-    return _document(await submit_review(session, vault_sink, caller, doc))
-
-
-@router.post("/documents/{document_id}/approve")
-async def approve_endpoint(
-    document_id: uuid.UUID,
-    body: Approve,
-    caller: AppUser = Depends(_approve),
-    session: AsyncSession = Depends(get_session),
-    vault_sink: VaultAuditSink = Depends(get_vault_audit_sink),
-) -> dict[str, Any]:
-    doc = await _load_document(session, caller, document_id)
-    return _document(
-        await approve(session, vault_sink, caller, doc, effective_from=body.effective_from)
-    )
-
-
-@router.post("/documents/{document_id}/request-changes")
-async def request_changes_endpoint(
-    document_id: uuid.UUID,
-    body: RequestChanges,
-    caller: AppUser = Depends(_review),
-    session: AsyncSession = Depends(get_session),
-    vault_sink: VaultAuditSink = Depends(get_vault_audit_sink),
-) -> dict[str, Any]:
-    doc = await _load_document(session, caller, document_id)
-    return _document(await request_changes(session, vault_sink, caller, doc, comment=body.comment))
+    result = await submit_review(session, caller, doc)
+    await instantiate_approval(session, result.doc, caller)
+    await session.commit()
+    audit_transition(vault_sink, result, caller)
+    return _document(result.doc)
 
 
 @router.post("/documents/{document_id}/release")
@@ -457,11 +476,18 @@ async def obsolete_endpoint(
     caller: AppUser = Depends(_obsolete),
     session: AsyncSession = Depends(get_session),
     vault_sink: VaultAuditSink = Depends(get_vault_audit_sink),
+    sig_sink: SignatureEventSink = Depends(get_vault_signature_sink),
 ) -> dict[str, Any]:
     doc = await _load_document(session, caller, document_id)
     return _document(
         await obsolete(
-            session, vault_sink, caller, doc, reason=body.reason, version_id=body.version_id
+            session,
+            vault_sink,
+            sig_sink,
+            caller,
+            doc,
+            reason=body.reason,
+            version_id=body.version_id,
         )
     )
 
