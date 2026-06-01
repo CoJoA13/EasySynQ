@@ -14,20 +14,55 @@ changes, manage documented evidence/records, and keep an organization audit-read
 UI/UX flows the way ISO 9001 flows (clause spine / process map / PDCA) and must stay calm, modern,
 and progressively disclosed — never overwhelming.
 
-## Current status (as of 2026-05-31)
+## Current status (as of 2026-06-01)
 
-**Spec-only — there is NO application code yet, and that is intentional.** The owner wants the design
-right before any code is written. What exists:
+**Spec complete + MVP build underway** (foundation-first, against the approved plan). The design is locked;
+we are now writing code.
 
-- A complete, internally-reconciled **specification** in `docs/` (00–17 + `decisions-register.md`).
-  It was authored by fan-out, adversarially audited (`docs/17`), then a **reconciliation/hardening
-  pass** back-propagated the Decisions Register into every section (37/41 audit findings resolved +
-  4 cleanup edits; residual items are documented, non-blocking, and deferred to v1.x/Future).
-- A self-contained, clickable **HTML UI mockup** at `mockup/easysynq-mockup.html` (open in a browser;
-  no build/deps). 8 navigable screens, light/dark toggle. The owner has reviewed it and is happy.
+- **Specification** in `docs/` (00–17 + `decisions-register.md`) — complete, adversarially audited, reconciled
+  (Register R1–R37 back-propagated). The Register is authoritative.
+- **Approved implementation plan:** `docs/18-mvp-implementation-plan.md` — repo/tooling, Compose dev stack, the
+  Alembic schema from doc 14, the FastAPI/OpenAPI surface from doc 15, and **11 ordered vertical slices S0–S11**,
+  each mapped to the six MVP acceptance proofs. §1 records the canon corrections an adversarial pass forced
+  (two state enums `version_state`/`current_state`; `audit_event` identity-gap is the tamper signal — **no `seq`
+  col**; `framework_id` only on `documented_information`/`clause`/`clause_mapping`/`scope`; doc-07 permission keys
+  verbatim; doc-15 flat action sub-resources + approval via `POST /tasks/{id}/decision`).
+- **HTML UI mockup** at `mockup/easysynq-mockup.html` (owner-approved).
 
-**Likely next step (not started):** turn the `docs/16-roadmap.md` MVP into a concrete implementation
-plan, then build a first vertical slice. Hold at the planning level until the owner approves.
+**Code lives on GitHub:** https://github.com/CoJoA13/EasySynQ (`main`, protected — PR + green CI required;
+admin-bypass on for the solo owner). **Shipped so far (each merged via PR, all CI green, validated on the real
+Docker stack):**
+- **S0 — walking skeleton** ✅ — Compose stack, `/healthz`+`/readyz`, reversible Alembic baseline, OpenAPI→client pipeline
+- **S1 — AuthN** ✅ — Keycloak OIDC/PKCE, RS256 JWT validation vs JWKS, `app_user` + JIT provisioning, `GET /me`, `/auth/config`
+
+**Next slice: S2 — Authorization** (permission catalog seed, deny-wins PDP/PEP, the 8 seeded roles; acceptance
+proofs: per-user-deny-beats-role-allow, and `system.*` ≠ content boundary).
+
+## Building the MVP (dev workflow)
+
+- **Branch + PR flow:** `main` is protected. Do slice work on a `feat/sN-*` branch → open a PR → green CI →
+  squash-merge. CI jobs: `contracts` (redocly), `api` (ruff/mypy-strict/unit), `migrations` (alembic up↔down +
+  `alembic check`), `web` (eslint/tsc/build), `integration` (pytest -m integration via testcontainers). All five
+  are required checks.
+- **Toolchain (this machine):** `uv` + a managed **Python 3.12** at `~/.local/bin/uv` (system `python3` is 3.14;
+  `pip` needs `--break-system-packages`). Node 22 + npm. Docker v29.x. Lockfiles committed (`uv.lock`,
+  `package-lock.json`); CI uses `uv sync --frozen` / `npm ci`.
+  - **Docker socket:** the user is in the `docker` group, so a fresh login session (e.g. after a reboot) should
+    use Docker directly. If a shell still gets "permission denied", re-run `sudo chmod 666 /var/run/docker.sock`
+    (personal, non-shared device).
+- **Local loops** (fast; no commit needed to iterate):
+  - API: `cd apps/api && uv run ruff check . && uv run ruff format --check . && uv run mypy src && uv run pytest`
+    (unit always; `-m integration` needs Docker for testcontainers).
+  - Web: `cd apps/web && npm run lint && npm run typecheck && npm run build`.
+- **Run the stack:** `just up s` (or `docker compose -f infra/compose/compose.yml -f infra/compose/compose.s.yml
+  up -d --build`). Open **http://localhost**. Stop with `just down`. A gitignored `.env` holds dev secrets +
+  `OIDC_ISSUER=http://localhost/realms/easysynq`. OpenSearch + gotenberg are intentionally not run in MVP dev
+  (R34 / not needed until S7).
+- **Dev login:** `demo` / `Demo-Password-1` (created at runtime in Keycloak, **not committed**; realm policy
+  requires ≥12-char passwords). After a Keycloak container reset, recreate with `kcadm.sh` (`create users -r
+  easysynq -s username=demo -s enabled=true` then `set-password`).
+- **No Docker?** Every slice is still buildable + unit-testable on the uv/3.12 loop; CI runs the stack-dependent
+  proofs.
 
 ## The four LOCKED foundational decisions (never contradict)
 

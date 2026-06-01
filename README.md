@@ -11,8 +11,12 @@ invariant* rather than a discipline problem.
   [`docs/00-overview.md`](docs/00-overview.md); [`docs/decisions-register.md`](docs/decisions-register.md) is
   authoritative).
 - **Implementation plan:** [`docs/18-mvp-implementation-plan.md`](docs/18-mvp-implementation-plan.md) (approved).
-- **Code:** building the MVP foundation-first. **Slice S0 (walking skeleton)** is in progress — the Compose
-  stack, health endpoints, the reversible Alembic migration runner, and the OpenAPI→client codegen pipeline.
+- **Code:** building the MVP foundation-first, slice by slice (each via a PR with green CI on protected `main`).
+  - **S0 — walking skeleton** ✅ — Compose stack, `/healthz`+`/readyz`, reversible Alembic baseline, OpenAPI→client pipeline.
+  - **S1 — authentication** ✅ — Keycloak OIDC/PKCE, JWT-vs-JWKS validation, `app_user` + JIT provisioning, `/me`.
+  - **S2 — authorization** (next) — deny-wins PDP/PEP, permission catalog, seeded roles.
+
+  Run it: `just up s`, then open **http://localhost** (dev login `demo` / `Demo-Password-1`).
 
 ## Repository layout
 
