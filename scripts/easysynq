@@ -18,6 +18,10 @@ usage: easysynq <command>
   mirror rebuild    Regenerate the read-only filesystem mirror from the vault. [S7]
   upgrade           Backup -> migrate -> health-gate -> (rollback on failure). [S11]
   migrate           Run 'alembic upgrade head' inside the api image.
+  grant-role <sub> ["Role"]
+                    Pre-S8 bootstrap: assign a seeded role (default "System
+                    Administrator") to a Keycloak subject so the authz admin API
+                    is usable before the first-run wizard. Idempotent.       [S2]
 EOF
 }
 
@@ -25,6 +29,14 @@ cmd="${1:-}"; shift || true
 case "$cmd" in
   migrate)
     "${COMPOSE[@]}" run --rm migrate
+    ;;
+  grant-role)
+    sub="${1:-}"; role="${2:-System Administrator}"
+    if [ -z "$sub" ]; then
+      echo 'usage: easysynq grant-role <keycloak-subject> ["Role Name"]' >&2
+      exit 2
+    fi
+    "${COMPOSE[@]}" run --rm api uv run python -m easysynq_api.cli.grant_role --subject "$sub" --role "$role"
     ;;
   backup|restore|upgrade)
     echo "easysynq $cmd: not implemented in S0 — lands in slice S11 (see docs/18 §9)." >&2
