@@ -22,6 +22,7 @@ dependencies = [
   # pypdf's trailer /ID handling; a major bump could perturb the bytes (breaking content-addressing).
   "reportlab>=4.2,<5",
   "pypdf>=5.0,<7",
+  "segno>=1.6",
 ]
 
 [dependency-groups]

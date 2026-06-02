@@ -151,6 +151,7 @@ async def app_under_test(
     monkeypatch.setenv("S3_BUCKET_DOCUMENTS", "documents")
     monkeypatch.setenv("S3_BUCKET_AUDIT_CHECKPOINTS", "audit-checkpoints")
     monkeypatch.setenv("AUDIT_CHECKPOINT_SIGNING_KEY_PATH", str(tmp_path / "audit_ckpt.pem"))
+    monkeypatch.setenv("VERIFY_TOKEN_SIGNING_KEY_PATH", str(tmp_path / "verify.pem"))  # S7c
     monkeypatch.setenv("REDIS_URL", _redis)
 
     from alembic import command

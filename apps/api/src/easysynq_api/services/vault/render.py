@@ -74,6 +74,8 @@ class RenderRequest:
     mime_type: str
     source_filename: str
     version_id: uuid.UUID
+    # S7c: the public verify URL (token + QR) drawn into the footer; None → plaintext placeholder.
+    verify_url: str | None = None
 
 
 class RenderSink(Protocol):

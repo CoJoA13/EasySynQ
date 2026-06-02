@@ -141,13 +141,36 @@ Docker stack):**
   carries_band` [HEADLINE] + R26-no_controlled_rendition + rendition-cached-skips-render + download-controlled_copy/
   source (integration, PDF-passthrough — the LibreOffice path is validated on the real stack). Full suite 171 passed.
 
-**Next slice: S7c — verify-token + in-app export stamp** (the deferred verify path: the Ed25519-signed
-`{document_id, version_id, content_digest}` token + QR embedded in the footer + the public `GET /verify` →
-CURRENT/SUPERSEDED/UNKNOWN, reusing the `checkpoint.py` signing pattern; plus the per-intent export/print stamp
-"UNCONTROLLED IF PRINTED" + printed-by/ts + `export_event`/`print_event` audit; widen `RenderSink.render` to a
-three-way so non-renderable ≠ pending in S7b's downstream). Then **S8 — setup wizard** (per docs/18). S6/S7 seams
-still open: the `event_type` enum reserves the Keycloak auth-event values (SPI ships later), `/audit-events/export`
-keeps its `openapi.yaml` schema unmounted, and the clause/process IA mirror tree awaits `clause_mapping` in **S9**.
+- **S7c — Verify-token + QR + public `/verify`** ✅ — the controlled-rendition verify token (doc 05 §6.4,
+  zero-migration). `services/vault/verify_token.py` mints a compact Ed25519-signed token =
+  `base64url(doc_id[16] ‖ version_id[16] ‖ source_digest[32] ‖ sig[64])` (~171 chars), reusing the `checkpoint.py`
+  key pattern with its **own** dedicated key (`verify_token_signing_key_path`); `verify()` returns claims|None
+  (None on bad/forged/tampered). **Pure-sink discipline kept:** `build_tree` mints the token (it has the doc
+  context — `EffectiveDoc` gained `document_id`) and passes `verify_url = {public_base_url}/api/v1/verify?t=…` into
+  `RenderRequest.verify_url`; `watermark.py` draws a `segno` QR (deterministic PNG) of whatever URL it's given +
+  the scan hint (no signing knowledge → still pure/testable). **Deterministic** (Ed25519 + immutable claims) so the
+  rendition stays content-addressed (S7b cache/idempotency invariants hold). `api/verify.py` = a **public**
+  (`security: []`, no auth) `GET /verify` returning a minimal **HTMLResponse**: verify token → load the version →
+  digest match → CURRENT iff it's the doc's `current_effective_version_id` & `version_state==Effective`, else
+  SUPERSEDED; bad token → UNKNOWN. Minimal disclosure (status + identifier + current rev/date); each hit logged
+  (`vault.verify`). `easysynq mirror rebuild` now **force-clears `rendition_blob_sha256`** then re-renders (so a
+  template change like the QR reaches existing renditions; `sync` keeps the cache). The verify key is **shared
+  api↔worker via a new `secrets` volume** (worker mints, api verifies — they MUST agree). Deps: `segno>=1.6`
+  (BSD). **D3:** this is an integrity/currency token, NOT a Part-11 e-signature (signs a currency claim, not an
+  approval) — the `signature_event` path stays reserved. **Owner decisions:** (1) `/verify` is **public** (the
+  whole point — an external auditor scans a printout without an account; the signed token prevents enumeration);
+  (2) scope = verify-token+QR+/verify only, the per-intent **export/print stamp** ("UNCONTROLLED IF PRINTED" +
+  printed-by/ts + `export_event`/`print_event` audit, a non-cached per-request rendition) defers to **S7d**.
+  Proofs: token mint/verify round-trip + wrong-key/tampered/garbage + determinism (unit); watermark embeds the QR
+  (unit); `/verify` CURRENT/SUPERSEDED/UNKNOWN + mirror-rendition-carries-QR + `rebuild --force`-re-renders
+  (integration). Full suite 184 passed.
+
+**Next slice: S7d — in-app export/print stamp** (the deferred per-intent path: the download/export endpoint serves
+a fresh per-request rendition stamped "UNCONTROLLED IF PRINTED · valid as of {date}" + "Printed {ts} by {user}"
+instead of the cached CONTROLLED COPY, + `export_event`/`print_event` audit + the R26 click-through notice; likely
+an `ALTER TYPE event_type ADD VALUE`). Then **S8 — setup wizard** (per docs/18). S6/S7 seams still open: the
+`event_type` enum reserves the Keycloak auth-event values (SPI ships later), `/audit-events/export` keeps its
+`openapi.yaml` schema unmounted, and the clause/process IA mirror tree awaits `clause_mapping` in **S9**.
 
 ## Building the MVP (dev workflow)
 

@@ -20,6 +20,7 @@ from .api.auth import router as auth_router
 from .api.authz import router as authz_router
 from .api.documents import router as documents_router
 from .api.health import router as health_router
+from .api.verify import router as verify_router
 from .api.workflow import router as workflow_router
 from .config import get_settings
 from .db.session import dispose_engine
@@ -67,6 +68,7 @@ def create_app() -> FastAPI:
     app.include_router(documents_router)
     app.include_router(workflow_router)
     app.include_router(audit_router)
+    app.include_router(verify_router)  # S7c: public controlled-rendition verify page (no auth)
     return app
 
 

@@ -123,6 +123,7 @@ services:
       # worker UID writes it (worker mounts it rw below). The user-facing content route stays the
       # presigned-MinIO download — Caddy must NOT file_server this (it would bypass the PEP).
       - mirror:/var/lib/easysynq/qms-mirror:ro
+      - secrets:/run/secrets   # S7c: shared verify-token signing key (api verifies what worker mints)
     networks: [internal]
 
   worker:
@@ -138,6 +139,7 @@ services:
         condition: service_started   # S7b: the worker renders via gotenberg (resilient if it lags)
     volumes:
       - mirror:/var/lib/easysynq/qms-mirror   # worker writes the read-only mirror (R11)
+      - secrets:/run/secrets   # S7c: shared verify-token signing key (worker mints the QR token)
     networks: [internal]
 
   # Scheduler — EXACTLY ONE replica (two would double-fire). Asserted in profile overlays.
@@ -189,5 +191,6 @@ volumes:
   pgdata:
   miniodata:
   mirror:
+  secrets:
   caddydata:
   caddyconfig:

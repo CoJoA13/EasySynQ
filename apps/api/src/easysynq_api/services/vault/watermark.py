@@ -18,12 +18,16 @@ from __future__ import annotations
 import hashlib
 import io
 
+import segno
 from pypdf import PdfReader, PdfWriter
 from pypdf.generic import ArrayObject, ByteStringObject
 from reportlab.lib import colors
+from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
 
 from .render import RenderRequest
+
+_QR_SIZE = 42.0  # points
 
 _HEADER_FONT = "Helvetica-Bold"
 _FOOTER_FONT = "Helvetica"
@@ -67,14 +71,31 @@ def _draw_overlay(
         f"Owner {request.owner}"
     )
     line2 = f"Controlled in EasySynQ · {request.copy_status} · Page {page_no} of {total}"
-    line3 = "Verify current revision in EasySynQ"
+    # S7c: the verify line + a QR of the signed verify URL (doc 05 §6.4) — scan to check currency.
+    line3 = (
+        "Scan the QR to verify this revision's currency"
+        if request.verify_url
+        else "Verify current revision in EasySynQ"
+    )
     c.drawString(_MARGIN, _MARGIN + 16, line1)
     c.drawString(_MARGIN, _MARGIN + 8, line2)
     c.drawString(_MARGIN, _MARGIN, line3)
+    if request.verify_url:
+        _draw_qr(c, request.verify_url, width)
 
     c.showPage()
     c.save()
     return buf.getvalue()
+
+
+def _draw_qr(c: canvas.Canvas, url: str, width: float) -> None:
+    """Bottom-right QR of the verify URL (deterministic PNG via segno)."""
+    png = io.BytesIO()
+    segno.make(url, error="m").save(png, kind="png", scale=3, border=1)
+    png.seek(0)
+    c.drawImage(
+        ImageReader(png), width - _MARGIN - _QR_SIZE, _MARGIN, _QR_SIZE, _QR_SIZE, mask="auto"
+    )
 
 
 def stamp_controlled_copy(base_pdf: bytes, request: RenderRequest) -> bytes:
@@ -99,7 +120,10 @@ def stamp_controlled_copy(base_pdf: bytes, request: RenderRequest) -> bytes:
     # Pin the document id to a hash of the inputs so the output is byte-reproducible (content
     # addressing). reportlab's invariant=1 already fixed the overlay's timestamp/id.
     digest = hashlib.sha256(
-        base_pdf + request.version_id.bytes + request.copy_status.encode()
+        base_pdf
+        + request.version_id.bytes
+        + request.copy_status.encode()
+        + (request.verify_url or "").encode()
     ).digest()[:16]
     writer._ID = ArrayObject([ByteStringObject(digest), ByteStringObject(digest)])
 
