@@ -32,10 +32,14 @@ from ...db.models.app_user import AppUser
 from ...db.models.audit_event import AuditEvent
 from ...db.models.organization import Organization
 from ...db.models.role import Role, RoleAssignment
+from ...db.models.storage_config import StorageConfig
 from ...db.models.system_config import SetupState, SystemConfig
 from ...logging import request_id_var
 from ...problems import ProblemException
+from ..vault import storage
 from .bootstrap import verify_secret
+
+_OBJECT_LOCK_MODES = frozenset({"GOVERNANCE", "COMPLIANCE"})
 
 logger = logging.getLogger("easysynq.setup")
 
@@ -158,10 +162,20 @@ async def _gate_org_profile_set(session: AsyncSession, org_id: uuid.UUID) -> boo
     return code is not None and code != _DEFAULT_SHORT_CODE
 
 
-# S8a registers the gates whose configuration this slice builds. S8b/S8c append G-B/G-C/G-D.
+async def _gate_worm_verified(session: AsyncSession, org_id: uuid.UUID) -> bool:
+    """G-B (S8b): the vault bucket's object-lock WORM enforcement was verified (doc 08 §7.2)."""
+    verified = await session.scalar(
+        select(StorageConfig.worm_verified_at).where(StorageConfig.org_id == org_id)
+    )
+    return verified is not None
+
+
+# Gates land incrementally. S8a: G-A (admin) + G-E (org). S8b: G-B (WORM). S8b2/S8c append G-C/G-D.
+# finalize re-checks GATES live (doc 08 §14.2) — appending here is the only change a gate needs.
 GATES: list[Gate] = [
     Gate("G-A", "A System Administrator has been assigned", _gate_admin_exists),
     Gate("G-E", "The organization profile has been set", _gate_org_profile_set),
+    Gate("G-B", "Vault object-lock (WORM) was verified", _gate_worm_verified),
 ]
 
 
@@ -320,6 +334,53 @@ async def set_org_profile(
     )
     await session.commit()
     return {"legal_name": legal_name, "short_code": short_code, "timezone": timezone}
+
+
+async def verify_storage(
+    session: AsyncSession, actor: AppUser, *, object_lock_mode: str
+) -> dict[str, Any]:
+    """Verify the vault bucket enforces WORM (gate G-B, doc 08 §7) and record the result + the
+    operator's object-lock-mode choice (D-7). PASS sets ``storage_config.worm_verified_at`` + emits
+    WORM_VERIFIED; a bucket that does NOT enforce WORM is a 422 (the gate signal stays null)."""
+    mode = object_lock_mode.strip().upper()
+    if mode not in _OBJECT_LOCK_MODES:
+        raise ProblemException(
+            status=422,
+            code="validation_error",
+            title="object_lock_mode must be GOVERNANCE or COMPLIANCE",
+        )
+    probe = await storage.worm_probe()
+    if not probe.verified:
+        raise ProblemException(
+            status=422,
+            code="worm_not_enforced",
+            title="The vault bucket does not enforce WORM object-lock",
+            detail=probe.detail,
+        )
+    # Serialize per-org setup mutations on the system_config singleton (matches bootstrap_admin /
+    # finalize_setup) so a concurrent same-org verify-storage can't lose the check-then-insert race
+    # on storage_config's UNIQUE(org_id) and surface an unhandled IntegrityError.
+    await _load_config(session, actor.org_id, lock=True)
+    cfg = await session.scalar(select(StorageConfig).where(StorageConfig.org_id == actor.org_id))
+    if cfg is None:
+        cfg = StorageConfig(org_id=actor.org_id)
+        session.add(cfg)
+    cfg.worm_verified_at = _now()
+    cfg.object_lock_mode = mode
+    _emit(
+        session,
+        event_type="WORM_VERIFIED",
+        actor=actor,
+        object_type=AuditObjectType.config,
+        object_id=actor.org_id,
+        after={"object_lock_mode": mode, "detail": probe.detail},
+    )
+    await session.commit()
+    return {
+        "worm_verified": True,
+        "object_lock_mode": mode,
+        "retain_until": probe.retain_until.isoformat() if probe.retain_until else None,
+    }
 
 
 async def finalize_setup(session: AsyncSession, actor: AppUser) -> dict[str, Any]:

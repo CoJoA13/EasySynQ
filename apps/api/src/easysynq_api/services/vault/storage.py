@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import datetime
+import uuid
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
@@ -40,7 +41,7 @@ def _staging_bucket() -> str:
     return get_settings().s3_bucket_staging
 
 
-def _client() -> Any:
+def _client(*, config: Any = None) -> Any:
     import boto3
 
     s = get_settings()
@@ -50,6 +51,7 @@ def _client() -> Any:
         aws_access_key_id=s.s3_access_key,
         aws_secret_access_key=s.s3_secret_key,
         region_name=s.s3_region,
+        config=config,
     )
 
 
@@ -166,3 +168,72 @@ async def put_bytes(
     so this is a plain ``put_object`` (NOT the staging→``finalize_worm`` WORM cycle the source blob
     takes). Off the event loop."""
     await asyncio.to_thread(_put_bytes_sync, data, object_key, bucket, content_type)
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class WormProbeResult:
+    verified: bool
+    retain_until: datetime.datetime | None
+    detail: str
+
+
+def _worm_probe_sync(bucket: str) -> WormProbeResult:
+    """Prove the bucket enforces WORM (doc 08 §7.2 / gate G-B): PUT a tiny probe → confirm it came
+    back object-locked (a future retain-until) → attempt to delete THAT VERSION with no bypass and
+    expect a denial. A non-versioned/non-locked bucket yields no VersionId → not verified. Cleanup
+    is best-effort governance-bypass (else the probe is litter that expires with the retention)."""
+    from botocore.config import Config
+    from botocore.exceptions import BotoCoreError, ClientError
+
+    # Short timeouts so a dead/unreachable endpoint fails fast (the probe diagnoses storage — it
+    # must not hang ~60s on the default boto3 timeout).
+    client = _client(config=Config(connect_timeout=5, read_timeout=10, retries={"max_attempts": 2}))
+    key = f"_worm-probe/{uuid.uuid4().hex}"
+    try:
+        put = client.put_object(Bucket=bucket, Key=key, Body=b"easysynq-worm-probe")
+    except (ClientError, BotoCoreError) as exc:
+        # A missing bucket / unreachable MinIO is "not verified" (→ 422), NOT an opaque 500 — the
+        # whole point of this step is to diagnose storage.
+        return WormProbeResult(
+            verified=False,
+            retain_until=None,
+            detail=f"vault bucket not reachable or does not exist: {exc!r}"[:200],
+        )
+    version_id = put.get("VersionId")
+    retain_until = _head_sync(key, bucket).retain_until
+
+    delete_denied = False
+    if version_id:
+        try:
+            # delete the locked VERSION without BypassGovernanceRetention — WORM must refuse this.
+            client.delete_object(Bucket=bucket, Key=key, VersionId=version_id)
+        except ClientError:
+            delete_denied = True
+        try:  # cleanup (bypass) — best-effort; if not permitted the version expires with retention
+            client.delete_object(
+                Bucket=bucket, Key=key, VersionId=version_id, BypassGovernanceRetention=True
+            )
+        except ClientError:
+            pass
+    else:
+        try:  # non-versioned bucket: no WORM possible; just remove the plain probe object
+            client.delete_object(Bucket=bucket, Key=key)
+        except ClientError:
+            pass
+
+    verified = bool(version_id) and retain_until is not None and delete_denied
+    if not version_id:
+        detail = "bucket is not versioned/object-locked — no WORM"
+    elif retain_until is None:
+        detail = "probe object carries no retain-until — object-lock default retention not applied"
+    elif not delete_denied:
+        detail = "early delete of the object-locked probe version was ALLOWED — WORM not enforced"
+    else:
+        detail = "early delete of the object-locked probe version was denied — WORM enforced"
+    return WormProbeResult(verified=verified, retain_until=retain_until, detail=detail)
+
+
+async def worm_probe(bucket: str | None = None) -> WormProbeResult:
+    """Run :func:`_worm_probe_sync` off the event loop against ``bucket`` (default: the WORM
+    documents bucket). Used by the S8a/S8b setup wizard's G-B gate verification."""
+    return await asyncio.to_thread(_worm_probe_sync, bucket or _doc_bucket())

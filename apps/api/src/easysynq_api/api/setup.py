@@ -25,12 +25,15 @@ from ..services.setup import (
     get_setup_detail,
     get_setup_state,
     set_org_profile,
+    verify_storage,
 )
 
 router = APIRouter(prefix="/api/v1", tags=["setup"])
 
 # config.update is a SYSTEM-scope permission in the System Administrator bundle (doc 07 §3.9).
 _config_update = require("config.update")
+# storage.manage gates the WORM-verify step (doc 07 §3.9 / doc 15 §8.17); also in that bundle.
+_storage_manage = require("storage.manage")
 
 
 class BootstrapRequest(BaseModel):
@@ -41,6 +44,10 @@ class OrgProfileUpdate(BaseModel):
     legal_name: str
     short_code: str
     timezone: str
+
+
+class VerifyStorageRequest(BaseModel):
+    object_lock_mode: str = "GOVERNANCE"
 
 
 @router.get("/setup/state")
@@ -85,6 +92,17 @@ async def setup_org_profile_endpoint(
         short_code=body.short_code,
         timezone=body.timezone,
     )
+
+
+@router.post("/setup/verify-storage")
+async def setup_verify_storage_endpoint(
+    body: VerifyStorageRequest,
+    caller: AppUser = Depends(_storage_manage),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """Verify the vault bucket enforces WORM object-lock (gate G-B) + record the object-lock mode
+    (D-7). 422 ``worm_not_enforced`` if the bucket does not enforce it. Needs ``storage.manage``."""
+    return await verify_storage(session, caller, object_lock_mode=body.object_lock_mode)
 
 
 @router.post("/setup/finalize")

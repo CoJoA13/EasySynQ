@@ -43,6 +43,7 @@ from .role import Role, RoleAssignment, RoleGrant
 from .scope import Scope
 from .signature_event import SignatureEvent
 from .sod import SodConstraint
+from .storage_config import StorageConfig
 from .system_config import SetupState, SystemConfig
 from .workflow import (
     Task,
@@ -92,6 +93,7 @@ __all__ = [
     "SodConstraint",
     "SodSeverity",
     "SodTargetBinding",
+    "StorageConfig",
     "SystemConfig",
     "Task",
     "TaskOutcome",
