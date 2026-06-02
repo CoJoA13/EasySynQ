@@ -62,6 +62,12 @@ class EventType(enum.Enum):
     SETUP_FINALIZED = "SETUP_FINALIZED"
     # storage / WORM-verify gate (S8b, doc 08 §7) — added via ALTER TYPE … ADD VALUE in 0013.
     WORM_VERIFIED = "WORM_VERIFIED"
+    # backup config + restore-test gate G-C / AC#5 (S8b2, doc 08 §8) — added via ALTER TYPE …
+    # ADD VALUE in 0014. BACKUP_CONFIGURED records the policy; RESTORE_TEST_PASSED/_FAILED are the
+    # drill outcome the G-C gate reads (only a PASS satisfies the gate).
+    BACKUP_CONFIGURED = "BACKUP_CONFIGURED"
+    RESTORE_TEST_PASSED = "RESTORE_TEST_PASSED"
+    RESTORE_TEST_FAILED = "RESTORE_TEST_FAILED"
     # authorization (S2/S5) — denied-access attempts (always) + allows (configurable verbosity,
     # doc 12 §4.1 — off by default) + the permission/role/override changes
     ACCESS_DENIED = "ACCESS_DENIED"

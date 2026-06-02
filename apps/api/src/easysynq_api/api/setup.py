@@ -21,10 +21,12 @@ from ..db.session import get_session
 from ..services.authz import require
 from ..services.setup import (
     bootstrap_admin,
+    configure_backup,
     finalize_setup,
     get_setup_detail,
     get_setup_state,
     set_org_profile,
+    trigger_restore_test,
     verify_storage,
 )
 
@@ -34,6 +36,9 @@ router = APIRouter(prefix="/api/v1", tags=["setup"])
 _config_update = require("config.update")
 # storage.manage gates the WORM-verify step (doc 07 §3.9 / doc 15 §8.17); also in that bundle.
 _storage_manage = require("storage.manage")
+# S8b2: backup.configure records the policy; restore.run runs the gating drill (both in the bundle).
+_backup_configure = require("backup.configure")
+_restore_run = require("restore.run")
 
 
 class BootstrapRequest(BaseModel):
@@ -48,6 +53,17 @@ class OrgProfileUpdate(BaseModel):
 
 class VerifyStorageRequest(BaseModel):
     object_lock_mode: str = "GOVERNANCE"
+
+
+class ConfigureBackupRequest(BaseModel):
+    destination: str
+    cron: str = "0 2 * * *"  # nightly 02:00 (doc 08 §8.1 default; org tz)
+    retention_daily: int = 7
+    retention_weekly: int = 4
+    retention_monthly: int = 6
+    encryption_key_ref: str | None = None
+    alert_sink: str | None = None
+    wal_pitr_enabled: bool = False
 
 
 @router.get("/setup/state")
@@ -103,6 +119,38 @@ async def setup_verify_storage_endpoint(
     """Verify the vault bucket enforces WORM object-lock (gate G-B) + record the object-lock mode
     (D-7). 422 ``worm_not_enforced`` if the bucket does not enforce it. Needs ``storage.manage``."""
     return await verify_storage(session, caller, object_lock_mode=body.object_lock_mode)
+
+
+@router.post("/setup/configure-backup")
+async def setup_configure_backup_endpoint(
+    body: ConfigureBackupRequest,
+    caller: AppUser = Depends(_backup_configure),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """Record the backup policy (Step 4 config; doc 08 §8.1) + a live destination check. Needs
+    ``backup.configure``. Does NOT satisfy G-C — the restore-test drill must PASS."""
+    return await configure_backup(
+        session,
+        caller,
+        destination=body.destination,
+        cron=body.cron,
+        retention_daily=body.retention_daily,
+        retention_weekly=body.retention_weekly,
+        retention_monthly=body.retention_monthly,
+        encryption_key_ref=body.encryption_key_ref,
+        alert_sink=body.alert_sink,
+        wal_pitr_enabled=body.wal_pitr_enabled,
+    )
+
+
+@router.post("/setup/run-restore-test", status_code=202)
+async def setup_run_restore_test_endpoint(
+    caller: AppUser = Depends(_restore_run),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """Enqueue the backup→restore-into-scratch drill (gate G-C / AC#5). Async (it may take minutes);
+    poll ``GET /setup`` for the persisted result. Needs ``restore.run``; 409 if no backup yet."""
+    return await trigger_restore_test(session, caller)
 
 
 @router.post("/setup/finalize")

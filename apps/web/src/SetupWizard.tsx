@@ -25,6 +25,14 @@ interface SetupDetail {
     short_code: string | null;
     timezone: string | null;
   };
+  backup: {
+    configured: boolean;
+    destination: string | null;
+    last_restore_test_at: string | null;
+    last_restore_test_result: string | null;
+  };
+  // Soft gate (R13): false until a fresh off-host audit anchor is configured. Never blocks finalize.
+  tamper_evident: boolean;
 }
 
 const browserTz = (): string => {
@@ -35,9 +43,9 @@ const browserTz = (): string => {
   }
 };
 
-// The first-run wizard (S8a). Shown whenever setup_state != OPERATIONAL. It is resumable: the
-// active step is derived from the live setup state + gates (doc 08 §2). Steps deferred to S8b/S8c
-// (storage/WORM, backup+restore, auth) are intentionally absent here.
+// The first-run wizard (S8a + S8b storage + S8b2 backup). Shown whenever setup_state != OPERATIONAL.
+// Resumable: the active step is derived from the live setup state + gates (doc 08 §2). The auth step
+// (G-D) is deferred to S8c.
 export function SetupWizard({
   token,
   login,
@@ -47,10 +55,13 @@ export function SetupWizard({
   login: () => void;
   onFinalized: () => void;
 }) {
+  const [testRunning, setTestRunning] = useState(false);
   const detail = useQuery({
     queryKey: ["setup-detail", token],
     queryFn: () => apiGet<SetupDetail>("/api/v1/setup", token),
     enabled: !!token,
+    // While the async restore-test drill runs, poll so G-C flips in the UI without a manual refresh.
+    refetchInterval: testRunning ? 3000 : false,
   });
 
   const [secret, setSecret] = useState("");
@@ -58,15 +69,32 @@ export function SetupWizard({
   const [shortCode, setShortCode] = useState("");
   const [timezone, setTimezone] = useState(browserTz());
   const [lockMode, setLockMode] = useState("GOVERNANCE");
+  const [backupDest, setBackupDest] = useState("/var/lib/easysynq/backups");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const state = detail.data?.setup_state ?? "UNINITIALIZED";
   const orgSet = detail.data?.gates?.["G-E"] ?? false;
   const wormVerified = detail.data?.gates?.["G-B"] ?? false;
-  // Resumable step order (doc 08 R4: org before storage): bootstrap → org → storage → finalize.
+  const restorePassed = detail.data?.gates?.["G-C"] ?? false;
+  const backupConfigured = detail.data?.backup?.configured ?? false;
+  const restoreResult = detail.data?.backup?.last_restore_test_result ?? null;
+  // Resumable step order (doc 08 R4: org → storage → backup → finalize).
   const active =
-    token && state === "IN_SETUP" ? (!orgSet ? 1 : !wormVerified ? 2 : 3) : 0;
+    token && state === "IN_SETUP"
+      ? !orgSet
+        ? 1
+        : !wormVerified
+          ? 2
+          : !restorePassed
+            ? 3
+            : 4
+      : 0;
+
+  // Stop polling once the drill lands a result (PASS flips G-C; FAIL surfaces the reason).
+  useEffect(() => {
+    if (testRunning && (restorePassed || restoreResult === "FAIL")) setTestRunning(false);
+  }, [testRunning, restorePassed, restoreResult]);
 
   // Prefill the org name from the persisted profile once it loads (resume), without clobbering edits.
   const persistedName = detail.data?.org_profile.legal_name;
@@ -111,6 +139,21 @@ export function SetupWizard({
     run(
       () => apiSend("POST", "/api/v1/setup/verify-storage", token, { object_lock_mode: lockMode }),
       () => void detail.refetch(),
+    );
+
+  const configureBackup = (): Promise<void> =>
+    run(
+      () => apiSend("POST", "/api/v1/setup/configure-backup", token, { destination: backupDest }),
+      () => void detail.refetch(),
+    );
+
+  const runRestoreTest = (): Promise<void> =>
+    run(
+      () => apiSend("POST", "/api/v1/setup/run-restore-test", token, {}),
+      () => {
+        setTestRunning(true);
+        void detail.refetch();
+      },
     );
 
   const finalize = (): Promise<void> =>
@@ -225,9 +268,63 @@ export function SetupWizard({
             </Stack>
           </Stepper.Step>
 
+          <Stepper.Step label="Backup" description="Restore-test">
+            <Stack gap="md" mt="md">
+              <Text size="sm">
+                Configure admin-controlled backups, then prove a restore actually works. The drill
+                backs up, restores into an isolated scratch namespace, and verifies integrity
+                (row counts, blob SHA-256 re-hash, FK checks). Setup cannot finalize until it passes
+                — a configured-but-unverified backup is treated as no backup.
+              </Text>
+              <TextInput
+                label="Backup destination"
+                description="A mounted local/NFS path the worker can write"
+                value={backupDest}
+                onChange={(e) => setBackupDest(e.currentTarget.value)}
+              />
+              <Group>
+                <Button
+                  variant="default"
+                  onClick={() => void configureBackup()}
+                  loading={busy}
+                  disabled={!backupDest}
+                >
+                  {backupConfigured ? "Update backup config" : "Save backup config"}
+                </Button>
+                <Button
+                  onClick={() => void runRestoreTest()}
+                  loading={busy || testRunning}
+                  disabled={!backupConfigured}
+                >
+                  Run backup + restore-test drill
+                </Button>
+                {restorePassed ? (
+                  <Text size="sm" c="teal">
+                    ✓ restore verified
+                  </Text>
+                ) : testRunning ? (
+                  <Text size="sm" c="dimmed">
+                    drill running…
+                  </Text>
+                ) : restoreResult === "FAIL" ? (
+                  <Text size="sm" c="red">
+                    ✗ last drill failed — fix and retry
+                  </Text>
+                ) : null}
+              </Group>
+            </Stack>
+          </Stepper.Step>
+
           <Stepper.Step label="Finalize" description="Go live">
             <Stack gap="md" mt="md">
               <Text size="sm">Review and finalize — this unlocks the QMS.</Text>
+              {detail.data && !detail.data.tamper_evident && (
+                <Alert color="yellow" title="Not yet tamper-evident">
+                  No fresh off-host audit-checkpoint anchor is configured, so this install cannot
+                  claim tamper-evidence yet. This does not block finalize — configure an off-host
+                  sink afterward to clear the warning (doc 08 §8.3).
+                </Alert>
+              )}
               <List size="sm">
                 {Object.entries(detail.data?.gates ?? {}).map(([key, ok]) => (
                   <List.Item key={key}>

@@ -21,6 +21,9 @@ LOCK_CHAIN_LINK = 7710001
 LOCK_ROLL_PARTITIONS = 7710002
 # S7: serialize mirror rebuilds so two overlapping syncs cannot race on the temp-tree → swap.
 LOCK_MIRROR_SYNC = 7710003
+# S8b2: serialize the backup/restore-test drill — one scratch DB + scratch-bucket prefix at a time
+# (a second concurrent drill skips this tick). The advisory lock also auto-releases on a crash.
+LOCK_RESTORE_DRILL = 7710004
 
 
 @asynccontextmanager

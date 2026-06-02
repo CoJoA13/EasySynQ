@@ -50,5 +50,11 @@ app.conf.update(
             "task": "easysynq.mirror.sync",
             "schedule": 86400.0,  # daily
         },
+        # S8b2: nightly durable backup of every configured backup_policy (doc 08 §8 / D-6 MVP =
+        # nightly pg_dump). The gating restore-test drill is run on demand (setup / CLI), not here.
+        "backup-nightly": {
+            "task": "easysynq.backup.run",
+            "schedule": 86400.0,  # daily
+        },
     },
 )

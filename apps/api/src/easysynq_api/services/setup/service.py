@@ -13,6 +13,7 @@ state change — the app role holds INSERT on ``audit_event`` (S6); the chain-li
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 import datetime
 import logging
@@ -30,12 +31,15 @@ from ...config import get_settings
 from ...db.models._audit_enums import ActorType, AuditObjectType, EventType
 from ...db.models.app_user import AppUser
 from ...db.models.audit_event import AuditEvent
+from ...db.models.backup_policy import BackupPolicy
 from ...db.models.organization import Organization
 from ...db.models.role import Role, RoleAssignment
 from ...db.models.storage_config import StorageConfig
 from ...db.models.system_config import SetupState, SystemConfig
 from ...logging import request_id_var
 from ...problems import ProblemException
+from ..audit.checkpoint import tamper_evidence_attested
+from ..backup import configure_backup_destination_check
 from ..vault import storage
 from .bootstrap import verify_secret
 
@@ -170,12 +174,25 @@ async def _gate_worm_verified(session: AsyncSession, org_id: uuid.UUID) -> bool:
     return verified is not None
 
 
-# Gates land incrementally. S8a: G-A (admin) + G-E (org). S8b: G-B (WORM). S8b2/S8c append G-C/G-D.
-# finalize re-checks GATES live (doc 08 §14.2) — appending here is the only change a gate needs.
+async def _gate_restore_test_passed(session: AsyncSession, org_id: uuid.UUID) -> bool:
+    """G-C / AC#5 (S8b2): a backup→restore-into-scratch drill PASSED (doc 08 §8). Keys on the
+    persisted result == 'PASS' — NOT merely ``last_restore_test_at`` non-null, since a FAILED drill
+    also stamps the timestamp. "Configured but unverified" (null result) does not satisfy."""
+    result = await session.scalar(
+        select(BackupPolicy.last_restore_test_result).where(BackupPolicy.org_id == org_id)
+    )
+    return result == "PASS"
+
+
+# Gates land incrementally. S8a: G-A (admin) + G-E (org); S8b: G-B (WORM); S8b2: G-C (restore).
+# S8c appends G-D (auth). finalize re-checks GATES live (doc 08 §14.2) — appending here is the only
+# change a gate needs. (The off-host audit-sink anchor is a SOFT gate — see ``get_setup_detail`` —
+# and is deliberately NOT in this list: it warns but never blocks finalize, R13 / doc 08 §8.3.)
 GATES: list[Gate] = [
     Gate("G-A", "A System Administrator has been assigned", _gate_admin_exists),
     Gate("G-E", "The organization profile has been set", _gate_org_profile_set),
     Gate("G-B", "Vault object-lock (WORM) was verified", _gate_worm_verified),
+    Gate("G-C", "A backup/restore drill has passed", _gate_restore_test_passed),
 ]
 
 
@@ -213,6 +230,7 @@ async def get_setup_state(session: AsyncSession) -> SetupState:
 async def get_setup_detail(session: AsyncSession, actor: AppUser) -> dict[str, Any]:
     cfg = await _load_config(session, actor.org_id)
     org = await session.get(Organization, actor.org_id)
+    policy = await session.scalar(select(BackupPolicy).where(BackupPolicy.org_id == actor.org_id))
     return {
         "setup_state": cfg.setup_state.value,
         "gates": await _gate_status(session, actor.org_id),
@@ -221,6 +239,19 @@ async def get_setup_detail(session: AsyncSession, actor: AppUser) -> dict[str, A
             "short_code": org.short_code if org else None,
             "timezone": org.timezone if org else None,
         },
+        "backup": {
+            "configured": policy is not None,
+            "destination": policy.destination if policy else None,
+            "last_restore_test_at": (
+                policy.last_restore_test_at.isoformat()
+                if policy and policy.last_restore_test_at
+                else None
+            ),
+            "last_restore_test_result": policy.last_restore_test_result if policy else None,
+        },
+        # Soft gate (R13 / doc 08 §8.3): finalize is NEVER blocked on this, but an install with no
+        # fresh off-host audit anchor is loudly flagged NOT tamper-evident until one is configured.
+        "tamper_evident": await tamper_evidence_attested(session, actor.org_id),
     }
 
 
@@ -381,6 +412,101 @@ async def verify_storage(
         "object_lock_mode": mode,
         "retain_until": probe.retain_until.isoformat() if probe.retain_until else None,
     }
+
+
+_CRON_RE = re.compile(r"^\S+(\s+\S+){4}$")  # 5 whitespace-separated fields (light MVP check)
+
+
+async def configure_backup(
+    session: AsyncSession,
+    actor: AppUser,
+    *,
+    destination: str,
+    cron: str,
+    retention_daily: int,
+    retention_weekly: int,
+    retention_monthly: int,
+    encryption_key_ref: str | None = None,
+    alert_sink: str | None = None,
+    wal_pitr_enabled: bool = False,
+) -> dict[str, Any]:
+    """Record the admin-controlled backup policy (doc 08 §8.1) + a live destination writability
+    check. Does NOT satisfy G-C on its own — the restore-test drill must PASS (configured ≠
+    verified)."""
+    destination = destination.strip()
+    if not destination:
+        raise ProblemException(
+            status=422, code="validation_error", title="backup destination must not be empty"
+        )
+    if not _CRON_RE.match(cron.strip()):
+        raise ProblemException(
+            status=422, code="validation_error", title="cron must be a 5-field schedule"
+        )
+    if retention_daily < 1 or retention_weekly < 0 or retention_monthly < 0:
+        raise ProblemException(
+            status=422,
+            code="validation_error",
+            title="retention must keep ≥1 daily and be non-negative",
+        )
+    ok, detail = await asyncio.to_thread(configure_backup_destination_check, destination)
+    if not ok:
+        raise ProblemException(
+            status=422,
+            code="backup_destination_unreachable",
+            title="The backup destination is not reachable/writable",
+            detail=detail,
+        )
+
+    # Serialize per-org setup mutations on the system_config singleton (matches verify_storage) so a
+    # concurrent same-org configure-backup cannot lose the check-then-insert race on UNIQUE(org_id).
+    await _load_config(session, actor.org_id, lock=True)
+    policy = await session.scalar(select(BackupPolicy).where(BackupPolicy.org_id == actor.org_id))
+    if policy is None:
+        policy = BackupPolicy(org_id=actor.org_id)
+        session.add(policy)
+    policy.destination = destination
+    policy.cron = cron.strip()
+    policy.retention_daily = retention_daily
+    policy.retention_weekly = retention_weekly
+    policy.retention_monthly = retention_monthly
+    policy.encryption_key_ref = encryption_key_ref
+    policy.alert_sink = alert_sink
+    policy.wal_pitr_enabled = wal_pitr_enabled
+    _emit(
+        session,
+        event_type="BACKUP_CONFIGURED",
+        actor=actor,
+        object_type=AuditObjectType.config,
+        object_id=actor.org_id,
+        after={"destination": destination, "cron": cron.strip()},
+    )
+    await session.commit()
+    return {
+        "configured": True,
+        "destination": destination,
+        "cron": cron.strip(),
+        "detail": detail,
+    }
+
+
+async def trigger_restore_test(session: AsyncSession, actor: AppUser) -> dict[str, Any]:
+    """Enqueue the backup→restore-into-scratch drill (gate G-C). The drill is an async worker task
+    (it may take minutes — RTO target ≤2h, doc 08 §8.2); finalize reads the PERSISTED result, never
+    runs it inline. Requires a configured backup policy first."""
+    policy = await session.scalar(
+        select(BackupPolicy.id).where(BackupPolicy.org_id == actor.org_id)
+    )
+    if policy is None:
+        raise ProblemException(
+            status=409,
+            code="backup_not_configured",
+            title="Configure a backup destination before running the restore-test",
+        )
+    # Lazy import — tasks import services, so importing at module top would risk a cycle.
+    from ...tasks.backup import backup_restore_test
+
+    backup_restore_test.delay(str(actor.org_id), str(actor.id))
+    return {"status": "enqueued"}
 
 
 async def finalize_setup(session: AsyncSession, actor: AppUser) -> dict[str, Any]:

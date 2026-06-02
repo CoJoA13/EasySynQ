@@ -13,6 +13,10 @@ mc mb --with-lock --ignore-existing local/documents
 mc mb --with-lock --ignore-existing local/records
 mc mb --ignore-existing local/renditions   # derived, rebuildable — not WORM
 mc mb --ignore-existing local/staging       # transient import staging (v1)
+# S8b2: the restore-test drill copies blobs INTO this plain (NON-WORM) scratch bucket and tears the
+# per-drill prefix down — object-lock can't be retro-added (R37), so the drill never restores into a
+# locked bucket. Deliberately NOT --with-lock.
+mc mb --ignore-existing local/restore-scratch
 
 # GOVERNANCE default retention keeps R37 fresh-bucket restore + the R27 destroy
 # escape hatch buildable. Dev uses a short window so engineers can reset.
@@ -45,4 +49,4 @@ EOF
 mc admin policy create local audit-sink-writeonly /tmp/audit-sink-writeonly.json || true
 mc admin policy attach local audit-sink-writeonly --user "$AUDIT_SINK_KEY" || true
 
-echo "minio-init: buckets ready (documents, records [WORM/${RETENTION}], renditions, staging, audit-checkpoints)"
+echo "minio-init: buckets ready (documents, records [WORM/${RETENTION}], renditions, staging, restore-scratch, audit-checkpoints)"

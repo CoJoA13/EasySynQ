@@ -140,6 +140,7 @@ services:
     volumes:
       - mirror:/var/lib/easysynq/qms-mirror   # worker writes the read-only mirror (R11)
       - secrets:/run/secrets   # S7c: shared verify-token signing key (worker mints the QR token)
+      - backup:/var/lib/easysynq/backups   # S8b2: durable backup archives + the restore-test drill
     networks: [internal]
 
   # Scheduler — EXACTLY ONE replica (two would double-fire). Asserted in profile overlays.
@@ -192,5 +193,6 @@ volumes:
   miniodata:
   mirror:
   secrets:
+  backup:   # S8b2: durable backup destination (default backup_policy.destination; a mounted path)
   caddydata:
   caddyconfig:
