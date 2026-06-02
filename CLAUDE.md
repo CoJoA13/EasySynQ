@@ -115,13 +115,39 @@ Docker stack):**
   only-excludes-drafts, supersession/obsolete prune, post-commit enqueue-once, atomic-swap-no-partial-tree, render-
   pending marker, metadata/INDEX/manifest, byte-idempotent rebuild, advisory-lock serialization.
 
-**Next slice: S7b — watermarked-PDF rendering** (make the `RenderSink` real: Gotenberg office→PDF + the §11.3
-header/footer band — Rev + EffectiveDate + copy_status, non-removable; non-suppressible Obsolete/Superseded stamps;
-the real R26 `no_controlled_rendition` path; populate `document_version.rendition_blob_sha256`; the QR/verify-token).
-S7 left clean seams for it: `get_render_sink()` swaps in the Gotenberg sink, the reserved `rendition_blob_sha256`
-column is the FK target, the in-compose `renderer` (gotenberg:8) is ready, and the mirror already writes
-`render_status` so flipping `pending`→`rendered` is local. S6 seams still open: the `event_type` enum reserves the
-Keycloak auth-event values (SPI ships later), and `/audit-events/export` keeps its `openapi.yaml` schema unmounted.
+- **S7b — Watermarked-PDF rendering** ✅ — made the S7 `RenderSink` real (zero-migration). `render_gotenberg.py`
+  `GotenbergRenderSink` (a **pure** convert+overlay; no DB/MinIO) routes on mime_type → Gotenberg
+  `/forms/libreoffice/convert` (office) / `/forms/chromium/...` (html) / **passthrough** (pdf); a non-renderable
+  allowlist short-circuits. `watermark.py` `stamp_controlled_copy` (reportlab+pypdf, **BSD-only**, NO PyMuPDF/AGPL)
+  draws the §11.3 band (header `{id} — {title} {classification}`; footer `Rev · Effective · Owner / Controlled in
+  EasySynQ · {copy_status} · Page n of N / Verify…`) + the diagonal `{copy_status}` watermark onto **every page**,
+  **byte-deterministic** (reportlab `invariant=1` + a pinned pypdf `/ID`) so the rendition content-addresses.
+  `render()` is now **async + three-way `RenderResult`** (RENDERED / NON_RENDERABLE=R26 / PENDING) + `set_render_sink`.
+  **`build_tree` owns caching** (the sink stays pure + testable): cache-hit fetch by `eff.rendition_blob_sha256`,
+  else render → RENDERED caches (`storage.put_bytes` to the **non-WORM** renditions bucket + a derived `Blob` row +
+  set the FK, under the mirror's advisory-locked session) → next sync is a cache hit (no Gotenberg). `metadata.json`
+  gains `render_status` (rendered/pending/unrenderable) + `no_controlled_rendition` (R26 only). The **worker** renders
+  for real (`tasks/mirror.py` constructs `GotenbergRenderSink`); the **api never renders** (it presigns the cache).
+  New `GET /documents/{id}/download` (doc 15 §8.5) presigns the Effective version's controlled-copy rendition
+  (fallback `rendition:"source"`). **Latent bug fixed:** check-in now captures the real `Content-Type` from MinIO
+  (`ObjectHead.content_type` via `finalize_worm`'s head) into `blob.mime_type` — previously always `octet-stream`,
+  which would have routed everything to R26; this is what makes render routing correct. Compose: pinned
+  `gotenberg/gotenberg:8.33` + `worker depends_on renderer` (no healthcheck — gotenberg bundles no http client and
+  rendering is resilient: a renderer outage → `pending` → self-heals). Deps: `reportlab`+`pypdf` (+ a uv.lock license
+  guard). **Owner decisions:** (1) defer the **verify-token + QR + public `GET /verify`** entirely to **S7c** (open
+  spec + dead-ink QR); (2) ship the download endpoint. Proofs: `test_watermark_band_carries_rev_effective_copystatus`
+  + obsolete/superseded-stamp + determinism + Gotenberg 200/5xx-R26/503-pending/transport-pending + encrypted-pdf-R26
+  + three-way build_tree branch + license guard (unit, mocked Gotenberg — no container); `test_released_mirror_pdf_
+  carries_band` [HEADLINE] + R26-no_controlled_rendition + rendition-cached-skips-render + download-controlled_copy/
+  source (integration, PDF-passthrough — the LibreOffice path is validated on the real stack). Full suite 171 passed.
+
+**Next slice: S7c — verify-token + in-app export stamp** (the deferred verify path: the Ed25519-signed
+`{document_id, version_id, content_digest}` token + QR embedded in the footer + the public `GET /verify` →
+CURRENT/SUPERSEDED/UNKNOWN, reusing the `checkpoint.py` signing pattern; plus the per-intent export/print stamp
+"UNCONTROLLED IF PRINTED" + printed-by/ts + `export_event`/`print_event` audit; widen `RenderSink.render` to a
+three-way so non-renderable ≠ pending in S7b's downstream). Then **S8 — setup wizard** (per docs/18). S6/S7 seams
+still open: the `event_type` enum reserves the Keycloak auth-event values (SPI ships later), `/audit-events/export`
+keeps its `openapi.yaml` schema unmounted, and the clause/process IA mirror tree awaits `clause_mapping` in **S9**.
 
 ## Building the MVP (dev workflow)
 

@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from ..config import get_settings
 from ..services.common.pg_locks import LOCK_MIRROR_SYNC, pg_advisory_lock
 from ..services.vault.mirror import MirrorSyncResult, sync_mirror
+from ..services.vault.render_gotenberg import GotenbergRenderSink
 
 
 async def _sync() -> MirrorSyncResult | None:
@@ -33,7 +34,9 @@ async def _sync() -> MirrorSyncResult | None:
         async with sessionmaker() as session, pg_advisory_lock(session, LOCK_MIRROR_SYNC) as held:
             if not held:
                 return None
-            return await sync_mirror(session=session)
+            # Render for real (S7b) — like the Beat task; without this the CLI rebuild would write
+            # every doc as render_status="pending" (the no-op default sink).
+            return await sync_mirror(session=session, render_sink=GotenbergRenderSink())
     finally:
         await engine.dispose()
 

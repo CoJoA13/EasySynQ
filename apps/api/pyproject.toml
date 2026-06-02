@@ -18,6 +18,10 @@ dependencies = [
   "httpx>=0.27",            # Keycloak JWKS / readiness probes
   "pyjwt[crypto]>=2.9",     # RS256 JWT validation against JWKS (later slices)
   "rfc8785>=0.1.4",
+  # Upper-bounded: stamp_controlled_copy's byte-determinism depends on reportlab invariant mode +
+  # pypdf's trailer /ID handling; a major bump could perturb the bytes (breaking content-addressing).
+  "reportlab>=4.2,<5",
+  "pypdf>=5.0,<7",
 ]
 
 [dependency-groups]
@@ -70,7 +74,7 @@ explicit_package_bases = true
 
 # Third-party libs without bundled type stubs (mypy --strict would otherwise error).
 [[tool.mypy.overrides]]
-module = ["boto3", "boto3.*", "botocore", "botocore.*", "celery", "celery.*", "alembic", "alembic.*", "redis", "redis.*"]
+module = ["boto3", "boto3.*", "botocore", "botocore.*", "celery", "celery.*", "alembic", "alembic.*", "redis", "redis.*", "reportlab", "reportlab.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

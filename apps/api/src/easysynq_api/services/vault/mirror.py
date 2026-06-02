@@ -30,28 +30,33 @@ import dataclasses
 import datetime
 import hashlib
 import json
+import logging
 import mimetypes
 import os
 import shutil
 import uuid
 from pathlib import Path
 
-from sqlalchemy import select
+from sqlalchemy import select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...config import get_settings
 from ...db.models._vault_enums import VersionState
+from ...db.models.app_user import AppUser
 from ...db.models.blob import Blob
 from ...db.models.document_version import DocumentVersion
 from ...db.models.documented_information import DocumentedInformation
 from ...db.session import get_sessionmaker
 from . import storage
-from .render import RenderRequest, RenderSink, get_render_sink
+from .render import RenderRequest, RenderSink, RenderStatus, get_render_sink
+
+logger = logging.getLogger("easysynq.mirror")
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class EffectiveDoc:
-    """The materialized join (document + Effective version + source blob) the build needs."""
+    """The materialized join (document + Effective version + blob + owner) the build needs."""
 
     identifier: str
     title: str
@@ -60,12 +65,16 @@ class EffectiveDoc:
     change_reason: str
     effective_from: datetime.datetime | None
     owner_user_id: uuid.UUID
+    owner_display: str
     classification: str
     source_sha256: str
     mime_type: str
     size_bytes: int
     bucket: str
     object_key: str
+    version_id: uuid.UUID
+    org_id: uuid.UUID
+    rendition_blob_sha256: str | None
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -82,9 +91,10 @@ async def list_effective_versions(session: AsyncSession) -> list[EffectiveDoc]:
     selector the cutover maintains — NOT ``documented_information.current_state``."""
     rows = (
         await session.execute(
-            select(DocumentVersion, DocumentedInformation, Blob)
+            select(DocumentVersion, DocumentedInformation, Blob, AppUser)
             .join(DocumentedInformation, DocumentVersion.document_id == DocumentedInformation.id)
             .join(Blob, DocumentVersion.source_blob_sha256 == Blob.sha256)
+            .join(AppUser, DocumentedInformation.owner_user_id == AppUser.id)
             .where(DocumentVersion.version_state == VersionState.Effective)
             .order_by(DocumentedInformation.identifier)
         )
@@ -98,14 +108,18 @@ async def list_effective_versions(session: AsyncSession) -> list[EffectiveDoc]:
             change_reason=ver.change_reason,
             effective_from=ver.effective_from,
             owner_user_id=doc.owner_user_id,
+            owner_display=owner.display_name,
             classification=doc.classification.value,
             source_sha256=ver.source_blob_sha256,
             mime_type=blob.mime_type,
             size_bytes=blob.size_bytes,
             bucket=blob.bucket,
             object_key=blob.object_key,
+            version_id=ver.id,
+            org_id=ver.org_id,
+            rendition_blob_sha256=ver.rendition_blob_sha256,
         )
-        for ver, doc, blob in rows
+        for ver, doc, blob, owner in rows
     ]
 
 
@@ -160,8 +174,10 @@ def _index_md(effs: list[EffectiveDoc]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _metadata(eff: EffectiveDoc, source_filename: str, render_status: str) -> bytes:
-    meta = {
+def _metadata(
+    eff: EffectiveDoc, source_filename: str, render_status: str, no_controlled_rendition: bool
+) -> bytes:
+    meta: dict[str, object] = {
         "identifier": eff.identifier,
         "title": eff.title,
         "revision_label": eff.revision_label,
@@ -176,8 +192,13 @@ def _metadata(eff: EffectiveDoc, source_filename: str, render_status: str) -> by
         "source_filename": source_filename,
         "mime_type": eff.mime_type,
         "size_bytes": eff.size_bytes,
+        # "rendered" (watermarked PDF) | "pending" (transient) | "unrenderable" (R26).
         "render_status": render_status,
     }
+    if no_controlled_rendition:
+        # R26 (doc 04 §11.4): a genuinely non-renderable format — surfaced for the QM dashboard
+        # (doc 13). Distinct from "pending"; only present when true.
+        meta["no_controlled_rendition"] = True
     return (json.dumps(meta, indent=2, sort_keys=True) + "\n").encode()
 
 
@@ -192,34 +213,97 @@ def _write(path: Path, data: bytes, manifest: list[dict[str, object]], rel_root:
     )
 
 
+async def _cache_rendition(session: AsyncSession, eff: EffectiveDoc, pdf: bytes) -> None:
+    """Persist a freshly-rendered controlled PDF: PUT it (content-addressed) into the non-WORM
+    renditions bucket, INSERT a derived ``Blob`` row, and point the version's
+    ``rendition_blob_sha256`` at it — so the next sync is a cache hit (no Gotenberg). Staged on
+    ``session`` (sync_mirror commits)."""
+    bucket = get_settings().s3_bucket_renditions
+    sha = hashlib.sha256(pdf).hexdigest()
+    await storage.put_bytes(pdf, sha, bucket=bucket, content_type="application/pdf")
+    await session.execute(
+        pg_insert(Blob)
+        .values(
+            sha256=sha,
+            org_id=eff.org_id,
+            size_bytes=len(pdf),
+            mime_type="application/pdf",
+            bucket=bucket,
+            object_key=sha,
+            worm_locked=False,  # renditions are derived + rebuildable (doc 14 §5.4)
+        )
+        .on_conflict_do_nothing(index_elements=["sha256"])
+    )
+    await session.execute(
+        update(DocumentVersion)
+        .where(DocumentVersion.id == eff.version_id)
+        .values(rendition_blob_sha256=sha)
+    )
+
+
+async def _resolve_rendition(
+    eff: EffectiveDoc, source_bytes: bytes, render_sink: RenderSink, session: AsyncSession | None
+) -> tuple[bytes, str, str, bool]:
+    """(content, ext, render_status, no_controlled_rendition). Cache hit first; else render via the
+    sink and (when a session is available — the worker path) cache a RENDERED result."""
+    # Cache hit — a prior sync already rendered this exact version.
+    if eff.rendition_blob_sha256:
+        try:
+            cached = await storage.fetch_bytes(
+                eff.rendition_blob_sha256, bucket=get_settings().s3_bucket_renditions
+            )
+            return cached, ".pdf", RenderStatus.RENDERED.value, False
+        except Exception:  # noqa: BLE001 — cached rendition vanished; re-render below
+            logger.warning(
+                "mirror.rendition_cache_miss",
+                extra={"extra_fields": {"version_id": str(eff.version_id)}},
+            )
+
+    request = RenderRequest(
+        identifier=eff.identifier,
+        title=eff.title,
+        revision_label=eff.revision_label,
+        effective_from=eff.effective_from,
+        classification=eff.classification,
+        copy_status="CONTROLLED COPY",  # only Effective reaches the mirror (doc 04 §11.2)
+        owner=eff.owner_display,
+        mime_type=eff.mime_type,
+        source_filename=_source_filename(eff, _ext(eff.mime_type)),
+        version_id=eff.version_id,
+    )
+    result = await render_sink.render(request, source_bytes)
+    if result.status is RenderStatus.RENDERED and result.pdf is not None:
+        if session is not None:
+            await _cache_rendition(session, eff, result.pdf)
+        return result.pdf, ".pdf", RenderStatus.RENDERED.value, False
+    if result.status is RenderStatus.NON_RENDERABLE:
+        return source_bytes, _ext(eff.mime_type), RenderStatus.NON_RENDERABLE.value, True
+    return source_bytes, _ext(eff.mime_type), RenderStatus.PENDING.value, False
+
+
 async def build_tree(
-    build_root: Path, effs: list[EffectiveDoc], render_sink: RenderSink
+    build_root: Path,
+    effs: list[EffectiveDoc],
+    render_sink: RenderSink,
+    session: AsyncSession | None = None,
 ) -> tuple[list[dict[str, object]], int]:
-    """Write the complete mirror tree into ``build_root`` (a fresh dir). Returns the manifest file
-    list + the count of pending (un-rendered) renditions. Everything except ``manifest.json``'s
-    generated-at is deterministic, so the tree is byte-reproducible (doc 04 §10.4)."""
+    """Write the complete mirror tree into ``build_root`` (a fresh dir). Each Effective version is
+    rendered to a watermarked controlled-copy PDF (cached after the first render); a renderer outage
+    falls back to source bytes (``pending``), a non-renderable format to source + R26
+    ``no_controlled_rendition``. Returns the manifest file list + the count of pending renditions.
+    ``session`` (the worker's, under the advisory lock) is needed to cache renditions; without one
+    (pure-unit / no-op sink) rendering still writes the bytes but does not persist the cache."""
     (build_root / "_meta").mkdir(parents=True, exist_ok=True)
     manifest: list[dict[str, object]] = []
     pending = 0
 
     for eff in effs:
         source_bytes = await storage.fetch_bytes(eff.object_key, bucket=eff.bucket)
-        request = RenderRequest(
-            identifier=eff.identifier,
-            title=eff.title,
-            revision_label=eff.revision_label,
-            effective_from=eff.effective_from,
-            classification=eff.classification,
-            copy_status="CONTROLLED COPY",  # only Effective reaches the mirror (doc 04 §11.2)
-            mime_type=eff.mime_type,
-            source_filename=_source_filename(eff, _ext(eff.mime_type)),
+        content, ext, render_status, no_rendition = await _resolve_rendition(
+            eff, source_bytes, render_sink, session
         )
-        rendered = render_sink.render(request, source_bytes)
-        if rendered is None:
-            content, ext, render_status = source_bytes, _ext(eff.mime_type), "pending"
+        if render_status == RenderStatus.PENDING.value:
             pending += 1
-        else:
-            content, ext, render_status = rendered, ".pdf", "rendered"
 
         doc_dir = build_root / _doc_dirname(eff)
         doc_dir.mkdir(parents=True, exist_ok=True)
@@ -227,7 +311,7 @@ async def build_tree(
         _write(doc_dir / source_filename, content, manifest, build_root)
         _write(
             doc_dir / "metadata.json",
-            _metadata(eff, source_filename, render_status),
+            _metadata(eff, source_filename, render_status, no_rendition),
             manifest,
             build_root,
         )
@@ -285,23 +369,30 @@ async def sync_mirror(
     session: AsyncSession | None = None,
 ) -> MirrorSyncResult:
     """Full rebuild + atomic swap of the read-only mirror. Idempotent: a duplicate call re-converges
-    on the same content. ``mirror_path`` defaults to ``settings.mirror_path`` (tests override it);
-    ``session`` is opened from the app sessionmaker (the non-owner ``easysynq_app`` role — SELECT on
-    ``document_version``/``blob`` is all the build needs) when not supplied."""
+    on the same content (renditions are cached after the first render). ``mirror_path`` defaults to
+    ``settings.mirror_path`` (tests override it); ``session`` is opened from the app sessionmaker
+    (the non-owner ``easysynq_app`` role — SELECT the vault + INSERT a rendition ``blob`` + UPDATE
+    the rendition FK is all it needs) when not supplied. The session is held through ``build_tree``
+    and **committed** so cached renditions persist; the atomic swap then publishes the tree."""
     root = Path(mirror_path) if mirror_path is not None else Path(get_settings().mirror_path)
     sink = render_sink if render_sink is not None else get_render_sink()
-
-    if session is not None:
-        effs = await list_effective_versions(session)
-    else:
-        async with get_sessionmaker()() as own:
-            effs = await list_effective_versions(own)
 
     builds = root / ".builds"
     builds.mkdir(parents=True, exist_ok=True)
     build_root = builds / uuid.uuid4().hex
     build_root.mkdir(parents=True, exist_ok=True)
 
-    manifest, pending = await build_tree(build_root, effs, sink)
+    async def _build(s: AsyncSession) -> tuple[list[dict[str, object]], int, int]:
+        effs = await list_effective_versions(s)
+        manifest, pending = await build_tree(build_root, effs, sink, s)
+        await s.commit()  # persist the rendition cache writes (blob rows + version FKs)
+        return manifest, pending, len(effs)
+
+    if session is not None:
+        manifest, pending, count = await _build(session)
+    else:
+        async with get_sessionmaker()() as own:
+            manifest, pending, count = await _build(own)
+
     atomic_swap(root, build_root)
-    return MirrorSyncResult(documents=len(effs), files=len(manifest), pending_renditions=pending)
+    return MirrorSyncResult(documents=count, files=len(manifest), pending_renditions=pending)

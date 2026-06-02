@@ -48,6 +48,7 @@ class Settings(BaseSettings):
     s3_secret_key: str = ""
     s3_bucket_documents: str = "documents"
     s3_bucket_staging: str = "staging"
+    s3_bucket_renditions: str = "renditions"  # derived watermarked PDFs (non-WORM; S7b)
     s3_object_lock_mode: str = "GOVERNANCE"
     s3_presign_expiry_seconds: int = 900  # presigned PUT/GET validity (doc 18 §5.2)
 

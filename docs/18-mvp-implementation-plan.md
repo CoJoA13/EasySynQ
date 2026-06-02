@@ -1,15 +1,19 @@
 # EasySynQ — MVP Implementation Plan (for approval)
 
-> **Status: APPROVED (2026-05-31) and IN BUILD.** Slices **S0–S7 are shipped to `main`** (each via PR, all CI
-> green, validated on the real Docker stack); **S7b (watermarked-PDF rendering) is next.** S7 shipped the read-only
-> Effective-only filesystem mirror (AC#2) as a deliberately minimal, **zero-migration** slice: a full-rebuild +
-> symlink-repoint atomic swap (`current → .builds/<uuid>`), the post-commit release/obsolete enqueue + a nightly
-> Beat reconcile + `python -m easysynq_api.cli.mirror sync`, a flat layout (the clause/process IA tree defers to
-> **S9** with `clause_mapping`), and the api `:ro` mount completing the R11 contract. **Rendering was deferred to
-> S7b** (owner decision): the mirror writes **source bytes** behind a no-op `RenderSink` seam and marks
-> `render_status:"pending"` (NOT R26's `no_controlled_rendition`); the watermark band (§11.3), non-suppressible
-> Obsolete/Superseded stamps, the real R26 path, and the QR verify-token all land in S7b. The drift scan/quarantine/
-> `MIRROR_DRIFT_DETECTED` alarm stay **v1** (D-6). This document is the build guide; the
+> **Status: APPROVED (2026-05-31) and IN BUILD.** Slices **S0–S7 + S7b are shipped to `main`** (each via PR, all CI
+> green, validated on the real Docker stack); **S7c (verify-token + in-app export stamp) then S8 (setup wizard) are
+> next.** S7 shipped the read-only Effective-only filesystem mirror (AC#2, zero-migration): full-rebuild +
+> symlink-repoint atomic swap (`current → .builds/<uuid>`), post-commit release/obsolete enqueue + nightly Beat
+> reconcile + `python -m easysynq_api.cli.mirror sync`, a flat layout (the clause/process IA tree defers to **S9**
+> with `clause_mapping`), and the api `:ro` mount completing the R11 contract. **S7b** then made the `RenderSink`
+> real (zero-migration): Gotenberg office→PDF (LibreOffice/Chromium; PDF passthrough) + a deterministic
+> reportlab+pypdf overlay stamps the §11.3 non-removable band (Rev + Effective + copy_status) + the diagonal
+> CONTROLLED COPY watermark, cached content-addressed in the non-WORM renditions bucket (`document_version.
+> rendition_blob_sha256`) — rendered Effective-only inside the mirror sink, three-way `RenderResult`
+> (RENDERED / R26 `no_controlled_rendition` / PENDING self-heal), license-safe BSD-only (NO PyMuPDF/AGPL), plus
+> `GET /documents/{id}/download`. **Deferred to S7c** (owner decision): the verify-token + QR + public `GET /verify`
+> (CURRENT/SUPERSEDED/UNKNOWN) + the per-intent export/print stamp. The drift scan/quarantine/`MIRROR_DRIFT_DETECTED`
+> alarm stay **v1** (D-6). This document is the build guide; the
 > Decisions Register remains authoritative where they differ, and a few canon reconciliations were made during the
 > build (see CLAUDE.md "Current status" and the per-slice memory for the exact decisions, e.g. `documented_information`
 > collapse, `role_grant`/`role_assignment` naming, the INV-1/R25 partial indexes (built in S4 with `::enum`-cast

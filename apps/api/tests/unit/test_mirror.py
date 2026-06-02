@@ -12,7 +12,12 @@ import pytest
 
 from easysynq_api.services.vault import mirror as mirror_mod
 from easysynq_api.services.vault.mirror import EffectiveDoc, atomic_swap, build_tree
-from easysynq_api.services.vault.render import LoggingRenderSink, RenderRequest
+from easysynq_api.services.vault.render import (
+    LoggingRenderSink,
+    RenderRequest,
+    RenderResult,
+    RenderStatus,
+)
 
 
 def _make_build(mirror: Path, name: str) -> Path:
@@ -31,12 +36,16 @@ def _eff(**overrides: Any) -> EffectiveDoc:
         "change_reason": "initial",
         "effective_from": None,
         "owner_user_id": uuid.uuid4(),
+        "owner_display": "p.author",
         "classification": "Internal",
         "source_sha256": "deadbeef",
         "mime_type": "application/pdf",
         "size_bytes": 3,
         "bucket": "documents",
         "object_key": "deadbeef",
+        "version_id": uuid.uuid4(),
+        "org_id": uuid.uuid4(),
+        "rendition_blob_sha256": None,
     }
     fields.update(overrides)
     return EffectiveDoc(**fields)
@@ -99,7 +108,12 @@ async def test_build_tree_overwrites_in_place(
     eff = _eff()
 
     await build_tree(build, [eff], LoggingRenderSink())
-    assert _only_source(build).read_bytes() == b"VAULT-BYTES"
+    source = _only_source(build)
+    assert source.read_bytes() == b"VAULT-BYTES"
+    # The no-op sink → PENDING: source bytes + render_status="pending", no R26 flag.
+    meta = json.loads((source.parent / "metadata.json").read_text())
+    assert meta["render_status"] == "pending"
+    assert "no_controlled_rendition" not in meta
 
     _only_source(build).write_bytes(b"TAMPERED")  # drift, in a dir that already exists
     await build_tree(build, [eff], LoggingRenderSink())  # rebuild into the SAME dir
@@ -116,11 +130,12 @@ async def test_build_tree_rendered_branch(tmp_path: Path, monkeypatch: pytest.Mo
     monkeypatch.setattr(mirror_mod.storage, "fetch_bytes", _fetch)
 
     class _PdfSink:
-        def render(self, request: RenderRequest, source_bytes: bytes) -> bytes:
-            return b"%PDF-1.7 rendered"
+        async def render(self, request: RenderRequest, source_bytes: bytes) -> RenderResult:
+            return RenderResult.rendered(b"%PDF-1.7 rendered")
 
     build = tmp_path / "b"
     build.mkdir()
+    # session=None → render still writes the .pdf, but the rendition cache (blob/FK) is skipped.
     _, pending = await build_tree(build, [_eff()], _PdfSink())
 
     assert pending == 0
@@ -129,18 +144,50 @@ async def test_build_tree_rendered_branch(tmp_path: Path, monkeypatch: pytest.Mo
     assert source.read_bytes() == b"%PDF-1.7 rendered"
     meta = json.loads((source.parent / "metadata.json").read_text())
     assert meta["render_status"] == "rendered"
+    assert "no_controlled_rendition" not in meta
 
 
-def test_logging_render_sink_defers() -> None:
-    """The default S7 render sink renders nothing — the mirror falls back to source bytes."""
-    request = RenderRequest(
-        identifier="SOP-PUR-001",
-        title="Purchasing Procedure",
-        revision_label="Rev A",
-        effective_from=None,
-        classification="Internal",
-        copy_status="CONTROLLED COPY",
-        mime_type="application/pdf",
-        source_filename="x.pdf",
+async def test_build_tree_non_renderable_marks_r26(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A NON_RENDERABLE result → source bytes + render_status 'unrenderable' + the R26 flag
+    (distinct from 'pending')."""
+
+    async def _fetch(object_key: str, *, bucket: str | None = None) -> bytes:
+        return b"CAD-SOURCE"
+
+    monkeypatch.setattr(mirror_mod.storage, "fetch_bytes", _fetch)
+
+    class _NonRenderableSink:
+        async def render(self, request: RenderRequest, source_bytes: bytes) -> RenderResult:
+            return RenderResult.non_renderable()
+
+    build = tmp_path / "b"
+    build.mkdir()
+    await build_tree(build, [_eff(mime_type="application/octet-stream")], _NonRenderableSink())
+    source = _only_source(build)
+    assert source.read_bytes() == b"CAD-SOURCE"  # source kept (no PDF)
+    meta = json.loads((source.parent / "metadata.json").read_text())
+    assert meta["render_status"] == "unrenderable"
+    assert meta["no_controlled_rendition"] is True
+
+
+async def test_logging_render_sink_defers_to_pending() -> None:
+    """The no-op default render sink returns PENDING — the mirror falls back to source bytes."""
+    result = await LoggingRenderSink().render(
+        RenderRequest(
+            identifier="SOP-PUR-001",
+            title="Purchasing Procedure",
+            revision_label="Rev A",
+            effective_from=None,
+            classification="Internal",
+            copy_status="CONTROLLED COPY",
+            owner="p.author",
+            mime_type="application/pdf",
+            source_filename="x.pdf",
+            version_id=uuid.uuid4(),
+        ),
+        b"some-bytes",
     )
-    assert LoggingRenderSink().render(request, b"some-bytes") is None
+    assert result.status is RenderStatus.PENDING
+    assert result.pdf is None
