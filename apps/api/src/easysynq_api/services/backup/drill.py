@@ -10,6 +10,12 @@ Runs as the OWNER DB role (``settings.sync_dsn``) — the runtime ``easysynq_app
 ``pg_dump`` the whole DB nor ``CREATE DATABASE``. Row-count parity is race-free: counts are captured
 under a single ``REPEATABLE READ`` snapshot that ``pg_dump --snapshot`` then uses (the 423 setup
 latch also keeps the DB quiescent during first-run setup).
+
+NB doc 08 §8.2 describes the scratch namespace as "a temporary PG schema"; we use an isolated
+temporary DATABASE instead — it is ``pg_restore``'s natural unit (a whole-DB custom-format dump does
+not restore cleanly into a renamed schema), gives the strongest isolation, and tears down with one
+``DROP DATABASE``. The §8.2 wording is reconciled as illustrative of "an isolated namespace" (owner
+sign-off, this slice; note back-propagated to doc 08 §8.2).
 """
 
 from __future__ import annotations

@@ -13,6 +13,7 @@ import os
 import tempfile
 import uuid
 from collections.abc import Callable
+from types import SimpleNamespace
 
 import pytest
 from httpx import AsyncClient
@@ -25,6 +26,7 @@ from easysynq_api.db.models.backup_policy import BackupPolicy
 from easysynq_api.db.session import get_sessionmaker
 from easysynq_api.services import backup as backup_service
 
+from . import s5_helpers as s5
 from .test_setup import (
     _auth,
     _bootstrap,
@@ -35,6 +37,29 @@ from .test_setup import (
 )
 
 pytestmark = pytest.mark.integration
+
+
+def _s3_client() -> object:
+    import boto3
+
+    s = get_settings()
+    return boto3.client(
+        "s3",
+        endpoint_url=s.s3_endpoint,
+        aws_access_key_id=s.s3_access_key,
+        aws_secret_access_key=s.s3_secret_key,
+        region_name=s.s3_region,
+    )
+
+
+async def _insert_backup_policy(org_id: uuid.UUID, destination: str) -> None:
+    async with get_sessionmaker()() as s:
+        existing = await s.scalar(select(BackupPolicy).where(BackupPolicy.org_id == org_id))
+        if existing is None:
+            s.add(BackupPolicy(org_id=org_id, destination=destination, cron="0 2 * * *"))
+        else:
+            existing.destination = destination
+        await s.commit()
 
 
 async def test_configure_backup_requires_permission(
@@ -109,6 +134,24 @@ async def test_configure_backup_rejects_bad_cron(
         json={"destination": dest, "cron": "not a cron"},
     )
     assert r.status_code == 422
+
+
+async def test_configure_backup_rejects_wal_pitr(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """wal_pitr_enabled is a recorded forward-seam; continuous WAL/PITR is S11/v1.x (D-6) — setting
+    it true is a 422, so the scope boundary is enforced rather than silently accepted."""
+    secret = await _reset_uninitialized()
+    h = _auth(token_factory, _sub("walpitr"))
+    await _bootstrap(app_client, h, secret)
+    dest = tempfile.mkdtemp(prefix="easysynq-wal-")
+    r = await app_client.post(
+        "/api/v1/setup/configure-backup",
+        headers=h,
+        json={"destination": dest, "wal_pitr_enabled": True},
+    )
+    assert r.status_code == 422
+    assert r.json()["code"] == "wal_pitr_unavailable"
 
 
 async def test_run_restore_test_requires_permission(
@@ -192,3 +235,66 @@ async def test_drill_tears_down_scratch_namespace(
     )
     listing = client.list_objects_v2(Bucket=settings.s3_bucket_restore_scratch)
     assert listing.get("KeyCount", 0) == 0, listing.get("Contents")
+
+
+# --- the blob-dependent triad legs, exercised with REAL blob data (not vacuously) -------------
+#
+# The setup-flow drill (test_setup.py) runs at IN_SETUP time when the DB carries 0 blobs, so the
+# blob SHA-256 re-hash + document_version→blob FK legs are vacuous there. These tests run while
+# OPERATIONAL (the conftest default), create a real Effective document → a real source blob, and
+# drive the drill over it — so the legs run over real rows AND a corrupted restored blob is caught.
+
+
+async def _make_effective_doc(
+    app_client: AsyncClient, token_factory: Callable[..., str], content: bytes
+) -> None:
+    """Create one Effective document (→ a content-addressed source blob in the documents bucket)."""
+    subj = SimpleNamespace(a=_sub("bk-author"), b=_sub("bk-approver"))
+    await s5.grant_lifecycle(subj.a)
+    await s5.grant_lifecycle(subj.b)
+    await s5.set_approver_release(await s5.default_org_id(), True)
+    ha, hb = _auth(token_factory, subj.a), _auth(token_factory, subj.b)
+    await s5.drive_to_effective(app_client, ha, hb, hb, await s5.type_id("SOP"), content)
+
+
+async def test_drill_passes_over_real_blobs(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """[AC#5 blob legs] With a real Effective document present, the drill PASSES and the triad runs
+    NON-vacuously over real blobs (details.blobs ≥ 1) — the SHA-256 re-hash + FK legs cover real
+    rows, not an empty set."""
+    org_id = await _org_id()  # conftest leaves the DB OPERATIONAL — no reset, so blobs can be made
+    await _make_effective_doc(app_client, token_factory, b"effective-source-for-drill-v1")
+    dest = tempfile.mkdtemp(prefix="easysynq-realblob-")
+    await _insert_backup_policy(org_id, dest)
+
+    result = await backup_service.run_restore_test(org_id)
+    assert result["result"] == "PASS", result
+    assert result["details"]["blobs"] >= 1  # the re-hash leg actually iterated real blobs
+
+
+async def test_drill_fails_on_corrupted_restored_blob(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """[AC#5 negative, re-hash leg] A restored scratch blob whose bytes are corrupted re-hashes to a
+    different digest → the drill FAILs specifically on the blob SHA-256 leg. This is the leg the
+    fresh-setup negative test cannot reach (it has no blobs)."""
+    org_id = await _org_id()
+    await _make_effective_doc(app_client, token_factory, b"effective-source-for-drill-v2")
+    dest = tempfile.mkdtemp(prefix="easysynq-corrupt-")
+    await _insert_backup_policy(org_id, dest)
+    client = _s3_client()
+
+    def _corrupt_one_blob(handle: backup_service.ScratchHandle) -> None:
+        listing = client.list_objects_v2(  # type: ignore[attr-defined]
+            Bucket=handle.scratch_bucket, Prefix=handle.object_prefix
+        )
+        objs = listing.get("Contents", [])
+        assert objs, "expected ≥1 restored scratch blob to corrupt"
+        client.put_object(  # type: ignore[attr-defined]
+            Bucket=handle.scratch_bucket, Key=objs[0]["Key"], Body=b"corrupted-not-the-real-bytes"
+        )
+
+    result = await backup_service.run_restore_test(org_id, after_restore=_corrupt_one_blob)
+    assert result["result"] == "FAIL", result
+    assert "re-hash" in result["reason"] or "SHA-256" in result["reason"], result

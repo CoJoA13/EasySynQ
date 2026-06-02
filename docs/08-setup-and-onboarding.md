@@ -245,7 +245,9 @@ The screen states plainly: **the mirror is regenerable and is NOT backed up** (A
 
 ### 8.2 The mandatory restore-test
 
-The gate is not "a backup ran" but "a backup **was restored and verified**." The wizard runs an end-to-end drill into an **isolated scratch namespace** (a temporary PG schema + a scratch MinIO bucket), never touching live data:
+The gate is not "a backup ran" but "a backup **was restored and verified**." The wizard runs an end-to-end drill into an **isolated scratch namespace** (a temporary scratch **PostgreSQL database** + a scratch MinIO bucket), never touching live data:
+
+> **Reconciliation (S8b2).** The scratch namespace is implemented as a **temporary database**, not a schema — it is `pg_restore`'s natural unit (a whole-DB custom-format `pg_dump` does not restore cleanly into a renamed schema), gives the strongest isolation, and tears down with one `DROP DATABASE`. "Schema" above is illustrative of "an isolated namespace."
 
 ```mermaid
 sequenceDiagram

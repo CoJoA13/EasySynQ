@@ -448,6 +448,14 @@ async def configure_backup(
             code="validation_error",
             title="retention must keep ≥1 daily and be non-negative",
         )
+    if wal_pitr_enabled:
+        # The column is a recorded forward-seam; continuous WAL/PITR is S11/v1.x (D-6). Reject true
+        # so the scope boundary is enforced, not silently accepted (the scheduler ignores it today).
+        raise ProblemException(
+            status=422,
+            code="wal_pitr_unavailable",
+            title="WAL/PITR is reserved for a later release (D-6); leave wal_pitr_enabled false",
+        )
     ok, detail = await asyncio.to_thread(configure_backup_destination_check, destination)
     if not ok:
         raise ProblemException(
@@ -492,7 +500,12 @@ async def configure_backup(
 async def trigger_restore_test(session: AsyncSession, actor: AppUser) -> dict[str, Any]:
     """Enqueue the backup→restore-into-scratch drill (gate G-C). The drill is an async worker task
     (it may take minutes — RTO target ≤2h, doc 08 §8.2); finalize reads the PERSISTED result, never
-    runs it inline. Requires a configured backup policy first."""
+    runs it inline. Requires a configured backup policy first.
+
+    If a drill is already running, the worker task takes the ``LOCK_RESTORE_DRILL`` advisory lock,
+    finds it held, and SKIPS without persisting — so ``last_restore_test_result`` is unchanged and a
+    poller sees no new result (the operator simply re-runs). The endpoint still returns 202; the
+    enqueue succeeded, the drill just deduplicated against the in-flight one."""
     policy = await session.scalar(
         select(BackupPolicy.id).where(BackupPolicy.org_id == actor.org_id)
     )
