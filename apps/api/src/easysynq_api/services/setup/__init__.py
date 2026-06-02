@@ -13,6 +13,7 @@ from .bootstrap import mint_secret, verify_secret
 from .service import (
     GATES,
     bootstrap_admin,
+    configure_auth,
     configure_backup,
     finalize_setup,
     get_setup_detail,
@@ -25,6 +26,7 @@ from .service import (
 __all__ = [
     "GATES",
     "bootstrap_admin",
+    "configure_auth",
     "configure_backup",
     "finalize_setup",
     "get_setup_detail",

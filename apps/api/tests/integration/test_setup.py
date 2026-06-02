@@ -55,6 +55,9 @@ async def _reset_uninitialized() -> str:
         cfg.bootstrap_consumed_at = None
         cfg.bootstrap_secret_hash = stored
         cfg.bootstrap_expires_at = setup_service._now() + datetime.timedelta(hours=1)
+        cfg.auth_method = None  # reset G-D (S8c) so it starts unsatisfied
+        cfg.auth_test_login_ok = None
+        cfg.auth_test_login_at = None
         await s.execute(
             delete(RoleAssignment).where(
                 RoleAssignment.role_id.in_(select(Role.id).where(Role.name == _ADMIN))
@@ -85,6 +88,18 @@ async def _pass_restore_gate(result: str = "PASS") -> None:
             s.add(policy)
         policy.last_restore_test_at = setup_service._now()
         policy.last_restore_test_result = result
+        await s.commit()
+
+
+async def _pass_auth_gate() -> None:
+    """Satisfy gate G-D directly by persisting the auth attestation — for tests whose subject is a
+    different gate. The real configure-auth→proof path is proven in
+    ``test_setup_finalize_requires_auth_proven`` without this shortcut."""
+    async with get_sessionmaker()() as s:
+        cfg = (await s.execute(select(SystemConfig))).scalar_one()
+        cfg.auth_method = "LOCAL"
+        cfg.auth_test_login_ok = True
+        cfg.auth_test_login_at = setup_service._now()
         await s.commit()
 
 
@@ -231,6 +246,7 @@ async def test_finalize_blocked_then_operational_lifts_latch(
     )
     await _verify_storage(app_client, h)  # G-B (S8b) is now a required finalize gate too
     await _pass_restore_gate()  # G-C (S8b2) is required too — drill proven separately (AC#5)
+    await _pass_auth_gate()  # G-D (S8c) is required too — configure-auth proven separately
     done = await app_client.post("/api/v1/setup/finalize", headers=h)
     assert done.status_code == 200, done.text
     assert done.json()["setup_state"] == "OPERATIONAL"
@@ -404,6 +420,7 @@ async def test_finalize_blocked_on_g_b_until_worm_verified(
 
     await _verify_storage(app_client, h)
     await _pass_restore_gate()  # G-C (S8b2) is required too — drill proven separately (AC#5)
+    await _pass_auth_gate()  # G-D (S8c) is required too — configure-auth proven separately
     done = await app_client.post("/api/v1/setup/finalize", headers=h)
     assert done.status_code == 200, done.text
     assert done.json()["setup_state"] == "OPERATIONAL"
@@ -495,6 +512,7 @@ async def test_setup_finalize_requires_restore_pass(
         assert detail.json()["gates"]["G-C"] is True
         assert detail.json()["backup"]["last_restore_test_result"] == "PASS"
 
+        await _pass_auth_gate()  # G-D (S8c) is required too — configure-auth proven separately
         done = await app_client.post("/api/v1/setup/finalize", headers=h)
         assert done.status_code == 200, done.text
         assert done.json()["setup_state"] == "OPERATIONAL"
@@ -589,3 +607,112 @@ def _drop_a_scratch_row(handle: backup_service.ScratchHandle) -> None:
         conn.cursor() as cur,
     ):
         cur.execute("DELETE FROM permission WHERE ctid IN (SELECT ctid FROM permission LIMIT 1)")
+
+
+# --- S8c: G-D auth-config gate -------------------------------------------------------------
+#
+# The live OIDC-issuer probe is monkeypatched (CI runs no Keycloak; the integration conftest stubs
+# JWKS). The non-bootstrap login proof is real: the minted admin token is a valid JWKS-validated JWT
+# distinct from the install-secret bootstrap POST (which authorizes outside the PEP).
+
+
+async def _stub_auth_probe(monkeypatch: pytest.MonkeyPatch, *, ok: bool) -> None:
+    async def _probe(_issuer: str) -> tuple[bool, str]:
+        return ok, "stubbed reachable" if ok else "stubbed unreachable"
+
+    monkeypatch.setattr(setup_service.auth_check, "probe_oidc_discovery", _probe)
+
+
+async def test_setup_finalize_requires_auth_proven(
+    app_client: AsyncClient, token_factory: Callable[..., str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """[HEADLINE / G-D] Finalize is BLOCKED on G-D until configure-auth proves a non-bootstrap
+    login; a recorded-but-unproven auth does not satisfy it. Once proven, finalize → OPERATIONAL."""
+    h, admin_id = await _bootstrap_through_storage(app_client, token_factory, "gd")
+    await _pass_restore_gate()  # G-A/E/B/C satisfied; only G-D outstanding
+
+    blocked = await app_client.post("/api/v1/setup/finalize", headers=h)
+    assert blocked.status_code == 409
+    assert any(g["key"] == "G-D" for g in blocked.json()["failed_gates"])
+
+    await _stub_auth_probe(monkeypatch, ok=True)
+    res = await app_client.post(
+        "/api/v1/setup/configure-auth",
+        headers=h,
+        json={"method": "LOCAL", "mfa_acknowledged": True},
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["auth_test_login_ok"] is True
+
+    detail = await app_client.get("/api/v1/setup", headers=h)
+    assert detail.json()["gates"]["G-D"] is True
+    assert detail.json()["auth"]["method"] == "LOCAL"
+
+    done = await app_client.post("/api/v1/setup/finalize", headers=h)
+    assert done.status_code == 200, done.text
+    assert done.json()["setup_state"] == "OPERATIONAL"
+
+    async with get_sessionmaker()() as s:
+        for evt in (EventType.AUTH_CONFIGURED, EventType.AUTH_TEST_LOGIN_OK):
+            row = await s.scalar(
+                select(AuditEvent.id).where(
+                    AuditEvent.event_type == evt, AuditEvent.actor_id == admin_id
+                )
+            )
+            assert row is not None, evt
+
+
+async def test_configure_auth_unreachable_idp_blocks_finalize(
+    app_client: AsyncClient, token_factory: Callable[..., str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """[NEGATIVE / G-D] An unreachable/misconfigured IdP → 422 auth_unavailable, the signal stays
+    null, G-D stays red, finalize stays blocked, and AUTH_TEST_LOGIN_FAILED is audited — no
+    false-PASS that would strand the org on a broken login."""
+    h, admin_id = await _bootstrap_through_storage(app_client, token_factory, "gdfail")
+    await _pass_restore_gate()
+
+    await _stub_auth_probe(monkeypatch, ok=False)
+    res = await app_client.post("/api/v1/setup/configure-auth", headers=h, json={"method": "LOCAL"})
+    assert res.status_code == 422
+    assert res.json()["code"] == "auth_unavailable"
+
+    detail = await app_client.get("/api/v1/setup", headers=h)
+    assert detail.json()["gates"]["G-D"] is False
+    assert detail.json()["auth"]["configured"] is False
+
+    blocked = await app_client.post("/api/v1/setup/finalize", headers=h)
+    assert blocked.status_code == 409
+    assert any(g["key"] == "G-D" for g in blocked.json()["failed_gates"])
+
+    async with get_sessionmaker()() as s:
+        failed = await s.scalar(
+            select(AuditEvent.id).where(
+                AuditEvent.event_type == EventType.AUTH_TEST_LOGIN_FAILED,
+                AuditEvent.actor_id == admin_id,
+            )
+        )
+    assert failed is not None
+
+
+async def test_configure_auth_requires_config_update(
+    app_client: AsyncClient, token_factory: Callable[..., str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """configure-auth is gated on config.update — a non-admin is 403 (before any probe runs)."""
+    await _reset_uninitialized()
+    await _stub_auth_probe(monkeypatch, ok=True)
+    h_other = _auth(token_factory, _sub("noauth"))
+    r = await app_client.post(
+        "/api/v1/setup/configure-auth", headers=h_other, json={"method": "LOCAL"}
+    )
+    assert r.status_code == 403
+
+
+async def test_configure_auth_rejects_bad_method(
+    app_client: AsyncClient, token_factory: Callable[..., str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    secret = await _reset_uninitialized()
+    await _stub_auth_probe(monkeypatch, ok=True)
+    h = _auth(token_factory, _sub("badmethod"))
+    await _bootstrap(app_client, h, secret)
+    r = await app_client.post("/api/v1/setup/configure-auth", headers=h, json={"method": "WAT"})
+    assert r.status_code == 422

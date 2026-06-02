@@ -85,6 +85,17 @@ class SystemConfig(Base):
         DateTime(timezone=True),
         nullable=True,
     )
+    # Auth-config gate G-D (S8c, doc 08 §9): the chosen primary login method (LOCAL/FEDERATED —
+    # informational; the app always authenticates via Keycloak/OIDC) + the persisted non-bootstrap
+    # login proof. ``auth_test_login_ok`` is True ONLY after ``/setup/configure-auth`` proves the
+    # OIDC issuer is reachable AND the caller presented a valid non-bootstrap JWT — null/False reads
+    # as G-D-unsatisfied (no false-PASS). Federation params live in Keycloak (not here).
+    auth_method: Mapped[str | None] = mapped_column(Text, nullable=True)
+    auth_test_login_ok: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    auth_test_login_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),

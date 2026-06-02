@@ -1,6 +1,7 @@
 import {
   Alert,
   Button,
+  Checkbox,
   Code,
   Container,
   Group,
@@ -31,6 +32,11 @@ interface SetupDetail {
     last_restore_test_at: string | null;
     last_restore_test_result: string | null;
   };
+  auth: {
+    configured: boolean;
+    method: string | null;
+    last_test_at: string | null;
+  };
   // Soft gate (R13): false until a fresh off-host audit anchor is configured. Never blocks finalize.
   tamper_evident: boolean;
 }
@@ -43,9 +49,9 @@ const browserTz = (): string => {
   }
 };
 
-// The first-run wizard (S8a + S8b storage + S8b2 backup). Shown whenever setup_state != OPERATIONAL.
-// Resumable: the active step is derived from the live setup state + gates (doc 08 §2). The auth step
-// (G-D) is deferred to S8c.
+// The first-run wizard (S8a–S8c). Shown whenever setup_state != OPERATIONAL. Resumable: the active
+// step is derived from the live setup state + gates (doc 08 §2): bootstrap → org → storage → backup
+// → auth → finalize.
 export function SetupWizard({
   token,
   login,
@@ -70,6 +76,8 @@ export function SetupWizard({
   const [timezone, setTimezone] = useState(browserTz());
   const [lockMode, setLockMode] = useState("GOVERNANCE");
   const [backupDest, setBackupDest] = useState("/var/lib/easysynq/backups");
+  const [authMethod, setAuthMethod] = useState("LOCAL");
+  const [mfaAck, setMfaAck] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -77,9 +85,10 @@ export function SetupWizard({
   const orgSet = detail.data?.gates?.["G-E"] ?? false;
   const wormVerified = detail.data?.gates?.["G-B"] ?? false;
   const restorePassed = detail.data?.gates?.["G-C"] ?? false;
+  const authConfigured = detail.data?.gates?.["G-D"] ?? false;
   const backupConfigured = detail.data?.backup?.configured ?? false;
   const restoreResult = detail.data?.backup?.last_restore_test_result ?? null;
-  // Resumable step order (doc 08 R4: org → storage → backup → finalize).
+  // Resumable step order (doc 08 R4: org → storage → backup → auth → finalize).
   const active =
     token && state === "IN_SETUP"
       ? !orgSet
@@ -88,7 +97,9 @@ export function SetupWizard({
           ? 2
           : !restorePassed
             ? 3
-            : 4
+            : !authConfigured
+              ? 4
+              : 5
       : 0;
 
   // Stop polling once the drill lands a result (PASS flips G-C; FAIL surfaces the reason).
@@ -154,6 +165,16 @@ export function SetupWizard({
         setTestRunning(true);
         void detail.refetch();
       },
+    );
+
+  const configureAuth = (): Promise<void> =>
+    run(
+      () =>
+        apiSend("POST", "/api/v1/setup/configure-auth", token, {
+          method: authMethod,
+          mfa_acknowledged: mfaAck,
+        }),
+      () => void detail.refetch(),
     );
 
   const finalize = (): Promise<void> =>
@@ -311,6 +332,40 @@ export function SetupWizard({
                     ✗ last drill failed — fix and retry
                   </Text>
                 ) : null}
+              </Group>
+            </Stack>
+          </Stepper.Step>
+
+          <Stepper.Step label="Authentication" description="Login proof">
+            <Stack gap="md" mt="md">
+              <Text size="sm">
+                Confirm how users sign in and prove a real (non-bootstrap) login works, so the
+                install is never stranded on a misconfigured identity provider. Local break-glass
+                login always stays available. Sign-in is always via your Keycloak realm; federated
+                SSO (LDAP/OIDC/SAML) is configured in Keycloak.
+              </Text>
+              <SegmentedControl
+                value={authMethod}
+                onChange={setAuthMethod}
+                data={[
+                  { label: "Local accounts", value: "LOCAL" },
+                  { label: "Federated SSO", value: "FEDERATED" },
+                ]}
+              />
+              <Checkbox
+                checked={mfaAck}
+                onChange={(e) => setMfaAck(e.currentTarget.checked)}
+                label="I understand multi-factor authentication is strongly recommended (enrol it in Keycloak)."
+              />
+              <Group>
+                <Button onClick={() => void configureAuth()} loading={busy}>
+                  Verify authentication
+                </Button>
+                {authConfigured && (
+                  <Text size="sm" c="teal">
+                    ✓ login proven
+                  </Text>
+                )}
               </Group>
             </Stack>
           </Stepper.Step>
