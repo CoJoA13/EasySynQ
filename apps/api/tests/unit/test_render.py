@@ -23,7 +23,7 @@ from reportlab.pdfgen import canvas
 from easysynq_api.services.vault import render_gotenberg
 from easysynq_api.services.vault.render import RenderRequest, RenderStatus
 from easysynq_api.services.vault.render_gotenberg import GotenbergRenderSink
-from easysynq_api.services.vault.watermark import stamp_controlled_copy
+from easysynq_api.services.vault.watermark import stamp_controlled_copy, stamp_per_request_copy
 
 
 def _req(
@@ -115,6 +115,51 @@ def test_overlay_deterministic() -> None:
     reproducible (guards reportlab invariant mode + the pinned pypdf trailer /ID)."""
     base = _pdf()
     assert stamp_controlled_copy(base, _req()) == stamp_controlled_copy(base, _req())
+
+
+# --- S7d per-request export/print overlay ------------------------------------------------
+
+_BANNER = "UNCONTROLLED WHEN PRINTED — valid as of 2026-06-02"
+_FOOTER = "Exported 2026-06-02T10:00:00+00:00 by p.author"
+
+
+def test_per_request_stamp_adds_banner_and_footer_every_page() -> None:
+    """[S7d] The per-request overlay draws the banner + footer note on EVERY page of the base."""
+    out = stamp_per_request_copy(_pdf(pages=3), banner=_BANNER, footer_note=_FOOTER)
+    reader = PdfReader(io.BytesIO(out))
+    assert len(reader.pages) == 3
+    for i, page in enumerate(reader.pages):
+        text = page.extract_text()
+        assert "UNCONTROLLED WHEN PRINTED" in text, f"page {i + 1} missing banner"
+        assert "Exported 2026-06-02T10:00:00+00:00 by p.author" in text, f"page {i + 1} no footer"
+
+
+def test_per_request_stamp_overlays_on_banded_base_without_removing_it() -> None:
+    """[S7d] The export banner is overlaid onto the cached CONTROLLED COPY — keeping the original
+    provenance band AND adding the uncontrolled banner (the dual-marking design)."""
+    banded = stamp_controlled_copy(_pdf(pages=1), _req())  # the worker's cached controlled copy
+    out = stamp_per_request_copy(banded, banner=_BANNER, footer_note=_FOOTER)
+    text = PdfReader(io.BytesIO(out)).pages[0].extract_text()
+    assert "CONTROLLED COPY" in text  # the base band survives the overlay
+    assert "UNCONTROLLED WHEN PRINTED" in text  # the per-request export banner is added on top
+
+
+def test_per_request_stamp_deterministic_for_fixed_inputs() -> None:
+    """[S7d] Fixed (base, banner, footer_note) → byte-identical (testable); the per-request variance
+    comes only from the timestamp/user the caller bakes into the text."""
+    base = _pdf()
+    assert stamp_per_request_copy(base, banner=_BANNER, footer_note=_FOOTER) == (
+        stamp_per_request_copy(base, banner=_BANNER, footer_note=_FOOTER)
+    )
+
+
+def test_per_request_stamp_varies_with_footer() -> None:
+    """[S7d] A different footer (different ts/user) → different bytes, so the export is genuinely
+    per-request and must never be content-addressed / cached like the controlled copy."""
+    base = _pdf()
+    a = stamp_per_request_copy(base, banner=_BANNER, footer_note="Exported T1 by u")
+    b = stamp_per_request_copy(base, banner=_BANNER, footer_note="Exported T2 by u")
+    assert a != b
 
 
 # --- Gotenberg sink (mocked) -------------------------------------------------------------

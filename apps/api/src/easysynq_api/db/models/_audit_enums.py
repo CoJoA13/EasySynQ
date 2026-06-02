@@ -47,6 +47,13 @@ class EventType(enum.Enum):
     SUPERSEDED = "SUPERSEDED"
     REVISION_STARTED = "REVISION_STARTED"
     MADE_OBSOLETE = "MADE_OBSOLETE"
+    # controlled-copy distribution (S7d, doc 04 §11.2) — the per-request export/print intent trail
+    # (who/when/which version). Distinct from the cached, deterministic mirror rendition. Added via
+    # ``ALTER TYPE … ADD VALUE`` in 0011 (the first additive-enum migration); a fresh ``upgrade
+    # head`` rebuilds the type from ``EVENT_TYPE_VALUES`` (below) — so a migrated and a from-scratch
+    # DB converge only because these members live here too.
+    EXPORTED = "EXPORTED"
+    PRINTED = "PRINTED"
     # authorization (S2/S5) — denied-access attempts (always) + allows (configurable verbosity,
     # doc 12 §4.1 — off by default) + the permission/role/override changes
     ACCESS_DENIED = "ACCESS_DENIED"

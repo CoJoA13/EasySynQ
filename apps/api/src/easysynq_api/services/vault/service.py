@@ -9,10 +9,12 @@ exclusive lock (409 ``lock_conflict``), content-addressed dedup ("no change dete
 
 from __future__ import annotations
 
+import asyncio
 import datetime
 import logging
+import re
 import uuid
-from typing import Any
+from typing import Any, Literal
 
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -33,7 +35,7 @@ from ...db.models.working_draft import WorkingDraft
 from ...domain.vault import format_identifier, revision_label
 from ...logging import request_id_var
 from ...problems import ProblemException
-from . import locks, repository, storage
+from . import locks, repository, storage, watermark
 from .audit import VaultAuditEvent, VaultAuditSink
 
 logger = logging.getLogger("easysynq.vault")
@@ -60,6 +62,7 @@ def _emit(
     *,
     identifier: str | None = None,
     reason: str | None = None,
+    after: dict[str, Any] | None = None,
 ) -> None:
     """Append the vault ``audit_event`` row to ``session`` BEFORE its commit, so the row commits (or
     rolls back) atomically with the action it records (doc 12 §4.4 / AC#6)."""
@@ -75,6 +78,7 @@ def _emit(
             identifier=identifier,
             reason=reason,
             request_id=request_id_var.get(),
+            after=after,
         ),
     )
 
@@ -344,3 +348,108 @@ async def heartbeat(session: AsyncSession, actor: AppUser, doc: DocumentedInform
             status=409, code="lock_conflict", title="The check-out lock has lapsed; check out again"
         )
     return await locks.ttl(doc.id)
+
+
+# --- S7d: per-request export/print stamped rendition ------------------------------------
+
+_EXPORT = "export"
+_PRINT = "print"
+
+# The download filename is interpolated into a Content-Disposition header, so keep it to a strict
+# ASCII token (no quotes/semicolons/spaces/controls) — the identifier embeds the request-supplied
+# area_code (and an admin-set type code), neither constrained to be header-safe.
+_FILENAME_UNSAFE = re.compile(r"[^A-Za-z0-9._-]+")
+
+
+def _safe_pdf_filename(identifier: str, revision_label: str) -> str:
+    stem = _FILENAME_UNSAFE.sub("_", f"{identifier}_{revision_label}").strip("_")
+    return f"{stem or 'document'}.pdf"
+
+
+async def render_dynamic_copy(
+    session: AsyncSession,
+    sink: VaultAuditSink,
+    actor: AppUser,
+    doc: DocumentedInformation,
+    *,
+    intent: Literal["export", "print"],
+) -> tuple[bytes, str]:
+    """Serve a FRESH, per-request stamped PDF of the document's Effective version (doc 04 §11.2,
+    slice S7d) and audit the intent. Distinct from the mirror's cached, deterministic CONTROLLED
+    COPY: it overlays a per-request banner + "{verb} {ts} by {user}" onto the cached rendition, so
+    it carries a timestamp + actor and is therefore NEVER cached / content-addressed.
+
+    ``intent="export"`` → an "UNCONTROLLED WHEN PRINTED — valid as of {date}" banner + an
+    ``EXPORTED`` audit row; ``intent="print"`` → a "CONTROLLED COPY — valid on {date} only" banner +
+    a ``PRINTED`` row. The permission gate (``document.export`` vs ``document.print_controlled``) is
+    enforced by the endpoint's PEP dependency, not here.
+
+    Reads the already-watermarked rendition bytes server-side (``storage.fetch_bytes``) and overlays
+    in-process — the **one** place the api tier touches rendition bytes (it otherwise only presigns;
+    D1). 404 if there is no Effective version; 409 ``no_controlled_rendition`` if the controlled PDF
+    is unavailable (still rendering, or a non-renderable R26 format — the source is downloadable via
+    ``/download`` instead). Emits the audit row + commits before returning the bytes."""
+    if doc.current_effective_version_id is None:
+        raise ProblemException(status=404, code="not_found", title="No effective version to render")
+    version = await session.get(DocumentVersionModel, doc.current_effective_version_id)
+    if version is None:  # pragma: no cover - defensive (the FK is set at the cutover)
+        raise ProblemException(status=404, code="not_found", title="Effective version not found")
+    rendition = (
+        await repository.get_blob(session, version.rendition_blob_sha256)
+        if version.rendition_blob_sha256 is not None
+        else None
+    )
+    if rendition is None:
+        # Pending or non-renderable (R26, doc 04 §11.4) are indistinguishable from the version row
+        # alone (it carries no render-status), so one 409 covers both. The R26 "uncontrolled when
+        # printed" warning rides in the ``notice`` member + the source stays downloadable via
+        # /download (rendition:source); rendering the click-through page itself is the SPA's job
+        # (deferred per the approved plan — this 409 carries everything it needs).
+        raise ProblemException(
+            status=409,
+            code="no_controlled_rendition",
+            title="No controlled PDF rendition is available yet",
+            detail=(
+                "The controlled-copy PDF is still being generated, or the source format is "
+                "non-renderable (R26). Download the source via /documents/{id}/download."
+            ),
+            members={
+                "notice": "UNCONTROLLED WHEN PRINTED — this source has no controlled rendition.",
+                "source_download": f"/api/v1/documents/{doc.id}/download",
+            },
+        )
+    base_pdf = await storage.fetch_bytes(rendition.object_key, bucket=rendition.bucket)
+
+    now = _now()
+    actor_label = actor.display_name or actor.email or str(actor.id)
+    on_date = now.date().isoformat()
+    stamped_at = now.isoformat(timespec="seconds")
+    if intent == _EXPORT:
+        banner = f"UNCONTROLLED WHEN PRINTED — valid as of {on_date}"
+        footer_note = f"Exported {stamped_at} by {actor_label}"
+        event_type, copy_status = "EXPORTED", "UNCONTROLLED IF PRINTED"
+    else:
+        banner = f"CONTROLLED COPY — valid on {on_date} only"
+        footer_note = f"Printed {stamped_at} by {actor_label}"
+        event_type, copy_status = "PRINTED", "CONTROLLED COPY"
+
+    # Offload the CPU-bound reportlab/pypdf overlay off the event loop (mirrors the S7b sink's
+    # asyncio.to_thread for stamp_controlled_copy). Done BEFORE _emit/commit so a stamping failure
+    # raises before any audit row is written (no orphan row for an undelivered copy).
+    stamped = await asyncio.to_thread(
+        watermark.stamp_per_request_copy, base_pdf, banner=banner, footer_note=footer_note
+    )
+
+    _emit(
+        session,
+        sink,
+        event_type,
+        actor,
+        "document_version",
+        version.id,
+        identifier=doc.identifier,
+        after={"intent": intent, "copy_status": copy_status, "printed_by": actor_label},
+    )
+    await session.commit()
+
+    return stamped, _safe_pdf_filename(doc.identifier, version.revision_label)

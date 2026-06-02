@@ -14,7 +14,7 @@ import datetime
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, Depends, Request, status
+from fastapi import APIRouter, Depends, Request, Response, status
 from pydantic import BaseModel
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -46,6 +46,7 @@ from ..services.vault import (
     init_upload,
     obsolete,
     release,
+    render_dynamic_copy,
     start_revision,
     storage,
     submit_review,
@@ -266,6 +267,11 @@ _manage_metadata = require("document.manage_metadata", async_scope_resolver=_doc
 # ``document.edit`` (no ``document.revise`` key exists).
 _submit = require("document.submit", async_scope_resolver=_document_scope)
 _obsolete = require("document.obsolete", async_scope_resolver=_document_scope, sig_hook=True)
+# S7d export/print. The cheap cached controlled-copy presign stays on document.read (/download). The
+# per-request UNCONTROLLED-when-printed export is gated on the SoD-sensitive document.export; the
+# in-app controlled print on document.print_controlled (doc 07 §3.1 keys, both already seeded).
+_export = require("document.export", async_scope_resolver=_document_scope)
+_print = require("document.print_controlled", async_scope_resolver=_document_scope)
 
 
 # --- documents --------------------------------------------------------------------------
@@ -563,6 +569,49 @@ async def download_document_endpoint(
         "rendition": "source",
         "sha256": blob.sha256,
     }
+
+
+@router.get("/documents/{document_id}/export")
+async def export_document_endpoint(
+    document_id: uuid.UUID,
+    caller: AppUser = Depends(_export),
+    session: AsyncSession = Depends(get_session),
+    vault_sink: VaultAuditSink = Depends(get_vault_audit_sink),
+) -> Response:
+    """A FRESH, per-request export rendition of the Effective version, stamped "UNCONTROLLED WHEN
+    PRINTED — valid as of {date}" + "Exported {ts} by {user}" (doc 04 §11.2). Streamed as an
+    ``application/pdf`` attachment (NOT the JSON presign that ``/download`` returns) and audited as
+    an ``EXPORTED`` event — distinct from the cached, deterministic controlled copy. 409
+    ``no_controlled_rendition`` if no controlled PDF exists yet (R26/pending → use ``/download``).
+    Needs ``document.export``."""
+    doc = await _load_document(session, caller, document_id)
+    pdf, filename = await render_dynamic_copy(session, vault_sink, caller, doc, intent="export")
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get("/documents/{document_id}/print")
+async def print_document_endpoint(
+    document_id: uuid.UUID,
+    caller: AppUser = Depends(_print),
+    session: AsyncSession = Depends(get_session),
+    vault_sink: VaultAuditSink = Depends(get_vault_audit_sink),
+) -> Response:
+    """A FRESH, per-request print rendition of the Effective version, stamped "CONTROLLED COPY —
+    valid on {date} only" + "Printed {ts} by {user}" (doc 04 §11.2). Streamed ``inline`` as an
+    ``application/pdf`` for the browser print dialog and audited as a ``PRINTED`` event. 409
+    ``no_controlled_rendition`` if no controlled PDF exists yet (R26/pending). Needs
+    ``document.print_controlled``."""
+    doc = await _load_document(session, caller, document_id)
+    pdf, filename = await render_dynamic_copy(session, vault_sink, caller, doc, intent="print")
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="{filename}"'},
+    )
 
 
 # --- versions ---------------------------------------------------------------------------

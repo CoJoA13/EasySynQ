@@ -38,7 +38,15 @@ from .render import (
     set_render_sink,
 )
 from .render_gotenberg import GotenbergRenderSink
-from .service import break_lock, checkin, checkout, create_document, heartbeat, init_upload
+from .service import (
+    break_lock,
+    checkin,
+    checkout,
+    create_document,
+    heartbeat,
+    init_upload,
+    render_dynamic_copy,
+)
 from .signature import (
     CapturingSignatureEventSink,
     DbSignatureEventSink,
@@ -88,6 +96,7 @@ __all__ = [
     "obsolete",
     "release",
     "release_due",
+    "render_dynamic_copy",
     "request_changes",
     "set_mirror_enqueue_sink",
     "set_render_sink",
