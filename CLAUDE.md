@@ -223,15 +223,39 @@ Docker stack):**
   expired/no-secret rejected, rate-limit-lockout, org-profile authz+validation, finalize-gates→OPERATIONAL+latch-lifts,
   exemption-boundary, grant-role break-glass (integration). 131 unit + 84 integration.
 
-**Next slice: S8b — storage/WORM-verify (G-B) + backup/restore-drill (G-C / AC#5)** — the deferred hard gates: the
-WORM-verify probe (object-locked early-delete DENIED) + the net-new `backup`/`restore` CLI and the restore-into-scratch
-drill that finalize must require (AC#5 is a named MVP proof; "configured-but-unverified" doesn't satisfy G-C). Then
-**S8c** (auth-config G-D + the fuller wizard / router) and **S9** (clause/process IA + `clause_mapping`). The S8a gate
-registry + the latch are built to extend: S8b/S8c just append gates to `GATES` and add their wizard steps. S6/S7 seams
-still open: the `event_type` enum reserves the Keycloak auth-event values (SPI later), `/audit-events/export` stays
-unmounted, the clause/process IA mirror tree awaits `clause_mapping` (**S9**). Pre-existing hardening noted (not
-S8a-introduced): `area_code` is unconstrained `Text` at the create boundary (S8a's `short_code` IS now validated in
-`/setup/org-profile`, but the S3 create path isn't).
+- **S8b — Setup gate G-B (WORM-verify) + `storage_config`** ✅ — PR #18. An owner-approved **split** of S8b (the
+  backup/restore CLI + the AC#5 restore-into-scratch drill + gate G-C are **S8b2** — disjoint risk profiles). Lands
+  gate **G-B** (doc 08 §7): **`storage.worm_probe`** PUTs a tiny probe to the object-locked `documents` bucket →
+  confirms a future `retain-until` → attempts to delete **that version** with no bypass and expects a **denial** (the
+  honest §7.2 proof — deletes the *version*, not a delete marker; a non-versioned/non-locked bucket → no VersionId →
+  **not verified**, so no false-PASS). Short boto3 timeouts + a guarded `put` so a missing/unreachable bucket is a clean
+  422, not a 500/hang (review fix). **`POST /api/v1/setup/verify-storage`** (gate `storage.manage`, latch-exempt) → PASS
+  upserts `storage_config` (`worm_verified_at` + the `object_lock_mode` choice) + emits `WORM_VERIFIED` + commits
+  (serialized on the `system_config` singleton lock — a review fix for the same-org check-then-insert race); FAIL → 422
+  `worm_not_enforced` (signal stays null → no gate false-pass). **D-7:** the object-lock mode is **recorded** (default
+  GOVERNANCE); COMPLIANCE is not plumbed (a hardened v1.x opt-in). `Gate("G-B", _gate_worm_verified)` appended to the
+  registry — finalize now requires **G-A + G-E + G-B** (live re-check, zero finalize-code change). **`0013`**: `ALTER
+  TYPE event_type ADD VALUE 'WORM_VERIFIED'` (+ Python member) + a **minimal** `storage_config` (id PK, org_id unique,
+  `worm_verified_at`, `object_lock_mode`; no seed — null reads as G-B-unsatisfied; no brick risk — upgraded OPERATIONAL
+  installs never re-finalize; doc-14's backup/bucket/mirror columns land in S8b2). **Web:** a "Storage" `<Stepper>` step
+  (GOVERNANCE/COMPLIANCE mode + a Verify button) between Organization and Finalize. Adversarially reviewed (4 lenses →
+  verify) — the probe lens hunted the dangerous **false-PASS** direction and all three findings independently confirmed
+  there is none; folded the concurrency lock + the guarded-probe-put/timeout + a re-run/UPDATE-in-place test. Proofs:
+  probe verifies the locked bucket + correctly reports plain `staging` as non-WORM, verify-storage sets G-B +
+  `WORM_VERIFIED` audit + requires `storage.manage` (403 else), finalize-blocked-on-G-B-then-passes, re-run UPDATEs in
+  place. 131 unit + 89 integration.
+
+**Next slice: S8b2 — backup/restore CLI + the AC#5 restore-into-scratch drill (gate G-C)** — the big deferred sub-build:
+a net-new in-container `backup`/`restore` CLI (pg_dump → scratch schema + `boto3` copy blobs → a **non-WORM** scratch
+bucket + the AC#5 integrity triad: blob SHA-256 re-hash, row-count parity, FK checks) that **finalize must require**
+("configured-but-unverified" doesn't satisfy G-C); plus the `backup_policy` table, the off-host audit-sink soft-gate
+(G-soft, reuses the S6 checkpoint sink), the remaining `storage_config` columns, and 3 more `event_type` values
+(`BACKUP_CONFIGURED`/`RESTORE_TEST_PASSED`/`RESTORE_TEST_FAILED`). **Locked for S8b2:** all-blobs drill depth; the
+drill runs as a worker task (G-C reads the persisted `last_restore_test_result`, so finalize never runs it inline).
+WAL/PITR + the operator-grade WORM-aware restore CLI stay **v1.x/S11** (D-6). Then **S8c** (auth-config G-D + fuller
+wizard / router) and **S9** (clause/process IA + `clause_mapping`). The gate registry + latch extend by just appending
+gates. S6/S7 seams still open (Keycloak auth-event SPI, `/audit-events/export`, the clause/process IA mirror tree).
+Pre-existing hardening noted: `area_code` is unconstrained `Text` at the S3 create boundary.
 
 ## Building the MVP (dev workflow)
 
