@@ -87,6 +87,21 @@ async def test_probe_fails_on_network_error(monkeypatch: pytest.MonkeyPatch) -> 
     assert "not reachable" in detail
 
 
+async def test_probe_fails_on_non_dict_body(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A malformed IdP returning a JSON array/string (not an object) is a clean FAIL, never a 500
+    AttributeError (the 'never raises' contract)."""
+    _patch_client(monkeypatch, _FakeClient(resp=_FakeResp(200, ["not", "a", "dict"])))
+    ok, _ = await auth_check.probe_oidc_discovery(_ISSUER)
+    assert ok is False
+
+
+async def test_probe_fails_on_non_string_issuer(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A non-string ``issuer`` field must not raise on ``.rstrip`` — a clean FAIL."""
+    _patch_client(monkeypatch, _FakeClient(resp=_FakeResp(200, {"issuer": 123, "jwks_uri": "x"})))
+    ok, _ = await auth_check.probe_oidc_discovery(_ISSUER)
+    assert ok is False
+
+
 async def test_probe_fails_on_empty_issuer() -> None:
     ok, _ = await auth_check.probe_oidc_discovery("")
     assert ok is False

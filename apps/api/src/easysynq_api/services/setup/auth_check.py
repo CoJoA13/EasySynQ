@@ -39,8 +39,14 @@ async def probe_oidc_discovery(issuer: str) -> tuple[bool, str]:
     except (httpx.HTTPError, ValueError) as exc:
         return False, f"OIDC issuer not reachable: {type(exc).__name__}"[:200]
 
-    if doc.get("issuer", "").rstrip("/") != issuer:
+    # Type-guard the parsed doc — a malformed IdP can return a non-dict body or non-string fields;
+    # never let that escape as a 500 (the "never raises" contract → a clean (False, detail) → 422).
+    if not isinstance(doc, dict):
+        return False, "discovery document is not a JSON object"
+    doc_issuer = doc.get("issuer")
+    if not isinstance(doc_issuer, str) or doc_issuer.rstrip("/") != issuer:
         return False, "discovery 'issuer' does not match the configured issuer"
-    if not doc.get("jwks_uri"):
+    jwks_uri = doc.get("jwks_uri")
+    if not isinstance(jwks_uri, str) or not jwks_uri:
         return False, "discovery document advertises no jwks_uri"
     return True, "OIDC issuer reachable and well-formed"
