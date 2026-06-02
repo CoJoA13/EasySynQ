@@ -14,7 +14,7 @@ changes, manage documented evidence/records, and keep an organization audit-read
 UI/UX flows the way ISO 9001 flows (clause spine / process map / PDCA) and must stay calm, modern,
 and progressively disclosed — never overwhelming.
 
-## Current status (as of 2026-06-01)
+## Current status (as of 2026-06-02)
 
 **Spec complete + MVP build underway** (foundation-first, against the approved plan). The design is locked;
 we are now writing code.
@@ -203,14 +203,20 @@ an `ALTER TYPE event_type ADD VALUE`). Then **S8 — setup wizard** (per docs/18
   before `api`/`worker`/`beat` start as the app role). `minio-init.sh` provisions the `audit-checkpoints` bucket +
   the scoped `audit-sink` user. The `worker`/`beat` containers now run real tasks (the S6 chain-linker/verify/
   checkpoint/roll-partitions Beat jobs + the **S7 mirror reconcile**).
-- **S7 mirror (R11 mount contract):** the `worker` writes the read-only mirror to the `mirror` volume **rw**; `api`
-  mounts it **`:ro`** — that is the whole contract for the single-host MVP (Caddy must NOT `file_server` it; the
-  user-facing content route stays the presigned-MinIO download). On a network share, validate `root_squash`/UID
-  mapping so a client cannot write back (runbook caveat). The mirror is **regenerable, never backup-critical**. It is
-  rebuilt on every release/obsolete (post-commit) + a nightly Beat reconcile; force one with `docker compose … exec
-  worker python -m easysynq_api.cli.mirror sync`. Browse it at `${MIRROR_PATH}/current/` (an Effective-only flat tree
-  of source bytes — watermarked PDFs arrive with S7b). No new `.env` keys (`MIRROR_PATH`/`GOTENBERG_URL` already in
-  `.env.example`).
+- **S7/S7b/S7c mirror + rendering + verify (operator):** the `worker` writes the read-only mirror to the `mirror`
+  volume **rw**; `api` mounts it **`:ro`** — the whole R11 contract for the single-host MVP (Caddy must NOT
+  `file_server` it; the user-facing content route stays the presigned-MinIO download / `GET /documents/{id}/download`).
+  On a network share, validate `root_squash`/UID mapping (runbook caveat). The mirror is **regenerable, never
+  backup-critical**, rebuilt on every release/obsolete (post-commit) + a nightly Beat reconcile. Browse it at
+  `${MIRROR_PATH}/current/` — now **watermarked controlled-copy PDFs** (S7b: gotenberg `renderer` is live; office→PDF +
+  the §11.3 band + a verify QR) with each footer carrying a signed verify token. **S7c `.env` additions (already in
+  `.env.example`):** `VERIFY_TOKEN_SIGNING_KEY_PATH=/run/secrets/verify_token_key` + `PUBLIC_BASE_URL=http://localhost`;
+  the verify key is **shared api↔worker via the `secrets` volume** (worker mints, api verifies). The public verify page
+  is `GET /api/v1/verify?t=…` → CURRENT/SUPERSEDED/UNKNOWN. **After upgrading an existing stack** (so S7b/S7c renditions
+  carry the new template/QR), force a full re-render: `docker compose … exec worker python -m easysynq_api.cli.mirror
+  rebuild` (clears `rendition_blob_sha256` + re-renders; plain `sync` keeps the cache). The `worker`/`beat` now run the
+  S6 audit jobs + the S7 mirror reconcile, and the `renderer` (gotenberg:8.33) must be up for real rendering (a
+  renderer outage degrades to `render_status:"pending"` and self-heals on the next reconcile).
 - **Dev login:** `demo` / `Demo-Password-1` (created at runtime in Keycloak, **not committed**; realm policy
   requires ≥12-char passwords). After a Keycloak container reset, recreate with `kcadm.sh` (`create users -r
   easysynq -s username=demo -s enabled=true` then `set-password`).
