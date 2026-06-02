@@ -16,7 +16,7 @@ import dataclasses
 import datetime
 import logging
 import uuid
-from typing import Protocol
+from typing import Any, Protocol
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -43,6 +43,10 @@ class VaultAuditEvent:
     identifier: str | None = None
     reason: str | None = None
     request_id: str | None = None
+    # Optional structured context (S7d: the export/print intent + copy disposition). Rides in the
+    # already-hashed ``after`` JSONB (canonical v1 §4.3) — NOT a new column, so the frozen
+    # serializer and golden vector are untouched.
+    after: dict[str, Any] | None = None
 
 
 def _maybe_uuid(value: str | None) -> uuid.UUID | None:
@@ -68,6 +72,7 @@ def to_audit_event(event: VaultAuditEvent) -> AuditEvent:
         scope_ref=event.identifier,  # the controlled identifier is the row's scope context
         reason=event.reason,
         request_id=_maybe_uuid(event.request_id),
+        after=event.after,
     )
 
 

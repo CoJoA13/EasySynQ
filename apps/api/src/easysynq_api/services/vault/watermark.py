@@ -11,6 +11,14 @@ License-safe + deterministic: reportlab (BSD) draws the overlay in **invariant**
 timestamp / fixed doc id); pypdf (BSD-3) merges it onto each page and the output id is pinned to a
 hash of the inputs — so an identical (source, request) yields **byte-identical** output, making the
 rendition genuinely content-addressable. NO PyMuPDF/AGPL.
+
+``stamp_per_request_copy`` (slice S7d, doc 04 §11.2 export/print rows) is the **per-request**
+sibling: it overlays only a prominent top banner + a single footer note (e.g. "UNCONTROLLED WHEN
+PRINTED — valid as of {date}" + "Exported {ts} by {user}") onto the **already-banded** cached
+controlled-copy PDF — it draws no second band and no second QR (the cached base already carries
+them). Its output embeds a per-request timestamp + username, so it is **inherently
+non-deterministic across requests** and MUST NOT be content-addressed / cached (it never enters
+``rendition_blob_sha256``). It is deterministic only for fixed (base, banner, footer_note).
 """
 
 from __future__ import annotations
@@ -124,6 +132,69 @@ def stamp_controlled_copy(base_pdf: bytes, request: RenderRequest) -> bytes:
         + request.version_id.bytes
         + request.copy_status.encode()
         + (request.verify_url or "").encode()
+    ).digest()[:16]
+    writer._ID = ArrayObject([ByteStringObject(digest), ByteStringObject(digest)])
+
+    out = io.BytesIO()
+    writer.write(out)
+    return out.getvalue()
+
+
+_BANNER_FONT = "Helvetica-Bold"
+_BANNER_COLOR = colors.HexColor("#B00020")  # attention red — the per-request copy-status warning
+
+
+def _draw_dynamic_overlay(width: float, height: float, banner: str, footer_note: str) -> bytes:
+    """One overlay page carrying ONLY the per-request additions (S7d): a prominent top banner + a
+    single footer note, sized to (width, height). Drawn on top of the already-banded base, so it
+    deliberately adds nothing else (no header/diagonal/QR — the cached base owns those)."""
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=(width, height), invariant=1)
+
+    # Top banner: a faint white backing strip (so it stays legible over content) + bold red text,
+    # centred just below where the base band's header sits. Drawn on every page.
+    band_y = height - _MARGIN - 16
+    c.setFillColor(colors.white)
+    c.setFillAlpha(0.65)
+    c.rect(_MARGIN, band_y - 4, width - 2 * _MARGIN, 16, stroke=0, fill=1)
+    c.setFillAlpha(1.0)
+    c.setFillColor(_BANNER_COLOR)
+    c.setFont(_BANNER_FONT, 10)
+    c.drawCentredString(width / 2.0, band_y, banner[:120])
+
+    # Footer note: one line just above the base band's 3-line footer (which sits at _MARGIN..+16),
+    # left-aligned so it clears the bottom-right verify QR.
+    c.setFillColor(colors.HexColor("#444444"))
+    c.setFont(_FOOTER_FONT, 7)
+    c.drawString(_MARGIN, _MARGIN + 26, footer_note[:110])
+
+    c.showPage()
+    c.save()
+    return buf.getvalue()
+
+
+def stamp_per_request_copy(base_pdf: bytes, *, banner: str, footer_note: str) -> bytes:
+    """Overlay the per-request ``banner`` + ``footer_note`` onto every page of an already-banded
+    ``base_pdf`` (the cached controlled-copy rendition). Non-cached by design — the caller passes a
+    timestamp/user in the text, so the bytes vary per request. Deterministic for fixed inputs (the
+    output id is pinned to a hash of base + banner + footer_note), which the unit tests rely on."""
+    reader = PdfReader(io.BytesIO(base_pdf))
+    total = len(reader.pages)
+    writer = PdfWriter()
+
+    for index in range(total):
+        page = reader.pages[index]
+        box = page.mediabox
+        overlay = PdfReader(
+            io.BytesIO(
+                _draw_dynamic_overlay(float(box.width), float(box.height), banner, footer_note)
+            )
+        )
+        writer.add_page(page)
+        writer.pages[index].merge_page(overlay.pages[0], over=True)
+
+    digest = hashlib.sha256(
+        base_pdf + b"\x00" + banner.encode() + b"\x00" + footer_note.encode()
     ).digest()[:16]
     writer._ID = ArrayObject([ByteStringObject(digest), ByteStringObject(digest)])
 

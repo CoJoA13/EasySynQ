@@ -688,6 +688,60 @@ paths:
         "403": { $ref: "#/components/responses/ProblemResponse" }
         "404": { $ref: "#/components/responses/ProblemResponse" }
 
+  /documents/{document_id}/export:
+    get:
+      tags: [documents]
+      operationId: exportDocument
+      summary: A fresh per-request UNCONTROLLED-when-printed export of the Effective version. Needs document.export.
+      description: >-
+        Streams a fresh, per-request PDF of the Effective version stamped "UNCONTROLLED WHEN PRINTED —
+        valid as of {date}" + "Exported {ts} by {user}" (doc 04 §11.2), as an application/pdf
+        attachment. Distinct from /download (the cached, deterministic CONTROLLED COPY presign): this
+        rendition carries a timestamp + actor, is never cached, and is audited as an EXPORTED event.
+        Returns 409 no_controlled_rendition when no controlled PDF exists yet (still rendering, or a
+        non-renderable R26 format — fetch the source via /download instead).
+      parameters:
+        - { name: document_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: The stamped export PDF (download attachment).
+          content:
+            application/pdf:
+              schema: { type: string, format: binary }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409":
+          description: No controlled PDF rendition is available yet (no_controlled_rendition).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  /documents/{document_id}/print:
+    get:
+      tags: [documents]
+      operationId: printDocument
+      summary: A fresh per-request CONTROLLED-COPY print rendition of the Effective version. Needs document.print_controlled.
+      description: >-
+        Streams a fresh, per-request PDF of the Effective version stamped "CONTROLLED COPY — valid on
+        {date} only" + "Printed {ts} by {user}" (doc 04 §11.2), inline for the browser print dialog.
+        Audited as a PRINTED event. Returns 409 no_controlled_rendition when no controlled PDF exists
+        yet (still rendering, or a non-renderable R26 format).
+      parameters:
+        - { name: document_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: The stamped controlled-copy PDF (inline).
+          content:
+            application/pdf:
+              schema: { type: string, format: binary }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409":
+          description: No controlled PDF rendition is available yet (no_controlled_rendition).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
   /documents/{document_id}/versions:
     get:
       tags: [documents]
