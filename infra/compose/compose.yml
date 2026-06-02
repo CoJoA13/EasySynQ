@@ -114,6 +114,11 @@ services:
       interval: 10s
       timeout: 3s
       retries: 12
+    volumes:
+      # R11 mount contract (doc 18 §3 / doc 04 §10.6): users/api see the mirror READ-ONLY; only the
+      # worker UID writes it (worker mounts it rw below). The user-facing content route stays the
+      # presigned-MinIO download — Caddy must NOT file_server this (it would bypass the PEP).
+      - mirror:/var/lib/easysynq/qms-mirror:ro
     networks: [internal]
 
   worker:

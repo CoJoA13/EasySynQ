@@ -39,6 +39,7 @@ from ...logging import request_id_var
 from ...problems import ProblemException
 from . import locks, repository
 from .audit import VaultAuditEvent, VaultAuditSink, get_vault_audit_sink
+from .mirror_sink import get_mirror_enqueue_sink
 from .signature import SignatureEvent, SignatureEventSink, get_vault_signature_sink
 
 logger = logging.getLogger("easysynq.vault")
@@ -383,6 +384,9 @@ async def obsolete(
     )
     await session.commit()
     await session.refresh(doc)
+    # S7: T11 pulled the Effective version from the mirror — rebuild post-commit. (The T12 path
+    # above obsoletes an already-Superseded version, never in the mirror, so it does not enqueue.)
+    get_mirror_enqueue_sink().enqueue("obsolete")
     return doc
 
 
@@ -517,7 +521,7 @@ async def release(
         # Raise isolation before any statement opens the transaction.
         await session.connection(execution_options={"isolation_level": "SERIALIZABLE"})
         try:
-            return await _cutover(session, sink, sig_sink, doc_id, version_id, actor, now)
+            doc = await _cutover(session, sink, sig_sink, doc_id, version_id, actor, now)
         except DBAPIError as exc:
             await session.rollback()
             if _is_race_loss(exc):
@@ -528,6 +532,10 @@ async def release(
                     detail="another release set the Effective version concurrently; reload + retry",
                 ) from exc
             raise
+    # S7: enqueue the mirror rewrite AFTER the cutover commits — never inside the SERIALIZABLE txn,
+    # so a concurrent-release loser (rolled back above) does not enqueue (doc 15 §8.5).
+    get_mirror_enqueue_sink().enqueue("release")
+    return doc
 
 
 async def release_due(now: datetime.datetime | None = None) -> list[uuid.UUID]:
@@ -568,6 +576,9 @@ async def release_due(now: datetime.datetime | None = None) -> list[uuid.UUID]:
                     # The document moved past Approved between the scan and the cutover (a
                     # concurrent release won, or it was handled manually) — skip it.
                     await session.rollback()
+        # S7: one idempotent full-rebuild enqueue covers every version this sweep activated.
+        if released:
+            get_mirror_enqueue_sink().enqueue("release_due")
     finally:
         await engine.dispose()
     return released

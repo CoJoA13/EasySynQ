@@ -19,6 +19,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 # connection-scoped, so they persist across the commits the linker makes within a single run.
 LOCK_CHAIN_LINK = 7710001
 LOCK_ROLL_PARTITIONS = 7710002
+# S7: serialize mirror rebuilds so two overlapping syncs cannot race on the temp-tree → swap.
+LOCK_MIRROR_SYNC = 7710003
 
 
 @asynccontextmanager

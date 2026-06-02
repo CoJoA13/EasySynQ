@@ -132,3 +132,17 @@ async def finalize_worm(sha256: str) -> ObjectHead:
     head — existence + size + the now-applied retain-until. The blob is WORM-locked here, before
     the version row is committed."""
     return await asyncio.to_thread(_finalize_sync, sha256)
+
+
+def _fetch_bytes_sync(object_key: str, bucket: str) -> bytes:
+    client = _client()
+    body: bytes = client.get_object(Bucket=bucket, Key=object_key)["Body"].read()
+    return body
+
+
+async def fetch_bytes(object_key: str, *, bucket: str | None = None) -> bytes:
+    """Read a blob's bytes server-side (the **worker** path: the mirror writer pulls Effective
+    blobs to disk). Unlike the api tier — which only ever presigns so bytes flow client↔MinIO (D1)
+    — the worker reads object bytes directly. Runs the sync boto3 ``get_object`` off the event loop.
+    Reads are unaffected by WORM object-lock (it blocks writes/deletes, not GETs)."""
+    return await asyncio.to_thread(_fetch_bytes_sync, object_key, bucket or _doc_bucket())
