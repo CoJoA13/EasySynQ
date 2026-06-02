@@ -68,6 +68,12 @@ class EventType(enum.Enum):
     BACKUP_CONFIGURED = "BACKUP_CONFIGURED"
     RESTORE_TEST_PASSED = "RESTORE_TEST_PASSED"
     RESTORE_TEST_FAILED = "RESTORE_TEST_FAILED"
+    # auth-config + non-bootstrap-login-proof gate G-D (S8c, doc 08 §9) — added via ALTER TYPE …
+    # ADD VALUE in 0015. AUTH_CONFIGURED records the chosen method; AUTH_TEST_LOGIN_OK is the proof
+    # the G-D gate reads (only an OK satisfies it); AUTH_TEST_LOGIN_FAILED trails a failed probe.
+    AUTH_CONFIGURED = "AUTH_CONFIGURED"
+    AUTH_TEST_LOGIN_OK = "AUTH_TEST_LOGIN_OK"
+    AUTH_TEST_LOGIN_FAILED = "AUTH_TEST_LOGIN_FAILED"
     # authorization (S2/S5) — denied-access attempts (always) + allows (configurable verbosity,
     # doc 12 §4.1 — off by default) + the permission/role/override changes
     ACCESS_DENIED = "ACCESS_DENIED"

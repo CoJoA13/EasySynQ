@@ -21,6 +21,7 @@ from ..db.session import get_session
 from ..services.authz import require
 from ..services.setup import (
     bootstrap_admin,
+    configure_auth,
     configure_backup,
     finalize_setup,
     get_setup_detail,
@@ -64,6 +65,11 @@ class ConfigureBackupRequest(BaseModel):
     encryption_key_ref: str | None = None
     alert_sink: str | None = None
     wal_pitr_enabled: bool = False
+
+
+class ConfigureAuthRequest(BaseModel):
+    method: str = "LOCAL"  # LOCAL | FEDERATED (the app always authenticates via Keycloak/OIDC)
+    mfa_acknowledged: bool = False
 
 
 @router.get("/setup/state")
@@ -151,6 +157,20 @@ async def setup_run_restore_test_endpoint(
     """Enqueue the backup→restore-into-scratch drill (gate G-C / AC#5). Async (it may take minutes);
     poll ``GET /setup`` for the persisted result. Needs ``restore.run``; 409 if no backup yet."""
     return await trigger_restore_test(session, caller)
+
+
+@router.post("/setup/configure-auth")
+async def setup_configure_auth_endpoint(
+    body: ConfigureAuthRequest,
+    caller: AppUser = Depends(_config_update),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """Record the auth method + prove a non-bootstrap login (gate G-D, doc 08 §9). Needs
+    ``config.update``. The caller's valid non-bootstrap JWT + a live OIDC-issuer reachability probe
+    are the proof; an unreachable IdP → 422 ``auth_unavailable`` (G-D stays unsatisfied)."""
+    return await configure_auth(
+        session, caller, method=body.method, mfa_acknowledged=body.mfa_acknowledged
+    )
 
 
 @router.post("/setup/finalize")

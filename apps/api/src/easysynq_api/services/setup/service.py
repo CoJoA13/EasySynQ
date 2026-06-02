@@ -41,9 +41,11 @@ from ...problems import ProblemException
 from ..audit.checkpoint import tamper_evidence_attested
 from ..backup import configure_backup_destination_check
 from ..vault import storage
+from . import auth_check
 from .bootstrap import verify_secret
 
 _OBJECT_LOCK_MODES = frozenset({"GOVERNANCE", "COMPLIANCE"})
+_AUTH_METHODS = frozenset({"LOCAL", "FEDERATED"})
 
 logger = logging.getLogger("easysynq.setup")
 
@@ -184,15 +186,30 @@ async def _gate_restore_test_passed(session: AsyncSession, org_id: uuid.UUID) ->
     return result == "PASS"
 
 
-# Gates land incrementally. S8a: G-A (admin) + G-E (org); S8b: G-B (WORM); S8b2: G-C (restore).
-# S8c appends G-D (auth). finalize re-checks GATES live (doc 08 §14.2) — appending here is the only
-# change a gate needs. (The off-host audit-sink anchor is a SOFT gate — see ``get_setup_detail`` —
-# and is deliberately NOT in this list: it warns but never blocks finalize, R13 / doc 08 §8.3.)
+async def _gate_auth_configured(session: AsyncSession, org_id: uuid.UUID) -> bool:
+    """G-D (S8c): an auth method was configured and a non-bootstrap login proven (doc 08 §9). Keys
+    on the persisted ``auth_test_login_ok is True`` — NOT just ``auth_test_login_at`` non-null (a
+    FAILED probe stamps the timestamp too). Null/False reads as G-D-unsatisfied (no false-PASS)."""
+    ok = await session.scalar(
+        select(SystemConfig.auth_test_login_ok).where(SystemConfig.org_id == org_id)
+    )
+    return ok is True
+
+
+# Gates land incrementally. S8a: G-A (admin) + G-E (org); S8b: G-B (WORM); S8b2: G-C (restore);
+# S8c: G-D (auth). finalize re-checks GATES live (doc 08 §14.2) — appending here is the only change
+# a gate needs. (The off-host audit-sink anchor is a SOFT gate — see ``get_setup_detail`` — and is
+# deliberately NOT in this list: it warns but never blocks finalize, R13 / doc 08 §8.3.)
 GATES: list[Gate] = [
     Gate("G-A", "A System Administrator has been assigned", _gate_admin_exists),
     Gate("G-E", "The organization profile has been set", _gate_org_profile_set),
     Gate("G-B", "Vault object-lock (WORM) was verified", _gate_worm_verified),
     Gate("G-C", "A backup/restore drill has passed", _gate_restore_test_passed),
+    Gate(
+        "G-D",
+        "An auth method was configured and a non-bootstrap login proven",
+        _gate_auth_configured,
+    ),
 ]
 
 
@@ -248,6 +265,13 @@ async def get_setup_detail(session: AsyncSession, actor: AppUser) -> dict[str, A
                 else None
             ),
             "last_restore_test_result": policy.last_restore_test_result if policy else None,
+        },
+        "auth": {
+            "configured": cfg.auth_test_login_ok is True,
+            "method": cfg.auth_method,
+            "last_test_at": (
+                cfg.auth_test_login_at.isoformat() if cfg.auth_test_login_at else None
+            ),
         },
         # Soft gate (R13 / doc 08 §8.3): finalize is NEVER blocked on this, but an install with no
         # fresh off-host audit anchor is loudly flagged NOT tamper-evident until one is configured.
@@ -520,6 +544,80 @@ async def trigger_restore_test(session: AsyncSession, actor: AppUser) -> dict[st
 
     backup_restore_test.delay(str(actor.org_id), str(actor.id))
     return {"status": "enqueued"}
+
+
+async def configure_auth(
+    session: AsyncSession,
+    actor: AppUser,
+    *,
+    method: str,
+    mfa_acknowledged: bool = False,
+) -> dict[str, Any]:
+    """Record the primary auth method + prove a non-bootstrap login works (gate G-D, doc 08 §9).
+
+    The proof has two legs, both required: (1) the **caller's valid non-bootstrap JWT** — this
+    endpoint runs inside the PEP (``config.update`` + ``get_current_user``), whereas the bootstrap
+    path authorizes via the install *secret* outside the PEP, so reaching here at all proves a real
+    Keycloak login works; (2) a **live OIDC-issuer reachability probe** (the realm the app validates
+    tokens against is reachable + self-consistent) so a misconfigured/unreachable IdP can't strand
+    the org. A failed probe → 422 ``auth_unavailable`` + AUTH_TEST_LOGIN_FAILED (signal stays null →
+    no false-PASS). MFA is a logged acknowledgement only (enforcement is the reserved Part-11 seam,
+    D3); local break-glass login is never disabled here, so the org cannot be locked out."""
+    method = method.strip().upper()
+    if method not in _AUTH_METHODS:
+        raise ProblemException(
+            status=422, code="validation_error", title="method must be LOCAL or FEDERATED"
+        )
+
+    verified, detail = await auth_check.probe_oidc_discovery(get_settings().oidc_issuer)
+    if not verified:
+        cfg = await _load_config(session, actor.org_id, lock=True)
+        cfg.auth_test_login_at = _now()
+        cfg.auth_test_login_ok = False
+        _emit(
+            session,
+            event_type="AUTH_TEST_LOGIN_FAILED",
+            actor=actor,
+            object_type=AuditObjectType.config,
+            object_id=actor.org_id,
+            after={"method": method, "detail": detail},
+        )
+        await session.commit()
+        raise ProblemException(
+            status=422,
+            code="auth_unavailable",
+            title="The configured identity provider is not reachable/well-formed",
+            detail=detail,
+        )
+
+    # Serialize per-org setup mutations on the system_config singleton (matches verify_storage /
+    # configure_backup) so a concurrent same-org configure-auth can't race the read-then-write.
+    cfg = await _load_config(session, actor.org_id, lock=True)
+    cfg.auth_method = method
+    cfg.auth_test_login_ok = True
+    cfg.auth_test_login_at = _now()
+    _emit(
+        session,
+        event_type="AUTH_CONFIGURED",
+        actor=actor,
+        object_type=AuditObjectType.config,
+        object_id=actor.org_id,
+        after={
+            "method": method,
+            "mfa_acknowledged": mfa_acknowledged,
+            "break_glass_local_login": True,
+        },
+    )
+    _emit(
+        session,
+        event_type="AUTH_TEST_LOGIN_OK",
+        actor=actor,
+        object_type=AuditObjectType.config,
+        object_id=actor.org_id,
+        after={"method": method},
+    )
+    await session.commit()
+    return {"auth_test_login_ok": True, "method": method, "detail": detail}
 
 
 async def finalize_setup(session: AsyncSession, actor: AppUser) -> dict[str, Any]:
