@@ -165,12 +165,41 @@ Docker stack):**
   (unit); `/verify` CURRENT/SUPERSEDED/UNKNOWN + mirror-rendition-carries-QR + `rebuild --force`-re-renders
   (integration). Full suite 184 passed.
 
-**Next slice: S7d — in-app export/print stamp** (the deferred per-intent path: the download/export endpoint serves
-a fresh per-request rendition stamped "UNCONTROLLED IF PRINTED · valid as of {date}" + "Printed {ts} by {user}"
-instead of the cached CONTROLLED COPY, + `export_event`/`print_event` audit + the R26 click-through notice; likely
-an `ALTER TYPE event_type ADD VALUE`). Then **S8 — setup wizard** (per docs/18). S6/S7 seams still open: the
-`event_type` enum reserves the Keycloak auth-event values (SPI ships later), `/audit-events/export` keeps its
-`openapi.yaml` schema unmounted, and the clause/process IA mirror tree awaits `clause_mapping` in **S9**.
+- **S7d — In-app export/print stamp [AC closes the rendering epic]** ✅ — the per-request, non-cached export/print
+  rendition (doc 04 §11.2, R26). Two **authenticated** endpoints serve a FRESH stamped PDF of the Effective version,
+  distinct from `/download`'s cached controlled-copy presign: **`GET /documents/{id}/export`** ("UNCONTROLLED WHEN
+  PRINTED — valid as of {date}" + "Exported {ts} by {user}", attachment, gate `document.export` sod_sensitive,
+  `EXPORTED` audit) and **`GET /documents/{id}/print`** ("CONTROLLED COPY — valid on {date} only" + "Printed {ts} by
+  {user}", inline, gate `document.print_controlled`, `PRINTED` audit). **Owner-chosen design:** the api NEVER converts
+  via Gotenberg — `services/vault/render_dynamic_copy` reuses the worker's **already-cached** controlled-copy PDF as the
+  base and `watermark.stamp_per_request_copy` overlays ONLY a banner + footer note (reportlab/pypdf, no second band/QR),
+  run in `asyncio.to_thread`, then streams the bytes (the narrow "api reads+overlays+streams rendition bytes" softening
+  of D1, documented in the docstrings). The rendition carries a timestamp+user → **intentionally non-deterministic →
+  NEVER content-addressed/cached** (`rendition_blob_sha256` stays the cached controlled copy). **`0011`** is the repo's
+  **first additive-enum migration**: `ALTER TYPE event_type ADD VALUE 'EXPORTED'/'PRINTED'` (PG16 in-txn-safe — no row
+  uses the value; **irreversible → no-op `downgrade`**, safe under CI's round-trip because `0010` drops the type
+  wholesale) + the matching Python `EventType` members (mandatory — a fresh `upgrade head` rebuilds from
+  `EVENT_TYPE_VALUES`). `canonical_serialize` v1 **untouched** (new values hash as their string; golden vector passes);
+  the intent/copy disposition ride in the already-hashed `after` JSONB (added to `VaultAuditEvent`/`_emit`, **no new
+  hashed column**). 404 when no Effective version; **`409 no_controlled_rendition`** (pending or R26 — the version row
+  carries no render-status to distinguish them) carries a **user-facing "uncontrolled when printed" notice** + a
+  source-download pointer (the click-through UI is the SPA's job, deferred). The `Content-Disposition` filename is
+  reduced to a strict ASCII token (`_safe_pdf_filename`) — closes a header/parameter-injection vector (the identifier
+  embeds the request-supplied `area_code`). **Both keys already in the closed 96-key catalog (no catalog change);
+  `document.export` is granted to NO seeded role by design** (deliberate, sod_sensitive — grant via override/custom role
+  pre-S8; `document.print_controlled` is in the Employee bundle). Adversarially reviewed (5 lenses → per-finding verify):
+  folded filename sanitization, the event-loop offload, the R26 notice, and two negative tests. Proofs: watermark
+  banner/footer-every-page + dual-marking + determinism + per-request variance, `EventType` resolution + `after`-mapping
+  + filename sanitizer (unit); export/print stamp+audit (headline), 403-without-export, 403-without-print_controlled,
+  404-no-effective, 409-no-rendition+notice (integration, PDF-passthrough + mirror sync — no Gotenberg). 126 unit + 73
+  integration passed.
+
+**Next slice: S8 — setup wizard** (per docs/18 — the first-run onboarding that grants the first admin, today only
+bootstrapped via the `easysynq grant-role` CLI; likely the first substantial web/UI work). The mirror/rendering epic
+(S7–S7d) is now complete. S6/S7 seams still open: the `event_type` enum reserves the Keycloak auth-event values (SPI
+ships later), `/audit-events/export` keeps its `openapi.yaml` schema unmounted, and the clause/process IA mirror tree
+awaits `clause_mapping` in **S9**. Pre-existing hardening noted during S7d review (not S7d-introduced): `area_code` is
+unconstrained `Text` at the create boundary — a Pydantic `pattern` there would tidy the identifier across all surfaces.
 
 ## Building the MVP (dev workflow)
 
@@ -203,9 +232,12 @@ an `ALTER TYPE event_type ADD VALUE`). Then **S8 — setup wizard** (per docs/18
   before `api`/`worker`/`beat` start as the app role). `minio-init.sh` provisions the `audit-checkpoints` bucket +
   the scoped `audit-sink` user. The `worker`/`beat` containers now run real tasks (the S6 chain-linker/verify/
   checkpoint/roll-partitions Beat jobs + the **S7 mirror reconcile**).
-- **S7/S7b/S7c mirror + rendering + verify (operator):** the `worker` writes the read-only mirror to the `mirror`
-  volume **rw**; `api` mounts it **`:ro`** — the whole R11 contract for the single-host MVP (Caddy must NOT
-  `file_server` it; the user-facing content route stays the presigned-MinIO download / `GET /documents/{id}/download`).
+- **S7/S7b/S7c/S7d mirror + rendering + verify + export/print (operator):** the `worker` writes the read-only mirror to
+  the `mirror` volume **rw**; `api` mounts it **`:ro`** — the whole R11 contract for the single-host MVP (Caddy must NOT
+  `file_server` it; the in-app view route stays the presigned-MinIO `GET /documents/{id}/download`, while **S7d**'s
+  `GET /documents/{id}/export` (gate `document.export`) + `GET /documents/{id}/print` (gate `document.print_controlled`)
+  **stream** a fresh per-request stamped PDF from the api — `document.export` is granted to no seeded role, so grant it
+  via override/custom role until S8's role UI).
   On a network share, validate `root_squash`/UID mapping (runbook caveat). The mirror is **regenerable, never
   backup-critical**, rebuilt on every release/obsolete (post-commit) + a nightly Beat reconcile. Browse it at
   `${MIRROR_PATH}/current/` — now **watermarked controlled-copy PDFs** (S7b: gotenberg `renderer` is live; office→PDF +
