@@ -1,34 +1,67 @@
-"""The rendition seam (slice S7) — turns a version's source bytes into a controlled, watermarked
-PDF rendition.
+"""The rendition seam (slices S7 + S7b) — turns a version's source bytes into a controlled,
+watermarked PDF rendition.
 
-S7 wires the seam; **S7b makes it real.** The default sink is the no-op :class:`LoggingRenderSink`:
-it returns ``None``, so the mirror writes the version's **source bytes** and marks the document
-``render_status="pending"`` (an honest "not yet rendered" marker — NOT R26's
-``no_controlled_rendition``, which is reserved for formats Gotenberg/LibreOffice genuinely cannot
-render). When S7b lands, :class:`LoggingRenderSink` is swapped for a Gotenberg-backed sink that
-returns the watermarked PDF (the §11.3 header/footer band — Rev + EffectiveDate + copy_status,
-non-removable; Obsolete/Superseded stamps non-suppressible) and the mirror writes that instead.
+S7 wired the seam as a no-op; **S7b makes it real** (:class:`GotenbergRenderSink` in
+``render_gotenberg.py``, installed as the worker's default). ``render`` is **async** and returns a
+three-way :class:`RenderResult` so the caller (the mirror's ``build_tree``) can tell apart:
 
-This mirrors how S4 wired ``SignatureEventSink`` as a logging no-op before S5 made it real.
+* ``RENDERED`` — a watermarked PDF (``pdf`` set); the mirror writes the ``.pdf`` + ``"rendered"``.
+* ``PENDING`` — not rendered yet / transient renderer outage; the mirror writes **source bytes** +
+  ``render_status="pending"`` and self-heals on the next rebuild.
+* ``NON_RENDERABLE`` — a format Gotenberg/LibreOffice genuinely cannot render (R26, doc 04 §11.4);
+  the mirror writes **source bytes** + ``"unrenderable"`` + ``no_controlled_rendition=true``.
+
+The two-way ``bytes | None`` of S7 collapsed PENDING and NON_RENDERABLE into one ``None``; the S7
+review flagged that R26's flag must be DISTINCT from "pending" — this three-way result is that fix.
+The default sink stays the no-op :class:`LoggingRenderSink` (PENDING) so the api/tests never render;
+the worker's Beat task + the ``easysynq mirror`` CLI construct :class:`GotenbergRenderSink`
+explicitly and pass it to ``sync_mirror`` (the api just presigns the cached rendition).
 """
 
 from __future__ import annotations
 
 import dataclasses
 import datetime
+import enum
 import logging
+import uuid
 from typing import Protocol
 
 logger = logging.getLogger("easysynq.vault")
 
 
+class RenderStatus(enum.Enum):
+    RENDERED = "rendered"
+    PENDING = "pending"
+    NON_RENDERABLE = "unrenderable"
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class RenderResult:
+    """The outcome of a render attempt. ``pdf`` is set only when ``status is RENDERED``."""
+
+    status: RenderStatus
+    pdf: bytes | None = None
+
+    @classmethod
+    def rendered(cls, pdf: bytes) -> RenderResult:
+        return cls(RenderStatus.RENDERED, pdf)
+
+    @classmethod
+    def pending(cls) -> RenderResult:
+        return cls(RenderStatus.PENDING, None)
+
+    @classmethod
+    def non_renderable(cls) -> RenderResult:
+        return cls(RenderStatus.NON_RENDERABLE, None)
+
+
 @dataclasses.dataclass(frozen=True, slots=True)
 class RenderRequest:
-    """Everything a renderer needs to stamp the §11.3 controlled-copy band onto a source blob.
-
-    The no-op default ignores all of it; the fields are present so the S7b renderer needs no new
-    seam — the band's mandatory, non-removable payload (``revision_label`` + ``effective_from`` +
-    ``copy_status``) is already threaded here (doc 04 §11.3)."""
+    """Everything the renderer needs to convert + stamp the §11.3 controlled-copy band. The band's
+    mandatory, non-removable payload (``revision_label`` + ``effective_from`` + ``copy_status``) is
+    threaded here (doc 04 §11.3); ``version_id`` keys the overlay's deterministic document id. The
+    sink is PURE (convert + overlay) — ``build_tree`` owns caching/persistence."""
 
     identifier: str
     title: str
@@ -37,24 +70,21 @@ class RenderRequest:
     classification: str
     # "CONTROLLED COPY" | "SUPERSEDED" | "OBSOLETE" — non-suppressible (doc 04 §11.2)
     copy_status: str
+    owner: str
     mime_type: str
     source_filename: str
+    version_id: uuid.UUID
 
 
 class RenderSink(Protocol):
-    # S7b note: this two-way return (bytes = rendered PDF | None = not rendered) collapses
-    # "render pending/failed" and "genuinely non-renderable" into one None. When the Gotenberg sink
-    # lands, WIDEN this to a three-way result so a non-renderable format (CAD/proprietary/large
-    # media) surfaces as R26 ``no_controlled_rendition`` — NOT as ``render_status="pending"`` (which
-    # would falsely imply a watermarked PDF is still coming). doc 04 §11.4 / R26.
-    def render(self, request: RenderRequest, source_bytes: bytes) -> bytes | None: ...
+    async def render(self, request: RenderRequest, source_bytes: bytes) -> RenderResult: ...
 
 
 class LoggingRenderSink:
-    """Default S7 sink — renders nothing. Returns ``None`` so the mirror falls back to source bytes
-    + ``render_status="pending"``. Replaced by the Gotenberg-backed sink in S7b."""
+    """Default sink — renders nothing, returns ``PENDING`` so the mirror falls back to source bytes.
+    The api keeps this default (it never renders); the worker/CLI pass the Gotenberg sink (S7b)."""
 
-    def render(self, request: RenderRequest, source_bytes: bytes) -> None:
+    async def render(self, request: RenderRequest, source_bytes: bytes) -> RenderResult:
         logger.info(
             "vault.render.deferred",
             extra={
@@ -62,16 +92,27 @@ class LoggingRenderSink:
                     "identifier": request.identifier,
                     "revision_label": request.revision_label,
                     "mime_type": request.mime_type,
-                    "reason": "renderer deferred to S7b",
+                    "reason": "no render sink installed",
                 }
             },
         )
-        return None
+        return RenderResult.pending()
 
 
 _default_render_sink: RenderSink = LoggingRenderSink()
 
 
 def get_render_sink() -> RenderSink:
-    """The active render sink — overridden in tests / replaced by the Gotenberg sink in S7b."""
+    """The active render sink — the no-op default unless overridden. The render-bearing entrypoints
+    (Beat task, CLI) pass :class:`GotenbergRenderSink` to ``sync_mirror`` explicitly rather than
+    relying on this default, so the api stays a pure non-renderer."""
     return _default_render_sink
+
+
+def set_render_sink(sink: RenderSink) -> RenderSink:
+    """Swap the process-wide render sink (a test seam — tests inject a stub). Returns the previous
+    sink so the caller can restore it."""
+    global _default_render_sink
+    previous = _default_render_sink
+    _default_render_sink = sink
+    return previous

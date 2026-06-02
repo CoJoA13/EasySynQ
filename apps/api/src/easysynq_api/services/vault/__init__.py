@@ -28,7 +28,16 @@ from .mirror_sink import (
     get_mirror_enqueue_sink,
     set_mirror_enqueue_sink,
 )
-from .render import LoggingRenderSink, RenderRequest, RenderSink, get_render_sink
+from .render import (
+    LoggingRenderSink,
+    RenderRequest,
+    RenderResult,
+    RenderSink,
+    RenderStatus,
+    get_render_sink,
+    set_render_sink,
+)
+from .render_gotenberg import GotenbergRenderSink
 from .service import break_lock, checkin, checkout, create_document, heartbeat, init_upload
 from .signature import (
     CapturingSignatureEventSink,
@@ -38,6 +47,7 @@ from .signature import (
     SignatureEventSink,
     get_vault_signature_sink,
 )
+from .watermark import stamp_controlled_copy
 
 __all__ = [
     "CapturingMirrorEnqueueSink",
@@ -45,6 +55,7 @@ __all__ = [
     "CapturingVaultAuditSink",
     "CeleryMirrorEnqueueSink",
     "DbSignatureEventSink",
+    "GotenbergRenderSink",
     "LoggingMirrorEnqueueSink",
     "LoggingRenderSink",
     "LoggingSignatureEventSink",
@@ -52,7 +63,9 @@ __all__ = [
     "MirrorEnqueueSink",
     "MirrorSyncResult",
     "RenderRequest",
+    "RenderResult",
     "RenderSink",
+    "RenderStatus",
     "SignatureEvent",
     "SignatureEventSink",
     "TransitionResult",
@@ -77,6 +90,8 @@ __all__ = [
     "release_due",
     "request_changes",
     "set_mirror_enqueue_sink",
+    "set_render_sink",
+    "stamp_controlled_copy",
     "start_revision",
     "submit_review",
     "sync_mirror",

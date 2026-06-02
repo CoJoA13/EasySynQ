@@ -79,8 +79,12 @@ services:
       - ./keycloak:/opt/keycloak/data/import:ro
     networks: [internal]
 
+  # S7b: office→PDF for the watermarked controlled-copy renditions. Pinned (consistent with the
+  # other pinned images). No healthcheck — the gotenberg image bundles no http client (see header)
+  # and rendering is resilient anyway: a renderer outage yields render_status=pending and the next
+  # mirror reconcile re-renders (a renderer probe in /readyz is a v1 add).
   renderer:
-    image: gotenberg/gotenberg:8
+    image: gotenberg/gotenberg:8.33
     command: ["gotenberg", "--api-port=3000"]
     networks: [internal]
 
@@ -130,6 +134,8 @@ services:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
+      renderer:
+        condition: service_started   # S7b: the worker renders via gotenberg (resilient if it lags)
     volumes:
       - mirror:/var/lib/easysynq/qms-mirror   # worker writes the read-only mirror (R11)
     networks: [internal]

@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from ..config import get_settings
 from ..services.common.pg_locks import LOCK_MIRROR_SYNC, pg_advisory_lock
 from ..services.vault.mirror import sync_mirror
+from ..services.vault.render_gotenberg import GotenbergRenderSink
 from .app import app
 
 logger = logging.getLogger("easysynq.mirror.tasks")
@@ -35,7 +36,8 @@ async def _run_mirror_sync() -> int:
             if not held:
                 logger.info("mirror.sync: another sync holds the lock; skipping this tick")
                 return 0
-            result = await sync_mirror(session=session)
+            # The worker renders for real (S7b); the api never renders (it presigns the cache).
+            result = await sync_mirror(session=session, render_sink=GotenbergRenderSink())
             logger.info(
                 "mirror.sync.done",
                 extra={

@@ -643,6 +643,26 @@ paths:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
 
+  /documents/{document_id}/download:
+    get:
+      tags: [documents]
+      operationId: downloadDocument
+      summary: A presigned GET URL for the Effective version's controlled-copy PDF. Needs document.read.
+      description: >-
+        Presigns the Effective version's cached watermarked CONTROLLED COPY rendition
+        (rendition=controlled_copy). If the rendition is still being generated or the source format is
+        non-renderable (R26), presigns the source bytes instead (rendition=source). Never proxied.
+      parameters:
+        - { name: document_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: A short-lived presigned download URL for the controlled copy (or the source).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DocumentDownload" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+
   /documents/{document_id}/versions:
     get:
       tags: [documents]
@@ -1319,6 +1339,19 @@ components:
       properties:
         download_url: { type: string, description: "Short-lived presigned GET URL (MinIO, not the api)." }
         content_type: { type: string }
+        sha256: { type: string }
+
+    DocumentDownload:
+      type: object
+      additionalProperties: false
+      required: [download_url, rendition]
+      properties:
+        download_url: { type: string, description: "Short-lived presigned GET URL (MinIO, not the api)." }
+        content_type: { type: string }
+        rendition:
+          type: string
+          enum: [controlled_copy, source]
+          description: "controlled_copy = the watermarked PDF rendition; source = no controlled rendition yet (rendering or R26)."
         sha256: { type: string }
 
     Task:

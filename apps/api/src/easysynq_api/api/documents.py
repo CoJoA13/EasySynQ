@@ -523,6 +523,48 @@ async def obsolete_endpoint(
     )
 
 
+@router.get("/documents/{document_id}/download")
+async def download_document_endpoint(
+    document_id: uuid.UUID,
+    caller: AppUser = Depends(_read),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """The Effective version's controlled-copy PDF (doc 15 §8.5). Presigns the cached watermarked
+    rendition (``rendition:"controlled_copy"``) when it exists; otherwise the source blob
+    (``rendition:"source"`` — the controlled PDF is still rendering or the format is non-renderable,
+    R26). Distinct from ``/versions/{vid}/download`` (a specific version's source)."""
+    doc = await _load_document(session, caller, document_id)
+    if doc.current_effective_version_id is None:
+        raise ProblemException(
+            status=404, code="not_found", title="No effective version to download"
+        )
+    version = await session.get(DocumentVersion, doc.current_effective_version_id)
+    if version is None:  # pragma: no cover - defensive (the FK is set at the cutover)
+        raise ProblemException(status=404, code="not_found", title="Effective version not found")
+
+    if version.rendition_blob_sha256 is not None:
+        rendition = await vault_repo.get_blob(session, version.rendition_blob_sha256)
+        if rendition is not None:
+            url = await storage.presign_get(rendition.object_key, bucket=rendition.bucket)
+            return {
+                "download_url": url,
+                "content_type": "application/pdf",
+                "rendition": "controlled_copy",
+                "sha256": rendition.sha256,
+            }
+
+    blob = await vault_repo.get_blob(session, version.source_blob_sha256)
+    if blob is None:  # pragma: no cover - defensive
+        raise ProblemException(status=404, code="not_found", title="Blob not found")
+    url = await storage.presign_get(blob.object_key, bucket=blob.bucket)
+    return {
+        "download_url": url,
+        "content_type": blob.mime_type,
+        "rendition": "source",
+        "sha256": blob.sha256,
+    }
+
+
 # --- versions ---------------------------------------------------------------------------
 
 

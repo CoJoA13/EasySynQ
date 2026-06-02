@@ -270,7 +270,9 @@ async def checkin(
                 sha256=sha256,
                 org_id=actor.org_id,
                 size_bytes=promoted.size or 0,
-                mime_type=mime_type,
+                # Prefer the Content-Type MinIO recorded from the client PUT (drives S7b render
+                # routing); fall back to the declared default. Set once on insert (content-hashed).
+                mime_type=promoted.content_type or mime_type,
                 bucket=get_settings().s3_bucket_documents,
                 object_key=sha256,
                 worm_locked=True,

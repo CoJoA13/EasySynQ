@@ -29,6 +29,7 @@ class ObjectHead:
     exists: bool
     size: int | None = None
     retain_until: datetime.datetime | None = None
+    content_type: str | None = None  # the Content-Type the client PUT (drives S7b render routing)
 
 
 def _doc_bucket() -> str:
@@ -101,7 +102,12 @@ def _head_sync(key: str, bucket: str) -> ObjectHead:
         retain_until = retention.get("Retention", {}).get("RetainUntilDate")
     except ClientError:
         retain_until = None
-    return ObjectHead(exists=True, size=int(meta["ContentLength"]), retain_until=retain_until)
+    return ObjectHead(
+        exists=True,
+        size=int(meta["ContentLength"]),
+        retain_until=retain_until,
+        content_type=meta.get("ContentType"),
+    )
 
 
 async def head(object_key: str, *, bucket: str | None = None) -> ObjectHead:
@@ -146,3 +152,17 @@ async def fetch_bytes(object_key: str, *, bucket: str | None = None) -> bytes:
     — the worker reads object bytes directly. Runs the sync boto3 ``get_object`` off the event loop.
     Reads are unaffected by WORM object-lock (it blocks writes/deletes, not GETs)."""
     return await asyncio.to_thread(_fetch_bytes_sync, object_key, bucket or _doc_bucket())
+
+
+def _put_bytes_sync(data: bytes, object_key: str, bucket: str, content_type: str) -> None:
+    _client().put_object(Bucket=bucket, Key=object_key, Body=data, ContentType=content_type)
+
+
+async def put_bytes(
+    data: bytes, object_key: str, *, bucket: str, content_type: str = "application/octet-stream"
+) -> None:
+    """Write bytes server-side (the **worker** path: the renderer caches a generated PDF rendition).
+    Targets the **non-WORM** renditions bucket — renditions are derived + rebuildable (doc 14 §5.4),
+    so this is a plain ``put_object`` (NOT the staging→``finalize_worm`` WORM cycle the source blob
+    takes). Off the event loop."""
+    await asyncio.to_thread(_put_bytes_sync, data, object_key, bucket, content_type)

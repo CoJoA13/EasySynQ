@@ -104,6 +104,7 @@ def _minio() -> Iterator[dict[str, str]]:
             },
         )
         client.create_bucket(Bucket="staging")  # plain bucket for presigned uploads
+        client.create_bucket(Bucket="renditions")  # S7b derived watermarked PDFs (non-WORM)
         # S6 off-host audit-checkpoint anchor bucket (object-lock, R13).
         client.create_bucket(Bucket="audit-checkpoints", ObjectLockEnabledForBucket=True)
         yield {
