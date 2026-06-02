@@ -95,10 +95,33 @@ Docker stack):**
   `signature_event` rejected with SQLSTATE 42501, incl. a partitioned row; no write verbs), `test_ac6b_*` (linker chains +
   is idempotent; verify matches; a tampered row is the first broken link; checkpoint push + soft-gate), golden vector.
 
-**Next slice: S7 — Mirror [AC#2]** (the read-only filesystem mirror of Effective-only versions, regenerated from the
-vault → atomic swap, mounted read-only; an edited mirror file overwritten on next sync). S6 left clean seams: the
-`event_type` enum reserves the Keycloak auth-event values (the SPI ships them later, out-of-band), and
-`/audit-events/export` keeps its `openapi.yaml` schema while the route stays unmounted until the async-job pattern lands.
+- **S7 — Mirror [AC#2]** ✅ — the read-only, Effective-only filesystem mirror (D2: authority flows vault→mirror).
+  A deliberately minimal, **zero-migration** slice (the sync only SELECTs `document_version`/`blob` + writes the
+  filesystem; `0010_audit` stays head). `services/vault/mirror.py` enumerates Effective versions (gate on
+  `version_state`, not `current_state`), pulls **source bytes** via a new `storage.fetch_bytes` (worker server-side
+  GET; the api still only presigns), and lays out a **flat** tree `current/{identifier}_{revision_label}/` (source
+  file + `metadata.json` + `CHANGELOG.md`) + top-level `INDEX.md` + `_meta/manifest.json` (generated artifact only —
+  no scan/diff). The **atomic swap is symlink-repoint**: build a fresh `.builds/<uuid>/`, then `os.replace` a temp
+  symlink onto `current` (rename-over-symlink is atomic on one fs) — sidesteps the `os.replace`-onto-non-empty-dir
+  failure that would break AC#2's second sync. Triggers: a post-commit `MirrorEnqueueSink` from release/release_due/
+  obsolete (never inside the SERIALIZABLE cutover — the race loser must not enqueue; best-effort + nightly Beat
+  backstop), the `easysynq.mirror.sync` Beat job (daily), and `python -m easysynq_api.cli.mirror sync` (under
+  `LOCK_MIRROR_SYNC`). Compose: the api mounts the `mirror` volume **`:ro`** (R11 contract's missing half; worker
+  stays rw; Caddy must NOT file_server it). **Rendering deferred to S7b** (owner decision): a no-op `RenderSink`
+  (`render.py`) so the mirror writes source bytes + `render_status:"pending"` — *not* R26's `no_controlled_rendition`
+  (reserved for genuinely non-renderable formats). Layout is flat because the clause/process IA tree (doc 04 §10.3)
+  needs `clause_mapping`, an **S9** seam; drift scan/quarantine/`MIRROR_DRIFT_DETECTED` stay **v1** (D-6). Proofs:
+  `test_ro_mirror_autocorrect` [AC#2] (edited file + stray file both corrected from the vault on re-sync), effective-
+  only-excludes-drafts, supersession/obsolete prune, post-commit enqueue-once, atomic-swap-no-partial-tree, render-
+  pending marker, metadata/INDEX/manifest, byte-idempotent rebuild, advisory-lock serialization.
+
+**Next slice: S7b — watermarked-PDF rendering** (make the `RenderSink` real: Gotenberg office→PDF + the §11.3
+header/footer band — Rev + EffectiveDate + copy_status, non-removable; non-suppressible Obsolete/Superseded stamps;
+the real R26 `no_controlled_rendition` path; populate `document_version.rendition_blob_sha256`; the QR/verify-token).
+S7 left clean seams for it: `get_render_sink()` swaps in the Gotenberg sink, the reserved `rendition_blob_sha256`
+column is the FK target, the in-compose `renderer` (gotenberg:8) is ready, and the mirror already writes
+`render_status` so flipping `pending`→`rendered` is local. S6 seams still open: the `event_type` enum reserves the
+Keycloak auth-event values (SPI ships later), and `/audit-events/export` keeps its `openapi.yaml` schema unmounted.
 
 ## Building the MVP (dev workflow)
 
@@ -130,7 +153,15 @@ vault → atomic swap, mounted read-only; an edited mirror file overwritten on n
   `just up s --build` (the `migrate` service runs `0010` as the owner → creates `easysynq_app`/`easysynq_linker`
   before `api`/`worker`/`beat` start as the app role). `minio-init.sh` provisions the `audit-checkpoints` bucket +
   the scoped `audit-sink` user. The `worker`/`beat` containers now run real tasks (the S6 chain-linker/verify/
-  checkpoint/roll-partitions Beat jobs).
+  checkpoint/roll-partitions Beat jobs + the **S7 mirror reconcile**).
+- **S7 mirror (R11 mount contract):** the `worker` writes the read-only mirror to the `mirror` volume **rw**; `api`
+  mounts it **`:ro`** — that is the whole contract for the single-host MVP (Caddy must NOT `file_server` it; the
+  user-facing content route stays the presigned-MinIO download). On a network share, validate `root_squash`/UID
+  mapping so a client cannot write back (runbook caveat). The mirror is **regenerable, never backup-critical**. It is
+  rebuilt on every release/obsolete (post-commit) + a nightly Beat reconcile; force one with `docker compose … exec
+  worker python -m easysynq_api.cli.mirror sync`. Browse it at `${MIRROR_PATH}/current/` (an Effective-only flat tree
+  of source bytes — watermarked PDFs arrive with S7b). No new `.env` keys (`MIRROR_PATH`/`GOTENBERG_URL` already in
+  `.env.example`).
 - **Dev login:** `demo` / `Demo-Password-1` (created at runtime in Keycloak, **not committed**; realm policy
   requires ≥12-char passwords). After a Keycloak container reset, recreate with `kcadm.sh` (`create users -r
   easysynq -s username=demo -s enabled=true` then `set-password`).

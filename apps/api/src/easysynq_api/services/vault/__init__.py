@@ -19,6 +19,16 @@ from .lifecycle import (
     start_revision,
     submit_review,
 )
+from .mirror import MirrorSyncResult, atomic_swap, list_effective_versions, sync_mirror
+from .mirror_sink import (
+    CapturingMirrorEnqueueSink,
+    CeleryMirrorEnqueueSink,
+    LoggingMirrorEnqueueSink,
+    MirrorEnqueueSink,
+    get_mirror_enqueue_sink,
+    set_mirror_enqueue_sink,
+)
+from .render import LoggingRenderSink, RenderRequest, RenderSink, get_render_sink
 from .service import break_lock, checkin, checkout, create_document, heartbeat, init_upload
 from .signature import (
     CapturingSignatureEventSink,
@@ -30,30 +40,44 @@ from .signature import (
 )
 
 __all__ = [
+    "CapturingMirrorEnqueueSink",
     "CapturingSignatureEventSink",
     "CapturingVaultAuditSink",
+    "CeleryMirrorEnqueueSink",
     "DbSignatureEventSink",
+    "LoggingMirrorEnqueueSink",
+    "LoggingRenderSink",
     "LoggingSignatureEventSink",
     "LoggingVaultAuditSink",
+    "MirrorEnqueueSink",
+    "MirrorSyncResult",
+    "RenderRequest",
+    "RenderSink",
     "SignatureEvent",
     "SignatureEventSink",
     "TransitionResult",
     "VaultAuditEvent",
     "VaultAuditSink",
     "approve",
+    "atomic_swap",
     "audit_transition",
     "break_lock",
     "checkin",
     "checkout",
     "create_document",
+    "get_mirror_enqueue_sink",
+    "get_render_sink",
     "get_vault_audit_sink",
     "get_vault_signature_sink",
     "heartbeat",
     "init_upload",
+    "list_effective_versions",
     "obsolete",
     "release",
     "release_due",
     "request_changes",
+    "set_mirror_enqueue_sink",
     "start_revision",
     "submit_review",
+    "sync_mirror",
 ]

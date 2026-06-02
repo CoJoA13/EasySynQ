@@ -44,5 +44,11 @@ app.conf.update(
             "task": "easysynq.audit.roll_partitions",
             "schedule": 86400.0,  # daily
         },
+        # S7: nightly full reconcile of the read-only Effective-only filesystem mirror (doc 04
+        # §10.4). Release/obsolete also enqueue this incrementally; both share one idempotent task.
+        "mirror-sync-nightly": {
+            "task": "easysynq.mirror.sync",
+            "schedule": 86400.0,  # daily
+        },
     },
 )
