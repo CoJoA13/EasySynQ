@@ -16,16 +16,20 @@ import argparse
 import asyncio
 from collections.abc import Sequence
 
+from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from ..config import get_settings
+from ..db.models.document_version import DocumentVersion
 from ..services.common.pg_locks import LOCK_MIRROR_SYNC, pg_advisory_lock
 from ..services.vault.mirror import MirrorSyncResult, sync_mirror
 from ..services.vault.render_gotenberg import GotenbergRenderSink
 
 
-async def _sync() -> MirrorSyncResult | None:
-    """Rebuild under the advisory lock; ``None`` if another sync holds the lock (skip)."""
+async def _sync(*, force: bool) -> MirrorSyncResult | None:
+    """Rebuild under the advisory lock; ``None`` if another sync holds the lock (skip). ``force``
+    clears every cached rendition first (``rebuild``) so each doc re-renders — used after a template
+    change (e.g. the S7c verify QR) where the content-addressed cache would otherwise be a hit."""
     engine = create_async_engine(get_settings().database_url)
     sessionmaker: async_sessionmaker[AsyncSession] = async_sessionmaker(
         engine, expire_on_commit=False
@@ -34,6 +38,10 @@ async def _sync() -> MirrorSyncResult | None:
         async with sessionmaker() as session, pg_advisory_lock(session, LOCK_MIRROR_SYNC) as held:
             if not held:
                 return None
+            if force:
+                # Deliberate blanket null (single-org per install, D1; runs under LOCK_MIRROR_SYNC).
+                # Add a WHERE (org/document) predicate if multi-org or selective rebuild ever lands.
+                await session.execute(update(DocumentVersion).values(rendition_blob_sha256=None))
             # Render for real (S7b) — like the Beat task; without this the CLI rebuild would write
             # every doc as render_status="pending" (the no-op default sink).
             return await sync_mirror(session=session, render_sink=GotenbergRenderSink())
@@ -44,11 +52,13 @@ async def _sync() -> MirrorSyncResult | None:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="easysynq-mirror", description="Read-only mirror CLI.")
     sub = parser.add_subparsers(dest="command", required=True)
-    sub.add_parser("sync", help="full rebuild + atomic swap of the Effective-only mirror")
-    sub.add_parser("rebuild", help="alias for sync (regenerate the whole mirror from the vault)")
-    parser.parse_args(argv)  # both commands are the same full rebuild; parsing validates the verb
+    sub.add_parser("sync", help="incremental rebuild + atomic swap (cached renditions reused)")
+    sub.add_parser(
+        "rebuild", help="full regenerate — clears cached renditions + re-renders (doc 04 §10.4)"
+    )
+    args = parser.parse_args(argv)
 
-    result = asyncio.run(_sync())
+    result = asyncio.run(_sync(force=args.command == "rebuild"))
     if result is None:
         print("mirror sync skipped: another sync is already in progress")
         return 0

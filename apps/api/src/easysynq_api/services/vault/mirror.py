@@ -48,7 +48,7 @@ from ...db.models.blob import Blob
 from ...db.models.document_version import DocumentVersion
 from ...db.models.documented_information import DocumentedInformation
 from ...db.session import get_sessionmaker
-from . import storage
+from . import storage, verify_token
 from .render import RenderRequest, RenderSink, RenderStatus, get_render_sink
 
 logger = logging.getLogger("easysynq.mirror")
@@ -72,6 +72,7 @@ class EffectiveDoc:
     size_bytes: int
     bucket: str
     object_key: str
+    document_id: uuid.UUID
     version_id: uuid.UUID
     org_id: uuid.UUID
     rendition_blob_sha256: str | None
@@ -115,6 +116,7 @@ async def list_effective_versions(session: AsyncSession) -> list[EffectiveDoc]:
             size_bytes=blob.size_bytes,
             bucket=blob.bucket,
             object_key=blob.object_key,
+            document_id=doc.id,
             version_id=ver.id,
             org_id=ver.org_id,
             rendition_blob_sha256=ver.rendition_blob_sha256,
@@ -259,6 +261,12 @@ async def _resolve_rendition(
                 extra={"extra_fields": {"version_id": str(eff.version_id)}},
             )
 
+    # S7c: a signed verify token (doc 05 §6.4) over the immutable {doc, version, source digest},
+    # drawn as a QR in the footer. Deterministic (Ed25519 + immutable claims) so the rendition stays
+    # content-addressed. ``content_digest`` is the version's source bytes.
+    token = verify_token.mint(eff.document_id, eff.version_id, eff.source_sha256)
+    verify_url = f"{get_settings().public_base_url.rstrip('/')}/api/v1/verify?t={token}"
+
     request = RenderRequest(
         identifier=eff.identifier,
         title=eff.title,
@@ -270,6 +278,7 @@ async def _resolve_rendition(
         mime_type=eff.mime_type,
         source_filename=_source_filename(eff, _ext(eff.mime_type)),
         version_id=eff.version_id,
+        verify_url=verify_url,
     )
     result = await render_sink.render(request, source_bytes)
     if result.status is RenderStatus.RENDERED and result.pdf is not None:

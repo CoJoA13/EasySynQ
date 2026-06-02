@@ -1,8 +1,15 @@
 # EasySynQ — MVP Implementation Plan (for approval)
 
-> **Status: APPROVED (2026-05-31) and IN BUILD.** Slices **S0–S7 + S7b are shipped to `main`** (each via PR, all CI
-> green, validated on the real Docker stack); **S7c (verify-token + in-app export stamp) then S8 (setup wizard) are
-> next.** S7 shipped the read-only Effective-only filesystem mirror (AC#2, zero-migration): full-rebuild +
+> **Status: APPROVED (2026-05-31) and IN BUILD.** Slices **S0–S7 + S7b + S7c are shipped to `main`** (each via PR,
+> all CI green, validated on the real Docker stack); **S7d (in-app export/print stamp) then S8 (setup wizard) are
+> next.** **S7c** added the controlled-rendition verify token (doc 05 §6.4, zero-migration): an Ed25519-signed
+> `{document_id, version_id, content_digest}` token (reusing the `checkpoint.py` pattern) + a `segno` QR in the
+> watermark footer, and a **public `GET /verify`** (unauthenticated, minimal disclosure; edge rate-limiting is a v1 add)
+> returning **CURRENT / SUPERSEDED / UNKNOWN** — so any printout/export's currency is checkable without an account
+> (R11 boundary). The token is deterministic (Ed25519 + immutable claims) so the rendition stays content-addressed;
+> `easysynq mirror rebuild` force-re-renders existing renditions to carry it; the verify key is shared api↔worker via
+> a `secrets` volume. (It is an integrity token, **not** a Part-11 e-signature — D3 stays reserved.) Earlier:
+> S7 shipped the read-only Effective-only filesystem mirror (AC#2, zero-migration): full-rebuild +
 > symlink-repoint atomic swap (`current → .builds/<uuid>`), post-commit release/obsolete enqueue + nightly Beat
 > reconcile + `python -m easysynq_api.cli.mirror sync`, a flat layout (the clause/process IA tree defers to **S9**
 > with `clause_mapping`), and the api `:ro` mount completing the R11 contract. **S7b** then made the `RenderSink`

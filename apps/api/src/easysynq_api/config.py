@@ -76,6 +76,11 @@ class Settings(BaseSettings):
     gotenberg_url: str = "http://localhost:3000"
     mirror_path: str = "/var/lib/easysynq/qms-mirror"
 
+    # S7c verify token: a dedicated Ed25519 key (separate custody from the audit-checkpoint key) +
+    # the browser-reachable origin the footer QR/verify-link points at.
+    verify_token_signing_key_path: str = "/run/secrets/verify_token_key"  # noqa: S105 — a path
+    public_base_url: str = "http://localhost"
+
     @property
     def sync_dsn(self) -> str:
         """DSN Alembic uses (sync driver). Falls back to the async URL's driver name."""

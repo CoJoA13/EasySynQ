@@ -26,7 +26,11 @@ from easysynq_api.services.vault.render_gotenberg import GotenbergRenderSink
 from easysynq_api.services.vault.watermark import stamp_controlled_copy
 
 
-def _req(copy_status: str = "CONTROLLED COPY", mime: str = "application/pdf") -> RenderRequest:
+def _req(
+    copy_status: str = "CONTROLLED COPY",
+    mime: str = "application/pdf",
+    verify_url: str | None = None,
+) -> RenderRequest:
     return RenderRequest(
         identifier="SOP-PUR-014",
         title="Purchasing Procedure",
@@ -38,7 +42,20 @@ def _req(copy_status: str = "CONTROLLED COPY", mime: str = "application/pdf") ->
         mime_type=mime,
         source_filename="x.pdf",
         version_id=uuid.UUID(int=7),
+        verify_url=verify_url,
     )
+
+
+def test_watermark_embeds_verify_qr() -> None:
+    """[S7c] With a verify_url, the footer carries the scan hint + a QR image; deterministic."""
+    url = "http://localhost/api/v1/verify?t=" + "A" * 171
+    a = stamp_controlled_copy(_pdf(pages=1), _req(verify_url=url))
+    assert a == stamp_controlled_copy(_pdf(pages=1), _req(verify_url=url))  # deterministic
+    page = PdfReader(io.BytesIO(a)).pages[0]
+    assert "Scan the QR" in page.extract_text()
+    xobjects = page.get("/Resources", {}).get("/XObject")
+    assert xobjects is not None
+    assert any(xobjects[k].get("/Subtype") == "/Image" for k in xobjects), "no QR image embedded"
 
 
 def _pdf(pages: int = 2, body: str = "Body") -> bytes:

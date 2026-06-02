@@ -95,6 +95,31 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/AuthConfig" }
 
+  /verify:
+    get:
+      tags: [verify]
+      operationId: verifyControlledCopy
+      summary: Public controlled-copy currency check (no auth). Scan a printout's QR / signed token.
+      description: >-
+        Returns an HTML page with the copy's currency: CURRENT (this revision still governs),
+        SUPERSEDED (a newer revision is now Effective, or the version is obsolete), or UNKNOWN
+        (bad/forged/tampered token, or no such version). The token is Ed25519-signed, so this only
+        confirms what a valid token encodes — no enumeration. Minimal disclosure (status + identifier
+        + current revision/date; no content). doc 05 §6.4.
+      security: []
+      parameters:
+        - name: t
+          in: query
+          required: true
+          schema: { type: string }
+          description: The signed verify token from the controlled copy's QR/footer.
+      responses:
+        "200":
+          description: An HTML verify page (CURRENT / SUPERSEDED / UNKNOWN).
+          content:
+            text/html:
+              schema: { type: string }
+
   /me:
     get:
       tags: [auth]

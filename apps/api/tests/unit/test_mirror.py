@@ -38,11 +38,12 @@ def _eff(**overrides: Any) -> EffectiveDoc:
         "owner_user_id": uuid.uuid4(),
         "owner_display": "p.author",
         "classification": "Internal",
-        "source_sha256": "deadbeef",
+        "source_sha256": "de" * 32,  # a real 32-byte sha256 hex (the verify token mints over it)
         "mime_type": "application/pdf",
         "size_bytes": 3,
         "bucket": "documents",
         "object_key": "deadbeef",
+        "document_id": uuid.uuid4(),
         "version_id": uuid.uuid4(),
         "org_id": uuid.uuid4(),
         "rendition_blob_sha256": None,
