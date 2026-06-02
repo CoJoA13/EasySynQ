@@ -284,16 +284,47 @@ Docker stack):**
   scratch teardown (no orphan DB/objects), real-blob PASS + corrupted-blob FAIL; archive-checksum + dsn + EventType
   unit. **139 unit + 101 integration** (the real-drill path validated locally with `postgresql-client-16` + in CI).
 
-**Next slice: S8c — auth-config gate G-D + the fuller wizard / client router** — the Keycloak in-app provisioning + MFA
-+ a proven non-bootstrap login (gate G-D, doc 08 §9), plus wizard steps 6–9 (org roles/users, QMS scope/process map,
-import hand-off) and the client-side router. Then **S9** (clause/process IA + `clause_mapping` — also unblocks the
-mirror's clause/process tree + the lifecycle submit ≥1-`clause_mapping` gate). The gate registry + latch extend by just
-appending gates. **Deferred from S8b2 (S11 / v1.x, D-6 / R37):** the operator-grade *live* WORM-aware restore + cutover,
-PITR↔blob-snapshot alignment, checkpoint-not-ahead, WAL/PITR, retention *pruning* execution, Keycloak realm export,
-archive envelope encryption, S3-destination, `easysynq restore`/`upgrade`; the non-drill-critical `storage_config`
-mirror/bucket columns were also deferred (config-redundant with env, no G-C proof value). S6/S7 seams still open
-(Keycloak auth-event SPI, `/audit-events/export`, the clause/process IA mirror tree). Pre-existing hardening noted:
-`area_code` is unconstrained `Text` at the S3 create boundary.
+- **S8c — Setup gate G-D (auth-config + non-bootstrap login proof) + minimal client router** ✅ — PR #22. The **last
+  blocking** setup gate (doc 08 §9): finalize is blocked until an auth method is selected and a **non-bootstrap login is
+  proven** — "never strand the org on a misconfigured IdP". Once G-D lands the latch fully lifts (G-A+G-E+G-B+G-C+G-D →
+  OPERATIONAL). **Owner forks:** scope = G-D gate + minimal router (defer wizard steps 6–9 + Keycloak admin-API
+  provisioning + MFA *enforcement* → S8d) · proof = mode-routed live check + persisted attestation (mirrors G-B
+  `worm_probe` / G-C drill) · MFA = **logged acknowledgement only** (the `acr`/`/auth/step-up` enforcement seam stays a
+  no-op, Part-11 reserved per D3). **The proof, faithful to the Keycloak-brokered architecture:** the `configure-auth`
+  caller's **valid non-bootstrap JWT** (JWKS-validated by `get_current_user`; the bootstrap path authorizes via the
+  *secret* OUTSIDE the PEP) **+ a live OIDC-issuer discovery reachability probe** (`services/setup/auth_check.py` —
+  httpx, short timeout, **never raises**, type-guards a malformed IdP body → a clean 422 not a 500; mockable like
+  `worm_probe`). A failed probe → **422 `auth_unavailable`** + `AUTH_TEST_LOGIN_FAILED`, signal stays null (no
+  false-PASS). Upstream federation (LDAP/OIDC/SAML) is **Keycloak's** job (deferred); `auth_method` is recorded metadata;
+  local break-glass login is never disabled → the org can't be locked out. `Gate("G-D", _gate_auth_configured)` appended
+  to `GATES` (keys on `system_config.auth_test_login_ok is True`, not just `_at`) — zero finalize-code change.
+  `configure_auth` singleton-locks the `system_config` row + emits `AUTH_CONFIGURED` + `AUTH_TEST_LOGIN_OK` (mfa-ack +
+  break-glass ride in the audit `after`). **`0015`**: `ALTER TYPE event_type ADD VALUE` ×3
+  (`AUTH_CONFIGURED`/`AUTH_TEST_LOGIN_OK`/`AUTH_TEST_LOGIN_FAILED`, the 0011–0014 pattern; Python `EventType` members
+  added too) + 3 **nullable** `system_config` auth columns (no seed → null = G-D-unsatisfied; no brick). `POST
+  /setup/configure-auth` (`config.update`, latch-exempt). The `acr`/step-up seam is **untouched** (D3). **Web:** added
+  `react-router-dom` (`<BrowserRouter>` wraps `App`; routes `/setup` · `/` shell · `/admin` stub — `useAuth` stays at the
+  root so the OIDC `/?code&state` callback is processed before routing) + an **"Authentication"** wizard `<Stepper.Step>`
+  (method + MFA-ack + Verify) between Backup and Finalize. Adversarially reviewed (4 lenses → verify; the false-PASS /
+  lock-out lens confirmed neither risk exists) — folded the one real finding: the OIDC probe parsed the JSON body outside
+  the try/except (a malformed IdP → 500, not 422), now type-guarded + 2 unit tests. **CI runs no Keycloak** (JWKS stubbed)
+  — the probe is monkeypatched and the minted token is the non-bootstrap login proof; the live round-trip stays a manual
+  dev-stack proof. Proofs: `test_setup_finalize_requires_auth_proven` **[G-D]** + a negative (unreachable IdP → 422,
+  finalize blocked, `AUTH_TEST_LOGIN_FAILED`) + configure-auth authz (403) + bad-method (422); the probe parsing
+  (mismatch/missing-jwks/non-200/network-error/non-dict-body/non-string-issuer all FAIL) + `EventType` unit. **148 unit +
+  108 integration**.
+
+**Next slice: S8d — the deferrable wizard steps 6–9 + the fuller admin shell** (org roles & permission bundles, user
+invite/CSV + per-user scope/overrides, QMS scope & process-map seed + the Mara hand-off, import hand-off → the ingestion
+engine; plus in-app Keycloak admin-API provisioning + MFA enrolment). These are **non-blocking** (post-finalize, Mara's
+domain) — the five blocking gates G-A…G-E are now all shipped, so finalize works end-to-end. The router skeleton
+(`/setup` · `/` · `/admin`) makes S8d purely feature-additive. Then **S9** (clause/process IA + `clause_mapping` — also
+unblocks the mirror's clause/process tree + the lifecycle submit ≥1-`clause_mapping` gate). The gate registry + latch
+extend by just appending gates. **Deferred (S11 / v1.x, D-6 / R37):** the operator-grade *live* WORM-aware restore +
+cutover, PITR/WAL, retention *pruning*, Keycloak realm export, archive envelope encryption, S3-destination,
+`easysynq restore`/`upgrade`; MFA *enforcement* + `acr`/signature re-auth + a direct upstream-IdP (LDAP-bind) live probe
+(Part-11 / Keycloak-brokered). S6/S7 seams still open (Keycloak auth-event SPI, `/audit-events/export`, the clause/process
+IA mirror tree). Pre-existing hardening noted: `area_code` is unconstrained `Text` at the S3 create boundary.
 
 ## Building the MVP (dev workflow)
 
@@ -352,7 +383,9 @@ mirror/bucket columns were also deferred (config-redundant with env, no G-C proo
   Keycloak, paste the secret → you become the first **System Administrator** (`setup_state → IN_SETUP`); (3) the wizard
   sets the org profile (legal name / short code / timezone); (3.5 — **S8b**) **Verify storage** (the WORM probe, G-B);
   (3.6 — **S8b2**) **Backup**: set a backup destination, then **Run backup + restore-test drill** — finalize is blocked
-  until it PASSES (G-C / AC#5); (4) **Finalize** flips `→ OPERATIONAL` and the latch lifts. After an **upgrade of a
+  until it PASSES (G-C / AC#5); (3.7 — **S8c**) **Authentication**: pick a login method + ack MFA, then **Verify
+  authentication** (G-D — a non-bootstrap login proof + an OIDC-issuer reachability probe); (4) **Finalize** flips
+  `→ OPERATIONAL` and the latch lifts (all five gates G-A…G-E now satisfied). After an **upgrade of a
   running install**, `0012` seeds `OPERATIONAL` automatically (a `role_assignment` already exists) — no wizard, no
   lock-out. **NB the operator must point the app at the non-owner DB role for the latch UPDATE to work** (same `.env`
   role-separation as S6).
