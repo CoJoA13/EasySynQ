@@ -54,6 +54,12 @@ class EventType(enum.Enum):
     # DB converge only because these members live here too.
     EXPORTED = "EXPORTED"
     PRINTED = "PRINTED"
+    # first-run setup wizard (S8a, doc 08) — the bootstrap-of-trust + finalize trail. Added via
+    # ``ALTER TYPE … ADD VALUE`` in 0012 (same additive pattern as 0011 for EXPORTED/PRINTED).
+    BOOTSTRAP_CONSUMED = "BOOTSTRAP_CONSUMED"
+    ADMIN_BOOTSTRAPPED = "ADMIN_BOOTSTRAPPED"
+    ORG_PROFILE_SET = "ORG_PROFILE_SET"
+    SETUP_FINALIZED = "SETUP_FINALIZED"
     # authorization (S2/S5) — denied-access attempts (always) + allows (configurable verbosity,
     # doc 12 §4.1 — off by default) + the permission/role/override changes
     ACCESS_DENIED = "ACCESS_DENIED"

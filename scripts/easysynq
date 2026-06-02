@@ -19,9 +19,12 @@ usage: easysynq <command>
   upgrade           Backup -> migrate -> health-gate -> (rollback on failure). [S11]
   migrate           Run 'alembic upgrade head' inside the api image.
   grant-role <sub> ["Role"]
-                    Pre-S8 bootstrap: assign a seeded role (default "System
-                    Administrator") to a Keycloak subject so the authz admin API
-                    is usable before the first-run wizard. Idempotent.       [S2]
+                    Break-glass: assign a seeded role (default "System
+                    Administrator") to a Keycloak subject directly (bypasses the
+                    wizard). Idempotent.                                     [S2]
+  setup mint-bootstrap [--ttl-hours N]
+                    Mint the one-time first-run bootstrap secret; open /setup,
+                    sign in, and paste it to become the first admin.        [S8a]
 EOF
 }
 
@@ -38,13 +41,16 @@ case "$cmd" in
     fi
     "${COMPOSE[@]}" run --rm api uv run python -m easysynq_api.cli.grant_role --subject "$sub" --role "$role"
     ;;
+  setup)
+    # First-run bootstrap (S8a): e.g. `easysynq setup mint-bootstrap [--ttl-hours 24]`.
+    "${COMPOSE[@]}" run --rm api uv run python -m easysynq_api.cli.setup "$@"
+    ;;
   backup|restore|upgrade)
     echo "easysynq $cmd: not implemented in S0 — lands in slice S11 (see docs/18 §9)." >&2
     exit 3
     ;;
   mirror)
-    echo "easysynq mirror: not implemented in S0 — lands in slice S7." >&2
-    exit 3
+    "${COMPOSE[@]}" run --rm api uv run python -m easysynq_api.cli.mirror "$@"
     ;;
   ""|-h|--help|help)
     usage
