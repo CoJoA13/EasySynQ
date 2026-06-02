@@ -6,6 +6,7 @@ import {
   Group,
   List,
   PasswordInput,
+  SegmentedControl,
   Stack,
   Stepper,
   Text,
@@ -56,12 +57,16 @@ export function SetupWizard({
   const [legalName, setLegalName] = useState("");
   const [shortCode, setShortCode] = useState("");
   const [timezone, setTimezone] = useState(browserTz());
+  const [lockMode, setLockMode] = useState("GOVERNANCE");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const state = detail.data?.setup_state ?? "UNINITIALIZED";
   const orgSet = detail.data?.gates?.["G-E"] ?? false;
-  const active = token && state === "IN_SETUP" ? (orgSet ? 2 : 1) : 0;
+  const wormVerified = detail.data?.gates?.["G-B"] ?? false;
+  // Resumable step order (doc 08 R4: org before storage): bootstrap → org → storage → finalize.
+  const active =
+    token && state === "IN_SETUP" ? (!orgSet ? 1 : !wormVerified ? 2 : 3) : 0;
 
   // Prefill the org name from the persisted profile once it loads (resume), without clobbering edits.
   const persistedName = detail.data?.org_profile.legal_name;
@@ -99,6 +104,12 @@ export function SetupWizard({
           short_code: shortCode,
           timezone,
         }),
+      () => void detail.refetch(),
+    );
+
+  const verifyStorage = (): Promise<void> =>
+    run(
+      () => apiSend("POST", "/api/v1/setup/verify-storage", token, { object_lock_mode: lockMode }),
       () => void detail.refetch(),
     );
 
@@ -182,6 +193,34 @@ export function SetupWizard({
                 >
                   Save & continue
                 </Button>
+              </Group>
+            </Stack>
+          </Stepper.Step>
+
+          <Stepper.Step label="Storage" description="WORM verify">
+            <Stack gap="md" mt="md">
+              <Text size="sm">
+                Verify the vault bucket enforces WORM object-lock (a probe writes a tiny object and
+                confirms an early delete is denied).
+              </Text>
+              <SegmentedControl
+                value={lockMode}
+                onChange={setLockMode}
+                data={["GOVERNANCE", "COMPLIANCE"]}
+              />
+              <Text size="xs" c="dimmed">
+                GOVERNANCE (recommended) keeps fresh-bucket restore + lawful-erasure possible.
+                COMPLIANCE is immutable even to root.
+              </Text>
+              <Group>
+                <Button onClick={() => void verifyStorage()} loading={busy}>
+                  Verify WORM storage
+                </Button>
+                {wormVerified && (
+                  <Text size="sm" c="teal">
+                    ✓ verified
+                  </Text>
+                )}
               </Group>
             </Stack>
           </Stepper.Step>

@@ -23,10 +23,12 @@ from easysynq_api.db.models.app_user import AppUser
 from easysynq_api.db.models.audit_event import AuditEvent
 from easysynq_api.db.models.organization import Organization
 from easysynq_api.db.models.role import Role, RoleAssignment
+from easysynq_api.db.models.storage_config import StorageConfig
 from easysynq_api.db.models.system_config import SetupState, SystemConfig
 from easysynq_api.db.session import get_sessionmaker
 from easysynq_api.services.setup import service as setup_service
 from easysynq_api.services.setup.bootstrap import mint_secret
+from easysynq_api.services.vault import storage
 
 from .test_vault import _auth
 
@@ -54,6 +56,7 @@ async def _reset_uninitialized() -> str:
                 RoleAssignment.role_id.in_(select(Role.id).where(Role.name == _ADMIN))
             )
         )
+        await s.execute(delete(StorageConfig))  # reset G-B (S8b) so it starts unsatisfied
         org = (await s.execute(select(Organization))).scalar_one()
         org.short_code = "DEFAULT"
         org.legal_name = "EasySynQ (configure in setup)"
@@ -65,6 +68,14 @@ async def _reset_uninitialized() -> str:
 
 async def _bootstrap(client: AsyncClient, h: dict[str, str], secret: str) -> dict:
     r = await client.post("/api/v1/setup/bootstrap", headers=h, json={"secret": secret})
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+async def _verify_storage(client: AsyncClient, h: dict[str, str], mode: str = "GOVERNANCE") -> dict:
+    r = await client.post(
+        "/api/v1/setup/verify-storage", headers=h, json={"object_lock_mode": mode}
+    )
     assert r.status_code == 200, r.text
     return r.json()
 
@@ -196,6 +207,7 @@ async def test_finalize_blocked_then_operational_lifts_latch(
         headers=h,
         json={"legal_name": "Acme Corp", "short_code": "ACME", "timezone": "UTC"},
     )
+    await _verify_storage(app_client, h)  # G-B (S8b) is now a required finalize gate too
     done = await app_client.post("/api/v1/setup/finalize", headers=h)
     assert done.status_code == 200, done.text
     assert done.json()["setup_state"] == "OPERATIONAL"
@@ -291,3 +303,107 @@ async def test_grant_role_break_glass_still_works(
             .where(AppUser.keycloak_subject == sub, Role.name == _ADMIN)
         )
     assert assigned is not None
+
+
+# --- S8b: G-B WORM-verify -----------------------------------------------------------------
+
+
+async def test_worm_probe_detects_enforcement(app_client: AsyncClient) -> None:
+    """[S8b] The probe verifies the object-locked `documents` bucket (early delete denied) and
+    correctly reports the plain `staging` bucket as NOT WORM. (Depends on app_client only to wire
+    the testcontainer S3 settings.)"""
+    docs = await storage.worm_probe("documents")
+    assert docs.verified is True, docs.detail
+    assert docs.retain_until is not None
+
+    staging = await storage.worm_probe("staging")  # plain bucket, no object-lock
+    assert staging.verified is False
+
+
+async def test_verify_storage_passes_and_satisfies_g_b(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """[HEADLINE S8b] verify-storage proves WORM, sets worm_verified_at + a WORM_VERIFIED audit row,
+    and flips gate G-B (the live finalize gate)."""
+    secret = await _reset_uninitialized()
+    h = _auth(token_factory, _sub("worm"))
+    body = await _bootstrap(app_client, h, secret)
+    admin_id = uuid.UUID(body["admin_user_id"])
+
+    res = await _verify_storage(app_client, h, "GOVERNANCE")
+    assert res["worm_verified"] is True
+    assert res["object_lock_mode"] == "GOVERNANCE"
+
+    detail = await app_client.get("/api/v1/setup", headers=h)
+    assert detail.json()["gates"]["G-B"] is True
+
+    async with get_sessionmaker()() as s:
+        cfg = (await s.execute(select(StorageConfig))).scalar_one()
+        assert cfg.worm_verified_at is not None
+        assert cfg.object_lock_mode == "GOVERNANCE"
+        worm_audit = await s.scalar(
+            select(AuditEvent.id).where(
+                AuditEvent.event_type == EventType.WORM_VERIFIED,
+                AuditEvent.actor_id == admin_id,
+            )
+        )
+    assert worm_audit is not None
+
+
+async def test_verify_storage_requires_storage_manage(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """A non-admin (no bootstrap → no storage.manage) cannot verify storage."""
+    await _reset_uninitialized()
+    h = _auth(token_factory, _sub("nope"))
+    r = await app_client.post(
+        "/api/v1/setup/verify-storage", headers=h, json={"object_lock_mode": "GOVERNANCE"}
+    )
+    assert r.status_code == 403
+
+
+async def test_finalize_blocked_on_g_b_until_worm_verified(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """With G-A + G-E satisfied but WORM not yet verified, finalize is blocked on G-B; verifying
+    storage then lets it finalize."""
+    secret = await _reset_uninitialized()
+    h = _auth(token_factory, _sub("gb"))
+    await _bootstrap(app_client, h, secret)
+    await app_client.patch(
+        "/api/v1/setup/org-profile",
+        headers=h,
+        json={"legal_name": "Acme", "short_code": "ACME", "timezone": "UTC"},
+    )
+    blocked = await app_client.post("/api/v1/setup/finalize", headers=h)
+    assert blocked.status_code == 409
+    assert any(g["key"] == "G-B" for g in blocked.json()["failed_gates"])
+
+    await _verify_storage(app_client, h)
+    done = await app_client.post("/api/v1/setup/finalize", headers=h)
+    assert done.status_code == 200, done.text
+    assert done.json()["setup_state"] == "OPERATIONAL"
+
+
+async def test_verify_storage_rerun_updates_in_place(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """Re-running verify-storage (resumable wizard: re-click / switch mode) UPDATEs the single
+    storage_config row in place — not a second INSERT (which would 500 on UNIQUE(org_id))."""
+    secret = await _reset_uninitialized()
+    h = _auth(token_factory, _sub("rerun"))
+    await _bootstrap(app_client, h, secret)
+
+    await _verify_storage(app_client, h, "GOVERNANCE")
+    async with get_sessionmaker()() as s:
+        first = (await s.execute(select(StorageConfig))).scalar_one()
+        first_at = first.worm_verified_at
+    assert first.object_lock_mode == "GOVERNANCE"
+
+    res = await _verify_storage(app_client, h, "COMPLIANCE")
+    assert res["object_lock_mode"] == "COMPLIANCE"
+    async with get_sessionmaker()() as s:
+        rows = (await s.execute(select(StorageConfig))).scalars().all()
+    assert len(rows) == 1  # UPDATE in place, not a second INSERT
+    assert rows[0].object_lock_mode == "COMPLIANCE"
+    assert first_at is not None and rows[0].worm_verified_at >= first_at

@@ -17,6 +17,7 @@ from .service import (
     get_setup_detail,
     get_setup_state,
     set_org_profile,
+    verify_storage,
 )
 
 __all__ = [
@@ -28,4 +29,5 @@ __all__ = [
     "mint_secret",
     "set_org_profile",
     "verify_secret",
+    "verify_storage",
 ]

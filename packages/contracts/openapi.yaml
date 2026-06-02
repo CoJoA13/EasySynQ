@@ -179,6 +179,40 @@ paths:
         "403": { $ref: "#/components/responses/ProblemResponse" }
         "422": { $ref: "#/components/responses/ProblemResponse" }
 
+  /setup/verify-storage:
+    post:
+      tags: [setup]
+      operationId: verifySetupStorage
+      summary: >-
+        Verify the vault bucket enforces WORM object-lock (gate G-B) + record the object-lock mode
+        (GOVERNANCE default; COMPLIANCE recorded but not plumbed in v1, D-7). Needs storage.manage.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                object_lock_mode: { type: string, enum: [GOVERNANCE, COMPLIANCE], default: GOVERNANCE }
+      responses:
+        "200":
+          description: WORM verified; G-B satisfied.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [worm_verified, object_lock_mode]
+                properties:
+                  worm_verified: { type: boolean }
+                  object_lock_mode: { type: string }
+                  retain_until: { type: [string, "null"], format: date-time }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "422":
+          description: The vault bucket does not enforce WORM (worm_not_enforced).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
   /setup/finalize:
     post:
       tags: [setup]
@@ -1178,6 +1212,7 @@ components:
             - bootstrap_invalid
             - bootstrap_expired
             - bootstrap_already_consumed
+            - worm_not_enforced
             - rate_limited
             - idempotency_replay
             - internal_error
