@@ -194,12 +194,44 @@ Docker stack):**
   404-no-effective, 409-no-rendition+notice (integration, PDF-passthrough + mirror sync — no Gotenberg). 126 unit + 73
   integration passed.
 
-**Next slice: S8 — setup wizard** (per docs/18 — the first-run onboarding that grants the first admin, today only
-bootstrapped via the `easysynq grant-role` CLI; likely the first substantial web/UI work). The mirror/rendering epic
-(S7–S7d) is now complete. S6/S7 seams still open: the `event_type` enum reserves the Keycloak auth-event values (SPI
-ships later), `/audit-events/export` keeps its `openapi.yaml` schema unmounted, and the clause/process IA mirror tree
-awaits `clause_mapping` in **S9**. Pre-existing hardening noted during S7d review (not S7d-introduced): `area_code` is
-unconstrained `Text` at the create boundary — a Pydantic `pattern` there would tidy the identifier across all surfaces.
+- **S8a — Setup spine (latch + bootstrap-of-trust + first admin + org profile + finalize)** ✅ — PR #16. The first-run
+  foundation (doc 08) that stands a fresh install up **self-service + latch-protected**, without the `grant-role` CLI.
+  An owner-approved **decomposition** of S8 (G-B WORM-verify, G-C/AC#5 backup+restore-drill CLI, G-D auth-config, wizard
+  steps 6-9, the client-side router, in-app Keycloak provisioning + MFA all deferred to **S8b/S8c**). **The 423 latch**
+  is an ASGI middleware in `create_app()`: `/api/v1/*` → 423 `setup_incomplete` while `setup_state != OPERATIONAL`, with
+  **boundary-anchored** exemptions (the `/setup` tree + exact `/auth/config`, `/me`, `/verify`, `/openapi.json`, `/docs`
+  — a `startswith`-collision review fix) so a future sibling route can't be silently un-latched; no cache (per-request
+  indexed PK lookup — isolation-safe; the conftest defaults the shared test DB to OPERATIONAL so non-setup tests aren't
+  latched). **Bootstrap-of-trust:** `easysynq setup mint-bootstrap` (a new `cli/setup.py`) stores a 256-bit single-use,
+  TTL'd, **salted-SHA256** secret on `system_config`; the **public** `POST /setup/bootstrap` (Keycloak-authenticated but
+  **outside the PEP** — the secret, not a grant, authorizes it) verifies it constant-time + grants the caller the seeded
+  System Administrator role → breaks the deny-by-default chicken-and-egg. Best-effort Redis rate-limit (5/15min, degrades
+  if Redis is down). `grant-role` stays **break-glass**. **Endpoints** (`api/setup.py`): `GET /setup/state` (public, SPA
+  routing), `GET /setup` (auth), `POST /setup/bootstrap`, `PATCH /setup/org-profile` + `POST /setup/finalize`
+  (`config.update`). An **extensible gate registry** (`services/setup/service.py GATES`): S8a checks **G-A** (admin) +
+  **G-E** (org `short_code != 'DEFAULT'`); finalize flips the one-way `UNINITIALIZED→IN_SETUP→OPERATIONAL` + emits
+  `SETUP_FINALIZED` (its `after` carries the full `{gate: bool}` snapshot — a `sorted(dict)`-drops-bools review fix).
+  Setup `audit_event` rows (object types `config`/`user`) commit atomically; `canonical_serialize` v1 untouched.
+  **Migration `0012`**: `ALTER TYPE event_type ADD VALUE` for the 4 setup events (the `0011` pattern; no-op downgrade) +
+  Python `EventType` members; `organization.timezone` (R8); the bootstrap columns; and it **seeds the never-before-created
+  `system_config` row** — `OPERATIONAL` iff a `role_assignment` already exists (so upgrading a **running** install isn't
+  bricked by the new latch), else `UNINITIALIZED`; downgrade deletes the seeded row (the org FK would block `0002`).
+  **Web (minimal, no router):** `App` branches on `/setup/state` — a Mantine `<Stepper>` wizard (sign-in + bootstrap
+  secret → org-profile form → finalize) vs the normal shell; a bearer-fetch helper; **no new deps**. Adversarially
+  reviewed (5 lenses → 15-agent verify); the `0012` OPERATIONAL-upgrade branch verified on a throwaway PG. Proofs:
+  secret mint/verify + EventType (unit); latch-423-until-operational, bootstrap-grants-admin+audits, wrong/replay/
+  expired/no-secret rejected, rate-limit-lockout, org-profile authz+validation, finalize-gates→OPERATIONAL+latch-lifts,
+  exemption-boundary, grant-role break-glass (integration). 131 unit + 84 integration.
+
+**Next slice: S8b — storage/WORM-verify (G-B) + backup/restore-drill (G-C / AC#5)** — the deferred hard gates: the
+WORM-verify probe (object-locked early-delete DENIED) + the net-new `backup`/`restore` CLI and the restore-into-scratch
+drill that finalize must require (AC#5 is a named MVP proof; "configured-but-unverified" doesn't satisfy G-C). Then
+**S8c** (auth-config G-D + the fuller wizard / router) and **S9** (clause/process IA + `clause_mapping`). The S8a gate
+registry + the latch are built to extend: S8b/S8c just append gates to `GATES` and add their wizard steps. S6/S7 seams
+still open: the `event_type` enum reserves the Keycloak auth-event values (SPI later), `/audit-events/export` stays
+unmounted, the clause/process IA mirror tree awaits `clause_mapping` (**S9**). Pre-existing hardening noted (not
+S8a-introduced): `area_code` is unconstrained `Text` at the create boundary (S8a's `short_code` IS now validated in
+`/setup/org-profile`, but the S3 create path isn't).
 
 ## Building the MVP (dev workflow)
 
@@ -252,10 +284,18 @@ unconstrained `Text` at the create boundary — a Pydantic `pattern` there would
 - **Dev login:** `demo` / `Demo-Password-1` (created at runtime in Keycloak, **not committed**; realm policy
   requires ≥12-char passwords). After a Keycloak container reset, recreate with `kcadm.sh` (`create users -r
   easysynq -s username=demo -s enabled=true` then `set-password`).
-- **Authz bootstrap (pre-S8):** since the first-run wizard that grants the first admin is S8, the authz admin API is
-  deny-by-default for everyone until a role is assigned. Bootstrap with `easysynq grant-role <keycloak-subject>
-  ["Role Name"]` (default "System Administrator"; idempotent; JIT-creates the `app_user`). It runs
-  `easysynq_api.cli.grant_role` inside the api container — an explicit operator action, not an app-logic auto-grant.
+- **First-run setup (S8a) — the primary path now:** a fresh install boots `UNINITIALIZED`, so the **whole `/api/v1/*`
+  QMS surface is 423 `setup_incomplete`** until setup finalizes (the latch). Stand it up self-service: (1) operator runs
+  **`easysynq setup mint-bootstrap`** (prints a one-time secret); (2) open **`/setup`** in the browser, sign in via
+  Keycloak, paste the secret → you become the first **System Administrator** (`setup_state → IN_SETUP`); (3) the wizard
+  sets the org profile (legal name / short code / timezone); (4) **Finalize** flips `→ OPERATIONAL` and the latch lifts.
+  After an **upgrade of a running install**, `0012` seeds `OPERATIONAL` automatically (a `role_assignment` already
+  exists) — no wizard, no lock-out. **NB the operator must point the app at the non-owner DB role for the latch UPDATE
+  to work** (same `.env` role-separation as S6).
+- **Authz break-glass (`grant-role`):** still available to assign a seeded role directly, bypassing the wizard +
+  PEP — `easysynq grant-role <keycloak-subject> ["Role Name"]` (default "System Administrator"; idempotent;
+  JIT-creates the `app_user`; runs `easysynq_api.cli.grant_role` as the DB owner). Use it to recover a botched
+  bootstrap or to seed an admin without the UI.
 - **No Docker?** Every slice is still buildable + unit-testable on the uv/3.12 loop; CI runs the stack-dependent
   proofs.
 
