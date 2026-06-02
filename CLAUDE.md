@@ -245,17 +245,55 @@ Docker stack):**
   `WORM_VERIFIED` audit + requires `storage.manage` (403 else), finalize-blocked-on-G-B-then-passes, re-run UPDATEs in
   place. 131 unit + 89 integration.
 
-**Next slice: S8b2 — backup/restore CLI + the AC#5 restore-into-scratch drill (gate G-C)** — the big deferred sub-build:
-a net-new in-container `backup`/`restore` CLI (pg_dump → scratch schema + `boto3` copy blobs → a **non-WORM** scratch
-bucket + the AC#5 integrity triad: blob SHA-256 re-hash, row-count parity, FK checks) that **finalize must require**
-("configured-but-unverified" doesn't satisfy G-C); plus the `backup_policy` table, the off-host audit-sink soft-gate
-(G-soft, reuses the S6 checkpoint sink), the remaining `storage_config` columns, and 3 more `event_type` values
-(`BACKUP_CONFIGURED`/`RESTORE_TEST_PASSED`/`RESTORE_TEST_FAILED`). **Locked for S8b2:** all-blobs drill depth; the
-drill runs as a worker task (G-C reads the persisted `last_restore_test_result`, so finalize never runs it inline).
-WAL/PITR + the operator-grade WORM-aware restore CLI stay **v1.x/S11** (D-6). Then **S8c** (auth-config G-D + fuller
-wizard / router) and **S9** (clause/process IA + `clause_mapping`). The gate registry + latch extend by just appending
-gates. S6/S7 seams still open (Keycloak auth-event SPI, `/audit-events/export`, the clause/process IA mirror tree).
-Pre-existing hardening noted: `area_code` is unconstrained `Text` at the S3 create boundary.
+- **S8b2 — Setup gate G-C (backup/restore-into-scratch drill) + durable backup [AC#5]** ✅ — PR #20. The last blocking
+  setup gate + a named MVP acceptance proof: finalize is **blocked until a real backup→restore-into-scratch drill
+  PASSES** the integrity triad (**blob SHA-256 re-hash · per-table row-count parity · `document_version→blob` FK
+  check**); "configured but unverified" does **not** satisfy G-C (doc 08 §8, doc 18 §7). **Owner forks:** real
+  `pg_dump`→`pg_restore` (a faithful artifact round-trip, NOT a logical copy — the thing G-C exists to catch) ·
+  restore into a scratch **DATABASE** (pg_restore's natural unit; doc 08 §8.2's "temporary PG schema" **reconciled**
+  as "an isolated namespace", noted in `drill.py` + back-propagated to doc 08 §8.2) · **durable archive + drill** (a
+  real `easysynq backup` + nightly Beat, alongside the gating drill). `services/backup/`: `dsn` (SQLAlchemy URL→libpq
+  env, password via env not argv), `archive` (`pg_dump -Fc`/`pg_restore` subprocess + tar + `.sha256` pack/verify),
+  `drill` (scratch-DB createdb→`pg_restore`→teardown; blob copy into the **non-WORM** `restore-scratch` bucket under a
+  per-drill prefix; the triad on the **restored** copy; **race-free row-count parity** via `pg_export_snapshot()` +
+  `pg_dump --snapshot`; composable steps + an `after_restore` fault seam; **never raises** — a missing binary/crash is
+  an honest FAIL, never a 500), `service` (async orchestration: `LOCK_RESTORE_DRILL`=7710004, persist
+  `last_restore_test_result`, emit `RESTORE_TEST_*` + commit). Runs as the **OWNER** role (`sync_dsn`) — the
+  `easysynq_app` role can neither `pg_dump` the whole DB nor `CREATE DATABASE`. `Gate("G-C", _gate_restore_test_passed)`
+  appended to `GATES` (keys on `result=='PASS'`, not just `_at`) → finalize now needs **G-A+G-E+G-B+G-C**, zero
+  finalize-code change; the off-host audit anchor stays a **soft gate** (surfaced in `GET /setup` via S6's
+  `tamper_evidence_attested`; never blocks; R13). **`0014`**: `ALTER TYPE event_type ADD VALUE` ×3
+  (`BACKUP_CONFIGURED`/`RESTORE_TEST_PASSED`/`RESTORE_TEST_FAILED`, the 0012/0013 pattern; Python `EventType` members
+  added too) + `backup_policy` (doc 14 §2 columns; retention as **counts** 7/4/6; `wal_pitr_enabled` a recorded
+  forward-seam — `configure-backup` **rejects `true`** as D-6 scope). Endpoints (latch-exempt): `POST
+  /setup/configure-backup` (`backup.configure` + live destination writability check) + `POST /setup/run-restore-test`
+  (`restore.run`, enqueues the worker task — 202). `tasks/backup.py` + the nightly `easysynq.backup.run` Beat job +
+  `cli/backup.py` (`run`/`restore-test`) wired into `scripts/easysynq`. **Dockerfile**: `postgresql-client-16` via the
+  PGDG repo (matches `postgres:16`; build-time only → air-gapped *installs* unaffected). Compose: a `backup` volume on
+  the worker; minio-init + the integration conftest add the plain `restore-scratch` bucket (R37 — object-lock can't be
+  retro-added, never restore into the WORM vault bucket). **Web:** a "Backup" `<Stepper>` step (configure + run-restore-
+  test with poll-to-green) + the not-tamper-evident soft-gate warning. Adversarially reviewed (5 lenses → 24 raw → 14
+  verified; the false-PASS lens found no way for the drill to PASS without a real restore): folded the **headline
+  coverage gap** — the blob-dependent legs (re-hash + FK) were only vacuously exercised at 0-blob IN_SETUP, so added two
+  deterministic OPERATIONAL-state tests over a real Effective document (`test_drill_passes_over_real_blobs` asserts
+  `details.blobs ≥ 1`; `test_drill_fails_on_corrupted_restored_blob` proves the re-hash leg catches a corrupted restored
+  blob) + the WAL/PITR-reject test + the §8.2 deviation/skip docstrings. Also fixed a real bug review surfaced via the
+  full-suite (with prior tests' blobs): teardown's multi-delete `delete_objects` → MinIO `MissingContentMD5` → switched
+  to per-object `delete_object`. Proofs: `test_setup_finalize_requires_restore_pass` **[AC#5]** + negative
+  drill→FAIL→finalize-blocked, configure/run authz (403), destination/cron/wal-pitr validation, durable archive,
+  scratch teardown (no orphan DB/objects), real-blob PASS + corrupted-blob FAIL; archive-checksum + dsn + EventType
+  unit. **139 unit + 101 integration** (the real-drill path validated locally with `postgresql-client-16` + in CI).
+
+**Next slice: S8c — auth-config gate G-D + the fuller wizard / client router** — the Keycloak in-app provisioning + MFA
++ a proven non-bootstrap login (gate G-D, doc 08 §9), plus wizard steps 6–9 (org roles/users, QMS scope/process map,
+import hand-off) and the client-side router. Then **S9** (clause/process IA + `clause_mapping` — also unblocks the
+mirror's clause/process tree + the lifecycle submit ≥1-`clause_mapping` gate). The gate registry + latch extend by just
+appending gates. **Deferred from S8b2 (S11 / v1.x, D-6 / R37):** the operator-grade *live* WORM-aware restore + cutover,
+PITR↔blob-snapshot alignment, checkpoint-not-ahead, WAL/PITR, retention *pruning* execution, Keycloak realm export,
+archive envelope encryption, S3-destination, `easysynq restore`/`upgrade`; the non-drill-critical `storage_config`
+mirror/bucket columns were also deferred (config-redundant with env, no G-C proof value). S6/S7 seams still open
+(Keycloak auth-event SPI, `/audit-events/export`, the clause/process IA mirror tree). Pre-existing hardening noted:
+`area_code` is unconstrained `Text` at the S3 create boundary.
 
 ## Building the MVP (dev workflow)
 
@@ -312,10 +350,20 @@ Pre-existing hardening noted: `area_code` is unconstrained `Text` at the S3 crea
   QMS surface is 423 `setup_incomplete`** until setup finalizes (the latch). Stand it up self-service: (1) operator runs
   **`easysynq setup mint-bootstrap`** (prints a one-time secret); (2) open **`/setup`** in the browser, sign in via
   Keycloak, paste the secret → you become the first **System Administrator** (`setup_state → IN_SETUP`); (3) the wizard
-  sets the org profile (legal name / short code / timezone); (4) **Finalize** flips `→ OPERATIONAL` and the latch lifts.
-  After an **upgrade of a running install**, `0012` seeds `OPERATIONAL` automatically (a `role_assignment` already
-  exists) — no wizard, no lock-out. **NB the operator must point the app at the non-owner DB role for the latch UPDATE
-  to work** (same `.env` role-separation as S6).
+  sets the org profile (legal name / short code / timezone); (3.5 — **S8b**) **Verify storage** (the WORM probe, G-B);
+  (3.6 — **S8b2**) **Backup**: set a backup destination, then **Run backup + restore-test drill** — finalize is blocked
+  until it PASSES (G-C / AC#5); (4) **Finalize** flips `→ OPERATIONAL` and the latch lifts. After an **upgrade of a
+  running install**, `0012` seeds `OPERATIONAL` automatically (a `role_assignment` already exists) — no wizard, no
+  lock-out. **NB the operator must point the app at the non-owner DB role for the latch UPDATE to work** (same `.env`
+  role-separation as S6).
+- **⚠ S8b2 backup/restore drill (operator):** the drill + `pg_dump` run as the **OWNER** role, so the **worker** must
+  see `DATABASE_URL_SYNC` (the owner `easysynq` DSN — the same one Alembic uses; already set for S6) in addition to the
+  non-owner `DATABASE_URL`. New `.env`/compose: `BACKUP_PATH` (default destination, a mounted `backup` volume on the
+  worker) + `S3_BUCKET_RESTORE_SCRATCH=restore-scratch` (a plain non-WORM scratch bucket minio-init provisions). The
+  worker image now carries `postgresql-client-16`. Operator CLI (host-side): `easysynq backup run` (write a durable
+  archive now) and `easysynq backup restore-test` (run the gating drill; exits non-zero on FAIL) — both dispatch to the
+  worker container. The nightly `easysynq.backup.run` Beat job writes durable archives (pg_dump + a MinIO blob
+  manifest); the operator-grade **live** WORM-aware restore stays S11.
 - **Authz break-glass (`grant-role`):** still available to assign a seeded role directly, bypassing the wizard +
   PEP — `easysynq grant-role <keycloak-subject> ["Role Name"]` (default "System Administrator"; idempotent;
   JIT-creates the `app_user`; runs `easysynq_api.cli.grant_role` as the DB owner). Use it to recover a botched
