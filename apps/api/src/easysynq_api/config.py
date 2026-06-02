@@ -49,6 +49,9 @@ class Settings(BaseSettings):
     s3_bucket_documents: str = "documents"
     s3_bucket_staging: str = "staging"
     s3_bucket_renditions: str = "renditions"  # derived watermarked PDFs (non-WORM; S7b)
+    # S8b2 restore-drill: a plain (NON-WORM) scratch bucket the drill copies blobs INTO and tears
+    # down (R37 — object-lock can't be retro-added, so never restore into the locked vault bucket).
+    s3_bucket_restore_scratch: str = "restore-scratch"
     s3_object_lock_mode: str = "GOVERNANCE"
     s3_presign_expiry_seconds: int = 900  # presigned PUT/GET validity (doc 18 §5.2)
 
@@ -75,6 +78,11 @@ class Settings(BaseSettings):
     # renderer + mirror
     gotenberg_url: str = "http://localhost:3000"
     mirror_path: str = "/var/lib/easysynq/qms-mirror"
+
+    # S8b2 backup: the default filesystem destination for durable archives + the restore-test drill
+    # (the per-org backup_policy.destination overrides). A mounted volume / NFS path in MVP
+    # (S3-destination is S11/v1.x). The drill + pg_dump run as the OWNER role (database_url_sync).
+    backup_path: str = "/var/lib/easysynq/backups"
 
     # S7c verify token: a dedicated Ed25519 key (separate custody from the audit-checkpoint key) +
     # the browser-reachable origin the footer QR/verify-link points at.

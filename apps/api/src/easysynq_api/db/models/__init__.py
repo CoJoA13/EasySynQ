@@ -29,6 +29,7 @@ from .audit_checkpoint import AuditCheckpoint
 from .audit_checkpoint_sink import AuditCheckpointSink
 from .audit_event import AuditEvent
 from .authz_grant import PermissionOverride
+from .backup_policy import BackupPolicy
 from .blob import Blob
 from .document_type import DocumentType
 from .document_version import DocumentVersion
@@ -61,6 +62,7 @@ __all__ = [
     "AuditCheckpointSink",
     "AuditEvent",
     "AuditObjectType",
+    "BackupPolicy",
     "Blob",
     "ChangeSignificance",
     "CheckpointSinkKind",

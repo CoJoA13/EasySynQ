@@ -9,6 +9,8 @@ first-run flow is deterministic regardless of order.
 from __future__ import annotations
 
 import datetime
+import shutil
+import tempfile
 import uuid
 from collections.abc import Callable
 
@@ -21,11 +23,13 @@ from easysynq_api.config import get_settings
 from easysynq_api.db.models._audit_enums import EventType
 from easysynq_api.db.models.app_user import AppUser
 from easysynq_api.db.models.audit_event import AuditEvent
+from easysynq_api.db.models.backup_policy import BackupPolicy
 from easysynq_api.db.models.organization import Organization
 from easysynq_api.db.models.role import Role, RoleAssignment
 from easysynq_api.db.models.storage_config import StorageConfig
 from easysynq_api.db.models.system_config import SetupState, SystemConfig
 from easysynq_api.db.session import get_sessionmaker
+from easysynq_api.services import backup as backup_service
 from easysynq_api.services.setup import service as setup_service
 from easysynq_api.services.setup.bootstrap import mint_secret
 from easysynq_api.services.vault import storage
@@ -57,6 +61,7 @@ async def _reset_uninitialized() -> str:
             )
         )
         await s.execute(delete(StorageConfig))  # reset G-B (S8b) so it starts unsatisfied
+        await s.execute(delete(BackupPolicy))  # reset G-C (S8b2) so it starts unsatisfied
         org = (await s.execute(select(Organization))).scalar_one()
         org.short_code = "DEFAULT"
         org.legal_name = "EasySynQ (configure in setup)"
@@ -64,6 +69,23 @@ async def _reset_uninitialized() -> str:
     async with aioredis.from_url(get_settings().redis_url, decode_responses=True) as r:
         await r.delete(setup_service._RL_KEY)
     return secret
+
+
+async def _pass_restore_gate(result: str = "PASS") -> None:
+    """Satisfy (or fail) gate G-C directly by persisting a backup_policy result — for tests whose
+    subject is the latch/other gates, NOT the drill. The real drill→PASS path is proven in
+    ``test_setup_finalize_requires_restore_pass`` (this session) without this shortcut."""
+    async with get_sessionmaker()() as s:
+        org_id = (await s.execute(select(Organization.id))).scalar_one()
+        policy = await s.scalar(select(BackupPolicy).where(BackupPolicy.org_id == org_id))
+        if policy is None:
+            policy = BackupPolicy(
+                org_id=org_id, destination=tempfile.gettempdir(), cron="0 2 * * *"
+            )
+            s.add(policy)
+        policy.last_restore_test_at = setup_service._now()
+        policy.last_restore_test_result = result
+        await s.commit()
 
 
 async def _bootstrap(client: AsyncClient, h: dict[str, str], secret: str) -> dict:
@@ -208,6 +230,7 @@ async def test_finalize_blocked_then_operational_lifts_latch(
         json={"legal_name": "Acme Corp", "short_code": "ACME", "timezone": "UTC"},
     )
     await _verify_storage(app_client, h)  # G-B (S8b) is now a required finalize gate too
+    await _pass_restore_gate()  # G-C (S8b2) is required too — drill proven separately (AC#5)
     done = await app_client.post("/api/v1/setup/finalize", headers=h)
     assert done.status_code == 200, done.text
     assert done.json()["setup_state"] == "OPERATIONAL"
@@ -380,6 +403,7 @@ async def test_finalize_blocked_on_g_b_until_worm_verified(
     assert any(g["key"] == "G-B" for g in blocked.json()["failed_gates"])
 
     await _verify_storage(app_client, h)
+    await _pass_restore_gate()  # G-C (S8b2) is required too — drill proven separately (AC#5)
     done = await app_client.post("/api/v1/setup/finalize", headers=h)
     assert done.status_code == 200, done.text
     assert done.json()["setup_state"] == "OPERATIONAL"
@@ -407,3 +431,161 @@ async def test_verify_storage_rerun_updates_in_place(
     assert len(rows) == 1  # UPDATE in place, not a second INSERT
     assert rows[0].object_lock_mode == "COMPLIANCE"
     assert first_at is not None and rows[0].worm_verified_at >= first_at
+
+
+# --- S8b2: G-C backup/restore drill (AC#5) ------------------------------------------------
+#
+# These exercise the REAL drill (pg_dump/pg_restore against the testcontainer PG + a MinIO scratch
+# bucket). The CI `integration` job's runner carries postgresql-client-16; a runner/host without it
+# makes the drill an honest FAIL (a missing binary is caught + reported, never a 500).
+
+
+async def _org_id() -> uuid.UUID:
+    async with get_sessionmaker()() as s:
+        return (await s.execute(select(Organization.id))).scalar_one()
+
+
+async def _bootstrap_through_storage(
+    app_client: AsyncClient, token_factory: Callable[..., str], sub: str
+) -> tuple[dict[str, str], uuid.UUID]:
+    """reset → bootstrap (G-A) → org (G-E) → verify-storage (G-B). Returns (headers, admin_id)."""
+    secret = await _reset_uninitialized()
+    h = _auth(token_factory, _sub(sub))
+    body = await _bootstrap(app_client, h, secret)
+    await app_client.patch(
+        "/api/v1/setup/org-profile",
+        headers=h,
+        json={"legal_name": "Acme Corp", "short_code": "ACME", "timezone": "UTC"},
+    )
+    await _verify_storage(app_client, h)
+    return h, uuid.UUID(body["admin_user_id"])
+
+
+async def test_setup_finalize_requires_restore_pass(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """[HEADLINE / AC#5] Finalize is BLOCKED on G-C until a real backup→restore-into-scratch drill
+    PASSES the integrity triad; "configured but unverified" does NOT satisfy it. test name is the
+    doc-18 §7 acceptance proof."""
+    dest = tempfile.mkdtemp(prefix="easysynq-drill-")
+    try:
+        h, admin_id = await _bootstrap_through_storage(app_client, token_factory, "ac5")
+        org_id = await _org_id()
+
+        # G-A/E/B satisfied, but no restore test yet → finalize blocked specifically on G-C.
+        blocked = await app_client.post("/api/v1/setup/finalize", headers=h)
+        assert blocked.status_code == 409
+        assert any(g["key"] == "G-C" for g in blocked.json()["failed_gates"])
+
+        # Configure the backup destination (records the policy — does NOT satisfy G-C on its own).
+        cfg = await app_client.post(
+            "/api/v1/setup/configure-backup", headers=h, json={"destination": dest}
+        )
+        assert cfg.status_code == 200, cfg.text
+        still_blocked = await app_client.post("/api/v1/setup/finalize", headers=h)
+        assert still_blocked.status_code == 409  # configured ≠ verified
+        assert any(g["key"] == "G-C" for g in still_blocked.json()["failed_gates"])
+
+        # Run the REAL drill (the endpoint only enqueues; drive the worker coroutine directly).
+        result = await backup_service.run_restore_test(org_id, admin_id)
+        assert result["result"] == "PASS", result
+
+        # The persisted PASS flips G-C → finalize succeeds; a RESTORE_TEST_PASSED row was written.
+        detail = await app_client.get("/api/v1/setup", headers=h)
+        assert detail.json()["gates"]["G-C"] is True
+        assert detail.json()["backup"]["last_restore_test_result"] == "PASS"
+
+        done = await app_client.post("/api/v1/setup/finalize", headers=h)
+        assert done.status_code == 200, done.text
+        assert done.json()["setup_state"] == "OPERATIONAL"
+
+        async with get_sessionmaker()() as s:
+            passed = await s.scalar(
+                select(AuditEvent.id).where(
+                    AuditEvent.event_type == EventType.RESTORE_TEST_PASSED,
+                    AuditEvent.object_id == org_id,
+                )
+            )
+        assert passed is not None
+    finally:
+        shutil.rmtree(dest, ignore_errors=True)
+
+
+async def test_restore_drill_failure_blocks_finalize(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """[NEGATIVE / AC#5] If the integrity triad fails (here: a restored scratch blob is corrupted
+    after restore), the drill is FAIL — last_restore_test_result is not PASS, G-C stays unsatisfied,
+    and finalize stays blocked. The drill must never falsely claim recoverability."""
+    import boto3
+
+    dest = tempfile.mkdtemp(prefix="easysynq-drill-fail-")
+    try:
+        h, admin_id = await _bootstrap_through_storage(app_client, token_factory, "ac5fail")
+        org_id = await _org_id()
+        await app_client.post(
+            "/api/v1/setup/configure-backup", headers=h, json={"destination": dest}
+        )
+
+        settings = get_settings()
+        client = boto3.client(
+            "s3",
+            endpoint_url=settings.s3_endpoint,
+            aws_access_key_id=settings.s3_access_key,
+            aws_secret_access_key=settings.s3_secret_key,
+            region_name=settings.s3_region,
+        )
+
+        def _corrupt(handle: backup_service.ScratchHandle) -> None:
+            # Corrupt every restored scratch blob so the re-hash leg mismatches. At fresh-setup time
+            # there are no blobs yet, so fall back to dropping a row (row-count parity then fails).
+            paginator = client.get_paginator("list_objects_v2")
+            wrote = False
+            for page in paginator.paginate(
+                Bucket=handle.scratch_bucket, Prefix=handle.object_prefix
+            ):
+                for obj in page.get("Contents", []):
+                    client.put_object(
+                        Bucket=handle.scratch_bucket, Key=obj["Key"], Body=b"corrupted-bytes"
+                    )
+                    wrote = True
+            if not wrote:
+                _drop_a_scratch_row(handle)
+
+        result = await backup_service.run_restore_test(org_id, admin_id, after_restore=_corrupt)
+        assert result["result"] == "FAIL", result
+
+        detail = await app_client.get("/api/v1/setup", headers=h)
+        assert detail.json()["gates"]["G-C"] is False
+        assert detail.json()["backup"]["last_restore_test_result"] == "FAIL"
+
+        blocked = await app_client.post("/api/v1/setup/finalize", headers=h)
+        assert blocked.status_code == 409
+        assert any(g["key"] == "G-C" for g in blocked.json()["failed_gates"])
+
+        async with get_sessionmaker()() as s:
+            failed = await s.scalar(
+                select(AuditEvent.id).where(
+                    AuditEvent.event_type == EventType.RESTORE_TEST_FAILED,
+                    AuditEvent.object_id == org_id,
+                )
+            )
+        assert failed is not None
+    finally:
+        shutil.rmtree(dest, ignore_errors=True)
+
+
+def _drop_a_scratch_row(handle: backup_service.ScratchHandle) -> None:
+    """Delete one row from the restored scratch DB so row-count parity fails (the fallback fault
+    when the fresh-setup DB carries no blobs to corrupt)."""
+    import psycopg
+
+    from easysynq_api.services.backup.dsn import conn_kwargs
+
+    with (
+        psycopg.connect(
+            **conn_kwargs(handle.owner_dsn, dbname=handle.scratch_db), autocommit=True
+        ) as conn,
+        conn.cursor() as cur,
+    ):
+        cur.execute("DELETE FROM permission WHERE ctid IN (SELECT ctid FROM permission LIMIT 1)")

@@ -6,6 +6,22 @@ FROM python:3.12-slim AS base
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     EASYSYNQ_MIGRATIONS_DIR=/migrations
+# S8b2: postgresql-client-16 (pg_dump/pg_restore) for the backup + restore-test drill. Pinned to 16
+# to match the postgres:16 server (an older client refuses a newer server). Via the PGDG apt repo
+# (bookworm ships only client-15); build-time only, so air-gapped *installs* are unaffected (the
+# image is pre-built). Only the worker runs the drill; the shared image carries it for both.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl ca-certificates gnupg \
+    && install -d /usr/share/postgresql-common/pgdg \
+    && curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+        -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+    && echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] \
+https://apt.postgresql.org/pub/repos/apt bookworm-pgdg main" > /etc/apt/sources.list.d/pgdg.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends postgresql-client-16 \
+    && apt-get purge -y curl gnupg \
+    && apt-get autoremove -y \
+    && rm -rf /var/lib/apt/lists/*
 COPY --from=ghcr.io/astral-sh/uv:0.4 /uv /usr/local/bin/uv
 WORKDIR /app
 

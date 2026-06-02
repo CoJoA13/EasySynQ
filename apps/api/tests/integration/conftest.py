@@ -105,6 +105,9 @@ def _minio() -> Iterator[dict[str, str]]:
         )
         client.create_bucket(Bucket="staging")  # plain bucket for presigned uploads
         client.create_bucket(Bucket="renditions")  # S7b derived watermarked PDFs (non-WORM)
+        # S8b2 restore-test drill: a plain (NON-WORM) scratch bucket the drill copies blobs into +
+        # tears the per-drill prefix down (R37 — never restore into the object-locked documents).
+        client.create_bucket(Bucket="restore-scratch")
         # S6 off-host audit-checkpoint anchor bucket (object-lock, R13).
         client.create_bucket(Bucket="audit-checkpoints", ObjectLockEnabledForBucket=True)
         yield {

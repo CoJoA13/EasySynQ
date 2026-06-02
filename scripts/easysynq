@@ -11,10 +11,13 @@ usage() {
   cat <<'EOF'
 usage: easysynq <command>
 
-  backup            Create a checksummed, optionally-encrypted archive (PG + MinIO
-                    manifest + Keycloak realm + config).                 [S11]
-  restore <file>    WORM-aware restore into a fresh bucket; PITR<->blob aligned;
-                    audit-checkpoint-not-ahead check.                    [S11]
+  backup run        Write a durable checksummed archive (pg_dump + MinIO blob
+                    manifest) to each configured destination.            [S8b2]
+  backup restore-test
+                    Run the backup->restore-into-scratch drill + integrity triad
+                    (gate G-C); persists PASS/FAIL.                      [S8b2]
+  restore <file>    WORM-aware *live* restore into a fresh bucket; PITR<->blob
+                    aligned; audit-checkpoint-not-ahead check.           [S11]
   mirror rebuild    Regenerate the read-only filesystem mirror from the vault. [S7]
   upgrade           Backup -> migrate -> health-gate -> (rollback on failure). [S11]
   migrate           Run 'alembic upgrade head' inside the api image.
@@ -45,8 +48,15 @@ case "$cmd" in
     # First-run bootstrap (S8a): e.g. `easysynq setup mint-bootstrap [--ttl-hours 24]`.
     "${COMPOSE[@]}" run --rm api uv run python -m easysynq_api.cli.setup "$@"
     ;;
-  backup|restore|upgrade)
-    echo "easysynq $cmd: not implemented in S0 — lands in slice S11 (see docs/18 §9)." >&2
+  backup)
+    # S8b2: durable backup (`backup run`) + the restore-into-scratch drill (`backup restore-test`,
+    # gate G-C). Runs on the WORKER (it carries postgresql-client + the owner DATABASE_URL_SYNC).
+    "${COMPOSE[@]}" run --rm worker uv run python -m easysynq_api.cli.backup "$@"
+    ;;
+  restore|upgrade)
+    # Operator-grade WORM-aware *live* restore (R37) + upgrade land in S11 (see docs/18 §9). The
+    # S8b2 `backup restore-test` already proves recoverability into a scratch namespace (gate G-C).
+    echo "easysynq $cmd: not implemented yet — lands in slice S11 (see docs/18 §9)." >&2
     exit 3
     ;;
   mirror)
