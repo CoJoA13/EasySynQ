@@ -170,6 +170,18 @@ async def app_under_test(
     cfg.set_main_option("script_location", str(MIGRATIONS_DIR))
     command.upgrade(cfg, "head")
 
+    # The S8a latch (423 until OPERATIONAL) would otherwise lock every non-setup test out of the
+    # shared, session-scoped DB. Default it OPEN here so existing tests behave as before; the setup
+    # tests reset setup_state to UNINITIALIZED themselves (test_setup.py).
+    import sqlalchemy as _sa
+
+    _owner = _sa.create_engine(_pg)
+    with _owner.begin() as conn:
+        conn.execute(
+            _sa.text("UPDATE system_config SET setup_state='OPERATIONAL', finalized_at=now()")
+        )
+    _owner.dispose()
+
     app = create_app()
     app.dependency_overrides[get_jwks_cache] = lambda: JWKSCache("", static_jwks=JWKS)
 

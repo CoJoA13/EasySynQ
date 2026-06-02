@@ -70,6 +70,20 @@ def _body(
     return body
 
 
+def problem_response(
+    request: Request, *, status: int, code: str, title: str, detail: str | None = None
+) -> JSONResponse:
+    """Build a problem+json ``JSONResponse`` directly — for code paths OUTSIDE the exception
+    handlers (e.g. the setup-latch middleware, which runs before routing/handlers)."""
+    return JSONResponse(
+        status_code=status,
+        media_type=PROBLEM_MEDIA_TYPE,
+        content=_body(
+            status=status, code=code, title=title, instance=str(request.url.path), detail=detail
+        ),
+    )
+
+
 def register_exception_handlers(app: FastAPI) -> None:
     from .domain.vault.lifecycle import IllegalTransition
 

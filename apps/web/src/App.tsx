@@ -1,5 +1,7 @@
-import { Badge, Button, Card, Container, Group, Stack, Text, Title } from "@mantine/core";
+import { Badge, Button, Card, Container, Group, Loader, Stack, Text, Title } from "@mantine/core";
 import { useQuery } from "@tanstack/react-query";
+import { SetupWizard } from "./SetupWizard";
+import { apiGet } from "./lib/api";
 import { useAuth } from "./lib/auth";
 
 interface Dependency {
@@ -99,22 +101,42 @@ export function App() {
   const { ready, user, login, logout } = useAuth();
   const token = user?.access_token ?? null;
 
+  // The public setup-state probe decides wizard-vs-shell (S8a). The latch (423) protects the API
+  // regardless; this is just the SPA's routing signal.
+  const setupState = useQuery({
+    queryKey: ["setup-state"],
+    queryFn: () => apiGet<{ setup_state: string }>("/api/v1/setup/state"),
+  });
+
+  if (!ready || setupState.isLoading) {
+    return (
+      <Container size="sm" py="xl">
+        <Loader />
+      </Container>
+    );
+  }
+
+  if (setupState.data?.setup_state !== "OPERATIONAL") {
+    return (
+      <SetupWizard token={token} login={login} onFinalized={() => void setupState.refetch()} />
+    );
+  }
+
   return (
     <Container size="sm" py="xl">
       <Stack gap="md">
         <Group justify="space-between">
           <Title order={1}>EasySynQ</Title>
-          {ready &&
-            (token ? (
-              <Button variant="light" onClick={logout}>
-                Sign out
-              </Button>
-            ) : (
-              <Button onClick={login}>Sign in</Button>
-            ))}
+          {token ? (
+            <Button variant="light" onClick={logout}>
+              Sign out
+            </Button>
+          ) : (
+            <Button onClick={login}>Sign in</Button>
+          )}
         </Group>
         <Text c="dimmed">
-          Self-hosted ISO 9001:2015 QMS — slices S0 (walking skeleton) + S1 (authentication).
+          Self-hosted ISO 9001:2015 QMS — slices S0–S8a.
         </Text>
 
         {token && <AccountCard token={token} />}

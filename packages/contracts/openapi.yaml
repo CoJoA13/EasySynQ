@@ -24,6 +24,11 @@ tags:
     description: Liveness and readiness. Public, unversioned-friendly probes.
   - name: auth
     description: Authentication & session. Keycloak OIDC + PKCE; the API is a resource server.
+  - name: setup
+    description: >-
+      First-run setup wizard (slice S8a). Latch-exempt; the QMS surface is 423 setup_incomplete
+      until setup finalizes to OPERATIONAL. The bootstrap secret grants the first System
+      Administrator (outside the PEP); org-profile + finalize need config.update.
   - name: authz
     description: >-
       Authorization admin — the permission catalog, roles, and per-user role/override
@@ -94,6 +99,106 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/AuthConfig" }
+
+  /setup/state:
+    get:
+      tags: [setup]
+      operationId: getSetupState
+      summary: The first-run setup latch state (public, so the SPA can route before sign-in).
+      security: []
+      responses:
+        "200":
+          description: The current setup_state.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [setup_state]
+                properties:
+                  setup_state: { type: string, enum: [UNINITIALIZED, IN_SETUP, OPERATIONAL] }
+
+  /setup:
+    get:
+      tags: [setup]
+      operationId: getSetup
+      summary: The wizard view — state + live gate status + current org profile. Authenticated.
+      responses:
+        "200":
+          description: Setup state, gate status, and org profile.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SetupDetail" }
+
+  /setup/bootstrap:
+    post:
+      tags: [setup]
+      operationId: bootstrapSetup
+      summary: >-
+        Consume the one-time install secret and grant the caller System Administrator
+        (the bootstrap-of-trust). Authenticated, but outside the PEP — the secret authorizes it.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [secret]
+              properties:
+                secret: { type: string }
+      responses:
+        "200":
+          description: The caller is now System Administrator; setup_state advanced to IN_SETUP.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [setup_state, admin_user_id]
+                properties:
+                  setup_state: { type: string }
+                  admin_user_id: { type: string, format: uuid }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "409": { $ref: "#/components/responses/ProblemResponse" }
+        "429": { $ref: "#/components/responses/ProblemResponse" }
+
+  /setup/org-profile:
+    patch:
+      tags: [setup]
+      operationId: setSetupOrgProfile
+      summary: Set the organization profile (Step 2 / gate G-E). Needs config.update.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OrgProfileUpdate" }
+      responses:
+        "200":
+          description: The updated org profile.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OrgProfileUpdate" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "422": { $ref: "#/components/responses/ProblemResponse" }
+
+  /setup/finalize:
+    post:
+      tags: [setup]
+      operationId: finalizeSetup
+      summary: >-
+        Re-check the gates live and flip the setup latch to OPERATIONAL (Step 10). Needs
+        config.update. 409 setup_gates_unsatisfied lists the failed gates.
+      responses:
+        "200":
+          description: Setup finalized; the latch is now OPERATIONAL.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [setup_state]
+                properties:
+                  setup_state: { type: string }
+                  finalized_at: { type: string, format: date-time }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "409": { $ref: "#/components/responses/ProblemResponse" }
 
   /verify:
     get:
@@ -1066,6 +1171,13 @@ components:
             - sod_violation
             - step_up_required
             - setup_incomplete
+            - setup_not_initialized
+            - setup_already_complete
+            - setup_gates_unsatisfied
+            - no_bootstrap_secret
+            - bootstrap_invalid
+            - bootstrap_expired
+            - bootstrap_already_consumed
             - rate_limited
             - idempotency_replay
             - internal_error
@@ -1098,6 +1210,32 @@ components:
         issuer: { type: string }
         client_id: { type: string }
         audience: { type: string }
+
+    OrgProfileUpdate:
+      type: object
+      additionalProperties: false
+      required: [legal_name, short_code, timezone]
+      properties:
+        legal_name: { type: string }
+        short_code: { type: string, description: "[A-Z0-9-], 2-32 chars, not 'DEFAULT'" }
+        timezone: { type: string, description: "IANA tz; authoritative for effective dates (R8)" }
+
+    SetupDetail:
+      type: object
+      additionalProperties: false
+      required: [setup_state, gates, org_profile]
+      properties:
+        setup_state: { type: string, enum: [UNINITIALIZED, IN_SETUP, OPERATIONAL] }
+        gates:
+          type: object
+          additionalProperties: { type: boolean }
+          description: Live gate status keyed by gate id (G-A, G-E, … as later slices add G-B/C/D).
+        org_profile:
+          type: object
+          properties:
+            legal_name: { type: [string, "null"] }
+            short_code: { type: [string, "null"] }
+            timezone: { type: [string, "null"] }
 
     AppUser:
       type: object
