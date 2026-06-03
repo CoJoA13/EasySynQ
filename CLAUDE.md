@@ -21,6 +21,40 @@ Docker stack; the exit slice S11 is PR #41). All six MVP acceptance proofs are i
 backends are complete; the doc-18 §12 exit checklist is closed. The design was locked first (spec-before-code);
 v1/v1.x residuals are listed at the end of this section.
 
+**v1 phase: STARTED.** The owner chose (AskUserQuestion) the **v1 feature** track → **Records & evidence
+(doc 06)** as the first slice (over the web track + the v1.x backend residuals). **Migration head is now `0023`.**
+
+- **S-rec-1 — Records: capture + evidence-linking + correction** ✅ — PR #43. Turns the inert `record` scaffolding
+  (the table/enums/`record.*` perms from 0008/0004 + the WORM `records` bucket from minio-init) into a working
+  subsystem (the *"retain"* half of ISO documented information). **Owner forks:** capture+linking+correction · **all
+  16** RecordType values · **retention-as-data fleshed out** (defer the Beat sweep + disposition state machine) · an
+  **`evidence_blob` M:N** satellite. **Migration `0023`**: `retention_policy` → policy-as-data (`applies_to`/`basis`/
+  `duration`/`disposition_action`/`review_required`/`worm_lock_period`, native enums, `UNIQUE(org,name)`, a seeded
+  per-org *System Default*); `evidence_blob` (M:N record↔blob) + `evidence_for_link` (polymorphic
+  record→clause/process/document, the `signature_event` no-FK precedent); 4 additive `RECORD_*` `event_type` values
+  (downgrade seed-delete guarded with `NOT EXISTS(record)` against the FK; enum tuples sourced from the ORM `*_VALUES`
+  per the 0010 precedent). **Pure domain**: a 5-tier retention resolver (override→process→clause→record_type→system)
+  + a domain-separated RFC-8785-JCS `content_hash` seal (excludes the mutable cols; **separate** from the FROZEN
+  audit `canonical_serialize`). **`services/records` + `api/records`**: atomic capture (base
+  `documented_information[kind=RECORD]` + `record` subtype + WORM-sealed evidence in the dedicated `records` bucket +
+  `content_hash` + `RECORD_CAPTURED` audit, **one commit**); the `evidence-for` link sub-resource; **correction-via-
+  new-record** (correct, don't change — flips `superseded_by_correction`, the only post-capture write). Records are
+  **immutable** — no PATCH/PUT/DELETE on a record (a route-inventory proof). Records ride on **SYSTEM `record.create`
+  overrides** (no seeded role reaches a folderless/processless record — the `process.create` precedent); reads on
+  `record.read` (catalog CLOSED — no new keys). **R21** source-version pinning enforced. A **kind-scoping fix** makes
+  `GET /documents` (list + `_load_document`) and **both** search queries filter `kind=DOCUMENT`, so Records (Effective,
+  shared-PK) never leak into the documents/search surfaces. Records audit does NOT use `VaultAuditSink` (its
+  object-type map lacks `record`) → a direct `emit_record_event`. **OpenAPI caught up in-PR** (redocly green).
+  Adversarially reviewed (6 lenses → per-finding verify; **5 confirmed, all folded** — the headline 2 HIGH + 1 MEDIUM,
+  one root cause: `_attach_evidence` only WORM-sealed on the fresh-upload branch, so the global-sha Blob dedup let a
+  **non-WORM rendition** (or documents-bucket) blob back a record's "sealed" evidence → **fixed fail-closed** [reuse
+  only an already-records-bucket-WORM blob, else 423] + a regression test; + the downgrade-FK guard + the enum-tuple
+  source). **230 unit + 14 records integration green**; `0023` round-trips up↔down↔check on PG16. **Deferred to later
+  v1 slices:** **S-rec-2** (disposition state machine + Beat retention-sweep + DISPOSED tombstone + dual-control
+  WORM-destroy [R27] + legal-hold), **S-rec-3** (Mode-B `form_template` structured capture), Evidence Packs (UJ-7),
+  the `/retention-policies` CRUD; then the rest of v1 (ingestion doc 09, workflows + notifications doc 10,
+  CAPA/audit/finding/complaint/NCR entities, the rest of doc-13).
+
 - **Specification** in `docs/` (00–17 + `decisions-register.md`) — complete, adversarially audited, reconciled
   (Register R1–R37 back-propagated). The Register is authoritative.
 - **Approved implementation plan:** `docs/18-mvp-implementation-plan.md` — repo/tooling, Compose dev stack, the
@@ -513,6 +547,21 @@ create boundary.
   accepts the doc-15 bracketed filters (`filter[clause_refs][has]=8.4`, `filter[current_state][eq]=…`, etc.; unknown →
   400 `unknown_filter`). The web Checklist dashboard + Admin Audit-Log screen + the rest of doc-13 (facets, saved
   searches, dashboards, reports, evidence packs) are deferred.
+- **Records & evidence (S-rec-1) — API/data only, no UI:** capture an **immutable** record with
+  `POST /api/v1/records:init-upload` (presign evidence to the WORM `records` bucket) → `POST /api/v1/records`
+  (`{record_type, title, evidence:[{sha256}], source_document_id?, source_version_id?, …}`, gate `record.create`).
+  All 16 `record_type` values are accepted. A record produced under a controlled document **must** pin
+  `source_version_id` (R21 → 422 `source_version_required`); ad-hoc `EVIDENCE` leaves both source fields null. Read
+  with `GET /api/v1/records(/{id})` (gate `record.read`, row-filtered) + `GET …/{id}/evidence/{sha}/download`.
+  **Correct** (never edit) via `POST …/{id}/correction` (a new record `correction_of`→old; 409 if already
+  superseded). **Link** as evidence-for a clause/process/document via `POST/GET/DELETE …/{id}/evidence-links` (gate
+  `record.create`). **Authz:** the `record.*` write keys are seeded but reach no folderless/processless record at
+  their seeded scope → **grant `record.create`/`record.read` via a SYSTEM override** until a role/UI wires them (the
+  `process.create` precedent). Evidence bytes that already exist in another bucket (a rendition, or the documents
+  vault) are **rejected 423** — a record's evidence must be freshly WORM-sealed in the `records` bucket (or link to
+  that document instead). Retention is **policy-as-data** (a seeded per-org *System Default* + a 5-tier resolver +
+  the snapshot-at-capture ratchet); the disposition lifecycle + Beat sweep + Evidence Packs + the `/retention-policies`
+  CRUD are deferred (S-rec-2+). **No web.** Migration head is now `0023` (next `0024`).
 - **⚠ S11 restore + upgrade + encrypted backup (operator):** the durable archive (`easysynq backup run` / the nightly
   Beat job) is now **AES-256-GCM `.tar.enc`** sealed with `BACKUP_ENCRYPTION_KEY` (install.sh generates it into the
   0600 `.env`; **lose it → those archives are unrecoverable** — back it up out-of-band) and bundles the live Keycloak
