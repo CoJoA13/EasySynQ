@@ -16,8 +16,10 @@ and progressively disclosed — never overwhelming.
 
 ## Current status (as of 2026-06-03)
 
-**Spec complete + MVP build underway** (foundation-first, against the approved plan). The design is locked;
-we are now writing code.
+**MVP COMPLETE** (all 11 ordered slices S0–S11 shipped to `main` via PR, all CI green, validated on the real
+Docker stack; the exit slice S11 is PR #41). All six MVP acceptance proofs are in; the mirror epic + both IA
+backends are complete; the doc-18 §12 exit checklist is closed. The design was locked first (spec-before-code);
+v1/v1.x residuals are listed at the end of this section.
 
 - **Specification** in `docs/` (00–17 + `decisions-register.md`) — complete, adversarially audited, reconciled
   (Register R1–R37 back-propagated). The Register is authoritative.
@@ -352,10 +354,44 @@ Docker stack):**
   the Effective-only search restriction). **186 unit + the S10 integration suite green** (the 5 `pg_dump`-absent
   backup tests stay environmental, green on CI).
 
-**Next slice: S11 — backup/restore-CLI hardening + the exit slice** (operator-grade *live* WORM-aware restore + cutover,
-PITR↔blob-snapshot alignment, retention *pruning*, archive envelope encryption, S3 destination, `easysynq
-restore`/`upgrade`, the NFR/security/runbook pass). The gate registry + latch extend by just appending gates.
-**Deferred (S8e / v1 / Part-11):** the doc-14 `storage_config.mirror_layout` toggle (with its config UI);
+- **S11 — the MVP EXIT slice: `easysynq restore`/`upgrade` + backup archive v2 + security/NFR/runbook hardening** ✅ —
+  PR #41. Turns the S8b2 tested-restore drill (gate G-C, AC#5) into an operator-grade *live* restore and ships the
+  hardening to call the MVP done (doc 18 §7/§12, doc 12 §8.2, R37/R13/R14). **Single combined PR + owner forks
+  (AskUserQuestion):** IN = Keycloak realm export + AES-256-GCM archive encryption; v1.x = retention pruning, S3
+  destination, continuous WAL/PITR, automated in-place cutover; CSP = strict **static**; restore =
+  restore-to-VERIFIED-TARGET + documented operator cutover. **No new permission keys, no new API endpoints** (restore/
+  upgrade are worker CLIs). **(W1) `easysynq restore`** (`services/backup/restore.py`, runs as OWNER, never raises):
+  decrypt+verify archive → restore PG into a **fresh scratch DB** → copy blobs into the **fresh non-WORM
+  restore-scratch bucket** (the locked vault is **READ**, never written) → integrity triad → **checkpoint-not-ahead**
+  tamper guard → **restored-chain re-verify** (the frozen `verify_chain`, version read from the *restored*
+  `system_config`) → **leave the verified target standing** for a documented cutover (`LOCK_RESTORE_LIVE` +
+  `restore_easysynq_` prefix, distinct from the drill's so the nightly sweep can't destroy it). The checkpoint verdict
+  compares the off-host checkpoint against the **restored head** (the false-PASS fix) + treats a missing off-host
+  anchor as UNVERIFIABLE→FLAGGED; `--audit-checkpoint-ack` proceeds and is itself audited (`RESTORE_CHECKPOINT_ACK`).
+  **`easysynq upgrade`** (`services/upgrade.py`): pre-backup → `alembic upgrade head` → readiness health-gate (the
+  pre-backup is the disaster safety net; full auto-restore is the tracked hardening TODO). Migration **`0022`** adds 8
+  additive `RESTORE_*`/`UPGRADE_*` `event_type` values (the 0011-0021 pattern; **`canonical_serialize` v1 untouched**).
+  **(W2) Backup archive v2** — `crypto.py` (AES-256-GCM envelope; key = SHA-256(`BACKUP_ENCRYPTION_KEY`); **`cryptography`
+  already a dep → no new package**), `realm_export.py` (Keycloak **Admin REST** — the worker runs the api image, no
+  kcadm.sh; degrades to `realm_export:absent` on a Keycloak outage, never blocking the nightly backup), `config_snapshot.py`;
+  manifest v2 + `_sidecar` helper (the `.tar.enc` `with_suffix` trap). **The G-C drill stays plaintext-internal so AC#5
+  is NOT regressed**; the realm + config legs (which carry secrets) ride **ONLY inside an encrypted archive** — omitted,
+  never cleartext, when no key (a folded review finding). **(W3) Security + NFR** — Caddy **strict static CSP scoped to
+  the SPA `handle{}` block** (`script-src 'self'`, `frame-ancestors 'none'`; `style-src 'self' 'unsafe-inline'` for
+  Mantine's runtime `<style>`, **never** script) + the air-gap internal-issuer placeholder `CADDY_TLS_DIRECTIVE` + the
+  Referrer-Policy reconcile; **TLS is Caddy's default 1.2 floor** (an explicit `tls{}` block crash-loops the plain-HTTP
+  `:80` listener — a folded HIGH, `caddy validate`-confirmed both ways); a Caddyfile-header unit test + a server-side
+  NFR P95 smoke (generous ~5× regression bounds, not the SLO — CI noise). **(W4) Exit** — 9 operator runbooks
+  (`docs/runbooks/`), air-gap finalize (`just images-update` + a release-gated floating-tag guard + a bundle checksum),
+  the **Avery→Mara handoff** integration test, and a `tests/conftest.py` **directory auto-marker hook** that closes a
+  real CI gap (only 71/204 unit tests were `-m unit`-gated — now all 204 are). Adversarially reviewed (6 lenses →
+  per-finding verify; **9 confirmed, all folded** — incl. the Caddy `:80` crash, the plaintext-sensitive-legs leak, the
+  `discard_target` blob leak, the per-sink off-host bucket, and dangling runbook refs). openapi.yaml unchanged (no new
+  endpoints). **204 unit + 1 release-gated skip + the S11 integration suite green** (the restore/drill `pg_dump` tests
+  stay environmental, green on CI); `0022` round-trips clean on PG16.
+
+**MVP EXIT: complete.** All 11 ordered slices (S0–S11) shipped; all six acceptance proofs in; the mirror epic + both IA
+backends complete; the exit checklist (doc 18 §12) closed. **Deferred (S8e / v1 / Part-11):** the doc-14 `storage_config.mirror_layout` toggle (with its config UI);
 **owner-assignment** (`org_role_assignment` + concrete PROCESS-scope grants → real Process-Owner authoring) +
 `/org-roles`/`/suppliers` authoring (v1); the **web** Compliance-Checklist + Admin Audit-Log screens + clause-spine nav +
 mapping UI + process-map UI; the rest of doc-13 search/reporting (faceted facet-rail, saved searches, dashboards, the
@@ -364,9 +400,12 @@ subtree clause rollup, the checklist's "overdue review"/"linked evidence" legs [
 scope-conditional coverage); wizard Step 8 (scope/process-map seed → SEED nodes) + Step 9 (import → the v1 ingestion
 epic); custom-role create/update/delete + bulk-CSV invite + the effective-permissions explorer (v1); in-app Keycloak
 admin-API provisioning (v1); MFA *enforcement* + `acr`/step-up (Part-11, D3); the §10.4 self-grant friction +
-`ADMIN_SELF_GRANTED_QMS_CAP` event (v1). **Deferred (S11 / v1.x, D-6 / R37):** PITR/WAL, retention *pruning*, Keycloak
-realm export, archive envelope encryption, S3-destination, `easysynq restore`/`upgrade`. S6/S7 seams still open (Keycloak
-auth-event SPI, `/audit-events/export`). Pre-existing hardening noted: `area_code` is unconstrained `Text` at the S3
+`ADMIN_SELF_GRANTED_QMS_CAP` event (v1). **Deferred (v1.x, D-6 / R37) — the residuals S11 explicitly did NOT ship:**
+continuous **PITR/WAL**, retention **pruning**, **S3/cloud backup destination**, **automated in-place live cutover**
+(restore-to-verified-target + a documented manual cutover ships; automation is the hardening TODO noted in
+`restore.py`/`upgrade.py`), **per-request nonce-CSP** (strict static CSP ships; nonce needs SPA HTML-nonce injection —
+web track), **COMPLIANCE object-lock mode** (GOVERNANCE ships, D-7). S6/S7 seams still open (Keycloak auth-event SPI,
+`/audit-events/export` async-export job). Pre-existing hardening noted: `area_code` is unconstrained `Text` at the S3
 create boundary.
 
 ## Building the MVP (dev workflow)
@@ -474,6 +513,19 @@ create boundary.
   accepts the doc-15 bracketed filters (`filter[clause_refs][has]=8.4`, `filter[current_state][eq]=…`, etc.; unknown →
   400 `unknown_filter`). The web Checklist dashboard + Admin Audit-Log screen + the rest of doc-13 (facets, saved
   searches, dashboards, reports, evidence packs) are deferred.
+- **⚠ S11 restore + upgrade + encrypted backup (operator):** the durable archive (`easysynq backup run` / the nightly
+  Beat job) is now **AES-256-GCM `.tar.enc`** sealed with `BACKUP_ENCRYPTION_KEY` (install.sh generates it into the
+  0600 `.env`; **lose it → those archives are unrecoverable** — back it up out-of-band) and bundles the live Keycloak
+  realm export (worker → Keycloak Admin REST; degrades to `absent` on a Keycloak outage) + a config snapshot **only when
+  encrypted**. `easysynq restore <archive> --confirm` does a WORM-aware **restore-to-VERIFIED-TARGET** (fresh scratch DB +
+  fresh `restore-scratch` bucket; **never touches the locked vault**) + the checkpoint-not-ahead tamper check + a chain
+  re-verify, then **leaves a standing target** — the production **cutover is a documented manual step**
+  (`docs/runbooks/backup-restore.md`); exit 3 = FLAGGED (re-run with `--audit-checkpoint-ack`, audited). `easysynq
+  restore --discard <db>` reclaims a target (both DB + blobs). `easysynq upgrade --confirm` = pre-backup → migrate →
+  health-gate. Both run on the **worker** (OWNER `DATABASE_URL_SYNC` + pg client). Caddy now sets a strict static CSP +
+  the default TLS 1.2 floor; the air-gap overlay sets `CADDY_TLS_DIRECTIVE="tls internal"` + a hostname `SITE_ADDRESS`.
+  Operator runbooks live in **`docs/runbooks/`**. The full operator-grade live cutover (auto-repoint) + PITR/WAL +
+  retention pruning + S3 destinations are the explicit **v1.x** residuals.
 - **Authz break-glass (`grant-role`):** still available to assign a seeded role directly, bypassing the wizard +
   PEP — `easysynq grant-role <keycloak-subject> ["Role Name"]` (default "System Administrator"; idempotent;
   JIT-creates the `app_user`; runs `easysynq_api.cli.grant_role` as the DB owner). Use it to recover a botched

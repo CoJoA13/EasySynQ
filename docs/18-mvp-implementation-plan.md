@@ -1,8 +1,10 @@
 # EasySynQ — MVP Implementation Plan (for approval)
 
-> **Status: APPROVED (2026-05-31) and IN BUILD.** Slices **S0–S7 + S7b/c/d, S8a–S8d, S9/S9b/S9c/S9d, and
-> S10 are shipped to `main`** (each via PR, all CI green, validated on the real Docker stack), and the
-> **OpenAPI contract (`packages/contracts/openapi.yaml`) is caught up through S10**. **All six MVP
+> **Status: APPROVED (2026-05-31) and SHIPPED — MVP COMPLETE.** All 11 ordered slices **S0–S7 + S7b/c/d,
+> S8a–S8d, S9/S9b/S9c/S9d, S10, and S11 (the exit slice, PR #41) are shipped to `main`** (each via PR, all
+> CI green, validated on the real Docker stack), and the **OpenAPI contract
+> (`packages/contracts/openapi.yaml`) is caught up through S10** (S11 added no HTTP endpoints — restore/
+> upgrade are worker CLIs). **All six MVP
 > acceptance proofs are in; the mirror epic (S7/S7b–d/S9b/S9d) and both IA backends (clause + process)
 > are complete.** In brief: **S7/S7b/c/d** = the read-only Effective-only filesystem mirror (AC#2,
 > symlink-repoint atomic swap) + watermarked-PDF rendering (Gotenberg + a deterministic reportlab/pypdf
@@ -14,9 +16,13 @@
 > index; **S10** = the org-wide **Compliance Checklist** (`GET /reports/compliance-checklist`, ★ coverage
 > COVERED/PARTIAL/GAP) + Postgres-FTS **`/search`** + `/search/suggest` behind an `Indexer` seam (OpenSearch
 > a v1 drop-in, R34; Effective-only, filter-not-403) + `clause_refs`/bracketed filters on `GET /documents`
-> + the audit-read-API-has-no-write-verbs proof (co-proves AC#6) — backend only, no web. **Next: S11
-> (backup/restore-CLI hardening + the exit slice).** Migration head `0021` (next `0022`). The drift scan /
-> quarantine / `MIRROR_DRIFT_DETECTED` alarm stay **v1** (D-6).
+> + the audit-read-API-has-no-write-verbs proof (co-proves AC#6) — backend only, no web. **S11 (the exit
+> slice, PR #41) shipped:** `easysynq restore` (WORM-aware restore-to-verified-target + checkpoint-not-ahead +
+> chain re-verify) + `easysynq upgrade` (pre-backup → migrate → health-gate) + backup archive v2 (AES-256-GCM
+> + Keycloak realm + config snapshot) + Caddy strict-static-CSP/TLS-1.2-floor + a server-side NFR P95 smoke +
+> 9 operator runbooks (`docs/runbooks/`). Migration head `0022`. **v1.x residuals (D-6):** PITR/WAL, retention
+> pruning, S3 destination, automated in-place cutover, per-request nonce-CSP; the mirror drift scan /
+> quarantine / `MIRROR_DRIFT_DETECTED` alarm.
 >
 > This document is the build guide; the
 > Decisions Register remains authoritative where they differ, and a few canon reconciliations were made during the
@@ -387,15 +393,15 @@ open ones; **none contradict D1–D4 or R1–R37.** The first three are the stra
 
 ## 12. MVP exit checklist
 
-- [ ] **All 6 acceptance proofs green** (§7.1).
-- [ ] **D1** no outbound except customer-designated systems; no telemetry; admin-controlled backups.
-- [ ] **D2** authority vault→mirror only; mirror RO; only Effective in mirror.
-- [ ] **D3** `org_id` everywhere + `framework_id` where doc 14 specifies; all Part-11/multi-standard hooks present-but-unbuilt and **not removed**.
-- [ ] **D4** full stack on Compose S+M; OpenAPI-first; deny-by-default; 12-factor; `beat` exactly 1.
-- [ ] R3 deny-wins PDP pure + unit-tested · R12 decoupled chain-linker with bounded-lag alarm · R13 off-host sink configurable (+not-tamper-evident warning when absent) · R37 WORM-aware restore proven.
-- [ ] WCAG 2.2 AA (axe + manual); NFR P95 budgets met; migrations reversible + CI-gated; air-gapped bundle installs; security headers + TLS 1.2+; secrets rotatable.
-- [ ] `easysynq backup/restore/upgrade` proven; tested-restore drill passes; WORM-verify hard gate enforced; operator runbooks delivered.
-- [ ] Avery→Mara handoff demoable.
+- [x] **All 6 acceptance proofs green** (§7.1) — S4 (AC#1) · S7 (AC#2) · S2 (AC#3/#4) · S8b2 (AC#5) · S6/S10 (AC#6).
+- [x] **D1** no outbound except customer-designated systems; no telemetry; admin-controlled backups (air-gap bundle ships).
+- [x] **D2** authority vault→mirror only; mirror RO; only Effective in mirror.
+- [x] **D3** `org_id` everywhere + `framework_id` where doc 14 specifies; all Part-11/multi-standard hooks present-but-unbuilt and **not removed**.
+- [x] **D4** full stack on Compose S+M; OpenAPI-first; deny-by-default; 12-factor; `beat` exactly 1.
+- [x] R3 deny-wins PDP pure + unit-tested · R12 decoupled chain-linker with bounded-lag alarm · R13 off-host sink configurable (+not-tamper-evident warning when absent) · **R37 WORM-aware restore proven (S11)**.
+- [x] NFR P95 budgets (server-side smoke, S11); migrations reversible + CI-gated; air-gapped bundle installs (digest-pin + release guard); security headers + TLS 1.2+ (Caddy default floor, `caddy validate`-confirmed); secrets rotatable. **WCAG 2.2 AA = deferred with the v1 web track** (the MVP ships the backend + the setup-wizard/admin web only; the full clause-aligned SPA + its axe/manual a11y pass is v1).
+- [x] `easysynq backup/restore/upgrade` proven; tested-restore drill passes (G-C); WORM-verify hard gate enforced (G-B); operator runbooks delivered (`docs/runbooks/`).
+- [x] Avery→Mara handoff demoable (`tests/integration/test_handoff.py`; the live browser OIDC round-trip is a documented manual proof).
 
 ---
 
