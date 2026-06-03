@@ -31,6 +31,10 @@ class AuditObjectType(enum.Enum):
     session = "session"
     config = "config"
     audit = "audit"
+    # process IA (S9c, doc 02 §3.3) — process/edge events key here; process_link events reuse
+    # ``document`` (the link is about the document, the clause_mapping precedent). Added via
+    # ``ALTER TYPE audit_object_type ADD VALUE`` in 0019 (the event_type 0011-0017 pattern).
+    process = "process"
 
 
 class EventType(enum.Enum):
@@ -83,6 +87,16 @@ class EventType(enum.Enum):
     # 0017 (the 0011-0016 additive pattern).
     CLAUSE_MAPPED = "CLAUSE_MAPPED"
     CLAUSE_UNMAPPED = "CLAUSE_UNMAPPED"
+    # process IA (S9c, doc 02 §3.3, doc 14 §4) — process create/update/state-confirm + edge
+    # add/remove (object_type ``process``) and the document↔process link (object_type ``document``,
+    # the clause_mapping precedent). Added via ALTER TYPE … ADD VALUE in 0019 (the 0011-17 pattern).
+    PROCESS_CREATED = "PROCESS_CREATED"
+    PROCESS_UPDATED = "PROCESS_UPDATED"
+    PROCESS_STATE_CHANGED = "PROCESS_STATE_CHANGED"
+    PROCESS_EDGE_ADDED = "PROCESS_EDGE_ADDED"
+    PROCESS_EDGE_REMOVED = "PROCESS_EDGE_REMOVED"
+    PROCESS_LINKED = "PROCESS_LINKED"
+    PROCESS_UNLINKED = "PROCESS_UNLINKED"
     # authorization (S2/S5) — denied-access attempts (always) + allows (configurable verbosity,
     # doc 12 §4.1 — off by default) + the permission/role/override changes
     ACCESS_DENIED = "ACCESS_DENIED"

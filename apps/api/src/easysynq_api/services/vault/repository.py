@@ -22,6 +22,11 @@ from ...db.models.document_version import DocumentVersion
 from ...db.models.documented_information import DocumentedInformation
 from ...db.models.framework import Framework
 from ...db.models.numbering_counter import NumberingCounter
+from ...db.models.org_role import OrgRole
+from ...db.models.process import Process
+from ...db.models.process_edge import ProcessEdge
+from ...db.models.process_link import ProcessLink
+from ...db.models.supplier import Supplier
 from ...db.models.working_draft import WorkingDraft
 
 
@@ -157,3 +162,94 @@ async def list_clause_mappings(
         )
     ).all()
     return [(m, c) for m, c in rows]
+
+
+# --- process IA (S9c, doc 02 §3.3, doc 14 §4) --------------------------------------------
+# By-id lookups fetch then let the handler org-validate (the get_clause/get_clause_mapping
+# precedent) — every S9c handler checks ``org_id == caller.org_id`` before use; list/by-name
+# helpers filter by org_id directly.
+
+
+async def get_process(session: AsyncSession, process_id: uuid.UUID) -> Process | None:
+    return await session.get(Process, process_id)
+
+
+async def get_process_by_name(
+    session: AsyncSession, org_id: uuid.UUID, name: str
+) -> Process | None:
+    return (
+        await session.execute(select(Process).where(Process.org_id == org_id, Process.name == name))
+    ).scalar_one_or_none()
+
+
+async def list_processes(session: AsyncSession, org_id: uuid.UUID) -> list[Process]:
+    """All processes in the org, name-ordered (the process map + list reads, org-wide per S9c)."""
+    return list(
+        (
+            await session.execute(
+                select(Process).where(Process.org_id == org_id).order_by(asc(Process.name))
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+
+async def list_process_edges(session: AsyncSession, org_id: uuid.UUID) -> list[ProcessEdge]:
+    return list(
+        (await session.execute(select(ProcessEdge).where(ProcessEdge.org_id == org_id)))
+        .scalars()
+        .all()
+    )
+
+
+async def get_process_edge(session: AsyncSession, edge_id: uuid.UUID) -> ProcessEdge | None:
+    return await session.get(ProcessEdge, edge_id)
+
+
+async def get_process_edge_pair(
+    session: AsyncSession, from_id: uuid.UUID, to_id: uuid.UUID
+) -> ProcessEdge | None:
+    return (
+        await session.execute(
+            select(ProcessEdge).where(
+                ProcessEdge.from_process_id == from_id, ProcessEdge.to_process_id == to_id
+            )
+        )
+    ).scalar_one_or_none()
+
+
+async def get_org_role(session: AsyncSession, role_id: uuid.UUID) -> OrgRole | None:
+    return await session.get(OrgRole, role_id)
+
+
+async def get_supplier(session: AsyncSession, supplier_id: uuid.UUID) -> Supplier | None:
+    return await session.get(Supplier, supplier_id)
+
+
+async def get_process_link(
+    session: AsyncSession, process_id: uuid.UUID, doc_id: uuid.UUID
+) -> ProcessLink | None:
+    return (
+        await session.execute(
+            select(ProcessLink).where(
+                ProcessLink.process_id == process_id,
+                ProcessLink.documented_information_id == doc_id,
+            )
+        )
+    ).scalar_one_or_none()
+
+
+async def list_process_links(
+    session: AsyncSession, doc_id: uuid.UUID
+) -> list[tuple[ProcessLink, Process]]:
+    """A document's process links joined to the process detail (for the per-document read)."""
+    rows = (
+        await session.execute(
+            select(ProcessLink, Process)
+            .join(Process, ProcessLink.process_id == Process.id)
+            .where(ProcessLink.documented_information_id == doc_id)
+            .order_by(asc(Process.name))
+        )
+    ).all()
+    return [(link, proc) for link, proc in rows]
