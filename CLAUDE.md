@@ -223,20 +223,51 @@ Docker stack):**
   **156 unit + 120 integration** (the only locally-red tests are the 5 pre-existing `pg_dump`-absent backup-drill tests —
   environmental, green on CI's `ubuntu-latest`).
 
-**Next slice: S9b — clause/process IA mirror tree + process IA** (rebuild the S7 flat mirror into the doc 04 §10.3
-PLAN/DO/CHECK/ACT→clause tree now that `clause_mapping` exists; land the `process`/`process_edge`/`process_link` schema
-and the `GET /processes(/map)` reads — couples to **S8e** = the deferred wizard Step 8 QMS scope/process-map seed). Then **S10/S11**
-(search/reporting · backup/restore-CLI hardening + the exit slice). The gate registry + latch extend by just appending
-gates. **Deferred (S9b / S8e / v1 / Part-11):** the clause/process mirror tree + process IA (process/edge/link +
-endpoints, needs `org_role`/`supplier`); the org-wide **Compliance Checklist** dashboard (reads `is_mandatory_star` +
-coverage, doc 13) + `filter[clause_refs][has]` on `GET /documents` + `clause_refs` in the list serializer (S10); the web
-clause-spine nav + mapping UI; wizard Step 8 (scope/process-map, after S9b) + Step 9 (import → the v1 ingestion epic);
-custom-role create/update/delete + bulk-CSV invite + the effective-permissions explorer (v1); in-app Keycloak admin-API
-provisioning (v1); MFA *enforcement* + `acr`/step-up (Part-11, D3); the §10.4 self-grant friction +
-`ADMIN_SELF_GRANTED_QMS_CAP` event (v1). **Deferred (S11 / v1.x, D-6 / R37):** operator-grade *live* WORM-aware restore +
-cutover, PITR/WAL, retention *pruning*, Keycloak realm export, archive envelope encryption, S3-destination, `easysynq
-restore`/`upgrade`. S6/S7 seams still open (Keycloak auth-event SPI, `/audit-events/export`, the clause/process IA mirror
-tree). Pre-existing hardening noted: `area_code` is unconstrained `Text` at the S3 create boundary.
+- **S9b — Clause-aligned mirror tree (doc 04 §10.3)** ✅ — PR #31. Rebuilds the flat S7 mirror into the
+  PLAN/DO/CHECK/ACT → top-level-clause tree now that `clause_mapping` exists (fills the `# S9:` seam at `mirror.py:21`).
+  **Owner forks:** scope = **mirror tree only** (process IA + the by-process secondary index deferred to **S9c** — the
+  `process`/`edge`/`link` + `org_role`/`supplier` FK targets don't exist, `process.create` is held by no seeded role, and
+  process rows only come from the deferred S8e wizard); placement = **symlink into every mapped clause** (real bytes
+  **once** under the *numerically*-lowest mapped clause, a **relative** symlink from every other mapped clause folder —
+  §10.3/§10.4 "without duplicating bytes"). **Phase rides on the mapped clause's own `pdca_phase`** (`documented_information`
+  has **no** `pdca_phase` column — doc 04 §6.1 says it should; S3 never added it), so the clause-7 split lands 7.2 →
+  `PLAN/07-Support` and 7.5 → `DO/07-Support`; the `{NN}-Word` folder = the top-level ancestor's number (0-padded) + the
+  first word of its title (reproduces the §10.3 example exactly). A zero-mapping Effective doc (only reachable as a pre-S9
+  **upgrade** artifact — the submit gate forbids it) lands in `_unmapped/`. **Pure `services/vault/mirror.py` + tests — no
+  migration/schema/`event_type`/web/endpoint change (head stays `0018`):** `ClauseRef` + the pure `_placement_dirs`
+  (numeric-not-lexical primary [9 before 10], `(phase, top_number)` dedup, canonical PLAN<DO<CHECK<ACT `other_dirs` order)
+  + `fetch_clause_refs`/`fetch_top_words` (one batch query each; top words **(framework_id, top_number)-keyed** so a future
+  standard's "8" can't collide with ISO's) + `_write_symlink` (relative target, asserted within `build_root` — no host-path
+  leak — manifest `{path, symlink_to}` entry, no `sha256`); `metadata.json`/`INDEX.md` gain the numeric-sorted mapped-clause
+  list (byte-deterministic → the §10.4 idempotency invariant holds); `MirrorSyncResult` gains a `symlinks` count.
+  `atomic_swap`/render-cache/the `:ro` mount contract/the AC#2 whole-tree-rebuild are untouched (internal symlinks are
+  relative → survive the swap). **Single-org invariant (D1)** documented (the mirror stays org-agnostic → no cross-org
+  `{ident}_{rev}` collision). **Fresh-dir-only:** a path can flip dir↔symlink between builds, so production always builds
+  into a fresh `.builds/<uuid>` + swaps (a unit test pins that reuse-after-remap raises). Adversarially reviewed (5 lenses
+  → per-finding verify; **1 of 5 confirmed + folded** — a test-assertion tightening; placement/symlink-safety/query/spec
+  lenses found nothing). Proofs: `_placement_dirs` (single · dedup · clause-7 split · numeric primary · canonical phase
+  order · `_unmapped` · zero-pad) + build-tree real-bytes-under-primary + cross-clause relative symlink (resolves +
+  contained) + manifest symlink entries + the fresh-dir-only reuse-raises contract (unit); clause-placement +
+  multi-clause-symlink (bytes-once) + clause-7-two-phase + `_unmapped`-fallback (simulated via direct mapping-row delete) +
+  **symlink-survives-swap** end-to-end (integration); `test_render`/`test_verify` helpers updated for the nested layout.
+  **169 unit + 28 mirror/render/verify integration green** (the 5 `pg_dump`-absent backup tests stay environmental, green
+  on CI).
+
+**Next slice: S9c — process IA + the by-process mirror index** (land `process`/`process_edge`/`process_link` +
+`GET /processes(/map)`, and rebuild the by-process secondary mirror index — needs `process_link`; requires minimal
+`org_role`/`supplier` FK targets, and couples to **S8e** = the deferred wizard Step 8 QMS scope/process-map seed that
+populates SEED process nodes). Then **S10/S11** (search/reporting · the Compliance Checklist · backup/restore-CLI
+hardening + the exit slice). The gate registry + latch extend by just appending gates. **Deferred (S9c / S8e / S10 / v1 /
+Part-11):** process IA (process/edge/link + endpoints + the by-process mirror index, needs `org_role`/`supplier`); the
+org-wide **Compliance Checklist** dashboard (reads `is_mandatory_star` + coverage, doc 13) + `filter[clause_refs][has]` on
+`GET /documents` + `clause_refs` in the list serializer (S10); the web clause-spine nav + mapping UI; wizard Step 8
+(scope/process-map, with S9c) + Step 9 (import → the v1 ingestion epic); custom-role create/update/delete + bulk-CSV invite
++ the effective-permissions explorer (v1); in-app Keycloak admin-API provisioning (v1); MFA *enforcement* + `acr`/step-up
+(Part-11, D3); the §10.4 self-grant friction + `ADMIN_SELF_GRANTED_QMS_CAP` event (v1). **Deferred (S11 / v1.x, D-6 /
+R37):** operator-grade *live* WORM-aware restore + cutover, PITR/WAL, retention *pruning*, Keycloak realm export, archive
+envelope encryption, S3-destination, `easysynq restore`/`upgrade`. S6/S7 seams still open (Keycloak auth-event SPI,
+`/audit-events/export`, the **by-process** mirror index). Pre-existing hardening noted: `area_code` is unconstrained
+`Text` at the S3 create boundary.
 
 ## Building the MVP (dev workflow)
 
@@ -277,8 +308,11 @@ tree). Pre-existing hardening noted: `area_code` is unconstrained `Text` at the 
   via override/custom role until S8's role UI).
   On a network share, validate `root_squash`/UID mapping (runbook caveat). The mirror is **regenerable, never
   backup-critical**, rebuilt on every release/obsolete (post-commit) + a nightly Beat reconcile. Browse it at
-  `${MIRROR_PATH}/current/` — now **watermarked controlled-copy PDFs** (S7b: gotenberg `renderer` is live; office→PDF +
-  the §11.3 band + a verify QR) with each footer carrying a signed verify token. **S7c `.env` additions (already in
+  `${MIRROR_PATH}/current/` — **S9b** organizes it as the doc 04 §10.3 **`{PLAN|DO|CHECK|ACT}/{NN-Name}/`** clause tree
+  (a doc lives once under its numerically-lowest mapped clause + a relative symlink from every other mapped clause folder;
+  a zero-mapping upgrade artifact lands in `_unmapped/`). Plain `sync` rebuilds the whole tree, so the flat→tree
+  migration needs no `rebuild` (which only forces re-render). The files are **watermarked controlled-copy PDFs** (S7b:
+  gotenberg `renderer` is live; office→PDF + the §11.3 band + a verify QR) with each footer carrying a signed verify token. **S7c `.env` additions (already in
   `.env.example`):** `VERIFY_TOKEN_SIGNING_KEY_PATH=/run/secrets/verify_token_key` + `PUBLIC_BASE_URL=http://localhost`;
   the verify key is **shared api↔worker via the `secrets` volume** (worker mints, api verifies). The public verify page
   is `GET /api/v1/verify?t=…` → CURRENT/SUPERSEDED/UNKNOWN. **After upgrading an existing stack** (so S7b/S7c renditions
