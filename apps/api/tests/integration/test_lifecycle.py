@@ -29,7 +29,7 @@ from easysynq_api.db.models.signature_event import SignatureEvent as SignatureEv
 from easysynq_api.db.session import get_sessionmaker
 
 from . import s5_helpers as s5
-from .test_vault import _auth, _checkin, _create, _upload
+from .test_vault import _auth, _checkin, _create, _map_clause, _upload
 
 pytestmark = pytest.mark.integration
 
@@ -196,6 +196,7 @@ async def test_future_dated_stays_approved_then_beat_sweep_releases(
     v = (
         await _checkin(app_client, ha, did, sha, change_reason="v1", change_significance="MAJOR")
     ).json()
+    await _map_clause(app_client, ha, did)  # S9: submit-review needs ≥1 clause_mapping
     await app_client.post(f"/api/v1/documents/{did}/submit-review", headers=ha)
 
     # Approve (b) with a future go-live — carried on the decision body (replaces /approve's body).

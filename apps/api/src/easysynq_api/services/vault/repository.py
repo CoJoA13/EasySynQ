@@ -7,12 +7,16 @@
 from __future__ import annotations
 
 import uuid
+from typing import Any
 
-from sqlalchemy import desc, func, select
+from sqlalchemy import ColumnElement, asc, desc, func, select
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...db.models.blob import Blob
+from ...db.models.clause import Clause
+from ...db.models.clause_mapping import ClauseMapping
 from ...db.models.document_type import DocumentType
 from ...db.models.document_version import DocumentVersion
 from ...db.models.documented_information import DocumentedInformation
@@ -85,3 +89,71 @@ async def next_version_seq(session: AsyncSession, doc_id: uuid.UUID) -> int:
 
 async def get_blob(session: AsyncSession, sha256: str) -> Blob | None:
     return await session.get(Blob, sha256)
+
+
+# --- clause IA / clause_mapping (S9) -----------------------------------------------------
+
+
+async def list_clauses(session: AsyncSession, framework_id: uuid.UUID) -> list[Clause]:
+    """The read-only clause spine for a framework, ordered by the natural clause-number key so the
+    client can rebuild the 4 → 4.4 → 4.4.1 tree from the flat list + ``parent_id``."""
+    return list(
+        (
+            await session.execute(
+                select(Clause)
+                .where(Clause.framework_id == framework_id)
+                .order_by(asc(_clause_sort_key()))
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+
+def _clause_sort_key() -> ColumnElement[Any]:
+    """Sort clause numbers numerically per dotted segment ('8.5' before '8.10', '10' after '9').
+    ``string_to_array(number,'.')::int[]`` orders the segments as integers, not lexically."""
+    return func.cast(func.string_to_array(Clause.number, "."), postgresql.ARRAY(postgresql.INTEGER))
+
+
+async def get_clause(session: AsyncSession, clause_id: uuid.UUID) -> Clause | None:
+    return await session.get(Clause, clause_id)
+
+
+async def count_clause_mappings(session: AsyncSession, doc_id: uuid.UUID) -> int:
+    """How many clauses a document maps to (the submit-review >=1 gate reads this)."""
+    return (
+        await session.execute(
+            select(func.count())
+            .select_from(ClauseMapping)
+            .where(ClauseMapping.documented_information_id == doc_id)
+        )
+    ).scalar_one()
+
+
+async def get_clause_mapping(
+    session: AsyncSession, doc_id: uuid.UUID, clause_id: uuid.UUID
+) -> ClauseMapping | None:
+    return (
+        await session.execute(
+            select(ClauseMapping).where(
+                ClauseMapping.documented_information_id == doc_id,
+                ClauseMapping.clause_id == clause_id,
+            )
+        )
+    ).scalar_one_or_none()
+
+
+async def list_clause_mappings(
+    session: AsyncSession, doc_id: uuid.UUID
+) -> list[tuple[ClauseMapping, Clause]]:
+    """A document's clause mappings joined to the clause detail (for the per-document read)."""
+    rows = (
+        await session.execute(
+            select(ClauseMapping, Clause)
+            .join(Clause, ClauseMapping.clause_id == Clause.id)
+            .where(ClauseMapping.documented_information_id == doc_id)
+            .order_by(asc(_clause_sort_key()))
+        )
+    ).all()
+    return [(m, c) for m, c in rows]

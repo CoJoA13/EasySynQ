@@ -28,7 +28,7 @@ from easysynq_api.db.models.workflow import Task, WorkflowInstance
 from easysynq_api.db.session import get_sessionmaker
 from easysynq_api.domain.authz.types import Effect, ScopeLevel
 
-from .test_vault import _checkin, _create, _ensure_user, _upload
+from .test_vault import _checkin, _create, _ensure_user, _map_clause, _upload
 
 # The full lifecycle permission set an actor needs end-to-end (S3 vault + S4/S5 keys, doc 07 §3.1).
 LIFECYCLE_PERMS = (
@@ -175,6 +175,7 @@ async def drive_to_approved(
     sha = await _upload(client, h_author, did, content)
     ci = await _checkin(client, h_author, did, sha, change_reason="v1", change_significance="MAJOR")
     assert ci.status_code == 201, ci.text
+    await _map_clause(client, h_author, did)  # S9: submit-review needs ≥1 clause_mapping
     sr = await client.post(f"/api/v1/documents/{did}/submit-review", headers=h_author)
     assert sr.status_code == 200, sr.text
     task_id = await task_for_doc(did)

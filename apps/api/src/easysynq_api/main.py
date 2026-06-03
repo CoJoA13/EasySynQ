@@ -18,6 +18,7 @@ from starlette.responses import Response
 from .api.audit import router as audit_router
 from .api.auth import router as auth_router
 from .api.authz import router as authz_router
+from .api.clauses import router as clauses_router
 from .api.documents import router as documents_router
 from .api.health import router as health_router
 from .api.setup import router as setup_router
@@ -121,6 +122,7 @@ def create_app() -> FastAPI:
     app.include_router(authz_router)
     app.include_router(users_router)  # S8d: user-lifecycle admin (roster / invite / enable-disable)
     app.include_router(documents_router)
+    app.include_router(clauses_router)  # S9: read-only ISO clause spine (GET /clauses)
     app.include_router(workflow_router)
     app.include_router(audit_router)
     app.include_router(verify_router)  # S7c: public controlled-rendition verify page (no auth)

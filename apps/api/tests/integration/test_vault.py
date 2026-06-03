@@ -21,7 +21,9 @@ from sqlalchemy import select
 from easysynq_api.db.models.app_user import AppUser, UserStatus
 from easysynq_api.db.models.authz_grant import PermissionOverride
 from easysynq_api.db.models.blob import Blob
+from easysynq_api.db.models.clause import Clause
 from easysynq_api.db.models.document_type import DocumentType
+from easysynq_api.db.models.framework import Framework
 from easysynq_api.db.models.organization import Organization
 from easysynq_api.db.models.permission import Permission
 from easysynq_api.db.models.scope import Scope
@@ -107,6 +109,34 @@ async def _create(client: AsyncClient, h: dict[str, str], type_id: str, area: st
     )
     assert r.status_code == 201, r.text
     return r.json()
+
+
+async def _first_clause_id() -> str:
+    """An ``iso9001:2015`` clause id — scoped to that framework so a foreign-framework test clause
+    (test_clauses' cross-framework case) can't be picked and trip the framework-match guard."""
+    async with get_sessionmaker()() as s:
+        return str(
+            (
+                await s.execute(
+                    select(Clause.id)
+                    .join(Framework, Clause.framework_id == Framework.id)
+                    .where(Framework.code == "iso9001:2015")
+                    .order_by(Clause.number)
+                    .limit(1)
+                )
+            ).scalar_one()
+        )
+
+
+async def _map_clause(client: AsyncClient, h: dict[str, str], doc_id: str) -> str:
+    """Map a document to one ISO clause (satisfies the S9 submit-review >=1-clause_mapping gate).
+    Requires the caller to hold ``document.manage_metadata`` (in both _DOC_PERMS + LIFECYCLE)."""
+    clause_id = await _first_clause_id()
+    r = await client.post(
+        f"/api/v1/documents/{doc_id}/clause-mappings", headers=h, json={"clause_id": clause_id}
+    )
+    assert r.status_code == 201, r.text
+    return clause_id
 
 
 async def _upload(

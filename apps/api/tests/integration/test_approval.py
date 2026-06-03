@@ -25,7 +25,7 @@ from easysynq_api.db.models.workflow import Task, TaskOutcome, WorkflowInstance
 from easysynq_api.db.session import get_sessionmaker
 
 from . import s5_helpers as s5
-from .test_vault import _auth, _checkin, _create, _upload
+from .test_vault import _auth, _checkin, _create, _map_clause, _upload
 
 pytestmark = pytest.mark.integration
 
@@ -43,6 +43,7 @@ async def _to_in_review(client: AsyncClient, h_author: dict[str, str], type_id: 
     sha = await _upload(client, h_author, did, f"approval-{did}".encode())
     ci = await _checkin(client, h_author, did, sha, change_reason="v1", change_significance="MAJOR")
     assert ci.status_code == 201, ci.text
+    await _map_clause(client, h_author, did)  # S9: submit-review needs ≥1 clause_mapping
     sr = await client.post(f"/api/v1/documents/{did}/submit-review", headers=h_author)
     assert sr.status_code == 200, sr.text
     return did
