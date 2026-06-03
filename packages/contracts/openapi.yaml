@@ -893,7 +893,7 @@ paths:
       tags: [documents]
       operationId: submitReview
       summary: "Draft→InReview (T2) / UnderRevision→InReview (T9). Needs document.submit."
-      description: "The >=1 clause_mapping precondition (doc 15 §8.5) lands with the IA slice (S9); not enforced in S4."
+      description: "Enforces the >=1 clause_mapping precondition (S9): a document with zero clause mappings is rejected 422 (validation_error). Map via POST /documents/{id}/clause-mappings first."
       parameters:
         - { name: document_id, in: path, required: true, schema: { type: string, format: uuid } }
       responses:

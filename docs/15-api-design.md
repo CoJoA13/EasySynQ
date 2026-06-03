@@ -315,12 +315,13 @@ Clauses are **read-only seed reference data** — there is deliberately no `clau
 
 | Method | Path | Perm | Idem | Notes |
 |---|---|---|---|---|
-| GET | `/clauses?framework_id=iso9001:2015` | `clause.read` | — | The clause spine (4 → 4.4 → 4.4.1). Read-only. |
+| GET | `/clauses` | `clauseMap.read` | — | **S9** ✅. The clause spine (4 → 4.4 → 4.4.1), returned flat + numeric-sorted (the client builds the tree from `parent_id`). Read-only seed data. Optional `?framework=iso9001:2015` (the framework *code*, default iso9001:2015). _(Key corrected from `clause.read` per the S9 build — the closed doc-07 catalog has `clauseMap.read`, not `clause.read`.)_ |
+| POST / GET / DELETE | `/documents/{id}/clause-mappings` | `document.manage_metadata` / `document.read` | ✓ | **S9** ✅. Map / list / unmap a document↔clause (flat sub-resources, body `{clause_id, is_requirement_level?}`). Framework-mismatch → 422; duplicate → 409; emits `CLAUSE_MAPPED`/`CLAUSE_UNMAPPED`. _(The dedicated `clauseMap.map_artifact` key stays seeded-but-ungranted; the build gates the write on `document.manage_metadata`, which the Author bundle holds, so mapping + the submit gate work out of the box — owner decision.)_ |
 | GET | `/folders/tree` / `/folders` | `folder.read` | — | Hierarchy for the navigator (lazy children); `?parent_id=` / `?subtree_of=`. |
 | POST / PATCH / DELETE | `/folders` … | `folder.create`/`.update`/`.delete` | ✓ | Move re-roots the subtree path (async-mirrored). Cascade delete needs `document.delete` too. |
-| GET | `/processes` / `/processes/map` | `process.read` | — | Process list / the `process_edge` graph for the Process Map lens. |
-| POST / PATCH | `/processes` … | `process.create`/`.update` | ✓ | Confirm `SEED→ACTIVE`, set owner org-role, edges (no self-loops). |
-| POST | `/processes/{id}/edges` | `process.update` | ✓ | Add an input/output edge. |
+| GET | `/processes` / `/processes/map` | `process.read` | — | Process list / the `process_edge` graph for the Process Map lens. _(S9b.)_ |
+| POST / PATCH | `/processes` … | `process.create`/`process.manage` | ✓ | Confirm `SEED→ACTIVE`, set owner org-role, edges (no self-loops). _(Key corrected from the shorthand `process.update` → the closed catalog's `process.manage`. S9b.)_ |
+| POST | `/processes/{id}/edges` | `process.manage` | ✓ | Add an input/output edge. _(S9b.)_ |
 
 ### 8.5 Documents (`/documents`)
 
