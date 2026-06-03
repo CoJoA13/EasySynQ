@@ -31,6 +31,10 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy import text
 
+from easysynq_api.db.models._clause_enums import PdcaPhase
+from easysynq_api.db.models.documented_information import DocumentedInformation
+from easysynq_api.db.models.process import Process
+from easysynq_api.db.models.process_link import ProcessLink
 from easysynq_api.db.session import get_sessionmaker
 from easysynq_api.services.common.pg_locks import LOCK_MIRROR_SYNC
 from easysynq_api.services.vault.mirror import sync_mirror
@@ -581,3 +585,85 @@ async def test_mirror_symlinks_survive_swap(
     assert not link.readlink().is_absolute()
     meta = json.loads((link / "metadata.json").read_text())  # resolves current→.builds→../../PLAN/…
     assert meta["identifier"] == doc["identifier"]
+
+
+# --- S9d: the by-process secondary index (doc 04 §10.3) ---------------------------------------
+
+
+async def _link_processes(doc_id: str, names: list[str]) -> list[str]:
+    """Direct-seed a Process per name + a ProcessLink to the doc (the mirror reads ``process_link``;
+    this avoids needing the ungranted ``process.create`` in a mirror test — the ``_seed_org_role``
+    precedent). Returns the unique process names (the by-process folder labels)."""
+    async with get_sessionmaker()() as s:
+        doc = await s.get(DocumentedInformation, uuid.UUID(doc_id))
+        created: list[str] = []
+        for name in names:
+            uname = f"{name}-{uuid.uuid4().hex[:6]}"
+            proc = Process(
+                org_id=doc.org_id,
+                name=uname,
+                pdca_phase=PdcaPhase.DO,
+                created_by=doc.owner_user_id,
+            )
+            s.add(proc)
+            await s.flush()
+            s.add(
+                ProcessLink(
+                    org_id=doc.org_id,
+                    process_id=proc.id,
+                    documented_information_id=doc.id,
+                    created_by=doc.owner_user_id,
+                )
+            )
+            created.append(uname)
+        await s.commit()
+        return created
+
+
+async def test_mirror_by_process_index(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    subj: SimpleNamespace,
+    tmp_path: Path,
+) -> None:
+    """A process-linked Effective doc gets a ``by-process/{name}/`` relative symlink resolving to
+    its real clause-tree folder, and its metadata.json lists the process."""
+    mirror = tmp_path / "m"
+    await _grant_release_actors(subj)
+    ha, hb = _auth(token_factory, subj.a), _auth(token_factory, subj.b)
+    doc = await s5.drive_to_effective(app_client, ha, hb, hb, await s5.type_id("SOP"), b"proc-doc")
+    [pname] = await _link_processes(doc["id"], ["Purchasing"])
+
+    await _sync(mirror)
+    real = _doc_dir(mirror, doc["identifier"])
+    link = mirror / "current" / "by-process" / pname / real.name
+    assert link.is_symlink()
+    assert not link.readlink().is_absolute()  # relative target
+    assert link.resolve() == real.resolve()  # resolves to the real clause-tree folder
+    assert (link / "metadata.json").exists()
+    meta = json.loads((real / "metadata.json").read_text())
+    assert pname in [p["name"] for p in meta["processes"]]
+
+
+async def test_mirror_by_process_multi(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    subj: SimpleNamespace,
+    tmp_path: Path,
+) -> None:
+    """A doc linked to two processes → two by-process symlinks, both resolving to the one real
+    folder; the source bytes are stored exactly once (the symlinks add no real files)."""
+    mirror = tmp_path / "m"
+    await _grant_release_actors(subj)
+    ha, hb = _auth(token_factory, subj.a), _auth(token_factory, subj.b)
+    doc = await s5.drive_to_effective(
+        app_client, ha, hb, hb, await s5.type_id("SOP"), b"proc-multi"
+    )
+    names = await _link_processes(doc["id"], ["Purchasing", "Sales"])
+
+    await _sync(mirror)
+    real = _doc_dir(mirror, doc["identifier"])
+    for pname in names:
+        link = mirror / "current" / "by-process" / pname / real.name
+        assert link.is_symlink() and link.resolve() == real.resolve()
+    assert _all_file_bytes(mirror).count(b"proc-multi") == 1

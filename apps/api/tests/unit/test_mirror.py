@@ -15,7 +15,9 @@ from easysynq_api.services.vault import mirror as mirror_mod
 from easysynq_api.services.vault.mirror import (
     ClauseRef,
     EffectiveDoc,
+    ProcessRef,
     _placement_dirs,
+    _placement_process_dirs,
     atomic_swap,
     build_tree,
 )
@@ -44,6 +46,10 @@ def _ref(number: str, phase: str, *, title: str = "X", star: bool = False) -> Cl
     return ClauseRef(
         number=number, pdca_phase=phase, title=title, is_mandatory_star=star, framework_id=_FW
     )
+
+
+def _pref(name: str) -> ProcessRef:
+    return ProcessRef(process_id=uuid.uuid4(), process_name=name)
 
 
 def _doc_dirname() -> str:
@@ -288,6 +294,7 @@ async def _build_with_clauses(
     monkeypatch: pytest.MonkeyPatch,
     refs: list[ClauseRef],
     payload: bytes = b"BYTES",
+    processes: list[ProcessRef] | None = None,
 ) -> tuple[Path, EffectiveDoc, list[dict[str, Any]]]:
     async def _fetch(object_key: str, *, bucket: str | None = None) -> bytes:
         return payload
@@ -302,6 +309,7 @@ async def _build_with_clauses(
         LoggingRenderSink(),
         clauses_by_doc={eff.document_id: refs},
         top_words=_TOP_WORDS,
+        processes_by_doc={eff.document_id: processes} if processes else None,
     )
     return build, eff, manifest
 
@@ -399,3 +407,96 @@ async def test_build_tree_fresh_dir_only_remap_into_reused_dir_raises(
             clauses_by_doc={eff.document_id: [_ref("4.1", "PLAN"), _ref("8.1", "DO")]},
             top_words=_TOP_WORDS,
         )
+
+
+# --- S9d: the by-process secondary index (pure _placement_process_dirs) ------------------------
+
+
+def test_placement_process_single() -> None:
+    assert _placement_process_dirs([_pref("Purchasing")]) == ["by-process/Purchasing"]
+
+
+def test_placement_process_multiple_sorted() -> None:
+    dirs = _placement_process_dirs([_pref("Sales"), _pref("Purchasing"), _pref("QA")])
+    assert dirs == ["by-process/Purchasing", "by-process/QA", "by-process/Sales"]
+
+
+def test_placement_process_empty() -> None:
+    assert _placement_process_dirs([]) == []
+
+
+def test_placement_process_dedup_on_safe_name() -> None:
+    """Two distinct processes whose names _safe() to the same folder collapse to one symlink dir."""
+    dirs = _placement_process_dirs([_pref("Sales/EU"), _pref("Sales_EU")])
+    assert dirs == ["by-process/Sales_EU"]
+
+
+# --- S9d: build_tree writes the by-process symlinks -------------------------------------------
+
+
+async def test_build_tree_by_process_symlink_resolves(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    build, _, _ = await _build_with_clauses(
+        tmp_path, monkeypatch, [_ref("8.4", "DO")], processes=[_pref("Purchasing")]
+    )
+    dirname = _doc_dirname()
+    real = build / "DO" / "08-Operation" / dirname
+    link = build / "by-process" / "Purchasing" / dirname
+    assert real.is_dir() and not real.is_symlink()
+    assert link.is_symlink()
+    assert not link.readlink().is_absolute()  # relative target
+    assert link.resolve() == real.resolve()  # resolves to the one real folder
+    assert (link / "metadata.json").exists()  # readable through the link
+
+
+async def test_build_tree_by_process_clause_and_process_share_real_folder(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A doc mapped to two clauses AND linked to a process: real bytes once (under the lower
+    clause), reached from the other clause folder AND the by-process folder — all resolve to it."""
+    build, _, _ = await _build_with_clauses(
+        tmp_path,
+        monkeypatch,
+        [_ref("4.1", "PLAN"), _ref("8.1", "DO")],
+        processes=[_pref("Purchasing")],
+    )
+    dirname = _doc_dirname()
+    real = build / "PLAN" / "04-Context" / dirname
+    clause_link = build / "DO" / "08-Operation" / dirname
+    proc_link = build / "by-process" / "Purchasing" / dirname
+    assert real.is_dir() and not real.is_symlink()
+    for link in (clause_link, proc_link):
+        assert link.is_symlink() and link.resolve() == real.resolve()
+    # the source is stored exactly once (the symlinks don't add real files)
+    assert _only_source(build).read_bytes() == b"BYTES"
+
+
+async def test_build_tree_by_process_manifest_and_metadata(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    build, _, manifest = await _build_with_clauses(
+        tmp_path, monkeypatch, [_ref("8.4", "DO")], processes=[_pref("Sales"), _pref("Purchasing")]
+    )
+    proc_symlinks = [
+        e for e in manifest if "symlink_to" in e and e["path"].startswith("by-process/")
+    ]
+    assert len(proc_symlinks) == 2
+    assert all("sha256" not in e and e["symlink_to"].startswith("..") for e in proc_symlinks)
+    meta = json.loads((_only_source(build).parent / "metadata.json").read_text())
+    assert [p["name"] for p in meta["processes"]] == ["Purchasing", "Sales"]  # sorted by name
+
+
+async def test_build_tree_unmapped_doc_with_process_link(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A zero-clause (pre-S9 upgrade) doc that IS process-linked: real bytes under _unmapped/, a
+    by-process symlink pointing there."""
+    build, _, _ = await _build_with_clauses(
+        tmp_path, monkeypatch, [], processes=[_pref("Purchasing")]
+    )
+    dirname = _doc_dirname()
+    real = build / "_unmapped" / dirname
+    link = build / "by-process" / "Purchasing" / dirname
+    assert real.is_dir() and not real.is_symlink()
+    assert link.is_symlink() and link.resolve() == real.resolve()

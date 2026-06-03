@@ -25,13 +25,18 @@ other mapped clause folder via a **relative symlink** (spec-faithful "without du
 §10.3/§10.4). A document with no mappings (only reachable as a pre-S9 upgrade artifact — the
 ``submit-review`` ≥1-clause gate forbids it otherwise) lands in ``_unmapped/``.
 
+**What S9d adds (the by-process secondary index, doc 04 §10.3):** now that ``process_link`` exists,
+a parallel ``current/by-process/{name}/`` tree of **relative symlinks** into the same real doc
+folders — a doc linked to a process is reachable from its ``by-process/{name}/`` folder too (bytes
+never duplicated). Always built (the doc-14 ``storage_config.mirror_layout`` toggle is deferred to
+its config UI; the index is cheap). A doc with no process links simply gets no by-process entry.
+
 **Single-org invariant (D1).** ``list_effective_versions`` is org-agnostic (no ``org_id`` filter);
 under D1 (one organization per install) the per-doc ``{identifier}_{revision_label}`` directory name
 is globally unique, so clause-bucketing introduces no cross-org collision. Multi-tenant namespacing
 is out of scope for v1 (this is pre-existing S7 behavior, not introduced here).
 
-**Deferred (with seams):** rendering is S7b (live). **Process IA** + the by-process secondary mirror
-index (doc 04 §10.3 — needs ``process_link``) are deferred to **S9c**. The SHA-256 drift scan /
+**Deferred (with seams):** rendering is S7b (live). The SHA-256 drift scan /
 quarantine / ``MIRROR_DRIFT_DETECTED`` alarm are **v1** (D-6): the ``_meta/manifest.json`` here is a
 generated artifact only (file entries carry ``sha256``; symlink entries carry ``symlink_to``) —
 there is no comparison/scan code yet.
@@ -63,6 +68,8 @@ from ...db.models.clause import Clause
 from ...db.models.clause_mapping import ClauseMapping
 from ...db.models.document_version import DocumentVersion
 from ...db.models.documented_information import DocumentedInformation
+from ...db.models.process import Process
+from ...db.models.process_link import ProcessLink
 from ...db.session import get_sessionmaker
 from . import storage, verify_token
 from .render import RenderRequest, RenderSink, RenderStatus, get_render_sink
@@ -115,6 +122,15 @@ class ClauseRef:
     @property
     def sort_key(self) -> tuple[int, ...]:
         return _clause_sort_key_py(self.number)
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class ProcessRef:
+    """A process a document is linked to — drives the by-process secondary index (S9d, doc 04
+    §10.3) + the metadata.json ``processes`` array."""
+
+    process_id: uuid.UUID
+    process_name: str
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -214,6 +230,27 @@ async def fetch_top_words(session: AsyncSession) -> dict[tuple[uuid.UUID, str], 
     return {(framework_id, number): _top_word(title) for framework_id, number, title in rows}
 
 
+async def fetch_process_links(
+    session: AsyncSession, doc_ids: list[uuid.UUID]
+) -> dict[uuid.UUID, list[ProcessRef]]:
+    """Every process each document is linked to, grouped by ``documented_information_id`` — one
+    batch query (index-backed by ``ix_process_link_documented_information_id``), the
+    ``fetch_clause_refs`` twin. Drives the by-process secondary index (S9d, doc 04 §10.3)."""
+    if not doc_ids:
+        return {}
+    rows = (
+        await session.execute(
+            select(ProcessLink.documented_information_id, Process.id, Process.name)
+            .join(Process, ProcessLink.process_id == Process.id)
+            .where(ProcessLink.documented_information_id.in_(doc_ids))
+        )
+    ).all()
+    grouped: dict[uuid.UUID, list[ProcessRef]] = {}
+    for doc_id, process_id, name in rows:
+        grouped.setdefault(doc_id, []).append(ProcessRef(process_id=process_id, process_name=name))
+    return grouped
+
+
 def _safe(name: str) -> str:
     """Make a path component filesystem-safe (no separators / NUL); never empty."""
     cleaned = name.replace("/", "_").replace("\\", "_").replace("\x00", "").strip()
@@ -237,6 +274,8 @@ def _source_filename(eff: EffectiveDoc, ext: str) -> str:
 _PHASE_ORDER = {phase.value: i for i, phase in enumerate(PdcaPhase)}
 # Where an Effective document with zero clause mappings lands (only a pre-S9 upgrade artifact).
 _UNMAPPED_DIR = "_unmapped"
+# The by-process secondary index root (doc 04 §10.3) — a top-level sibling of the phase folders.
+_BY_PROCESS_DIR = "by-process"
 
 
 def _clause_sort_key_py(number: str) -> tuple[int, ...]:
@@ -301,6 +340,13 @@ def _placement_dirs(
     return primary, sorted(others, key=lambda d: others[d])
 
 
+def _placement_process_dirs(process_refs: list[ProcessRef]) -> list[str]:
+    """The ``by-process/{name}/`` folders a document is symlinked into (doc 04 §10.3, S9d) — one per
+    linked process, **deduped by the safe dir string** (two names that ``_safe`` alike collapse to
+    one symlink, no FileExistsError) and **sorted** for a byte-deterministic tree/manifest."""
+    return sorted({f"{_BY_PROCESS_DIR}/{_safe(ref.process_name)}" for ref in process_refs})
+
+
 def _effective_date(eff: EffectiveDoc) -> str:
     # UTC calendar date (R8 org-tz display deferred with the storage_config/org-settings model).
     return eff.effective_from.date().isoformat() if eff.effective_from else "—"
@@ -326,6 +372,15 @@ def _clause_payload(clause_refs: list[ClauseRef]) -> list[dict[str, object]]:
             "is_mandatory_star": ref.is_mandatory_star,
         }
         for ref in sorted(clause_refs, key=lambda c: c.sort_key)
+    ]
+
+
+def _process_payload(process_refs: list[ProcessRef]) -> list[dict[str, object]]:
+    """The linked-process list for metadata.json, sorted by ``(name, id)`` so two builds are
+    byte-identical (the §10.4 idempotency invariant)."""
+    return [
+        {"id": str(ref.process_id), "name": ref.process_name}
+        for ref in sorted(process_refs, key=lambda p: (p.process_name, str(p.process_id)))
     ]
 
 
@@ -356,6 +411,7 @@ def _metadata(
     render_status: str,
     no_controlled_rendition: bool,
     clause_refs: list[ClauseRef],
+    process_refs: list[ProcessRef],
 ) -> bytes:
     meta: dict[str, object] = {
         "identifier": eff.identifier,
@@ -375,6 +431,8 @@ def _metadata(
         # The clauses this document maps to (doc 02 §2.1) — the basis for its tree placement and the
         # compliance-checklist coverage view (doc 13). Empty only for a pre-S9 upgrade artifact.
         "clauses": _clause_payload(clause_refs),
+        # The processes this document is linked to (doc 02 §6.2) — the by-process index + map lens.
+        "processes": _process_payload(process_refs),
         # "rendered" (watermarked PDF) | "pending" (transient) | "unrenderable" (R26).
         "render_status": render_status,
     }
@@ -496,6 +554,7 @@ async def build_tree(
     *,
     clauses_by_doc: dict[uuid.UUID, list[ClauseRef]] | None = None,
     top_words: dict[tuple[uuid.UUID, str], str] | None = None,
+    processes_by_doc: dict[uuid.UUID, list[ProcessRef]] | None = None,
 ) -> tuple[list[dict[str, object]], int]:
     """Write the complete clause-aligned mirror tree into ``build_root`` (a fresh dir, S9b / doc 04
     §10.3). Each Effective version renders to a watermarked controlled-copy PDF (cached after the
@@ -514,6 +573,7 @@ async def build_tree(
     pending = 0
     cbd = clauses_by_doc or {}
     words = top_words or {}
+    pbd = processes_by_doc or {}
 
     for eff in effs:
         source_bytes = await storage.fetch_bytes(eff.object_key, bucket=eff.bucket)
@@ -524,6 +584,7 @@ async def build_tree(
             pending += 1
 
         refs = cbd.get(eff.document_id, [])
+        proc_refs = pbd.get(eff.document_id, [])
         primary_dir, other_dirs = _placement_dirs(refs, words)
         dirname = _doc_dirname(eff)
         doc_dir = build_root / primary_dir / dirname
@@ -532,7 +593,7 @@ async def build_tree(
         _write(doc_dir / source_filename, content, manifest, build_root)
         _write(
             doc_dir / "metadata.json",
-            _metadata(eff, source_filename, render_status, no_rendition, refs),
+            _metadata(eff, source_filename, render_status, no_rendition, refs, proc_refs),
             manifest,
             build_root,
         )
@@ -540,6 +601,10 @@ async def build_tree(
         # §10.3: reachable from EVERY mapped clause — real bytes once, a relative symlink each.
         for other in other_dirs:
             _write_symlink(build_root / other / dirname, doc_dir, build_root, manifest)
+        # §10.3: the by-process secondary index — a relative symlink from each linked process folder
+        # into the same real doc folder (works whether doc_dir is under a clause or _unmapped/).
+        for proc_dir in _placement_process_dirs(proc_refs):
+            _write_symlink(build_root / proc_dir / dirname, doc_dir, build_root, manifest)
 
     _write(build_root / "INDEX.md", _index_md(effs, cbd).encode(), manifest, build_root)
     # The machine manifest (doc 04 §10.3). Generated artifact only — NO scan/diff consumes it in S7
@@ -608,10 +673,18 @@ async def sync_mirror(
 
     async def _build(s: AsyncSession) -> tuple[list[dict[str, object]], int, int]:
         effs = await list_effective_versions(s)
-        clauses_by_doc = await fetch_clause_refs(s, [e.document_id for e in effs])
+        doc_ids = [e.document_id for e in effs]
+        clauses_by_doc = await fetch_clause_refs(s, doc_ids)
         top_words = await fetch_top_words(s)
+        processes_by_doc = await fetch_process_links(s, doc_ids)
         manifest, pending = await build_tree(
-            build_root, effs, sink, s, clauses_by_doc=clauses_by_doc, top_words=top_words
+            build_root,
+            effs,
+            sink,
+            s,
+            clauses_by_doc=clauses_by_doc,
+            top_words=top_words,
+            processes_by_doc=processes_by_doc,
         )
         await s.commit()  # persist the rendition cache writes (blob rows + version FKs)
         return manifest, pending, len(effs)
