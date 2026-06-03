@@ -1,26 +1,21 @@
 # EasySynQ — MVP Implementation Plan (for approval)
 
-> **Status: APPROVED (2026-05-31) and IN BUILD.** Slices **S0–S7 + S7b + S7c are shipped to `main`** (each via PR,
-> all CI green, validated on the real Docker stack); **S7d (in-app export/print stamp) then S8 (setup wizard) are
-> next.** **S7c** added the controlled-rendition verify token (doc 05 §6.4, zero-migration): an Ed25519-signed
-> `{document_id, version_id, content_digest}` token (reusing the `checkpoint.py` pattern) + a `segno` QR in the
-> watermark footer, and a **public `GET /verify`** (unauthenticated, minimal disclosure; edge rate-limiting is a v1 add)
-> returning **CURRENT / SUPERSEDED / UNKNOWN** — so any printout/export's currency is checkable without an account
-> (R11 boundary). The token is deterministic (Ed25519 + immutable claims) so the rendition stays content-addressed;
-> `easysynq mirror rebuild` force-re-renders existing renditions to carry it; the verify key is shared api↔worker via
-> a `secrets` volume. (It is an integrity token, **not** a Part-11 e-signature — D3 stays reserved.) Earlier:
-> S7 shipped the read-only Effective-only filesystem mirror (AC#2, zero-migration): full-rebuild +
-> symlink-repoint atomic swap (`current → .builds/<uuid>`), post-commit release/obsolete enqueue + nightly Beat
-> reconcile + `python -m easysynq_api.cli.mirror sync`, a flat layout (the clause/process IA tree defers to **S9**
-> with `clause_mapping`), and the api `:ro` mount completing the R11 contract. **S7b** then made the `RenderSink`
-> real (zero-migration): Gotenberg office→PDF (LibreOffice/Chromium; PDF passthrough) + a deterministic
-> reportlab+pypdf overlay stamps the §11.3 non-removable band (Rev + Effective + copy_status) + the diagonal
-> CONTROLLED COPY watermark, cached content-addressed in the non-WORM renditions bucket (`document_version.
-> rendition_blob_sha256`) — rendered Effective-only inside the mirror sink, three-way `RenderResult`
-> (RENDERED / R26 `no_controlled_rendition` / PENDING self-heal), license-safe BSD-only (NO PyMuPDF/AGPL), plus
-> `GET /documents/{id}/download`. **Deferred to S7c** (owner decision): the verify-token + QR + public `GET /verify`
-> (CURRENT/SUPERSEDED/UNKNOWN) + the per-intent export/print stamp. The drift scan/quarantine/`MIRROR_DRIFT_DETECTED`
-> alarm stay **v1** (D-6). This document is the build guide; the
+> **Status: APPROVED (2026-05-31) and IN BUILD.** Slices **S0–S7 + S7b/c/d, S8a–S8d, and S9/S9b/S9c/S9d
+> are shipped to `main`** (each via PR, all CI green, validated on the real Docker stack), and the
+> **OpenAPI contract (`packages/contracts/openapi.yaml`) is caught up through S9c**. **All six MVP
+> acceptance proofs are in; the mirror epic (S7/S7b–d/S9b/S9d) and both IA backends (clause + process)
+> are complete.** In brief: **S7/S7b/c/d** = the read-only Effective-only filesystem mirror (AC#2,
+> symlink-repoint atomic swap) + watermarked-PDF rendering (Gotenberg + a deterministic reportlab/pypdf
+> §11.3 band, BSD-only) + the Ed25519 verify-token/QR + public `GET /verify` + the per-request export/print
+> stamp; **S8a–d** = the 423 setup latch + bootstrap-of-trust + all five blocking gates (G-A admin / G-E
+> org / G-B WORM-verify / G-C backup→restore-into-scratch drill [AC#5] / G-D auth-config) + the Users &
+> Roles admin; **S9/S9b/c/d** = the ISO 9001:2015 clause spine + `clause_mapping` + the submit-≥1-clause
+> gate, the §10.3 clause-aligned mirror tree, the Clause 4.4 process IA backend, and the by-process mirror
+> index. **Next: S10 (search/reporting + the org-wide Compliance Checklist), then S11 (backup/restore-CLI
+> hardening + the exit slice).** Migration head `0019` (next `0020`). The drift scan / quarantine /
+> `MIRROR_DRIFT_DETECTED` alarm stay **v1** (D-6).
+>
+> This document is the build guide; the
 > Decisions Register remains authoritative where they differ, and a few canon reconciliations were made during the
 > build (see CLAUDE.md "Current status" and the per-slice memory for the exact decisions, e.g. `documented_information`
 > collapse, `role_grant`/`role_assignment` naming, the INV-1/R25 partial indexes (built in S4 with `::enum`-cast
@@ -295,6 +290,13 @@ S0 walking skeleton ─┬─ S1 AuthN ── S2 AuthZ[AC#3,4] ── S3 Vault �
                      └─ S11 Backup/restore CLI + hardening (exit slice)
 ```
 
+> **Note — this table is the *original* plan, not a live status board.** The as-built shipped-state lives
+> in the top **Status** header + `CLAUDE.md` "Current status". During the build, **S8** was decomposed into
+> **S8a–S8d** (the setup latch + bootstrap-of-trust + the five gates + Users & Roles admin) and **S9** was
+> built as a **backend** epic **S9/S9b/S9c/S9d** (clause + process IA + the clause-aligned/by-process mirror
+> trees) ahead of the original "S9" **web-UI** track (Library + Document UI), which now defers to v1 — so the
+> row numbering below ≠ the as-built slice IDs.
+
 | Slice | Goal | Definition of Done (incl. **[PROOF]** = the load-bearing automated test) |
 |---|---|---|
 | **S0 Walking skeleton** | Compose up, health green, reversible migration, OpenAPI→client round-trips | Compose S/M bring all services up (digest-pinned); `/healthz`+`/readyz` green; `install.sh` blocks on ready; **[PROOF]** `alembic upgrade head && downgrade base`; **[PROOF]** contract regen produces zero drift; `beat`=exactly 1; structured JSON logs w/ `request_id`. |
@@ -302,7 +304,7 @@ S0 walking skeleton ─┬─ S1 AuthN ── S2 AuthZ[AC#3,4] ── S3 Vault �
 | **S2 AuthZ [AC#3,4]** | Catalog seed, 8 roles, PDP/PEP, deny-wins — before any vault write | Closed doc-07 catalog seeded (legacy spellings normalized); ADMIN holds **no** content perms; Approver lacks `document.edit`; PDP is a pure unit-tested function; **[PROOF AC#3]** per-user `DENY @DOCUMENT` beats role `ALLOW @PROCESS`; **[PROOF AC#4]** `system.*` holder → `document.approve` = **DENY**; **[PROOF]** content-tier `permission.grant` of a system key → **422 two_tier_violation**; **[PROOF]** specificity never overrides a DENY; every allow+deny emits an audit hook. |
 | **S3 Vault** | Create doc, check-out (Redis lock), upload CAS blob, check-in immutable version | Identifier `{TYPE}-{AREA}-{SEQ}` allocated atomically (REV not in identifier); **[PROOF]** re-checkin identical bytes → "no change detected", no new version; **[PROOF]** empty `change_reason` **or** missing `change_significance` → **422** (INV-3, C10); **[PROOF]** double check-out → **409 lock_conflict**; **[PROOF]** break-lock **preserves scratch** (R9) + `LOCK_BROKEN` audit; blobs WORM-written before version marked complete; lock TTL **8h** (R24) with heartbeat; content I/O **presigned** (asserted: API never proxies bytes). |
 | **S4 Lifecycle [AC#1]** | FSM + atomic single-Effective cutover | FSM enforced server-side (illegal → 409); **7-state tokens verbatim** in DB; **[PROOF AC#1a]** `Draft→InReview→Approved→Effective` with recorded approval; prior Effective atomically → `Superseded`; **[PROOF AC#1b]** two parallel `release` txns → exactly one Effective (loser hits INV-1, rolls back) under real concurrent connections; future-dated release fires via Beat at the stored UTC instant; **submit-review requires ≥1 `clause_mapping` else 422**. MVP ships T1–T4, T6, T7, T9–T12; defers T5/T8 (§11 D-5). |
-| **S5 Approval + SoD** ✅ | Approve/release persist append-only `signature_event`; SoD blocks self-approval | Approval/review routes through `POST /tasks/{id}/decision` (writes `signature_event`+`task_outcome`+audit in one txn; tasks-canonical, C7 — direct `/approve`+`/request-changes` removed); `signature_event` append-only (rescind via `voided_*`), **polymorphic `signed_object_type`/`signed_object_id`** (doc 14 §8 governs over §15.4's typed-FK form), only v1 meanings emitted, `content_digest`+`auth_context` captured, Part-11 cols NULL; **[PROOF]** **SoD-1** (author of the version cannot approve it) → **403 `sod_violation`** (doc 15 §8.8 governs the error shape — reconciled from the originally-stated 409); **SoD-2** (author never releases own edit; approver-release behind `allow_approver_release`) and **SoD-3** (auditor independence — Internal Auditor role hard-excludes edit/approve/release, RBAC) covered, evaluated against **immutable version/signature history** (INV-4), not a single current field. |
+| **S5 Approval + SoD** | Approve/release persist append-only `signature_event`; SoD blocks self-approval | Approval/review routes through `POST /tasks/{id}/decision` (writes `signature_event`+`task_outcome`+audit in one txn; tasks-canonical, C7 — direct `/approve`+`/request-changes` removed); `signature_event` append-only (rescind via `voided_*`), **polymorphic `signed_object_type`/`signed_object_id`** (doc 14 §8 governs over §15.4's typed-FK form), only v1 meanings emitted, `content_digest`+`auth_context` captured, Part-11 cols NULL; **[PROOF]** **SoD-1** (author of the version cannot approve it) → **403 `sod_violation`** (doc 15 §8.8 governs the error shape — reconciled from the originally-stated 409); **SoD-2** (author never releases own edit; approver-release behind `allow_approver_release`) and **SoD-3** (auditor independence — Internal Auditor role hard-excludes edit/approve/release, RBAC) covered, evaluated against **immutable version/signature history** (INV-4), not a single current field. |
 | **S6 Audit + chain-linker + sink [AC#6]** | Append-only partitioned trail; decoupled hash-chain; off-host checkpoint | `audit_event` monthly-partitioned; app role has **no UPDATE/DELETE** on `audit_event` **and** `signature_event`; row written in same txn as its change; **[PROOF AC#6a]** UPDATE/DELETE rejected; every gated step produces a row; **[PROOF AC#6b]** chain-linker sets `prev_hash/row_hash/chained_at`; `verify-chain` recomputes & matches; a mutated row is **detected** as the first broken link; linker is **exactly-one** (advisory lock) with a **bounded-lag alarm**; off-host `audit_checkpoint_sink` push works; absent sink → persistent **"NOT tamper-evident"** UI warning (R13 soft gate). `canonical_serialize` frozen as a normative spec + **golden-vector test** (§11 D-4). |
 | **S7 Mirror [AC#2]** | RO mirror of Effective-only, watermarked; auto-correct by regeneration | Mirror contains **only** Effective versions (drafts provably excluded); written to temp tree then **atomic swap**; mounted **read-only to users** (R11 mount contract); **[PROOF AC#2]** an edited mirror file is **overwritten from the vault on next sync**; watermark band carries Rev+EffectiveDate+copy_status (non-removable); Obsolete/Superseded stamps non-suppressible; non-renderable formats stored as controlled source + `no_controlled_rendition` (R26); mirror regenerable, **not** backed up. *MVP = RO-mount + regeneration; the SHA-256 drift scan / quarantine / `MIRROR_DRIFT_DETECTED` alarm are v1 (C-correction; §11 D-6).* |
 | **S8 Setup wizard + gates [AC#5]** | 10-step latch; WORM-verify + tested-restore hard gates | `setup_state` latch enforced; `/api/v1/*` → **423** until OPERATIONAL; canonical step order (org profile before storage; backup+restore-test before auth); bootstrap secret single-use, salted-hashed; **[PROOF G-B]** WORM probe: object-locked probe early-delete **denied**; **[PROOF AC#5]** finalize **blocked** until a backup→restore-into-scratch drill **passes** integrity assertions (blob SHA-256 re-hash, row counts, FK checks) — "configured but unverified" does **not** satisfy G-C; off-host sink absent → loud not-tamper-evident warning (never blocks); finalize is one transactional commit that arms Beat jobs + writes `SETUP_FINALIZED`; Avery→Mara handoff (System Administrator bundle = no content caps; Mara gets QualityManager). |
