@@ -40,6 +40,9 @@ async function request<T>(
     }
     throw new ApiError(resp.status, problem.code ?? "error", problem.detail ?? problem.title ?? `HTTP ${resp.status}`);
   }
+  if (resp.status === 204 || resp.headers.get("content-length") === "0") {
+    return undefined as T; // 204 No Content (e.g. DELETE) — no JSON body to parse
+  }
   return (await resp.json()) as T;
 }
 
@@ -47,7 +50,7 @@ export const apiGet = <T>(path: string, token: string | null = null): Promise<T>
   request<T>("GET", path, token);
 
 export const apiSend = <T>(
-  method: "POST" | "PATCH",
+  method: "POST" | "PATCH" | "DELETE",
   path: string,
   token: string | null,
   body?: unknown,

@@ -74,6 +74,10 @@ class EventType(enum.Enum):
     AUTH_CONFIGURED = "AUTH_CONFIGURED"
     AUTH_TEST_LOGIN_OK = "AUTH_TEST_LOGIN_OK"
     AUTH_TEST_LOGIN_FAILED = "AUTH_TEST_LOGIN_FAILED"
+    # user lifecycle admin (S8d, doc 08 §10/§11) — the invite (pre-create) + enable/disable trail
+    # (object_type ``user``). Added via ALTER TYPE … ADD VALUE in 0016 (the 0011-0015 pattern).
+    USER_CREATED = "USER_CREATED"
+    USER_STATUS_CHANGED = "USER_STATUS_CHANGED"
     # authorization (S2/S5) — denied-access attempts (always) + allows (configurable verbosity,
     # doc 12 §4.1 — off by default) + the permission/role/override changes
     ACCESS_DENIED = "ACCESS_DENIED"

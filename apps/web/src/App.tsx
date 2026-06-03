@@ -2,6 +2,9 @@ import { Badge, Button, Card, Container, Group, Loader, Stack, Text, Title } fro
 import { useQuery } from "@tanstack/react-query";
 import { Link, Navigate, Route, Routes } from "react-router-dom";
 import { SetupWizard } from "./SetupWizard";
+import { AdminShell } from "./admin/AdminShell";
+import { RolesAdmin } from "./admin/RolesAdmin";
+import { UsersAdmin } from "./admin/UsersAdmin";
 import { apiGet } from "./lib/api";
 import { useAuth } from "./lib/auth";
 
@@ -131,24 +134,6 @@ function Shell({
   );
 }
 
-// S8c: a placeholder admin route — the multi-screen admin surface (users/roles/settings/health,
-// wizard steps 6-9) lands in S8d. It exists now so the router seam is real, not deferred.
-function AdminStub() {
-  return (
-    <Container size="sm" py="xl">
-      <Stack gap="md">
-        <Group justify="space-between">
-          <Title order={2}>Administration</Title>
-          <Button component={Link} to="/" variant="subtle">
-            Back
-          </Button>
-        </Group>
-        <Text c="dimmed">System administration surfaces (users, roles, settings) arrive in S8d.</Text>
-      </Stack>
-    </Container>
-  );
-}
-
 export function App() {
   const { ready, user, login, logout } = useAuth();
   const token = user?.access_token ?? null;
@@ -185,8 +170,12 @@ export function App() {
       />
       <Route
         path="/admin"
-        element={operational ? <AdminStub /> : <Navigate to="/setup" replace />}
-      />
+        element={operational ? <AdminShell /> : <Navigate to="/setup" replace />}
+      >
+        <Route index element={<Navigate to="users" replace />} />
+        <Route path="users" element={<UsersAdmin token={token} />} />
+        <Route path="roles" element={<RolesAdmin token={token} />} />
+      </Route>
       <Route
         path="/"
         element={
