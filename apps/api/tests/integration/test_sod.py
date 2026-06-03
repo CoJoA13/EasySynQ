@@ -17,7 +17,7 @@ import pytest
 from httpx import AsyncClient
 
 from . import s5_helpers as s5
-from .test_vault import _auth, _checkin, _create, _upload
+from .test_vault import _auth, _checkin, _create, _map_clause, _upload
 
 pytestmark = pytest.mark.integration
 
@@ -33,6 +33,7 @@ async def _to_in_review(client: AsyncClient, h: dict[str, str], type_id: str) ->
     await client.post(f"/api/v1/documents/{did}/checkout", headers=h)
     sha = await _upload(client, h, did, f"sod-{did}".encode())
     await _checkin(client, h, did, sha, change_reason="v1", change_significance="MAJOR")
+    await _map_clause(client, h, did)  # S9: submit-review needs ≥1 clause_mapping
     assert (
         await client.post(f"/api/v1/documents/{did}/submit-review", headers=h)
     ).status_code == 200

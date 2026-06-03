@@ -341,18 +341,57 @@ Docker stack):**
   disable-blocks-then-reenable + `USER_STATUS_CHANGED` + 403, the last-admin guard (409), assign-seeded-role-visible-in-
   roster end-to-end; the 2 `EventType` members unit. **149 unit + 111 integration**.
 
-**Next slice: S9 — clause/process IA + `clause_mapping`** (the ISO clause spine + process map as navigable read-only
-reference data + the M:N `clause_mapping`; unblocks the mirror's clause/process tree (doc 04 §10.3) + the lifecycle
-submit ≥1-`clause_mapping` gate (the `# S9:` seam from S4) + **S8e** = the deferred wizard Step 8 QMS scope/process-map
-seed, which couples to this IA). Then **S10/S11** (search/reporting · backup/restore-CLI hardening + the exit slice).
-The gate registry + latch extend by just appending gates. **Deferred (S8e / v1 / Part-11):** wizard Step 8 (scope/
-process-map, after S9) + Step 9 (import → the v1 ingestion epic); custom-role create/update/delete + bulk-CSV invite +
-the effective-permissions explorer (v1); in-app Keycloak admin-API provisioning (v1); MFA *enforcement* + `acr`/step-up
-(Part-11, D3); the §10.4 self-grant friction + `ADMIN_SELF_GRANTED_QMS_CAP` event (v1). **Deferred (S11 / v1.x, D-6 /
-R37):** operator-grade *live* WORM-aware restore + cutover, PITR/WAL, retention *pruning*, Keycloak realm export, archive
-envelope encryption, S3-destination, `easysynq restore`/`upgrade`. S6/S7 seams still open (Keycloak auth-event SPI,
-`/audit-events/export`, the clause/process IA mirror tree). Pre-existing hardening noted: `area_code` is unconstrained
-`Text` at the S3 create boundary.
+- **S9 — Clause IA + `clause_mapping`** ✅ — the ISO 9001:2015 clause spine + the M:N document↔clause mapping + the
+  lifecycle submit gate. **Owner-scoped to clause IA only** (process IA — `process`/`process_edge`/`process_link` +
+  endpoints — deferred to a follow-on/S8e to avoid the not-yet-built `org_role`/`supplier` FK targets; the mirror
+  §10.3 tree deferred to **S9b**; clause-mapping writes gated on the existing `document.manage_metadata`). **`0017`**
+  creates the read-only `clause` table (self-nested `parent_id`, `pdca_phase` enum, `is_mandatory_star`,
+  INSERT-by-seed-only — no `clause.edit` key) + the audited `clause_mapping` join (`org_id`+`framework_id` per C5;
+  `UNIQUE(documented_information_id, clause_id)`; the `documented_information_id` FK **named explicitly** — the
+  convention default is 64 chars > PG's 63 limit) + `ALTER TYPE event_type ADD VALUE 'CLAUSE_MAPPED'/'CLAUSE_UNMAPPED'`
+  (the 0011-0016 additive pattern; reuse `object_type=document` — the closed `AuditObjectType` gains no member).
+  **`0018`** seeds the **83-clause** ISO 9001:2015 catalog (the **20 ★ mandatory** rows = doc 02 §2.1 / **R30**, incl.
+  **8.5.6**; PDCA per §3.2 with clause 7 split PLAN/DO) from a **reviewable, unit-tested** data module
+  (`db/seeds/iso9001_clauses.py`) — **drafted + adversarially verified against doc 02** (a draft → 3-skeptic-lens →
+  reconcile workflow; two corrections: 7.5 is not a §2.1 ★ row, 5.1.1's official title is "General"); parent_id resolved
+  in a second pass. **The headline:** the S4 `# S9:` seam at `lifecycle.py` is filled — `submit_review` now **422
+  `validation_error`** when a document has **zero** clause mappings (counted on the DOCUMENT, so a revision T9 inherits
+  its mappings; fail-closed before any mutation). New `GET /clauses` (`clauseMap.read`, SYSTEM — doc 15 §8.4's `clause.read`
+  shorthand reconciled to the real seeded key) returns the spine flat + ordered by a numeric `string_to_array(number,'.')::int[]`
+  sort; flat sub-resources **`POST`/`GET`/`DELETE /documents/{id}/clause-mappings`** (`document.manage_metadata`/`document.read`)
+  with a multi-standard framework-match guard (422), dup-map 409 (+ `IntegrityError` race backstop), and in-txn
+  `CLAUSE_MAPPED`/`CLAUSE_UNMAPPED` audit (the `users._emit_user_event` pattern). **No new permission keys, no catalog
+  change, no web** (S9 is the API/data foundation). Shared test helper `_map_clause` (iso9001-scoped clause pick) wired
+  into `drive_to_approved` + 4 direct-submit sites so the gate doesn't break existing flows. Adversarially reviewed
+  (4 lenses → per-finding verify; 10 confirmed of 22, all folded) — incl. a **HIGH**: `0018` originally resolved the
+  framework via a `short_code='DEFAULT'` org join, but a finalized install renames `short_code` away (the G-E gate), so
+  `0018` (the first seed migration to run during an **upgrade of an already-finalized install**) would `NoResultFound` →
+  `alembic upgrade` fail (CI can't catch it — a fresh DB still has `DEFAULT`); fixed to resolve by the stable
+  `code='iso9001:2015'` + `scalar_one_or_none` skip (proven on a throwaway PG by renaming the org, then upgrading). Plus
+  the submit/unmap **TOCTOU** (unmap now `FOR UPDATE`-locks the doc row) + 4 test gaps (the T9 gate, the concurrent-dup
+  `IntegrityError` race, the audit-payload content, the default-`False` path). Proofs:
+  `test_submit_requires_clause_mapping` [S9 headline] (0-maps→422, then map→T2 200) + `test_t9_revision_submit_requires_
+  clause_mapping` (the T9 gate + revision-inherits-mappings) + GET-clauses-spine (hierarchy + ★ + PDCA) + clauseMap.read
+  403 + map/unmap-audited round-trip (before/after payloads) + dup-409 + concurrent-dup-race (201/409) +
+  cross-framework-422 + map-needs-manage_metadata-403 (integration); the frozen catalog (83/20★/8.5.6/PDCA/tree) +
+  `EventType` members (unit).
+  **156 unit + 120 integration** (the only locally-red tests are the 5 pre-existing `pg_dump`-absent backup-drill tests —
+  environmental, green on CI's `ubuntu-latest`).
+
+**Next slice: S9b — clause/process IA mirror tree + process IA** (rebuild the S7 flat mirror into the doc 04 §10.3
+PLAN/DO/CHECK/ACT→clause tree now that `clause_mapping` exists; land the `process`/`process_edge`/`process_link` schema
+and the `GET /processes(/map)` reads — couples to **S8e** = the deferred wizard Step 8 QMS scope/process-map seed). Then **S10/S11**
+(search/reporting · backup/restore-CLI hardening + the exit slice). The gate registry + latch extend by just appending
+gates. **Deferred (S9b / S8e / v1 / Part-11):** the clause/process mirror tree + process IA (process/edge/link +
+endpoints, needs `org_role`/`supplier`); the org-wide **Compliance Checklist** dashboard (reads `is_mandatory_star` +
+coverage, doc 13) + `filter[clause_refs][has]` on `GET /documents` + `clause_refs` in the list serializer (S10); the web
+clause-spine nav + mapping UI; wizard Step 8 (scope/process-map, after S9b) + Step 9 (import → the v1 ingestion epic);
+custom-role create/update/delete + bulk-CSV invite + the effective-permissions explorer (v1); in-app Keycloak admin-API
+provisioning (v1); MFA *enforcement* + `acr`/step-up (Part-11, D3); the §10.4 self-grant friction +
+`ADMIN_SELF_GRANTED_QMS_CAP` event (v1). **Deferred (S11 / v1.x, D-6 / R37):** operator-grade *live* WORM-aware restore +
+cutover, PITR/WAL, retention *pruning*, Keycloak realm export, archive envelope encryption, S3-destination, `easysynq
+restore`/`upgrade`. S6/S7 seams still open (Keycloak auth-event SPI, `/audit-events/export`, the clause/process IA mirror
+tree). Pre-existing hardening noted: `area_code` is unconstrained `Text` at the S3 create boundary.
 
 ## Building the MVP (dev workflow)
 
@@ -431,6 +470,13 @@ envelope encryption, S3-destination, `easysynq restore`/`upgrade`. S6/S7 seams s
   (the R35 two-tier guard applies), and enable/disable accounts (the last active admin can't be disabled). `/admin/roles`
   is a read-only view of the seeded bundles. (Custom-role authoring, bulk-CSV invite, and in-app Keycloak provisioning
   are v1.)
+- **Clause IA + mapping (S9) — no UI yet (API/data only):** a fresh/upgraded install now carries the read-only
+  ISO 9001:2015 clause spine (seeded by `0018`; **no operator action**). `GET /api/v1/clauses` lists it (gate
+  `clauseMap.read`, held by QMS Owner + Internal Auditor — grant it via override for others until the clause-nav UI
+  lands). A document must be mapped to **≥1 clause before `submit-review`** (else **422**) — map via
+  `POST /api/v1/documents/{id}/clause-mappings {clause_id}` (gate `document.manage_metadata`, in the Author bundle),
+  unmap via `DELETE …/clause-mappings/{clause_id}`. Both audited (`CLAUSE_MAPPED`/`CLAUSE_UNMAPPED`). The clause-spine
+  nav + mapping UI, the clause/process **mirror tree**, and **process IA** are deferred (S9b/web).
 - **Authz break-glass (`grant-role`):** still available to assign a seeded role directly, bypassing the wizard +
   PEP — `easysynq grant-role <keycloak-subject> ["Role Name"]` (default "System Administrator"; idempotent;
   JIT-creates the `app_user`; runs `easysynq_api.cli.grant_role` as the DB owner). Use it to recover a botched

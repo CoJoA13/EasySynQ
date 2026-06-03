@@ -7,6 +7,7 @@ from ._audit_enums import (
     EventType,
 )
 from ._authz_enums import SodSeverity, SodTargetBinding
+from ._clause_enums import PdcaPhase
 from ._record_enums import RecordDispositionState, RecordType
 from ._signature_enums import SignatureMeaning, SignatureMethod, SignedObjectType
 from ._vault_enums import (
@@ -31,6 +32,8 @@ from .audit_event import AuditEvent
 from .authz_grant import PermissionOverride
 from .backup_policy import BackupPolicy
 from .blob import Blob
+from .clause import Clause
+from .clause_mapping import ClauseMapping
 from .document_type import DocumentType
 from .document_version import DocumentVersion
 from .documented_information import DocumentedInformation
@@ -67,6 +70,8 @@ __all__ = [
     "ChangeSignificance",
     "CheckpointSinkKind",
     "Classification",
+    "Clause",
+    "ClauseMapping",
     "DocumentCurrentState",
     "DocumentKind",
     "DocumentLevel",
@@ -77,6 +82,7 @@ __all__ = [
     "Framework",
     "NumberingCounter",
     "Organization",
+    "PdcaPhase",
     "Permission",
     "PermissionOverride",
     "Record",

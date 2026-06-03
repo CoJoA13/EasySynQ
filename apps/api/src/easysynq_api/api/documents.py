@@ -17,12 +17,17 @@ from typing import Any
 from fastapi import APIRouter, Depends, Request, Response, status
 from pydantic import BaseModel
 from sqlalchemy import desc, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..auth.dependencies import get_current_user
+from ..db.models._audit_enums import ActorType, AuditObjectType, EventType
 from ..db.models._signature_enums import SignatureMeaning
 from ..db.models._vault_enums import VersionState
 from ..db.models.app_user import AppUser
+from ..db.models.audit_event import AuditEvent
+from ..db.models.clause import Clause
+from ..db.models.clause_mapping import ClauseMapping
 from ..db.models.document_type import DocumentType
 from ..db.models.document_version import DocumentVersion
 from ..db.models.documented_information import DocumentedInformation
@@ -30,6 +35,7 @@ from ..db.models.signature_event import SignatureEvent as SignatureEventRow
 from ..db.models.working_draft import WorkingDraft
 from ..db.session import get_session
 from ..domain.authz import RequestContext, ResourceContext, authorize
+from ..logging import request_id_var
 from ..problems import ProblemException
 from ..services.authz import AuthzAuditSink, enforce, gather_grants, get_authz_audit_sink, require
 from ..services.vault import (
@@ -150,6 +156,62 @@ def _working_draft(wd: WorkingDraft) -> dict[str, Any]:
         "source_version_id": str(wd.source_version_id) if wd.source_version_id else None,
         "lock_ttl_seconds": LOCK_TTL_SECONDS,
     }
+
+
+class ClauseMappingCreate(BaseModel):
+    clause_id: uuid.UUID
+    is_requirement_level: bool = False
+
+
+def _clause_mapping(m: ClauseMapping, c: Clause) -> dict[str, Any]:
+    return {
+        "id": str(m.id),
+        "document_id": str(m.documented_information_id),
+        "clause_id": str(m.clause_id),
+        "clause_number": c.number,
+        "clause_title": c.title,
+        "is_requirement_level": m.is_requirement_level,
+        "framework_id": str(m.framework_id),
+        "created_at": m.created_at.isoformat() if m.created_at else None,
+    }
+
+
+def _rid() -> uuid.UUID | None:
+    raw = request_id_var.get()
+    if not raw:
+        return None
+    try:
+        return uuid.UUID(raw)
+    except ValueError:
+        return None
+
+
+def _emit_clause_event(
+    session: AsyncSession,
+    actor: AppUser,
+    event_type: EventType,
+    doc_id: uuid.UUID,
+    *,
+    before: dict[str, Any] | None = None,
+    after: dict[str, Any] | None = None,
+) -> None:
+    """Append a clause-mapping ``audit_event`` (object_type=document, keyed to the mapped artifact)
+    BEFORE commit, so the link change + its audit row commit atomically (mirrors
+    ``users._emit_user_event``). Hashes stay NULL — the S6 linker stamps them off the hot path."""
+    session.add(
+        AuditEvent(
+            org_id=actor.org_id,
+            occurred_at=datetime.datetime.now(datetime.UTC),
+            actor_id=actor.id,
+            actor_type=ActorType.user,
+            event_type=event_type,
+            object_type=AuditObjectType.document,
+            object_id=doc_id,
+            before=before,
+            after=after,
+            request_id=_rid(),
+        )
+    )
 
 
 # --- helpers ----------------------------------------------------------------------------
@@ -379,6 +441,109 @@ async def update_metadata_endpoint(
     await session.commit()
     await session.refresh(doc)
     return _document(doc)
+
+
+# --- clause mappings (S9): the M:N document↔clause link satisfying the submit gate --------
+
+
+@router.get("/documents/{document_id}/clause-mappings")
+async def list_clause_mappings_endpoint(
+    document_id: uuid.UUID,
+    caller: AppUser = Depends(_read),
+    session: AsyncSession = Depends(get_session),
+) -> list[dict[str, Any]]:
+    doc = await _load_document(session, caller, document_id)
+    rows = await vault_repo.list_clause_mappings(session, doc.id)
+    return [_clause_mapping(m, c) for m, c in rows]
+
+
+@router.post("/documents/{document_id}/clause-mappings", status_code=status.HTTP_201_CREATED)
+async def map_clause_endpoint(
+    document_id: uuid.UUID,
+    body: ClauseMappingCreate,
+    caller: AppUser = Depends(_manage_metadata),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    doc = await _load_document(session, caller, document_id)
+    clause = await vault_repo.get_clause(session, body.clause_id)
+    if clause is None:
+        raise ProblemException(status=404, code="not_found", title="Clause not found")
+    # Multi-standard safety (D3): a document may only map to clauses of its own framework.
+    if clause.framework_id != doc.framework_id:
+        raise ProblemException(
+            status=422,
+            code="validation_error",
+            title="Clause belongs to a different framework",
+            errors=[
+                {
+                    "field": "clause_id",
+                    "code": "framework_mismatch",
+                    "message": "the clause and the document must share a framework",
+                }
+            ],
+        )
+    if await vault_repo.get_clause_mapping(session, doc.id, clause.id) is not None:
+        raise ProblemException(status=409, code="conflict", title="Clause already mapped")
+    mapping = ClauseMapping(
+        org_id=doc.org_id,
+        framework_id=doc.framework_id,
+        clause_id=clause.id,
+        documented_information_id=doc.id,
+        is_requirement_level=body.is_requirement_level,
+        created_by=caller.id,
+    )
+    session.add(mapping)
+    try:
+        await session.flush()  # the UNIQUE backstop for a concurrent duplicate map
+    except IntegrityError:
+        await session.rollback()
+        raise ProblemException(status=409, code="conflict", title="Clause already mapped") from None
+    _emit_clause_event(
+        session,
+        caller,
+        EventType.CLAUSE_MAPPED,
+        doc.id,
+        after={
+            "clause_id": str(clause.id),
+            "clause_number": clause.number,
+            "is_requirement_level": mapping.is_requirement_level,
+        },
+    )
+    await session.commit()
+    return _clause_mapping(mapping, clause)
+
+
+@router.delete(
+    "/documents/{document_id}/clause-mappings/{clause_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def unmap_clause_endpoint(
+    document_id: uuid.UUID,
+    clause_id: uuid.UUID,
+    caller: AppUser = Depends(_manage_metadata),
+    session: AsyncSession = Depends(get_session),
+) -> Response:
+    # FOR UPDATE on the document row serializes this against a concurrent submit-review (which also
+    # locks the doc row): the submit's mapping count and a last-mapping delete can't interleave to
+    # leave an InReview document with zero mappings.
+    doc = await _load_document(session, caller, document_id, for_update=True)
+    mapping = await vault_repo.get_clause_mapping(session, doc.id, clause_id)
+    if mapping is None:
+        raise ProblemException(status=404, code="not_found", title="Clause mapping not found")
+    clause = await vault_repo.get_clause(session, clause_id)
+    await session.delete(mapping)
+    _emit_clause_event(
+        session,
+        caller,
+        EventType.CLAUSE_UNMAPPED,
+        doc.id,
+        before={
+            "clause_id": str(clause_id),
+            "clause_number": clause.number if clause else None,
+        },
+    )
+    await session.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 # --- check-out / upload / check-in ------------------------------------------------------

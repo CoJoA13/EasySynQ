@@ -78,6 +78,11 @@ class EventType(enum.Enum):
     # (object_type ``user``). Added via ALTER TYPE … ADD VALUE in 0016 (the 0011-0015 pattern).
     USER_CREATED = "USER_CREATED"
     USER_STATUS_CHANGED = "USER_STATUS_CHANGED"
+    # clause IA / clause_mapping (S9, doc 02 §2.1, doc 14 §4) — the audited document↔clause link
+    # (object_type ``document``, keyed to the mapped artifact). Added via ALTER TYPE … ADD VALUE in
+    # 0017 (the 0011-0016 additive pattern).
+    CLAUSE_MAPPED = "CLAUSE_MAPPED"
+    CLAUSE_UNMAPPED = "CLAUSE_UNMAPPED"
     # authorization (S2/S5) — denied-access attempts (always) + allows (configurable verbosity,
     # doc 12 §4.1 — off by default) + the permission/role/override changes
     ACCESS_DENIED = "ACCESS_DENIED"

@@ -181,8 +181,22 @@ async def submit_review(
     """T2 (Draft → InReview) / T9 (UnderRevision → InReview). Acts on the latest checked-in Draft
     version (the check-in already released the edit lock, so this is lock-free). **Mutate-only** —
     the submit-review endpoint commits, instantiates the approval workflow, and audits."""
-    # S9: enforce the ">=1 clause_mapping else 422" precondition here (doc 15 §8.5). The
-    # clause/clause_mapping schema + ISO seed + mapping UX land in the IA slice; deferred per owner.
+    # S9: a document must address >=1 ISO clause before it enters review (doc 15 §8.5 / doc 04
+    # §6.1 / doc 14 §4). Counted on the DOCUMENT (clause_mapping is keyed to documented_information,
+    # not the version), so a revision (T9) keeps its mappings; the gate covers both T2 and T9.
+    if await repository.count_clause_mappings(session, doc.id) == 0:
+        raise ProblemException(
+            status=422,
+            code="validation_error",
+            title="Submit-review requires at least one clause mapping",
+            errors=[
+                {
+                    "field": "clause_mappings",
+                    "code": "required",
+                    "message": "map the document to ≥1 ISO clause before submitting for review",
+                }
+            ],
+        )
     return await _advance_active_version(
         session, actor, doc, Action.submit_review, "SUBMITTED_FOR_REVIEW"
     )

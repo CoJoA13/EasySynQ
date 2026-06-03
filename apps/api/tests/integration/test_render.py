@@ -31,7 +31,7 @@ from easysynq_api.services.vault.render import RenderRequest, RenderResult, Rend
 from easysynq_api.services.vault.render_gotenberg import GotenbergRenderSink
 
 from . import s5_helpers as s5
-from .test_vault import _auth, _checkin, _create, _upload
+from .test_vault import _auth, _checkin, _create, _map_clause, _upload
 
 pytestmark = pytest.mark.integration
 
@@ -80,6 +80,7 @@ async def _release_manual(
     await client.post(f"/api/v1/documents/{did}/checkout", headers=ha)
     sha = await _upload(client, ha, did, content, ct=content_type)
     await _checkin(client, ha, did, sha, change_reason="v1", change_significance="MAJOR")
+    await _map_clause(client, ha, did)  # S9: submit-review needs ≥1 clause_mapping
     await client.post(f"/api/v1/documents/{did}/submit-review", headers=ha)
     task_id = await s5.task_for_doc(did)
     await client.post(f"/api/v1/tasks/{task_id}/decision", headers=hb, json={"outcome": "approve"})
