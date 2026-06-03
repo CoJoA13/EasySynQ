@@ -164,6 +164,29 @@ async def list_clause_mappings(
     return [(m, c) for m, c in rows]
 
 
+async def clause_numbers_for_docs(
+    session: AsyncSession, doc_ids: list[uuid.UUID]
+) -> dict[uuid.UUID, list[str]]:
+    """Batch-load each document's mapped clause **numbers** (the ``clause_refs`` serializer field on
+    ``GET /documents``, S10). One ``clause_mapping ⨝ clause`` query over the page — index-backed by
+    ``ix_clause_mapping_documented_information_id``, no N+1 (the ``mirror.fetch_clause_refs`` idea).
+    Numbers are numeric-sorted per doc ('8.5' before '8.10'); docs with no mapping are absent."""
+    if not doc_ids:
+        return {}
+    rows = (
+        await session.execute(
+            select(ClauseMapping.documented_information_id, Clause.number)
+            .join(Clause, ClauseMapping.clause_id == Clause.id)
+            .where(ClauseMapping.documented_information_id.in_(doc_ids))
+            .order_by(asc(_clause_sort_key()))
+        )
+    ).all()
+    out: dict[uuid.UUID, list[str]] = {}
+    for doc_id, number in rows:
+        out.setdefault(doc_id, []).append(number)
+    return out
+
+
 # --- process IA (S9c, doc 02 §3.3, doc 14 §4) --------------------------------------------
 # By-id lookups fetch then let the handler org-validate (the get_clause/get_clause_mapping
 # precedent) — every S9c handler checks ``org_id == caller.org_id`` before use; list/by-name
