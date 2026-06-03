@@ -341,7 +341,7 @@ Docker stack):**
   disable-blocks-then-reenable + `USER_STATUS_CHANGED` + 403, the last-admin guard (409), assign-seeded-role-visible-in-
   roster end-to-end; the 2 `EventType` members unit. **149 unit + 111 integration**.
 
-- **S9 — Clause IA + `clause_mapping`** ✅ — the ISO 9001:2015 clause spine + the M:N document↔clause mapping + the
+- **S9 — Clause IA + `clause_mapping`** ✅ — PR #27. The ISO 9001:2015 clause spine + the M:N document↔clause mapping + the
   lifecycle submit gate. **Owner-scoped to clause IA only** (process IA — `process`/`process_edge`/`process_link` +
   endpoints — deferred to a follow-on/S8e to avoid the not-yet-built `org_role`/`supplier` FK targets; the mirror
   §10.3 tree deferred to **S9b**; clause-mapping writes gated on the existing `document.manage_metadata`). **`0017`**
