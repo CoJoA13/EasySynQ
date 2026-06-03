@@ -26,8 +26,8 @@ from ...db.models._audit_enums import ActorType, AuditObjectType, EventType
 from ...db.models.audit_event import AuditEvent
 from ...db.models.backup_policy import BackupPolicy
 from ...logging import request_id_var
-from ..common.pg_locks import LOCK_RESTORE_DRILL, pg_advisory_lock
-from . import drill
+from ..common.pg_locks import LOCK_RESTORE_DRILL, LOCK_RESTORE_LIVE, pg_advisory_lock
+from . import drill, restore
 from .drill import ScratchHandle
 
 logger = logging.getLogger("easysynq.backup")
@@ -162,5 +162,105 @@ async def run_restore_test(
             await session.commit()
             logger.info("restore-test.done", extra={"extra_fields": {"result": result.result}})
             return {"result": result.result, "reason": result.reason, "details": result.details}
+    finally:
+        await engine.dispose()
+
+
+async def run_restore(
+    org_id: uuid.UUID,
+    actor_id: uuid.UUID | None = None,
+    *,
+    archive_path: str,
+    audit_checkpoint_ack: bool = False,
+    fetch_off_host: restore.FetchOffHost | None = None,
+    after_restore: Callable[[ScratchHandle], None] | None = None,
+) -> dict[str, Any]:
+    """Operator-grade live WORM-aware restore-to-verified-target (S11, R37). Serialized on
+    ``LOCK_RESTORE_LIVE`` (distinct from the drill lock). Emits RESTORE_STARTED then one of
+    RESTORE_VERIFIED / RESTORE_CHECKPOINT_AHEAD / RESTORE_FAILED (+ an audited
+    RESTORE_CHECKPOINT_ACK when a flagged restore proceeds under operator ack). The pg/blob work
+    runs as the
+    OWNER role inside ``restore.run_restore``; this session only audits + commits. Returns
+    ``{result, reason, scratch_db, ...}`` — only PASS leaves a standing, ready-to-cutover target."""
+    settings = get_settings()
+    engine = create_async_engine(settings.database_url)
+    sessionmaker: async_sessionmaker[AsyncSession] = async_sessionmaker(
+        engine, expire_on_commit=False
+    )
+    try:
+        async with sessionmaker() as session, pg_advisory_lock(session, LOCK_RESTORE_LIVE) as held:
+            if not held:
+                return {"result": "SKIPPED", "reason": "another restore is in progress"}
+            _emit(
+                session,
+                org_id=org_id,
+                actor_id=actor_id,
+                event_type="RESTORE_STARTED",
+                after={"archive": archive_path},
+            )
+            await session.commit()
+
+            result = await asyncio.to_thread(
+                restore.run_restore,
+                settings,
+                archive_path=archive_path,
+                audit_checkpoint_ack=audit_checkpoint_ack,
+                fetch_off_host=fetch_off_host,
+                after_restore=after_restore,
+            )
+
+            after = {
+                "reason": result.reason,
+                "scratch_db": result.scratch_db,
+                "checkpoint": result.checkpoint_check,
+                "chain": result.chain_verify,
+                "triad": result.triad,
+                **result.details,
+            }
+            if result.result == "PASS":
+                if result.checkpoint_check.get("acknowledged"):
+                    _emit(
+                        session,
+                        org_id=org_id,
+                        actor_id=actor_id,
+                        event_type="RESTORE_CHECKPOINT_ACK",
+                        after={"checkpoint": result.checkpoint_check},
+                    )
+                _emit(
+                    session,
+                    org_id=org_id,
+                    actor_id=actor_id,
+                    event_type="RESTORE_VERIFIED",
+                    after=after,
+                )
+            elif result.result == "FLAGGED":
+                _emit(
+                    session,
+                    org_id=org_id,
+                    actor_id=actor_id,
+                    event_type="RESTORE_CHECKPOINT_AHEAD",
+                    after=after,
+                )
+            else:
+                _emit(
+                    session,
+                    org_id=org_id,
+                    actor_id=actor_id,
+                    event_type="RESTORE_FAILED",
+                    after=after,
+                )
+            await session.commit()
+            logger.info("restore.done", extra={"extra_fields": {"result": result.result}})
+            return {
+                "result": result.result,
+                "reason": result.reason,
+                "scratch_db": result.scratch_db,
+                "scratch_bucket": result.scratch_bucket,
+                "object_prefix": result.object_prefix,
+                "checkpoint": result.checkpoint_check,
+                "chain": result.chain_verify,
+                "triad": result.triad,
+                "details": result.details,
+            }
     finally:
         await engine.dispose()

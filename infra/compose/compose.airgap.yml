@@ -1,9 +1,11 @@
-# Air-gapped overlay: no outbound, no ACME. TLS must be admin-supplied or the
-# Caddy internal self-signed CA (set SITE_ADDRESS to a name + mount certs, or use
-# the internal issuer). Images must be loaded from the air-gapped bundle
-# (scripts/airgap-bundle.sh) and pinned by digest in infra/images.lock.
+# Air-gapped overlay: no outbound, no ACME. ACME (Let's Encrypt) is unreachable offline, so TLS uses
+# Caddy's internal self-signed CA. Set SITE_ADDRESS to a hostname (e.g. https://easysynq.local) so the
+# internal issuer takes effect — `tls internal` is invalid on the plain :80 listener. Images must be
+# loaded from the air-gapped bundle (scripts/airgap-bundle.sh) and pinned by digest in images.lock.
 services:
   proxy:
     environment:
-      # Force the internal (self-signed) issuer; never reach Let's Encrypt offline.
-      CADDY_TLS_INTERNAL: "1"
+      # The Caddyfile reads this placeholder; "tls internal" selects the self-signed internal CA.
+      CADDY_TLS_DIRECTIVE: "tls internal"
+      # Operator MUST set SITE_ADDRESS to a hostname for HTTPS (the internal CA cannot serve on :80).
+      SITE_ADDRESS: ${SITE_ADDRESS:-https://easysynq.local}

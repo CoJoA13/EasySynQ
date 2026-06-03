@@ -20,9 +20,11 @@ sign-off, this slice; note back-propagated to doc 08 §8.2).
 
 from __future__ import annotations
 
+import base64
 import dataclasses
 import datetime
 import hashlib
+import json
 import logging
 import uuid
 from collections.abc import Callable
@@ -31,7 +33,7 @@ from tempfile import TemporaryDirectory
 from typing import Any
 
 from ...config import Settings
-from . import archive
+from . import archive, config_snapshot, crypto, realm_export
 from .archive import BackupError, BlobRef
 from .dsn import conn_kwargs
 
@@ -268,24 +270,130 @@ def run_triad(settings: Settings, handle: ScratchHandle) -> DrillResult:
 # --- durable backup (the scheduled / CLI archive; no restore) ---------------------------------
 
 
+def _latest_checkpoint_bundle(owner_dsn: str) -> bytes | None:
+    """Serialize the newest signed ``audit_checkpoint`` row to JSON (doc 12 §8.1 'audit checkpoint
+    in every backup'). Best-effort → ``None`` if the table is empty/unreadable; never fails the
+    backup. A forward-seam — the restore checkpoint-not-ahead check reads the restored DB + the
+    off-host sink, not this bundle."""
+    import psycopg
+
+    try:
+        with psycopg.connect(**conn_kwargs(owner_dsn)) as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT org_id, latest_id, latest_row_hash, timestamp, app_signature "
+                "FROM audit_checkpoint ORDER BY latest_id DESC LIMIT 1"
+            )
+            row = cur.fetchone()
+            if row is None:
+                return None
+            return json.dumps(
+                {
+                    "org_id": str(row[0]),
+                    "latest_id": int(row[1]),
+                    "latest_row_hash": bytes(row[2]).hex() if row[2] is not None else None,
+                    "timestamp": row[3].isoformat() if row[3] is not None else None,
+                    "app_signature": (
+                        base64.b64encode(bytes(row[4])).decode() if row[4] is not None else None
+                    ),
+                }
+            ).encode()
+    except Exception:  # noqa: BLE001 — best-effort; a checkpoint bundle is reference-only
+        logger.warning("backup: audit-checkpoint bundle read failed", exc_info=True)
+        return None
+
+
 def build_durable_backup(settings: Settings, *, destination: str) -> dict[str, Any]:
-    """Write a real, timestamped, checksum-verified backup archive (pg_dump + blob manifest) to
-    ``destination`` — the durable artifact the nightly Beat job + ``easysynq backup run`` produce.
-    No restore (that is the drill). Runs as the OWNER role; raises ``BackupError`` on a dump/pack
-    failure (the caller logs + alerts). Retention pruning + S3-destination stay S11/v1.x."""
+    """Write a real, timestamped, checksum-verified backup archive to ``destination`` — the durable
+    artifact the nightly Beat job + ``easysynq backup run`` produce. The archive (v2) carries the
+    pg_dump + blob manifest (per-table counts) + the latest audit checkpoint, and — ONLY when
+    ``BACKUP_ENCRYPTION_KEY`` is set — the Keycloak realm export + a config snapshot, AES-256-GCM
+    encrypted to ``.tar.enc``. With NO key it falls back to a PLAINTEXT ``.tar`` and OMITS the
+    realm + config legs (they carry secrets and must never land in cleartext, doc 12 §6.2). No
+    restore (that is the drill, plaintext-internal). Runs as the OWNER role; raises ``BackupError``
+    on a dump/pack failure. Retention pruning + S3-destination stay v1.x (D-6)."""
     owner_dsn = settings.sync_dsn
     stamp = (
         datetime.datetime.now(datetime.UTC).strftime("%Y%m%dT%H%M%SZ") + f"-{uuid.uuid4().hex[:8]}"
     )
+    dest_dir = Path(destination)
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    encrypt = crypto.key_is_configured(settings.backup_encryption_key)
     with TemporaryDirectory() as tmp:
-        dump_path = Path(tmp) / "db.dump"
-        _counts, blobs = _capture_and_dump(owner_dsn, dump_path)
+        tmp_path = Path(tmp)
+        dump_path = tmp_path / "db.dump"
+        counts, blobs = _capture_and_dump(owner_dsn, dump_path)
+
+        # --- the v2 legs (each degrades gracefully; a failure never blocks the backup) ----------
+        extra: dict[str, bytes] = {}
+        legs = {"realm_export": "absent", "config_snapshot": "absent", "audit_checkpoint": "absent"}
+        # The realm export + config snapshot can carry secrets, so they ride ONLY inside an
+        # encrypted archive (doc 12 §6.2). With no key they are OMITTED, not written in cleartext.
+        if encrypt:
+            realm = realm_export.export_realm(
+                base_url=settings.keycloak_admin_url,
+                realm=realm_export.realm_name_from_issuer(settings.oidc_issuer),
+                admin_user=settings.keycloak_admin_user,
+                admin_password=settings.keycloak_admin_password,
+            )
+            if realm is not None:
+                extra[archive.REALM_NAME] = json.dumps(realm, sort_keys=True).encode()
+                legs["realm_export"] = "present"
+            try:
+                extra[archive.CONFIG_NAME] = json.dumps(
+                    config_snapshot.build_config_snapshot(owner_dsn), sort_keys=True
+                ).encode()
+                legs["config_snapshot"] = "present"
+            except Exception:  # noqa: BLE001 — snapshot is reference-only; never block the backup
+                logger.warning("backup: config snapshot failed", exc_info=True)
+        else:
+            logger.warning(
+                "backup: BACKUP_ENCRYPTION_KEY unset/placeholder — writing an UNENCRYPTED archive "
+                "and OMITTING the Keycloak realm + config snapshot (they carry secrets; set "
+                "BACKUP_ENCRYPTION_KEY to capture them inside an encrypted archive)."
+            )
+        # The audit-checkpoint bundle is a signed public checkpoint (no secrets) → always included.
+        ckpt = _latest_checkpoint_bundle(owner_dsn)
+        if ckpt is not None:
+            extra[archive.CHECKPOINT_NAME] = ckpt
+            legs["audit_checkpoint"] = "present"
+
         manifest = archive.build_manifest(
-            blobs, config={"source": "scheduled-backup", "blob_count": len(blobs)}
+            blobs,
+            config={
+                "source": "scheduled-backup",
+                "blob_count": len(blobs),
+                "table_counts": counts,
+            },
+            realm_export=legs["realm_export"],
+            config_snapshot=legs["config_snapshot"],
+            audit_checkpoint=legs["audit_checkpoint"],
+            encryption_key_ref=crypto.ENCRYPTION_KEY_REF if encrypt else None,
         )
-        archive_path = archive.pack_archive(dump_path, manifest, Path(destination), stamp=stamp)
-        verified = archive.verify_archive(archive_path)
-    return {"archive": str(archive_path), "blobs": len(blobs), "verified": verified}
+
+        if encrypt:
+            plain = archive.pack_archive(
+                dump_path, manifest, tmp_path / "pack", stamp=stamp, extra_files=extra
+            )
+            final = crypto.encrypt_archive(
+                plain,
+                dest_dir / f"easysynq-backup-{stamp}.tar.enc",
+                secret=settings.backup_encryption_key,
+            )
+            archive.write_sidecar(final)
+        else:
+            # No key → plaintext .tar (the unencrypted-fallback warning + the sensitive-leg omission
+            # were already logged above when the legs were built).
+            final = archive.pack_archive(
+                dump_path, manifest, dest_dir, stamp=stamp, extra_files=extra
+            )
+        verified = archive.verify_archive(final)
+    return {
+        "archive": str(final),
+        "blobs": len(blobs),
+        "verified": verified,
+        "encrypted": encrypt,
+        "legs": legs,
+    }
 
 
 # --- orchestration -----------------------------------------------------------------------------

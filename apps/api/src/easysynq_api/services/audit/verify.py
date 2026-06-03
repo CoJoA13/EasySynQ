@@ -44,9 +44,14 @@ async def verify_chain(
     *,
     from_id: int | None = None,
     to_id: int | None = None,
+    version: int = 1,
 ) -> VerifyResult:
     """Verify ``org_id``'s linked chain (optionally bounded to ``[from_id, to_id]``). Reports every
-    broken link found, the first being the root cause (a mutated/deleted/reordered row)."""
+    broken link found, the first being the root cause (a mutated/deleted/reordered row).
+
+    ``version`` selects the canonical_serialize spec version to recompute against; the S11 restore
+    re-verify reads it from the RESTORED ``system_config.canonical_serialize_version`` rather than
+    hardcoding 1, so a future v2 chain verifies under its own spec (R12/D-4)."""
     stmt = (
         select(AuditEvent)
         .where(AuditEvent.org_id == org_id, AuditEvent.chained_at.is_not(None))
@@ -81,7 +86,9 @@ async def verify_chain(
     breaks: list[ChainBreak] = []
     for event in rows:
         stored = event.row_hash or b""
-        recomputed = compute_row_hash(audit_row_from_orm(event), event.prev_hash or GENESIS_HASH)
+        recomputed = compute_row_hash(
+            audit_row_from_orm(event), event.prev_hash or GENESIS_HASH, version=version
+        )
         if recomputed != stored:
             breaks.append(ChainBreak(at_id=event.id, reason="row_hash mismatch (row mutated)"))
         elif (event.prev_hash or GENESIS_HASH) != prev:

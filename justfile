@@ -70,3 +70,12 @@ logs:
 # --- packaging ---
 airgap:
     bash scripts/airgap-bundle.sh
+
+# Resolve every image in infra/images.lock to an @sha256 digest (a RELEASE-CEREMONY step — needs a
+# connected host + Docker; never run in CI or on the air-gapped target). Prints the pinned refs to
+# append to images.lock so a release ships immutable, digest-pinned images (doc 03 §15, S11).
+images-update:
+    @grep -vE '^\s*#|^\s*$' infra/images.lock | awk '{print $2}' | while read -r img; do \
+        digest=$(docker manifest inspect "$img" >/dev/null 2>&1 && docker buildx imagetools inspect "$img" --format '{{.Manifest.Digest}}' 2>/dev/null || true); \
+        if [ -n "$digest" ]; then echo "$img@$digest"; else echo "# COULD NOT RESOLVE: $img"; fi; \
+    done

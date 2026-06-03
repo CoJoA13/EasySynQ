@@ -16,18 +16,22 @@ demands. The drill runs as the **OWNER** DB role (``settings.sync_dsn``); the ru
 from __future__ import annotations
 
 from .drill import DrillResult, ScratchHandle, build_durable_backup, run_drill
+from .restore import RestoreResult
 from .service import (
     configure_backup_destination_check,
+    run_restore,
     run_restore_test,
     run_scheduled_backups,
 )
 
 __all__ = [
     "DrillResult",
+    "RestoreResult",
     "ScratchHandle",
     "build_durable_backup",
     "configure_backup_destination_check",
     "run_drill",
+    "run_restore",
     "run_restore_test",
     "run_scheduled_backups",
 ]
