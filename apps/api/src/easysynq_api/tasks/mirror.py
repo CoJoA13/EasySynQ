@@ -44,6 +44,7 @@ async def _run_mirror_sync() -> int:
                     "extra_fields": {
                         "documents": result.documents,
                         "files": result.files,
+                        "symlinks": result.symlinks,
                         "pending_renditions": result.pending_renditions,
                     }
                 },

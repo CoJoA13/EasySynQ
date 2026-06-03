@@ -64,7 +64,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
     print(
         f"mirror synced: documents={result.documents} files={result.files} "
-        f"pending_renditions={result.pending_renditions}"
+        f"symlinks={result.symlinks} pending_renditions={result.pending_renditions}"
     )
     return 0
 

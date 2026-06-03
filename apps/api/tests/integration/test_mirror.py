@@ -1,4 +1,4 @@
-"""S7 integration proofs — the read-only, Effective-only filesystem mirror (AC#2).
+"""S7 + S9b integration proofs — the read-only, Effective-only, clause-aligned filesystem mirror.
 
 Headline proof: ``test_ro_mirror_autocorrect`` — an edited mirror file is overwritten from the vault
 on the next sync (and an out-of-band stray file is removed), because the whole tree is rebuilt and
@@ -6,7 +6,10 @@ the ``current`` symlink atomically repointed. Supporting proofs: only Effective 
 mirror (drafts excluded); supersession/obsolescence prune the prior doc; release enqueues the
 rebuild post-commit; the render deferral marks ``render_status:"pending"`` (NOT R26's
 ``no_controlled_rendition``); metadata/INDEX/manifest are written; the rebuild is byte-idempotent;
-the advisory lock serializes overlapping syncs.
+the advisory lock serializes overlapping syncs. **S9b:** a doc is placed under its
+``{PHASE}/{NN}-Word/`` clause folder, reachable from every other mapped clause via a relative
+symlink; the clause-7 PLAN/DO split, multi-clause symlinks, the symlink-survives-swap chain, and the
+``_unmapped/`` upgrade fallback are all exercised.
 
 The multi-actor setup reuses the S5 helpers: author ``a`` checks in + submits; approver/releaser
 ``b`` approves + releases (``allow_approver_release`` on). The mirror writer reads as the non-owner
@@ -18,6 +21,7 @@ from __future__ import annotations
 import datetime
 import hashlib
 import json
+import os
 import uuid
 from collections.abc import Callable
 from pathlib import Path
@@ -37,7 +41,7 @@ from easysynq_api.services.vault.mirror_sink import (
 from easysynq_api.services.vault.render import LoggingRenderSink
 
 from . import s5_helpers as s5
-from .test_vault import _auth, _checkin, _create, _upload
+from .test_vault import _auth, _checkin, _create, _first_clause_id, _upload
 
 pytestmark = pytest.mark.integration
 
@@ -64,17 +68,23 @@ async def _sync(mirror: Path) -> int:
 
 
 def _doc_dir(mirror: Path, identifier: str) -> Path:
-    """The single mirror directory for ``identifier`` (the session-scoped DB accumulates other
-    tests' Effective docs, so scope every assertion to this test's own document)."""
-    current = mirror / "current"
-    matches = [p for p in current.iterdir() if p.is_dir() and p.name.startswith(f"{identifier}_")]
-    assert len(matches) == 1, f"expected one dir for {identifier}, got {[m.name for m in matches]}"
+    """The single REAL mirror directory for ``identifier`` — now nested under ``{PHASE}/{NN}-Word/``
+    (or ``_unmapped/``), so search recursively; cross-clause symlink copies are excluded. The
+    session-scoped DB accumulates other tests' Effective docs, so scope every assertion to this
+    test's own document."""
+    matches = [
+        p
+        for p in (mirror / "current").rglob(f"{identifier}_*")
+        if p.is_dir() and not p.is_symlink()
+    ]
+    assert len(matches) == 1, f"expected one dir for {identifier}, got {[str(m) for m in matches]}"
     return matches[0]
 
 
 def _has_doc_dir(mirror: Path, identifier: str) -> bool:
-    current = mirror / "current"
-    return any(p.is_dir() and p.name.startswith(f"{identifier}_") for p in current.iterdir())
+    return any(
+        p.is_dir() and not p.is_symlink() for p in (mirror / "current").rglob(f"{identifier}_*")
+    )
 
 
 def _source_in(doc_dir: Path) -> Path:
@@ -84,19 +94,64 @@ def _source_in(doc_dir: Path) -> Path:
 
 
 def _all_file_bytes(mirror: Path) -> list[bytes]:
-    return [f.read_bytes() for f in (mirror / "current").rglob("*") if f.is_file()]
+    """Bytes of every REAL file under current/ — ``os.walk`` (followlinks=False) so a cross-clause
+    symlink folder isn't traversed and its bytes double-counted."""
+    out: list[bytes] = []
+    for dirpath, _dirs, names in os.walk(mirror / "current"):
+        for name in names:
+            path = Path(dirpath) / name
+            if not path.is_symlink():
+                out.append(path.read_bytes())
+    return out
 
 
 def _content_snapshot(root: Path) -> dict[str, str]:
-    """{relpath: sha256} for every file under ``root`` EXCEPT ``_meta/manifest.json`` (whose
+    """{relpath: sha256} for every real file under ``root`` EXCEPT ``_meta/manifest.json`` (whose
     generated-at timestamp legitimately varies between runs). Pass a single doc dir to keep the
     idempotency check scoped to this test's own document (the DB accumulates other tests' docs)."""
     snapshot: dict[str, str] = {}
     for f in sorted(root.rglob("*")):
         rel = f.relative_to(root)
-        if f.is_file() and rel != Path("_meta/manifest.json"):
+        if f.is_file() and not f.is_symlink() and rel != Path("_meta/manifest.json"):
             snapshot[str(rel)] = hashlib.sha256(f.read_bytes()).hexdigest()
     return snapshot
+
+
+async def _clause_id(number: str) -> str:
+    """The iso9001:2015 clause id for a given clause number (e.g. '4.1', '7.5')."""
+    async with get_sessionmaker()() as s:
+        return str(
+            (
+                await s.execute(
+                    text(
+                        "SELECT c.id FROM clause c JOIN framework f ON c.framework_id = f.id "
+                        "WHERE f.code = 'iso9001:2015' AND c.number = :n"
+                    ),
+                    {"n": number},
+                )
+            ).scalar_one()
+        )
+
+
+async def _remap_exactly(
+    client: AsyncClient, h: dict[str, str], doc_id: str, numbers: list[str]
+) -> None:
+    """Replace ``drive_to_effective``'s single auto-mapped clause (``_first_clause_id``) with the
+    EXACT given clause numbers so a placement test controls the on-disk tree shape (mappings live on
+    the document, so this survives into the Effective tree — no re-release needed)."""
+    for number in numbers:
+        r = await client.post(
+            f"/api/v1/documents/{doc_id}/clause-mappings",
+            headers=h,
+            json={"clause_id": await _clause_id(number)},
+        )
+        assert r.status_code == 201, r.text
+    # drive_to_effective always maps _first_clause_id, and the loop above never re-adds it (that
+    # would 409), so the auto-mapped clause is always present here — its delete must be a clean 204.
+    drop = await client.delete(
+        f"/api/v1/documents/{doc_id}/clause-mappings/{await _first_clause_id()}", headers=h
+    )
+    assert drop.status_code == 204, drop.text
 
 
 async def test_ro_mirror_autocorrect(
@@ -278,12 +333,22 @@ async def test_mirror_metadata_and_index(
         assert key in meta, key
     assert (doc_dir / "CHANGELOG.md").exists()
 
+    # S9b: metadata carries the mapped-clause list (basis for the tree + the compliance checklist).
+    assert meta["clauses"], "clauses array present + non-empty"
+    c0 = meta["clauses"][0]
+    assert {"number", "pdca_phase", "title", "is_mandatory_star"} <= c0.keys()
+
     index = (mirror / "current" / "INDEX.md").read_text()
     assert meta["identifier"] in index
+    assert c0["number"] in index  # the clause number shows in the INDEX Clauses column
 
     manifest = json.loads((mirror / "current" / "_meta" / "manifest.json").read_text())
-    assert manifest["files"]
-    assert all("sha256" in f and "path" in f for f in manifest["files"])
+    # File entries carry sha256; symlink entries (from any multi-clause doc in the shared DB) carry
+    # symlink_to instead. Both are valid manifest entries.
+    files = [f for f in manifest["files"] if "symlink_to" not in f]
+    assert files
+    assert all("sha256" in f and "path" in f for f in files)
+    assert all("path" in f for f in manifest["files"] if "symlink_to" in f)
 
 
 async def test_mirror_rebuild_idempotent_and_regenerable(
@@ -398,3 +463,121 @@ async def test_release_commits_before_enqueue(
         assert await s5.effective_count(did) == 1  # the cutover committed before the enqueue raised
     finally:
         set_mirror_enqueue_sink(previous)
+
+
+# --- S9b: the clause-aligned tree (doc 04 §10.3) ----------------------------------------------
+
+
+async def test_mirror_clause_placement(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    subj: SimpleNamespace,
+    tmp_path: Path,
+) -> None:
+    """A doc mapped to a known clause lands under its ``{PHASE}/{NN}-Word/`` folder (8.4→DO)."""
+    mirror = tmp_path / "m"
+    await _grant_release_actors(subj)
+    ha, hb = _auth(token_factory, subj.a), _auth(token_factory, subj.b)
+    doc = await s5.drive_to_effective(app_client, ha, hb, hb, await s5.type_id("SOP"), b"placed")
+    await _remap_exactly(app_client, ha, doc["id"], ["8.4"])
+
+    await _sync(mirror)
+    real = _doc_dir(mirror, doc["identifier"])
+    assert real.parent == mirror / "current" / "DO" / "08-Operation"
+    assert _source_in(real).read_bytes() == b"placed"
+
+
+async def test_mirror_multi_clause_symlink(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    subj: SimpleNamespace,
+    tmp_path: Path,
+) -> None:
+    """A doc mapped to two top-level buckets (4.1 + 8.1): real bytes under the numerically-lower
+    clause (PLAN/04-Context), reached from the other via a relative symlink — bytes stored once."""
+    mirror = tmp_path / "m"
+    await _grant_release_actors(subj)
+    ha, hb = _auth(token_factory, subj.a), _auth(token_factory, subj.b)
+    doc = await s5.drive_to_effective(app_client, ha, hb, hb, await s5.type_id("SOP"), b"multi")
+    await _remap_exactly(app_client, ha, doc["id"], ["4.1", "8.1"])
+
+    await _sync(mirror)
+    real = _doc_dir(mirror, doc["identifier"])
+    assert real.parent == mirror / "current" / "PLAN" / "04-Context"  # 4.1 is lower than 8.1
+    link = mirror / "current" / "DO" / "08-Operation" / real.name
+    assert link.is_symlink()
+    assert not link.readlink().is_absolute()  # relative target
+    assert link.resolve() == real.resolve()  # resolves back to the real folder
+    assert (link / "metadata.json").exists()  # readable through the link
+    assert _all_file_bytes(mirror).count(b"multi") == 1  # the source is stored exactly once
+
+
+async def test_mirror_clause7_split_two_phases(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    subj: SimpleNamespace,
+    tmp_path: Path,
+) -> None:
+    """Clause 7's PLAN/DO split: a doc mapped to 7.2 (PLAN) + 7.5 (DO) is real under PLAN/07-Support
+    and symlinked under DO/07-Support — the same top-level folder appears in two phase trees."""
+    mirror = tmp_path / "m"
+    await _grant_release_actors(subj)
+    ha, hb = _auth(token_factory, subj.a), _auth(token_factory, subj.b)
+    doc = await s5.drive_to_effective(app_client, ha, hb, hb, await s5.type_id("SOP"), b"split")
+    await _remap_exactly(app_client, ha, doc["id"], ["7.2", "7.5"])
+
+    await _sync(mirror)
+    real = _doc_dir(mirror, doc["identifier"])
+    assert real.parent == mirror / "current" / "PLAN" / "07-Support"  # 7.2 is lower than 7.5
+    link = mirror / "current" / "DO" / "07-Support" / real.name
+    assert link.is_symlink() and link.resolve() == real.resolve()
+
+
+async def test_mirror_unmapped_fallback(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    subj: SimpleNamespace,
+    tmp_path: Path,
+) -> None:
+    """An Effective doc with ZERO clause mappings lands in ``_unmapped/`` — only reachable as a
+    pre-S9 upgrade artifact (the submit-review gate forbids it via the API), so simulate it by
+    deleting the mapping rows directly, then sync. The build must not crash on the orphan."""
+    mirror = tmp_path / "m"
+    await _grant_release_actors(subj)
+    ha, hb = _auth(token_factory, subj.a), _auth(token_factory, subj.b)
+    doc = await s5.drive_to_effective(app_client, ha, hb, hb, await s5.type_id("SOP"), b"orphan")
+    async with get_sessionmaker()() as s:
+        await s.execute(
+            text("DELETE FROM clause_mapping WHERE documented_information_id = :d"),
+            {"d": uuid.UUID(doc["id"])},
+        )
+        await s.commit()
+
+    await _sync(mirror)
+    real = _doc_dir(mirror, doc["identifier"])
+    assert real.parent == mirror / "current" / "_unmapped"
+    assert _source_in(real).read_bytes() == b"orphan"
+
+
+async def test_mirror_symlinks_survive_swap(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    subj: SimpleNamespace,
+    tmp_path: Path,
+) -> None:
+    """The load-bearing proof: a cross-clause symlink is RELATIVE and resolves end-to-end through
+    the ``current → .builds/<uuid>`` chain after the atomic swap (the exact thing that silently
+    breaks if a symlink were made absolute or relative-to-``current`` instead of to its own dir)."""
+    mirror = tmp_path / "m"
+    await _grant_release_actors(subj)
+    ha, hb = _auth(token_factory, subj.a), _auth(token_factory, subj.b)
+    doc = await s5.drive_to_effective(app_client, ha, hb, hb, await s5.type_id("SOP"), b"swap")
+    await _remap_exactly(app_client, ha, doc["id"], ["4.1", "8.1"])
+
+    await _sync(mirror)
+    dirname = _doc_dir(mirror, doc["identifier"]).name
+    link = mirror / "current" / "DO" / "08-Operation" / dirname  # reached via the current symlink
+    assert link.is_symlink()
+    assert not link.readlink().is_absolute()
+    meta = json.loads((link / "metadata.json").read_text())  # resolves current→.builds→../../PLAN/…
+    assert meta["identifier"] == doc["identifier"]

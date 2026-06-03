@@ -1,27 +1,40 @@
-"""The read-only filesystem mirror (slice S7, AC#2) — regenerate the on-disk tree from the vault.
+"""The read-only filesystem mirror (S7 + S9b, AC#2) — regenerate the on-disk tree from PG+MinIO.
 
 The mirror is a regenerated, **read-only** export of the **Effective-only** state of the vault
 (doc 04 §10): authority flows vault → mirror, never the reverse (D2). It exists for offline
 browsing, OS-level backup convenience, and human reassurance. It is fully regenerable from PG +
 MinIO and is **never backup-critical**.
 
-**What S7 builds (the minimal, proof-focused slice):**
+**What S7 built (the minimal, proof-focused slice):**
 - Enumerate every ``Effective`` ``document_version`` (gate on ``version_state``; drafts/superseded/
-  obsolete are provably excluded), pull its **source bytes** from MinIO, and lay out a flat tree:
-  ``current/{identifier}_{revision_label}/`` holding the source file + ``metadata.json`` +
-  ``CHANGELOG.md``, with a top-level ``INDEX.md`` + ``_meta/manifest.json``.
+  obsolete are provably excluded), pull its **source bytes** from MinIO, and lay out the tree
+  holding, per document, the source file + ``metadata.json`` + ``CHANGELOG.md``, with a top-level
+  ``INDEX.md`` + ``_meta/manifest.json``.
 - Write the whole tree into a fresh ``.builds/<uuid>/`` then **atomically swap** the
   ``current`` symlink onto it (renaming a symlink over an existing symlink is atomic on one
   filesystem). This is the AC#2 mechanism: an edited mirror file is overwritten because the *whole
   tree* is rebuilt and the live pointer repointed — drift can never become a competing truth.
 
-**Deferred (with seams):** rendering is deferred to S7b — the source bytes are written and
-``metadata.json`` records ``render_status:"pending"`` (NOT R26's ``no_controlled_rendition``); the
-``RenderSink`` seam (``render.py``) swaps in the Gotenberg-backed watermarked-PDF renderer later.
-The clause/process IA tree (doc 04 §10.3) is deferred to **S9** (needs ``clause_mapping``); S7 uses
-a deliberately flat layout. The SHA-256 drift scan / quarantine / ``MIRROR_DRIFT_DETECTED`` alarm
-are **v1** (D-6): the ``_meta/manifest.json`` here is a generated artifact only — there is no
-comparison/scan code in S7.
+**What S9b adds (the clause-aligned tree, doc 04 §10.3):** now that ``clause_mapping`` exists, the
+flat ``current/{identifier}_{revision_label}/`` layout becomes the IA tree a human browsing the disk
+recognizes: ``current/{PHASE}/{NN}-{Word}/{identifier}_{revision_label}/`` where ``PHASE`` is the
+*mapped clause's own* ``pdca_phase`` (PLAN/DO/CHECK/ACT) and ``{NN}-{Word}`` is its top-level
+ancestor (e.g. ``DO/08-Operation``; clause 7 splits 7.1-7.4 → PLAN, 7.5 → DO). A document mapping
+several clauses lives **once** under its numerically-lowest mapped clause and is reached from every
+other mapped clause folder via a **relative symlink** (spec-faithful "without duplicating bytes",
+§10.3/§10.4). A document with no mappings (only reachable as a pre-S9 upgrade artifact — the
+``submit-review`` ≥1-clause gate forbids it otherwise) lands in ``_unmapped/``.
+
+**Single-org invariant (D1).** ``list_effective_versions`` is org-agnostic (no ``org_id`` filter);
+under D1 (one organization per install) the per-doc ``{identifier}_{revision_label}`` directory name
+is globally unique, so clause-bucketing introduces no cross-org collision. Multi-tenant namespacing
+is out of scope for v1 (this is pre-existing S7 behavior, not introduced here).
+
+**Deferred (with seams):** rendering is S7b (live). **Process IA** + the by-process secondary mirror
+index (doc 04 §10.3 — needs ``process_link``) are deferred to **S9c**. The SHA-256 drift scan /
+quarantine / ``MIRROR_DRIFT_DETECTED`` alarm are **v1** (D-6): the ``_meta/manifest.json`` here is a
+generated artifact only (file entries carry ``sha256``; symlink entries carry ``symlink_to``) —
+there is no comparison/scan code yet.
 """
 
 from __future__ import annotations
@@ -42,9 +55,12 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...config import get_settings
+from ...db.models._clause_enums import PdcaPhase
 from ...db.models._vault_enums import VersionState
 from ...db.models.app_user import AppUser
 from ...db.models.blob import Blob
+from ...db.models.clause import Clause
+from ...db.models.clause_mapping import ClauseMapping
 from ...db.models.document_version import DocumentVersion
 from ...db.models.documented_information import DocumentedInformation
 from ...db.session import get_sessionmaker
@@ -79,9 +95,33 @@ class EffectiveDoc:
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
+class ClauseRef:
+    """A clause a document maps to, with the fields the S9b tree placement + metadata need.
+
+    ``framework_id`` keys the top-level-word lookup so two frameworks' "8" never collide; the
+    derived ``top_number``/``sort_key`` drive folder placement (``8.4`` → top ``8``) and the numeric
+    ordering that picks the primary placement (``8.5`` before ``8.10``, ``10`` after ``9``)."""
+
+    number: str
+    pdca_phase: str
+    title: str
+    is_mandatory_star: bool
+    framework_id: uuid.UUID
+
+    @property
+    def top_number(self) -> str:
+        return self.number.split(".")[0]
+
+    @property
+    def sort_key(self) -> tuple[int, ...]:
+        return _clause_sort_key_py(self.number)
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
 class MirrorSyncResult:
     documents: int
     files: int
+    symlinks: int
     pending_renditions: int
 
 
@@ -125,6 +165,55 @@ async def list_effective_versions(session: AsyncSession) -> list[EffectiveDoc]:
     ]
 
 
+async def fetch_clause_refs(
+    session: AsyncSession, doc_ids: list[uuid.UUID]
+) -> dict[uuid.UUID, list[ClauseRef]]:
+    """Every clause each document maps to, grouped by ``documented_information_id`` — one batch
+    query (index-backed by ``ix_clause_mapping_documented_information_id``), so no N+1 per doc."""
+    if not doc_ids:
+        return {}
+    rows = (
+        await session.execute(
+            select(
+                ClauseMapping.documented_information_id,
+                Clause.number,
+                Clause.pdca_phase,
+                Clause.title,
+                Clause.is_mandatory_star,
+                Clause.framework_id,
+            )
+            .join(Clause, ClauseMapping.clause_id == Clause.id)
+            .where(ClauseMapping.documented_information_id.in_(doc_ids))
+        )
+    ).all()
+    grouped: dict[uuid.UUID, list[ClauseRef]] = {}
+    for doc_id, number, phase, title, star, framework_id in rows:
+        grouped.setdefault(doc_id, []).append(
+            ClauseRef(
+                number=number,
+                pdca_phase=phase.value,
+                title=title,
+                is_mandatory_star=star,
+                framework_id=framework_id,
+            )
+        )
+    return grouped
+
+
+async def fetch_top_words(session: AsyncSession) -> dict[tuple[uuid.UUID, str], str]:
+    """``{(framework_id, top_level_number): first-word-of-title}`` for every top-level clause (the
+    seven 4..10 per framework, ``parent_id IS NULL``) — the ``{NN}-{Word}`` folder label, keyed by
+    framework so a future second standard's "8" can't collide with ISO's."""
+    rows = (
+        await session.execute(
+            select(Clause.framework_id, Clause.number, Clause.title).where(
+                Clause.parent_id.is_(None)
+            )
+        )
+    ).all()
+    return {(framework_id, number): _top_word(title) for framework_id, number, title in rows}
+
+
 def _safe(name: str) -> str:
     """Make a path component filesystem-safe (no separators / NUL); never empty."""
     cleaned = name.replace("/", "_").replace("\\", "_").replace("\x00", "").strip()
@@ -144,6 +233,74 @@ def _source_filename(eff: EffectiveDoc, ext: str) -> str:
     return _safe(f"{eff.identifier} {eff.title} (Rev {eff.revision_label})") + ext
 
 
+# Canonical PDCA folder order (PLAN<DO<CHECK<ACT, doc 04 §10.3 visual order) — NOT alphabetical.
+_PHASE_ORDER = {phase.value: i for i, phase in enumerate(PdcaPhase)}
+# Where an Effective document with zero clause mappings lands (only a pre-S9 upgrade artifact).
+_UNMAPPED_DIR = "_unmapped"
+
+
+def _clause_sort_key_py(number: str) -> tuple[int, ...]:
+    """Numeric per-dotted-segment sort key — the Python twin of ``repository._clause_sort_key``
+    (``string_to_array(number,'.')::int[]``): ``8.5`` before ``8.10``, ``10`` after ``9`` (not
+    lexical). A non-numeric segment sorts last rather than crashing the build."""
+    parts: list[int] = []
+    for seg in number.split("."):
+        try:
+            parts.append(int(seg))
+        except ValueError:
+            parts.append(1_000_000)
+    return tuple(parts)
+
+
+def _top_word(title: str) -> str:
+    """The first word of a top-level clause title → the folder label ('Context', 'Operation')."""
+    words = title.split()
+    return _safe(words[0]) if words else "untitled"
+
+
+def _placement(phase: str, top_number: str, word: str) -> str:
+    """The clause-folder path for a placement: ``'{PHASE}/{NN}-{Word}'`` (e.g. ``DO/08-Operation``).
+    ``NN`` is the top-level clause number zero-padded to two digits (doc 04 §10.3)."""
+    try:
+        nn = f"{int(top_number):02d}"
+    except ValueError:
+        nn = _safe(top_number)
+    return f"{phase}/{nn}-{word}"
+
+
+def _dir_for(ref: ClauseRef, top_words: dict[tuple[uuid.UUID, str], str]) -> str:
+    word = top_words.get((ref.framework_id, ref.top_number), _safe(ref.top_number))
+    return _placement(ref.pdca_phase, ref.top_number, word)
+
+
+def _placement_dirs(
+    clause_refs: list[ClauseRef], top_words: dict[tuple[uuid.UUID, str], str]
+) -> tuple[str, list[str]]:
+    """Resolve a document's on-disk placement from its mapped clauses (doc 04 §10.3).
+
+    Returns ``(primary_dir, other_dirs)``: the real doc folder is written under ``primary_dir`` (the
+    placement of the numerically-lowest mapped clause), and every OTHER distinct placement in
+    ``other_dirs`` gets a relative symlink to it. Placements are deduped by ``(phase, top_number)``:
+    two clauses in one top-level bucket collapse to one folder, while the clause-7 PLAN/DO split
+    yields two. ``other_dirs`` is ordered canonically (PLAN<DO<CHECK<ACT, then top number) for a
+    deterministic tree/manifest. No mappings → ``(_unmapped, [])`` (a pre-S9 upgrade artifact)."""
+    if not clause_refs:
+        return _UNMAPPED_DIR, []
+    ordered = sorted(clause_refs, key=lambda c: c.sort_key)
+    primary = _dir_for(ordered[0], top_words)
+    others: dict[str, tuple[int, int]] = {}
+    for ref in ordered:
+        directory = _dir_for(ref, top_words)
+        if directory == primary or directory in others:
+            continue
+        try:
+            top = int(ref.top_number)
+        except ValueError:
+            top = 1_000_000
+        others[directory] = (_PHASE_ORDER.get(ref.pdca_phase, 99), top)
+    return primary, sorted(others, key=lambda d: others[d])
+
+
 def _effective_date(eff: EffectiveDoc) -> str:
     # UTC calendar date (R8 org-tz display deferred with the storage_config/org-settings model).
     return eff.effective_from.date().isoformat() if eff.effective_from else "—"
@@ -158,26 +315,47 @@ def _changelog_md(eff: EffectiveDoc) -> str:
     )
 
 
-def _index_md(effs: list[EffectiveDoc]) -> str:
+def _clause_payload(clause_refs: list[ClauseRef]) -> list[dict[str, object]]:
+    """The mapped-clause list for metadata.json / INDEX, numeric-sorted so two builds are
+    byte-identical (the §10.4 idempotency invariant)."""
+    return [
+        {
+            "number": ref.number,
+            "pdca_phase": ref.pdca_phase,
+            "title": ref.title,
+            "is_mandatory_star": ref.is_mandatory_star,
+        }
+        for ref in sorted(clause_refs, key=lambda c: c.sort_key)
+    ]
+
+
+def _index_md(effs: list[EffectiveDoc], clauses_by_doc: dict[uuid.UUID, list[ClauseRef]]) -> str:
     lines = [
         "# EasySynQ Controlled Document Mirror",
         "",
         "Effective documents only — read-only, regenerated from the vault "
-        "(authority flows vault → mirror; D2).",
+        "(authority flows vault → mirror; D2). Organized by the ISO clause spine "
+        "(PLAN/DO/CHECK/ACT → top-level clause, doc 04 §10.3).",
         "",
-        "| Identifier | Title | Rev | Effective | SHA-256 |",
-        "|---|---|---|---|---|",
+        "| Identifier | Title | Rev | Clauses | Effective | SHA-256 |",
+        "|---|---|---|---|---|---|",
     ]
     for eff in effs:
+        refs = sorted(clauses_by_doc.get(eff.document_id, []), key=lambda c: c.sort_key)
+        clauses = ", ".join(ref.number for ref in refs) or "—"
         lines.append(
-            f"| {eff.identifier} | {eff.title} | {eff.revision_label} | "
+            f"| {eff.identifier} | {eff.title} | {eff.revision_label} | {clauses} | "
             f"{_effective_date(eff)} | {eff.source_sha256} |"
         )
     return "\n".join(lines) + "\n"
 
 
 def _metadata(
-    eff: EffectiveDoc, source_filename: str, render_status: str, no_controlled_rendition: bool
+    eff: EffectiveDoc,
+    source_filename: str,
+    render_status: str,
+    no_controlled_rendition: bool,
+    clause_refs: list[ClauseRef],
 ) -> bytes:
     meta: dict[str, object] = {
         "identifier": eff.identifier,
@@ -194,6 +372,9 @@ def _metadata(
         "source_filename": source_filename,
         "mime_type": eff.mime_type,
         "size_bytes": eff.size_bytes,
+        # The clauses this document maps to (doc 02 §2.1) — the basis for its tree placement and the
+        # compliance-checklist coverage view (doc 13). Empty only for a pre-S9 upgrade artifact.
+        "clauses": _clause_payload(clause_refs),
         # "rendered" (watermarked PDF) | "pending" (transient) | "unrenderable" (R26).
         "render_status": render_status,
     }
@@ -213,6 +394,23 @@ def _write(path: Path, data: bytes, manifest: list[dict[str, object]], rel_root:
             "size_bytes": len(data),
         }
     )
+
+
+def _write_symlink(
+    link_path: Path, real_folder: Path, build_root: Path, manifest: list[dict[str, object]]
+) -> None:
+    """Create a RELATIVE symlink at ``link_path`` pointing at the real doc folder ``real_folder`` (a
+    doc reachable from another mapped clause, §10.3). Relative — not absolute — so it survives the
+    atomic ``current`` swap (it resolves within the build tree wherever the tree is mounted) and
+    never leaks a host path into the read-only mirror. Records a ``{path, symlink_to}`` manifest
+    entry (no bytes to hash). Defence-in-depth: the target must resolve within the build tree."""
+    target = os.path.relpath(real_folder, link_path.parent)
+    resolved = os.path.normpath(os.path.join(link_path.parent, target))
+    if os.path.relpath(resolved, build_root).startswith(".."):
+        raise ValueError(f"mirror symlink target escapes the build tree: {target!r}")
+    link_path.parent.mkdir(parents=True, exist_ok=True)
+    os.symlink(target, link_path, target_is_directory=True)
+    manifest.append({"path": str(link_path.relative_to(build_root)), "symlink_to": target})
 
 
 async def _cache_rendition(session: AsyncSession, eff: EffectiveDoc, pdf: bytes) -> None:
@@ -295,16 +493,27 @@ async def build_tree(
     effs: list[EffectiveDoc],
     render_sink: RenderSink,
     session: AsyncSession | None = None,
+    *,
+    clauses_by_doc: dict[uuid.UUID, list[ClauseRef]] | None = None,
+    top_words: dict[tuple[uuid.UUID, str], str] | None = None,
 ) -> tuple[list[dict[str, object]], int]:
-    """Write the complete mirror tree into ``build_root`` (a fresh dir). Each Effective version is
-    rendered to a watermarked controlled-copy PDF (cached after the first render); a renderer outage
-    falls back to source bytes (``pending``), a non-renderable format to source + R26
-    ``no_controlled_rendition``. Returns the manifest file list + the count of pending renditions.
-    ``session`` (the worker's, under the advisory lock) is needed to cache renditions; without one
-    (pure-unit / no-op sink) rendering still writes the bytes but does not persist the cache."""
+    """Write the complete clause-aligned mirror tree into ``build_root`` (a fresh dir, S9b / doc 04
+    §10.3). Each Effective version renders to a watermarked controlled-copy PDF (cached after the
+    first render); a renderer outage falls back to source bytes (``pending``), a non-renderable
+    format to source + R26 ``no_controlled_rendition``. The doc folder is placed under
+    ``{PHASE}/{NN}-{Word}/`` for its numerically-lowest mapped clause, with a relative symlink from
+    each other mapped clause folder; an unmapped doc lands in ``_unmapped/``. Returns the manifest
+    entry list (file entries carry ``sha256``; symlink entries carry ``symlink_to``) + the count of
+    pending renditions. ``session`` (the worker's, under the advisory lock) is needed to cache
+    renditions; without one (pure-unit / no-op sink) rendering still writes the bytes but does not
+    persist the cache. ``clauses_by_doc`` / ``top_words`` default to empty (the unit render tests
+    pass none → docs land in ``_unmapped/``). **Fresh-dir-only:** a path can flip dir↔symlink
+    between builds, so production builds into a new ``.builds/<uuid>`` and swaps (never reuse)."""
     (build_root / "_meta").mkdir(parents=True, exist_ok=True)
     manifest: list[dict[str, object]] = []
     pending = 0
+    cbd = clauses_by_doc or {}
+    words = top_words or {}
 
     for eff in effs:
         source_bytes = await storage.fetch_bytes(eff.object_key, bucket=eff.bucket)
@@ -314,19 +523,25 @@ async def build_tree(
         if render_status == RenderStatus.PENDING.value:
             pending += 1
 
-        doc_dir = build_root / _doc_dirname(eff)
+        refs = cbd.get(eff.document_id, [])
+        primary_dir, other_dirs = _placement_dirs(refs, words)
+        dirname = _doc_dirname(eff)
+        doc_dir = build_root / primary_dir / dirname
         doc_dir.mkdir(parents=True, exist_ok=True)
         source_filename = _source_filename(eff, ext)
         _write(doc_dir / source_filename, content, manifest, build_root)
         _write(
             doc_dir / "metadata.json",
-            _metadata(eff, source_filename, render_status, no_rendition),
+            _metadata(eff, source_filename, render_status, no_rendition, refs),
             manifest,
             build_root,
         )
         _write(doc_dir / "CHANGELOG.md", _changelog_md(eff).encode(), manifest, build_root)
+        # §10.3: reachable from EVERY mapped clause — real bytes once, a relative symlink each.
+        for other in other_dirs:
+            _write_symlink(build_root / other / dirname, doc_dir, build_root, manifest)
 
-    _write(build_root / "INDEX.md", _index_md(effs).encode(), manifest, build_root)
+    _write(build_root / "INDEX.md", _index_md(effs, cbd).encode(), manifest, build_root)
     # The machine manifest (doc 04 §10.3). Generated artifact only — NO scan/diff consumes it in S7
     # (drift detection is v1, D-6). ``generated_at`` is the one non-deterministic field by design.
     manifest_doc = {
@@ -393,7 +608,11 @@ async def sync_mirror(
 
     async def _build(s: AsyncSession) -> tuple[list[dict[str, object]], int, int]:
         effs = await list_effective_versions(s)
-        manifest, pending = await build_tree(build_root, effs, sink, s)
+        clauses_by_doc = await fetch_clause_refs(s, [e.document_id for e in effs])
+        top_words = await fetch_top_words(s)
+        manifest, pending = await build_tree(
+            build_root, effs, sink, s, clauses_by_doc=clauses_by_doc, top_words=top_words
+        )
         await s.commit()  # persist the rendition cache writes (blob rows + version FKs)
         return manifest, pending, len(effs)
 
@@ -404,4 +623,8 @@ async def sync_mirror(
             manifest, pending, count = await _build(own)
 
     atomic_swap(root, build_root)
-    return MirrorSyncResult(documents=count, files=len(manifest), pending_renditions=pending)
+    files = sum(1 for entry in manifest if "sha256" in entry)
+    symlinks = sum(1 for entry in manifest if "symlink_to" in entry)
+    return MirrorSyncResult(
+        documents=count, files=files, symlinks=symlinks, pending_renditions=pending
+    )
