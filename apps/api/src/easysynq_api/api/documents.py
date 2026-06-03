@@ -638,7 +638,9 @@ async def unlink_process_endpoint(
 ) -> Response:
     doc = await _load_document(session, caller, document_id)
     link = await vault_repo.get_process_link(session, process_id, doc.id)
-    if link is None:
+    # The link is keyed to the already-org-checked doc, so it's this org's by construction; the
+    # explicit org guard is belt-and-suspenders (mirrors processes.remove_edge_endpoint).
+    if link is None or link.org_id != caller.org_id:
         raise ProblemException(status=404, code="not_found", title="Process link not found")
     process = await vault_repo.get_process(session, process_id)
     await session.delete(link)

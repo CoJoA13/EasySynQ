@@ -286,6 +286,12 @@ async def update_process_endpoint(
             )
         state_changed = True
 
+    # Explicit null on a non-nullable column → 422 (not a 500 on flush). criteria/owner_org_role_id
+    # are nullable, so a null there is a legitimate "unset".
+    for attr in ("name", "pdca_phase", "excluded"):
+        if attr in fields and getattr(body, attr) is None:
+            raise _validation_error(attr, "required", f"{attr} cannot be null")
+
     if "owner_org_role_id" in fields and body.owner_org_role_id is not None:
         role = await repo.get_org_role(session, body.owner_org_role_id)
         if role is None or role.org_id != caller.org_id:

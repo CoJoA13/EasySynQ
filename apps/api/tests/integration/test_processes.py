@@ -22,14 +22,17 @@ from types import SimpleNamespace
 
 import pytest
 from httpx import AsyncClient
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 
 from easysynq_api.db.models._audit_enums import AuditObjectType, EventType
+from easysynq_api.db.models._clause_enums import PdcaPhase
 from easysynq_api.db.models._process_enums import SupplierStatus
 from easysynq_api.db.models.audit_event import AuditEvent
 from easysynq_api.db.models.authz_grant import PermissionOverride
 from easysynq_api.db.models.org_role import OrgRole
+from easysynq_api.db.models.organization import Organization
 from easysynq_api.db.models.permission import Permission
+from easysynq_api.db.models.process import Process
 from easysynq_api.db.models.scope import Scope
 from easysynq_api.db.models.supplier import Supplier
 from easysynq_api.db.session import get_sessionmaker
@@ -274,6 +277,35 @@ async def test_patch_active_to_seed_rejected(
     assert r.json()["code"] == "invalid_state_transition"
 
 
+async def test_patch_active_metadata_emits_updated(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    """A confirmed (ACTIVE) process is still editable — metadata PATCH → PROCESS_UPDATED, not a
+    state event, and the state stays ACTIVE."""
+    await _grant_authoring(subj.a)
+    h = _auth(token_factory, subj.a)
+    proc = await _create_process(app_client, h)
+    await app_client.patch(f"/api/v1/processes/{proc['id']}", headers=h, json={"state": "ACTIVE"})
+    r = await app_client.patch(
+        f"/api/v1/processes/{proc['id']}", headers=h, json={"criteria": "post-active"}
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["criteria"] == "post-active" and r.json()["state"] == "ACTIVE"
+    assert await _audit_count(EventType.PROCESS_UPDATED, proc["id"]) == 1
+
+
+async def test_patch_null_on_required_field_422(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    """An explicit null on a non-nullable column (name) is a 422, not a 500 on flush."""
+    await _grant_authoring(subj.a)
+    h = _auth(token_factory, subj.a)
+    proc = await _create_process(app_client, h)
+    r = await app_client.patch(f"/api/v1/processes/{proc['id']}", headers=h, json={"name": None})
+    assert r.status_code == 422, r.text
+    assert r.json()["errors"][0]["field"] == "name"
+
+
 async def test_patch_unknown_process_404(
     app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
 ) -> None:
@@ -478,3 +510,52 @@ async def test_process_link_requires_manage_metadata(
         f"/api/v1/documents/{did}/process-links", headers=hc, json={"process_id": proc["id"]}
     )
     assert r.status_code == 403, r.text
+
+
+async def _seed_foreign_process(created_by: uuid.UUID) -> tuple[str, str]:
+    """A process under a throwaway SECOND org (returns (org_id, process_id))."""
+    async with get_sessionmaker()() as s:
+        org = Organization(
+            legal_name="Other Co", short_code=f"OTHER-{uuid.uuid4().hex[:6].upper()}"
+        )
+        s.add(org)
+        await s.flush()
+        proc = Process(
+            org_id=org.id,
+            name=f"ForeignProc-{uuid.uuid4().hex[:8]}",
+            pdca_phase=PdcaPhase.DO,
+            created_by=created_by,
+        )
+        s.add(proc)
+        await s.flush()
+        ids = (str(org.id), str(proc.id))
+        await s.commit()
+        return ids
+
+
+async def _drop_foreign(org_id: str, process_id: str) -> None:
+    async with get_sessionmaker()() as s:
+        await s.execute(delete(Process).where(Process.id == uuid.UUID(process_id)))
+        await s.execute(delete(Organization).where(Organization.id == uuid.UUID(org_id)))
+        await s.commit()
+
+
+async def test_process_link_cross_org_rejected(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    """Linking a document to a process from ANOTHER org is rejected (422) — the org-isolation guard
+    (documents.link_process_endpoint). Single-org per install (D1) makes this impossible in
+    production; the test seeds a throwaway second org + process and **cleans them up in finally** so
+    the shared session-scoped DB stays single-org (else test_setup's ``Organization.scalar_one``
+    would break)."""
+    uid = await s5.grant_lifecycle(subj.a)
+    h = _auth(token_factory, subj.a)
+    did = await _doc_id(app_client, h)
+    org_id, proc_id = await _seed_foreign_process(uid)
+    try:
+        r = await app_client.post(
+            f"/api/v1/documents/{did}/process-links", headers=h, json={"process_id": proc_id}
+        )
+        assert r.status_code == 422, r.text
+    finally:
+        await _drop_foreign(org_id, proc_id)

@@ -165,6 +165,9 @@ async def list_clause_mappings(
 
 
 # --- process IA (S9c, doc 02 §3.3, doc 14 §4) --------------------------------------------
+# By-id lookups fetch then let the handler org-validate (the get_clause/get_clause_mapping
+# precedent) — every S9c handler checks ``org_id == caller.org_id`` before use; list/by-name
+# helpers filter by org_id directly.
 
 
 async def get_process(session: AsyncSession, process_id: uuid.UUID) -> Process | None:
