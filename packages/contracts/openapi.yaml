@@ -34,6 +34,11 @@ tags:
       Authorization admin — the permission catalog, roles, and per-user role/override
       grants. Deny-by-default, deny-wins; reads need role.read/user.read, grants need
       permission.grant (two-tier guard).
+  - name: users
+    description: >-
+      User-lifecycle admin (slice S8d) — the roster, invite (pre-create INVITED, reconciled by
+      JIT), and enable/disable (with a last-admin lock-out guard). Needs user.read / user.create /
+      user.deactivate. Per-user role/override grants live under the authz tag.
   - name: documents
     description: >-
       The controlled vault — documents, the check-out → presigned CAS upload → immutable
@@ -213,6 +218,98 @@ paths:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
 
+  /setup/configure-backup:
+    post:
+      tags: [setup]
+      operationId: configureSetupBackup
+      summary: >-
+        Record the admin-controlled backup policy + a live destination writability check (Step 4
+        config; doc 08 §8.1). Needs backup.configure. Does NOT satisfy gate G-C — the restore-test
+        drill must PASS. Rejects wal_pitr_enabled=true (reserved for a later release, D-6).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [destination]
+              properties:
+                destination: { type: string }
+                cron: { type: string, default: "0 2 * * *" }
+                retention_daily: { type: integer, default: 7 }
+                retention_weekly: { type: integer, default: 4 }
+                retention_monthly: { type: integer, default: 6 }
+                encryption_key_ref: { type: [string, "null"] }
+                alert_sink: { type: [string, "null"] }
+                wal_pitr_enabled: { type: boolean, default: false }
+      responses:
+        "200":
+          description: Backup policy recorded.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [configured, destination]
+                properties:
+                  configured: { type: boolean }
+                  destination: { type: string }
+                  cron: { type: string }
+                  detail: { type: string }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "422": { $ref: "#/components/responses/ProblemResponse" }
+
+  /setup/run-restore-test:
+    post:
+      tags: [setup]
+      operationId: runSetupRestoreTest
+      summary: >-
+        Enqueue the backup→restore-into-scratch drill (gate G-C / AC#5). Async worker task; poll
+        GET /setup for the persisted result. Needs restore.run; 409 if no backup configured.
+      responses:
+        "202":
+          description: The drill was enqueued.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status: { type: string }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "409": { $ref: "#/components/responses/ProblemResponse" }
+
+  /setup/configure-auth:
+    post:
+      tags: [setup]
+      operationId: configureSetupAuth
+      summary: >-
+        Record the auth method + prove a non-bootstrap login (gate G-D; doc 08 §9). The caller's
+        valid non-bootstrap JWT + a live OIDC-issuer reachability probe are the proof. Needs
+        config.update. 422 auth_unavailable if the issuer is not reachable/well-formed.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                method: { type: string, enum: [LOCAL, FEDERATED], default: LOCAL }
+                mfa_acknowledged: { type: boolean, default: false }
+      responses:
+        "200":
+          description: Auth verified; gate G-D satisfied.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [auth_test_login_ok, method]
+                properties:
+                  auth_test_login_ok: { type: boolean }
+                  method: { type: string }
+                  detail: { type: string }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "422": { $ref: "#/components/responses/ProblemResponse" }
+
   /setup/finalize:
     post:
       tags: [setup]
@@ -338,6 +435,99 @@ paths:
               schema: { $ref: "#/components/schemas/RoleDetail" }
         "403": { $ref: "#/components/responses/ProblemResponse" }
         "404": { $ref: "#/components/responses/ProblemResponse" }
+
+  /users:
+    get:
+      tags: [users]
+      operationId: listUsers
+      summary: The user roster (S8d). Needs user.read. Optional status/is_guest filters.
+      parameters:
+        - { name: status_filter, in: query, required: false, schema: { type: string } }
+        - { name: is_guest, in: query, required: false, schema: { type: boolean } }
+      responses:
+        "200":
+          description: The user roster.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/UserAdmin" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+    post:
+      tags: [users]
+      operationId: inviteUser
+      summary: >-
+        Invite a user — pre-create an INVITED app_user bound to an operator-supplied Keycloak
+        subject (reconciled to ACTIVE on first login). Needs user.create. 409 if the subject exists.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [keycloak_subject]
+              properties:
+                keycloak_subject: { type: string }
+                display_name: { type: [string, "null"] }
+                email: { type: [string, "null"] }
+      responses:
+        "201":
+          description: The invited (INVITED) user.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UserAdmin" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "409": { $ref: "#/components/responses/ProblemResponse" }
+        "422": { $ref: "#/components/responses/ProblemResponse" }
+
+  /users/{user_id}:
+    get:
+      tags: [users]
+      operationId: getUser
+      summary: A single user record (S8d). Needs user.read.
+      parameters:
+        - name: user_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: The user record.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UserAdmin" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+    patch:
+      tags: [users]
+      operationId: updateUserStatus
+      summary: >-
+        Enable/disable a user (S8d). Needs user.deactivate. 409 last_admin when disabling the sole
+        active System Administrator (the break-glass guard, doc 08 §9.1).
+      parameters:
+        - name: user_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status: { type: string, enum: [ACTIVE, DISABLED] }
+      responses:
+        "200":
+          description: The updated user.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UserAdmin" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409": { $ref: "#/components/responses/ProblemResponse" }
+        "422": { $ref: "#/components/responses/ProblemResponse" }
 
   /users/{user_id}/roles:
     get:
@@ -1264,13 +1454,31 @@ components:
         gates:
           type: object
           additionalProperties: { type: boolean }
-          description: Live gate status keyed by gate id (G-A, G-E, … as later slices add G-B/C/D).
+          description: Live gate status keyed by gate id (G-A, G-E, G-B, G-C, G-D).
         org_profile:
           type: object
           properties:
             legal_name: { type: [string, "null"] }
             short_code: { type: [string, "null"] }
             timezone: { type: [string, "null"] }
+        backup:
+          type: object
+          description: G-C backup/restore status (S8b2).
+          properties:
+            configured: { type: boolean }
+            destination: { type: [string, "null"] }
+            last_restore_test_at: { type: [string, "null"], format: date-time }
+            last_restore_test_result: { type: [string, "null"] }
+        auth:
+          type: object
+          description: G-D auth-config status (S8c).
+          properties:
+            configured: { type: boolean }
+            method: { type: [string, "null"] }
+            last_test_at: { type: [string, "null"], format: date-time }
+        tamper_evident:
+          type: boolean
+          description: Off-host audit-anchor soft gate (R13) — never blocks finalize.
 
     AppUser:
       type: object
@@ -1285,6 +1493,25 @@ components:
           type: string
           enum: [INVITED, ACTIVE, LOCKED, DISABLED, RETIRED]
         is_guest: { type: boolean }
+
+    UserAdmin:
+      type: object
+      additionalProperties: false
+      required: [id, keycloak_subject, status, mfa_enrolled, is_guest, roles]
+      description: The admin roster representation (S8d) — AppUser + mfa_enrolled + assigned role names.
+      properties:
+        id: { type: string, format: uuid }
+        keycloak_subject: { type: string }
+        display_name: { type: [string, "null"] }
+        email: { type: [string, "null"] }
+        status:
+          type: string
+          enum: [INVITED, ACTIVE, LOCKED, DISABLED, RETIRED]
+        mfa_enrolled: { type: boolean }
+        is_guest: { type: boolean }
+        roles:
+          type: array
+          items: { type: string }
 
     ScopeLevel:
       type: string
