@@ -37,6 +37,12 @@ def _doc_bucket() -> str:
     return get_settings().s3_bucket_documents
 
 
+def _records_bucket() -> str:
+    """The records WORM bucket (object-locked, GOVERNANCE) — captured record evidence promotes here,
+    kept apart from the documents vault (doc 06; provisioned in ``minio-init.sh``)."""
+    return get_settings().s3_bucket_records
+
+
 def _staging_bucket() -> str:
     return get_settings().s3_bucket_staging
 
@@ -117,7 +123,7 @@ async def head(object_key: str, *, bucket: str | None = None) -> ObjectHead:
     return await asyncio.to_thread(_head_sync, object_key, bucket or _doc_bucket())
 
 
-def _finalize_sync(sha256: str) -> ObjectHead:
+def _finalize_sync(sha256: str, bucket: str) -> ObjectHead:
     from botocore.exceptions import ClientError
 
     client = _client()
@@ -125,21 +131,21 @@ def _finalize_sync(sha256: str) -> ObjectHead:
         client.head_object(Bucket=_staging_bucket(), Key=sha256)
     except ClientError:
         return ObjectHead(exists=False)
-    # Server-side copy into the WORM documents bucket; its GOVERNANCE default retention
-    # auto-applies on object creation. No bytes flow through the api.
+    # Server-side copy into the target WORM bucket; its GOVERNANCE default retention auto-applies on
+    # object creation. No bytes flow through the api.
     client.copy_object(
-        Bucket=_doc_bucket(),
+        Bucket=bucket,
         Key=sha256,
         CopySource={"Bucket": _staging_bucket(), "Key": sha256},
     )
-    return _head_sync(sha256, _doc_bucket())
+    return _head_sync(sha256, bucket)
 
 
-async def finalize_worm(sha256: str) -> ObjectHead:
-    """Promote a staged object to the WORM documents bucket (server-side copy) and return its
-    head — existence + size + the now-applied retain-until. The blob is WORM-locked here, before
-    the version row is committed."""
-    return await asyncio.to_thread(_finalize_sync, sha256)
+async def finalize_worm(sha256: str, *, bucket: str | None = None) -> ObjectHead:
+    """Promote a staged object to a WORM bucket (server-side copy) and return its head — existence +
+    size + the now-applied retain-until. The blob is WORM-locked here, before the owning row is
+    committed. Defaults to the documents vault; records evidence passes ``_records_bucket()``."""
+    return await asyncio.to_thread(_finalize_sync, sha256, bucket or _doc_bucket())
 
 
 def _fetch_bytes_sync(object_key: str, bucket: str) -> bytes:

@@ -126,6 +126,16 @@ class EventType(enum.Enum):
     UPGRADE_STARTED = "UPGRADE_STARTED"
     UPGRADE_COMPLETED = "UPGRADE_COMPLETED"
     UPGRADE_FAILED = "UPGRADE_FAILED"
+    # records capture + evidence-linking + correction (S-rec-1, doc 06 §4/§6) — the immutable
+    # capture trail, the correct-don't-change pointer flip, and the evidence-for link annotations
+    # (object_type ``record``; AuditObjectType.record already exists → no audit_object_type ALTER).
+    # Added via ALTER TYPE event_type ADD VALUE in 0023 (the 0011-0022 additive pattern; a
+    # from-scratch ``upgrade head`` rebuilds the type from EVENT_TYPE_VALUES, so the members live
+    # here too).
+    RECORD_CAPTURED = "RECORD_CAPTURED"
+    RECORD_CORRECTED = "RECORD_CORRECTED"
+    RECORD_EVIDENCE_LINKED = "RECORD_EVIDENCE_LINKED"
+    RECORD_EVIDENCE_UNLINKED = "RECORD_EVIDENCE_UNLINKED"
 
 
 class CheckpointSinkKind(enum.Enum):

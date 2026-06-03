@@ -8,8 +8,10 @@ from ._audit_enums import (
 )
 from ._authz_enums import SodSeverity, SodTargetBinding
 from ._clause_enums import PdcaPhase
+from ._evidence_enums import EvidenceForTargetType
 from ._process_enums import ProcessState, SupplierStatus
 from ._record_enums import RecordDispositionState, RecordType
+from ._retention_enums import DispositionAction, RetentionBasis
 from ._signature_enums import SignatureMeaning, SignatureMethod, SignedObjectType
 from ._vault_enums import (
     ChangeSignificance,
@@ -38,6 +40,8 @@ from .clause_mapping import ClauseMapping
 from .document_type import DocumentType
 from .document_version import DocumentVersion
 from .documented_information import DocumentedInformation
+from .evidence_blob import EvidenceBlob
+from .evidence_for_link import EvidenceForLink
 from .framework import Framework
 from .numbering_counter import NumberingCounter
 from .org_role import OrgRole
@@ -78,6 +82,7 @@ __all__ = [
     "Classification",
     "Clause",
     "ClauseMapping",
+    "DispositionAction",
     "DocumentCurrentState",
     "DocumentKind",
     "DocumentLevel",
@@ -85,6 +90,9 @@ __all__ = [
     "DocumentVersion",
     "DocumentedInformation",
     "EventType",
+    "EvidenceBlob",
+    "EvidenceForLink",
+    "EvidenceForTargetType",
     "Framework",
     "NumberingCounter",
     "OrgRole",
@@ -99,6 +107,7 @@ __all__ = [
     "Record",
     "RecordDispositionState",
     "RecordType",
+    "RetentionBasis",
     "RetentionPolicy",
     "Role",
     "RoleAssignment",

@@ -22,6 +22,7 @@ from .api.clauses import router as clauses_router
 from .api.documents import router as documents_router
 from .api.health import router as health_router
 from .api.processes import router as processes_router
+from .api.records import router as records_router
 from .api.reports import router as reports_router
 from .api.search import router as search_router
 from .api.setup import router as setup_router
@@ -127,6 +128,7 @@ def create_app() -> FastAPI:
     app.include_router(documents_router)
     app.include_router(clauses_router)  # S9: read-only ISO clause spine (GET /clauses)
     app.include_router(processes_router)  # S9c: process IA (graph + authoring + /processes/map)
+    app.include_router(records_router)  # S-rec-1: records capture + evidence-linking + correction
     app.include_router(search_router)  # S10: Postgres-FTS search (filter-not-403, Indexer seam)
     app.include_router(reports_router)  # S10: org-wide Compliance Checklist
     app.include_router(workflow_router)

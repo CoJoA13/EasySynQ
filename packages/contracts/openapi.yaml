@@ -58,6 +58,14 @@ tags:
       and the M:N document↔process link. Reads need process.read (default SYSTEM scope); authoring
       needs process.create (create) / process.manage (update, edges); the per-document
       process-link sub-resources (under /documents/{id}) need document.manage_metadata.
+  - name: records
+    description: >-
+      Records & documented evidence (slice S-rec-1, doc 06) — the "retain" half of ISO documented
+      information. A Record is immutable proof an activity happened: captured once (base + subtype +
+      WORM-sealed evidence + content_hash), never edited. There is no PATCH/PUT/DELETE on a record —
+      corrections capture a successor (correction_of); only the evidence-link sub-resource has a
+      DELETE (an audited annotation). Capture/correction/linking need record.create (held by no role
+      at a records-reachable scope → grant via override); reads need record.read (row-filtered list).
   - name: audit
     description: >-
       The append-only, hash-chained audit trail (read-only). No POST/PATCH/DELETE ever —
@@ -1444,6 +1452,222 @@ paths:
         "403": { $ref: "#/components/responses/ProblemResponse" }
         "404": { $ref: "#/components/responses/ProblemResponse" }
 
+  /records:init-upload:
+    post:
+      tags: [records]
+      operationId: initRecordEvidenceUpload
+      summary: Step 1 of evidence capture — get a presigned PUT URL (or a dedup hit). Needs record.create.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/InitUpload" }
+      responses:
+        "200":
+          description: Presigned upload (to the staging bucket), or a dedup result.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/InitUploadResult" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+
+  /records:
+    get:
+      tags: [records]
+      operationId: listRecords
+      summary: List records the caller may read (row-filtered by record.read).
+      description: >-
+        Row-filtered by record.read (filter, not 403). Effective-immutable records only (records are
+        not in the documents surface). Plain query-param filters (no bracketed grammar); a bad enum
+        value → 422. limit is a pre-authz cap.
+      parameters:
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
+        - name: record_type
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/RecordType" }
+        - { name: source_document_id, in: query, required: false, schema: { type: string, format: uuid } }
+        - { name: captured_by, in: query, required: false, schema: { type: string, format: uuid } }
+        - name: disposition_state
+          in: query
+          required: false
+          schema: { type: string, enum: [ACTIVE, DUE_FOR_REVIEW, ON_HOLD, DISPOSED] }
+        - { name: legal_hold, in: query, required: false, schema: { type: boolean } }
+      responses:
+        "200":
+          description: Records (newest capture first).
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/Record" } }
+        "422":
+          description: Invalid filter value (bad enum; code=validation_error).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+    post:
+      tags: [records]
+      operationId: captureRecord
+      summary: Capture an immutable record (base + subtype + WORM evidence + seal). Needs record.create.
+      description: >-
+        A record produced under a controlled document MUST pin its exact version (source_version_id);
+        ad-hoc EVIDENCE leaves both source fields null (R21). Evidence blobs are promoted to the WORM
+        records bucket; content_hash seals the manifest. The resolved retention policy is snapshotted.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RecordCreate" }
+      responses:
+        "201":
+          description: The captured record (with evidence_blobs + evidence_links).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Record" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "422":
+          description: >-
+            Validation error — bad record_type/classification, unknown source document/version, or a
+            record-under-document missing source_version_id (errors[].code=source_version_required) or
+            a framework mismatch (errors[].code=framework_mismatch).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "423":
+          description: An evidence object is not WORM-locked (code=worm_required).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  /records/{record_id}:
+    parameters:
+      - { name: record_id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [records]
+      operationId: getRecord
+      summary: A record's metadata + evidence blobs + evidence links. Needs record.read.
+      responses:
+        "200":
+          description: The record.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Record" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+
+  /records/{record_id}/evidence/{sha256}/download:
+    get:
+      tags: [records]
+      operationId: downloadRecordEvidence
+      summary: A presigned GET for one attached evidence blob. Needs record.read.
+      parameters:
+        - { name: record_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: sha256, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: A short-lived presigned GET URL for the evidence blob.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EvidenceDownload" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+
+  /records/{record_id}/correction:
+    post:
+      tags: [records]
+      operationId: correctRecord
+      summary: Correct a record by capturing a successor (correct, don't change). Needs record.create.
+      description: >-
+        Captures a NEW record (correction_of → the original) and flags the original
+        superseded_by_correction; the original stays retrievable forever. 409 if already superseded.
+      parameters:
+        - { name: record_id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RecordCreate" }
+      responses:
+        "201":
+          description: The successor (correcting) record.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Record" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409":
+          description: The record is already superseded by a correction (conflict).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "422":
+          description: Validation error (see captureRecord).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "423":
+          description: An evidence object is not WORM-locked (code=worm_required).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  /records/{record_id}/evidence-links:
+    parameters:
+      - { name: record_id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [records]
+      operationId: listEvidenceLinks
+      summary: The record's evidence-for links. Needs record.read.
+      responses:
+        "200":
+          description: The evidence-for links.
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/EvidenceLink" } }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+    post:
+      tags: [records]
+      operationId: linkEvidence
+      summary: Link the record as evidence for a clause/process/document. Needs record.create.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/EvidenceLinkCreate" }
+      responses:
+        "201":
+          description: The created evidence-for link.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EvidenceLink" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409":
+          description: The link already exists (conflict).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "422":
+          description: >-
+            Target not found, or it belongs to a different framework
+            (errors[].code=framework_mismatch).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  /records/{record_id}/evidence-links/{link_id}:
+    delete:
+      tags: [records]
+      operationId: unlinkEvidence
+      summary: Remove an evidence-for link (an audited annotation). Needs record.create.
+      parameters:
+        - { name: record_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: link_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "204": { description: Unlinked. }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+
   /tasks:
     get:
       tags: [tasks]
@@ -2595,6 +2819,164 @@ components:
         framework: { type: string, example: "iso9001:2015" }
         rollup: { $ref: "#/components/schemas/ChecklistRollup" }
         rows: { type: array, items: { $ref: "#/components/schemas/ChecklistRow" } }
+
+    RecordType:
+      type: string
+      description: The record discriminator (doc 06 §2). All 16 are accepted as flat captures in S-rec-1.
+      enum:
+        - AUDIT
+        - AUDIT_FINDING
+        - CAPA
+        - COMPETENCE
+        - CALIBRATION
+        - MGMT_REVIEW
+        - SUPPLIER_EVAL
+        - RELEASE
+        - KPI_READING
+        - SATISFACTION
+        - TRACEABILITY
+        - PROPERTY_EVENT
+        - CHANGE
+        - EVIDENCE
+        - FILLED_FORM
+        - COMPLAINT
+
+    EvidenceRef:
+      type: object
+      additionalProperties: false
+      required: [sha256]
+      properties:
+        sha256: { type: string, description: Client-computed lowercase-hex SHA-256 of the evidence bytes. }
+        content_type: { type: string, default: application/octet-stream }
+
+    EvidenceBlob:
+      type: object
+      additionalProperties: false
+      required: [sha256, is_original, size_bytes]
+      properties:
+        sha256: { type: string, description: The content-addressed evidence blob (lowercase hex). }
+        is_original: { type: boolean, description: true for the uploaded artifact (vs a derived rendition). }
+        filename: { type: [string, "null"] }
+        content_type: { type: [string, "null"] }
+        size_bytes: { type: integer }
+        created_at: { type: [string, "null"], format: date-time }
+
+    EvidenceLink:
+      type: object
+      additionalProperties: false
+      required: [id, record_id, target_type, target_id]
+      properties:
+        id: { type: string, format: uuid }
+        record_id: { type: string, format: uuid }
+        target_type: { type: string, enum: [clause, process, document] }
+        target_id: { type: string, format: uuid }
+        link_reason: { type: [string, "null"] }
+        created_at: { type: [string, "null"], format: date-time }
+
+    EvidenceLinkCreate:
+      type: object
+      additionalProperties: false
+      required: [target_type, target_id]
+      properties:
+        target_type:
+          type: string
+          enum: [clause, process, document]
+          description: >-
+            The link target kind. The enum reserves finding/capa_stage for future slices, but the
+            S-rec-1 API accepts only clause/process/document (it validates the target exists).
+        target_id: { type: string, format: uuid }
+        link_reason: { type: [string, "null"] }
+
+    EvidenceDownload:
+      type: object
+      additionalProperties: false
+      required: [download_url, sha256]
+      properties:
+        download_url:
+          type: string
+          description: A short-lived presigned GET URL for the evidence blob. Points at MinIO, not the api.
+        sha256: { type: string }
+        content_type: { type: [string, "null"] }
+
+    Record:
+      type: object
+      additionalProperties: false
+      required: [id, identifier, kind, record_type, title, classification, framework_id, captured_by, retention_policy_id, disposition_state, legal_hold]
+      properties:
+        id: { type: string, format: uuid }
+        identifier: { type: string, example: REC-QA-014 }
+        kind: { type: string, enum: [DOCUMENT, RECORD] }
+        record_type: { $ref: "#/components/schemas/RecordType" }
+        title: { type: string }
+        classification: { type: string, enum: [Public, Internal, Confidential, Restricted] }
+        framework_id: { type: string, format: uuid }
+        captured_at: { type: [string, "null"], format: date-time }
+        captured_by: { type: string, format: uuid }
+        content_hash:
+          type: [string, "null"]
+          description: The "sha256:"-prefixed seal over the structured content + the evidence-digest manifest.
+        source_document_id:
+          type: [string, "null"]
+          format: uuid
+          description: The controlled document this record was produced under, or null for ad-hoc EVIDENCE.
+        source_version_id:
+          type: [string, "null"]
+          format: uuid
+          description: The exact pinned version (R21) — required when source_document_id is set, else null.
+        form_field_values: { type: [object, "null"], additionalProperties: true }
+        retention_policy_id:
+          type: string
+          format: uuid
+          description: The retention policy snapshotted at capture (one-way ratchet, doc 06 §5.2).
+        retention_basis_date:
+          type: [string, "null"]
+          format: date
+          description: When the retention clock starts; null for an event:* basis (no event date at capture).
+        disposition_state: { type: string, enum: [ACTIVE, DUE_FOR_REVIEW, ON_HOLD, DISPOSED] }
+        legal_hold: { type: boolean }
+        correction_of:
+          type: [string, "null"]
+          format: uuid
+          description: The record this one corrects (when this record is itself a correction), or null.
+        superseded_by_correction:
+          type: [string, "null"]
+          format: uuid
+          description: The successor that corrected this record (this record stays retrievable), or null.
+        created_at: { type: [string, "null"], format: date-time }
+        evidence_blobs:
+          type: array
+          items: { $ref: "#/components/schemas/EvidenceBlob" }
+          description: The attached evidence (omitted on the list serializer, present on single reads).
+        evidence_links:
+          type: array
+          items: { $ref: "#/components/schemas/EvidenceLink" }
+          description: The evidence-for links (omitted on the list serializer, present on single reads).
+
+    RecordCreate:
+      type: object
+      additionalProperties: false
+      required: [record_type, title]
+      properties:
+        record_type: { $ref: "#/components/schemas/RecordType" }
+        title: { type: string }
+        classification: { type: string, enum: [Public, Internal, Confidential, Restricted], default: Internal }
+        area_code:
+          type: [string, "null"]
+          description: The AREA segment of the REC-AREA-SEQ identifier (default GEN).
+        source_document_id: { type: [string, "null"], format: uuid }
+        source_version_id:
+          type: [string, "null"]
+          format: uuid
+          description: Required when source_document_id is set (R21); must be null otherwise.
+        evidence:
+          type: array
+          items: { $ref: "#/components/schemas/EvidenceRef" }
+          description: Evidence blobs to seal into the WORM records bucket (upload via :init-upload first).
+        form_field_values: { type: [object, "null"], additionalProperties: true }
+        retention_policy_id:
+          type: [string, "null"]
+          format: uuid
+          description: A per-record retention override (doc 06 §5.1 tier 1); else the policy is resolved.
 
 security:
   - keycloak: []

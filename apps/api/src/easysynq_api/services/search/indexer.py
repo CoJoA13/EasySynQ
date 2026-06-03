@@ -56,6 +56,7 @@ _SEARCH_SQL = sa.text(
     FROM documented_information
     LEFT JOIN document_type dt ON dt.id = documented_information.document_type_id
     WHERE documented_information.org_id = :org_id
+      AND documented_information.kind = 'DOCUMENT'::document_kind
       AND documented_information.current_state = 'Effective'::document_current_state
       AND to_tsvector('english',
               coalesce(identifier, '') || ' ' || coalesce(title, '') || ' '
@@ -80,6 +81,7 @@ _SUGGEST_SQL = sa.text(
     FROM documented_information
     LEFT JOIN document_type dt ON dt.id = documented_information.document_type_id
     WHERE documented_information.org_id = :org_id
+      AND documented_information.kind = 'DOCUMENT'::document_kind
       AND documented_information.current_state = 'Effective'::document_current_state
       AND (identifier ILIKE :prefix OR title ILIKE :prefix)
     ORDER BY length(identifier), identifier

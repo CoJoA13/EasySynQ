@@ -47,6 +47,9 @@ class Settings(BaseSettings):
     s3_access_key: str = ""
     s3_secret_key: str = ""
     s3_bucket_documents: str = "documents"
+    # S-rec-1: the records WORM bucket (object-locked, GOVERNANCE) — captured record evidence
+    # promotes here, kept apart from the documents vault (doc 06; provisioned in minio-init.sh).
+    s3_bucket_records: str = "records"
     s3_bucket_staging: str = "staging"
     s3_bucket_renditions: str = "renditions"  # derived watermarked PDFs (non-WORM; S7b)
     # S8b2 restore-drill: a plain (NON-WORM) scratch bucket the drill copies blobs INTO and tears
