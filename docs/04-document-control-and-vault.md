@@ -547,6 +547,8 @@ The tree mirrors the IA so a human browsing the disk recognizes the QMS:
 
 A configurable **secondary index by Process** (symlinks or a parallel `by-process/` tree) supports the Process Map lens without duplicating bytes.
 
+> **Build note (S9b/S9d ✅, reconciled).** The clause tree is built in **S9b** and the `by-process/` index in **S9d** (`services/vault/mirror.py`), both as **relative symlinks into one real doc folder** (bytes stored once). The phase folder keys off the **mapped clause's** `pdca_phase`, not a document field — the §6 `pdca_phase` metadata column was never added to `documented_information` (S3), so placement is purely clause-driven (a doc mapped to several clauses lives under its numerically-lowest one + is symlinked from the rest; clause 7 splits PLAN/DO; an unmapped upgrade artifact → `_unmapped/`). The `by-process/` index is **always built** in v1 — the doc-14 `storage_config.mirror_layout` toggle is deferred to its config UI. The drift-scan/`_quarantine` (§10.6) remains v1.
+
 ### 10.4 Generation & integrity
 
 | Aspect | Decision |
