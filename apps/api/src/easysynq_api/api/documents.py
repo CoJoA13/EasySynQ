@@ -31,6 +31,8 @@ from ..db.models.clause_mapping import ClauseMapping
 from ..db.models.document_type import DocumentType
 from ..db.models.document_version import DocumentVersion
 from ..db.models.documented_information import DocumentedInformation
+from ..db.models.process import Process
+from ..db.models.process_link import ProcessLink
 from ..db.models.signature_event import SignatureEvent as SignatureEventRow
 from ..db.models.working_draft import WorkingDraft
 from ..db.session import get_session
@@ -176,6 +178,20 @@ def _clause_mapping(m: ClauseMapping, c: Clause) -> dict[str, Any]:
     }
 
 
+class ProcessLinkCreate(BaseModel):
+    process_id: uuid.UUID
+
+
+def _process_link(link: ProcessLink, p: Process) -> dict[str, Any]:
+    return {
+        "id": str(link.id),
+        "document_id": str(link.documented_information_id),
+        "process_id": str(link.process_id),
+        "process_name": p.name,
+        "created_at": link.created_at.isoformat() if link.created_at else None,
+    }
+
+
 def _rid() -> uuid.UUID | None:
     raw = request_id_var.get()
     if not raw:
@@ -212,6 +228,11 @@ def _emit_clause_event(
             request_id=_rid(),
         )
     )
+
+
+# The document↔process link audit reuses object_type=document (the link is *about the document*, the
+# clause_mapping precedent) — so _emit_clause_event covers PROCESS_LINKED/PROCESS_UNLINKED too.
+_emit_process_link_event = _emit_clause_event
 
 
 # --- helpers ----------------------------------------------------------------------------
@@ -540,6 +561,95 @@ async def unmap_clause_endpoint(
         before={
             "clause_id": str(clause_id),
             "clause_number": clause.number if clause else None,
+        },
+    )
+    await session.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+# --- process links (S9c, doc 02 §6.2) — the M:N document↔process join, the clause-mappings shape --
+
+
+@router.get("/documents/{document_id}/process-links")
+async def list_process_links_endpoint(
+    document_id: uuid.UUID,
+    caller: AppUser = Depends(_read),
+    session: AsyncSession = Depends(get_session),
+) -> list[dict[str, Any]]:
+    doc = await _load_document(session, caller, document_id)
+    rows = await vault_repo.list_process_links(session, doc.id)
+    return [_process_link(link, p) for link, p in rows]
+
+
+@router.post("/documents/{document_id}/process-links", status_code=status.HTTP_201_CREATED)
+async def link_process_endpoint(
+    document_id: uuid.UUID,
+    body: ProcessLinkCreate,
+    caller: AppUser = Depends(_manage_metadata),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    doc = await _load_document(session, caller, document_id)
+    process = await vault_repo.get_process(session, body.process_id)
+    if process is None or process.org_id != caller.org_id:
+        raise ProblemException(
+            status=422,
+            code="validation_error",
+            title="Process does not exist",
+            errors=[
+                {"field": "process_id", "code": "not_found", "message": "process does not exist"}
+            ],
+        )
+    if await vault_repo.get_process_link(session, process.id, doc.id) is not None:
+        raise ProblemException(status=409, code="conflict", title="Process already linked")
+    link = ProcessLink(
+        org_id=doc.org_id,
+        process_id=process.id,
+        documented_information_id=doc.id,
+        created_by=caller.id,
+    )
+    session.add(link)
+    try:
+        await session.flush()  # the UNIQUE backstop for a concurrent duplicate link
+    except IntegrityError:
+        await session.rollback()
+        raise ProblemException(
+            status=409, code="conflict", title="Process already linked"
+        ) from None
+    _emit_process_link_event(
+        session,
+        caller,
+        EventType.PROCESS_LINKED,
+        doc.id,
+        after={"process_id": str(process.id), "process_name": process.name},
+    )
+    await session.commit()
+    return _process_link(link, process)
+
+
+@router.delete(
+    "/documents/{document_id}/process-links/{process_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def unlink_process_endpoint(
+    document_id: uuid.UUID,
+    process_id: uuid.UUID,
+    caller: AppUser = Depends(_manage_metadata),
+    session: AsyncSession = Depends(get_session),
+) -> Response:
+    doc = await _load_document(session, caller, document_id)
+    link = await vault_repo.get_process_link(session, process_id, doc.id)
+    if link is None:
+        raise ProblemException(status=404, code="not_found", title="Process link not found")
+    process = await vault_repo.get_process(session, process_id)
+    await session.delete(link)
+    _emit_process_link_event(
+        session,
+        caller,
+        EventType.PROCESS_UNLINKED,
+        doc.id,
+        before={
+            "process_id": str(process_id),
+            "process_name": process.name if process else None,
         },
     )
     await session.commit()

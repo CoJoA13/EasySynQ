@@ -8,6 +8,7 @@ from ._audit_enums import (
 )
 from ._authz_enums import SodSeverity, SodTargetBinding
 from ._clause_enums import PdcaPhase
+from ._process_enums import ProcessState, SupplierStatus
 from ._record_enums import RecordDispositionState, RecordType
 from ._signature_enums import SignatureMeaning, SignatureMethod, SignedObjectType
 from ._vault_enums import (
@@ -39,8 +40,12 @@ from .document_version import DocumentVersion
 from .documented_information import DocumentedInformation
 from .framework import Framework
 from .numbering_counter import NumberingCounter
+from .org_role import OrgRole
 from .organization import Organization
 from .permission import Permission
+from .process import Process
+from .process_edge import ProcessEdge
+from .process_link import ProcessLink
 from .record import Record
 from .retention_policy import RetentionPolicy
 from .role import Role, RoleAssignment, RoleGrant
@@ -48,6 +53,7 @@ from .scope import Scope
 from .signature_event import SignatureEvent
 from .sod import SodConstraint
 from .storage_config import StorageConfig
+from .supplier import Supplier
 from .system_config import SetupState, SystemConfig
 from .workflow import (
     Task,
@@ -81,10 +87,15 @@ __all__ = [
     "EventType",
     "Framework",
     "NumberingCounter",
+    "OrgRole",
     "Organization",
     "PdcaPhase",
     "Permission",
     "PermissionOverride",
+    "Process",
+    "ProcessEdge",
+    "ProcessLink",
+    "ProcessState",
     "Record",
     "RecordDispositionState",
     "RecordType",
@@ -102,6 +113,8 @@ __all__ = [
     "SodSeverity",
     "SodTargetBinding",
     "StorageConfig",
+    "Supplier",
+    "SupplierStatus",
     "SystemConfig",
     "Task",
     "TaskOutcome",
