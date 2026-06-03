@@ -11,7 +11,9 @@ invariant* rather than a discipline problem.
   [`docs/00-overview.md`](docs/00-overview.md); [`docs/decisions-register.md`](docs/decisions-register.md) is
   authoritative).
 - **Implementation plan:** [`docs/18-mvp-implementation-plan.md`](docs/18-mvp-implementation-plan.md) (approved).
-- **Code:** building the MVP foundation-first, slice by slice (each via a PR with green CI on protected `main`).
+- **Code: the MVP is complete** — all 11 vertical slices (S0–S11) shipped to protected `main` (each via a PR with
+  green CI), all six acceptance proofs in, the mirror epic + both information-architecture backends complete, and the
+  doc-18 §12 exit checklist closed.
   - **S0 — walking skeleton** ✅ — Compose stack, `/healthz`+`/readyz`, reversible Alembic baseline, OpenAPI→client pipeline.
   - **S1 — authentication** ✅ — Keycloak OIDC/PKCE, JWT-vs-JWKS validation, `app_user` + JIT provisioning, `/me`.
   - **S2 — authorization** ✅ — deny-wins PDP/PEP, the closed permission catalog + 8 seeded roles, two-tier grant guard.
@@ -25,7 +27,10 @@ invariant* rather than a discipline problem.
   - **S9b — clause-aligned mirror tree** ✅ — the §10.3 `PLAN/DO/CHECK/ACT → {NN}-{clause}/` tree: each Effective doc lives once under its numerically-lowest mapped clause and is reached from every other mapped clause via a relative symlink (clause 7 splits PLAN/DO); an unmapped (pre-S9 upgrade) doc lands in `_unmapped/`.
   - **S9c — process IA backend** ✅ — the Clause 4.4 process graph (`process`/`process_edge`/`process_link` + `org_role`/`supplier` FK targets) with `GET /processes(/{id})(/map)` + `SEED→ACTIVE` authoring (`POST`/`PATCH /processes`, `…/edges`) + the M:N `…/process-links` sub-resource, all audited (`process.create`/`assign_owner` seeded-but-ungranted → grant via override until the role UI).
   - **S9d — by-process mirror index** ✅ — the §10.3 secondary `current/by-process/{name}/` tree of relative symlinks into the clause-tree doc folders (always-on; bytes never duplicated). **Completes the mirror epic.**
-  - **S10 — search + the Compliance Checklist** (next) — the org-wide checklist (reads `is_mandatory_star` + `clause_mapping` coverage, doc 13), `filter[clause_refs][has]` on `GET /documents`, faceted search; then **S11** (backup/restore-CLI hardening + the exit slice).
+  - **S10 — search + the Compliance Checklist** ✅ — the org-wide checklist (`GET /reports/compliance-checklist`: the 20 ★ mandatory clauses with COVERED/PARTIAL/GAP coverage), Postgres-FTS `GET /search`(+`/suggest`) behind an engine-agnostic `Indexer` seam (Effective-only, filter-not-403), and `clause_refs` + bracketed `filter[field][op]` on `GET /documents` (the audit-read API proven write-verb-free, co-proving AC#6).
+  - **S11 — the MVP exit slice** ✅ — `easysynq restore` (WORM-aware **restore-to-verified-target**: fresh scratch DB + fresh non-WORM bucket, the locked vault read-never-written, integrity triad → checkpoint-not-ahead tamper guard → restored-chain re-verify → a documented operator cutover) + `easysynq upgrade` (pre-backup → migrate → health-gate); backup archive v2 (AES-256-GCM envelope + Keycloak realm export + config snapshot, the G-C drill kept plaintext-internal so AC#5 isn't regressed); Caddy strict static CSP + TLS 1.2 floor + air-gap internal-issuer wiring; a server-side NFR P95 smoke; and the operator [`docs/runbooks/`](docs/runbooks/). **The MVP is done.**
+
+  See [`CLAUDE.md`](CLAUDE.md) for the per-slice detail and the v1/v1.x deferrals.
 
   Run it: `just up s`, then open **http://localhost** (dev login `demo` / `Demo-Password-1`).
 
