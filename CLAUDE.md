@@ -314,17 +314,45 @@ Docker stack):**
   (mismatch/missing-jwks/non-200/network-error/non-dict-body/non-string-issuer all FAIL) + `EventType` unit. **148 unit +
   108 integration**.
 
-**Next slice: S8d — the deferrable wizard steps 6–9 + the fuller admin shell** (org roles & permission bundles, user
-invite/CSV + per-user scope/overrides, QMS scope & process-map seed + the Mara hand-off, import hand-off → the ingestion
-engine; plus in-app Keycloak admin-API provisioning + MFA enrolment). These are **non-blocking** (post-finalize, Mara's
-domain) — the five blocking gates G-A…G-E are now all shipped, so finalize works end-to-end. The router skeleton
-(`/setup` · `/` · `/admin`) makes S8d purely feature-additive. Then **S9** (clause/process IA + `clause_mapping` — also
-unblocks the mirror's clause/process tree + the lifecycle submit ≥1-`clause_mapping` gate). The gate registry + latch
-extend by just appending gates. **Deferred (S11 / v1.x, D-6 / R37):** the operator-grade *live* WORM-aware restore +
-cutover, PITR/WAL, retention *pruning*, Keycloak realm export, archive envelope encryption, S3-destination,
-`easysynq restore`/`upgrade`; MFA *enforcement* + `acr`/signature re-auth + a direct upstream-IdP (LDAP-bind) live probe
-(Part-11 / Keycloak-brokered). S6/S7 seams still open (Keycloak auth-event SPI, `/audit-events/export`, the clause/process
-IA mirror tree). Pre-existing hardening noted: `area_code` is unconstrained `Text` at the S3 create boundary.
+- **S8d — Users & Roles admin + user lifecycle (invite / enable-disable)** ✅ — PR #24. The first **post-finalize,
+  non-blocking** admin surface (doc 08 §10/§11) — makes the seeded roles + per-user grants manageable in-app (the
+  Avery→Mara hand-off), replacing the `grant-role` break-glass CLI as the only path. **Mostly web + reuse:** S2 already
+  shipped the entire authz-admin API incl. the WRITE paths (`POST/DELETE /users/{id}/roles` with the R35 two-tier guard,
+  `POST/DELETE /users/{id}/overrides`), all audited + epoch-bumped — **no new permission keys, no new authz concepts, no
+  schema columns** (`UserStatus` already has `INVITED`; `app_user.mfa_enrolled` already exists). **Owner forks:** scope =
+  Users & Roles admin + user lifecycle (invite/enable-disable); defer the doc-08 §10.4 self-grant friction → v1
+  (self-grants are already `OVERRIDE_ADD`-audited + two-tier-guarded), MFA = display `mfa_enrolled` only (enforcement
+  Part-11/D3), Keycloak provisioning = rely on JIT (in-app admin-API is v1), custom-role authoring + scope/process-map
+  (S9) + import (v1) deferred. **`api/users.py`** (new router): `GET /users` (roster + role names, `user.read`) +
+  `GET /users/{id}`; `POST /users` = **invite** (pre-create an `INVITED` `app_user` bound to an operator-supplied
+  Keycloak subject, `user.create`, `USER_CREATED` audit, 409 on dup); `PATCH /users/{id}` = **enable/disable**
+  (ACTIVE|DISABLED, `user.deactivate`, `USER_STATUS_CHANGED` audit) with a **last-admin lock-out guard** (409
+  `last_admin`, doc 08 §9.1 — refuses disabling the sole active System Administrator). All org-scoped + pre-commit-audited.
+  **`auth/dependencies.py`**: `get_current_user` reconciles an `INVITED` row → `ACTIVE` on first genuine login (JIT match
+  on `keycloak_subject`; never resurrects an inactive account). **`0016`**: `ALTER TYPE event_type ADD VALUE` ×2
+  (`USER_CREATED`/`USER_STATUS_CHANGED`, the 0011–0015 pattern; Python `EventType` members too); **no columns**. **Web:**
+  `react-router` nested routes under `/admin` → `AdminShell` (Users/Roles tabs + `Outlet`) + `UsersAdmin` (Mantine Table
+  roster + invite `Modal` + enable/disable + a per-user `Drawer`: assign/revoke seeded roles + add/remove SYSTEM-scoped
+  overrides via the reused S2 endpoints, surfacing `two_tier_violation`/`last_admin`) + `RolesAdmin` (read-only seeded
+  roles + grants); `lib/api` gains `DELETE` + 204 handling + `useMutation`. Adversarially reviewed (3 lenses incl. an
+  authz-bypass/lock-out hunter → per-finding verify; **0 confirmed of 1** — no false-PASS/lock-out/escalation path).
+  `openapi.yaml` deliberately not updated (matches S8b2/S8c; the `contracts` CI is redocly-lint only, the web client isn't
+  generated). Proofs: roster authz (403), invite + `USER_CREATED` + 409-dup + 403, the `INVITED→ACTIVE` reconciliation,
+  disable-blocks-then-reenable + `USER_STATUS_CHANGED` + 403, the last-admin guard (409), assign-seeded-role-visible-in-
+  roster end-to-end; the 2 `EventType` members unit. **149 unit + 111 integration**.
+
+**Next slice: S9 — clause/process IA + `clause_mapping`** (the ISO clause spine + process map as navigable read-only
+reference data + the M:N `clause_mapping`; unblocks the mirror's clause/process tree (doc 04 §10.3) + the lifecycle
+submit ≥1-`clause_mapping` gate (the `# S9:` seam from S4) + **S8e** = the deferred wizard Step 8 QMS scope/process-map
+seed, which couples to this IA). Then **S10/S11** (search/reporting · backup/restore-CLI hardening + the exit slice).
+The gate registry + latch extend by just appending gates. **Deferred (S8e / v1 / Part-11):** wizard Step 8 (scope/
+process-map, after S9) + Step 9 (import → the v1 ingestion epic); custom-role create/update/delete + bulk-CSV invite +
+the effective-permissions explorer (v1); in-app Keycloak admin-API provisioning (v1); MFA *enforcement* + `acr`/step-up
+(Part-11, D3); the §10.4 self-grant friction + `ADMIN_SELF_GRANTED_QMS_CAP` event (v1). **Deferred (S11 / v1.x, D-6 /
+R37):** operator-grade *live* WORM-aware restore + cutover, PITR/WAL, retention *pruning*, Keycloak realm export, archive
+envelope encryption, S3-destination, `easysynq restore`/`upgrade`. S6/S7 seams still open (Keycloak auth-event SPI,
+`/audit-events/export`, the clause/process IA mirror tree). Pre-existing hardening noted: `area_code` is unconstrained
+`Text` at the S3 create boundary.
 
 ## Building the MVP (dev workflow)
 
@@ -397,10 +425,16 @@ IA mirror tree). Pre-existing hardening noted: `area_code` is unconstrained `Tex
   archive now) and `easysynq backup restore-test` (run the gating drill; exits non-zero on FAIL) — both dispatch to the
   worker container. The nightly `easysynq.backup.run` Beat job writes durable archives (pg_dump + a MinIO blob
   manifest); the operator-grade **live** WORM-aware restore stays S11.
+- **Users & Roles admin (S8d) — the primary in-app path now:** once OPERATIONAL, sign in as a System Administrator
+  and open **`/admin/users`** to invite users (paste their Keycloak `sub` — create the Keycloak account out-of-band
+  first; they go `INVITED`→`ACTIVE` on first login), assign/revoke the seeded roles, add/remove per-user overrides
+  (the R35 two-tier guard applies), and enable/disable accounts (the last active admin can't be disabled). `/admin/roles`
+  is a read-only view of the seeded bundles. (Custom-role authoring, bulk-CSV invite, and in-app Keycloak provisioning
+  are v1.)
 - **Authz break-glass (`grant-role`):** still available to assign a seeded role directly, bypassing the wizard +
   PEP — `easysynq grant-role <keycloak-subject> ["Role Name"]` (default "System Administrator"; idempotent;
   JIT-creates the `app_user`; runs `easysynq_api.cli.grant_role` as the DB owner). Use it to recover a botched
-  bootstrap or to seed an admin without the UI.
+  bootstrap or to seed the first admin before the UI is reachable.
 - **No Docker?** Every slice is still buildable + unit-testable on the uv/3.12 loop; CI runs the stack-dependent
   proofs.
 
