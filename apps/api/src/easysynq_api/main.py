@@ -21,6 +21,7 @@ from .api.authz import router as authz_router
 from .api.documents import router as documents_router
 from .api.health import router as health_router
 from .api.setup import router as setup_router
+from .api.users import router as users_router
 from .api.verify import router as verify_router
 from .api.workflow import router as workflow_router
 from .config import get_settings
@@ -118,6 +119,7 @@ def create_app() -> FastAPI:
     app.include_router(auth_router)
     app.include_router(setup_router)  # S8a: first-run wizard (latch-exempt)
     app.include_router(authz_router)
+    app.include_router(users_router)  # S8d: user-lifecycle admin (roster / invite / enable-disable)
     app.include_router(documents_router)
     app.include_router(workflow_router)
     app.include_router(audit_router)
