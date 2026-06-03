@@ -202,18 +202,38 @@ async def test_ac6b_linker_chains_verify_matches_and_tamper_is_first_broken_link
     owner_engine = create_async_engine(dsns["owner"])
     try:
         async with async_sessionmaker(owner_engine, expire_on_commit=False)() as session:
+            original_reason = (
+                await session.execute(
+                    text("SELECT reason FROM audit_event WHERE id = :id"), {"id": victim}
+                )
+            ).scalar_one()
             await session.execute(
                 text("UPDATE audit_event SET reason = 'TAMPERED' WHERE id = :id"), {"id": victim}
+            )
+            await session.commit()
+
+        broken = await app_client.get("/api/v1/audit-events/verify-chain", headers=headers)
+        body = broken.json()
+        assert body["verified"] is False
+        assert body["breaks"], "tamper not detected"
+        assert body["breaks"][0]["at_id"] == victim, "tamper not reported as the first broken link"
+
+        # Restore the victim's original reason so the SHARED session DB chain is clean again for
+        # later whole-chain consumers (the S11 restore re-verify re-walks the ENTIRE chain, not just
+        # this org's verify-chain window — a committed-and-not-undone tamper would otherwise break
+        # every subsequent full-chain re-verify). The stored row_hash was computed over the original
+        # reason, so restoring it makes the recompute match the stored hash again (chain clean).
+        async with async_sessionmaker(owner_engine, expire_on_commit=False)() as session:
+            await session.execute(
+                text("UPDATE audit_event SET reason = :reason WHERE id = :id"),
+                {"reason": original_reason, "id": victim},
             )
             await session.commit()
     finally:
         await owner_engine.dispose()
 
-    broken = await app_client.get("/api/v1/audit-events/verify-chain", headers=headers)
-    body = broken.json()
-    assert body["verified"] is False
-    assert body["breaks"], "tamper not detected"
-    assert body["breaks"][0]["at_id"] == victim, "tamper not reported as the first broken link"
+    healed = await app_client.get("/api/v1/audit-events/verify-chain", headers=headers)
+    assert healed.json()["verified"] is True, "chain not clean after restoring the tampered row"
 
 
 async def test_ac6b_checkpoint_push_and_soft_gate(
