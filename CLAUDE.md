@@ -318,20 +318,56 @@ Docker stack):**
   stale per-slice "openapi deliberately not updated" notes (S8b2–S9c) are superseded — going forward,
   document new endpoints in the same PR as they ship.
 
-**Next slice: S10 — search/reporting + the org-wide Compliance Checklist** (reads `is_mandatory_star` + `clause_mapping`
-coverage [doc 13] · `filter[clause_refs][has]` on `GET /documents` + `clause_refs` in the list serializer · faceted
-search). Then **S11** (backup/restore-CLI hardening + the exit slice). The gate registry + latch extend by just appending
-gates. **Deferred (S10 / S8e / v1 / Part-11):** the doc-14 `storage_config.mirror_layout` toggle (with its config UI);
+- **S10 — search/reporting backend: the Compliance Checklist + Postgres-FTS search + clause_refs/filter on
+  `GET /documents`** ✅ — PR #38. The doc-13 search & reporting layer, **owner-scoped (AskUserQuestion) to the
+  reporting/FTS-search backend; NO web** (the Admin Audit-Log *screen* stays with the deferred web track). Forks:
+  scope = reporting/FTS-search · coverage = **Mapped+Effective** · list = **minimal add** (no envelope) · checklist authz =
+  **also grant Internal Auditor**. **(1) Compliance Checklist** — `GET /reports/compliance-checklist` (gate
+  `report.compliance_checklist.read`, SYSTEM — **already seeded in 0004**, QMS-Owner-only) returns the **20 ★ mandatory
+  clauses** (`clause.is_mandatory_star`, doc 02 §2.1 / R30 incl. 8.5.6) with per-clause **COVERED** (≥1 mapped doc has
+  an Effective version) / **PARTIAL** (mapped, none Effective) / **GAP** + a rollup; one grouped query (`clause` LEFT
+  JOIN `clause_mapping` ON clause_id+org_id LEFT JOIN `documented_information`, `count(distinct di.id)` + a
+  `FILTER(effective)`); framework resolved by stable code; **PG-only** (doc 13 §1.2; never the index);
+  `services/reports/checklist.py` + a pure `coverage_status`. **(2) Search** — `GET /search` + `GET /search/suggest`
+  behind an engine-agnostic **`Indexer` Protocol** (`services/search/indexer.py` `PostgresFtsIndexer`; `get_indexer()`
+  the seam; **OpenSearch is the v1 drop-in**, R34). A **functional GIN index** via `op.execute` (`0020` — not a
+  generated column, so no `Computed`-comparison drift; `migrations/env.py._include_object` **excludes**
+  `ix_documented_information_search_tsv` from autogenerate — *this Alembic version DOES reflect expression indexes, so it
+  must be excluded; verified on a throwaway PG16*). **Effective documents only** (doc 13's "Effective only" default — a
+  folded review finding: searching all states leaked Draft/Obsolete titles to a `document.read`-only caller, since
+  `read_draft`/`read_obsolete` are distinct keys search never consults). **Filter-not-403**: candidate hits are
+  post-filtered by per-row `authorize(document.read)` → a `hidden_by_scope` footer ("N hidden by your access scope").
+  **(3) `GET /documents`** — `clause_refs` (batch-joined via `repository.clause_numbers_for_docs`, no N+1) in the list +
+  single serializers; the doc-15 bracketed `filter[field][op]` grammar parsed from `request.query_params` (allow-list:
+  `clause_refs[has]` exact clause-number, **framework-constrained** [folded D3 defense-in-depth] + `current_state` /
+  `document_type` / `owner_user_id` / `classification` `eq`); unknown field/op → **400 `unknown_filter`**, bad
+  enum/uuid → 422; kept the bare `list[dict]` + `limit` (minimal add — no `{data,page,_links}` envelope/cursor).
+  **(4) Authz** — `0021` **backfills `report.compliance_checklist.read` onto the Internal Auditor role for every org**
+  (resolve role by stable name + permission by key; `on_conflict_do_nothing`; downgrade deletes exactly that grant by
+  role-name so QMS Owner's `0004` grant is untouched — the **first authz backfill after 0004**). **PROOF:** the audit
+  read API exposes **no write verbs** (route-inventory unit test over `api.audit.router`; doc 18 §7 S10 DoD; co-proves
+  **AC#6**). **No new permission keys.** openapi.yaml caught up **in-PR** (tags `search`/`reports` + the 3 paths +
+  `clause_refs`/filters + `SearchResults`/`Suggestions`/`ComplianceChecklist` schemas; redocly green). Adversarially
+  reviewed (5 lenses → per-finding verify; **2 of 2 confirmed + folded** — the framework-constrained clause filter and
+  the Effective-only search restriction). **186 unit + the S10 integration suite green** (the 5 `pg_dump`-absent
+  backup tests stay environmental, green on CI).
+
+**Next slice: S11 — backup/restore-CLI hardening + the exit slice** (operator-grade *live* WORM-aware restore + cutover,
+PITR↔blob-snapshot alignment, retention *pruning*, archive envelope encryption, S3 destination, `easysynq
+restore`/`upgrade`, the NFR/security/runbook pass). The gate registry + latch extend by just appending gates.
+**Deferred (S8e / v1 / Part-11):** the doc-14 `storage_config.mirror_layout` toggle (with its config UI);
 **owner-assignment** (`org_role_assignment` + concrete PROCESS-scope grants → real Process-Owner authoring) +
-`/org-roles`/`/suppliers` authoring (v1); the org-wide **Compliance Checklist** dashboard (reads `is_mandatory_star` +
-coverage, doc 13) + `filter[clause_refs][has]` on `GET /documents` + `clause_refs` in the list serializer (S10); the web
-clause-spine nav + mapping UI + the process-map UI; wizard Step 8 (scope/process-map seed → SEED nodes) + Step 9 (import →
-the v1 ingestion epic); custom-role create/update/delete + bulk-CSV invite + the effective-permissions explorer (v1);
-in-app Keycloak admin-API provisioning (v1); MFA *enforcement* + `acr`/step-up (Part-11, D3); the §10.4 self-grant
-friction + `ADMIN_SELF_GRANTED_QMS_CAP` event (v1). **Deferred (S11 / v1.x, D-6 / R37):** operator-grade *live* WORM-aware
-restore + cutover, PITR/WAL, retention *pruning*, Keycloak realm export, archive envelope encryption, S3-destination,
-`easysynq restore`/`upgrade`. S6/S7 seams still open (Keycloak auth-event SPI, `/audit-events/export`). Pre-existing
-hardening noted: `area_code` is unconstrained `Text` at the S3 create boundary.
+`/org-roles`/`/suppliers` authoring (v1); the **web** Compliance-Checklist + Admin Audit-Log screens + clause-spine nav +
+mapping UI + process-map UI; the rest of doc-13 search/reporting (faceted facet-rail, saved searches, dashboards, the
+canonical reports, evidence packs, find-where-used, content-plane/body-text FTS, the `{data,page,_links}` cursor envelope,
+subtree clause rollup, the checklist's "overdue review"/"linked evidence" legs [need `next_review_due`/records], R31
+scope-conditional coverage); wizard Step 8 (scope/process-map seed → SEED nodes) + Step 9 (import → the v1 ingestion
+epic); custom-role create/update/delete + bulk-CSV invite + the effective-permissions explorer (v1); in-app Keycloak
+admin-API provisioning (v1); MFA *enforcement* + `acr`/step-up (Part-11, D3); the §10.4 self-grant friction +
+`ADMIN_SELF_GRANTED_QMS_CAP` event (v1). **Deferred (S11 / v1.x, D-6 / R37):** PITR/WAL, retention *pruning*, Keycloak
+realm export, archive envelope encryption, S3-destination, `easysynq restore`/`upgrade`. S6/S7 seams still open (Keycloak
+auth-event SPI, `/audit-events/export`). Pre-existing hardening noted: `area_code` is unconstrained `Text` at the S3
+create boundary.
 
 ## Building the MVP (dev workflow)
 
@@ -428,6 +464,16 @@ hardening noted: `area_code` is unconstrained `Text` at the S3 create boundary.
   endpoint yet (owner-assignment + supplier population are deferred). **S9d** then mirrors the links: a process-linked
   Effective doc shows up under `${MIRROR_PATH}/current/by-process/{ProcessName}/` (relative symlinks into the clause tree;
   plain `mirror sync` builds it).
+- **Search + Compliance Checklist (S10) — API/data only, no UI:** the org-wide **Compliance Checklist** is
+  `GET /api/v1/reports/compliance-checklist` (gate `report.compliance_checklist.read`, now held by **QMS Owner +
+  Internal Auditor** after `0021`) — the 20 ★ mandatory clauses with per-clause **COVERED/PARTIAL/GAP** coverage + a
+  rollup, computed from PostgreSQL. **Search** is `GET /api/v1/search?q=…` + `GET /api/v1/search/suggest?q=…`
+  (authenticated; **filter-not-403** — results post-filtered by `document.read`, with a `hidden_by_scope` count; **over
+  Effective documents only**, doc 13's "Effective only" default). Postgres-FTS behind the `Indexer` seam — **OpenSearch
+  stays omitted in MVP dev** (R34); `/readyz` must not probe it. `GET /api/v1/documents` now carries `clause_refs` and
+  accepts the doc-15 bracketed filters (`filter[clause_refs][has]=8.4`, `filter[current_state][eq]=…`, etc.; unknown →
+  400 `unknown_filter`). The web Checklist dashboard + Admin Audit-Log screen + the rest of doc-13 (facets, saved
+  searches, dashboards, reports, evidence packs) are deferred.
 - **Authz break-glass (`grant-role`):** still available to assign a seeded role directly, bypassing the wizard +
   PEP — `easysynq grant-role <keycloak-subject> ["Role Name"]` (default "System Administrator"; idempotent;
   JIT-creates the `app_user`; runs `easysynq_api.cli.grant_role` as the DB owner). Use it to recover a botched
