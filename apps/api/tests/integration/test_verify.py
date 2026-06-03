@@ -152,9 +152,11 @@ async def test_mirror_rendition_carries_verify_qr(
 
     await sync_mirror(mirror_path=mirror, render_sink=GotenbergRenderSink())
 
-    current = mirror / "current"
+    # S9b: the doc nests under its {PHASE}/{NN}-Word/ clause folder — find the one REAL dir.
     doc_dir = next(
-        p for p in current.iterdir() if p.is_dir() and p.name.startswith(doc["identifier"])
+        p
+        for p in (mirror / "current").rglob(f"{doc['identifier']}_*")
+        if p.is_dir() and not p.is_symlink()
     )
     pdf = next(f for f in doc_dir.iterdir() if f.suffix == ".pdf")
     page = PdfReader(str(pdf)).pages[0]

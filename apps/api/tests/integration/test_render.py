@@ -58,9 +58,14 @@ def _pdf(body: str = "Procedure body") -> bytes:
 
 
 def _doc_dir(mirror: Path, identifier: str) -> Path:
-    current = mirror / "current"
-    matches = [p for p in current.iterdir() if p.is_dir() and p.name.startswith(f"{identifier}_")]
-    assert len(matches) == 1, [m.name for m in matches]
+    # S9b: docs nest under {PHASE}/{NN}-Word/ (or _unmapped/); find the one REAL dir (not a
+    # cross-clause symlink copy) for this identifier.
+    matches = [
+        p
+        for p in (mirror / "current").rglob(f"{identifier}_*")
+        if p.is_dir() and not p.is_symlink()
+    ]
+    assert len(matches) == 1, [str(m) for m in matches]
     return matches[0]
 
 
