@@ -14,7 +14,7 @@ changes, manage documented evidence/records, and keep an organization audit-read
 UI/UX flows the way ISO 9001 flows (clause spine / process map / PDCA) and must stay calm, modern,
 and progressively disclosed — never overwhelming.
 
-## Current status (as of 2026-06-02)
+## Current status (as of 2026-06-03)
 
 **Spec complete + MVP build underway** (foundation-first, against the approved plan). The design is locked;
 we are now writing code.
@@ -303,6 +303,20 @@ Docker stack):**
   integration (by-process symlink resolves + metadata; multi-process two symlinks + bytes-once, via a direct
   `Process`+`ProcessLink` seed on an Effective doc). **181 unit + the mirror/render/verify integration green** (the 5
   `pg_dump`-absent backup tests stay environmental, green on CI).
+
+- **OpenAPI contract catch-up (S9–S9c)** ✅ — PR #35. A bounded, no-code chore: the hand-maintained
+  `packages/contracts/openapi.yaml` (caught up only through S8d/#26) now documents the shipped S9/S9c
+  surface — `GET /clauses`, the `/documents/{id}/clause-mappings` + `/process-links` sub-resources, and
+  `/processes(/{id})(/map)` + `/processes/{id}/edges` — **2 tags (`clauses`/`processes`), 14 ops across 10
+  path items, 11 component schemas**, with field names/types/nullability/enums (`PdcaPhase`/`ProcessState`)
+  + every status (201/200/204/403/404/409/422) + machine error code transcribed **verbatim** from the
+  models + handler serializers (no new `Problem.code` value needed — `framework_mismatch` is a free-form
+  `errors[].code`). Pure-additive; **redocly lint green** (the `contracts` CI is redocly-lint only — no
+  codegen, the API server/web client are not generated from this file). Adversarial **4-lens fidelity
+  review** (clauses · process-graph · process-links · style/lint/completeness → per-finding verify) — **0
+  findings**. S9b/S9d are pure-mirror (no endpoints). The contract is now caught up **through S9c**, so the
+  stale per-slice "openapi deliberately not updated" notes (S8b2–S9c) are superseded — going forward,
+  document new endpoints in the same PR as they ship.
 
 **Next slice: S10 — search/reporting + the org-wide Compliance Checklist** (reads `is_mandatory_star` + `clause_mapping`
 coverage [doc 13] · `filter[clause_refs][has]` on `GET /documents` + `clause_refs` in the list serializer · faceted
