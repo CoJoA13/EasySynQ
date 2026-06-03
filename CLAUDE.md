@@ -253,21 +253,54 @@ Docker stack):**
   **169 unit + 28 mirror/render/verify integration green** (the 5 `pg_dump`-absent backup tests stay environmental, green
   on CI).
 
-**Next slice: S9c — process IA + the by-process mirror index** (land `process`/`process_edge`/`process_link` +
-`GET /processes(/map)`, and rebuild the by-process secondary mirror index — needs `process_link`; requires minimal
-`org_role`/`supplier` FK targets, and couples to **S8e** = the deferred wizard Step 8 QMS scope/process-map seed that
-populates SEED process nodes). Then **S10/S11** (search/reporting · the Compliance Checklist · backup/restore-CLI
-hardening + the exit slice). The gate registry + latch extend by just appending gates. **Deferred (S9c / S8e / S10 / v1 /
-Part-11):** process IA (process/edge/link + endpoints + the by-process mirror index, needs `org_role`/`supplier`); the
-org-wide **Compliance Checklist** dashboard (reads `is_mandatory_star` + coverage, doc 13) + `filter[clause_refs][has]` on
-`GET /documents` + `clause_refs` in the list serializer (S10); the web clause-spine nav + mapping UI; wizard Step 8
-(scope/process-map, with S9c) + Step 9 (import → the v1 ingestion epic); custom-role create/update/delete + bulk-CSV invite
-+ the effective-permissions explorer (v1); in-app Keycloak admin-API provisioning (v1); MFA *enforcement* + `acr`/step-up
-(Part-11, D3); the §10.4 self-grant friction + `ADMIN_SELF_GRANTED_QMS_CAP` event (v1). **Deferred (S11 / v1.x, D-6 /
-R37):** operator-grade *live* WORM-aware restore + cutover, PITR/WAL, retention *pruning*, Keycloak realm export, archive
-envelope encryption, S3-destination, `easysynq restore`/`upgrade`. S6/S7 seams still open (Keycloak auth-event SPI,
-`/audit-events/export`, the **by-process** mirror index). Pre-existing hardening noted: `area_code` is unconstrained
-`Text` at the S3 create boundary.
+- **S9c — Process IA backend (graph + authoring + process-links)** ✅ — PR #32. The ISO 9001 Clause 4.4 process
+  dimension as the API/data foundation (the S9 clause-backend → S9b clause-mirror split, applied to processes).
+  **Owner forks:** **backend only** (the by-process secondary mirror index → **S9d**, a separate filesystem surface that
+  reuses S9b's `_write_symlink` over `process_link`); **minimal real `org_role` + `supplier`** tables (RACI / outsourcing
+  FK targets, **empty-but-present** per D-3 — no `/org-roles`/`/suppliers` authoring; `org_role` is RACI-not-authz, doc 02
+  §3.4) with the `process` FKs **nullable**. **`0019`**: `org_role` + `supplier` + `process` (self-nested `SEED`/`ACTIVE`
+  node; `pdca_phase` **reuses** the 0017 enum) + `process_edge` (`CHECK` no-self-loop + `UNIQUE` pair) + the audited
+  `process_link` M:N join (FK named explicitly — the 63-char limit, clause_mapping precedent) + `ALTER TYPE
+  audit_object_type ADD VALUE 'process'` + 7 `PROCESS_*` `event_type` values (the 0011-0017 additive pattern; Python
+  members too). **No seed migration, no `storage_config`/mirror change, no web; `alembic check` clean** (all 5 models
+  registered, names matched; verified up↔down↔check on a throwaway PG16). **`api/processes.py`**: `GET /processes(/{id})
+  (/map)` (`process.read`, **default SYSTEM scope** — the `GET /clauses` shape) + `POST`/`PATCH /processes` + `POST`/
+  `DELETE /processes/{id}/edges` (`process.create` SYSTEM / `process.manage` + `_process_scope`); the **SEED→ACTIVE
+  one-way ratchet** (`ACTIVE→SEED` → 409 `invalid_state_transition`; null-on-required → 422 not a 500); self-loop/dup 409
+  (+ `IntegrityError` backstops); `_emit_process_event` (`object_type=process`). **Process-links** `POST`/`GET`/`DELETE
+  /documents/{id}/process-links` in `api/documents.py` clone the clause-mappings shape (gate `document.manage_metadata`;
+  `PROCESS_LINKED`/`UNLINKED` **reuse `object_type=document`** keyed to the doc — the S9 precedent). **Authz reality (the
+  decisive point):** `process.create`/`assign_owner` are **seeded but held by no role** (override-until-UI, the
+  `document.export` precedent); the seeded `process.read/manage` grants are PROCESS-scoped with an unsubstituted
+  `:assignment_process` placeholder that matches **no concrete process** → S9c authoring rides on **SYSTEM overrides**,
+  and a negative test documents the deferral (concrete per-process authoring lands with owner-assignment). `org_role` is
+  never wired to the PDP/PEP. **No web; openapi not regenerated** (the S8b2-S9b precedent). Adversarially **designed** (a
+  Plan-agent pressure-test caught the PROCESS-scope dead-end, the 64-char FK, the audit-object_type choice, the
+  `alembic check` discipline up front) and **reviewed** (5 lenses → per-finding verify; **7 of 9 confirmed + folded** —
+  the real bug was the PATCH-null 500→422; rest defense-in-depth/tests; 2 refuted soundly). Deferred as
+  consistent-with-clause-precedent / systemic / moot-under-D1: repo by-id helpers fetch-then-handler-validate (the
+  `get_clause` pattern); a DB-level `process_link` org-consistency constraint (`clause_mapping` has the same shape).
+  Proofs: 4 unit (enum values + new audit members) + 19 integration (create/dup/concurrent-race/validations · the
+  SEED→ACTIVE machine + null-422 + active-edit · edges self-loop/dup/missing/delete · reads+map+403 · the **PROCESS-scope
+  deferral 403 + concrete-binding 200** · process-link map/unmap/dup/422/403 + **cross-org-422** [seeds a throwaway 2nd
+  org, cleaned up in `finally` so `test_setup`'s `Organization.scalar_one` stays valid]). **177 unit + the
+  process/clause/documents integration green** (the 5 `pg_dump`-absent backup tests stay environmental, green on CI).
+
+**Next slice: S9d — the by-process secondary mirror index** (rebuild the mirror's `by-process/{name}/` parallel tree of
+relative symlinks into the real clause-tree doc folders now that `process_link` exists — `fetch_process_links` +
+`_placement_process_dirs` + a `build_tree` loop reusing S9b's `_write_symlink`; + `storage_config.mirror_layout`). Then
+**S10/S11** (search/reporting · the Compliance Checklist · backup/restore-CLI hardening + the exit slice). The gate
+registry + latch extend by just appending gates. **Deferred (S9d / S8e / S10 / v1 / Part-11):** the by-process mirror
+index (S9d); **owner-assignment** (`org_role_assignment` + concrete PROCESS-scope grants → real Process-Owner authoring) +
+`/org-roles`/`/suppliers` authoring (v1); the org-wide **Compliance Checklist** dashboard (reads `is_mandatory_star` +
+coverage, doc 13) + `filter[clause_refs][has]` on `GET /documents` + `clause_refs` in the list serializer (S10); the web
+clause-spine nav + mapping UI + the process-map UI; wizard Step 8 (scope/process-map seed → SEED nodes) + Step 9 (import →
+the v1 ingestion epic); custom-role create/update/delete + bulk-CSV invite + the effective-permissions explorer (v1);
+in-app Keycloak admin-API provisioning (v1); MFA *enforcement* + `acr`/step-up (Part-11, D3); the §10.4 self-grant
+friction + `ADMIN_SELF_GRANTED_QMS_CAP` event (v1). **Deferred (S11 / v1.x, D-6 / R37):** operator-grade *live* WORM-aware
+restore + cutover, PITR/WAL, retention *pruning*, Keycloak realm export, archive envelope encryption, S3-destination,
+`easysynq restore`/`upgrade`. S6/S7 seams still open (Keycloak auth-event SPI, `/audit-events/export`, the **by-process**
+mirror index). Pre-existing hardening noted: `area_code` is unconstrained `Text` at the S3 create boundary.
 
 ## Building the MVP (dev workflow)
 
@@ -353,9 +386,15 @@ envelope encryption, S3-destination, `easysynq restore`/`upgrade`. S6/S7 seams s
   ISO 9001:2015 clause spine (seeded by `0018`; **no operator action**). `GET /api/v1/clauses` lists it (gate
   `clauseMap.read`, held by QMS Owner + Internal Auditor — grant it via override for others until the clause-nav UI
   lands). A document must be mapped to **≥1 clause before `submit-review`** (else **422**) — map via
-  `POST /api/v1/documents/{id}/clause-mappings {clause_id}` (gate `document.manage_metadata`, in the Author bundle),
-  unmap via `DELETE …/clause-mappings/{clause_id}`. Both audited (`CLAUSE_MAPPED`/`CLAUSE_UNMAPPED`). The clause-spine
-  nav + mapping UI, the clause/process **mirror tree**, and **process IA** are deferred (S9b/web).
+  `POST /api/v1/documents/{id}/clause-mappings {clause_id}` (gate `document.manage_metadata`, held by the lifecycle
+  actors), unmap via `DELETE …/clause-mappings/{clause_id}`. Both audited (`CLAUSE_MAPPED`/`CLAUSE_UNMAPPED`). The
+  clause-spine nav + mapping UI are deferred (web).
+- **Process IA (S9c) — API/data only, no UI:** `GET /api/v1/processes(/{id})(/map)` read the Clause 4.4 process graph
+  (gate `process.read`, held at SYSTEM by QMS Owner + Internal Auditor). Authoring — `POST`/`PATCH /processes` (confirm
+  `SEED→ACTIVE`), `POST`/`DELETE /processes/{id}/edges`, and `POST`/`DELETE /documents/{id}/process-links` — is gated on
+  `process.create`/`process.manage` (the first **held by no seeded role** → grant via override until the role UI, like
+  `document.export`) and `document.manage_metadata` for links. `org_role`/`supplier` tables exist but have no authoring
+  endpoint yet (owner-assignment + supplier population are deferred). **The by-process mirror index is S9d.**
 - **Authz break-glass (`grant-role`):** still available to assign a seeded role directly, bypassing the wizard +
   PEP — `easysynq grant-role <keycloak-subject> ["Role Name"]` (default "System Administrator"; idempotent;
   JIT-creates the `app_user`; runs `easysynq_api.cli.grant_role` as the DB owner). Use it to recover a botched
