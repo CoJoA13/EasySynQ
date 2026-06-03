@@ -103,6 +103,16 @@ def _minio() -> Iterator[dict[str, str]]:
                 "Rule": {"DefaultRetention": {"Mode": "GOVERNANCE", "Days": 30}},
             },
         )
+        # S-rec-1: the records WORM bucket (captured record evidence promotes here, apart from the
+        # documents vault) — object-lock + GOVERNANCE default, mirroring the documents block.
+        client.create_bucket(Bucket="records", ObjectLockEnabledForBucket=True)
+        client.put_object_lock_configuration(
+            Bucket="records",
+            ObjectLockConfiguration={
+                "ObjectLockEnabled": "Enabled",
+                "Rule": {"DefaultRetention": {"Mode": "GOVERNANCE", "Days": 30}},
+            },
+        )
         client.create_bucket(Bucket="staging")  # plain bucket for presigned uploads
         client.create_bucket(Bucket="renditions")  # S7b derived watermarked PDFs (non-WORM)
         # S8b2 restore-test drill: a plain (NON-WORM) scratch bucket the drill copies blobs into +
@@ -152,6 +162,7 @@ async def app_under_test(
     monkeypatch.setenv("S3_ACCESS_KEY", _minio["access_key"])
     monkeypatch.setenv("S3_SECRET_KEY", _minio["secret_key"])
     monkeypatch.setenv("S3_BUCKET_DOCUMENTS", "documents")
+    monkeypatch.setenv("S3_BUCKET_RECORDS", "records")  # S-rec-1 records evidence WORM bucket
     monkeypatch.setenv("S3_BUCKET_AUDIT_CHECKPOINTS", "audit-checkpoints")
     monkeypatch.setenv("AUDIT_CHECKPOINT_SIGNING_KEY_PATH", str(tmp_path / "audit_ckpt.pem"))
     monkeypatch.setenv("VERIFY_TOKEN_SIGNING_KEY_PATH", str(tmp_path / "verify.pem"))  # S7c

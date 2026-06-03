@@ -24,7 +24,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..auth.dependencies import get_current_user
 from ..db.models._audit_enums import ActorType, AuditObjectType, EventType
 from ..db.models._signature_enums import SignatureMeaning
-from ..db.models._vault_enums import Classification, DocumentCurrentState, VersionState
+from ..db.models._vault_enums import (
+    Classification,
+    DocumentCurrentState,
+    DocumentKind,
+    VersionState,
+)
 from ..db.models.app_user import AppUser
 from ..db.models.audit_event import AuditEvent
 from ..db.models.clause import Clause
@@ -339,7 +344,9 @@ async def _load_document(
         ).scalar_one_or_none()
     else:
         doc = await vault_repo.get_document(session, raw_id)
-    if doc is None or doc.org_id != caller.org_id:
+    # kind-scoping (S-rec-1): a Record shares the documented_information PK + is Effective, so a
+    # record id would otherwise resolve here and let a document sub-resource operate on a record.
+    if doc is None or doc.org_id != caller.org_id or doc.kind != DocumentKind.DOCUMENT:
         raise ProblemException(status=404, code="not_found", title="Document not found")
     return doc
 
@@ -456,7 +463,13 @@ async def list_documents(
         (
             await session.execute(
                 select(DocumentedInformation)
-                .where(DocumentedInformation.org_id == caller.org_id, *filters)
+                # kind-scoping (S-rec-1): exclude Records (kind=RECORD) — they share the table + are
+                # Effective, so without this they would leak into the documents list.
+                .where(
+                    DocumentedInformation.org_id == caller.org_id,
+                    DocumentedInformation.kind == DocumentKind.DOCUMENT,
+                    *filters,
+                )
                 .order_by(desc(DocumentedInformation.created_at))
                 .limit(min(limit, 100))
             )
