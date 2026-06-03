@@ -11,19 +11,20 @@ from __future__ import annotations
 
 import dataclasses
 import datetime
+import re
 import uuid
 from typing import Any
 
 from fastapi import APIRouter, Depends, Request, Response, status
 from pydantic import BaseModel
-from sqlalchemy import desc, select
+from sqlalchemy import ColumnElement, desc, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..auth.dependencies import get_current_user
 from ..db.models._audit_enums import ActorType, AuditObjectType, EventType
 from ..db.models._signature_enums import SignatureMeaning
-from ..db.models._vault_enums import VersionState
+from ..db.models._vault_enums import Classification, DocumentCurrentState, VersionState
 from ..db.models.app_user import AppUser
 from ..db.models.audit_event import AuditEvent
 from ..db.models.clause import Clause
@@ -107,8 +108,8 @@ class Release(BaseModel):
 # --- representations --------------------------------------------------------------------
 
 
-def _document(d: DocumentedInformation) -> dict[str, Any]:
-    return {
+def _document(d: DocumentedInformation, *, clause_refs: list[str] | None = None) -> dict[str, Any]:
+    out: dict[str, Any] = {
         "id": str(d.id),
         "identifier": d.identifier,
         "kind": d.kind.value,
@@ -126,6 +127,11 @@ def _document(d: DocumentedInformation) -> dict[str, Any]:
         ),
         "created_at": d.created_at.isoformat() if d.created_at else None,
     }
+    # clause_refs (S10, doc 15 §2.1): the mapped clause numbers, derived from clause_mapping (never
+    # a denormalized column — D2). Omitted unless the handler supplies it (batch-loaded per page).
+    if clause_refs is not None:
+        out["clause_refs"] = clause_refs
+    return out
 
 
 def _version(v: DocumentVersion) -> dict[str, Any]:
@@ -360,18 +366,97 @@ _print = require("document.print_controlled", async_scope_resolver=_document_sco
 # --- documents --------------------------------------------------------------------------
 
 
+# --- GET /documents list filtering (S10, doc 15 §3.2 bracketed grammar) -------------------
+# Only these (field, op) pairs are accepted; anything else matching filter[…][…] → 400
+# unknown_filter (doc 15 §3.2). The list still ROW-FILTERS by document.read in Python (§9.3) — these
+# SQL filters just narrow the candidate set first; ``limit`` remains a pre-authz cap (since S3).
+_FILTER_KEY_RE = re.compile(r"^filter\[([^\]]+)\]\[([^\]]+)\]$")
+_FILTER_ALLOW: frozenset[tuple[str, str]] = frozenset(
+    {
+        ("clause_refs", "has"),
+        ("current_state", "eq"),
+        ("document_type", "eq"),
+        ("owner_user_id", "eq"),
+        ("classification", "eq"),
+    }
+)
+
+
+def _filter_condition(field: str, value: str) -> ColumnElement[bool]:
+    """Build one SQL WHERE condition for an allow-listed filter; a bad enum/uuid value → 422."""
+    if field == "clause_refs":  # filter[clause_refs][has]=8.4 — exact clause-number membership
+        # Constrain to the document's OWN framework (clause.number is unique only per framework —
+        # uq_clause_framework_id_number): multi-standard safety (D3), matching the clause-map write
+        # guard + the checklist query. Today the map guard already keeps a doc's mappings
+        # framework-consistent, so this is defense-in-depth against a future second seeded standard.
+        return (
+            select(1)
+            .select_from(ClauseMapping)
+            .join(Clause, ClauseMapping.clause_id == Clause.id)
+            .where(
+                ClauseMapping.documented_information_id == DocumentedInformation.id,
+                Clause.framework_id == DocumentedInformation.framework_id,
+                Clause.number == value,
+            )
+            .exists()
+        )
+    if field == "current_state":
+        try:
+            return DocumentedInformation.current_state == DocumentCurrentState(value)
+        except ValueError as exc:
+            raise ProblemException(
+                status=422, code="validation_error", title="Invalid current_state filter value"
+            ) from exc
+    if field == "classification":
+        try:
+            return DocumentedInformation.classification == Classification(value)
+        except ValueError as exc:
+            raise ProblemException(
+                status=422, code="validation_error", title="Invalid classification filter value"
+            ) from exc
+    # document_type / owner_user_id — UUID-valued
+    column = (
+        DocumentedInformation.document_type_id
+        if field == "document_type"
+        else DocumentedInformation.owner_user_id
+    )
+    try:
+        return column == uuid.UUID(value)
+    except ValueError as exc:
+        raise ProblemException(
+            status=422, code="validation_error", title=f"Invalid {field} filter value"
+        ) from exc
+
+
+def _parse_document_filters(request: Request) -> list[ColumnElement[bool]]:
+    conditions: list[ColumnElement[bool]] = []
+    for raw_key, value in request.query_params.multi_items():
+        match = _FILTER_KEY_RE.match(raw_key)
+        if match is None:
+            continue  # not a filter[…][…] param (e.g. limit) — ignored
+        field, op = match.group(1), match.group(2)
+        if (field, op) not in _FILTER_ALLOW:
+            raise ProblemException(
+                status=400, code="unknown_filter", title=f"Unknown filter: {raw_key}"
+            )
+        conditions.append(_filter_condition(field, value))
+    return conditions
+
+
 @router.get("/documents")
 async def list_documents(
+    request: Request,
     caller: AppUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
     limit: int = 50,
 ) -> list[dict[str, Any]]:
+    filters = _parse_document_filters(request)
     grants = await gather_grants(session, caller.id, caller.org_id, "document.read")
     docs = (
         (
             await session.execute(
                 select(DocumentedInformation)
-                .where(DocumentedInformation.org_id == caller.org_id)
+                .where(DocumentedInformation.org_id == caller.org_id, *filters)
                 .order_by(desc(DocumentedInformation.created_at))
                 .limit(min(limit, 100))
             )
@@ -389,7 +474,7 @@ async def list_documents(
         ):
             levels[dt.id] = dt.document_level.value
     ctx = RequestContext(now=datetime.datetime.now(datetime.UTC))
-    out: list[dict[str, Any]] = []
+    visible: list[DocumentedInformation] = []
     for d in docs:
         resource = ResourceContext(
             artifact_id=str(d.id),
@@ -397,8 +482,10 @@ async def list_documents(
             document_level=levels.get(d.document_type_id) if d.document_type_id else None,
         )
         if authorize(grants, "document.read", resource, ctx).allow:
-            out.append(_document(d))
-    return out
+            visible.append(d)
+    # clause_refs (S10): one batch join over the visible page (no N+1).
+    refs = await vault_repo.clause_numbers_for_docs(session, [d.id for d in visible])
+    return [_document(d, clause_refs=refs.get(d.id, [])) for d in visible]
 
 
 @router.post("/documents", status_code=status.HTTP_201_CREATED)
@@ -434,7 +521,8 @@ async def get_document_endpoint(
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
     doc = await _load_document(session, caller, document_id)
-    return _document(doc)
+    rows = await vault_repo.list_clause_mappings(session, doc.id)
+    return _document(doc, clause_refs=[c.number for _, c in rows])
 
 
 @router.patch("/documents/{document_id}")

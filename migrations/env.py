@@ -27,16 +27,24 @@ config.set_main_option("sqlalchemy.url", _DSN)
 target_metadata = Base.metadata
 
 
+# The full-text search index (slice S10) is a functional/expression GIN index created by the 0020
+# migration via raw DDL — it cannot be round-tripped through ``Base.metadata`` (PG normalizes the
+# ``to_tsvector('english', …)`` expression, so a modelled ``Index(text(...))`` never compares equal),
+# so like the audit partitions it is excluded from autogenerate / ``alembic check``.
+_MIGRATION_MANAGED_INDEXES = frozenset({"ix_documented_information_search_tsv"})
+
+
 def _include_object(
     obj: object, name: str | None, type_: str, reflected: bool, compare_to: object
 ) -> bool:
-    """Exclude the monthly ``audit_event_YYYY_MM`` child partitions (and their PG-named child
-    indexes) from autogenerate / ``alembic check``. They are created dynamically by the 0010
-    migration + the ``roll_partitions`` Beat job — never modelled in ``Base.metadata`` — so without
-    this filter ``alembic check`` would try to drop them. The parent ``audit_event`` (and its
-    explicitly-named ``brin_*`` / ``ix_*`` indexes) are NOT excluded, so column drift is still
-    caught (slice S6)."""
-    return not (name is not None and name.startswith("audit_event_"))
+    """Exclude objects that are created by migrations but never modelled in ``Base.metadata`` (so
+    ``alembic check`` would otherwise try to drop them): the monthly ``audit_event_YYYY_MM`` child
+    partitions + their PG-named child indexes (0010 + the ``roll_partitions`` Beat job, slice S6),
+    and the functional FTS GIN index (0020, slice S10). The parent ``audit_event`` and every modelled
+    table/index/column is still compared, so real schema drift is caught."""
+    if name is not None and name.startswith("audit_event_"):
+        return False
+    return not (type_ == "index" and name in _MIGRATION_MANAGED_INDEXES)
 
 
 def run_migrations_offline() -> None:
