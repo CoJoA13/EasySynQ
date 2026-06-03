@@ -286,12 +286,29 @@ Docker stack):**
   org, cleaned up in `finally` so `test_setup`'s `Organization.scalar_one` stays valid]). **177 unit + the
   process/clause/documents integration green** (the 5 `pg_dump`-absent backup tests stay environmental, green on CI).
 
-**Next slice: S9d — the by-process secondary mirror index** (rebuild the mirror's `by-process/{name}/` parallel tree of
-relative symlinks into the real clause-tree doc folders now that `process_link` exists — `fetch_process_links` +
-`_placement_process_dirs` + a `build_tree` loop reusing S9b's `_write_symlink`; + `storage_config.mirror_layout`). Then
-**S10/S11** (search/reporting · the Compliance Checklist · backup/restore-CLI hardening + the exit slice). The gate
-registry + latch extend by just appending gates. **Deferred (S9d / S8e / S10 / v1 / Part-11):** the by-process mirror
-index (S9d); **owner-assignment** (`org_role_assignment` + concrete PROCESS-scope grants → real Process-Owner authoring) +
+- **S9d — By-process secondary mirror index (doc 04 §10.3)** ✅ — PR #33. Now that S9c landed `process_link`, the mirror
+  gains the doc 04 §10.3 "secondary index by Process": a parallel **`current/by-process/{name}/`** tree of **relative
+  symlinks** into the same real clause-tree doc folders (bytes never duplicated), so a human can browse the disk by the
+  process a doc serves. **Completes the mirror epic for the IA's process dimension** (closes the S6/S7 by-process seam).
+  **Owner fork: always-on hybrid, NO `mirror_layout` column** — the index is cheap + there's no v1 UI to toggle it, so the
+  doc-14 `storage_config.mirror_layout` column lands later with its config surface. **Pure `services/vault/mirror.py` +
+  tests — no migration/schema/API/web (head stays `0019`):** reuses S9b's `_write_symlink` via `ProcessRef` +
+  `fetch_process_links` (the `fetch_clause_refs` twin, one batch query) + `_placement_process_dirs`
+  (`sorted({"by-process/{_safe(name)}"})`, deduped-by-safe-name) + a `build_tree` loop symlinking `doc_dir` from each
+  process folder (works whether `doc_dir` is under a clause or `_unmapped/`); `metadata.json` gains a name-sorted
+  `processes` array; the `MirrorSyncResult.symlinks` count already covers them. Adversarially reviewed (5 lenses →
+  per-finding verify; **0 of 3 confirmed** — placement/symlink/query/idempotency/spec lenses found nothing; the 3 refuted
+  were test-nits). Proofs: 8 unit (`_placement_process_dirs` single/multi/empty/safe-name-dedup + build-tree by-process
+  symlink resolves + clause-and-process share one real folder + manifest/metadata + unmapped-doc-with-process-link) + 2
+  integration (by-process symlink resolves + metadata; multi-process two symlinks + bytes-once, via a direct
+  `Process`+`ProcessLink` seed on an Effective doc). **181 unit + the mirror/render/verify integration green** (the 5
+  `pg_dump`-absent backup tests stay environmental, green on CI).
+
+**Next slice: S10 — search/reporting + the org-wide Compliance Checklist** (reads `is_mandatory_star` + `clause_mapping`
+coverage [doc 13] · `filter[clause_refs][has]` on `GET /documents` + `clause_refs` in the list serializer · faceted
+search). Then **S11** (backup/restore-CLI hardening + the exit slice). The gate registry + latch extend by just appending
+gates. **Deferred (S10 / S8e / v1 / Part-11):** the doc-14 `storage_config.mirror_layout` toggle (with its config UI);
+**owner-assignment** (`org_role_assignment` + concrete PROCESS-scope grants → real Process-Owner authoring) +
 `/org-roles`/`/suppliers` authoring (v1); the org-wide **Compliance Checklist** dashboard (reads `is_mandatory_star` +
 coverage, doc 13) + `filter[clause_refs][has]` on `GET /documents` + `clause_refs` in the list serializer (S10); the web
 clause-spine nav + mapping UI + the process-map UI; wizard Step 8 (scope/process-map seed → SEED nodes) + Step 9 (import →
@@ -299,8 +316,8 @@ the v1 ingestion epic); custom-role create/update/delete + bulk-CSV invite + the
 in-app Keycloak admin-API provisioning (v1); MFA *enforcement* + `acr`/step-up (Part-11, D3); the §10.4 self-grant
 friction + `ADMIN_SELF_GRANTED_QMS_CAP` event (v1). **Deferred (S11 / v1.x, D-6 / R37):** operator-grade *live* WORM-aware
 restore + cutover, PITR/WAL, retention *pruning*, Keycloak realm export, archive envelope encryption, S3-destination,
-`easysynq restore`/`upgrade`. S6/S7 seams still open (Keycloak auth-event SPI, `/audit-events/export`, the **by-process**
-mirror index). Pre-existing hardening noted: `area_code` is unconstrained `Text` at the S3 create boundary.
+`easysynq restore`/`upgrade`. S6/S7 seams still open (Keycloak auth-event SPI, `/audit-events/export`). Pre-existing
+hardening noted: `area_code` is unconstrained `Text` at the S3 create boundary.
 
 ## Building the MVP (dev workflow)
 
@@ -394,7 +411,9 @@ mirror index). Pre-existing hardening noted: `area_code` is unconstrained `Text`
   `SEED→ACTIVE`), `POST`/`DELETE /processes/{id}/edges`, and `POST`/`DELETE /documents/{id}/process-links` — is gated on
   `process.create`/`process.manage` (the first **held by no seeded role** → grant via override until the role UI, like
   `document.export`) and `document.manage_metadata` for links. `org_role`/`supplier` tables exist but have no authoring
-  endpoint yet (owner-assignment + supplier population are deferred). **The by-process mirror index is S9d.**
+  endpoint yet (owner-assignment + supplier population are deferred). **S9d** then mirrors the links: a process-linked
+  Effective doc shows up under `${MIRROR_PATH}/current/by-process/{ProcessName}/` (relative symlinks into the clause tree;
+  plain `mirror sync` builds it).
 - **Authz break-glass (`grant-role`):** still available to assign a seeded role directly, bypassing the wizard +
   PEP — `easysynq grant-role <keycloak-subject> ["Role Name"]` (default "System Administrator"; idempotent;
   JIT-creates the `app_user`; runs `easysynq_api.cli.grant_role` as the DB owner). Use it to recover a botched
