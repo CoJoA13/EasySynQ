@@ -45,6 +45,19 @@ tags:
       check-in cycle, break-lock, and version reads. Content I/O is presigned (never proxied);
       check-in is content-addressed (identical bytes create no new version) and requires a
       change reason + significance (INV-3).
+  - name: clauses
+    description: >-
+      The ISO 9001:2015 clause spine (slice S9) — read-only reference data (INSERT-by-seed only,
+      no write surface) — and the M:N document↔clause mapping. Reading the spine needs
+      clauseMap.read; the per-document mapping sub-resources (under /documents/{id}) need
+      document.read (list) / document.manage_metadata (map, unmap). A document must carry ≥1
+      clause mapping before submit-review.
+  - name: processes
+    description: >-
+      The ISO 9001 Clause 4.4 process landscape (slice S9c) — the process graph (nodes + edges)
+      and the M:N document↔process link. Reads need process.read (default SYSTEM scope); authoring
+      needs process.create (create) / process.manage (update, edges); the per-document
+      process-link sub-resources (under /documents/{id}) need document.manage_metadata.
   - name: audit
     description: >-
       The append-only, hash-chained audit trail (read-only). No POST/PATCH/DELETE ever —
@@ -765,6 +778,118 @@ paths:
         "403": { $ref: "#/components/responses/ProblemResponse" }
         "404": { $ref: "#/components/responses/ProblemResponse" }
 
+  /documents/{document_id}/clause-mappings:
+    parameters:
+      - { name: document_id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [clauses]
+      operationId: listClauseMappings
+      summary: The document's clause mappings. Needs document.read.
+      responses:
+        "200":
+          description: The document↔clause mappings.
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/ClauseMapping" } }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+    post:
+      tags: [clauses]
+      operationId: mapClause
+      summary: Map the document to a clause of its own framework. Needs document.manage_metadata.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ClauseMappingCreate" }
+      responses:
+        "201":
+          description: The created mapping.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ClauseMapping" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409":
+          description: The clause is already mapped to this document (conflict).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "422":
+          description: The clause belongs to a different framework (validation_error, framework_mismatch).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  /documents/{document_id}/clause-mappings/{clause_id}:
+    delete:
+      tags: [clauses]
+      operationId: unmapClause
+      summary: Remove a clause mapping. Needs document.manage_metadata.
+      parameters:
+        - { name: document_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: clause_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "204": { description: Unmapped. }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+
+  /documents/{document_id}/process-links:
+    parameters:
+      - { name: document_id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [processes]
+      operationId: listProcessLinks
+      summary: The document's process links. Needs document.read.
+      responses:
+        "200":
+          description: The document↔process links.
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/ProcessLink" } }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+    post:
+      tags: [processes]
+      operationId: linkProcess
+      summary: Link the document to a process. Needs document.manage_metadata.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ProcessLinkCreate" }
+      responses:
+        "201":
+          description: The created link.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProcessLink" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409":
+          description: The process is already linked to this document (conflict).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "422":
+          description: The referenced process does not exist (validation_error).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  /documents/{document_id}/process-links/{process_id}:
+    delete:
+      tags: [processes]
+      operationId: unlinkProcess
+      summary: Remove a process link. Needs document.manage_metadata.
+      parameters:
+        - { name: document_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: process_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "204": { description: Unlinked. }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+
   /documents/{document_id}/checkout:
     post:
       tags: [documents]
@@ -1118,6 +1243,161 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/VersionDownload" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+
+  /clauses:
+    get:
+      tags: [clauses]
+      operationId: listClauses
+      summary: The ISO clause spine (flat, ordered by clause number; each row carries parent_id). Needs clauseMap.read.
+      parameters:
+        - { name: framework, in: query, required: false, schema: { type: string, default: "iso9001:2015" }, description: "Framework code; defaults to the org's iso9001:2015." }
+      responses:
+        "200":
+          description: The clause catalog.
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/Clause" } }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+
+  /processes:
+    get:
+      tags: [processes]
+      operationId: listProcesses
+      summary: The org's process nodes (default SYSTEM scope). Needs process.read.
+      responses:
+        "200":
+          description: The process nodes.
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/Process" } }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+    post:
+      tags: [processes]
+      operationId: createProcess
+      summary: Create a SEED process node. Needs process.create (seeded but held by no role → grant via override until the role UI).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ProcessCreate" }
+      responses:
+        "201":
+          description: The created process (state=SEED).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Process" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "409":
+          description: A process with that name already exists (conflict).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "422":
+          description: A referenced parent/owner/supplier is missing, or an outsourced process names no supplier (validation_error).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  /processes/map:
+    get:
+      tags: [processes]
+      operationId: getProcessMap
+      summary: The process graph as {nodes, edges}. Needs process.read.
+      responses:
+        "200":
+          description: The process landscape.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProcessMap" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+
+  /processes/{process_id}:
+    parameters:
+      - { name: process_id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [processes]
+      operationId: getProcess
+      summary: A single process node. Needs process.read.
+      responses:
+        "200":
+          description: The process.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Process" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+    patch:
+      tags: [processes]
+      operationId: updateProcess
+      summary: Edit a process; confirm SEED→ACTIVE (a one-way ratchet). Needs process.manage.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ProcessUpdate" }
+      responses:
+        "200":
+          description: The updated process.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Process" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409":
+          description: An illegal state transition (e.g. ACTIVE→SEED) or a duplicate name (invalid_state_transition / conflict).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "422":
+          description: A null on a non-nullable field, or a missing owner_org_role (validation_error).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  /processes/{process_id}/edges:
+    post:
+      tags: [processes]
+      operationId: addProcessEdge
+      summary: Add a directed edge from this process to another. Needs process.manage.
+      parameters:
+        - { name: process_id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/EdgeCreate" }
+      responses:
+        "201":
+          description: The created edge.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProcessEdge" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409":
+          description: A self-loop or a duplicate edge (conflict).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "422":
+          description: The target process does not exist (validation_error).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  /processes/{process_id}/edges/{edge_id}:
+    delete:
+      tags: [processes]
+      operationId: removeProcessEdge
+      summary: Remove an edge from this process. Needs process.manage.
+      parameters:
+        - { name: process_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: edge_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "204": { description: Removed. }
         "403": { $ref: "#/components/responses/ProblemResponse" }
         "404": { $ref: "#/components/responses/ProblemResponse" }
 
@@ -1832,6 +2112,134 @@ components:
           enum: [controlled_copy, source]
           description: "controlled_copy = the watermarked PDF rendition; source = no controlled rendition yet (rendering or R26)."
         sha256: { type: string }
+
+    Clause:
+      type: object
+      additionalProperties: false
+      required: [id, framework_id, number, title, intent_text, is_mandatory_star, pdca_phase, requirement_node]
+      properties:
+        id: { type: string, format: uuid }
+        framework_id: { type: string, format: uuid }
+        number: { type: string, example: "8.5.6" }
+        parent_id: { type: [string, "null"], format: uuid }
+        title: { type: string }
+        intent_text: { type: string }
+        is_mandatory_star: { type: boolean, description: "A ★ clause demanding its own documented information (doc 02 §2.1, R30; e.g. 8.5.6)." }
+        pdca_phase: { type: string, enum: [PLAN, DO, CHECK, ACT] }
+        requirement_node: { type: boolean }
+
+    ClauseMapping:
+      type: object
+      additionalProperties: false
+      required: [id, document_id, clause_id, clause_number, clause_title, is_requirement_level, framework_id]
+      properties:
+        id: { type: string, format: uuid }
+        document_id: { type: string, format: uuid }
+        clause_id: { type: string, format: uuid }
+        clause_number: { type: string, example: "8.5.6" }
+        clause_title: { type: string }
+        is_requirement_level: { type: boolean }
+        framework_id: { type: string, format: uuid }
+        created_at: { type: [string, "null"], format: date-time }
+
+    ClauseMappingCreate:
+      type: object
+      additionalProperties: false
+      required: [clause_id]
+      properties:
+        clause_id: { type: string, format: uuid }
+        is_requirement_level: { type: boolean, default: false }
+
+    Process:
+      type: object
+      additionalProperties: false
+      required: [id, org_id, name, pdca_phase, state, excluded, is_outsourced]
+      properties:
+        id: { type: string, format: uuid }
+        org_id: { type: string, format: uuid }
+        name: { type: string }
+        parent_id: { type: [string, "null"], format: uuid }
+        owner_org_role_id: { type: [string, "null"], format: uuid }
+        pdca_phase: { type: string, enum: [PLAN, DO, CHECK, ACT] }
+        criteria: { type: [string, "null"] }
+        state: { type: string, enum: [SEED, ACTIVE] }
+        excluded: { type: boolean }
+        is_outsourced: { type: boolean }
+        outsourced_supplier_id: { type: [string, "null"], format: uuid }
+        created_at: { type: [string, "null"], format: date-time }
+
+    ProcessCreate:
+      type: object
+      additionalProperties: false
+      required: [name, pdca_phase]
+      properties:
+        name: { type: string }
+        pdca_phase: { type: string, enum: [PLAN, DO, CHECK, ACT] }
+        parent_id: { type: [string, "null"], format: uuid }
+        criteria: { type: [string, "null"] }
+        is_outsourced: { type: boolean, default: false }
+        owner_org_role_id: { type: [string, "null"], format: uuid }
+        outsourced_supplier_id: { type: [string, "null"], format: uuid }
+
+    ProcessUpdate:
+      type: object
+      additionalProperties: false
+      description: "A PATCH; only the present fields change. state accepts only SEED→ACTIVE (a one-way ratchet)."
+      properties:
+        name: { type: [string, "null"] }
+        pdca_phase: { type: [string, "null"], enum: [PLAN, DO, CHECK, ACT, null] }
+        criteria: { type: [string, "null"] }
+        excluded: { type: [boolean, "null"] }
+        owner_org_role_id: { type: [string, "null"], format: uuid }
+        state: { type: [string, "null"], enum: [SEED, ACTIVE, null] }
+
+    ProcessEdge:
+      type: object
+      additionalProperties: false
+      required: [id, from_process_id, to_process_id]
+      properties:
+        id: { type: string, format: uuid }
+        from_process_id: { type: string, format: uuid }
+        to_process_id: { type: string, format: uuid }
+        io_label: { type: [string, "null"] }
+
+    EdgeCreate:
+      type: object
+      additionalProperties: false
+      required: [to_process_id]
+      properties:
+        to_process_id: { type: string, format: uuid }
+        io_label: { type: [string, "null"] }
+
+    ProcessMap:
+      type: object
+      additionalProperties: false
+      required: [nodes, edges]
+      properties:
+        nodes:
+          type: array
+          items: { $ref: "#/components/schemas/Process" }
+        edges:
+          type: array
+          items: { $ref: "#/components/schemas/ProcessEdge" }
+
+    ProcessLink:
+      type: object
+      additionalProperties: false
+      required: [id, document_id, process_id, process_name]
+      properties:
+        id: { type: string, format: uuid }
+        document_id: { type: string, format: uuid }
+        process_id: { type: string, format: uuid }
+        process_name: { type: string }
+        created_at: { type: [string, "null"], format: date-time }
+
+    ProcessLinkCreate:
+      type: object
+      additionalProperties: false
+      required: [process_id]
+      properties:
+        process_id: { type: string, format: uuid }
 
     Task:
       type: object
