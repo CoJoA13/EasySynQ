@@ -37,6 +37,7 @@ if [ ! -f "$ENV_FILE" ]; then
   S3_SECRET="$(gen_secret)"
   KEK="$(gen_secret)"
   BK="$(gen_secret)"
+  KC_ADMIN_PW="$(gen_secret)"
 
   set_kv POSTGRES_USER easysynq
   set_kv POSTGRES_PASSWORD "$PG_PW"
@@ -46,7 +47,9 @@ if [ ! -f "$ENV_FILE" ]; then
   set_kv S3_ACCESS_KEY "$S3_KEY"
   set_kv S3_SECRET_KEY "$S3_SECRET"
   set_kv APP_MASTER_KEK "$KEK"
-  set_kv BACKUP_ENCRYPTION_KEY "$BK"
+  set_kv BACKUP_ENCRYPTION_KEY "$BK"          # S11: seals the durable backup archive (AES-256-GCM)
+  set_kv KEYCLOAK_ADMIN_USER admin
+  set_kv KEYCLOAK_ADMIN_PASSWORD "$KC_ADMIN_PW"  # S11: also the worker's realm-export admin creds
   set_kv EASYSYNQ_PROFILE "$PROFILE"
 
   chmod 600 "$ENV_FILE"

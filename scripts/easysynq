@@ -16,10 +16,13 @@ usage: easysynq <command>
   backup restore-test
                     Run the backup->restore-into-scratch drill + integrity triad
                     (gate G-C); persists PASS/FAIL.                      [S8b2]
-  restore <file>    WORM-aware *live* restore into a fresh bucket; PITR<->blob
-                    aligned; audit-checkpoint-not-ahead check.           [S11]
+  restore <file> --confirm [--audit-checkpoint-ack]
+                    WORM-aware live restore to a VERIFIED TARGET (fresh bucket;
+                    blob-snapshot aligned; checkpoint-not-ahead check; chain
+                    re-verify). Leaves a standing target; cut over per runbook. [S11]
   mirror rebuild    Regenerate the read-only filesystem mirror from the vault. [S7]
-  upgrade           Backup -> migrate -> health-gate -> (rollback on failure). [S11]
+  upgrade --confirm Pre-backup -> migrate -> health-gate (pre-backup is the
+                    disaster safety net on a failed migration).             [S11]
   migrate           Run 'alembic upgrade head' inside the api image.
   grant-role <sub> ["Role"]
                     Break-glass: assign a seeded role (default "System
@@ -53,11 +56,17 @@ case "$cmd" in
     # gate G-C). Runs on the WORKER (it carries postgresql-client + the owner DATABASE_URL_SYNC).
     "${COMPOSE[@]}" run --rm worker uv run python -m easysynq_api.cli.backup "$@"
     ;;
-  restore|upgrade)
-    # Operator-grade WORM-aware *live* restore (R37) + upgrade land in S11 (see docs/18 §9). The
-    # S8b2 `backup restore-test` already proves recoverability into a scratch namespace (gate G-C).
-    echo "easysynq $cmd: not implemented yet — lands in slice S11 (see docs/18 §9)." >&2
-    exit 3
+  restore)
+    # S11 (R37): WORM-aware *live* restore to a VERIFIED TARGET (fresh bucket; blob-snapshot
+    # alignment; checkpoint-not-ahead tamper check; restored-chain re-verify). Leaves a standing,
+    # ready-to-cutover target — the production cutover is a documented operator step (runbook).
+    # Runs on the WORKER (OWNER DATABASE_URL_SYNC + postgresql-client).
+    "${COMPOSE[@]}" run --rm worker uv run python -m easysynq_api.cli.restore "$@"
+    ;;
+  upgrade)
+    # S11: pre-backup -> alembic upgrade head -> readiness health-gate (the pre-backup is the
+    # disaster safety net; a failed migration auto-rolls-back its txn). Runs on the WORKER.
+    "${COMPOSE[@]}" run --rm worker uv run python -m easysynq_api.cli.upgrade "$@"
     ;;
   mirror)
     "${COMPOSE[@]}" run --rm api uv run python -m easysynq_api.cli.mirror "$@"

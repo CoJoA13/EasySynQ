@@ -69,7 +69,8 @@ services:
     image: quay.io/keycloak/keycloak:26.0
     command: ["start-dev", "--import-realm"]
     environment:
-      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN:-admin}
+      # Same admin credential the worker uses for the S11 realm export (KEYCLOAK_ADMIN_USER/PASSWORD).
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN_USER:-admin}
       KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
       KC_HEALTH_ENABLED: "true"
       # Honor Caddy's X-Forwarded-* so tokens are issued for the browser-facing host.
@@ -169,6 +170,12 @@ services:
   proxy:
     image: caddy:2
     depends_on: [api, web]
+    environment:
+      # SITE_ADDRESS=:80 (dev, plain HTTP) or a domain (prod → automatic HTTPS). CADDY_TLS_DIRECTIVE
+      # is empty by default (ACME on a domain; no-op on :80); the air-gap overlay sets it to
+      # "tls internal" (the self-signed CA) since ACME is unreachable offline.
+      SITE_ADDRESS: ${SITE_ADDRESS:-:80}
+      CADDY_TLS_DIRECTIVE: ${CADDY_TLS_DIRECTIVE:-}
     ports:
       - "${HTTP_PORT:-80}:80"
       - "${HTTPS_PORT:-443}:443"

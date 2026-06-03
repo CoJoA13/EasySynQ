@@ -384,6 +384,15 @@ Integrity of the *bytes* (not just the metadata) is what makes EasySynQ's eviden
 
 Security response headers set at Caddy: strict **`Content-Security-Policy`** (nonce-based, `default-src 'self'`, no inline script except nonce, `frame-ancestors 'none'`), `X-Content-Type-Options: nosniff`, `Referrer-Policy: strict-origin-when-cross-origin`, `Permissions-Policy` (deny camera/mic/geolocation), and `Strict-Transport-Security`.
 
+> **MVP reconciliation (S11).** The MVP ships a **strict *static* CSP** scoped to the SPA route —
+> `default-src 'self'; script-src 'self'` (no inline/eval escape), `object-src 'none'`,
+> `base-uri 'self'`, `frame-ancestors 'none'`, with `style-src 'self' 'unsafe-inline'` for **style
+> only** (Mantine injects runtime inline `<style>`; never for script). A **per-request nonce-CSP**
+> (the wording above) requires build-time HTML nonce injection the static reverse-proxy cannot do, so
+> it is a **web-track v1 refinement**. TLS is Caddy's default **1.2 floor + modern AEAD ciphers** (an
+> explicit `tls` connection-policy block is invalid on the plain-HTTP dev listener); the air-gap
+> internal self-signed issuer is wired via `CADDY_TLS_DIRECTIVE`.
+
 ### 6.2 At rest
 
 | Store | Encryption | Notes |

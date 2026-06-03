@@ -112,6 +112,20 @@ class EventType(enum.Enum):
     CHAIN_VERIFY_PASS = "CHAIN_VERIFY_PASS"  # noqa: S105 — enum label, not a credential
     CHAIN_VERIFY_FAIL = "CHAIN_VERIFY_FAIL"
     CHECKPOINT_ANCHORED = "CHECKPOINT_ANCHORED"
+    # operator-grade restore + upgrade CLIs (S11, doc 18 §9, doc 12 §8.2 / R37) — the live
+    # WORM-aware restore-to-verified-target trail + the pre-backup/health-gated upgrade trail
+    # (object_type ``config``). RESTORE_CHECKPOINT_AHEAD is the tamper-suspected flag (the off-host
+    # checkpoint is ahead of the restored head); RESTORE_CHECKPOINT_ACK records the audited operator
+    # acknowledgement that proceeds past it. Added via ALTER TYPE … ADD VALUE in 0022 (the 0011-0021
+    # additive pattern; a from-scratch ``upgrade head`` rebuilds the type from EVENT_TYPE_VALUES).
+    RESTORE_STARTED = "RESTORE_STARTED"
+    RESTORE_VERIFIED = "RESTORE_VERIFIED"
+    RESTORE_FAILED = "RESTORE_FAILED"
+    RESTORE_CHECKPOINT_AHEAD = "RESTORE_CHECKPOINT_AHEAD"
+    RESTORE_CHECKPOINT_ACK = "RESTORE_CHECKPOINT_ACK"
+    UPGRADE_STARTED = "UPGRADE_STARTED"
+    UPGRADE_COMPLETED = "UPGRADE_COMPLETED"
+    UPGRADE_FAILED = "UPGRADE_FAILED"
 
 
 class CheckpointSinkKind(enum.Enum):

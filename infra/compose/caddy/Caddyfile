@@ -8,12 +8,20 @@
 {$SITE_ADDRESS::80} {
 	encode zstd gzip
 
+	# TLS: Caddy enforces a TLS 1.2 floor + modern AEAD-only ciphers BY DEFAULT (doc 12 §6.1 / doc 03
+	# §8) — no explicit policy is set here, because a `tls` connection-policy block is INVALID on the
+	# plain-HTTP dev :80 listener (Caddy refuses to adapt it). Production sets SITE_ADDRESS to a domain
+	# for automatic HTTPS (ACME). When ACME is unreachable (air-gap), the overlay sets
+	# CADDY_TLS_DIRECTIVE="tls internal" (Caddy's self-signed internal CA) — set SITE_ADDRESS to a
+	# hostname for it to take effect. Empty by default → no-op on :80.
+	{$CADDY_TLS_DIRECTIVE}
+
+	# Site-wide response headers safe on every route (doc 12 §6.1).
 	header {
 		Strict-Transport-Security "max-age=31536000; includeSubDomains"
 		X-Content-Type-Options "nosniff"
-		Referrer-Policy "no-referrer"
+		Referrer-Policy "strict-origin-when-cross-origin"
 		Permissions-Policy "geolocation=(), microphone=(), camera=()"
-		# A strict nonce-based Content-Security-Policy is finalized in slice S11.
 		-Server
 	}
 
@@ -31,8 +39,16 @@
 		reverse_proxy keycloak:8080
 	}
 
-	# Everything else is the SPA.
+	# Everything else is the SPA. The strict static Content-Security-Policy is scoped HERE (not
+	# global) so it never breaks the Keycloak admin console / login theme on the @keycloak routes
+	# (Keycloak serves its own assets + sets its own CSP). `script-src 'self'` has NO inline/eval
+	# escape (the Vite build emits no inline scripts); the OIDC redirect is a top-level, same-origin
+	# (through Caddy) navigation, so `connect-src 'self'` suffices. `style-src` allows 'unsafe-inline'
+	# ONLY for styles (never script) because Mantine injects runtime inline <style> for its theme — a
+	# strict style nonce needs SPA build/HTML nonce injection this static proxy can't do (a web-track
+	# v1 refinement, like a full per-request script nonce-CSP).
 	handle {
+		header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; frame-src 'none'; upgrade-insecure-requests"
 		reverse_proxy web:5173
 	}
 }

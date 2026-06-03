@@ -83,6 +83,18 @@ class Settings(BaseSettings):
     # (the per-org backup_policy.destination overrides). A mounted volume / NFS path in MVP
     # (S3-destination is S11/v1.x). The drill + pg_dump run as the OWNER role (database_url_sync).
     backup_path: str = "/var/lib/easysynq/backups"
+    # S11 archive envelope encryption (doc 12 §6.2): a dedicated AES-256-GCM key, SEPARATE custody
+    # from the app KEK — install.sh generates it into the 0600 .env (a stolen archive is useless
+    # without it). Unset/placeholder → the durable backup degrades to PLAINTEXT + a loud warning
+    # (the drill never encrypts — it is plaintext-internal). Never stored in the archive or VCS.
+    backup_encryption_key: str = "CHANGE_ME"
+    # S11 Keycloak realm export: the worker reaches Keycloak's Admin REST API on the INTERNAL
+    # network (the worker runs the api image — no kcadm.sh). Empty admin creds → the realm leg
+    # degrades to "absent" (a Keycloak outage must never fail the nightly backup). The realm name
+    # is parsed from oidc_issuer (…/realms/<name>).
+    keycloak_admin_url: str = "http://keycloak:8080"
+    keycloak_admin_user: str = ""
+    keycloak_admin_password: str = ""
 
     # S7c verify token: a dedicated Ed25519 key (separate custody from the audit-checkpoint key) +
     # the browser-reachable origin the footer QR/verify-link points at.

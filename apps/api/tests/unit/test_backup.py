@@ -51,12 +51,34 @@ def test_libpq_env_url_decodes_credentials() -> None:
 
 
 def test_build_manifest_lists_blob_snapshot() -> None:
+    """S11: manifest v2 carries the blob snapshot + the legs presence markers + encryption_key_ref;
+    the legs default to 'absent' and the key ref to None (an unencrypted/plain archive)."""
     blobs = [BlobRef(sha256="a" * 64, size_bytes=10, bucket="documents", object_key="a" * 64)]
     m = archive.build_manifest(blobs, config={"source": "restore-drill", "blob_count": 1})
-    assert m["manifest_version"] == 1
+    assert m["manifest_version"] == 2
     assert m["config"]["blob_count"] == 1
     assert m["blobs"][0]["sha256"] == "a" * 64
     assert m["blobs"][0]["bucket"] == "documents"
+    assert m["legs"] == {
+        "realm_export": "absent",
+        "config_snapshot": "absent",
+        "audit_checkpoint": "absent",
+    }
+    assert m["encryption_key_ref"] is None
+
+
+def test_build_manifest_records_legs_and_key_ref() -> None:
+    m = archive.build_manifest(
+        [],
+        config={"table_counts": {"organization": 1}},
+        realm_export="present",
+        config_snapshot="present",
+        audit_checkpoint="present",
+        encryption_key_ref="BACKUP_ENCRYPTION_KEY:sha256-v1",
+    )
+    assert m["legs"]["realm_export"] == "present"
+    assert m["config"]["table_counts"]["organization"] == 1
+    assert m["encryption_key_ref"] == "BACKUP_ENCRYPTION_KEY:sha256-v1"
 
 
 def test_pack_verify_unpack_roundtrip(tmp_path: Path) -> None:
@@ -98,5 +120,23 @@ def test_new_event_types_present() -> None:
     """0014's three ALTER TYPE ADD VALUEs must also be Python EventType members, or a from-scratch
     ``upgrade head`` (which rebuilds the type from EVENT_TYPE_VALUES) drops them → inserts crash."""
     for name in ("BACKUP_CONFIGURED", "RESTORE_TEST_PASSED", "RESTORE_TEST_FAILED"):
+        assert EventType(name).value == name
+        assert name in EVENT_TYPE_VALUES
+
+
+def test_s11_restore_upgrade_event_types_present() -> None:
+    """0022's eight ALTER TYPE ADD VALUEs (the restore + upgrade trail) must also be Python
+    EventType members so a from-scratch ``upgrade head`` matches a migrated DB (the 0011-0021
+    pattern)."""
+    for name in (
+        "RESTORE_STARTED",
+        "RESTORE_VERIFIED",
+        "RESTORE_FAILED",
+        "RESTORE_CHECKPOINT_AHEAD",
+        "RESTORE_CHECKPOINT_ACK",
+        "UPGRADE_STARTED",
+        "UPGRADE_COMPLETED",
+        "UPGRADE_FAILED",
+    ):
         assert EventType(name).value == name
         assert name in EVENT_TYPE_VALUES

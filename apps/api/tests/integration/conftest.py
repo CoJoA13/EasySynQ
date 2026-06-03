@@ -155,6 +155,10 @@ async def app_under_test(
     monkeypatch.setenv("S3_BUCKET_AUDIT_CHECKPOINTS", "audit-checkpoints")
     monkeypatch.setenv("AUDIT_CHECKPOINT_SIGNING_KEY_PATH", str(tmp_path / "audit_ckpt.pem"))
     monkeypatch.setenv("VERIFY_TOKEN_SIGNING_KEY_PATH", str(tmp_path / "verify.pem"))  # S7c
+    # S11: a real backup-encryption key so the durable archive exercises the AES-256-GCM path (the
+    # restore-into-scratch drill stays plaintext-internal regardless). Keycloak admin stays unset →
+    # the realm-export leg degrades to "absent" in CI (no Keycloak), as designed.
+    monkeypatch.setenv("BACKUP_ENCRYPTION_KEY", "ci-test-backup-encryption-key-0123456789")
     monkeypatch.setenv("REDIS_URL", _redis)
 
     from alembic import command
