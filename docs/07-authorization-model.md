@@ -282,7 +282,7 @@ EasySynQ ships these as a fast start; they are **not** authoritative and carry *
 | **Process Owner** | no | Diego | Scoped to `:process`: `document.create/edit/submit/manage_metadata`, `record.create/read`, `capa.create/record_rca/plan_action/capture_effectiveness`, `process.manage`, `kpi.record`, broad `read`. |
 | **Author** | no | Priya | Scoped to `:folder`/`:process`: `document.create/checkout/edit/submit`, `document.read_draft`, `record.create`, `changeRequest.create`. **No** `approve`/`release`. |
 | **Approver** | no | Ken | Scoped to `:doc_class`/`:process`: `document.review/approve`, `changeRequest.approve`. **No** `edit`/`submit` on the same artifact (SoD §7). |
-| **Internal Auditor** | no | Ingrid | Broad `*.read` incl. `document.read_obsolete`, `record.read`; `audit.create/conduct/close`, `finding.*`. **Hard-excludes** all `document.edit/approve/release` (independence — Vision §6.2). |
+| **Internal Auditor** | no | Ingrid | Broad `*.read` incl. `document.read_obsolete`, `record.read`, `clauseMap.read`, `report.read`, and `report.compliance_checklist.read` (the ★ mandatory-coverage view — **added to the bundle in S10** via migration `0021`, since the auditor is the natural consumer of coverage); `audit.create/conduct/close`, `finding.*`. **Hard-excludes** all `document.edit/approve/release` (independence — Vision §6.2). |
 | **Employee (Read-only)** | no | Sam | Scoped to `:area`: `document.read`, `document.print_controlled`, `document.acknowledge`, `record.read` (own/area), `process.read`. |
 | **External Auditor (Guest)** | no | Olsen | Guest principal; `document.read` + `record.read` + `report.read` **only within a bound Evidence Pack**, plus `EXPIRES_AT` and `IP/scope` constraints (§5.4, §9). |
 
