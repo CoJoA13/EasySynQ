@@ -1,8 +1,8 @@
 # EasySynQ — MVP Implementation Plan (for approval)
 
-> **Status: APPROVED (2026-05-31) and IN BUILD.** Slices **S0–S7 + S7b/c/d, S8a–S8d, and S9/S9b/S9c/S9d
-> are shipped to `main`** (each via PR, all CI green, validated on the real Docker stack), and the
-> **OpenAPI contract (`packages/contracts/openapi.yaml`) is caught up through S9c**. **All six MVP
+> **Status: APPROVED (2026-05-31) and IN BUILD.** Slices **S0–S7 + S7b/c/d, S8a–S8d, S9/S9b/S9c/S9d, and
+> S10 are shipped to `main`** (each via PR, all CI green, validated on the real Docker stack), and the
+> **OpenAPI contract (`packages/contracts/openapi.yaml`) is caught up through S10**. **All six MVP
 > acceptance proofs are in; the mirror epic (S7/S7b–d/S9b/S9d) and both IA backends (clause + process)
 > are complete.** In brief: **S7/S7b/c/d** = the read-only Effective-only filesystem mirror (AC#2,
 > symlink-repoint atomic swap) + watermarked-PDF rendering (Gotenberg + a deterministic reportlab/pypdf
@@ -11,9 +11,12 @@
 > org / G-B WORM-verify / G-C backup→restore-into-scratch drill [AC#5] / G-D auth-config) + the Users &
 > Roles admin; **S9/S9b/c/d** = the ISO 9001:2015 clause spine + `clause_mapping` + the submit-≥1-clause
 > gate, the §10.3 clause-aligned mirror tree, the Clause 4.4 process IA backend, and the by-process mirror
-> index. **Next: S10 (search/reporting + the org-wide Compliance Checklist), then S11 (backup/restore-CLI
-> hardening + the exit slice).** Migration head `0019` (next `0020`). The drift scan / quarantine /
-> `MIRROR_DRIFT_DETECTED` alarm stay **v1** (D-6).
+> index; **S10** = the org-wide **Compliance Checklist** (`GET /reports/compliance-checklist`, ★ coverage
+> COVERED/PARTIAL/GAP) + Postgres-FTS **`/search`** + `/search/suggest` behind an `Indexer` seam (OpenSearch
+> a v1 drop-in, R34; Effective-only, filter-not-403) + `clause_refs`/bracketed filters on `GET /documents`
+> + the audit-read-API-has-no-write-verbs proof (co-proves AC#6) — backend only, no web. **Next: S11
+> (backup/restore-CLI hardening + the exit slice).** Migration head `0021` (next `0022`). The drift scan /
+> quarantine / `MIRROR_DRIFT_DETECTED` alarm stay **v1** (D-6).
 >
 > This document is the build guide; the
 > Decisions Register remains authoritative where they differ, and a few canon reconciliations were made during the
