@@ -325,6 +325,8 @@ flowchart TD
 
 **On completion:** Keycloak realm/identity-provider config is written and exported (so it is captured by backups); gate **G-D** green. Audit: `AUTH_CONFIGURED` (mode), `AUTH_TEST_LOGIN_OK`.
 
+> **Reconciliation (S8c).** EasySynQ always authenticates via Keycloak (OIDC); upstream federation (LDAP/OIDC/SAML) is configured *in Keycloak*. So G-D's "proven non-bootstrap login (live round-trip)" is implemented as: the `POST /setup/configure-auth` caller's **valid non-bootstrap JWT** (the endpoint runs inside the PEP; the bootstrap path authorizes via the install *secret* outside the PEP) **+ a live OIDC-issuer discovery reachability probe** (a misconfigured/unreachable issuer → 422 `auth_unavailable`, gate stays red — no false-PASS). The richer in-app Keycloak admin-API provisioning (account/password/TOTP create), a full federated popup round-trip, and **MFA enforcement** are v1 (MFA is a logged acknowledgement here; `acr`/step-up stays the reserved Part-11 seam, D3). Local break-glass login is never disabled, so the org cannot be locked out.
+
 ---
 
 ## 10. Step 6 — Organization Roles & Permissions (deferrable)
@@ -379,6 +381,8 @@ If Avery edits the `System Administrator` bundle (or their own overrides) to add
 3. Writes a distinct, high-visibility audit event `ADMIN_SELF_GRANTED_QMS_CAP` that surfaces on the Health dashboard and in audit exports.
 
 This makes crossing the Admin/QMS boundary *possible but never silent* — the principle is enforced by friction + traceability, not by a hard impossibility (because some tiny orgs legitimately need one person to wear both hats, knowingly).
+
+> **Deferral (S8d → v1).** The S8d Users & Roles admin ships the role/override management surface but **defers the §10.4-specific friction** (the blocking typed-justification confirm + the distinct `ADMIN_SELF_GRANTED_QMS_CAP` event) to v1. There is no silent hole in the interim: an admin self-grant of a content cap still goes through the **two-tier grant guard** (R35) and is **audited as `OVERRIDE_ADD`** (object_type=permission); only the extra friction + the dedicated high-visibility event are deferred. Adding the event needs a new `event_type` value (an additive-enum migration).
 
 ### 10.5 The permission-grant boundary — a two-tier model (reconciled per Decisions Register R35)
 
