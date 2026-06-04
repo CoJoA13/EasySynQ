@@ -33,12 +33,18 @@ invariant* rather than a discipline problem.
   See [`CLAUDE.md`](CLAUDE.md) for the per-slice detail and the v1/v1.x deferrals.
 
   Run it: `just up s`, then open **http://localhost** (dev login `demo` / `Demo-Password-1`).
-- **v1 phase: in progress** 🟡 — the first feature slice **S-rec-1** (records capture + evidence-linking + correction,
-  [`docs/06`](docs/06-records-and-evidence.md)) is on `main`: immutable upload capture (base + WORM-sealed evidence in
-  a dedicated `records` bucket + a `content_hash` seal), the `evidence_for_link` evidence-for sub-resource
-  (record→clause/process/document), `correction_of` (correct, don't change), `source_version_id` pinning (R21), and
-  **retention-policy-as-data** (a 5-tier resolver + the snapshot-at-capture ratchet). The disposition lifecycle + Beat
-  retention-sweep, Evidence Packs, and Mode-B structured-form capture are the next v1 slices. Migration head `0023`.
+- **v1 phase: in progress** 🟡 — the **Records & evidence** slice family ([`docs/06`](docs/06-records-and-evidence.md))
+  is shipping depth-first on `main`:
+  - **S-rec-1** (capture + evidence-linking + correction): immutable upload capture (base + WORM-sealed evidence in a
+    dedicated `records` bucket + a `content_hash` seal), the `evidence_for_link` evidence-for sub-resource
+    (record→clause/process/document), `correction_of` (correct, don't change), `source_version_id` pinning (R21), and
+    **retention-policy-as-data** (a 5-tier resolver + the snapshot-at-capture ratchet).
+  - **S-rec-2** (retention/disposition lifecycle): the disposition state machine + a daily Beat **retention sweep**
+    (auto-disposes low-risk policies, flags the rest for human approval), the `DISPOSED` **tombstone** (metadata +
+    audit survive the bytes), **legal hold**, and the R27 **dual-control WORM-destroy-under-legal-order** escape hatch
+    (two distinct authorizers, fail-closed physical purge, GDPR refused-with-reason logging).
+
+  Evidence Packs (UJ-7) and Mode-B structured-form capture are the next v1 records slices. Migration head `0024`.
 
 ## Repository layout
 

@@ -56,5 +56,11 @@ app.conf.update(
             "task": "easysynq.backup.run",
             "schedule": 86400.0,  # daily
         },
+        # S-rec-2: daily records retention sweep (doc 06 §5.3) — flips due ACTIVE records to
+        # DUE_FOR_REVIEW + auto-disposes low-risk (review_required=false) policies once WORM allows.
+        "records-retention-sweep": {
+            "task": "easysynq.records.retention_sweep",
+            "schedule": 86400.0,  # daily
+        },
     },
 )

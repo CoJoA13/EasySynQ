@@ -465,7 +465,12 @@ Documented evidence to be **retained** (`14 §5.5`, ISO 7.5.3). Records are **im
 | GET | `/records/{id}` | `record.read` | — | Metadata + `_links.download` + `content_hash`. |
 | GET | `/records/{id}/download` | `record.read` | — | Presigned GET to the immutable evidence blob. |
 | POST | `/records/{id}/correction` | `record.create` | ✓ | Create a successor record correcting this one (sets `correction_of`/`superseded_by_correction`). The original is never mutated. |
-| PATCH | `/records/{id}/disposition` | `record.dispose` | — | Advance `disposition_state` only (`ACTIVE→DUE_FOR_REVIEW→…→DISPOSED`); a `disposition_event` tombstone is written. **Blocked (`409`)** while `worm_lock_period` is unexpired or `legal_hold=true` (`14 §10`). |
+| PATCH | `/records/{id}/disposition` | `record.dispose` | — | Advance `disposition_state` only (`ACTIVE→DUE_FOR_REVIEW→…→DISPOSED`); a `disposition_event` tombstone is written. **Blocked (`409`)** while `worm_lock_period` is unexpired or `legal_hold=true` (the refusal is audited `RECORD_ERASURE_REFUSED`, R27) (`14 §10`). |
+| POST | `/records/{id}/legal-hold` | `record.dispose` | — | Place/release a legal hold (`{action, reason}`, reason mandatory) — overrides retention expiry (`06 §5.2`). |
+| GET / POST | `/records/{id}/worm-destroy-requests` | `record.read` / `record.dispose` | ✓ | The R27 dual-control destroy-under-legal-order — step 1 (`{legal_basis}`). One open request per record. |
+| POST | `/records/{id}/worm-destroy-requests/{req_id}/{approve\|cancel}` | `record.dispose` | — | Step 2 — a **distinct** second actor approves (governance-bypass purge, fail-closed) or cancels. `409 dual_control_same_actor` / `409 compliance_mode_denies_destroy`. |
+
+> **Records stay immutable** (`06 §1.3`): `PATCH /records/{id}/disposition` is the *only* PATCH on the records surface — a sanctioned state advance, not a content edit (the route-inventory proof whitelists it exactly as the evidence-link `DELETE` is whitelisted). Legal-hold + the dual-control destroy are POST sub-resources. There is no content PATCH/PUT and no content DELETE.
 
 ### 8.9a Complaints (`/complaints`)
 

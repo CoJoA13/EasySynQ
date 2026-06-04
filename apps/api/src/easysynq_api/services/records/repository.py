@@ -11,18 +11,22 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import asc, desc, select
+from sqlalchemy import and_, asc, desc, func, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...db.models._evidence_enums import EvidenceForTargetType
+from ...db.models._record_enums import RecordDispositionState
 from ...db.models._retention_enums import DispositionAction, RetentionBasis
 from ...db.models.blob import Blob
+from ...db.models.disposition_event import DispositionEvent
 from ...db.models.documented_information import DocumentedInformation
 from ...db.models.evidence_blob import EvidenceBlob
 from ...db.models.evidence_for_link import EvidenceForLink
 from ...db.models.record import Record
 from ...db.models.retention_policy import RetentionPolicy
+from ...db.models.storage_config import StorageConfig
+from ...db.models.worm_destroy_request import WormDestroyRequest
 
 SYSTEM_DEFAULT_POLICY_NAME = "System Default Retention"
 
@@ -215,6 +219,134 @@ async def list_evidence_links(session: AsyncSession, record_id: uuid.UUID) -> li
                 select(EvidenceForLink)
                 .where(EvidenceForLink.record_id == record_id)
                 .order_by(asc(EvidenceForLink.created_at))
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+
+# --- disposition (slice S-rec-2) ---------------------------------------------------------
+
+
+async def org_object_lock_mode(session: AsyncSession, org_id: uuid.UUID) -> str:
+    """The org's recorded object-lock mode (``GOVERNANCE`` | ``COMPLIANCE``); ``GOVERNANCE`` (the
+    D-7 default) when no ``storage_config`` row exists. Drives the R27 destroy bypass-vs-refuse."""
+    mode = await session.scalar(
+        select(StorageConfig.object_lock_mode).where(StorageConfig.org_id == org_id)
+    )
+    return mode or "GOVERNANCE"
+
+
+async def due_active_records(
+    session: AsyncSession, *, for_update: bool = True
+) -> list[tuple[Record, RetentionPolicy]]:
+    """The retention-sweep candidate set, not legal-held, with a known basis date and a
+    non-``RETAIN_PERMANENT`` policy (``PERMANENT`` durations never expire):
+
+    * ``ACTIVE`` records (flip to DUE_FOR_REVIEW when their clock has elapsed), and
+    * ``DUE_FOR_REVIEW`` + ``review_required=false`` records (the low-risk retry leg — a DESTROY
+      whose WORM lock had not yet expired on an earlier sweep). ``review_required=true`` DUE records
+      are excluded — they await human approval and must not be re-processed.
+
+    The caller computes ``retention_until`` in-app and keeps only the rows whose clock has elapsed.
+    ``FOR UPDATE SKIP LOCKED`` (of ``record`` only) reserves the batch so overlapping sweeps don't
+    double-process."""
+    stmt = (
+        select(Record, RetentionPolicy)
+        .join(RetentionPolicy, Record.retention_policy_id == RetentionPolicy.id)
+        .where(
+            Record.legal_hold.is_(False),
+            Record.retention_basis_date.is_not(None),
+            RetentionPolicy.disposition_action != DispositionAction.RETAIN_PERMANENT,
+            or_(
+                Record.disposition_state == RecordDispositionState.ACTIVE,
+                and_(
+                    Record.disposition_state == RecordDispositionState.DUE_FOR_REVIEW,
+                    RetentionPolicy.review_required.is_(False),
+                ),
+            ),
+        )
+    )
+    if for_update:
+        stmt = stmt.with_for_update(skip_locked=True, of=Record)
+    rows = (await session.execute(stmt)).all()
+    return [(r, p) for r, p in rows]
+
+
+async def blob_needed_by_other_live_record(
+    session: AsyncSession, blob_sha256: str, exclude_record_id: uuid.UUID
+) -> bool:
+    """``True`` if some OTHER non-``DISPOSED`` record still attaches this blob — so destroying its
+    bytes would orphan a live record's evidence. Records may share a records-bucket WORM blob (the
+    S-rec-1 dedup), so a DESTROY purges bytes only when this is ``False``; the disposed record keeps
+    its ``evidence_blob`` tombstone row regardless (the bytes simply 404 once gone)."""
+    count = await session.scalar(
+        select(func.count())
+        .select_from(EvidenceBlob)
+        .join(Record, EvidenceBlob.record_id == Record.id)
+        .where(
+            EvidenceBlob.blob_sha256 == blob_sha256,
+            EvidenceBlob.record_id != exclude_record_id,
+            Record.disposition_state != RecordDispositionState.DISPOSED,
+        )
+    )
+    return bool(count)
+
+
+async def list_disposition_events(
+    session: AsyncSession, record_id: uuid.UUID
+) -> list[DispositionEvent]:
+    return list(
+        (
+            await session.execute(
+                select(DispositionEvent)
+                .where(DispositionEvent.record_id == record_id)
+                .order_by(asc(DispositionEvent.executed_at))
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+
+async def open_worm_destroy_request(
+    session: AsyncSession, record_id: uuid.UUID
+) -> WormDestroyRequest | None:
+    """The single open (neither executed nor cancelled) destroy request for a record, if any (the
+    partial-unique index guarantees at most one)."""
+    return (
+        await session.execute(
+            select(WormDestroyRequest).where(
+                WormDestroyRequest.record_id == record_id,
+                WormDestroyRequest.executed_at.is_(None),
+                WormDestroyRequest.cancelled_at.is_(None),
+            )
+        )
+    ).scalar_one_or_none()
+
+
+async def get_worm_destroy_request(
+    session: AsyncSession, req_id: uuid.UUID, *, for_update: bool = False
+) -> WormDestroyRequest | None:
+    if for_update:
+        return (
+            await session.execute(
+                select(WormDestroyRequest).where(WormDestroyRequest.id == req_id).with_for_update()
+            )
+        ).scalar_one_or_none()
+    return await session.get(WormDestroyRequest, req_id)
+
+
+async def list_worm_destroy_requests(
+    session: AsyncSession, record_id: uuid.UUID
+) -> list[WormDestroyRequest]:
+    return list(
+        (
+            await session.execute(
+                select(WormDestroyRequest)
+                .where(WormDestroyRequest.record_id == record_id)
+                .order_by(asc(WormDestroyRequest.requested_at))
             )
         )
         .scalars()

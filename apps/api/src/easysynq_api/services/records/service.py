@@ -95,6 +95,35 @@ def emit_record_event(
     )
 
 
+def emit_record_event_system(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    event_type: EventType,
+    record_id: uuid.UUID,
+    *,
+    before: dict[str, Any] | None = None,
+    after: dict[str, Any] | None = None,
+) -> None:
+    """Append a *system*-actor record ``audit_event`` (actor_id NULL, actor_type=system) for the
+    Beat sweep's auto-transitions (the ``upgrade.py``/``backup.service`` system-actor precedent).
+    ``canonical_serialize`` already NULL-handles ``actor_id`` (doc 12 §4.3), so the S6 chain-linker
+    is unaffected. Same atomic-with-the-mutation contract as :func:`emit_record_event`."""
+    session.add(
+        AuditEvent(
+            org_id=org_id,
+            occurred_at=_now(),
+            actor_id=None,
+            actor_type=ActorType.system,
+            event_type=event_type,
+            object_type=AuditObjectType.record,
+            object_id=record_id,
+            before=before,
+            after=after,
+            request_id=_rid(),
+        )
+    )
+
+
 def _validation_error(field: str, code: str, message: str) -> ProblemException:
     return ProblemException(
         status=422,

@@ -27,11 +27,16 @@ config.set_main_option("sqlalchemy.url", _DSN)
 target_metadata = Base.metadata
 
 
-# The full-text search index (slice S10) is a functional/expression GIN index created by the 0020
-# migration via raw DDL — it cannot be round-tripped through ``Base.metadata`` (PG normalizes the
-# ``to_tsvector('english', …)`` expression, so a modelled ``Index(text(...))`` never compares equal),
-# so like the audit partitions it is excluded from autogenerate / ``alembic check``.
-_MIGRATION_MANAGED_INDEXES = frozenset({"ix_documented_information_search_tsv"})
+# Functional/expression + partial indexes created by migrations via raw DDL — they cannot be
+# round-tripped through ``Base.metadata`` (PG normalizes the expression/predicate, so a modelled
+# ``Index`` never compares equal), so like the audit partitions they are excluded from autogenerate /
+# ``alembic check``:
+#   * ``ix_documented_information_search_tsv`` — the FTS GIN index (0020, slice S10).
+#   * ``ix_worm_destroy_request_open`` — the "one open request per record" partial UNIQUE (0024,
+#     ``... WHERE executed_at IS NULL AND cancelled_at IS NULL``; slice S-rec-2).
+_MIGRATION_MANAGED_INDEXES = frozenset(
+    {"ix_documented_information_search_tsv", "ix_worm_destroy_request_open"}
+)
 
 
 def _include_object(

@@ -22,7 +22,8 @@ backends are complete; the doc-18 §12 exit checklist is closed. The design was 
 v1/v1.x residuals are listed at the end of this section.
 
 **v1 phase: STARTED.** The owner chose (AskUserQuestion) the **v1 feature** track → **Records & evidence
-(doc 06)** as the first slice (over the web track + the v1.x backend residuals). **Migration head is now `0023`.**
+(doc 06)** as the slice family (over the web track + the v1.x backend residuals); **S-rec-1** then **S-rec-2**
+shipped depth-first. **Migration head is now `0024`.**
 
 - **S-rec-1 — Records: capture + evidence-linking + correction** ✅ — PR #43. Turns the inert `record` scaffolding
   (the table/enums/`record.*` perms from 0008/0004 + the WORM `records` bucket from minio-init) into a working
@@ -49,11 +50,40 @@ v1/v1.x residuals are listed at the end of this section.
   one root cause: `_attach_evidence` only WORM-sealed on the fresh-upload branch, so the global-sha Blob dedup let a
   **non-WORM rendition** (or documents-bucket) blob back a record's "sealed" evidence → **fixed fail-closed** [reuse
   only an already-records-bucket-WORM blob, else 423] + a regression test; + the downgrade-FK guard + the enum-tuple
-  source). **230 unit + 14 records integration green**; `0023` round-trips up↔down↔check on PG16. **Deferred to later
-  v1 slices:** **S-rec-2** (disposition state machine + Beat retention-sweep + DISPOSED tombstone + dual-control
-  WORM-destroy [R27] + legal-hold), **S-rec-3** (Mode-B `form_template` structured capture), Evidence Packs (UJ-7),
-  the `/retention-policies` CRUD; then the rest of v1 (ingestion doc 09, workflows + notifications doc 10,
-  CAPA/audit/finding/complaint/NCR entities, the rest of doc-13).
+  source). **230 unit + 14 records integration green**; `0023` round-trips up↔down↔check on PG16.
+
+- **S-rec-2 — Records: retention/disposition lifecycle** ✅. Turns the inert disposition scaffolding (the
+  `RecordDispositionState` enum, `record.disposition_state`/`legal_hold` cols, the sweep index, the
+  `retention_policy.{disposition_action,review_required,worm_lock_period}` fields — all shipped dead in 0023) into a
+  working end-of-life subsystem (doc 06 §5; doc 14 §10; R5/R27). **Owner forks (AskUserQuestion):** full scope incl. R27
+  in **one PR** · DESTROY = **physically delete the WORM bytes, fail-closed** · legal-hold on **`record.dispose`**
+  (catalog CLOSED) · sweep **auto-disposes low-risk** (`review_required=false`). **Migration `0024`**: `disposition_event`
+  (immutable tombstone — doc-14 cols + the R27 `is_worm_destroy`/`requested_by`/`legal_basis` + nullable `policy_id`) +
+  `worm_destroy_request` (the dual-control two-step, state from nullable timestamps — the `dcr` R22 precedent — with a
+  `CHECK(approved_by<>requested_by)` + a **partial `UNIQUE(record_id) WHERE open`** authored as raw DDL + excluded in
+  `env.py` [the 0020 lesson]) + **9 additive `RECORD_*` `event_type`** values + **explicit `easysynq_app` GRANTs** on the
+  two tables (belt-and-suspenders over 0010's ALTER DEFAULT PRIVILEGES). **Pure domain**: `retention_until` (dependency-free
+  ISO-8601 duration parser, day-clamp, `PERMANENT`/None-basis→None) + a `legal_disposition_transition` table. **Service
+  `services/records/disposition.py`**: `advance_disposition` (PATCH state machine) · `place/release_legal_hold` ·
+  `request/approve/cancel_worm_destroy` (R27) · `sweep_due_records` (Beat). **Fail-closed, purge-FIRST** ordering (idempotent
+  `storage.purge_object` runs *before* the DISPOSED flip — never a tombstone over live bytes); a **pre-purge guard** logs
+  `RECORD_ERASURE_REFUSED` + 409 when blocked by unexpired WORM / legal_hold / COMPLIANCE (the GDPR refused-with-reason);
+  **dual-control** = `approver != requester` (409 + DB CHECK) + a `FOR UPDATE` re-check; only this path passes
+  `BypassGovernanceRetention` (GOVERNANCE-only). New `storage.purge_object` (lists + deletes every version + delete-marker,
+  off-loop). New **system-actor** `emit_record_event_system` (actor_id NULL — `canonical_serialize` already NULL-handles it,
+  the `upgrade.py`/`backup` precedent). **Beat** `easysynq.records.retention_sweep` (daily, on the non-owner `database_url`
+  role; `FOR UPDATE SKIP LOCKED`; per-record SAVEPOINTs; skips `RETAIN_PERMANENT`/null-basis/WORM-unexpired). **API** (all
+  under `/records`, **immutability preserved**): `GET`+`PATCH /disposition`, `POST /legal-hold`, `GET`+`POST
+  /worm-destroy-requests` + `…/{req_id}/{approve,cancel}`. The **route-inventory proof reframed** ("record *content*
+  immutable; the disposition state machine advances" — whitelists `PATCH /disposition` like the evidence-link DELETE).
+  Adversarially pressure-tested **before coding** (3-critic Workflow → folded: purge-first ordering, COMPLIANCE pre-check,
+  DB CHECK + `FOR UPDATE`, delete-marker handling, partial-index alembic exclusion, populated-DB downgrade deletes, the
+  shared-DB sweep test-isolation contract). **256 unit + 10 disposition integration green** (the 14 pg_dump-absent
+  backup/restore tests stay environmental, green on CI); `0024` round-trips up↔down↔check **+ a populated-DB downgrade** on
+  PG16; OpenAPI caught up in-PR (redocly green). **Deferred:** **S-rec-3** (Mode-B `form_template` structured capture),
+  Evidence Packs (UJ-7), the `/retention-policies` CRUD (its `retention.*` keys aren't in the closed catalog), the
+  `event:*` basis-date backfill (source HR/CAPA domains don't exist), ordinary creator≠disposer SoD; then the rest of v1
+  (ingestion doc 09, workflows + notifications doc 10, CAPA/audit/finding/complaint/NCR entities, the rest of doc-13).
 
 - **Specification** in `docs/` (00–17 + `decisions-register.md`) — complete, adversarially audited, reconciled
   (Register R1–R37 back-propagated). The Register is authoritative.
@@ -75,354 +105,42 @@ Docker stack):**
 - **S3** Vault (check-out → presigned CAS upload → immutable check-in; MinIO WORM + Redis lock; atomic `{TYPE}-{AREA}-{SEQ}` numbering) · **S4** Lifecycle **[AC#1]** (the doc FSM + the atomic SERIALIZABLE single-Effective cutover + the INV-1 partial-unique index) · **S5** Approval + SoD (`POST /tasks/{id}/decision` one-txn + append-only `signature_event` + the deny-wins SoD-1/2/3 gate).
 - **S6** Audit **[AC#6]** (append-only, monthly-partitioned, hash-chained `audit_event` behind DB **role separation** [non-owner `easysynq_app`] + the decoupled chain-linker + frozen `canonical_serialize` + the off-host checkpoint anchor) · **S7** Mirror **[AC#2]** (RO Effective-only filesystem mirror, atomic symlink-repoint swap, mounted `:ro`) + **S7b/c/d** (watermarked-PDF rendering via Gotenberg + a deterministic reportlab/pypdf §11.3 band · Ed25519 verify-token + QR + public `GET /verify` · the per-request export/print stamp).
 
-- **S8a — Setup spine (latch + bootstrap-of-trust + first admin + org profile + finalize)** ✅ — PR #16. The first-run
-  foundation (doc 08) that stands a fresh install up **self-service + latch-protected**, without the `grant-role` CLI.
-  An owner-approved **decomposition** of S8 (G-B WORM-verify, G-C/AC#5 backup+restore-drill CLI, G-D auth-config, wizard
-  steps 6-9, the client-side router, in-app Keycloak provisioning + MFA all deferred to **S8b/S8c**). **The 423 latch**
-  is an ASGI middleware in `create_app()`: `/api/v1/*` → 423 `setup_incomplete` while `setup_state != OPERATIONAL`, with
-  **boundary-anchored** exemptions (the `/setup` tree + exact `/auth/config`, `/me`, `/verify`, `/openapi.json`, `/docs`
-  — a `startswith`-collision review fix) so a future sibling route can't be silently un-latched; no cache (per-request
-  indexed PK lookup — isolation-safe; the conftest defaults the shared test DB to OPERATIONAL so non-setup tests aren't
-  latched). **Bootstrap-of-trust:** `easysynq setup mint-bootstrap` (a new `cli/setup.py`) stores a 256-bit single-use,
-  TTL'd, **salted-SHA256** secret on `system_config`; the **public** `POST /setup/bootstrap` (Keycloak-authenticated but
-  **outside the PEP** — the secret, not a grant, authorizes it) verifies it constant-time + grants the caller the seeded
-  System Administrator role → breaks the deny-by-default chicken-and-egg. Best-effort Redis rate-limit (5/15min, degrades
-  if Redis is down). `grant-role` stays **break-glass**. **Endpoints** (`api/setup.py`): `GET /setup/state` (public, SPA
-  routing), `GET /setup` (auth), `POST /setup/bootstrap`, `PATCH /setup/org-profile` + `POST /setup/finalize`
-  (`config.update`). An **extensible gate registry** (`services/setup/service.py GATES`): S8a checks **G-A** (admin) +
-  **G-E** (org `short_code != 'DEFAULT'`); finalize flips the one-way `UNINITIALIZED→IN_SETUP→OPERATIONAL` + emits
-  `SETUP_FINALIZED` (its `after` carries the full `{gate: bool}` snapshot — a `sorted(dict)`-drops-bools review fix).
-  Setup `audit_event` rows (object types `config`/`user`) commit atomically; `canonical_serialize` v1 untouched.
-  **Migration `0012`**: `ALTER TYPE event_type ADD VALUE` for the 4 setup events (the `0011` pattern; no-op downgrade) +
-  Python `EventType` members; `organization.timezone` (R8); the bootstrap columns; and it **seeds the never-before-created
-  `system_config` row** — `OPERATIONAL` iff a `role_assignment` already exists (so upgrading a **running** install isn't
-  bricked by the new latch), else `UNINITIALIZED`; downgrade deletes the seeded row (the org FK would block `0002`).
-  **Web (minimal, no router):** `App` branches on `/setup/state` — a Mantine `<Stepper>` wizard (sign-in + bootstrap
-  secret → org-profile form → finalize) vs the normal shell; a bearer-fetch helper; **no new deps**. Adversarially
-  reviewed (5 lenses → 15-agent verify); the `0012` OPERATIONAL-upgrade branch verified on a throwaway PG. Proofs:
-  secret mint/verify + EventType (unit); latch-423-until-operational, bootstrap-grants-admin+audits, wrong/replay/
-  expired/no-secret rejected, rate-limit-lockout, org-profile authz+validation, finalize-gates→OPERATIONAL+latch-lifts,
-  exemption-boundary, grant-role break-glass (integration). 131 unit + 84 integration.
+- **S8a–S8d — first-run setup + admin** ✅ (PRs #16/#18/#20/#22/#24): the **423 setup-latch** (ASGI middleware, boundary-anchored
+  exemptions) + **bootstrap-of-trust** (`easysynq setup mint-bootstrap` → a 256-bit salted single-use secret → public
+  `POST /setup/bootstrap` *outside* the PEP grants the first System Administrator, breaking the deny-by-default chicken-and-egg)
+  + the extensible **gate registry** (`services/setup/service.py GATES`: G-A admin · G-B WORM-probe · G-C backup→restore-drill
+  **[AC#5]** · G-D non-bootstrap-auth-proof · G-E org-profile) → the one-way `UNINITIALIZED→IN_SETUP→OPERATIONAL` finalize
+  (migrations `0012`–`0016` seed `system_config` OPERATIONAL-iff-`role_assignment`-exists so upgrades aren't bricked). Then
+  **Users & Roles admin** + invite/enable-disable (reuses the S2 authz-admin write API + R35 two-tier guard; last-admin
+  lock-out guard; `INVITED→ACTIVE` JIT reconcile). `grant-role` stays break-glass. A Mantine `<Stepper>` wizard fronts it;
+  S8c added the first `react-router-dom`.
 
-- **S8b — Setup gate G-B (WORM-verify) + `storage_config`** ✅ — PR #18. An owner-approved **split** of S8b (the
-  backup/restore CLI + the AC#5 restore-into-scratch drill + gate G-C are **S8b2** — disjoint risk profiles). Lands
-  gate **G-B** (doc 08 §7): **`storage.worm_probe`** PUTs a tiny probe to the object-locked `documents` bucket →
-  confirms a future `retain-until` → attempts to delete **that version** with no bypass and expects a **denial** (the
-  honest §7.2 proof — deletes the *version*, not a delete marker; a non-versioned/non-locked bucket → no VersionId →
-  **not verified**, so no false-PASS). Short boto3 timeouts + a guarded `put` so a missing/unreachable bucket is a clean
-  422, not a 500/hang (review fix). **`POST /api/v1/setup/verify-storage`** (gate `storage.manage`, latch-exempt) → PASS
-  upserts `storage_config` (`worm_verified_at` + the `object_lock_mode` choice) + emits `WORM_VERIFIED` + commits
-  (serialized on the `system_config` singleton lock — a review fix for the same-org check-then-insert race); FAIL → 422
-  `worm_not_enforced` (signal stays null → no gate false-pass). **D-7:** the object-lock mode is **recorded** (default
-  GOVERNANCE); COMPLIANCE is not plumbed (a hardened v1.x opt-in). `Gate("G-B", _gate_worm_verified)` appended to the
-  registry — finalize now requires **G-A + G-E + G-B** (live re-check, zero finalize-code change). **`0013`**: `ALTER
-  TYPE event_type ADD VALUE 'WORM_VERIFIED'` (+ Python member) + a **minimal** `storage_config` (id PK, org_id unique,
-  `worm_verified_at`, `object_lock_mode`; no seed — null reads as G-B-unsatisfied; no brick risk — upgraded OPERATIONAL
-  installs never re-finalize; doc-14's backup/bucket/mirror columns land in S8b2). **Web:** a "Storage" `<Stepper>` step
-  (GOVERNANCE/COMPLIANCE mode + a Verify button) between Organization and Finalize. Adversarially reviewed (4 lenses →
-  verify) — the probe lens hunted the dangerous **false-PASS** direction and all three findings independently confirmed
-  there is none; folded the concurrency lock + the guarded-probe-put/timeout + a re-run/UPDATE-in-place test. Proofs:
-  probe verifies the locked bucket + correctly reports plain `staging` as non-WORM, verify-storage sets G-B +
-  `WORM_VERIFIED` audit + requires `storage.manage` (403 else), finalize-blocked-on-G-B-then-passes, re-run UPDATEs in
-  place. 131 unit + 89 integration.
+- **S9/S9b/S9c/S9d — the two IA backends + the mirror tree** ✅ (PRs #27/#31/#32/#33): the read-only ISO 9001 **clause
+  spine** (the **83-clause / 20★** catalog in `db/seeds/iso9001_clauses.py`, drafted+adversarially-verified against doc 02)
+  + M:N `clause_mapping` + the headline **submit-needs-≥1-mapping gate** (`submit_review` → 422, counted on the DOCUMENT so
+  a T9 revision inherits mappings) via `0017`/`0018`; the **process graph** (`process`/`process_edge`/`process_link` +
+  empty-but-present `org_role`/`supplier` FK targets, SEED→ACTIVE one-way ratchet, `0019`); and the §10.3 mirror rebuilt
+  into the `{PLAN|DO|CHECK|ACT}/{NN-Name}/` **clause tree** + a `by-process/` secondary index (pure `services/vault/mirror.py`,
+  relative symlinks so real bytes live **once**, no migration — head stays `0019`). **Authz reality:** the seeded
+  `process.create`/`.read`/`.manage` grants reach no *concrete* process (an unsubstituted `:assignment_process`
+  placeholder), so authoring rides on **SYSTEM overrides** until owner-assignment (the `document.export` precedent).
+- **OpenAPI catch-up** ✅ (PR #35) — `packages/contracts/openapi.yaml` caught up through S9c (the `contracts` CI is
+  redocly-lint only — no codegen, server+web not generated from it); **document new endpoints in-PR going forward**.
 
-- **S8b2 — Setup gate G-C (backup/restore-into-scratch drill) + durable backup [AC#5]** ✅ — PR #20. The last blocking
-  setup gate + a named MVP acceptance proof: finalize is **blocked until a real backup→restore-into-scratch drill
-  PASSES** the integrity triad (**blob SHA-256 re-hash · per-table row-count parity · `document_version→blob` FK
-  check**); "configured but unverified" does **not** satisfy G-C (doc 08 §8, doc 18 §7). **Owner forks:** real
-  `pg_dump`→`pg_restore` (a faithful artifact round-trip, NOT a logical copy — the thing G-C exists to catch) ·
-  restore into a scratch **DATABASE** (pg_restore's natural unit; doc 08 §8.2's "temporary PG schema" **reconciled**
-  as "an isolated namespace", noted in `drill.py` + back-propagated to doc 08 §8.2) · **durable archive + drill** (a
-  real `easysynq backup` + nightly Beat, alongside the gating drill). `services/backup/`: `dsn` (SQLAlchemy URL→libpq
-  env, password via env not argv), `archive` (`pg_dump -Fc`/`pg_restore` subprocess + tar + `.sha256` pack/verify),
-  `drill` (scratch-DB createdb→`pg_restore`→teardown; blob copy into the **non-WORM** `restore-scratch` bucket under a
-  per-drill prefix; the triad on the **restored** copy; **race-free row-count parity** via `pg_export_snapshot()` +
-  `pg_dump --snapshot`; composable steps + an `after_restore` fault seam; **never raises** — a missing binary/crash is
-  an honest FAIL, never a 500), `service` (async orchestration: `LOCK_RESTORE_DRILL`=7710004, persist
-  `last_restore_test_result`, emit `RESTORE_TEST_*` + commit). Runs as the **OWNER** role (`sync_dsn`) — the
-  `easysynq_app` role can neither `pg_dump` the whole DB nor `CREATE DATABASE`. `Gate("G-C", _gate_restore_test_passed)`
-  appended to `GATES` (keys on `result=='PASS'`, not just `_at`) → finalize now needs **G-A+G-E+G-B+G-C**, zero
-  finalize-code change; the off-host audit anchor stays a **soft gate** (surfaced in `GET /setup` via S6's
-  `tamper_evidence_attested`; never blocks; R13). **`0014`**: `ALTER TYPE event_type ADD VALUE` ×3
-  (`BACKUP_CONFIGURED`/`RESTORE_TEST_PASSED`/`RESTORE_TEST_FAILED`, the 0012/0013 pattern; Python `EventType` members
-  added too) + `backup_policy` (doc 14 §2 columns; retention as **counts** 7/4/6; `wal_pitr_enabled` a recorded
-  forward-seam — `configure-backup` **rejects `true`** as D-6 scope). Endpoints (latch-exempt): `POST
-  /setup/configure-backup` (`backup.configure` + live destination writability check) + `POST /setup/run-restore-test`
-  (`restore.run`, enqueues the worker task — 202). `tasks/backup.py` + the nightly `easysynq.backup.run` Beat job +
-  `cli/backup.py` (`run`/`restore-test`) wired into `scripts/easysynq`. **Dockerfile**: `postgresql-client-16` via the
-  PGDG repo (matches `postgres:16`; build-time only → air-gapped *installs* unaffected). Compose: a `backup` volume on
-  the worker; minio-init + the integration conftest add the plain `restore-scratch` bucket (R37 — object-lock can't be
-  retro-added, never restore into the WORM vault bucket). **Web:** a "Backup" `<Stepper>` step (configure + run-restore-
-  test with poll-to-green) + the not-tamper-evident soft-gate warning. Adversarially reviewed (5 lenses → 24 raw → 14
-  verified; the false-PASS lens found no way for the drill to PASS without a real restore): folded the **headline
-  coverage gap** — the blob-dependent legs (re-hash + FK) were only vacuously exercised at 0-blob IN_SETUP, so added two
-  deterministic OPERATIONAL-state tests over a real Effective document (`test_drill_passes_over_real_blobs` asserts
-  `details.blobs ≥ 1`; `test_drill_fails_on_corrupted_restored_blob` proves the re-hash leg catches a corrupted restored
-  blob) + the WAL/PITR-reject test + the §8.2 deviation/skip docstrings. Also fixed a real bug review surfaced via the
-  full-suite (with prior tests' blobs): teardown's multi-delete `delete_objects` → MinIO `MissingContentMD5` → switched
-  to per-object `delete_object`. Proofs: `test_setup_finalize_requires_restore_pass` **[AC#5]** + negative
-  drill→FAIL→finalize-blocked, configure/run authz (403), destination/cron/wal-pitr validation, durable archive,
-  scratch teardown (no orphan DB/objects), real-blob PASS + corrupted-blob FAIL; archive-checksum + dsn + EventType
-  unit. **139 unit + 101 integration** (the real-drill path validated locally with `postgresql-client-16` + in CI).
-
-- **S8c — Setup gate G-D (auth-config + non-bootstrap login proof) + minimal client router** ✅ — PR #22. The **last
-  blocking** setup gate (doc 08 §9): finalize is blocked until an auth method is selected and a **non-bootstrap login is
-  proven** — "never strand the org on a misconfigured IdP". Once G-D lands the latch fully lifts (G-A+G-E+G-B+G-C+G-D →
-  OPERATIONAL). **Owner forks:** scope = G-D gate + minimal router (defer wizard steps 6–9 + Keycloak admin-API
-  provisioning + MFA *enforcement* → S8d) · proof = mode-routed live check + persisted attestation (mirrors G-B
-  `worm_probe` / G-C drill) · MFA = **logged acknowledgement only** (the `acr`/`/auth/step-up` enforcement seam stays a
-  no-op, Part-11 reserved per D3). **The proof, faithful to the Keycloak-brokered architecture:** the `configure-auth`
-  caller's **valid non-bootstrap JWT** (JWKS-validated by `get_current_user`; the bootstrap path authorizes via the
-  *secret* OUTSIDE the PEP) **+ a live OIDC-issuer discovery reachability probe** (`services/setup/auth_check.py` —
-  httpx, short timeout, **never raises**, type-guards a malformed IdP body → a clean 422 not a 500; mockable like
-  `worm_probe`). A failed probe → **422 `auth_unavailable`** + `AUTH_TEST_LOGIN_FAILED`, signal stays null (no
-  false-PASS). Upstream federation (LDAP/OIDC/SAML) is **Keycloak's** job (deferred); `auth_method` is recorded metadata;
-  local break-glass login is never disabled → the org can't be locked out. `Gate("G-D", _gate_auth_configured)` appended
-  to `GATES` (keys on `system_config.auth_test_login_ok is True`, not just `_at`) — zero finalize-code change.
-  `configure_auth` singleton-locks the `system_config` row + emits `AUTH_CONFIGURED` + `AUTH_TEST_LOGIN_OK` (mfa-ack +
-  break-glass ride in the audit `after`). **`0015`**: `ALTER TYPE event_type ADD VALUE` ×3
-  (`AUTH_CONFIGURED`/`AUTH_TEST_LOGIN_OK`/`AUTH_TEST_LOGIN_FAILED`, the 0011–0014 pattern; Python `EventType` members
-  added too) + 3 **nullable** `system_config` auth columns (no seed → null = G-D-unsatisfied; no brick). `POST
-  /setup/configure-auth` (`config.update`, latch-exempt). The `acr`/step-up seam is **untouched** (D3). **Web:** added
-  `react-router-dom` (`<BrowserRouter>` wraps `App`; routes `/setup` · `/` shell · `/admin` stub — `useAuth` stays at the
-  root so the OIDC `/?code&state` callback is processed before routing) + an **"Authentication"** wizard `<Stepper.Step>`
-  (method + MFA-ack + Verify) between Backup and Finalize. Adversarially reviewed (4 lenses → verify; the false-PASS /
-  lock-out lens confirmed neither risk exists) — folded the one real finding: the OIDC probe parsed the JSON body outside
-  the try/except (a malformed IdP → 500, not 422), now type-guarded + 2 unit tests. **CI runs no Keycloak** (JWKS stubbed)
-  — the probe is monkeypatched and the minted token is the non-bootstrap login proof; the live round-trip stays a manual
-  dev-stack proof. Proofs: `test_setup_finalize_requires_auth_proven` **[G-D]** + a negative (unreachable IdP → 422,
-  finalize blocked, `AUTH_TEST_LOGIN_FAILED`) + configure-auth authz (403) + bad-method (422); the probe parsing
-  (mismatch/missing-jwks/non-200/network-error/non-dict-body/non-string-issuer all FAIL) + `EventType` unit. **148 unit +
-  108 integration**.
-
-- **S8d — Users & Roles admin + user lifecycle (invite / enable-disable)** ✅ — PR #24. The first **post-finalize,
-  non-blocking** admin surface (doc 08 §10/§11) — makes the seeded roles + per-user grants manageable in-app (the
-  Avery→Mara hand-off), replacing the `grant-role` break-glass CLI as the only path. **Mostly web + reuse:** S2 already
-  shipped the entire authz-admin API incl. the WRITE paths (`POST/DELETE /users/{id}/roles` with the R35 two-tier guard,
-  `POST/DELETE /users/{id}/overrides`), all audited + epoch-bumped — **no new permission keys, no new authz concepts, no
-  schema columns** (`UserStatus` already has `INVITED`; `app_user.mfa_enrolled` already exists). **Owner forks:** scope =
-  Users & Roles admin + user lifecycle (invite/enable-disable); defer the doc-08 §10.4 self-grant friction → v1
-  (self-grants are already `OVERRIDE_ADD`-audited + two-tier-guarded), MFA = display `mfa_enrolled` only (enforcement
-  Part-11/D3), Keycloak provisioning = rely on JIT (in-app admin-API is v1), custom-role authoring + scope/process-map
-  (S9) + import (v1) deferred. **`api/users.py`** (new router): `GET /users` (roster + role names, `user.read`) +
-  `GET /users/{id}`; `POST /users` = **invite** (pre-create an `INVITED` `app_user` bound to an operator-supplied
-  Keycloak subject, `user.create`, `USER_CREATED` audit, 409 on dup); `PATCH /users/{id}` = **enable/disable**
-  (ACTIVE|DISABLED, `user.deactivate`, `USER_STATUS_CHANGED` audit) with a **last-admin lock-out guard** (409
-  `last_admin`, doc 08 §9.1 — refuses disabling the sole active System Administrator). All org-scoped + pre-commit-audited.
-  **`auth/dependencies.py`**: `get_current_user` reconciles an `INVITED` row → `ACTIVE` on first genuine login (JIT match
-  on `keycloak_subject`; never resurrects an inactive account). **`0016`**: `ALTER TYPE event_type ADD VALUE` ×2
-  (`USER_CREATED`/`USER_STATUS_CHANGED`, the 0011–0015 pattern; Python `EventType` members too); **no columns**. **Web:**
-  `react-router` nested routes under `/admin` → `AdminShell` (Users/Roles tabs + `Outlet`) + `UsersAdmin` (Mantine Table
-  roster + invite `Modal` + enable/disable + a per-user `Drawer`: assign/revoke seeded roles + add/remove SYSTEM-scoped
-  overrides via the reused S2 endpoints, surfacing `two_tier_violation`/`last_admin`) + `RolesAdmin` (read-only seeded
-  roles + grants); `lib/api` gains `DELETE` + 204 handling + `useMutation`. Adversarially reviewed (3 lenses incl. an
-  authz-bypass/lock-out hunter → per-finding verify; **0 confirmed of 1** — no false-PASS/lock-out/escalation path).
-  `openapi.yaml` deliberately not updated (matches S8b2/S8c; the `contracts` CI is redocly-lint only, the web client isn't
-  generated). Proofs: roster authz (403), invite + `USER_CREATED` + 409-dup + 403, the `INVITED→ACTIVE` reconciliation,
-  disable-blocks-then-reenable + `USER_STATUS_CHANGED` + 403, the last-admin guard (409), assign-seeded-role-visible-in-
-  roster end-to-end; the 2 `EventType` members unit. **149 unit + 111 integration**.
-
-- **S9 — Clause IA + `clause_mapping`** ✅ — PR #27. The ISO 9001:2015 clause spine + the M:N document↔clause mapping + the
-  lifecycle submit gate. **Owner-scoped to clause IA only** (process IA — `process`/`process_edge`/`process_link` +
-  endpoints — deferred to a follow-on/S8e to avoid the not-yet-built `org_role`/`supplier` FK targets; the mirror
-  §10.3 tree deferred to **S9b**; clause-mapping writes gated on the existing `document.manage_metadata`). **`0017`**
-  creates the read-only `clause` table (self-nested `parent_id`, `pdca_phase` enum, `is_mandatory_star`,
-  INSERT-by-seed-only — no `clause.edit` key) + the audited `clause_mapping` join (`org_id`+`framework_id` per C5;
-  `UNIQUE(documented_information_id, clause_id)`; the `documented_information_id` FK **named explicitly** — the
-  convention default is 64 chars > PG's 63 limit) + `ALTER TYPE event_type ADD VALUE 'CLAUSE_MAPPED'/'CLAUSE_UNMAPPED'`
-  (the 0011-0016 additive pattern; reuse `object_type=document` — the closed `AuditObjectType` gains no member).
-  **`0018`** seeds the **83-clause** ISO 9001:2015 catalog (the **20 ★ mandatory** rows = doc 02 §2.1 / **R30**, incl.
-  **8.5.6**; PDCA per §3.2 with clause 7 split PLAN/DO) from a **reviewable, unit-tested** data module
-  (`db/seeds/iso9001_clauses.py`) — **drafted + adversarially verified against doc 02** (a draft → 3-skeptic-lens →
-  reconcile workflow; two corrections: 7.5 is not a §2.1 ★ row, 5.1.1's official title is "General"); parent_id resolved
-  in a second pass. **The headline:** the S4 `# S9:` seam at `lifecycle.py` is filled — `submit_review` now **422
-  `validation_error`** when a document has **zero** clause mappings (counted on the DOCUMENT, so a revision T9 inherits
-  its mappings; fail-closed before any mutation). New `GET /clauses` (`clauseMap.read`, SYSTEM — doc 15 §8.4's `clause.read`
-  shorthand reconciled to the real seeded key) returns the spine flat + ordered by a numeric `string_to_array(number,'.')::int[]`
-  sort; flat sub-resources **`POST`/`GET`/`DELETE /documents/{id}/clause-mappings`** (`document.manage_metadata`/`document.read`)
-  with a multi-standard framework-match guard (422), dup-map 409 (+ `IntegrityError` race backstop), and in-txn
-  `CLAUSE_MAPPED`/`CLAUSE_UNMAPPED` audit (the `users._emit_user_event` pattern). **No new permission keys, no catalog
-  change, no web** (S9 is the API/data foundation). Shared test helper `_map_clause` (iso9001-scoped clause pick) wired
-  into `drive_to_approved` + 4 direct-submit sites so the gate doesn't break existing flows. Adversarially reviewed
-  (4 lenses → per-finding verify; 10 confirmed of 22, all folded) — incl. a **HIGH**: `0018` originally resolved the
-  framework via a `short_code='DEFAULT'` org join, but a finalized install renames `short_code` away (the G-E gate), so
-  `0018` (the first seed migration to run during an **upgrade of an already-finalized install**) would `NoResultFound` →
-  `alembic upgrade` fail (CI can't catch it — a fresh DB still has `DEFAULT`); fixed to resolve by the stable
-  `code='iso9001:2015'` + `scalar_one_or_none` skip (proven on a throwaway PG by renaming the org, then upgrading). Plus
-  the submit/unmap **TOCTOU** (unmap now `FOR UPDATE`-locks the doc row) + 4 test gaps (the T9 gate, the concurrent-dup
-  `IntegrityError` race, the audit-payload content, the default-`False` path). Proofs:
-  `test_submit_requires_clause_mapping` [S9 headline] (0-maps→422, then map→T2 200) + `test_t9_revision_submit_requires_
-  clause_mapping` (the T9 gate + revision-inherits-mappings) + GET-clauses-spine (hierarchy + ★ + PDCA) + clauseMap.read
-  403 + map/unmap-audited round-trip (before/after payloads) + dup-409 + concurrent-dup-race (201/409) +
-  cross-framework-422 + map-needs-manage_metadata-403 (integration); the frozen catalog (83/20★/8.5.6/PDCA/tree) +
-  `EventType` members (unit).
-  **156 unit + 120 integration** (the only locally-red tests are the 5 pre-existing `pg_dump`-absent backup-drill tests —
-  environmental, green on CI's `ubuntu-latest`).
-
-- **S9b — Clause-aligned mirror tree (doc 04 §10.3)** ✅ — PR #31. Rebuilds the flat S7 mirror into the
-  PLAN/DO/CHECK/ACT → top-level-clause tree now that `clause_mapping` exists (fills the `# S9:` seam at `mirror.py:21`).
-  **Owner forks:** scope = **mirror tree only** (process IA + the by-process secondary index deferred to **S9c** — the
-  `process`/`edge`/`link` + `org_role`/`supplier` FK targets don't exist, `process.create` is held by no seeded role, and
-  process rows only come from the deferred S8e wizard); placement = **symlink into every mapped clause** (real bytes
-  **once** under the *numerically*-lowest mapped clause, a **relative** symlink from every other mapped clause folder —
-  §10.3/§10.4 "without duplicating bytes"). **Phase rides on the mapped clause's own `pdca_phase`** (`documented_information`
-  has **no** `pdca_phase` column — doc 04 §6.1 says it should; S3 never added it), so the clause-7 split lands 7.2 →
-  `PLAN/07-Support` and 7.5 → `DO/07-Support`; the `{NN}-Word` folder = the top-level ancestor's number (0-padded) + the
-  first word of its title (reproduces the §10.3 example exactly). A zero-mapping Effective doc (only reachable as a pre-S9
-  **upgrade** artifact — the submit gate forbids it) lands in `_unmapped/`. **Pure `services/vault/mirror.py` + tests — no
-  migration/schema/`event_type`/web/endpoint change (head stays `0018`):** `ClauseRef` + the pure `_placement_dirs`
-  (numeric-not-lexical primary [9 before 10], `(phase, top_number)` dedup, canonical PLAN<DO<CHECK<ACT `other_dirs` order)
-  + `fetch_clause_refs`/`fetch_top_words` (one batch query each; top words **(framework_id, top_number)-keyed** so a future
-  standard's "8" can't collide with ISO's) + `_write_symlink` (relative target, asserted within `build_root` — no host-path
-  leak — manifest `{path, symlink_to}` entry, no `sha256`); `metadata.json`/`INDEX.md` gain the numeric-sorted mapped-clause
-  list (byte-deterministic → the §10.4 idempotency invariant holds); `MirrorSyncResult` gains a `symlinks` count.
-  `atomic_swap`/render-cache/the `:ro` mount contract/the AC#2 whole-tree-rebuild are untouched (internal symlinks are
-  relative → survive the swap). **Single-org invariant (D1)** documented (the mirror stays org-agnostic → no cross-org
-  `{ident}_{rev}` collision). **Fresh-dir-only:** a path can flip dir↔symlink between builds, so production always builds
-  into a fresh `.builds/<uuid>` + swaps (a unit test pins that reuse-after-remap raises). Adversarially reviewed (5 lenses
-  → per-finding verify; **1 of 5 confirmed + folded** — a test-assertion tightening; placement/symlink-safety/query/spec
-  lenses found nothing). Proofs: `_placement_dirs` (single · dedup · clause-7 split · numeric primary · canonical phase
-  order · `_unmapped` · zero-pad) + build-tree real-bytes-under-primary + cross-clause relative symlink (resolves +
-  contained) + manifest symlink entries + the fresh-dir-only reuse-raises contract (unit); clause-placement +
-  multi-clause-symlink (bytes-once) + clause-7-two-phase + `_unmapped`-fallback (simulated via direct mapping-row delete) +
-  **symlink-survives-swap** end-to-end (integration); `test_render`/`test_verify` helpers updated for the nested layout.
-  **169 unit + 28 mirror/render/verify integration green** (the 5 `pg_dump`-absent backup tests stay environmental, green
-  on CI).
-
-- **S9c — Process IA backend (graph + authoring + process-links)** ✅ — PR #32. The ISO 9001 Clause 4.4 process
-  dimension as the API/data foundation (the S9 clause-backend → S9b clause-mirror split, applied to processes).
-  **Owner forks:** **backend only** (the by-process secondary mirror index → **S9d**, a separate filesystem surface that
-  reuses S9b's `_write_symlink` over `process_link`); **minimal real `org_role` + `supplier`** tables (RACI / outsourcing
-  FK targets, **empty-but-present** per D-3 — no `/org-roles`/`/suppliers` authoring; `org_role` is RACI-not-authz, doc 02
-  §3.4) with the `process` FKs **nullable**. **`0019`**: `org_role` + `supplier` + `process` (self-nested `SEED`/`ACTIVE`
-  node; `pdca_phase` **reuses** the 0017 enum) + `process_edge` (`CHECK` no-self-loop + `UNIQUE` pair) + the audited
-  `process_link` M:N join (FK named explicitly — the 63-char limit, clause_mapping precedent) + `ALTER TYPE
-  audit_object_type ADD VALUE 'process'` + 7 `PROCESS_*` `event_type` values (the 0011-0017 additive pattern; Python
-  members too). **No seed migration, no `storage_config`/mirror change, no web; `alembic check` clean** (all 5 models
-  registered, names matched; verified up↔down↔check on a throwaway PG16). **`api/processes.py`**: `GET /processes(/{id})
-  (/map)` (`process.read`, **default SYSTEM scope** — the `GET /clauses` shape) + `POST`/`PATCH /processes` + `POST`/
-  `DELETE /processes/{id}/edges` (`process.create` SYSTEM / `process.manage` + `_process_scope`); the **SEED→ACTIVE
-  one-way ratchet** (`ACTIVE→SEED` → 409 `invalid_state_transition`; null-on-required → 422 not a 500); self-loop/dup 409
-  (+ `IntegrityError` backstops); `_emit_process_event` (`object_type=process`). **Process-links** `POST`/`GET`/`DELETE
-  /documents/{id}/process-links` in `api/documents.py` clone the clause-mappings shape (gate `document.manage_metadata`;
-  `PROCESS_LINKED`/`UNLINKED` **reuse `object_type=document`** keyed to the doc — the S9 precedent). **Authz reality (the
-  decisive point):** `process.create`/`assign_owner` are **seeded but held by no role** (override-until-UI, the
-  `document.export` precedent); the seeded `process.read/manage` grants are PROCESS-scoped with an unsubstituted
-  `:assignment_process` placeholder that matches **no concrete process** → S9c authoring rides on **SYSTEM overrides**,
-  and a negative test documents the deferral (concrete per-process authoring lands with owner-assignment). `org_role` is
-  never wired to the PDP/PEP. **No web; openapi not regenerated** (the S8b2-S9b precedent). Adversarially **designed** (a
-  Plan-agent pressure-test caught the PROCESS-scope dead-end, the 64-char FK, the audit-object_type choice, the
-  `alembic check` discipline up front) and **reviewed** (5 lenses → per-finding verify; **7 of 9 confirmed + folded** —
-  the real bug was the PATCH-null 500→422; rest defense-in-depth/tests; 2 refuted soundly). Deferred as
-  consistent-with-clause-precedent / systemic / moot-under-D1: repo by-id helpers fetch-then-handler-validate (the
-  `get_clause` pattern); a DB-level `process_link` org-consistency constraint (`clause_mapping` has the same shape).
-  Proofs: 4 unit (enum values + new audit members) + 19 integration (create/dup/concurrent-race/validations · the
-  SEED→ACTIVE machine + null-422 + active-edit · edges self-loop/dup/missing/delete · reads+map+403 · the **PROCESS-scope
-  deferral 403 + concrete-binding 200** · process-link map/unmap/dup/422/403 + **cross-org-422** [seeds a throwaway 2nd
-  org, cleaned up in `finally` so `test_setup`'s `Organization.scalar_one` stays valid]). **177 unit + the
-  process/clause/documents integration green** (the 5 `pg_dump`-absent backup tests stay environmental, green on CI).
-
-- **S9d — By-process secondary mirror index (doc 04 §10.3)** ✅ — PR #33. Now that S9c landed `process_link`, the mirror
-  gains the doc 04 §10.3 "secondary index by Process": a parallel **`current/by-process/{name}/`** tree of **relative
-  symlinks** into the same real clause-tree doc folders (bytes never duplicated), so a human can browse the disk by the
-  process a doc serves. **Completes the mirror epic for the IA's process dimension** (closes the S6/S7 by-process seam).
-  **Owner fork: always-on hybrid, NO `mirror_layout` column** — the index is cheap + there's no v1 UI to toggle it, so the
-  doc-14 `storage_config.mirror_layout` column lands later with its config surface. **Pure `services/vault/mirror.py` +
-  tests — no migration/schema/API/web (head stays `0019`):** reuses S9b's `_write_symlink` via `ProcessRef` +
-  `fetch_process_links` (the `fetch_clause_refs` twin, one batch query) + `_placement_process_dirs`
-  (`sorted({"by-process/{_safe(name)}"})`, deduped-by-safe-name) + a `build_tree` loop symlinking `doc_dir` from each
-  process folder (works whether `doc_dir` is under a clause or `_unmapped/`); `metadata.json` gains a name-sorted
-  `processes` array; the `MirrorSyncResult.symlinks` count already covers them. Adversarially reviewed (5 lenses →
-  per-finding verify; **0 of 3 confirmed** — placement/symlink/query/idempotency/spec lenses found nothing; the 3 refuted
-  were test-nits). Proofs: 8 unit (`_placement_process_dirs` single/multi/empty/safe-name-dedup + build-tree by-process
-  symlink resolves + clause-and-process share one real folder + manifest/metadata + unmapped-doc-with-process-link) + 2
-  integration (by-process symlink resolves + metadata; multi-process two symlinks + bytes-once, via a direct
-  `Process`+`ProcessLink` seed on an Effective doc). **181 unit + the mirror/render/verify integration green** (the 5
-  `pg_dump`-absent backup tests stay environmental, green on CI).
-
-- **OpenAPI contract catch-up (S9–S9c)** ✅ — PR #35. A bounded, no-code chore: the hand-maintained
-  `packages/contracts/openapi.yaml` (caught up only through S8d/#26) now documents the shipped S9/S9c
-  surface — `GET /clauses`, the `/documents/{id}/clause-mappings` + `/process-links` sub-resources, and
-  `/processes(/{id})(/map)` + `/processes/{id}/edges` — **2 tags (`clauses`/`processes`), 14 ops across 10
-  path items, 11 component schemas**, with field names/types/nullability/enums (`PdcaPhase`/`ProcessState`)
-  + every status (201/200/204/403/404/409/422) + machine error code transcribed **verbatim** from the
-  models + handler serializers (no new `Problem.code` value needed — `framework_mismatch` is a free-form
-  `errors[].code`). Pure-additive; **redocly lint green** (the `contracts` CI is redocly-lint only — no
-  codegen, the API server/web client are not generated from this file). Adversarial **4-lens fidelity
-  review** (clauses · process-graph · process-links · style/lint/completeness → per-finding verify) — **0
-  findings**. S9b/S9d are pure-mirror (no endpoints). The contract is now caught up **through S9c**, so the
-  stale per-slice "openapi deliberately not updated" notes (S8b2–S9c) are superseded — going forward,
-  document new endpoints in the same PR as they ship.
-
-- **S10 — search/reporting backend: the Compliance Checklist + Postgres-FTS search + clause_refs/filter on
-  `GET /documents`** ✅ — PR #38. The doc-13 search & reporting layer, **owner-scoped (AskUserQuestion) to the
-  reporting/FTS-search backend; NO web** (the Admin Audit-Log *screen* stays with the deferred web track). Forks:
-  scope = reporting/FTS-search · coverage = **Mapped+Effective** · list = **minimal add** (no envelope) · checklist authz =
-  **also grant Internal Auditor**. **(1) Compliance Checklist** — `GET /reports/compliance-checklist` (gate
-  `report.compliance_checklist.read`, SYSTEM — **already seeded in 0004**, QMS-Owner-only) returns the **20 ★ mandatory
-  clauses** (`clause.is_mandatory_star`, doc 02 §2.1 / R30 incl. 8.5.6) with per-clause **COVERED** (≥1 mapped doc has
-  an Effective version) / **PARTIAL** (mapped, none Effective) / **GAP** + a rollup; one grouped query (`clause` LEFT
-  JOIN `clause_mapping` ON clause_id+org_id LEFT JOIN `documented_information`, `count(distinct di.id)` + a
-  `FILTER(effective)`); framework resolved by stable code; **PG-only** (doc 13 §1.2; never the index);
-  `services/reports/checklist.py` + a pure `coverage_status`. **(2) Search** — `GET /search` + `GET /search/suggest`
-  behind an engine-agnostic **`Indexer` Protocol** (`services/search/indexer.py` `PostgresFtsIndexer`; `get_indexer()`
-  the seam; **OpenSearch is the v1 drop-in**, R34). A **functional GIN index** via `op.execute` (`0020` — not a
-  generated column, so no `Computed`-comparison drift; `migrations/env.py._include_object` **excludes**
-  `ix_documented_information_search_tsv` from autogenerate — *this Alembic version DOES reflect expression indexes, so it
-  must be excluded; verified on a throwaway PG16*). **Effective documents only** (doc 13's "Effective only" default — a
-  folded review finding: searching all states leaked Draft/Obsolete titles to a `document.read`-only caller, since
-  `read_draft`/`read_obsolete` are distinct keys search never consults). **Filter-not-403**: candidate hits are
-  post-filtered by per-row `authorize(document.read)` → a `hidden_by_scope` footer ("N hidden by your access scope").
-  **(3) `GET /documents`** — `clause_refs` (batch-joined via `repository.clause_numbers_for_docs`, no N+1) in the list +
-  single serializers; the doc-15 bracketed `filter[field][op]` grammar parsed from `request.query_params` (allow-list:
-  `clause_refs[has]` exact clause-number, **framework-constrained** [folded D3 defense-in-depth] + `current_state` /
-  `document_type` / `owner_user_id` / `classification` `eq`); unknown field/op → **400 `unknown_filter`**, bad
-  enum/uuid → 422; kept the bare `list[dict]` + `limit` (minimal add — no `{data,page,_links}` envelope/cursor).
-  **(4) Authz** — `0021` **backfills `report.compliance_checklist.read` onto the Internal Auditor role for every org**
-  (resolve role by stable name + permission by key; `on_conflict_do_nothing`; downgrade deletes exactly that grant by
-  role-name so QMS Owner's `0004` grant is untouched — the **first authz backfill after 0004**). **PROOF:** the audit
-  read API exposes **no write verbs** (route-inventory unit test over `api.audit.router`; doc 18 §7 S10 DoD; co-proves
-  **AC#6**). **No new permission keys.** openapi.yaml caught up **in-PR** (tags `search`/`reports` + the 3 paths +
-  `clause_refs`/filters + `SearchResults`/`Suggestions`/`ComplianceChecklist` schemas; redocly green). Adversarially
-  reviewed (5 lenses → per-finding verify; **2 of 2 confirmed + folded** — the framework-constrained clause filter and
-  the Effective-only search restriction). **186 unit + the S10 integration suite green** (the 5 `pg_dump`-absent
-  backup tests stay environmental, green on CI).
-
-- **S11 — the MVP EXIT slice: `easysynq restore`/`upgrade` + backup archive v2 + security/NFR/runbook hardening** ✅ —
-  PR #41. Turns the S8b2 tested-restore drill (gate G-C, AC#5) into an operator-grade *live* restore and ships the
-  hardening to call the MVP done (doc 18 §7/§12, doc 12 §8.2, R37/R13/R14). **Single combined PR + owner forks
-  (AskUserQuestion):** IN = Keycloak realm export + AES-256-GCM archive encryption; v1.x = retention pruning, S3
-  destination, continuous WAL/PITR, automated in-place cutover; CSP = strict **static**; restore =
-  restore-to-VERIFIED-TARGET + documented operator cutover. **No new permission keys, no new API endpoints** (restore/
-  upgrade are worker CLIs). **(W1) `easysynq restore`** (`services/backup/restore.py`, runs as OWNER, never raises):
-  decrypt+verify archive → restore PG into a **fresh scratch DB** → copy blobs into the **fresh non-WORM
-  restore-scratch bucket** (the locked vault is **READ**, never written) → integrity triad → **checkpoint-not-ahead**
-  tamper guard → **restored-chain re-verify** (the frozen `verify_chain`, version read from the *restored*
-  `system_config`) → **leave the verified target standing** for a documented cutover (`LOCK_RESTORE_LIVE` +
-  `restore_easysynq_` prefix, distinct from the drill's so the nightly sweep can't destroy it). The checkpoint verdict
-  compares the off-host checkpoint against the **restored head** (the false-PASS fix) + treats a missing off-host
-  anchor as UNVERIFIABLE→FLAGGED; `--audit-checkpoint-ack` proceeds and is itself audited (`RESTORE_CHECKPOINT_ACK`).
-  **`easysynq upgrade`** (`services/upgrade.py`): pre-backup → `alembic upgrade head` → readiness health-gate (the
-  pre-backup is the disaster safety net; full auto-restore is the tracked hardening TODO). Migration **`0022`** adds 8
-  additive `RESTORE_*`/`UPGRADE_*` `event_type` values (the 0011-0021 pattern; **`canonical_serialize` v1 untouched**).
-  **(W2) Backup archive v2** — `crypto.py` (AES-256-GCM envelope; key = SHA-256(`BACKUP_ENCRYPTION_KEY`); **`cryptography`
-  already a dep → no new package**), `realm_export.py` (Keycloak **Admin REST** — the worker runs the api image, no
-  kcadm.sh; degrades to `realm_export:absent` on a Keycloak outage, never blocking the nightly backup), `config_snapshot.py`;
-  manifest v2 + `_sidecar` helper (the `.tar.enc` `with_suffix` trap). **The G-C drill stays plaintext-internal so AC#5
-  is NOT regressed**; the realm + config legs (which carry secrets) ride **ONLY inside an encrypted archive** — omitted,
-  never cleartext, when no key (a folded review finding). **(W3) Security + NFR** — Caddy **strict static CSP scoped to
-  the SPA `handle{}` block** (`script-src 'self'`, `frame-ancestors 'none'`; `style-src 'self' 'unsafe-inline'` for
-  Mantine's runtime `<style>`, **never** script) + the air-gap internal-issuer placeholder `CADDY_TLS_DIRECTIVE` + the
-  Referrer-Policy reconcile; **TLS is Caddy's default 1.2 floor** (an explicit `tls{}` block crash-loops the plain-HTTP
-  `:80` listener — a folded HIGH, `caddy validate`-confirmed both ways); a Caddyfile-header unit test + a server-side
-  NFR P95 smoke (generous ~5× regression bounds, not the SLO — CI noise). **(W4) Exit** — 9 operator runbooks
-  (`docs/runbooks/`), air-gap finalize (`just images-update` + a release-gated floating-tag guard + a bundle checksum),
-  the **Avery→Mara handoff** integration test, and a `tests/conftest.py` **directory auto-marker hook** that closes a
-  real CI gap (only 71/204 unit tests were `-m unit`-gated — now all 204 are). Adversarially reviewed (6 lenses →
-  per-finding verify; **9 confirmed, all folded** — incl. the Caddy `:80` crash, the plaintext-sensitive-legs leak, the
-  `discard_target` blob leak, the per-sink off-host bucket, and dangling runbook refs). openapi.yaml unchanged (no new
-  endpoints). **204 unit + 1 release-gated skip + the S11 integration suite green** (the restore/drill `pg_dump` tests
-  stay environmental, green on CI); `0022` round-trips clean on PG16.
+- **S10 — search/reporting backend** ✅ (PR #38, owner-scoped to backend, NO web): the org-wide **Compliance Checklist**
+  `GET /reports/compliance-checklist` (the 20★ clauses → per-clause COVERED/PARTIAL/GAP + rollup, one grouped query, PG-only)
+  + Postgres-FTS **search** `GET /search(/suggest)` behind an engine-agnostic `Indexer` seam (OpenSearch is the v1 drop-in,
+  R34; **Effective-docs-only** + **filter-not-403** post-filter with a `hidden_by_scope` footer) + `clause_refs` and the
+  doc-15 bracketed `filter[field][op]` grammar on `GET /documents` (`0020` functional GIN index). `0021` backfills the
+  checklist read onto Internal Auditor. **PROOF:** the audit read API exposes no write verbs (route-inventory test, co-proves **AC#6**).
+- **S11 — the MVP EXIT slice** ✅ (PR #41): operator-grade **`easysynq restore`** (`services/backup/restore.py`, runs as
+  OWNER, never raises) — WORM-aware **restore-to-VERIFIED-TARGET** (fresh scratch DB + fresh non-WORM `restore-scratch`
+  bucket; the locked vault is READ-never-written) → integrity triad → checkpoint-not-ahead vs the *restored* head → chain
+  re-verify → leaves a standing target for a **documented manual cutover**; **`easysynq upgrade`** (pre-backup → migrate →
+  health-gate); **backup archive v2** (AES-256-GCM `.tar.enc` + Keycloak realm export, both **only-if-encrypted** so the
+  G-C drill stays plaintext and AC#5 isn't regressed); strict static **Caddy CSP** scoped to the SPA `handle{}` + default
+  TLS 1.2 floor; 9 operator runbooks (`docs/runbooks/`); a `conftest.py` dir auto-marker closing a real `-m unit` CI gap.
+  `0022` adds 8 `RESTORE_*`/`UPGRADE_*` `event_type` values (`canonical_serialize` v1 untouched).
 
 **MVP EXIT: complete.** All 11 ordered slices (S0–S11) shipped; all six acceptance proofs in; the mirror epic + both IA
 backends complete; the exit checklist (doc 18 §12) closed. **Deferred (S8e / v1 / Part-11):** the doc-14 `storage_config.mirror_layout` toggle (with its config UI);
@@ -560,8 +278,22 @@ create boundary.
   `process.create` precedent). Evidence bytes that already exist in another bucket (a rendition, or the documents
   vault) are **rejected 423** — a record's evidence must be freshly WORM-sealed in the `records` bucket (or link to
   that document instead). Retention is **policy-as-data** (a seeded per-org *System Default* + a 5-tier resolver +
-  the snapshot-at-capture ratchet); the disposition lifecycle + Beat sweep + Evidence Packs + the `/retention-policies`
-  CRUD are deferred (S-rec-2+). **No web.** Migration head is now `0023` (next `0024`).
+  the snapshot-at-capture ratchet). **No web.**
+
+- **Records disposition lifecycle (S-rec-2) — API/data only, no UI:** the retention end-of-life. `GET
+  /api/v1/records/{id}/disposition` (gate `record.read`) shows state + `retention_until` + `legal_hold` + the open
+  destroy request + the tombstone history. **Advance** the state machine with `PATCH …/{id}/disposition
+  {to_state,reason?}` (gate `record.dispose`; `ACTIVE↔DUE_FOR_REVIEW↔DISPOSED`; a DESTROY physically removes the WORM
+  bytes **fail-closed**, blocked 409 + audited `RECORD_ERASURE_REFUSED` while the lock is unexpired or a hold is on).
+  **Legal hold** via `POST …/{id}/legal-hold {action:place|release, reason}` (gate `record.dispose`; reason mandatory;
+  overrides expiry). The **R27 dual-control destroy-under-legal-order**: `POST …/{id}/worm-destroy-requests
+  {legal_basis}` (step 1) → `POST …/{req_id}/approve` by a **distinct** second actor (step 2 — governance-bypass purge;
+  409 `dual_control_same_actor`, 409 `compliance_mode_denies_destroy`) or `…/cancel`. The **Beat** sweep
+  (`easysynq.records.retention_sweep`, daily) flips due `ACTIVE`→`DUE_FOR_REVIEW` and **auto-disposes** low-risk
+  (`review_required=false`) policies once the WORM lock allows; `review_required=true` waits for a human. Records stay
+  **immutable** — `PATCH /disposition` is the only PATCH (a state advance, not a content edit; the route-inventory proof
+  whitelists it). Authz: ride on a **SYSTEM `record.dispose` override** (catalog CLOSED — legal-hold + dual-control both
+  map onto `record.dispose`). Migration head is now `0024` (next `0025`).
 - **⚠ S11 restore + upgrade + encrypted backup (operator):** the durable archive (`easysynq backup run` / the nightly
   Beat job) is now **AES-256-GCM `.tar.enc`** sealed with `BACKUP_ENCRYPTION_KEY` (install.sh generates it into the
   0600 `.env`; **lose it → those archives are unrecoverable** — back it up out-of-band) and bundles the live Keycloak
@@ -581,6 +313,28 @@ create boundary.
   bootstrap or to seed the first admin before the UI is reachable.
 - **No Docker?** Every slice is still buildable + unit-testable on the uv/3.12 loop; CI runs the stack-dependent
   proofs.
+
+## Recurring engineering patterns (learned across slices)
+
+> The deep per-slice rationale lives in the squash-merge commits + the `easysynq-project.md` memory. These are the
+> patterns that keep recurring — apply them by default on the next slice.
+
+- **Extending an enum** (`event_type`, `audit_object_type`): `ALTER TYPE … ADD VALUE` is the additive pattern (no-op
+  downgrade), since 0011. Add the matching Python member. **Source the migration's enum tuples from the ORM `*_VALUES`**
+  (the 0010 precedent), not a hand-retyped list.
+- **Guard a downgrade seed-delete with `NOT EXISTS(<child>)`** when a child FK is `RESTRICT` — else the downgrade aborts
+  on a *populated* DB (a fresh-DB CI blind spot; the 0023 lesson).
+- **Name join-table FKs explicitly** — the convention default can exceed **PG's 63-char identifier limit** (clause_mapping/process_link).
+- **`alembic check` must be clean.** This Alembic version **does reflect expression/functional indexes**, so exclude them
+  from autogenerate in `migrations/env.py._include_object` (the 0020 GIN-index lesson). Round-trip up↔down↔check on a throwaway PG16.
+- **Backup/restore drills run as the OWNER role** (`DATABASE_URL_SYNC`; the app role can't `pg_dump`/`CREATE DATABASE`)
+  and **never raise** — a missing binary/crash is an honest FAIL, never a 500.
+- **Run the FULL integration suite for mirror/symlink work** — Py3.12 `rglob` follows symlinks, so dir-finders must filter
+  `not is_symlink()` and byte-scans use `os.walk(followlinks=False)`; cross-file test pollution only surfaces in the full run.
+- **Review rhythm:** N adversarial lenses → per-finding verify → fold only confirmed. Prefer hunting the *false-PASS*
+  direction on any gate/proof.
+- **Authz for not-yet-UI'd domains:** seed the permission keys but expect them to reach no concrete object at their seeded
+  scope → ride on **SYSTEM overrides** until the role/UI lands (the `document.export`/`process.create`/`record.*` precedent).
 
 ## The four LOCKED foundational decisions (never contradict)
 

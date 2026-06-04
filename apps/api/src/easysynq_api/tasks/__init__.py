@@ -6,7 +6,13 @@ read-only filesystem mirror reconcile), and ``backup`` (the S8b2 nightly durable
 backup + the restore-test drill / gate G-C).
 """
 
-from . import audit, backup, lifecycle, mirror  # noqa: F401  (registers the Celery tasks)
+from . import (  # noqa: F401  (registers the Celery tasks)
+    audit,
+    backup,
+    lifecycle,
+    mirror,
+    records,
+)
 from .app import app
 
 __all__ = ["app"]

@@ -1668,6 +1668,178 @@ paths:
         "403": { $ref: "#/components/responses/ProblemResponse" }
         "404": { $ref: "#/components/responses/ProblemResponse" }
 
+  /records/{record_id}/disposition:
+    parameters:
+      - { name: record_id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [records]
+      operationId: getDisposition
+      summary: Disposition status + retention_until + legal_hold + tombstone history. Needs record.read.
+      responses:
+        "200":
+          description: The record's disposition status.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DispositionStatus" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+    patch:
+      tags: [records]
+      operationId: advanceDisposition
+      summary: Advance disposition_state (the only PATCH on a record — not a content edit). Needs record.dispose.
+      description: >-
+        The sanctioned record state advance (doc 06 §5.3): ACTIVE↔DUE_FOR_REVIEW↔DISPOSED (ON_HOLD is
+        driven by /legal-hold). A DESTROY physically removes the WORM bytes (fail-closed); it is
+        blocked 409 while the lock is unexpired or a legal hold is active, and that refusal is audited
+        (RECORD_ERASURE_REFUSED — the GDPR refused-with-reason, R27).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DispositionAdvance" }
+      responses:
+        "200":
+          description: The record after the transition (full serialization).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Record" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409":
+          description: >-
+            Illegal transition, on legal hold, or a DESTROY refused (codes: invalid_transition,
+            on_legal_hold, worm_lock_unexpired, retain_permanent).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  /records/{record_id}/legal-hold:
+    post:
+      tags: [records]
+      operationId: legalHold
+      summary: Place or release a legal hold (overrides retention expiry). Needs record.dispose.
+      parameters:
+        - { name: record_id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/LegalHoldAction" }
+      responses:
+        "200":
+          description: The record after the hold change (full serialization).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Record" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409":
+          description: Already on hold / not on hold / already disposed (codes vary).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  /records/{record_id}/worm-destroy-requests:
+    parameters:
+      - { name: record_id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [records]
+      operationId: listWormDestroyRequests
+      summary: The record's WORM destroy-under-legal-order requests. Needs record.read.
+      responses:
+        "200":
+          description: The destroy requests.
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/WormDestroyRequest" } }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+    post:
+      tags: [records]
+      operationId: requestWormDestroy
+      summary: "R27 dual-control destroy — step 1 (request). Needs record.dispose."
+      description: >-
+        The dual-control escape hatch for destroying a WORM blob before its lock expires (a mis-import
+        or a binding legal order). A distinct second actor must approve before any bytes are destroyed.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/WormDestroyRequestCreate" }
+      responses:
+        "201":
+          description: The created (open) destroy request.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WormDestroyRequest" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409":
+          description: An open request already exists, or the record is already disposed.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  /records/{record_id}/worm-destroy-requests/{req_id}/approve:
+    post:
+      tags: [records]
+      operationId: approveWormDestroy
+      summary: "R27 dual-control destroy — step 2 (approve + execute). Needs record.dispose."
+      description: >-
+        A second, distinct actor approves → the governance-bypass purge runs fail-closed → the record
+        becomes DISPOSED with a tombstone (is_worm_destroy=true, both actors, the legal basis). 409 if
+        the approver is the requester, or if COMPLIANCE mode forbids the bypass (audited).
+      parameters:
+        - { name: record_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: req_id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DispositionReason" }
+      responses:
+        "200":
+          description: The destroyed record (DISPOSED tombstone; full serialization).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Record" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409":
+          description: >-
+            Not open, same actor as requester, already disposed, or COMPLIANCE mode (codes:
+            not_open, dual_control_same_actor, already_disposed, compliance_mode_denies_destroy).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  /records/{record_id}/worm-destroy-requests/{req_id}/cancel:
+    post:
+      tags: [records]
+      operationId: cancelWormDestroy
+      summary: Cancel an open WORM destroy request (audited). Needs record.dispose.
+      parameters:
+        - { name: record_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: req_id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DispositionReason" }
+      responses:
+        "200":
+          description: The cancelled request.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WormDestroyRequest" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409":
+          description: The request is not open (code=not_open).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
   /tasks:
     get:
       tags: [tasks]
@@ -2977,6 +3149,100 @@ components:
           type: [string, "null"]
           format: uuid
           description: A per-record retention override (doc 06 §5.1 tier 1); else the policy is resolved.
+
+    DispositionEvent:
+      type: object
+      additionalProperties: false
+      required: [id, action, tombstone, is_worm_destroy]
+      properties:
+        id: { type: string, format: uuid }
+        action: { type: string, enum: [DESTROY, ARCHIVE_COLD, TRANSFER, RETAIN_PERMANENT] }
+        tombstone: { type: boolean }
+        policy_id:
+          type: [string, "null"]
+          format: uuid
+          description: The policy that drove the disposition; null for a non-policy legal-order destroy.
+        approved_by:
+          type: [string, "null"]
+          format: uuid
+          description: The executing/second authorizer; null for a system (Beat-sweep) auto-disposition.
+        requested_by:
+          type: [string, "null"]
+          format: uuid
+          description: The R27 first authorizer (the destroy requester); null otherwise.
+        is_worm_destroy: { type: boolean, description: true for the R27 dual-control pre-expiry destroy. }
+        legal_basis: { type: [string, "null"] }
+        executed_at: { type: [string, "null"], format: date-time }
+
+    WormDestroyRequest:
+      type: object
+      additionalProperties: false
+      required: [id, record_id, status, legal_basis, requested_by]
+      properties:
+        id: { type: string, format: uuid }
+        record_id: { type: string, format: uuid }
+        status: { type: string, enum: [open, executed, cancelled] }
+        legal_basis: { type: string }
+        requested_by: { type: string, format: uuid }
+        requested_at: { type: [string, "null"], format: date-time }
+        approved_by: { type: [string, "null"], format: uuid }
+        executed_at: { type: [string, "null"], format: date-time }
+        cancelled_by: { type: [string, "null"], format: uuid }
+        cancelled_at: { type: [string, "null"], format: date-time }
+
+    DispositionStatus:
+      type: object
+      additionalProperties: false
+      required: [record_id, disposition_state, legal_hold, retention_policy_id]
+      properties:
+        record_id: { type: string, format: uuid }
+        disposition_state: { type: string, enum: [ACTIVE, DUE_FOR_REVIEW, ON_HOLD, DISPOSED] }
+        legal_hold: { type: boolean }
+        retention_policy_id: { type: string, format: uuid }
+        retention_basis_date: { type: [string, "null"], format: date }
+        retention_until:
+          type: [string, "null"]
+          format: date
+          description: basis_date + the policy duration; null for a PERMANENT/RETAIN_PERMANENT or unknown-basis record.
+        open_worm_destroy_request:
+          oneOf:
+            - { $ref: "#/components/schemas/WormDestroyRequest" }
+            - { type: "null" }
+        disposition_events:
+          type: array
+          items: { $ref: "#/components/schemas/DispositionEvent" }
+
+    DispositionAdvance:
+      type: object
+      additionalProperties: false
+      required: [to_state]
+      properties:
+        to_state:
+          type: string
+          enum: [DUE_FOR_REVIEW, ACTIVE, DISPOSED]
+          description: The target state (ON_HOLD is driven by /legal-hold, not here).
+        reason: { type: [string, "null"] }
+
+    LegalHoldAction:
+      type: object
+      additionalProperties: false
+      required: [action, reason]
+      properties:
+        action: { type: string, enum: [place, release] }
+        reason: { type: string, minLength: 1, maxLength: 1000, description: Mandatory (audit trail). }
+
+    WormDestroyRequestCreate:
+      type: object
+      additionalProperties: false
+      required: [legal_basis]
+      properties:
+        legal_basis: { type: string, minLength: 1, maxLength: 1000 }
+
+    DispositionReason:
+      type: object
+      additionalProperties: false
+      properties:
+        reason: { type: [string, "null"], maxLength: 1000 }
 
 security:
   - keycloak: []
