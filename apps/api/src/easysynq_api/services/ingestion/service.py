@@ -194,10 +194,20 @@ async def create_import_run(
         raise
     await session.refresh(run)
 
-    # Enqueue AFTER commit so the worker never reads an uncommitted Created row.
+    # Enqueue AFTER commit so the worker never reads an uncommitted Created row. Best-effort (the
+    # records ``_enqueue_structured_pdf`` precedent): the run is already committed, so a broker
+    # hiccup
+    # must not 500 the create — the run stays Created (operator-recoverable). In production the lock
+    # Redis and the Celery broker Redis are the same instance, so a reachable lock (above) implies a
+    # reachable broker; the swallow matters only for a momentary blip / a test with no broker.
     from ...tasks.ingestion import scan_source
 
-    scan_source.delay(str(run.id))
+    try:
+        scan_source.delay(str(run.id))
+    except Exception:  # noqa: BLE001 — best-effort enqueue; the run is committed (Created)
+        logger.warning(
+            "ingestion.scan.enqueue_failed", extra={"extra_fields": {"run_id": str(run.id)}}
+        )
     return run
 
 

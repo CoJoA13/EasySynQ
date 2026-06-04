@@ -10,6 +10,7 @@ import uuid
 from collections.abc import Callable
 from pathlib import Path
 
+import pytest
 import sqlalchemy as sa
 from httpx import AsyncClient
 from sqlalchemy import select
@@ -26,6 +27,16 @@ from easysynq_api.services.ingestion.service import run_scan
 
 from .test_authz import _assign_role, _auth
 from .test_records import _grant, _subject
+
+
+@pytest.fixture(autouse=True)
+def _stub_scan_enqueue(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The Celery app binds its broker to the default localhost Redis at import time (not the
+    testcontainer), and the shared-DB contract is "never trigger real Celery/Beat" — so stub the
+    create-path enqueue; every test drives ``run_scan`` directly (the packs ``build`` precedent)."""
+    from easysynq_api.tasks.ingestion import scan_source
+
+    monkeypatch.setattr(scan_source, "delay", lambda *a, **k: None)
 
 
 def _seed_source() -> Path:
