@@ -52,15 +52,19 @@ from ..services.vault import (
     audit_transition,
     break_lock,
     checkin,
+    checkin_form_schema,
     checkout,
     create_document,
+    get_effective_schema,
     get_vault_audit_sink,
     get_vault_signature_sink,
+    get_working_schema,
     heartbeat,
     init_upload,
     obsolete,
     release,
     render_dynamic_copy,
+    set_working_schema,
     start_revision,
     storage,
     submit_review,
@@ -108,6 +112,15 @@ class Obsolete(BaseModel):
 
 class Release(BaseModel):
     version_id: uuid.UUID | None = None
+
+
+class FormSchemaUpdate(BaseModel):
+    field_schema: dict[str, Any]
+
+
+class FormSchemaCheckin(BaseModel):
+    change_reason: str = ""
+    change_significance: str = ""
 
 
 # --- representations --------------------------------------------------------------------
@@ -563,6 +576,80 @@ async def update_metadata_endpoint(
     await session.commit()
     await session.refresh(doc)
     return _document(doc)
+
+
+# --- form-template schema (S-rec-3, doc 06 §4.2): the Mode-B structured-form authoring surface ----
+# A Form/Template (document_type FRM) carries an editable working ``field_schema`` (the bespoke
+# field-list DSL). ``form-schema:checkin`` freezes it into an immutable version (its content IS the
+# schema); the standard submit-review → approve → release then drives it Effective. Mode-B capture
+# (POST /records) validates form_field_values against the schema pinned in the Effective version.
+
+
+@router.put("/documents/{document_id}/form-schema")
+async def set_form_schema_endpoint(
+    document_id: uuid.UUID,
+    body: FormSchemaUpdate,
+    caller: AppUser = Depends(_manage_metadata),
+    session: AsyncSession = Depends(get_session),
+    vault_sink: VaultAuditSink = Depends(get_vault_audit_sink),
+) -> dict[str, Any]:
+    """Set/replace a Form/Template's editable working field schema (Draft/UnderRevision only; the
+    service hard-blocks non-FRM / non-editable in-handler — the SYSTEM override carries no lifecycle
+    predicate). Validates the bespoke DSL; 422 on a malformed schema. Needs
+    ``document.manage_metadata``."""
+    doc = await _load_document(session, caller, document_id)
+    ft = await set_working_schema(session, vault_sink, caller, doc, body.field_schema)
+    return {"document_id": str(doc.id), "field_schema": ft.field_schema}
+
+
+@router.get("/documents/{document_id}/form-schema")
+async def get_form_schema_endpoint(
+    document_id: uuid.UUID,
+    caller: AppUser = Depends(_read),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """The current editable working field schema (null if none authored yet). Needs
+    ``document.read``."""
+    doc = await _load_document(session, caller, document_id)
+    return {"document_id": str(doc.id), "field_schema": await get_working_schema(session, doc)}
+
+
+@router.get("/documents/{document_id}/effective-form-schema")
+async def get_effective_form_schema_endpoint(
+    document_id: uuid.UUID,
+    caller: AppUser = Depends(_read),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """The schema pinned in the template's in-force version — the form to render (doc 06 §4.2 GET
+    /templates/{id}/effective-version). Read from the VERSION snapshot (never the mutable working
+    copy), honoring the org's pre-release-capture toggle. 422 if no resolvable version. Needs
+    ``document.read``."""
+    doc = await _load_document(session, caller, document_id)
+    allow_pre = await vault_repo.capture_pre_release_enabled(session, caller.org_id)
+    return await get_effective_schema(session, doc, allow_pre_release=allow_pre)
+
+
+@router.post("/documents/{document_id}/form-schema:checkin", status_code=status.HTTP_201_CREATED)
+async def checkin_form_schema_endpoint(
+    document_id: uuid.UUID,
+    body: FormSchemaCheckin,
+    caller: AppUser = Depends(_edit),
+    session: AsyncSession = Depends(get_session),
+    vault_sink: VaultAuditSink = Depends(get_vault_audit_sink),
+) -> dict[str, Any]:
+    """Freeze the working schema into an immutable Draft version (its WORM source blob IS the
+    canonical-serialized schema; the schema is pinned into metadata_snapshot). Then submit-review →
+    approve → release drives it Effective. Needs ``document.edit``."""
+    doc = await _load_document(session, caller, document_id)
+    version = await checkin_form_schema(
+        session,
+        vault_sink,
+        caller,
+        doc,
+        change_reason=body.change_reason,
+        change_significance=body.change_significance,
+    )
+    return _version(version)
 
 
 # --- clause mappings (S9): the M:N document↔clause link satisfying the submit gate --------

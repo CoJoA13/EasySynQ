@@ -16,7 +16,7 @@ import datetime
 import uuid
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, Response, status
+from fastapi import APIRouter, Depends, Request, Response, status
 from pydantic import BaseModel, Field
 from sqlalchemy import ColumnElement
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -35,7 +35,7 @@ from ..db.session import get_session
 from ..domain.authz import RequestContext, ResourceContext, authorize
 from ..domain.records.retention import retention_until
 from ..problems import ProblemException
-from ..services.authz import gather_grants, require
+from ..services.authz import AuthzAuditSink, enforce, gather_grants, get_authz_audit_sink, require
 from ..services.records import (
     advance_disposition,
     approve_worm_destroy,
@@ -199,6 +199,7 @@ def _record(
         ),
         "disposition_state": record.disposition_state.value,
         "legal_hold": record.legal_hold,
+        "has_structured_pdf": record.structured_pdf_blob_sha256 is not None,
         "correction_of": str(record.correction_of) if record.correction_of else None,
         "superseded_by_correction": (
             str(record.superseded_by_correction) if record.superseded_by_correction else None
@@ -228,6 +229,28 @@ async def _record_scope(request: Any, session: AsyncSession) -> ResourceContext:
     if base is None:
         return ResourceContext(artifact_id=str(record_id))
     return ResourceContext(artifact_id=str(base.id), folder_path=base.folder_path)
+
+
+async def _capture_scope(
+    session: AsyncSession, caller: AppUser, source_document_id: uuid.UUID | None
+) -> ResourceContext:
+    """The ``record.create`` scope for a capture (S-rec-3 / [Fold 16], the S-pack-1 R28 lesson): a
+    Mode-B record is bound to its source form template, so build the FULL ResourceContext from that
+    template's framework + process-links + folder — a PROCESS/FOLDER-scoped ``record.create`` then
+    authorizes correctly (a bare SYSTEM context would fail-closed mis-DENY it). Ad-hoc EVIDENCE (no
+    source document) stays SYSTEM-only, as today (a SYSTEM override always matches)."""
+    if source_document_id is None:
+        return ResourceContext.system()
+    doc = await session.get(DocumentedInformation, source_document_id)
+    if doc is None or doc.org_id != caller.org_id:
+        return ResourceContext.system()  # the service raises the real 404/422
+    links = await vault_repo.list_process_links(session, doc.id)
+    return ResourceContext(
+        kind="RECORD",
+        folder_path=doc.folder_path,
+        framework_id=str(doc.framework_id),
+        process_ids=frozenset(str(p.id) for _link, p in links),
+    )
 
 
 async def _load(
@@ -288,9 +311,16 @@ async def init_upload_endpoint(
 @router.post("/records", status_code=status.HTTP_201_CREATED)
 async def capture_endpoint(
     body: RecordCreate,
-    caller: AppUser = Depends(_create),
+    request: Request,
+    caller: AppUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
+    authz_sink: AuthzAuditSink = Depends(get_authz_audit_sink),
 ) -> dict[str, Any]:
+    # Enforce in-handler (the create_document precedent): the record.create scope is derived from
+    # the body's source template (a path-only dependency cannot see the body) so a process/folder-
+    # scoped grant authorizes a Mode-B capture against its template ([Fold 16]).
+    resource = await _capture_scope(session, caller, body.source_document_id)
+    await enforce(session, authz_sink, request, caller, "record.create", resource)
     record = await capture_record(
         session,
         caller,
@@ -386,6 +416,32 @@ async def download_evidence_endpoint(
         "sha256": eb.blob_sha256,
         "content_type": eb.content_type or blob.mime_type,
     }
+
+
+@router.get("/records/{record_id}/rendition")
+async def get_rendition_endpoint(
+    record_id: uuid.UUID,
+    caller: AppUser = Depends(_read),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """Presign the structured-record PDF rendition (S-rec-3, doc 06 §4.2) — a derived, regenerable
+    view of a Mode-B record's fielded data. 409 ``rendition_pending`` until the best-effort Stage-2
+    build lands (or the record carries no structured values). Needs ``record.read``."""
+    record, _base = await _load(session, caller, record_id)
+    if record.structured_pdf_blob_sha256 is None:
+        raise ProblemException(
+            status=409,
+            code="rendition_pending",
+            title="No structured-record PDF rendition is available",
+            detail="The rendition is still being generated, or the record is not structured.",
+        )
+    blob = await vault_repo.get_blob(session, record.structured_pdf_blob_sha256)
+    if blob is None:  # pragma: no cover - defensive (the build sets the pointer + blob together)
+        raise ProblemException(
+            status=409, code="rendition_pending", title="Rendition not available"
+        )
+    url = await storage.presign_get(blob.object_key, bucket=blob.bucket)
+    return {"download_url": url, "content_type": "application/pdf", "sha256": blob.sha256}
 
 
 @router.post("/records/{record_id}/correction", status_code=status.HTTP_201_CREATED)

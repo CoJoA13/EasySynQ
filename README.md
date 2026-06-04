@@ -57,8 +57,17 @@ invariant* rather than a discipline problem.
     outlives a revoke). The `format=pdf` **portfolio** is a printable cover + traceability index + the §11.3-stamped
     controlled-document renditions, built best-effort at seal so a renderer outage never blocks the canonical pack. (The
     heavier `guest_grant`/ABAC/Keycloak-guest path stays v1.x.)
+  - **S-rec-3** (Mode-B structured-form capture — completes the records family): fill a controlled **Form/Template** to
+    capture a record. A Form/Template is a controlled document (`FRM`) carrying a `field_schema` (a small, dependency-free
+    field-list DSL); the schema is versioned through the normal document lifecycle (its check-in's WORM source blob **is**
+    the canonical-serialized schema, also pinned into the version snapshot). Mode-B capture resolves the template's
+    **Effective** version, validates the submitted `form_field_values` against **that version's pinned schema** (so
+    already-captured records keep showing the edition that was in force), and pins `source_version_id`. A best-effort PDF
+    rendition of the fielded data builds after capture; an org toggle (`PATCH /admin/config`, admin-only) optionally allows
+    capturing against a pre-release draft for controlled migrations.
 
-  Mode-B structured-form capture is the next v1 records slice. Migration head `0026`.
+  The v1 **records family is complete** (capture → retention/disposition → evidence packs → structured forms). Migration
+  head `0027`.
 
 ## Repository layout
 

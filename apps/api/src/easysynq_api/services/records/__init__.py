@@ -15,6 +15,7 @@ from .disposition import (
     request_worm_destroy,
     sweep_due_records,
 )
+from .render import build_structured_pdf
 from .service import (
     capture_correction,
     capture_record,
@@ -29,6 +30,7 @@ from .service import (
 __all__ = [
     "advance_disposition",
     "approve_worm_destroy",
+    "build_structured_pdf",
     "cancel_worm_destroy",
     "capture_correction",
     "capture_record",

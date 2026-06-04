@@ -21,7 +21,7 @@ and progressively disclosed — never overwhelming.
   e.g. the ISO clause catalog) · `tasks/` (Celery worker/beat) · `cli/` (operator commands). Tests in
   `apps/api/tests/{unit,integration}` (the latter via testcontainers).
 - `apps/web/` — React/TS + Mantine SPA (currently the setup wizard + admin stubs; the rest of the UI is deferred).
-- `migrations/` — Alembic (single tree; head **`0026`**; `env.py` excludes migration-managed expression/partial indexes).
+- `migrations/` — Alembic (single tree; head **`0027`**; `env.py` excludes migration-managed expression/partial indexes).
 - `packages/contracts/openapi.yaml` — the living API contract (redocly-lint only; **not** codegen — server/web aren't generated from it).
 - `infra/compose/` — Docker Compose (S/M/L profiles) + Caddy; `just` recipes wrap it.
 - `docs/` — the authoritative spec (`00`–`18` + `decisions-register.md`); `mockup/` — the owner-approved HTML UI mockup.
@@ -35,8 +35,9 @@ v1/v1.x residuals are listed at the end of this section.
 
 **v1 phase: STARTED.** The owner chose (AskUserQuestion) the **v1 feature** track → **Records & evidence
 (doc 06)** as the slice family (over the web track + the v1.x backend residuals); **S-rec-1**, **S-rec-2**,
-then the **Evidence Packs (UJ-7)** family (**S-pack-1** build/seal, **S-pack-2** external delivery + PDF portfolio) shipped
-depth-first, completing UJ-7. **Migration head is now `0026`.**
+the **Evidence Packs (UJ-7)** family (**S-pack-1** build/seal, **S-pack-2** external delivery + PDF portfolio),
+then **S-rec-3** (Mode-B structured-form capture) shipped depth-first — completing UJ-7 **and** the records
+family. **Migration head is now `0027`.**
 
 **v1 RECORDS family — S-rec-1/2 + S-pack-1** ✅ (one line each; the full per-slice non-obvious decisions live in the
 squash-merge commits + the `easysynq-project.md` memory; operator/API usage is in the dev-workflow section below):
@@ -48,7 +49,7 @@ squash-merge commits + the `easysynq-project.md` memory; operator/API usage is i
 - **S-rec-2** Records: retention/disposition lifecycle (PR #46, `0024`) — the disposition state machine + daily Beat sweep
   + legal-hold + the **R27 dual-control WORM-destroy-under-legal-order** hatch (fail-closed, **purge-FIRST** ordering, the
   `RECORD_ERASURE_REFUSED` 409 refused-with-reason); `disposition_event` tombstone + `worm_destroy_request` (the dcr R22
-  precedent). **Deferred:** S-rec-3 (Mode-B `form_template` capture), `/retention-policies` CRUD, ordinary creator≠disposer SoD.
+  precedent). **Deferred:** `/retention-policies` CRUD, ordinary creator≠disposer SoD (S-rec-3 Mode-B capture now SHIPPED).
 - **S-pack-1** Evidence Packs build/seal (PR #48, `0025`) — an immutable, self-verifying, scope-limited (CLAUSE/PROCESS +
   date) bundle sealed as a `RETAIN_PERMANENT` EVIDENCE Record; **R28-honest** classification (the `pack_item` table IS the
   exclusion report; absence = a destroy tombstone) + gap report; an idempotent `.delay` worker build (the
@@ -85,6 +86,45 @@ squash-merge commits + the `easysynq-project.md` memory; operator/API usage is i
   downgrade** on PG16; OpenAPI caught up in-PR (redocly green). **Deferred (later):** the `guest_grant`/ABAC/Keycloak-guest
   path (v1.x), Finding/CAPA pack scope, `ip_allow` binding, app-layer rate-limiting (a Caddy edge concern). **Migration head
   is now `0026`.**
+
+- **S-rec-3 — Mode-B structured-form capture (completes the records family)** ✅ — migration `0027` (the full non-obvious
+  decisions live in the squash-merge commit + the project memory). **Owner forks (AskUserQuestion):** schema **versioned
+  via the document lifecycle** · a **bespoke field-list DSL** (no new dep) · **Core + BOTH extras** (the pre-release toggle
+  AND a best-effort sealed-PDF rendition). A Form/Template is a controlled DOCUMENT (`document_type` code `FRM`); the new
+  **`form_template`** shared-PK subtype holds the editable working `field_schema` (the bespoke DSL — `{fields:[{key,label,
+  type:string|text|number|integer|boolean|date|enum,required,min,max,enum}]}`, a pure dependency-free validator covering
+  exactly "types/required/ranges/enums", **no regex/`pattern` leg** → no ReDoS). The schema is **frozen into each
+  `document_version.metadata_snapshot` at check-in** — a dedicated `checkin_form_schema` whose **WORM source blob IS the
+  canonical-serialized schema** (server-side write, no client upload; derived BOTH the blob bytes AND the snapshot from the
+  SAME in-memory schema in one txn — NEVER touch the generic `_snapshot(doc)`). **Mode-B capture** triggers SOLELY on a
+  `source_document_id` that resolves to an FRM template: the server resolves the **Effective** version (or the highest
+  non-Obsolete version when `system_config.capture_pre_release_templates` is on), reads the schema from **that version's
+  snapshot** (never the mutable working copy), validates `form_field_values` (422 `errors[].field`), and pins
+  `source_version_id`; a caller-supplied version must match (else 422 `stale_template_version`). A **correction** pins +
+  validates against the **original record's** edition (so "records keep showing v2.0" survives a v2→v3 revision). The
+  earlier "form_field_values requires a template" tightening was **dropped** (it would 422 existing non-template structured
+  records — the critic caught it); a non-FRM source keeps accepting free-form values. **Authoring** on `/documents`
+  (no records route-inventory change): `PUT/GET …/form-schema` (gate `document.manage_metadata`/`read`; in-service
+  FRM+editable guard — the SYSTEM override has no lifecycle predicate), `GET …/effective-form-schema` (the doc 06 §4.2
+  render-the-form read), `POST …/form-schema:checkin` (gate `document.edit`). **Pre-release toggle:** `PATCH /admin/config`
+  (new `api/config.py`, gate the SYSTEM-only `config.update` — admin; audited `CONFIG_UPDATED` on the closed `config`
+  object type). **Structured-PDF rendition:** best-effort Stage-2 Celery task `easysynq.records.build_structured_pdf`
+  (`.delay`'d after capture commits; idempotent `FOR UPDATE`; deterministic reportlab, **no Gotenberg**; the record id is
+  folded into the bytes → per-record sha) cached in the non-WORM renditions bucket via `record.structured_pdf_blob_sha256`
+  (plain Text, NO FK — the `zip_blob_sha256` R27 precedent); `GET /records/{id}/rendition` presigns it (409 until built).
+  **[the critical fold]** the rendition purge is centralized in the SHARED `_purge_record_evidence`, so ALL THREE destroy
+  paths (`_dispose_now`, the `_auto_dispose` sweep, the R27 `approve_worm_destroy`) drop its `blob` row + bytes + null the
+  pointer — the blob-row-iff-bytes invariant (else the backup sweep crashes NoSuchKey, CI-only). **Migration `0027`**:
+  `form_template` (shared-PK subtype, GRANT to `easysynq_app`) + `record.structured_pdf_blob_sha256` + `system_config.
+  capture_pre_release_templates` (NOT-NULL false default) + additive `FORM_SCHEMA_SET`/`CONFIG_UPDATED` `event_type`
+  (`audit_object_type` stays CLOSED — form templates ride `document`, the config flip rides `config`). Adversarially
+  pressure-tested **before coding** (Plan-agent + 6-lens critic Workflow, 30 agents → folded: `_snapshot`-wiring,
+  read-schema-from-the-version-snapshot, the single Mode-B trigger predicate, the dropped tightening, correction-pins-the-
+  edition, the centralized rendition purge, the config-setter SYSTEM gate, register `FormTemplate` in `db/models/__init__.py`
+  or `alembic check` phantom-drifts, drop the regex leg + size caps). **302 unit + 9 structured-form integration green**;
+  `0027` round-trips up↔down↔check **+ a populated-DB downgrade** on PG16; OpenAPI caught up in-PR (redocly green).
+  **Deferred:** Mode B for `audit`/`capa` multi-stage records (those entities don't exist), a richer schema language, the
+  web form-builder. **Migration head is now `0027`.**
 
 - **Specification** in `docs/` (00–17 + `decisions-register.md`) — complete, adversarially audited, reconciled
   (Register R1–R37 back-propagated). The Register is authoritative.
@@ -321,6 +361,21 @@ create boundary.
   (`VERIFY_TOKEN_SIGNING_KEY_PATH` on the secrets volume — already provisioned for the mirror QR). The heavier
   `guest_grant`/ABAC/Keycloak-guest path stays **v1.x**; Finding/CAPA scope + `ip_allow` + app-rate-limiting deferred.
   Migration head is now `0026` (next `0027`).
+- **Mode-B structured-form capture (S-rec-3) — API/data only, no UI:** author a Form/Template, then fill it. (1) Create
+  an `FRM` document (`POST /documents` with the FRM `document_type_id`); `PUT /documents/{id}/form-schema {field_schema}`
+  sets the working schema (the bespoke field-list DSL; `document.manage_metadata`; FRM + Draft/UnderRevision only, 422/409
+  else). (2) `POST /documents/{id}/form-schema:checkin {change_reason, change_significance}` (`document.edit`) freezes it
+  into a Draft version (the WORM source blob IS the schema). (3) Map ≥1 clause, then the standard `submit-review → approve
+  → release` drives it Effective. (4) `GET /documents/{id}/effective-form-schema` renders the form (the pinned schema).
+  (5) **Capture:** `POST /api/v1/records {record_type, title, source_document_id:<the FRM doc>, form_field_values}`
+  (`record.create`) — the server resolves+pins the Effective version, validates the values against its pinned schema
+  (422 `errors[].field`), and pins `source_version_id`. A **correction** validates against the original's pinned edition.
+  The structured-record PDF builds best-effort (`GET /records/{id}/rendition`; 409 until built — run the worker, or the
+  `easysynq.records.build_structured_pdf` task fires on capture). **Pre-release capture** (fill a Draft template, for a
+  controlled migration): a System Administrator flips it via `PATCH /api/v1/admin/config {capture_pre_release_templates:
+  true}` (`config.update`, admin-only). **Authz:** capture rides a SYSTEM `record.create` override (the records precedent);
+  template authoring rides `document.*` (a folderless FRM doc needs a SYSTEM/DOC_CLASS grant — the `document.export`
+  precedent). Migration head is now `0027` (next `0028`).
 - **⚠ S11 restore + upgrade + encrypted backup (operator):** the durable archive (`easysynq backup run` / the nightly
   Beat job) is now **AES-256-GCM `.tar.enc`** sealed with `BACKUP_ENCRYPTION_KEY` (install.sh generates it into the
   0600 `.env`; **lose it → those archives are unrecoverable** — back it up out-of-band) and bundles the live Keycloak
@@ -354,6 +409,9 @@ create boundary.
 - **Name join-table FKs explicitly** — the convention default can exceed **PG's 63-char identifier limit** (clause_mapping/process_link).
 - **`alembic check` must be clean.** This Alembic version **does reflect expression/functional indexes**, so exclude them
   from autogenerate in `migrations/env.py._include_object` (the 0020 GIN-index lesson). Round-trip up↔down↔check on a throwaway PG16.
+- **A new model module MUST be imported in `db/models/__init__.py`** (+ added to `__all__`) — that file is the sole place
+  `Base.metadata` is populated; a CREATEd table whose model isn't imported makes `alembic check` report a phantom-DROP and
+  the `migrations` CI job goes red (the 0027 `form_template` lesson; the `tasks/__init__.py` registration precedent).
 - **Backup/restore drills run as the OWNER role** (`DATABASE_URL_SYNC`; the app role can't `pg_dump`/`CREATE DATABASE`)
   and **never raise** — a missing binary/crash is an honest FAIL, never a 500.
 - **Run the FULL integration suite for mirror/symlink work** — Py3.12 `rglob` follows symlinks, so dir-finders must filter
@@ -363,6 +421,18 @@ create boundary.
   `blob` row + its `evidence_blob` links — else the backup manifest + restore drill (`_copy_blobs`/`_rehash`) iterate
   **all** `blob` rows and crash `NoSuchKey` on the dead one (after the first disposal, every backup/restore breaks). A
   destroyed record's tombstone is the `disposition_event` + the record `content_hash`, not a dangling `blob` row.
+  **Corollary (S-rec-3):** a NEW per-record derived-rendition `blob` row reachable only by a plain-Text pointer (e.g.
+  `record.structured_pdf_blob_sha256`, NOT an `evidence_blob`) is invisible to the evidence purge loop — wire its purge into
+  the **shared** `_purge_record_evidence` (so ALL three DESTROY paths cover it), drop the row + bytes + null the pointer.
+  Fold the record id into the rendered bytes (per-record sha) so the purge needs no liveness guard.
+- **Versioned "content-as-data" via the document lifecycle (S-rec-3):** when a thing's controlled content is structured
+  data (a form schema), make it the version's source blob (canonical-serialize → server-side staging-PUT →
+  `finalize_worm`, NO client upload) AND snapshot it into `document_version.metadata_snapshot` in ONE txn from the SAME
+  in-memory object — never branch the shared `_snapshot(doc)` (keep ordinary docs untouched). Read it back from the
+  **version snapshot** (immutable), never the mutable working row, so the pin survives a revision. Mark such a structured
+  source blob non-renderable in the mirror (S-rec-3 added `application/json`/`xml` to
+  `render_gotenberg._NON_RENDERABLE_PREFIXES` → the FRM template version lands `no_controlled_rendition` (R26),
+  source-bytes-only, never a garbage CONTROLLED COPY — else a JSON schema blob would route to LibreOffice).
 - **Review rhythm:** N adversarial lenses → per-finding verify → fold only confirmed. Prefer hunting the *false-PASS*
   direction on any gate/proof.
 - **Authz for not-yet-UI'd domains:** seed the permission keys but expect them to reach no concrete object at their seeded

@@ -88,3 +88,9 @@ class Record(Base):
     legal_hold: Mapped[bool] = mapped_column(
         Boolean, server_default=text("false"), default=False, nullable=False
     )
+    # S-rec-3 (doc 06 §4.2): a pointer to the cached structured-record PDF rendition — a DERIVED,
+    # regenerable view in the NON-WORM renditions bucket (doc 14 §5.4), built best-effort at Stage 2
+    # after capture commits. Plain Text, NO FK (the evidence_pack.zip_blob_sha256 / portfolio
+    # precedent) so the R27 WORM-destroy hatch never aborts on a RESTRICT FK; nulled + the blob row
+    # dropped when the record is destroyed/disposed (the blob-row-iff-bytes invariant).
+    structured_pdf_blob_sha256: Mapped[str | None] = mapped_column(Text, nullable=True)

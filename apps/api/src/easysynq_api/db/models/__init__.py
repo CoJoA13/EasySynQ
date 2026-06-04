@@ -50,6 +50,7 @@ from .documented_information import DocumentedInformation
 from .evidence_blob import EvidenceBlob
 from .evidence_for_link import EvidenceForLink
 from .evidence_pack import EvidencePack
+from .form_template import FormTemplate
 from .framework import Framework
 from .numbering_counter import NumberingCounter
 from .org_role import OrgRole
@@ -106,6 +107,7 @@ __all__ = [
     "EvidenceForLink",
     "EvidenceForTargetType",
     "EvidencePack",
+    "FormTemplate",
     "Framework",
     "NumberingCounter",
     "OrgRole",

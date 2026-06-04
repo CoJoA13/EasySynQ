@@ -69,6 +69,16 @@ class SystemConfig(Base):
         default=False,
         nullable=False,
     )
+    # S-rec-3 (doc 06 §4.2): the org opt-in to capture a Mode-B record against a NON-Effective form
+    # template (a Draft/InReview edition) for a controlled migration. Defaults OFF — the safe
+    # drift-killing default is to require an Effective template; flipping it relaxes that integrity
+    # rule org-wide, so it is gated on the SYSTEM-only ``config.update`` (admin) via /admin/config.
+    capture_pre_release_templates: Mapped[bool] = mapped_column(
+        Boolean,
+        server_default=false(),
+        default=False,
+        nullable=False,
+    )
     finalized_at: Mapped[datetime.datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,

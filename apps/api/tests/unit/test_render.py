@@ -254,6 +254,18 @@ async def test_encrypted_pdf_is_non_renderable() -> None:
     assert result.status is RenderStatus.NON_RENDERABLE
 
 
+def test_structured_data_mimes_are_non_renderable() -> None:
+    """[S-rec-3] A Form/Template's controlled source IS its JSON field schema — the mirror must mark
+    application/json (and xml) non-renderable (R26, source-only), never route it to LibreOffice."""
+    assert render_gotenberg._is_non_renderable("application/json")
+    assert render_gotenberg._is_non_renderable("application/xml")
+    assert render_gotenberg._is_non_renderable("text/xml")
+    # A real office doc stays renderable.
+    assert not render_gotenberg._is_non_renderable(
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    )
+
+
 # --- license guard -----------------------------------------------------------------------
 
 

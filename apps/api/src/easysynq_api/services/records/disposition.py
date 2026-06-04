@@ -30,6 +30,7 @@ import uuid
 from botocore.exceptions import BotoCoreError, ClientError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ...config import get_settings
 from ...db.models._audit_enums import EventType
 from ...db.models._record_enums import RecordDispositionState
 from ...db.models._retention_enums import DispositionAction
@@ -73,7 +74,15 @@ async def _max_worm_retain_until(
 async def _purge_record_evidence(session: AsyncSession, record: Record, *, bypass: bool) -> int:
     """Physically destroy the record's evidence bytes (fail-closed; raises on any storage error). A
     blob still attached to another non-disposed record is left intact (its bytes survive for that
-    live record); the disposed record keeps its ``evidence_blob`` rows as a tombstone regardless."""
+    live record); the disposed record keeps its ``evidence_blob`` rows as a tombstone regardless.
+
+    Also purges the record's structured-PDF rendition (S-rec-3) — it is a non-evidence_blob ``blob``
+    row reachable ONLY via ``record.structured_pdf_blob_sha256``, so the evidence loop never visits
+    it. Centralised here so ALL THREE destroy paths (``_dispose_now``, the sweep ``_auto_dispose``,
+    and the R27 ``approve_worm_destroy``) drop it — else the backup manifest / restore drill iterate
+    every ``blob`` row and crash NoSuchKey on the dead rendition (the blob-row-iff-bytes invariant;
+    the S-rec-2 lesson, re-armed). The rendition is per-record (its bytes fold in the record id), so
+    no liveness guard is needed; it is non-WORM, so no governance bypass is needed."""
     purged = 0
     seen: set[str] = set()
     for _eb, blob in await repo.list_evidence_blobs(session, record.id):
@@ -87,7 +96,21 @@ async def _purge_record_evidence(session: AsyncSession, record: Record, *, bypas
         # invariant "a blob row exists iff its object exists" holds (backup won't copy a dead one).
         await repo.delete_blob_and_links(session, blob.sha256)
         purged += 1
+    await _purge_record_rendition(session, record)
     return purged
+
+
+async def _purge_record_rendition(session: AsyncSession, record: Record) -> None:
+    """Drop the record's structured-PDF rendition object + its ``blob`` row (non-WORM renditions
+    bucket; no bypass) and NULL the pointer, so blob-row-iff-bytes holds after a destroy/dispose."""
+    sha = record.structured_pdf_blob_sha256
+    if sha is None:
+        return
+    await storage.purge_object(
+        sha, bucket=get_settings().s3_bucket_renditions, bypass_governance=False
+    )
+    await repo.delete_blob_and_links(session, sha)
+    record.structured_pdf_blob_sha256 = None
 
 
 def _write_tombstone(

@@ -19,6 +19,7 @@ from .api.audit import router as audit_router
 from .api.auth import router as auth_router
 from .api.authz import router as authz_router
 from .api.clauses import router as clauses_router
+from .api.config import router as config_router
 from .api.documents import router as documents_router
 from .api.health import router as health_router
 from .api.pack_share import router as pack_share_router
@@ -132,6 +133,7 @@ def create_app() -> FastAPI:
     app.include_router(setup_router)  # S8a: first-run wizard (latch-exempt)
     app.include_router(authz_router)
     app.include_router(users_router)  # S8d: user-lifecycle admin (roster / invite / enable-disable)
+    app.include_router(config_router)  # S-rec-3: PATCH /admin/config (pre-release-capture toggle)
     app.include_router(documents_router)
     app.include_router(clauses_router)  # S9: read-only ISO clause spine (GET /clauses)
     app.include_router(processes_router)  # S9c: process IA (graph + authoring + /processes/map)
