@@ -122,6 +122,21 @@ class Settings(BaseSettings):
     import_lock_ttl_seconds: int = 1800  # source-root lock TTL; heartbeated per batch
     import_scan_stall_seconds: int = 3600  # the stalled-scan reaper cutoff on scan_started_at
 
+    # S-ing-2 ingestion extract + classify (doc 09 §5-6). The Apache Tika ``-full`` sidecar bundles
+    # the extractors + Tesseract OCR (HTTP, fully local, no telemetry; the Gotenberg precedent). The
+    # source-root lock is held continuously scan->extract->classify (freed at Classified), so the
+    # reaper's primary stall signal is lock-liveness; ``import_run_stall_seconds`` is the generous
+    # absolute backstop on ``scan_started_at`` (the pipeline anchor) for a wedged-but-locked run.
+    tika_url: str = "http://localhost:9998"
+    import_ocr_language: str = "eng"  # Tesseract lang (org-configurable; en in v1, §5.2)
+    import_ocr_char_per_page_threshold: int = 50  # native chars/page below which a PDF is OCR'd
+    import_extract_batch_size: int = 50  # extract is OCR-heavy; a conservative per-batch checkpoint
+    import_classify_batch_size: int = 200  # classify is pure CPU; cheaper, larger batch
+    import_max_extract_text_bytes: int = (
+        4 * 1024 * 1024
+    )  # full_text inline cap (text_truncated flag)
+    import_run_stall_seconds: int = 6 * 3600  # reaper absolute backstop on an in-progress run
+
     @property
     def sync_dsn(self) -> str:
         """DSN Alembic uses (sync driver). Falls back to the async URL's driver name."""

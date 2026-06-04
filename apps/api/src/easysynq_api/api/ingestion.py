@@ -25,8 +25,14 @@ from fastapi import APIRouter, Depends, status
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..db.models._ingestion_enums import ImportRunStatus
+from ..db.models._ingestion_enums import (
+    ImportConfidenceBand,
+    ImportKind,
+    ImportRunStatus,
+)
 from ..db.models.app_user import AppUser
+from ..db.models.import_classification import ImportClassification
+from ..db.models.import_extract import ImportExtract
 from ..db.models.import_file import ImportFile
 from ..db.models.import_run import ImportRun
 from ..db.session import get_session
@@ -69,7 +75,54 @@ def _view(run: ImportRun) -> dict[str, Any]:
     }
 
 
-def _file_view(f: ImportFile) -> dict[str, Any]:
+def _classification_view(
+    c: ImportClassification | None, *, with_evidence: bool = False
+) -> dict[str, Any] | None:
+    """The Stage-3 scored proposal (R10: kind is a suggestion only — confirmation is S-ing-4)."""
+    if c is None:
+        return None
+    view: dict[str, Any] = {
+        "kind": c.kind.value,
+        "kind_conf": c.kind_conf,
+        "type_code": c.type_code,
+        "type_conf": c.type_conf,
+        "clause_numbers": list(c.clause_numbers),
+        "clause_conf": c.clause_conf,
+        "process_names": list(c.process_names) if c.process_names else [],
+        "process_conf": c.process_conf,
+        "pdca_phase": c.pdca_phase.value if c.pdca_phase is not None else None,
+        "band": c.band.value,
+        "ambiguous": c.ambiguous,
+        "top2_margin": c.top2_margin,
+        "classifier_version": c.classifier_version,
+    }
+    if with_evidence:
+        view["evidence"] = c.evidence
+    return view
+
+
+def _extract_view(e: ImportExtract | None) -> dict[str, Any] | None:
+    """The Stage-2 extraction detail (the per-file preview)."""
+    if e is None:
+        return None
+    return {
+        "status": e.status.value,
+        "full_text": e.full_text,
+        "text_truncated": e.text_truncated,
+        "header_block": e.header_block,
+        "embedded_props": e.embedded_props,
+        "language": e.language,
+        "structure_hints": e.structure_hints,
+        "ocr_used": e.ocr_used,
+        "ocr_confidence": e.ocr_confidence,
+        "char_count": e.char_count,
+        "page_count": e.page_count,
+        "error": e.error,
+        "extractor_version": e.extractor_version,
+    }
+
+
+def _file_view(f: ImportFile, classification: ImportClassification | None = None) -> dict[str, Any]:
     return {
         "id": str(f.id),
         "rel_path": f.rel_path,
@@ -83,6 +136,7 @@ def _file_view(f: ImportFile) -> dict[str, Any]:
         "included_candidate": f.included_candidate,
         "mtime": _iso(f.mtime),
         "ctime": _iso(f.ctime),
+        "classification": _classification_view(classification),
     }
 
 
@@ -133,17 +187,44 @@ async def get_import_run_endpoint(
 async def list_import_files_endpoint(
     import_id: uuid.UUID,
     disposition: str | None = None,
+    kind: ImportKind | None = None,
+    band: ImportConfidenceBand | None = None,
     limit: int = 100,
     offset: int = 0,
     caller: AppUser = Depends(_import_review),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
-    """Paginated file inventory for a run (optional ``?disposition=included|excluded|quarantine``).
-    Needs ``import.review``."""
-    run, files = await svc.list_import_files(
-        session, caller, import_id, disposition=disposition, limit=limit, offset=offset
+    """Paginated file inventory + each file's classification proposal (optional
+    ``?disposition=included|excluded|quarantine``, ``?kind=DOCUMENT|RECORD|UNKNOWN``,
+    ``?band=HIGH|MEDIUM|LOW|AMBIGUOUS`` filters). Needs ``import.review``."""
+    run, rows = await svc.list_import_files(
+        session,
+        caller,
+        import_id,
+        disposition=disposition,
+        kind=kind,
+        band=band,
+        limit=limit,
+        offset=offset,
     )
-    return {"run_id": str(run.id), "files": [_file_view(f) for f in files]}
+    return {"run_id": str(run.id), "files": [_file_view(f, c) for f, c in rows]}
+
+
+@router.get("/admin/imports/{import_id}/files/{file_id}")
+async def get_import_file_endpoint(
+    import_id: uuid.UUID,
+    file_id: uuid.UUID,
+    caller: AppUser = Depends(_import_review),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """One file's full review detail: inventory + extraction (text/props/structure) + the scored
+    classification proposal with its evidence list. Needs ``import.review``."""
+    run, f, ext, cls = await svc.list_import_file_detail(session, caller, import_id, file_id)
+    view = _file_view(f, cls)
+    view["run_id"] = str(run.id)
+    view["extract"] = _extract_view(ext)
+    view["classification"] = _classification_view(cls, with_evidence=True)
+    return view
 
 
 @router.post("/admin/imports/{import_id}/cancel")

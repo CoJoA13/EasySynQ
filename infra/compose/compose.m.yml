@@ -10,6 +10,9 @@ services:
   renderer:
     deploy:
       replicas: 2
+  tika:
+    deploy:
+      replicas: 1      # S-ing-2: one ~1 GB Tika JVM serves both workers (OCR scales via worker cores).
   beat:
     deploy:
       replicas: 1      # EXACTLY ONE (R14 SPOF; fast-restart runbook).

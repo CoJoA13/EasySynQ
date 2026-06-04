@@ -39,9 +39,9 @@ the **Evidence Packs (UJ-7)** family (**S-pack-1** build/seal, **S-pack-2** exte
 **S-rec-3** (Mode-B structured-form capture), then **S-rec-4** (the records-family close-out:
 `/retention-policies` CRUD + creator≠disposer SoD-6) shipped depth-first — completing UJ-7 **and** the records
 family. The owner then chose (AskUserQuestion) **Ingestion (doc 09, UJ-2)** as the next family — depth-first slices
-**S-ing-1** (run + scan/inventory foundation) shipped, with extract+classify (slice 2) · dedup+propose (slice 3) ·
+**S-ing-1** (run + scan/inventory foundation) + **S-ing-2** (extract + classify) shipped, with dedup+propose (slice 3) ·
 review (slice 4) · commit+provenance+report+mirror (slice 5) to follow; the family dependency posture is **full-fidelity**
-(Tesseract + Tika + OpenSearch — those bite at slices 2-3). **Migration head is now `0029`.**
+(Tesseract + Tika + OpenSearch — Tika+Tesseract landed at S-ing-2; OpenSearch bites at slice 3). **Migration head is now `0030`.**
 
 **v1 RECORDS family — S-rec-1/2 + S-pack-1** ✅ (one line each; the full per-slice non-obvious decisions live in the
 squash-merge commits + the `easysynq-project.md` memory; operator/API usage is in the dev-workflow section below):
@@ -126,6 +126,38 @@ squash-merge commits + the `easysynq-project.md` memory; operator/API usage is i
   Tika/Tesseract land), dedup+version-families+proposal (slice 3 — OpenSearch lands), review-decisions API (slice 4),
   commit + `import_provenance` + `import_baseline` signature + Import Report + mirror sync (slice 5), the staging TTL janitor,
   the dedicated `import` Celery queue. **Migration head is now `0029`.**
+
+- **S-ing-2 — Ingestion: extract + classify (doc 09 §5-6, the v1 Ingestion engine's analytical stages)** ✅ — migration
+  `0030` (full non-obvious decisions in the squash-merge commit + project memory). **Owner forks (AskUserQuestion):**
+  **Apache Tika `-full` sidecar** (one JVM container bundling the extractors + Tesseract OCR — extraction AND §5.2 OCR over
+  HTTP, fully local, the Gotenberg precedent; collapses the OCR fork) · **YAML rule-pack resource** (the §6.3 matchers in a
+  versioned, schema-validated `rule_packs/iso9001_rule_pack_v1.yaml`) · **synthetic-corpus + real measurement** (a 45-example
+  labeled hold-out + a measurement harness publishing the **INTERIM** per-dimension band tied to `classifier_version`,
+  `VALIDATION.md`). The pipeline **auto-chains** scan→extract→classify (best-effort `.delay`; `import_run_status` ADD VALUEs
+  `Extracting`/`Classifying`/`Classified`) and writes **nothing to the vault**. `0030`: **import_extract** (Stage-2 output;
+  `full_text` **inline TEXT** capped — the staging row is transient/TTL-purged, no blob-row-iff-bytes cost; `UNIQUE(run,file)`)
+  + **import_classification** (Stage-3 scored proposal; `import_kind` enum carries **UNKNOWN** the vault lacks; `clause_numbers`
+  are catalog **codes** not UUIDs; reuses the `pdca_phase` type; `UNIQUE(run,file,classifier_version)`); both FKs CASCADE on
+  run/file (the transient-layer exception); pg_roles-guarded GRANTs. **ExtractorProvider** (`TikaExtractorProvider`: PUT
+  `/rmeta/text`; the **§5.2 two-pass PDF OCR ladder** no_ocr→ocr_only below 50 chars/page; image OCR; **never raises**, §5.3
+  fail-closed; `ocr_confidence` best-effort) + **ClassifierProvider** (the pure `RuleHeuristicClassifier`: **capped weighted
+  sum** `min(100, Σ fired weights)` calibrated to reproduce the §6.5 worked examples — SOP 92/POL 96/AUDIT 90/FRM 88; bands
+  High≥85/Med 60-84/Low<60; row band = the **type** headline conf + an `ambiguous` flag; **kind scored-only**, UNKNOWN below a
+  floor, R10; **PDCA derived** from the highest-confidence requirement-node clause, ties→highest-numbered, bare headers
+  excluded; an **evidence list**). The **load-bearing lock change:** scan no longer releases at Scanned — the source-root lock
+  is held **continuously** scan→extract→classify, freed at Classified; the reaper (`reap_stalled_runs`) reaps any in-progress
+  run via **lock-liveness** (+ a generous age backstop). **ReDoS mechanism:** regex confined to length-capped filename/header
+  + a load-time nested-quantifier rejector (org-override loading deferred). **API** (read-only; gate `import.review`; **no new
+  keys**): `GET …/{id}/files` gains a per-file `classification` sub-object + `?kind=`/`?band=` filters; new `GET
+  …/{id}/files/{file_id}` detail (extract text/props + classification + evidence); counts gain `by_kind`/`by_band`/`extract`.
+  **387 unit (35 new) + 7 ingestion integration green** (the classifier reproduces §6.5 exactly; a mocked-Tika full-pipeline
+  integration test); `0030` round-trips up↔down↔check **+ a populated-DB downgrade** on PG16; OpenAPI caught up in-PR (redocly
+  green). **Deviations (documented):** the band is the **type** dimension (the §6.5 single-number model), not worst-of(type,
+  clause); the accuracy band is **INTERIM-synthetic** (real-corpus `S-ing-2a` sprint is v1.x); `ocr_enabled=False` gates the
+  PDF OCR pass but a standalone image is always OCR'd by the sidecar. **Deferred:** dedup+version-families+proposal (slice 3 —
+  OpenSearch lands), review-decisions API + the **kind confirmation** R10 requires before commit (slice 4), commit +
+  provenance + baseline signature + Import Report + mirror (slice 5), org-overridable rule-pack loading, a Beat
+  pipeline-advancer + a resume API. **Migration head is now `0030`.**
 
 - **Specification** in `docs/` (00–17 + `decisions-register.md`) — complete, adversarially audited, reconciled
   (Register R1–R37 back-propagated). The Register is authoritative.
@@ -401,9 +433,23 @@ create boundary.
   for `Scanned` + counts; `GET …/{id}/files?disposition=included|excluded|quarantine` lists the inventory;
   `POST …/{id}/cancel` aborts (the worker stops cooperatively). It writes **nothing to the vault** (commit is a later slice).
   Gate split: writes (create/cancel) = `import.execute`, reads = `import.review`. **Operator notes:** the worker image carries
-  `libmagic1` (content-sniff); a crashed scan self-recovers via the Beat `easysynq.ingestion.reap_stalled_scans` (FAILs the
-  run + frees the source lock); a new `import-staging` bucket is provisioned by `minio-init.sh`. Extract/classify/dedup/
-  review/commit are later slices. Migration head is now `0029` (next `0030`).
+  `libmagic1` (content-sniff); a crashed scan self-recovers via the Beat `easysynq.ingestion.reap_stalled_runs` (FAILs the
+  run + frees the source lock); a new `import-staging` bucket is provisioned by `minio-init.sh`. Dedup/review/commit are
+  later slices. Migration head is now `0029` (next `0030`).
+- **Ingestion: extract + classify (S-ing-2) — API/data only, no UI:** a created run now **auto-chains** through
+  `Scanning→Scanned→Extracting→Classifying→Classified` (the resting checkpoint awaiting S-ing-4 review) — no operator action
+  beyond the scan trigger. Bring up the **Tika `-full` sidecar** (`just up s --build` pulls `apache/tika:<ver>-full`,
+  `TIKA_URL=http://tika:9998`); set `ocr_enabled:true` in the `POST /admin/imports` body to OCR scanned/image-only PDFs
+  (Tesseract, `IMPORT_OCR_LANGUAGE=eng`). Poll `GET /admin/imports/{id}` for `Classified` + the extended `counts`
+  (`by_kind`/`by_band`/`extract`); `GET …/{id}/files?kind=DOCUMENT|RECORD|UNKNOWN&band=HIGH|MEDIUM|LOW|AMBIGUOUS` lists each
+  file + its **classification proposal** (kind/type/clause_numbers/pdca/band); `GET …/{id}/files/{file_id}` is the per-file
+  review detail (extract text/props + the classification **evidence** list). It writes **nothing to the vault**; the proposal
+  is a SUGGESTION — `kind` is human-confirmed at S-ing-4 (R10), commit is S-ing-5. The §6.3 matchers live in
+  `domain/ingestion/rule_packs/iso9001_rule_pack_v1.yaml` (`classifier_version="rule-heuristic-1"`; its **INTERIM-synthetic**
+  measured band is published in `tests/fixtures/ingestion_corpus/VALIDATION.md`). **Operator notes:** the worker reaches Tika
+  over HTTP (no Tesseract in the worker image; a Tika outage degrades a file to `extract_failed` and the run continues, §5.3);
+  the source-root lock is held **continuously** scan→extract→classify (a re-import of the same root stays 409 through the whole
+  pipeline); a crashed stage self-recovers via `reap_stalled_runs` (lock-liveness). Migration head is now `0030` (next `0031`).
 - **⚠ S11 restore + upgrade + encrypted backup (operator):** the durable archive (`easysynq backup run` / the nightly
   Beat job) is now **AES-256-GCM `.tar.enc`** sealed with `BACKUP_ENCRYPTION_KEY` (install.sh generates it into the
   0600 `.env`; **lose it → those archives are unrecoverable** — back it up out-of-band) and bundles the live Keycloak
@@ -485,6 +531,20 @@ create boundary.
   leaves zero PG side effects; content-addressed writes dedup on re-run), and add a Beat **reaper** for a hard-killed
   `BUILDING` row (no self-healing set-sweep like records). Register the task module in `tasks/__init__.py` (+ a unit test
   asserting it's in `app.tasks`) or `.delay` publishes to a name no worker handles and the row hangs forever.
+- **A multi-stage worker pipeline (S-ing-2 scan→extract→classify) holds ONE lock continuously across stages + a
+  lock-liveness reaper** — NOT a per-stage release/re-acquire (a between-stages window a liveness reaper misreads as
+  stalled) and NOT an age-based reaper (false-fails a legitimately long OCR stage). Each stage `.delay`-chains the next
+  best-effort after its commit (the `_enqueue_structured_pdf` precedent); the lock heartbeats per batch and frees only at
+  the terminal rest; the reaper checks **whether the Redis lock key still exists** (a missing lock on an in-progress run =
+  dead worker) + a generous absolute backstop. A dropped chain-enqueue self-heals to FAILED once the TTL lapses (operator
+  re-runs; resume is cheap via the `WHERE NOT EXISTS(<stage row>)` batch query). The earlier-stage's terminal state stops
+  being terminal (Scanned → cancellable) — update its `_TERMINAL` tuple + the cancel/active-run checks + the existing test.
+- **A classifier rule pack is a versioned YAML resource, not buried code** (S-ing-2, doc 09 §6.3): matchers/weights/
+  explanations load + schema-validate at startup (`domain/ingestion/rule_pack.py`); calibrate weights against the spec's
+  worked examples (a capped weighted sum `min(100, Σ fired)` reproduces doc 09 §6.5's 92/96/90/88). **ReDoS confinement:**
+  allow regex ONLY on length-capped targets (filename/header), use substring keywords on content/path, and reject
+  nested-quantifier patterns at load (untrusted org-override loading stays deferred). A *measured* accuracy band (R10) ships
+  as a labeled hold-out corpus + a harness that IS the validation test, published **INTERIM-synthetic** (real-corpus is v1.x).
 - **A static route alongside a `/{id}` route MUST be mounted FIRST** (the S-pack-2 lesson): FastAPI compiles a path param
   like `{pack_id}` with the **str** path-convertor and validates the UUID *after* matching — so `/evidence-packs/shared`
   resolves to the authenticated `/{pack_id}` route (→ 401) unless the public `/shared` router is `include_router`'d **before**

@@ -2197,9 +2197,12 @@ paths:
       tags: [imports]
       operationId: listImportRunFiles
       summary: >-
-        Paginated file inventory for a run, optionally filtered by disposition. Needs import.review.
+        Paginated file inventory for a run + each file's classification proposal (S-ing-2),
+        optionally filtered by disposition / kind / band. Needs import.review.
       parameters:
         - { name: disposition, in: query, required: false, schema: { type: string, enum: [included, excluded, quarantine] } }
+        - { name: kind, in: query, required: false, schema: { $ref: "#/components/schemas/ImportKind" } }
+        - { name: band, in: query, required: false, schema: { $ref: "#/components/schemas/ImportConfidenceBand" } }
         - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 200, default: 100 } }
         - { name: offset, in: query, required: false, schema: { type: integer, minimum: 0, default: 0 } }
       responses:
@@ -2208,6 +2211,26 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ImportFileList" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "423": { $ref: "#/components/responses/ProblemResponse" }
+
+  /admin/imports/{import_id}/files/{file_id}:
+    parameters:
+      - { name: import_id, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: file_id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [imports]
+      operationId: getImportRunFile
+      summary: >-
+        One file's full review detail (S-ing-2): inventory + extraction (text/props/structure) + the
+        scored classification proposal with its evidence list. Needs import.review.
+      responses:
+        "200":
+          description: The file detail.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ImportFileDetail" }
         "403": { $ref: "#/components/responses/ProblemResponse" }
         "404": { $ref: "#/components/responses/ProblemResponse" }
         "423": { $ref: "#/components/responses/ProblemResponse" }
@@ -4057,9 +4080,20 @@ components:
     ImportRunStatus:
       type: string
       description: >-
-        The import-run state machine. S-ing-1 reaches Created → Scanning → Scanned (+ Failed/Cancelled);
-        later slices add the downstream stages additively.
-      enum: [Created, Scanning, Scanned, Failed, Cancelled]
+        The import-run state machine. S-ing-2 auto-chains Created → Scanning → Scanned → Extracting →
+        Classifying → Classified (the resting checkpoint awaiting review) (+ Failed/Cancelled); later
+        slices add the commit/complete stages additively.
+      enum: [Created, Scanning, Scanned, Extracting, Classifying, Classified, Failed, Cancelled]
+    ImportKind:
+      type: string
+      description: >-
+        The classifier's kind dimension (doc 09 §6.1). UNKNOWN is a staging-only value the vault
+        DocumentKind lacks — kind is ALWAYS human-confirmed (R10); the scorer may decline.
+      enum: [DOCUMENT, RECORD, UNKNOWN]
+    ImportConfidenceBand:
+      type: string
+      description: "The row-level review band (doc 09 §6.4): High ≥85 / Medium 60-84 / Low <60, or AMBIGUOUS on a near-tie."
+      enum: [HIGH, MEDIUM, LOW, AMBIGUOUS]
     ImportRunCreate:
       type: object
       additionalProperties: false
@@ -4067,8 +4101,8 @@ components:
       properties:
         source_root: { type: string, minLength: 1, maxLength: 4096, description: "Path within the configured import mount root (NG3-confined)." }
         profile: { type: [string, "null"], maxLength: 128 }
-        ocr_enabled: { type: boolean, default: false, description: "Reserved; consumed at slice 2 (extract)." }
-        classifier_version: { type: [string, "null"], maxLength: 128, description: "Reserved; consumed at slice 3 (classify)." }
+        ocr_enabled: { type: boolean, default: false, description: "Enable Tesseract OCR for scanned/image-only PDFs + images (S-ing-2, §5.2)." }
+        classifier_version: { type: [string, "null"], maxLength: 128, description: "Reserved; the run records the classifier version that scored it." }
     ImportRun:
       type: object
       additionalProperties: false
@@ -4103,6 +4137,63 @@ components:
         included_candidate: { type: boolean }
         mtime: { type: [string, "null"], format: date-time }
         ctime: { type: [string, "null"], format: date-time }
+        classification:
+          description: "The Stage-3 scored proposal (S-ing-2); null until the run is classified."
+          oneOf:
+            - { type: "null" }
+            - { $ref: "#/components/schemas/ImportClassification" }
+    ImportClassification:
+      type: object
+      additionalProperties: true
+      description: >-
+        A scored, four-dimension proposal (doc 09 §6). A SUGGESTION only — nothing is confirmed or
+        committed here. kind is human-confirmed at review (R10); type/clause/process resolve to vault
+        ids at commit. `evidence` is present only on the per-file detail endpoint.
+      required: [kind, kind_conf, type_conf, clause_numbers, clause_conf, process_conf, band, ambiguous, top2_margin, classifier_version]
+      properties:
+        kind: { $ref: "#/components/schemas/ImportKind" }
+        kind_conf: { type: integer, minimum: 0, maximum: 100 }
+        type_code: { type: [string, "null"], description: "A document_type code (POL/SOP/WI/FRM) or a record_type, per kind." }
+        type_conf: { type: integer, minimum: 0, maximum: 100 }
+        clause_numbers: { type: array, items: { type: string }, description: "Catalog clause CODES (e.g. 8.4), not UUIDs." }
+        clause_conf: { type: integer, minimum: 0, maximum: 100 }
+        process_names: { type: [array, "null"], items: { type: string } }
+        process_conf: { type: integer, minimum: 0, maximum: 100 }
+        pdca_phase: { type: [string, "null"], enum: [PLAN, DO, CHECK, ACT, null], description: "Derived from the matched requirement-node clauses (never guessed)." }
+        band: { $ref: "#/components/schemas/ImportConfidenceBand" }
+        ambiguous: { type: boolean, description: "A scored dimension has a <10 top-two margin." }
+        top2_margin: { type: integer }
+        classifier_version: { type: string }
+        evidence: { type: array, items: { type: object, additionalProperties: true }, description: "[{dimension, candidate, signal_type, weight, explanation}] — detail endpoint only." }
+    ImportExtract:
+      type: object
+      additionalProperties: true
+      description: "The Stage-2 extraction detail (doc 09 §5)."
+      required: [status]
+      properties:
+        status: { type: string, enum: [extracted, ocr, empty, failed] }
+        full_text: { type: [string, "null"] }
+        text_truncated: { type: boolean }
+        header_block: { type: [string, "null"] }
+        embedded_props: { type: [object, "null"], additionalProperties: true }
+        language: { type: [string, "null"] }
+        structure_hints: { type: [object, "null"], additionalProperties: true }
+        ocr_used: { type: boolean }
+        ocr_confidence: { type: [number, "null"] }
+        char_count: { type: [integer, "null"] }
+        page_count: { type: [integer, "null"] }
+        error: { type: [string, "null"] }
+        extractor_version: { type: [string, "null"] }
+    ImportFileDetail:
+      allOf:
+        - { $ref: "#/components/schemas/ImportFile" }
+        - type: object
+          properties:
+            run_id: { type: string, format: uuid }
+            extract:
+              oneOf:
+                - { type: "null" }
+                - { $ref: "#/components/schemas/ImportExtract" }
     ImportFileList:
       type: object
       additionalProperties: false

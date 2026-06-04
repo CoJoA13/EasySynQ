@@ -1,8 +1,7 @@
-"""S-ing-1 integration: the end-to-end scan against real PG/MinIO/Redis, the ``import.*``
-execute/review
-gate split, deny-by-default, the source-root lock (duplicate-active 409), the setup latch (423), and
-org isolation (404, never a leak). The scan is driven in-process (no Celery worker in tests), the
-``services.packs`` build precedent."""
+"""S-ing-1/2 integration: the end-to-end scan->extract->classify pipeline against real PG/MinIO/
+Redis, the ``import.*`` execute/review gate split, deny-by-default, the source-root lock (dup-active
+409), the setup latch (423), and org isolation (404, never a leak). The stages are driven in-process
+(no Celery worker in tests) with a mocked Tika sidecar, the ``services.packs`` build precedent."""
 
 from __future__ import annotations
 
@@ -23,6 +22,9 @@ from easysynq_api.db.models.permission import Permission
 from easysynq_api.db.models.scope import Scope
 from easysynq_api.db.session import get_sessionmaker
 from easysynq_api.domain.authz.types import Effect, ScopeLevel
+from easysynq_api.domain.ingestion.extractor import ExtractInput, ExtractResult
+from easysynq_api.services.ingestion.classify import run_classify
+from easysynq_api.services.ingestion.extract import run_extract
 from easysynq_api.services.ingestion.service import run_scan
 
 from .test_authz import _assign_role, _auth
@@ -30,13 +32,43 @@ from .test_records import _grant, _subject
 
 
 @pytest.fixture(autouse=True)
-def _stub_scan_enqueue(monkeypatch: pytest.MonkeyPatch) -> None:
+def _stub_pipeline_enqueue(monkeypatch: pytest.MonkeyPatch) -> None:
     """The Celery app binds its broker to the default localhost Redis at import time (not the
     testcontainer), and the shared-DB contract is "never trigger real Celery/Beat" — so stub the
-    create-path enqueue; every test drives ``run_scan`` directly (the packs ``build`` precedent)."""
-    from easysynq_api.tasks.ingestion import scan_source
+    auto-chain enqueues (scan->extract->classify); every test drives the stage bodies directly (the
+    packs ``build`` precedent). All THREE ``.delay`` chains are stubbed (a missed one would publish
+    to the localhost broker and hang)."""
+    from easysynq_api.tasks.ingestion import classify_source, extract_source, scan_source
 
-    monkeypatch.setattr(scan_source, "delay", lambda *a, **k: None)
+    for task in (scan_source, extract_source, classify_source):
+        monkeypatch.setattr(task, "delay", lambda *a, **k: None)
+
+
+class _FakeTika:
+    """A mock Tika extractor for integration (no real sidecar in CI): it decodes the staged bytes
+    (the seed files are plain text) as the extracted text. The §5.2 ladder + the real HTTP path are
+    unit-tested (``test_ingestion_extractor.py``) + validated on the Docker stack."""
+
+    def __init__(self, **_kw: object) -> None:
+        pass
+
+    async def extract(
+        self, data: bytes, meta: ExtractInput, *, ocr_enabled: bool, ocr_language: str
+    ) -> ExtractResult:
+        text = data.decode("utf-8", "ignore").strip()
+        return ExtractResult(
+            full_text=text or None,
+            header_block=text[:1500] or None,
+            char_count=len(text),
+            extractor_version="fake-tika",
+        )
+
+
+@pytest.fixture
+def _stub_tika(monkeypatch: pytest.MonkeyPatch) -> None:
+    from easysynq_api.services.ingestion import extract as extract_mod
+
+    monkeypatch.setattr(extract_mod, "TikaExtractorProvider", _FakeTika)
 
 
 def _seed_source() -> Path:
@@ -92,9 +124,177 @@ async def test_scan_happy_path(app_client: AsyncClient, token_factory: Callable[
     assert by_name["copy1.txt"]["sha256"] == by_name["copy2.txt"]["sha256"]
     assert by_name["Thumbs.db"]["sha256"] is None  # excluded → never hashed
 
-    # cancel on a terminal run → 409
+    # S-ing-2: Scanned is NO LONGER terminal (the pipeline auto-chains scan->extract->classify), so
+    # a Scanned (in-progress) run is cancellable → 200. The lock frees; a 2nd cancel is then 409.
     cancel = await app_client.post(f"/api/v1/admin/imports/{run_id}/cancel", headers=h)
-    assert cancel.status_code == 409
+    assert cancel.status_code == 200 and cancel.json()["status"] == "Cancelled"
+    again = await app_client.post(f"/api/v1/admin/imports/{run_id}/cancel", headers=h)
+    assert again.status_code == 409
+
+
+def _seed_classifiable() -> None:
+    """Seed a clear SOP (DOCUMENT) + audit report (RECORD) under IA folders for the classifier."""
+    root = Path(get_settings().import_source_root)
+    proc = root / "Procedures"
+    proc.mkdir(exist_ok=True)
+    (proc / "SOP-PUR-002 Purchasing.docx").write_text(
+        "Standard Operating Procedure Purchasing. supplier and purchasing process steps and "
+        "responsibilities. Revision History. Approved by J Smith"
+    )
+    audits = root / "Records" / "Audits"
+    audits.mkdir(parents=True, exist_ok=True)
+    (audits / "Internal Audit Report Q2 2023.pdf").write_text(
+        "Internal Audit Report. audit findings and audit criteria. Lead auditor signed 2023-06-30"
+    )
+
+
+async def test_pipeline_extract_classify(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    _stub_tika: None,
+) -> None:
+    admin = _subject("avery")
+    await _assign_role(admin, "System Administrator")
+    h = _auth(token_factory, admin)
+    _seed_classifiable()
+
+    run_id = (
+        await app_client.post("/api/v1/admin/imports", headers=h, json={"source_root": "."})
+    ).json()["id"]
+    rid = uuid.UUID(run_id)
+    # Drive the three stages in sequence (the auto-chain enqueues are stubbed).
+    async with get_sessionmaker()() as s:
+        await run_scan(s, rid)
+    async with get_sessionmaker()() as s:
+        await run_extract(s, rid)
+    async with get_sessionmaker()() as s:
+        await run_classify(s, rid)
+
+    got = (await app_client.get(f"/api/v1/admin/imports/{run_id}", headers=h)).json()
+    assert got["status"] == "Classified"
+    counts = got["counts"]
+    assert counts["classified"] == 2  # the SOP + the audit report (both included)
+    assert counts["by_kind"]["DOCUMENT"] == 1 and counts["by_kind"]["RECORD"] == 1
+    assert "HIGH" in counts["by_band"] and "extract" in counts
+
+    files = (await app_client.get(f"/api/v1/admin/imports/{run_id}/files", headers=h)).json()[
+        "files"
+    ]
+    by_name = {f["filename"]: f for f in files}
+    sop = by_name["SOP-PUR-002 Purchasing.docx"]
+    assert sop["classification"]["kind"] == "DOCUMENT"
+    assert sop["classification"]["type_code"] == "SOP"
+    assert sop["classification"]["band"] == "HIGH"
+    assert "8.4" in sop["classification"]["clause_numbers"]
+    assert sop["classification"]["pdca_phase"] == "DO"
+    audit = by_name["Internal Audit Report Q2 2023.pdf"]
+    assert audit["classification"]["kind"] == "RECORD"
+    assert audit["classification"]["type_code"] == "AUDIT"
+
+    # the per-file detail carries the extract text + the classification evidence
+    detail = (
+        await app_client.get(f"/api/v1/admin/imports/{run_id}/files/{sop['id']}", headers=h)
+    ).json()
+    assert detail["extract"]["full_text"] and detail["extract"]["status"] == "extracted"
+    assert any(e["dimension"] == "type" for e in detail["classification"]["evidence"])
+
+    # the ?kind= / ?band= filters
+    docs = (
+        await app_client.get(f"/api/v1/admin/imports/{run_id}/files?kind=DOCUMENT", headers=h)
+    ).json()["files"]
+    assert len(docs) == 1 and docs[0]["filename"] == "SOP-PUR-002 Purchasing.docx"
+    highs = (
+        await app_client.get(f"/api/v1/admin/imports/{run_id}/files?band=HIGH", headers=h)
+    ).json()["files"]
+    assert {f["filename"] for f in highs} == {
+        "SOP-PUR-002 Purchasing.docx",
+        "Internal Audit Report Q2 2023.pdf",
+    }
+
+
+class _FailingTika:
+    """A mock that always fails extraction (corrupt/unknown sub-format) — never raises (§5.3)."""
+
+    def __init__(self, **_kw: object) -> None:
+        pass
+
+    async def extract(
+        self, data: bytes, meta: ExtractInput, *, ocr_enabled: bool, ocr_language: str
+    ) -> ExtractResult:
+        return ExtractResult(failed=True, error="corrupt", extractor_version="fake-tika")
+
+
+async def test_failed_extract_still_classifies_on_filename(
+    app_client: AsyncClient, token_factory: Callable[..., str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # §5.3: a failed extract NEVER fails the run; the file still classifies on filename/path.
+    from easysynq_api.services.ingestion import extract as extract_mod
+
+    monkeypatch.setattr(extract_mod, "TikaExtractorProvider", _FailingTika)
+    admin = _subject("avery")
+    await _assign_role(admin, "System Administrator")
+    h = _auth(token_factory, admin)
+    _seed_classifiable()
+
+    run_id = (
+        await app_client.post("/api/v1/admin/imports", headers=h, json={"source_root": "."})
+    ).json()["id"]
+    rid = uuid.UUID(run_id)
+    async with get_sessionmaker()() as s:
+        await run_scan(s, rid)
+    async with get_sessionmaker()() as s:
+        await run_extract(s, rid)
+    async with get_sessionmaker()() as s:
+        await run_classify(s, rid)
+
+    got = (await app_client.get(f"/api/v1/admin/imports/{run_id}", headers=h)).json()
+    assert got["status"] == "Classified"  # the run completed despite every extract failing
+    detail_files = (
+        await app_client.get(f"/api/v1/admin/imports/{run_id}/files", headers=h)
+    ).json()["files"]
+    sop = next(f for f in detail_files if f["filename"] == "SOP-PUR-002 Purchasing.docx")
+    fid = sop["id"]
+    full = (await app_client.get(f"/api/v1/admin/imports/{run_id}/files/{fid}", headers=h)).json()
+    assert full["extract"]["status"] == "failed"  # extraction recorded as failed
+    assert sop["classification"]["type_code"] == "SOP"  # still typed from the filename doc-code
+
+
+async def test_reaper_fails_run_with_dead_lock(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    # The lock-liveness reaper: an in-progress run whose lock has lapsed (dead worker) is FAILED.
+    # Drive a run to Scanned (lock held), advance to Extracting, force-free the lock, then reap.
+    from easysynq_api.services.ingestion import locks
+    from easysynq_api.services.ingestion.service import reap_stalled_runs
+
+    admin = _subject("avery")
+    await _assign_role(admin, "System Administrator")
+    h = _auth(token_factory, admin)
+    _seed_classifiable()
+    run_id = (
+        await app_client.post("/api/v1/admin/imports", headers=h, json={"source_root": "."})
+    ).json()["id"]
+    rid = uuid.UUID(run_id)
+    async with get_sessionmaker()() as s:
+        await run_scan(s, rid)  # → Scanned, lock held
+
+    async with get_sessionmaker()() as s:
+        run = (
+            await s.execute(
+                sa.text("SELECT source_root_hash FROM import_run WHERE id = :i"), {"i": rid}
+            )
+        ).scalar_one()
+        await s.execute(
+            sa.text("UPDATE import_run SET status='Extracting' WHERE id = :i"), {"i": rid}
+        )
+        await s.commit()
+    await locks.force_release(run)  # simulate the worker dying (lock lapses)
+
+    async with get_sessionmaker()() as s:
+        summary = await reap_stalled_runs(s)
+    assert summary["reaped"] >= 1
+    got = (await app_client.get(f"/api/v1/admin/imports/{run_id}", headers=h)).json()
+    assert got["status"] == "Failed" and got["error"] == "stage_timeout"
 
 
 async def test_gate_split_execute_vs_review(
