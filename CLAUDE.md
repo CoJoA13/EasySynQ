@@ -331,6 +331,11 @@ create boundary.
   and **never raise** — a missing binary/crash is an honest FAIL, never a 500.
 - **Run the FULL integration suite for mirror/symlink work** — Py3.12 `rglob` follows symlinks, so dir-finders must filter
   `not is_symlink()` and byte-scans use `os.walk(followlinks=False)`; cross-file test pollution only surfaces in the full run.
+- **Keep the `blob`-row-iff-bytes invariant** (the S-rec-2 lesson, found by CI not local since the restore tests are
+  pg_dump-gated): any path that physically deletes object bytes (the WORM-destroy / sweep DESTROY) MUST also drop the
+  `blob` row + its `evidence_blob` links — else the backup manifest + restore drill (`_copy_blobs`/`_rehash`) iterate
+  **all** `blob` rows and crash `NoSuchKey` on the dead one (after the first disposal, every backup/restore breaks). A
+  destroyed record's tombstone is the `disposition_event` + the record `content_hash`, not a dangling `blob` row.
 - **Review rhythm:** N adversarial lenses → per-finding verify → fold only confirmed. Prefer hunting the *false-PASS*
   direction on any gate/proof.
 - **Authz for not-yet-UI'd domains:** seed the permission keys but expect them to reach no concrete object at their seeded

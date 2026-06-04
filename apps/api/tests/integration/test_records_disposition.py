@@ -24,6 +24,7 @@ from easysynq_api.db.models._audit_enums import EventType
 from easysynq_api.db.models._retention_enums import DispositionAction, RetentionBasis
 from easysynq_api.db.models.app_user import AppUser
 from easysynq_api.db.models.audit_event import AuditEvent
+from easysynq_api.db.models.blob import Blob
 from easysynq_api.db.models.disposition_event import DispositionEvent
 from easysynq_api.db.models.documented_information import DocumentedInformation
 from easysynq_api.db.models.evidence_blob import EvidenceBlob
@@ -439,9 +440,13 @@ async def test_dual_control_destroy_happy_path_and_same_actor_block(
         assert ok.status_code == 200, ok.text
         assert ok.json()["disposition_state"] == "DISPOSED"
 
-        # The WORM bytes are physically gone (governance bypass actually deleted the version).
+        # The WORM bytes are physically gone (governance bypass actually deleted the version)...
         head_after = await storage.head(sha, bucket=storage._records_bucket())
         assert not head_after.exists
+        # ...and the now-false blob row is dropped (the invariant: a blob row exists iff its object
+        # does — so backup/restore never tries to copy a destroyed blob).
+        async with get_sessionmaker()() as s:
+            assert await s.get(Blob, sha) is None
 
         events = await _disposition_events(rid)
         assert len(events) == 1

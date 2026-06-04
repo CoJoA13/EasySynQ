@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import and_, asc, desc, func, or_, select
+from sqlalchemy import and_, asc, delete, desc, func, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -272,6 +272,16 @@ async def due_active_records(
         stmt = stmt.with_for_update(skip_locked=True, of=Record)
     rows = (await session.execute(stmt)).all()
     return [(r, p) for r, p in rows]
+
+
+async def delete_blob_and_links(session: AsyncSession, blob_sha256: str) -> None:
+    """After a blob's bytes are physically destroyed, drop the now-false ``blob`` row + every
+    ``evidence_blob`` row referencing it, so the invariant **a ``blob`` row exists iff its object
+    exists** holds — no backup/restore (or any 'copy every blob' sweep) ever hits a destroyed
+    object (doc 06 §5.3 "removes the blob"; the ``disposition_event`` tombstone + the record
+    ``content_hash`` preserve what existed). Only called when no live record needs the bytes."""
+    await session.execute(delete(EvidenceBlob).where(EvidenceBlob.blob_sha256 == blob_sha256))
+    await session.execute(delete(Blob).where(Blob.sha256 == blob_sha256))
 
 
 async def blob_needed_by_other_live_record(

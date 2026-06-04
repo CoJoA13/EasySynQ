@@ -83,6 +83,9 @@ async def _purge_record_evidence(session: AsyncSession, record: Record, *, bypas
         if await repo.blob_needed_by_other_live_record(session, blob.sha256, record.id):
             continue
         await storage.purge_object(blob.object_key, bucket=blob.bucket, bypass_governance=bypass)
+        # The object is gone → drop the now-false blob row + its evidence_blob links so the
+        # invariant "a blob row exists iff its object exists" holds (backup won't copy a dead one).
+        await repo.delete_blob_and_links(session, blob.sha256)
         purged += 1
     return purged
 
