@@ -178,6 +178,15 @@ class EventType(enum.Enum):
     PACK_SHARED = "PACK_SHARED"
     PACK_DOWNLOADED = "PACK_DOWNLOADED"
     PACK_SHARE_REVOKED = "PACK_SHARE_REVOKED"
+    # Mode-B structured forms (S-rec-3, doc 06 §4.2). FORM_SCHEMA_SET trails an author setting a
+    # form template's working ``field_schema`` (object_type ``document`` — a form template IS a
+    # controlled document; the schema is frozen into the version's metadata_snapshot at check-in).
+    # CONFIG_UPDATED trails a post-OPERATIONAL org-config change via PATCH /admin/config (object
+    # type ``config`` — e.g. the ``capture_pre_release_templates`` toggle). Added via ALTER TYPE
+    # event_type ADD VALUE in 0027 (the 0011-0026 additive pattern; a from-scratch ``upgrade head``
+    # rebuilds the type from EVENT_TYPE_VALUES, so the members live here too).
+    FORM_SCHEMA_SET = "FORM_SCHEMA_SET"
+    CONFIG_UPDATED = "CONFIG_UPDATED"
 
 
 class CheckpointSinkKind(enum.Enum):

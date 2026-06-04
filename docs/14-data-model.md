@@ -285,10 +285,11 @@ erDiagram
 | `retention_basis_date` | date | Anchor for retention computation. |
 | `disposition_state` | enum(`ACTIVE`,`DUE_FOR_REVIEW`,`ON_HOLD`,`DISPOSED`) | `06 §5.3`. |
 | `legal_hold` | bool | Overrides expiry. |
+| `structured_pdf_blob_sha256` (**S-rec-3**) | text null, **NO FK** | Pointer to the cached structured-record PDF — a DERIVED, regenerable rendition (§5.4) in the non-WORM renditions bucket, built best-effort at Stage 2. Plain Text (the `evidence_pack.zip_blob_sha256` R27 precedent) so the WORM-destroy hatch never aborts; nulled + the `blob` row dropped on destroy (blob-row-iff-bytes). NOT part of `content_hash`. |
 
 | Supporting entity | Key attributes | Notes |
 |---|---|---|
-| `form_template` | `id` PK/FK (a `document` with `document_type=Form/Template`), `field_schema` jsonb | A maintained Document that instantiates Records (`06 §1.2`, `02 §4.2`). |
+| `form_template` (**S-rec-3**) | `id` PK/FK = `documented_information.id` (a shared-PK subtype of a `kind=DOCUMENT`, `document_type` code `FRM`; there is no separate `document` table — DI is the single kind-discriminated base), `org_id`, `field_schema` jsonb (the **editable WORKING copy** — a bespoke field-list DSL; doc 06 §4.2) | A maintained Document that instantiates Records (`06 §1.2`, `02 §4.2`). The working `field_schema` is **frozen into each `document_version.metadata_snapshot` at check-in** (`metadata_snapshot.field_schema`) — Mode-B capture validates + pins the schema from the record's `source_version_id` snapshot, **never** this mutable row, so already-captured records keep showing their edition (the v2.0 ratchet, doc 06 §4.2). |
 | `evidence_blob` | `id` PK, `record_id` FK, `blob_sha256` FK, `is_original` bool | Content-addressed attachment(s); original never mutated. |
 | `requirement_link` | `id` PK, `record_id` FK, `clause_id` FK (requirement node) | Finer-grained direct requirement traceability (`06 §3`). |
 | `evidence_for_link` | `id` PK, `record_id` FK, `target_type` enum(`finding`,`capa_stage`,`clause`,`process`,`document`), `target_id` | Link-as-evidence (Mode C), audited, never copies (`06 §4.3`). |

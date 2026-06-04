@@ -15,6 +15,7 @@ pattern), ``object_type=record``, hashes NULL for the S6 linker.
 from __future__ import annotations
 
 import datetime
+import logging
 import uuid
 from collections.abc import Sequence
 from typing import Any
@@ -38,6 +39,7 @@ from ...db.models.evidence_blob import EvidenceBlob
 from ...db.models.evidence_for_link import EvidenceForLink
 from ...db.models.record import Record
 from ...domain.records.content_hash import record_content_hash
+from ...domain.records.form_schema import validate_values, values_too_large
 from ...domain.records.retention import (
     PolicyCandidate,
     RetentionResolution,
@@ -48,10 +50,13 @@ from ...domain.vault import format_identifier
 from ...logging import request_id_var
 from ...problems import ProblemException
 from ..vault import repository as vault_repo
-from ..vault import storage
+from ..vault import resolve_template_version, schema_from_version, storage
 from . import repository as repo
 
+logger = logging.getLogger("easysynq.records")
+
 _RECORD_TYPE_PREFIX = "REC"  # identifier {REC}-{AREA}-{SEQ}; record_type is the row discriminator
+_FRM_CODE = "FRM"  # the Form/Template document_type code (Mode-B capture trigger; doc 06 §4.2)
 
 
 def _now() -> datetime.datetime:
@@ -184,6 +189,120 @@ async def resolve_capture_retention(
     )
 
 
+# --- source-version resolution (R21 + Mode-B, doc 06 §4.2) -------------------------------
+
+
+async def _resolve_source_version(
+    session: AsyncSession,
+    actor: AppUser,
+    framework_id: uuid.UUID,
+    *,
+    source_document_id: uuid.UUID | None,
+    source_version_id: uuid.UUID | None,
+    form_field_values: dict[str, Any] | None,
+    pin_version: uuid.UUID | None,
+) -> uuid.UUID | None:
+    """Validate the source document + resolve the pinned version, returning the resolved
+    ``source_version_id`` (None for ad-hoc EVIDENCE). Two cases:
+
+    * **Mode-B** — the source is a Form/Template (``document_type`` code FRM): the SERVER resolves
+      the Effective (or, if the org enabled it, the latest pre-release) version, validates
+      ``form_field_values`` against that version's PINNED schema (never the mutable working copy),
+      and returns its id. A caller-supplied ``source_version_id`` must match (else 422 — the
+      template was revised mid-fill). A correction pins the original record's edition
+      (``pin_version``) and validates against IT, so "records keep showing v2.0" across a revision.
+    * **R21** — a regular controlled document: the caller MUST pin the exact version.
+    """
+    if source_document_id is None:
+        if source_version_id is not None:
+            raise _validation_error(
+                "source_version_id", "invalid", "source_version_id requires source_document_id"
+            )
+        return None
+
+    source_doc = await session.get(DocumentedInformation, source_document_id)
+    if (
+        source_doc is None
+        or source_doc.org_id != actor.org_id
+        or source_doc.kind != DocumentKind.DOCUMENT
+    ):
+        raise _validation_error("source_document_id", "not_found", "Source document not found")
+    if source_doc.framework_id != framework_id:
+        raise _validation_error(
+            "source_document_id", "framework_mismatch", "Source document framework mismatch"
+        )
+
+    dt = (
+        await vault_repo.get_document_type(session, source_doc.document_type_id)
+        if source_doc.document_type_id
+        else None
+    )
+    if dt is not None and dt.code == _FRM_CODE:  # --- Mode-B (structured-form capture) ---
+        if pin_version is not None:  # correction: validate against the original's pinned edition
+            version = await session.get(DocumentVersion, pin_version)
+            if version is None or version.document_id != source_document_id:
+                raise _validation_error(
+                    "source_version_id", "not_found", "Source version not found for that template"
+                )
+        else:
+            allow_pre = await vault_repo.capture_pre_release_enabled(session, actor.org_id)
+            version = await resolve_template_version(
+                session, source_doc, allow_pre_release=allow_pre
+            )
+            if source_version_id is not None and source_version_id != version.id:
+                raise _validation_error(
+                    "source_version_id",
+                    "stale_template_version",
+                    "the form template was revised — re-render the form (Effective version moved)",
+                )
+        schema = schema_from_version(version)
+        if schema is None:
+            raise _validation_error(
+                "source_document_id",
+                "template_has_no_schema",
+                "the form-template version carries no field schema",
+            )
+        field_errors = validate_values(schema, form_field_values or {})
+        if field_errors:
+            raise ProblemException(
+                status=422,
+                code="validation_error",
+                title="Form values do not match the template schema",
+                errors=[e.as_dict() for e in field_errors],
+            )
+        return version.id
+
+    # --- R21: a record produced under a regular controlled document MUST pin its version ---
+    if source_version_id is None:
+        raise _validation_error(
+            "source_version_id",
+            "source_version_required",
+            "A record produced under a document must pin its version (R21)",
+        )
+    version = await session.get(DocumentVersion, source_version_id)
+    if version is None or version.document_id != source_document_id:
+        raise _validation_error(
+            "source_version_id", "not_found", "Source version not found for that document"
+        )
+    return source_version_id
+
+
+def _enqueue_structured_pdf(record_id: uuid.UUID) -> None:
+    """Best-effort: enqueue the Stage-2 structured-record PDF rendition build after capture commits
+    (the ``packs.generate_pack`` precedent). Swallows a broker hiccup — the rendition is derived +
+    rebuildable (no reaper; ``GET /records/{id}/rendition`` 409s until it lands), so a publish
+    failure must never fail the capture."""
+    try:
+        from ...tasks.records import build_structured_pdf
+
+        build_structured_pdf.delay(str(record_id))
+    except Exception:  # noqa: BLE001 — best-effort enqueue; capture already committed
+        logger.warning(
+            "records.structured_pdf.enqueue_failed",
+            extra={"extra_fields": {"record_id": str(record_id)}},
+        )
+
+
 # --- capture -----------------------------------------------------------------------------
 
 
@@ -296,11 +415,14 @@ async def capture_record(
     form_field_values: dict[str, Any] | None = None,
     retention_policy_id: uuid.UUID | None = None,
     _correction_of: uuid.UUID | None = None,
+    _pin_version: uuid.UUID | None = None,
     _commit: bool = True,
 ) -> Record:
     """Capture an immutable record: base + subtype + WORM evidence + content_hash seal + audit, one
-    commit. ``_correction_of``/``_commit`` are internal (the correction path captures the successor
-    without committing, then flips the original's pointer in the same transaction)."""
+    commit. When ``source_document_id`` is a Form/Template, this is **Mode-B** capture: the server
+    resolves + pins the Effective (or pre-release) version and validates ``form_field_values``
+    against its pinned schema (doc 06 §4.2). ``_correction_of``/``_pin_version``/``_commit`` are
+    internal (the correction path uses them to capture the successor and pin its edition)."""
     try:
         rtype = RecordType(record_type)
     except ValueError as exc:
@@ -309,40 +431,27 @@ async def capture_record(
         klass = Classification(classification)
     except ValueError as exc:
         raise _validation_error("classification", "invalid", "Invalid classification") from exc
+    # Size guard (every capture, before the synchronous content_hash) — Mode-B re-checks per-field.
+    if form_field_values is not None and values_too_large(form_field_values):
+        raise _validation_error(
+            "form_field_values", "too_large", "form_field_values payload is too large"
+        )
 
     framework = await vault_repo.get_framework(session, actor.org_id)
     if framework is None:
         raise ProblemException(status=422, code="validation_error", title="No framework configured")
 
-    # R21: a record produced under a controlled document MUST pin the exact version; ad-hoc EVIDENCE
-    # has neither. Validate the source document + the version-belongs-to-document + framework match.
-    if source_document_id is not None:
-        source_doc = await session.get(DocumentedInformation, source_document_id)
-        if (
-            source_doc is None
-            or source_doc.org_id != actor.org_id
-            or source_doc.kind != DocumentKind.DOCUMENT
-        ):
-            raise _validation_error("source_document_id", "not_found", "Source document not found")
-        if source_doc.framework_id != framework.id:
-            raise _validation_error(
-                "source_document_id", "framework_mismatch", "Source document framework mismatch"
-            )
-        if source_version_id is None:
-            raise _validation_error(
-                "source_version_id",
-                "source_version_required",
-                "A record produced under a document must pin its version (R21)",
-            )
-        version = await session.get(DocumentVersion, source_version_id)
-        if version is None or version.document_id != source_document_id:
-            raise _validation_error(
-                "source_version_id", "not_found", "Source version not found for that document"
-            )
-    elif source_version_id is not None:
-        raise _validation_error(
-            "source_version_id", "invalid", "source_version_id requires source_document_id"
-        )
+    # Validate + resolve the source/version (R21 pin, or the Mode-B Effective-version resolution +
+    # schema validation). Returns the resolved source_version_id the record will pin.
+    source_version_id = await _resolve_source_version(
+        session,
+        actor,
+        framework.id,
+        source_document_id=source_document_id,
+        source_version_id=source_version_id,
+        form_field_values=form_field_values,
+        pin_version=_pin_version,
+    )
 
     captured_at = _now()
     resolution = await resolve_capture_retention(
@@ -421,6 +530,8 @@ async def capture_record(
     if _commit:
         await session.commit()
         await session.refresh(record)
+        if record.form_field_values:  # a structured record → best-effort Stage-2 PDF rendition
+            _enqueue_structured_pdf(record.id)
     return record
 
 
@@ -447,6 +558,15 @@ async def capture_correction(
         raise ProblemException(
             status=409, code="conflict", title="Record already superseded by a correction"
         )
+    # A correction documents what should have been recorded under the SAME source edition: when the
+    # original was produced under a document, inherit its source pins and validate the corrected
+    # values against the original's PINNED template version (``_pin_version``) — NOT the org-current
+    # Effective one — so a v2→v3 template revision never invalidates correcting a v2.0 record (doc
+    # 06 §4.2 "records keep showing v2.0"). An ad-hoc EVIDENCE original keeps the body's source.
+    pin_version = original.source_version_id if original.source_document_id is not None else None
+    if original.source_document_id is not None:
+        source_document_id = original.source_document_id
+        source_version_id = original.source_version_id
     new_record = await capture_record(
         session,
         actor,
@@ -460,6 +580,7 @@ async def capture_correction(
         form_field_values=form_field_values,
         retention_policy_id=retention_policy_id,
         _correction_of=original.id,
+        _pin_version=pin_version,
         _commit=False,
     )
     original.superseded_by_correction = new_record.id
@@ -473,6 +594,8 @@ async def capture_correction(
     )
     await session.commit()
     await session.refresh(new_record)
+    if new_record.form_field_values:  # a structured correction → best-effort Stage-2 PDF rendition
+        _enqueue_structured_pdf(new_record.id)
     return new_record
 
 

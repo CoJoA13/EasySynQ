@@ -11,11 +11,13 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import hashlib
 import logging
 import re
 import uuid
 from typing import Any, Literal
 
+import rfc8785
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -31,7 +33,9 @@ from ...db.models.app_user import AppUser
 from ...db.models.blob import Blob
 from ...db.models.document_version import DocumentVersion as DocumentVersionModel
 from ...db.models.documented_information import DocumentedInformation
+from ...db.models.form_template import FormTemplate
 from ...db.models.working_draft import WorkingDraft
+from ...domain.records.form_schema import FieldError, validate_schema
 from ...domain.vault import format_identifier, revision_label
 from ...logging import request_id_var
 from ...problems import ProblemException
@@ -83,9 +87,14 @@ def _emit(
     )
 
 
-def _snapshot(doc: DocumentedInformation) -> dict[str, Any]:
-    """Metadata as it was at check-in (doc 14 §5.3) — frozen onto the immutable version."""
-    return {
+def _snapshot(
+    doc: DocumentedInformation, *, field_schema: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """Metadata as it was at check-in (doc 14 §5.3) — frozen onto the immutable version. Ordinary
+    documents call this with no ``field_schema`` (the snapshot shape is unchanged). A Form/Template
+    check-in (S-rec-3) passes the working ``field_schema`` so the version pins it (the Mode-B
+    capture validator reads it from here, never the mutable ``form_template`` row)."""
+    snap: dict[str, Any] = {
         "identifier": doc.identifier,
         "title": doc.title,
         "document_type_id": str(doc.document_type_id) if doc.document_type_id else None,
@@ -94,6 +103,9 @@ def _snapshot(doc: DocumentedInformation) -> dict[str, Any]:
         "classification": doc.classification.value,
         "framework_id": str(doc.framework_id),
     }
+    if field_schema is not None:
+        snap["field_schema"] = field_schema
+    return snap
 
 
 async def create_document(
@@ -364,6 +376,270 @@ _FILENAME_UNSAFE = re.compile(r"[^A-Za-z0-9._-]+")
 def _safe_pdf_filename(identifier: str, revision_label: str) -> str:
     stem = _FILENAME_UNSAFE.sub("_", f"{identifier}_{revision_label}").strip("_")
     return f"{stem or 'document'}.pdf"
+
+
+# --- S-rec-3: Form/Template schema authoring + version resolution (doc 06 §4.2) ----------
+
+_FRM_CODE = "FRM"  # the seeded Form/Template document_type code (0006_seed_vault)
+_EDITABLE_STATES = frozenset({DocumentCurrentState.Draft, DocumentCurrentState.UnderRevision})
+
+
+def _schema_422(errors: list[FieldError]) -> ProblemException:
+    return ProblemException(
+        status=422,
+        code="validation_error",
+        title="Invalid form field schema",
+        errors=[e.as_dict() for e in errors],
+    )
+
+
+async def _require_form_template_doc(
+    session: AsyncSession, doc: DocumentedInformation, *, must_be_editable: bool
+) -> None:
+    """In-service guard (NOT an authz ``lifecycle_state`` predicate — the SYSTEM override that
+    reaches a folderless FRM doc carries none): the doc must be a Form/Template (``kind=DOCUMENT``,
+    ``document_type`` code ``FRM``); when ``must_be_editable`` also Draft/UnderRevision, so an
+    Effective template's working schema can never be overwritten without a new version (doc 06 §4.2;
+    AZ-INV-8). Mirrors the in-service FSM guards in ``lifecycle.py``."""
+    dt = (
+        await repository.get_document_type(session, doc.document_type_id)
+        if doc.document_type_id
+        else None
+    )
+    if doc.kind is not DocumentKind.DOCUMENT or dt is None or dt.code != _FRM_CODE:
+        raise ProblemException(
+            status=422,
+            code="validation_error",
+            title="Document is not a Form/Template",
+            errors=[
+                {
+                    "field": "document_type",
+                    "code": "not_form_template",
+                    "message": "the document_type must be FRM (Form/Template)",
+                }
+            ],
+        )
+    if must_be_editable and doc.current_state not in _EDITABLE_STATES:
+        raise ProblemException(
+            status=409,
+            code="not_editable",
+            title="Edit a form template's schema only while Draft or UnderRevision",
+            detail="Start a revision to author a new schema edition on an Effective template.",
+        )
+
+
+async def set_working_schema(
+    session: AsyncSession,
+    sink: VaultAuditSink,
+    actor: AppUser,
+    doc: DocumentedInformation,
+    field_schema: dict[str, Any],
+) -> FormTemplate:
+    """Set/replace a Form/Template's editable working ``field_schema`` (S-rec-3). Validates the
+    schema *definition*, upserts the ``form_template`` row, audits FORM_SCHEMA_SET.
+    Draft/UnderRevision only — a check-in then freezes it into a version (the pin for capture)."""
+    await _require_form_template_doc(session, doc, must_be_editable=True)
+    errors = validate_schema(field_schema)
+    if errors:
+        raise _schema_422(errors)
+    ft = await repository.get_form_template(session, doc.id)
+    if ft is None:
+        ft = FormTemplate(id=doc.id, org_id=doc.org_id, field_schema=field_schema)
+        session.add(ft)
+    else:
+        ft.field_schema = field_schema
+    _emit(
+        session,
+        sink,
+        "FORM_SCHEMA_SET",
+        actor,
+        "document",
+        doc.id,
+        identifier=doc.identifier,
+        after={"field_count": len(field_schema.get("fields", []))},
+    )
+    await session.commit()
+    await session.refresh(ft)
+    return ft
+
+
+async def get_working_schema(
+    session: AsyncSession, doc: DocumentedInformation
+) -> dict[str, Any] | None:
+    ft = await repository.get_form_template(session, doc.id)
+    return ft.field_schema if ft is not None else None
+
+
+async def checkin_form_schema(
+    session: AsyncSession,
+    sink: VaultAuditSink,
+    actor: AppUser,
+    doc: DocumentedInformation,
+    *,
+    change_reason: str,
+    change_significance: str,
+) -> DocumentVersionModel:
+    """Freeze the working schema into an immutable ``DocumentVersion`` (S-rec-3). The controlled
+    content of a Form/Template IS its schema: the canonical-serialized ``field_schema`` is the
+    version's WORM source blob (server-side write — no client upload), and the SAME in-memory schema
+    is pinned into ``metadata_snapshot`` in one transaction (so the bytes and the snapshot can never
+    diverge). Then the standard submit-review → approve → release drives it Effective, unchanged."""
+    await _require_form_template_doc(session, doc, must_be_editable=True)
+    ft = await repository.get_form_template(session, doc.id)
+    if ft is None or ft.field_schema is None:
+        raise ProblemException(
+            status=422,
+            code="validation_error",
+            title="Set a form schema first via PUT /documents/{id}/form-schema",
+        )
+    schema = ft.field_schema
+    errors = validate_schema(schema)  # defensive — set-time validated, but the seal must be sound
+    if errors:
+        raise _schema_422(errors)
+    if not change_reason or not change_reason.strip():
+        raise ProblemException(
+            status=422,
+            code="validation_error",
+            title="Check-in requires a change reason (INV-3)",
+            errors=[{"field": "change_reason", "code": "required", "message": "must be non-empty"}],
+        )
+    try:
+        significance = ChangeSignificance(change_significance)
+    except ValueError as exc:
+        raise ProblemException(
+            status=422,
+            code="validation_error",
+            title="Check-in requires change_significance MAJOR or MINOR (INV-3)",
+            errors=[{"field": "change_significance", "code": "invalid", "message": "MAJOR|MINOR"}],
+        ) from exc
+
+    payload = rfc8785.dumps(schema)  # JCS — deterministic; identical schema → identical source blob
+    sha = hashlib.sha256(payload).hexdigest()
+    if await repository.get_blob(session, sha) is None:
+        await storage.put_staging_bytes(payload, sha, content_type="application/json")
+        promoted = await storage.finalize_worm(sha)
+        if not promoted.exists:  # pragma: no cover - defensive (we just wrote it)
+            raise ProblemException(
+                status=500, code="internal_error", title="Schema object upload failed"
+            )
+        if promoted.retain_until is None:
+            raise ProblemException(
+                status=423, code="worm_required", title="Schema object is not WORM-locked"
+            )
+        await session.execute(
+            pg_insert(Blob)
+            .values(
+                sha256=sha,
+                org_id=actor.org_id,
+                size_bytes=promoted.size or len(payload),
+                mime_type="application/json",
+                bucket=get_settings().s3_bucket_documents,
+                object_key=sha,
+                worm_locked=True,
+                worm_retain_until=promoted.retain_until,
+            )
+            .on_conflict_do_nothing(index_elements=["sha256"])
+        )
+        await session.flush()
+
+    seq = await repository.next_version_seq(session, doc.id)
+    version = DocumentVersionModel(
+        org_id=actor.org_id,
+        document_id=doc.id,
+        version_seq=seq,
+        revision_label=revision_label(seq),
+        change_significance=significance,
+        change_reason=change_reason.strip(),
+        version_state=VersionState.Draft,
+        source_blob_sha256=sha,
+        metadata_snapshot=_snapshot(doc, field_schema=schema),  # SAME object → bytes ≡ snapshot
+        author_user_id=actor.id,
+        created_by=actor.id,
+    )
+    session.add(version)
+    _emit(
+        session,
+        sink,
+        "CHECKIN",
+        actor,
+        "document_version",
+        version.id,
+        identifier=doc.identifier,
+        reason=change_reason.strip(),
+    )
+    await session.commit()
+    await session.refresh(version)
+    return version
+
+
+def schema_from_version(version: DocumentVersionModel) -> dict[str, Any] | None:
+    """The pinned ``field_schema`` from a version's immutable ``metadata_snapshot`` (None if absent
+    — e.g. an ordinary document version). The Mode-B validator reads ONLY here (doc 06 §4.2)."""
+    fs = (version.metadata_snapshot or {}).get("field_schema")
+    return fs if isinstance(fs, dict) else None
+
+
+async def resolve_template_version(
+    session: AsyncSession, doc: DocumentedInformation, *, allow_pre_release: bool
+) -> DocumentVersionModel:
+    """Resolve the form-template version whose pinned schema a Mode-B capture (or the
+    effective-form-schema read) validates against: the **Effective** version by default; the latest
+    non-Obsolete version when ``allow_pre_release`` (the org toggle) and none is Effective. 422 when
+    unresolved — never a crash on a freshly-created, never-checked-in template."""
+    eff = await repository.effective_version(session, doc.id)
+    if eff is not None:
+        return eff
+    if allow_pre_release:
+        version = await repository.latest_non_obsolete_version(session, doc.id)
+        if version is None:
+            raise ProblemException(
+                status=422,
+                code="validation_error",
+                title="Form template has no resolvable version",
+                errors=[
+                    {
+                        "field": "source_document_id",
+                        "code": "no_resolvable_template_version",
+                        "message": "the form template has no checked-in version yet",
+                    }
+                ],
+            )
+        return version
+    raise ProblemException(
+        status=422,
+        code="validation_error",
+        title="Form template is not Effective",
+        errors=[
+            {
+                "field": "source_document_id",
+                "code": "template_not_effective",
+                "message": "the form template has no Effective version",
+            }
+        ],
+    )
+
+
+async def get_effective_schema(
+    session: AsyncSession, doc: DocumentedInformation, *, allow_pre_release: bool
+) -> dict[str, Any]:
+    """The render-the-form read (doc 06 §4.2 ``GET /templates/{id}/effective-version``): resolve the
+    in-force version + return its pinned schema. The same resolver capture uses, so the form the
+    user fills is exactly the schema their record will validate + pin against."""
+    await _require_form_template_doc(session, doc, must_be_editable=False)
+    version = await resolve_template_version(session, doc, allow_pre_release=allow_pre_release)
+    schema = schema_from_version(version)
+    if schema is None:
+        raise ProblemException(
+            status=409,
+            code="conflict",
+            title="The resolved form-template version carries no field schema",
+        )
+    return {
+        "source_version_id": str(version.id),
+        "revision_label": version.revision_label,
+        "version_state": version.version_state.value,
+        "field_schema": schema,
+    }
 
 
 async def render_dynamic_copy(

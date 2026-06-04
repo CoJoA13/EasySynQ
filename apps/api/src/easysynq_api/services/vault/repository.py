@@ -14,12 +14,14 @@ from sqlalchemy.dialects import postgresql
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ...db.models._vault_enums import VersionState
 from ...db.models.blob import Blob
 from ...db.models.clause import Clause
 from ...db.models.clause_mapping import ClauseMapping
 from ...db.models.document_type import DocumentType
 from ...db.models.document_version import DocumentVersion
 from ...db.models.documented_information import DocumentedInformation
+from ...db.models.form_template import FormTemplate
 from ...db.models.framework import Framework
 from ...db.models.numbering_counter import NumberingCounter
 from ...db.models.org_role import OrgRole
@@ -27,6 +29,7 @@ from ...db.models.process import Process
 from ...db.models.process_edge import ProcessEdge
 from ...db.models.process_link import ProcessLink
 from ...db.models.supplier import Supplier
+from ...db.models.system_config import SystemConfig
 from ...db.models.working_draft import WorkingDraft
 
 
@@ -52,6 +55,41 @@ async def get_document(session: AsyncSession, doc_id: uuid.UUID) -> DocumentedIn
 
 async def get_document_type(session: AsyncSession, dt_id: uuid.UUID) -> DocumentType | None:
     return await session.get(DocumentType, dt_id)
+
+
+async def get_form_template(session: AsyncSession, doc_id: uuid.UUID) -> FormTemplate | None:
+    """The ``form_template`` subtype row for a document id (S-rec-3), if it is a Form/Template."""
+    return await session.get(FormTemplate, doc_id)
+
+
+async def effective_version(session: AsyncSession, doc_id: uuid.UUID) -> DocumentVersion | None:
+    """The single Effective version of a document (INV-1 guarantees at most one), or None."""
+    return (
+        await session.execute(
+            select(DocumentVersion).where(
+                DocumentVersion.document_id == doc_id,
+                DocumentVersion.version_state == VersionState.Effective,
+            )
+        )
+    ).scalar_one_or_none()
+
+
+async def latest_non_obsolete_version(
+    session: AsyncSession, doc_id: uuid.UUID
+) -> DocumentVersion | None:
+    """The highest-``version_seq`` version that is not Obsolete (the S-rec-3 pre-release-capture
+    resolution — a deterministic pick, never a bare ``latest_version`` that ignores state)."""
+    return (
+        await session.execute(
+            select(DocumentVersion)
+            .where(
+                DocumentVersion.document_id == doc_id,
+                DocumentVersion.version_state != VersionState.Obsolete,
+            )
+            .order_by(desc(DocumentVersion.version_seq))
+            .limit(1)
+        )
+    ).scalar_one_or_none()
 
 
 async def get_framework(
@@ -94,6 +132,16 @@ async def next_version_seq(session: AsyncSession, doc_id: uuid.UUID) -> int:
 
 async def get_blob(session: AsyncSession, sha256: str) -> Blob | None:
     return await session.get(Blob, sha256)
+
+
+async def capture_pre_release_enabled(session: AsyncSession, org_id: uuid.UUID) -> bool:
+    """The org's S-rec-3 opt-in to capture a Mode-B record against a non-Effective form template
+    (default OFF). Drives the pre-release version resolution in capture + effective-form-schema."""
+    return bool(
+        await session.scalar(
+            select(SystemConfig.capture_pre_release_templates).where(SystemConfig.org_id == org_id)
+        )
+    )
 
 
 # --- clause IA / clause_mapping (S9) -----------------------------------------------------

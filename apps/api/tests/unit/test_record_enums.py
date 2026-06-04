@@ -97,3 +97,11 @@ def test_record_event_type_members() -> None:
 def test_record_audit_object_type_exists() -> None:
     # record events key on object_type='record' — already in the closed set (no ALTER needed).
     assert AuditObjectType.record.value == "record"
+
+
+def test_structured_form_event_type_members() -> None:
+    # S-rec-3 (0027 ALTER TYPE event_type ADD VALUE): FORM_SCHEMA_SET (object_type=document) +
+    # CONFIG_UPDATED (object_type=config). The from-scratch upgrade rebuilds the type from these.
+    assert {"FORM_SCHEMA_SET", "CONFIG_UPDATED"} <= {m.value for m in EventType}
+    # config is already in the CLOSED audit_object_type set (no ALTER needed for the toggle event).
+    assert AuditObjectType.config.value == "config"

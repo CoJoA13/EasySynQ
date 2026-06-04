@@ -178,6 +178,31 @@ Rules specific to Mode B:
 - A captured structured Record renders both as a **read-only structured view** (the fielded data) and as a **sealed PDF rendition** (for export/print), the latter being a generated `evidence_blob`.
 - If the template is in `Draft`/`In Review` (not Effective), capture is **blocked** unless the org has explicitly enabled "capture against pre-release templates" for a controlled migration — otherwise records could be produced under an unapproved form (a drift/compliance hole).
 
+> **S-rec-3 (migration `0027`) implements Mode B as built.** A Form/Template is a controlled DOCUMENT
+> (`document_type` code `FRM`) carrying its schema; `form_template.field_schema` (doc 14 §5.5) is the
+> **editable working copy**, authored via `PUT /documents/{id}/form-schema` while Draft/UnderRevision
+> and **frozen into each `document_version.metadata_snapshot` at check-in** (`POST
+> /documents/{id}/form-schema:checkin` — the version's WORM source blob IS the canonical-serialized
+> schema). The schema is a **bespoke field-list DSL** (`{fields:[{key,label,type:string|text|number|
+> integer|boolean|date|enum,required,min,max,enum}]}`) — a small, dependency-free validator covering
+> exactly "types, required, ranges, enumerations" (no regex/`pattern` leg → no ReDoS surface).
+> **Mode-B capture** (`POST /records` with a `source_document_id` that resolves to an FRM template)
+> resolves the **Effective** version (or, when `system_config.capture_pre_release_templates` is on,
+> the highest-`version_seq` non-Obsolete version), reads the schema from **that version's
+> `metadata_snapshot`** (never the mutable working copy), validates `form_field_values` against it
+> (422 `errors[].field` on failure), and pins `source_version_id` = that version. A **correction**
+> validates against and re-pins the **original record's** edition (so "records keep showing v2.0"
+> survives a v2→v3 template revision). The **pre-release toggle** is flipped via `PATCH /admin/config`
+> (SYSTEM-only `config.update`, admin; audited `CONFIG_UPDATED`). The **structured-record PDF** (the
+> "render for export/print" below) is built **best-effort at Stage 2** after capture commits — a
+> DERIVED, regenerable rendition (doc 14 §5.4: "rebuildable, never authoritative"), cached in the
+> non-WORM renditions bucket and pointed at by `record.structured_pdf_blob_sha256` (plain Text, NO FK
+> — the `evidence_pack.zip_blob_sha256` R27 precedent; reconciles the "generated `evidence_blob`"
+> wording below — the **record's integrity seal is its `content_hash`**, not the PDF). The
+> WORM-destroy / disposition DESTROY path drops the rendition object + its `blob` row + nulls the
+> pointer (the blob-row-iff-bytes invariant). **Deferred:** Mode B for `audit`/`capa` multi-stage
+> structured records (those entities don't exist yet); a richer schema language; the web form-builder.
+
 ### 4.3 Mode C — Link-as-Evidence
 
 The "promote what already exists into the chain" path. A user designates an existing artifact (an uploaded file already in the vault, a Record produced elsewhere, a released Document acting as evidence of its own existence, or a KPI reading) as **evidence for** a specific clause, process, document, requirement, audit finding, or CAPA stage.

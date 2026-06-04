@@ -93,6 +93,11 @@ tags:
       external delivery: a time-boxed, revocable Ed25519 share link (share/revoke ride
       report.evidence_pack.generate) + a PUBLIC, no-auth, latch-exempt guest landing + ZIP/PDF
       download where the signed token IS the authorization.
+  - name: admin
+    description: >-
+      Post-OPERATIONAL organization configuration. PATCH /admin/config carries org-level toggles
+      (today the Mode-B capture_pre_release_templates flag, doc 06 §4.2), gated on the SYSTEM-domain
+      config.update key (admin-only; the R35 two-tier guard blocks a content-tier grant).
 
 paths:
   /healthz:
@@ -839,6 +844,133 @@ paths:
         "403": { $ref: "#/components/responses/ProblemResponse" }
         "404": { $ref: "#/components/responses/ProblemResponse" }
 
+  /documents/{document_id}/form-schema:
+    parameters:
+      - { name: document_id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [documents]
+      operationId: getFormSchema
+      summary: A Form/Template's editable working field schema (null if unset). Needs document.read.
+      responses:
+        "200":
+          description: The working field schema.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  document_id: { type: string, format: uuid }
+                  field_schema:
+                    oneOf:
+                      - { $ref: "#/components/schemas/FieldSchema" }
+                      - { type: "null" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+    put:
+      tags: [documents]
+      operationId: setFormSchema
+      summary: >-
+        Set/replace a Form/Template's working field schema (FRM + Draft/UnderRevision, enforced
+        in-service). Validates the bespoke field-list DSL. Needs document.manage_metadata.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [field_schema]
+              properties:
+                field_schema: { $ref: "#/components/schemas/FieldSchema" }
+      responses:
+        "200":
+          description: The stored working schema.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  document_id: { type: string, format: uuid }
+                  field_schema: { $ref: "#/components/schemas/FieldSchema" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409":
+          description: The form template is not editable (not Draft/UnderRevision).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "422":
+          description: Not a Form/Template, or a malformed field schema (validation_error).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  /documents/{document_id}/effective-form-schema:
+    parameters:
+      - { name: document_id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [documents]
+      operationId: getEffectiveFormSchema
+      summary: >-
+        The schema pinned in the template's in-force version — the form to render (doc 06 §4.2).
+        Read from the version snapshot, honoring the org pre-release-capture toggle. Needs document.read.
+      responses:
+        "200":
+          description: The pinned schema + the resolved version.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  source_version_id: { type: string, format: uuid }
+                  revision_label: { type: string }
+                  version_state: { type: string }
+                  field_schema: { $ref: "#/components/schemas/FieldSchema" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409":
+          description: The resolved version carries no field schema.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "422":
+          description: No resolvable version (template_not_effective / no_resolvable_template_version).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  /documents/{document_id}/form-schema:checkin:
+    parameters:
+      - { name: document_id, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      tags: [documents]
+      operationId: checkinFormSchema
+      summary: >-
+        Freeze the working schema into an immutable Draft version — its WORM source blob IS the
+        canonical-serialized schema; the schema is pinned into metadata_snapshot. Needs document.edit.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/FormSchemaCheckin" }
+      responses:
+        "201":
+          description: The created (Draft) version.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DocumentVersion" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409":
+          description: The form template is not editable (not Draft/UnderRevision).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "422":
+          description: Not a Form/Template, no working schema set, or missing change_reason/significance.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
   /documents/{document_id}/clause-mappings:
     parameters:
       - { name: document_id, in: path, required: true, schema: { type: string, format: uuid } }
@@ -1580,6 +1712,29 @@ paths:
               schema: { $ref: "#/components/schemas/EvidenceDownload" }
         "403": { $ref: "#/components/responses/ProblemResponse" }
         "404": { $ref: "#/components/responses/ProblemResponse" }
+
+  /records/{record_id}/rendition:
+    get:
+      tags: [records]
+      operationId: getRecordRendition
+      summary: >-
+        A presigned GET for the structured-record PDF rendition (doc 06 §4.2) — a derived,
+        regenerable view of a Mode-B record's fielded data. Needs record.read.
+      parameters:
+        - { name: record_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: A short-lived presigned GET URL for the rendition PDF.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EvidenceDownload" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409":
+          description: No rendition yet (still building, or the record is not structured) — rendition_pending.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
 
   /records/{record_id}/correction:
     post:
@@ -2323,6 +2478,37 @@ paths:
               schema: { $ref: "#/components/schemas/AuditEventPage" }
         "403": { $ref: "#/components/responses/ProblemResponse" }
         "404": { $ref: "#/components/responses/ProblemResponse" }
+
+  /admin/config:
+    get:
+      tags: [admin]
+      operationId: getOrgConfig
+      summary: The org's mutable config toggles. Needs config.update (SYSTEM, admin-only).
+      responses:
+        "200":
+          description: The org config toggles.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OrgConfig" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+    patch:
+      tags: [admin]
+      operationId: updateOrgConfig
+      summary: >-
+        Update org-level config toggles (partial) — e.g. the Mode-B capture_pre_release_templates
+        flag (doc 06 §4.2). Audited CONFIG_UPDATED. Needs config.update (SYSTEM, admin-only).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OrgConfigUpdate" }
+      responses:
+        "200":
+          description: The updated org config toggles.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OrgConfig" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
 
 components:
   securitySchemes:
@@ -3305,6 +3491,54 @@ components:
         sha256: { type: string }
         content_type: { type: [string, "null"] }
 
+    FieldDefinition:
+      type: object
+      additionalProperties: false
+      required: [key, type]
+      description: One field in a Mode-B form template's schema (the bespoke DSL, doc 06 §4.2).
+      properties:
+        key: { type: string, description: Unique field key. }
+        label: { type: string }
+        type: { type: string, enum: [string, text, number, integer, boolean, date, enum] }
+        required: { type: boolean, default: false }
+        min: { description: "Value bound (number/integer), length bound (string/text), or ISO-date bound (date)." }
+        max: { description: As min. }
+        enum:
+          type: array
+          items: { type: string }
+          description: Required and non-empty iff type=enum.
+    FieldSchema:
+      type: object
+      additionalProperties: false
+      required: [fields]
+      description: A form template's field schema — validated server-side at capture (types/required/ranges/enums).
+      properties:
+        fields:
+          type: array
+          minItems: 1
+          items: { $ref: "#/components/schemas/FieldDefinition" }
+    FormSchemaCheckin:
+      type: object
+      additionalProperties: false
+      description: Freeze the working schema into an immutable version (INV-3 — reason + significance mandatory).
+      properties:
+        change_reason: { type: string }
+        change_significance: { type: string, enum: [MAJOR, MINOR] }
+    OrgConfig:
+      type: object
+      additionalProperties: false
+      properties:
+        org_id: { type: string, format: uuid }
+        capture_pre_release_templates:
+          type: boolean
+          description: Whether Mode-B capture may use a non-Effective (draft) form template (doc 06 §4.2).
+    OrgConfigUpdate:
+      type: object
+      additionalProperties: false
+      description: A partial org-config update; only supplied fields change.
+      properties:
+        capture_pre_release_templates: { type: [boolean, "null"] }
+
     Record:
       type: object
       additionalProperties: false
@@ -3341,6 +3575,11 @@ components:
           description: When the retention clock starts; null for an event:* basis (no event date at capture).
         disposition_state: { type: string, enum: [ACTIVE, DUE_FOR_REVIEW, ON_HOLD, DISPOSED] }
         legal_hold: { type: boolean }
+        has_structured_pdf:
+          type: boolean
+          description: >-
+            Whether the best-effort structured-record PDF rendition has been built (S-rec-3);
+            fetch it via GET /records/{id}/rendition.
         correction_of:
           type: [string, "null"]
           format: uuid

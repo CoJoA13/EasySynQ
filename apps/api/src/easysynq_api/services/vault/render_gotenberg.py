@@ -34,6 +34,12 @@ _NON_RENDERABLE_PREFIXES = (
     "application/octet-stream",
     "application/zip",
     "application/x-",
+    # Structured-data blobs (S-rec-3: a Form/Template's controlled source IS its JSON field schema):
+    # mark them non-renderable so the mirror keeps the source bytes + a no_controlled_rendition flag
+    # (R26) instead of routing a schema to LibreOffice (host-dependent 4xx-vs-garbage).
+    "application/json",
+    "application/xml",
+    "text/xml",
     "image/vnd.dwg",
     "image/vnd.dxf",
     "model/",

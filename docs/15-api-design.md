@@ -342,6 +342,10 @@ The logical maintained item (`documented_information` + `document`, `14 §5.2`).
 | POST | `/documents/{id}/start-revision` | `document.edit` | ✓ | `Effective→UnderRevision` (derived): opens a new draft while the current version keeps governing. |
 | POST | `/documents/{id}/obsolete` | `document.obsolete` | ✓ | Supersede/withdraw → predecessor `Superseded`, document `Obsolete`; pulled from mirror; all versions/records retained (immutability). |
 | GET | `/documents/{id}/download` | `document.read` | — | Returns a short-lived **MinIO presigned GET URL** to the effective version's PDF rendition (watermarked per classification). |
+| PUT | `/documents/{id}/form-schema` | `document.manage_metadata` | — | **S-rec-3 (Mode-B):** set/replace a Form/Template's editable working `field_schema` (the bespoke field-list DSL). In-service guard: `FRM` document_type + Draft/UnderRevision only (422/409 otherwise). |
+| GET | `/documents/{id}/form-schema` | `document.read` | — | The current working `field_schema` (null if unset). |
+| GET | `/documents/{id}/effective-form-schema` | `document.read` | — | The schema **pinned in the in-force version** (the form to render — doc 06 §4.2 `GET /templates/{id}/effective-version`); read from the version snapshot, honoring the org pre-release-capture toggle. `422` if no resolvable version. |
+| POST | `/documents/{id}/form-schema:checkin` | `document.edit` | — | Freeze the working schema into an immutable Draft version (its WORM source blob IS the canonical-serialized schema; the schema is pinned into `metadata_snapshot`). Then submit-review → approve → release drives it Effective. |
 | GET | `/documents/{id}/where-used` | `document.read` | — | The `document_link` impact graph (parent/child/references). |
 | GET | `/documents/{id}/audit-events` | `document.read` + `audit.read` | — | Per-document slice of the immutable trail (§8.13). |
 | GET / POST | `/documents/{id}/distribution` | `document.read` / `document.distribute` | — | Distribution list + read-and-understood acknowledgements (immutable `acknowledgement` records pinned to a version). |
@@ -461,9 +465,10 @@ Documented evidence to be **retained** (`14 §5.5`, ISO 7.5.3). Records are **im
 |---|---|---|---|---|
 | GET | `/records` | `record.read` | — | Filter `record_type`, `source_document_id`, `captured_by`, `captured_at` range, `disposition_state`, `legal_hold`. |
 | POST | `/records:init-upload` | `record.create` | ✓ | Presigned PUT for evidence blob(s) (content-addressed, WORM). |
-| POST | `/records` | `record.create` | ✓ | Finalize: `{ record_type, source_document_id?, source_version_id?, title, evidence:[{sha256}], captured_at, form_field_values?, retention_basis_date? }`. Server snapshots the `retention_policy` (one-way ratchet) and validates `form_field_values` against the **pinned** `form_template` version's schema. |
-| GET | `/records/{id}` | `record.read` | — | Metadata + `_links.download` + `content_hash`. |
+| POST | `/records` | `record.create` | ✓ | Finalize: `{ record_type, source_document_id?, source_version_id?, title, evidence:[{sha256}], captured_at, form_field_values?, retention_basis_date? }`. Server snapshots the `retention_policy` (one-way ratchet); when `source_document_id` resolves to an **`FRM` form template** (Mode-B, S-rec-3) it resolves + pins the Effective (or pre-release) version and validates `form_field_values` against **that version's pinned schema** (422 `errors[].field`). The capture `record.create` scope is built from the source template's framework + process-links (the R28 full-context rule). |
+| GET | `/records/{id}` | `record.read` | — | Metadata + `_links.download` + `content_hash` + `has_structured_pdf`. |
 | GET | `/records/{id}/download` | `record.read` | — | Presigned GET to the immutable evidence blob. |
+| GET | `/records/{id}/rendition` | `record.read` | — | **S-rec-3:** presigned GET to the structured-record PDF rendition (a derived, regenerable view of the fielded data). `409 rendition_pending` until the best-effort Stage-2 build lands (or the record is not structured). |
 | POST | `/records/{id}/correction` | `record.create` | ✓ | Create a successor record correcting this one (sets `correction_of`/`superseded_by_correction`). The original is never mutated. |
 | PATCH | `/records/{id}/disposition` | `record.dispose` | — | Advance `disposition_state` only (`ACTIVE→DUE_FOR_REVIEW→…→DISPOSED`); a `disposition_event` tombstone is written. **Blocked (`409`)** while `worm_lock_period` is unexpired or `legal_hold=true` (the refusal is audited `RECORD_ERASURE_REFUSED`, R27) (`14 §10`). |
 | POST | `/records/{id}/legal-hold` | `record.dispose` | — | Place/release a legal hold (`{action, reason}`, reason mandatory) — overrides retention expiry (`06 §5.2`). |
@@ -619,6 +624,7 @@ The ADMIN super-user sits **outside the QMS** (`03 §4`): first-run setup, users
 | Method | Path | Notes |
 |---|---|---|
 | GET / PATCH | `/admin/setup` | First-run `setup_state` gates G-A…G-E; cannot reach `OPERATIONAL` until all pass (`14 §2`). |
+| GET / PATCH | `/admin/config` | **S-rec-3 (as built):** post-OPERATIONAL org toggles on `system_config` (today `capture_pre_release_templates`, doc 06 §4.2). Gated on the SYSTEM-domain `config.update` (admin-only; R35); audited `CONFIG_UPDATED` (object_type `config`). |
 | GET / PATCH | `/admin/org` | `organization` + `org_profile` (locale, timezone, logo). |
 | GET / PATCH | `/admin/config/storage` | `storage_config`: MinIO endpoint/buckets (secret fields write-only), `mirror_path`/`mirror_layout`, `worm_verified_at`. `POST …:test` runs a connectivity + WORM check (must be verified before any blob write, gate G-B). |
 | GET / PATCH | `/admin/config/identity` | `identity_provider_config`: Keycloak mode (local/LDAP-AD/OIDC-SAML), connection (secrets envelope-encrypted), group→role hints. |
