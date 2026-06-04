@@ -83,6 +83,13 @@ tags:
       QMS-health reporting (slice S10) — the org-wide Compliance Checklist (★ mandatory-item
       coverage), computed from PostgreSQL only (never the search index). Gated by
       report.compliance_checklist.read (SYSTEM; held by QMS Owner and Internal Auditor).
+  - name: evidence-packs
+    description: >-
+      Evidence Packs (UJ-7, slice S-pack-1) — on-demand, scope-limited, immutable, self-verifying
+      bundles of records + their evidence + a traceability manifest, sealed and registered as a
+      RETAIN_PERMANENT EVIDENCE Record. Preview is synchronous; build/seal runs on the worker (poll
+      GET for SEALED). Gated by report.evidence_pack.generate (SYSTEM override); download by
+      report.export. Immutable once sealed (no PUT/PATCH/DELETE). External delivery is S-pack-2.
 
 paths:
   /healthz:
@@ -1840,6 +1847,113 @@ paths:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
 
+  /evidence-packs:
+    get:
+      tags: [evidence-packs]
+      operationId: listEvidencePacks
+      summary: List the org's evidence packs (newest first). Needs report.evidence_pack.generate.
+      parameters:
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
+      responses:
+        "200":
+          description: Evidence pack headers.
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/EvidencePack" } }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+    post:
+      tags: [evidence-packs]
+      operationId: createEvidencePack
+      summary: Create a pack (DRAFT) + compute its preview. Needs report.evidence_pack.generate.
+      description: >-
+        Resolves the in-scope record candidates (CLAUSE or PROCESS scope, optional date overlay) and
+        classifies each through the generator's deny-by-default record.read (R28: INCLUDED /
+        EXCLUDED_PERMISSION / EXCLUDED_ABSENCE — nothing silently dropped), persisting the membership +
+        the gap/exclusion summaries. The preview is advisory — POST .../generate seals it.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/EvidencePackCreate" }
+      responses:
+        "201":
+          description: The DRAFT pack with its preview membership + summaries.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EvidencePackDetail" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "422":
+          description: >-
+            Validation error — bad scope_kind, an empty/invalid clause_ids/process_ids, an unknown
+            clause/process, or period_end before period_start.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  /evidence-packs/{pack_id}:
+    parameters:
+      - { name: pack_id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [evidence-packs]
+      operationId: getEvidencePack
+      summary: The pack header + membership + status (the build poll endpoint). Needs report.evidence_pack.generate.
+      description: >-
+        status is DRAFT → BUILDING → SEALED | FAILED. Membership/summaries reflect the seal-time
+        classification once SEALED (the preview is advisory).
+      responses:
+        "200":
+          description: The pack header, membership, and gap/exclusion summaries.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EvidencePackDetail" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+
+  /evidence-packs/{pack_id}/generate:
+    parameters:
+      - { name: pack_id, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      tags: [evidence-packs]
+      operationId: generateEvidencePack
+      summary: Enqueue the immutable build/seal (DRAFT/FAILED → BUILDING). Needs report.evidence_pack.generate.
+      description: >-
+        Flips the pack to BUILDING and enqueues the worker build; poll GET /evidence-packs/{pack_id}
+        for SEALED. Re-triggerable from FAILED.
+      responses:
+        "202":
+          description: The pack flipped to BUILDING; the build runs asynchronously.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EvidencePack" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409":
+          description: The pack is already SEALED (terminal) or a build is already in progress.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  /evidence-packs/{pack_id}/download:
+    parameters:
+      - { name: pack_id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [evidence-packs]
+      operationId: downloadEvidencePack
+      summary: Presign the sealed pack ZIP. Needs report.export.
+      responses:
+        "200":
+          description: A presigned GET URL for the sealed pack ZIP (+ its sha256).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EvidencePackDownload" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409":
+          description: The pack is not SEALED yet (detail carries the current status).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
   /tasks:
     get:
       tags: [tasks]
@@ -3243,6 +3357,86 @@ components:
       additionalProperties: false
       properties:
         reason: { type: [string, "null"], maxLength: 1000 }
+
+    EvidencePackCreate:
+      type: object
+      additionalProperties: false
+      required: [title, scope_kind]
+      properties:
+        title: { type: string }
+        scope_kind: { type: string, enum: [CLAUSE, PROCESS] }
+        clause_ids:
+          type: array
+          items: { type: string, format: uuid }
+          description: Required (non-empty) when scope_kind=CLAUSE.
+        process_ids:
+          type: array
+          items: { type: string, format: uuid }
+          description: Required (non-empty) when scope_kind=PROCESS.
+        period_start: { type: [string, "null"], format: date, description: Optional date overlay (by record captured_at). }
+        period_end: { type: [string, "null"], format: date }
+
+    PackItem:
+      type: object
+      additionalProperties: false
+      required: [id, item_type, inclusion_status]
+      properties:
+        id: { type: string, format: uuid }
+        item_type: { type: string, enum: [RECORD, DOCUMENT_VERSION] }
+        record_id: { type: [string, "null"], format: uuid }
+        version_id: { type: [string, "null"], format: uuid, description: A pinned governing version (record.source_version_id). }
+        inclusion_status:
+          type: string
+          enum: [INCLUDED, EXCLUDED_PERMISSION, EXCLUDED_ABSENCE]
+          description: R28 — every in-scope candidate gets a row; a silently-dropped item is a defect.
+        exclusion_reason: { type: [string, "null"] }
+        content_hash_at_seal: { type: [string, "null"] }
+
+    EvidencePack:
+      type: object
+      additionalProperties: false
+      required: [id, title, scope_kind, status, item_count]
+      properties:
+        id: { type: string, format: uuid }
+        title: { type: string }
+        scope_kind: { type: string, enum: [CLAUSE, PROCESS] }
+        scope_selector: { type: object, additionalProperties: true }
+        period_start: { type: [string, "null"], format: date }
+        period_end: { type: [string, "null"], format: date }
+        status: { type: string, enum: [DRAFT, BUILDING, SEALED, FAILED], description: The build poll state. }
+        item_count: { type: integer, description: Included records + their distinct pinned versions. }
+        gap_summary:
+          type: [object, "null"]
+          additionalProperties: true
+          description: In-scope ★ clauses lacking current evidence (distinct from the exclusion report).
+        exclusion_summary:
+          type: [object, "null"]
+          additionalProperties: true
+          description: R28 permission-vs-absence exclusions (permission/absence id lists + counts).
+        content_hash: { type: [string, "null"], description: The domain-separated manifest seal (set at seal). }
+        zip_blob_sha256: { type: [string, "null"], description: The sealed ZIP file digest. }
+        pack_record_id: { type: [string, "null"], format: uuid, description: The pack's own RETAIN_PERMANENT EVIDENCE Record. }
+        error: { type: [string, "null"] }
+        created_at: { type: [string, "null"], format: date-time }
+        generated_at: { type: [string, "null"], format: date-time }
+
+    EvidencePackDetail:
+      allOf:
+        - { $ref: "#/components/schemas/EvidencePack" }
+        - type: object
+          properties:
+            items:
+              type: array
+              items: { $ref: "#/components/schemas/PackItem" }
+
+    EvidencePackDownload:
+      type: object
+      additionalProperties: false
+      required: [download_url, sha256, content_type]
+      properties:
+        download_url: { type: string, format: uri }
+        sha256: { type: string }
+        content_type: { type: string, enum: ["application/zip"] }
 
 security:
   - keycloak: []
