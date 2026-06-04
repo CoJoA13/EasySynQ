@@ -14,6 +14,18 @@ changes, manage documented evidence/records, and keep an organization audit-read
 UI/UX flows the way ISO 9001 flows (clause spine / process map / PDCA) and must stay calm, modern,
 and progressively disclosed — never overwhelming.
 
+## Repository layout
+
+- `apps/api/` — FastAPI / Python 3.12 backend. Under `src/easysynq_api/`: `api/` (routes) · `services/`
+  (use-cases, transaction owners) · `domain/` (pure logic) · `db/models/` (ORM) · `db/seeds/` (seed data,
+  e.g. the ISO clause catalog) · `tasks/` (Celery worker/beat) · `cli/` (operator commands). Tests in
+  `apps/api/tests/{unit,integration}` (the latter via testcontainers).
+- `apps/web/` — React/TS + Mantine SPA (currently the setup wizard + admin stubs; the rest of the UI is deferred).
+- `migrations/` — Alembic (single tree; head **`0024`**; `env.py` excludes migration-managed expression/partial indexes).
+- `packages/contracts/openapi.yaml` — the living API contract (redocly-lint only; **not** codegen — server/web aren't generated from it).
+- `infra/compose/` — Docker Compose (S/M/L profiles) + Caddy; `just` recipes wrap it.
+- `docs/` — the authoritative spec (`00`–`18` + `decisions-register.md`); `mockup/` — the owner-approved HTML UI mockup.
+
 ## Current status (as of 2026-06-03)
 
 **MVP COMPLETE** (all 11 ordered slices S0–S11 shipped to `main` via PR, all CI green, validated on the real
@@ -25,32 +37,14 @@ v1/v1.x residuals are listed at the end of this section.
 (doc 06)** as the slice family (over the web track + the v1.x backend residuals); **S-rec-1** then **S-rec-2**
 shipped depth-first. **Migration head is now `0024`.**
 
-- **S-rec-1 — Records: capture + evidence-linking + correction** ✅ — PR #43. Turns the inert `record` scaffolding
-  (the table/enums/`record.*` perms from 0008/0004 + the WORM `records` bucket from minio-init) into a working
-  subsystem (the *"retain"* half of ISO documented information). **Owner forks:** capture+linking+correction · **all
-  16** RecordType values · **retention-as-data fleshed out** (defer the Beat sweep + disposition state machine) · an
-  **`evidence_blob` M:N** satellite. **Migration `0023`**: `retention_policy` → policy-as-data (`applies_to`/`basis`/
-  `duration`/`disposition_action`/`review_required`/`worm_lock_period`, native enums, `UNIQUE(org,name)`, a seeded
-  per-org *System Default*); `evidence_blob` (M:N record↔blob) + `evidence_for_link` (polymorphic
-  record→clause/process/document, the `signature_event` no-FK precedent); 4 additive `RECORD_*` `event_type` values
-  (downgrade seed-delete guarded with `NOT EXISTS(record)` against the FK; enum tuples sourced from the ORM `*_VALUES`
-  per the 0010 precedent). **Pure domain**: a 5-tier retention resolver (override→process→clause→record_type→system)
-  + a domain-separated RFC-8785-JCS `content_hash` seal (excludes the mutable cols; **separate** from the FROZEN
-  audit `canonical_serialize`). **`services/records` + `api/records`**: atomic capture (base
-  `documented_information[kind=RECORD]` + `record` subtype + WORM-sealed evidence in the dedicated `records` bucket +
-  `content_hash` + `RECORD_CAPTURED` audit, **one commit**); the `evidence-for` link sub-resource; **correction-via-
-  new-record** (correct, don't change — flips `superseded_by_correction`, the only post-capture write). Records are
-  **immutable** — no PATCH/PUT/DELETE on a record (a route-inventory proof). Records ride on **SYSTEM `record.create`
-  overrides** (no seeded role reaches a folderless/processless record — the `process.create` precedent); reads on
-  `record.read` (catalog CLOSED — no new keys). **R21** source-version pinning enforced. A **kind-scoping fix** makes
-  `GET /documents` (list + `_load_document`) and **both** search queries filter `kind=DOCUMENT`, so Records (Effective,
-  shared-PK) never leak into the documents/search surfaces. Records audit does NOT use `VaultAuditSink` (its
-  object-type map lacks `record`) → a direct `emit_record_event`. **OpenAPI caught up in-PR** (redocly green).
-  Adversarially reviewed (6 lenses → per-finding verify; **5 confirmed, all folded** — the headline 2 HIGH + 1 MEDIUM,
-  one root cause: `_attach_evidence` only WORM-sealed on the fresh-upload branch, so the global-sha Blob dedup let a
-  **non-WORM rendition** (or documents-bucket) blob back a record's "sealed" evidence → **fixed fail-closed** [reuse
-  only an already-records-bucket-WORM blob, else 423] + a regression test; + the downgrade-FK guard + the enum-tuple
-  source). **230 unit + 14 records integration green**; `0023` round-trips up↔down↔check on PG16.
+- **S-rec-1 — Records: capture + evidence-linking + correction** ✅ — PR #43, migration `0023` (the full
+  non-obvious decisions live in the squash-merge commit + the project memory). Turned the inert `record`
+  scaffolding ON: atomic immutable capture (base `documented_information[kind=RECORD]` + `record` subtype +
+  WORM-sealed evidence in the dedicated `records` bucket + a domain-separated `content_hash` seal, one commit) ·
+  the polymorphic `evidence_for_link` evidence-for sub-resource · correction-via-new-record (records are immutable —
+  a route-inventory proof) · retention-policy-as-data (a 5-tier resolver + a seeded per-org *System Default* + the
+  snapshot-at-capture ratchet) · a kind-scoping fix so Records don't leak into `GET /documents`/search · records ride
+  **SYSTEM `record.create`/`.read` overrides** (catalog CLOSED).
 
 - **S-rec-2 — Records: retention/disposition lifecycle** ✅. Turns the inert disposition scaffolding (the
   `RecordDispositionState` enum, `record.disposition_state`/`legal_hold` cols, the sweep index, the
@@ -357,7 +351,7 @@ system permissions. Per a stakeholder decision, the **Quality Manager may hold `
 scoped to content domains within QMS scope**; system permissions (user/storage/backup/restore/config/
 import) stay admin-only.
 
-## Other stakeholder decisions made this session
+## Stakeholder decisions (locked)
 
 - **Import default = current-version-only** (older copies archived as provenance); revision-chain
   reconstruction is opt-in per family; Document-vs-Record *kind* is always human-confirmed.
