@@ -87,22 +87,24 @@ Records/evidence capture, retention/disposition, Evidence Packs, audits/findings
 
 ## 4. v1 — "A Complete ISO 9001:2015 QMS"
 
-> **🟡 IN PROGRESS (v1 started 2026-06-03).** First slice **S-rec-1** (records capture + evidence-linking +
-> correction) is on `main` — the *Records & evidence capture* row below, minus its Mode-B (structured-form) leg:
-> immutable upload capture, `evidence_for_link` (link-as-evidence: record→clause/process/document), `correction_of`,
-> `source_version_id` pinning (R21), WORM-sealed evidence in a dedicated `records` bucket + a `content_hash` seal, and
-> most of the *Retention & disposition* row's **policy-as-data** (the schema + a 5-tier resolver + the snapshot-at-
-> capture ratchet). Deferred to the next v1 slices: the disposition lifecycle + Beat retention sweep (S-rec-2),
-> Mode-B structured-form capture (S-rec-3), Evidence Packs (UJ-7), and the rows below. See `CLAUDE.md` for shipped
-> detail.
+> **🟡 IN PROGRESS (v1 started 2026-06-03).** The **Records & evidence family is COMPLETE** on `main` (migration head
+> `0027`) — the first three capability rows below: **S-rec-1** (capture + evidence-linking + correction), **S-rec-2**
+> (retention/disposition lifecycle + daily Beat sweep + the R27 dual-control WORM-destroy hatch), the **Evidence Packs
+> (UJ-7)** family **S-pack-1** (scope resolution + immutable build/seal) + **S-pack-2** (external delivery via a
+> time-boxed revocable Ed25519 share link + the PDF portfolio), and **S-rec-3** (Mode-B structured-form capture: a
+> Form/Template carries a versioned `field_schema`; capture validates `form_field_values` against the pinned Effective
+> version's schema). **UJ-7 (one-click evidence pack) works end-to-end.** Deferred to the next v1 slices: the rows below
+> (audits/findings, CAPA, ingestion, workflows+notifications, the web UI, the rest of search/reporting), plus the
+> records-family residuals (Mode B for the `audit`/`capa` multi-stage records once those entities land; ordinary
+> creator≠disposer SoD; `/retention-policies` CRUD). See `CLAUDE.md` for shipped detail.
 
 **Goal:** everything an organization needs to *run and certify* an ISO 9001:2015 QMS, end to end, and to face an external audit with a one-click evidence pack.
 
 | Capability | What v1 adds | Doc | Depends on |
 |---|---|---|---|
-| **Records & evidence capture** | Three capture modes (upload, structured-form-from-Effective-template, link-as-evidence); record types catalog; `source_version_id` pinning; immutability + `correction_of`; WORM retention hold. | 06 §2-4 | MVP vault, forms-as-Documents |
-| **Retention & disposition** | Retention policies as data; resolution precedence; one-way ratchet; legal hold; disposition lifecycle with tombstones; Beat retention sweep. | 06 §5 | records, Beat |
-| **Traceability chain + Evidence Packs (UJ-7)** | requirement→process→document→record→evidence chain; clause/process/finding-scoped packs; immutable, self-verifying, gap-honest; time-boxed external-auditor guest delivery. | 06 §6-7 | records, search, authz scope |
+| ✅ **Records & evidence capture** | Three capture modes (upload, structured-form-from-Effective-template, link-as-evidence); record types catalog; `source_version_id` pinning; immutability + `correction_of`; WORM retention hold. **Shipped (S-rec-1 + S-rec-3).** | 06 §2-4 | MVP vault, forms-as-Documents |
+| ✅ **Retention & disposition** | Retention policies as data; resolution precedence; one-way ratchet; legal hold; disposition lifecycle with tombstones; Beat retention sweep. **Shipped (S-rec-2).** | 06 §5 | records, Beat |
+| ✅ **Traceability chain + Evidence Packs (UJ-7)** | requirement→process→document→record→evidence chain; clause/process/finding-scoped packs; immutable, self-verifying, gap-honest; time-boxed external-auditor guest delivery. **Shipped (S-pack-1/2)** — clause/process scope; **Finding/CAPA scope** awaits those entities. | 06 §6-7 | records, search, authz scope |
 | **Audits & findings (UJ-5)** | Audit program/plan/audit/finding; finding types (NC/Observation/OFI) + severity; NC auto-creates CAPA. | 02 §2 (9.2), 06, 10 | records, authz (auditor independence) |
 | **CAPA / improvement (UJ-6)** | Multi-stage CAPA record (NC → correction → RCA → action → verification → close); close-guards (RCA + action + effectiveness all present, metric M4). | 06, 10 | audits, records |
 | **Revision/change depth** | DCR (reason, impact assessment, routing); where-used/impact analysis; major/minor significance; effectivity windows + scheduled future revisions; redline/diff (text + metadata + visual). | 05 | MVP versions |
