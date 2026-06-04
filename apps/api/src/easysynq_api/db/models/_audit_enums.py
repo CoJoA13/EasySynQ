@@ -168,6 +168,16 @@ class EventType(enum.Enum):
     # head`` rebuilds the type from EVENT_TYPE_VALUES, so the members live here too).
     PACK_GENERATED = "PACK_GENERATED"
     PACK_BUILD_FAILED = "PACK_BUILD_FAILED"
+    # evidence-pack external delivery (S-pack-2, doc 06 §7.4, UJ-7) — the time-boxed Ed25519
+    # share-link lifecycle (object_type ``evidence_pack``, the pack header id). PACK_SHARED records
+    # a link minted for an auditor (actor = generator; detail = recipient + expiry + digest);
+    # PACK_SHARE_REVOKED trails a manual early revoke; PACK_DOWNLOADED is the **guest** access (a
+    # system-actor event — actor_id NULL — a bearer-token guest has no app_user; detail = format +
+    # recipient + client_ip + digest). Added via ALTER TYPE event_type ADD VALUE in 0026 (the
+    # 0011-0025 additive pattern; a from-scratch upgrade rebuilds the type from the ORM values).
+    PACK_SHARED = "PACK_SHARED"
+    PACK_DOWNLOADED = "PACK_DOWNLOADED"
+    PACK_SHARE_REVOKED = "PACK_SHARE_REVOKED"
 
 
 class CheckpointSinkKind(enum.Enum):

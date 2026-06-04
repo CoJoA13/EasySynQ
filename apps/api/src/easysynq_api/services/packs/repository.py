@@ -24,6 +24,7 @@ from ...db.models.documented_information import DocumentedInformation
 from ...db.models.evidence_for_link import EvidenceForLink
 from ...db.models.evidence_pack import EvidencePack
 from ...db.models.pack_item import PackItem
+from ...db.models.pack_share_link import PackShareLink
 from ...db.models.process_link import ProcessLink
 from ...db.models.record import Record
 
@@ -239,3 +240,65 @@ async def get_document_versions(
         await session.scalars(select(DocumentVersion).where(DocumentVersion.id.in_(version_ids)))
     ).all()
     return {v.id: v for v in rows}
+
+
+async def get_records_with_base(
+    session: AsyncSession, record_ids: list[uuid.UUID]
+) -> list[tuple[Record, DocumentedInformation]]:
+    """Record ⨝ its shared-PK base, for the portfolio's traceability index (Stage 2)."""
+    if not record_ids:
+        return []
+    rows = (
+        await session.execute(
+            select(Record, DocumentedInformation)
+            .join(DocumentedInformation, Record.id == DocumentedInformation.id)
+            .where(Record.id.in_(record_ids))
+            .order_by(asc(Record.captured_at))
+        )
+    ).all()
+    return [(r, d) for r, d in rows]
+
+
+async def get_base_docs(
+    session: AsyncSession, doc_ids: list[uuid.UUID]
+) -> dict[uuid.UUID, DocumentedInformation]:
+    """The governing documents of a set of pinned versions (for the portfolio section headers)."""
+    if not doc_ids:
+        return {}
+    rows = (
+        await session.scalars(
+            select(DocumentedInformation).where(DocumentedInformation.id.in_(doc_ids))
+        )
+    ).all()
+    return {d.id: d for d in rows}
+
+
+# --- share-link CRUD (S-pack-2 external delivery, doc 06 §7.4) ---------------------------
+
+
+async def get_share_link(
+    session: AsyncSession, link_id: uuid.UUID, *, for_update: bool = False
+) -> PackShareLink | None:
+    """Load a share link by its id (the id rides in the verified token payload). ``for_update``
+    re-checks the revocation state under a row lock for the revoke transition."""
+    if for_update:
+        return (
+            await session.execute(
+                select(PackShareLink).where(PackShareLink.id == link_id).with_for_update()
+            )
+        ).scalar_one_or_none()
+    return await session.get(PackShareLink, link_id)
+
+
+async def list_share_links(session: AsyncSession, pack_id: uuid.UUID) -> list[PackShareLink]:
+    return list(
+        (
+            await session.execute(
+                select(PackShareLink)
+                .where(PackShareLink.pack_id == pack_id)
+                .order_by(desc(PackShareLink.created_at))
+            )
+        )
+        .scalars()
+        .all()
+    )

@@ -19,6 +19,7 @@ import asyncio
 import dataclasses
 import datetime
 import uuid
+from collections.abc import AsyncIterator
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
@@ -160,6 +161,30 @@ async def fetch_bytes(object_key: str, *, bucket: str | None = None) -> bytes:
     — the worker reads object bytes directly. Runs the sync boto3 ``get_object`` off the event loop.
     Reads are unaffected by WORM object-lock (it blocks writes/deletes, not GETs)."""
     return await asyncio.to_thread(_fetch_bytes_sync, object_key, bucket or _doc_bucket())
+
+
+_STREAM_CHUNK = 1 << 20  # 1 MiB
+
+
+async def stream_object(object_key: str, *, bucket: str) -> AsyncIterator[bytes]:
+    """Yield a blob's bytes in fixed chunks for a StreamingResponse — bounded memory (unlike
+    :func:`fetch_bytes`, which materialises the whole object). The **API** uses this for the public
+    guest pack download: every access is gated + audited per request (so a revoke takes effect on
+    the next request) and bytes never sit in RAM in full. boto3 ``get_object`` returns a streaming
+    Body; each ``read`` runs off the loop. WORM object-lock blocks writes/deletes, not GETs."""
+
+    def _open() -> Any:
+        return _client().get_object(Bucket=bucket, Key=object_key)["Body"]
+
+    body = await asyncio.to_thread(_open)
+    try:
+        while True:
+            chunk: bytes = await asyncio.to_thread(body.read, _STREAM_CHUNK)
+            if not chunk:
+                break
+            yield chunk
+    finally:
+        await asyncio.to_thread(body.close)
 
 
 def _put_bytes_sync(data: bytes, object_key: str, bucket: str, content_type: str) -> None:

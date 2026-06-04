@@ -104,6 +104,12 @@ class Settings(BaseSettings):
     verify_token_signing_key_path: str = "/run/secrets/verify_token_key"  # noqa: S105 — a path
     public_base_url: str = "http://localhost"
 
+    # S-pack-2 evidence-pack external delivery (doc 06 §7.4, UJ-7): the time-box on an Ed25519
+    # share-link. A request may set its own expiry; the server clamps to [1, max] days and uses the
+    # default when unset. Short windows + revoke are the controls (the link rides a URL).
+    pack_share_default_ttl_days: int = 14
+    pack_share_max_ttl_days: int = 90
+
     @property
     def sync_dsn(self) -> str:
         """DSN Alembic uses (sync driver). Falls back to the async URL's driver name."""

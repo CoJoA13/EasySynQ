@@ -67,6 +67,11 @@ class EvidencePack(Base):
     content_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
     # The sealed ZIP file digest (== blob.sha256). Plain Text, NO FK to blob (see module docstring).
     zip_blob_sha256: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # S-pack-2: the cached single-PDF portfolio variant (cover + summaries + §11.3-stamped
+    # renditions) — a DERIVED view in the non-WORM renditions bucket, NOT part of the seal
+    # (content_hash is over the ZIP content list). Plain Text, NO FK to blob (the zip_blob_sha256
+    # R27 rationale). NULL until Stage 2 of the build caches it (a Gotenberg outage leaves it NULL).
+    portfolio_blob_sha256: Mapped[str | None] = mapped_column(Text, nullable=True)
     pack_record_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("record.id", ondelete="RESTRICT"), nullable=True
     )

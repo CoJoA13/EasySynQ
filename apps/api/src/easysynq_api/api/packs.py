@@ -19,14 +19,21 @@ from fastapi import APIRouter, Depends, status
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..config import get_settings
 from ..db.models._pack_enums import PackStatus
 from ..db.models.app_user import AppUser
 from ..db.models.evidence_pack import EvidencePack
 from ..db.models.pack_item import PackItem
+from ..db.models.pack_share_link import PackShareLink
 from ..db.session import get_session
 from ..problems import ProblemException
 from ..services.authz import require
-from ..services.packs import create_pack_with_preview, generate_pack
+from ..services.packs import (
+    create_pack_with_preview,
+    create_share_link,
+    generate_pack,
+    revoke_share_link,
+)
 from ..services.packs import repository as packs_repo
 from ..services.vault import repository as vault_repo
 from ..services.vault import storage
@@ -49,6 +56,16 @@ class PackCreate(BaseModel):
         if self.scope_kind == "CLAUSE":
             return {"clause_ids": [str(c) for c in self.clause_ids]}
         return {"process_ids": [str(p) for p in self.process_ids]}
+
+
+class ShareCreate(BaseModel):
+    ttl_days: int | None = None
+    expires_at: datetime.datetime | None = None
+    recipient: str | None = None
+
+
+class ShareRevoke(BaseModel):
+    reason: str | None = None
 
 
 # --- serializers ------------------------------------------------------------------------
@@ -84,6 +101,26 @@ def _pack_item(item: PackItem) -> dict[str, Any]:
         "inclusion_status": item.inclusion_status.value,
         "exclusion_reason": item.exclusion_reason,
         "content_hash_at_seal": item.content_hash_at_seal,
+    }
+
+
+def _share_link(link: PackShareLink) -> dict[str, Any]:
+    """A management view of a share link — never the raw token (only its digest prefix)."""
+    now = datetime.datetime.now(datetime.UTC)
+    return {
+        "id": str(link.id),
+        "pack_id": str(link.pack_id),
+        "recipient": link.recipient,
+        "state": link.state(now=now),
+        "token_digest": link.token_digest[:16],
+        "expires_at": link.expires_at.isoformat(),
+        "created_at": link.created_at.isoformat() if link.created_at else None,
+        "revoked_at": link.revoked_at.isoformat() if link.revoked_at else None,
+        "revoke_reason": link.revoke_reason,
+        "download_count": link.download_count,
+        "last_downloaded_at": (
+            link.last_downloaded_at.isoformat() if link.last_downloaded_at else None
+        ),
     }
 
 
@@ -177,3 +214,64 @@ async def download_pack_endpoint(
         raise ProblemException(status=404, code="not_found", title="Pack artifact not found")
     url = await storage.presign_get(blob.object_key, bucket=blob.bucket)
     return {"download_url": url, "sha256": pack.zip_blob_sha256, "content_type": "application/zip"}
+
+
+# --- external delivery: time-boxed share links (S-pack-2, doc 06 §7.4, UJ-7) ------------
+#
+# Sharing/revoking rides the SAME ``report.evidence_pack.generate`` authority that produces packs
+# (the pack-management owner via the SYSTEM override; the catalog stays CLOSED, no new key). The
+# PUBLIC guest landing + download (``api/pack_share.py``) carry NO gate — the signed, time-boxed,
+# revocable token IS the authorization. These POSTs are share-link *lifecycle* management; they do
+# not mutate the immutable sealed pack content (the route-inventory proof whitelists them).
+
+
+@router.post("/evidence-packs/{pack_id}/share", status_code=status.HTTP_201_CREATED)
+async def share_pack_endpoint(
+    pack_id: uuid.UUID,
+    body: ShareCreate,
+    caller: AppUser = Depends(_generate),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """Mint a time-boxed Ed25519 share link for a SEALED pack. Returns the raw token + the share URL
+    **once** (only its digest is stored). 409 if the pack is not sealed; 503 if the signing key is
+    not provisioned."""
+    link, token = await create_share_link(
+        session,
+        caller,
+        pack_id,
+        ttl_days=body.ttl_days,
+        expires_at=body.expires_at,
+        recipient=body.recipient,
+    )
+    base = get_settings().public_base_url.rstrip("/")
+    return {
+        **_share_link(link),
+        "token": token,
+        "share_url": f"{base}/api/v1/evidence-packs/shared?t={token}",
+    }
+
+
+@router.get("/evidence-packs/{pack_id}/share-links")
+async def list_share_links_endpoint(
+    pack_id: uuid.UUID,
+    caller: AppUser = Depends(_generate),
+    session: AsyncSession = Depends(get_session),
+) -> list[dict[str, Any]]:
+    """List a pack's share links (management view, no raw token). 404 if the pack is another org."""
+    await _load(session, caller, pack_id)
+    links = await packs_repo.list_share_links(session, pack_id)
+    return [_share_link(link) for link in links]
+
+
+@router.post("/evidence-packs/{pack_id}/share-links/{link_id}/revoke")
+async def revoke_share_link_endpoint(
+    pack_id: uuid.UUID,
+    link_id: uuid.UUID,
+    body: ShareRevoke,
+    caller: AppUser = Depends(_generate),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """Revoke a share link (immediate — the public endpoint re-checks on every access). 404 if
+    missing; 409 if already revoked. The sealed pack is untouched (doc 06 §7.4 frozen snapshot)."""
+    link = await revoke_share_link(session, caller, pack_id, link_id, reason=body.reason)
+    return _share_link(link)

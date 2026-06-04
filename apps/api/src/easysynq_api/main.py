@@ -21,6 +21,7 @@ from .api.authz import router as authz_router
 from .api.clauses import router as clauses_router
 from .api.documents import router as documents_router
 from .api.health import router as health_router
+from .api.pack_share import router as pack_share_router
 from .api.packs import router as packs_router
 from .api.processes import router as processes_router
 from .api.records import router as records_router
@@ -50,6 +51,11 @@ _LATCH_EXEMPT_EXACT: frozenset[str] = frozenset(
         "/api/v1/auth/config",
         "/api/v1/me",
         "/api/v1/verify",
+        # S-pack-2 (doc 06 §7.4, UJ-7): the public, unauthenticated external-auditor delivery
+        # surface (a signed time-boxed token is the authorization). BOUNDARY-ANCHORED exact paths —
+        # never a prefix — so no sibling route is silently un-latched (the /verify precedent).
+        "/api/v1/evidence-packs/shared",
+        "/api/v1/evidence-packs/shared/download",
         "/api/v1/openapi.json",
         "/api/v1/docs",
     }
@@ -132,6 +138,11 @@ def create_app() -> FastAPI:
     app.include_router(records_router)  # S-rec-1: records capture + evidence-linking + correction
     app.include_router(search_router)  # S10: Postgres-FTS search (filter-not-403, Indexer seam)
     app.include_router(reports_router)  # S10: org-wide Compliance Checklist
+    # S-pack-2 public delivery is mounted BEFORE the authenticated packs router: ``{pack_id}`` uses
+    # the str path-convertor (UUIDs are validated post-match), so the static ``…/shared`` literals
+    # must be matched first or ``/evidence-packs/shared`` would resolve to the authenticated
+    # ``/{pack_id}`` route (401). A real UUID pack path never matches the ``shared`` literal.
+    app.include_router(pack_share_router)  # S-pack-2: public time-boxed pack delivery (no auth)
     app.include_router(packs_router)  # S-pack-1: evidence packs (preview + build/seal + download)
     app.include_router(workflow_router)
     app.include_router(audit_router)

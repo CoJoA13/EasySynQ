@@ -584,9 +584,9 @@ Purpose-built aggregation (the reason GraphQL was unnecessary), organized around
 | GET | `/reports/audit-coverage` | `report.read` | ISO clause-coverage matrix from audits/findings. |
 | POST | `/reports/{key}/export` | `report.export` | Async export (PDF/CSV/XLSX) → `202` + job; the artifact lands in MinIO and is returned via presigned URL (self-hosted; nothing leaves the boundary). |
 
-### 8.15a Evidence Packs (`/evidence-packs`) — as built (slice S-pack-1, doc 06 §7)
+### 8.15a Evidence Packs (`/evidence-packs`) — as built (slices S-pack-1/2, doc 06 §7)
 
-UJ-7: an on-demand, scope-limited, **immutable, self-verifying** bundle of records + their evidence + a traceability manifest, sealed and registered as a `RETAIN_PERMANENT` EVIDENCE `record`. Build/seal runs on the worker (poll `GET` for `SEALED`). A pack is immutable — **no PUT/PATCH/DELETE** (the route-inventory proof). External time-boxed delivery (the `guest-grant` of §8.1 / Ed25519 link) is **S-pack-2**.
+UJ-7: an on-demand, scope-limited, **immutable, self-verifying** bundle of records + their evidence + a traceability manifest, sealed and registered as a `RETAIN_PERMANENT` EVIDENCE `record`. Build/seal runs on the worker (poll `GET` for `SEALED`). The pack **content** is immutable — **no PUT/PATCH/DELETE** on a pack (the route-inventory proof; the S-pack-2 share/revoke POSTs manage delivery grants, not pack content). **S-pack-2** adds external delivery via a time-boxed, revocable Ed25519 share link + a PUBLIC, no-auth, latch-exempt guest landing/download (the signed token IS the authorization; the heavier `guest-grant` of §8.1 + ABAC stays v1.x).
 
 | Method | Path | Perm | Notes |
 |---|---|---|---|
@@ -595,6 +595,11 @@ UJ-7: an on-demand, scope-limited, **immutable, self-verifying** bundle of recor
 | GET | `/evidence-packs/{id}` | `report.evidence_pack.generate` | Header + membership + gap/exclusion summaries + **`status`** (DRAFT→BUILDING→SEALED\|FAILED — the build poll). Seal-time classification once SEALED. |
 | POST | `/evidence-packs/{id}/generate` | `report.evidence_pack.generate` | Enqueue the immutable build/seal (DRAFT/FAILED→BUILDING) → `202`. `409` if already SEALED or building. |
 | GET | `/evidence-packs/{id}/download` | `report.export` | Presigned GET to the sealed pack ZIP. `409` until SEALED. |
+| POST | `/evidence-packs/{id}/share` | `report.evidence_pack.generate` | **(S-pack-2)** Mint a time-boxed Ed25519 share link for a SEALED pack: `{ ttl_days?\|expires_at?, recipient? }`. Returns the raw token + `share_url` **once** (only its digest is stored). `409` if not SEALED; `503` if the signing key isn't provisioned. |
+| GET | `/evidence-packs/{id}/share-links` | `report.evidence_pack.generate` | **(S-pack-2)** List a pack's share links (management view, digest prefix only — never the raw token). |
+| POST | `/evidence-packs/{id}/share-links/{link_id}/revoke` | `report.evidence_pack.generate` | **(S-pack-2)** Revoke a link (immediate — re-checked on every public access): `{ reason? }`. `409` if already revoked. |
+| GET | `/evidence-packs/shared?t=<token>` | *public (no auth)* | **(S-pack-2)** The guest HTML landing — verify the token + show the pack summary (incl. the R28 gap/exclusion surface) + download links, or an honest expired/revoked/invalid message. Latch-exempt; `Referrer-Policy: no-referrer`. |
+| GET | `/evidence-packs/shared/download?t=<token>&format=zip\|pdf` | *public (no auth)* | **(S-pack-2)** Stream the pack to the guest (ZIP canonical, or the live-stamped PDF portfolio). Re-checks the **revocable** DB row each request (revoke is immediate), audits `PACK_DOWNLOADED`, streams through the API (no presigned URL outlives a revoke). `403` if invalid/expired/revoked; `409` if the PDF portfolio is unavailable. |
 
 > **No new permission key** — `report.evidence_pack.generate` + `report.export` already exist in the closed `07 §3.8` catalog (held by QMS Owner); packs ride a **SYSTEM override** until the role UI (the `record.*` precedent). Pack lifecycle audits as `PACK_GENERATED`/`PACK_BUILD_FAILED` (object_type `evidence_pack`).
 

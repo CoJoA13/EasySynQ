@@ -48,10 +48,17 @@ invariant* rather than a discipline problem.
     evidence + a traceability manifest, assembled by the worker and sealed as a `RETAIN_PERMANENT` EVIDENCE Record. The
     build is **R28-honest** — every in-scope record is classified `INCLUDED` / `EXCLUDED_PERMISSION` (the generator
     couldn't read it) / `EXCLUDED_ABSENCE` (its evidence was destroyed), so nothing is ever silently dropped, plus a gap
-    report of in-scope ★ clauses lacking evidence. (External time-boxed delivery is the next slice, S-pack-2.)
+    report of in-scope ★ clauses lacking evidence.
+  - **S-pack-2** (Evidence Packs / UJ-7 — external delivery + PDF portfolio, completes UJ-7): hand a sealed pack to an
+    external auditor via a **time-boxed, revocable Ed25519 share link** — a signed token validated *outside* the PEP
+    (domain-separated from the S7c verify token, fails closed if the key isn't provisioned) backed by a `pack_share_link`
+    record. A **public, no-auth, latch-exempt** guest landing + `format=zip|pdf` download re-checks the revocable DB row
+    on every access (revoke is immediate), audits each view, and streams the bytes through the API (no presigned URL
+    outlives a revoke). The `format=pdf` **portfolio** is a printable cover + traceability index + the §11.3-stamped
+    controlled-document renditions, built best-effort at seal so a renderer outage never blocks the canonical pack. (The
+    heavier `guest_grant`/ABAC/Keycloak-guest path stays v1.x.)
 
-  S-pack-2 (time-boxed external-auditor delivery) and Mode-B structured-form capture are the next v1 records slices.
-  Migration head `0025`.
+  Mode-B structured-form capture is the next v1 records slice. Migration head `0026`.
 
 ## Repository layout
 

@@ -48,6 +48,17 @@ class VerifyClaims:
 
 
 _cached_key: Ed25519PrivateKey | None = None
+# True once :func:`load_verify_signing_key` had to fall back to an in-memory ephemeral key (a
+# read-only key path) — i.e. the active key is NOT durably persisted. S-pack-2's share-link mint
+# reads this (``signing_key_is_persisted``) to fail closed rather than hand an outsider a token that
+# would stop verifying after a restart.
+_ephemeral_fallback: bool = False
+
+
+def signing_key_is_persisted() -> bool:
+    """``False`` only when the active signing key is a non-persisted ephemeral fallback (a read-only
+    key path). Meaningful after a load (mint paths call ``load_verify_signing_key`` first)."""
+    return not _ephemeral_fallback
 
 
 def _read_key() -> Ed25519PrivateKey | None:
@@ -72,7 +83,7 @@ def load_verify_signing_key() -> Ed25519PrivateKey:
     **minter** (the worker Beat task + the `easysynq mirror` CLI) calls this, and the mirror lock
     serializes minters — so generation has a single owner and there is no key race; the api verifier
     uses :func:`_read_key` (read-only)."""
-    global _cached_key
+    global _cached_key, _ephemeral_fallback
     key = _read_key()
     if key is not None:
         return key
@@ -83,6 +94,7 @@ def load_verify_signing_key() -> Ed25519PrivateKey:
         tmp = path.with_name(f"{path.name}.tmp.{os.getpid()}")
         tmp.write_bytes(key.private_bytes(Encoding.PEM, PrivateFormat.PKCS8, NoEncryption()))
         os.replace(tmp, path)  # atomic publish — a concurrent winner's file wins for everyone
+        _ephemeral_fallback = False  # durably persisted
         return _read_key() or key
     except OSError:  # pragma: no cover - read-only mount fallback
         logger.warning(
@@ -90,6 +102,7 @@ def load_verify_signing_key() -> Ed25519PrivateKey:
             "(cross-process verifies will read UNKNOWN until a persisted key is available)"
         )
         _cached_key = key
+        _ephemeral_fallback = True
         return key
 
 
