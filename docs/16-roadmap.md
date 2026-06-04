@@ -87,6 +87,15 @@ Records/evidence capture, retention/disposition, Evidence Packs, audits/findings
 
 ## 4. v1 — "A Complete ISO 9001:2015 QMS"
 
+> **🟡 IN PROGRESS (v1 started 2026-06-03).** First slice **S-rec-1** (records capture + evidence-linking +
+> correction) is on `main` — the *Records & evidence capture* row below, minus its Mode-B (structured-form) leg:
+> immutable upload capture, `evidence_for_link` (link-as-evidence: record→clause/process/document), `correction_of`,
+> `source_version_id` pinning (R21), WORM-sealed evidence in a dedicated `records` bucket + a `content_hash` seal, and
+> most of the *Retention & disposition* row's **policy-as-data** (the schema + a 5-tier resolver + the snapshot-at-
+> capture ratchet). Deferred to the next v1 slices: the disposition lifecycle + Beat retention sweep (S-rec-2),
+> Mode-B structured-form capture (S-rec-3), Evidence Packs (UJ-7), and the rows below. See `CLAUDE.md` for shipped
+> detail.
+
 **Goal:** everything an organization needs to *run and certify* an ISO 9001:2015 QMS, end to end, and to face an external audit with a one-click evidence pack.
 
 | Capability | What v1 adds | Doc | Depends on |
