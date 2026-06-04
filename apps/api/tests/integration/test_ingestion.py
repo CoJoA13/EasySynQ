@@ -171,7 +171,9 @@ async def test_org_isolation_returns_404(
         await app_client.post("/api/v1/admin/imports", headers=h, json={"source_root": "."})
     ).json()["id"]
 
-    # a reviewer in a DIFFERENT org must not see org A's run — 404, never a 403/leak
+    # a reviewer in a DIFFERENT org must not see org A's run — 404, never a 403/leak. The 2nd org is
+    # created AND torn down within this test: a lingering 2nd Organization would break the many
+    # shared-DB tests that do ``select(Organization).scalar_one()`` (the single-org test contract).
     other = _subject("orgb-reviewer")
     async with get_sessionmaker()() as session:
         org_b = Organization(
@@ -179,8 +181,9 @@ async def test_org_isolation_returns_404(
         )
         session.add(org_b)
         await session.flush()
+        org_b_id = org_b.id
         user_b = AppUser(
-            org_id=org_b.id,
+            org_id=org_b_id,
             keycloak_subject=other,
             display_name=other,
             status=UserStatus.ACTIVE,
@@ -190,12 +193,12 @@ async def test_org_isolation_returns_404(
         perm = (
             await session.execute(select(Permission).where(Permission.key == "import.review"))
         ).scalar_one()
-        scope = Scope(org_id=org_b.id, level=ScopeLevel.SYSTEM)
+        scope = Scope(org_id=org_b_id, level=ScopeLevel.SYSTEM)
         session.add(scope)
         await session.flush()
         session.add(
             PermissionOverride(
-                org_id=org_b.id,
+                org_id=org_b_id,
                 user_id=user_b.id,
                 permission_id=perm.id,
                 effect=Effect.ALLOW,
@@ -204,6 +207,30 @@ async def test_org_isolation_returns_404(
         )
         await session.commit()
 
-    hb = _auth(token_factory, other)
-    cross = await app_client.get(f"/api/v1/admin/imports/{run_id}", headers=hb)
-    assert cross.status_code == 404
+    try:
+        hb = _auth(token_factory, other)
+        cross = await app_client.get(f"/api/v1/admin/imports/{run_id}", headers=hb)
+        assert cross.status_code == 404
+    finally:
+        # Tear down org_b in FK-RESTRICT order so the single-org contract is restored even if the
+        # assertion fails.
+        async with get_sessionmaker()() as session:
+            await session.execute(
+                sa.text("DELETE FROM permission_override WHERE org_id = :o"), {"o": org_b_id}
+            )
+            await session.execute(sa.text("DELETE FROM scope WHERE org_id = :o"), {"o": org_b_id})
+            await session.execute(
+                sa.text("DELETE FROM app_user WHERE org_id = :o"), {"o": org_b_id}
+            )
+            await session.execute(
+                sa.text("DELETE FROM organization WHERE id = :o"), {"o": org_b_id}
+            )
+            await session.commit()
+
+    # the single-org contract is restored (a cleanup regression fails HERE, not in the many
+    # downstream shared-DB tests that do select(Organization).scalar_one()).
+    async with get_sessionmaker()() as session:
+        remaining = (
+            await session.execute(sa.text("SELECT count(*) FROM organization"))
+        ).scalar_one()
+        assert remaining == 1
