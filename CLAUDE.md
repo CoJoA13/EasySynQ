@@ -59,113 +59,38 @@ squash-merge commits + the `easysynq-project.md` memory; operator/API usage is i
   exclusion report; absence = a destroy tombstone) + gap report; an idempotent `.delay` worker build (the
   `pack_content_hash` is over the content list, NOT the ZIP bytes) + a stalled-build reaper; no renderer dependency.
 
-- **S-pack-2 — Evidence Packs (UJ-7): external delivery + PDF portfolio (completes UJ-7)** ✅ — migration `0026` (the full
-  non-obvious decisions live in the squash-merge commit + the project memory). **Owner forks (AskUserQuestion):** **Full
-  UJ-7** scope (delivery + PDF portfolio + per-request live §11.3 stamping) · a **DB-backed `pack_share_link`** record for
-  revocation/audit (NOT pure-stateless; the heavier `guest_grant` + `scope.evidence_pack_id` ABAC + Keycloak-guest identity
-  stays **v1.x**). The **Ed25519 signed-token-outside-the-PEP** path (reuses `services/vault/verify_token.py`,
-  **domain-separated** by a `easysynq.packshare.v1` preamble + a distinct 105-byte length so a verify token can never
-  cross-validate as a share token, locked by a unit test; **fails closed** at mint via `verify_token.signing_key_is_persisted()`).
-  **Migration `0026`**: `pack_share_link` (token_digest UNIQUE — the raw token is never stored; recipient/expires_at/
-  revoked_at+by+reason/download_count; state DERIVED from nullable timestamps, the 0024 `worm_destroy_request` precedent) +
-  a nullable `evidence_pack.portfolio_blob_sha256` (a derived rendition pointer, plain Text NO FK — the `zip_blob_sha256`
-  R27 precedent) + additive `PACK_SHARED`/`PACK_DOWNLOADED`/`PACK_SHARE_REVOKED` `event_type` (reuse `evidence_pack`
-  object_type) + explicit `easysynq_app` GRANTs. **Authenticated** (`api/packs.py`, gate `report.evidence_pack.generate` —
-  the pack-management authority, catalog CLOSED): `POST …/share` (mint a link, raw token returned ONCE), `GET …/share-links`,
-  `POST …/share-links/{id}/revoke`. **Public** (`api/pack_share.py`, **no auth, GET-only**, latch-exempt EXACT, mounted
-  **before** the `/{pack_id}` router — the str-path-convertor lesson): `GET …/shared?t=` (an HTML landing surfacing the R28
-  gap/exclusion summary) + `GET …/shared/download?t=&format=zip|pdf` — re-checks the **revocable** DB row on every access
-  (revoke is immediate), audits `PACK_DOWNLOADED` (system-actor), and **streams** the bytes through the API (no presigned URL
-  outlives a revoke) + `Referrer-Policy: no-referrer`, digest-only logging. **PDF portfolio** = build **Stage 2**
-  (`services/packs/portfolio.py`, a SEPARATE txn after the seal commits, idempotent on `portfolio_blob_sha256`, best-effort
-  so Gotenberg never blocks the seal): cover + traceability index + gap/exclusion pages + each version's **cached** §11.3-stamped
-  rendition (a truthful pure-pypdf "no longer governs" overlay if its state changed; an honest placeholder if uncached — so
-  the **API never invokes Gotenberg**), content-addressed into the non-WORM renditions bucket (blob-row-iff-bytes); the
-  per-request guest stamp is `watermark.stamp_per_request_copy` (the S7d precedent). Adversarially pressure-tested **before
-  coding** (4-lens Workflow → folded: seal-must-not-block-on-render → Stage-2-separate-txn, content-address-by-output-not-input,
-  stream-not-presign for immediate revoke + per-access audit, landing surfaces R28, Referrer-Policy + digest-only logging,
-  mint-fails-closed, domain-separation tests, the route-order shadow; rejected the "add `guest.*` keys / build guest_grant now"
-  findings as contrary to the closed-catalog discipline + the owner's Q2). **281 unit + 7 pack integration green** (the 14
-  pg_dump-absent backup/restore tests stay environmental, green on CI); `0026` round-trips up↔down↔check **+ a populated-DB
-  downgrade** on PG16; OpenAPI caught up in-PR (redocly green). **Deferred (later):** the `guest_grant`/ABAC/Keycloak-guest
-  path (v1.x), Finding/CAPA pack scope, `ip_allow` binding, app-layer rate-limiting (a Caddy edge concern). **Migration head
-  is now `0026`.**
+- **S-pack-2** Evidence Packs (UJ-7): external delivery + PDF portfolio — **completes UJ-7** (PR #50, `0026`) — an Ed25519
+  signed share-token *outside* the PEP (reuses `verify_token.py`, **domain-separated** by a distinct preamble + 105-byte
+  length, **fails closed** at mint) + a DB-backed **revocable** `pack_share_link` (token_digest UNIQUE, raw token returned
+  ONCE, state derived from nullable timestamps); a **public no-auth GET-only** guest surface (`api/pack_share.py`,
+  latch-exempt, mounted **before** the `/{pack_id}` router — the str-convertor lesson): an R28 gap/exclusion HTML landing +
+  a streamed `…/shared/download?format=zip|pdf` that re-checks the revocable row **per access** (immediate revoke), audits
+  `PACK_DOWNLOADED` (system-actor), `Referrer-Policy: no-referrer` + digest-only logging; the **PDF portfolio** is a
+  best-effort build **Stage 2** (separate txn after the seal, content-addressed by **output**, the API never invokes
+  Gotenberg). Deferred: `guest_grant`/ABAC/Keycloak-guest (v1.x), Finding/CAPA scope, `ip_allow`.
 
-- **S-rec-3 — Mode-B structured-form capture (completes the records family)** ✅ — migration `0027` (the full non-obvious
-  decisions live in the squash-merge commit + the project memory). **Owner forks (AskUserQuestion):** schema **versioned
-  via the document lifecycle** · a **bespoke field-list DSL** (no new dep) · **Core + BOTH extras** (the pre-release toggle
-  AND a best-effort sealed-PDF rendition). A Form/Template is a controlled DOCUMENT (`document_type` code `FRM`); the new
-  **`form_template`** shared-PK subtype holds the editable working `field_schema` (the bespoke DSL — `{fields:[{key,label,
-  type:string|text|number|integer|boolean|date|enum,required,min,max,enum}]}`, a pure dependency-free validator covering
-  exactly "types/required/ranges/enums", **no regex/`pattern` leg** → no ReDoS). The schema is **frozen into each
-  `document_version.metadata_snapshot` at check-in** — a dedicated `checkin_form_schema` whose **WORM source blob IS the
-  canonical-serialized schema** (server-side write, no client upload; derived BOTH the blob bytes AND the snapshot from the
-  SAME in-memory schema in one txn — NEVER touch the generic `_snapshot(doc)`). **Mode-B capture** triggers SOLELY on a
-  `source_document_id` that resolves to an FRM template: the server resolves the **Effective** version (or the highest
-  non-Obsolete version when `system_config.capture_pre_release_templates` is on), reads the schema from **that version's
-  snapshot** (never the mutable working copy), validates `form_field_values` (422 `errors[].field`), and pins
-  `source_version_id`; a caller-supplied version must match (else 422 `stale_template_version`). A **correction** pins +
-  validates against the **original record's** edition (so "records keep showing v2.0" survives a v2→v3 revision). The
-  earlier "form_field_values requires a template" tightening was **dropped** (it would 422 existing non-template structured
-  records — the critic caught it); a non-FRM source keeps accepting free-form values. **Authoring** on `/documents`
-  (no records route-inventory change): `PUT/GET …/form-schema` (gate `document.manage_metadata`/`read`; in-service
-  FRM+editable guard — the SYSTEM override has no lifecycle predicate), `GET …/effective-form-schema` (the doc 06 §4.2
-  render-the-form read), `POST …/form-schema:checkin` (gate `document.edit`). **Pre-release toggle:** `PATCH /admin/config`
-  (new `api/config.py`, gate the SYSTEM-only `config.update` — admin; audited `CONFIG_UPDATED` on the closed `config`
-  object type). **Structured-PDF rendition:** best-effort Stage-2 Celery task `easysynq.records.build_structured_pdf`
-  (`.delay`'d after capture commits; idempotent `FOR UPDATE`; deterministic reportlab, **no Gotenberg**; the record id is
-  folded into the bytes → per-record sha) cached in the non-WORM renditions bucket via `record.structured_pdf_blob_sha256`
-  (plain Text, NO FK — the `zip_blob_sha256` R27 precedent); `GET /records/{id}/rendition` presigns it (409 until built).
-  **[the critical fold]** the rendition purge is centralized in the SHARED `_purge_record_evidence`, so ALL THREE destroy
-  paths (`_dispose_now`, the `_auto_dispose` sweep, the R27 `approve_worm_destroy`) drop its `blob` row + bytes + null the
-  pointer — the blob-row-iff-bytes invariant (else the backup sweep crashes NoSuchKey, CI-only). **Migration `0027`**:
-  `form_template` (shared-PK subtype, GRANT to `easysynq_app`) + `record.structured_pdf_blob_sha256` + `system_config.
-  capture_pre_release_templates` (NOT-NULL false default) + additive `FORM_SCHEMA_SET`/`CONFIG_UPDATED` `event_type`
-  (`audit_object_type` stays CLOSED — form templates ride `document`, the config flip rides `config`). Adversarially
-  pressure-tested **before coding** (Plan-agent + 6-lens critic Workflow, 30 agents → folded: `_snapshot`-wiring,
-  read-schema-from-the-version-snapshot, the single Mode-B trigger predicate, the dropped tightening, correction-pins-the-
-  edition, the centralized rendition purge, the config-setter SYSTEM gate, register `FormTemplate` in `db/models/__init__.py`
-  or `alembic check` phantom-drifts, drop the regex leg + size caps). **302 unit + 9 structured-form integration green**;
-  `0027` round-trips up↔down↔check **+ a populated-DB downgrade** on PG16; OpenAPI caught up in-PR (redocly green).
-  **Deferred:** Mode B for `audit`/`capa` multi-stage records (those entities don't exist), a richer schema language, the
-  web form-builder. **Migration head is now `0027`.**
+- **S-rec-3** Mode-B structured-form capture — **completes the records family** (PR #52, `0027`) — a Form/Template is an
+  `FRM` controlled DOCUMENT + a **`form_template`** shared-PK subtype holding a bespoke dependency-free field-list DSL
+  (types/required/ranges/enums; **no regex leg → no ReDoS**); the schema is **frozen into `document_version.metadata_snapshot`
+  at check-in** (the WORM source blob IS the canonical-serialized schema, derived server-side from the SAME in-memory object
+  — never the generic `_snapshot`). **Mode-B capture** triggers SOLELY on a `source_document_id` resolving to an FRM template:
+  validates `form_field_values` against **that version's** pinned schema (a caller version must match else 422
+  `stale_template_version`; a correction validates the **original record's** edition). A pre-release toggle via
+  `PATCH /admin/config` (`config.update`); a best-effort structured-PDF rendition (`record.structured_pdf_blob_sha256`,
+  plain Text NO FK) whose purge is **centralized in the shared `_purge_record_evidence`** across all 3 DESTROY paths (the
+  blob-row-iff-bytes fold). Deferred: Mode B for `audit`/`capa`, a richer schema language.
 
-- **S-rec-4 — Records-family close-out: `/retention-policies` CRUD + creator≠disposer SoD-6** ✅ — migration `0028`
-  (the full non-obvious decisions live in the squash-merge commit + the project memory). **Owner forks (AskUserQuestion):**
-  **open the catalog** with two additive CONTENT keys · SoD-6 **overridable, default-enforced** · **full CRUD +
-  soft-archive**. **The catalog is now ADDITIVELY extensible** — decisions-register **R38** REFINES R5 (closed = no
-  *rename/removal*; additive growth allowed with a register entry); the first additive keys are **`retention.read`** (→
-  QMS Owner + Internal Auditor) + **`retention.manage`** (→ QMS Owner), both `is_system_domain=false`, `finest_scope=SYSTEM`
-  (org-level; the `config.update` gate mechanic), so the R35 two-tier guard already permits a QMS-Owner content-tier grant.
-  **SoD-6 (creator≠disposer):** a record's own `captured_by` may not advance it to DISPOSED/DESTROY (refused **409
-  `sod_self_disposition`**, audited **`DISPOSITION_REFUSED_SOD`**) unless the org sets **`allow_self_disposition`**
-  (`system_config`, default OFF; flipped via `PATCH /admin/config`). Enforced in the **service** (`advance_disposition`
-  DISPOSED branch, *before* `_dispose_now`'s irreversible purge — uniform across all actions), **not** the PDP, so a SYSTEM
-  `record.dispose` override does NOT bypass it; gates only the DISPOSED edge, **exempt for the Beat sweep** (system actor,
-  structurally — `_auto_dispose` takes no actor), and subsumed by the **stronger R27 dual-control** (requester≠approver) on
-  the legal-order hatch (no separate check there). **[the ratchet crux]** the snapshot pins only `policy_id` +
-  `retention_basis_date`; the sweep **live-derefs** `policy.duration`/`disposition_action`/`review_required`, so a policy
-  *edit* reaches pinned records — doc 06 §5.1 *wants* that for an extension but not a reduction. Honored WITHOUT a per-record
-  duration snapshot: **PATCH is extend-forward only while a policy has non-disposed pinned records** (422
-  `retention_reduction_blocked` on a shorter duration / weaker action / `review_required` true→false), and **shortening for
-  future = archive + create-new** (soft-archive `active=false` drops the policy from the 3 auto-attach resolver tiers but
-  **NOT** from `due_active_records` — pinned records keep being swept). The **System Default is protected** (un-archivable,
-  un-renameable; name-based via `SYSTEM_DEFAULT_POLICY_NAME` — robust since the name is reserved + un-renameable, no extra
-  column). **Authenticated** `api/retention_policies.py` (a SEPARATE router so the records immutability proof stays tight):
-  `GET /retention-policies(?include_archived)`, `GET/{id}`, `POST` (gate `retention.manage`; 422 reserved-name/malformed,
-  409 `name_taken`), `PATCH /{id}`, `POST /{id}/archive`·`/unarchive` — **no PUT/DELETE** (a hard delete is blocked by 3
-  RESTRICT FKs). Pinning an **archived** policy at capture → 422 `retention_policy_archived`. **Migration `0028`**:
-  `system_config.allow_self_disposition` + `retention_policy.active/archived_at/archived_by/created_at/updated_at` +
-  additive `event_type` (`RETENTION_POLICY_CREATED/UPDATED/ARCHIVED`, `DISPOSITION_REFUSED_SOD`) + `audit_object_type
-  retention_policy` + the 2 keys & role-grants seeded (downgrade deletes role_grant **before** permission — the RESTRICT-FK
-  order). No new GRANT (the table already carries the app-role grant from 0010). Adversarially pressure-tested **before
-  coding** (Plan-agent + 7-lens critic Workflow, 96 agents → folded: the SoD gate placement before the irreversible purge,
-  the live-deref ratchet → extend-forward + archive-recreate, resolver active-filter on the 3 auto-attach tiers only,
-  finest_scope=SYSTEM, retention.read→Internal Auditor, the migration downgrade FK order, the catalog-count test 96→98,
-  R38-refines-R5; rejected the `is_system_default` column + the reuse-RECORD_ERASURE_REFUSED alternative). **320 unit + 7
-  retention-policy + the SoD-6 integration tests green**; `0028` round-trips up↔down↔check **+ a populated-DB downgrade** on
-  PG16; OpenAPI caught up in-PR (redocly green). **Deferred:** the `record.set_retention` per-record-override endpoint
-  (future), Mode B for `audit`/`capa` records. **Migration head is now `0028`.**
+- **S-rec-4** Records-family close-out: `/retention-policies` CRUD + creator≠disposer SoD-6 (PR #54, `0028`, **R38**) —
+  **opens the catalog ADDITIVELY** (R38 refines R5: closed = no *rename/removal*; additive growth allowed with a register
+  entry) with `retention.read`/`retention.manage` (`finest_scope=SYSTEM`, the `config.update` mechanic); `/retention-policies`
+  CRUD + **soft-archive** (a SEPARATE router; PATCH is **extend-forward-only** while a policy has non-disposed pinned records
+  — 422 `retention_reduction_blocked` — and shorten-for-future = **archive + create-new**; the System Default is protected).
+  **SoD-6 (creator≠disposer)** is a **service-layer** gate (`advance_disposition`, before `_dispose_now`'s irreversible
+  purge), **not** the PDP — so a SYSTEM `record.dispose` override does NOT bypass it; relaxed only by `allow_self_disposition`
+  (`system_config`, default OFF); the Beat sweep is structurally exempt; subsumed by the stronger R27 dual-control. **[the
+  ratchet crux]** the capture snapshot pins only `policy_id` + `retention_basis_date` and the sweep **live-derefs** the
+  policy's duration/action/review — so an edit reaches pinned records (extension wanted; reduction blocked by the
+  extend-forward PATCH, no per-record duration snapshot). Deferred: `record.set_retention` per-record override.
 
 - **S-ing-1 — Ingestion: run + scan/inventory foundation (the v1 Ingestion engine's first slice, doc 09, UJ-2)** ✅ —
   migration `0029` (the full non-obvious decisions live in the squash-merge commit + the project memory). **Owner forks
