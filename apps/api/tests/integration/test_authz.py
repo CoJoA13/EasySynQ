@@ -128,12 +128,18 @@ async def test_seed_catalog_and_roles(
     h = _auth(token_factory, subj.admin)
 
     perms = (await app_client.get("/api/v1/permissions", headers=h)).json()
-    assert len(perms) == 96
+    # 96 closed v1 keys + the 2 additive retention.* keys opened in 0028 (R38).
+    assert len(perms) == 98
     by_key = {p["key"]: p for p in perms}
     assert by_key["user.read"]["is_system_domain"] is True
     assert by_key["document.read"]["is_system_domain"] is False
     assert by_key["document.approve"]["sig_hook"] is True
     assert by_key["document.read"]["sig_hook"] is False
+    # R38: the additive retention-policy keys are CONTENT-domain, non-sig-hook, non-SoD-sensitive.
+    for key in ("retention.read", "retention.manage"):
+        assert by_key[key]["is_system_domain"] is False
+        assert by_key[key]["sig_hook"] is False
+        assert by_key[key]["sod_sensitive"] is False
 
     roles = (await app_client.get("/api/v1/roles", headers=h)).json()
     names = {r["name"] for r in roles}

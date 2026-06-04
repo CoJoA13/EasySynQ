@@ -16,6 +16,8 @@ edges. This module is pure (no DB/IO) so the legality table is unit-testable in 
 
 from __future__ import annotations
 
+import uuid
+
 from easysynq_api.db.models._record_enums import RecordDispositionState as S
 
 _ALLOWED: frozenset[tuple[S, S]] = frozenset(
@@ -35,6 +37,18 @@ def legal_disposition_transition(
 ) -> bool:
     """``True`` iff ``from_state → to_state`` is an allowed disposition transition (doc 06 §5.3)."""
     return (from_state, to_state) in _ALLOWED
+
+
+def self_disposition_blocked(
+    actor_id: uuid.UUID, captured_by: uuid.UUID, *, allow_self_disposition: bool
+) -> bool:
+    """SoD-6 (creator≠disposer, doc 07 §7): ``True`` iff the actor executing a record's disposition
+    is the record's own capturer AND the org has NOT relaxed the rule. Pure (no DB) so it is
+    unit-testable; the caller restricts it to the human DISPOSED edge (it does NOT gate
+    DUE_FOR_REVIEW / ACTIVE re-anchor, nor the Beat sweep's system disposals, nor the R27
+    legal-order hatch — which enforces the stronger dual-control requester != approver). Overridable
+    per the SoD-2/4/5 small-org class: ``allow_self_disposition`` defaults OFF (strict)."""
+    return (not allow_self_disposition) and actor_id == captured_by
 
 
 # Re-export the enum alias name used in the signature above (keeps the table terse with ``S``).

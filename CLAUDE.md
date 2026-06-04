@@ -36,8 +36,9 @@ v1/v1.x residuals are listed at the end of this section.
 **v1 phase: STARTED.** The owner chose (AskUserQuestion) the **v1 feature** track → **Records & evidence
 (doc 06)** as the slice family (over the web track + the v1.x backend residuals); **S-rec-1**, **S-rec-2**,
 the **Evidence Packs (UJ-7)** family (**S-pack-1** build/seal, **S-pack-2** external delivery + PDF portfolio),
-then **S-rec-3** (Mode-B structured-form capture) shipped depth-first — completing UJ-7 **and** the records
-family. **Migration head is now `0027`.**
+**S-rec-3** (Mode-B structured-form capture), then **S-rec-4** (the records-family close-out:
+`/retention-policies` CRUD + creator≠disposer SoD-6) shipped depth-first — completing UJ-7 **and** the records
+family. **Migration head is now `0028`.**
 
 **v1 RECORDS family — S-rec-1/2 + S-pack-1** ✅ (one line each; the full per-slice non-obvious decisions live in the
 squash-merge commits + the `easysynq-project.md` memory; operator/API usage is in the dev-workflow section below):
@@ -125,6 +126,43 @@ squash-merge commits + the `easysynq-project.md` memory; operator/API usage is i
   `0027` round-trips up↔down↔check **+ a populated-DB downgrade** on PG16; OpenAPI caught up in-PR (redocly green).
   **Deferred:** Mode B for `audit`/`capa` multi-stage records (those entities don't exist), a richer schema language, the
   web form-builder. **Migration head is now `0027`.**
+
+- **S-rec-4 — Records-family close-out: `/retention-policies` CRUD + creator≠disposer SoD-6** ✅ — migration `0028`
+  (the full non-obvious decisions live in the squash-merge commit + the project memory). **Owner forks (AskUserQuestion):**
+  **open the catalog** with two additive CONTENT keys · SoD-6 **overridable, default-enforced** · **full CRUD +
+  soft-archive**. **The catalog is now ADDITIVELY extensible** — decisions-register **R38** REFINES R5 (closed = no
+  *rename/removal*; additive growth allowed with a register entry); the first additive keys are **`retention.read`** (→
+  QMS Owner + Internal Auditor) + **`retention.manage`** (→ QMS Owner), both `is_system_domain=false`, `finest_scope=SYSTEM`
+  (org-level; the `config.update` gate mechanic), so the R35 two-tier guard already permits a QMS-Owner content-tier grant.
+  **SoD-6 (creator≠disposer):** a record's own `captured_by` may not advance it to DISPOSED/DESTROY (refused **409
+  `sod_self_disposition`**, audited **`DISPOSITION_REFUSED_SOD`**) unless the org sets **`allow_self_disposition`**
+  (`system_config`, default OFF; flipped via `PATCH /admin/config`). Enforced in the **service** (`advance_disposition`
+  DISPOSED branch, *before* `_dispose_now`'s irreversible purge — uniform across all actions), **not** the PDP, so a SYSTEM
+  `record.dispose` override does NOT bypass it; gates only the DISPOSED edge, **exempt for the Beat sweep** (system actor,
+  structurally — `_auto_dispose` takes no actor), and subsumed by the **stronger R27 dual-control** (requester≠approver) on
+  the legal-order hatch (no separate check there). **[the ratchet crux]** the snapshot pins only `policy_id` +
+  `retention_basis_date`; the sweep **live-derefs** `policy.duration`/`disposition_action`/`review_required`, so a policy
+  *edit* reaches pinned records — doc 06 §5.1 *wants* that for an extension but not a reduction. Honored WITHOUT a per-record
+  duration snapshot: **PATCH is extend-forward only while a policy has non-disposed pinned records** (422
+  `retention_reduction_blocked` on a shorter duration / weaker action / `review_required` true→false), and **shortening for
+  future = archive + create-new** (soft-archive `active=false` drops the policy from the 3 auto-attach resolver tiers but
+  **NOT** from `due_active_records` — pinned records keep being swept). The **System Default is protected** (un-archivable,
+  un-renameable; name-based via `SYSTEM_DEFAULT_POLICY_NAME` — robust since the name is reserved + un-renameable, no extra
+  column). **Authenticated** `api/retention_policies.py` (a SEPARATE router so the records immutability proof stays tight):
+  `GET /retention-policies(?include_archived)`, `GET/{id}`, `POST` (gate `retention.manage`; 422 reserved-name/malformed,
+  409 `name_taken`), `PATCH /{id}`, `POST /{id}/archive`·`/unarchive` — **no PUT/DELETE** (a hard delete is blocked by 3
+  RESTRICT FKs). Pinning an **archived** policy at capture → 422 `retention_policy_archived`. **Migration `0028`**:
+  `system_config.allow_self_disposition` + `retention_policy.active/archived_at/archived_by/created_at/updated_at` +
+  additive `event_type` (`RETENTION_POLICY_CREATED/UPDATED/ARCHIVED`, `DISPOSITION_REFUSED_SOD`) + `audit_object_type
+  retention_policy` + the 2 keys & role-grants seeded (downgrade deletes role_grant **before** permission — the RESTRICT-FK
+  order). No new GRANT (the table already carries the app-role grant from 0010). Adversarially pressure-tested **before
+  coding** (Plan-agent + 7-lens critic Workflow, 96 agents → folded: the SoD gate placement before the irreversible purge,
+  the live-deref ratchet → extend-forward + archive-recreate, resolver active-filter on the 3 auto-attach tiers only,
+  finest_scope=SYSTEM, retention.read→Internal Auditor, the migration downgrade FK order, the catalog-count test 96→98,
+  R38-refines-R5; rejected the `is_system_default` column + the reuse-RECORD_ERASURE_REFUSED alternative). **320 unit + 7
+  retention-policy + the SoD-6 integration tests green**; `0028` round-trips up↔down↔check **+ a populated-DB downgrade** on
+  PG16; OpenAPI caught up in-PR (redocly green). **Deferred:** the `record.set_retention` per-record-override endpoint
+  (future), Mode B for `audit`/`capa` records. **Migration head is now `0028`.**
 
 - **Specification** in `docs/` (00–17 + `decisions-register.md`) — complete, adversarially audited, reconciled
   (Register R1–R37 back-propagated). The Register is authoritative.
@@ -376,6 +414,20 @@ create boundary.
   true}` (`config.update`, admin-only). **Authz:** capture rides a SYSTEM `record.create` override (the records precedent);
   template authoring rides `document.*` (a folderless FRM doc needs a SYSTEM/DOC_CLASS grant — the `document.export`
   precedent). Migration head is now `0027` (next `0028`).
+- **Retention-policy management + creator≠disposer SoD (S-rec-4) — API/data only, no UI:** manage the policy-as-data
+  schedules. `GET /api/v1/retention-policies(?include_archived=true)` + `GET …/{id}` (gate `retention.read`); `POST`
+  (`retention.manage`; 422 reserved-name/malformed, 409 `name_taken`), `PATCH …/{id}` (`retention.manage` — **extend-forward
+  only** while a policy has non-disposed pinned records: a duration reduction / weaker `disposition_action` /
+  `review_required` true→false is 422 `retention_reduction_blocked`; **to shorten future retention, archive + create a new
+  shorter policy**), `POST …/{id}/archive`·`/unarchive` (soft-archive — a hard DELETE is blocked by 3 RESTRICT FKs; archived
+  hides from new-capture resolution but pinned records keep being swept). The seeded **System Default** is protected
+  (un-archivable/un-renameable). `retention.read`/`retention.manage` are the **first additively-opened catalog keys** (R38):
+  seeded to **QMS Owner** (both) + **Internal Auditor** (read) — but for a not-yet-UI'd actor still ride a SYSTEM override
+  (the `record.*` precedent). **Creator≠disposer (SoD-6):** a record's `captured_by` advancing its own record to
+  DISPOSED/DESTROY is refused **409 `sod_self_disposition`** (audited `DISPOSITION_REFUSED_SOD`) **unless** an admin sets
+  `PATCH /api/v1/admin/config {allow_self_disposition: true}` (`config.update`). **⚠ Operator note:** the flag defaults OFF
+  (strict), so a **single-operator install** must flip it to `true` to dispose its own records (else every self-disposal is
+  blocked — the second-person requirement). The Beat sweep (system actor) is exempt. Migration head is now `0028` (next `0029`).
 - **⚠ S11 restore + upgrade + encrypted backup (operator):** the durable archive (`easysynq backup run` / the nightly
   Beat job) is now **AES-256-GCM `.tar.enc`** sealed with `BACKUP_ENCRYPTION_KEY` (install.sh generates it into the
   0600 `.env`; **lose it → those archives are unrecoverable** — back it up out-of-band) and bundles the live Keycloak
@@ -437,6 +489,13 @@ create boundary.
   direction on any gate/proof.
 - **Authz for not-yet-UI'd domains:** seed the permission keys but expect them to reach no concrete object at their seeded
   scope → ride on **SYSTEM overrides** until the role/UI lands (the `document.export`/`process.create`/`record.*` precedent).
+- **The permission catalog is ADDITIVE-only (R38), not frozen.** "Closed at v1" (R5) means **no rename/removal** — but a
+  genuinely new capability MAY add keys with a decisions-register entry (S-rec-4's `retention.read`/`retention.manage` were
+  the first). Prefer riding an existing key when one fits; open the catalog only when none does (it's a register-level call —
+  ask the owner). New keys: seed via `pg_insert(...).on_conflict_do_nothing(["key"])` mirroring `0004`'s
+  `(key, is_system_domain, sod_sensitive, sig_hook, finest_scope)` shape; an **org-level** resource uses `finest_scope=SYSTEM`
+  + `require(...)`'s default `_system_scope` (the `config.update` mechanic); a downgrade deletes **role_grant before
+  permission** (the RESTRICT FK); bump the catalog-count assertion in `test_authz.py`.
 - **Reusing the row-filter for a new permission-gated listing** (`gather_grants` + `authorize`, the search/records
   pattern): populate the **FULL `ResourceContext`** the resource is actually granted on (process_ids + framework, not just
   artifact_id + folder_path), or a genuinely PROCESS/FOLDER-scoped grant silently mis-denies everything (the S-pack-1 R28

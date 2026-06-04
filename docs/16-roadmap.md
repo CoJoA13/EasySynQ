@@ -95,15 +95,16 @@ Records/evidence capture, retention/disposition, Evidence Packs, audits/findings
 > Form/Template carries a versioned `field_schema`; capture validates `form_field_values` against the pinned Effective
 > version's schema). **UJ-7 (one-click evidence pack) works end-to-end.** Deferred to the next v1 slices: the rows below
 > (audits/findings, CAPA, ingestion, workflows+notifications, the web UI, the rest of search/reporting), plus the
-> records-family residuals (Mode B for the `audit`/`capa` multi-stage records once those entities land; ordinary
-> creator≠disposer SoD; `/retention-policies` CRUD). See `CLAUDE.md` for shipped detail.
+> records-family residual Mode B for the `audit`/`capa` multi-stage records (once those entities land). The
+> **records-family close-out — `/retention-policies` CRUD + soft-archive + the creator≠disposer SoD-6** — shipped in
+> **S-rec-4** (migration `0028`, the first additive catalog extension, R38). See `CLAUDE.md` for shipped detail.
 
 **Goal:** everything an organization needs to *run and certify* an ISO 9001:2015 QMS, end to end, and to face an external audit with a one-click evidence pack.
 
 | Capability | What v1 adds | Doc | Depends on |
 |---|---|---|---|
 | ✅ **Records & evidence capture** | Three capture modes (upload, structured-form-from-Effective-template, link-as-evidence); record types catalog; `source_version_id` pinning; immutability + `correction_of`; WORM retention hold. **Shipped (S-rec-1 + S-rec-3).** | 06 §2-4 | MVP vault, forms-as-Documents |
-| ✅ **Retention & disposition** | Retention policies as data; resolution precedence; one-way ratchet; legal hold; disposition lifecycle with tombstones; Beat retention sweep. **Shipped (S-rec-2).** | 06 §5 | records, Beat |
+| ✅ **Retention & disposition** | Retention policies as data; resolution precedence; one-way ratchet; legal hold; disposition lifecycle with tombstones; Beat retention sweep. **Shipped (S-rec-2).** Plus **`/retention-policies` CRUD + soft-archive** and the **creator≠disposer SoD-6** (overridable via `allow_self_disposition`). **Shipped (S-rec-4, R38).** | 06 §5, 07 §7 | records, Beat |
 | ✅ **Traceability chain + Evidence Packs (UJ-7)** | requirement→process→document→record→evidence chain; clause/process/finding-scoped packs; immutable, self-verifying, gap-honest; time-boxed external-auditor guest delivery. **Shipped (S-pack-1/2)** — clause/process scope; **Finding/CAPA scope** awaits those entities. | 06 §6-7 | records, search, authz scope |
 | **Audits & findings (UJ-5)** | Audit program/plan/audit/finding; finding types (NC/Observation/OFI) + severity; NC auto-creates CAPA. | 02 §2 (9.2), 06, 10 | records, authz (auditor independence) |
 | **CAPA / improvement (UJ-6)** | Multi-stage CAPA record (NC → correction → RCA → action → verification → close); close-guards (RCA + action + effectiveness all present, metric M4). | 06, 10 | audits, records |

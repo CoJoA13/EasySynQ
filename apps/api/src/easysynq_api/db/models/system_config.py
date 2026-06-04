@@ -79,6 +79,16 @@ class SystemConfig(Base):
         default=False,
         nullable=False,
     )
+    # SoD-6 relaxation flag (S-rec-4, doc 07 §7): when false (the default, STRICT), a record's
+    # capturer may NOT execute its own disposition to DISPOSED/DESTROY (creator-not-disposer; 409
+    # ``sod_self_disposition``). When true, the org relaxes that for a small/solo install. It is
+    # gated on the SYSTEM-only ``config.update`` (admin) via /admin/config, like the toggles above.
+    allow_self_disposition: Mapped[bool] = mapped_column(
+        Boolean,
+        server_default=false(),
+        default=False,
+        nullable=False,
+    )
     finalized_at: Mapped[datetime.datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,

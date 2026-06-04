@@ -66,6 +66,13 @@ tags:
       corrections capture a successor (correction_of); only the evidence-link sub-resource has a
       DELETE (an audited annotation). Capture/correction/linking need record.create (held by no role
       at a records-reachable scope → grant via override); reads need record.read (row-filtered list).
+  - name: retention-policies
+    description: >-
+      Retention-policy management (slice S-rec-4, doc 06 §5.1) — CRUD + soft-archive over the
+      policy-as-data schedules. Reads need retention.read (QMS Owner + Internal Auditor), writes need
+      retention.manage (QMS Owner) — the two CONTENT-domain keys opened additively in 0028 (R38).
+      A hard DELETE is impossible (3 RESTRICT FKs); retirement is the soft :archive action. PATCH is
+      extend-forward only while records are pinned (doc 06 §5.2); shorten-for-future = archive + new.
   - name: audit
     description: >-
       The append-only, hash-chained audit trail (read-only). No POST/PATCH/DELETE ever —
@@ -1856,7 +1863,9 @@ paths:
         The sanctioned record state advance (doc 06 §5.3): ACTIVE↔DUE_FOR_REVIEW↔DISPOSED (ON_HOLD is
         driven by /legal-hold). A DESTROY physically removes the WORM bytes (fail-closed); it is
         blocked 409 while the lock is unexpired or a legal hold is active, and that refusal is audited
-        (RECORD_ERASURE_REFUSED — the GDPR refused-with-reason, R27).
+        (RECORD_ERASURE_REFUSED — the GDPR refused-with-reason, R27). SoD-6 (S-rec-4, doc 07 §7): a
+        DISPOSED transition by the record's own capturer is refused 409 sod_self_disposition (audited
+        DISPOSITION_REFUSED_SOD) unless the org sets allow_self_disposition.
       requestBody:
         required: true
         content:
@@ -1872,8 +1881,9 @@ paths:
         "404": { $ref: "#/components/responses/ProblemResponse" }
         "409":
           description: >-
-            Illegal transition, on legal hold, or a DESTROY refused (codes: invalid_transition,
-            on_legal_hold, worm_lock_unexpired, retain_permanent).
+            Illegal transition, on legal hold, a DESTROY refused, or SoD-6 self-disposition (codes:
+            invalid_transition, on_legal_hold, worm_lock_unexpired, retain_permanent,
+            sod_self_disposition).
           content:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
@@ -2004,6 +2014,117 @@ paths:
           content:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
+
+  /retention-policies:
+    get:
+      tags: [retention-policies]
+      operationId: listRetentionPolicies
+      summary: List the org's retention policies (active only by default). Needs retention.read.
+      parameters:
+        - { name: include_archived, in: query, required: false, schema: { type: boolean, default: false } }
+      responses:
+        "200":
+          description: The retention policies.
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/RetentionPolicy" } }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+    post:
+      tags: [retention-policies]
+      operationId: createRetentionPolicy
+      summary: >-
+        Create a retention policy. Needs retention.manage. 422 on a malformed duration/applies_to or
+        the reserved System-Default name; 409 name_taken on a per-org name collision.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RetentionPolicyCreate" }
+      responses:
+        "201":
+          description: The created policy.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RetentionPolicy" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "409": { $ref: "#/components/responses/ProblemResponse" }
+        "422": { $ref: "#/components/responses/ProblemResponse" }
+
+  /retention-policies/{policy_id}:
+    parameters:
+      - { name: policy_id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [retention-policies]
+      operationId: getRetentionPolicy
+      summary: A single retention policy. Needs retention.read.
+      responses:
+        "200":
+          description: The policy.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RetentionPolicy" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+    patch:
+      tags: [retention-policies]
+      operationId: updateRetentionPolicy
+      summary: >-
+        Edit a retention policy (partial). Needs retention.manage. Extend-forward only while the
+        policy has non-disposed pinned records (doc 06 §5.2): a duration reduction, a weaker
+        disposition_action, or review_required true→false is refused 422 retention_reduction_blocked
+        (archive + create a shorter policy for future captures instead). The System Default cannot be
+        renamed or have its applies_to changed (409 system_default_protected).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RetentionPolicyUpdate" }
+      responses:
+        "200":
+          description: The updated policy.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RetentionPolicy" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409": { $ref: "#/components/responses/ProblemResponse" }
+        "422": { $ref: "#/components/responses/ProblemResponse" }
+
+  /retention-policies/{policy_id}/archive:
+    parameters:
+      - { name: policy_id, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      tags: [retention-policies]
+      operationId: archiveRetentionPolicy
+      summary: >-
+        Soft-archive a policy (hide from new-capture resolution; pinned records keep it). Needs
+        retention.manage. 409 system_default_protected (the System Default) or already_archived.
+      responses:
+        "200":
+          description: The archived policy.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RetentionPolicy" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409": { $ref: "#/components/responses/ProblemResponse" }
+
+  /retention-policies/{policy_id}/unarchive:
+    parameters:
+      - { name: policy_id, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      tags: [retention-policies]
+      operationId: unarchiveRetentionPolicy
+      summary: Reactivate an archived policy. Needs retention.manage. 409 not_archived if active.
+      responses:
+        "200":
+          description: The reactivated policy.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RetentionPolicy" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409": { $ref: "#/components/responses/ProblemResponse" }
 
   /evidence-packs:
     get:
@@ -3434,6 +3555,25 @@ components:
         - FILLED_FORM
         - COMPLAINT
 
+    RetentionBasis:
+      type: string
+      description: When a record's retention clock starts (doc 06 §5.1).
+      enum:
+        - captured_at
+        - "event:employment_end"
+        - "event:product_eol"
+        - "event:contract_end"
+        - "event:capa_closed"
+
+    DispositionAction:
+      type: string
+      description: What happens to a record at end-of-retention (doc 06 §5.1).
+      enum:
+        - DESTROY
+        - ARCHIVE_COLD
+        - TRANSFER
+        - RETAIN_PERMANENT
+
     EvidenceRef:
       type: object
       additionalProperties: false
@@ -3532,12 +3672,68 @@ components:
         capture_pre_release_templates:
           type: boolean
           description: Whether Mode-B capture may use a non-Effective (draft) form template (doc 06 §4.2).
+        allow_self_disposition:
+          type: boolean
+          description: >-
+            SoD-6 relaxation (doc 07 §7): when false (default, STRICT) a record's capturer may not
+            execute its own disposition; when true the org relaxes that for a small/solo install.
     OrgConfigUpdate:
       type: object
       additionalProperties: false
       description: A partial org-config update; only supplied fields change.
       properties:
         capture_pre_release_templates: { type: [boolean, "null"] }
+        allow_self_disposition: { type: [boolean, "null"] }
+
+    RetentionPolicy:
+      type: object
+      additionalProperties: false
+      required: [id, org_id, name, basis, duration, disposition_action, review_required, active]
+      properties:
+        id: { type: string, format: uuid }
+        org_id: { type: string, format: uuid }
+        name: { type: string, example: "Quality records — 7 years" }
+        applies_to:
+          type: [object, "null"]
+          description: >-
+            The auto-attach map — exactly one of {record_type|clause_id|process_id}, or null for an
+            explicitly-assigned policy with no auto-attach (the System Default + per-record overrides).
+        basis: { $ref: "#/components/schemas/RetentionBasis" }
+        duration: { type: string, description: "ISO-8601 date duration or PERMANENT", example: P7Y }
+        disposition_action: { $ref: "#/components/schemas/DispositionAction" }
+        review_required: { type: boolean }
+        worm_lock_period: { type: [string, "null"], description: "ISO-8601 duration ≥ duration" }
+        active: { type: boolean, description: "false once soft-archived (hidden from new-capture resolution)" }
+        archived_at: { type: [string, "null"], format: date-time }
+        archived_by: { type: [string, "null"], format: uuid }
+        created_at: { type: [string, "null"], format: date-time }
+        updated_at: { type: [string, "null"], format: date-time }
+
+    RetentionPolicyCreate:
+      type: object
+      additionalProperties: false
+      required: [name, duration, disposition_action]
+      properties:
+        name: { type: string }
+        applies_to: { type: [object, "null"] }
+        basis: { $ref: "#/components/schemas/RetentionBasis" }
+        duration: { type: string, example: P7Y }
+        disposition_action: { $ref: "#/components/schemas/DispositionAction" }
+        review_required: { type: boolean, default: false }
+        worm_lock_period: { type: [string, "null"] }
+
+    RetentionPolicyUpdate:
+      type: object
+      additionalProperties: false
+      description: A partial update; only supplied fields change (extend-forward only while pinned).
+      properties:
+        name: { type: [string, "null"] }
+        applies_to: { type: [object, "null"] }
+        basis: { type: [string, "null"], enum: [captured_at, "event:employment_end", "event:product_eol", "event:contract_end", "event:capa_closed", null] }
+        duration: { type: [string, "null"] }
+        disposition_action: { type: [string, "null"], enum: [DESTROY, ARCHIVE_COLD, TRANSFER, RETAIN_PERMANENT, null] }
+        review_required: { type: [boolean, "null"] }
+        worm_lock_period: { type: [string, "null"] }
 
     Record:
       type: object

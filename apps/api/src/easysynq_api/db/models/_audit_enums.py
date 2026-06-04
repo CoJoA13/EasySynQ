@@ -41,6 +41,12 @@ class AuditObjectType(enum.Enum):
     # separate ``record``-typed RECORD_CAPTURED. Added via ``ALTER TYPE audit_object_type ADD
     # VALUE`` in 0025 (the 0019 precedent).
     evidence_pack = "evidence_pack"
+    # retention-policy management (S-rec-4, doc 06 §5.1, doc 15 §8.16) — the RETENTION_POLICY_*
+    # CRUD/archive lifecycle keys here on the ``retention_policy`` row id (its own table, not a
+    # ``record``). The SoD-6 self-disposition refusal (DISPOSITION_REFUSED_SOD) is a *record* event
+    # → it reuses ``record``, NOT this. Added via ``ALTER TYPE audit_object_type ADD VALUE`` in 0028
+    # (the 0019/0025 precedent).
+    retention_policy = "retention_policy"
 
 
 class EventType(enum.Enum):
@@ -187,6 +193,19 @@ class EventType(enum.Enum):
     # rebuilds the type from EVENT_TYPE_VALUES, so the members live here too).
     FORM_SCHEMA_SET = "FORM_SCHEMA_SET"
     CONFIG_UPDATED = "CONFIG_UPDATED"
+    # records-family close-out (S-rec-4, doc 06 §5, doc 07 §7, doc 15 §8.16). The RETENTION_POLICY_*
+    # trio trails the /retention-policies CRUD + soft-archive (object_type ``retention_policy``).
+    # DISPOSITION_REFUSED_SOD trails a self-disposition refused by the SoD-6 creator-not-disposer
+    # gate (object_type ``record``) — distinct from RECORD_ERASURE_REFUSED (a preservation refusal:
+    # WORM/legal-hold/COMPLIANCE): SoD-6 fires for ALL disposition actions (incl. the non-DESTROY
+    # ARCHIVE/TRANSFER, where "erasure refused" would be a misnomer) and is a duty-segregation, not
+    # a preservation, refusal. Added via ALTER TYPE ... ADD VALUE in 0028 (the 0011-0027 additive
+    # pattern; a from-scratch ``upgrade head`` rebuilds the type from EVENT_TYPE_VALUES, so the
+    # members live here too).
+    RETENTION_POLICY_CREATED = "RETENTION_POLICY_CREATED"
+    RETENTION_POLICY_UPDATED = "RETENTION_POLICY_UPDATED"
+    RETENTION_POLICY_ARCHIVED = "RETENTION_POLICY_ARCHIVED"
+    DISPOSITION_REFUSED_SOD = "DISPOSITION_REFUSED_SOD"
 
 
 class CheckpointSinkKind(enum.Enum):

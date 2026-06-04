@@ -6,7 +6,12 @@ import datetime
 
 import pytest
 
-from easysynq_api.domain.records.retention import retention_until
+from easysynq_api.db.models._retention_enums import DispositionAction as DA
+from easysynq_api.domain.records.retention import (
+    action_preservation_rank,
+    duration_ge,
+    retention_until,
+)
 
 _BASIS = datetime.date(2026, 1, 15)
 
@@ -59,3 +64,33 @@ def test_retention_until_none_basis_is_none() -> None:
 def test_retention_until_malformed_raises(duration: str) -> None:
     with pytest.raises(ValueError, match="duration"):
         retention_until(_BASIS, duration)
+
+
+# --- the extend-forward comparators (S-rec-4, doc 06 §5.2) -------------------------------
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("a", "b", "expected"),
+    [
+        ("P10Y", "P5Y", True),  # longer >= shorter
+        ("P5Y", "P10Y", False),  # shorter < longer (a reduction)
+        ("P1Y", "P12M", True),  # equal forms compare equal
+        ("P12M", "P1Y", True),
+        ("P10Y", "P10Y", True),  # equal
+        ("PERMANENT", "P10Y", True),  # PERMANENT is the maximum
+        ("PERMANENT", "PERMANENT", True),
+        ("P10Y", "PERMANENT", False),  # finite < PERMANENT
+        ("P366D", "P1Y", True),  # 366 days >= 1 year (2000 is a leap year off the ref date)
+    ],
+)
+def test_duration_ge(a: str, b: str, expected: bool) -> None:
+    assert duration_ge(a, b) is expected
+
+
+@pytest.mark.unit
+def test_action_preservation_rank_ordering() -> None:
+    # DESTROY < ARCHIVE_COLD == TRANSFER < RETAIN_PERMANENT.
+    assert action_preservation_rank(DA.DESTROY) < action_preservation_rank(DA.ARCHIVE_COLD)
+    assert action_preservation_rank(DA.ARCHIVE_COLD) == action_preservation_rank(DA.TRANSFER)
+    assert action_preservation_rank(DA.TRANSFER) < action_preservation_rank(DA.RETAIN_PERMANENT)

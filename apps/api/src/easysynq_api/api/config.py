@@ -39,6 +39,8 @@ class OrgConfigUpdate(BaseModel):
     # All optional → a partial update; only supplied fields change. Extend additively as more
     # org-level toggles land (the toggle surface, not a per-field endpoint sprawl).
     capture_pre_release_templates: bool | None = None
+    # S-rec-4 (doc 07 §7): SoD-6 relaxation — when true, a record's capturer may also dispose it.
+    allow_self_disposition: bool | None = None
 
 
 def _rid() -> uuid.UUID | None:
@@ -55,6 +57,7 @@ def _config_view(cfg: SystemConfig) -> dict[str, Any]:
     return {
         "org_id": str(cfg.org_id),
         "capture_pre_release_templates": cfg.capture_pre_release_templates,
+        "allow_self_disposition": cfg.allow_self_disposition,
     }
 
 
@@ -87,6 +90,10 @@ async def update_config_endpoint(
         before["capture_pre_release_templates"] = cfg.capture_pre_release_templates
         cfg.capture_pre_release_templates = body.capture_pre_release_templates
         after["capture_pre_release_templates"] = body.capture_pre_release_templates
+    if body.allow_self_disposition is not None:
+        before["allow_self_disposition"] = cfg.allow_self_disposition
+        cfg.allow_self_disposition = body.allow_self_disposition
+        after["allow_self_disposition"] = body.allow_self_disposition
     if after:
         session.add(
             AuditEvent(

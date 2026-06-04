@@ -120,6 +120,8 @@ Permissions are named `resource.action`. The catalog below is **complete for v1*
 | `record.correct` | Create a *correction* record via `correction_of` chain (never edits the original) | ARTIFACT | yes | optional |
 | `record.dispose` | Move a Record to disposition per its RetentionPolicy (audited; not deletion) (reconciled per Decisions Register R5 — was `record.retire`) | DOC_CLASS / PROCESS | yes | yes |
 | `record.set_retention` | Define/adjust a Record's retention period & disposition rule | DOC_CLASS / PROCESS | – | – |
+| `retention.read` | List/read retention policies (additive key — R38 / slice S-rec-4) | SYSTEM | – | – |
+| `retention.manage` | Create/edit/archive retention policies (additive key — R38 / slice S-rec-4) | SYSTEM | – | – |
 | `record.export` | Export records/evidence | PROCESS | yes | – |
 
 > Records have **no `edit` and no `delete`** action anywhere — enforcing the Domain §4 immutability rule at the catalog level. "Editing" a record is structurally impossible; corrections are new records.
@@ -417,6 +419,7 @@ SoD constraints are **declarative rules** evaluated at step 5. Each names an *in
 | **SoD-3 — Auditor independence** | A principal holding `audit.conduct`/`finding.create` on a process may not hold `document.edit`/`approve`/`release` on documents *governing that same audited process*. | Internal-audit independence (Vision §6.2, Ingrid). |
 | **SoD-4 — CAPA verifier ≠ action owner** | The principal who `capa.plan_action`/executes (i.e., performs `capa.update`) may not be the one who `capa.verify` / `capa.close` for the same CAPA. (reconciled per Decisions Register R5) | Independent effectiveness verification (M4). |
 | **SoD-5 — Admin/QMS split** | A principal with system-admin perms (`user.role.assign`, `permission.grant`) performing a QMS-content sig-hook action (`approve`/`release`) triggers a `PRIVILEGE_ESCALATION` audit flag and (if `strict_admin_split = true`) a hard DENY. | AZ-INV-6; Avery boundary. |
+| **SoD-6 — Creator ≠ disposer** | The principal who captured a Record (`record.captured_by`) may not execute its disposition to DISPOSED/DESTROY — refused **409 `sod_self_disposition`**, audited **`DISPOSITION_REFUSED_SOD`** — *unless* the org sets `allow_self_disposition = true` (small orgs). Enforced in-service (like the R27 dual-control), not the PDP, so a SYSTEM `record.dispose` override does not bypass it; gates only the DISPOSED edge (never DUE_FOR_REVIEW / ACTIVE), exempt for the Beat sweep (system actor), and subsumed by the stronger dual-control (requester≠approver) on the R27 legal-order hatch. (R38 / slice S-rec-4) | ISO 7.5.3 records-control integrity; two-person disposition control. |
 
 ### 7.2 SoD constraint shape & configurability
 
@@ -431,7 +434,7 @@ SoDConstraint
  └─ org_overridable: bool (some, e.g. SoD-2, expose a config flag; SoD-1 & SoD-3 are not overridable in v1)
 ```
 
-- **SoD-1 and SoD-3 are not org-overridable** in v1 (they are the integrity backbone). SoD-2/4/5 expose documented config flags for small organizations that lack enough staff for full segregation, but every relaxation is itself an audited config change and surfaces on Mara's review feed.
+- **SoD-1 and SoD-3 are not org-overridable** in v1 (they are the integrity backbone). SoD-2/4/5/6 expose documented config flags for small organizations that lack enough staff for full segregation (SoD-6's is `allow_self_disposition`), but every relaxation is itself an audited config change and surfaces on Mara's review feed.
 - SoD evaluates against the **audit/version history**, not just current state — e.g., "who edited *this version*" is read from the immutable version record, so a user cannot edit, hand off, take back, and approve.
 
 ---

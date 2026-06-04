@@ -31,6 +31,7 @@ from easysynq_api.db.models.evidence_blob import EvidenceBlob
 from easysynq_api.db.models.record import Record
 from easysynq_api.db.models.retention_policy import RetentionPolicy
 from easysynq_api.db.models.storage_config import StorageConfig
+from easysynq_api.db.models.system_config import SystemConfig
 from easysynq_api.db.models.worm_destroy_request import WormDestroyRequest
 from easysynq_api.db.session import get_sessionmaker
 from easysynq_api.services.records import sweep_due_records
@@ -129,6 +130,15 @@ async def _disposition_events(record_id: str) -> list[DispositionEvent]:
         )
 
 
+async def _set_self_disposition(org_id: uuid.UUID, value: bool) -> None:
+    """Flip the org's SoD-6 relaxation flag (system_config.allow_self_disposition)."""
+    async with get_sessionmaker()() as s:
+        cfg = await s.get(SystemConfig, org_id)
+        assert cfg is not None  # OPERATIONAL install seeds a system_config row
+        cfg.allow_self_disposition = value
+        await s.commit()
+
+
 async def _set_object_lock_mode(org_id: uuid.UUID, mode: str) -> None:
     async with get_sessionmaker()() as s:
         cfg = await s.scalar(select(StorageConfig).where(StorageConfig.org_id == org_id))
@@ -208,11 +218,15 @@ async def test_sweep_flips_and_auto_disposes_low_risk(
 async def test_sweep_review_required_stops_then_human_disposes(
     app_client: AsyncClient, token_factory: Callable[..., str]
 ) -> None:
-    """review_required=true → the sweep stops at DUE_FOR_REVIEW; a human PATCH then disposes it."""
-    subject = _subject("disp")
-    user_id = await _grant(subject, _DISPOSITION_PERMS)
+    """review_required=true → the sweep stops at DUE_FOR_REVIEW; a human PATCH then disposes it. The
+    disposer is a DISTINCT actor from the capturer (SoD-6, S-rec-4)."""
+    capturer = _subject("disp")
+    user_id = await _grant(capturer, _DISPOSITION_PERMS)
     org_id = await _org_id(user_id)
-    h = _auth(token_factory, subject)
+    h = _auth(token_factory, capturer)
+    disposer = _subject("disp-reviewer")
+    await _grant(disposer, _DISPOSITION_PERMS)
+    h_disposer = _auth(token_factory, disposer)
     policy_id = await _seed_policy(
         org_id, action=DispositionAction.ARCHIVE_COLD, review_required=True
     )
@@ -233,9 +247,9 @@ async def test_sweep_review_required_stops_then_human_disposes(
         assert state == "DUE_FOR_REVIEW"  # awaits human approval
         assert await _count_events(rid, EventType.RECORD_DISPOSED) == 0
 
-        # Human approves the disposition.
+        # A distinct human approves the disposition (SoD-6: not the capturer).
         patch = await app_client.patch(
-            f"/api/v1/records/{rid}/disposition", headers=h, json={"to_state": "DISPOSED"}
+            f"/api/v1/records/{rid}/disposition", headers=h_disposer, json={"to_state": "DISPOSED"}
         )
         assert patch.status_code == 200, patch.text
         assert patch.json()["disposition_state"] == "DISPOSED"
@@ -351,10 +365,15 @@ async def test_legal_hold_blocks_sweep_and_dispose(
 async def test_manual_destroy_worm_unexpired_refused_and_audited(
     app_client: AsyncClient, token_factory: Callable[..., str]
 ) -> None:
-    subject = _subject("disp")
-    user_id = await _grant(subject, _DISPOSITION_PERMS)
+    capturer = _subject("disp")
+    user_id = await _grant(capturer, _DISPOSITION_PERMS)
     org_id = await _org_id(user_id)
-    h = _auth(token_factory, subject)
+    h = _auth(token_factory, capturer)
+    disposer = _subject(
+        "disp-b"
+    )  # distinct disposer so SoD-6 passes → the WORM guard is the refusal
+    await _grant(disposer, _DISPOSITION_PERMS)
+    h_disposer = _auth(token_factory, disposer)
     policy_id = await _seed_policy(org_id, action=DispositionAction.DESTROY, review_required=True)
     try:
         sha = await _upload_evidence(app_client, h, f"e-{uuid.uuid4().hex}".encode())
@@ -374,7 +393,9 @@ async def test_manual_destroy_worm_unexpired_refused_and_audited(
         )
         assert due.status_code == 200, due.text
         refused = await app_client.patch(
-            f"/api/v1/records/{rid}/disposition", headers=h, json={"to_state": "DISPOSED"}
+            f"/api/v1/records/{rid}/disposition",
+            headers=h_disposer,
+            json={"to_state": "DISPOSED"},
         )
         assert refused.status_code == 409
         assert refused.json()["code"] == "worm_lock_unexpired"
@@ -610,6 +631,242 @@ async def test_fail_closed_purge_failure_does_not_dispose(
         assert await _disposition_events(rid) == []
         head = await storage.head(sha, bucket=storage._records_bucket())
         assert head.exists  # bytes intact
+    finally:
+        await _cleanup(policy_id)
+
+
+# --- SoD-6 creator-not-disposer (S-rec-4, doc 07 §7) -------------------------------------
+
+
+async def _to_due(app_client: AsyncClient, h: dict[str, str], rid: str) -> None:
+    """Advance ACTIVE → DUE_FOR_REVIEW (a manual early review; not SoD-6-gated)."""
+    r = await app_client.patch(
+        f"/api/v1/records/{rid}/disposition", headers=h, json={"to_state": "DUE_FOR_REVIEW"}
+    )
+    assert r.status_code == 200, r.text
+
+
+async def test_sod6_self_disposition_blocked_and_audited(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """The capturer may NOT dispose their own record (default-enforced). Proves the gate is NOT
+    bypassed by the SYSTEM ``record.dispose`` override the capturer holds — only the config flag
+    relaxes it. The refusal is audited DISPOSITION_REFUSED_SOD, the record stays DUE_FOR_REVIEW."""
+    capturer = _subject("disp")
+    user_id = await _grant(capturer, _DISPOSITION_PERMS)
+    org_id = await _org_id(user_id)
+    h = _auth(token_factory, capturer)
+    policy_id = await _seed_policy(
+        org_id, action=DispositionAction.ARCHIVE_COLD, review_required=False
+    )
+    try:
+        rid = (
+            await _capture(
+                app_client,
+                h,
+                record_type="COMPETENCE",
+                title="c",
+                retention_policy_id=str(policy_id),
+            )
+        ).json()["id"]
+        await _to_due(app_client, h, rid)
+        refused = await app_client.patch(
+            f"/api/v1/records/{rid}/disposition", headers=h, json={"to_state": "DISPOSED"}
+        )
+        assert refused.status_code == 409
+        assert refused.json()["code"] == "sod_self_disposition"
+        assert await _count_events(rid, EventType.DISPOSITION_REFUSED_SOD) == 1
+        assert await _count_events(rid, EventType.RECORD_DISPOSED) == 0
+        state, _ = await _state(rid)
+        assert state == "DUE_FOR_REVIEW"
+    finally:
+        await _cleanup(policy_id)
+
+
+async def test_sod6_distinct_disposer_allowed(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """A distinct disposer (not the capturer) disposes successfully."""
+    capturer = _subject("disp")
+    user_id = await _grant(capturer, _DISPOSITION_PERMS)
+    org_id = await _org_id(user_id)
+    h = _auth(token_factory, capturer)
+    disposer = _subject("disp-b")
+    await _grant(disposer, _DISPOSITION_PERMS)
+    hb = _auth(token_factory, disposer)
+    policy_id = await _seed_policy(
+        org_id, action=DispositionAction.ARCHIVE_COLD, review_required=False
+    )
+    try:
+        rid = (
+            await _capture(
+                app_client,
+                h,
+                record_type="COMPETENCE",
+                title="c",
+                retention_policy_id=str(policy_id),
+            )
+        ).json()["id"]
+        await _to_due(app_client, h, rid)
+        ok = await app_client.patch(
+            f"/api/v1/records/{rid}/disposition", headers=hb, json={"to_state": "DISPOSED"}
+        )
+        assert ok.status_code == 200, ok.text
+        assert ok.json()["disposition_state"] == "DISPOSED"
+        assert await _count_events(rid, EventType.RECORD_DISPOSED) == 1
+    finally:
+        await _cleanup(policy_id)
+
+
+async def test_sod6_relaxed_by_config_flag(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """With allow_self_disposition=true the capturer may self-dispose (small/solo org)."""
+    capturer = _subject("disp")
+    user_id = await _grant(capturer, _DISPOSITION_PERMS)
+    org_id = await _org_id(user_id)
+    h = _auth(token_factory, capturer)
+    policy_id = await _seed_policy(
+        org_id, action=DispositionAction.ARCHIVE_COLD, review_required=False
+    )
+    try:
+        await _set_self_disposition(org_id, True)
+        rid = (
+            await _capture(
+                app_client,
+                h,
+                record_type="COMPETENCE",
+                title="c",
+                retention_policy_id=str(policy_id),
+            )
+        ).json()["id"]
+        await _to_due(app_client, h, rid)
+        ok = await app_client.patch(
+            f"/api/v1/records/{rid}/disposition", headers=h, json={"to_state": "DISPOSED"}
+        )
+        assert ok.status_code == 200, ok.text
+        assert ok.json()["disposition_state"] == "DISPOSED"
+    finally:
+        await _set_self_disposition(org_id, False)  # restore strict for the shared org
+        await _cleanup(policy_id)
+
+
+async def test_sod6_does_not_gate_due_or_active_transitions(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """SoD-6 gates only DISPOSED: the capturer may still flip ACTIVE<->DUE_FOR_REVIEW themselves."""
+    capturer = _subject("disp")
+    user_id = await _grant(capturer, _DISPOSITION_PERMS)
+    org_id = await _org_id(user_id)
+    h = _auth(token_factory, capturer)
+    policy_id = await _seed_policy(
+        org_id, action=DispositionAction.ARCHIVE_COLD, review_required=False
+    )
+    try:
+        rid = (
+            await _capture(
+                app_client,
+                h,
+                record_type="COMPETENCE",
+                title="c",
+                retention_policy_id=str(policy_id),
+            )
+        ).json()["id"]
+        to_due = await app_client.patch(
+            f"/api/v1/records/{rid}/disposition", headers=h, json={"to_state": "DUE_FOR_REVIEW"}
+        )
+        assert to_due.status_code == 200, to_due.text
+        to_active = await app_client.patch(
+            f"/api/v1/records/{rid}/disposition", headers=h, json={"to_state": "ACTIVE"}
+        )
+        assert to_active.status_code == 200, to_active.text
+        assert to_active.json()["disposition_state"] == "ACTIVE"
+    finally:
+        await _cleanup(policy_id)
+
+
+async def test_sod6_sweep_is_exempt(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """The Beat sweep auto-disposes a self-captured record (system actor) — SoD-6 (a human-only
+    gate) never blocks it, even though the only human is the capturer."""
+    capturer = _subject("disp")
+    user_id = await _grant(capturer, _DISPOSITION_PERMS)
+    org_id = await _org_id(user_id)
+    h = _auth(token_factory, capturer)
+    policy_id = await _seed_policy(
+        org_id, action=DispositionAction.ARCHIVE_COLD, review_required=False
+    )
+    try:
+        rid = (
+            await _capture(
+                app_client,
+                h,
+                record_type="COMPETENCE",
+                title="c",
+                retention_policy_id=str(policy_id),
+            )
+        ).json()["id"]
+        await _backdate(rid, days=30)
+        await _run_sweep()
+        state, _ = await _state(rid)
+        assert state == "DISPOSED"
+        assert await _count_events(rid, EventType.DISPOSITION_REFUSED_SOD) == 0
+    finally:
+        await _cleanup(policy_id)
+
+
+async def test_sod6_keys_off_record_captured_by_for_correction(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """SoD-6 keys off the RECORD's own captured_by: for a correction that is the corrector, so the
+    corrector cannot dispose the correction, but the ORIGINAL capturer (who did not capture it)
+    can."""
+    a = _subject("disp-a")
+    user_a = await _grant(a, _DISPOSITION_PERMS)
+    org_id = await _org_id(user_a)
+    ha = _auth(token_factory, a)
+    b = _subject("disp-b")
+    await _grant(b, _DISPOSITION_PERMS)
+    hb = _auth(token_factory, b)
+    policy_id = await _seed_policy(
+        org_id, action=DispositionAction.ARCHIVE_COLD, review_required=False
+    )
+    try:
+        r1_id = (
+            await _capture(
+                app_client,
+                ha,
+                record_type="CALIBRATION",
+                title="orig",
+                retention_policy_id=str(policy_id),
+            )
+        ).json()["id"]
+        # B captures the correction → R2.captured_by == B.
+        r2_id = (
+            await app_client.post(
+                f"/api/v1/records/{r1_id}/correction",
+                headers=hb,
+                json={
+                    "record_type": "CALIBRATION",
+                    "title": "corrected",
+                    "retention_policy_id": str(policy_id),
+                },
+            )
+        ).json()["id"]
+        await _to_due(app_client, hb, r2_id)
+        # B (the corrector == R2's capturer) is blocked.
+        refused = await app_client.patch(
+            f"/api/v1/records/{r2_id}/disposition", headers=hb, json={"to_state": "DISPOSED"}
+        )
+        assert refused.status_code == 409
+        assert refused.json()["code"] == "sod_self_disposition"
+        # A (the original capturer, who did NOT capture R2) may dispose it.
+        ok = await app_client.patch(
+            f"/api/v1/records/{r2_id}/disposition", headers=ha, json={"to_state": "DISPOSED"}
+        )
+        assert ok.status_code == 200, ok.text
+        assert ok.json()["disposition_state"] == "DISPOSED"
     finally:
         await _cleanup(policy_id)
 

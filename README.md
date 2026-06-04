@@ -65,9 +65,15 @@ invariant* rather than a discipline problem.
     already-captured records keep showing the edition that was in force), and pins `source_version_id`. A best-effort PDF
     rendition of the fielded data builds after capture; an org toggle (`PATCH /admin/config`, admin-only) optionally allows
     capturing against a pre-release draft for controlled migrations.
+  - **S-rec-4** (records-family close-out): **`/retention-policies` CRUD + soft-archive** (a hard delete is impossible —
+    three RESTRICT FKs — so retirement is a soft archive; PATCH is *extend-forward only* while records are pinned, and you
+    shorten future retention by archiving a policy and creating a shorter one), plus the **creator≠disposer SoD-6** — a
+    record's own capturer may not dispose it (`409 sod_self_disposition`) unless the org sets `allow_self_disposition`. Its
+    two keys (`retention.read`/`retention.manage`) are the first **additive** permission-catalog extension
+    (decisions-register **R38** refines "closed at v1" to "no rename/removal; additive growth allowed").
 
-  The v1 **records family is complete** (capture → retention/disposition → evidence packs → structured forms). Migration
-  head `0027`.
+  The v1 **records family is complete** (capture → retention/disposition + management → evidence packs → structured forms).
+  Migration head `0028`.
 
 ## Repository layout
 
