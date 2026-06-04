@@ -38,80 +38,21 @@ v1/v1.x residuals are listed at the end of this section.
 then the **Evidence Packs (UJ-7)** family (**S-pack-1** build/seal, **S-pack-2** external delivery + PDF portfolio) shipped
 depth-first, completing UJ-7. **Migration head is now `0026`.**
 
-- **S-rec-1 — Records: capture + evidence-linking + correction** ✅ — PR #43, migration `0023` (the full
-  non-obvious decisions live in the squash-merge commit + the project memory). Turned the inert `record`
-  scaffolding ON: atomic immutable capture (base `documented_information[kind=RECORD]` + `record` subtype +
-  WORM-sealed evidence in the dedicated `records` bucket + a domain-separated `content_hash` seal, one commit) ·
-  the polymorphic `evidence_for_link` evidence-for sub-resource · correction-via-new-record (records are immutable —
-  a route-inventory proof) · retention-policy-as-data (a 5-tier resolver + a seeded per-org *System Default* + the
-  snapshot-at-capture ratchet) · a kind-scoping fix so Records don't leak into `GET /documents`/search · records ride
-  **SYSTEM `record.create`/`.read` overrides** (catalog CLOSED).
+**v1 RECORDS family — S-rec-1/2 + S-pack-1** ✅ (one line each; the full per-slice non-obvious decisions live in the
+squash-merge commits + the `easysynq-project.md` memory; operator/API usage is in the dev-workflow section below):
 
-- **S-rec-2 — Records: retention/disposition lifecycle** ✅. Turns the inert disposition scaffolding (the
-  `RecordDispositionState` enum, `record.disposition_state`/`legal_hold` cols, the sweep index, the
-  `retention_policy.{disposition_action,review_required,worm_lock_period}` fields — all shipped dead in 0023) into a
-  working end-of-life subsystem (doc 06 §5; doc 14 §10; R5/R27). **Owner forks (AskUserQuestion):** full scope incl. R27
-  in **one PR** · DESTROY = **physically delete the WORM bytes, fail-closed** · legal-hold on **`record.dispose`**
-  (catalog CLOSED) · sweep **auto-disposes low-risk** (`review_required=false`). **Migration `0024`**: `disposition_event`
-  (immutable tombstone — doc-14 cols + the R27 `is_worm_destroy`/`requested_by`/`legal_basis` + nullable `policy_id`) +
-  `worm_destroy_request` (the dual-control two-step, state from nullable timestamps — the `dcr` R22 precedent — with a
-  `CHECK(approved_by<>requested_by)` + a **partial `UNIQUE(record_id) WHERE open`** authored as raw DDL + excluded in
-  `env.py` [the 0020 lesson]) + **9 additive `RECORD_*` `event_type`** values + **explicit `easysynq_app` GRANTs** on the
-  two tables (belt-and-suspenders over 0010's ALTER DEFAULT PRIVILEGES). **Pure domain**: `retention_until` (dependency-free
-  ISO-8601 duration parser, day-clamp, `PERMANENT`/None-basis→None) + a `legal_disposition_transition` table. **Service
-  `services/records/disposition.py`**: `advance_disposition` (PATCH state machine) · `place/release_legal_hold` ·
-  `request/approve/cancel_worm_destroy` (R27) · `sweep_due_records` (Beat). **Fail-closed, purge-FIRST** ordering (idempotent
-  `storage.purge_object` runs *before* the DISPOSED flip — never a tombstone over live bytes); a **pre-purge guard** logs
-  `RECORD_ERASURE_REFUSED` + 409 when blocked by unexpired WORM / legal_hold / COMPLIANCE (the GDPR refused-with-reason);
-  **dual-control** = `approver != requester` (409 + DB CHECK) + a `FOR UPDATE` re-check; only this path passes
-  `BypassGovernanceRetention` (GOVERNANCE-only). New `storage.purge_object` (lists + deletes every version + delete-marker,
-  off-loop). New **system-actor** `emit_record_event_system` (actor_id NULL — `canonical_serialize` already NULL-handles it,
-  the `upgrade.py`/`backup` precedent). **Beat** `easysynq.records.retention_sweep` (daily, on the non-owner `database_url`
-  role; `FOR UPDATE SKIP LOCKED`; per-record SAVEPOINTs; skips `RETAIN_PERMANENT`/null-basis/WORM-unexpired). **API** (all
-  under `/records`, **immutability preserved**): `GET`+`PATCH /disposition`, `POST /legal-hold`, `GET`+`POST
-  /worm-destroy-requests` + `…/{req_id}/{approve,cancel}`. The **route-inventory proof reframed** ("record *content*
-  immutable; the disposition state machine advances" — whitelists `PATCH /disposition` like the evidence-link DELETE).
-  Adversarially pressure-tested **before coding** (3-critic Workflow → folded: purge-first ordering, COMPLIANCE pre-check,
-  DB CHECK + `FOR UPDATE`, delete-marker handling, partial-index alembic exclusion, populated-DB downgrade deletes, the
-  shared-DB sweep test-isolation contract). **256 unit + 10 disposition integration green** (the 14 pg_dump-absent
-  backup/restore tests stay environmental, green on CI); `0024` round-trips up↔down↔check **+ a populated-DB downgrade** on
-  PG16; OpenAPI caught up in-PR (redocly green). **Deferred:** **S-rec-3** (Mode-B `form_template` structured capture),
-  the `/retention-policies` CRUD (its `retention.*` keys aren't in the closed catalog), the
-  `event:*` basis-date backfill (source HR/CAPA domains don't exist), ordinary creator≠disposer SoD; then the rest of v1
-  (ingestion doc 09, workflows + notifications doc 10, CAPA/audit/finding/complaint/NCR entities, the rest of doc-13).
-
-- **S-pack-1 — Evidence Packs (UJ-7): scope resolution + immutable build/seal** ✅ — PR #48, migration `0025` (the
-  full non-obvious decisions live in the squash-merge commit + the project memory). The first of **two** pack PRs
-  (owner forks via AskUserQuestion: **two PRs** · pack-specific **Celery worker job + status poll** · **first-class
-  `evidence_pack` + `pack_item` tables** · Ed25519 time-boxed delivery → **S-pack-2**). A pack is an on-demand,
-  scope-limited, **immutable, self-verifying** bundle of records + their evidence + a traceability manifest, sealed
-  and registered as a **`RETAIN_PERMANENT` EVIDENCE Record**. **Migration `0025`**: `evidence_pack` header +
-  `pack_item` membership + 4 enums + additive `PACK_GENERATED`/`PACK_BUILD_FAILED` `event_type` + an `evidence_pack`
-  `audit_object_type` (both b-tree indexes → no `env.py` change). **Scope** = CLAUSE/PROCESS (+ DATE overlay), each a
-  **UNION of two legs** (`evidence_for_link` AND records under a clause-mapped/process-linked source doc — records
-  don't inherit their source-doc clause mappings); Finding/CAPA scope deferred (no entities). **R28 honesty** (load-bearing):
-  every candidate runs the generator's deny-by-default `record.read` (**full `ResourceContext`** — process_ids +
-  framework, so a PROCESS-scoped grant is honored) → `INCLUDED`/`EXCLUDED_PERMISSION`/`EXCLUDED_ABSENCE`; the
-  `pack_item` table IS the exclusion report; **absence = a DESTROY/WORM-destroy disposition tombstone** (never "no
-  evidence_blob rows" → a valid form-only record stays INCLUDED); the **gap** report reuses `compute_checklist`
-  (org-wide rule, distinct), a PROCESS pack deriving its clauses transitively. **Build worker** (`services/packs/build.py`,
-  `.delay`-triggered): single-txn, **idempotent** (`FOR UPDATE` + early-return if `pack_record_id` set — `acks_late`
-  re-delivery safe), **fail-closed**; re-resolves + re-classifies and **atomically replaces** the preview `pack_item`
-  rows (TOCTOU), seals over the content list with a domain-separated `pack_content_hash` (preamble
-  `easysynq.evidencepack.v1`, NOT the ZIP bytes), writes the ZIP to the WORM `records` bucket + registers it via
-  `capture_record`. **`evidence_pack` has NO FK to `blob`** (the ZIP is reached via `pack_record_id → evidence_blob`) so
-  the pack's R27 WORM-destroy hatch never aborts. A daily **reaper** flips stalled `BUILDING` → `FAILED`. **Routes**
-  (`api/packs.py`, gate `report.evidence_pack.generate` via SYSTEM override; download `report.export`): `POST
-  /evidence-packs` (preview) · `GET` (list/poll) · `POST …/generate` (202) · `GET …/download`; **immutable** — the
-  route-inventory proof asserts **zero PUT/PATCH/DELETE**. Pinned governing versions ride their cached rendition blob
-  (else source bytes — a version always has one), so **no renderer dependency** in S-pack-1. Adversarially
-  pressure-tested **before coding** (3-critic Workflow → folded: the blob-FK/`RETAIN_PERMANENT` pin, the full
-  `ResourceContext`, TOCTOU replace-don't-merge, `acks_late` idempotency, tombstone-not-empty-blobs absence, transitive
-  process→clause gap, the `evidence_pack` audit object_type). **268 unit + 4 pack integration green** (the 14
-  pg_dump-absent backup/restore tests stay environmental, green on CI — they're also where the pack ZIP blob's
-  blob-row-iff-bytes is truly exercised); `0025` round-trips up↔down↔check **+ a populated-DB downgrade** on PG16;
-  OpenAPI caught up in-PR (redocly green). **Deferred (S-pack-2 / later):** Ed25519 time-boxed external delivery +
-  revoke, ZIP/PDF export-format variants + live §11.3 stamping, Finding/CAPA scope.
+- **S-rec-1** Records: capture + evidence-linking + correction (PR #43, `0023`) — atomic immutable WORM-sealed capture
+  (base `documented_information[kind=RECORD]` + `record` subtype + domain-separated `content_hash`), the polymorphic
+  `evidence_for_link`, correction-via-new-record, retention-policy-as-data (5-tier resolver + per-org *System Default* +
+  snapshot-at-capture ratchet); records ride **SYSTEM `record.*` overrides** (catalog CLOSED).
+- **S-rec-2** Records: retention/disposition lifecycle (PR #46, `0024`) — the disposition state machine + daily Beat sweep
+  + legal-hold + the **R27 dual-control WORM-destroy-under-legal-order** hatch (fail-closed, **purge-FIRST** ordering, the
+  `RECORD_ERASURE_REFUSED` 409 refused-with-reason); `disposition_event` tombstone + `worm_destroy_request` (the dcr R22
+  precedent). **Deferred:** S-rec-3 (Mode-B `form_template` capture), `/retention-policies` CRUD, ordinary creator≠disposer SoD.
+- **S-pack-1** Evidence Packs build/seal (PR #48, `0025`) — an immutable, self-verifying, scope-limited (CLAUSE/PROCESS +
+  date) bundle sealed as a `RETAIN_PERMANENT` EVIDENCE Record; **R28-honest** classification (the `pack_item` table IS the
+  exclusion report; absence = a destroy tombstone) + gap report; an idempotent `.delay` worker build (the
+  `pack_content_hash` is over the content list, NOT the ZIP bytes) + a stalled-build reaper; no renderer dependency.
 
 - **S-pack-2 — Evidence Packs (UJ-7): external delivery + PDF portfolio (completes UJ-7)** ✅ — migration `0026` (the full
   non-obvious decisions live in the squash-merge commit + the project memory). **Owner forks (AskUserQuestion):** **Full
