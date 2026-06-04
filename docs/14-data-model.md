@@ -303,6 +303,15 @@ erDiagram
 
 **Constraints / invariants on Cluster B:** exactly one `Effective` version per document (INV-1); released versions immutable (INV-2); check-in requires non-empty change_reason + significance (INV-3); author ≠ sole approver, auditor cannot approve (INV-4, via `sod_constraint`); records never edited — corrections only (R3/INV-7); record pins are immutable (INV-7); `document.is_singleton` enforces **exactly one `Effective` instance at a time** (NOT one instance ever) for the Quality Policy / Scope Statement — a draft successor may coexist while the current governs, and this survives import dedup and multi-site (reconciled per Decisions Register R25).
 
+### 5.7 `evidence_pack` & `pack_item` (Evidence Packs / UJ-7 — as built, slice S-pack-1, doc 06 §7)
+
+| Entity | Key attributes | Notes |
+|---|---|---|
+| `evidence_pack` | `id` PK, `org_id`, `framework_id`, `title`, `scope_kind` enum(`CLAUSE`,`PROCESS`), `scope_selector` jsonb (`clause_ids`/`process_ids`), `period_start/end` (date overlay), `status` enum(`DRAFT`,`BUILDING`,`SEALED`,`FAILED`), `build_started_at`, `item_count`, `gap_summary` jsonb, `exclusion_summary` jsonb, `content_hash` (the domain-separated manifest seal), `zip_blob_sha256` (**plain Text, NO FK to `blob`**), `pack_record_id` FK→`record` (nullable until sealed), `error`, `created_by`, `created_at`, `generated_at` | The pack header. Sealed = an immutable, content-addressed ZIP written to the WORM `records` bucket + registered as a `RETAIN_PERMANENT` EVIDENCE `record` (`pack_record_id`). The ZIP blob is reached via `pack_record_id → evidence_blob → blob` — `zip_blob_sha256` carries **no `blob` FK** so the pack's R27 WORM-destroy hatch never aborts on a RESTRICT FK (`06 §7.4`). |
+| `pack_item` | `id` PK, `org_id`, `pack_id` FK→`evidence_pack` (**ON DELETE CASCADE**), `item_type` enum(`RECORD`,`DOCUMENT_VERSION`), `record_id` FK→`record` (nullable), `version_id` FK→`document_version` (nullable, the PINNED governing version), `inclusion_status` enum(`INCLUDED`,`EXCLUDED_PERMISSION`,`EXCLUDED_ABSENCE`), `exclusion_reason`, `content_hash_at_seal`, `created_at` | The resolved membership. **R28: the exclusion report IS this table** — every in-scope candidate (incl. the ones left out) gets a row with its classifying status; a silently-dropped item is a defect. Rebuilt atomically (delete-all-then-reinsert) at preview and again at seal. |
+
+`event_type` gains `PACK_GENERATED` / `PACK_BUILD_FAILED`; `audit_object_type` gains `evidence_pack` (the pack lifecycle events key on the pack-header id). The doc-14 `guest_grant` table + the `scope.predicates.evidence_pack_id` ABAC bound (§3, above) stay **deferred to S-pack-2** (time-boxed external-auditor delivery).
+
 ---
 
 ## 6. Registers, Objectives, Resources & the QMS Plan/Support Entities

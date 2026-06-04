@@ -43,8 +43,15 @@ invariant* rather than a discipline problem.
     (auto-disposes low-risk policies, flags the rest for human approval), the `DISPOSED` **tombstone** (metadata +
     audit survive the bytes), **legal hold**, and the R27 **dual-control WORM-destroy-under-legal-order** escape hatch
     (two distinct authorizers, fail-closed physical purge, GDPR refused-with-reason logging).
+  - **S-pack-1** (Evidence Packs / UJ-7 — scope resolution + immutable build/seal): the auditor-facing headline. An
+    on-demand, scope-limited (clause/process + date overlay), **immutable, self-verifying** bundle of records + their
+    evidence + a traceability manifest, assembled by the worker and sealed as a `RETAIN_PERMANENT` EVIDENCE Record. The
+    build is **R28-honest** — every in-scope record is classified `INCLUDED` / `EXCLUDED_PERMISSION` (the generator
+    couldn't read it) / `EXCLUDED_ABSENCE` (its evidence was destroyed), so nothing is ever silently dropped, plus a gap
+    report of in-scope ★ clauses lacking evidence. (External time-boxed delivery is the next slice, S-pack-2.)
 
-  Evidence Packs (UJ-7) and Mode-B structured-form capture are the next v1 records slices. Migration head `0024`.
+  S-pack-2 (time-boxed external-auditor delivery) and Mode-B structured-form capture are the next v1 records slices.
+  Migration head `0025`.
 
 ## Repository layout
 

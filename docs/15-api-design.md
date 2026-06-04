@@ -584,6 +584,20 @@ Purpose-built aggregation (the reason GraphQL was unnecessary), organized around
 | GET | `/reports/audit-coverage` | `report.read` | ISO clause-coverage matrix from audits/findings. |
 | POST | `/reports/{key}/export` | `report.export` | Async export (PDF/CSV/XLSX) → `202` + job; the artifact lands in MinIO and is returned via presigned URL (self-hosted; nothing leaves the boundary). |
 
+### 8.15a Evidence Packs (`/evidence-packs`) — as built (slice S-pack-1, doc 06 §7)
+
+UJ-7: an on-demand, scope-limited, **immutable, self-verifying** bundle of records + their evidence + a traceability manifest, sealed and registered as a `RETAIN_PERMANENT` EVIDENCE `record`. Build/seal runs on the worker (poll `GET` for `SEALED`). A pack is immutable — **no PUT/PATCH/DELETE** (the route-inventory proof). External time-boxed delivery (the `guest-grant` of §8.1 / Ed25519 link) is **S-pack-2**.
+
+| Method | Path | Perm | Notes |
+|---|---|---|---|
+| POST | `/evidence-packs` | `report.evidence_pack.generate` | Create (DRAFT) + synchronous preview: `{ title, scope_kind:CLAUSE\|PROCESS, clause_ids\|process_ids, period_start?, period_end? }`. Resolves candidates (CLAUSE/PROCESS UNION of `evidence_for_link` + clause-mapped/process-linked source docs) and **R28-classifies** each `INCLUDED`/`EXCLUDED_PERMISSION`/`EXCLUDED_ABSENCE` (nothing silently dropped) + the gap report. `422` on bad scope / unknown clause-process / bad period. |
+| GET | `/evidence-packs` | `report.evidence_pack.generate` | List the org's packs (newest first). |
+| GET | `/evidence-packs/{id}` | `report.evidence_pack.generate` | Header + membership + gap/exclusion summaries + **`status`** (DRAFT→BUILDING→SEALED\|FAILED — the build poll). Seal-time classification once SEALED. |
+| POST | `/evidence-packs/{id}/generate` | `report.evidence_pack.generate` | Enqueue the immutable build/seal (DRAFT/FAILED→BUILDING) → `202`. `409` if already SEALED or building. |
+| GET | `/evidence-packs/{id}/download` | `report.export` | Presigned GET to the sealed pack ZIP. `409` until SEALED. |
+
+> **No new permission key** — `report.evidence_pack.generate` + `report.export` already exist in the closed `07 §3.8` catalog (held by QMS Owner); packs ride a **SYSTEM override** until the role UI (the `record.*` precedent). Pack lifecycle audits as `PACK_GENERATED`/`PACK_BUILD_FAILED` (object_type `evidence_pack`).
+
 ### 8.16 Retention (`/retention-policies`)
 
 Policy-as-data, snapshotted at capture (`14 §10`).
