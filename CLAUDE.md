@@ -21,7 +21,7 @@ and progressively disclosed — never overwhelming.
   e.g. the ISO clause catalog) · `tasks/` (Celery worker/beat) · `cli/` (operator commands). Tests in
   `apps/api/tests/{unit,integration}` (the latter via testcontainers).
 - `apps/web/` — React/TS + Mantine SPA (currently the setup wizard + admin stubs; the rest of the UI is deferred).
-- `migrations/` — Alembic (single tree; head **`0024`**; `env.py` excludes migration-managed expression/partial indexes).
+- `migrations/` — Alembic (single tree; head **`0025`**; `env.py` excludes migration-managed expression/partial indexes).
 - `packages/contracts/openapi.yaml` — the living API contract (redocly-lint only; **not** codegen — server/web aren't generated from it).
 - `infra/compose/` — Docker Compose (S/M/L profiles) + Caddy; `just` recipes wrap it.
 - `docs/` — the authoritative spec (`00`–`18` + `decisions-register.md`); `mockup/` — the owner-approved HTML UI mockup.
@@ -34,8 +34,8 @@ backends are complete; the doc-18 §12 exit checklist is closed. The design was 
 v1/v1.x residuals are listed at the end of this section.
 
 **v1 phase: STARTED.** The owner chose (AskUserQuestion) the **v1 feature** track → **Records & evidence
-(doc 06)** as the slice family (over the web track + the v1.x backend residuals); **S-rec-1** then **S-rec-2**
-shipped depth-first. **Migration head is now `0024`.**
+(doc 06)** as the slice family (over the web track + the v1.x backend residuals); **S-rec-1**, **S-rec-2**,
+then the **Evidence Packs (UJ-7)** family (**S-pack-1**) shipped depth-first. **Migration head is now `0025`.**
 
 - **S-rec-1 — Records: capture + evidence-linking + correction** ✅ — PR #43, migration `0023` (the full
   non-obvious decisions live in the squash-merge commit + the project memory). Turned the inert `record`
@@ -75,9 +75,42 @@ shipped depth-first. **Migration head is now `0024`.**
   shared-DB sweep test-isolation contract). **256 unit + 10 disposition integration green** (the 14 pg_dump-absent
   backup/restore tests stay environmental, green on CI); `0024` round-trips up↔down↔check **+ a populated-DB downgrade** on
   PG16; OpenAPI caught up in-PR (redocly green). **Deferred:** **S-rec-3** (Mode-B `form_template` structured capture),
-  Evidence Packs (UJ-7), the `/retention-policies` CRUD (its `retention.*` keys aren't in the closed catalog), the
+  the `/retention-policies` CRUD (its `retention.*` keys aren't in the closed catalog), the
   `event:*` basis-date backfill (source HR/CAPA domains don't exist), ordinary creator≠disposer SoD; then the rest of v1
   (ingestion doc 09, workflows + notifications doc 10, CAPA/audit/finding/complaint/NCR entities, the rest of doc-13).
+
+- **S-pack-1 — Evidence Packs (UJ-7): scope resolution + immutable build/seal** ✅ — PR #48, migration `0025` (the
+  full non-obvious decisions live in the squash-merge commit + the project memory). The first of **two** pack PRs
+  (owner forks via AskUserQuestion: **two PRs** · pack-specific **Celery worker job + status poll** · **first-class
+  `evidence_pack` + `pack_item` tables** · Ed25519 time-boxed delivery → **S-pack-2**). A pack is an on-demand,
+  scope-limited, **immutable, self-verifying** bundle of records + their evidence + a traceability manifest, sealed
+  and registered as a **`RETAIN_PERMANENT` EVIDENCE Record**. **Migration `0025`**: `evidence_pack` header +
+  `pack_item` membership + 4 enums + additive `PACK_GENERATED`/`PACK_BUILD_FAILED` `event_type` + an `evidence_pack`
+  `audit_object_type` (both b-tree indexes → no `env.py` change). **Scope** = CLAUSE/PROCESS (+ DATE overlay), each a
+  **UNION of two legs** (`evidence_for_link` AND records under a clause-mapped/process-linked source doc — records
+  don't inherit their source-doc clause mappings); Finding/CAPA scope deferred (no entities). **R28 honesty** (load-bearing):
+  every candidate runs the generator's deny-by-default `record.read` (**full `ResourceContext`** — process_ids +
+  framework, so a PROCESS-scoped grant is honored) → `INCLUDED`/`EXCLUDED_PERMISSION`/`EXCLUDED_ABSENCE`; the
+  `pack_item` table IS the exclusion report; **absence = a DESTROY/WORM-destroy disposition tombstone** (never "no
+  evidence_blob rows" → a valid form-only record stays INCLUDED); the **gap** report reuses `compute_checklist`
+  (org-wide rule, distinct), a PROCESS pack deriving its clauses transitively. **Build worker** (`services/packs/build.py`,
+  `.delay`-triggered): single-txn, **idempotent** (`FOR UPDATE` + early-return if `pack_record_id` set — `acks_late`
+  re-delivery safe), **fail-closed**; re-resolves + re-classifies and **atomically replaces** the preview `pack_item`
+  rows (TOCTOU), seals over the content list with a domain-separated `pack_content_hash` (preamble
+  `easysynq.evidencepack.v1`, NOT the ZIP bytes), writes the ZIP to the WORM `records` bucket + registers it via
+  `capture_record`. **`evidence_pack` has NO FK to `blob`** (the ZIP is reached via `pack_record_id → evidence_blob`) so
+  the pack's R27 WORM-destroy hatch never aborts. A daily **reaper** flips stalled `BUILDING` → `FAILED`. **Routes**
+  (`api/packs.py`, gate `report.evidence_pack.generate` via SYSTEM override; download `report.export`): `POST
+  /evidence-packs` (preview) · `GET` (list/poll) · `POST …/generate` (202) · `GET …/download`; **immutable** — the
+  route-inventory proof asserts **zero PUT/PATCH/DELETE**. Pinned governing versions ride their cached rendition blob
+  (else source bytes — a version always has one), so **no renderer dependency** in S-pack-1. Adversarially
+  pressure-tested **before coding** (3-critic Workflow → folded: the blob-FK/`RETAIN_PERMANENT` pin, the full
+  `ResourceContext`, TOCTOU replace-don't-merge, `acks_late` idempotency, tombstone-not-empty-blobs absence, transitive
+  process→clause gap, the `evidence_pack` audit object_type). **268 unit + 4 pack integration green** (the 14
+  pg_dump-absent backup/restore tests stay environmental, green on CI — they're also where the pack ZIP blob's
+  blob-row-iff-bytes is truly exercised); `0025` round-trips up↔down↔check **+ a populated-DB downgrade** on PG16;
+  OpenAPI caught up in-PR (redocly green). **Deferred (S-pack-2 / later):** Ed25519 time-boxed external delivery +
+  revoke, ZIP/PDF export-format variants + live §11.3 stamping, Finding/CAPA scope.
 
 - **Specification** in `docs/` (00–17 + `decisions-register.md`) — complete, adversarially audited, reconciled
   (Register R1–R37 back-propagated). The Register is authoritative.
@@ -287,7 +320,19 @@ create boundary.
   (`review_required=false`) policies once the WORM lock allows; `review_required=true` waits for a human. Records stay
   **immutable** — `PATCH /disposition` is the only PATCH (a state advance, not a content edit; the route-inventory proof
   whitelists it). Authz: ride on a **SYSTEM `record.dispose` override** (catalog CLOSED — legal-hold + dual-control both
-  map onto `record.dispose`). Migration head is now `0024` (next `0025`).
+  map onto `record.dispose`).
+- **Evidence Packs (S-pack-1) — API/data only, no UI:** assemble an immutable audit bundle. `POST
+  /api/v1/evidence-packs {title, scope_kind:CLAUSE|PROCESS, clause_ids|process_ids, period_start?, period_end?}` (gate
+  `report.evidence_pack.generate`) creates a **DRAFT** pack + computes its preview synchronously (resolve candidates +
+  R28-classify `INCLUDED`/`EXCLUDED_PERMISSION`/`EXCLUDED_ABSENCE` + gap/exclusion summaries). `POST
+  /evidence-packs/{id}/generate` (202) flips `→ BUILDING` and enqueues the worker build; **poll** `GET
+  /evidence-packs(/{id})` for `SEALED` (or `FAILED`). `GET /evidence-packs/{id}/download` (gate `report.export`) presigns
+  the sealed ZIP (409 until SEALED). The sealed pack is a **`RETAIN_PERMANENT` EVIDENCE Record**; the pack is immutable
+  (**no PUT/PATCH/DELETE** — the route-inventory proof). **Authz:** ride a **SYSTEM `report.evidence_pack.generate`
+  override** until the role UI (the `record.*` precedent; catalog CLOSED — no new key needed). The build runs on the
+  **worker** (the `build_evidence_pack` Celery task; a daily `easysynq.packs.reap_stalled_builds` Beat reaper recovers a
+  stalled `BUILDING`). External time-boxed delivery (Ed25519 link) + export-format variants are **S-pack-2**. Migration
+  head is now `0025` (next `0026`).
 - **⚠ S11 restore + upgrade + encrypted backup (operator):** the durable archive (`easysynq backup run` / the nightly
   Beat job) is now **AES-256-GCM `.tar.enc`** sealed with `BACKUP_ENCRYPTION_KEY` (install.sh generates it into the
   0600 `.env`; **lose it → those archives are unrecoverable** — back it up out-of-band) and bundles the live Keycloak
@@ -334,6 +379,19 @@ create boundary.
   direction on any gate/proof.
 - **Authz for not-yet-UI'd domains:** seed the permission keys but expect them to reach no concrete object at their seeded
   scope → ride on **SYSTEM overrides** until the role/UI lands (the `document.export`/`process.create`/`record.*` precedent).
+- **Reusing the row-filter for a new permission-gated listing** (`gather_grants` + `authorize`, the search/records
+  pattern): populate the **FULL `ResourceContext`** the resource is actually granted on (process_ids + framework, not just
+  artifact_id + folder_path), or a genuinely PROCESS/FOLDER-scoped grant silently mis-denies everything (the S-pack-1 R28
+  lesson). SYSTEM overrides mask this — the EXCLUSION/visibility fact must be correct regardless.
+- **A blob registered under a record that can later be disposed must NOT carry a RESTRICT FK from a sibling row to that
+  `blob`** — the R27 WORM-destroy / sweep purge calls `delete_blob_and_links`, and a RESTRICT FK aborts the legal erasure
+  (a 500, not the refused-with-reason). Reach the bytes via `…_record_id → evidence_blob → blob` instead (the S-pack-1
+  `evidence_pack.zip_blob_sha256`-is-plain-Text lesson). Pin a never-disposed artifact (e.g. a sealed pack) `RETAIN_PERMANENT`.
+- **A `.delay`-triggered Celery build must be idempotent** (`task_acks_late=True` re-delivers on a worker kill): `FOR UPDATE`
+  + early-return if the terminal pointer is already set, do the whole build in ONE transaction (a crash before commit
+  leaves zero PG side effects; content-addressed writes dedup on re-run), and add a Beat **reaper** for a hard-killed
+  `BUILDING` row (no self-healing set-sweep like records). Register the task module in `tasks/__init__.py` (+ a unit test
+  asserting it's in `app.tasks`) or `.delay` publishes to a name no worker handles and the row hangs forever.
 
 ## The four LOCKED foundational decisions (never contradict)
 
