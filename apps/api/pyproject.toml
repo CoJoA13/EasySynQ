@@ -23,6 +23,10 @@ dependencies = [
   "reportlab>=4.2,<5",
   "pypdf>=5.0,<7",
   "segno>=1.6",
+  # S-ing-1 ingestion: libmagic content-sniff for mime detection (doc 09 §4.1). The system libmagic1
+  # is added to the worker image (Dockerfile); ``import magic`` is lazy + guarded in
+  # services/ingestion/mime.py so the bare unit-test CI runner (no libmagic1) degrades to mimetypes.
+  "python-magic>=0.4",
 ]
 
 [dependency-groups]
@@ -75,7 +79,7 @@ explicit_package_bases = true
 
 # Third-party libs without bundled type stubs (mypy --strict would otherwise error).
 [[tool.mypy.overrides]]
-module = ["boto3", "boto3.*", "botocore", "botocore.*", "celery", "celery.*", "alembic", "alembic.*", "redis", "redis.*", "reportlab", "reportlab.*"]
+module = ["boto3", "boto3.*", "botocore", "botocore.*", "celery", "celery.*", "alembic", "alembic.*", "redis", "redis.*", "reportlab", "reportlab.*", "magic"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

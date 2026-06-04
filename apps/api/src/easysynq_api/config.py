@@ -110,6 +110,18 @@ class Settings(BaseSettings):
     pack_share_default_ttl_days: int = 14
     pack_share_max_ttl_days: int = 90
 
+    # S-ing-1 ingestion (doc 09, UJ-2): the read-only mounted source root the worker walks — this is
+    # the NG3 confinement boundary (a run's ``source_root`` must resolve within it). The non-WORM
+    # ``import-staging`` bucket is where included bytes content-address in one pass (abandoned
+    # imports
+    # never touch the immutable vault, doc 09 §2/§15). Plus the scan tuning knobs.
+    import_source_root: str = "/srv/import/source"
+    s3_bucket_import_staging: str = "import-staging"
+    import_oversize_bytes: int = 500 * 1024 * 1024  # >500 MB → quarantined, never read/hashed
+    import_walk_batch_size: int = 500  # files per walk batch / per-batch commit checkpoint
+    import_lock_ttl_seconds: int = 1800  # source-root lock TTL; heartbeated per batch
+    import_scan_stall_seconds: int = 3600  # the stalled-scan reaper cutoff on scan_started_at
+
     @property
     def sync_dsn(self) -> str:
         """DSN Alembic uses (sync driver). Falls back to the async URL's driver name."""

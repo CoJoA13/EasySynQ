@@ -38,7 +38,10 @@ v1/v1.x residuals are listed at the end of this section.
 the **Evidence Packs (UJ-7)** family (**S-pack-1** build/seal, **S-pack-2** external delivery + PDF portfolio),
 **S-rec-3** (Mode-B structured-form capture), then **S-rec-4** (the records-family close-out:
 `/retention-policies` CRUD + creator≠disposer SoD-6) shipped depth-first — completing UJ-7 **and** the records
-family. **Migration head is now `0028`.**
+family. The owner then chose (AskUserQuestion) **Ingestion (doc 09, UJ-2)** as the next family — depth-first slices
+**S-ing-1** (run + scan/inventory foundation) shipped, with extract+classify (slice 2) · dedup+propose (slice 3) ·
+review (slice 4) · commit+provenance+report+mirror (slice 5) to follow; the family dependency posture is **full-fidelity**
+(Tesseract + Tika + OpenSearch — those bite at slices 2-3). **Migration head is now `0029`.**
 
 **v1 RECORDS family — S-rec-1/2 + S-pack-1** ✅ (one line each; the full per-slice non-obvious decisions live in the
 squash-merge commits + the `easysynq-project.md` memory; operator/API usage is in the dev-workflow section below):
@@ -163,6 +166,41 @@ squash-merge commits + the `easysynq-project.md` memory; operator/API usage is i
   retention-policy + the SoD-6 integration tests green**; `0028` round-trips up↔down↔check **+ a populated-DB downgrade** on
   PG16; OpenAPI caught up in-PR (redocly green). **Deferred:** the `record.set_retention` per-record-override endpoint
   (future), Mode B for `audit`/`capa` records. **Migration head is now `0028`.**
+
+- **S-ing-1 — Ingestion: run + scan/inventory foundation (the v1 Ingestion engine's first slice, doc 09, UJ-2)** ✅ —
+  migration `0029` (the full non-obvious decisions live in the squash-merge commit + the project memory). **Owner forks
+  (AskUserQuestion):** the **thin scan/inventory first bite** (over a thicker scan+classify bite / a vertical commit-spike);
+  a **full-fidelity** family dependency posture (Tesseract OCR + Tika + OpenSearch) — those bite at slices 2-3, so S-ing-1's
+  only new runtime dep is **python-magic/libmagic** (content-sniff mime). It introduces ONLY the transient `import_*` staging
+  layer (doc 14 §1.2) — **writes nothing to the vault**. **Migration `0029`:** `import_run` (the first-class audited run +
+  state machine; `import_run_status` Created→Scanning→Scanned [+Failed/Cancelled], **minimal-now/additive-later** per the
+  ALTER-TYPE-ADD-VALUE pattern) + `import_file` (one inventory row per walked path; **UNIQUE(run_id,rel_path)** = the §11.1
+  idempotency/upsert key; `run_id` **ON DELETE CASCADE** — the one deliberate exception to RESTRICT-everywhere, justified by
+  the transient/TTL-purged layer) + additive `IMPORT_RUN_CREATED/STAGE_CHANGED/FAILED/CANCELLED` `event_type` + `import_run`
+  `audit_object_type` + pg_roles-guarded GRANTs. **No new permission keys** — `import.execute`/`import.review`/`import.commit`
+  already exist (0004, SYSTEM-scope admin-only, held via the System Administrator role bundle; **no `is_system_admin` flag
+  exists** — the design-critic caught that false premise, the gate is the `config.update` mechanic). **Authenticated**
+  `api/ingestion.py` under `/api/v1/admin/imports` (**NOT latch-exempt** → 423 until OPERATIONAL): `POST` create (gate
+  `import.execute`; 202 + enqueue scan; 422 on a confinement escape / non-dir; 409 + `active_run_id` on a duplicate-active
+  run), `GET` list/detail/`/files` (gate `import.review`), `POST …/{id}/cancel` (`import.execute`, 409 if terminal) — the
+  **SoD-as-data** execute/review split. The **scan worker** (`tasks/ingestion.py` `easysynq.ingestion.scan_source`,
+  `.delay`-triggered, idempotent under `task_acks_late` re-delivery, fail-closed — the packs build/reaper discipline) walks a
+  **read-only** mounted source root via a `FilesystemSourceProvider` (the doc 09 §3.4 SourceProvider seam;
+  `os.walk(followlinks=False)`; symlinks/unreadable are inventoried-not-silently-dropped), classifies via the pure §4.2 ladder,
+  one-pass **stream→sha256→content-address** stages included bytes into the non-WORM `import-staging` bucket (head-dedup),
+  upserts per (run_id,rel_path), checkpoints + heartbeats the **Redis source-root lock** per batch, and materializes the §4.3
+  counts summary via SQL aggregates; a Beat **stalled-scan reaper** (`reap_stalled_scans`, every 10 min) FAILs a wedged scan +
+  force-frees its lock. **Load-bearing safety (NG3):** `resolve_confined` rejects path-traversal/symlink-escape; the `:ro`
+  worker mount is the physical write-back block; only `rel_path` is stored (no host secrets). **§4.2 deviations (documented):**
+  archives **quarantined** with a reserved expand hook (no `py7zr`/`rarfile`/zip-bomb risk); only **cheap header-level**
+  encryption flagged (the deep probe → slice 2). Adversarially designed before coding (Plan-mode + an 8-reader understand
+  fan-out + 3 layer Plan-agents → folded: the no-`is_system_admin` authz correction, minimal-additive status enum,
+  CASCADE-for-transient, the lazy-guarded libmagic CI fallback, the temp-key-then-server-copy one-pass staging, the
+  confinement primitive). **352 unit (32 new) + 6 ingestion integration green**; `0029` round-trips up↔down↔check **+ a
+  populated-DB downgrade** on PG16; OpenAPI caught up in-PR (redocly green). **Deferred:** extract+classify (slice 2 —
+  Tika/Tesseract land), dedup+version-families+proposal (slice 3 — OpenSearch lands), review-decisions API (slice 4),
+  commit + `import_provenance` + `import_baseline` signature + Import Report + mirror sync (slice 5), the staging TTL janitor,
+  the dedicated `import` Celery queue. **Migration head is now `0029`.**
 
 - **Specification** in `docs/` (00–17 + `decisions-register.md`) — complete, adversarially audited, reconciled
   (Register R1–R37 back-propagated). The Register is authoritative.
@@ -428,6 +466,19 @@ create boundary.
   `PATCH /api/v1/admin/config {allow_self_disposition: true}` (`config.update`). **⚠ Operator note:** the flag defaults OFF
   (strict), so a **single-operator install** must flip it to `true` to dispose its own records (else every self-disposal is
   blocked — the second-person requirement). The Beat sweep (system actor) is exempt. Migration head is now `0028` (next `0029`).
+- **Ingestion: run + scan/inventory (S-ing-1) — API/data only, no UI:** point the **worker** at an existing QMS file tree
+  (set `IMPORT_SOURCE_PATH` to the host dir; it mounts **read-only** at `IMPORT_SOURCE_ROOT`=`/srv/import/source`, NG3). As a
+  **System Administrator** (`import.*` are SYSTEM-scope admin-only, held by the role bundle — no override dance):
+  `POST /api/v1/admin/imports {source_root}` (`source_root` is relative to the mount; 422 on a confinement escape; 409 +
+  `active_run_id` if a scan is already active for that root) → 202 + an `import_run` (Created), then the **worker** scans
+  (Created→Scanning→Scanned) — inventory every file with size/mtime/mime/sha256 + a §4.2 scan verdict, content-address
+  included bytes into the non-WORM `import-staging` bucket, and a calm §4.3 `counts` summary. Poll `GET /admin/imports/{id}`
+  for `Scanned` + counts; `GET …/{id}/files?disposition=included|excluded|quarantine` lists the inventory;
+  `POST …/{id}/cancel` aborts (the worker stops cooperatively). It writes **nothing to the vault** (commit is a later slice).
+  Gate split: writes (create/cancel) = `import.execute`, reads = `import.review`. **Operator notes:** the worker image carries
+  `libmagic1` (content-sniff); a crashed scan self-recovers via the Beat `easysynq.ingestion.reap_stalled_scans` (FAILs the
+  run + frees the source lock); a new `import-staging` bucket is provisioned by `minio-init.sh`. Extract/classify/dedup/
+  review/commit are later slices. Migration head is now `0029` (next `0030`).
 - **⚠ S11 restore + upgrade + encrypted backup (operator):** the durable archive (`easysynq backup run` / the nightly
   Beat job) is now **AES-256-GCM `.tar.enc`** sealed with `BACKUP_ENCRYPTION_KEY` (install.sh generates it into the
   0600 `.env`; **lose it → those archives are unrecoverable** — back it up out-of-band) and bundles the live Keycloak

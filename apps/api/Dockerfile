@@ -10,6 +10,7 @@ ENV PYTHONUNBUFFERED=1 \
 # to match the postgres:16 server (an older client refuses a newer server). Via the PGDG apt repo
 # (bookworm ships only client-15); build-time only, so air-gapped *installs* are unaffected (the
 # image is pre-built). Only the worker runs the drill; the shared image carries it for both.
+# S-ing-1: libmagic1 — the system lib python-magic content-sniffs imported files with (doc 09 §4.1).
 RUN apt-get update \
     && apt-get install -y --no-install-recommends curl ca-certificates gnupg \
     && install -d /usr/share/postgresql-common/pgdg \
@@ -18,7 +19,7 @@ RUN apt-get update \
     && echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] \
 https://apt.postgresql.org/pub/repos/apt bookworm-pgdg main" > /etc/apt/sources.list.d/pgdg.list \
     && apt-get update \
-    && apt-get install -y --no-install-recommends postgresql-client-16 \
+    && apt-get install -y --no-install-recommends postgresql-client-16 libmagic1 \
     && apt-get purge -y curl gnupg \
     && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/*
