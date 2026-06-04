@@ -37,6 +37,7 @@ from .backup_policy import BackupPolicy
 from .blob import Blob
 from .clause import Clause
 from .clause_mapping import ClauseMapping
+from .disposition_event import DispositionEvent
 from .document_type import DocumentType
 from .document_version import DocumentVersion
 from .documented_information import DocumentedInformation
@@ -67,6 +68,7 @@ from .workflow import (
     WorkflowStage,
 )
 from .working_draft import WorkingDraft
+from .worm_destroy_request import WormDestroyRequest
 
 __all__ = [
     "ActorType",
@@ -83,6 +85,7 @@ __all__ = [
     "Clause",
     "ClauseMapping",
     "DispositionAction",
+    "DispositionEvent",
     "DocumentCurrentState",
     "DocumentKind",
     "DocumentLevel",
@@ -138,4 +141,5 @@ __all__ = [
     "WorkflowStageMode",
     "WorkflowSubjectType",
     "WorkingDraft",
+    "WormDestroyRequest",
 ]

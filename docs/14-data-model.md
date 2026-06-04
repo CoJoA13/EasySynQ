@@ -451,6 +451,7 @@ erDiagram
     RETENTION_POLICY ||--o{ RECORD : "snapshotted onto"
     RETENTION_POLICY ||--o{ DOCUMENT : "retention_of_superseded"
     RECORD ||--o{ DISPOSITION_EVENT : "disposed via (tombstone)"
+    RECORD ||--o{ WORM_DESTROY_REQUEST : "destroy-under-legal-order (R27)"
     RETENTION_POLICY }o--o| PROCESS : "applies_to"
     RETENTION_POLICY }o--o| CLAUSE : "applies_to"
 ```
@@ -458,9 +459,10 @@ erDiagram
 | Entity | Key attributes | Notes / source |
 |---|---|---|
 | `retention_policy` | `id` PK, `org_id`, `name`, `applies_to` jsonb (record_type/clause/process), `basis` enum(`captured_at`,`event:employment_end`,`event:product_eol`,`event:contract_end`,`event:capa_closed`), `duration` (ISO-8601 / `PERMANENT`), `disposition_action` enum(`DESTROY`,`ARCHIVE_COLD`,`TRANSFER`,`RETAIN_PERMANENT`), `review_required` bool, `worm_lock_period` (≥ duration) | Policy-as-data; **snapshotted at capture** (one-way ratchet, `06 §5.1`). |
-| `disposition_event` | `id` PK, `record_id` FK, `action`, `approved_by`, `executed_at`, `policy_id`, `tombstone` bool | Immutable; blob removed/anonymized but Record metadata + audit preserved (`06 §5.3`). |
+| `disposition_event` | `id` PK, `org_id`, `record_id` FK, `action`, `tombstone` bool, `policy_id` FK **null** (null for a non-policy legal-order destroy), `approved_by` FK **null** (null on a system Beat-sweep auto-dispose), `requested_by` FK **null** (the R27 first authorizer), `is_worm_destroy` bool, `legal_basis` text null, `executed_at` | Immutable; the executed-disposition tombstone — blob removed/anonymized but Record metadata + audit preserved (`06 §5.3`). Slice S-rec-2 added the `is_worm_destroy`/`requested_by`/`legal_basis` dual-control fields + the `policy_id` nullability. |
+| `worm_destroy_request` | `id` PK, `org_id`, `record_id` FK, `legal_basis` text, `requested_by` FK, `requested_at`, `approved_by` FK null, `executed_at` null, `cancelled_by` FK null, `cancelled_at` null | The R27 dual-control two-step workflow (the `dcr` mutable-state precedent, R22); state derived from the nullable timestamps (open / executed / cancelled). `CHECK(approved_by <> requested_by)` + a partial `UNIQUE(record_id) WHERE open` (one open request per record). Slice S-rec-2. |
 
-**Constraints:** resolution precedence per-record > process > clause > type > system default; `legal_hold = true` overrides expiry; DESTROY blocked until `worm_lock_period` expired AND no hold; reduction of retention never applies to already-captured records (extension forward only).
+**Constraints:** resolution precedence per-record > process > clause > type > system default; `legal_hold = true` overrides expiry; DESTROY blocked until `worm_lock_period` expired AND no hold (a blocked destroy is logged-as-refused-with-reason, `RECORD_ERASURE_REFUSED`, R27); `RETAIN_PERMANENT` pairs with `duration=PERMANENT` (never auto-swept); reduction of retention never applies to already-captured records (extension forward only). The R27 dual-control destroy is the **only** pre-lock-expiry destruction path (two distinct authorizers, `BypassGovernanceRetention`, GOVERNANCE-only).
 
 ---
 

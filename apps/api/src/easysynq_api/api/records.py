@@ -17,7 +17,7 @@ import uuid
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Response, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import ColumnElement
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -25,19 +25,28 @@ from ..auth.dependencies import get_current_user
 from ..db.models._record_enums import RecordDispositionState, RecordType
 from ..db.models.app_user import AppUser
 from ..db.models.blob import Blob
+from ..db.models.disposition_event import DispositionEvent
 from ..db.models.documented_information import DocumentedInformation
 from ..db.models.evidence_blob import EvidenceBlob
 from ..db.models.evidence_for_link import EvidenceForLink
 from ..db.models.record import Record
+from ..db.models.worm_destroy_request import WormDestroyRequest
 from ..db.session import get_session
 from ..domain.authz import RequestContext, ResourceContext, authorize
+from ..domain.records.retention import retention_until
 from ..problems import ProblemException
 from ..services.authz import gather_grants, require
 from ..services.records import (
+    advance_disposition,
+    approve_worm_destroy,
+    cancel_worm_destroy,
     capture_correction,
     capture_record,
     link_evidence,
+    place_legal_hold,
     record_init_upload,
+    release_legal_hold,
+    request_worm_destroy,
     unlink_evidence,
 )
 from ..services.records import repository as records_repo
@@ -82,6 +91,25 @@ class EvidenceLinkCreate(BaseModel):
     link_reason: str | None = None
 
 
+class DispositionAdvance(BaseModel):
+    # ON_HOLD is intentionally not accepted here — legal hold uses POST /records/{id}/legal-hold.
+    to_state: Literal["DUE_FOR_REVIEW", "ACTIVE", "DISPOSED"]
+    reason: str | None = None
+
+
+class LegalHoldAction(BaseModel):
+    action: Literal["place", "release"]
+    reason: str = Field(min_length=1, max_length=1000)
+
+
+class WormDestroyRequestCreate(BaseModel):
+    legal_basis: str = Field(min_length=1, max_length=1000)
+
+
+class DispositionReason(BaseModel):
+    reason: str | None = Field(default=None, max_length=1000)
+
+
 # --- serializers ------------------------------------------------------------------------
 
 
@@ -104,6 +132,41 @@ def _evidence_link(link: EvidenceForLink) -> dict[str, Any]:
         "target_id": str(link.target_id),
         "link_reason": link.link_reason,
         "created_at": link.created_at.isoformat() if link.created_at else None,
+    }
+
+
+def _worm_destroy_request(req: WormDestroyRequest) -> dict[str, Any]:
+    if req.executed_at is not None:
+        req_status = "executed"
+    elif req.cancelled_at is not None:
+        req_status = "cancelled"
+    else:
+        req_status = "open"
+    return {
+        "id": str(req.id),
+        "record_id": str(req.record_id),
+        "status": req_status,
+        "legal_basis": req.legal_basis,
+        "requested_by": str(req.requested_by),
+        "requested_at": req.requested_at.isoformat() if req.requested_at else None,
+        "approved_by": str(req.approved_by) if req.approved_by else None,
+        "executed_at": req.executed_at.isoformat() if req.executed_at else None,
+        "cancelled_by": str(req.cancelled_by) if req.cancelled_by else None,
+        "cancelled_at": req.cancelled_at.isoformat() if req.cancelled_at else None,
+    }
+
+
+def _disposition_event(event: DispositionEvent) -> dict[str, Any]:
+    return {
+        "id": str(event.id),
+        "action": event.action.value,
+        "tombstone": event.tombstone,
+        "policy_id": str(event.policy_id) if event.policy_id else None,
+        "approved_by": str(event.approved_by) if event.approved_by else None,
+        "requested_by": str(event.requested_by) if event.requested_by else None,
+        "is_worm_destroy": event.is_worm_destroy,
+        "legal_basis": event.legal_basis,
+        "executed_at": event.executed_at.isoformat() if event.executed_at else None,
     }
 
 
@@ -180,6 +243,21 @@ async def _load(
 _read = require("record.read", async_scope_resolver=_record_scope)
 _create = require("record.create")  # SYSTEM scope (create/init-upload — no path id)
 _create_scoped = require("record.create", async_scope_resolver=_record_scope)  # per-record writes
+# Disposition / legal-hold / dual-control destroy all gate on record.dispose (SoD-sensitive; doc 06
+# §5.3, doc 15 §8.9). Per-record scope from the path id (SYSTEM grants always match).
+_dispose = require("record.dispose", async_scope_resolver=_record_scope)
+
+
+async def _retention_until_for(session: AsyncSession, record: Record) -> datetime.date | None:
+    """The record's computed end-of-retention date (None = never expires / unknown basis / bad
+    duration). Reads the snapshotted policy's duration against the frozen basis date."""
+    policy = await records_repo.get_policy(session, record.retention_policy_id, record.org_id)
+    if policy is None:
+        return None
+    try:
+        return retention_until(record.retention_basis_date, policy.duration)
+    except ValueError:
+        return None
 
 
 async def _serialize_full(
@@ -375,3 +453,122 @@ async def unlink_evidence_endpoint(
 ) -> Response:
     await unlink_evidence(session, caller, record_id, link_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+# --- disposition lifecycle (slice S-rec-2, doc 06 §5.3, doc 15 §8.9/§8.16) ---------------
+
+
+@router.get("/records/{record_id}/disposition")
+async def get_disposition_endpoint(
+    record_id: uuid.UUID,
+    caller: AppUser = Depends(_read),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """Disposition status + ``retention_until`` + ``legal_hold`` + the open destroy request + the
+    tombstone history (doc 15 §8.16)."""
+    record, _base = await _load(session, caller, record_id)
+    until = await _retention_until_for(session, record)
+    open_req = await records_repo.open_worm_destroy_request(session, record.id)
+    events = await records_repo.list_disposition_events(session, record.id)
+    return {
+        "record_id": str(record.id),
+        "disposition_state": record.disposition_state.value,
+        "legal_hold": record.legal_hold,
+        "retention_policy_id": str(record.retention_policy_id),
+        "retention_basis_date": (
+            record.retention_basis_date.isoformat() if record.retention_basis_date else None
+        ),
+        "retention_until": until.isoformat() if until else None,
+        "open_worm_destroy_request": _worm_destroy_request(open_req) if open_req else None,
+        "disposition_events": [_disposition_event(e) for e in events],
+    }
+
+
+@router.patch("/records/{record_id}/disposition")
+async def advance_disposition_endpoint(
+    record_id: uuid.UUID,
+    body: DispositionAdvance,
+    caller: AppUser = Depends(_dispose),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """Advance ``disposition_state`` (ACTIVE↔DUE_FOR_REVIEW↔DISPOSED). A DESTROY physically removes
+    the WORM bytes (fail-closed); blocked 409 while the lock is unexpired or a hold is active (the
+    refusal is audited). Legal hold uses the dedicated endpoint."""
+    record = await advance_disposition(
+        session,
+        caller,
+        record_id,
+        to_state=RecordDispositionState(body.to_state),
+        reason=body.reason,
+    )
+    _, base = await _load(session, caller, record.id)
+    return await _serialize_full(session, record, base)
+
+
+@router.post("/records/{record_id}/legal-hold")
+async def legal_hold_endpoint(
+    record_id: uuid.UUID,
+    body: LegalHoldAction,
+    caller: AppUser = Depends(_dispose),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """Place or release a legal hold — a preservation freeze that overrides retention expiry (doc 06
+    §5.2). ``reason`` is mandatory (audit trail). Gated on ``record.dispose``."""
+    if body.action == "place":
+        record = await place_legal_hold(session, caller, record_id, reason=body.reason)
+    else:
+        record = await release_legal_hold(session, caller, record_id, reason=body.reason)
+    _, base = await _load(session, caller, record.id)
+    return await _serialize_full(session, record, base)
+
+
+@router.get("/records/{record_id}/worm-destroy-requests")
+async def list_worm_destroy_requests_endpoint(
+    record_id: uuid.UUID,
+    caller: AppUser = Depends(_read),
+    session: AsyncSession = Depends(get_session),
+) -> list[dict[str, Any]]:
+    await _load(session, caller, record_id)
+    reqs = await records_repo.list_worm_destroy_requests(session, record_id)
+    return [_worm_destroy_request(r) for r in reqs]
+
+
+@router.post("/records/{record_id}/worm-destroy-requests", status_code=status.HTTP_201_CREATED)
+async def request_worm_destroy_endpoint(
+    record_id: uuid.UUID,
+    body: WormDestroyRequestCreate,
+    caller: AppUser = Depends(_dispose),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """R27 dual-control destroy-under-legal-order — STEP 1 (request). A distinct second actor must
+    approve before any WORM bytes are destroyed."""
+    req = await request_worm_destroy(session, caller, record_id, legal_basis=body.legal_basis)
+    return _worm_destroy_request(req)
+
+
+@router.post("/records/{record_id}/worm-destroy-requests/{req_id}/approve")
+async def approve_worm_destroy_endpoint(
+    record_id: uuid.UUID,
+    req_id: uuid.UUID,
+    body: DispositionReason,
+    caller: AppUser = Depends(_dispose),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """R27 dual-control destroy — STEP 2 (approve + execute). The approver must differ from the
+    requester (409); the governance-bypass purge is fail-closed; COMPLIANCE mode is refused."""
+    record = await approve_worm_destroy(session, caller, record_id, req_id, reason=body.reason)
+    _, base = await _load(session, caller, record.id)
+    return await _serialize_full(session, record, base)
+
+
+@router.post("/records/{record_id}/worm-destroy-requests/{req_id}/cancel")
+async def cancel_worm_destroy_endpoint(
+    record_id: uuid.UUID,
+    req_id: uuid.UUID,
+    body: DispositionReason,
+    caller: AppUser = Depends(_dispose),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """Cancel an open dual-control destroy request (audited)."""
+    req = await cancel_worm_destroy(session, caller, record_id, req_id, reason=body.reason)
+    return _worm_destroy_request(req)

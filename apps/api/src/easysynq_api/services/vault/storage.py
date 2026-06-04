@@ -243,3 +243,41 @@ async def worm_probe(bucket: str | None = None) -> WormProbeResult:
     """Run :func:`_worm_probe_sync` off the event loop against ``bucket`` (default: the WORM
     documents bucket). Used by the S8a/S8b setup wizard's G-B gate verification."""
     return await asyncio.to_thread(_worm_probe_sync, bucket or _doc_bucket())
+
+
+def _purge_object_sync(object_key: str, bucket: str, bypass_governance: bool) -> int:
+    """Delete EVERY version + delete-marker of ``object_key`` from a versioned bucket. Returns the
+    count removed. Idempotent — a key with no remaining versions is a no-op success. Raises
+    ``ClientError``/``BotoCoreError`` on a real failure (e.g. an ``AccessDenied`` when COMPLIANCE
+    mode refuses ``BypassGovernanceRetention``) so the caller stays fail-closed."""
+    client = _client()
+    paginator = client.get_paginator("list_object_versions")
+    removed = 0
+    for page in paginator.paginate(Bucket=bucket, Prefix=object_key):
+        # Versions and DeleteMarkers are deleted the same way — by their own VersionId (deleting a
+        # marker's version removes the marker; a plain delete would just add another marker).
+        for entry in (*page.get("Versions", []), *page.get("DeleteMarkers", [])):
+            if entry.get("Key") != object_key:  # Prefix can match longer keys — exact-match only
+                continue
+            kwargs: dict[str, Any] = {
+                "Bucket": bucket,
+                "Key": object_key,
+                "VersionId": entry["VersionId"],
+            }
+            if bypass_governance:
+                kwargs["BypassGovernanceRetention"] = True
+            client.delete_object(**kwargs)
+            removed += 1
+    return removed
+
+
+async def purge_object(object_key: str, *, bucket: str, bypass_governance: bool = False) -> int:
+    """Physically destroy a record's WORM evidence (slice S-rec-2, doc 06 §5.3). Removes every
+    version + delete-marker of ``object_key`` in ``bucket``; returns the count removed. Idempotent
+    (re-purging an already-gone object is a no-op) and **fail-closed** — raises on any real storage
+    failure so the caller never writes a DISPOSED tombstone over still-present bytes.
+
+    ``bypass_governance=True`` (the R27 dual-control destroy-under-legal-order hatch) overrides an
+    *unexpired* GOVERNANCE object-lock; it is denied under COMPLIANCE mode (an honest
+    ``AccessDenied`` the caller surfaces). The normal/sweep path passes ``False`` (lock expired)."""
+    return await asyncio.to_thread(_purge_object_sync, object_key, bucket, bypass_governance)

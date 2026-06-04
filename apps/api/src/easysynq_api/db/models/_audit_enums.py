@@ -136,6 +136,25 @@ class EventType(enum.Enum):
     RECORD_CORRECTED = "RECORD_CORRECTED"
     RECORD_EVIDENCE_LINKED = "RECORD_EVIDENCE_LINKED"
     RECORD_EVIDENCE_UNLINKED = "RECORD_EVIDENCE_UNLINKED"
+    # records retention & disposition (S-rec-2, doc 06 §5, doc 14 §10) — the disposition state
+    # machine + the Beat retention sweep + legal-hold + the R27 dual-control WORM-destroy hatch
+    # (object_type ``record``). DISPOSITION_DUE is the sweep's ACTIVE→DUE_FOR_REVIEW flip (and the
+    # v1 "notify owning org_role" surrogate until doc-10 notifications); DISPOSED is the executed
+    # disposition (tombstone); RETENTION_EXTENDED is the DUE_FOR_REVIEW→ACTIVE re-anchor;
+    # LEGAL_HOLD_PLACED/RELEASED toggle the preservation freeze; the WORM_DESTROY_* trio is the
+    # two-person legal-order hatch; ERASURE_REFUSED logs a destroy blocked by WORM/legal-hold/
+    # COMPLIANCE mode (the GDPR refused-with-reason, R27). Added via ALTER TYPE event_type ADD VALUE
+    # in 0024 (the 0011-0023 additive pattern; a from-scratch ``upgrade head`` rebuilds the type
+    # from EVENT_TYPE_VALUES, so the members live here too).
+    RECORD_DISPOSITION_DUE = "RECORD_DISPOSITION_DUE"
+    RECORD_DISPOSED = "RECORD_DISPOSED"
+    RECORD_RETENTION_EXTENDED = "RECORD_RETENTION_EXTENDED"
+    RECORD_LEGAL_HOLD_PLACED = "RECORD_LEGAL_HOLD_PLACED"
+    RECORD_LEGAL_HOLD_RELEASED = "RECORD_LEGAL_HOLD_RELEASED"
+    RECORD_WORM_DESTROY_REQUESTED = "RECORD_WORM_DESTROY_REQUESTED"
+    RECORD_WORM_DESTROY_CANCELLED = "RECORD_WORM_DESTROY_CANCELLED"
+    RECORD_WORM_DESTROYED = "RECORD_WORM_DESTROYED"
+    RECORD_ERASURE_REFUSED = "RECORD_ERASURE_REFUSED"
 
 
 class CheckpointSinkKind(enum.Enum):
