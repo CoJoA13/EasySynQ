@@ -47,6 +47,15 @@ class AuditObjectType(enum.Enum):
     # → it reuses ``record``, NOT this. Added via ``ALTER TYPE audit_object_type ADD VALUE`` in 0028
     # (the 0019/0025 precedent).
     retention_policy = "retention_policy"
+    # ingestion runs (S-ing-1, doc 09 §3.2, doc 14 §13) — the IMPORT_RUN_* lifecycle events key here
+    # on the ``import_run`` row id (its own transient staging table, not a ``record``/``document``).
+    # The run's per-file inventory (import_file) does NOT get its own object type — those rows
+    # belong
+    # to the run, so item-level events (later slices) key on the run (the
+    # process_link-reuses-document
+    # precedent). Added via ``ALTER TYPE audit_object_type ADD VALUE`` in 0029 (the 0019/0025/0028
+    # precedent).
+    import_run = "import_run"
 
 
 class EventType(enum.Enum):
@@ -206,6 +215,23 @@ class EventType(enum.Enum):
     RETENTION_POLICY_UPDATED = "RETENTION_POLICY_UPDATED"
     RETENTION_POLICY_ARCHIVED = "RETENTION_POLICY_ARCHIVED"
     DISPOSITION_REFUSED_SOD = "DISPOSITION_REFUSED_SOD"
+    # ingestion run + scan/inventory foundation (S-ing-1, doc 09 §3.2/§12.2, doc 14 §13). The run
+    # is a
+    # first-class audited object: IMPORT_RUN_CREATED (operator starts a run, user actor),
+    # IMPORT_RUN_STAGE_CHANGED (each Created→Scanning→Scanned transition, a *system* actor — the
+    # scan
+    # runs detached in the worker with no HTTP caller), IMPORT_RUN_FAILED (scan error / reaper,
+    # system
+    # actor), IMPORT_RUN_CANCELLED (operator aborts, user actor). The
+    # IMPORT_ITEM_*/_COMPLETED/_PARTIAL
+    # events + the import_baseline signature defer to the later review/commit slices. Added via
+    # ALTER
+    # TYPE event_type ADD VALUE in 0029 (the 0011-0028 additive pattern; a from-scratch ``upgrade
+    # head`` rebuilds the type from EVENT_TYPE_VALUES, so the members live here too).
+    IMPORT_RUN_CREATED = "IMPORT_RUN_CREATED"
+    IMPORT_RUN_STAGE_CHANGED = "IMPORT_RUN_STAGE_CHANGED"
+    IMPORT_RUN_FAILED = "IMPORT_RUN_FAILED"
+    IMPORT_RUN_CANCELLED = "IMPORT_RUN_CANCELLED"
 
 
 class CheckpointSinkKind(enum.Enum):

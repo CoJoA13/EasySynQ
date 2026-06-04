@@ -97,7 +97,11 @@ Records/evidence capture, retention/disposition, Evidence Packs, audits/findings
 > (audits/findings, CAPA, ingestion, workflows+notifications, the web UI, the rest of search/reporting), plus the
 > records-family residual Mode B for the `audit`/`capa` multi-stage records (once those entities land). The
 > **records-family close-out — `/retention-policies` CRUD + soft-archive + the creator≠disposer SoD-6** — shipped in
-> **S-rec-4** (migration `0028`, the first additive catalog extension, R38). See `CLAUDE.md` for shipped detail.
+> **S-rec-4** (migration `0028`, the first additive catalog extension, R38). The **Ingestion engine (UJ-2)** family is now
+> STARTED: **S-ing-1** (run + scan/inventory foundation, migration `0029`) ships an idempotent, crash-safe scan that
+> inventories a read-only mounted source tree into transient `import_*` staging (it writes nothing to the vault);
+> extract+classify · dedup+propose · review · commit follow as slices 2–5 (the full-fidelity Tesseract/Tika/OpenSearch
+> dependency posture bites at slices 2–3). See `CLAUDE.md` for shipped detail.
 
 **Goal:** everything an organization needs to *run and certify* an ISO 9001:2015 QMS, end to end, and to face an external audit with a one-click evidence pack.
 

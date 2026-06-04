@@ -142,6 +142,9 @@ services:
       - mirror:/var/lib/easysynq/qms-mirror   # worker writes the read-only mirror (R11)
       - secrets:/run/secrets   # S7c: shared verify-token signing key (worker mints the QR token)
       - backup:/var/lib/easysynq/backups   # S8b2: durable backup archives + the restore-test drill
+      # S-ing-1: the import source tree, mounted READ-ONLY (NG3 — the engine physically cannot write
+      # back). Only the worker walks it; IMPORT_SOURCE_ROOT (=/srv/import/source) is the confinement root.
+      - ${IMPORT_SOURCE_PATH:-./.import-source}:/srv/import/source:ro
     networks: [internal]
 
   # Scheduler — EXACTLY ONE replica (two would double-fire). Asserted in profile overlays.

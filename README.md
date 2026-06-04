@@ -73,7 +73,13 @@ invariant* rather than a discipline problem.
     (decisions-register **R38** refines "closed at v1" to "no rename/removal; additive growth allowed").
 
   The v1 **records family is complete** (capture → retention/disposition + management → evidence packs → structured forms).
-  Migration head `0028`.
+
+- **v1 Ingestion engine: STARTED** 🟡 — the on-ramp that imports an existing QMS file tree into the controlled vault
+  ([`docs/09`](docs/09-ingestion-engine.md), UJ-2). A depth-first family; **S-ing-1** (run + scan/inventory foundation)
+  shipped: point the worker at a **read-only** mounted source tree → `POST /api/v1/admin/imports` → an idempotent,
+  crash-safe scan inventories every file (size/mtime/mime/sha256 + a §4.2 filters/quarantine verdict), content-addresses
+  included bytes into a non-WORM staging bucket, and produces a calm summary — all transient `import_*` rows; **it writes
+  nothing to the vault** (extract/classify · dedup/propose · review · commit are slices 2–5). Migration head `0029`.
 
 ## Repository layout
 

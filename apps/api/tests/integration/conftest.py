@@ -120,6 +120,7 @@ def _minio() -> Iterator[dict[str, str]]:
         client.create_bucket(Bucket="restore-scratch")
         # S6 off-host audit-checkpoint anchor bucket (object-lock, R13).
         client.create_bucket(Bucket="audit-checkpoints", ObjectLockEnabledForBucket=True)
+        client.create_bucket(Bucket="import-staging")  # S-ing-1 plain (non-WORM) import staging
         yield {
             "endpoint": endpoint,
             "access_key": cfg["access_key"],
@@ -171,6 +172,12 @@ async def app_under_test(
     # the realm-export leg degrades to "absent" in CI (no Keycloak), as designed.
     monkeypatch.setenv("BACKUP_ENCRYPTION_KEY", "ci-test-backup-encryption-key-0123456789")
     monkeypatch.setenv("REDIS_URL", _redis)
+    # S-ing-1: a per-test read-only import source root (the worker walks it) + the plain staging
+    # bucket.
+    import_root = tmp_path / "import-source"
+    import_root.mkdir()
+    monkeypatch.setenv("IMPORT_SOURCE_ROOT", str(import_root))
+    monkeypatch.setenv("S3_BUCKET_IMPORT_STAGING", "import-staging")
 
     from alembic import command
     from alembic.config import Config

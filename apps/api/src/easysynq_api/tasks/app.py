@@ -68,5 +68,14 @@ app.conf.update(
             "task": "easysynq.packs.reap_stalled_builds",
             "schedule": 86400.0,  # daily
         },
+        # S-ing-1: recover ingestion scans wedged in SCANNING (a worker kill strands them) → FAILED
+        # +
+        # free the source-root lock. Tighter cadence than the daily packs reaper because a stuck
+        # scan
+        # holds the source root's lock (blocking re-scan) until it is reaped (doc 09 §3.3).
+        "ingestion-reap-stalled-scans": {
+            "task": "easysynq.ingestion.reap_stalled_scans",
+            "schedule": 600.0,  # every 10 minutes
+        },
     },
 )

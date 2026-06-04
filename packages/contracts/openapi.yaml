@@ -73,6 +73,15 @@ tags:
       retention.manage (QMS Owner) — the two CONTENT-domain keys opened additively in 0028 (R38).
       A hard DELETE is impossible (3 RESTRICT FKs); retirement is the soft :archive action. PATCH is
       extend-forward only while records are pinned (doc 06 §5.2); shorten-for-future = archive + new.
+  - name: imports
+    description: >-
+      The Ingestion engine (slice S-ing-1, doc 09, UJ-2) — bulk-import an existing QMS file tree into
+      the controlled vault. THIS slice ships the run + scan/inventory foundation only: it walks a
+      read-only mounted source root, inventories every file (path/size/mtime/mime/sha256), applies the
+      §4.2 filters/quarantine, content-addresses included bytes into a non-WORM staging bucket, and
+      produces a calm inventory summary — all transient import_* rows; it writes NOTHING to the vault
+      (extract/classify/dedup/review/commit are later slices). SYSTEM-scope, admin-only: writes
+      (create + cancel) need import.execute, reads need import.review (the SoD-as-data split, R5/R35).
   - name: audit
     description: >-
       The append-only, hash-chained audit trail (read-only). No POST/PATCH/DELETE ever —
@@ -2126,6 +2135,103 @@ paths:
         "404": { $ref: "#/components/responses/ProblemResponse" }
         "409": { $ref: "#/components/responses/ProblemResponse" }
 
+  /admin/imports:
+    get:
+      tags: [imports]
+      operationId: listImportRuns
+      summary: The org's import runs (newest first; optional status filter). Needs import.review.
+      parameters:
+        - { name: run_status, in: query, required: false, schema: { $ref: "#/components/schemas/ImportRunStatus" } }
+      responses:
+        "200":
+          description: Import run headers.
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/ImportRun" } }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "423": { $ref: "#/components/responses/ProblemResponse" }
+    post:
+      tags: [imports]
+      operationId: createImportRun
+      summary: >-
+        Start an import run over a read-only mounted source root + enqueue the scan. Needs
+        import.execute. 422 if source_root escapes the import mount or is not a directory; 409 conflict
+        (with active_run_id) if a scan is already in progress for that root.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ImportRunCreate" }
+      responses:
+        "202":
+          description: The created run (status Created); poll GET until Scanned.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ImportRun" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "409": { $ref: "#/components/responses/ProblemResponse" }
+        "422": { $ref: "#/components/responses/ProblemResponse" }
+        "423": { $ref: "#/components/responses/ProblemResponse" }
+
+  /admin/imports/{import_id}:
+    parameters:
+      - { name: import_id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [imports]
+      operationId: getImportRun
+      summary: One import run's status + inventory summary (counts). Needs import.review.
+      responses:
+        "200":
+          description: The run.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ImportRun" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "423": { $ref: "#/components/responses/ProblemResponse" }
+
+  /admin/imports/{import_id}/files:
+    parameters:
+      - { name: import_id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [imports]
+      operationId: listImportRunFiles
+      summary: >-
+        Paginated file inventory for a run, optionally filtered by disposition. Needs import.review.
+      parameters:
+        - { name: disposition, in: query, required: false, schema: { type: string, enum: [included, excluded, quarantine] } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 200, default: 100 } }
+        - { name: offset, in: query, required: false, schema: { type: integer, minimum: 0, default: 0 } }
+      responses:
+        "200":
+          description: The inventory page.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ImportFileList" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "423": { $ref: "#/components/responses/ProblemResponse" }
+
+  /admin/imports/{import_id}/cancel:
+    parameters:
+      - { name: import_id, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      tags: [imports]
+      operationId: cancelImportRun
+      summary: >-
+        Abort an import run (the worker stops cooperatively). Needs import.execute. 409 if the run is
+        already in a terminal state.
+      responses:
+        "200":
+          description: The cancelled run.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ImportRun" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409": { $ref: "#/components/responses/ProblemResponse" }
+        "423": { $ref: "#/components/responses/ProblemResponse" }
+
   /evidence-packs:
     get:
       tags: [evidence-packs]
@@ -3948,6 +4054,62 @@ components:
         exclusion_reason: { type: [string, "null"] }
         content_hash_at_seal: { type: [string, "null"] }
 
+    ImportRunStatus:
+      type: string
+      description: >-
+        The import-run state machine. S-ing-1 reaches Created → Scanning → Scanned (+ Failed/Cancelled);
+        later slices add the downstream stages additively.
+      enum: [Created, Scanning, Scanned, Failed, Cancelled]
+    ImportRunCreate:
+      type: object
+      additionalProperties: false
+      required: [source_root]
+      properties:
+        source_root: { type: string, minLength: 1, maxLength: 4096, description: "Path within the configured import mount root (NG3-confined)." }
+        profile: { type: [string, "null"], maxLength: 128 }
+        ocr_enabled: { type: boolean, default: false, description: "Reserved; consumed at slice 2 (extract)." }
+        classifier_version: { type: [string, "null"], maxLength: 128, description: "Reserved; consumed at slice 3 (classify)." }
+    ImportRun:
+      type: object
+      additionalProperties: false
+      required: [id, status, source_root, ocr_enabled, created_by]
+      properties:
+        id: { type: string, format: uuid }
+        status: { $ref: "#/components/schemas/ImportRunStatus" }
+        source_root: { type: string }
+        profile: { type: [string, "null"] }
+        ocr_enabled: { type: boolean }
+        classifier_version: { type: [string, "null"] }
+        counts: { type: [object, "null"], additionalProperties: true, description: "The §4.3 inventory summary, materialized at scan-complete." }
+        error: { type: [string, "null"] }
+        created_by: { type: string, format: uuid }
+        created_at: { type: [string, "null"], format: date-time }
+        scan_started_at: { type: [string, "null"], format: date-time }
+        completed_at: { type: [string, "null"], format: date-time }
+    ImportFile:
+      type: object
+      additionalProperties: false
+      required: [id, rel_path, filename, size_bytes, scan_flags, included_candidate]
+      properties:
+        id: { type: string, format: uuid }
+        rel_path: { type: string, description: "Path relative to source_root (no host secrets)." }
+        filename: { type: string }
+        ext: { type: [string, "null"] }
+        size_bytes: { type: integer }
+        mime_type: { type: [string, "null"] }
+        sha256: { type: [string, "null"], description: "Content address; null for quarantined/excluded files (never hashed)." }
+        staged_blob_uri: { type: [string, "null"], description: "s3://import-staging/{sha256}; null when not staged." }
+        scan_flags: { type: object, additionalProperties: true, description: "{disposition: included|excluded|quarantine, reason, detail}." }
+        included_candidate: { type: boolean }
+        mtime: { type: [string, "null"], format: date-time }
+        ctime: { type: [string, "null"], format: date-time }
+    ImportFileList:
+      type: object
+      additionalProperties: false
+      required: [run_id, files]
+      properties:
+        run_id: { type: string, format: uuid }
+        files: { type: array, items: { $ref: "#/components/schemas/ImportFile" } }
     EvidencePack:
       type: object
       additionalProperties: false
