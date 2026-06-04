@@ -85,11 +85,14 @@ tags:
       report.compliance_checklist.read (SYSTEM; held by QMS Owner and Internal Auditor).
   - name: evidence-packs
     description: >-
-      Evidence Packs (UJ-7, slice S-pack-1) — on-demand, scope-limited, immutable, self-verifying
+      Evidence Packs (UJ-7, slices S-pack-1/2) — on-demand, scope-limited, immutable, self-verifying
       bundles of records + their evidence + a traceability manifest, sealed and registered as a
       RETAIN_PERMANENT EVIDENCE Record. Preview is synchronous; build/seal runs on the worker (poll
       GET for SEALED). Gated by report.evidence_pack.generate (SYSTEM override); download by
-      report.export. Immutable once sealed (no PUT/PATCH/DELETE). External delivery is S-pack-2.
+      report.export. The pack content is immutable once sealed (no PUT/PATCH/DELETE). S-pack-2 adds
+      external delivery: a time-boxed, revocable Ed25519 share link (share/revoke ride
+      report.evidence_pack.generate) + a PUBLIC, no-auth, latch-exempt guest landing + ZIP/PDF
+      download where the signed token IS the authorization.
 
 paths:
   /healthz:
@@ -1954,6 +1957,124 @@ paths:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
 
+  /evidence-packs/{pack_id}/share:
+    parameters:
+      - { name: pack_id, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      tags: [evidence-packs]
+      operationId: shareEvidencePack
+      summary: "Mint a time-boxed Ed25519 share link for a SEALED pack (UJ-7). Needs report.evidence_pack.generate."
+      description: >-
+        External-auditor delivery (S-pack-2, doc 06 §7.4): mints a signed, time-boxed, revocable
+        bearer token and returns it (+ the share URL) ONCE — only its digest is stored. The pack must
+        be SEALED (409 else); 503 if the signing key is not provisioned.
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ShareLinkCreate" }
+      responses:
+        "201":
+          description: The created share link, with the raw token shown once.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ShareLinkCreated" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409": { $ref: "#/components/responses/ProblemResponse" }
+        "503": { $ref: "#/components/responses/ProblemResponse" }
+
+  /evidence-packs/{pack_id}/share-links:
+    parameters:
+      - { name: pack_id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [evidence-packs]
+      operationId: listEvidencePackShareLinks
+      summary: "List a pack's share links (management view; no raw token). Needs report.evidence_pack.generate."
+      responses:
+        "200":
+          description: The pack's share links (token digest prefix only).
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/ShareLink" } }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+
+  /evidence-packs/{pack_id}/share-links/{link_id}/revoke:
+    parameters:
+      - { name: pack_id, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: link_id, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      tags: [evidence-packs]
+      operationId: revokeEvidencePackShareLink
+      summary: "Revoke a share link (immediate). Needs report.evidence_pack.generate."
+      description: >-
+        Revocation is immediate — the public endpoint re-checks the row on every access. The sealed
+        pack is untouched (doc 06 §7.4 frozen snapshot). 409 if already revoked.
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ShareLinkRevoke" }
+      responses:
+        "200":
+          description: The revoked share link.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ShareLink" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409": { $ref: "#/components/responses/ProblemResponse" }
+
+  /evidence-packs/shared:
+    get:
+      tags: [evidence-packs]
+      operationId: sharedPackLanding
+      summary: "Public guest landing for a shared pack (no auth). The signed token is the authorization."
+      description: >-
+        S-pack-2 external delivery (doc 06 §7.4, UJ-7): an HTML landing page showing the pack summary
+        (scope, period, content_hash, gap + exclusion counts — R28 honesty) and the download links, or
+        an honest expired/revoked/invalid message. Latch-exempt; Referrer-Policy: no-referrer.
+      security: []
+      parameters:
+        - name: t
+          in: query
+          required: true
+          schema: { type: string }
+          description: The signed share token from the delivery link.
+      responses:
+        "200":
+          description: An HTML landing page for the shared pack.
+          content:
+            text/html: { schema: { type: string } }
+        "403":
+          description: The link is invalid, expired, or revoked (HTML).
+          content:
+            text/html: { schema: { type: string } }
+
+  /evidence-packs/shared/download:
+    get:
+      tags: [evidence-packs]
+      operationId: sharedPackDownload
+      summary: "Public guest download of a shared pack (no auth), streamed through the API."
+      description: >-
+        Verifies the token + the revocable DB state on every request (revoke is immediate), audits
+        PACK_DOWNLOADED, and streams the bytes through the API (no presigned URL outlives a revoke).
+        format=zip is the canonical sealed bundle; format=pdf is the live-stamped portfolio variant
+        (409 if the portfolio is unavailable). Latch-exempt; Referrer-Policy: no-referrer.
+      security: []
+      parameters:
+        - { name: t, in: query, required: true, schema: { type: string } }
+        - { name: format, in: query, required: false, schema: { type: string, enum: [zip, pdf], default: zip } }
+      responses:
+        "200":
+          description: The pack bytes (application/zip, or application/pdf for the portfolio).
+          content:
+            application/zip: { schema: { type: string, format: binary } }
+            application/pdf: { schema: { type: string, format: binary } }
+        "403":
+          description: The link is invalid, expired, or revoked.
+        "409":
+          description: The requested format is not available (e.g. no PDF portfolio).
+
   /tasks:
     get:
       tags: [tasks]
@@ -3437,6 +3558,48 @@ components:
         download_url: { type: string, format: uri }
         sha256: { type: string }
         content_type: { type: string, enum: ["application/zip"] }
+
+    ShareLinkCreate:
+      type: object
+      additionalProperties: false
+      description: >-
+        The time-box: an explicit expires_at wins; else ttl_days (server default when unset). The
+        server clamps to [1, max] days. recipient is an optional audit label.
+      properties:
+        ttl_days: { type: integer, minimum: 1 }
+        expires_at: { type: string, format: date-time }
+        recipient: { type: string }
+
+    ShareLinkRevoke:
+      type: object
+      additionalProperties: false
+      properties:
+        reason: { type: string }
+
+    ShareLink:
+      type: object
+      description: A management view of a share link — never the raw token (only its digest prefix).
+      properties:
+        id: { type: string, format: uuid }
+        pack_id: { type: string, format: uuid }
+        recipient: { type: [string, "null"] }
+        state: { type: string, enum: [ACTIVE, EXPIRED, REVOKED] }
+        token_digest: { type: string, description: "The first 16 hex chars of the token's SHA-256." }
+        expires_at: { type: string, format: date-time }
+        created_at: { type: [string, "null"], format: date-time }
+        revoked_at: { type: [string, "null"], format: date-time }
+        revoke_reason: { type: [string, "null"] }
+        download_count: { type: integer }
+        last_downloaded_at: { type: [string, "null"], format: date-time }
+
+    ShareLinkCreated:
+      allOf:
+        - $ref: "#/components/schemas/ShareLink"
+        - type: object
+          description: The creation response — the raw token + URL are shown ONCE (only the digest is stored).
+          properties:
+            token: { type: string, description: "The signed bearer token (shown once)." }
+            share_url: { type: string, format: uri }
 
 security:
   - keycloak: []

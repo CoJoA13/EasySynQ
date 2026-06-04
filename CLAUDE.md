@@ -21,12 +21,12 @@ and progressively disclosed — never overwhelming.
   e.g. the ISO clause catalog) · `tasks/` (Celery worker/beat) · `cli/` (operator commands). Tests in
   `apps/api/tests/{unit,integration}` (the latter via testcontainers).
 - `apps/web/` — React/TS + Mantine SPA (currently the setup wizard + admin stubs; the rest of the UI is deferred).
-- `migrations/` — Alembic (single tree; head **`0025`**; `env.py` excludes migration-managed expression/partial indexes).
+- `migrations/` — Alembic (single tree; head **`0026`**; `env.py` excludes migration-managed expression/partial indexes).
 - `packages/contracts/openapi.yaml` — the living API contract (redocly-lint only; **not** codegen — server/web aren't generated from it).
 - `infra/compose/` — Docker Compose (S/M/L profiles) + Caddy; `just` recipes wrap it.
 - `docs/` — the authoritative spec (`00`–`18` + `decisions-register.md`); `mockup/` — the owner-approved HTML UI mockup.
 
-## Current status (as of 2026-06-03)
+## Current status (as of 2026-06-04)
 
 **MVP COMPLETE** (all 11 ordered slices S0–S11 shipped to `main` via PR, all CI green, validated on the real
 Docker stack; the exit slice S11 is PR #41). All six MVP acceptance proofs are in; the mirror epic + both IA
@@ -35,7 +35,8 @@ v1/v1.x residuals are listed at the end of this section.
 
 **v1 phase: STARTED.** The owner chose (AskUserQuestion) the **v1 feature** track → **Records & evidence
 (doc 06)** as the slice family (over the web track + the v1.x backend residuals); **S-rec-1**, **S-rec-2**,
-then the **Evidence Packs (UJ-7)** family (**S-pack-1**) shipped depth-first. **Migration head is now `0025`.**
+then the **Evidence Packs (UJ-7)** family (**S-pack-1** build/seal, **S-pack-2** external delivery + PDF portfolio) shipped
+depth-first, completing UJ-7. **Migration head is now `0026`.**
 
 - **S-rec-1 — Records: capture + evidence-linking + correction** ✅ — PR #43, migration `0023` (the full
   non-obvious decisions live in the squash-merge commit + the project memory). Turned the inert `record`
@@ -111,6 +112,38 @@ then the **Evidence Packs (UJ-7)** family (**S-pack-1**) shipped depth-first. **
   blob-row-iff-bytes is truly exercised); `0025` round-trips up↔down↔check **+ a populated-DB downgrade** on PG16;
   OpenAPI caught up in-PR (redocly green). **Deferred (S-pack-2 / later):** Ed25519 time-boxed external delivery +
   revoke, ZIP/PDF export-format variants + live §11.3 stamping, Finding/CAPA scope.
+
+- **S-pack-2 — Evidence Packs (UJ-7): external delivery + PDF portfolio (completes UJ-7)** ✅ — migration `0026` (the full
+  non-obvious decisions live in the squash-merge commit + the project memory). **Owner forks (AskUserQuestion):** **Full
+  UJ-7** scope (delivery + PDF portfolio + per-request live §11.3 stamping) · a **DB-backed `pack_share_link`** record for
+  revocation/audit (NOT pure-stateless; the heavier `guest_grant` + `scope.evidence_pack_id` ABAC + Keycloak-guest identity
+  stays **v1.x**). The **Ed25519 signed-token-outside-the-PEP** path (reuses `services/vault/verify_token.py`,
+  **domain-separated** by a `easysynq.packshare.v1` preamble + a distinct 105-byte length so a verify token can never
+  cross-validate as a share token, locked by a unit test; **fails closed** at mint via `verify_token.signing_key_is_persisted()`).
+  **Migration `0026`**: `pack_share_link` (token_digest UNIQUE — the raw token is never stored; recipient/expires_at/
+  revoked_at+by+reason/download_count; state DERIVED from nullable timestamps, the 0024 `worm_destroy_request` precedent) +
+  a nullable `evidence_pack.portfolio_blob_sha256` (a derived rendition pointer, plain Text NO FK — the `zip_blob_sha256`
+  R27 precedent) + additive `PACK_SHARED`/`PACK_DOWNLOADED`/`PACK_SHARE_REVOKED` `event_type` (reuse `evidence_pack`
+  object_type) + explicit `easysynq_app` GRANTs. **Authenticated** (`api/packs.py`, gate `report.evidence_pack.generate` —
+  the pack-management authority, catalog CLOSED): `POST …/share` (mint a link, raw token returned ONCE), `GET …/share-links`,
+  `POST …/share-links/{id}/revoke`. **Public** (`api/pack_share.py`, **no auth, GET-only**, latch-exempt EXACT, mounted
+  **before** the `/{pack_id}` router — the str-path-convertor lesson): `GET …/shared?t=` (an HTML landing surfacing the R28
+  gap/exclusion summary) + `GET …/shared/download?t=&format=zip|pdf` — re-checks the **revocable** DB row on every access
+  (revoke is immediate), audits `PACK_DOWNLOADED` (system-actor), and **streams** the bytes through the API (no presigned URL
+  outlives a revoke) + `Referrer-Policy: no-referrer`, digest-only logging. **PDF portfolio** = build **Stage 2**
+  (`services/packs/portfolio.py`, a SEPARATE txn after the seal commits, idempotent on `portfolio_blob_sha256`, best-effort
+  so Gotenberg never blocks the seal): cover + traceability index + gap/exclusion pages + each version's **cached** §11.3-stamped
+  rendition (a truthful pure-pypdf "no longer governs" overlay if its state changed; an honest placeholder if uncached — so
+  the **API never invokes Gotenberg**), content-addressed into the non-WORM renditions bucket (blob-row-iff-bytes); the
+  per-request guest stamp is `watermark.stamp_per_request_copy` (the S7d precedent). Adversarially pressure-tested **before
+  coding** (4-lens Workflow → folded: seal-must-not-block-on-render → Stage-2-separate-txn, content-address-by-output-not-input,
+  stream-not-presign for immediate revoke + per-access audit, landing surfaces R28, Referrer-Policy + digest-only logging,
+  mint-fails-closed, domain-separation tests, the route-order shadow; rejected the "add `guest.*` keys / build guest_grant now"
+  findings as contrary to the closed-catalog discipline + the owner's Q2). **281 unit + 7 pack integration green** (the 14
+  pg_dump-absent backup/restore tests stay environmental, green on CI); `0026` round-trips up↔down↔check **+ a populated-DB
+  downgrade** on PG16; OpenAPI caught up in-PR (redocly green). **Deferred (later):** the `guest_grant`/ABAC/Keycloak-guest
+  path (v1.x), Finding/CAPA pack scope, `ip_allow` binding, app-layer rate-limiting (a Caddy edge concern). **Migration head
+  is now `0026`.**
 
 - **Specification** in `docs/` (00–17 + `decisions-register.md`) — complete, adversarially audited, reconciled
   (Register R1–R37 back-propagated). The Register is authoritative.
@@ -331,8 +364,22 @@ create boundary.
   (**no PUT/PATCH/DELETE** — the route-inventory proof). **Authz:** ride a **SYSTEM `report.evidence_pack.generate`
   override** until the role UI (the `record.*` precedent; catalog CLOSED — no new key needed). The build runs on the
   **worker** (the `build_evidence_pack` Celery task; a daily `easysynq.packs.reap_stalled_builds` Beat reaper recovers a
-  stalled `BUILDING`). External time-boxed delivery (Ed25519 link) + export-format variants are **S-pack-2**. Migration
-  head is now `0025` (next `0026`).
+  stalled `BUILDING`).
+- **Evidence Packs delivery (S-pack-2) — API/data only, no UI:** deliver a sealed pack to an external auditor.
+  `POST /api/v1/evidence-packs/{id}/share {ttl_days?|expires_at?, recipient?}` (gate `report.evidence_pack.generate`;
+  pack must be SEALED → 409 else; 503 if the verify-token signing key isn't provisioned) mints a time-boxed Ed25519
+  **share link** and returns the raw token + `share_url` **once** (only its SHA-256 digest is stored). `GET …/share-links`
+  lists them (management view, digest prefix only); `POST …/share-links/{link_id}/revoke {reason}` is immediate (409 if
+  already revoked). The **public, no-auth, latch-exempt** guest surface: `GET /api/v1/evidence-packs/shared?t=<token>`
+  (an HTML landing surfacing the R28 gap/exclusion summary + download links) and
+  `GET …/shared/download?t=<token>&format=zip|pdf` — re-checks the **revocable** DB row on every access (revoke is
+  immediate), audits `PACK_DOWNLOADED` (system-actor), and **streams** the bytes through the API (`Referrer-Policy:
+  no-referrer`; the raw token is never logged). `format=pdf` is the live-stamped **PDF portfolio** (built at seal Stage 2,
+  best-effort; 409 if unavailable). The pack **content** stays immutable (no PUT/PATCH/DELETE; the route-inventory proof
+  whitelists share/revoke as delivery-grant lifecycle). The verify signing key is shared with S7c
+  (`VERIFY_TOKEN_SIGNING_KEY_PATH` on the secrets volume — already provisioned for the mirror QR). The heavier
+  `guest_grant`/ABAC/Keycloak-guest path stays **v1.x**; Finding/CAPA scope + `ip_allow` + app-rate-limiting deferred.
+  Migration head is now `0026` (next `0027`).
 - **⚠ S11 restore + upgrade + encrypted backup (operator):** the durable archive (`easysynq backup run` / the nightly
   Beat job) is now **AES-256-GCM `.tar.enc`** sealed with `BACKUP_ENCRYPTION_KEY` (install.sh generates it into the
   0600 `.env`; **lose it → those archives are unrecoverable** — back it up out-of-band) and bundles the live Keycloak
@@ -392,6 +439,19 @@ create boundary.
   leaves zero PG side effects; content-addressed writes dedup on re-run), and add a Beat **reaper** for a hard-killed
   `BUILDING` row (no self-healing set-sweep like records). Register the task module in `tasks/__init__.py` (+ a unit test
   asserting it's in `app.tasks`) or `.delay` publishes to a name no worker handles and the row hangs forever.
+- **A static route alongside a `/{id}` route MUST be mounted FIRST** (the S-pack-2 lesson): FastAPI compiles a path param
+  like `{pack_id}` with the **str** path-convertor and validates the UUID *after* matching — so `/evidence-packs/shared`
+  resolves to the authenticated `/{pack_id}` route (→ 401) unless the public `/shared` router is `include_router`'d **before**
+  the `/{pack_id}` router. A real UUID never matches the `shared` literal, so ordering is safe. Add a resolution unit test
+  (`app.router.routes` + `route.matches(...)`) — a route-inventory test on a single router won't catch a cross-router shadow.
+- **A public, no-auth bearer-token route** (a signed token outside the PEP — the S7c `/verify` + S-pack-2 share-link pattern):
+  put it in its own router (GET-only, **no `get_current_user` dependency** — proven by a unit test), add its EXACT path to
+  `main.py::_LATCH_EXEMPT_EXACT` (boundary-anchored, never a prefix), **never log the raw token** (digest only), set
+  `Referrer-Policy: no-referrer`, and **stream** revocable content through the API (a presigned URL outlives a revoke).
+  Revocation needs server state (a self-contained token can't be un-issued) — a DB row checked on every access is the audit-
+  first answer. Reuse the Ed25519 key but **domain-separate** (a distinct preamble + a distinct token length) and **fail
+  closed** at mint if the key isn't durably persisted (`verify_token.signing_key_is_persisted()` — an ephemeral-key token
+  stops verifying after a restart).
 
 ## The four LOCKED foundational decisions (never contradict)
 

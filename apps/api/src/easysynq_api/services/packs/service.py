@@ -21,12 +21,15 @@ from __future__ import annotations
 
 import dataclasses
 import datetime
+import hashlib
+import hmac
 import uuid
-from typing import Any
+from typing import Any, Literal
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ...config import get_settings
 from ...db.models._audit_enums import ActorType, AuditObjectType, EventType
 from ...db.models._pack_enums import PackInclusionStatus, PackItemType, PackScopeKind, PackStatus
 from ...db.models.app_user import AppUser
@@ -34,6 +37,7 @@ from ...db.models.audit_event import AuditEvent
 from ...db.models.documented_information import DocumentedInformation
 from ...db.models.evidence_pack import EvidencePack
 from ...db.models.pack_item import PackItem
+from ...db.models.pack_share_link import PackShareLink
 from ...db.models.record import Record
 from ...domain.authz import RequestContext, ResourceContext, authorize
 from ...logging import request_id_var
@@ -42,6 +46,7 @@ from ..authz import gather_grants
 from ..reports.checklist import compute_checklist
 from ..vault import repository as vault_repo
 from . import repository as repo
+from . import share_token
 
 _SCOPE_SELECTOR_KEY = {"CLAUSE": "clause_ids", "PROCESS": "process_ids"}
 
@@ -421,3 +426,191 @@ async def reap_stalled_builds(
         )
     await session.commit()
     return {"reaped": len(stalled)}
+
+
+# --- external delivery: time-boxed Ed25519 share links (S-pack-2, doc 06 §7.4, UJ-7) ------
+
+
+def _token_digest(token: str) -> str:
+    """The stored fingerprint of a share token (the raw token is never persisted)."""
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+def _resolve_expiry(
+    *,
+    now: datetime.datetime,
+    ttl_days: int | None,
+    expires_at: datetime.datetime | None,
+) -> datetime.datetime:
+    """Compute a link's expiry, clamped to [now+1d, now+max]. An explicit ``expires_at`` wins; else
+    ``ttl_days`` (default when unset). The time-box + revoke are the controls (it rides a URL)."""
+    settings = get_settings()
+    max_at = now + datetime.timedelta(days=settings.pack_share_max_ttl_days)
+    min_at = now + datetime.timedelta(days=1)
+    if expires_at is not None:
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=datetime.UTC)
+        chosen = expires_at
+    else:
+        days = ttl_days if ttl_days is not None else settings.pack_share_default_ttl_days
+        chosen = now + datetime.timedelta(days=max(1, days))
+    return min(max(chosen, min_at), max_at)
+
+
+async def create_share_link(
+    session: AsyncSession,
+    caller: AppUser,
+    pack_id: uuid.UUID,
+    *,
+    ttl_days: int | None = None,
+    expires_at: datetime.datetime | None = None,
+    recipient: str | None = None,
+) -> tuple[PackShareLink, str]:
+    """Mint a time-boxed Ed25519 share link for a SEALED pack + persist the ``pack_share_link`` row.
+    Returns ``(link, raw_token)`` — the raw token is shown to the caller **once** (only its digest
+    is stored). 404 if the pack is missing/another org; 409 if not SEALED; 503 if the signing key is
+    not provisioned (a share link must be verifiable). Audits PACK_SHARED."""
+    pack = await repo.get_pack(session, pack_id)
+    if pack is None or pack.org_id != caller.org_id:
+        raise ProblemException(status=404, code="not_found", title="Evidence pack not found")
+    if pack.status is not PackStatus.SEALED:
+        raise ProblemException(
+            status=409, code="conflict", title="Pack must be sealed before sharing"
+        )
+
+    now = _now()
+    exp = _resolve_expiry(now=now, ttl_days=ttl_days, expires_at=expires_at)
+    link = PackShareLink(
+        org_id=caller.org_id,
+        pack_id=pack.id,
+        token_digest="",  # set after the id is assigned (the token binds the link id)
+        recipient=recipient,
+        expires_at=exp,
+        created_by=caller.id,
+    )
+    session.add(link)
+    await session.flush()  # populate link.id
+
+    try:
+        token = share_token.mint(pack.id, link.id, int(exp.timestamp()))
+    except share_token.SigningKeyUnavailable as exc:
+        raise ProblemException(
+            status=503,
+            code="signing_key_unavailable",
+            title="Share-link signing key is not provisioned",
+            detail=str(exc),
+        ) from exc
+    link.token_digest = _token_digest(token)
+
+    emit_pack_event(
+        session,
+        caller,
+        EventType.PACK_SHARED,
+        pack.id,
+        after={
+            "share_link_id": str(link.id),
+            "recipient": recipient,
+            "expires_at": exp.isoformat(),
+            "token_digest": link.token_digest,
+        },
+    )
+    await session.commit()
+    await session.refresh(link)
+    return link, token
+
+
+async def revoke_share_link(
+    session: AsyncSession,
+    caller: AppUser,
+    pack_id: uuid.UUID,
+    link_id: uuid.UUID,
+    *,
+    reason: str | None = None,
+) -> PackShareLink:
+    """Revoke a share link (immediate — the public endpoint re-checks the row on every access). 404
+    if missing/other org/other pack; 409 if already revoked. Audits PACK_SHARE_REVOKED. The sealed
+    pack is untouched (doc 06 §7.4 "frozen snapshot")."""
+    link = await repo.get_share_link(session, link_id, for_update=True)
+    if link is None or link.org_id != caller.org_id or link.pack_id != pack_id:
+        raise ProblemException(status=404, code="not_found", title="Share link not found")
+    if link.revoked_at is not None:
+        raise ProblemException(status=409, code="conflict", title="Share link already revoked")
+    link.revoked_at = _now()
+    link.revoked_by = caller.id
+    link.revoke_reason = reason
+    emit_pack_event(
+        session,
+        caller,
+        EventType.PACK_SHARE_REVOKED,
+        pack_id,
+        after={"share_link_id": str(link.id), "reason": reason},
+    )
+    await session.commit()
+    await session.refresh(link)
+    return link
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class ShareResolution:
+    """The outcome of verifying a public share token against its DB row. ``status`` is OK only when
+    the signature is valid AND the link is live AND the pack is SEALED — the others map to 403 with
+    an honest reason (a legitimate auditor sees "expired"/"revoked", not a vague error)."""
+
+    status: Literal["OK", "INVALID", "REVOKED", "EXPIRED", "UNAVAILABLE"]
+    link: PackShareLink | None = None
+    pack: EvidencePack | None = None
+
+
+async def resolve_share_token(
+    session: AsyncSession, token: str, *, now: datetime.datetime | None = None
+) -> ShareResolution:
+    """Public-path resolver (no auth): Ed25519-verify the token, bind it to its ``pack_share_link``
+    row (constant-time digest compare), then enforce the **authoritative, revocable** state —
+    revoked, expired, or pack-not-SEALED. Never raises (the endpoint maps status to 403/HTML)."""
+    now = now or _now()
+    claims = share_token.verify(token)
+    if claims is None:
+        return ShareResolution("INVALID")
+    link = await repo.get_share_link(session, claims.share_link_id)
+    if (
+        link is None
+        or link.pack_id != claims.pack_id
+        or not hmac.compare_digest(link.token_digest, _token_digest(token))
+    ):
+        return ShareResolution("INVALID")
+    if link.revoked_at is not None:
+        return ShareResolution("REVOKED", link=link)
+    if now >= link.expires_at:
+        return ShareResolution("EXPIRED", link=link)
+    pack = await repo.get_pack(session, link.pack_id)
+    if pack is None or pack.status is not PackStatus.SEALED or pack.zip_blob_sha256 is None:
+        return ShareResolution("UNAVAILABLE", link=link)
+    return ShareResolution("OK", link=link, pack=pack)
+
+
+async def record_share_download(
+    session: AsyncSession,
+    link: PackShareLink,
+    pack: EvidencePack,
+    *,
+    fmt: str,
+    client_ip: str | None,
+) -> None:
+    """Account + audit a successful guest download (PACK_DOWNLOADED, system-actor — a bearer-token
+    guest has no app_user). Commits its own short transaction before the bytes stream."""
+    link.download_count += 1
+    link.last_downloaded_at = _now()
+    emit_pack_event_system(
+        session,
+        pack.org_id,
+        EventType.PACK_DOWNLOADED,
+        pack.id,
+        after={
+            "share_link_id": str(link.id),
+            "format": fmt,
+            "recipient": link.recipient,
+            "client_ip": client_ip,
+            "token_digest": link.token_digest,
+        },
+    )
+    await session.commit()
