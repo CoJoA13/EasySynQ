@@ -610,12 +610,18 @@ UJ-7: an on-demand, scope-limited, **immutable, self-verifying** bundle of recor
 
 ### 8.16 Retention (`/retention-policies`)
 
-Policy-as-data, snapshotted at capture (`14 §10`).
+Policy-as-data (`14 §10`). **Shipped (slice S-rec-4).** `retention.read`/`retention.manage` are the two
+CONTENT-domain keys opened additively in migration `0028` (R38). A hard DELETE is impossible (3 RESTRICT
+FKs) → retirement is the soft `:archive` action.
 
 | Method | Path | Perm | Notes |
 |---|---|---|---|
-| GET / POST / PATCH | `/retention-policies` | `retention.read` / `retention.manage` | `basis`, `duration` (ISO-8601 / `PERMANENT`), `disposition_action`, `worm_lock_period`. Reductions never apply to already-captured records (extend-forward only). |
-| GET | `/records/{id}/disposition` | `record.read` | Current disposition status, `retention_until`, `legal_hold`. (Advancing disposition is §8.9.) |
+| GET | `/retention-policies` | `retention.read` | List (active only; `?include_archived=true` for all). |
+| POST | `/retention-policies` | `retention.manage` | Create. Fields: `name`, `applies_to?` ({record_type\|clause_id\|process_id}), `basis`, `duration` (ISO-8601 / `PERMANENT`), `disposition_action`, `review_required`, `worm_lock_period?` (≥ duration). 422 on a malformed value or the reserved System-Default name; 409 `name_taken`. |
+| GET | `/retention-policies/{id}` | `retention.read` | A single policy. |
+| PATCH | `/retention-policies/{id}` | `retention.manage` | Partial edit. **Extend-forward only while records are pinned** (`06 §5.2`): a duration reduction / weaker `disposition_action` / `review_required` true→false is refused 422 `retention_reduction_blocked`. The System Default may not be renamed or have its `applies_to` changed (409 `system_default_protected`). |
+| POST | `/retention-policies/{id}/archive` · `/unarchive` | `retention.manage` | Soft-archive / reactivate. Archived = hidden from new-capture resolution; pinned records keep it. System Default un-archivable (409). |
+| GET | `/records/{id}/disposition` | `record.read` | Current disposition status, `retention_until`, `legal_hold`. (Advancing disposition is §8.9; SoD-6 self-disposition is refused 409 `sod_self_disposition` unless `allow_self_disposition`.) |
 
 ### 8.17 Admin & Config (`/admin/*`)
 

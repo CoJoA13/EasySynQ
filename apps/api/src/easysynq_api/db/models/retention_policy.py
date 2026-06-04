@@ -19,10 +19,11 @@ The new NOT-NULL columns carry ``server_default``\\s frozen byte-identical to mi
 
 from __future__ import annotations
 
+import datetime
 import uuid
 from typing import Any
 
-from sqlalchemy import Boolean, ForeignKey, Text, UniqueConstraint, text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Text, UniqueConstraint, func, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -59,3 +60,25 @@ class RetentionPolicy(Base):
         Boolean, server_default=text("false"), nullable=False
     )
     worm_lock_period: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # S-rec-4 (doc 06 §5.1, doc 15 §8.16): soft-archive. A hard DELETE is blocked by 3 RESTRICT FKs
+    # (record / document_type / disposition_event), so retirement = ``active=false``. An archived
+    # policy stops auto-attaching to NEW captures (the resolver's record_type/clause/process tiers
+    # filter ``active``), but records already pinned to it keep being swept (``due_active_records``
+    # joins by id, no active filter) — so "archive + create a shorter policy" is the spec's
+    # shorten-retention-for-future-only workflow (doc 06 §5.2, the one-way ratchet). The seeded
+    # System Default is never archivable.
+    active: Mapped[bool] = mapped_column(
+        Boolean, server_default=text("true"), default=True, nullable=False
+    )
+    archived_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    archived_by: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("app_user.id", ondelete="RESTRICT"), nullable=True
+    )
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )

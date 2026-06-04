@@ -25,7 +25,7 @@ import datetime
 import re
 import uuid
 
-from easysynq_api.db.models._retention_enums import RetentionBasis
+from easysynq_api.db.models._retention_enums import DispositionAction, RetentionBasis
 
 # The ISO-8601 *date* duration subset retention policies use (doc 06 §5.1): ``P{n}Y{n}M{n}W{n}D`` in
 # any combination (e.g. ``P10Y``, ``P3Y6M``, ``P90D``). Time components (``PT…``) are not meaningful
@@ -130,3 +130,43 @@ def retention_until(basis_date: datetime.date | None, duration: str) -> datetime
     parts = {k: int(v) if v else 0 for k, v in match.groupdict().items()}
     out = _add_months(basis_date, parts["years"] * 12 + parts["months"])
     return out + datetime.timedelta(days=parts["weeks"] * 7 + parts["days"])
+
+
+# --- the extend-forward PATCH guard (slice S-rec-4, doc 06 §5.2) ---------------------------
+
+# The most-specific-wins precedence keeps records' clocks live-deref'd off their pinned policy, so
+# a policy *edit* propagates to already-captured records. doc 06 §5.2 wants that ONLY for extensions
+# ("an extension can be applied forward; a reduction never applies to already-captured records"). So
+# the service enforces extend-forward on PATCH (when a policy has pinned records); shortening for
+# FUTURE captures is done by archiving + creating a shorter policy (these comparators back that).
+
+_REFERENCE_DATE = datetime.date(2000, 1, 1)
+# Preservation rank: a higher rank retains MORE strongly. ARCHIVE_COLD and TRANSFER both preserve
+# the bytes (just elsewhere) so they share a rank; DESTROY is the floor, RETAIN_PERMANENT the top.
+_PRESERVATION_RANK: dict[DispositionAction, int] = {
+    DispositionAction.DESTROY: 0,
+    DispositionAction.ARCHIVE_COLD: 1,
+    DispositionAction.TRANSFER: 1,
+    DispositionAction.RETAIN_PERMANENT: 2,
+}
+
+
+def duration_ge(a: str, b: str) -> bool:
+    """``True`` iff retention duration ``a`` retains at least as long as ``b`` (``a >= b``).
+    ``PERMANENT`` is the maximum. Raises ``ValueError`` on a malformed duration (the caller
+    validates the new value first, so this only compares well-formed inputs)."""
+    ua, ub = a.strip().upper(), b.strip().upper()
+    if ua == PERMANENT:
+        return True
+    if ub == PERMANENT:
+        return False
+    until_a = retention_until(_REFERENCE_DATE, ua)
+    until_b = retention_until(_REFERENCE_DATE, ub)
+    assert until_a is not None and until_b is not None  # noqa: S101 — both finite (real ref date)
+    return until_a >= until_b
+
+
+def action_preservation_rank(action: DispositionAction) -> int:
+    """Higher = retains more strongly (doc 06 §5.2). Used by the extend-forward guard so a PATCH may
+    not weaken a pinned policy's disposition (e.g. RETAIN_PERMANENT → DESTROY)."""
+    return _PRESERVATION_RANK[action]

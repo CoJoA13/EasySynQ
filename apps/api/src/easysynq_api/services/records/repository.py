@@ -26,6 +26,7 @@ from ...db.models.evidence_for_link import EvidenceForLink
 from ...db.models.record import Record
 from ...db.models.retention_policy import RetentionPolicy
 from ...db.models.storage_config import StorageConfig
+from ...db.models.system_config import SystemConfig
 from ...db.models.worm_destroy_request import WormDestroyRequest
 
 SYSTEM_DEFAULT_POLICY_NAME = "System Default Retention"
@@ -76,11 +77,18 @@ async def get_policy(
 
 
 async def system_default_policy(session: AsyncSession, org_id: uuid.UUID) -> RetentionPolicy | None:
+    return await policy_by_name(session, org_id, SYSTEM_DEFAULT_POLICY_NAME)
+
+
+async def policy_by_name(
+    session: AsyncSession, org_id: uuid.UUID, name: str
+) -> RetentionPolicy | None:
+    """The org's policy with this exact name, if any (UNIQUE(org_id, name) → at most one)."""
     return (
         await session.execute(
             select(RetentionPolicy).where(
                 RetentionPolicy.org_id == org_id,
-                RetentionPolicy.name == SYSTEM_DEFAULT_POLICY_NAME,
+                RetentionPolicy.name == name,
             )
         )
     ).scalar_one_or_none()
@@ -110,12 +118,14 @@ async def ensure_default_policy(session: AsyncSession, org_id: uuid.UUID) -> Ret
 async def record_type_default_policy(
     session: AsyncSession, org_id: uuid.UUID, record_type: str
 ) -> RetentionPolicy | None:
-    """The record-type default tier: a policy whose ``applies_to.record_type`` matches."""
+    """The record-type default tier: an ACTIVE policy whose ``applies_to.record_type`` matches (an
+    archived policy stops auto-attaching to new captures — S-rec-4)."""
     return (
         await session.execute(
             select(RetentionPolicy)
             .where(
                 RetentionPolicy.org_id == org_id,
+                RetentionPolicy.active.is_(True),
                 RetentionPolicy.applies_to["record_type"].astext == record_type,
             )
             .order_by(asc(RetentionPolicy.id))
@@ -134,6 +144,7 @@ async def clause_default_policy(
             select(RetentionPolicy)
             .where(
                 RetentionPolicy.org_id == org_id,
+                RetentionPolicy.active.is_(True),
                 RetentionPolicy.applies_to["clause_id"].astext.in_(clause_ids),
             )
             .order_by(asc(RetentionPolicy.id))
@@ -152,12 +163,38 @@ async def process_default_policy(
             select(RetentionPolicy)
             .where(
                 RetentionPolicy.org_id == org_id,
+                RetentionPolicy.active.is_(True),
                 RetentionPolicy.applies_to["process_id"].astext.in_(process_ids),
             )
             .order_by(asc(RetentionPolicy.id))
             .limit(1)
         )
     ).scalar_one_or_none()
+
+
+async def list_retention_policies(
+    session: AsyncSession, org_id: uuid.UUID, *, include_archived: bool
+) -> list[RetentionPolicy]:
+    """All of an org's retention policies (newest first), optionally including archived ones."""
+    stmt = select(RetentionPolicy).where(RetentionPolicy.org_id == org_id)
+    if not include_archived:
+        stmt = stmt.where(RetentionPolicy.active.is_(True))
+    stmt = stmt.order_by(desc(RetentionPolicy.created_at), asc(RetentionPolicy.id))
+    return list((await session.execute(stmt)).scalars().all())
+
+
+async def count_active_pinned_records(session: AsyncSession, policy_id: uuid.UUID) -> int:
+    """How many non-DISPOSED records are pinned to this policy — the extend-forward guard fires only
+    when this is > 0 (the spec's "already-captured records" qualifier, doc 06 §5.2)."""
+    count = await session.scalar(
+        select(func.count())
+        .select_from(Record)
+        .where(
+            Record.retention_policy_id == policy_id,
+            Record.disposition_state != RecordDispositionState.DISPOSED,
+        )
+    )
+    return int(count or 0)
 
 
 # --- evidence satellites -----------------------------------------------------------------
@@ -236,6 +273,16 @@ async def org_object_lock_mode(session: AsyncSession, org_id: uuid.UUID) -> str:
         select(StorageConfig.object_lock_mode).where(StorageConfig.org_id == org_id)
     )
     return mode or "GOVERNANCE"
+
+
+async def allow_self_disposition(session: AsyncSession, org_id: uuid.UUID) -> bool:
+    """The org's SoD-6 relaxation flag (S-rec-4). ``False`` (STRICT — creator-not-disposer enforced)
+    when no ``system_config`` row exists yet, so the default fails closed (the
+    ``get_allow_approver_release`` precedent)."""
+    value = await session.scalar(
+        select(SystemConfig.allow_self_disposition).where(SystemConfig.org_id == org_id)
+    )
+    return bool(value)
 
 
 async def due_active_records(

@@ -27,6 +27,7 @@ from .api.packs import router as packs_router
 from .api.processes import router as processes_router
 from .api.records import router as records_router
 from .api.reports import router as reports_router
+from .api.retention_policies import router as retention_policies_router
 from .api.search import router as search_router
 from .api.setup import router as setup_router
 from .api.users import router as users_router
@@ -138,6 +139,7 @@ def create_app() -> FastAPI:
     app.include_router(clauses_router)  # S9: read-only ISO clause spine (GET /clauses)
     app.include_router(processes_router)  # S9c: process IA (graph + authoring + /processes/map)
     app.include_router(records_router)  # S-rec-1: records capture + evidence-linking + correction
+    app.include_router(retention_policies_router)  # S-rec-4: retention-policy CRUD + soft-archive
     app.include_router(search_router)  # S10: Postgres-FTS search (filter-not-403, Indexer seam)
     app.include_router(reports_router)  # S10: org-wide Compliance Checklist
     # S-pack-2 public delivery is mounted BEFORE the authenticated packs router: ``{pack_id}`` uses

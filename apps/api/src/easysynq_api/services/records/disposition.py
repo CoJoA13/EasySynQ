@@ -39,7 +39,7 @@ from ...db.models.disposition_event import DispositionEvent
 from ...db.models.record import Record
 from ...db.models.retention_policy import RetentionPolicy
 from ...db.models.worm_destroy_request import WormDestroyRequest
-from ...domain.records.disposition import legal_disposition_transition
+from ...domain.records.disposition import legal_disposition_transition, self_disposition_blocked
 from ...domain.records.retention import retention_until
 from ...problems import ProblemException
 from ..vault import storage
@@ -199,7 +199,19 @@ async def advance_disposition(
         await session.refresh(record)
         return record
 
-    # to_state is DISPOSED — execute the disposition per the record's snapshotted policy.
+    # to_state is DISPOSED. SoD-6 (creator-not-disposer, doc 07 §7): the record's own capturer may
+    # not execute its disposition unless the org relaxes it (allow_self_disposition). Checked HERE —
+    # the DISPOSED edge only (never the DUE_FOR_REVIEW / ACTIVE branches above), and BEFORE
+    # _dispose_now's irreversible purge — so it applies uniformly to every disposition action
+    # (DESTROY and the ARCHIVE/TRANSFER actions alike). Audited-then-409, never silent.
+    if self_disposition_blocked(
+        actor.id,
+        record.captured_by,
+        allow_self_disposition=await repo.allow_self_disposition(session, record.org_id),
+    ):
+        await _refuse_self_disposition(session, actor, record)
+
+    # execute the disposition per the record's snapshotted policy.
     await _dispose_now(session, actor, record, reason=reason)
     await session.commit()
     await session.refresh(record)
@@ -240,6 +252,30 @@ async def _dispose_now(
             "policy_id": str(policy.id),
             "reason": reason,
         },
+    )
+
+
+async def _refuse_self_disposition(session: AsyncSession, actor: AppUser, record: Record) -> None:
+    """SoD-6 refusal (creator-not-disposer): the refuse-with-reason contract (the
+    ``_guard_or_refuse_destroy`` precedent) — log ``DISPOSITION_REFUSED_SOD`` (committed) then raise
+    409, never silent. Distinct from ``RECORD_ERASURE_REFUSED`` (a preservation refusal) — this is a
+    duty-segregation refusal and fires for ALL disposition actions, not just DESTROY."""
+    emit_record_event(
+        session,
+        actor,
+        EventType.DISPOSITION_REFUSED_SOD,
+        record.id,
+        after={
+            "reason": "sod_self_disposition",
+            "constraint": "SoD-6",
+            "captured_by": str(record.captured_by),
+            "disposition_state": record.disposition_state.value,
+        },
+    )
+    await session.commit()
+    raise _conflict(
+        "sod_self_disposition",
+        "Disposition refused: the record's capturer may not dispose it (SoD-6)",
     )
 
 
@@ -379,6 +415,10 @@ async def approve_worm_destroy(
         raise ProblemException(status=404, code="not_found", title="Destroy request not found")
     if req.executed_at is not None or req.cancelled_at is not None:
         raise _conflict("not_open", "Destroy request is not open")
+    # Dual-control (R27): a distinct second actor must approve. This subsumes SoD-6
+    # (creator-not-disposer) by a STRONGER rule — two distinct humans are mandatory here — so SoD-6
+    # is intentionally NOT re-checked on this legal-order hatch, and allow_self_disposition must
+    # NEVER weaken it.
     if actor.id == req.requested_by:
         raise _conflict("dual_control_same_actor", "A second, distinct authorizer must approve")
 

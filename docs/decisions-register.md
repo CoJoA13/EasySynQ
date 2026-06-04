@@ -1,6 +1,6 @@
 # EasySynQ Decisions Register
 
-This document is the **single authoritative source of truth** for the EasySynQ self-hosted ISO 9001:2015 QMS specification. It records the locked foundational decisions, the locked stakeholder decisions, and the normative resolutions (R1–R37) to every finding raised in the gap audit (`17-gaps-and-open-questions.md`).
+This document is the **single authoritative source of truth** for the EasySynQ self-hosted ISO 9001:2015 QMS specification. It records the locked foundational decisions, the locked stakeholder decisions, and the normative resolutions (R1–R38) to every finding raised in the gap audit (`17-gaps-and-open-questions.md`); R38 (slice S-rec-4) is the first post-v1 *additive* decision (additive catalog extensibility + SoD-6).
 
 **Precedence:** Where this register conflicts with any text in sections `01`–`15`, **this register supersedes that text.** Section editors MUST back-propagate the changes listed under each resolution's *Back-propagation* note. The exact tokens, enum values, state names, and field names quoted here are **canonical and verbatim** — they must be reproduced character-for-character (case, snake_case, dot-namespacing, and all) wherever the underlying concept appears. Do not soften, rename, abbreviate, or omit any token.
 
@@ -52,7 +52,7 @@ Proceed with the **full reconcile-and-harden pass** — i.e., adopt R1–R37 bel
 
 ---
 
-## Part 3 — Resolutions R1–R37
+## Part 3 — Resolutions R1–R38
 
 Each resolution states the decision, the exact canonical tokens/enums/states/field-names verbatim, and a Back-propagation note listing the section files that change.
 
@@ -491,6 +491,42 @@ Doc 10 short form (Raised / Triage / Accepted) **maps onto these**.
 - **Bound the consistency-quiesce window** and **reconcile it with the R14 availability target**.
 
 **Back-propagation:** 03, 12.
+
+---
+
+### R38 — Additive permission-catalog extensibility + the SoD-6 creator≠disposer constraint (slice S-rec-4)
+
+**Context.** The doc-07 §3 permission catalog was declared "closed for v1" (R5). Shipping
+`/retention-policies` management (doc 15 §8.16, deferred to v1) needs permission keys the closed 96-key
+catalog does not contain. Records disposition also lacked any creator≠disposer segregation (doc 07 §7
+listed only SoD-1…SoD-5).
+
+**Decision:**
+- **The catalog is ADDITIVELY extensible post-v1.** "Closed for v1" (R5) is REFINED, not contradicted:
+  existing keys are never renamed or removed (the normalization in R5 stands), but new keys MAY be added
+  with a register entry. The **first** such additive extension is **`retention.read` + `retention.manage`**
+  (CONTENT-domain — `is_system_domain=false`, non-sig-hook, non-SoD-sensitive, `finest_scope=SYSTEM`
+  because retention policies are org-level). Seeded to **QMS Owner** (`retention.read` + `retention.manage`)
+  and **Internal Auditor** (`retention.read` — the checklist-read precedent). Being CONTENT-domain, the
+  R35 two-tier guard already lets a QMS Owner's content-tier `permission.grant` grant them.
+- **SoD-6 (creator≠disposer)** is a new SoD constraint in the **overridable** SoD-2/4/5 small-org class
+  (NOT the hard SoD-1/3 class): a record's own capturer (`record.captured_by`) may not execute its
+  disposition to DISPOSED/DESTROY (refused **409 `sod_self_disposition`**, audited
+  **`DISPOSITION_REFUSED_SOD`**), unless the org sets the **`allow_self_disposition`** flag
+  (`system_config`, default OFF = enforced; flipped via PATCH `/admin/config`, the SYSTEM-only
+  `config.update`). It is enforced in the service layer (like the R27 dual-control), NOT in the PDP, so a
+  SYSTEM-scope `record.dispose` override does not bypass it — only the flag relaxes it. It gates only the
+  DISPOSED edge (never DUE_FOR_REVIEW / ACTIVE re-anchor), is exempt for the Beat sweep (a system actor),
+  and is subsumed by the stronger dual-control (requester≠approver) on the R27 legal-order hatch.
+- **Retention-policy lifecycle:** full CRUD + **soft-archive** (a hard DELETE is structurally impossible —
+  3 RESTRICT FKs from record / document_type / disposition_event). PATCH is **extend-forward only while a
+  policy has non-disposed pinned records** (a duration reduction, a weaker `disposition_action`, or
+  `review_required` true→false is refused 422 `retention_reduction_blocked`) because the sweep
+  live-dereferences the pinned policy; shortening retention for FUTURE captures is done by **archiving the
+  policy + creating a shorter one** (doc 06 §5.2's one-way ratchet, honored without snapshotting the
+  duration onto each record). The seeded **System Default is protected** (cannot be archived/renamed).
+
+**Back-propagation:** 06 (§5.1/§5.3), 07 (§3 catalog + §7 SoD-6), 14 (§10), 15 (§8.16), 16.
 
 ---
 
