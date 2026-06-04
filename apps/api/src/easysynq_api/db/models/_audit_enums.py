@@ -35,6 +35,12 @@ class AuditObjectType(enum.Enum):
     # ``document`` (the link is about the document, the clause_mapping precedent). Added via
     # ``ALTER TYPE audit_object_type ADD VALUE`` in 0019 (the event_type 0011-0017 pattern).
     process = "process"
+    # evidence packs (S-pack-1, doc 06 §7) — the PACK_GENERATED/PACK_BUILD_FAILED lifecycle events
+    # key here on the ``evidence_pack`` header id (NOT ``record`` — a pack header is its own table;
+    # the pre-seal PACK_BUILD_FAILED has no record id yet). The pack's own EVIDENCE capture is a
+    # separate ``record``-typed RECORD_CAPTURED. Added via ``ALTER TYPE audit_object_type ADD
+    # VALUE`` in 0025 (the 0019 precedent).
+    evidence_pack = "evidence_pack"
 
 
 class EventType(enum.Enum):
@@ -155,6 +161,13 @@ class EventType(enum.Enum):
     RECORD_WORM_DESTROY_CANCELLED = "RECORD_WORM_DESTROY_CANCELLED"
     RECORD_WORM_DESTROYED = "RECORD_WORM_DESTROYED"
     RECORD_ERASURE_REFUSED = "RECORD_ERASURE_REFUSED"
+    # evidence packs (S-pack-1, doc 06 §7, doc 13 §7.3) — the audited pack lifecycle (object_type
+    # ``evidence_pack``). PACK_GENERATED records the sealed pack (scope + content hashes + counts +
+    # the preview-vs-seal diff); PACK_BUILD_FAILED trails a failed/abandoned build. Added via ALTER
+    # TYPE event_type ADD VALUE in 0025 (the 0011-0024 additive pattern; a from-scratch ``upgrade
+    # head`` rebuilds the type from EVENT_TYPE_VALUES, so the members live here too).
+    PACK_GENERATED = "PACK_GENERATED"
+    PACK_BUILD_FAILED = "PACK_BUILD_FAILED"
 
 
 class CheckpointSinkKind(enum.Enum):

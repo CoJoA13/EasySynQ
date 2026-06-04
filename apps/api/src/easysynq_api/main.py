@@ -21,6 +21,7 @@ from .api.authz import router as authz_router
 from .api.clauses import router as clauses_router
 from .api.documents import router as documents_router
 from .api.health import router as health_router
+from .api.packs import router as packs_router
 from .api.processes import router as processes_router
 from .api.records import router as records_router
 from .api.reports import router as reports_router
@@ -131,6 +132,7 @@ def create_app() -> FastAPI:
     app.include_router(records_router)  # S-rec-1: records capture + evidence-linking + correction
     app.include_router(search_router)  # S10: Postgres-FTS search (filter-not-403, Indexer seam)
     app.include_router(reports_router)  # S10: org-wide Compliance Checklist
+    app.include_router(packs_router)  # S-pack-1: evidence packs (preview + build/seal + download)
     app.include_router(workflow_router)
     app.include_router(audit_router)
     app.include_router(verify_router)  # S7c: public controlled-rendition verify page (no auth)

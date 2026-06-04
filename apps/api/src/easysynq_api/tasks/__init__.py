@@ -11,6 +11,7 @@ from . import (  # noqa: F401  (registers the Celery tasks)
     backup,
     lifecycle,
     mirror,
+    packs,
     records,
 )
 from .app import app

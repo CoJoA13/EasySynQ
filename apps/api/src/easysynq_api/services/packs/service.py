@@ -1,0 +1,423 @@
+"""The evidence-packs use-case layer (slice S-pack-1, doc 06 §7): preview + generate orchestration.
+
+Two transaction owners run synchronously in the request:
+
+* ``create_pack_with_preview`` — validate the scope, persist the pack header (DRAFT), resolve the
+  candidate set, classify each candidate (R28: INCLUDED / EXCLUDED_PERMISSION / EXCLUDED_ABSENCE),
+  persist the ``pack_item`` rows + the gap/exclusion summaries. The preview is **advisory** — the
+  audited "generated" event fires only at seal (in the worker).
+* ``generate_pack`` — flip DRAFT/FAILED → BUILDING (under ``FOR UPDATE``) and enqueue the worker
+  build (strictly after commit so the worker never races an uncommitted row).
+
+The R28 classification reuses the SAME deny-by-default engine the search/records row-filter uses
+(``gather_grants`` + ``authorize``) — a pack can never contain an artifact the generator couldn't
+read, and every dropped candidate is surfaced (a silent drop is a spec-defined defect).
+
+Pack lifecycle audit events key on ``AuditObjectType.evidence_pack`` (the pack header id), NOT
+``record`` — the pre-seal failed build has no record id yet, and the header is its own table.
+"""
+
+from __future__ import annotations
+
+import dataclasses
+import datetime
+import uuid
+from typing import Any
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from ...db.models._audit_enums import ActorType, AuditObjectType, EventType
+from ...db.models._pack_enums import PackInclusionStatus, PackItemType, PackScopeKind, PackStatus
+from ...db.models.app_user import AppUser
+from ...db.models.audit_event import AuditEvent
+from ...db.models.documented_information import DocumentedInformation
+from ...db.models.evidence_pack import EvidencePack
+from ...db.models.pack_item import PackItem
+from ...db.models.record import Record
+from ...domain.authz import RequestContext, ResourceContext, authorize
+from ...logging import request_id_var
+from ...problems import ProblemException
+from ..authz import gather_grants
+from ..reports.checklist import compute_checklist
+from ..vault import repository as vault_repo
+from . import repository as repo
+
+_SCOPE_SELECTOR_KEY = {"CLAUSE": "clause_ids", "PROCESS": "process_ids"}
+
+
+def _now() -> datetime.datetime:
+    return datetime.datetime.now(datetime.UTC)
+
+
+def _rid() -> uuid.UUID | None:
+    raw = request_id_var.get()
+    if not raw:
+        return None
+    try:
+        return uuid.UUID(raw)
+    except ValueError:
+        return None
+
+
+def _validation_error(field: str, code: str, message: str) -> ProblemException:
+    return ProblemException(
+        status=422,
+        code="validation_error",
+        title=message,
+        errors=[{"field": field, "code": code, "message": message}],
+    )
+
+
+# --- audit emission ----------------------------------------------------------------------
+
+
+def emit_pack_event(
+    session: AsyncSession,
+    actor: AppUser,
+    event_type: EventType,
+    pack_id: uuid.UUID,
+    *,
+    before: dict[str, Any] | None = None,
+    after: dict[str, Any] | None = None,
+) -> None:
+    """Append a pack ``audit_event`` (object_type=evidence_pack) BEFORE commit, so the mutation +
+    its audit row commit atomically (hashes NULL for the S6 linker)."""
+    session.add(
+        AuditEvent(
+            org_id=actor.org_id,
+            occurred_at=_now(),
+            actor_id=actor.id,
+            actor_type=ActorType.user,
+            event_type=event_type,
+            object_type=AuditObjectType.evidence_pack,
+            object_id=pack_id,
+            before=before,
+            after=after,
+            request_id=_rid(),
+        )
+    )
+
+
+def emit_pack_event_system(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    event_type: EventType,
+    pack_id: uuid.UUID,
+    *,
+    before: dict[str, Any] | None = None,
+    after: dict[str, Any] | None = None,
+) -> None:
+    """A *system*-actor pack event (actor_id NULL) — used by the stalled-build reaper (a time-driven
+    Beat job with no initiating user). The human-initiated build attributes to its generator."""
+    session.add(
+        AuditEvent(
+            org_id=org_id,
+            occurred_at=_now(),
+            actor_id=None,
+            actor_type=ActorType.system,
+            event_type=event_type,
+            object_type=AuditObjectType.evidence_pack,
+            object_id=pack_id,
+            before=before,
+            after=after,
+            request_id=_rid(),
+        )
+    )
+
+
+# --- R28 classification (shared by preview + build) --------------------------------------
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class ClassifiedRecord:
+    record: Record
+    base: DocumentedInformation
+    status: PackInclusionStatus
+    reason: str | None
+
+
+async def classify_candidates(
+    session: AsyncSession,
+    generator: AppUser,
+    candidates: list[tuple[Record, DocumentedInformation]],
+) -> list[ClassifiedRecord]:
+    """Run each candidate through the generator's deny-by-default ``record.read`` (the
+    search/records row-filter), then the genuine-absence (destroy-tombstone) check. The
+    ``ResourceContext`` carries the record's process_ids + framework so a genuinely PROCESS-scoped
+    grant is honored (not a blanket EXCLUDED_PERMISSION)."""
+    grants = await gather_grants(session, generator.id, generator.org_id, "record.read")
+    ctx = RequestContext(now=_now())
+    out: list[ClassifiedRecord] = []
+    for record, base in candidates:
+        process_ids = await repo.record_process_ids(session, record)
+        resource = ResourceContext(
+            artifact_id=str(record.id),
+            kind="RECORD",
+            folder_path=base.folder_path,
+            process_ids=frozenset(process_ids),
+            framework_id=str(base.framework_id),
+        )
+        if not authorize(grants, "record.read", resource, ctx).allow:
+            out.append(
+                ClassifiedRecord(
+                    record, base, PackInclusionStatus.EXCLUDED_PERMISSION, "not entitled to read"
+                )
+            )
+        elif await repo.has_destroy_tombstone(session, record.id):
+            out.append(
+                ClassifiedRecord(
+                    record,
+                    base,
+                    PackInclusionStatus.EXCLUDED_ABSENCE,
+                    "evidence physically destroyed (disposition)",
+                )
+            )
+        else:
+            out.append(ClassifiedRecord(record, base, PackInclusionStatus.INCLUDED, None))
+    return out
+
+
+def exclusion_summary(classified: list[ClassifiedRecord]) -> dict[str, Any]:
+    """The R28 exclusion report shape — permission-vs-absence, distinct from the gap report."""
+    perm = [
+        str(c.record.id) for c in classified if c.status is PackInclusionStatus.EXCLUDED_PERMISSION
+    ]
+    absent = [
+        str(c.record.id) for c in classified if c.status is PackInclusionStatus.EXCLUDED_ABSENCE
+    ]
+    return {
+        "permission": perm,
+        "absence": absent,
+        "permission_count": len(perm),
+        "absence_count": len(absent),
+    }
+
+
+async def gap_summary(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    *,
+    scope_kind: str,
+    scope_ids: list[uuid.UUID],
+) -> dict[str, Any]:
+    """The gap report (doc 06 §7.3 item 6): in-scope mandatory ★ clauses lacking current evidence.
+    Reuses the org-wide ``compute_checklist`` (an objective rule, NOT permission-filtered — distinct
+    from the exclusion report), intersected with the in-scope clause set. For PROCESS scope the
+    clause set is derived transitively (process → linked docs → clause_mappings)."""
+    checklist = await compute_checklist(session, org_id)
+    if scope_kind == "CLAUSE":
+        in_scope = {str(c) for c in scope_ids}
+    else:
+        in_scope = await repo.process_clause_ids(session, org_id, scope_ids)
+    rows = [r for r in checklist["rows"] if r["clause_id"] in in_scope]
+    gaps = [r for r in rows if r["status"] in ("GAP", "PARTIAL")]
+    return {
+        "in_scope_star_clauses": len(rows),
+        "gap_count": len(gaps),
+        "clauses": [
+            {"number": r["number"], "title": r["title"], "status": r["status"]} for r in gaps
+        ],
+    }
+
+
+# --- scope validation --------------------------------------------------------------------
+
+
+async def _validate_scope(
+    session: AsyncSession, org_id: uuid.UUID, scope_kind: str, scope_selector: dict[str, Any]
+) -> list[uuid.UUID]:
+    key = _SCOPE_SELECTOR_KEY[scope_kind]
+    raw = scope_selector.get(key)
+    if not isinstance(raw, list) or not raw:
+        raise _validation_error("scope_selector", "required", f"scope_selector.{key} is required")
+    ids: list[uuid.UUID] = []
+    for value in raw:
+        try:
+            ids.append(uuid.UUID(str(value)))
+        except ValueError as exc:
+            raise _validation_error(key, "invalid", f"{key} must be UUIDs") from exc
+    if scope_kind == "CLAUSE":
+        for cid in ids:
+            clause = await vault_repo.get_clause(session, cid)
+            if clause is None:
+                raise _validation_error(key, "not_found", f"Clause {cid} not found")
+    else:  # PROCESS
+        for pid in ids:
+            process = await vault_repo.get_process(session, pid)
+            if process is None or process.org_id != org_id:
+                raise _validation_error(key, "not_found", f"Process {pid} not found")
+    return ids
+
+
+def _build_items(
+    org_id: uuid.UUID,
+    pack_id: uuid.UUID,
+    classified: list[ClassifiedRecord],
+) -> tuple[list[PackItem], int]:
+    """Materialise the pack_item rows from a classification: one RECORD row per candidate (carrying
+    its inclusion status) + one DOCUMENT_VERSION row per distinct pinned governing version of an
+    INCLUDED record. Returns (items, included_count)."""
+    items: list[PackItem] = []
+    seen_versions: set[uuid.UUID] = set()
+    included = 0
+    for c in classified:
+        items.append(
+            PackItem(
+                org_id=org_id,
+                pack_id=pack_id,
+                item_type=PackItemType.RECORD,
+                record_id=c.record.id,
+                inclusion_status=c.status,
+                exclusion_reason=c.reason,
+                content_hash_at_seal=c.record.content_hash,
+            )
+        )
+        if c.status is PackInclusionStatus.INCLUDED:
+            included += 1
+            vid = c.record.source_version_id
+            if vid is not None and vid not in seen_versions:
+                seen_versions.add(vid)
+                items.append(
+                    PackItem(
+                        org_id=org_id,
+                        pack_id=pack_id,
+                        item_type=PackItemType.DOCUMENT_VERSION,
+                        version_id=vid,
+                        inclusion_status=PackInclusionStatus.INCLUDED,
+                    )
+                )
+    return items, included + len(seen_versions)
+
+
+# --- transaction owners ------------------------------------------------------------------
+
+
+async def create_pack_with_preview(
+    session: AsyncSession,
+    caller: AppUser,
+    *,
+    title: str,
+    scope_kind: str,
+    scope_selector: dict[str, Any],
+    period_start: datetime.date | None = None,
+    period_end: datetime.date | None = None,
+) -> EvidencePack:
+    """Create a pack (DRAFT) and compute its preview synchronously: resolve + classify candidates,
+    persist the membership + gap/exclusion summaries. One commit."""
+    try:
+        kind = PackScopeKind(scope_kind)
+    except ValueError as exc:
+        raise _validation_error(
+            "scope_kind", "invalid", "scope_kind must be CLAUSE or PROCESS"
+        ) from exc
+    if period_start is not None and period_end is not None and period_start > period_end:
+        raise _validation_error("period_end", "invalid", "period_end precedes period_start")
+
+    framework = await vault_repo.get_framework(session, caller.org_id)
+    if framework is None:
+        raise ProblemException(status=422, code="validation_error", title="No framework configured")
+    scope_ids = await _validate_scope(session, caller.org_id, kind.value, scope_selector)
+
+    pack = EvidencePack(
+        org_id=caller.org_id,
+        framework_id=framework.id,
+        title=title,
+        scope_kind=kind,
+        scope_selector=scope_selector,
+        period_start=period_start,
+        period_end=period_end,
+        status=PackStatus.DRAFT,
+        created_by=caller.id,
+    )
+    session.add(pack)
+    await session.flush()  # populate pack.id
+
+    candidates = await repo.resolve_candidates(
+        session,
+        caller.org_id,
+        scope_kind=kind.value,
+        scope_ids=scope_ids,
+        period_start=period_start,
+        period_end=period_end,
+    )
+    classified = await classify_candidates(session, caller, candidates)
+    items, included = _build_items(caller.org_id, pack.id, classified)
+    session.add_all(items)
+    pack.exclusion_summary = exclusion_summary(classified)
+    pack.gap_summary = await gap_summary(
+        session, caller.org_id, scope_kind=kind.value, scope_ids=scope_ids
+    )
+    pack.item_count = included
+    await session.commit()
+    await session.refresh(pack)
+    return pack
+
+
+async def generate_pack(session: AsyncSession, caller: AppUser, pack_id: uuid.UUID) -> EvidencePack:
+    """Flip a DRAFT/FAILED pack → BUILDING and enqueue the worker build (after commit). Idempotent
+    re-trigger from FAILED; a SEALED pack is terminal (409); a BUILDING pack is already in flight
+    (409) — the reaper recovers a stalled build."""
+    pack = await repo.get_pack(session, pack_id, for_update=True)
+    if pack is None or pack.org_id != caller.org_id:
+        raise ProblemException(status=404, code="not_found", title="Evidence pack not found")
+    if pack.status is PackStatus.SEALED:
+        raise ProblemException(status=409, code="conflict", title="Pack is already sealed")
+    if pack.status is PackStatus.BUILDING:
+        raise ProblemException(status=409, code="conflict", title="Pack build already in progress")
+    pack.status = PackStatus.BUILDING
+    pack.build_started_at = _now()
+    pack.error = None
+    await session.commit()
+    await session.refresh(pack)
+
+    # Enqueue AFTER the commit so the worker never reads an uncommitted BUILDING row.
+    from ...tasks.packs import build_evidence_pack
+
+    build_evidence_pack.delay(str(pack.id))
+    return pack
+
+
+# Default stall window before the reaper gives up on a BUILDING pack (a hard worker kill between the
+# BUILDING commit and the build's own try/except strands it; acks_late re-delivery is best-effort).
+STALL_TIMEOUT_SECONDS = 3600
+
+
+async def reap_stalled_builds(
+    session: AsyncSession,
+    *,
+    now: datetime.datetime | None = None,
+    max_age_seconds: int = STALL_TIMEOUT_SECONDS,
+) -> dict[str, int]:
+    """Flip packs stuck in BUILDING past the stall window → FAILED (a system-actor event), so the
+    operator can re-generate. A Beat job (``easysynq.packs.reap_stalled_builds``) drives this; tests
+    call it directly. ``FOR UPDATE SKIP LOCKED`` avoids racing an in-flight build."""
+    now = now or _now()
+    cutoff = now - datetime.timedelta(seconds=max_age_seconds)
+    stalled = (
+        (
+            await session.execute(
+                select(EvidencePack)
+                .where(
+                    EvidencePack.status == PackStatus.BUILDING,
+                    EvidencePack.build_started_at.is_not(None),
+                    EvidencePack.build_started_at < cutoff,
+                )
+                .with_for_update(skip_locked=True)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for pack in stalled:
+        pack.status = PackStatus.FAILED
+        pack.error = "build_timeout"
+        emit_pack_event_system(
+            session,
+            pack.org_id,
+            EventType.PACK_BUILD_FAILED,
+            pack.id,
+            after={"error": "build_timeout"},
+        )
+    await session.commit()
+    return {"reaped": len(stalled)}
