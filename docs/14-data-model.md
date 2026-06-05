@@ -387,7 +387,7 @@ erDiagram
 | `impact_assessment` | `id` PK, `dcr_id` FK, `dimension` enum, `auto_populated` jsonb, `requester_annotation` | Pre-populated from where-used (`05 §5.3`). |
 | `workflow_definition` | `id` PK, `org_id`, `key` (`document_approval`), `version` int, `effective` bool, `subject_type` enum(`DOCUMENT`,`DCR`,`CAPA`,`AUDIT`,`MGMT_REVIEW`,`PERIODIC_REVIEW`), `stages` jsonb, `entry_conditions` jsonb, `default_sla` jsonb | Declarative, versioned, data-not-code (`10 §2`). |
 | `workflow_stage` | `id` PK, `definition_id` FK, `key`, `mode` enum(`SEQUENTIAL`,`PARALLEL`,`ROUTER`), `assignees` jsonb, `quorum` jsonb (`ALL`/`ANY`/`N_OF_M`/`PERCENT`), `transitions` jsonb, `sla` jsonb, `sod_author_excluded` bool, `signature` jsonb | `10 §2.2`. |
-| `workflow_instance` | `id` PK, `org_id`, `definition_id` FK, `definition_version` (**pinned**), `subject_type`, `subject_id`, `current_state`, `started_at`, `revision` int (idempotency guard) | `10 §2.6`. |
+| `workflow_instance` | `id` PK, `org_id`, `definition_id` FK, `definition_version` (**pinned**), `subject_type`, `subject_id`, `current_state`, `started_at`, `revision` int (idempotency guard), `context` jsonb null | `context` = the entry snapshot the engine evaluates conditional quorum/routing against (e.g. `{"severity":"Critical"}`); the DOCUMENT single-stage path leaves it NULL (S-wf-engine, mig `0035`). `10 §2.6`. |
 | `task` | `id` PK, `org_id`, `instance_id` FK, `stage_key`, `assignee_user_id` null, `candidate_pool` jsonb, `type` enum(`APPROVE`,`REVIEW`,`PERIODIC_REVIEW`,`AUDIT_TASK`,`FINDING_ACK`,`CAPA_STAGE`,`CAPA_ACTION`,`VERIFY`,`MR_INPUT`,`MR_ACTION`,`DCR_TRIAGE`), `action_expected`, `state` enum(`PENDING`,`CLAIMED`,`DONE`,`SKIPPED`,`ESCALATED`,`EXPIRED`), `due_at`, `client_token` (idempotency) | The atom of **My Tasks** (`10 §8`) (reconciled per Decisions Register R23). |
 | `task_outcome` | `id` PK, `task_id` FK, `outcome` enum(`approve`,`reject`,`acknowledge`,`complete`,`verify`,`changes_requested`), `comment`, `decided_at`, `decided_by` | Reject captures comments → returns to Draft. |
 
@@ -439,7 +439,7 @@ erDiagram
 
 | Entity | Key attributes | Notes / source |
 |---|---|---|
-| `audit_program` | `id` PK/FK (a maintained `document`, Cl 9.2), `period`, `coverage` jsonb | The **maintained** plan (`02 §2 Cl9`). |
+| `audit_program` | `id` PK, `org_id`, `identifier`, `title`, `period`, `coverage` jsonb, `archived`, `created_by`, `created_at` | **Own-table** scheduling container (R39 — a deliberate divergence from `kind=DOCUMENT`: a programme has no version/mirror presence; a version-less Effective document would be mis-listed). The retained `audit`/`audit_finding`/`capa` evidence stays a `record` subtype. mig `0034`. |
 | `audit_plan` | `id` PK, `program_id` FK, `auditee_process_id`, `lead_auditor_user_id`, `scheduled_date`, `checklist_ref` | `10 §5.2`. |
 | `audit` | `id` PK/FK (a `record`, AUDIT), `plan_id` FK, `lead_auditor`, `dates`, `result_summary`, `state` enum(`Scheduled`,`Planned`,`InProgress`,`FindingsDraft`,`Reported`,`Closing`,`Closed`) | A **retained** record (`10 §5.1`). |
 | `audit_finding` | `id` PK/FK (a `record`, AUDIT_FINDING), `audit_id` FK, `finding_type` enum(`NC`,`OBSERVATION`,`OFI`), `severity`, `clause_ref`, `process_ref`, `auto_capa_id` null | NC **auto-creates** linked CAPA (`02`, `06 §2`, `10 §5.3`). |

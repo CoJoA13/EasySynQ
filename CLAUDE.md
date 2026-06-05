@@ -46,7 +46,13 @@ COMMIT — finally writes the confirmed set into the vault: per-item Effective R
 COMPLETE**. The family dependency posture is **full-fidelity** (Tesseract + Tika + OpenSearch) — Tika+Tesseract landed at
 S-ing-2; **near-dup at S-ing-3 ships as in-process MinHash** (the doc 09 §14 path) behind a `DedupDetector` seam, with the
 OpenSearch container itself deferred (R34 honest: OpenSearch stays absent in MVP/v1; the OpenSearch-backed detector/indexer
-are the reserved drop-ins). **Migration head is now `0033`.**
+are the reserved drop-ins). The owner then chose (AskUserQuestion) **Audits/Findings/CAPA (doc 02 Cl 9.2/10.2, doc 10 §5-6,
+UJ-5/UJ-6)** as the next family — now **STARTED** (depth-first): **S-aud-1** (internal-audit programmes/plans + the `audit`
+record lifecycle FSM, mig `0034`) + **S-wf-engine** (the doc-10 declarative workflow engine — multi-stage routing/quorum on
+the existing `workflow_*` tables, mig `0035`) shipped. The family's locked model + workflow + SoD posture is **R39**
+(+declarative-routing · severity-aware SoD-4 · block-until-corrected audit close · `audit_program` own-table). **Next: S-capa-1**
+(CAPA core — `capa` + append-only `capa_stage` + `ncr` + complaint→CAPA + the grant backfill + `allow_capa_self_verify`).
+**Migration head is now `0035`.**
 
 **v1 RECORDS & evidence family (UJ-7 + records) — COMPLETE** ✅ (one line each; per-slice non-obvious
 decisions live in the squash-merge commits + the `easysynq-project.md` memory; operating detail in the
@@ -455,6 +461,23 @@ create boundary.
   `FileNotFoundError` — and since `_write` runs after `atomic_swap`-prep, it freezes the published tree. A unit test that drives
   `build_tree` with a non-None session + a monkeypatched `fetch_import_reports` row exercises the path no other test reaches
   (the diff-critic's CRITICAL catch — production-only, green-suite-invisible).
+- **Generalizing a test-pinned/"welded" path: build a NEW module, keep the old path byte-identical, prove parity** (the
+  S-wf-engine lesson). The S5 single-stage DOCUMENT `decide()` is welded to the vault FSM; the multi-stage engine is a
+  SEPARATE `services/workflow/engine.py` (the old `decide()`/`instantiate_approval` untouched), and the S5 `test_approval`
+  suite is the regression backstop. Don't refactor a shared core "in place" when the old path has pinned tests — duplicate the
+  minimal lock/replay skeleton and add a parity test.
+- **A `FOR UPDATE` serialization point needs an explicit locking accessor — `session.get`/a PK `get_instance` takes NO lock.**
+  Add `select(Model).where(id==…).with_for_update()` (the S-wf-engine `lock_instance_for_update`); for a multi-row quorum the
+  parent (instance) row is the serialization point, locked FIRST (consistent parent→child order), and proven by a 2-session
+  `asyncio.gather` race test (without the lock both racers read a stale pre-state → no advance → the test fails).
+- **Fail-closed config evaluation uses a SUBSET check, not an intersection.** A conditional/ROUTER over a context snapshot must
+  fail-closed (→ NEEDS_ATTENTION) when ANY referenced discriminator key is absent: `if not (refs <= set(ctx))`, NOT
+  `if refs and not (refs & set(ctx))` (the latter only fail-closes when NONE present → a multi-key conjunction with one missing
+  key silently took the default — the S-wf-engine diff-critic CRITICAL). Evaluate untrusted predicates via an **`ast`-node
+  whitelist**, never `eval` (no calls/attributes; the rule-pack ReDoS-confinement spirit).
+- **A service-level integration test still needs the `app_under_test` fixture** even with no HTTP — that fixture repoints
+  `get_sessionmaker()` to the testcontainer DB; without it `get_sessionmaker()()` hits localhost:5432 (connection refused). Add
+  it as a fixture param (`app_under_test: object`) even when the test only drives services directly (the S-wf-engine lesson).
 
 ## The four LOCKED foundational decisions (never contradict)
 
