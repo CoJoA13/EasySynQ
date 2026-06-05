@@ -129,6 +129,11 @@ class WorkflowInstance(Base):
     # Polymorphic subject (documented_information / DCR / CAPA …) — no FK by design.
     subject_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     current_state: Mapped[str] = mapped_column(Text, nullable=False)
+    # The entry-context snapshot (e.g. {"severity": "Critical"}) the declarative engine evaluates
+    # conditional quorum/assignees/routing against — frozen at instantiate(), since ``subject_id``
+    # has
+    # no FK (S-wf-engine, doc 10 §2.5). The DOCUMENT single-stage path leaves it NULL.
+    context: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     started_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

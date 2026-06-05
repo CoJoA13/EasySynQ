@@ -119,7 +119,11 @@ Records/evidence capture, retention/disposition, Evidence Packs, audits/findings
 > the internal-audit programmes/plans (own-table scheduling) + the `audit` record (a `kind=RECORD` subtype) walked
 > through the linear lifecycle FSM (Scheduled→…→Closing→Closed); the family's locked model + workflow + SoD posture is
 > **R39** (+declarative-routing · severity-aware SoD-4 · block-until-corrected audit close · `audit_program` own-table).
-> **Migration head is now `0034`.** See `CLAUDE.md` for shipped detail.
+> **S-wf-engine** (migration `0035`) then adds the doc-10 **declarative workflow engine** (multi-stage + tri-state quorum
+> [ANY/ALL/N_OF_M/PERCENT, distinct approvers, early-fail] + `conditional`/ROUTER routing over an `ast`-sandboxed predicate
+> grammar + candidate-pool resolution + due-date SLA) on the existing `workflow_*` tables, the S5 DOCUMENT approval left
+> byte-identical — the substrate S-capa-2's severity-routed CAPA approval rides. **Migration head is now `0035`.** See
+> `CLAUDE.md` for shipped detail.
 
 **Goal:** everything an organization needs to *run and certify* an ISO 9001:2015 QMS, end to end, and to face an external audit with a one-click evidence pack.
 

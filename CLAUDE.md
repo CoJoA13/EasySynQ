@@ -110,7 +110,18 @@ dev-workflow quick-reference below):
   Closing→Closed close-gate is a **no-op stub** until S-aud-2 wires the live-NC-findings check); `/audit-programs`+
   `/audit-plans`+`/audits`+6 flat-action transitions (gates `audit.{plan,create,conduct,close,read}` — all pre-seeded,
   PROCESS conduct/close via an `_audit_scope` resolver w/ SYSTEM fallback); programme/plan events reuse
-  `audit_object_type=audit`, the audit record's reuse `record`. **Migration head is now `0034`.**
+  `audit_object_type=audit`, the audit record's reuse `record`.
+- **S-wf-engine** the doc-10 declarative workflow engine (`0035`) — NEW `services/workflow/engine.py` (generic
+  `instantiate`+multi-stage `decide`) on the existing `workflow_*` tables, the S5 DOCUMENT `decide()` left
+  **byte-identical**; supports SEQUENTIAL/PARALLEL stages + `domain/workflow` pure helpers: tri-state quorum
+  (ANY/ALL/N_OF_M/PERCENT, **distinct approvers**, early-fail), `conditional` quorum/ROUTER routing over an
+  `ast`-sandboxed predicate grammar on a new `workflow_instance.context` snapshot, candidate-pool via the
+  permission-role `users_with_roles` seam, due-date SLA. **Instance-row `FOR UPDATE` is the quorum
+  serialization point**; cross-role conjunction (Critical CAPA) is composed as **sequential stages** (S-capa-2);
+  the stage **signature spec is threaded, NO `signature_event` row written** this slice; per-transition audit
+  (`TASK_DECIDED`/`STAGE_ADVANCED`/`STAGE_FAILED`, `object_type=workflow_instance`). Fail-closed totality
+  (missing discriminator / empty-or-under-quorum pool / ROUTER cycle → `NEEDS_ATTENTION`). Service-level only
+  (HTTP wiring + per-subject permission/scope deferred to S-capa-2). **Migration head is now `0035`.**
 
 - **Specification** in `docs/` (00–17 + `decisions-register.md`) — complete, adversarially audited, reconciled
   (Register R1–R37 back-propagated). The Register is authoritative.
