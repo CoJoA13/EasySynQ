@@ -661,9 +661,16 @@ Point the install at an existing QMS and ingest into the controlled vault (locke
 | POST | `/admin/imports` | `import.execute` | Start an `import_run`: `{ source_root, profile, ocr_enabled?, classifier_version? }` → `202` + `import_id`. |
 | GET | `/admin/imports/{id}` | `import.review` | Run status + counts (inventoried, classified, staged, committed, failed). |
 | GET | `/admin/imports/{id}/files?scan_flags=&status=` | `import.review` | Paginated `import_file` items with `import_classification` (kind/type/clauses + confidence), dedup clusters, proposed identifier/IA path/owner, conflict flags. |
-| POST | `/admin/imports/{id}/files/{fileId}/decision` | `import.review` | `import_decision`: `{ action:"accept"\|"correct"\|"merge"\|"split"\|"exclude"\|"defer", after?:{...} }`. Human-in-the-loop mapping correction; captured for future ML labels. |
+| POST | `/admin/imports/{id}/files/{fileId}/decision` | `import.review` | `import_decision` (per-file **dimensional** decision): `{ action:"accept"\|"correct"\|"exclude"\|"defer", after?:{kind?,type_code?,clause_numbers?,process_names?,identifier?,owner?} }`. The R10 kind-confirm rides `after.kind`. Human-in-the-loop; captured for future ML labels. |
+| POST | `/admin/imports/{id}/decisions` | `import.review` | **Bulk** dimensional decision across explicit `file_ids` OR a `{kind,band,disposition}` selector (`09 §9.2a`). |
+| POST | `/admin/imports/{id}/merge` | `import.review` | **Structural** — combine ≥2 files into one version family + the per-family `reconstruct_revision_chain` opt-in (`09 §9.2`). |
+| POST | `/admin/imports/{id}/split` | `import.review` | **Structural** — break a dupe-cluster / version-family apart (a group dropping <2 members is deleted). |
+| GET | `/admin/imports/{id}/checklist` | `import.review` | The `09 §9.3` pre-commit gate: `ready` + blocking conflicts (over the **effective** folded state) + the non-blocking mandatory-★ coverage projection + advisory counts. |
+| GET | `/admin/imports/{id}/decisions` | `import.review` | The run's append-only review-decision log (`09 §12.2`). |
 | POST | `/admin/imports/{id}/commit` | `import.commit` | Ingest accepted items into the vault (idempotent via `import_commit_result` on `(run_id,file_id)`+content-hash; resumable on partial failure). Writes one `audit_event` per ingested doc. |
 | POST | `/admin/imports/{id}/cancel` | `import.execute` | Abort; discards staged-but-uncommitted items (TTL-purged). |
+
+> **S-ing-4 refinement (decided at implementation):** `merge`/`split` are **structural** intent (they reshape the dedup clusters / version families) and ship as the **dedicated** `…/merge` and `…/split` endpoints above; the per-file `…/decision` action enum is therefore the **dimensional** set `{accept, correct, exclude, defer}` (a `merge`/`split` posted there is rejected `422`). The `import_decision.action` column still records all six values. All review writes accept an optional `Idempotency-Key` header (replay = no-op).
 
 > **Import permission family is canonical.** The subsystem is the `imports` collection (mounted under `/admin`) with the three actions `import.execute` (run the scan/classify), `import.review` (review/correct classifications), and `import.commit` (commit to vault). These **REPLACE the legacy `import.initiate` / `import.administer` keys everywhere** (reconciled per Decisions Register R5).
 

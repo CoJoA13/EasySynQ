@@ -103,9 +103,12 @@ Records/evidence capture, retention/disposition, Evidence Packs, audits/findings
 > migration `0030`) adds the Tika `-full` sidecar [extractors + Tesseract OCR over HTTP] + the pure
 > `RuleHeuristicClassifier`; **S-ing-3** (dedup + version-families + proposal, migration `0031`) adds the three §7
 > detectors [exact / near-dup via **in-process MinHash** behind a `DedupDetector` seam / version-family], the §7.2
-> provably-total canonical pick, and the §8 proposal — all still writing nothing to the vault. Review (slice 4: the
-> review-decisions API + the R10 `kind` confirmation) · commit (slice 5: provenance + `import_baseline` signature + Import
-> Report + mirror) follow. **OpenSearch posture (S-ing-3):** near-dup ships as in-process MinHash; the OpenSearch
+> provably-total canonical pick, and the §8 proposal — all still writing nothing to the vault. **S-ing-4** (the
+> human-in-the-loop review, migration `0032`) adds the §9 decision surface — per-file accept/correct/exclude/defer + the
+> **R10 `kind` confirmation** (folded at read, never on the engine classification), live-mutating merge/split, the §9.2a
+> bulk lever, and the §9.3 pre-commit checklist (blocking conflicts + the non-blocking ★-coverage projection) — turning a
+> `Proposed` run into a confirmed, commit-ready set, still writing nothing to the vault. Commit (slice 5: provenance +
+> `import_baseline` signature + Import Report + mirror) follows. **OpenSearch posture (S-ing-3):** near-dup ships as in-process MinHash; the OpenSearch
 > container itself stays **absent (R34)** — the `DedupDetector`/`Indexer` OpenSearch impls are reserved, not-built
 > drop-ins. See `CLAUDE.md` for shipped detail.
 
