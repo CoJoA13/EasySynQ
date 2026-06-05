@@ -49,10 +49,12 @@ OpenSearch container itself deferred (R34 honest: OpenSearch stays absent in MVP
 are the reserved drop-ins). The owner then chose (AskUserQuestion) **Audits/Findings/CAPA (doc 02 Cl 9.2/10.2, doc 10 §5-6,
 UJ-5/UJ-6)** as the next family — now **STARTED** (depth-first): **S-aud-1** (internal-audit programmes/plans + the `audit`
 record lifecycle FSM, mig `0034`) + **S-wf-engine** (the doc-10 declarative workflow engine — multi-stage routing/quorum on
-the existing `workflow_*` tables, mig `0035`) shipped. The family's locked model + workflow + SoD posture is **R39**
-(+declarative-routing · severity-aware SoD-4 · block-until-corrected audit close · `audit_program` own-table). **Next: S-capa-1**
-(CAPA core — `capa` + append-only `capa_stage` + `ncr` + complaint→CAPA + the grant backfill + `allow_capa_self_verify`).
-**Migration head is now `0035`.**
+the existing `workflow_*` tables, mig `0035`) + **S-capa-1** (the CAPA core + intake — `capa` + append-only `capa_stage` +
+`ncr` + `complaint` + the idempotent complaint→CAPA spawn + Raised/Containment + the slice-0 grant-backfill +
+`allow_capa_self_verify`, mig `0036`) shipped. The family's locked model + workflow + SoD posture is **R39**
+(+declarative-routing · severity-aware SoD-4 · block-until-corrected audit close · `audit_program` own-table). **Next: S-aud-2**
+(findings NC/OBS/OFI + the atomic NC→CAPA auto-link + the REAL block-until-corrected audit close gate + the finding
+correction/retype path + enabling the `evidence_for_link` FINDING/CAPA_STAGE validation). **Migration head is now `0036`.**
 
 **v1 RECORDS & evidence family (UJ-7 + records) — COMPLETE** ✅ (one line each; per-slice non-obvious
 decisions live in the squash-merge commits + the `easysynq-project.md` memory; operating detail in the
@@ -127,7 +129,21 @@ dev-workflow quick-reference below):
   the stage **signature spec is threaded, NO `signature_event` row written** this slice; per-transition audit
   (`TASK_DECIDED`/`STAGE_ADVANCED`/`STAGE_FAILED`, `object_type=workflow_instance`). Fail-closed totality
   (missing discriminator / empty-or-under-quorum pool / ROUTER cycle → `NEEDS_ATTENTION`). Service-level only
-  (HTTP wiring + per-subject permission/scope deferred to S-capa-2). **Migration head is now `0035`.**
+  (HTTP wiring + per-subject permission/scope deferred to S-capa-2).
+
+- **S-capa-1** the CAPA core + intake (`0036`) — `capa` (a `kind=RECORD` shared-PK subtype via
+  `capture_record(_commit=False)`, mutable `close_state` FSM Raised→…→Closed/Rejected with the Verify→ActionPlan
+  loop; only **Raised→Containment** service-wired) + append-only `capa_stage` (`REVOKE UPDATE,DELETE`; doc-14
+  `attachments` realized as `evidence_for_link(CAPA_STAGE)` edges, not a column; `signed_event_id`/`cycle_marker`
+  forward seams) + `ncr` (own-table, R20 disposition + `NCR-{SEQ}` id, events on the new `audit_object_type=ncr`) +
+  `complaint` (R16 shared-PK subtype, divergence from doc-14's satellite phrasing) + the **idempotent complaint→CAPA
+  spawn** (`complaint.spawned_capa_id` latch under `FOR UPDATE`; 201 fresh / 200 replay). New `api/capa.py` —
+  the PROCESS-scoped write keys gate on a process-derived `ResourceContext` (**in-handler `enforce` from
+  `body.process_id`** for creates, the records-capture precedent; resolvers for path-id writes; SYSTEM fallback),
+  reads at SYSTEM. The **slice-0 grant-backfill** (R39/owner): `capa.update`→Process Owner; `ncr.create`→QMS Owner +
+  Internal Auditor; `ncr.record_correction`→QMS Owner (PROCESS-placeholder scope, rides SYSTEM overrides — no new
+  keys). `system_config.allow_capa_self_verify` (default OFF, /admin/config) is the S-capa-3 SoD-4 seam. NC→CAPA
+  auto-link + findings are S-aud-2; RCA/ActionPlan/Implement/Verify are S-capa-2..3. **Migration head is now `0036`.**
 
 - **Specification** in `docs/` (00–17 + `decisions-register.md`) — complete, adversarially audited, reconciled
   (Register R1–R37 back-propagated). The Register is authoritative.
@@ -300,6 +316,13 @@ create boundary.
     PartiallyCommitted** (re-POST resumes); writes Effective Rev A docs + Records + the §12.1 Import Report;
     per-doc audit at `GET /documents/{id}/audit-events`. Crashes self-recover via
     `reap_stalled_runs`/`reap_stalled_commits`. No new service container; commit holds NO source-root lock.
+  - **CAPA / NCR / Complaint (S-capa-1):** raise a CAPA `POST /capas {title,severity,source?,process_id?,problem?}`
+    (gate `capa.create`) → `POST /capas/{id}/containment {content_block}` (gate `capa.update`); read `GET /capas(/{id})`.
+    Complaints: `POST /complaints {description,customer?,severity?,…}` (gate `record.create`) →
+    `POST /complaints/{id}/spawn-capa {severity?,process_id?}` (gate `capa.create`; idempotent 201/200). NCRs:
+    `POST /ncrs {source,description,severity,process_id?}` (gate `ncr.create`) → `PATCH /ncrs/{id}/disposition
+    {disposition,notes?}` (gate `ncr.record_correction`, one-shot 409). All ride **SYSTEM overrides** until
+    owner-assignment (the family precedent); `allow_capa_self_verify` via `PATCH /admin/config` (S-capa-3 seam).
 - **⚠ S11 restore + upgrade + encrypted backup (operator):** the durable archive (`easysynq backup run` / the nightly
   Beat job) is now **AES-256-GCM `.tar.enc`** sealed with `BACKUP_ENCRYPTION_KEY` (install.sh generates it into the
   0600 `.env`; **lose it → those archives are unrecoverable** — back it up out-of-band) and bundles the live Keycloak

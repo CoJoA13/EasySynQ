@@ -41,6 +41,10 @@ class OrgConfigUpdate(BaseModel):
     capture_pre_release_templates: bool | None = None
     # S-rec-4 (doc 07 §7): SoD-6 relaxation — when true, a record's capturer may also dispose it.
     allow_self_disposition: bool | None = None
+    # S-capa-1 (R39): severity-aware SoD-4 relaxation — when true, a Minor CAPA's implementer may
+    # also
+    # verify it (Critical/Major always hard-enforce). Forward seam; enforced in S-capa-3.
+    allow_capa_self_verify: bool | None = None
 
 
 def _rid() -> uuid.UUID | None:
@@ -58,6 +62,7 @@ def _config_view(cfg: SystemConfig) -> dict[str, Any]:
         "org_id": str(cfg.org_id),
         "capture_pre_release_templates": cfg.capture_pre_release_templates,
         "allow_self_disposition": cfg.allow_self_disposition,
+        "allow_capa_self_verify": cfg.allow_capa_self_verify,
     }
 
 
@@ -94,6 +99,10 @@ async def update_config_endpoint(
         before["allow_self_disposition"] = cfg.allow_self_disposition
         cfg.allow_self_disposition = body.allow_self_disposition
         after["allow_self_disposition"] = body.allow_self_disposition
+    if body.allow_capa_self_verify is not None:
+        before["allow_capa_self_verify"] = cfg.allow_capa_self_verify
+        cfg.allow_capa_self_verify = body.allow_capa_self_verify
+        after["allow_capa_self_verify"] = body.allow_capa_self_verify
     if after:
         session.add(
             AuditEvent(

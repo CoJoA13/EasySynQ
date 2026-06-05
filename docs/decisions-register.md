@@ -569,12 +569,27 @@ Several modelling + governance choices were locked by the product owner and an a
   (zero ADD VALUE). The only catalog work is the S-capa-1 grant-*backfill* of three already-defined-but-
   ungranted keys (no new keys; not a catalog extension).
 
-**Implemented in slices:** S-aud-1 (`audit_program` + `audit_plan` + `audit` + FSM, migration `0034`);
-S-aud-2 (findings + NC→CAPA auto-link + the block-until-corrected close gate); S-capa-1..3 (the CAPA
-lifecycle + severity-aware SoD-4 + the M4 closure gate); the declarative engine + the Evidence-Pack
-Finding/CAPA scope close-out.
+**Enum canon (S-capa-1 normalization).** The CAPA-family enums are all-lowercase, extending the R2
+(`signature_event.meaning`) / R16 (`source=complaint`) lowercase precedent: `capa_source` =
+`audit`,`process`,`complaint`,`review_output` (doc 14 §9's `AUDIT` was a spec typo, corrected;
+`review_output` is a RESERVED forward seam for the deferred Management-Review family, never written in
+v1); `ncr_source` = `audit`,`process`,`complaint`,`internal`. The `nc_severity`
+(`Critical`/`Major`/`Minor`) vocabulary is shared across `capa` / `ncr` / `complaint` (and
+`audit_finding` in S-aud-2). `complaint` is implemented as a **`kind=RECORD` shared-PK subtype**
+(`complaint.id` IS `record.id`) — a justified divergence from doc 14 §6's literal `id PK + record_id
+FK` satellite phrasing, for consistency with the `audit`/`capa` record-subtype family (the same kind
+of divergence this register made for `audit_program`). `capa_stage`'s doc-14 `attachments` member is
+realized as `evidence_for_link(target_type=CAPA_STAGE)` edges (Mode C), not a column.
 
-**Back-propagation:** 02 (Cl 9.2/10.2), 06, 07 (§7 SoD-4), 10 (§5-6), 14 (§9/§14), 15, 16.
+**Implemented in slices:** S-aud-1 (`audit_program` + `audit_plan` + `audit` + FSM, migration `0034`);
+S-wf-engine (the declarative engine, migration `0035`); **S-capa-1** (the CAPA core + intake —
+`capa` + append-only `capa_stage` + `ncr` + `complaint` + complaint→CAPA spawn + Raised/Containment +
+the grant-backfill of `capa.update`/`ncr.create`/`ncr.record_correction` + the `allow_capa_self_verify`
+flag, migration `0036`); S-aud-2 (findings + NC→CAPA auto-link + the block-until-corrected close gate);
+S-capa-2..3 (RCA/ActionPlan/Implement/Verify + severity-aware SoD-4 + the M4 closure gate); the
+Evidence-Pack Finding/CAPA scope close-out.
+
+**Back-propagation:** 02 (Cl 9.2/10.2), 06, 07 (§7 SoD-4), 10 (§5-6), 14 (§6/§9/§14), 15, 16.
 
 ---
 
