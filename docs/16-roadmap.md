@@ -99,9 +99,15 @@ Records/evidence capture, retention/disposition, Evidence Packs, audits/findings
 > **records-family close-out — `/retention-policies` CRUD + soft-archive + the creator≠disposer SoD-6** — shipped in
 > **S-rec-4** (migration `0028`, the first additive catalog extension, R38). The **Ingestion engine (UJ-2)** family is now
 > STARTED: **S-ing-1** (run + scan/inventory foundation, migration `0029`) ships an idempotent, crash-safe scan that
-> inventories a read-only mounted source tree into transient `import_*` staging (it writes nothing to the vault);
-> extract+classify · dedup+propose · review · commit follow as slices 2–5 (the full-fidelity Tesseract/Tika/OpenSearch
-> dependency posture bites at slices 2–3). See `CLAUDE.md` for shipped detail.
+> inventories a read-only mounted source tree into transient `import_*` staging; **S-ing-2** (extract + classify,
+> migration `0030`) adds the Tika `-full` sidecar [extractors + Tesseract OCR over HTTP] + the pure
+> `RuleHeuristicClassifier`; **S-ing-3** (dedup + version-families + proposal, migration `0031`) adds the three §7
+> detectors [exact / near-dup via **in-process MinHash** behind a `DedupDetector` seam / version-family], the §7.2
+> provably-total canonical pick, and the §8 proposal — all still writing nothing to the vault. Review (slice 4: the
+> review-decisions API + the R10 `kind` confirmation) · commit (slice 5: provenance + `import_baseline` signature + Import
+> Report + mirror) follow. **OpenSearch posture (S-ing-3):** near-dup ships as in-process MinHash; the OpenSearch
+> container itself stays **absent (R34)** — the `DedupDetector`/`Indexer` OpenSearch impls are reserved, not-built
+> drop-ins. See `CLAUDE.md` for shipped detail.
 
 **Goal:** everything an organization needs to *run and certify* an ISO 9001:2015 QMS, end to end, and to face an external audit with a one-click evidence pack.
 
