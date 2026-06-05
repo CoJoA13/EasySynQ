@@ -34,8 +34,14 @@ target_metadata = Base.metadata
 #   * ``ix_documented_information_search_tsv`` — the FTS GIN index (0020, slice S10).
 #   * ``ix_worm_destroy_request_open`` — the "one open request per record" partial UNIQUE (0024,
 #     ``... WHERE executed_at IS NULL AND cancelled_at IS NULL``; slice S-rec-2).
+#   * ``uq_import_decision_run_idem`` — the review-decision idempotency partial UNIQUE (0032,
+#     ``... WHERE idempotency_key IS NOT NULL``; slice S-ing-4).
 _MIGRATION_MANAGED_INDEXES = frozenset(
-    {"ix_documented_information_search_tsv", "ix_worm_destroy_request_open"}
+    {
+        "ix_documented_information_search_tsv",
+        "ix_worm_destroy_request_open",
+        "uq_import_decision_run_idem",
+    }
 )
 
 

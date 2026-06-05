@@ -15,7 +15,8 @@ from __future__ import annotations
 
 import logging
 import uuid
-from typing import cast
+from collections.abc import Awaitable, Callable
+from typing import Any, cast
 
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -91,6 +92,76 @@ def _owner_hint(ext: ImportExtract | None) -> tuple[str | None, str | None]:
     return None, None
 
 
+async def rebuild_proposals(
+    session: AsyncSession,
+    run_id: uuid.UUID,
+    *,
+    org_id: uuid.UUID,
+    version: str | None,
+    heartbeat: Callable[[], Awaitable[None]] | None = None,
+) -> dict[str, Any]:
+    """Re-derive the keep-set + ``import_proposal_node`` rows from the run's CURRENT clusters /
+    families + included files, atomically replace them, and return the namespaced proposal counts.
+    **Pure w.r.t. run state** (no status/lock transition) so BOTH ``run_propose`` (worker) and the
+    S-ing-4 review merge/split ops can call it after a structural change — it reads the PERSISTED
+    clusters/families, so it reflects any mutation applied in the same txn (the keep-set uses
+    each cluster's ``canonical_file_id`` + each family's ``effective_file_id``, so those MUST be
+    recomputed + persisted by the caller BEFORE this call). The optional ``heartbeat`` is the
+    worker's source-root-lock keep-alive (the review path passes ``None`` — review is lock-free)."""
+    rows = list(await repo.included_files_with_context(session, run_id, version))
+    clusters = await repo.list_dupe_clusters(session, run_id)
+    families = await repo.list_version_families(session, run_id)
+    if heartbeat is not None:
+        await heartbeat()
+
+    # keep-item = included MINUS (non-canonical dup members + non-effective family members), built
+    # from the PERSISTED rows so it is order-independent + reproducible on re-delivery/re-derive.
+    excluded: set[uuid.UUID] = set()
+    for cl in clusters:
+        excluded.update(m for m in cl.member_file_ids if m != cl.canonical_file_id)
+    for fam in families:
+        excluded.update(m for m in fam.ordered_member_file_ids if m != fam.effective_file_id)
+    keep = [(f, e, c) for f, e, c in rows if f.id not in excluded]
+
+    clause_map = await _clause_ref_map(session, org_id)
+    top_words = await fetch_top_words(session)
+
+    nodes: list[dict[str, object]] = []
+    code_to_files: dict[str, list[uuid.UUID]] = {}
+    for n, (f, ext, cls) in enumerate(keep):
+        doc_code = extract_doc_code(f.filename, ext.header_block if ext is not None else None)
+        conflict_flags: dict[str, object] = {}
+        if doc_code:
+            proposed_identifier: str | None = doc_code
+            identifier_source: str | None = "preserved_doc_code"
+            code_to_files.setdefault(doc_code, []).append(f.id)
+        elif cls is not None and cls.type_code:
+            proposed_identifier = f"{cls.type_code}-<new>"
+            identifier_source = "suggested_default"
+        else:
+            proposed_identifier = None
+            identifier_source = None
+            conflict_flags["needs_identifier"] = True
+        owner, owner_source = _owner_hint(ext)
+        nodes.append(
+            {
+                "file_id": f.id,
+                "proposed_identifier": proposed_identifier,
+                "identifier_source": identifier_source,
+                "target_ia_path": _target_ia_path(cls, clause_map, top_words),
+                "proposed_owner": owner,
+                "owner_source": owner_source,
+                "conflict_flags": conflict_flags,
+            }
+        )
+        if n % 256 == 0 and heartbeat is not None:
+            await heartbeat()
+
+    await _detect_conflicts(session, org_id, nodes, code_to_files)
+    await repo.replace_proposals(session, run_id, org_id=org_id, nodes=nodes)
+    return await repo.compute_proposal_counts(session, run_id)
+
+
 async def run_propose(session: AsyncSession, run_id: uuid.UUID) -> None:
     settings = get_settings()
     run = await repo.get_run(session, run_id, for_update=True)
@@ -103,61 +174,15 @@ async def run_propose(session: AsyncSession, run_id: uuid.UUID) -> None:
     version = run.classifier_version
     await session.commit()  # release the FOR UPDATE before the (read-heavy) compute
 
-    try:
-        rows = list(await repo.included_files_with_context(session, run_id, version))
-        clusters = await repo.list_dupe_clusters(session, run_id)
-        families = await repo.list_version_families(session, run_id)
+    async def _hb() -> None:
         if token:
             await locks.heartbeat(src_hash, token, ttl=settings.import_lock_ttl_seconds)
 
-        # keep-item = included MINUS (non-canonical dup members + non-effective family members),
-        # built from the PERSISTED rows so it is order-independent + reproducible on re-delivery.
-        excluded: set[uuid.UUID] = set()
-        for cl in clusters:
-            excluded.update(m for m in cl.member_file_ids if m != cl.canonical_file_id)
-        for fam in families:
-            excluded.update(m for m in fam.ordered_member_file_ids if m != fam.effective_file_id)
-        keep = [(f, e, c) for f, e, c in rows if f.id not in excluded]
-
-        clause_map = await _clause_ref_map(session, org_id)
-        top_words = await fetch_top_words(session)
-
-        nodes: list[dict[str, object]] = []
-        code_to_files: dict[str, list[uuid.UUID]] = {}
-        for n, (f, ext, cls) in enumerate(keep):
-            doc_code = extract_doc_code(f.filename, ext.header_block if ext is not None else None)
-            conflict_flags: dict[str, object] = {}
-            if doc_code:
-                proposed_identifier: str | None = doc_code
-                identifier_source: str | None = "preserved_doc_code"
-                code_to_files.setdefault(doc_code, []).append(f.id)
-            elif cls is not None and cls.type_code:
-                proposed_identifier = f"{cls.type_code}-<new>"
-                identifier_source = "suggested_default"
-            else:
-                proposed_identifier = None
-                identifier_source = None
-                conflict_flags["needs_identifier"] = True
-            owner, owner_source = _owner_hint(ext)
-            nodes.append(
-                {
-                    "file_id": f.id,
-                    "proposed_identifier": proposed_identifier,
-                    "identifier_source": identifier_source,
-                    "target_ia_path": _target_ia_path(cls, clause_map, top_words),
-                    "proposed_owner": owner,
-                    "owner_source": owner_source,
-                    "conflict_flags": conflict_flags,
-                }
-            )
-            if n % 256 == 0 and token:
-                await locks.heartbeat(src_hash, token, ttl=settings.import_lock_ttl_seconds)
-
-        await _detect_conflicts(session, org_id, nodes, code_to_files)
-        await repo.replace_proposals(session, run_id, org_id=org_id, nodes=nodes)
-
+    try:
+        proposal_counts = await rebuild_proposals(
+            session, run_id, org_id=org_id, version=version, heartbeat=_hb
+        )
         dedup_counts = await repo.compute_dedup_counts(session, run_id)
-        proposal_counts = await repo.compute_proposal_counts(session, run_id)
         final = await repo.get_run(session, run_id, for_update=True)
         if final is None or final.status is not ImportRunStatus.PROPOSING:
             await session.rollback()  # a late cancel won → discard the staged proposals

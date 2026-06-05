@@ -46,18 +46,34 @@ def _number_key(number: str) -> list[int]:
     return [int(part) for part in number.split(".")]
 
 
-async def compute_checklist(session: AsyncSession, org_id: uuid.UUID) -> dict[str, Any]:
+async def compute_checklist(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    *,
+    projected_clause_numbers: set[str] | None = None,
+) -> dict[str, Any]:
     """The org's ★ mandatory-item coverage: per-clause status rows + a rollup RAG. One grouped query
-    over ``clause`` LEFT JOIN ``clause_mapping`` (org-scoped) LEFT JOIN documented_information."""
+    over ``clause`` LEFT JOIN ``clause_mapping`` (org-scoped) LEFT JOIN documented_information.
+
+    ``projected_clause_numbers`` (S-ing-4 pre-commit projection, doc 09 §9.3): when ``None`` (the
+    live ``GET /reports/compliance-checklist`` call) the output is byte-identical to the org-wide
+    read. When a set of clause CODES is given (the import's confirmed-DOCUMENT keep-items' effective
+    ★ clauses), each row gains a ``projected_status`` (= ``COVERED`` if already live-COVERED **or**
+    the number is in the set, else the live status — an import only ever IMPROVES coverage) and the
+    result gains a ``projected`` rollup. The non-blocking "which ★ items the import *appears*
+    to satisfy" advisory (N9 — it NEVER asserts compliance; the projected docs aren't live)."""
     framework = await get_framework(session, org_id)
     if (
         framework is None
     ):  # pragma: no cover - a finalized org always has its iso9001:2015 framework
-        return {
+        empty: dict[str, Any] = {
             "framework": "iso9001:2015",
             "rollup": {"total": 0, "covered": 0, "partial": 0, "gap": 0},
             "rows": [],
         }
+        if projected_clause_numbers is not None:
+            empty["projected_rollup"] = {"total": 0, "covered": 0, "partial": 0, "gap": 0}
+        return empty
 
     mapped_count = func.count(func.distinct(DocumentedInformation.id))
     effective_count = func.count(func.distinct(DocumentedInformation.id)).filter(
@@ -90,8 +106,11 @@ async def compute_checklist(session: AsyncSession, org_id: uuid.UUID) -> dict[st
         )
     ).all()
 
+    projecting = projected_clause_numbers is not None
+    projected = projected_clause_numbers or set()
     out_rows: list[dict[str, Any]] = []
     covered = partial = gap = 0
+    proj_covered = proj_partial = proj_gap = 0
     for clause_id, number, title, pdca_phase, mapped, effective in rows:
         status = coverage_status(mapped, effective)
         if status == "COVERED":
@@ -100,19 +119,29 @@ async def compute_checklist(session: AsyncSession, org_id: uuid.UUID) -> dict[st
             partial += 1
         else:
             gap += 1
-        out_rows.append(
-            {
-                "clause_id": str(clause_id),
-                "number": number,
-                "title": title,
-                "pdca_phase": pdca_phase.value,
-                "mapped_count": mapped,
-                "effective_count": effective,
-                "status": status,
-            }
-        )
+        row: dict[str, Any] = {
+            "clause_id": str(clause_id),
+            "number": number,
+            "title": title,
+            "pdca_phase": pdca_phase.value,
+            "mapped_count": mapped,
+            "effective_count": effective,
+            "status": status,
+        }
+        if projecting:
+            # An import only ever IMPROVES coverage: a confirmed-DOCUMENT mapping to a GAP/PARTIAL
+            # ★ clause → COVERED (it commits as a Rev A Effective baseline); never demotes.
+            proj_status = "COVERED" if status == "COVERED" or number in projected else status
+            row["projected_status"] = proj_status
+            if proj_status == "COVERED":
+                proj_covered += 1
+            elif proj_status == "PARTIAL":
+                proj_partial += 1
+            else:
+                proj_gap += 1
+        out_rows.append(row)
     out_rows.sort(key=lambda r: _number_key(r["number"]))
-    return {
+    result: dict[str, Any] = {
         "framework": framework.code,
         "rollup": {
             "total": len(out_rows),
@@ -122,3 +151,11 @@ async def compute_checklist(session: AsyncSession, org_id: uuid.UUID) -> dict[st
         },
         "rows": out_rows,
     }
+    if projecting:
+        result["projected_rollup"] = {
+            "total": len(out_rows),
+            "covered": proj_covered,
+            "partial": proj_partial,
+            "gap": proj_gap,
+        }
+    return result

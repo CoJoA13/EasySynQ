@@ -182,6 +182,9 @@ def require(
         await enforce(session, sink, request, user, permission_key, resource, sig_hook=sig_hook)
         return user
 
+    # Expose the gated key for route-inventory introspection (the ingestion SoD-gate proof) — the
+    # closure otherwise hides it; harmless metadata.
+    setattr(_dependency, "_easysynq_permission_key", permission_key)  # noqa: B010
     return _dependency
 
 

@@ -70,8 +70,8 @@ def test_looks_encrypted() -> None:
 
 
 def test_status_enum_values() -> None:
-    # S-ing-3 ADD VALUEs Deduping/Proposing/Proposed (the additive-enum pattern); order is
-    # load-bearing (the migration ADD VALUEs the new states; they precede the terminals).
+    # S-ing-3 ADD VALUEs Deduping/Proposing/Proposed; S-ing-4 ADD VALUEs Reviewing (additive enum).
+    # Order is load-bearing (the migration ADD VALUEs new states before the terminals).
     assert IMPORT_RUN_STATUS_VALUES == (
         "Created",
         "Scanning",
@@ -82,11 +82,13 @@ def test_status_enum_values() -> None:
         "Deduping",
         "Proposing",
         "Proposed",
+        "Reviewing",
         "Failed",
         "Cancelled",
     )
     assert ImportRunStatus.SCANNED.value == "Scanned"
     assert ImportRunStatus.PROPOSED.value == "Proposed"
+    assert ImportRunStatus.REVIEWING.value == "Reviewing"
 
 
 def test_audit_enum_members_exist() -> None:

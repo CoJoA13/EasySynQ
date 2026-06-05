@@ -141,6 +141,12 @@ class Settings(BaseSettings):
     # container; this URL is the reserved drop-in target only (nothing connects to it yet).
     import_near_dup_threshold: float = 0.85
     opensearch_url: str = ""  # reserved (R34 drop-in); empty = not configured
+    # S-ing-4 review: the §9.3 pre-commit gate "unresolved ambiguous items above a configurable
+    # count" — an ambiguous keep-item the reviewer has not decided on (accept/correct/exclude/defer)
+    # is unresolved; blocking when the count EXCEEDS this. Default 0 = resolve-or-defer every
+    # ambiguous before commit (configurable per install via env).
+    import_review_ambiguous_threshold: int = 0
+    import_bulk_decision_max: int = 5000  # max files a single bulk-decision call may target
 
     @property
     def sync_dsn(self) -> str:

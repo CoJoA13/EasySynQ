@@ -10,15 +10,21 @@ import uuid
 from collections.abc import Sequence
 from typing import Any
 
-from sqlalchemy import Text, and_, cast, delete, func, select
+from sqlalchemy import Text, and_, cast, delete, func, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...db.models._clause_enums import PdcaPhase
-from ...db.models._ingestion_enums import ImportExtractStatus, ImportRunStatus
+from ...db.models._ingestion_enums import (
+    ImportDecisionAction,
+    ImportExtractStatus,
+    ImportRunStatus,
+)
 from ...db.models.clause import Clause
+from ...db.models.documented_information import DocumentedInformation
 from ...db.models.framework import Framework
 from ...db.models.import_classification import ImportClassification
+from ...db.models.import_decision import ImportDecision
 from ...db.models.import_dupe_cluster import ImportDupeCluster
 from ...db.models.import_extract import ImportExtract
 from ...db.models.import_file import ImportFile
@@ -708,3 +714,169 @@ async def get_file_membership(
         )
     ).scalar_one_or_none()
     return clusters, family, node
+
+
+# --------------------------------------------------------------------------- S-ing-4 review
+
+
+async def get_file(
+    session: AsyncSession, run_id: uuid.UUID, file_id: uuid.UUID
+) -> ImportFile | None:
+    """A single inventory row scoped to its run (validate a decision target ∈ the run)."""
+    return (
+        await session.execute(
+            select(ImportFile).where(ImportFile.run_id == run_id, ImportFile.id == file_id)
+        )
+    ).scalar_one_or_none()
+
+
+async def get_dupe_cluster(
+    session: AsyncSession, run_id: uuid.UUID, cluster_id: uuid.UUID
+) -> ImportDupeCluster | None:
+    return (
+        await session.execute(
+            select(ImportDupeCluster).where(
+                ImportDupeCluster.run_id == run_id, ImportDupeCluster.id == cluster_id
+            )
+        )
+    ).scalar_one_or_none()
+
+
+async def get_version_family(
+    session: AsyncSession, run_id: uuid.UUID, family_id: uuid.UUID
+) -> ImportVersionFamily | None:
+    return (
+        await session.execute(
+            select(ImportVersionFamily).where(
+                ImportVersionFamily.run_id == run_id, ImportVersionFamily.id == family_id
+            )
+        )
+    ).scalar_one_or_none()
+
+
+async def list_proposal_nodes(
+    session: AsyncSession, run_id: uuid.UUID
+) -> Sequence[ImportProposalNode]:
+    """All keep-item proposal nodes for a run (the checklist + review fold read them at once)."""
+    return (
+        (
+            await session.execute(
+                select(ImportProposalNode).where(ImportProposalNode.run_id == run_id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+
+async def insert_decision(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    run_id: uuid.UUID,
+    action: ImportDecisionAction,
+    decided_by: uuid.UUID,
+    file_id: uuid.UUID | None = None,
+    cluster_id: uuid.UUID | None = None,
+    target_kind: str | None = None,
+    before: dict[str, Any] | None = None,
+    after: dict[str, Any] | None = None,
+    idempotency_key: str | None = None,
+) -> ImportDecision:
+    """Append one ``import_decision`` row (the caller commits). Append-only — never updated."""
+    row = ImportDecision(
+        org_id=org_id,
+        run_id=run_id,
+        file_id=file_id,
+        cluster_id=cluster_id,
+        target_kind=target_kind,
+        action=action,
+        before=before,
+        after=after,
+        idempotency_key=idempotency_key,
+        decided_by=decided_by,
+    )
+    session.add(row)
+    await session.flush()
+    return row
+
+
+async def find_decision_by_idem(
+    session: AsyncSession, run_id: uuid.UUID, idempotency_key: str
+) -> ImportDecision | None:
+    """The existing decision for a replayed ``Idempotency-Key`` (the partial-UNIQUE replay)."""
+    return (
+        await session.execute(
+            select(ImportDecision).where(
+                ImportDecision.run_id == run_id,
+                ImportDecision.idempotency_key == idempotency_key,
+            )
+        )
+    ).scalar_one_or_none()
+
+
+async def list_decisions(session: AsyncSession, run_id: uuid.UUID) -> Sequence[ImportDecision]:
+    """The run's full decision log, newest-first (the audit/review history + the fold source)."""
+    return (
+        (
+            await session.execute(
+                select(ImportDecision)
+                .where(ImportDecision.run_id == run_id)
+                .order_by(ImportDecision.decided_at.desc(), ImportDecision.id.desc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+
+async def decisions_for_file(
+    session: AsyncSession, run_id: uuid.UUID, file_id: uuid.UUID
+) -> Sequence[ImportDecision]:
+    """One file's decisions, newest-first (the per-file effective-state fold)."""
+    return (
+        (
+            await session.execute(
+                select(ImportDecision)
+                .where(ImportDecision.run_id == run_id, ImportDecision.file_id == file_id)
+                .order_by(ImportDecision.decided_at.desc(), ImportDecision.id.desc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+
+async def vault_identifier_collisions(
+    session: AsyncSession, org_id: uuid.UUID, identifiers: Sequence[str]
+) -> dict[str, str]:
+    """``{identifier: documented_information_id}`` for a proposed identifier that already exists in
+    the vault (as ``identifier`` or ``legacy_identifier``) — the §11.3 ``collides_with_vault_doc``
+    check over the EFFECTIVE (folded) identifiers (the ``propose._detect_conflicts`` query, reused
+    for the pre-commit checklist)."""
+    wanted = [i for i in {x for x in identifiers if x}]
+    if not wanted:
+        return {}
+    rows = (
+        await session.execute(
+            select(
+                DocumentedInformation.id,
+                DocumentedInformation.identifier,
+                DocumentedInformation.legacy_identifier,
+            ).where(
+                DocumentedInformation.org_id == org_id,
+                or_(
+                    DocumentedInformation.identifier.in_(wanted),
+                    DocumentedInformation.legacy_identifier.in_(wanted),
+                ),
+            )
+        )
+    ).all()
+    hits: dict[str, str] = {}
+    wanted_set = set(wanted)
+    for doc_id, ident, legacy in rows:
+        if ident in wanted_set:
+            hits[ident] = str(doc_id)
+        if legacy in wanted_set:
+            hits[legacy] = str(doc_id)
+    return hits

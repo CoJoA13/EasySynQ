@@ -589,3 +589,462 @@ async def test_org_isolation_returns_404(
             await session.execute(sa.text("SELECT count(*) FROM organization"))
         ).scalar_one()
         assert remaining == 1
+
+
+# --------------------------------------------------------------------------- S-ing-4 review
+
+
+async def _proposed_classifiable(
+    app_client: AsyncClient, h: dict[str, str], _stub_tika: None
+) -> tuple[str, dict[str, dict]]:
+    """Drive a classifiable corpus to Proposed; return (run_id, {filename: file_row})."""
+    _seed_classifiable()
+    run_id = (
+        await app_client.post("/api/v1/admin/imports", headers=h, json={"source_root": "."})
+    ).json()["id"]
+    await _drive(uuid.UUID(run_id))
+    files = (await app_client.get(f"/api/v1/admin/imports/{run_id}/files", headers=h)).json()[
+        "files"
+    ]
+    return run_id, {f["filename"]: f for f in files}
+
+
+async def test_review_decisions_fold_and_reviewing_transition(
+    app_client: AsyncClient, token_factory: Callable[..., str], _stub_tika: None
+) -> None:
+    admin = _subject("avery")
+    await _assign_role(admin, "System Administrator")
+    h = _auth(token_factory, admin)
+    run_id, by_name = await _proposed_classifiable(app_client, h, _stub_tika)
+    sop = by_name["SOP-PUR-002 Purchasing.docx"]["id"]
+
+    # the freshly-Proposed run has each file's review folded as undecided/UNCONFIRMED.
+    assert by_name["SOP-PUR-002 Purchasing.docx"]["review"]["disposition"] == "undecided"
+    assert by_name["SOP-PUR-002 Purchasing.docx"]["review"]["kind"] == "UNCONFIRMED"
+
+    # accept the SOP + confirm kind=DOCUMENT (R10 kind-confirm rides after.kind).
+    res = await app_client.post(
+        f"/api/v1/admin/imports/{run_id}/files/{sop}/decision",
+        headers=h,
+        json={"action": "accept", "after": {"kind": "DOCUMENT"}},
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["review"]["disposition"] == "included"
+    assert res.json()["review"]["kind"] == "DOCUMENT"
+    assert res.json()["review"]["commit_ready"] is True
+
+    # the first decision flips the run Proposed → Reviewing (a USER stage-change).
+    run = (await app_client.get(f"/api/v1/admin/imports/{run_id}", headers=h)).json()
+    assert run["status"] == "Reviewing"
+
+    # the per-file detail carries the folded effective state + the decision history.
+    detail = (await app_client.get(f"/api/v1/admin/imports/{run_id}/files/{sop}", headers=h)).json()
+    assert detail["review"]["effective"]["kind"] == "DOCUMENT"
+    assert len(detail["review"]["decision_history"]) == 1
+
+    # the decision log lists it (newest-first).
+    log = (await app_client.get(f"/api/v1/admin/imports/{run_id}/decisions", headers=h)).json()
+    assert len(log["decisions"]) == 1 and log["decisions"][0]["action"] == "accept"
+
+    # correct overrides the engine identifier; exclude/defer set the disposition.
+    audit = by_name["Internal Audit Report Q2 2023.pdf"]["id"]
+    corr = await app_client.post(
+        f"/api/v1/admin/imports/{run_id}/files/{audit}/decision",
+        headers=h,
+        json={"action": "correct", "after": {"identifier": "REC-AUD-007", "kind": "RECORD"}},
+    )
+    assert corr.json()["review"]["identifier"] == "REC-AUD-007"
+    assert corr.json()["review"]["kind"] == "RECORD"
+    excl = await app_client.post(
+        f"/api/v1/admin/imports/{run_id}/files/{audit}/decision",
+        headers=h,
+        json={"action": "exclude", "reason": "out of scope"},
+    )
+    assert excl.json()["review"]["disposition"] == "excluded"  # latest wins
+
+    # cancel is still allowed while Reviewing (Reviewing is not terminal).
+    cancel = await app_client.post(f"/api/v1/admin/imports/{run_id}/cancel", headers=h)
+    assert cancel.status_code == 200 and cancel.json()["status"] == "Cancelled"
+
+
+async def test_per_file_endpoint_rejects_merge_split_and_guards_state(
+    app_client: AsyncClient, token_factory: Callable[..., str], _stub_tika: None
+) -> None:
+    admin = _subject("avery")
+    await _assign_role(admin, "System Administrator")
+    h = _auth(token_factory, admin)
+    run_id, by_name = await _proposed_classifiable(app_client, h, _stub_tika)
+    sop = by_name["SOP-PUR-002 Purchasing.docx"]["id"]
+
+    bad = await app_client.post(
+        f"/api/v1/admin/imports/{run_id}/files/{sop}/decision",
+        headers=h,
+        json={"action": "merge"},
+    )
+    assert bad.status_code == 422  # merge/split are structural — dedicated endpoints only
+
+    # a non-reviewable run (still Created, not driven) refuses decisions with 409.
+    _seed_source()
+    fresh = (
+        await app_client.post("/api/v1/admin/imports", headers=h, json={"source_root": "sub"})
+    ).json()["id"]
+    blocked = await app_client.post(
+        f"/api/v1/admin/imports/{fresh}/files/{uuid.uuid4()}/decision",
+        headers=h,
+        json={"action": "accept"},
+    )
+    assert blocked.status_code == 409  # status=Created ∉ {Proposed, Reviewing}
+
+
+async def test_bulk_decision_over_filter(
+    app_client: AsyncClient, token_factory: Callable[..., str], _stub_tika: None
+) -> None:
+    admin = _subject("avery")
+    await _assign_role(admin, "System Administrator")
+    h = _auth(token_factory, admin)
+    run_id, _ = await _proposed_classifiable(app_client, h, _stub_tika)
+
+    # bulk-confirm kind=DOCUMENT across the engine's DOCUMENT-classified selection (explicit act).
+    res = await app_client.post(
+        f"/api/v1/admin/imports/{run_id}/decisions",
+        headers=h,
+        json={"action": "accept", "selector": {"kind": "DOCUMENT"}, "after": {"kind": "DOCUMENT"}},
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["applied"] == 1  # only the SOP is classified DOCUMENT
+
+    docs = (
+        await app_client.get(
+            f"/api/v1/admin/imports/{run_id}/files?review_status=included", headers=h
+        )
+    ).json()["files"]
+    assert {f["filename"] for f in docs} == {"SOP-PUR-002 Purchasing.docx"}
+    assert docs[0]["review"]["kind"] == "DOCUMENT" and docs[0]["review"]["commit_ready"] is True
+
+
+async def test_merge_forces_version_family_with_revision_chain(
+    app_client: AsyncClient, token_factory: Callable[..., str], _stub_tika: None
+) -> None:
+    admin = _subject("avery")
+    await _assign_role(admin, "System Administrator")
+    h = _auth(token_factory, admin)
+    run_id, by_name = await _proposed_classifiable(app_client, h, _stub_tika)
+    sop = by_name["SOP-PUR-002 Purchasing.docx"]["id"]
+    audit = by_name["Internal Audit Report Q2 2023.pdf"]["id"]
+
+    # merge the two standalone keep-items into one version family + opt into revision-chain.
+    res = await app_client.post(
+        f"/api/v1/admin/imports/{run_id}/merge",
+        headers=h,
+        json={
+            "file_ids": [sop, audit],
+            "effective_file_id": sop,
+            "reconstruct_revision_chain": True,
+        },
+    )
+    assert res.status_code == 200, res.text
+
+    families = (
+        await app_client.get(f"/api/v1/admin/imports/{run_id}/version-families", headers=h)
+    ).json()["families"]
+    assert len(families) == 1
+    fam = families[0]
+    assert set(fam["ordered_member_file_ids"]) == {sop, audit}
+    assert fam["effective_file_id"] == sop
+    assert fam["reconstruct_revision_chain"] is True  # the per-family R10 opt-in is set
+
+    # the keep-set re-derived: only the effective member is now a keep-item.
+    run = (await app_client.get(f"/api/v1/admin/imports/{run_id}", headers=h)).json()
+    assert run["counts"]["proposal"]["keep_items"] == 1
+    audit_detail = (
+        await app_client.get(f"/api/v1/admin/imports/{run_id}/files/{audit}", headers=h)
+    ).json()
+    assert audit_detail["proposal"] is None  # the non-effective member is no longer a keep-item
+    assert audit_detail["dedup"]["in_version_family"] is True
+
+
+async def test_split_deletes_group_below_two_members(
+    app_client: AsyncClient, token_factory: Callable[..., str], _stub_tika: None
+) -> None:
+    admin = _subject("avery")
+    await _assign_role(admin, "System Administrator")
+    h = _auth(token_factory, admin)
+    _seed_dedup_corpus()
+    run_id = (
+        await app_client.post("/api/v1/admin/imports", headers=h, json={"source_root": "."})
+    ).json()["id"]
+    await _drive(uuid.UUID(run_id))
+
+    clusters = (
+        await app_client.get(f"/api/v1/admin/imports/{run_id}/dupe-clusters", headers=h)
+    ).json()["clusters"]
+    exact = next(c for c in clusters if c["method"] == "exact")
+    before = (await app_client.get(f"/api/v1/admin/imports/{run_id}", headers=h)).json()
+    keep_before = before["counts"]["proposal"]["keep_items"]
+
+    # split off one of the 2 exact-dup members → the cluster drops to 1 → it is DELETED; both files
+    # become standalone keep-items (the survivor is not silently dropped).
+    member = exact["member_file_ids"][1]
+    res = await app_client.post(
+        f"/api/v1/admin/imports/{run_id}/split",
+        headers=h,
+        json={
+            "target_kind": "dupe_cluster",
+            "target_id": exact["id"],
+            "separate_file_ids": [member],
+        },
+    )
+    assert res.status_code == 200, res.text
+
+    after_clusters = (
+        await app_client.get(f"/api/v1/admin/imports/{run_id}/dupe-clusters", headers=h)
+    ).json()["clusters"]
+    assert {c["method"] for c in after_clusters} == {"near"}  # the exact cluster is gone
+    after = (await app_client.get(f"/api/v1/admin/imports/{run_id}", headers=h)).json()
+    assert (
+        after["counts"]["proposal"]["keep_items"] == keep_before + 1
+    )  # the survivor became a keep
+
+
+async def test_exclude_then_merge_keeps_exclude(
+    app_client: AsyncClient, token_factory: Callable[..., str], _stub_tika: None
+) -> None:
+    # The design-critic consistency case: a file excluded by decision, then merged structurally into
+    # a family, must STAY excluded — the exclude fold wins over the structural family membership.
+    admin = _subject("avery")
+    await _assign_role(admin, "System Administrator")
+    h = _auth(token_factory, admin)
+    run_id, by_name = await _proposed_classifiable(app_client, h, _stub_tika)
+    sop = by_name["SOP-PUR-002 Purchasing.docx"]["id"]
+    audit = by_name["Internal Audit Report Q2 2023.pdf"]["id"]
+
+    await app_client.post(
+        f"/api/v1/admin/imports/{run_id}/files/{audit}/decision",
+        headers=h,
+        json={"action": "exclude", "reason": "not in scope"},
+    )
+    await app_client.post(
+        f"/api/v1/admin/imports/{run_id}/merge",
+        headers=h,
+        json={"file_ids": [sop, audit], "effective_file_id": audit},
+    )
+    detail = (
+        await app_client.get(f"/api/v1/admin/imports/{run_id}/files/{audit}", headers=h)
+    ).json()
+    assert detail["dedup"]["in_version_family"] is True  # structurally merged
+    assert detail["review"]["effective"]["disposition"] == "excluded"  # but the exclude still wins
+    assert detail["review"]["effective"]["commit_ready"] is False
+
+
+async def test_checklist_conflict_blocks_then_resolves_and_projection(
+    app_client: AsyncClient, token_factory: Callable[..., str], _stub_tika: None
+) -> None:
+    admin = _subject("avery")
+    await _assign_role(admin, "System Administrator")
+    h = _auth(token_factory, admin)
+    run_id, by_name = await _proposed_classifiable(app_client, h, _stub_tika)
+    audit = by_name["Internal Audit Report Q2 2023.pdf"]["id"]  # engine SOP-PUR-002 on the SOP
+
+    # a fresh Proposed run with two distinct keep-items has no blocking conflicts → ready.
+    chk0 = (await app_client.get(f"/api/v1/admin/imports/{run_id}/checklist", headers=h)).json()
+    assert chk0["ready"] is True
+    assert (
+        "star_coverage" in chk0["advisory"]
+        and "projected_rollup" in chk0["advisory"]["star_coverage"]
+    )
+
+    # correct the audit identifier to COLLIDE with the SOP within the import → a blocking conflict.
+    await app_client.post(
+        f"/api/v1/admin/imports/{run_id}/files/{audit}/decision",
+        headers=h,
+        json={"action": "correct", "after": {"identifier": "SOP-PUR-002", "kind": "DOCUMENT"}},
+    )
+    chk1 = (await app_client.get(f"/api/v1/admin/imports/{run_id}/checklist", headers=h)).json()
+    assert chk1["ready"] is False
+    assert any(b["type"] == "duplicate_identifier_within_import" for b in chk1["blocking"])
+
+    # resolve by excluding the colliding file → ready again.
+    await app_client.post(
+        f"/api/v1/admin/imports/{run_id}/files/{audit}/decision",
+        headers=h,
+        json={"action": "exclude", "reason": "duplicate of the SOP"},
+    )
+    chk2 = (await app_client.get(f"/api/v1/admin/imports/{run_id}/checklist", headers=h)).json()
+    assert chk2["ready"] is True
+
+    # the ★-coverage projection never demotes: projected covered ≥ live covered (imports only add).
+    rollup = chk2["advisory"]["star_coverage"]["rollup"]
+    projected = chk2["advisory"]["star_coverage"]["projected_rollup"]
+    assert projected["covered"] >= rollup["covered"]
+    assert all("projected_status" in r for r in chk2["advisory"]["star_coverage"]["rows"])
+
+
+async def test_idempotency_key_replays_one_decision(
+    app_client: AsyncClient, token_factory: Callable[..., str], _stub_tika: None
+) -> None:
+    admin = _subject("avery")
+    await _assign_role(admin, "System Administrator")
+    h = _auth(token_factory, admin)
+    run_id, by_name = await _proposed_classifiable(app_client, h, _stub_tika)
+    sop = by_name["SOP-PUR-002 Purchasing.docx"]["id"]
+    hk = {**h, "Idempotency-Key": "decide-sop-once"}
+
+    first = await app_client.post(
+        f"/api/v1/admin/imports/{run_id}/files/{sop}/decision",
+        headers=hk,
+        json={"action": "accept", "after": {"kind": "DOCUMENT"}},
+    )
+    assert first.status_code == 200
+    replay = await app_client.post(
+        f"/api/v1/admin/imports/{run_id}/files/{sop}/decision",
+        headers=hk,
+        json={"action": "accept", "after": {"kind": "DOCUMENT"}},
+    )
+    assert replay.status_code == 200 and replay.json().get("replayed") is True
+
+    log = (await app_client.get(f"/api/v1/admin/imports/{run_id}/decisions", headers=h)).json()
+    assert len(log["decisions"]) == 1  # the replay created NO duplicate row
+
+
+async def test_review_writes_nothing_to_the_vault(
+    app_client: AsyncClient, token_factory: Callable[..., str], _stub_tika: None
+) -> None:
+    admin = _subject("avery")
+    await _assign_role(admin, "System Administrator")
+    h = _auth(token_factory, admin)
+    run_id, by_name = await _proposed_classifiable(app_client, h, _stub_tika)
+    sop = by_name["SOP-PUR-002 Purchasing.docx"]["id"]
+    audit = by_name["Internal Audit Report Q2 2023.pdf"]["id"]
+    await app_client.post(
+        f"/api/v1/admin/imports/{run_id}/files/{sop}/decision",
+        headers=h,
+        json={"action": "accept", "after": {"kind": "DOCUMENT"}},
+    )
+    await app_client.post(
+        f"/api/v1/admin/imports/{run_id}/merge",
+        headers=h,
+        json={"file_ids": [sop, audit], "effective_file_id": sop},
+    )
+    async with get_sessionmaker()() as session:
+        docs = (
+            await session.execute(sa.text("SELECT count(*) FROM documented_information"))
+        ).scalar_one()
+        versions = (
+            await session.execute(sa.text("SELECT count(*) FROM document_version"))
+        ).scalar_one()
+    assert docs == 0 and versions == 0  # review commits NOTHING to the vault (commit is S-ing-5)
+
+
+def _seed_merge_cluster() -> None:
+    """3 byte-identical files (an exact cluster of 3) + 1 distinct standalone — a merge that pulls
+    ONE member out of the cluster leaves ≥2 members whose canonical must be recomputed."""
+    root = Path(get_settings().import_source_root)
+    for n in ("d1.txt", "d2.txt", "d3.txt"):
+        (root / n).write_text("triple identical retained evidence body content xyz delta echo")
+    (root / "lonely.txt").write_text(
+        "a wholly distinct standalone purchasing document foxtrot golf hotel"
+    )
+
+
+async def test_merge_recomputes_canonical_of_remaining_cluster_members(
+    app_client: AsyncClient, token_factory: Callable[..., str], _stub_tika: None
+) -> None:
+    # Regression (diff-review major): merging a member OUT of a 3-member cluster leaves 2 members
+    # whose canonical is recomputed via ctx — those kept members are outside the merge set, so their
+    # context must be loaded first (else a KeyError 500). Assert the merge succeeds + cluster → 2.
+    admin = _subject("avery")
+    await _assign_role(admin, "System Administrator")
+    h = _auth(token_factory, admin)
+    _seed_merge_cluster()
+    run_id = (
+        await app_client.post("/api/v1/admin/imports", headers=h, json={"source_root": "."})
+    ).json()["id"]
+    await _drive(uuid.UUID(run_id))
+
+    clusters = (
+        await app_client.get(f"/api/v1/admin/imports/{run_id}/dupe-clusters", headers=h)
+    ).json()["clusters"]
+    exact = next(c for c in clusters if c["method"] == "exact")
+    assert len(exact["member_file_ids"]) == 3
+    files = (await app_client.get(f"/api/v1/admin/imports/{run_id}/files", headers=h)).json()[
+        "files"
+    ]
+    lonely = next(f["id"] for f in files if f["filename"] == "lonely.txt")
+
+    res = await app_client.post(
+        f"/api/v1/admin/imports/{run_id}/merge",
+        headers=h,
+        json={"file_ids": [exact["member_file_ids"][0], lonely]},
+    )
+    assert res.status_code == 200, res.text  # no KeyError 500
+
+    after = (
+        await app_client.get(f"/api/v1/admin/imports/{run_id}/dupe-clusters", headers=h)
+    ).json()["clusters"]
+    exact_after = next(c for c in after if c["method"] == "exact")
+    assert len(exact_after["member_file_ids"]) == 2  # the pulled member is gone
+    assert exact_after["canonical_file_id"] in exact_after["member_file_ids"]  # recomputed, valid
+
+
+async def test_merge_effective_file_id_from_consolidated_family(
+    app_client: AsyncClient, token_factory: Callable[..., str], _stub_tika: None
+) -> None:
+    # Regression (diff-review major): effective_file_id may be a member of a TOUCHED family, not in
+    # the explicit file_ids — it must validate against the FINAL consolidated set, not the file_ids.
+    admin = _subject("avery")
+    await _assign_role(admin, "System Administrator")
+    h = _auth(token_factory, admin)
+    _seed_dedup_corpus()
+    run_id = (
+        await app_client.post("/api/v1/admin/imports", headers=h, json={"source_root": "."})
+    ).json()["id"]
+    await _drive(uuid.UUID(run_id))
+
+    families = (
+        await app_client.get(f"/api/v1/admin/imports/{run_id}/version-families", headers=h)
+    ).json()["families"]
+    fam_members = families[0]["ordered_member_file_ids"]  # the 3-member SOP-FAM family
+    a, b = fam_members[0], fam_members[1]
+    clusters = (
+        await app_client.get(f"/api/v1/admin/imports/{run_id}/dupe-clusters", headers=h)
+    ).json()["clusters"]
+    standalone = next(c for c in clusters if c["method"] == "exact")["canonical_file_id"]
+
+    # merge family-member A + a standalone, choosing effective = family-member B (NOT in file_ids).
+    res = await app_client.post(
+        f"/api/v1/admin/imports/{run_id}/merge",
+        headers=h,
+        json={"file_ids": [a, standalone], "effective_file_id": b},
+    )
+    assert res.status_code == 200, res.text  # B is valid after consolidation (not a 422)
+
+    fams = (
+        await app_client.get(f"/api/v1/admin/imports/{run_id}/version-families", headers=h)
+    ).json()["families"]
+    merged = next(f for f in fams if standalone in f["ordered_member_file_ids"])
+    assert merged["effective_file_id"] == b  # the human-chosen consolidated member
+
+
+async def test_decision_rejected_on_non_included_file(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    # Regression (diff-review minor): a decision on an excluded/quarantined scan file is meaningless
+    # (no proposal node, never commits) → 422.
+    admin = _subject("avery")
+    await _assign_role(admin, "System Administrator")
+    h = _auth(token_factory, admin)
+    _seed_source()  # Thumbs.db (excluded), draft.tmp (quarantine)
+    run_id = (
+        await app_client.post("/api/v1/admin/imports", headers=h, json={"source_root": "."})
+    ).json()["id"]
+    await _drive(uuid.UUID(run_id))
+    files = (await app_client.get(f"/api/v1/admin/imports/{run_id}/files", headers=h)).json()[
+        "files"
+    ]
+    excluded = next(f["id"] for f in files if f["filename"] == "Thumbs.db")
+    res = await app_client.post(
+        f"/api/v1/admin/imports/{run_id}/files/{excluded}/decision",
+        headers=h,
+        json={"action": "accept", "after": {"kind": "DOCUMENT"}},
+    )
+    assert res.status_code == 422

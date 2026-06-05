@@ -8,7 +8,11 @@ the run-lifecycle states it could reach: ``Created`` -> ``Scanning`` -> ``Scanne
 ``Classified`` consequently STOPS being terminal and becomes the dedup rest-state, the ``Scanned``
 precedent). All via ``ALTER TYPE ... ADD VALUE`` — the additive-enum pattern (the ``event_type``
 0011-0029 precedent), which keeps each slice's migration churn-free and dodges speculative state
-names. Later slices add ``Committing`` ... ``Completed``/``PartiallyCommitted``.
+names. **S-ing-4 ADD VALUEs ``Reviewing``** (the lock-free human-review rest-state). Later slices
+add ``Committing`` ... ``Completed``/``PartiallyCommitted``.
+
+S-ing-4 also adds the fresh ``import_decision_action`` enum (the doc 14 §13 closed set
+accept/correct/merge/split/exclude/defer) backing the human-in-the-loop ``import_decision`` log.
 
 The staging enums (``import_extract_status``, ``import_kind``, ``import_confidence_band`` from
 S-ing-2; ``import_dupe_method`` from S-ing-3) are fresh ``CREATE TYPE``s. ``import_kind``
@@ -44,7 +48,13 @@ class ImportRunStatus(enum.Enum):
     CLASSIFIED = "Classified"  # S-ing-3: classify done, dedup pending (rest-state, lock held)
     DEDUPING = "Deduping"  # S-ing-3: Stage 4 (exact/near dup + version families) in progress
     PROPOSING = "Proposing"  # S-ing-3: Stage 5 (proposed identifier/IA-path/conflicts) in progress
-    PROPOSED = "Proposed"  # S-ing-3: proposed, awaiting S-ing-4 human review (the resting terminal)
+    PROPOSED = "Proposed"  # S-ing-3: proposed, awaiting S-ing-4 human review (a resting checkpoint)
+    # S-ing-4: a human has started recording review decisions. A LOCK-FREE, human-paced rest-state —
+    # it MUST stay out of repository._ACTIVE_STATES + service._IN_PROGRESS (the lock-liveness reaper
+    # would otherwise FAIL a run mid-review, as the source-root lock is freed at Proposed) and out
+    # of _TERMINAL (so cancel still works). Decisions are accepted in {Proposed, Reviewing}; S-ing-5
+    # commit transitions Reviewing→Committing.
+    REVIEWING = "Reviewing"
     FAILED = "Failed"
     CANCELLED = "Cancelled"
 
@@ -88,6 +98,24 @@ class ImportDupeMethod(enum.Enum):
     NEAR = "near"
 
 
+class ImportDecisionAction(enum.Enum):
+    """The human-in-the-loop review action recorded on an ``import_decision`` (S-ing-4, doc 09 §9.2,
+    doc 14 §13). A CLOSED set fixed by doc 14 §13. **Dimensional** (per-file) actions — ``ACCEPT``
+    (confirm the proposal as-is), ``CORRECT`` (change any dimension incl. the R10 kind-confirm via
+    ``after.kind``), ``EXCLUDE`` (drop from import, kept in the report), ``DEFER`` (leave undecided)
+    — flow through the per-file/bulk endpoints. **Structural** actions — ``MERGE`` (combine files
+    into a version family / force the revision chain), ``SPLIT`` (break an over-eager cluster/family
+    apart) — flow through the dedicated merge/split endpoints and live-mutate the cluster/family
+    rows."""
+
+    ACCEPT = "accept"
+    CORRECT = "correct"
+    MERGE = "merge"
+    SPLIT = "split"
+    EXCLUDE = "exclude"
+    DEFER = "defer"
+
+
 def _vals(e: type[enum.Enum]) -> list[str]:
     return [m.value for m in e]
 
@@ -105,6 +133,9 @@ import_confidence_band_enum = SAEnum(
 import_dupe_method_enum = SAEnum(
     ImportDupeMethod, name="import_dupe_method", values_callable=_vals, create_type=False
 )
+import_decision_action_enum = SAEnum(
+    ImportDecisionAction, name="import_decision_action", values_callable=_vals, create_type=False
+)
 
 # Re-used by the migration's enum-create / ADD VALUE steps so the ORM and the hand-authored DDL
 # never drift.
@@ -113,3 +144,4 @@ IMPORT_EXTRACT_STATUS_VALUES = tuple(_vals(ImportExtractStatus))
 IMPORT_KIND_VALUES = tuple(_vals(ImportKind))
 IMPORT_CONFIDENCE_BAND_VALUES = tuple(_vals(ImportConfidenceBand))
 IMPORT_DUPE_METHOD_VALUES = tuple(_vals(ImportDupeMethod))
+IMPORT_DECISION_ACTION_VALUES = tuple(_vals(ImportDecisionAction))
