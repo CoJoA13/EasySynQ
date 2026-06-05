@@ -843,17 +843,22 @@ async def test_checklist_conflict_blocks_then_resolves_and_projection(
     await _assign_role(admin, "System Administrator")
     h = _auth(token_factory, admin)
     run_id, by_name = await _proposed_classifiable(app_client, h, _stub_tika)
-    audit = by_name["Internal Audit Report Q2 2023.pdf"]["id"]  # engine SOP-PUR-002 on the SOP
+    sop = by_name["SOP-PUR-002 Purchasing.docx"]["id"]
+    audit = by_name["Internal Audit Report Q2 2023.pdf"]["id"]
 
-    # a fresh Proposed run with two distinct keep-items has no blocking conflicts → ready.
+    # The checklist always carries the ★-coverage projection. NB: the integration DB is shared
+    # across the suite, so a prior test's vault doc may collide with the SOP's identifier — assert
+    # the SPECIFIC duplicate conflict we introduce, not the global `ready` (the shared-DB rule).
     chk0 = (await app_client.get(f"/api/v1/admin/imports/{run_id}/checklist", headers=h)).json()
-    assert chk0["ready"] is True
-    assert (
-        "star_coverage" in chk0["advisory"]
-        and "projected_rollup" in chk0["advisory"]["star_coverage"]
-    )
+    assert "star_coverage" in chk0["advisory"]
+    assert "projected_rollup" in chk0["advisory"]["star_coverage"]
 
-    # correct the audit identifier to COLLIDE with the SOP within the import → a blocking conflict.
+    def _dups(chk: dict) -> list:
+        return [b for b in chk["blocking"] if b["type"] == "duplicate_identifier_within_import"]
+
+    assert not _dups(chk0)  # no within-import duplicate yet (two distinct identifiers)
+
+    # correct the audit identifier to COLLIDE with the SOP WITHIN the import → a duplicate conflict.
     await app_client.post(
         f"/api/v1/admin/imports/{run_id}/files/{audit}/decision",
         headers=h,
@@ -861,16 +866,18 @@ async def test_checklist_conflict_blocks_then_resolves_and_projection(
     )
     chk1 = (await app_client.get(f"/api/v1/admin/imports/{run_id}/checklist", headers=h)).json()
     assert chk1["ready"] is False
-    assert any(b["type"] == "duplicate_identifier_within_import" for b in chk1["blocking"])
+    dup = _dups(chk1)
+    assert len(dup) == 1 and dup[0]["identifier"] == "SOP-PUR-002"
+    assert {sop, audit} == set(dup[0]["file_ids"])
 
-    # resolve by excluding the colliding file → ready again.
+    # resolve by excluding the colliding file → the within-import duplicate is gone.
     await app_client.post(
         f"/api/v1/admin/imports/{run_id}/files/{audit}/decision",
         headers=h,
         json={"action": "exclude", "reason": "duplicate of the SOP"},
     )
     chk2 = (await app_client.get(f"/api/v1/admin/imports/{run_id}/checklist", headers=h)).json()
-    assert chk2["ready"] is True
+    assert not _dups(chk2)  # the duplicate conflict is resolved
 
     # the ★-coverage projection never demotes: projected covered ≥ live covered (imports only add).
     rollup = chk2["advisory"]["star_coverage"]["rollup"]
@@ -915,6 +922,20 @@ async def test_review_writes_nothing_to_the_vault(
     run_id, by_name = await _proposed_classifiable(app_client, h, _stub_tika)
     sop = by_name["SOP-PUR-002 Purchasing.docx"]["id"]
     audit = by_name["Internal Audit Report Q2 2023.pdf"]["id"]
+
+    # The integration DB is shared across the suite (prior tests created vault docs), so assert the
+    # vault row counts are UNCHANGED by the review (delta 0), not absolute-zero (shared-DB rule).
+    async def _vault_counts() -> tuple[int, int]:
+        async with get_sessionmaker()() as session:
+            d = (
+                await session.execute(sa.text("SELECT count(*) FROM documented_information"))
+            ).scalar_one()
+            v = (
+                await session.execute(sa.text("SELECT count(*) FROM document_version"))
+            ).scalar_one()
+        return int(d), int(v)
+
+    before = await _vault_counts()
     await app_client.post(
         f"/api/v1/admin/imports/{run_id}/files/{sop}/decision",
         headers=h,
@@ -925,14 +946,8 @@ async def test_review_writes_nothing_to_the_vault(
         headers=h,
         json={"file_ids": [sop, audit], "effective_file_id": sop},
     )
-    async with get_sessionmaker()() as session:
-        docs = (
-            await session.execute(sa.text("SELECT count(*) FROM documented_information"))
-        ).scalar_one()
-        versions = (
-            await session.execute(sa.text("SELECT count(*) FROM document_version"))
-        ).scalar_one()
-    assert docs == 0 and versions == 0  # review commits NOTHING to the vault (commit is S-ing-5)
+    after = await _vault_counts()
+    assert after == before  # review commits NOTHING to the vault (commit is S-ing-5)
 
 
 def _seed_merge_cluster() -> None:
