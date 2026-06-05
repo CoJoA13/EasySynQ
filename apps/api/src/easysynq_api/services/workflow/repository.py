@@ -78,6 +78,66 @@ async def get_instance(session: AsyncSession, instance_id: uuid.UUID) -> Workflo
     return await session.get(WorkflowInstance, instance_id)
 
 
+async def lock_instance_for_update(
+    session: AsyncSession, instance_id: uuid.UUID
+) -> WorkflowInstance | None:
+    """SELECT … FOR UPDATE the instance row — the multi-stage engine's serialization point (sibling
+    quorum approvers serialize here so quorum-count + advance + sibling-skip + next-stage
+    materialization is atomic). Distinct from ``get_instance`` (an unlocked ``session.get`` the
+    byte-identical DOCUMENT path keeps using)."""
+    return (
+        await session.execute(
+            select(WorkflowInstance).where(WorkflowInstance.id == instance_id).with_for_update()
+        )
+    ).scalar_one_or_none()
+
+
+async def all_stages(session: AsyncSession, definition_id: uuid.UUID) -> dict[str, WorkflowStage]:
+    """Every stage of a definition, keyed by ``stage.key`` (the engine's stage graph)."""
+    rows = (
+        (
+            await session.execute(
+                select(WorkflowStage).where(WorkflowStage.definition_id == definition_id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return {s.key: s for s in rows}
+
+
+async def stage_tasks(session: AsyncSession, instance_id: uuid.UUID, stage_key: str) -> list[Task]:
+    """All tasks materialized for one stage entry (any state) — siblings for quorum + auto-skip."""
+    return list(
+        (
+            await session.execute(
+                select(Task)
+                .where(Task.instance_id == instance_id, Task.stage_key == stage_key)
+                .order_by(Task.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+
+async def stage_outcomes(
+    session: AsyncSession, instance_id: uuid.UUID, stage_key: str
+) -> list[TaskOutcome]:
+    """The recorded outcomes of a stage's DONE tasks (for the distinct-approver quorum count)."""
+    return list(
+        (
+            await session.execute(
+                select(TaskOutcome)
+                .join(Task, Task.id == TaskOutcome.task_id)
+                .where(Task.instance_id == instance_id, Task.stage_key == stage_key)
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+
 async def get_outcome(session: AsyncSession, task_id: uuid.UUID) -> TaskOutcome | None:
     return (
         await session.execute(select(TaskOutcome).where(TaskOutcome.task_id == task_id))

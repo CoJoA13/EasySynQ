@@ -56,6 +56,12 @@ class AuditObjectType(enum.Enum):
     # precedent). Added via ``ALTER TYPE audit_object_type ADD VALUE`` in 0029 (the 0019/0025/0028
     # precedent).
     import_run = "import_run"
+    # the declarative workflow engine (S-wf-engine, doc 10 §2.6) — the per-transition TASK_DECIDED /
+    # STAGE_ADVANCED / STAGE_FAILED events key here on the ``workflow_instance`` id (the engine's
+    # subject is polymorphic with no FK, so the instance is the per-flow anchor). The DOCUMENT
+    # single-stage approval (S5) keeps writing via VaultAuditSink on ``document_version``. Added via
+    # ``ALTER TYPE audit_object_type ADD VALUE`` in 0035 (the 0019/0025/0028/0029 precedent).
+    workflow_instance = "workflow_instance"
 
 
 class EventType(enum.Enum):
@@ -270,6 +276,17 @@ class EventType(enum.Enum):
     AUDIT_CREATED = "AUDIT_CREATED"
     AUDIT_TRANSITIONED = "AUDIT_TRANSITIONED"
     AUDIT_CLOSED = "AUDIT_CLOSED"
+    # the declarative workflow engine (S-wf-engine, doc 10 §2.6). One in-txn audit row per stage
+    # transition (object_type=workflow_instance): TASK_DECIDED per task decision; STAGE_ADVANCED
+    # when
+    # a stage's quorum is MET + the flow advances/completes; STAGE_FAILED on early-fail/reject. The
+    # DOCUMENT approval (S5) keeps its VaultAuditSink lifecycle events untouched. Added via ALTER
+    # TYPE
+    # event_type ADD VALUE in 0035 (the 0011-0034 additive pattern; a from-scratch ``upgrade head``
+    # rebuilds the type from EVENT_TYPE_VALUES, so the members live here too).
+    TASK_DECIDED = "TASK_DECIDED"
+    STAGE_ADVANCED = "STAGE_ADVANCED"
+    STAGE_FAILED = "STAGE_FAILED"
 
 
 class CheckpointSinkKind(enum.Enum):
