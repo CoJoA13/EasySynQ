@@ -136,6 +136,11 @@ class Settings(BaseSettings):
         4 * 1024 * 1024
     )  # full_text inline cap (text_truncated flag)
     import_run_stall_seconds: int = 6 * 3600  # reaper absolute backstop on an in-progress run
+    # S-ing-3 dedup: the §7.1 near-dup Jaccard threshold (in-process MinHash). OpenSearch is the
+    # documented v1 drop-in for the DedupDetector/Indexer seams (R34) — absent in MVP/v1, no
+    # container; this URL is the reserved drop-in target only (nothing connects to it yet).
+    import_near_dup_threshold: float = 0.85
+    opensearch_url: str = ""  # reserved (R34 drop-in); empty = not configured
 
     @property
     def sync_dsn(self) -> str:

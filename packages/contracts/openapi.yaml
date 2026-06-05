@@ -2223,14 +2223,55 @@ paths:
       tags: [imports]
       operationId: getImportRunFile
       summary: >-
-        One file's full review detail (S-ing-2): inventory + extraction (text/props/structure) + the
-        scored classification proposal with its evidence list. Needs import.review.
+        One file's full review detail: inventory + extraction + the scored classification proposal
+        with its evidence list (S-ing-2) + the S-ing-3 dedup membership and per-keep-item proposal
+        (identifier / IA path / conflicts). Needs import.review.
       responses:
         "200":
           description: The file detail.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ImportFileDetail" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "423": { $ref: "#/components/responses/ProblemResponse" }
+
+  /admin/imports/{import_id}/dupe-clusters:
+    parameters:
+      - { name: import_id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [imports]
+      operationId: listImportDupeClusters
+      summary: >-
+        The run's Stage-4 duplicate clusters — exact (SHA-256) and near (MinHash/Jaccard >= 0.85),
+        each with its members + the deterministic canonical pick (S-ing-3, doc 09 §7.1). Needs
+        import.review.
+      responses:
+        "200":
+          description: The dedup clusters.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ImportDupeClusterList" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "423": { $ref: "#/components/responses/ProblemResponse" }
+
+  /admin/imports/{import_id}/version-families:
+    parameters:
+      - { name: import_id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [imports]
+      operationId: listImportVersionFamilies
+      summary: >-
+        The run's Stage-4 reconstructed version families (grouped by doc-code / normalized base-name),
+        each with its ordered members + the candidate effective version (S-ing-3, doc 09 §7.3). Needs
+        import.review.
+      responses:
+        "200":
+          description: The version families.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ImportVersionFamilyList" }
         "403": { $ref: "#/components/responses/ProblemResponse" }
         "404": { $ref: "#/components/responses/ProblemResponse" }
         "423": { $ref: "#/components/responses/ProblemResponse" }
@@ -4080,10 +4121,13 @@ components:
     ImportRunStatus:
       type: string
       description: >-
-        The import-run state machine. S-ing-2 auto-chains Created → Scanning → Scanned → Extracting →
-        Classifying → Classified (the resting checkpoint awaiting review) (+ Failed/Cancelled); later
-        slices add the commit/complete stages additively.
-      enum: [Created, Scanning, Scanned, Extracting, Classifying, Classified, Failed, Cancelled]
+        The import-run state machine. The pipeline auto-chains Created → Scanning → Scanned →
+        Extracting → Classifying → Classified → Deduping → Proposing → Proposed (the resting
+        checkpoint awaiting review) (+ Failed/Cancelled); later slices add the commit/complete stages
+        additively. S-ing-3: Classified is no longer terminal (it chains to dedup); Proposed is.
+      enum:
+        [Created, Scanning, Scanned, Extracting, Classifying, Classified, Deduping, Proposing,
+         Proposed, Failed, Cancelled]
     ImportKind:
       type: string
       description: >-
@@ -4194,6 +4238,12 @@ components:
               oneOf:
                 - { type: "null" }
                 - { $ref: "#/components/schemas/ImportExtract" }
+            dedup: { $ref: "#/components/schemas/ImportDedupMembership" }
+            proposal:
+              description: "The Stage-5 per-keep-item proposal (S-ing-3); null for a non-keep file."
+              oneOf:
+                - { type: "null" }
+                - { $ref: "#/components/schemas/ImportProposalNode" }
     ImportFileList:
       type: object
       additionalProperties: false
@@ -4201,6 +4251,69 @@ components:
       properties:
         run_id: { type: string, format: uuid }
         files: { type: array, items: { $ref: "#/components/schemas/ImportFile" } }
+    ImportDedupMembership:
+      type: object
+      additionalProperties: false
+      description: "A file's derived Stage-4 dedup/family role (S-ing-3, doc 09 §7)."
+      properties:
+        in_exact_cluster: { type: boolean }
+        in_near_cluster: { type: boolean }
+        is_canonical: { type: [boolean, "null"], description: "The keep-pick of its cluster(s); null if in none." }
+        redundant_of_file_id: { type: [string, "null"], format: uuid, description: "The canonical it is a redundant copy of." }
+        in_version_family: { type: boolean }
+        is_effective: { type: [boolean, "null"], description: "The candidate Effective member of its family; null if in none." }
+        superseded_by_file_id: { type: [string, "null"], format: uuid, description: "The effective member it is superseded by." }
+    ImportDupeCluster:
+      type: object
+      additionalProperties: false
+      description: "A Stage-4 duplicate cluster (S-ing-3, doc 09 §7.1)."
+      required: [id, method, member_file_ids, canonical_file_id]
+      properties:
+        id: { type: string, format: uuid }
+        method: { type: string, enum: [exact, near], description: "exact = byte-identical SHA-256; near = MinHash/Jaccard >= 0.85." }
+        member_file_ids: { type: array, items: { type: string, format: uuid }, description: "All files in the cluster (>=2), canonical first." }
+        canonical_file_id: { type: string, format: uuid, description: "The §7.2 deterministic keep-pick." }
+        jaccard: { type: [number, "null"], description: "1.0 for exact; the min pairwise exact-Jaccard for near." }
+        evidence: { type: object, additionalProperties: true, description: "Review caveats, e.g. {truncated_comparison: true}." }
+    ImportDupeClusterList:
+      type: object
+      additionalProperties: false
+      required: [run_id, clusters]
+      properties:
+        run_id: { type: string, format: uuid }
+        clusters: { type: array, items: { $ref: "#/components/schemas/ImportDupeCluster" } }
+    ImportVersionFamily:
+      type: object
+      additionalProperties: false
+      description: "A Stage-4 reconstructed version family (S-ing-3, doc 09 §7.3)."
+      required: [id, family_key, base_name, ordered_member_file_ids, effective_file_id, reconstruct_revision_chain]
+      properties:
+        id: { type: string, format: uuid }
+        family_key: { type: string, description: "The doc-code if present, else the normalized base-name." }
+        base_name: { type: string }
+        doc_code: { type: [string, "null"] }
+        ordered_member_file_ids: { type: array, items: { type: string, format: uuid }, description: "Members in §7.2 canonical (newest-first) order." }
+        effective_file_id: { type: string, format: uuid, description: "The candidate Effective baseline (the family head)." }
+        reconstruct_revision_chain: { type: boolean, description: "R10 opt-in (default false = current-only-as-provenance); set at review." }
+        evidence: { type: object, additionalProperties: true, description: "Per-tie-break rationale + obsolete_candidate pre-flags." }
+    ImportVersionFamilyList:
+      type: object
+      additionalProperties: false
+      required: [run_id, families]
+      properties:
+        run_id: { type: string, format: uuid }
+        families: { type: array, items: { $ref: "#/components/schemas/ImportVersionFamily" } }
+    ImportProposalNode:
+      type: object
+      additionalProperties: false
+      description: "The Stage-5 per-keep-item proposal (S-ing-3, doc 09 §8). A suggestion only — never an allocated identifier."
+      properties:
+        proposed_identifier: { type: [string, "null"], description: "A preserved doc-code verbatim, or a {type}-<new> sentinel, or null." }
+        identifier_source: { type: [string, "null"], enum: [preserved_doc_code, suggested_default, null] }
+        target_ia_path: { type: [string, "null"], description: "The proposed mirror home ('Records' | '{PHASE}/{NN}-{Word}' | '_unmapped')." }
+        proposed_owner: { type: [string, "null"], description: "A best-effort owner hint string (resolved to an app_user at review/commit)." }
+        owner_source: { type: [string, "null"], enum: [embedded_author, null] }
+        conflict_flags: { type: object, additionalProperties: true, description: "{duplicate_identifier_within_import: [...], collides_with_vault_doc: <uuid>, needs_identifier: true}." }
     EvidencePack:
       type: object
       additionalProperties: false

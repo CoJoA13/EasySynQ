@@ -1,8 +1,9 @@
-"""Route-inventory PROOF (S-ing-1/2): the ingestion surface exposes EXACTLY the run/scan verbs and
-**writes nothing to the vault** — no ``/commit`` (S-ing-5), no ``/decision`` (S-ing-4). S-ing-2 adds
-only a read (the per-file detail GET); the POST allow-list is unchanged. The exact POST allow-list
-(not merely a PUT/PATCH/DELETE ban) catches a future stray ``POST .../commit`` or
-``POST .../files/{id}/decision`` — both POSTs that a verb-class ban would miss. No DB needed."""
+"""Route-inventory PROOF (S-ing-1/2/3): the ingestion surface exposes EXACTLY the run/scan/review
+verbs and **writes nothing to the vault** — no ``/commit`` (S-ing-5), no ``/decision`` (S-ing-4).
+S-ing-3 adds only reads (the dedup-clusters + version-families GETs + the per-file proposal sub-
+object); the POST allow-list is unchanged. The exact POST allow-list (not merely a PUT/PATCH/DELETE
+ban) catches a future stray ``POST .../commit`` or ``POST .../files/{id}/decision`` — both POSTs
+a verb-class ban would miss. No DB needed."""
 
 from __future__ import annotations
 
@@ -17,6 +18,8 @@ _EXPECTED = {
     ("/api/v1/admin/imports/{import_id}", "GET"),
     ("/api/v1/admin/imports/{import_id}/files", "GET"),
     ("/api/v1/admin/imports/{import_id}/files/{file_id}", "GET"),
+    ("/api/v1/admin/imports/{import_id}/dupe-clusters", "GET"),
+    ("/api/v1/admin/imports/{import_id}/version-families", "GET"),
     ("/api/v1/admin/imports/{import_id}/cancel", "POST"),
 }
 

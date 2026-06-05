@@ -27,14 +27,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db.models._ingestion_enums import (
     ImportConfidenceBand,
+    ImportDupeMethod,
     ImportKind,
     ImportRunStatus,
 )
 from ..db.models.app_user import AppUser
 from ..db.models.import_classification import ImportClassification
+from ..db.models.import_dupe_cluster import ImportDupeCluster
 from ..db.models.import_extract import ImportExtract
 from ..db.models.import_file import ImportFile
+from ..db.models.import_proposal_node import ImportProposalNode
 from ..db.models.import_run import ImportRun
+from ..db.models.import_version_family import ImportVersionFamily
 from ..db.session import get_session
 from ..services.authz import require
 from ..services.ingestion import service as svc
@@ -140,6 +144,77 @@ def _file_view(f: ImportFile, classification: ImportClassification | None = None
     }
 
 
+def _dupe_cluster_view(c: ImportDupeCluster) -> dict[str, Any]:
+    """A Stage-4 duplicate cluster (S-ing-3, doc 09 §7.1)."""
+    return {
+        "id": str(c.id),
+        "method": c.method.value,
+        "member_file_ids": [str(m) for m in c.member_file_ids],
+        "canonical_file_id": str(c.canonical_file_id),
+        "jaccard": c.jaccard,
+        "evidence": c.evidence,
+    }
+
+
+def _version_family_view(fam: ImportVersionFamily) -> dict[str, Any]:
+    """A Stage-4 reconstructed version family (S-ing-3, doc 09 §7.3)."""
+    return {
+        "id": str(fam.id),
+        "family_key": fam.family_key,
+        "base_name": fam.base_name,
+        "doc_code": fam.doc_code,
+        "ordered_member_file_ids": [str(m) for m in fam.ordered_member_file_ids],
+        "effective_file_id": str(fam.effective_file_id),
+        "reconstruct_revision_chain": fam.reconstruct_revision_chain,
+        "evidence": fam.evidence,
+    }
+
+
+def _proposal_view(n: ImportProposalNode | None) -> dict[str, Any] | None:
+    """The Stage-5 per-keep-item proposal (S-ing-3, doc 09 §8); NULL for a non-keep file."""
+    if n is None:
+        return None
+    return {
+        "proposed_identifier": n.proposed_identifier,
+        "identifier_source": n.identifier_source,
+        "target_ia_path": n.target_ia_path,
+        "proposed_owner": n.proposed_owner,
+        "owner_source": n.owner_source,
+        "conflict_flags": n.conflict_flags,
+    }
+
+
+def _dedup_membership_view(
+    file_id: uuid.UUID,
+    clusters: list[ImportDupeCluster],
+    family: ImportVersionFamily | None,
+) -> dict[str, Any]:
+    """A file's derived dedup/family role for the review row (which cluster/family it is in, and
+    whether it is the canonical/effective keep or a redundant/superseded member)."""
+    exact = next((c for c in clusters if c.method is ImportDupeMethod.EXACT), None)
+    near = next((c for c in clusters if c.method is ImportDupeMethod.NEAR), None)
+    redundant_of = next(
+        (str(c.canonical_file_id) for c in clusters if c.canonical_file_id != file_id), None
+    )
+    is_canonical = any(c.canonical_file_id == file_id for c in clusters) if clusters else None
+    in_family = family is not None
+    is_effective = (family.effective_file_id == file_id) if family is not None else None
+    superseded_by = (
+        str(family.effective_file_id)
+        if family is not None and family.effective_file_id != file_id
+        else None
+    )
+    return {
+        "in_exact_cluster": exact is not None,
+        "in_near_cluster": near is not None,
+        "is_canonical": is_canonical,
+        "redundant_of_file_id": redundant_of,
+        "in_version_family": in_family,
+        "is_effective": is_effective,
+        "superseded_by_file_id": superseded_by,
+    }
+
+
 @router.post("/admin/imports", status_code=status.HTTP_202_ACCEPTED)
 async def create_import_run_endpoint(
     body: ImportRunCreate,
@@ -218,13 +293,41 @@ async def get_import_file_endpoint(
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
     """One file's full review detail: inventory + extraction (text/props/structure) + the scored
-    classification proposal with its evidence list. Needs ``import.review``."""
+    classification proposal with its evidence list + the S-ing-3 dedup membership and per-keep-item
+    proposal (identifier / IA path / conflicts). Needs ``import.review``."""
     run, f, ext, cls = await svc.list_import_file_detail(session, caller, import_id, file_id)
+    clusters, family, node = await svc.get_import_file_membership(
+        session, caller, import_id, file_id
+    )
     view = _file_view(f, cls)
     view["run_id"] = str(run.id)
     view["extract"] = _extract_view(ext)
     view["classification"] = _classification_view(cls, with_evidence=True)
+    view["dedup"] = _dedup_membership_view(f.id, list(clusters), family)
+    view["proposal"] = _proposal_view(node)
     return view
+
+
+@router.get("/admin/imports/{import_id}/dupe-clusters")
+async def list_dupe_clusters_endpoint(
+    import_id: uuid.UUID,
+    caller: AppUser = Depends(_import_review),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """The run's Stage-4 duplicate clusters (exact + near; doc 09 §7.1). Needs ``import.review``."""
+    run, clusters = await svc.list_import_dupe_clusters(session, caller, import_id)
+    return {"run_id": str(run.id), "clusters": [_dupe_cluster_view(c) for c in clusters]}
+
+
+@router.get("/admin/imports/{import_id}/version-families")
+async def list_version_families_endpoint(
+    import_id: uuid.UUID,
+    caller: AppUser = Depends(_import_review),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """The run's Stage-4 reconstructed version families (doc 09 §7.3). Needs ``import.review``."""
+    run, families = await svc.list_import_version_families(session, caller, import_id)
+    return {"run_id": str(run.id), "families": [_version_family_view(fam) for fam in families]}
 
 
 @router.post("/admin/imports/{import_id}/cancel")

@@ -340,6 +340,16 @@ def _placement_dirs(
     return primary, sorted(others, key=lambda d: others[d])
 
 
+def ia_placement_dir(
+    clause_refs: list[ClauseRef], top_words: dict[tuple[uuid.UUID, str], str]
+) -> str:
+    """The single IA home for a document from its mapped clauses — the placement of the
+    numerically-lowest mapped clause (``{PHASE}/{NN}-{Word}``), or ``_unmapped`` with no mappings.
+    A thin public wrapper over ``_placement_dirs`` (pure) so the S-ing-3 import proposal reuses the
+    exact mirror layout — the proposed ``target_ia_path`` byte-matches the eventual mirror."""
+    return _placement_dirs(clause_refs, top_words)[0]
+
+
 def _placement_process_dirs(process_refs: list[ProcessRef]) -> list[str]:
     """The ``by-process/{name}/`` folders a document is symlinked into (doc 04 §10.3, S9d) — one per
     linked process, **deduped by the safe dir string** (two names that ``_safe`` alike collapse to

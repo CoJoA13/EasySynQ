@@ -39,9 +39,11 @@ the **Evidence Packs (UJ-7)** family (**S-pack-1** build/seal, **S-pack-2** exte
 **S-rec-3** (Mode-B structured-form capture), then **S-rec-4** (the records-family close-out:
 `/retention-policies` CRUD + creator≠disposer SoD-6) shipped depth-first — completing UJ-7 **and** the records
 family. The owner then chose (AskUserQuestion) **Ingestion (doc 09, UJ-2)** as the next family — depth-first slices
-**S-ing-1** (run + scan/inventory foundation) + **S-ing-2** (extract + classify) shipped, with dedup+propose (slice 3) ·
-review (slice 4) · commit+provenance+report+mirror (slice 5) to follow; the family dependency posture is **full-fidelity**
-(Tesseract + Tika + OpenSearch — Tika+Tesseract landed at S-ing-2; OpenSearch bites at slice 3). **Migration head is now `0030`.**
+**S-ing-1** (run + scan/inventory foundation) + **S-ing-2** (extract + classify) + **S-ing-3** (dedup + version-families +
+proposal) shipped, with review (slice 4) · commit+provenance+report+mirror (slice 5) to follow; the family dependency
+posture is **full-fidelity** (Tesseract + Tika + OpenSearch) — Tika+Tesseract landed at S-ing-2; **near-dup at S-ing-3 ships
+as in-process MinHash** (the doc 09 §14 path) behind a `DedupDetector` seam, with the OpenSearch container itself deferred
+(R34 honest: OpenSearch stays absent in MVP/v1; the OpenSearch-backed detector/indexer are the reserved drop-ins). **Migration head is now `0031`.**
 
 **v1 RECORDS family — S-rec-1/2 + S-pack-1** ✅ (one line each; the full per-slice non-obvious decisions live in the
 squash-merge commits + the `easysynq-project.md` memory; operator/API usage is in the dev-workflow section below):
@@ -158,6 +160,46 @@ squash-merge commits + the `easysynq-project.md` memory; operator/API usage is i
   OpenSearch lands), review-decisions API + the **kind confirmation** R10 requires before commit (slice 4), commit +
   provenance + baseline signature + Import Report + mirror (slice 5), org-overridable rule-pack loading, a Beat
   pipeline-advancer + a resume API. **Migration head is now `0030`.**
+
+- **S-ing-3 — Ingestion: dedup + version-families + proposal (doc 09 §7-8, the analytical cleanup stages)** ✅ — migration
+  `0031` (full non-obvious decisions in the squash-merge commit + project memory). **Owner forks (AskUserQuestion):** the
+  near-dup engine = **in-process MinHash behind a new `DedupDetector` seam** (the doc 09 §14 path); **FULL §7.2 canonical-pick**
+  + the R10 default; **FULL proposal node**. **A re-decided fork (the design review reversed my first framing):** the OpenSearch
+  **container is NOT added** this slice — it contradicted R34 in 5 code locations, is the first overlay-introduced service on
+  untested compose CI, and nothing wires to it (near-dup is in-process). We ship the **seam only** (the `OpenSearchDedupDetector`
+  is a documented-not-built drop-in, the `OpenSearchIndexer` reserve-without-service precedent) + a reserved `OPENSEARCH_URL`
+  default; **no compose change**, R34 stays honest. The pipeline now **auto-chains** classify→dedup→propose (best-effort
+  `.delay`); `import_run_status` ADD VALUEs `Deduping`/`Proposing`/`Proposed` — **`Classified` STOPS being terminal** (it is now
+  the dedup rest-state, the `Scanned` precedent); the source-root lock is held continuously **through propose**, freed only at
+  `Proposed`/`Failed`/`Cancelled` (`_TERMINAL`/`_IN_PROGRESS` + the **missed-then-found `repository._ACTIVE_STATES`** all grew).
+  `0031`: **import_dupe_cluster** (`method` exact/near, `member_file_ids` **the FIRST `ARRAY(UUID)` in the schema**,
+  `canonical_file_id`, `jaccard`, `evidence`; UNIQUE(run,method,canonical)) + **import_version_family** (`family_key`,
+  `ordered_member_file_ids`, `effective_file_id`, `reconstruct_revision_chain` Boolean default **false** = R10 current-only-as-
+  provenance opt-in set at S-ing-4; UNIQUE(run,family_key)) + **import_proposal_node** (one row **per KEEP-ITEM** —
+  redundant/superseded files are represented by cluster/family membership, §11.3 nothing-vanishes; `proposed_identifier` /
+  `identifier_source` / `target_ia_path` / `proposed_owner` hint / `owner_source` / `conflict_flags`; UNIQUE(run,file)); all
+  run/file FKs CASCADE (transient layer); pg_roles-guarded GRANTs. **Domain (pure, deterministic):** `domain/ingestion/minhash.py`
+  (hashlib-blake2b stable hash — **never Python `hash()`**; seeded module-constant perms; 32×4 LSH knee ≈0.42 deliberately below
+  0.85 → near-perfect recall; **clusters on the EXACT-Jaccard re-verify, not the MinHash estimate**) + `normalize.py` (NFC +
+  ReDoS-safe via `rule_pack.validate_pattern`; `extract_doc_code` captures the FULL code verbatim, trimming a version suffix —
+  NOT the classifier's bare `type_code`) + `version_family.py` (the **§7.2 provably-TOTAL order**: version → recency [embedded
+  modified-date parsed defensively, else mtime] → editable>PDF → /Current/>/Archive/ → **lexically-lowest rel_path → file_id**,
+  so an all-tie exact-dup resolves deterministically — the DELETE-then-INSERT idempotency contract). **run_dedup** runs the §7.1
+  cascade (EXACT sha256 → NEAR over survivors → FAMILY over what remains, so a file is claimed once) + **atomic DELETE-then-INSERT
+  replace** + heartbeats the lock **from inside the compute** (the detector calls back); **run_propose** builds keep-item nodes
+  (identifier preserve-verbatim-else-`{type}-<new>`-sentinel — **NEVER consumes `NumberingCounter`**; `target_ia_path` reuses the
+  mirror layout via a thin public `mirror.ia_placement_dir`; conflict_flags = duplicate-within-import + collides-with-vault-doc),
+  merges **namespaced** `dedup`/`proposal` counts (does NOT clobber the scan-stage `exact_dup_*` keys), sets `Proposed` + releases
+  the lock. **API** (gate `import.review`; **no new keys**): `GET …/{id}/dupe-clusters` + `…/version-families`; `…/files/{file_id}`
+  gains `dedup` (membership) + `proposal` sub-objects. **433 unit (46 new) + 14 ingestion integration green** (the MinHash is
+  pinned-deterministic; a full exact+near+family corpus drives scan→Proposed); `0031` round-trips up↔down↔check **+ a populated-DB
+  `ARRAY(UUID)` downgrade** on PG16; OpenAPI caught up in-PR (redocly green); the full mirror suites re-run green (mirror.py
+  touched). **Designed adversarially before coding** (a 9-reader understand fan-out + a 41-agent 2-Plan/5-lens design-critic
+  Workflow → 32 confirmed findings folded — incl. the total-order tie-break, the `_ACTIVE_STATES` miss, heartbeat-during-compute,
+  the counts-namespacing, the §7.1 cascade, doc-code≠type_code, and the OpenSearch re-decision). **Deferred:** review-decisions
+  API + the R10 kind confirmation (slice 4; sets `reconstruct_revision_chain`), commit + provenance + baseline + Import Report +
+  mirror (slice 5), the OpenSearch container + the OpenSearch-backed detector/indexer, org numbering-scheme + folder/process owner
+  sources, a Beat pipeline-advancer, extracting a shared pure IA-layout module. **Migration head is now `0031`.**
 
 - **Specification** in `docs/` (00–17 + `decisions-register.md`) — complete, adversarially audited, reconciled
   (Register R1–R37 back-propagated). The Register is authoritative.
@@ -450,6 +492,23 @@ create boundary.
   over HTTP (no Tesseract in the worker image; a Tika outage degrades a file to `extract_failed` and the run continues, §5.3);
   the source-root lock is held **continuously** scan→extract→classify (a re-import of the same root stays 409 through the whole
   pipeline); a crashed stage self-recovers via `reap_stalled_runs` (lock-liveness). Migration head is now `0030` (next `0031`).
+- **Ingestion: dedup + version-families + proposal (S-ing-3) — API/data only, no UI:** a created run now auto-chains all the way
+  to `Classified→Deduping→Proposing→Proposed` (the new resting checkpoint awaiting S-ing-4 review) — **no operator action beyond
+  the scan trigger, and no new service** (near-dup is **in-process MinHash**; the OpenSearch container is NOT added — R34 stays
+  honest, the `DedupDetector`/`Indexer` OpenSearch impls are reserved drop-ins, `OPENSEARCH_URL` is a reserved-empty setting).
+  Poll `GET /admin/imports/{id}` for `Proposed` + the extended `counts` (the scan-stage `exact_dup_*` keys plus namespaced
+  `counts.dedup` = `{by_method:{exact,near}, redundant_files, version_families, superseded_files}` + `counts.proposal` =
+  `{keep_items, conflicts, needs_identifier}`). New read surfaces (gate `import.review`): `GET …/{id}/dupe-clusters` (exact +
+  near clusters, each with members + the §7.2 canonical) · `GET …/{id}/version-families` (grouped by doc-code/base-name, ordered
+  members + the candidate effective) · `GET …/{id}/files/{file_id}` gains a `dedup` membership sub-object (in_exact/in_near/
+  is_canonical/redundant_of/in_version_family/is_effective/superseded_by) + a `proposal` sub-object (proposed_identifier +
+  identifier_source + target_ia_path + proposed_owner hint + conflict_flags) — `proposal` is null for a redundant/superseded
+  (non-keep) file. It writes **nothing to the vault**; the proposal is a SUGGESTION (R10: `kind` is confirmed at S-ing-4, the
+  per-family revision-chain opt-in is set there, commit is S-ing-5) and **never consumes a numbering sequence** (a no-doc-code
+  keep-item gets a `{type}-<new>` placeholder flagged for assignment). **Operator notes:** the lock is now held continuously
+  scan→…→**propose** (re-import stays 409 the whole way); a crashed dedup/propose self-recovers via `reap_stalled_runs`; the
+  in-process MinHash is the bounded/S-profile path (doc 09 §14) — near-dup over a huge corpus is the documented degradation the
+  OpenSearch drop-in later addresses. Migration head is now `0031` (next `0032`).
 - **⚠ S11 restore + upgrade + encrypted backup (operator):** the durable archive (`easysynq backup run` / the nightly
   Beat job) is now **AES-256-GCM `.tar.enc`** sealed with `BACKUP_ENCRYPTION_KEY` (install.sh generates it into the
   0600 `.env`; **lose it → those archives are unrecoverable** — back it up out-of-band) and bundles the live Keycloak
