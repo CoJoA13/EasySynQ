@@ -40,10 +40,11 @@ the **Evidence Packs (UJ-7)** family (**S-pack-1** build/seal, **S-pack-2** exte
 `/retention-policies` CRUD + creator≠disposer SoD-6) shipped depth-first — completing UJ-7 **and** the records
 family. The owner then chose (AskUserQuestion) **Ingestion (doc 09, UJ-2)** as the next family — depth-first slices
 **S-ing-1** (run + scan/inventory foundation) + **S-ing-2** (extract + classify) + **S-ing-3** (dedup + version-families +
-proposal) shipped, with review (slice 4) · commit+provenance+report+mirror (slice 5) to follow; the family dependency
-posture is **full-fidelity** (Tesseract + Tika + OpenSearch) — Tika+Tesseract landed at S-ing-2; **near-dup at S-ing-3 ships
-as in-process MinHash** (the doc 09 §14 path) behind a `DedupDetector` seam, with the OpenSearch container itself deferred
-(R34 honest: OpenSearch stays absent in MVP/v1; the OpenSearch-backed detector/indexer are the reserved drop-ins). **Migration head is now `0031`.**
+proposal) + **S-ing-4** (the human-in-the-loop review: decisions + merge/split + the pre-commit checklist) shipped, with
+commit+provenance+report+mirror (slice 5) to follow; the family dependency posture is **full-fidelity** (Tesseract + Tika +
+OpenSearch) — Tika+Tesseract landed at S-ing-2; **near-dup at S-ing-3 ships as in-process MinHash** (the doc 09 §14 path)
+behind a `DedupDetector` seam, with the OpenSearch container itself deferred (R34 honest: OpenSearch stays absent in MVP/v1;
+the OpenSearch-backed detector/indexer are the reserved drop-ins). **Migration head is now `0032`.**
 
 **v1 RECORDS family — S-rec-1/2 + S-pack-1** ✅ (one line each; the full per-slice non-obvious decisions live in the
 squash-merge commits + the `easysynq-project.md` memory; operator/API usage is in the dev-workflow section below):
@@ -200,6 +201,42 @@ squash-merge commits + the `easysynq-project.md` memory; operator/API usage is i
   API + the R10 kind confirmation (slice 4; sets `reconstruct_revision_chain`), commit + provenance + baseline + Import Report +
   mirror (slice 5), the OpenSearch container + the OpenSearch-backed detector/indexer, org numbering-scheme + folder/process owner
   sources, a Beat pipeline-advancer, extracting a shared pure IA-layout module. **Migration head is now `0031`.**
+
+- **S-ing-4 — Ingestion: human-in-the-loop review (doc 09 §9/§11.3/§12-13, the UJ-2 confirmation stage)** ✅ — migration
+  `0032` (full non-obvious decisions in the squash-merge commit + project memory). Turns a `Proposed` run into a confirmed,
+  commit-ready set; writes **NOTHING to the vault** (commit is S-ing-5) and never consumes `NumberingCounter`. **Owner forks
+  (AskUserQuestion):** the **FULL action set with Merge/Split live-mutating** the dupe-cluster/version-family rows + re-deriving
+  the keep-set/proposals (over decision-overlay / thinner sets) · **ship the bulk endpoint now** · the **FULL pre-commit
+  checklist** (blocking conflicts + the non-blocking ★-coverage projection). **The decision model** (the spine): `import_decision`
+  is the **append-only** human-in-the-loop log (+ future ML labels) — **dimensional** intent (accept/correct/exclude/defer + the
+  **R10 kind-confirm via `after.kind`, NEVER written to `import_classification`** — the immutable engine proposal) is recorded
+  ONLY as decision rows and **folded at read time** (`review.fold_file_decisions`, the SINGLE source of a keep-item's effective
+  state used by the checklist + the file detail + S-ing-5's commit gate); **structural** intent (merge/split) **live-mutates** the
+  cluster/family rows (targeted ORM edits **preserving every OTHER family's `reconstruct_revision_chain`** — a naïve full
+  `replace_dedup` would reset it) + **re-derives** the proposal nodes via the extracted `propose.rebuild_proposals`.
+  **`0032`:** `import_decision` (file **XOR** cluster polymorphic target [a `CHECK`], `cluster_id` **no FK** [signature_event
+  precedent], `idempotency_key` **partial-UNIQUE** [raw DDL + `env.py._MIGRATION_MANAGED_INDEXES`, the 0024 lesson],
+  **SELECT,INSERT-only GRANT** = append-only; run/file FK CASCADE, org/decided_by RESTRICT) + new `ImportDecisionAction` enum +
+  `ImportRunStatus.REVIEWING` (a **lock-free** human rest-state, kept **OUT** of `service._IN_PROGRESS`/`repository._ACTIVE_STATES`
+  so the lock-liveness reaper never FAILs a run mid-review — **the #1 trap**; not `_TERMINAL` so cancel works) +
+  `EventType.IMPORT_DECISION_RECORDED` (additive). **API** (gate **`import.review`** = the SoD review tier, not execute/commit;
+  every write `FOR UPDATE`s the run + honours an optional `Idempotency-Key` replay; flips `Proposed→Reviewing` on the first
+  decision): `POST …/files/{id}/decision` (rejects merge/split 422), bulk `POST …/decisions` (explicit ids OR a kind/band/disposition
+  selector — the §9.2a scale lever; bulk kind-confirm is an explicit act), `POST …/merge`, `POST …/split`; `GET …/checklist`
+  (§9.3: BLOCKING duplicate-identifier + vault-collision + ambiguous-over-threshold computed over the **EFFECTIVE folded**
+  identifiers; non-blocking ★-coverage **projection** via `compute_checklist(projected_clause_numbers=…)` [backward-compatible
+  param] + advisory counts), `GET …/decisions`; the file list/detail gain a folded `review` sub-object + a `?review_status`
+  filter. **doc 15 §8.19 refined:** the per-file action enum narrows to `{accept,correct,exclude,defer}`; merge/split are
+  dedicated structural endpoints. **Load-bearing:** exclude/defer fold **wins over** structural keep-item membership; merge/split
+  recompute+persist `effective_file_id`/`canonical_file_id` **BEFORE** `rebuild_proposals` (the keep-set reads it); a split
+  dropping a group <2 **DELETEs** it (survivor → standalone keep-item). **447 unit (14 new) + 26 ingestion integration green**
+  (incl. exclude-then-merge consistency + the merge-cluster-canonical-recompute & effective-from-consolidated-family regressions);
+  `0032` round-trips up↔down↔check **+ a populated-DB downgrade** on PG16; redocly green. **Adversarially designed + reviewed**
+  (a 10-reader understand fan-out → a 54-agent 6-lens design-critic [28 findings folded pre-code] → a 13-agent 5-lens diff-critic
+  [5 findings folded, 2 majors in `merge_files`, now regression-tested]). **Deferred:** commit + `import_provenance` + baseline +
+  Import Report + mirror (S-ing-5); per-process ABAC-scoped `import.review` delegation (§9.4 — `import.*` is SYSTEM-scope today);
+  the "revise existing vault doc → Rev B+" collision path (a commit-time choice); pull-from-quarantine; the web review UI.
+  **Migration head is now `0032`.**
 
 - **Specification** in `docs/` (00–17 + `decisions-register.md`) — complete, adversarially audited, reconciled
   (Register R1–R37 back-propagated). The Register is authoritative.
@@ -509,6 +546,22 @@ create boundary.
   scan→…→**propose** (re-import stays 409 the whole way); a crashed dedup/propose self-recovers via `reap_stalled_runs`; the
   in-process MinHash is the bounded/S-profile path (doc 09 §14) — near-dup over a huge corpus is the documented degradation the
   OpenSearch drop-in later addresses. Migration head is now `0031` (next `0032`).
+- **Ingestion: human-in-the-loop review (S-ing-4) — API/data only, no UI:** the review stage that turns a `Proposed` run into a
+  confirmed, commit-ready set — **no operator action beyond the decisions; writes NOTHING to the vault, no new service/task.**
+  As a System Administrator (gate `import.review`, the SoD review tier — create/cancel stay `import.execute`): per-file
+  `POST /admin/imports/{id}/files/{file_id}/decision {action:accept|correct|exclude|defer, after?:{kind?,type_code?,
+  clause_numbers?,process_names?,identifier?,owner?}, reason?}` — the **R10 kind-confirm rides `after.kind`** (DOCUMENT|RECORD;
+  merge/split are 422 here); bulk `POST …/{id}/decisions {action, file_ids?|selector?:{kind,band,disposition}, after?}` (the
+  §9.2a scale lever; bulk kind-confirm is an explicit act); structural `POST …/{id}/merge {file_ids,effective_file_id?,
+  reconstruct_revision_chain?}` (combine into a version family + the per-family revision-chain opt-in) + `POST …/{id}/split
+  {target_kind,target_id,separate_file_ids}` (break a cluster/family apart; a group <2 is deleted). All accept an optional
+  `Idempotency-Key` header (replay = no-op). Reads: `GET …/{id}/checklist` (the §9.3 pre-commit gate: `ready` + blocking
+  conflicts [duplicate-identifier / vault-collision / ambiguous-over-`import_review_ambiguous_threshold`, default 0] + the
+  non-blocking ★-coverage **projection** + advisory `unknown_low`/`kind_unconfirmed` + folded review stats) · `GET …/{id}/decisions`
+  (the append-only log) · `GET …/{id}/files` + `…/files/{file_id}` gain a folded `review` sub-object + a `?review_status=
+  included|excluded|deferred|undecided` filter. The first decision flips the run `Proposed→Reviewing` (a lock-free human
+  rest-state; cancel still works; the source-root lock stays freed so a re-import is a new run). Nothing commits unconfirmed
+  (R10); commit is S-ing-5. Migration head is now `0032` (next `0033`).
 - **⚠ S11 restore + upgrade + encrypted backup (operator):** the durable archive (`easysynq backup run` / the nightly
   Beat job) is now **AES-256-GCM `.tar.enc`** sealed with `BACKUP_ENCRYPTION_KEY` (install.sh generates it into the
   0600 `.env`; **lose it → those archives are unrecoverable** — back it up out-of-band) and bundles the live Keycloak
@@ -604,6 +657,34 @@ create boundary.
   allow regex ONLY on length-capped targets (filename/header), use substring keywords on content/path, and reject
   nested-quantifier patterns at load (untrusted org-override loading stays deferred). A *measured* accuracy band (R10) ships
   as a labeled hold-out corpus + a harness that IS the validation test, published **INTERIM-synthetic** (real-corpus is v1.x).
+- **A lock-free, human-paced rest-state must be kept OUT of the reaper's in-progress/active sets** (the S-ing-4 `Reviewing`
+  lesson — the #1 trap). The S-ing lock-liveness reaper FAILs any run in `service._IN_PROGRESS` whose Redis source-root lock has
+  lapsed; the lock is freed at `Proposed`, so a state a human dwells in (review) is lock-free — putting it in `_IN_PROGRESS`
+  (or `repository._ACTIVE_STATES`) makes the reaper kill a run mid-review. Add such a state to NEITHER set (and not `_TERMINAL`,
+  so cancel still works) — gate the new writes on a separate `_REVIEWABLE` tuple instead. The additive-enum ADD VALUE still applies.
+- **Human dimensional intent folds at read; structural intent is materialized** (the S-ing-4 review model). Per-item dimensional
+  decisions (kind-confirm/type/clause/owner/identifier + accept/exclude/defer) live ONLY in an **append-only** decision log and
+  are folded newest-wins at read (the single `fold_*` used by the checklist + the commit gate) — the **R10 kind-confirm rides the
+  decision's `after.kind`, NEVER written back to the immutable engine classification**. Structural reshaping (merge/split) DOES
+  mutate the materialized grouping rows, because the keep-set derivation reads them. When mutating one grouping row, **preserve
+  every OTHER group's opt-in flags** (targeted ORM edits + read-current-carry-forward; a naïve full DELETE-then-INSERT replace
+  resets a default-false flag like `reconstruct_revision_chain`), **recompute + persist the canonical/effective member BEFORE**
+  re-deriving the downstream nodes (the keep-set reads `effective_file_id`/`canonical_file_id` — a stale one silently drops
+  files), **delete a group that drops <2 members** (a 1-member group with a dangling canonical drops its survivor), and let the
+  **exclude/defer fold win over** structural membership everywhere readiness/commit is computed. Reassign ARRAY columns (not
+  in-place `.append`/`.remove` — SQLAlchemy doesn't track in-place mutation of a plain ARRAY).
+- **Integration assertions must be delta-based / run-scoped, never assume a clean shared DB** (the S-ing-4 lesson — it
+  passed the targeted-subset local run but failed the full CI suite). The `-m integration` suite shares ONE session DB across
+  all files; earlier files leave vault docs/orgs behind. So a test that asserts an absolute (`documented_information == 0`, or a
+  checklist's global `ready is True`) breaks once another file has run first. Assert a **delta** (capture counts before → assert
+  unchanged after) or scope to **this run's** rows / the **specific** entity you created (e.g. "the duplicate-identifier conflict
+  I introduced appears/disappears", not the global `ready` — a prior test's vault doc may collide). Reproduce locally by running
+  a doc-creating file BEFORE the touched file (`pytest -m integration tests/integration/test_vault.py <touched>.py`).
+- **A replay/no-op path that `rollback()`s must capture any ORM ids it returns BEFORE the rollback** (the S-ing-4
+  Idempotency-Key lesson). `session.rollback()` expires every loaded instance; a subsequent `str(row.id)` (or any attr access)
+  triggers a lazy refresh whose I/O, on an async session, surfaces later as a `MissingGreenlet` at connection-pool close — a
+  confusing teardown crash, not a clean error. Read what you need into locals first, then rollback, then return a plain dict.
+  For a bulk op keyed by one `Idempotency-Key`, stamp the key on a SINGLE row (a partial-UNIQUE `(run_id, key)` forbids N rows).
 - **A static route alongside a `/{id}` route MUST be mounted FIRST** (the S-pack-2 lesson): FastAPI compiles a path param
   like `{pack_id}` with the **str** path-convertor and validates the UUID *after* matching — so `/evidence-packs/shared`
   resolves to the authenticated `/{pack_id}` route (→ 401) unless the public `/shared` router is `include_router`'d **before**

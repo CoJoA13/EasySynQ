@@ -2197,12 +2197,14 @@ paths:
       tags: [imports]
       operationId: listImportRunFiles
       summary: >-
-        Paginated file inventory for a run + each file's classification proposal (S-ing-2),
-        optionally filtered by disposition / kind / band. Needs import.review.
+        Paginated file inventory for a run + each file's classification proposal (S-ing-2) + the
+        S-ing-4 review folded effective state, optionally filtered by disposition / kind / band, or by
+        the derived review_status (folded disposition). Needs import.review.
       parameters:
         - { name: disposition, in: query, required: false, schema: { type: string, enum: [included, excluded, quarantine] } }
         - { name: kind, in: query, required: false, schema: { $ref: "#/components/schemas/ImportKind" } }
         - { name: band, in: query, required: false, schema: { $ref: "#/components/schemas/ImportConfidenceBand" } }
+        - { name: review_status, in: query, required: false, schema: { type: string, enum: [included, excluded, deferred, undecided] } }
         - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 200, default: 100 } }
         - { name: offset, in: query, required: false, schema: { type: integer, minimum: 0, default: 0 } }
       responses:
@@ -2274,6 +2276,162 @@ paths:
               schema: { $ref: "#/components/schemas/ImportVersionFamilyList" }
         "403": { $ref: "#/components/responses/ProblemResponse" }
         "404": { $ref: "#/components/responses/ProblemResponse" }
+        "423": { $ref: "#/components/responses/ProblemResponse" }
+
+  /admin/imports/{import_id}/checklist:
+    parameters:
+      - { name: import_id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [imports]
+      operationId: getImportReviewChecklist
+      summary: >-
+        The S-ing-4 pre-commit checklist (doc 09 §9.3): ready + blocking conflicts (duplicate
+        identifier / vault collision / ambiguous-over-threshold, over the EFFECTIVE folded state) +
+        the non-blocking mandatory-star coverage projection + advisory counts + folded review stats.
+        Needs import.review.
+      responses:
+        "200":
+          description: The pre-commit checklist.
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "423": { $ref: "#/components/responses/ProblemResponse" }
+
+  /admin/imports/{import_id}/decisions:
+    parameters:
+      - { name: import_id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [imports]
+      operationId: listImportDecisions
+      summary: >-
+        The run's append-only review-decision log, newest-first (doc 09 §12.2). Needs import.review.
+      responses:
+        "200":
+          description: The decision log.
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "423": { $ref: "#/components/responses/ProblemResponse" }
+    post:
+      tags: [imports]
+      operationId: recordBulkImportDecisions
+      summary: >-
+        Apply ONE dimensional action (accept / correct / exclude / defer) across an explicit file_ids
+        list OR a selector filter (kind / band / disposition) — the doc 09 §9.2a bulk-triage scale
+        lever. Bulk kind-confirm (after.kind) is the explicit human act (R10). An optional
+        Idempotency-Key header makes a retry a no-op replay. Needs import.review.
+      parameters:
+        - { name: Idempotency-Key, in: header, required: false, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ImportBulkDecisionRequest" }
+      responses:
+        "200":
+          description: The applied count (or a replay).
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409": { $ref: "#/components/responses/ProblemResponse" }
+        "422": { $ref: "#/components/responses/ProblemResponse" }
+        "423": { $ref: "#/components/responses/ProblemResponse" }
+
+  /admin/imports/{import_id}/files/{file_id}/decision:
+    parameters:
+      - { name: import_id, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: file_id, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      tags: [imports]
+      operationId: recordImportFileDecision
+      summary: >-
+        Record one per-file dimensional decision (accept / correct / exclude / defer + the R10
+        kind-confirm via after.kind; doc 09 §9.2). Merge/split are rejected here (422) — they are
+        structural and have dedicated endpoints. An optional Idempotency-Key header makes a retry a
+        no-op replay. Needs import.review. 409 if the run is not Proposed/Reviewing.
+      parameters:
+        - { name: Idempotency-Key, in: header, required: false, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ImportFileDecisionRequest" }
+      responses:
+        "200":
+          description: The decision result + the file's folded review state.
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409": { $ref: "#/components/responses/ProblemResponse" }
+        "422": { $ref: "#/components/responses/ProblemResponse" }
+        "423": { $ref: "#/components/responses/ProblemResponse" }
+
+  /admin/imports/{import_id}/merge:
+    parameters:
+      - { name: import_id, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      tags: [imports]
+      operationId: mergeImportFiles
+      summary: >-
+        Combine >=2 files into one version family (force the revision chain; doc 09 §9.2). Sets the
+        family's effective member + reconstruct_revision_chain (the per-family R10 opt-in), preserves
+        other families' flags, and re-derives the proposal nodes. An optional Idempotency-Key header
+        makes a retry a no-op replay. Needs import.review.
+      parameters:
+        - { name: Idempotency-Key, in: header, required: false, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ImportMergeRequest" }
+      responses:
+        "200":
+          description: The created/updated version family.
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409": { $ref: "#/components/responses/ProblemResponse" }
+        "422": { $ref: "#/components/responses/ProblemResponse" }
+        "423": { $ref: "#/components/responses/ProblemResponse" }
+
+  /admin/imports/{import_id}/split:
+    parameters:
+      - { name: import_id, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      tags: [imports]
+      operationId: splitImportCluster
+      summary: >-
+        Break members out of a dupe-cluster / version-family (doc 09 §9.2). A group dropping below 2
+        members is deleted; the separated files (and any survivor) become standalone keep-items, then
+        the proposal nodes are re-derived. An optional Idempotency-Key header makes a retry a no-op
+        replay. Needs import.review.
+      parameters:
+        - { name: Idempotency-Key, in: header, required: false, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ImportSplitRequest" }
+      responses:
+        "200":
+          description: The split result.
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409": { $ref: "#/components/responses/ProblemResponse" }
+        "422": { $ref: "#/components/responses/ProblemResponse" }
         "423": { $ref: "#/components/responses/ProblemResponse" }
 
   /admin/imports/{import_id}/cancel:
@@ -4147,6 +4305,61 @@ components:
         profile: { type: [string, "null"], maxLength: 128 }
         ocr_enabled: { type: boolean, default: false, description: "Enable Tesseract OCR for scanned/image-only PDFs + images (S-ing-2, §5.2)." }
         classifier_version: { type: [string, "null"], maxLength: 128, description: "Reserved; the run records the classifier version that scored it." }
+    ImportDecisionAfter:
+      type: object
+      additionalProperties: false
+      description: "The confirmed/changed dimensions of a per-file decision; the R10 kind-confirm rides `kind`."
+      properties:
+        kind: { type: string, enum: [DOCUMENT, RECORD], description: "The R10 human kind confirmation (never UNKNOWN)." }
+        type_code: { type: string }
+        clause_numbers: { type: array, items: { type: string } }
+        process_names: { type: array, items: { type: string } }
+        identifier: { type: string }
+        owner: { type: string }
+    ImportFileDecisionRequest:
+      type: object
+      additionalProperties: false
+      required: [action]
+      properties:
+        action: { type: string, enum: [accept, correct, exclude, defer], description: "Dimensional actions only; merge/split are structural (dedicated endpoints)." }
+        after: { $ref: "#/components/schemas/ImportDecisionAfter" }
+        reason: { type: [string, "null"], maxLength: 2000 }
+    ImportBulkSelector:
+      type: object
+      additionalProperties: false
+      description: "A bulk selection over the existing classification/scan dimensions (not a derived review_status)."
+      properties:
+        kind: { type: [string, "null"] }
+        band: { type: [string, "null"] }
+        disposition: { type: [string, "null"] }
+    ImportBulkDecisionRequest:
+      type: object
+      additionalProperties: false
+      required: [action]
+      properties:
+        action: { type: string, enum: [accept, correct, exclude, defer] }
+        file_ids: { type: [array, "null"], items: { type: string, format: uuid } }
+        selector: { $ref: "#/components/schemas/ImportBulkSelector" }
+        after: { $ref: "#/components/schemas/ImportDecisionAfter" }
+        reason: { type: [string, "null"], maxLength: 2000 }
+    ImportMergeRequest:
+      type: object
+      additionalProperties: false
+      required: [file_ids]
+      properties:
+        file_ids: { type: array, minItems: 2, items: { type: string, format: uuid } }
+        effective_file_id: { type: [string, "null"], format: uuid, description: "The §7.2 human override of the effective member; else the deterministic pick." }
+        reconstruct_revision_chain: { type: [boolean, "null"], description: "The per-family R10 opt-in; set when present, else preserved/false." }
+        reason: { type: [string, "null"], maxLength: 2000 }
+    ImportSplitRequest:
+      type: object
+      additionalProperties: false
+      required: [target_kind, target_id, separate_file_ids]
+      properties:
+        target_kind: { type: string, enum: [dupe_cluster, version_family] }
+        target_id: { type: string, format: uuid }
+        separate_file_ids: { type: array, minItems: 1, items: { type: string, format: uuid } }
+        reason: { type: [string, "null"], maxLength: 2000 }
     ImportRun:
       type: object
       additionalProperties: false
@@ -4186,6 +4399,10 @@ components:
           oneOf:
             - { type: "null" }
             - { $ref: "#/components/schemas/ImportClassification" }
+        review:
+          type: [object, "null"]
+          additionalProperties: true
+          description: "The S-ing-4 folded effective state (disposition/kind/identifier/.../commit_ready)."
     ImportClassification:
       type: object
       additionalProperties: true

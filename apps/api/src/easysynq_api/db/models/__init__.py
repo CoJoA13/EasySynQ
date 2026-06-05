@@ -11,6 +11,7 @@ from ._clause_enums import PdcaPhase
 from ._evidence_enums import EvidenceForTargetType
 from ._ingestion_enums import (
     ImportConfidenceBand,
+    ImportDecisionAction,
     ImportDupeMethod,
     ImportExtractStatus,
     ImportKind,
@@ -60,6 +61,7 @@ from .evidence_pack import EvidencePack
 from .form_template import FormTemplate
 from .framework import Framework
 from .import_classification import ImportClassification
+from .import_decision import ImportDecision
 from .import_dupe_cluster import ImportDupeCluster
 from .import_extract import ImportExtract
 from .import_file import ImportFile
@@ -125,6 +127,8 @@ __all__ = [
     "Framework",
     "ImportClassification",
     "ImportConfidenceBand",
+    "ImportDecision",
+    "ImportDecisionAction",
     "ImportDupeCluster",
     "ImportDupeMethod",
     "ImportExtract",

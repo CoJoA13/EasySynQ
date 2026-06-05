@@ -21,7 +21,7 @@ import datetime
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Header, status
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -41,6 +41,7 @@ from ..db.models.import_run import ImportRun
 from ..db.models.import_version_family import ImportVersionFamily
 from ..db.session import get_session
 from ..services.authz import require
+from ..services.ingestion import review as review_svc
 from ..services.ingestion import service as svc
 
 router = APIRouter(prefix="/api/v1", tags=["imports"])
@@ -56,6 +57,51 @@ class ImportRunCreate(BaseModel):
     # S-ing-1 — ocr_enabled bites at slice 2 (extract), classifier_version at slice 3 (classify).
     ocr_enabled: bool = False
     classifier_version: str | None = Field(default=None, max_length=128)
+
+
+# --- S-ing-4 review request models (writes gate import.review; honour an Idempotency-Key) ---
+
+
+class FileDecisionBody(BaseModel):
+    """A per-file dimensional decision (doc 15 §8.19, refined). ``action`` is the dimensional set
+    accept/correct/exclude/defer — merge/split are rejected here (they have dedicated endpoints).
+    ``after`` carries the confirmed/changed dimensions (kind/type_code/clause_numbers/process_names/
+    identifier/owner); the R10 kind-confirm rides ``after.kind``."""
+
+    action: str
+    after: dict[str, Any] | None = None
+    reason: str | None = Field(default=None, max_length=2000)
+
+
+class BulkSelector(BaseModel):
+    """A filter selection for a bulk decision — the EXISTING classification/scan dimensions only
+    (NOT a derived review_status)."""
+
+    kind: str | None = None
+    band: str | None = None
+    disposition: str | None = None
+
+
+class BulkDecisionBody(BaseModel):
+    action: str
+    file_ids: list[uuid.UUID] | None = None
+    selector: BulkSelector | None = None
+    after: dict[str, Any] | None = None
+    reason: str | None = Field(default=None, max_length=2000)
+
+
+class MergeBody(BaseModel):
+    file_ids: list[uuid.UUID] = Field(min_length=2)
+    effective_file_id: uuid.UUID | None = None
+    reconstruct_revision_chain: bool | None = None
+    reason: str | None = Field(default=None, max_length=2000)
+
+
+class SplitBody(BaseModel):
+    target_kind: str
+    target_id: uuid.UUID
+    separate_file_ids: list[uuid.UUID] = Field(min_length=1)
+    reason: str | None = Field(default=None, max_length=2000)
 
 
 def _iso(value: datetime.datetime | None) -> str | None:
@@ -264,25 +310,32 @@ async def list_import_files_endpoint(
     disposition: str | None = None,
     kind: ImportKind | None = None,
     band: ImportConfidenceBand | None = None,
+    review_status: str | None = None,
     limit: int = 100,
     offset: int = 0,
     caller: AppUser = Depends(_import_review),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
-    """Paginated file inventory + each file's classification proposal (optional
-    ``?disposition=included|excluded|quarantine``, ``?kind=DOCUMENT|RECORD|UNKNOWN``,
-    ``?band=HIGH|MEDIUM|LOW|AMBIGUOUS`` filters). Needs ``import.review``."""
-    run, rows = await svc.list_import_files(
+    """Paginated file inventory + each file's classification proposal + the S-ing-4 ``review``
+    folded effective state. Optional ``?disposition=included|excluded|quarantine`` (scan flag),
+    ``?kind=DOCUMENT|RECORD|UNKNOWN``, ``?band=HIGH|MEDIUM|LOW|AMBIGUOUS``, and the derived
+    ``?review_status=included|excluded|deferred|undecided`` (folded disposition) filters. Needs
+    ``import.review``."""
+    run, rows = await review_svc.list_files_review(
         session,
         caller,
         import_id,
         disposition=disposition,
         kind=kind,
         band=band,
+        review_status=review_status,
         limit=limit,
         offset=offset,
     )
-    return {"run_id": str(run.id), "files": [_file_view(f, c) for f, c in rows]}
+    return {
+        "run_id": str(run.id),
+        "files": [{**_file_view(f, c), "review": review} for f, c, review in rows],
+    }
 
 
 @router.get("/admin/imports/{import_id}/files/{file_id}")
@@ -305,6 +358,7 @@ async def get_import_file_endpoint(
     view["classification"] = _classification_view(cls, with_evidence=True)
     view["dedup"] = _dedup_membership_view(f.id, list(clusters), family)
     view["proposal"] = _proposal_view(node)
+    view["review"] = await review_svc.get_file_review(session, caller, import_id, file_id)
     return view
 
 
@@ -328,6 +382,124 @@ async def list_version_families_endpoint(
     """The run's Stage-4 reconstructed version families (doc 09 §7.3). Needs ``import.review``."""
     run, families = await svc.list_import_version_families(session, caller, import_id)
     return {"run_id": str(run.id), "families": [_version_family_view(fam) for fam in families]}
+
+
+@router.get("/admin/imports/{import_id}/checklist")
+async def import_checklist_endpoint(
+    import_id: uuid.UUID,
+    caller: AppUser = Depends(_import_review),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """The §9.3 pre-commit checklist: ``ready`` + blocking conflicts (duplicate-identifier / vault
+    collision / ambiguous-over-threshold, over the EFFECTIVE folded state) + the non-blocking
+    ★-coverage projection + advisory counts + folded review stats. Needs ``import.review``."""
+    return await review_svc.compute_review_checklist(session, caller, import_id)
+
+
+@router.get("/admin/imports/{import_id}/decisions")
+async def list_import_decisions_endpoint(
+    import_id: uuid.UUID,
+    caller: AppUser = Depends(_import_review),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """The run's append-only review-decision log, newest-first (doc 09 §12.2). Needs
+    ``import.review``."""
+    run, decisions = await review_svc.list_decisions(session, caller, import_id)
+    return {"run_id": str(run.id), "decisions": decisions}
+
+
+@router.post("/admin/imports/{import_id}/files/{file_id}/decision")
+async def record_file_decision_endpoint(
+    import_id: uuid.UUID,
+    file_id: uuid.UUID,
+    body: FileDecisionBody,
+    caller: AppUser = Depends(_import_review),
+    session: AsyncSession = Depends(get_session),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+) -> dict[str, Any]:
+    """Record one per-file dimensional decision (accept/correct/exclude/defer + the R10 kind-confirm
+    via ``after.kind``). 422 on merge/split (use the dedicated endpoints). 409 if the run is not
+    Proposed/Reviewing. Needs ``import.review``."""
+    return await review_svc.record_file_decision(
+        session,
+        caller,
+        import_id,
+        file_id,
+        action=body.action,
+        after=body.after,
+        reason=body.reason,
+        idem_key=idempotency_key,
+    )
+
+
+@router.post("/admin/imports/{import_id}/decisions")
+async def record_bulk_decisions_endpoint(
+    import_id: uuid.UUID,
+    body: BulkDecisionBody,
+    caller: AppUser = Depends(_import_review),
+    session: AsyncSession = Depends(get_session),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+) -> dict[str, Any]:
+    """Apply ONE dimensional action across an explicit ``file_ids`` list OR a ``selector`` filter
+    (kind/band/disposition) — the §9.2a scale lever. Bulk kind-confirm (``after.kind``) is the
+    explicit human act. Needs ``import.review``."""
+    return await review_svc.record_bulk_decisions(
+        session,
+        caller,
+        import_id,
+        action=body.action,
+        file_ids=body.file_ids,
+        selector=body.selector.model_dump() if body.selector is not None else None,
+        after=body.after,
+        reason=body.reason,
+        idem_key=idempotency_key,
+    )
+
+
+@router.post("/admin/imports/{import_id}/merge")
+async def merge_files_endpoint(
+    import_id: uuid.UUID,
+    body: MergeBody,
+    caller: AppUser = Depends(_import_review),
+    session: AsyncSession = Depends(get_session),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+) -> dict[str, Any]:
+    """Combine ≥2 files into one version family (force the revision chain). Sets the family's
+    effective member + ``reconstruct_revision_chain`` (the per-family R10 opt-in), preserves
+    other families' flags, re-derives the proposal nodes. Needs ``import.review``."""
+    return await review_svc.merge_files(
+        session,
+        caller,
+        import_id,
+        file_ids=body.file_ids,
+        effective_file_id=body.effective_file_id,
+        reconstruct_revision_chain=body.reconstruct_revision_chain,
+        reason=body.reason,
+        idem_key=idempotency_key,
+    )
+
+
+@router.post("/admin/imports/{import_id}/split")
+async def split_cluster_endpoint(
+    import_id: uuid.UUID,
+    body: SplitBody,
+    caller: AppUser = Depends(_import_review),
+    session: AsyncSession = Depends(get_session),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+) -> dict[str, Any]:
+    """Break members out of a dupe-cluster / version-family (a group dropping <2 members is deleted;
+    survivors become standalone keep-items), then re-derive the proposal nodes. Needs
+    ``import.review``."""
+    return await review_svc.split_cluster(
+        session,
+        caller,
+        import_id,
+        target_kind=body.target_kind,
+        target_id=body.target_id,
+        separate_file_ids=body.separate_file_ids,
+        reason=body.reason,
+        idem_key=idempotency_key,
+    )
 
 
 @router.post("/admin/imports/{import_id}/cancel")

@@ -77,6 +77,16 @@ _IN_PROGRESS = (
     ImportRunStatus.DEDUPING,
     ImportRunStatus.PROPOSING,
 )
+# S-ing-4: the states a human review write (decision/merge/split) is accepted in. REVIEWING is the
+# resting state the run enters on the first decision. NB: REVIEWING is DELIBERATELY absent from
+# _IN_PROGRESS + repository._ACTIVE_STATES — the source-root lock is freed at Proposed, so a
+# lock-free REVIEWING run must NOT be swept by the lock-liveness reaper (it would FAIL a run
+# mid-review), and a re-import of the same root during review is allowed (a new run). It is also not
+# _TERMINAL (cancel still works).
+_REVIEWABLE = (
+    ImportRunStatus.PROPOSED,
+    ImportRunStatus.REVIEWING,
+)
 
 
 def _now() -> datetime.datetime:

@@ -232,6 +232,13 @@ class EventType(enum.Enum):
     IMPORT_RUN_STAGE_CHANGED = "IMPORT_RUN_STAGE_CHANGED"
     IMPORT_RUN_FAILED = "IMPORT_RUN_FAILED"
     IMPORT_RUN_CANCELLED = "IMPORT_RUN_CANCELLED"
+    # ingestion human-in-the-loop review (S-ing-4, doc 09 §9/§12.2). One row per Mara accept /
+    # correct / merge / split / exclude / defer (a USER actor — review is HTTP-driven, not worker),
+    # capturing before→after. Reuses object_type=import_run (object_id=run_id) — decisions are
+    # run-scoped events, NOT a new audit_object_type. Added via ALTER TYPE event_type ADD VALUE in
+    # 0032 (the 0011-0031 additive pattern; a from-scratch ``upgrade head`` rebuilds the type from
+    # EVENT_TYPE_VALUES, so the member lives here too).
+    IMPORT_DECISION_RECORDED = "IMPORT_DECISION_RECORDED"
 
 
 class CheckpointSinkKind(enum.Enum):
