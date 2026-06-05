@@ -18,6 +18,7 @@ from ._ingestion_enums import (
     ImportKind,
     ImportRunStatus,
 )
+from ._iso_audit_enums import AuditState
 from ._pack_enums import (
     PackInclusionStatus,
     PackItemType,
@@ -44,9 +45,12 @@ from ._workflow_enums import (
     WorkflowSubjectType,
 )
 from .app_user import AppUser, UserStatus
+from .audit import Audit
 from .audit_checkpoint import AuditCheckpoint
 from .audit_checkpoint_sink import AuditCheckpointSink
 from .audit_event import AuditEvent
+from .audit_plan import AuditPlan
+from .audit_program import AuditProgram
 from .authz_grant import PermissionOverride
 from .backup_policy import BackupPolicy
 from .blob import Blob
@@ -101,10 +105,14 @@ from .worm_destroy_request import WormDestroyRequest
 __all__ = [
     "ActorType",
     "AppUser",
+    "Audit",
     "AuditCheckpoint",
     "AuditCheckpointSink",
     "AuditEvent",
     "AuditObjectType",
+    "AuditPlan",
+    "AuditProgram",
+    "AuditState",
     "BackupPolicy",
     "Blob",
     "ChangeSignificance",

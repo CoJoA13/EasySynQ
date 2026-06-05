@@ -257,6 +257,19 @@ class EventType(enum.Enum):
     IMPORT_ITEM_FAILED = "IMPORT_ITEM_FAILED"
     IMPORT_RUN_COMPLETED = "IMPORT_RUN_COMPLETED"
     IMPORT_RUN_PARTIAL = "IMPORT_RUN_PARTIAL"
+    # ISO internal-audit family (S-aud-1, doc 02 Cl 9.2 / doc 10 §5 / doc 14 §14). Programme + plan
+    # are own-table containers → object_type=audit (the reserved AuditObjectType.audit value, no ADD
+    # VALUE); the audit RECORD's create + FSM events reuse object_type=record (audit.id is a record
+    # id) so GET /documents/{id}/audit-events surfaces them. AUDIT_TRANSITIONED carries before/after
+    # state; AUDIT_CLOSED is the gated Closing→Closed terminal. Added via ALTER TYPE event_type ADD
+    # VALUE in 0034 (the 0011-0033 additive pattern; a from-scratch ``upgrade head`` rebuilds from
+    # EVENT_TYPE_VALUES, so the members live here too).
+    AUDIT_PROGRAM_CREATED = "AUDIT_PROGRAM_CREATED"
+    AUDIT_PROGRAM_UPDATED = "AUDIT_PROGRAM_UPDATED"
+    AUDIT_PLAN_CREATED = "AUDIT_PLAN_CREATED"
+    AUDIT_CREATED = "AUDIT_CREATED"
+    AUDIT_TRANSITIONED = "AUDIT_TRANSITIONED"
+    AUDIT_CLOSED = "AUDIT_CLOSED"
 
 
 class CheckpointSinkKind(enum.Enum):

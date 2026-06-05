@@ -114,6 +114,16 @@ tags:
       Post-OPERATIONAL organization configuration. PATCH /admin/config carries org-level toggles
       (today the Mode-B capture_pre_release_templates flag, doc 06 §4.2), gated on the SYSTEM-domain
       config.update key (admin-only; the R35 two-tier guard blocks a content-tier grant).
+  - name: audits
+    description: >-
+      Internal audits (slice S-aud-1, doc 02 Cl 9.2, doc 10 §5) — the maintained audit programme +
+      its plans (the schedule) and the retained audit records walked through a linear lifecycle FSM
+      (Scheduled→Planned→InProgress→FindingsDraft→Reported→Closing→Closed). Programmes/plans need
+      audit.plan (QMS Owner, SYSTEM scope); audits are created with audit.create and conducted/closed
+      with audit.conduct / audit.close (PROCESS scope, resolved from the plan's auditee process with a
+      SYSTEM-override fallback); reads need audit.read. All keys are the seeded doc-07 catalog. An
+      audit is a kind=RECORD subtype, so its lifecycle events also surface at
+      /documents/{id}/audit-events. Findings + the NC→CAPA close gate land in S-aud-2.
 
 paths:
   /healthz:
@@ -2135,6 +2145,258 @@ paths:
         "404": { $ref: "#/components/responses/ProblemResponse" }
         "409": { $ref: "#/components/responses/ProblemResponse" }
 
+  /audit-programs:
+    get:
+      tags: [audits]
+      operationId: listAuditPrograms
+      summary: The org's audit programmes. Needs audit.read.
+      responses:
+        "200":
+          description: The audit programmes.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { $ref: "#/components/schemas/AuditProgram" } }
+                required: [data]
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+    post:
+      tags: [audits]
+      operationId: createAuditProgram
+      summary: Create an audit programme (the maintained Cl 9.2 schedule container). Needs audit.plan.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AuditProgramCreate" }
+      responses:
+        "201":
+          description: The created programme.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuditProgram" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+
+  /audit-programs/{program_id}:
+    parameters:
+      - { name: program_id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [audits]
+      operationId: getAuditProgram
+      summary: A single audit programme. Needs audit.read.
+      responses:
+        "200":
+          description: The programme.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuditProgram" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+    patch:
+      tags: [audits]
+      operationId: updateAuditProgram
+      summary: Maintain a programme (title/period/coverage/archived; partial). Needs audit.plan.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AuditProgramUpdate" }
+      responses:
+        "200":
+          description: The updated programme.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuditProgram" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+
+  /audit-programs/{program_id}/plans:
+    parameters:
+      - { name: program_id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [audits]
+      operationId: listAuditPlans
+      summary: The plans under a programme. Needs audit.read.
+      responses:
+        "200":
+          description: The plans.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { $ref: "#/components/schemas/AuditPlan" } }
+                required: [data]
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+    post:
+      tags: [audits]
+      operationId: createAuditPlan
+      summary: Schedule a plan under a programme. Needs audit.plan.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AuditPlanCreate" }
+      responses:
+        "201":
+          description: The created plan.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuditPlan" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409":
+          description: The programme is archived (program_archived).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  /audit-plans/{plan_id}:
+    parameters:
+      - { name: plan_id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [audits]
+      operationId: getAuditPlan
+      summary: A single audit plan. Needs audit.read.
+      responses:
+        "200":
+          description: The plan.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuditPlan" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+
+  /audits:
+    get:
+      tags: [audits]
+      operationId: listAudits
+      summary: The org's audits. Needs audit.read.
+      responses:
+        "200":
+          description: The audits.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { $ref: "#/components/schemas/Audit" } }
+                required: [data]
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+    post:
+      tags: [audits]
+      operationId: createAudit
+      summary: Create an audit (state=Scheduled) from a plan. Captures an immutable AUDIT record. Needs audit.create.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AuditCreate" }
+      responses:
+        "201":
+          description: The created audit (state=Scheduled).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Audit" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+
+  /audits/{audit_id}:
+    parameters:
+      - { name: audit_id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [audits]
+      operationId: getAudit
+      summary: A single audit. Needs audit.read.
+      responses:
+        "200":
+          description: The audit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Audit" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+
+  /audits/{audit_id}/plan:
+    parameters:
+      - { name: audit_id, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      tags: [audits]
+      operationId: planAudit
+      summary: Scheduled → Planned (finalize the plan). Needs audit.plan.
+      responses:
+        "200": { $ref: "#/components/responses/AuditTransition" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409": { $ref: "#/components/responses/AuditTransitionConflict" }
+
+  /audits/{audit_id}/conduct:
+    parameters:
+      - { name: audit_id, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      tags: [audits]
+      operationId: conductAudit
+      summary: Planned → InProgress (begin conducting). Needs audit.conduct.
+      responses:
+        "200": { $ref: "#/components/responses/AuditTransition" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409": { $ref: "#/components/responses/AuditTransitionConflict" }
+
+  /audits/{audit_id}/draft-findings:
+    parameters:
+      - { name: audit_id, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      tags: [audits]
+      operationId: draftAuditFindings
+      summary: InProgress → FindingsDraft. Needs audit.conduct.
+      responses:
+        "200": { $ref: "#/components/responses/AuditTransition" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409": { $ref: "#/components/responses/AuditTransitionConflict" }
+
+  /audits/{audit_id}/report:
+    parameters:
+      - { name: audit_id, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      tags: [audits]
+      operationId: reportAudit
+      summary: FindingsDraft → Reported. Needs audit.conduct.
+      responses:
+        "200": { $ref: "#/components/responses/AuditTransition" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409": { $ref: "#/components/responses/AuditTransitionConflict" }
+
+  /audits/{audit_id}/begin-closing:
+    parameters:
+      - { name: audit_id, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      tags: [audits]
+      operationId: beginClosingAudit
+      summary: Reported → Closing. Needs audit.close.
+      responses:
+        "200": { $ref: "#/components/responses/AuditTransition" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409": { $ref: "#/components/responses/AuditTransitionConflict" }
+
+  /audits/{audit_id}/close:
+    parameters:
+      - { name: audit_id, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      tags: [audits]
+      operationId: closeAudit
+      summary: Closing → Closed (the close gate; a no-op until S-aud-2 wires the NC-CAPA check). Needs audit.close.
+      responses:
+        "200": { $ref: "#/components/responses/AuditTransition" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409": { $ref: "#/components/responses/AuditTransitionConflict" }
+
   /admin/imports:
     get:
       tags: [imports]
@@ -3003,6 +3265,16 @@ components:
   responses:
     ProblemResponse:
       description: An error, as RFC 9457 application/problem+json.
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    AuditTransition:
+      description: The audit after the FSM transition.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Audit" }
+    AuditTransitionConflict:
+      description: An illegal FSM transition (invalid_audit_transition).
       content:
         application/problem+json:
           schema: { $ref: "#/components/schemas/Problem" }
@@ -4043,6 +4315,84 @@ components:
       properties:
         capture_pre_release_templates: { type: [boolean, "null"] }
         allow_self_disposition: { type: [boolean, "null"] }
+
+    AuditProgram:
+      type: object
+      additionalProperties: false
+      required: [id, identifier, title, archived, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        identifier: { type: string }
+        title: { type: string }
+        period: { type: [string, "null"] }
+        coverage: { type: [object, "null"], additionalProperties: true }
+        archived: { type: boolean }
+        created_at: { type: string, format: date-time }
+
+    AuditProgramCreate:
+      type: object
+      additionalProperties: false
+      required: [title]
+      properties:
+        title: { type: string, minLength: 1, maxLength: 300 }
+        period: { type: [string, "null"], maxLength: 100 }
+        coverage: { type: [object, "null"], additionalProperties: true }
+
+    AuditProgramUpdate:
+      type: object
+      additionalProperties: false
+      description: "A PATCH; only the present fields change."
+      properties:
+        title: { type: [string, "null"], minLength: 1, maxLength: 300 }
+        period: { type: [string, "null"], maxLength: 100 }
+        coverage: { type: [object, "null"], additionalProperties: true }
+        archived: { type: [boolean, "null"] }
+
+    AuditPlan:
+      type: object
+      additionalProperties: false
+      required: [id, program_id, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        program_id: { type: string, format: uuid }
+        auditee_process_id: { type: [string, "null"], format: uuid }
+        lead_auditor_user_id: { type: [string, "null"], format: uuid }
+        scheduled_date: { type: [string, "null"], format: date }
+        checklist_ref: { type: [string, "null"] }
+        created_at: { type: string, format: date-time }
+
+    AuditPlanCreate:
+      type: object
+      additionalProperties: false
+      properties:
+        auditee_process_id: { type: [string, "null"], format: uuid }
+        lead_auditor_user_id: { type: [string, "null"], format: uuid }
+        scheduled_date: { type: [string, "null"], format: date }
+        checklist_ref: { type: [string, "null"], maxLength: 300 }
+
+    Audit:
+      type: object
+      additionalProperties: false
+      required: [id, plan_id, state]
+      properties:
+        id: { type: string, format: uuid }
+        plan_id: { type: string, format: uuid }
+        lead_auditor_user_id: { type: [string, "null"], format: uuid }
+        state:
+          type: string
+          enum: [Scheduled, Planned, InProgress, FindingsDraft, Reported, Closing, Closed]
+        started_at: { type: [string, "null"], format: date }
+        completed_at: { type: [string, "null"], format: date }
+        result_summary: { type: [string, "null"] }
+
+    AuditCreate:
+      type: object
+      additionalProperties: false
+      required: [plan_id]
+      properties:
+        plan_id: { type: string, format: uuid }
+        title: { type: [string, "null"], minLength: 1, maxLength: 300 }
+        lead_auditor_user_id: { type: [string, "null"], format: uuid }
 
     RetentionPolicy:
       type: object
