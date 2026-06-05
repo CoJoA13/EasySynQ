@@ -47,7 +47,7 @@ flowchart LR
 > **✅ SHIPPED (2026-06-03).** The MVP is complete — all 11 ordered slices (S0–S11) of
 > `docs/18-mvp-implementation-plan.md` §7 are on `main`, all six acceptance proofs are in, and the exit checklist
 > (doc 18 §12) is closed. This section is the original goal/scope statement; see `CLAUDE.md` for shipped detail and
-> the v1/v1.x deferrals. v1 (§4) is the next phase.
+> the v1/v1.x deferrals. v1 (§4) is currently in progress (started 2026-06-03).
 
 **Goal:** deliver the *minimum that makes EasySynQ structurally better than a file share* — a controlled vault with a working document lifecycle, granular permissions, first-run setup, and a basic but tamper-evident audit trail. If the MVP works, document drift is already structurally prevented for documents under control.
 
