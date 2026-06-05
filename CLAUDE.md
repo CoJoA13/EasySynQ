@@ -99,7 +99,18 @@ dev-workflow quick-reference below):
   the import-baseline cutover (Effective-directly, no SERIALIZABLE cutover, a single
   `signature_event(meaning=import_baseline)`, R2); `import_provenance` fold (doc 14 §5.1); the §12.1 Import
   Report (a RETAIN_PERMANENT EVIDENCE Record + the mirror `_ImportReport/` export); per-doc audit
-  (`scope_ref=identifier`, AC#6); `reap_stalled_commits`. **Migration head is now `0033`.**
+  (`scope_ref=identifier`, AC#6); `reap_stalled_commits`.
+
+**v1 AUDITS/FINDINGS/CAPA family (doc 02 Cl 9.2/10.2, doc 10 §5-6, UJ-5/UJ-6) — STARTED** (owner decisions R39:
++declarative-routing posture · severity-aware SoD-4 · block-until-corrected audit close · `audit_program` own-table):
+
+- **S-aud-1** audit programmes/plans/audits + lifecycle FSM (`0034`) — `audit_program`+`audit_plan` own-table
+  scheduling containers + `audit` as a `kind=RECORD` shared-PK subtype (captured via `capture_record(_commit=False)`,
+  REC-shared identifier, mutable `state`); the linear FSM Scheduled→…→Closing→Closed (FOR-UPDATE + audited-then-commit;
+  Closing→Closed close-gate is a **no-op stub** until S-aud-2 wires the live-NC-findings check); `/audit-programs`+
+  `/audit-plans`+`/audits`+6 flat-action transitions (gates `audit.{plan,create,conduct,close,read}` — all pre-seeded,
+  PROCESS conduct/close via an `_audit_scope` resolver w/ SYSTEM fallback); programme/plan events reuse
+  `audit_object_type=audit`, the audit record's reuse `record`. **Migration head is now `0034`.**
 
 - **Specification** in `docs/` (00–17 + `decisions-register.md`) — complete, adversarially audited, reconciled
   (Register R1–R37 back-propagated). The Register is authoritative.

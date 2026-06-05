@@ -1,6 +1,6 @@
 # EasySynQ Decisions Register
 
-This document is the **single authoritative source of truth** for the EasySynQ self-hosted ISO 9001:2015 QMS specification. It records the locked foundational decisions, the locked stakeholder decisions, and the normative resolutions (R1–R38) to every finding raised in the gap audit (`17-gaps-and-open-questions.md`); R38 (slice S-rec-4) is the first post-v1 *additive* decision (additive catalog extensibility + SoD-6).
+This document is the **single authoritative source of truth** for the EasySynQ self-hosted ISO 9001:2015 QMS specification. It records the locked foundational decisions, the locked stakeholder decisions, and the normative resolutions (R1–R39) to every finding raised in the gap audit (`17-gaps-and-open-questions.md`); R38 (slice S-rec-4) is the first post-v1 *additive* decision (additive catalog extensibility + SoD-6), and R39 (slice family S-aud/S-capa) locks the Audits/Findings/CAPA model + workflow posture.
 
 **Precedence:** Where this register conflicts with any text in sections `01`–`15`, **this register supersedes that text.** Section editors MUST back-propagate the changes listed under each resolution's *Back-propagation* note. The exact tokens, enum values, state names, and field names quoted here are **canonical and verbatim** — they must be reproduced character-for-character (case, snake_case, dot-namespacing, and all) wherever the underlying concept appears. Do not soften, rename, abbreviate, or omit any token.
 
@@ -52,7 +52,7 @@ Proceed with the **full reconcile-and-harden pass** — i.e., adopt R1–R37 bel
 
 ---
 
-## Part 3 — Resolutions R1–R38
+## Part 3 — Resolutions R1–R39
 
 Each resolution states the decision, the exact canonical tokens/enums/states/field-names verbatim, and a Back-propagation note listing the section files that change.
 
@@ -528,6 +528,53 @@ listed only SoD-1…SoD-5).
   duration onto each record). The seeded **System Default is protected** (cannot be archived/renamed).
 
 **Back-propagation:** 06 (§5.1/§5.3), 07 (§3 catalog + §7 SoD-6), 14 (§10), 15 (§8.16), 16.
+
+---
+
+### R39 — Audits / Findings / CAPA family: model + workflow + SoD posture (slice family S-aud / S-capa)
+
+**Context.** The v1 Audits/Findings/CAPA family (doc 02 Cl 9.2 / 10.2, doc 10 §5-6, UJ-5/UJ-6) was started.
+Several modelling + governance choices were locked by the product owner and an adversarial design pass.
+
+**Decision:**
+- **Workflow posture = "+ Declarative routing".** The family builds the audit/finding/CAPA **records +
+  state machines + closure gates + the atomic NC→CAPA auto-link** AND the doc-10 **declarative routing
+  engine** on the existing `workflow_*` tables (multi-stage + severity-conditional routing, quorum,
+  candidate-pool resolution, due-date SLAs, real My-Tasks). **Deferred** to a later Workflow & Notifications
+  family: SMTP/in-app notification *delivery*, digests, and the `manager_id`/`working_calendar`
+  auto-*escalation* Beat. v1 candidate-pool resolution reuses the existing permission-role membership seam;
+  `org_role_assignment`-based resolution stays deferred (owner-assignment track).
+- **SoD-4 (CAPA verifier ≠ action implementer) = severity-aware.** Critical/Major CAPAs HARD-enforce
+  (service-layer 409); Minor respects a per-org `allow_capa_self_verify` flag (`system_config`, default OFF),
+  mirroring the SoD-6 `allow_self_disposition` mechanic (service layer, NOT a PDP `sod_constraint` row). The
+  flag + grant-backfill for the orphaned `capa.update` / `ncr.create` / `ncr.record_correction` keys land
+  with the CAPA slice (S-capa-1).
+- **Rejected-CAPA → audit close = block-until-corrected.** An NC-sourced CAPA in `close_state=Rejected` does
+  NOT satisfy the audit-close gate. The gate keys off **live NC findings** (`finding_type=NC` AND
+  `superseded_by_correction IS NULL`), each requiring a linked CAPA at `close_state=Closed`. A legitimately
+  rejected NC must be corrected via a `correction_of` finding retyping it (NC → Observation/OFI), which
+  supersedes the original and removes it from the live-NC set. No audit ever closes over an uncorrected NC.
+- **`audit_program` is an own-table scheduling container, NOT a `documented_information` subtype** — a
+  deliberate divergence from doc 14's "a maintained document" phrasing. A programme is a period + coverage +
+  a set of planned audits; a version-less `kind=DOCUMENT` would leave an Effective document with no
+  `document_version` (silently dropped by the mirror join, but mis-listed by the document library + its
+  detail/download paths). `audit_plan` is likewise an own-table. The **retained evidence** —
+  `audit` / `audit_finding` / `capa` — stays a **`kind=RECORD` shared-PK subtype** per doc 14 (`audit.id` →
+  `record.id`), with a **mutable lifecycle column** (`audit.state` / `capa.close_state`) — the
+  `record.disposition_state` precedent (record immutability governs captured content + sealed stage-blocks,
+  not the lifecycle column).
+- **No new permission keys for this family.** `audit.*` / `finding.*` / `ncr.*` / `capa.*` already exist in
+  the closed doc-07 catalog (0004) and are granted to roles — `audit_object_type` reuses the reserved
+  `record` value for the record subtypes and the reserved `audit` value for programme/plan container events
+  (zero ADD VALUE). The only catalog work is the S-capa-1 grant-*backfill* of three already-defined-but-
+  ungranted keys (no new keys; not a catalog extension).
+
+**Implemented in slices:** S-aud-1 (`audit_program` + `audit_plan` + `audit` + FSM, migration `0034`);
+S-aud-2 (findings + NC→CAPA auto-link + the block-until-corrected close gate); S-capa-1..3 (the CAPA
+lifecycle + severity-aware SoD-4 + the M4 closure gate); the declarative engine + the Evidence-Pack
+Finding/CAPA scope close-out.
+
+**Back-propagation:** 02 (Cl 9.2/10.2), 06, 07 (§7 SoD-4), 10 (§5-6), 14 (§9/§14), 15, 16.
 
 ---
 

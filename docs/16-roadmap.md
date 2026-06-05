@@ -93,8 +93,8 @@ Records/evidence capture, retention/disposition, Evidence Packs, audits/findings
 > (UJ-7)** family **S-pack-1** (scope resolution + immutable build/seal) + **S-pack-2** (external delivery via a
 > time-boxed revocable Ed25519 share link + the PDF portfolio), and **S-rec-3** (Mode-B structured-form capture: a
 > Form/Template carries a versioned `field_schema`; capture validates `form_field_values` against the pinned Effective
-> version's schema). **UJ-7 (one-click evidence pack) works end-to-end.** Deferred to the next v1 slices: the rows below
-> (audits/findings, CAPA, ingestion, workflows+notifications, the web UI, the rest of search/reporting), plus the
+> version's schema). **UJ-7 (one-click evidence pack) works end-to-end.** Deferred to later v1 slices: CAPA's multi-stage
+> close-out, workflows+notifications *delivery/escalation*, the web UI, and the rest of search/reporting, plus the
 > records-family residual Mode B for the `audit`/`capa` multi-stage records (once those entities land). The
 > **records-family close-out — `/retention-policies` CRUD + soft-archive + the creator≠disposer SoD-6** — shipped in
 > **S-rec-4** (migration `0028`, the first additive catalog extension, R38). The **Ingestion engine (UJ-2)** family is now
@@ -114,7 +114,12 @@ Records/evidence capture, retention/disposition, Evidence Packs, audits/findings
 > + a baseline `signature_event(meaning=import_baseline)` (R2) + the §12.1 Import Report (a RETAIN_PERMANENT EVIDENCE Record +
 > the mirror `_ImportReport/` export), preserving the source doc-code as the vault identifier per R10. **OpenSearch posture
 > (S-ing-3):** near-dup ships as in-process MinHash; the OpenSearch container itself stays **absent (R34)** — the
-> `DedupDetector`/`Indexer` OpenSearch impls are reserved, not-built drop-ins. See `CLAUDE.md` for shipped detail.
+> `DedupDetector`/`Indexer` OpenSearch impls are reserved, not-built drop-ins. The **Ingestion engine (UJ-2) family is
+> COMPLETE**. The **Audits/Findings/CAPA family (UJ-5/UJ-6)** is now **STARTED**: **S-aud-1** (migration `0034`) ships
+> the internal-audit programmes/plans (own-table scheduling) + the `audit` record (a `kind=RECORD` subtype) walked
+> through the linear lifecycle FSM (Scheduled→…→Closing→Closed); the family's locked model + workflow + SoD posture is
+> **R39** (+declarative-routing · severity-aware SoD-4 · block-until-corrected audit close · `audit_program` own-table).
+> **Migration head is now `0034`.** See `CLAUDE.md` for shipped detail.
 
 **Goal:** everything an organization needs to *run and certify* an ISO 9001:2015 QMS, end to end, and to face an external audit with a one-click evidence pack.
 
