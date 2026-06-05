@@ -124,6 +124,15 @@ tags:
       SYSTEM-override fallback); reads need audit.read. All keys are the seeded doc-07 catalog. An
       audit is a kind=RECORD subtype, so its lifecycle events also surface at
       /documents/{id}/audit-events. Findings + the NC→CAPA close gate land in S-aud-2.
+  - name: capa
+    description: >-
+      CAPA core + intake (slice S-capa-1, doc 02 Cl 8.7/10.2, doc 10 §6) — corrective-action
+      containers (a kind=RECORD subtype with a mutable close_state + an append-only capa_stage
+      trail; S-capa-1 wires Raised→Containment via capa.update), lightweight customer complaints
+      (R16) that one-click spawn a CAPA (capa.create, idempotent), and NCRs (ISO 8.7 nonconforming
+      output, R20) with a recorded disposition (ncr.create / ncr.record_correction). The PROCESS-
+      scoped write keys resolve scope from the relevant process (SYSTEM fallback). All keys are the
+      seeded doc-07 catalog (S-capa-1 backfills the orphaned grants — no new keys).
 
 paths:
   /healthz:
@@ -3252,6 +3261,230 @@ paths:
               schema: { $ref: "#/components/schemas/OrgConfig" }
         "403": { $ref: "#/components/responses/ProblemResponse" }
 
+  /capas:
+    post:
+      tags: [capa]
+      operationId: raiseCapa
+      summary: >-
+        Raise a CAPA directly (source defaults process; origin_finding_id null — the NC→CAPA
+        auto-link is S-aud-2). Captures an immutable RECORD + the sealed Raised stage. Needs
+        capa.create (scope from body.process_id; SYSTEM fallback).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CapaRaise" }
+      responses:
+        "201":
+          description: The raised CAPA (close_state=Raised).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Capa" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "422": { $ref: "#/components/responses/ProblemResponse" }
+    get:
+      tags: [capa]
+      operationId: listCapas
+      summary: List the org's CAPAs. Needs capa.read.
+      responses:
+        "200":
+          description: The org's CAPAs.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { $ref: "#/components/schemas/Capa" } }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+  /capas/{capa_id}:
+    get:
+      tags: [capa]
+      operationId: getCapa
+      summary: A CAPA with its sealed stage trail. Needs capa.read.
+      parameters:
+        - { name: capa_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: The CAPA + stages.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Capa" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+  /capas/{capa_id}/containment:
+    post:
+      tags: [capa]
+      operationId: capaContainment
+      summary: >-
+        Raised → Containment — append the immediate-correction (symptom-fix) stage block. Needs
+        capa.update. 409 invalid_capa_transition if the CAPA is not in Raised.
+      parameters:
+        - { name: capa_id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ContainmentCreate" }
+      responses:
+        "200":
+          description: The CAPA (close_state=Containment).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Capa" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409": { $ref: "#/components/responses/ProblemResponse" }
+
+  /complaints:
+    post:
+      tags: [capa]
+      operationId: captureComplaint
+      summary: Capture a lightweight customer complaint (R16) as a RECORD. Needs record.create.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ComplaintCreate" }
+      responses:
+        "201":
+          description: The captured complaint.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Complaint" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+    get:
+      tags: [capa]
+      operationId: listComplaints
+      summary: List the org's complaints. Needs record.read.
+      responses:
+        "200":
+          description: The org's complaints.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { $ref: "#/components/schemas/Complaint" } }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+  /complaints/{complaint_id}:
+    get:
+      tags: [capa]
+      operationId: getComplaint
+      summary: A single complaint. Needs record.read.
+      parameters:
+        - { name: complaint_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: The complaint.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Complaint" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+  /complaints/{complaint_id}/spawn-capa:
+    post:
+      tags: [capa]
+      operationId: spawnCapaFromComplaint
+      summary: >-
+        Idempotently spawn a CAPA from a complaint (R16). Returns 201 on the first spawn, 200 on an
+        idempotent replay (the complaint already spawned — the SAME CAPA is returned; a retry after a
+        timed-out first attempt receives 200). severity resolves from the body else the complaint;
+        422 if neither is set. Needs capa.create.
+      parameters:
+        - { name: complaint_id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SpawnCapa" }
+      responses:
+        "201":
+          description: A newly spawned CAPA (close_state=Raised, source=complaint).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Capa" }
+        "200":
+          description: The existing CAPA (idempotent replay).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Capa" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "422": { $ref: "#/components/responses/ProblemResponse" }
+
+  /ncrs:
+    post:
+      tags: [capa]
+      operationId: createNcr
+      summary: >-
+        Raise an NCR (ISO 9001 8.7 nonconforming output) with an NCR-{SEQ} identifier. Needs
+        ncr.create (scope from body.process_id; SYSTEM fallback).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/NcrCreate" }
+      responses:
+        "201":
+          description: The raised NCR.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Ncr" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "422": { $ref: "#/components/responses/ProblemResponse" }
+    get:
+      tags: [capa]
+      operationId: listNcrs
+      summary: List the org's NCRs. Needs ncr.read.
+      responses:
+        "200":
+          description: The org's NCRs.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { $ref: "#/components/schemas/Ncr" } }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+  /ncrs/{ncr_id}:
+    get:
+      tags: [capa]
+      operationId: getNcr
+      summary: A single NCR. Needs ncr.read.
+      parameters:
+        - { name: ncr_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: The NCR.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Ncr" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+  /ncrs/{ncr_id}/disposition:
+    patch:
+      tags: [capa]
+      operationId: recordNcrDisposition
+      summary: >-
+        Record the ISO 9001 8.7 disposition decision + its authorizer (R20). One-shot — 409
+        ncr_already_dispositioned if already set. Needs ncr.record_correction.
+      parameters:
+        - { name: ncr_id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/NcrDispositionBody" }
+      responses:
+        "200":
+          description: The NCR with its recorded disposition.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Ncr" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409": { $ref: "#/components/responses/ProblemResponse" }
+
 components:
   securitySchemes:
     keycloak:
@@ -4308,6 +4541,12 @@ components:
           description: >-
             SoD-6 relaxation (doc 07 §7): when false (default, STRICT) a record's capturer may not
             execute its own disposition; when true the org relaxes that for a small/solo install.
+        allow_capa_self_verify:
+          type: boolean
+          description: >-
+            Severity-aware SoD-4 relaxation (R39): when false (default, STRICT) a CAPA's action
+            implementer may not verify it; when true a Minor CAPA may be self-verified (Critical/Major
+            always hard-enforce). A forward seam exposed now; enforced in S-capa-3.
     OrgConfigUpdate:
       type: object
       additionalProperties: false
@@ -4315,6 +4554,151 @@ components:
       properties:
         capture_pre_release_templates: { type: [boolean, "null"] }
         allow_self_disposition: { type: [boolean, "null"] }
+        allow_capa_self_verify: { type: [boolean, "null"] }
+
+    CapaSource:
+      type: string
+      description: review_output is reserved for the deferred Management-Review family (never written in v1).
+      enum: [audit, process, complaint, review_output]
+    NcSeverity:
+      type: string
+      enum: [Critical, Major, Minor]
+    CapaCloseState:
+      type: string
+      enum: [Raised, Containment, RootCause, ActionPlan, Implement, Verify, Closed, Rejected]
+    NcrSource:
+      type: string
+      enum: [audit, process, complaint, internal]
+    NcrDisposition:
+      type: string
+      description: ISO 9001 8.7 disposition tokens (R20).
+      enum: [use_as_is, rework, scrap, return, concession, regrade]
+    CapaStage:
+      type: object
+      additionalProperties: false
+      required: [id, stage, content_block, cycle_marker, created_by, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        stage: { $ref: "#/components/schemas/CapaCloseState" }
+        content_block: { type: object, additionalProperties: true }
+        cycle_marker: { type: integer }
+        created_by: { type: string, format: uuid }
+        created_at: { type: string, format: date-time }
+    Capa:
+      type: object
+      additionalProperties: false
+      required: [id, identifier, source, severity, close_state, cycle_marker]
+      properties:
+        id: { type: string, format: uuid }
+        identifier: { type: [string, "null"] }
+        source: { $ref: "#/components/schemas/CapaSource" }
+        severity: { $ref: "#/components/schemas/NcSeverity" }
+        process_id: { type: [string, "null"], format: uuid }
+        close_state: { $ref: "#/components/schemas/CapaCloseState" }
+        cycle_marker: { type: integer }
+        origin_finding_id:
+          type: [string, "null"]
+          format: uuid
+          description: NULL in v1 — the NC→CAPA auto-link (audit_finding) lands in S-aud-2.
+        stages:
+          type: array
+          items: { $ref: "#/components/schemas/CapaStage" }
+          description: The sealed stage trail (present on a single read, omitted on the list).
+    CapaRaise:
+      type: object
+      additionalProperties: false
+      required: [title, severity]
+      properties:
+        title: { type: string }
+        severity: { $ref: "#/components/schemas/NcSeverity" }
+        source: { $ref: "#/components/schemas/CapaSource" }
+        process_id: { type: [string, "null"], format: uuid }
+        problem: { type: [string, "null"] }
+    ContainmentCreate:
+      type: object
+      additionalProperties: false
+      required: [content_block]
+      properties:
+        content_block:
+          type: object
+          additionalProperties: true
+          description: The sealed correction narrative (non-empty).
+    Complaint:
+      type: object
+      additionalProperties: false
+      required: [id, identifier, description]
+      properties:
+        id: { type: string, format: uuid }
+        identifier: { type: [string, "null"] }
+        customer: { type: [string, "null"] }
+        received_at: { type: [string, "null"], format: date-time }
+        channel: { type: [string, "null"] }
+        description: { type: string }
+        severity:
+          oneOf:
+            - { $ref: "#/components/schemas/NcSeverity" }
+            - { type: "null" }
+        spawned_capa_id:
+          type: [string, "null"]
+          format: uuid
+          description: The one-click-spawn idempotency latch (R16) — set once at spawn.
+    ComplaintCreate:
+      type: object
+      additionalProperties: false
+      required: [description]
+      properties:
+        description: { type: string }
+        customer: { type: [string, "null"] }
+        received_at: { type: [string, "null"], format: date-time }
+        channel: { type: [string, "null"] }
+        severity:
+          oneOf:
+            - { $ref: "#/components/schemas/NcSeverity" }
+            - { type: "null" }
+    SpawnCapa:
+      type: object
+      additionalProperties: false
+      properties:
+        severity:
+          oneOf:
+            - { $ref: "#/components/schemas/NcSeverity" }
+            - { type: "null" }
+        process_id: { type: [string, "null"], format: uuid }
+    Ncr:
+      type: object
+      additionalProperties: false
+      required: [id, identifier, source, description, severity, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        identifier: { type: string }
+        source: { $ref: "#/components/schemas/NcrSource" }
+        description: { type: string }
+        severity: { $ref: "#/components/schemas/NcSeverity" }
+        process_id: { type: [string, "null"], format: uuid }
+        disposition:
+          oneOf:
+            - { $ref: "#/components/schemas/NcrDisposition" }
+            - { type: "null" }
+        disposition_authorized_by: { type: [string, "null"], format: uuid }
+        disposition_notes: { type: [string, "null"] }
+        disposed_at: { type: [string, "null"], format: date-time }
+        created_at: { type: string, format: date-time }
+    NcrCreate:
+      type: object
+      additionalProperties: false
+      required: [source, description, severity]
+      properties:
+        source: { $ref: "#/components/schemas/NcrSource" }
+        description: { type: string }
+        severity: { $ref: "#/components/schemas/NcSeverity" }
+        process_id: { type: [string, "null"], format: uuid }
+    NcrDispositionBody:
+      type: object
+      additionalProperties: false
+      required: [disposition]
+      properties:
+        disposition: { $ref: "#/components/schemas/NcrDisposition" }
+        notes: { type: [string, "null"] }
 
     AuditProgram:
       type: object

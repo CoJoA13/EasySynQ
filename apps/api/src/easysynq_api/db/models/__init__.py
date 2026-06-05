@@ -7,6 +7,13 @@ from ._audit_enums import (
     EventType,
 )
 from ._authz_enums import SodSeverity, SodTargetBinding
+from ._capa_enums import (
+    CapaCloseState,
+    CapaSource,
+    NcrDisposition,
+    NcrSource,
+    NcSeverity,
+)
 from ._clause_enums import PdcaPhase
 from ._evidence_enums import EvidenceForTargetType
 from ._ingestion_enums import (
@@ -54,8 +61,11 @@ from .audit_program import AuditProgram
 from .authz_grant import PermissionOverride
 from .backup_policy import BackupPolicy
 from .blob import Blob
+from .capa import Capa
+from .capa_stage import CapaStage
 from .clause import Clause
 from .clause_mapping import ClauseMapping
+from .complaint import Complaint
 from .disposition_event import DispositionEvent
 from .document_type import DocumentType
 from .document_version import DocumentVersion
@@ -74,6 +84,7 @@ from .import_file import ImportFile
 from .import_proposal_node import ImportProposalNode
 from .import_run import ImportRun
 from .import_version_family import ImportVersionFamily
+from .ncr import Ncr
 from .numbering_counter import NumberingCounter
 from .org_role import OrgRole
 from .organization import Organization
@@ -115,11 +126,16 @@ __all__ = [
     "AuditState",
     "BackupPolicy",
     "Blob",
+    "Capa",
+    "CapaCloseState",
+    "CapaSource",
+    "CapaStage",
     "ChangeSignificance",
     "CheckpointSinkKind",
     "Classification",
     "Clause",
     "ClauseMapping",
+    "Complaint",
     "DispositionAction",
     "DispositionEvent",
     "DocumentCurrentState",
@@ -151,6 +167,10 @@ __all__ = [
     "ImportRun",
     "ImportRunStatus",
     "ImportVersionFamily",
+    "NcSeverity",
+    "Ncr",
+    "NcrDisposition",
+    "NcrSource",
     "NumberingCounter",
     "OrgRole",
     "Organization",

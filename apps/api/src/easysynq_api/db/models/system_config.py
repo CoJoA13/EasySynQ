@@ -89,6 +89,18 @@ class SystemConfig(Base):
         default=False,
         nullable=False,
     )
+    # Severity-aware SoD-4 relaxation flag (S-capa-1 seam; consumed in S-capa-3, decisions-register
+    # R39): when false (the default, STRICT), a CAPA's action implementer may NOT verify it. A
+    # per-org flip lets a small/solo install relax this for **Minor** CAPAs only (Critical/Major
+    # always hard-enforce verifier≠implementer). Exposed now via /admin/config so an operator can
+    # pre-set it; the verify-time enforcement lands with S-capa-3. Distinct from
+    # ``allow_self_disposition`` (the records SoD-6 flag) — a separate duty separation.
+    allow_capa_self_verify: Mapped[bool] = mapped_column(
+        Boolean,
+        server_default=false(),
+        default=False,
+        nullable=False,
+    )
     finalized_at: Mapped[datetime.datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,

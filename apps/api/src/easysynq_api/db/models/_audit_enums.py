@@ -62,6 +62,12 @@ class AuditObjectType(enum.Enum):
     # single-stage approval (S5) keeps writing via VaultAuditSink on ``document_version``. Added via
     # ``ALTER TYPE audit_object_type ADD VALUE`` in 0035 (the 0019/0025/0028/0029 precedent).
     workflow_instance = "workflow_instance"
+    # the NCR own-table (S-capa-1, doc 14 §9) — NCR_CREATED / NCR_DISPOSITIONED key here on the
+    # ``ncr.id`` (an own table, NOT a record subtype, so it cannot reuse ``record``). The CAPA +
+    # complaint record subtypes (``capa.id`` / ``complaint.id`` ARE record ids) keep reusing
+    # ``record``. Added via ``ALTER TYPE audit_object_type ADD VALUE`` in 0036 (the precedent
+    # above).
+    ncr = "ncr"
 
 
 class EventType(enum.Enum):
@@ -287,6 +293,18 @@ class EventType(enum.Enum):
     TASK_DECIDED = "TASK_DECIDED"
     STAGE_ADVANCED = "STAGE_ADVANCED"
     STAGE_FAILED = "STAGE_FAILED"
+    # the CAPA core + intake family (S-capa-1, doc 02 Cl 10.2, doc 10 §6, doc 14 §9). CAPA +
+    # complaint
+    # are kind=RECORD subtypes (events key on object_type=record, their ``.id`` IS a record id); NCR
+    # is an own table (object_type=ncr). Added via ``ALTER TYPE event_type ADD VALUE`` in 0036 (the
+    # additive pattern; a from-scratch ``upgrade head`` rebuilds the type from EVENT_TYPE_VALUES, so
+    # the members live here too).
+    CAPA_RAISED = "CAPA_RAISED"
+    CAPA_TRANSITIONED = "CAPA_TRANSITIONED"
+    COMPLAINT_CAPTURED = "COMPLAINT_CAPTURED"
+    COMPLAINT_SPAWNED_CAPA = "COMPLAINT_SPAWNED_CAPA"
+    NCR_CREATED = "NCR_CREATED"
+    NCR_DISPOSITIONED = "NCR_DISPOSITIONED"
 
 
 class CheckpointSinkKind(enum.Enum):

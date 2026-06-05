@@ -19,6 +19,7 @@ from .api.audit import router as audit_router
 from .api.audits import router as audits_router
 from .api.auth import router as auth_router
 from .api.authz import router as authz_router
+from .api.capa import router as capa_router
 from .api.clauses import router as clauses_router
 from .api.config import router as config_router
 from .api.documents import router as documents_router
@@ -142,6 +143,7 @@ def create_app() -> FastAPI:
     app.include_router(processes_router)  # S9c: process IA (graph + authoring + /processes/map)
     app.include_router(records_router)  # S-rec-1: records capture + evidence-linking + correction
     app.include_router(audits_router)  # S-aud-1: internal-audit programmes/plans/audits + FSM
+    app.include_router(capa_router)  # S-capa-1: CAPA core + intake (capas/complaints/ncrs)
     app.include_router(retention_policies_router)  # S-rec-4: retention-policy CRUD + soft-archive
     app.include_router(ingestion_router)  # S-ing-1: import run + scan/inventory (NOT latch-exempt)
     app.include_router(search_router)  # S10: Postgres-FTS search (filter-not-403, Indexer seam)

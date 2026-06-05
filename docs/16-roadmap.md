@@ -122,8 +122,13 @@ Records/evidence capture, retention/disposition, Evidence Packs, audits/findings
 > **S-wf-engine** (migration `0035`) then adds the doc-10 **declarative workflow engine** (multi-stage + tri-state quorum
 > [ANY/ALL/N_OF_M/PERCENT, distinct approvers, early-fail] + `conditional`/ROUTER routing over an `ast`-sandboxed predicate
 > grammar + candidate-pool resolution + due-date SLA) on the existing `workflow_*` tables, the S5 DOCUMENT approval left
-> byte-identical — the substrate S-capa-2's severity-routed CAPA approval rides. **Migration head is now `0035`.** See
-> `CLAUDE.md` for shipped detail.
+> byte-identical — the substrate S-capa-2's severity-routed CAPA approval rides. **S-capa-1** (migration `0036`) then
+> ships the **CAPA core + intake**: `capa` (a `kind=RECORD` subtype with a mutable `close_state` + an append-only
+> `capa_stage` trail; Raised→Containment wired), `ncr` (ISO 8.7 own-table + recorded disposition, R20), `complaint`
+> (R16, a shared-PK subtype) + the idempotent **complaint→CAPA spawn**, the slice-0 grant-backfill of the orphaned
+> `capa.update`/`ncr.create`/`ncr.record_correction` keys, and the `allow_capa_self_verify` SoD-4 config seam (enforced
+> in S-capa-3). NC→CAPA auto-link + findings stay in S-aud-2; RCA/ActionPlan/Implement/Verify stay in S-capa-2..3.
+> **Migration head is now `0036`.** See `CLAUDE.md` for shipped detail.
 
 **Goal:** everything an organization needs to *run and certify* an ISO 9001:2015 QMS, end to end, and to face an external audit with a one-click evidence pack.
 
