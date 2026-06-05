@@ -673,6 +673,13 @@ create boundary.
   files), **delete a group that drops <2 members** (a 1-member group with a dangling canonical drops its survivor), and let the
   **exclude/defer fold win over** structural membership everywhere readiness/commit is computed. Reassign ARRAY columns (not
   in-place `.append`/`.remove` — SQLAlchemy doesn't track in-place mutation of a plain ARRAY).
+- **Integration assertions must be delta-based / run-scoped, never assume a clean shared DB** (the S-ing-4 lesson — it
+  passed the targeted-subset local run but failed the full CI suite). The `-m integration` suite shares ONE session DB across
+  all files; earlier files leave vault docs/orgs behind. So a test that asserts an absolute (`documented_information == 0`, or a
+  checklist's global `ready is True`) breaks once another file has run first. Assert a **delta** (capture counts before → assert
+  unchanged after) or scope to **this run's** rows / the **specific** entity you created (e.g. "the duplicate-identifier conflict
+  I introduced appears/disappears", not the global `ready` — a prior test's vault doc may collide). Reproduce locally by running
+  a doc-creating file BEFORE the touched file (`pytest -m integration tests/integration/test_vault.py <touched>.py`).
 - **A replay/no-op path that `rollback()`s must capture any ORM ids it returns BEFORE the rollback** (the S-ing-4
   Idempotency-Key lesson). `session.rollback()` expires every loaded instance; a subsequent `str(row.id)` (or any attr access)
   triggers a lazy refresh whose I/O, on an async session, surfaces later as a `MissingGreenlet` at connection-pool close — a
