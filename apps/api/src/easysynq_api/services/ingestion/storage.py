@@ -111,3 +111,16 @@ async def stage_stream(fileobj: BinaryIO) -> StagedResult:
     in one pass, off the event loop. Returns the digest + the canonical ``s3://…`` uri + the
     byte size."""
     return await asyncio.to_thread(_stage_sync, fileobj)
+
+
+def _fetch_sync(sha256: str) -> bytes:
+    body: bytes = _client().get_object(Bucket=_import_staging_bucket(), Key=sha256)["Body"].read()
+    return body
+
+
+async def fetch_staged_bytes(sha256: str) -> bytes:
+    """Read a staged object's bytes by its content address (S-ing-2 extract). The worker reads the
+    staged copy — NOT the source tree (a file may be moved/deleted between scan and extract; the
+    staging bytes are immutable + content-addressed). Off the event loop; whole-object (a 0-byte /
+    junk file never reaches here — only included candidates carry a ``staged_blob_uri``)."""
+    return await asyncio.to_thread(_fetch_sync, sha256)

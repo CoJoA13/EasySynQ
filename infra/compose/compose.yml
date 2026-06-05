@@ -89,6 +89,16 @@ services:
     command: ["gotenberg", "--api-port=3000"]
     networks: [internal]
 
+  # S-ing-2: text extraction + OCR for the ingestion engine (doc 09 §5). The Apache Tika ``-full``
+  # image bundles the extractors (~1000 formats) AND Tesseract OCR + tessdata, so extraction AND OCR
+  # run locally over HTTP (no telemetry, D1) — the worker reaches it at TIKA_URL (http://tika:9998).
+  # Pinned (confirm/bump the -full tag as Tika releases). No healthcheck (the Gotenberg precedent —
+  # a JVM image with no bundled http client; a Tika outage degrades a file to extract_failed and the
+  # run continues, §5.3). JVM footprint ~1 GB (fits the S-profile budget alongside the other services).
+  tika:
+    image: apache/tika:3.2.3.0-full
+    networks: [internal]
+
   # Run migrations to head, then exit. The api waits for this to complete.
   migrate:
     build: *api-build
@@ -138,6 +148,8 @@ services:
         condition: service_completed_successfully
       renderer:
         condition: service_started   # S7b: the worker renders via gotenberg (resilient if it lags)
+      tika:
+        condition: service_started   # S-ing-2: the worker extracts/OCRs via tika (resilient if it lags)
     volumes:
       - mirror:/var/lib/easysynq/qms-mirror   # worker writes the read-only mirror (R11)
       - secrets:/run/secrets   # S7c: shared verify-token signing key (worker mints the QR token)

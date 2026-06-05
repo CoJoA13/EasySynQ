@@ -61,10 +61,18 @@ async def release(source_root_hash: str, token: str) -> bool:
 
 
 async def force_release(source_root_hash: str) -> None:
-    """Break the lock without the token — the stalled-scan reaper recovering an abandoned source
+    """Break the lock without the token — the stalled-run reaper recovering an abandoned source
     root."""
     async with _redis() as client:
         await client.delete(_key(source_root_hash))
+
+
+async def is_alive(source_root_hash: str) -> bool:
+    """True iff the source-root lock key still exists (S-ing-2). The lock is held continuously
+    scan→extract→classify and heartbeated per batch, so a *missing* key on an in-progress run means
+    the worker died (its TTL lapsed with no heartbeat) — the reaper's primary stall signal."""
+    async with _redis() as client:
+        return bool(await client.exists(_key(source_root_hash)))
 
 
 async def heartbeat(source_root_hash: str, token: str, *, ttl: int) -> bool:

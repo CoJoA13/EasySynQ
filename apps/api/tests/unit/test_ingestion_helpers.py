@@ -70,8 +70,20 @@ def test_looks_encrypted() -> None:
 
 
 def test_status_enum_values() -> None:
-    assert IMPORT_RUN_STATUS_VALUES == ("Created", "Scanning", "Scanned", "Failed", "Cancelled")
+    # S-ing-2 ADD VALUEs Extracting/Classifying/Classified (the additive-enum pattern); order is
+    # load-bearing (the migration ADD VALUEs the new states; they precede the terminals).
+    assert IMPORT_RUN_STATUS_VALUES == (
+        "Created",
+        "Scanning",
+        "Scanned",
+        "Extracting",
+        "Classifying",
+        "Classified",
+        "Failed",
+        "Cancelled",
+    )
     assert ImportRunStatus.SCANNED.value == "Scanned"
+    assert ImportRunStatus.CLASSIFIED.value == "Classified"
 
 
 def test_audit_enum_members_exist() -> None:

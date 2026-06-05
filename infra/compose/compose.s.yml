@@ -11,6 +11,9 @@ services:
   renderer:
     deploy:
       replicas: 1
+  tika:
+    deploy:
+      replicas: 1      # S-ing-2: one Tika sidecar serves the worker (OCR scales via worker cores).
   beat:
     deploy:
       replicas: 1      # NEVER more than 1 — two schedulers double-fire.

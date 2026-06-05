@@ -29,9 +29,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...config import get_settings
 from ...db.models._audit_enums import ActorType, AuditObjectType, EventType
-from ...db.models._ingestion_enums import ImportRunStatus
+from ...db.models._ingestion_enums import (
+    ImportConfidenceBand,
+    ImportKind,
+    ImportRunStatus,
+)
 from ...db.models.app_user import AppUser
 from ...db.models.audit_event import AuditEvent
+from ...db.models.import_classification import ImportClassification
+from ...db.models.import_extract import ImportExtract
 from ...db.models.import_file import ImportFile
 from ...db.models.import_run import ImportRun
 from ...domain.ingestion.classifier import ScanFlags, classify
@@ -50,7 +56,20 @@ _CFB_MAGIC = (
     b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"  # OLE/CFB compound file (an encrypted OOXML wrapper)
 )
 _OOXML_EXTS = frozenset({"docx", "xlsx", "pptx"})
-_TERMINAL = (ImportRunStatus.SCANNED, ImportRunStatus.FAILED, ImportRunStatus.CANCELLED)
+# Terminal = no further stage + lock freed. S-ing-2: Scanned is NO LONGER terminal — the pipeline
+# auto-chains scan→extract→classify (the lock is held continuously, freed only at Classified/Failed/
+# Cancelled). The in-progress states (Scanning/Scanned/Extracting/Classifying) stay cancellable.
+_TERMINAL = (
+    ImportRunStatus.CLASSIFIED,
+    ImportRunStatus.FAILED,
+    ImportRunStatus.CANCELLED,
+)
+_IN_PROGRESS = (
+    ImportRunStatus.SCANNING,
+    ImportRunStatus.SCANNED,
+    ImportRunStatus.EXTRACTING,
+    ImportRunStatus.CLASSIFYING,
+)
 
 
 def _now() -> datetime.datetime:
@@ -234,14 +253,36 @@ async def list_import_files(
     run_id: uuid.UUID,
     *,
     disposition: str | None = None,
+    kind: ImportKind | None = None,
+    band: ImportConfidenceBand | None = None,
     limit: int = 100,
     offset: int = 0,
-) -> tuple[ImportRun, Sequence[ImportFile]]:
+) -> tuple[ImportRun, Sequence[tuple[ImportFile, ImportClassification | None]]]:
     run = await get_import_run(session, caller, run_id)  # org-scoped 404 first
-    files = await repo.list_files(
-        session, run_id, disposition=disposition, limit=min(limit, 200), offset=max(offset, 0)
+    rows = await repo.list_files_with_classification(
+        session,
+        run_id,
+        classifier_version=run.classifier_version,
+        disposition=disposition,
+        kind=kind,
+        band=band,
+        limit=min(limit, 200),
+        offset=max(offset, 0),
     )
-    return run, files
+    return run, rows
+
+
+async def list_import_file_detail(
+    session: AsyncSession, caller: AppUser, run_id: uuid.UUID, file_id: uuid.UUID
+) -> tuple[ImportRun, ImportFile, ImportExtract | None, ImportClassification | None]:
+    run = await get_import_run(session, caller, run_id)  # org-scoped 404 first
+    detail = await repo.get_file_detail(
+        session, run_id, file_id, classifier_version=run.classifier_version
+    )
+    if detail is None:
+        raise ProblemException(status=404, code="not_found", title="Import file not found")
+    f, ext, cls = detail
+    return run, f, ext, cls
 
 
 async def cancel_import_run(session: AsyncSession, caller: AppUser, run_id: uuid.UUID) -> ImportRun:
@@ -322,7 +363,9 @@ async def run_scan(session: AsyncSession, run_id: uuid.UUID) -> None:
             await session.commit()  # per-batch checkpoint (the §11.2 resume granularity)
             if token:
                 await locks.heartbeat(src_hash, token, ttl=settings.import_lock_ttl_seconds)
-            if await repo.get_status(session, run_id) is ImportRunStatus.CANCELLED:
+            # Stop on ANY status change away from Scanning — a cancel, OR a reaper that FAILED a run
+            # whose lock lapsed mid-batch (the release is a CAS no-op if already freed).
+            if await repo.get_status(session, run_id) is not ImportRunStatus.SCANNING:
                 if token:
                     await locks.release(src_hash, token)
                 return
@@ -336,7 +379,9 @@ async def run_scan(session: AsyncSession, run_id: uuid.UUID) -> None:
             return
         final.status = ImportRunStatus.SCANNED
         final.counts = counts
-        final.completed_at = _now()
+        # completed_at stays NULL — the pipeline auto-chains to extract→classify and completes at
+        # Classified. The source-root lock is held continuously (NOT released here), so a re-import
+        # of the same root stays blocked through the whole pipeline (doc 09 §3.3).
         emit_import_event_system(
             session,
             org_id,
@@ -346,14 +391,27 @@ async def run_scan(session: AsyncSession, run_id: uuid.UUID) -> None:
             after={"status": "Scanned", "counts": counts},
         )
         await session.commit()
-        if token:
-            await locks.release(src_hash, token)
+        _enqueue_extract(run_id)  # chain to Stage 2 (best-effort; the reaper backstops a drop)
     except Exception as exc:
         await session.rollback()
-        await _fail_scan(session, run_id, repr(exc)[:500])
+        await _fail_run(session, run_id, repr(exc)[:500])
         if token:
             await locks.release(src_hash, token)
         raise
+
+
+def _enqueue_extract(run_id: uuid.UUID) -> None:
+    """Best-effort chain to Stage 2 AFTER the Scanned commit (the ``_enqueue_structured_pdf``
+    precedent): the run is committed + the lock held, so a broker blip must not fail the scan — the
+    lock-liveness reaper FAILs a stranded run once its TTL lapses (operator re-runs to resume)."""
+    from ...tasks.ingestion import extract_source
+
+    try:
+        extract_source.delay(str(run_id))
+    except Exception:  # noqa: BLE001 — best-effort enqueue; the run is committed (Scanned)
+        logger.warning(
+            "ingestion.extract.enqueue_failed", extra={"extra_fields": {"run_id": str(run_id)}}
+        )
 
 
 async def _process_file(
@@ -409,8 +467,8 @@ def _looks_encrypted(head: bytes, ext: str | None) -> bool:
     return False
 
 
-async def _fail_scan(session: AsyncSession, run_id: uuid.UUID, reason: str) -> None:
-    """Mark a scan FAILED in its own transaction (the packs ``_fail`` discipline)."""
+async def _fail_run(session: AsyncSession, run_id: uuid.UUID, reason: str) -> None:
+    """Mark a run FAILED in its own transaction (the packs ``_fail`` discipline)."""
     run = await repo.get_run(session, run_id, for_update=True)
     if run is None or run.status in _TERMINAL:
         await session.rollback()
@@ -427,31 +485,30 @@ async def _fail_scan(session: AsyncSession, run_id: uuid.UUID, reason: str) -> N
 # --------------------------------------------------------------------------- reaper (Beat)
 
 
-async def reap_stalled_scans(
+async def reap_stalled_runs(
     session: AsyncSession,
     *,
     now: datetime.datetime | None = None,
     max_age_seconds: int | None = None,
 ) -> dict[str, int]:
-    """Flip scans stuck in SCANNING past the stall window → FAILED (system-actor) + force-release
-    the
-    abandoned source-root lock, so a crashed scan never wedges the root. ``FOR UPDATE SKIP LOCKED``
-    avoids racing a live scan; a Beat job drives this, tests call it directly."""
+    """Flip wedged in-progress runs (Scanning/Scanned/Extracting/Classifying) → FAILED + force-free
+    the source-root lock, so a crashed worker never wedges the root. S-ing-2 primary signal:
+    **lock-liveness** — the lock is held continuously + heartbeated per batch, so a missing lock on
+    an in-progress run means the worker died (the TTL lapsed with no heartbeat). A generous absolute
+    ``import_run_stall_seconds`` backstop on ``scan_started_at`` (the whole-pipeline anchor) covers
+    the rare alive-but-wedged case. ``FOR UPDATE SKIP LOCKED`` avoids racing a live worker; a Beat
+    job drives this, tests call it directly."""
     from sqlalchemy import select
 
     settings = get_settings()
     now = now or _now()
-    max_age = max_age_seconds if max_age_seconds is not None else settings.import_scan_stall_seconds
+    max_age = max_age_seconds if max_age_seconds is not None else settings.import_run_stall_seconds
     cutoff = now - datetime.timedelta(seconds=max_age)
-    stalled = (
+    candidates = (
         (
             await session.execute(
                 select(ImportRun)
-                .where(
-                    ImportRun.status == ImportRunStatus.SCANNING,
-                    ImportRun.scan_started_at.is_not(None),
-                    ImportRun.scan_started_at < cutoff,
-                )
+                .where(ImportRun.status.in_(_IN_PROGRESS))
                 .with_for_update(skip_locked=True)
             )
         )
@@ -459,9 +516,13 @@ async def reap_stalled_scans(
         .all()
     )
     hashes: list[str] = []
-    for run in stalled:
+    for run in candidates:
+        lock_alive = await locks.is_alive(run.source_root_hash)
+        too_old = run.scan_started_at is not None and run.scan_started_at < cutoff
+        if lock_alive and not too_old:
+            continue  # progressing (heartbeat keeps the lock alive)
         run.status = ImportRunStatus.FAILED
-        run.error = "scan_timeout"
+        run.error = "stage_timeout"
         run.completed_at = now
         hashes.append(run.source_root_hash)
         emit_import_event_system(
@@ -469,9 +530,9 @@ async def reap_stalled_scans(
             run.org_id,
             EventType.IMPORT_RUN_FAILED,
             run.id,
-            after={"error": "scan_timeout"},
+            after={"error": "stage_timeout"},
         )
     await session.commit()
     for src_hash in hashes:
         await locks.force_release(src_hash)
-    return {"reaped": len(stalled)}
+    return {"reaped": len(hashes)}

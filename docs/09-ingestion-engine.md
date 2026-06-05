@@ -198,6 +198,14 @@ The scan completes into a **calm summary card** (progressive disclosure): total 
 
 ## 5. Stage 2 — Extraction (text, metadata, OCR)
 
+> **Implemented in S-ing-2** via an Apache Tika `-full` HTTP sidecar (the extractors + Tesseract OCR
+> bundled in one local JVM container, no telemetry) behind the `ExtractorProvider` seam. The §5.2 OCR
+> ladder is a two-pass PDF path (`no_ocr` → `ocr_only` below the per-page char threshold). Deviations:
+> `ocr_confidence` is best-effort (Tika does not surface per-doc Tesseract confidence in `/rmeta`);
+> `ocr_enabled=False` gates the PDF OCR pass but a standalone image is still OCR'd by the sidecar's
+> image parser. Extraction failure marks `extract_failed` and never fails the run (§5.3). `full_text`
+> is stored inline (capped) in the transient `import_extract` row, not a blob reference.
+
 ### 5.1 What is extracted
 
 | Output | How | Used by |
@@ -235,6 +243,17 @@ Extraction failures (corrupt file, unknown sub-format) do **not** fail the run: 
 ## 6. Stage 3 — Classification (rules + heuristics, with confidence)
 
 This is the analytical heart. The classifier assigns, **per file**, four independent dimensions, **each with its own confidence score** and a human-readable **evidence list** (so Mara sees *why*). It is deliberately transparent and pluggable.
+
+> **Implemented in S-ing-2** as the pure `RuleHeuristicClassifier` (`classifier_version =
+> "rule-heuristic-1"`) behind the `ClassifierProvider` seam, scoring against a versioned YAML rule
+> pack (`domain/ingestion/rule_packs/iso9001_rule_pack_v1.yaml`). The §6.3 formula is a **capped
+> weighted sum** `min(100, Σ fired-matcher weights)` (weights calibrated to reproduce the §6.5 worked
+> examples). The **row-level review band is the type (headline) confidence** + a separate `ambiguous`
+> flag (a near-tie on any dimension) — the §6.5 single-number model. `kind` is **scored only** (UNKNOWN
+> below a floor; never auto-confirmed — R10; confirmation is the S-ing-4 review slice). PDCA is derived
+> from the highest-confidence matched requirement-node clause. The measured per-dimension accuracy band
+> (§6.4a) ships **INTERIM — synthetic corpus only** (`tests/fixtures/ingestion_corpus/VALIDATION.md`);
+> the real-corpus validation sprint is a v1.x prerequisite.
 
 ### 6.1 The four classification dimensions
 

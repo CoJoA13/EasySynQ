@@ -27,6 +27,10 @@ dependencies = [
   # is added to the worker image (Dockerfile); ``import magic`` is lazy + guarded in
   # services/ingestion/mime.py so the bare unit-test CI runner (no libmagic1) degrades to mimetypes.
   "python-magic>=0.4",
+  # S-ing-2 ingestion: the §6.3 classifier rule pack is a YAML resource (transparent, org-overridable).
+  # Loaded + validated at startup via yaml.safe_load (domain/ingestion/rule_pack.py). Extraction/OCR
+  # is an out-of-process Apache Tika -full sidecar (no Python extractor dep — reached over httpx).
+  "pyyaml>=6.0",
 ]
 
 [dependency-groups]
@@ -79,7 +83,7 @@ explicit_package_bases = true
 
 # Third-party libs without bundled type stubs (mypy --strict would otherwise error).
 [[tool.mypy.overrides]]
-module = ["boto3", "boto3.*", "botocore", "botocore.*", "celery", "celery.*", "alembic", "alembic.*", "redis", "redis.*", "reportlab", "reportlab.*", "magic"]
+module = ["boto3", "boto3.*", "botocore", "botocore.*", "celery", "celery.*", "alembic", "alembic.*", "redis", "redis.*", "reportlab", "reportlab.*", "magic", "yaml", "yaml.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

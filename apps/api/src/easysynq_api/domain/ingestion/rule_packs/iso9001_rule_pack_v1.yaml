@@ -1,0 +1,134 @@
+# EasySynQ v1 ISO 9001:2015 rule pack (slice S-ing-2, doc 09 §6.3).
+#
+# The transparent, weighted-evidence matchers the RuleHeuristicClassifier scores. A candidate's
+# dimension score = min(100, Σ of the weights of the matchers that fire) — so weights here are
+# calibrated against the doc 09 §6.5 worked examples (e.g. an SOP with its doc-code 40 + header 30 +
+# folder 15 + content 7 = 92, a High). High ≥85 / Medium 60-84 / Low <60.
+#
+# signal ∈ {explicit_doc_code, header_keyword, structural_shape, folder_path_token, content_keyword,
+#           embedded_property, filename_version_marker} (recorded on each evidence entry).
+# A matcher fires on exactly one of: pattern (regex; ONLY on filename/header — length-capped, the
+# ReDoS confinement), keywords (case-insensitive substring on filename/header/content/path), or
+# predicate (a named structural predicate: has_revision_history / has_approval_block /
+# has_dated_signatures). Clause candidates are catalog clause NUMBERS (requirement-node leaves).
+version: "rule-heuristic-1"
+
+# ---------------------------------------------------------------- Kind (DOCUMENT | RECORD; R10: scored only)
+kind_rules:
+  - candidate: DOCUMENT
+    matchers:
+      - {signal: explicit_doc_code, target: filename, pattern: '\b(SOP|WI|QP|POL|FRM)[-_ ]', weight: 30, explanation: "Filename carries a controlled-document code (SOP/WI/QP/POL/FRM)"}
+      - {signal: header_keyword, target: header, keywords: ["procedure", "policy", "work instruction", "quality manual", "form"], weight: 30, explanation: "Header reads like a controlled document (procedure/policy/work instruction/manual/form)"}
+      - {signal: folder_path_token, target: path, keywords: ["procedures", "policies", "forms", "templates", "manual", "work instructions"], weight: 15, explanation: "Lives under a controlled-document folder"}
+      - {signal: structural_shape, predicate: has_revision_history, weight: 25, explanation: "Contains a Revision History table (a controlled document)"}
+      - {signal: structural_shape, predicate: has_approval_block, weight: 15, explanation: "Contains a prepared/reviewed/approved-by block"}
+  - candidate: RECORD
+    matchers:
+      - {signal: header_keyword, target: header, keywords: ["report", "minutes", "certificate", "record", "log", "register", "evaluation"], weight: 30, explanation: "Header reads like a retained record (report/minutes/certificate/log/register)"}
+      - {signal: folder_path_token, target: path, keywords: ["records", "audits", "evidence", "calibration", "reviews", "complaints"], weight: 25, explanation: "Lives under a records/evidence folder"}
+      - {signal: structural_shape, predicate: has_dated_signatures, weight: 30, explanation: "Carries dated signatures (a completed record)"}
+      - {signal: filename_version_marker, target: filename, pattern: '\b(19|20)\d{2}\b|\bQ[1-4]\b', weight: 15, explanation: "Filename carries a year/quarter stamp (record-like)"}
+
+# ---------------------------------------------------------------- Type (document_type code OR record_type)
+type_rules:
+  # --- document types (POL/SOP/WI/FRM) ---
+  - candidate: POL
+    domain: document
+    matchers:
+      - {signal: header_keyword, target: header, keywords: ["quality policy"], weight: 60, explanation: "Header reads 'Quality Policy'"}
+      - {signal: header_keyword, target: filename, keywords: ["quality policy", "policy"], weight: 16, explanation: "Filename names a policy"}
+      - {signal: folder_path_token, target: path, keywords: ["quality manual", "policies", "policy"], weight: 20, explanation: "Lives under the policy/manual folder"}
+  - candidate: SOP
+    domain: document
+    matchers:
+      - {signal: explicit_doc_code, target: filename, pattern: '\bSOP[-_ ]', weight: 40, explanation: "Filename carries an SOP- document code"}
+      - {signal: header_keyword, target: header, keywords: ["standard operating procedure", "procedure"], weight: 30, explanation: "Header reads 'Standard Operating Procedure'"}
+      - {signal: folder_path_token, target: path, keywords: ["procedures"], weight: 15, explanation: "Lives under /Procedures/"}
+      - {signal: content_keyword, target: content, keywords: ["supplier", "purchasing", "process steps", "responsibilities"], weight: 7, explanation: "Procedure-style operating vocabulary"}
+  - candidate: WI
+    domain: document
+    matchers:
+      - {signal: explicit_doc_code, target: filename, pattern: '\bWI[-_ ]', weight: 40, explanation: "Filename carries a WI- document code"}
+      - {signal: header_keyword, target: header, keywords: ["work instruction"], weight: 45, explanation: "Header reads 'Work Instruction'"}
+      - {signal: folder_path_token, target: path, keywords: ["work instructions", "instructions"], weight: 15, explanation: "Lives under /Work Instructions/"}
+  - candidate: FRM
+    domain: document
+    matchers:
+      - {signal: explicit_doc_code, target: filename, pattern: '\b(F|FRM)[-_]\d', weight: 40, explanation: "Filename carries an F-/FRM- form code"}
+      - {signal: header_keyword, target: header, keywords: ["form", "template", "log", "register", "checklist"], weight: 30, explanation: "Header reads like a blank form/template/log"}
+      - {signal: folder_path_token, target: path, keywords: ["forms", "templates"], weight: 15, explanation: "Lives under /Forms/"}
+      - {signal: content_keyword, target: content, keywords: ["calibration", "complete the following"], weight: 3, explanation: "Form-style content"}
+  # --- record types (the high-signal subset; the rest classify as kind=RECORD, type unknown) ---
+  - candidate: AUDIT
+    domain: record
+    matchers:
+      - {signal: header_keyword, target: header, keywords: ["internal audit report", "audit report"], weight: 45, explanation: "Header reads 'Internal Audit Report'"}
+      - {signal: header_keyword, target: header, keywords: ["audit programme", "audit plan", "audit checklist"], weight: 30, explanation: "Header reads like an audit programme/plan"}
+      - {signal: folder_path_token, target: path, keywords: ["audits", "audit"], weight: 25, explanation: "Lives under /Records/Audits/"}
+      - {signal: structural_shape, predicate: has_dated_signatures, weight: 20, explanation: "Carries dated auditor signatures"}
+  - candidate: MGMT_REVIEW
+    domain: record
+    matchers:
+      - {signal: header_keyword, target: header, keywords: ["management review"], weight: 50, explanation: "Header reads 'Management Review'"}
+      - {signal: header_keyword, target: header, keywords: ["minutes", "agenda"], weight: 20, explanation: "Reads like meeting minutes/agenda"}
+      - {signal: folder_path_token, target: path, keywords: ["management review", "reviews"], weight: 20, explanation: "Lives under /Management Review/"}
+  - candidate: CAPA
+    domain: record
+    matchers:
+      - {signal: header_keyword, target: header, keywords: ["corrective action", "capa", "nonconformity report", "non-conformity report"], weight: 45, explanation: "Header reads 'Corrective Action / CAPA'"}
+      - {signal: content_keyword, target: content, keywords: ["root cause", "corrective action", "containment"], weight: 25, explanation: "CAPA vocabulary (root cause / corrective action)"}
+      - {signal: folder_path_token, target: path, keywords: ["capa", "corrective actions", "nonconformities"], weight: 20, explanation: "Lives under a CAPA/NC folder"}
+  - candidate: CALIBRATION
+    domain: record
+    matchers:
+      - {signal: header_keyword, target: header, keywords: ["calibration certificate", "calibration record", "certificate of calibration"], weight: 45, explanation: "Header reads 'Calibration Certificate'"}
+      - {signal: content_keyword, target: content, keywords: ["calibrated", "traceable to", "measurement uncertainty"], weight: 25, explanation: "Calibration vocabulary (traceability/uncertainty)"}
+      - {signal: folder_path_token, target: path, keywords: ["calibration"], weight: 20, explanation: "Lives under /Calibration/"}
+  - candidate: COMPETENCE
+    domain: record
+    matchers:
+      - {signal: header_keyword, target: header, keywords: ["training record", "competence record", "certificate of training", "training certificate"], weight: 45, explanation: "Header reads like a training/competence record"}
+      - {signal: folder_path_token, target: path, keywords: ["training", "competence", "hr"], weight: 20, explanation: "Lives under a training/competence folder"}
+  - candidate: SUPPLIER_EVAL
+    domain: record
+    matchers:
+      - {signal: header_keyword, target: header, keywords: ["supplier evaluation", "supplier assessment", "vendor assessment", "approved supplier"], weight: 45, explanation: "Header reads 'Supplier Evaluation'"}
+      - {signal: folder_path_token, target: path, keywords: ["suppliers", "supplier evaluations", "vendors"], weight: 20, explanation: "Lives under a supplier/vendor folder"}
+
+# ---------------------------------------------------------------- Clause map (catalog requirement-node numbers)
+clause_rules:
+  - candidate: "4.3"
+    matchers:
+      - {signal: content_keyword, target: content, keywords: ["scope of the quality management system", "boundaries and applicability", "scope statement"], weight: 60, explanation: "Defines the QMS scope (Clause 4.3)"}
+      - {signal: header_keyword, target: header, keywords: ["scope of the quality management system", "qms scope"], weight: 30, explanation: "Header names the QMS scope (Clause 4.3)"}
+  - candidate: "5.2"
+    matchers:
+      - {signal: header_keyword, target: header, keywords: ["quality policy"], weight: 70, explanation: "The Quality Policy (Clause 5.2)"}
+      - {signal: content_keyword, target: content, keywords: ["commitment to satisfy applicable requirements", "framework for setting quality objectives"], weight: 25, explanation: "Quality-policy commitments (Clause 5.2)"}
+  - candidate: "6.2"
+    matchers:
+      - {signal: header_keyword, target: header, keywords: ["quality objectives"], weight: 60, explanation: "Quality objectives (Clause 6.2)"}
+      - {signal: content_keyword, target: content, keywords: ["objectives and plans to achieve them", "measurable objectives"], weight: 25, explanation: "Objectives vocabulary (Clause 6.2)"}
+  - candidate: "7.2"
+    matchers:
+      - {signal: content_keyword, target: content, keywords: ["competence", "training needs", "education, training, or experience"], weight: 45, explanation: "Competence/training (Clause 7.2)"}
+  - candidate: "7.1.5.2"
+    matchers:
+      - {signal: content_keyword, target: content, keywords: ["measurement traceability", "calibrated", "traceable to", "measurement standards"], weight: 45, explanation: "Measurement traceability/calibration (Clause 7.1.5.2)"}
+  - candidate: "8.4"
+    matchers:
+      - {signal: content_keyword, target: content, keywords: ["supplier", "external provider", "purchasing", "subcontractor", "outsourced"], weight: 45, explanation: "Externally provided processes/products (Clause 8.4)"}
+      - {signal: folder_path_token, target: path, keywords: ["purchasing", "suppliers", "procurement"], weight: 20, explanation: "Filed under purchasing/suppliers (Clause 8.4)"}
+  - candidate: "8.7"
+    matchers:
+      - {signal: content_keyword, target: content, keywords: ["nonconforming output", "control of nonconforming", "nonconformity"], weight: 45, explanation: "Control of nonconforming outputs (Clause 8.7)"}
+  - candidate: "9.2"
+    matchers:
+      - {signal: header_keyword, target: header, keywords: ["internal audit", "audit report", "audit programme"], weight: 55, explanation: "Internal audit (Clause 9.2)"}
+      - {signal: content_keyword, target: content, keywords: ["audit criteria", "audit findings", "lead auditor"], weight: 20, explanation: "Internal-audit vocabulary (Clause 9.2)"}
+  - candidate: "9.3"
+    matchers:
+      - {signal: header_keyword, target: header, keywords: ["management review"], weight: 55, explanation: "Management review (Clause 9.3)"}
+  - candidate: "10.2"
+    matchers:
+      - {signal: content_keyword, target: content, keywords: ["corrective action", "root cause", "nonconformity and corrective action"], weight: 50, explanation: "Nonconformity & corrective action (Clause 10.2)"}

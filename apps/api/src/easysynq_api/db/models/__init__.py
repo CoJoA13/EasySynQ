@@ -9,7 +9,12 @@ from ._audit_enums import (
 from ._authz_enums import SodSeverity, SodTargetBinding
 from ._clause_enums import PdcaPhase
 from ._evidence_enums import EvidenceForTargetType
-from ._ingestion_enums import ImportRunStatus
+from ._ingestion_enums import (
+    ImportConfidenceBand,
+    ImportExtractStatus,
+    ImportKind,
+    ImportRunStatus,
+)
 from ._pack_enums import (
     PackInclusionStatus,
     PackItemType,
@@ -53,6 +58,8 @@ from .evidence_for_link import EvidenceForLink
 from .evidence_pack import EvidencePack
 from .form_template import FormTemplate
 from .framework import Framework
+from .import_classification import ImportClassification
+from .import_extract import ImportExtract
 from .import_file import ImportFile
 from .import_run import ImportRun
 from .numbering_counter import NumberingCounter
@@ -112,7 +119,12 @@ __all__ = [
     "EvidencePack",
     "FormTemplate",
     "Framework",
+    "ImportClassification",
+    "ImportConfidenceBand",
+    "ImportExtract",
+    "ImportExtractStatus",
     "ImportFile",
+    "ImportKind",
     "ImportRun",
     "ImportRunStatus",
     "NumberingCounter",
