@@ -379,9 +379,10 @@ flowchart TD
 ### 7.2 Canonical-pick rules (deterministic, explainable)
 Within a cluster/family the engine nominates a **canonical** "keep" item using ordered tie-breakers (all shown as evidence, all overridable by Mara):
 1. Highest explicit **version marker** (`v3` > `v2`), then `FINAL`/`APPROVED` markers over `DRAFT`.
-2. Most recent **mtime** (and embedded modified date when present).
+2. Most recent **mtime** (and embedded modified date when present — parsed defensively; an unparseable/absent date is "no signal", never a sortable garbage value, falling through to the next tie-breaker).
 3. **Format preference** for the *content* representation: prefer the editable **source** (e.g., `.docx`) as the controlled document's source blob, while keeping any matching **PDF** as a rendition rather than a separate document.
 4. Path preference: a file under `/Current/` or `/Released/` over `/Archive/` or `/Old/`.
+5. **Stable tie-break (total order):** lexically-lowest `rel_path`, then `import_file.id` — guarantees a *total* order so that identical exact-duplicates (and any all-tie cluster/family) resolve to the same canonical/effective deterministically across re-deliveries, which §11.1's "(run_id) recomputed deterministically" full-replace idempotency relies on.
 
 ### 7.3 Obsolescence outcome → the version chain
 This is where dedup connects to the **maintain/retain** model:

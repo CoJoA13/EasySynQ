@@ -36,7 +36,7 @@ from ...domain.ingestion.rule_classifier import (
 from ...domain.ingestion.rule_pack import default_rule_pack
 from . import locks
 from . import repository as repo
-from .service import _fail_run, _now, emit_import_event_system
+from .service import _fail_run, emit_import_event_system
 
 logger = logging.getLogger("easysynq.ingestion.classify")
 
@@ -132,7 +132,8 @@ async def run_classify(session: AsyncSession, run_id: uuid.UUID) -> None:
             return
         final.status = ImportRunStatus.CLASSIFIED
         final.counts = {**(final.counts or {}), **classify_counts}
-        final.completed_at = _now()
+        # S-ing-3: Classified is NO LONGER terminal — the pipeline chains to dedup→propose. Do NOT
+        # release the lock or set completed_at here; the propose stage is now the terminal doing it.
         emit_import_event_system(
             session,
             org_id,
@@ -142,11 +143,24 @@ async def run_classify(session: AsyncSession, run_id: uuid.UUID) -> None:
             after={"status": "Classified", "counts": final.counts},
         )
         await session.commit()
-        if token:
-            await locks.release(src_hash, token)  # end of the continuous scan→extract→classify hold
+        _enqueue_dedup(run_id)  # chain to Stage 4 (lock still held)
     except Exception as exc:
         await session.rollback()
         await _fail_run(session, run_id, repr(exc)[:500])
         if token:
             await locks.release(src_hash, token)
         raise
+
+
+def _enqueue_dedup(run_id: uuid.UUID) -> None:
+    """Best-effort chain to Stage 4 AFTER the Classified commit (the scan→extract precedent): run
+    is committed + the lock held, so a broker blip must not fail classify — the reaper backstops a
+    stranded run once its TTL lapses (operator re-runs to resume)."""
+    from ...tasks.ingestion import dedup_source
+
+    try:
+        dedup_source.delay(str(run_id))
+    except Exception:  # noqa: BLE001 — best-effort; the reaper backstops a dropped enqueue
+        logger.warning(
+            "ingestion.dedup.enqueue_failed", extra={"extra_fields": {"run_id": str(run_id)}}
+        )

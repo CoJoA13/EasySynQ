@@ -37,9 +37,12 @@ from ...db.models._ingestion_enums import (
 from ...db.models.app_user import AppUser
 from ...db.models.audit_event import AuditEvent
 from ...db.models.import_classification import ImportClassification
+from ...db.models.import_dupe_cluster import ImportDupeCluster
 from ...db.models.import_extract import ImportExtract
 from ...db.models.import_file import ImportFile
+from ...db.models.import_proposal_node import ImportProposalNode
 from ...db.models.import_run import ImportRun
+from ...db.models.import_version_family import ImportVersionFamily
 from ...domain.ingestion.classifier import ScanFlags, classify
 from ...domain.ingestion.source import FileMeta
 from ...logging import request_id_var
@@ -56,11 +59,12 @@ _CFB_MAGIC = (
     b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"  # OLE/CFB compound file (an encrypted OOXML wrapper)
 )
 _OOXML_EXTS = frozenset({"docx", "xlsx", "pptx"})
-# Terminal = no further stage + lock freed. S-ing-2: Scanned is NO LONGER terminal — the pipeline
-# auto-chains scan→extract→classify (the lock is held continuously, freed only at Classified/Failed/
-# Cancelled). The in-progress states (Scanning/Scanned/Extracting/Classifying) stay cancellable.
+# Terminal = no further stage + lock freed. S-ing-3: the pipeline auto-chains
+# scan→extract→classify→dedup→propose (the lock is held continuously, freed only at
+# Proposed/Failed/Cancelled). Classified is NO LONGER terminal — it chains to dedup. Every
+# in-progress state (incl. the rest-states Scanned/Classified) stays cancellable + reapable.
 _TERMINAL = (
-    ImportRunStatus.CLASSIFIED,
+    ImportRunStatus.PROPOSED,
     ImportRunStatus.FAILED,
     ImportRunStatus.CANCELLED,
 )
@@ -69,6 +73,9 @@ _IN_PROGRESS = (
     ImportRunStatus.SCANNED,
     ImportRunStatus.EXTRACTING,
     ImportRunStatus.CLASSIFYING,
+    ImportRunStatus.CLASSIFIED,
+    ImportRunStatus.DEDUPING,
+    ImportRunStatus.PROPOSING,
 )
 
 
@@ -283,6 +290,30 @@ async def list_import_file_detail(
         raise ProblemException(status=404, code="not_found", title="Import file not found")
     f, ext, cls = detail
     return run, f, ext, cls
+
+
+async def list_import_dupe_clusters(
+    session: AsyncSession, caller: AppUser, run_id: uuid.UUID
+) -> tuple[ImportRun, Sequence[ImportDupeCluster]]:
+    """The run's dedup clusters (S-ing-3 review read surface; org-scoped 404 first)."""
+    run = await get_import_run(session, caller, run_id)
+    return run, await repo.list_dupe_clusters(session, run_id)
+
+
+async def list_import_version_families(
+    session: AsyncSession, caller: AppUser, run_id: uuid.UUID
+) -> tuple[ImportRun, Sequence[ImportVersionFamily]]:
+    """The run's version families (S-ing-3 review read surface; org-scoped 404 first)."""
+    run = await get_import_run(session, caller, run_id)
+    return run, await repo.list_version_families(session, run_id)
+
+
+async def get_import_file_membership(
+    session: AsyncSession, caller: AppUser, run_id: uuid.UUID, file_id: uuid.UUID
+) -> tuple[Sequence[ImportDupeCluster], ImportVersionFamily | None, ImportProposalNode | None]:
+    """A file's dedup/family/proposal context for the per-file detail (org-scoped 404 first)."""
+    await get_import_run(session, caller, run_id)
+    return await repo.get_file_membership(session, run_id, file_id)
 
 
 async def cancel_import_run(session: AsyncSession, caller: AppUser, run_id: uuid.UUID) -> ImportRun:

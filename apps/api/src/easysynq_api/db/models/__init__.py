@@ -11,6 +11,7 @@ from ._clause_enums import PdcaPhase
 from ._evidence_enums import EvidenceForTargetType
 from ._ingestion_enums import (
     ImportConfidenceBand,
+    ImportDupeMethod,
     ImportExtractStatus,
     ImportKind,
     ImportRunStatus,
@@ -59,9 +60,12 @@ from .evidence_pack import EvidencePack
 from .form_template import FormTemplate
 from .framework import Framework
 from .import_classification import ImportClassification
+from .import_dupe_cluster import ImportDupeCluster
 from .import_extract import ImportExtract
 from .import_file import ImportFile
+from .import_proposal_node import ImportProposalNode
 from .import_run import ImportRun
+from .import_version_family import ImportVersionFamily
 from .numbering_counter import NumberingCounter
 from .org_role import OrgRole
 from .organization import Organization
@@ -121,12 +125,16 @@ __all__ = [
     "Framework",
     "ImportClassification",
     "ImportConfidenceBand",
+    "ImportDupeCluster",
+    "ImportDupeMethod",
     "ImportExtract",
     "ImportExtractStatus",
     "ImportFile",
     "ImportKind",
+    "ImportProposalNode",
     "ImportRun",
     "ImportRunStatus",
+    "ImportVersionFamily",
     "NumberingCounter",
     "OrgRole",
     "Organization",

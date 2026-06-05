@@ -10,7 +10,7 @@ import uuid
 from collections.abc import Sequence
 from typing import Any
 
-from sqlalchemy import and_, func, select
+from sqlalchemy import Text, and_, cast, delete, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -19,23 +19,31 @@ from ...db.models._ingestion_enums import ImportExtractStatus, ImportRunStatus
 from ...db.models.clause import Clause
 from ...db.models.framework import Framework
 from ...db.models.import_classification import ImportClassification
+from ...db.models.import_dupe_cluster import ImportDupeCluster
 from ...db.models.import_extract import ImportExtract
 from ...db.models.import_file import ImportFile
+from ...db.models.import_proposal_node import ImportProposalNode
 from ...db.models.import_run import ImportRun
+from ...db.models.import_version_family import ImportVersionFamily
 from ...db.models.process import Process
 from ...domain.ingestion.classifier import ScanFlags
 from ...domain.ingestion.source import FileMeta
 from ...domain.ingestion.summary import build_summary
 
 # The run states that count as "active" for the one-run-per-root surface (the 409 detail + the
-# duplicate-create guard). The S-ing-2 pipeline holds the source-root lock continuously through
-# these, so Scanned/Extracting/Classifying are all active (only the terminals free the root).
+# duplicate-create guard). The pipeline holds the source-root lock continuously through ALL of
+# these,
+# so they are all active (only PROPOSED/FAILED/CANCELLED free the root). S-ing-3: Classified is no
+# longer terminal (it chains to dedup), so it + Deduping/Proposing are now active too.
 _ACTIVE_STATES = (
     ImportRunStatus.CREATED,
     ImportRunStatus.SCANNING,
     ImportRunStatus.SCANNED,
     ImportRunStatus.EXTRACTING,
     ImportRunStatus.CLASSIFYING,
+    ImportRunStatus.CLASSIFIED,
+    ImportRunStatus.DEDUPING,
+    ImportRunStatus.PROPOSING,
 )
 
 
@@ -478,3 +486,225 @@ async def compute_classify_counts(
         "by_band": by_band,
         "extract": extract_by_status,
     }
+
+
+# ------------------------------------------------------------------- S-ing-3: dedup + propose
+
+
+async def included_files_with_context(
+    session: AsyncSession, run_id: uuid.UUID, classifier_version: str | None
+) -> Sequence[tuple[ImportFile, ImportExtract | None, ImportClassification | None]]:
+    """Every INCLUDED file + its extract + its classification, ordered by ``(rel_path, id)`` (a
+    stable total order so the in-memory dedup/propose iteration is itself deterministic). The
+    classification join is pinned to the run's ``classifier_version`` (the S-ing-2 §6.6 rule)."""
+    stmt = (
+        select(ImportFile, ImportExtract, ImportClassification)
+        .outerjoin(
+            ImportExtract,
+            and_(ImportExtract.run_id == run_id, ImportExtract.file_id == ImportFile.id),
+        )
+        .outerjoin(
+            ImportClassification,
+            and_(
+                ImportClassification.run_id == run_id,
+                ImportClassification.file_id == ImportFile.id,
+                ImportClassification.classifier_version == classifier_version,
+            ),
+        )
+        .where(ImportFile.run_id == run_id, ImportFile.included_candidate.is_(True))
+        .order_by(ImportFile.rel_path, ImportFile.id)
+    )
+    return [(f, e, c) for f, e, c in (await session.execute(stmt)).all()]
+
+
+async def replace_dedup(
+    session: AsyncSession,
+    run_id: uuid.UUID,
+    *,
+    org_id: uuid.UUID,
+    clusters: Sequence[dict[str, Any]],
+    families: Sequence[dict[str, Any]],
+) -> None:
+    """Atomically REPLACE a run's dedup output (doc 09 §7) — DELETE the existing clusters + families
+    for the run, then bulk-INSERT the freshly computed set, in ONE transaction (the caller commits).
+    The UNIQUE keys backstop a racing-twin re-delivery; the single-active-run lock prevents one."""
+    await session.execute(delete(ImportDupeCluster).where(ImportDupeCluster.run_id == run_id))
+    await session.execute(delete(ImportVersionFamily).where(ImportVersionFamily.run_id == run_id))
+    if clusters:
+        stmt = pg_insert(ImportDupeCluster).values(
+            [{"org_id": org_id, "run_id": run_id, **c} for c in clusters]
+        )
+        await session.execute(
+            stmt.on_conflict_do_nothing(constraint="uq_import_dupe_cluster_run_method_canon")
+        )
+    if families:
+        stmt = pg_insert(ImportVersionFamily).values(
+            [{"org_id": org_id, "run_id": run_id, **f} for f in families]
+        )
+        await session.execute(
+            stmt.on_conflict_do_nothing(constraint="uq_import_version_family_run_family_key")
+        )
+
+
+async def replace_proposals(
+    session: AsyncSession,
+    run_id: uuid.UUID,
+    *,
+    org_id: uuid.UUID,
+    nodes: Sequence[dict[str, Any]],
+) -> None:
+    """Atomically REPLACE a run's proposal nodes (doc 09 §8) — DELETE then bulk-INSERT, one txn."""
+    await session.execute(delete(ImportProposalNode).where(ImportProposalNode.run_id == run_id))
+    if nodes:
+        stmt = pg_insert(ImportProposalNode).values(
+            [{"org_id": org_id, "run_id": run_id, **n} for n in nodes]
+        )
+        await session.execute(
+            stmt.on_conflict_do_nothing(constraint="uq_import_proposal_node_run_file")
+        )
+
+
+async def compute_dedup_counts(session: AsyncSession, run_id: uuid.UUID) -> dict[str, Any]:
+    """The §10 dedup summary as SQL aggregates over the persisted clusters/families. Namespaced
+    a ``dedup`` block so it never clobbers the scan-stage ``exact_dup_clusters``/``exact_dup_files``
+    (the raw sha256 pre-flight) — both are intentionally present and mean different things."""
+    by_method = {
+        _enum_key(m): int(c)
+        for m, c in (
+            await session.execute(
+                select(ImportDupeCluster.method, func.count())
+                .where(ImportDupeCluster.run_id == run_id)
+                .group_by(ImportDupeCluster.method)
+            )
+        ).all()
+    }
+    # redundant = non-canonical members = Σ(len(member_file_ids) - 1) over every cluster.
+    redundant_files = (
+        await session.execute(
+            select(
+                func.coalesce(
+                    func.sum(func.array_length(ImportDupeCluster.member_file_ids, 1) - 1), 0
+                )
+            ).where(ImportDupeCluster.run_id == run_id)
+        )
+    ).scalar_one()
+    version_families = (
+        await session.execute(select(func.count()).where(ImportVersionFamily.run_id == run_id))
+    ).scalar_one()
+    superseded_files = (
+        await session.execute(
+            select(
+                func.coalesce(
+                    func.sum(func.array_length(ImportVersionFamily.ordered_member_file_ids, 1) - 1),
+                    0,
+                )
+            ).where(ImportVersionFamily.run_id == run_id)
+        )
+    ).scalar_one()
+    return {
+        "dedup": {
+            "by_method": by_method,
+            "redundant_files": int(redundant_files),
+            "version_families": int(version_families),
+            "superseded_files": int(superseded_files),
+        }
+    }
+
+
+async def compute_proposal_counts(session: AsyncSession, run_id: uuid.UUID) -> dict[str, Any]:
+    """The §10 proposal summary as SQL aggregates over the persisted nodes (the keep-items)."""
+    keep_items = (
+        await session.execute(select(func.count()).where(ImportProposalNode.run_id == run_id))
+    ).scalar_one()
+    conflicts = (
+        await session.execute(
+            select(func.count()).where(
+                ImportProposalNode.run_id == run_id,
+                cast(ImportProposalNode.conflict_flags, Text) != "{}",
+            )
+        )
+    ).scalar_one()
+    needs_identifier = (
+        await session.execute(
+            select(func.count()).where(
+                ImportProposalNode.run_id == run_id,
+                ImportProposalNode.conflict_flags.has_key("needs_identifier"),
+            )
+        )
+    ).scalar_one()
+    return {
+        "proposal": {
+            "keep_items": int(keep_items),
+            "conflicts": int(conflicts),
+            "needs_identifier": int(needs_identifier),
+        }
+    }
+
+
+async def list_dupe_clusters(
+    session: AsyncSession, run_id: uuid.UUID
+) -> Sequence[ImportDupeCluster]:
+    """All dedup clusters for a run (the review read surface), by method then canonical."""
+    return (
+        (
+            await session.execute(
+                select(ImportDupeCluster)
+                .where(ImportDupeCluster.run_id == run_id)
+                .order_by(ImportDupeCluster.method, ImportDupeCluster.canonical_file_id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+
+async def list_version_families(
+    session: AsyncSession, run_id: uuid.UUID
+) -> Sequence[ImportVersionFamily]:
+    """All version families for a run (the review read surface), ordered by family_key."""
+    return (
+        (
+            await session.execute(
+                select(ImportVersionFamily)
+                .where(ImportVersionFamily.run_id == run_id)
+                .order_by(ImportVersionFamily.family_key)
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+
+async def get_file_membership(
+    session: AsyncSession, run_id: uuid.UUID, file_id: uuid.UUID
+) -> tuple[Sequence[ImportDupeCluster], ImportVersionFamily | None, ImportProposalNode | None]:
+    """A file's dedup/family/proposal context for the per-file review detail: the cluster(s) it
+    belongs to, the family it belongs to, and its proposal node (if it is a keep-item)."""
+    clusters = (
+        (
+            await session.execute(
+                select(ImportDupeCluster).where(
+                    ImportDupeCluster.run_id == run_id,
+                    ImportDupeCluster.member_file_ids.contains([file_id]),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    family = (
+        await session.execute(
+            select(ImportVersionFamily).where(
+                ImportVersionFamily.run_id == run_id,
+                ImportVersionFamily.ordered_member_file_ids.contains([file_id]),
+            )
+        )
+    ).scalar_one_or_none()
+    node = (
+        await session.execute(
+            select(ImportProposalNode).where(
+                ImportProposalNode.run_id == run_id, ImportProposalNode.file_id == file_id
+            )
+        )
+    ).scalar_one_or_none()
+    return clusters, family, node
