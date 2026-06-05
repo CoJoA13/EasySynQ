@@ -62,16 +62,38 @@ jobs:
         working-directory: apps/api
         run: uv run alembic check
 
-  integration:
+  # The integration suite is sharded across N parallel runners (pytest-split, balanced by the
+  # committed apps/api/.test_durations). Each shard is its own process spinning its own testcontainers
+  # → the single-DB / single-org contract holds per shard. ~27 min serial → ~7 min wall.
+  integration-shards:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v3
       - working-directory: apps/api
         run: uv sync --frozen
-      - name: integration tests (testcontainers spin their own Postgres)
+      - name: integration tests (shard ${{ matrix.group }}/4, testcontainers spin their own Postgres)
         working-directory: apps/api
-        run: uv run pytest -m integration
+        run: uv run pytest -m integration --splits 4 --group ${{ matrix.group }} --durations-path .test_durations
+
+  # Aggregator gate: keeps the required-status-check name "integration" stable (no branch-protection
+  # change needed) and passes iff EVERY shard passed.
+  integration:
+    needs: integration-shards
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: gate on the shard results
+        run: |
+          result='${{ needs.integration-shards.result }}'
+          if [ "$result" != "success" ]; then
+            echo "integration shards did not all pass (result=$result)"; exit 1
+          fi
+          echo "all integration shards passed"
 
   web:
     runs-on: ubuntu-latest
