@@ -70,8 +70,9 @@ def test_looks_encrypted() -> None:
 
 
 def test_status_enum_values() -> None:
-    # S-ing-3 ADD VALUEs Deduping/Proposing/Proposed; S-ing-4 ADD VALUEs Reviewing (additive enum).
-    # Order is load-bearing (the migration ADD VALUEs new states before the terminals).
+    # S-ing-3 ADD VALUEs Deduping/Proposing/Proposed; S-ing-4 ADD VALUEs Reviewing; S-ing-5 adds
+    # Committing/Completed/PartiallyCommitted (additive enum). Order is load-bearing (the migration
+    # ADD VALUEs new states; a from-scratch upgrade rebuilds the type from this tuple).
     assert IMPORT_RUN_STATUS_VALUES == (
         "Created",
         "Scanning",
@@ -83,12 +84,17 @@ def test_status_enum_values() -> None:
         "Proposing",
         "Proposed",
         "Reviewing",
+        "Committing",
+        "Completed",
+        "PartiallyCommitted",
         "Failed",
         "Cancelled",
     )
     assert ImportRunStatus.SCANNED.value == "Scanned"
     assert ImportRunStatus.PROPOSED.value == "Proposed"
     assert ImportRunStatus.REVIEWING.value == "Reviewing"
+    assert ImportRunStatus.COMMITTING.value == "Committing"
+    assert ImportRunStatus.PARTIALLY_COMMITTED.value == "PartiallyCommitted"
 
 
 def test_audit_enum_members_exist() -> None:

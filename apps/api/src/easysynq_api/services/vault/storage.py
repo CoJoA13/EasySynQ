@@ -48,6 +48,13 @@ def _staging_bucket() -> str:
     return get_settings().s3_bucket_staging
 
 
+def _import_staging_bucket() -> str:
+    """The ingestion staging bucket (non-WORM) where S-ing-1 content-addresses included bytes.
+    S-ing-5 commit promotes directly from here into the documents/records WORM bucket via
+    ``finalize_worm(source_bucket=...)`` — a single server-side copy, no plain-staging hop."""
+    return get_settings().s3_bucket_import_staging
+
+
 def _client(*, config: Any = None) -> Any:
     import boto3
 
@@ -124,12 +131,12 @@ async def head(object_key: str, *, bucket: str | None = None) -> ObjectHead:
     return await asyncio.to_thread(_head_sync, object_key, bucket or _doc_bucket())
 
 
-def _finalize_sync(sha256: str, bucket: str) -> ObjectHead:
+def _finalize_sync(sha256: str, bucket: str, source_bucket: str) -> ObjectHead:
     from botocore.exceptions import ClientError
 
     client = _client()
     try:
-        client.head_object(Bucket=_staging_bucket(), Key=sha256)
+        client.head_object(Bucket=source_bucket, Key=sha256)
     except ClientError:
         return ObjectHead(exists=False)
     # Server-side copy into the target WORM bucket; its GOVERNANCE default retention auto-applies on
@@ -137,16 +144,23 @@ def _finalize_sync(sha256: str, bucket: str) -> ObjectHead:
     client.copy_object(
         Bucket=bucket,
         Key=sha256,
-        CopySource={"Bucket": _staging_bucket(), "Key": sha256},
+        CopySource={"Bucket": source_bucket, "Key": sha256},
     )
     return _head_sync(sha256, bucket)
 
 
-async def finalize_worm(sha256: str, *, bucket: str | None = None) -> ObjectHead:
-    """Promote a staged object to a WORM bucket (server-side copy) and return its head — existence +
-    size + the now-applied retain-until. The blob is WORM-locked here, before the owning row is
-    committed. Defaults to the documents vault; records evidence passes ``_records_bucket()``."""
-    return await asyncio.to_thread(_finalize_sync, sha256, bucket or _doc_bucket())
+async def finalize_worm(
+    sha256: str, *, bucket: str | None = None, source_bucket: str | None = None
+) -> ObjectHead:
+    """Promote a staged object to a WORM bucket (server-side copy) and return its head — existence
+    + size + the now-applied retain-until. The blob is WORM-locked here, before the owning row is
+    committed. ``bucket`` defaults to the documents vault (records evidence passes
+    ``_records_bucket()``); ``source_bucket`` defaults to the plain ``staging`` bucket — S-ing-5
+    commit passes ``_import_staging_bucket()`` to promote import-staged bytes directly (one
+    server-side copy, no plain-staging hop). Both the head probe and the CopySource use it."""
+    return await asyncio.to_thread(
+        _finalize_sync, sha256, bucket or _doc_bucket(), source_bucket or _staging_bucket()
+    )
 
 
 def _fetch_bytes_sync(object_key: str, bucket: str) -> bytes:

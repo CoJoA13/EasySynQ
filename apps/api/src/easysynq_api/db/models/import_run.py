@@ -68,12 +68,33 @@ class ImportRun(Base):
     created_by: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("app_user.id", ondelete="RESTRICT"), nullable=False
     )
-    # Reserved for the commit slice (who clicked Commit); NULL until then.
+    # S-ing-5: who clicked Commit (set on the API Reviewing/Proposed→Committing flip). The detached
+    # commit worker carries this as the import_baseline signature's signer + the provenance
+    # decided_by.
     committed_by: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("app_user.id", ondelete="RESTRICT"), nullable=True
     )
     scan_started_at: Mapped[datetime.datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
+    )
+    # S-ing-5: the commit-stage progress anchor. Commit holds NO source-root lock (freed at
+    # Proposed),
+    # so the dedicated reap_stalled_commits uses progress-liveness: stall =
+    # now - COALESCE(MAX(import_commit_result.committed_at), committing_started_at) > stall_seconds
+    # →
+    # RE-ENQUEUE (never FAIL). Set when the API flips the run to Committing.
+    committing_started_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # S-ing-5: the immutable §12.1 Import Report Record (a RETAIN_PERMANENT EVIDENCE record)
+    # produced
+    # at commit completion; the mirror enumerates this to export current/_ImportReport/. RESTRICT —
+    # the
+    # report is never disposed.
+    report_record_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("documented_information.id", ondelete="RESTRICT"),
+        nullable=True,
     )
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

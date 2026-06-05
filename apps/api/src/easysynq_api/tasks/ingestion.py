@@ -2,12 +2,15 @@
 
 The pipeline auto-chains via ``.delay``-triggered tasks (NOT Beat-scheduled): ``scan_source`` →
 ``extract_source`` → ``classify_source`` → ``dedup_source`` → ``propose_source`` (each enqueues the
-next after its commit). All are idempotent under ``task_acks_late`` re-delivery (status-guarded +
-per-(run,file) upsert / whole-run replace) and fail-closed (the packs build/reaper discipline).
-``reap_stalled_runs`` is the Beat job that recovers a run wedged in any in-progress stage (a hard
-worker kill strands it) → FAILED, freeing the source-root lock. Each uses a fresh disposed async
-engine per ``asyncio.run`` on the app DSN (the non-owner ``easysynq_app`` role — the import_* tables
-are granted to it in 0029/0030/0031)."""
+next after its commit), resting at Proposed. S-ing-5 adds ``commit_source`` (the operator-triggered
+commit into the vault, NOT auto-chained — the API enqueues it on the Reviewing/Proposed→Committing
+flip). All are idempotent under ``task_acks_late`` re-delivery (status-guarded + per-(run,file)
+upsert / whole-run replace) and fail-closed (the packs build/reaper discipline).
+``reap_stalled_runs`` recovers a run wedged in any in-progress *pipeline* stage → FAILED (freeing
+the source-root lock);
+``reap_stalled_commits`` RE-ENQUEUEs a wedged *Committing* run (progress-liveness; never fails it).
+Each uses a fresh disposed async engine per ``asyncio.run`` on the app DSN (the non-owner
+``easysynq_app`` role — the import_* tables are granted to it in 0029/0030/0031/0033)."""
 
 from __future__ import annotations
 
@@ -20,8 +23,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from ..config import get_settings
 from ..services.ingestion import (
+    reap_stalled_commits,
     reap_stalled_runs,
     run_classify,
+    run_commit,
     run_dedup,
     run_extract,
     run_propose,
@@ -42,6 +47,21 @@ async def _with_session[T](fn: Callable[[AsyncSession], Awaitable[T]]) -> T:
     try:
         async with sessionmaker() as session:
             return await fn(session)
+    finally:
+        await engine.dispose()
+
+
+async def _with_sessionmaker[T](
+    fn: Callable[[async_sessionmaker[AsyncSession]], Awaitable[T]],
+) -> T:
+    """Like :func:`_with_session` but hands ``fn`` the SESSIONMAKER (a fresh disposed engine) — the
+    S-ing-5 commit opens a fresh session PER ITEM (per-item transactional isolation)."""
+    engine = create_async_engine(get_settings().database_url)
+    sessionmaker: async_sessionmaker[AsyncSession] = async_sessionmaker(
+        engine, expire_on_commit=False
+    )
+    try:
+        return await fn(sessionmaker)
     finally:
         await engine.dispose()
 
@@ -76,6 +96,14 @@ def propose_source(run_id: str) -> None:
     asyncio.run(_with_session(lambda s: run_propose(s, uuid.UUID(run_id))))
 
 
+@app.task(name="easysynq.ingestion.commit_source")  # type: ignore[untyped-decorator]
+def commit_source(run_id: str) -> None:
+    """S-ing-5: commit a reviewed run's commit-ready keep-items into the vault (per-item,
+    idempotent, single-flight via the per-item ledger claim). The ``*_source`` name inherits the
+    integration hang-guard meta-test."""
+    asyncio.run(_with_sessionmaker(lambda sm: run_commit(sm, uuid.UUID(run_id))))
+
+
 @app.task(name="easysynq.ingestion.reap_stalled_runs")  # type: ignore[untyped-decorator]
 def reap_stalled_runs_task() -> dict[str, int]:
     """Flip runs wedged in any in-progress stage (dead lock / past the backstop) → FAILED + free the
@@ -84,6 +112,20 @@ def reap_stalled_runs_task() -> dict[str, int]:
     async def _reap(session: AsyncSession) -> dict[str, int]:
         summary = await reap_stalled_runs(session)
         logger.info("ingestion.reap_stalled_runs", extra={"extra_fields": summary})
+        return summary
+
+    return asyncio.run(_with_session(_reap))
+
+
+@app.task(name="easysynq.ingestion.reap_stalled_commits")  # type: ignore[untyped-decorator]
+def reap_stalled_commits_task() -> dict[str, int]:
+    """S-ing-5: RE-ENQUEUE a Committing run that has made no commit-ledger progress within the stall
+    window (a crashed commit worker) — resume via the idempotent ledger, never fail; returns
+    ``{requeued}``."""
+
+    async def _reap(session: AsyncSession) -> dict[str, int]:
+        summary = await reap_stalled_commits(session)
+        logger.info("ingestion.reap_stalled_commits", extra={"extra_fields": summary})
         return summary
 
     return asyncio.run(_with_session(_reap))

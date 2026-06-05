@@ -6,6 +6,7 @@ build precedent."""
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from collections.abc import Callable
 from pathlib import Path
@@ -16,15 +17,24 @@ from httpx import AsyncClient
 from sqlalchemy import select
 
 from easysynq_api.config import get_settings
+from easysynq_api.db.models._audit_enums import EventType
+from easysynq_api.db.models._signature_enums import SignatureMeaning, SignedObjectType
+from easysynq_api.db.models._vault_enums import DocumentCurrentState, DocumentKind, VersionState
 from easysynq_api.db.models.app_user import AppUser, UserStatus
+from easysynq_api.db.models.audit_event import AuditEvent
 from easysynq_api.db.models.authz_grant import PermissionOverride
+from easysynq_api.db.models.clause_mapping import ClauseMapping
+from easysynq_api.db.models.document_version import DocumentVersion
+from easysynq_api.db.models.documented_information import DocumentedInformation
 from easysynq_api.db.models.organization import Organization
 from easysynq_api.db.models.permission import Permission
 from easysynq_api.db.models.scope import Scope
+from easysynq_api.db.models.signature_event import SignatureEvent
 from easysynq_api.db.session import get_sessionmaker
 from easysynq_api.domain.authz.types import Effect, ScopeLevel
 from easysynq_api.domain.ingestion.extractor import ExtractInput, ExtractResult
 from easysynq_api.services.ingestion.classify import run_classify
+from easysynq_api.services.ingestion.commit import run_commit
 from easysynq_api.services.ingestion.dedup import run_dedup
 from easysynq_api.services.ingestion.extract import run_extract
 from easysynq_api.services.ingestion.propose import run_propose
@@ -43,22 +53,37 @@ def _stub_pipeline_enqueue(monkeypatch: pytest.MonkeyPatch) -> None:
     would publish to the localhost broker and hang)."""
     from easysynq_api.tasks.ingestion import (
         classify_source,
+        commit_source,
         dedup_source,
         extract_source,
         propose_source,
         scan_source,
     )
 
-    for task in (scan_source, extract_source, classify_source, dedup_source, propose_source):
+    for task in (
+        scan_source,
+        extract_source,
+        classify_source,
+        dedup_source,
+        propose_source,
+        commit_source,
+    ):
         monkeypatch.setattr(task, "delay", lambda *a, **k: None)
 
 
 async def _drive(rid: uuid.UUID) -> None:
     """Drive the full in-process pipeline scan→extract→classify→dedup→propose (each stage on its own
-    session, mirroring the worker's per-task session)."""
+    session, mirroring the worker's per-task session). Stops at Proposed — commit is operator-driven
+    (``_drive_commit``)."""
     for stage in (run_scan, run_extract, run_classify, run_dedup, run_propose):
         async with get_sessionmaker()() as s:
             await stage(s, rid)
+
+
+async def _drive_commit(rid: uuid.UUID) -> None:
+    """Drive the S-ing-5 commit body in-process on a fresh session (the run must already be in
+    ``Committing`` — the POST /commit endpoint flips it; the ``.delay`` enqueue is stubbed here)."""
+    await run_commit(get_sessionmaker(), rid)
 
 
 def test_autouse_stub_covers_all_ingestion_source_tasks() -> None:
@@ -76,6 +101,7 @@ def test_autouse_stub_covers_all_ingestion_source_tasks() -> None:
         ing.classify_source.name,
         ing.dedup_source.name,
         ing.propose_source.name,
+        ing.commit_source.name,
     }
     assert registered <= stubbed, f"unstubbed ingestion *_source tasks: {registered - stubbed}"
 
@@ -1063,3 +1089,305 @@ async def test_decision_rejected_on_non_included_file(
         json={"action": "accept", "after": {"kind": "DOCUMENT"}},
     )
     assert res.status_code == 422
+
+
+# --------------------------------------------------------------------------- S-ing-5 commit
+
+
+async def _confirm_for_commit(
+    app_client: AsyncClient,
+    h: dict[str, str],
+    run_id: str,
+    sop_id: str,
+    audit_id: str,
+    *,
+    doc_identifier: str,
+    audit_kind: str = "RECORD",
+    audit_after: dict[str, object] | None = None,
+) -> None:
+    """Confirm the SOP as a DOCUMENT with a per-test-UNIQUE identifier (the shared-DB collision
+    guard) + the audit per ``audit_kind``/``audit_after`` — making the run commit-ready."""
+    r1 = await app_client.post(
+        f"/api/v1/admin/imports/{run_id}/files/{sop_id}/decision",
+        headers=h,
+        json={
+            "action": "correct",
+            "after": {"kind": "DOCUMENT", "identifier": doc_identifier, "clause_numbers": ["8.4"]},
+        },
+    )
+    assert r1.status_code == 200, r1.text
+    r2 = await app_client.post(
+        f"/api/v1/admin/imports/{run_id}/files/{audit_id}/decision",
+        headers=h,
+        json={
+            "action": "accept" if audit_after is None else "correct",
+            "after": audit_after or {"kind": audit_kind},
+        },
+    )
+    assert r2.status_code == 200, r2.text
+
+
+async def test_commit_writes_documents_and_records_to_vault(
+    app_client: AsyncClient, token_factory: Callable[..., str], _stub_tika: None
+) -> None:
+    admin = _subject("avery")
+    await _assign_role(admin, "System Administrator")
+    h = _auth(token_factory, admin)
+    run_id, by_name = await _proposed_classifiable(app_client, h, _stub_tika)
+    sop = by_name["SOP-PUR-002 Purchasing.docx"]["id"]
+    audit = by_name["Internal Audit Report Q2 2023.pdf"]["id"]
+    tag = uuid.uuid4().hex[:6].upper()
+    doc_ident = f"SOP-{tag}-001"
+    await _confirm_for_commit(app_client, h, run_id, sop, audit, doc_identifier=doc_ident)
+
+    chk = (await app_client.get(f"/api/v1/admin/imports/{run_id}/checklist", headers=h)).json()
+    assert chk["ready"] is True, chk["blocking"]
+
+    commit = await app_client.post(f"/api/v1/admin/imports/{run_id}/commit", headers=h)
+    assert commit.status_code == 202, commit.text
+    assert commit.json()["status"] == "Committing"
+    await _drive_commit(uuid.UUID(run_id))
+
+    run = (await app_client.get(f"/api/v1/admin/imports/{run_id}", headers=h)).json()
+    assert run["status"] == "Completed"
+    assert run["counts"]["commit"] == {"committed": 2, "failed": 0}
+    assert run["report_record_id"]
+
+    async with get_sessionmaker()() as s:
+        doc = (
+            await s.execute(
+                select(DocumentedInformation).where(DocumentedInformation.identifier == doc_ident)
+            )
+        ).scalar_one()
+        assert doc.current_state == DocumentCurrentState.Effective
+        assert doc.kind == DocumentKind.DOCUMENT
+        assert doc.import_provenance and doc.import_provenance["run_id"] == run_id
+        assert doc.import_provenance["source_sha256"]
+        assert doc.current_effective_version_id is not None
+        ver = (
+            await s.execute(select(DocumentVersion).where(DocumentVersion.document_id == doc.id))
+        ).scalar_one()
+        assert ver.version_state == VersionState.Effective
+        assert ver.imported is True and ver.revision_label == "Rev A"
+        # the import_baseline signature (R2) on the version, signed by the committer, bound to
+        # bytes.
+        committer_id = (
+            await s.execute(select(AppUser.id).where(AppUser.keycloak_subject == admin))
+        ).scalar_one()
+        sig = (
+            await s.execute(
+                select(SignatureEvent).where(
+                    SignatureEvent.signed_object_id == ver.id,
+                    SignatureEvent.meaning == SignatureMeaning.import_baseline,
+                )
+            )
+        ).scalar_one()
+        assert sig.signer_user_id == committer_id
+        assert sig.content_digest == ver.source_blob_sha256
+        assert sig.signed_object_type == SignedObjectType.document_version
+        # the per-doc audit (AC#6): IMPORT_ITEM_COMMITTED keyed to the doc + scope_ref=identifier.
+        ev = (
+            await s.execute(
+                select(AuditEvent).where(
+                    AuditEvent.object_id == doc.id,
+                    AuditEvent.event_type == EventType.IMPORT_ITEM_COMMITTED,
+                )
+            )
+        ).scalar_one()
+        assert ev.scope_ref == doc_ident
+        # the folded clause mapping (8.4) was materialized.
+        mappings = (
+            (
+                await s.execute(
+                    select(ClauseMapping).where(ClauseMapping.documented_information_id == doc.id)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert len(mappings) >= 1
+        # the §12.1 Import Report record is a RETAIN_PERMANENT EVIDENCE record.
+        report = await s.get(DocumentedInformation, uuid.UUID(run["report_record_id"]))
+        assert report is not None and report.kind == DocumentKind.RECORD
+        assert report.title.startswith("Import Report")
+        # the mirror enumeration finds it (drives current/_ImportReport/).
+        from easysynq_api.services.vault.mirror import fetch_import_reports
+
+        reports = await fetch_import_reports(s)
+        assert any(uuid.UUID(run_id).hex[:8] in r.label for r in reports)
+
+    # the RECORD was captured (via the file-detail commit sub-object → its vault_document_id).
+    audit_detail = (
+        await app_client.get(f"/api/v1/admin/imports/{run_id}/files/{audit}", headers=h)
+    ).json()
+    assert audit_detail["commit"]["result"] == "success"
+    rec_id = audit_detail["commit"]["vault_document_id"]
+    assert audit_detail["commit"]["vault_version_id"] is None  # records have no document_version
+    async with get_sessionmaker()() as s:
+        rec = await s.get(DocumentedInformation, uuid.UUID(rec_id))
+        assert rec is not None and rec.kind == DocumentKind.RECORD
+        assert rec.import_provenance and rec.import_provenance["run_id"] == run_id
+        # R2: a RECORD is captured, NOT released — NO import_baseline signature (the asymmetry).
+        rec_sigs = (
+            (
+                await s.execute(
+                    select(SignatureEvent).where(
+                        SignatureEvent.signed_object_id == rec.id,
+                        SignatureEvent.meaning == SignatureMeaning.import_baseline,
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert rec_sigs == []
+
+    sop_detail = (
+        await app_client.get(f"/api/v1/admin/imports/{run_id}/files/{sop}", headers=h)
+    ).json()
+    assert sop_detail["commit"]["result"] == "success"
+    assert sop_detail["commit"]["vault_version_id"]
+
+    # idempotent: re-running the worker is a no-op (run no longer Committing); re-POST → 409.
+    await _drive_commit(uuid.UUID(run_id))
+    async with get_sessionmaker()() as s:
+        n = (
+            await s.execute(
+                select(sa.func.count())
+                .select_from(DocumentedInformation)
+                .where(DocumentedInformation.identifier == doc_ident)
+            )
+        ).scalar_one()
+        assert n == 1  # still exactly one — no duplicate document
+    recommit = await app_client.post(f"/api/v1/admin/imports/{run_id}/commit", headers=h)
+    assert recommit.status_code == 409  # already completed
+
+
+async def test_commit_partial_then_resume_keeps_committed_item(
+    app_client: AsyncClient, token_factory: Callable[..., str], _stub_tika: None
+) -> None:
+    admin = _subject("avery")
+    await _assign_role(admin, "System Administrator")
+    h = _auth(token_factory, admin)
+    run_id, by_name = await _proposed_classifiable(app_client, h, _stub_tika)
+    sop = by_name["SOP-PUR-002 Purchasing.docx"]["id"]
+    audit = by_name["Internal Audit Report Q2 2023.pdf"]["id"]
+    tag = uuid.uuid4().hex[:6].upper()
+    good = f"SOP-{tag}-001"
+    # The SOP commits; the audit is corrected to a DOCUMENT with a BOGUS type_code resolving to no
+    # DocumentType → an isolated per-item failure (unknown_document_type), NOT pre-blocked by the
+    # checklist (a bogus type is not a singleton; the identifier is unique).
+    await _confirm_for_commit(
+        app_client,
+        h,
+        run_id,
+        sop,
+        audit,
+        doc_identifier=good,
+        audit_after={"kind": "DOCUMENT", "type_code": f"ZZ{tag}", "identifier": f"ZZ-{tag}-001"},
+    )
+    chk = (await app_client.get(f"/api/v1/admin/imports/{run_id}/checklist", headers=h)).json()
+    assert chk["ready"] is True, chk["blocking"]
+
+    assert (
+        await app_client.post(f"/api/v1/admin/imports/{run_id}/commit", headers=h)
+    ).status_code == 202
+    await _drive_commit(uuid.UUID(run_id))
+    run = (await app_client.get(f"/api/v1/admin/imports/{run_id}", headers=h)).json()
+    assert run["status"] == "PartiallyCommitted"
+    assert run["counts"]["commit"] == {"committed": 1, "failed": 1}
+
+    audit_detail = (
+        await app_client.get(f"/api/v1/admin/imports/{run_id}/files/{audit}", headers=h)
+    ).json()
+    assert audit_detail["commit"]["result"] == "failed"
+    assert "unknown_document_type" in audit_detail["commit"]["error"]
+
+    # resume: re-POST is accepted (PartiallyCommitted → Committing) and re-runs idempotently — the
+    # already-committed SOP is skipped (no duplicate), the still-bogus audit fails again.
+    resume = await app_client.post(f"/api/v1/admin/imports/{run_id}/commit", headers=h)
+    assert resume.status_code == 202 and resume.json()["status"] == "Committing"
+    await _drive_commit(uuid.UUID(run_id))
+    run2 = (await app_client.get(f"/api/v1/admin/imports/{run_id}", headers=h)).json()
+    assert run2["status"] == "PartiallyCommitted"
+    assert run2["counts"]["commit"] == {"committed": 1, "failed": 1}
+    async with get_sessionmaker()() as s:
+        n = (
+            await s.execute(
+                select(sa.func.count())
+                .select_from(DocumentedInformation)
+                .where(DocumentedInformation.identifier == good)
+            )
+        ).scalar_one()
+        assert n == 1  # the committed SOP is not duplicated across the resume
+
+
+async def test_commit_concurrent_run_commit_is_single_flight(
+    app_client: AsyncClient, token_factory: Callable[..., str], _stub_tika: None
+) -> None:
+    admin = _subject("avery")
+    await _assign_role(admin, "System Administrator")
+    h = _auth(token_factory, admin)
+    run_id, by_name = await _proposed_classifiable(app_client, h, _stub_tika)
+    sop = by_name["SOP-PUR-002 Purchasing.docx"]["id"]
+    audit = by_name["Internal Audit Report Q2 2023.pdf"]["id"]
+    tag = uuid.uuid4().hex[:6].upper()
+    doc_ident = f"SOP-{tag}-001"
+    await _confirm_for_commit(app_client, h, run_id, sop, audit, doc_identifier=doc_ident)
+    assert (
+        await app_client.post(f"/api/v1/admin/imports/{run_id}/commit", headers=h)
+    ).status_code == 202
+
+    # Two concurrent commit workers on one Committing run — the per-item ledger CLAIM
+    # (UNIQUE(run,file)) makes it exactly-once (one wins the claim, the other rolls its item back).
+    async def _one() -> None:
+        await run_commit(get_sessionmaker(), uuid.UUID(run_id))
+
+    await asyncio.gather(_one(), _one())
+
+    run = (await app_client.get(f"/api/v1/admin/imports/{run_id}", headers=h)).json()
+    assert run["status"] == "Completed"
+    assert run["counts"]["commit"] == {"committed": 2, "failed": 0}
+    async with get_sessionmaker()() as s:
+        n = (
+            await s.execute(
+                select(sa.func.count())
+                .select_from(DocumentedInformation)
+                .where(DocumentedInformation.identifier == doc_ident)
+            )
+        ).scalar_one()
+        assert n == 1  # exactly one document despite two concurrent workers
+
+
+async def test_commit_blocked_by_conflict_and_gated_on_import_commit(
+    app_client: AsyncClient, token_factory: Callable[..., str], _stub_tika: None
+) -> None:
+    admin = _subject("avery")
+    await _assign_role(admin, "System Administrator")
+    h = _auth(token_factory, admin)
+    run_id, by_name = await _proposed_classifiable(app_client, h, _stub_tika)
+    sop = by_name["SOP-PUR-002 Purchasing.docx"]["id"]
+    audit = by_name["Internal Audit Report Q2 2023.pdf"]["id"]
+    tag = uuid.uuid4().hex[:6].upper()
+    clash = f"SOP-{tag}-001"
+    # two DOCUMENT keep-items corrected to the SAME identifier → a blocking duplicate-within-import.
+    for fid in (sop, audit):
+        await app_client.post(
+            f"/api/v1/admin/imports/{run_id}/files/{fid}/decision",
+            headers=h,
+            json={"action": "correct", "after": {"kind": "DOCUMENT", "identifier": clash}},
+        )
+    chk = (await app_client.get(f"/api/v1/admin/imports/{run_id}/checklist", headers=h)).json()
+    assert chk["ready"] is False
+    assert any(b["type"] == "duplicate_identifier_within_import" for b in chk["blocking"])
+
+    blocked = await app_client.post(f"/api/v1/admin/imports/{run_id}/commit", headers=h)
+    assert blocked.status_code == 422
+    assert blocked.json()["code"] == "commit_blocked"
+
+    # SoD: a reviewer-only principal (import.review, NOT import.commit) is 403 at the commit gate.
+    reviewer = _subject("mara")
+    await _grant(reviewer, ("import.review",))
+    hr = _auth(token_factory, reviewer)
+    denied = await app_client.post(f"/api/v1/admin/imports/{run_id}/commit", headers=hr)
+    assert denied.status_code == 403

@@ -84,6 +84,12 @@ class EffectiveFileState:
     disposition: str  # included | excluded | deferred | undecided
     kind: str  # DOCUMENT | RECORD | UNCONFIRMED
     identifier: str | None
+    # Where the effective identifier came from: 'human' (a reviewer correct/accept set it explicitly
+    # —
+    # always conflict-checked), the engine's node.identifier_source ('preserved_doc_code' = a real
+    # doc-code that CAN collide; 'suggested_default' = the "{type}-<new>" sentinel that CANNOT), or
+    # None.
+    identifier_source: str | None
     type_code: str | None
     clause_numbers: list[str]
     process_names: list[str] | None
@@ -96,11 +102,22 @@ class EffectiveFileState:
         """R10: an item commits only when it is in the import AND its kind is human-confirmed."""
         return self.disposition == "included" and self.kind in ("DOCUMENT", "RECORD")
 
+    @property
+    def identifier_collidable(self) -> bool:
+        """True iff the effective identifier is a concrete code that can truly collide (a preserved
+        doc-code OR a human-set identifier) — the "{type}-<new>" sentinel / a null identifier never
+        collides and is allocated fresh at commit (S-ing-5 finding 5)."""
+        return self.identifier is not None and self.identifier_source in (
+            "human",
+            "preserved_doc_code",
+        )
+
     def as_dict(self) -> dict[str, Any]:
         return {
             "disposition": self.disposition,
             "kind": self.kind,
             "identifier": self.identifier,
+            "identifier_source": self.identifier_source,
             "type_code": self.type_code,
             "clause_numbers": self.clause_numbers,
             "process_names": self.process_names,
@@ -129,9 +146,17 @@ def fold_file_decisions(
     last = decisions_newest_first[0].action if decisions_newest_first else None
     disposition = _DISPOSITION.get(last, "undecided") if last is not None else "undecided"
     kind = latest("kind") or "UNCONFIRMED"
-    identifier = latest("identifier")
-    if identifier is None and node is not None:
+    human_identifier = latest("identifier")
+    identifier_source: str | None
+    if human_identifier is not None:
+        identifier = human_identifier
+        identifier_source = "human"
+    elif node is not None:
         identifier = node.proposed_identifier
+        identifier_source = node.identifier_source
+    else:
+        identifier = None
+        identifier_source = None
     type_code = latest("type_code")
     if type_code is None and classification is not None:
         type_code = classification.type_code
@@ -148,6 +173,7 @@ def fold_file_decisions(
         disposition=disposition,
         kind=str(kind),
         identifier=identifier,
+        identifier_source=identifier_source,
         type_code=type_code,
         clause_numbers=list(clauses),
         process_names=process,
@@ -836,10 +862,15 @@ async def compute_review_checklist(
     # In-import keep-items (excluded/deferred are out for conflicts + projection).
     in_import = {fid: st for fid, st in states.items() if st.disposition in _IN_IMPORT}
 
-    # Blocking: duplicate identifier within the import (over EFFECTIVE identifiers).
+    # Blocking: duplicate identifier within the import — only over COLLIDABLE identifiers (a
+    # preserved
+    # doc-code or a human-set one). The "{type}-<new>" sentinel / a null identifier is allocated
+    # fresh
+    # at commit and never collides, so N sentinels of the same type must NOT false-block (finding
+    # 5).
     by_ident: dict[str, list[str]] = {}
     for fid, st in in_import.items():
-        if st.identifier:
+        if st.identifier_collidable and st.identifier is not None:
             by_ident.setdefault(st.identifier, []).append(str(fid))
     blocking: list[dict[str, Any]] = [
         {
@@ -852,17 +883,52 @@ async def compute_review_checklist(
         if len(fids) > 1
     ]
 
-    # Blocking: collides with an existing vault document (over EFFECTIVE identifiers).
-    idents = [st.identifier for st in in_import.values() if st.identifier]
+    # Blocking: collides with an existing vault document (over COLLIDABLE EFFECTIVE identifiers).
+    idents = [
+        st.identifier
+        for st in in_import.values()
+        if st.identifier_collidable and st.identifier is not None
+    ]
     vault_hits = await repo.vault_identifier_collisions(session, run.org_id, idents)
     for fid, st in sorted(in_import.items(), key=lambda kv: str(kv[0])):
-        if st.identifier and st.identifier in vault_hits:
+        if st.identifier_collidable and st.identifier and st.identifier in vault_hits:
             blocking.append(
                 {
                     "type": "collides_with_vault_doc",
                     "identifier": st.identifier,
                     "file_id": str(fid),
                     "documented_information_id": vault_hits[st.identifier],
+                    "resolved": False,
+                }
+            )
+
+    # Blocking: a singleton document-type (Quality Policy / Scope Statement) that already has an
+    # Effective instance in the vault, or appears more than once among the in-import DOCUMENT items
+    # —
+    # R25 single-Effective-per-type guard would otherwise surface as a per-item 23505 at commit
+    # (finding 23). Resolve only the distinct type_codes of confirmed-DOCUMENT keep-items.
+    doc_states = [
+        (fid, st) for fid, st in in_import.items() if st.kind == "DOCUMENT" and st.type_code
+    ]
+    codes = {st.type_code for _fid, st in doc_states if st.type_code}
+    dt_by_code = await repo.get_document_types_by_codes(session, run.org_id, codes)
+    singleton_type_ids = {dt.id for dt in dt_by_code.values() if dt.is_singleton}
+    existing_singletons = await repo.vault_effective_singleton_type_ids(
+        session, run.org_id, singleton_type_ids
+    )
+    by_singleton_type: dict[uuid.UUID, list[str]] = {}
+    for fid, st in doc_states:
+        dt = dt_by_code.get(st.type_code) if st.type_code else None
+        if dt is not None and dt.is_singleton:
+            by_singleton_type.setdefault(dt.id, []).append(str(fid))
+    for type_id, fids in sorted(by_singleton_type.items(), key=lambda kv: str(kv[0])):
+        if type_id in existing_singletons or len(fids) > 1:
+            blocking.append(
+                {
+                    "type": "singleton_type_already_effective",
+                    "document_type_id": str(type_id),
+                    "file_ids": sorted(fids),
+                    "existing_in_vault": type_id in existing_singletons,
                     "resolved": False,
                 }
             )

@@ -11,9 +11,9 @@ held by the System Administrator role bundle). A deliberate SoD-as-data split �
 ``import.review`` (Mara reviews) — so a future reviewer-only grant works with zero code change. Both
 gate at SYSTEM scope via ``require``'s default ``_system_scope`` (no ``{id}``-keyed resolver —
 these are
-org-level operations, not artifact-scoped). S-ing-1 exposes EXACTLY these five verbs and writes
-nothing
-to the vault (no ``/commit``, no ``/decision`` — those are later slices)."""
+org-level operations, not artifact-scoped). The S-ing-5 ``POST …/commit`` adds a THIRD SoD tier —
+``import.commit`` (the only verb that writes the vault). Reads stay ``import.review``; create/cancel
+stay ``import.execute``."""
 
 from __future__ import annotations
 
@@ -33,6 +33,7 @@ from ..db.models._ingestion_enums import (
 )
 from ..db.models.app_user import AppUser
 from ..db.models.import_classification import ImportClassification
+from ..db.models.import_commit_result import ImportCommitResult
 from ..db.models.import_dupe_cluster import ImportDupeCluster
 from ..db.models.import_extract import ImportExtract
 from ..db.models.import_file import ImportFile
@@ -48,6 +49,7 @@ router = APIRouter(prefix="/api/v1", tags=["imports"])
 
 _import_execute = require("import.execute")
 _import_review = require("import.review")
+_import_commit = require("import.commit")
 
 
 class ImportRunCreate(BaseModel):
@@ -119,6 +121,8 @@ def _view(run: ImportRun) -> dict[str, Any]:
         "counts": run.counts,
         "error": run.error,
         "created_by": str(run.created_by),
+        "committed_by": str(run.committed_by) if run.committed_by else None,
+        "report_record_id": str(run.report_record_id) if run.report_record_id else None,
         "created_at": _iso(run.created_at),
         "scan_started_at": _iso(run.scan_started_at),
         "completed_at": _iso(run.completed_at),
@@ -227,6 +231,19 @@ def _proposal_view(n: ImportProposalNode | None) -> dict[str, Any] | None:
         "proposed_owner": n.proposed_owner,
         "owner_source": n.owner_source,
         "conflict_flags": n.conflict_flags,
+    }
+
+
+def _commit_result_view(r: ImportCommitResult | None) -> dict[str, Any] | None:
+    """The S-ing-5 per-file commit ledger row (NULL if the file has not been committed)."""
+    if r is None:
+        return None
+    return {
+        "result": r.result.value,
+        "vault_document_id": str(r.vault_document_id) if r.vault_document_id else None,
+        "vault_version_id": str(r.vault_version_id) if r.vault_version_id else None,
+        "error": r.error,
+        "committed_at": _iso(r.committed_at),
     }
 
 
@@ -359,6 +376,9 @@ async def get_import_file_endpoint(
     view["dedup"] = _dedup_membership_view(f.id, list(clusters), family)
     view["proposal"] = _proposal_view(node)
     view["review"] = await review_svc.get_file_review(session, caller, import_id, file_id)
+    view["commit"] = _commit_result_view(
+        await svc.get_import_file_commit(session, caller, import_id, file_id)
+    )
     return view
 
 
@@ -500,6 +520,22 @@ async def split_cluster_endpoint(
         reason=body.reason,
         idem_key=idempotency_key,
     )
+
+
+@router.post("/admin/imports/{import_id}/commit", status_code=status.HTTP_202_ACCEPTED)
+async def commit_import_run_endpoint(
+    import_id: uuid.UUID,
+    caller: AppUser = Depends(_import_commit),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """Commit a reviewed run's commit-ready keep-items into the vault — or RESUME a
+    PartiallyCommitted one. 422 ``commit_blocked`` if the §9.3 checklist has unresolved blocking
+    conflicts; 409 if a commit is already running / the run is already completed / it is not in a
+    committable state. Flips the run → Committing + enqueues the detached commit worker (poll
+    ``GET …/{id}`` for the final ``Completed``/``PartiallyCommitted`` + ``counts.commit``). Needs
+    ``import.commit`` — the SoD commit tier, the only verb that writes the vault."""
+    run = await svc.start_import_commit(session, caller, import_id)
+    return _view(run)
 
 
 @router.post("/admin/imports/{import_id}/cancel")

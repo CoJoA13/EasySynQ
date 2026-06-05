@@ -16,14 +16,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...db.models._clause_enums import PdcaPhase
 from ...db.models._ingestion_enums import (
+    ImportCommitResultStatus,
     ImportDecisionAction,
     ImportExtractStatus,
     ImportRunStatus,
 )
+from ...db.models._vault_enums import DocumentCurrentState
 from ...db.models.clause import Clause
+from ...db.models.document_type import DocumentType
 from ...db.models.documented_information import DocumentedInformation
 from ...db.models.framework import Framework
 from ...db.models.import_classification import ImportClassification
+from ...db.models.import_commit_result import ImportCommitResult
 from ...db.models.import_decision import ImportDecision
 from ...db.models.import_dupe_cluster import ImportDupeCluster
 from ...db.models.import_extract import ImportExtract
@@ -880,3 +884,209 @@ async def vault_identifier_collisions(
         if legacy in wanted_set:
             hits[legacy] = str(doc_id)
     return hits
+
+
+# --------------------------------------------------------------------------- S-ing-5 commit helpers
+
+
+async def get_document_types_by_codes(
+    session: AsyncSession, org_id: uuid.UUID, codes: set[str]
+) -> dict[str, DocumentType]:
+    """``{code: DocumentType}`` for the org's resolvable type codes (uq_document_type_org_id_code).
+    Unresolvable codes are simply absent — the commit DOCUMENT branch fails those items honestly."""
+    if not codes:
+        return {}
+    rows = (
+        (
+            await session.execute(
+                select(DocumentType).where(
+                    DocumentType.org_id == org_id, DocumentType.code.in_(codes)
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return {dt.code: dt for dt in rows}
+
+
+async def vault_effective_singleton_type_ids(
+    session: AsyncSession, org_id: uuid.UUID, type_ids: set[uuid.UUID]
+) -> set[uuid.UUID]:
+    """Of ``type_ids``, the singleton document-types that ALREADY have an Effective instance in the
+    vault (the R25 pre-commit guard — a 2nd Effective singleton of the same type would 23505)."""
+    if not type_ids:
+        return set()
+    rows = (
+        (
+            await session.execute(
+                select(DocumentedInformation.document_type_id)
+                .where(
+                    DocumentedInformation.org_id == org_id,
+                    DocumentedInformation.document_type_id.in_(type_ids),
+                    DocumentedInformation.current_state == DocumentCurrentState.Effective,
+                    DocumentedInformation.is_singleton.is_(True),
+                )
+                .distinct()
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return {tid for tid in rows if tid is not None}
+
+
+async def get_clauses_by_numbers(
+    session: AsyncSession, framework_id: uuid.UUID, numbers: set[str]
+) -> dict[str, uuid.UUID]:
+    """``{clause_number: clause_id}`` for a framework (uq_clause_framework_id_number) — resolves the
+    folded clause_numbers ("8.4") to clause ids for the commit clause_mapping rows. Unmatched
+    numbers are absent (the commit skips + reports them)."""
+    if not numbers:
+        return {}
+    rows = (
+        await session.execute(
+            select(Clause.number, Clause.id).where(
+                Clause.framework_id == framework_id, Clause.number.in_(numbers)
+            )
+        )
+    ).all()
+    return {number: cid for number, cid in rows}
+
+
+async def get_processes_by_names(
+    session: AsyncSession, org_id: uuid.UUID, names: set[str]
+) -> dict[str, uuid.UUID]:
+    """``{process_name: process_id}`` for the org (uq_process_org_id_name) — resolves the folded
+    process_names to ids for the commit process_link rows. Unmatched names are absent (skipped)."""
+    if not names:
+        return {}
+    rows = (
+        await session.execute(
+            select(Process.name, Process.id).where(
+                Process.org_id == org_id, Process.name.in_(names)
+            )
+        )
+    ).all()
+    return {name: pid for name, pid in rows}
+
+
+async def get_base(session: AsyncSession, di_id: uuid.UUID) -> DocumentedInformation | None:
+    """The ``documented_information`` base row by id (the commit RECORD branch sets
+    import_provenance / legacy_identifier on it after capture_record returns the Record subtype)."""
+    return await session.get(DocumentedInformation, di_id)
+
+
+async def get_commit_result(
+    session: AsyncSession, run_id: uuid.UUID, file_id: uuid.UUID
+) -> ImportCommitResult | None:
+    """The ledger row for a (run, file), if any — the per-item idempotency check (skip done)."""
+    return (
+        await session.execute(
+            select(ImportCommitResult).where(
+                ImportCommitResult.run_id == run_id, ImportCommitResult.file_id == file_id
+            )
+        )
+    ).scalar_one_or_none()
+
+
+async def claim_commit_result(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    run_id: uuid.UUID,
+    file_id: uuid.UUID,
+    vault_document_id: uuid.UUID | None,
+    vault_version_id: uuid.UUID | None,
+) -> bool:
+    """The per-item single-flight + idempotency CLAIM (S-ing-5): atomically record SUCCESS iff no
+    row yet OR the existing row is ``failed`` (a resume retrying it). Returns True if THIS call won
+    (a row was inserted/updated → commit the item), False if a peer already committed it
+    (success/noop → the caller must roll back its half-built vault rows; doc 09 §10.2). This makes
+    concurrent commit workers exactly-once WITHOUT an advisory lock: the loser's INSERT blocks on
+    the winner's uncommitted row, then the ``WHERE result='failed'`` guard makes its DO UPDATE a
+    no-op (no row returned). The claim is the LAST write in the per-item txn, after the doc/etc."""
+    stmt = (
+        pg_insert(ImportCommitResult)
+        .values(
+            org_id=org_id,
+            run_id=run_id,
+            file_id=file_id,
+            result=ImportCommitResultStatus.SUCCESS,
+            vault_document_id=vault_document_id,
+            vault_version_id=vault_version_id,
+            error=None,
+        )
+        .on_conflict_do_update(
+            constraint="uq_import_commit_result_run_file",
+            set_={
+                "result": ImportCommitResultStatus.SUCCESS,
+                "vault_document_id": vault_document_id,
+                "vault_version_id": vault_version_id,
+                "error": None,
+                "committed_at": func.now(),
+            },
+            where=ImportCommitResult.result == ImportCommitResultStatus.FAILED,
+        )
+        .returning(ImportCommitResult.id)
+    )
+    return (await session.execute(stmt)).first() is not None
+
+
+async def record_failed_result(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    run_id: uuid.UUID,
+    file_id: uuid.UUID,
+    error: str,
+) -> None:
+    """Record an isolated per-item FAILURE (ON CONFLICT DO UPDATE — re-fail on a resume); never
+    clobbers a peer-committed SUCCESS (the ``WHERE result != 'success'`` guard). Caller commits."""
+    stmt = (
+        pg_insert(ImportCommitResult)
+        .values(
+            org_id=org_id,
+            run_id=run_id,
+            file_id=file_id,
+            result=ImportCommitResultStatus.FAILED,
+            error=error,
+        )
+        .on_conflict_do_update(
+            constraint="uq_import_commit_result_run_file",
+            set_={
+                "result": ImportCommitResultStatus.FAILED,
+                "error": error,
+                "committed_at": func.now(),
+            },
+            where=ImportCommitResult.result != ImportCommitResultStatus.SUCCESS,
+        )
+    )
+    await session.execute(stmt)
+
+
+async def list_commit_results(
+    session: AsyncSession, run_id: uuid.UUID
+) -> Sequence[ImportCommitResult]:
+    """All ledger rows for a run (the terminal tally + the Import Report disposition table)."""
+    return (
+        (
+            await session.execute(
+                select(ImportCommitResult).where(ImportCommitResult.run_id == run_id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+
+async def max_commit_progress(session: AsyncSession, run_id: uuid.UUID) -> Any:
+    """``MAX(import_commit_result.committed_at)`` for a run, or None — the commit reaper's
+    progress-liveness signal (a Committing run with no recent ledger row is wedged)."""
+    return (
+        await session.execute(
+            select(func.max(ImportCommitResult.committed_at)).where(
+                ImportCommitResult.run_id == run_id
+            )
+        )
+    ).scalar_one_or_none()

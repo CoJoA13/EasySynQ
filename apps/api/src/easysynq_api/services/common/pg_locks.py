@@ -28,6 +28,8 @@ LOCK_RESTORE_DRILL = 7710004
 # drill lock so a standing verified target is never swept by a concurrent nightly drill, and so two
 # operator restores cannot collide on the restore_easysynq_* scratch namespace.
 LOCK_RESTORE_LIVE = 7710005
+# (The S-ing-5 commit single-flight is the per-item ledger CLAIM — INSERT ON CONFLICT DO UPDATE
+# WHERE result='failed' — in ingestion.repository.claim_commit_result, NOT an advisory lock.)
 
 
 @asynccontextmanager

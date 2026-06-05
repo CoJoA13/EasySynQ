@@ -68,6 +68,8 @@ from ...db.models.clause import Clause
 from ...db.models.clause_mapping import ClauseMapping
 from ...db.models.document_version import DocumentVersion
 from ...db.models.documented_information import DocumentedInformation
+from ...db.models.evidence_blob import EvidenceBlob
+from ...db.models.import_run import ImportRun
 from ...db.models.process import Process
 from ...db.models.process_link import ProcessLink
 from ...db.session import get_sessionmaker
@@ -249,6 +251,45 @@ async def fetch_process_links(
     for doc_id, process_id, name in rows:
         grouped.setdefault(doc_id, []).append(ProcessRef(process_id=process_id, process_name=name))
     return grouped
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class ImportReportRef:
+    """A committed run's §12.1 Import Report record + the WORM blob holding its markdown bytes."""
+
+    label: str
+    object_key: str
+    bucket: str
+    sha256: str
+
+
+async def fetch_import_reports(session: AsyncSession) -> list[ImportReportRef]:
+    """The §12.1 Import Report of every committed import run (S-ing-5, doc 09 §10.3) — joined
+    import_run → its report record's evidence_blob → blob (read ``bucket`` FROM the blob row, the
+    packs precedent). Drives the read-only ``current/_ImportReport/`` mirror section. Org-agnostic
+    (single-org, D1; the ``list_effective_versions`` precedent). A run whose import_run row has been
+    TTL-purged simply drops from the mirror — the RETAIN_PERMANENT report record itself persists."""
+    rows = (
+        await session.execute(
+            select(
+                ImportRun.id,
+                ImportRun.source_root,
+                Blob.object_key,
+                Blob.bucket,
+                Blob.sha256,
+            )
+            .join(EvidenceBlob, EvidenceBlob.record_id == ImportRun.report_record_id)
+            .join(Blob, Blob.sha256 == EvidenceBlob.blob_sha256)
+            .where(ImportRun.report_record_id.isnot(None))
+        )
+    ).all()
+    out: list[ImportReportRef] = []
+    for run_id, source_root, object_key, bucket, sha256 in rows:
+        label = f"{_safe(Path(source_root).name) or 'import'}-{run_id.hex[:8]}"
+        out.append(
+            ImportReportRef(label=label, object_key=object_key, bucket=bucket, sha256=sha256)
+        )
+    return out
 
 
 def _safe(name: str) -> str:
@@ -454,6 +495,7 @@ def _metadata(
 
 
 def _write(path: Path, data: bytes, manifest: list[dict[str, object]], rel_root: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)  # parent-safe (the _ImportReport/<label>/ case)
     path.write_bytes(data)
     manifest.append(
         {
@@ -615,6 +657,28 @@ async def build_tree(
         # into the same real doc folder (works whether doc_dir is under a clause or _unmapped/).
         for proc_dir in _placement_process_dirs(proc_refs):
             _write_symlink(build_root / proc_dir / dirname, doc_dir, build_root, manifest)
+
+    # §10.3: the read-only Import Report section — each committed run's RETAIN_PERMANENT §12.1
+    # report markdown, fetched from the records WORM bucket (records are NOT otherwise mirrored). It
+    # needs the
+    # session to look them up; a pure/no-op build (no session) skips it. Best-effort per report: a
+    # missing blob (e.g. a TTL-purged record) is logged, never fatal to the whole mirror.
+    if session is not None:
+        for rpt in await fetch_import_reports(session):
+            try:
+                report_bytes = await storage.fetch_bytes(rpt.object_key, bucket=rpt.bucket)
+            except Exception:  # noqa: BLE001 — a missing/unreadable report drops from the mirror
+                logger.warning(
+                    "mirror.import_report.fetch_failed",
+                    extra={"extra_fields": {"label": rpt.label, "sha256": rpt.sha256}},
+                )
+                continue
+            _write(
+                build_root / "_ImportReport" / rpt.label / "Import-Report.md",
+                report_bytes,
+                manifest,
+                build_root,
+            )
 
     _write(build_root / "INDEX.md", _index_md(effs, cbd).encode(), manifest, build_root)
     # The machine manifest (doc 04 §10.3). Generated artifact only — NO scan/diff consumes it in S7

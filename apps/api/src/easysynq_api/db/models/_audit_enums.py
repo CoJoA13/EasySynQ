@@ -239,6 +239,24 @@ class EventType(enum.Enum):
     # 0032 (the 0011-0031 additive pattern; a from-scratch ``upgrade head`` rebuilds the type from
     # EVENT_TYPE_VALUES, so the member lives here too).
     IMPORT_DECISION_RECORDED = "IMPORT_DECISION_RECORDED"
+    # ingestion commit (S-ing-5, doc 09 §10.1/§12.2). Per committed item: IMPORT_ITEM_COMMITTED
+    # keyed
+    # object_type=document|record + object_id=the new vault row + scope_ref=identifier (so the
+    # per-doc
+    # audit read GET /documents/{id}/audit-events surfaces the import as the doc's creation event,
+    # AC#6) — a SYSTEM actor (the detached commit worker has no HTTP caller; the human committer is
+    # carried by import_run.committed_by + the import_baseline signature_event). IMPORT_ITEM_FAILED
+    # on
+    # an isolated per-item failure (object_type=import_run). IMPORT_RUN_COMPLETED /
+    # IMPORT_RUN_PARTIAL
+    # at the run terminal (object_type=import_run, after carries report_record_id + counts). Added
+    # via
+    # ALTER TYPE event_type ADD VALUE in 0033 (the 0011-0032 additive pattern; a from-scratch
+    # ``upgrade head`` rebuilds the type from EVENT_TYPE_VALUES, so the members live here too).
+    IMPORT_ITEM_COMMITTED = "IMPORT_ITEM_COMMITTED"
+    IMPORT_ITEM_FAILED = "IMPORT_ITEM_FAILED"
+    IMPORT_RUN_COMPLETED = "IMPORT_RUN_COMPLETED"
+    IMPORT_RUN_PARTIAL = "IMPORT_RUN_PARTIAL"
 
 
 class CheckpointSinkKind(enum.Enum):

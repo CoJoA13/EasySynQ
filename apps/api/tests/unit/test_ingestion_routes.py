@@ -1,9 +1,10 @@
-"""Route-inventory PROOF (S-ing-1/2/3/4): the ingestion surface exposes EXACTLY the run/scan/review
-verbs and **writes nothing to the vault** — no ``/commit`` (that is S-ing-5). S-ing-4 adds review
-WRITES (per-file ``/files/{id}/decision``, bulk ``/decisions``, structural ``/merge`` + ``/split``)
-and the ``/checklist`` + ``/decisions`` reads. Every review write is a **POST** (the decision log is
-append-only; structural ops are commands) — NO PUT/PATCH/DELETE on the staging surface. The exact
-POST allow-list (not merely a verb-class ban) catches a future stray ``POST .../commit``. No DB."""
+"""Route-inventory PROOF (S-ing-1..5): the ingestion surface exposes EXACTLY the run / scan / review
+/ commit verbs. S-ing-5 adds the ONE vault-writing verb — ``POST .../commit`` — gated on the SoD
+``import.commit`` tier; it is POST-only + immutable (no PUT/PATCH/DELETE), so commit is still a
+command, never an in-place mutation. S-ing-4 added review WRITES (per-file ``/files/{id}/decision``,
+bulk ``/decisions``, structural ``/merge`` + ``/split``) + the ``/checklist`` + ``/decisions``
+reads. Every staging write is a **POST** (the decision log is append-only; structural + commit ops
+are commands) — NO PUT/PATCH/DELETE anywhere. The exact POST allow-list pins the surface. No DB."""
 
 from __future__ import annotations
 
@@ -26,6 +27,7 @@ _EXPECTED = {
     ("/api/v1/admin/imports/{import_id}/files/{file_id}/decision", "POST"),
     ("/api/v1/admin/imports/{import_id}/merge", "POST"),
     ("/api/v1/admin/imports/{import_id}/split", "POST"),
+    ("/api/v1/admin/imports/{import_id}/commit", "POST"),
     ("/api/v1/admin/imports/{import_id}/cancel", "POST"),
 }
 
@@ -39,11 +41,10 @@ def test_exact_verb_surface() -> None:
     assert actual == _EXPECTED
 
 
-def test_writes_nothing_to_the_vault() -> None:
+def test_commit_is_post_only_no_in_place_mutation() -> None:
+    # S-ing-5: commit is the only vault-writing verb, but it is still a command — POST-only, never
+    # PUT/PATCH/DELETE (an imported Effective doc is immutable; you re-POST to resume, never edit).
     for route in _routes():
-        assert "/commit" not in route.path, f"{route.path} exposes a vault-commit verb (S-ing-5)"
-        # Review staging writes are POST-only (append-only decisions + structural commands) — no
-        # in-place mutation verbs anywhere on the import surface.
         assert not ({"PUT", "PATCH", "DELETE"} & route.methods), f"{route.path} mutates in place"
     post_paths = {r.path for r in _routes() if "POST" in r.methods}
     assert post_paths == {
@@ -52,6 +53,7 @@ def test_writes_nothing_to_the_vault() -> None:
         "/api/v1/admin/imports/{import_id}/files/{file_id}/decision",
         "/api/v1/admin/imports/{import_id}/merge",
         "/api/v1/admin/imports/{import_id}/split",
+        "/api/v1/admin/imports/{import_id}/commit",
         "/api/v1/admin/imports/{import_id}/cancel",
     }
 
@@ -69,6 +71,9 @@ def test_review_writes_gate_import_review_not_execute() -> None:
     execute_paths = {
         "/api/v1/admin/imports",
         "/api/v1/admin/imports/{import_id}/cancel",
+    }
+    commit_paths = {
+        "/api/v1/admin/imports/{import_id}/commit",
     }
     keys_by_path: dict[str, set[str]] = {}
     for route in _routes():
@@ -88,6 +93,10 @@ def test_review_writes_gate_import_review_not_execute() -> None:
     for p in execute_paths:
         assert keys_by_path.get(p) == {"import.execute"}, (
             f"{p} must gate import.execute, got {keys_by_path.get(p)}"
+        )
+    for p in commit_paths:
+        assert keys_by_path.get(p) == {"import.commit"}, (
+            f"{p} must gate import.commit, got {keys_by_path.get(p)}"
         )
 
 

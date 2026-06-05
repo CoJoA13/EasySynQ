@@ -65,6 +65,7 @@ _OOXML_EXTS = frozenset({"docx", "xlsx", "pptx"})
 # in-progress state (incl. the rest-states Scanned/Classified) stays cancellable + reapable.
 _TERMINAL = (
     ImportRunStatus.PROPOSED,
+    ImportRunStatus.COMPLETED,
     ImportRunStatus.FAILED,
     ImportRunStatus.CANCELLED,
 )
@@ -77,6 +78,25 @@ _IN_PROGRESS = (
     ImportRunStatus.DEDUPING,
     ImportRunStatus.PROPOSING,
 )
+# S-ing-5: COMMITTING/PARTIALLY_COMMITTED are DELIBERATELY absent from _IN_PROGRESS +
+# repository._ACTIVE_STATES (the lock-liveness reaper keys on the source-root lock, which commit
+# does
+# NOT hold — it was freed at Proposed; the reaper would instantly FAIL a commit run). They get their
+# own
+# progress-liveness reaper (reap_stalled_commits) that RE-ENQUEUEs, never fails. They are NOT
+# _TERMINAL
+# either (COMMITTING is in-flight; PARTIALLY_COMMITTED is resumable) — so cancel is gated by a
+# dedicated
+# _CANCEL_BLOCKED instead (a vault write has happened → cancel must 409; doc 09 §11.4
+# WORM-no-rollback).
+_CANCEL_BLOCKED = (
+    *_TERMINAL,
+    ImportRunStatus.COMMITTING,
+    ImportRunStatus.PARTIALLY_COMMITTED,
+)
+# POST /commit accepts a reviewed run to START commit, or a partial run to RESUME it.
+_COMMIT_START = (ImportRunStatus.PROPOSED, ImportRunStatus.REVIEWING)
+_COMMIT_RESUME = (ImportRunStatus.PARTIALLY_COMMITTED,)
 # S-ing-4: the states a human review write (decision/merge/split) is accepted in. REVIEWING is the
 # resting state the run enters on the first decision. NB: REVIEWING is DELIBERATELY absent from
 # _IN_PROGRESS + repository._ACTIVE_STATES — the source-root lock is freed at Proposed, so a
@@ -137,10 +157,16 @@ def emit_import_event_system(
     *,
     before: dict[str, Any] | None = None,
     after: dict[str, Any] | None = None,
+    object_type: AuditObjectType = AuditObjectType.import_run,
+    object_id: uuid.UUID | None = None,
+    scope_ref: str | None = None,
 ) -> None:
-    """A *system*-actor import-run event (actor_id NULL) — the detached scan worker / the reaper
-    have
-    no HTTP caller (the records ``emit_record_event_system`` precedent)."""
+    """A *system*-actor import-run event (actor_id NULL) — the detached scan/commit worker / the
+    reaper have no HTTP caller (the records ``emit_record_event_system`` precedent). Defaults key
+    the row to the run (object_type=import_run, object_id=run_id); the S-ing-5 per-item event keys
+    to the created vault row instead (object_type=document|record, object_id=the new id,
+    scope_ref=identifier) so ``GET /documents/{id}/audit-events`` surfaces the import as the doc's
+    creation event (AC#6 per-doc history)."""
     session.add(
         AuditEvent(
             org_id=org_id,
@@ -148,8 +174,9 @@ def emit_import_event_system(
             actor_id=None,
             actor_type=ActorType.system,
             event_type=event_type,
-            object_type=AuditObjectType.import_run,
-            object_id=run_id,
+            object_type=object_type,
+            object_id=object_id if object_id is not None else run_id,
+            scope_ref=scope_ref,
             before=before,
             after=after,
             request_id=_rid(),
@@ -326,13 +353,24 @@ async def get_import_file_membership(
     return await repo.get_file_membership(session, run_id, file_id)
 
 
+async def get_import_file_commit(
+    session: AsyncSession, caller: AppUser, run_id: uuid.UUID, file_id: uuid.UUID
+) -> Any:
+    """A file's S-ing-5 commit ledger row for the per-file detail (org-scoped 404 first; None until
+    the item is committed)."""
+    await get_import_run(session, caller, run_id)
+    return await repo.get_commit_result(session, run_id, file_id)
+
+
 async def cancel_import_run(session: AsyncSession, caller: AppUser, run_id: uuid.UUID) -> ImportRun:
     run = await repo.get_run(session, run_id, for_update=True)
     if run is None or run.org_id != caller.org_id:
         raise ProblemException(status=404, code="not_found", title="Import run not found")
-    if run.status in _TERMINAL:
+    if run.status in _CANCEL_BLOCKED:
         raise ProblemException(
-            status=409, code="conflict", title="Import run is already in a terminal state"
+            status=409,
+            code="conflict",
+            title="Import run cannot be cancelled (terminal or committing/committed)",
         )
     prev = run.status.value
     src_hash = run.source_root_hash
@@ -351,6 +389,78 @@ async def cancel_import_run(session: AsyncSession, caller: AppUser, run_id: uuid
     if token:  # free the root immediately (CAS — no-op if a later run already re-acquired)
         await locks.release(src_hash, token)
     await session.refresh(run)
+    return run
+
+
+async def start_import_commit(
+    session: AsyncSession, caller: AppUser, run_id: uuid.UUID
+) -> ImportRun:
+    """Flip a reviewed run (Proposed/Reviewing) — or RESUME a PartiallyCommitted one — to Committing
+    and enqueue the detached commit worker. A start checks the §9.3 checklist (blocking conflicts →
+    422 ``commit_blocked``); a resume skips it (the conflicts were cleared at the original start and
+    the idempotent ledger only re-attempts failed/remaining items). The Reviewing→Committing flip
+    is a USER act (the committer is in scope); the per-item commits run as a SYSTEM worker, with the
+    human committer carried by ``committed_by`` + the import_baseline signature. Idempotency is the
+    status routing + the ``(run_id, file_id)`` ledger, not a header (commit is one transition, not
+    an append-of-N like decisions)."""
+    run = await repo.get_run(session, run_id, for_update=True)
+    if run is None or run.org_id != caller.org_id:
+        raise ProblemException(status=404, code="not_found", title="Import run not found")
+
+    if run.status in _COMMIT_START:
+        # Lazy import to avoid the service↔review module cycle (review imports from service).
+        from .review import compute_review_checklist
+
+        checklist = await compute_review_checklist(session, caller, run_id)
+        if not checklist["ready"]:
+            raise ProblemException(
+                status=422,
+                code="commit_blocked",
+                title="Resolve the blocking conflicts before committing",
+                members={"blocking": checklist["blocking"]},
+            )
+        prev = run.status.value
+    elif run.status in _COMMIT_RESUME:
+        prev = run.status.value
+    elif run.status is ImportRunStatus.COMMITTING:
+        raise ProblemException(status=409, code="conflict", title="A commit is already in progress")
+    elif run.status is ImportRunStatus.COMPLETED:
+        raise ProblemException(
+            status=409, code="conflict", title="Import run is already fully committed"
+        )
+    else:
+        raise ProblemException(
+            status=409,
+            code="conflict",
+            title="Import run is not in a reviewable/resumable state to commit",
+            members={"status": run.status.value},
+        )
+
+    run.committed_by = caller.id
+    run.committing_started_at = _now()
+    run.status = ImportRunStatus.COMMITTING
+    emit_import_event(
+        session,
+        caller,
+        EventType.IMPORT_RUN_STAGE_CHANGED,
+        run.id,
+        before={"status": prev},
+        after={"status": "Committing"},
+    )
+    await session.commit()
+    await session.refresh(run)
+
+    # Enqueue AFTER commit (the create precedent). Best-effort — the reap_stalled_commits backstop
+    # re-enqueues a Committing run whose commit-ledger makes no progress, and a re-POST /commit also
+    # resumes (idempotent via the ledger).
+    from ...tasks.ingestion import commit_source
+
+    try:
+        commit_source.delay(str(run.id))
+    except Exception:  # noqa: BLE001 — best-effort enqueue; the run is committed (Committing)
+        logger.warning(
+            "ingestion.commit.enqueue_failed", extra={"extra_fields": {"run_id": str(run.id)}}
+        )
     return run
 
 
@@ -577,3 +687,62 @@ async def reap_stalled_runs(
     for src_hash in hashes:
         await locks.force_release(src_hash)
     return {"reaped": len(hashes)}
+
+
+async def reap_stalled_commits(
+    session: AsyncSession,
+    *,
+    now: datetime.datetime | None = None,
+    max_age_seconds: int | None = None,
+) -> dict[str, int]:
+    """RE-ENQUEUE a wedged Committing run (a crashed commit worker) — NEVER fail it (committed WORM
+    items are permanent; doc 09 §11.2 resume + §11.4 no-rollback). Commit holds NO source-root lock,
+    so this uses **progress-liveness**: a Committing run whose latest
+    ``import_commit_result.committed_at`` (else ``committing_started_at``) is older than the stall
+    window has made no progress → re-enqueue ``commit_source`` (idempotent via the ledger CLAIM,
+    which makes a re-enqueue alongside a still-live worker commit each item exactly once). Distinct
+    from ``reap_stalled_runs`` (lock-liveness → FAIL). ``FOR UPDATE SKIP LOCKED`` avoids racing the
+    row; a Beat job drives this, tests call it directly."""
+    from sqlalchemy import select
+
+    settings = get_settings()
+    now = now or _now()
+    max_age = max_age_seconds if max_age_seconds is not None else settings.import_run_stall_seconds
+    cutoff = now - datetime.timedelta(seconds=max_age)
+    candidates = (
+        (
+            await session.execute(
+                select(ImportRun)
+                .where(ImportRun.status == ImportRunStatus.COMMITTING)
+                .with_for_update(skip_locked=True)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    requeue: list[uuid.UUID] = []
+    for run in candidates:
+        progress = await repo.max_commit_progress(session, run.id)
+        # The GREATEST of the two liveness signals — so a freshly-resumed run (new
+        # committing_started_at, but a STALE max(committed_at) from the prior partial pass) counts
+        # as
+        # live and is not instantly re-reaped.
+        anchors = [s for s in (progress, run.committing_started_at) if s is not None]
+        anchor = max(anchors) if anchors else None
+        if anchor is not None and anchor >= cutoff:
+            continue  # the commit worker is making progress (or just started)
+        requeue.append(run.id)
+    await session.commit()  # release the FOR UPDATE before enqueueing
+
+    if requeue:
+        from ...tasks.ingestion import commit_source
+
+        for rid in requeue:
+            try:
+                commit_source.delay(str(rid))
+            except Exception:  # noqa: BLE001 — best-effort; the next reaper tick retries
+                logger.warning(
+                    "ingestion.commit.reap_enqueue_failed",
+                    extra={"extra_fields": {"run_id": str(rid)}},
+                )
+    return {"requeued": len(requeue)}

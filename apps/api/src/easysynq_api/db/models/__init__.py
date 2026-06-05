@@ -10,6 +10,7 @@ from ._authz_enums import SodSeverity, SodTargetBinding
 from ._clause_enums import PdcaPhase
 from ._evidence_enums import EvidenceForTargetType
 from ._ingestion_enums import (
+    ImportCommitResultStatus,
     ImportConfidenceBand,
     ImportDecisionAction,
     ImportDupeMethod,
@@ -61,6 +62,7 @@ from .evidence_pack import EvidencePack
 from .form_template import FormTemplate
 from .framework import Framework
 from .import_classification import ImportClassification
+from .import_commit_result import ImportCommitResult
 from .import_decision import ImportDecision
 from .import_dupe_cluster import ImportDupeCluster
 from .import_extract import ImportExtract
@@ -126,6 +128,8 @@ __all__ = [
     "FormTemplate",
     "Framework",
     "ImportClassification",
+    "ImportCommitResult",
+    "ImportCommitResultStatus",
     "ImportConfidenceBand",
     "ImportDecision",
     "ImportDecisionAction",

@@ -55,6 +55,15 @@ class ImportRunStatus(enum.Enum):
     # of _TERMINAL (so cancel still works). Decisions are accepted in {Proposed, Reviewing}; S-ing-5
     # commit transitions Reviewing→Committing.
     REVIEWING = "Reviewing"
+    # S-ing-5: the commit region. COMMITTING is a worker-held state holding NO lock (single-flight
+    # is the per-item ledger CLAIM; the source-root lock was freed at Proposed). It stays OUT of
+    # service._IN_PROGRESS + repository._ACTIVE_STATES (the lock-liveness reaper would FAIL it) and
+    # OUT of service._TERMINAL (reap_stalled_commits RE-ENQUEUEs a wedged commit, never fails it;
+    # cancel is gated by service._CANCEL_BLOCKED). COMPLETED is the all-good terminal;
+    # PARTIALLY_COMMITTED is a resumable rest-state (re-POST /commit resumes).
+    COMMITTING = "Committing"
+    COMPLETED = "Completed"
+    PARTIALLY_COMMITTED = "PartiallyCommitted"
     FAILED = "Failed"
     CANCELLED = "Cancelled"
 
@@ -116,6 +125,20 @@ class ImportDecisionAction(enum.Enum):
     DEFER = "defer"
 
 
+class ImportCommitResultStatus(enum.Enum):
+    """The per-item commit outcome on an ``import_commit_result`` row (S-ing-5, doc 09 §10.2 / doc
+    14 §13). ``SUCCESS`` = the item created a vault document/record in its own per-item txn;
+    ``FAILED`` = an isolated per-item failure (the run continues + resumes the remaining queue,
+    §11.2); ``NOOP`` = the doc 14 §13 spec value for an idempotent re-commit no-op — RESERVED, not
+    written in v1 (a re-run SKIPS an already-committed item rather than re-stamping it; the
+    read-guards accept it defensively). The ledger is keyed UNIQUE(run_id, file_id) — the per-item
+    single-flight + idempotency guard (the CLAIM)."""
+
+    SUCCESS = "success"
+    FAILED = "failed"
+    NOOP = "noop"
+
+
 def _vals(e: type[enum.Enum]) -> list[str]:
     return [m.value for m in e]
 
@@ -136,6 +159,12 @@ import_dupe_method_enum = SAEnum(
 import_decision_action_enum = SAEnum(
     ImportDecisionAction, name="import_decision_action", values_callable=_vals, create_type=False
 )
+import_commit_result_status_enum = SAEnum(
+    ImportCommitResultStatus,
+    name="import_commit_result_status",
+    values_callable=_vals,
+    create_type=False,
+)
 
 # Re-used by the migration's enum-create / ADD VALUE steps so the ORM and the hand-authored DDL
 # never drift.
@@ -145,3 +174,4 @@ IMPORT_KIND_VALUES = tuple(_vals(ImportKind))
 IMPORT_CONFIDENCE_BAND_VALUES = tuple(_vals(ImportConfidenceBand))
 IMPORT_DUPE_METHOD_VALUES = tuple(_vals(ImportDupeMethod))
 IMPORT_DECISION_ACTION_VALUES = tuple(_vals(ImportDecisionAction))
+IMPORT_COMMIT_RESULT_STATUS_VALUES = tuple(_vals(ImportCommitResultStatus))
