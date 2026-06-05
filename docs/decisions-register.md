@@ -455,8 +455,9 @@ Doc 10 short form (Raised / Triage / Accepted) **maps onto these**.
 - Quantify **expected index size per 1M docs** and **OCR throughput**.
 - Note that **per-request watermark/stamp rendering is a real cost** that belongs in the **performance budget**.
 - Explicitly state that the **S sizing profile runs Postgres-FTS-only (OpenSearch disabled)** as a **documented degraded mode**.
+- **OpenSearch is absent system-wide in MVP/v1, not merely S-profile-off.** Every feature with an OpenSearch path ships its **OpenSearch-disabled realization first** and reserves the OpenSearch impl as a *documented, not-built* drop-in behind a seam — no container, no compose entry, not probed in `/readyz`. So far: **search** = `PostgresFtsIndexer` behind the `Indexer` seam (the `OpenSearchIndexer` is the reserved drop-in); **ingestion near-dup** (doc 09 §7.1) = the **in-process MinHash** `InProcessMinHashDetector` behind the `DedupDetector` seam (the `OpenSearchDedupDetector` is the reserved drop-in, S-ing-3). Standing up the OpenSearch container is a *future* register-level decision, made in the slice that actually consumes it — a family-level "full-fidelity" posture does **not** by itself authorize adding the heavy service before anything reads from it.
 
-**Back-propagation:** 03, 13.
+**Back-propagation:** 03, 09, 13.
 
 ---
 
