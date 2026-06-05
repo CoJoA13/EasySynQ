@@ -26,7 +26,7 @@ and progressively disclosed — never overwhelming.
 - `infra/compose/` — Docker Compose (S/M/L profiles) + Caddy; `just` recipes wrap it.
 - `docs/` — the authoritative spec (`00`–`18` + `decisions-register.md`); `mockup/` — the owner-approved HTML UI mockup.
 
-## Current status (as of 2026-06-04)
+## Current status (as of 2026-06-05)
 
 **MVP COMPLETE** (all 11 ordered slices S0–S11 shipped to `main` via PR, all CI green, validated on the real
 Docker stack; the exit slice S11 is PR #41). All six MVP acceptance proofs are in; the mirror epic + both IA
@@ -48,240 +48,58 @@ S-ing-2; **near-dup at S-ing-3 ships as in-process MinHash** (the doc 09 §14 pa
 OpenSearch container itself deferred (R34 honest: OpenSearch stays absent in MVP/v1; the OpenSearch-backed detector/indexer
 are the reserved drop-ins). **Migration head is now `0033`.**
 
-**v1 RECORDS family — S-rec-1/2 + S-pack-1** ✅ (one line each; the full per-slice non-obvious decisions live in the
-squash-merge commits + the `easysynq-project.md` memory; operator/API usage is in the dev-workflow section below):
+**v1 RECORDS & evidence family (UJ-7 + records) — COMPLETE** ✅ (one line each; per-slice non-obvious
+decisions live in the squash-merge commits + the `easysynq-project.md` memory; operating detail in the
+dev-workflow quick-reference below):
 
-- **S-rec-1** Records: capture + evidence-linking + correction (PR #43, `0023`) — atomic immutable WORM-sealed capture
-  (base `documented_information[kind=RECORD]` + `record` subtype + domain-separated `content_hash`), the polymorphic
-  `evidence_for_link`, correction-via-new-record, retention-policy-as-data (5-tier resolver + per-org *System Default* +
-  snapshot-at-capture ratchet); records ride **SYSTEM `record.*` overrides** (catalog CLOSED).
-- **S-rec-2** Records: retention/disposition lifecycle (PR #46, `0024`) — the disposition state machine + daily Beat sweep
-  + legal-hold + the **R27 dual-control WORM-destroy-under-legal-order** hatch (fail-closed, **purge-FIRST** ordering, the
-  `RECORD_ERASURE_REFUSED` 409 refused-with-reason); `disposition_event` tombstone + `worm_destroy_request` (the dcr R22
-  precedent). **Deferred:** `/retention-policies` CRUD, ordinary creator≠disposer SoD (S-rec-3 Mode-B capture now SHIPPED).
-- **S-pack-1** Evidence Packs build/seal (PR #48, `0025`) — an immutable, self-verifying, scope-limited (CLAUSE/PROCESS +
-  date) bundle sealed as a `RETAIN_PERMANENT` EVIDENCE Record; **R28-honest** classification (the `pack_item` table IS the
-  exclusion report; absence = a destroy tombstone) + gap report; an idempotent `.delay` worker build (the
-  `pack_content_hash` is over the content list, NOT the ZIP bytes) + a stalled-build reaper; no renderer dependency.
+- **S-rec-1** Records capture + evidence-linking + correction (PR #43, `0023`) — atomic WORM-sealed
+  immutable capture (`documented_information[kind=RECORD]` + `record` subtype + domain-separated
+  `content_hash`), polymorphic `evidence_for_link`, correction-via-new-record, retention-policy-as-data
+  (5-tier resolver + per-org *System Default* + snapshot-at-capture ratchet).
+- **S-rec-2** Records retention/disposition lifecycle (PR #46, `0024`) — the disposition state machine +
+  daily Beat sweep + legal-hold + the R27 dual-control WORM-destroy-under-legal-order hatch (fail-closed,
+  purge-FIRST, `RECORD_ERASURE_REFUSED` 409); `disposition_event` tombstone + `worm_destroy_request`.
+- **S-pack-1** Evidence Packs build/seal (PR #48, `0025`) — an immutable scope-limited (CLAUSE/PROCESS +
+  date) bundle sealed as a RETAIN_PERMANENT EVIDENCE Record; R28-honest classification (`pack_item` IS the
+  exclusion report) + gap report; an idempotent `.delay` worker build + a stalled-build reaper.
+- **S-pack-2** Evidence Packs external delivery + PDF portfolio — **completes UJ-7** (PR #50, `0026`) — an
+  Ed25519 signed share-token outside the PEP + a DB-backed revocable `pack_share_link`; a public no-auth
+  latch-exempt guest surface (HTML landing + a streamed `zip|pdf` download re-checked per access,
+  `PACK_DOWNLOADED` audited); the PDF portfolio is a best-effort seal Stage 2.
+- **S-rec-3** Mode-B structured-form capture (PR #52, `0027`) — a Form/Template is an `FRM` DOCUMENT + a
+  `form_template` shared-PK subtype holding a dependency-free field-list DSL (no regex → no ReDoS), frozen
+  into `document_version.metadata_snapshot` at check-in; Mode-B capture validates `form_field_values`
+  against the pinned schema.
+- **S-rec-4** Records-family close-out: `/retention-policies` CRUD + creator≠disposer SoD-6 (PR #54, `0028`,
+  **R38**) — opens the catalog ADDITIVELY (R38 refines R5: closed = no rename/removal; additive growth is
+  allowed) with `retention.read`/`.manage`; CRUD + soft-archive (extend-forward-only PATCH); SoD-6 is a
+  service-layer gate (`advance_disposition`, NOT the PDP), relaxed only by `allow_self_disposition`.
 
-- **S-pack-2** Evidence Packs (UJ-7): external delivery + PDF portfolio — **completes UJ-7** (PR #50, `0026`) — an Ed25519
-  signed share-token *outside* the PEP (reuses `verify_token.py`, **domain-separated** by a distinct preamble + 105-byte
-  length, **fails closed** at mint) + a DB-backed **revocable** `pack_share_link` (token_digest UNIQUE, raw token returned
-  ONCE, state derived from nullable timestamps); a **public no-auth GET-only** guest surface (`api/pack_share.py`,
-  latch-exempt, mounted **before** the `/{pack_id}` router — the str-convertor lesson): an R28 gap/exclusion HTML landing +
-  a streamed `…/shared/download?format=zip|pdf` that re-checks the revocable row **per access** (immediate revoke), audits
-  `PACK_DOWNLOADED` (system-actor), `Referrer-Policy: no-referrer` + digest-only logging; the **PDF portfolio** is a
-  best-effort build **Stage 2** (separate txn after the seal, content-addressed by **output**, the API never invokes
-  Gotenberg). Deferred: `guest_grant`/ABAC/Keycloak-guest (v1.x), Finding/CAPA scope, `ip_allow`.
+**v1 INGESTION engine family (doc 09, UJ-2) — COMPLETE** ✅:
 
-- **S-rec-3** Mode-B structured-form capture — **completes the records family** (PR #52, `0027`) — a Form/Template is an
-  `FRM` controlled DOCUMENT + a **`form_template`** shared-PK subtype holding a bespoke dependency-free field-list DSL
-  (types/required/ranges/enums; **no regex leg → no ReDoS**); the schema is **frozen into `document_version.metadata_snapshot`
-  at check-in** (the WORM source blob IS the canonical-serialized schema, derived server-side from the SAME in-memory object
-  — never the generic `_snapshot`). **Mode-B capture** triggers SOLELY on a `source_document_id` resolving to an FRM template:
-  validates `form_field_values` against **that version's** pinned schema (a caller version must match else 422
-  `stale_template_version`; a correction validates the **original record's** edition). A pre-release toggle via
-  `PATCH /admin/config` (`config.update`); a best-effort structured-PDF rendition (`record.structured_pdf_blob_sha256`,
-  plain Text NO FK) whose purge is **centralized in the shared `_purge_record_evidence`** across all 3 DESTROY paths (the
-  blob-row-iff-bytes fold). Deferred: Mode B for `audit`/`capa`, a richer schema language.
-
-- **S-rec-4** Records-family close-out: `/retention-policies` CRUD + creator≠disposer SoD-6 (PR #54, `0028`, **R38**) —
-  **opens the catalog ADDITIVELY** (R38 refines R5: closed = no *rename/removal*; additive growth allowed with a register
-  entry) with `retention.read`/`retention.manage` (`finest_scope=SYSTEM`, the `config.update` mechanic); `/retention-policies`
-  CRUD + **soft-archive** (a SEPARATE router; PATCH is **extend-forward-only** while a policy has non-disposed pinned records
-  — 422 `retention_reduction_blocked` — and shorten-for-future = **archive + create-new**; the System Default is protected).
-  **SoD-6 (creator≠disposer)** is a **service-layer** gate (`advance_disposition`, before `_dispose_now`'s irreversible
-  purge), **not** the PDP — so a SYSTEM `record.dispose` override does NOT bypass it; relaxed only by `allow_self_disposition`
-  (`system_config`, default OFF); the Beat sweep is structurally exempt; subsumed by the stronger R27 dual-control. **[the
-  ratchet crux]** the capture snapshot pins only `policy_id` + `retention_basis_date` and the sweep **live-derefs** the
-  policy's duration/action/review — so an edit reaches pinned records (extension wanted; reduction blocked by the
-  extend-forward PATCH, no per-record duration snapshot). Deferred: `record.set_retention` per-record override.
-
-- **S-ing-1 — Ingestion: run + scan/inventory foundation (the v1 Ingestion engine's first slice, doc 09, UJ-2)** ✅ —
-  migration `0029` (the full non-obvious decisions live in the squash-merge commit + the project memory). **Owner forks
-  (AskUserQuestion):** the **thin scan/inventory first bite** (over a thicker scan+classify bite / a vertical commit-spike);
-  a **full-fidelity** family dependency posture (Tesseract OCR + Tika + OpenSearch) — those bite at slices 2-3, so S-ing-1's
-  only new runtime dep is **python-magic/libmagic** (content-sniff mime). It introduces ONLY the transient `import_*` staging
-  layer (doc 14 §1.2) — **writes nothing to the vault**. **Migration `0029`:** `import_run` (the first-class audited run +
-  state machine; `import_run_status` Created→Scanning→Scanned [+Failed/Cancelled], **minimal-now/additive-later** per the
-  ALTER-TYPE-ADD-VALUE pattern) + `import_file` (one inventory row per walked path; **UNIQUE(run_id,rel_path)** = the §11.1
-  idempotency/upsert key; `run_id` **ON DELETE CASCADE** — the one deliberate exception to RESTRICT-everywhere, justified by
-  the transient/TTL-purged layer) + additive `IMPORT_RUN_CREATED/STAGE_CHANGED/FAILED/CANCELLED` `event_type` + `import_run`
-  `audit_object_type` + pg_roles-guarded GRANTs. **No new permission keys** — `import.execute`/`import.review`/`import.commit`
-  already exist (0004, SYSTEM-scope admin-only, held via the System Administrator role bundle; **no `is_system_admin` flag
-  exists** — the design-critic caught that false premise, the gate is the `config.update` mechanic). **Authenticated**
-  `api/ingestion.py` under `/api/v1/admin/imports` (**NOT latch-exempt** → 423 until OPERATIONAL): `POST` create (gate
-  `import.execute`; 202 + enqueue scan; 422 on a confinement escape / non-dir; 409 + `active_run_id` on a duplicate-active
-  run), `GET` list/detail/`/files` (gate `import.review`), `POST …/{id}/cancel` (`import.execute`, 409 if terminal) — the
-  **SoD-as-data** execute/review split. The **scan worker** (`tasks/ingestion.py` `easysynq.ingestion.scan_source`,
-  `.delay`-triggered, idempotent under `task_acks_late` re-delivery, fail-closed — the packs build/reaper discipline) walks a
-  **read-only** mounted source root via a `FilesystemSourceProvider` (the doc 09 §3.4 SourceProvider seam;
-  `os.walk(followlinks=False)`; symlinks/unreadable are inventoried-not-silently-dropped), classifies via the pure §4.2 ladder,
-  one-pass **stream→sha256→content-address** stages included bytes into the non-WORM `import-staging` bucket (head-dedup),
-  upserts per (run_id,rel_path), checkpoints + heartbeats the **Redis source-root lock** per batch, and materializes the §4.3
-  counts summary via SQL aggregates; a Beat **stalled-scan reaper** (`reap_stalled_scans`, every 10 min) FAILs a wedged scan +
-  force-frees its lock. **Load-bearing safety (NG3):** `resolve_confined` rejects path-traversal/symlink-escape; the `:ro`
-  worker mount is the physical write-back block; only `rel_path` is stored (no host secrets). **§4.2 deviations (documented):**
-  archives **quarantined** with a reserved expand hook (no `py7zr`/`rarfile`/zip-bomb risk); only **cheap header-level**
-  encryption flagged (the deep probe → slice 2). Adversarially designed before coding (Plan-mode + an 8-reader understand
-  fan-out + 3 layer Plan-agents → folded: the no-`is_system_admin` authz correction, minimal-additive status enum,
-  CASCADE-for-transient, the lazy-guarded libmagic CI fallback, the temp-key-then-server-copy one-pass staging, the
-  confinement primitive). **352 unit (32 new) + 6 ingestion integration green**; `0029` round-trips up↔down↔check **+ a
-  populated-DB downgrade** on PG16; OpenAPI caught up in-PR (redocly green). **Deferred:** extract+classify (slice 2 —
-  Tika/Tesseract land), dedup+version-families+proposal (slice 3 — OpenSearch lands), review-decisions API (slice 4),
-  commit + `import_provenance` + `import_baseline` signature + Import Report + mirror sync (slice 5), the staging TTL janitor,
-  the dedicated `import` Celery queue. **Migration head is now `0029`.**
-
-- **S-ing-2 — Ingestion: extract + classify (doc 09 §5-6, the v1 Ingestion engine's analytical stages)** ✅ — migration
-  `0030` (full non-obvious decisions in the squash-merge commit + project memory). **Owner forks (AskUserQuestion):**
-  **Apache Tika `-full` sidecar** (one JVM container bundling the extractors + Tesseract OCR — extraction AND §5.2 OCR over
-  HTTP, fully local, the Gotenberg precedent; collapses the OCR fork) · **YAML rule-pack resource** (the §6.3 matchers in a
-  versioned, schema-validated `rule_packs/iso9001_rule_pack_v1.yaml`) · **synthetic-corpus + real measurement** (a 45-example
-  labeled hold-out + a measurement harness publishing the **INTERIM** per-dimension band tied to `classifier_version`,
-  `VALIDATION.md`). The pipeline **auto-chains** scan→extract→classify (best-effort `.delay`; `import_run_status` ADD VALUEs
-  `Extracting`/`Classifying`/`Classified`) and writes **nothing to the vault**. `0030`: **import_extract** (Stage-2 output;
-  `full_text` **inline TEXT** capped — the staging row is transient/TTL-purged, no blob-row-iff-bytes cost; `UNIQUE(run,file)`)
-  + **import_classification** (Stage-3 scored proposal; `import_kind` enum carries **UNKNOWN** the vault lacks; `clause_numbers`
-  are catalog **codes** not UUIDs; reuses the `pdca_phase` type; `UNIQUE(run,file,classifier_version)`); both FKs CASCADE on
-  run/file (the transient-layer exception); pg_roles-guarded GRANTs. **ExtractorProvider** (`TikaExtractorProvider`: PUT
-  `/rmeta/text`; the **§5.2 two-pass PDF OCR ladder** no_ocr→ocr_only below 50 chars/page; image OCR; **never raises**, §5.3
-  fail-closed; `ocr_confidence` best-effort) + **ClassifierProvider** (the pure `RuleHeuristicClassifier`: **capped weighted
-  sum** `min(100, Σ fired weights)` calibrated to reproduce the §6.5 worked examples — SOP 92/POL 96/AUDIT 90/FRM 88; bands
-  High≥85/Med 60-84/Low<60; row band = the **type** headline conf + an `ambiguous` flag; **kind scored-only**, UNKNOWN below a
-  floor, R10; **PDCA derived** from the highest-confidence requirement-node clause, ties→highest-numbered, bare headers
-  excluded; an **evidence list**). The **load-bearing lock change:** scan no longer releases at Scanned — the source-root lock
-  is held **continuously** scan→extract→classify, freed at Classified; the reaper (`reap_stalled_runs`) reaps any in-progress
-  run via **lock-liveness** (+ a generous age backstop). **ReDoS mechanism:** regex confined to length-capped filename/header
-  + a load-time nested-quantifier rejector (org-override loading deferred). **API** (read-only; gate `import.review`; **no new
-  keys**): `GET …/{id}/files` gains a per-file `classification` sub-object + `?kind=`/`?band=` filters; new `GET
-  …/{id}/files/{file_id}` detail (extract text/props + classification + evidence); counts gain `by_kind`/`by_band`/`extract`.
-  **387 unit (35 new) + 7 ingestion integration green** (the classifier reproduces §6.5 exactly; a mocked-Tika full-pipeline
-  integration test); `0030` round-trips up↔down↔check **+ a populated-DB downgrade** on PG16; OpenAPI caught up in-PR (redocly
-  green). **Deviations (documented):** the band is the **type** dimension (the §6.5 single-number model), not worst-of(type,
-  clause); the accuracy band is **INTERIM-synthetic** (real-corpus `S-ing-2a` sprint is v1.x); `ocr_enabled=False` gates the
-  PDF OCR pass but a standalone image is always OCR'd by the sidecar. **Deferred:** dedup+version-families+proposal (slice 3 —
-  OpenSearch lands), review-decisions API + the **kind confirmation** R10 requires before commit (slice 4), commit +
-  provenance + baseline signature + Import Report + mirror (slice 5), org-overridable rule-pack loading, a Beat
-  pipeline-advancer + a resume API. **Migration head is now `0030`.**
-
-- **S-ing-3 — Ingestion: dedup + version-families + proposal (doc 09 §7-8, the analytical cleanup stages)** ✅ — migration
-  `0031` (full non-obvious decisions in the squash-merge commit + project memory). **Owner forks (AskUserQuestion):** the
-  near-dup engine = **in-process MinHash behind a new `DedupDetector` seam** (the doc 09 §14 path); **FULL §7.2 canonical-pick**
-  + the R10 default; **FULL proposal node**. **A re-decided fork (the design review reversed my first framing):** the OpenSearch
-  **container is NOT added** this slice — it contradicted R34 in 5 code locations, is the first overlay-introduced service on
-  untested compose CI, and nothing wires to it (near-dup is in-process). We ship the **seam only** (the `OpenSearchDedupDetector`
-  is a documented-not-built drop-in, the `OpenSearchIndexer` reserve-without-service precedent) + a reserved `OPENSEARCH_URL`
-  default; **no compose change**, R34 stays honest. The pipeline now **auto-chains** classify→dedup→propose (best-effort
-  `.delay`); `import_run_status` ADD VALUEs `Deduping`/`Proposing`/`Proposed` — **`Classified` STOPS being terminal** (it is now
-  the dedup rest-state, the `Scanned` precedent); the source-root lock is held continuously **through propose**, freed only at
-  `Proposed`/`Failed`/`Cancelled` (`_TERMINAL`/`_IN_PROGRESS` + the **missed-then-found `repository._ACTIVE_STATES`** all grew).
-  `0031`: **import_dupe_cluster** (`method` exact/near, `member_file_ids` **the FIRST `ARRAY(UUID)` in the schema**,
-  `canonical_file_id`, `jaccard`, `evidence`; UNIQUE(run,method,canonical)) + **import_version_family** (`family_key`,
-  `ordered_member_file_ids`, `effective_file_id`, `reconstruct_revision_chain` Boolean default **false** = R10 current-only-as-
-  provenance opt-in set at S-ing-4; UNIQUE(run,family_key)) + **import_proposal_node** (one row **per KEEP-ITEM** —
-  redundant/superseded files are represented by cluster/family membership, §11.3 nothing-vanishes; `proposed_identifier` /
-  `identifier_source` / `target_ia_path` / `proposed_owner` hint / `owner_source` / `conflict_flags`; UNIQUE(run,file)); all
-  run/file FKs CASCADE (transient layer); pg_roles-guarded GRANTs. **Domain (pure, deterministic):** `domain/ingestion/minhash.py`
-  (hashlib-blake2b stable hash — **never Python `hash()`**; seeded module-constant perms; 32×4 LSH knee ≈0.42 deliberately below
-  0.85 → near-perfect recall; **clusters on the EXACT-Jaccard re-verify, not the MinHash estimate**) + `normalize.py` (NFC +
-  ReDoS-safe via `rule_pack.validate_pattern`; `extract_doc_code` captures the FULL code verbatim, trimming a version suffix —
-  NOT the classifier's bare `type_code`) + `version_family.py` (the **§7.2 provably-TOTAL order**: version → recency [embedded
-  modified-date parsed defensively, else mtime] → editable>PDF → /Current/>/Archive/ → **lexically-lowest rel_path → file_id**,
-  so an all-tie exact-dup resolves deterministically — the DELETE-then-INSERT idempotency contract). **run_dedup** runs the §7.1
-  cascade (EXACT sha256 → NEAR over survivors → FAMILY over what remains, so a file is claimed once) + **atomic DELETE-then-INSERT
-  replace** + heartbeats the lock **from inside the compute** (the detector calls back); **run_propose** builds keep-item nodes
-  (identifier preserve-verbatim-else-`{type}-<new>`-sentinel — **NEVER consumes `NumberingCounter`**; `target_ia_path` reuses the
-  mirror layout via a thin public `mirror.ia_placement_dir`; conflict_flags = duplicate-within-import + collides-with-vault-doc),
-  merges **namespaced** `dedup`/`proposal` counts (does NOT clobber the scan-stage `exact_dup_*` keys), sets `Proposed` + releases
-  the lock. **API** (gate `import.review`; **no new keys**): `GET …/{id}/dupe-clusters` + `…/version-families`; `…/files/{file_id}`
-  gains `dedup` (membership) + `proposal` sub-objects. **433 unit (46 new) + 14 ingestion integration green** (the MinHash is
-  pinned-deterministic; a full exact+near+family corpus drives scan→Proposed); `0031` round-trips up↔down↔check **+ a populated-DB
-  `ARRAY(UUID)` downgrade** on PG16; OpenAPI caught up in-PR (redocly green); the full mirror suites re-run green (mirror.py
-  touched). **Designed adversarially before coding** (a 9-reader understand fan-out + a 41-agent 2-Plan/5-lens design-critic
-  Workflow → 32 confirmed findings folded — incl. the total-order tie-break, the `_ACTIVE_STATES` miss, heartbeat-during-compute,
-  the counts-namespacing, the §7.1 cascade, doc-code≠type_code, and the OpenSearch re-decision). **Deferred:** review-decisions
-  API + the R10 kind confirmation (slice 4; sets `reconstruct_revision_chain`), commit + provenance + baseline + Import Report +
-  mirror (slice 5), the OpenSearch container + the OpenSearch-backed detector/indexer, org numbering-scheme + folder/process owner
-  sources, a Beat pipeline-advancer, extracting a shared pure IA-layout module. **Migration head is now `0031`.**
-
-- **S-ing-4 — Ingestion: human-in-the-loop review (doc 09 §9/§11.3/§12-13, the UJ-2 confirmation stage)** ✅ — migration
-  `0032` (full non-obvious decisions in the squash-merge commit + project memory). Turns a `Proposed` run into a confirmed,
-  commit-ready set; writes **NOTHING to the vault** (commit is S-ing-5) and never consumes `NumberingCounter`. **Owner forks
-  (AskUserQuestion):** the **FULL action set with Merge/Split live-mutating** the dupe-cluster/version-family rows + re-deriving
-  the keep-set/proposals (over decision-overlay / thinner sets) · **ship the bulk endpoint now** · the **FULL pre-commit
-  checklist** (blocking conflicts + the non-blocking ★-coverage projection). **The decision model** (the spine): `import_decision`
-  is the **append-only** human-in-the-loop log (+ future ML labels) — **dimensional** intent (accept/correct/exclude/defer + the
-  **R10 kind-confirm via `after.kind`, NEVER written to `import_classification`** — the immutable engine proposal) is recorded
-  ONLY as decision rows and **folded at read time** (`review.fold_file_decisions`, the SINGLE source of a keep-item's effective
-  state used by the checklist + the file detail + S-ing-5's commit gate); **structural** intent (merge/split) **live-mutates** the
-  cluster/family rows (targeted ORM edits **preserving every OTHER family's `reconstruct_revision_chain`** — a naïve full
-  `replace_dedup` would reset it) + **re-derives** the proposal nodes via the extracted `propose.rebuild_proposals`.
-  **`0032`:** `import_decision` (file **XOR** cluster polymorphic target [a `CHECK`], `cluster_id` **no FK** [signature_event
-  precedent], `idempotency_key` **partial-UNIQUE** [raw DDL + `env.py._MIGRATION_MANAGED_INDEXES`, the 0024 lesson],
-  **SELECT,INSERT-only GRANT** = append-only; run/file FK CASCADE, org/decided_by RESTRICT) + new `ImportDecisionAction` enum +
-  `ImportRunStatus.REVIEWING` (a **lock-free** human rest-state, kept **OUT** of `service._IN_PROGRESS`/`repository._ACTIVE_STATES`
-  so the lock-liveness reaper never FAILs a run mid-review — **the #1 trap**; not `_TERMINAL` so cancel works) +
-  `EventType.IMPORT_DECISION_RECORDED` (additive). **API** (gate **`import.review`** = the SoD review tier, not execute/commit;
-  every write `FOR UPDATE`s the run + honours an optional `Idempotency-Key` replay; flips `Proposed→Reviewing` on the first
-  decision): `POST …/files/{id}/decision` (rejects merge/split 422), bulk `POST …/decisions` (explicit ids OR a kind/band/disposition
-  selector — the §9.2a scale lever; bulk kind-confirm is an explicit act), `POST …/merge`, `POST …/split`; `GET …/checklist`
-  (§9.3: BLOCKING duplicate-identifier + vault-collision + ambiguous-over-threshold computed over the **EFFECTIVE folded**
-  identifiers; non-blocking ★-coverage **projection** via `compute_checklist(projected_clause_numbers=…)` [backward-compatible
-  param] + advisory counts), `GET …/decisions`; the file list/detail gain a folded `review` sub-object + a `?review_status`
-  filter. **doc 15 §8.19 refined:** the per-file action enum narrows to `{accept,correct,exclude,defer}`; merge/split are
-  dedicated structural endpoints. **Load-bearing:** exclude/defer fold **wins over** structural keep-item membership; merge/split
-  recompute+persist `effective_file_id`/`canonical_file_id` **BEFORE** `rebuild_proposals` (the keep-set reads it); a split
-  dropping a group <2 **DELETEs** it (survivor → standalone keep-item). **447 unit (14 new) + 26 ingestion integration green**
-  (incl. exclude-then-merge consistency + the merge-cluster-canonical-recompute & effective-from-consolidated-family regressions);
-  `0032` round-trips up↔down↔check **+ a populated-DB downgrade** on PG16; redocly green. **Adversarially designed + reviewed**
-  (a 10-reader understand fan-out → a 54-agent 6-lens design-critic [28 findings folded pre-code] → a 13-agent 5-lens diff-critic
-  [5 findings folded, 2 majors in `merge_files`, now regression-tested]). **Deferred:** commit + `import_provenance` + baseline +
-  Import Report + mirror (S-ing-5); per-process ABAC-scoped `import.review` delegation (§9.4 — `import.*` is SYSTEM-scope today);
-  the "revise existing vault doc → Rev B+" collision path (a commit-time choice); pull-from-quarantine; the web review UI.
-  **Migration head is now `0032`.**
-
-- **S-ing-5 — Ingestion: COMMIT — write the confirmed set into the vault (doc 09 §10/§12.1/§13)** ✅ — migration `0033`, the
-  capstone that **completes UJ-2 / the Ingestion family**. Turns a reviewed run's `commit_ready` keep-items
-  (`review.fold_file_decisions`: included + kind-confirmed) into Effective **Rev A** controlled documents + immutable Records,
-  **per-item transactional + idempotent + resumable**. **Owner forks (AskUserQuestion):** PRESERVE the source doc-code
-  verbatim as the vault `identifier` (fresh `{TYPE}-{AREA}-{SEQ}` via `NumberingCounter` ONLY for the `{type}-<new>` sentinel /
-  a human rename; `legacy_identifier` records the original); FULL §10 EXCEPT `reconstruct_revision_chain=true` older-version
-  materialization (deferred); REUSE `capture_record` for RECORD-kind; per-item txn + idempotent re-commit + reaper. **The
-  import-baseline cutover (the key correctness call):** a brand-new imported doc's version is created **DIRECTLY at
-  `version_state=Effective`** + `current_state=Effective` (NO SERIALIZABLE `_cutover`/`release` — INV-1 trivially holds with no
-  prior Effective) with a single `signature_event(meaning=import_baseline)` (R2); deliberately NOT `create_document`/`checkin`
-  (which commit internally + walk Draft→Approved→Effective + need the ≥1-clause submit gate). **Single-flight = the per-item
-  ledger CLAIM** (`repository.claim_commit_result`: `INSERT … ON CONFLICT(run,file) DO UPDATE … WHERE result='failed' RETURNING
-  id`) — concurrent workers (a reaper re-enqueue alongside a slow worker) commit each item exactly once, **NO advisory lock**;
-  each item runs in its **OWN fresh session** (`run_commit` takes a sessionmaker — per-item isolation; a reused session +
-  exception trips a pool-teardown `MissingGreenlet`, the diff-critic's first cut). A per-item failure → `result=failed` +
-  continue → **PartiallyCommitted**; re-POST `/commit` **resumes** (the ledger skips done). **`0033`:** `import_commit_result`
-  ledger (UNIQUE(run,file); vault FKs `ON DELETE SET NULL` so a later record-disposal purge isn't FK-blocked); the
-  `documented_information.import_provenance` jsonb fold (doc 14 §5.1; covers DOCUMENT + RECORD); `import_run.committing_started_at`
-  + `report_record_id`; ADD VALUE `Committing/Completed/PartiallyCommitted` + `IMPORT_ITEM_COMMITTED/_FAILED/IMPORT_RUN_COMPLETED/
-  _PARTIAL`. **State machine:** `Committing`/`PartiallyCommitted` stay OUT of `_IN_PROGRESS`/`_ACTIVE_STATES` (commit holds no
-  source-root lock → the lock-liveness reaper would FAIL it) + OUT of `_TERMINAL`; a new `_CANCEL_BLOCKED` 409s cancel once a
-  vault write has happened (§11.4); a dedicated `reap_stalled_commits` RE-ENQUEUEs a wedged Committing run via
-  **progress-liveness** (`MAX(committed_at)` ELSE `committing_started_at`, GREATEST-of-the-two so a fresh resume isn't
-  insta-reaped), never failing it. **AC#6:** per-item `IMPORT_ITEM_COMMITTED` keyed `object_type=document/record` +
-  `scope_ref=identifier` (so `GET /documents/{id}/audit-events` surfaces the import as the doc's creation event); SYSTEM actor;
-  the human committer carried by `committed_by` + the import_baseline signature (`signer=committed_by`, `content_digest=sha`).
-  **§12.1 Import Report** = a RETAIN_PERMANENT markdown EVIDENCE Record (`domain/ingestion/import_report.py`; captured in a
-  SAVEPOINT so a report failure never strands the terminal flip) + the mirror `_ImportReport/` export
-  (`mirror.fetch_import_reports` + `build_tree`; `_write` made parent-safe — the diff-critic's CRITICAL catch: else the mirror
-  rebuild would crash after the first commit). **Checklist fix:** exclude sentinel/None identifiers from the duplicate/vault
-  collision checks; new blocking `singleton_type_already_effective` (R25 pre-commit guard). `finalize_worm` gained a
-  backward-compatible `source_bucket` (one server-side `import-staging→WORM` copy). **POST `/admin/imports/{id}/commit`** (gate
-  **`import.commit`** — the SoD commit tier; 422 `commit_blocked` on unresolved conflicts; 409 in-progress/completed; resume on
-  PartiallyCommitted). **478 unit (incl. 16 new) + 43 ingestion integration green** (full commit / partial+resume / concurrent
-  single-flight / blocked+gate; delta/run-scoped + unique-doc-code per the shared-DB rule); the mirror/records/forms/packs
-  suites re-run green (mirror.py + storage.py + capture_record touched); `0033` round-trips up↔down↔check **+ a populated-DB
-  downgrade** on PG16; redocly green. **Adversarially designed + reviewed** (an 8-reader understand fan-out → AskUserQuestion (4
-  forks) → a 65-agent 6-lens design-critic [46 findings folded pre-code] → implement → a 26-agent 5-lens diff-critic [21
-  findings folded, incl. the CRITICAL mirror-mkdir crash + the reaper anchor + per-item isolation]). **Deferred:** the
-  `reconstruct_revision_chain=true` older-version materialization; the "revise existing vault doc → Rev B+" collision path;
-  bounded-parallelism commit; the staging TTL janitor; a dedicated `import` Celery queue; the web import UI. **Migration head
-  is now `0033`.**
+- **S-ing-1** run + scan/inventory foundation (`0029`) — the transient `import_*` staging layer
+  (`import_run` state machine + `import_file` inventory, UNIQUE(run,rel_path)); an idempotent fail-closed
+  scan worker walks a `:ro` source root (NG3 confinement), content-addresses included bytes into
+  `import-staging`, under a Redis source-root lock + a stalled-run reaper. Writes nothing to the vault.
+- **S-ing-2** extract + classify (PR #57, `0030`) — auto-chains scan→extract→classify; an Apache Tika
+  `-full` sidecar (extract + OCR over HTTP) + a pure `RuleHeuristicClassifier` over a versioned YAML
+  rule-pack (capped weighted sum; bands High/Med/Low; kind scored-only, UNKNOWN below a floor — confirmed
+  at S-ing-4, R10). The source-root lock is held continuously across the stages.
+- **S-ing-3** dedup + version-families + proposal (PR #58, `0031`) — auto-chains to Proposed; in-process
+  MinHash behind a `DedupDetector` seam (the §14 path; the OpenSearch container is NOT added — R34), the
+  §7.1 exact→near→family cascade with a provably-total canonical pick, and the §8 per-keep-item proposal
+  (identifier preserve-verbatim-else-`{type}-<new>`; never consumes `NumberingCounter`).
+- **S-ing-4** human-in-the-loop review (PR #60, `0032`) — append-only `import_decision` rows folded at read
+  (`review.fold_file_decisions`, the single commit-gate source: `commit_ready ⇔ included AND
+  kind∈{DOCUMENT,RECORD}`; the R10 kind-confirm rides `after.kind`, NEVER on the engine classification) +
+  live-mutating merge/split + the §9.3 pre-commit checklist. The lock-free `Reviewing` rest-state.
+- **S-ing-5** the COMMIT — writes the confirmed set into the vault (PR #62, `0033`) — `commit_ready`
+  keep-items → Effective **Rev A** documents + immutable Records, per-item txn + idempotent (the
+  `import_commit_result` ledger CLAIM = single-flight) + resumable (PartiallyCommitted → re-POST resumes);
+  the import-baseline cutover (Effective-directly, no SERIALIZABLE cutover, a single
+  `signature_event(meaning=import_baseline)`, R2); `import_provenance` fold (doc 14 §5.1); the §12.1 Import
+  Report (a RETAIN_PERMANENT EVIDENCE Record + the mirror `_ImportReport/` export); per-doc audit
+  (`scope_ref=identifier`, AC#6); `reap_stalled_commits`. **Migration head is now `0033`.**
 
 - **Specification** in `docs/` (00–17 + `decisions-register.md`) — complete, adversarially audited, reconciled
   (Register R1–R37 back-propagated). The Register is authoritative.
@@ -303,42 +121,25 @@ Docker stack):**
 - **S3** Vault (check-out → presigned CAS upload → immutable check-in; MinIO WORM + Redis lock; atomic `{TYPE}-{AREA}-{SEQ}` numbering) · **S4** Lifecycle **[AC#1]** (the doc FSM + the atomic SERIALIZABLE single-Effective cutover + the INV-1 partial-unique index) · **S5** Approval + SoD (`POST /tasks/{id}/decision` one-txn + append-only `signature_event` + the deny-wins SoD-1/2/3 gate).
 - **S6** Audit **[AC#6]** (append-only, monthly-partitioned, hash-chained `audit_event` behind DB **role separation** [non-owner `easysynq_app`] + the decoupled chain-linker + frozen `canonical_serialize` + the off-host checkpoint anchor) · **S7** Mirror **[AC#2]** (RO Effective-only filesystem mirror, atomic symlink-repoint swap, mounted `:ro`) + **S7b/c/d** (watermarked-PDF rendering via Gotenberg + a deterministic reportlab/pypdf §11.3 band · Ed25519 verify-token + QR + public `GET /verify` · the per-request export/print stamp).
 
-- **S8a–S8d — first-run setup + admin** ✅ (PRs #16/#18/#20/#22/#24): the **423 setup-latch** (ASGI middleware, boundary-anchored
-  exemptions) + **bootstrap-of-trust** (`easysynq setup mint-bootstrap` → a 256-bit salted single-use secret → public
-  `POST /setup/bootstrap` *outside* the PEP grants the first System Administrator, breaking the deny-by-default chicken-and-egg)
-  + the extensible **gate registry** (`services/setup/service.py GATES`: G-A admin · G-B WORM-probe · G-C backup→restore-drill
-  **[AC#5]** · G-D non-bootstrap-auth-proof · G-E org-profile) → the one-way `UNINITIALIZED→IN_SETUP→OPERATIONAL` finalize
-  (migrations `0012`–`0016` seed `system_config` OPERATIONAL-iff-`role_assignment`-exists so upgrades aren't bricked). Then
-  **Users & Roles admin** + invite/enable-disable (reuses the S2 authz-admin write API + R35 two-tier guard; last-admin
-  lock-out guard; `INVITED→ACTIVE` JIT reconcile). `grant-role` stays break-glass. A Mantine `<Stepper>` wizard fronts it;
-  S8c added the first `react-router-dom`.
-
-- **S9/S9b/S9c/S9d — the two IA backends + the mirror tree** ✅ (PRs #27/#31/#32/#33): the read-only ISO 9001 **clause
-  spine** (the **83-clause / 20★** catalog in `db/seeds/iso9001_clauses.py`, drafted+adversarially-verified against doc 02)
-  + M:N `clause_mapping` + the headline **submit-needs-≥1-mapping gate** (`submit_review` → 422, counted on the DOCUMENT so
-  a T9 revision inherits mappings) via `0017`/`0018`; the **process graph** (`process`/`process_edge`/`process_link` +
-  empty-but-present `org_role`/`supplier` FK targets, SEED→ACTIVE one-way ratchet, `0019`); and the §10.3 mirror rebuilt
-  into the `{PLAN|DO|CHECK|ACT}/{NN-Name}/` **clause tree** + a `by-process/` secondary index (pure `services/vault/mirror.py`,
-  relative symlinks so real bytes live **once**, no migration — head stays `0019`). **Authz reality:** the seeded
-  `process.create`/`.read`/`.manage` grants reach no *concrete* process (an unsubstituted `:assignment_process`
-  placeholder), so authoring rides on **SYSTEM overrides** until owner-assignment (the `document.export` precedent).
-- **OpenAPI catch-up** ✅ (PR #35) — `packages/contracts/openapi.yaml` caught up through S9c (the `contracts` CI is
-  redocly-lint only — no codegen, server+web not generated from it); **document new endpoints in-PR going forward**.
-
-- **S10 — search/reporting backend** ✅ (PR #38, owner-scoped to backend, NO web): the org-wide **Compliance Checklist**
-  `GET /reports/compliance-checklist` (the 20★ clauses → per-clause COVERED/PARTIAL/GAP + rollup, one grouped query, PG-only)
-  + Postgres-FTS **search** `GET /search(/suggest)` behind an engine-agnostic `Indexer` seam (OpenSearch is the v1 drop-in,
-  R34; **Effective-docs-only** + **filter-not-403** post-filter with a `hidden_by_scope` footer) + `clause_refs` and the
-  doc-15 bracketed `filter[field][op]` grammar on `GET /documents` (`0020` functional GIN index). `0021` backfills the
-  checklist read onto Internal Auditor. **PROOF:** the audit read API exposes no write verbs (route-inventory test, co-proves **AC#6**).
-- **S11 — the MVP EXIT slice** ✅ (PR #41): operator-grade **`easysynq restore`** (`services/backup/restore.py`, runs as
-  OWNER, never raises) — WORM-aware **restore-to-VERIFIED-TARGET** (fresh scratch DB + fresh non-WORM `restore-scratch`
-  bucket; the locked vault is READ-never-written) → integrity triad → checkpoint-not-ahead vs the *restored* head → chain
-  re-verify → leaves a standing target for a **documented manual cutover**; **`easysynq upgrade`** (pre-backup → migrate →
-  health-gate); **backup archive v2** (AES-256-GCM `.tar.enc` + Keycloak realm export, both **only-if-encrypted** so the
-  G-C drill stays plaintext and AC#5 isn't regressed); strict static **Caddy CSP** scoped to the SPA `handle{}` + default
-  TLS 1.2 floor; 9 operator runbooks (`docs/runbooks/`); a `conftest.py` dir auto-marker closing a real `-m unit` CI gap.
-  `0022` adds 8 `RESTORE_*`/`UPGRADE_*` `event_type` values (`canonical_serialize` v1 untouched).
+- **S8a–S8d** first-run setup + admin (PRs #16/#18/#20/#22/#24) — the **423 setup-latch** +
+  **bootstrap-of-trust** (`easysynq setup mint-bootstrap` → the first System Administrator) + the
+  extensible **gate registry** (G-A admin · G-B WORM-probe · G-C backup→restore-drill [AC#5] · G-D
+  auth-proof · G-E org-profile) → the one-way `UNINITIALIZED→IN_SETUP→OPERATIONAL` finalize; then Users &
+  Roles admin + invite/enable-disable (R35 two-tier guard; last-admin guard). A Mantine `<Stepper>` wizard.
+- **S9/S9b/S9c/S9d** the two IA backends + the mirror tree (PRs #27/#31/#32/#33) — the read-only ISO 9001
+  **clause spine** (83-clause/20★ catalog, `db/seeds/iso9001_clauses.py`) + M:N `clause_mapping` + the
+  submit-needs-≥1-mapping gate (`0017`/`0018`); the **process graph** (`process`/`process_edge`/
+  `process_link`, `0019`); the §10.3 mirror **clause tree** (`{PLAN|DO|CHECK|ACT}/{NN-Name}/`) + a
+  `by-process/` index (pure `mirror.py`, no migration). Authoring rides SYSTEM overrides until owner-assignment.
+- **OpenAPI catch-up** (PR #35) — `packages/contracts/openapi.yaml` is redocly-lint ONLY (no codegen);
+  **document new endpoints in-PR going forward**.
+- **S10** search/reporting backend (PR #38, backend only) — the org-wide **Compliance Checklist**
+  `GET /reports/compliance-checklist` (the 20★ clauses → COVERED/PARTIAL/GAP + rollup) + Postgres-FTS
+  `GET /search(/suggest)` behind the `Indexer` seam (OpenSearch the v1 drop-in, R34; Effective-only +
+  filter-not-403) + `clause_refs` + the doc-15 bracketed `filter[field][op]` grammar on `GET /documents` (`0020`).
+- **S11** the MVP EXIT slice (PR #41) — operator-grade `easysynq restore` (WORM-aware
+  restore-to-VERIFIED-TARGET) + `easysynq upgrade` (pre-backup → migrate → health-gate) + backup archive v2
+  (AES-256-GCM, only-if-encrypted) + a strict static Caddy CSP + 9 operator runbooks (`docs/runbooks/`) (`0022`).
 
 **MVP EXIT: complete.** All 11 ordered slices (S0–S11) shipped; all six acceptance proofs in; the mirror epic + both IA
 backends complete; the exit checklist (doc 18 §12) closed. **Deferred (S8e / v1 / Part-11):** the doc-14 `storage_config.mirror_layout` toggle (with its config UI);
@@ -432,196 +233,45 @@ create boundary.
   archive now) and `easysynq backup restore-test` (run the gating drill; exits non-zero on FAIL) — both dispatch to the
   worker container. The nightly `easysynq.backup.run` Beat job writes durable archives (pg_dump + a MinIO blob
   manifest); the operator-grade **live** WORM-aware restore stays S11.
-- **Users & Roles admin (S8d) — the primary in-app path now:** once OPERATIONAL, sign in as a System Administrator
-  and open **`/admin/users`** to invite users (paste their Keycloak `sub` — create the Keycloak account out-of-band
-  first; they go `INVITED`→`ACTIVE` on first login), assign/revoke the seeded roles, add/remove per-user overrides
-  (the R35 two-tier guard applies), and enable/disable accounts (the last active admin can't be disabled). `/admin/roles`
-  is a read-only view of the seeded bundles. (Custom-role authoring, bulk-CSV invite, and in-app Keycloak provisioning
-  are v1.)
-- **Clause IA + mapping (S9) — no UI yet (API/data only):** a fresh/upgraded install now carries the read-only
-  ISO 9001:2015 clause spine (seeded by `0018`; **no operator action**). `GET /api/v1/clauses` lists it (gate
-  `clauseMap.read`, held by QMS Owner + Internal Auditor — grant it via override for others until the clause-nav UI
-  lands). A document must be mapped to **≥1 clause before `submit-review`** (else **422**) — map via
-  `POST /api/v1/documents/{id}/clause-mappings {clause_id}` (gate `document.manage_metadata`, held by the lifecycle
-  actors), unmap via `DELETE …/clause-mappings/{clause_id}`. Both audited (`CLAUSE_MAPPED`/`CLAUSE_UNMAPPED`). The
-  clause-spine nav + mapping UI are deferred (web).
-- **Process IA (S9c) — API/data only, no UI:** `GET /api/v1/processes(/{id})(/map)` read the Clause 4.4 process graph
-  (gate `process.read`, held at SYSTEM by QMS Owner + Internal Auditor). Authoring — `POST`/`PATCH /processes` (confirm
-  `SEED→ACTIVE`), `POST`/`DELETE /processes/{id}/edges`, and `POST`/`DELETE /documents/{id}/process-links` — is gated on
-  `process.create`/`process.manage` (the first **held by no seeded role** → grant via override until the role UI, like
-  `document.export`) and `document.manage_metadata` for links. `org_role`/`supplier` tables exist but have no authoring
-  endpoint yet (owner-assignment + supplier population are deferred). **S9d** then mirrors the links: a process-linked
-  Effective doc shows up under `${MIRROR_PATH}/current/by-process/{ProcessName}/` (relative symlinks into the clause tree;
-  plain `mirror sync` builds it).
-- **Search + Compliance Checklist (S10) — API/data only, no UI:** the org-wide **Compliance Checklist** is
-  `GET /api/v1/reports/compliance-checklist` (gate `report.compliance_checklist.read`, now held by **QMS Owner +
-  Internal Auditor** after `0021`) — the 20 ★ mandatory clauses with per-clause **COVERED/PARTIAL/GAP** coverage + a
-  rollup, computed from PostgreSQL. **Search** is `GET /api/v1/search?q=…` + `GET /api/v1/search/suggest?q=…`
-  (authenticated; **filter-not-403** — results post-filtered by `document.read`, with a `hidden_by_scope` count; **over
-  Effective documents only**, doc 13's "Effective only" default). Postgres-FTS behind the `Indexer` seam — **OpenSearch
-  stays omitted in MVP dev** (R34); `/readyz` must not probe it. `GET /api/v1/documents` now carries `clause_refs` and
-  accepts the doc-15 bracketed filters (`filter[clause_refs][has]=8.4`, `filter[current_state][eq]=…`, etc.; unknown →
-  400 `unknown_filter`). The web Checklist dashboard + Admin Audit-Log screen + the rest of doc-13 (facets, saved
-  searches, dashboards, reports, evidence packs) are deferred.
-- **Records & evidence (S-rec-1) — API/data only, no UI:** capture an **immutable** record with
-  `POST /api/v1/records:init-upload` (presign evidence to the WORM `records` bucket) → `POST /api/v1/records`
-  (`{record_type, title, evidence:[{sha256}], source_document_id?, source_version_id?, …}`, gate `record.create`).
-  All 16 `record_type` values are accepted. A record produced under a controlled document **must** pin
-  `source_version_id` (R21 → 422 `source_version_required`); ad-hoc `EVIDENCE` leaves both source fields null. Read
-  with `GET /api/v1/records(/{id})` (gate `record.read`, row-filtered) + `GET …/{id}/evidence/{sha}/download`.
-  **Correct** (never edit) via `POST …/{id}/correction` (a new record `correction_of`→old; 409 if already
-  superseded). **Link** as evidence-for a clause/process/document via `POST/GET/DELETE …/{id}/evidence-links` (gate
-  `record.create`). **Authz:** the `record.*` write keys are seeded but reach no folderless/processless record at
-  their seeded scope → **grant `record.create`/`record.read` via a SYSTEM override** until a role/UI wires them (the
-  `process.create` precedent). Evidence bytes that already exist in another bucket (a rendition, or the documents
-  vault) are **rejected 423** — a record's evidence must be freshly WORM-sealed in the `records` bucket (or link to
-  that document instead). Retention is **policy-as-data** (a seeded per-org *System Default* + a 5-tier resolver +
-  the snapshot-at-capture ratchet). **No web.**
-
-- **Records disposition lifecycle (S-rec-2) — API/data only, no UI:** the retention end-of-life. `GET
-  /api/v1/records/{id}/disposition` (gate `record.read`) shows state + `retention_until` + `legal_hold` + the open
-  destroy request + the tombstone history. **Advance** the state machine with `PATCH …/{id}/disposition
-  {to_state,reason?}` (gate `record.dispose`; `ACTIVE↔DUE_FOR_REVIEW↔DISPOSED`; a DESTROY physically removes the WORM
-  bytes **fail-closed**, blocked 409 + audited `RECORD_ERASURE_REFUSED` while the lock is unexpired or a hold is on).
-  **Legal hold** via `POST …/{id}/legal-hold {action:place|release, reason}` (gate `record.dispose`; reason mandatory;
-  overrides expiry). The **R27 dual-control destroy-under-legal-order**: `POST …/{id}/worm-destroy-requests
-  {legal_basis}` (step 1) → `POST …/{req_id}/approve` by a **distinct** second actor (step 2 — governance-bypass purge;
-  409 `dual_control_same_actor`, 409 `compliance_mode_denies_destroy`) or `…/cancel`. The **Beat** sweep
-  (`easysynq.records.retention_sweep`, daily) flips due `ACTIVE`→`DUE_FOR_REVIEW` and **auto-disposes** low-risk
-  (`review_required=false`) policies once the WORM lock allows; `review_required=true` waits for a human. Records stay
-  **immutable** — `PATCH /disposition` is the only PATCH (a state advance, not a content edit; the route-inventory proof
-  whitelists it). Authz: ride on a **SYSTEM `record.dispose` override** (catalog CLOSED — legal-hold + dual-control both
-  map onto `record.dispose`).
-- **Evidence Packs (S-pack-1) — API/data only, no UI:** assemble an immutable audit bundle. `POST
-  /api/v1/evidence-packs {title, scope_kind:CLAUSE|PROCESS, clause_ids|process_ids, period_start?, period_end?}` (gate
-  `report.evidence_pack.generate`) creates a **DRAFT** pack + computes its preview synchronously (resolve candidates +
-  R28-classify `INCLUDED`/`EXCLUDED_PERMISSION`/`EXCLUDED_ABSENCE` + gap/exclusion summaries). `POST
-  /evidence-packs/{id}/generate` (202) flips `→ BUILDING` and enqueues the worker build; **poll** `GET
-  /evidence-packs(/{id})` for `SEALED` (or `FAILED`). `GET /evidence-packs/{id}/download` (gate `report.export`) presigns
-  the sealed ZIP (409 until SEALED). The sealed pack is a **`RETAIN_PERMANENT` EVIDENCE Record**; the pack is immutable
-  (**no PUT/PATCH/DELETE** — the route-inventory proof). **Authz:** ride a **SYSTEM `report.evidence_pack.generate`
-  override** until the role UI (the `record.*` precedent; catalog CLOSED — no new key needed). The build runs on the
-  **worker** (the `build_evidence_pack` Celery task; a daily `easysynq.packs.reap_stalled_builds` Beat reaper recovers a
-  stalled `BUILDING`).
-- **Evidence Packs delivery (S-pack-2) — API/data only, no UI:** deliver a sealed pack to an external auditor.
-  `POST /api/v1/evidence-packs/{id}/share {ttl_days?|expires_at?, recipient?}` (gate `report.evidence_pack.generate`;
-  pack must be SEALED → 409 else; 503 if the verify-token signing key isn't provisioned) mints a time-boxed Ed25519
-  **share link** and returns the raw token + `share_url` **once** (only its SHA-256 digest is stored). `GET …/share-links`
-  lists them (management view, digest prefix only); `POST …/share-links/{link_id}/revoke {reason}` is immediate (409 if
-  already revoked). The **public, no-auth, latch-exempt** guest surface: `GET /api/v1/evidence-packs/shared?t=<token>`
-  (an HTML landing surfacing the R28 gap/exclusion summary + download links) and
-  `GET …/shared/download?t=<token>&format=zip|pdf` — re-checks the **revocable** DB row on every access (revoke is
-  immediate), audits `PACK_DOWNLOADED` (system-actor), and **streams** the bytes through the API (`Referrer-Policy:
-  no-referrer`; the raw token is never logged). `format=pdf` is the live-stamped **PDF portfolio** (built at seal Stage 2,
-  best-effort; 409 if unavailable). The pack **content** stays immutable (no PUT/PATCH/DELETE; the route-inventory proof
-  whitelists share/revoke as delivery-grant lifecycle). The verify signing key is shared with S7c
-  (`VERIFY_TOKEN_SIGNING_KEY_PATH` on the secrets volume — already provisioned for the mirror QR). The heavier
-  `guest_grant`/ABAC/Keycloak-guest path stays **v1.x**; Finding/CAPA scope + `ip_allow` + app-rate-limiting deferred.
-  Migration head is now `0026` (next `0027`).
-- **Mode-B structured-form capture (S-rec-3) — API/data only, no UI:** author a Form/Template, then fill it. (1) Create
-  an `FRM` document (`POST /documents` with the FRM `document_type_id`); `PUT /documents/{id}/form-schema {field_schema}`
-  sets the working schema (the bespoke field-list DSL; `document.manage_metadata`; FRM + Draft/UnderRevision only, 422/409
-  else). (2) `POST /documents/{id}/form-schema:checkin {change_reason, change_significance}` (`document.edit`) freezes it
-  into a Draft version (the WORM source blob IS the schema). (3) Map ≥1 clause, then the standard `submit-review → approve
-  → release` drives it Effective. (4) `GET /documents/{id}/effective-form-schema` renders the form (the pinned schema).
-  (5) **Capture:** `POST /api/v1/records {record_type, title, source_document_id:<the FRM doc>, form_field_values}`
-  (`record.create`) — the server resolves+pins the Effective version, validates the values against its pinned schema
-  (422 `errors[].field`), and pins `source_version_id`. A **correction** validates against the original's pinned edition.
-  The structured-record PDF builds best-effort (`GET /records/{id}/rendition`; 409 until built — run the worker, or the
-  `easysynq.records.build_structured_pdf` task fires on capture). **Pre-release capture** (fill a Draft template, for a
-  controlled migration): a System Administrator flips it via `PATCH /api/v1/admin/config {capture_pre_release_templates:
-  true}` (`config.update`, admin-only). **Authz:** capture rides a SYSTEM `record.create` override (the records precedent);
-  template authoring rides `document.*` (a folderless FRM doc needs a SYSTEM/DOC_CLASS grant — the `document.export`
-  precedent). Migration head is now `0027` (next `0028`).
-- **Retention-policy management + creator≠disposer SoD (S-rec-4) — API/data only, no UI:** manage the policy-as-data
-  schedules. `GET /api/v1/retention-policies(?include_archived=true)` + `GET …/{id}` (gate `retention.read`); `POST`
-  (`retention.manage`; 422 reserved-name/malformed, 409 `name_taken`), `PATCH …/{id}` (`retention.manage` — **extend-forward
-  only** while a policy has non-disposed pinned records: a duration reduction / weaker `disposition_action` /
-  `review_required` true→false is 422 `retention_reduction_blocked`; **to shorten future retention, archive + create a new
-  shorter policy**), `POST …/{id}/archive`·`/unarchive` (soft-archive — a hard DELETE is blocked by 3 RESTRICT FKs; archived
-  hides from new-capture resolution but pinned records keep being swept). The seeded **System Default** is protected
-  (un-archivable/un-renameable). `retention.read`/`retention.manage` are the **first additively-opened catalog keys** (R38):
-  seeded to **QMS Owner** (both) + **Internal Auditor** (read) — but for a not-yet-UI'd actor still ride a SYSTEM override
-  (the `record.*` precedent). **Creator≠disposer (SoD-6):** a record's `captured_by` advancing its own record to
-  DISPOSED/DESTROY is refused **409 `sod_self_disposition`** (audited `DISPOSITION_REFUSED_SOD`) **unless** an admin sets
-  `PATCH /api/v1/admin/config {allow_self_disposition: true}` (`config.update`). **⚠ Operator note:** the flag defaults OFF
-  (strict), so a **single-operator install** must flip it to `true` to dispose its own records (else every self-disposal is
-  blocked — the second-person requirement). The Beat sweep (system actor) is exempt. Migration head is now `0028` (next `0029`).
-- **Ingestion: run + scan/inventory (S-ing-1) — API/data only, no UI:** point the **worker** at an existing QMS file tree
-  (set `IMPORT_SOURCE_PATH` to the host dir; it mounts **read-only** at `IMPORT_SOURCE_ROOT`=`/srv/import/source`, NG3). As a
-  **System Administrator** (`import.*` are SYSTEM-scope admin-only, held by the role bundle — no override dance):
-  `POST /api/v1/admin/imports {source_root}` (`source_root` is relative to the mount; 422 on a confinement escape; 409 +
-  `active_run_id` if a scan is already active for that root) → 202 + an `import_run` (Created), then the **worker** scans
-  (Created→Scanning→Scanned) — inventory every file with size/mtime/mime/sha256 + a §4.2 scan verdict, content-address
-  included bytes into the non-WORM `import-staging` bucket, and a calm §4.3 `counts` summary. Poll `GET /admin/imports/{id}`
-  for `Scanned` + counts; `GET …/{id}/files?disposition=included|excluded|quarantine` lists the inventory;
-  `POST …/{id}/cancel` aborts (the worker stops cooperatively). It writes **nothing to the vault** (commit is a later slice).
-  Gate split: writes (create/cancel) = `import.execute`, reads = `import.review`. **Operator notes:** the worker image carries
-  `libmagic1` (content-sniff); a crashed scan self-recovers via the Beat `easysynq.ingestion.reap_stalled_runs` (FAILs the
-  run + frees the source lock); a new `import-staging` bucket is provisioned by `minio-init.sh`. Dedup/review/commit are
-  later slices. Migration head is now `0029` (next `0030`).
-- **Ingestion: extract + classify (S-ing-2) — API/data only, no UI:** a created run now **auto-chains** through
-  `Scanning→Scanned→Extracting→Classifying→Classified` (the resting checkpoint awaiting S-ing-4 review) — no operator action
-  beyond the scan trigger. Bring up the **Tika `-full` sidecar** (`just up s --build` pulls `apache/tika:<ver>-full`,
-  `TIKA_URL=http://tika:9998`); set `ocr_enabled:true` in the `POST /admin/imports` body to OCR scanned/image-only PDFs
-  (Tesseract, `IMPORT_OCR_LANGUAGE=eng`). Poll `GET /admin/imports/{id}` for `Classified` + the extended `counts`
-  (`by_kind`/`by_band`/`extract`); `GET …/{id}/files?kind=DOCUMENT|RECORD|UNKNOWN&band=HIGH|MEDIUM|LOW|AMBIGUOUS` lists each
-  file + its **classification proposal** (kind/type/clause_numbers/pdca/band); `GET …/{id}/files/{file_id}` is the per-file
-  review detail (extract text/props + the classification **evidence** list). It writes **nothing to the vault**; the proposal
-  is a SUGGESTION — `kind` is human-confirmed at S-ing-4 (R10), commit is S-ing-5. The §6.3 matchers live in
-  `domain/ingestion/rule_packs/iso9001_rule_pack_v1.yaml` (`classifier_version="rule-heuristic-1"`; its **INTERIM-synthetic**
-  measured band is published in `tests/fixtures/ingestion_corpus/VALIDATION.md`). **Operator notes:** the worker reaches Tika
-  over HTTP (no Tesseract in the worker image; a Tika outage degrades a file to `extract_failed` and the run continues, §5.3);
-  the source-root lock is held **continuously** scan→extract→classify (a re-import of the same root stays 409 through the whole
-  pipeline); a crashed stage self-recovers via `reap_stalled_runs` (lock-liveness). Migration head is now `0030` (next `0031`).
-- **Ingestion: dedup + version-families + proposal (S-ing-3) — API/data only, no UI:** a created run now auto-chains all the way
-  to `Classified→Deduping→Proposing→Proposed` (the new resting checkpoint awaiting S-ing-4 review) — **no operator action beyond
-  the scan trigger, and no new service** (near-dup is **in-process MinHash**; the OpenSearch container is NOT added — R34 stays
-  honest, the `DedupDetector`/`Indexer` OpenSearch impls are reserved drop-ins, `OPENSEARCH_URL` is a reserved-empty setting).
-  Poll `GET /admin/imports/{id}` for `Proposed` + the extended `counts` (the scan-stage `exact_dup_*` keys plus namespaced
-  `counts.dedup` = `{by_method:{exact,near}, redundant_files, version_families, superseded_files}` + `counts.proposal` =
-  `{keep_items, conflicts, needs_identifier}`). New read surfaces (gate `import.review`): `GET …/{id}/dupe-clusters` (exact +
-  near clusters, each with members + the §7.2 canonical) · `GET …/{id}/version-families` (grouped by doc-code/base-name, ordered
-  members + the candidate effective) · `GET …/{id}/files/{file_id}` gains a `dedup` membership sub-object (in_exact/in_near/
-  is_canonical/redundant_of/in_version_family/is_effective/superseded_by) + a `proposal` sub-object (proposed_identifier +
-  identifier_source + target_ia_path + proposed_owner hint + conflict_flags) — `proposal` is null for a redundant/superseded
-  (non-keep) file. It writes **nothing to the vault**; the proposal is a SUGGESTION (R10: `kind` is confirmed at S-ing-4, the
-  per-family revision-chain opt-in is set there, commit is S-ing-5) and **never consumes a numbering sequence** (a no-doc-code
-  keep-item gets a `{type}-<new>` placeholder flagged for assignment). **Operator notes:** the lock is now held continuously
-  scan→…→**propose** (re-import stays 409 the whole way); a crashed dedup/propose self-recovers via `reap_stalled_runs`; the
-  in-process MinHash is the bounded/S-profile path (doc 09 §14) — near-dup over a huge corpus is the documented degradation the
-  OpenSearch drop-in later addresses. Migration head is now `0031` (next `0032`).
-- **Ingestion: human-in-the-loop review (S-ing-4) — API/data only, no UI:** the review stage that turns a `Proposed` run into a
-  confirmed, commit-ready set — **no operator action beyond the decisions; writes NOTHING to the vault, no new service/task.**
-  As a System Administrator (gate `import.review`, the SoD review tier — create/cancel stay `import.execute`): per-file
-  `POST /admin/imports/{id}/files/{file_id}/decision {action:accept|correct|exclude|defer, after?:{kind?,type_code?,
-  clause_numbers?,process_names?,identifier?,owner?}, reason?}` — the **R10 kind-confirm rides `after.kind`** (DOCUMENT|RECORD;
-  merge/split are 422 here); bulk `POST …/{id}/decisions {action, file_ids?|selector?:{kind,band,disposition}, after?}` (the
-  §9.2a scale lever; bulk kind-confirm is an explicit act); structural `POST …/{id}/merge {file_ids,effective_file_id?,
-  reconstruct_revision_chain?}` (combine into a version family + the per-family revision-chain opt-in) + `POST …/{id}/split
-  {target_kind,target_id,separate_file_ids}` (break a cluster/family apart; a group <2 is deleted). All accept an optional
-  `Idempotency-Key` header (replay = no-op). Reads: `GET …/{id}/checklist` (the §9.3 pre-commit gate: `ready` + blocking
-  conflicts [duplicate-identifier / vault-collision / ambiguous-over-`import_review_ambiguous_threshold`, default 0] + the
-  non-blocking ★-coverage **projection** + advisory `unknown_low`/`kind_unconfirmed` + folded review stats) · `GET …/{id}/decisions`
-  (the append-only log) · `GET …/{id}/files` + `…/files/{file_id}` gain a folded `review` sub-object + a `?review_status=
-  included|excluded|deferred|undecided` filter. The first decision flips the run `Proposed→Reviewing` (a lock-free human
-  rest-state; cancel still works; the source-root lock stays freed so a re-import is a new run). Nothing commits unconfirmed
-  (R10); commit is S-ing-5. Migration head is now `0032` (next `0033`).
-- **Ingestion: COMMIT (S-ing-5) — API/data only, no UI; the capstone that finally WRITES THE VAULT:** as a System
-  Administrator (gate **`import.commit`** — the SoD commit tier above review/execute), `POST /api/v1/admin/imports/{id}/commit`
-  flips a reviewed run (Proposed/Reviewing) → **Committing** + enqueues the detached commit worker → **202**; a §9.3 blocking
-  conflict → **422 `commit_blocked`**; poll `GET …/{id}` for the terminal **Completed** / **PartiallyCommitted** + `counts.commit`
-  + `report_record_id`. Each `commit_ready` keep-item becomes an **Effective Rev A** controlled document (the preserved doc-code
-  is its `identifier`; a `{type}-<new>` sentinel/rename allocates a fresh `{TYPE}-{AREA}-{SEQ}`) or an immutable **Record** (via
-  `capture_record`); per-item + idempotent (`import_commit_result` ledger) + resumable (**re-POST `/commit`** on a
-  PartiallyCommitted run resumes — the ledger skips done items). Each committed doc carries `import_provenance` + an
-  `import_baseline` signature; its per-doc audit is `GET /documents/{id}/audit-events` (the `IMPORT_ITEM_COMMITTED` creation
-  event). The §12.1 **Import Report** is sealed as a RETAIN_PERMANENT EVIDENCE Record + exported to the mirror's
-  `current/_ImportReport/<run>/Import-Report.md` (the post-commit mirror sync regenerates the Effective-doc tree + this section).
-  **Operator notes:** commit holds NO source-root lock (so a re-import during commit is allowed); a crashed Committing run
-  self-recovers via the Beat `easysynq.ingestion.reap_stalled_commits` (progress-liveness → RE-ENQUEUE, never fails — committed
-  WORM items are permanent); cancel is **409** once committing/committed (WORM is not deletable — withdraw via the normal
-  Obsolete lifecycle). No new service container. Migration head is now `0033` (next `0034`).
+- **Feature quick-reference (all API/data only, NO web UI yet).** Endpoints + gates are in `docs/15` +
+  `packages/contracts/openapi.yaml`; per-feature operating depth is in the `easysynq-project.md` memory + the
+  squash-merge commits. Most v1 feature keys reach no concrete object at their seeded scope, so **ride a
+  SYSTEM override** until the role/UI lands (the `document.export`/`record.*` precedent) — EXCEPT `import.*`
+  (SYSTEM-scope, held by the System Administrator bundle, no override dance).
+  - **Users & Roles admin (S8d):** as a System Administrator → `/admin/users` to invite (paste the Keycloak
+    `sub`; `INVITED→ACTIVE` on first login), assign/revoke seeded roles, add overrides (R35 two-tier guard),
+    enable/disable (last-active-admin guarded). `/admin/roles` is read-only.
+  - **Clause IA + mapping (S9):** `GET /clauses` (gate `clauseMap.read`); a doc needs ≥1 clause before
+    `submit-review` (422 else) — `POST /documents/{id}/clause-mappings` / `DELETE …`.
+  - **Process IA (S9c):** `GET /processes(/{id})(/map)` (gate `process.read`); authoring on
+    `process.create`/`.manage` (SEED→ACTIVE) + `document.manage_metadata` for links. **S9d** mirrors links
+    under `current/by-process/{name}/`.
+  - **Search + Compliance Checklist (S10):** `GET /reports/compliance-checklist`
+    (gate `report.compliance_checklist.read`) + `GET /search(/suggest)` (authenticated; filter-not-403;
+    Effective-only). `GET /documents` takes `filter[field][op]` (e.g. `filter[clause_refs][has]=8.4`).
+  - **Records (S-rec-1..4):** capture via `POST /records:init-upload` → `POST /records`
+    (`{record_type,title,evidence:[{sha256}],source_document_id?,…}`; R21 pins `source_version_id` under a
+    controlled doc); correct via `POST …/correction`; link via `…/evidence-links`. Disposition:
+    `PATCH …/{id}/disposition`, `POST …/legal-hold`, the R27 `POST …/worm-destroy-requests` + a distinct
+    approver. Retention: `/retention-policies` CRUD (extend-forward-only; System Default protected). **SoD-6:**
+    a record's `captured_by` cannot self-dispose unless an admin flips `allow_self_disposition`
+    (`PATCH /admin/config`) — ⚠ a single-operator install must flip it. Evidence must be freshly WORM-sealed
+    in the `records` bucket (a foreign-bucket sha is 423).
+  - **Evidence Packs (S-pack-1/2):** `POST /evidence-packs` (DRAFT + R28 preview) → `POST …/generate` (202,
+    worker build) → poll SEALED → `GET …/download`. Deliver: `POST …/share` (revocable Ed25519 link, raw
+    token returned once) → public `GET /evidence-packs/shared?t=…` + `…/shared/download?format=zip|pdf`.
+  - **Mode-B forms (S-rec-3):** create an `FRM` doc → `PUT /documents/{id}/form-schema` →
+    `POST …/form-schema:checkin` → map a clause → release Effective; then `POST /records {source_document_id:
+    <the FRM doc>, form_field_values}` validates against the pinned schema. Pre-release capture:
+    `PATCH /admin/config {capture_pre_release_templates:true}`.
+  - **Ingestion (S-ing-1..5):** point the worker at a source tree (`IMPORT_SOURCE_PATH` → a `:ro` mount at
+    `/srv/import/source`); bring up the Tika `-full` sidecar (`TIKA_URL`). `POST /admin/imports {source_root,
+    ocr_enabled?}` (gate `import.execute`) auto-chains scan→extract→classify→dedup→**Proposed**. Review (gate
+    `import.review`): `…/files/{id}/decision`, bulk `…/decisions`, `…/merge`/`…/split`, `GET …/checklist` →
+    **Reviewing**. **Commit** (gate `import.commit`): `POST …/{id}/commit` → Committing → **Completed /
+    PartiallyCommitted** (re-POST resumes); writes Effective Rev A docs + Records + the §12.1 Import Report;
+    per-doc audit at `GET /documents/{id}/audit-events`. Crashes self-recover via
+    `reap_stalled_runs`/`reap_stalled_commits`. No new service container; commit holds NO source-root lock.
 - **⚠ S11 restore + upgrade + encrypted backup (operator):** the durable archive (`easysynq backup run` / the nightly
   Beat job) is now **AES-256-GCM `.tar.enc`** sealed with `BACKUP_ENCRYPTION_KEY` (install.sh generates it into the
   0600 `.env`; **lose it → those archives are unrecoverable** — back it up out-of-band) and bundles the live Keycloak
