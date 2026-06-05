@@ -2454,6 +2454,37 @@ paths:
         "409": { $ref: "#/components/responses/ProblemResponse" }
         "423": { $ref: "#/components/responses/ProblemResponse" }
 
+  /admin/imports/{import_id}/commit:
+    parameters:
+      - { name: import_id, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      tags: [imports]
+      operationId: commitImportRun
+      summary: >-
+        S-ing-5 — commit a reviewed run's commit-ready keep-items into the vault (the ONLY verb that
+        writes the vault), or RESUME a PartiallyCommitted one. Each commit_ready keep-item (included +
+        kind-confirmed) becomes an Effective Rev A controlled document or an immutable Record,
+        per-item + idempotent. Flips the run to Committing + enqueues the detached commit worker; poll
+        GET /admin/imports/{id} for the final Completed / PartiallyCommitted + counts.commit. Needs
+        import.commit — the SoD commit tier (above import.review / import.execute).
+      responses:
+        "202":
+          description: Accepted — the run is Committing; poll for the terminal status + counts.commit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ImportRun" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409": { $ref: "#/components/responses/ProblemResponse" }
+        "422":
+          description: >-
+            commit_blocked — the §9.3 pre-commit checklist has unresolved blocking conflicts
+            (members.blocking lists them).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "423": { $ref: "#/components/responses/ProblemResponse" }
+
   /evidence-packs:
     get:
       tags: [evidence-packs]
@@ -4371,9 +4402,11 @@ components:
         profile: { type: [string, "null"] }
         ocr_enabled: { type: boolean }
         classifier_version: { type: [string, "null"] }
-        counts: { type: [object, "null"], additionalProperties: true, description: "The §4.3 inventory summary, materialized at scan-complete." }
+        counts: { type: [object, "null"], additionalProperties: true, description: "The §4.3 inventory summary + per-stage count blocks (S-ing-5 adds counts.commit = {committed, failed})." }
         error: { type: [string, "null"] }
         created_by: { type: string, format: uuid }
+        committed_by: { type: [string, "null"], format: uuid, description: "Who clicked Commit (S-ing-5); null until then." }
+        report_record_id: { type: [string, "null"], format: uuid, description: "The §12.1 Import Report record (S-ing-5); null until commit completes." }
         created_at: { type: [string, "null"], format: date-time }
         scan_started_at: { type: [string, "null"], format: date-time }
         completed_at: { type: [string, "null"], format: date-time }

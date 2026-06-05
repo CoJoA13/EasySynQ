@@ -107,10 +107,14 @@ Records/evidence capture, retention/disposition, Evidence Packs, audits/findings
 > human-in-the-loop review, migration `0032`) adds the §9 decision surface — per-file accept/correct/exclude/defer + the
 > **R10 `kind` confirmation** (folded at read, never on the engine classification), live-mutating merge/split, the §9.2a
 > bulk lever, and the §9.3 pre-commit checklist (blocking conflicts + the non-blocking ★-coverage projection) — turning a
-> `Proposed` run into a confirmed, commit-ready set, still writing nothing to the vault. Commit (slice 5: provenance +
-> `import_baseline` signature + Import Report + mirror) follows. **OpenSearch posture (S-ing-3):** near-dup ships as in-process MinHash; the OpenSearch
-> container itself stays **absent (R34)** — the `DedupDetector`/`Indexer` OpenSearch impls are reserved, not-built
-> drop-ins. See `CLAUDE.md` for shipped detail.
+> `Proposed` run into a confirmed, commit-ready set, still writing nothing to the vault. **S-ing-5** (the COMMIT, migration
+> `0033`) is the capstone that **completes the Ingestion family (UJ-2)**: it migrates the `commit_ready` keep-items into the
+> vault as Effective **Rev A** controlled documents + immutable Records, per-item transactional + idempotent (the
+> `import_commit_result` ledger) + resumable (PartiallyCommitted → re-POST resumes), each with `import_provenance` (doc 14 §5.1)
+> + a baseline `signature_event(meaning=import_baseline)` (R2) + the §12.1 Import Report (a RETAIN_PERMANENT EVIDENCE Record +
+> the mirror `_ImportReport/` export), preserving the source doc-code as the vault identifier per R10. **OpenSearch posture
+> (S-ing-3):** near-dup ships as in-process MinHash; the OpenSearch container itself stays **absent (R34)** — the
+> `DedupDetector`/`Indexer` OpenSearch impls are reserved, not-built drop-ins. See `CLAUDE.md` for shipped detail.
 
 **Goal:** everything an organization needs to *run and certify* an ISO 9001:2015 QMS, end to end, and to face an external audit with a one-click evidence pack.
 

@@ -14,9 +14,10 @@ from __future__ import annotations
 
 import datetime
 import uuid
+from typing import Any
 
 from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Text, UniqueConstraint, func, text
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from ..base import Base
@@ -100,3 +101,9 @@ class DocumentedInformation(Base):
     updated_by: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("app_user.id", ondelete="RESTRICT"), nullable=True
     )
+    # S-ing-5 (doc 14 §5.1): durable import provenance folded onto the committed artifact (DOCUMENT
+    # or
+    # RECORD — both share this base table) so it survives the staging-layer TTL purge. Carries
+    # {source_rel_path, source_sha256, run_id, classifier_version, confidence, decided_by}. NULL for
+    # natively-authored documents/records; set only at import commit.
+    import_provenance: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)

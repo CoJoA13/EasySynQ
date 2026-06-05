@@ -6,6 +6,7 @@ the vault (commit is S-ing-5). The public surface the API + Celery tasks bind to
 """
 
 from .classify import run_classify
+from .commit import run_commit
 from .dedup import run_dedup
 from .extract import run_extract
 from .propose import run_propose
@@ -16,8 +17,10 @@ from .service import (
     list_import_file_detail,
     list_import_files,
     list_import_runs,
+    reap_stalled_commits,
     reap_stalled_runs,
     run_scan,
+    start_import_commit,
 )
 
 __all__ = [
@@ -27,10 +30,13 @@ __all__ = [
     "list_import_file_detail",
     "list_import_files",
     "list_import_runs",
+    "reap_stalled_commits",
     "reap_stalled_runs",
     "run_classify",
+    "run_commit",
     "run_dedup",
     "run_extract",
     "run_propose",
     "run_scan",
+    "start_import_commit",
 ]

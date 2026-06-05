@@ -375,6 +375,36 @@ async def test_build_tree_unmapped_doc_lands_in_unmapped(
     assert (build / "_unmapped" / _doc_dirname()).is_dir()
 
 
+async def test_build_tree_writes_import_report_section(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """S-ing-5: build_tree exports each committed run's §12.1 report to _ImportReport/<label>/ — the
+    two-level parent dir must be created (the ``_write`` parent-safe fix; without it the WHOLE
+    mirror rebuild crashes with FileNotFoundError after the first import commit). No prior
+    build_tree test passes a non-None session with report rows — this guards the production path."""
+    from easysynq_api.services.vault.mirror import ImportReportRef
+
+    async def _reports(session: object) -> list[ImportReportRef]:
+        return [
+            ImportReportRef(
+                label="qms-deadbeef", object_key="rsha", bucket="records", sha256="rsha"
+            )
+        ]
+
+    async def _fetch(object_key: str, *, bucket: str | None = None) -> bytes:
+        return b"# Import Report\n\ncommitted 2."
+
+    monkeypatch.setattr(mirror_mod, "fetch_import_reports", _reports)
+    monkeypatch.setattr(mirror_mod.storage, "fetch_bytes", _fetch)
+    build = tmp_path / "b"
+    build.mkdir()
+    # A truthy (non-None) session triggers the _ImportReport branch; no DB op runs (empty effs +
+    # the monkeypatched report fetch), so a sentinel object stands in for the session.
+    await build_tree(build, [], LoggingRenderSink(), session=object())
+    report = build / "_ImportReport" / "qms-deadbeef" / "Import-Report.md"
+    assert report.read_bytes() == b"# Import Report\n\ncommitted 2."
+
+
 async def test_build_tree_fresh_dir_only_remap_into_reused_dir_raises(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

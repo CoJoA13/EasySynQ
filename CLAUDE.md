@@ -40,11 +40,13 @@ the **Evidence Packs (UJ-7)** family (**S-pack-1** build/seal, **S-pack-2** exte
 `/retention-policies` CRUD + creator≠disposer SoD-6) shipped depth-first — completing UJ-7 **and** the records
 family. The owner then chose (AskUserQuestion) **Ingestion (doc 09, UJ-2)** as the next family — depth-first slices
 **S-ing-1** (run + scan/inventory foundation) + **S-ing-2** (extract + classify) + **S-ing-3** (dedup + version-families +
-proposal) + **S-ing-4** (the human-in-the-loop review: decisions + merge/split + the pre-commit checklist) shipped, with
-commit+provenance+report+mirror (slice 5) to follow; the family dependency posture is **full-fidelity** (Tesseract + Tika +
-OpenSearch) — Tika+Tesseract landed at S-ing-2; **near-dup at S-ing-3 ships as in-process MinHash** (the doc 09 §14 path)
-behind a `DedupDetector` seam, with the OpenSearch container itself deferred (R34 honest: OpenSearch stays absent in MVP/v1;
-the OpenSearch-backed detector/indexer are the reserved drop-ins). **Migration head is now `0032`.**
+proposal) + **S-ing-4** (the human-in-the-loop review: decisions + merge/split + the pre-commit checklist) + **S-ing-5** (the
+COMMIT — finally writes the confirmed set into the vault: per-item Effective Rev A documents + immutable Records +
+`import_baseline` + provenance + the Import Report + mirror) shipped depth-first — **the Ingestion family (UJ-2) is now
+COMPLETE**. The family dependency posture is **full-fidelity** (Tesseract + Tika + OpenSearch) — Tika+Tesseract landed at
+S-ing-2; **near-dup at S-ing-3 ships as in-process MinHash** (the doc 09 §14 path) behind a `DedupDetector` seam, with the
+OpenSearch container itself deferred (R34 honest: OpenSearch stays absent in MVP/v1; the OpenSearch-backed detector/indexer
+are the reserved drop-ins). **Migration head is now `0033`.**
 
 **v1 RECORDS family — S-rec-1/2 + S-pack-1** ✅ (one line each; the full per-slice non-obvious decisions live in the
 squash-merge commits + the `easysynq-project.md` memory; operator/API usage is in the dev-workflow section below):
@@ -237,6 +239,49 @@ squash-merge commits + the `easysynq-project.md` memory; operator/API usage is i
   Import Report + mirror (S-ing-5); per-process ABAC-scoped `import.review` delegation (§9.4 — `import.*` is SYSTEM-scope today);
   the "revise existing vault doc → Rev B+" collision path (a commit-time choice); pull-from-quarantine; the web review UI.
   **Migration head is now `0032`.**
+
+- **S-ing-5 — Ingestion: COMMIT — write the confirmed set into the vault (doc 09 §10/§12.1/§13)** ✅ — migration `0033`, the
+  capstone that **completes UJ-2 / the Ingestion family**. Turns a reviewed run's `commit_ready` keep-items
+  (`review.fold_file_decisions`: included + kind-confirmed) into Effective **Rev A** controlled documents + immutable Records,
+  **per-item transactional + idempotent + resumable**. **Owner forks (AskUserQuestion):** PRESERVE the source doc-code
+  verbatim as the vault `identifier` (fresh `{TYPE}-{AREA}-{SEQ}` via `NumberingCounter` ONLY for the `{type}-<new>` sentinel /
+  a human rename; `legacy_identifier` records the original); FULL §10 EXCEPT `reconstruct_revision_chain=true` older-version
+  materialization (deferred); REUSE `capture_record` for RECORD-kind; per-item txn + idempotent re-commit + reaper. **The
+  import-baseline cutover (the key correctness call):** a brand-new imported doc's version is created **DIRECTLY at
+  `version_state=Effective`** + `current_state=Effective` (NO SERIALIZABLE `_cutover`/`release` — INV-1 trivially holds with no
+  prior Effective) with a single `signature_event(meaning=import_baseline)` (R2); deliberately NOT `create_document`/`checkin`
+  (which commit internally + walk Draft→Approved→Effective + need the ≥1-clause submit gate). **Single-flight = the per-item
+  ledger CLAIM** (`repository.claim_commit_result`: `INSERT … ON CONFLICT(run,file) DO UPDATE … WHERE result='failed' RETURNING
+  id`) — concurrent workers (a reaper re-enqueue alongside a slow worker) commit each item exactly once, **NO advisory lock**;
+  each item runs in its **OWN fresh session** (`run_commit` takes a sessionmaker — per-item isolation; a reused session +
+  exception trips a pool-teardown `MissingGreenlet`, the diff-critic's first cut). A per-item failure → `result=failed` +
+  continue → **PartiallyCommitted**; re-POST `/commit` **resumes** (the ledger skips done). **`0033`:** `import_commit_result`
+  ledger (UNIQUE(run,file); vault FKs `ON DELETE SET NULL` so a later record-disposal purge isn't FK-blocked); the
+  `documented_information.import_provenance` jsonb fold (doc 14 §5.1; covers DOCUMENT + RECORD); `import_run.committing_started_at`
+  + `report_record_id`; ADD VALUE `Committing/Completed/PartiallyCommitted` + `IMPORT_ITEM_COMMITTED/_FAILED/IMPORT_RUN_COMPLETED/
+  _PARTIAL`. **State machine:** `Committing`/`PartiallyCommitted` stay OUT of `_IN_PROGRESS`/`_ACTIVE_STATES` (commit holds no
+  source-root lock → the lock-liveness reaper would FAIL it) + OUT of `_TERMINAL`; a new `_CANCEL_BLOCKED` 409s cancel once a
+  vault write has happened (§11.4); a dedicated `reap_stalled_commits` RE-ENQUEUEs a wedged Committing run via
+  **progress-liveness** (`MAX(committed_at)` ELSE `committing_started_at`, GREATEST-of-the-two so a fresh resume isn't
+  insta-reaped), never failing it. **AC#6:** per-item `IMPORT_ITEM_COMMITTED` keyed `object_type=document/record` +
+  `scope_ref=identifier` (so `GET /documents/{id}/audit-events` surfaces the import as the doc's creation event); SYSTEM actor;
+  the human committer carried by `committed_by` + the import_baseline signature (`signer=committed_by`, `content_digest=sha`).
+  **§12.1 Import Report** = a RETAIN_PERMANENT markdown EVIDENCE Record (`domain/ingestion/import_report.py`; captured in a
+  SAVEPOINT so a report failure never strands the terminal flip) + the mirror `_ImportReport/` export
+  (`mirror.fetch_import_reports` + `build_tree`; `_write` made parent-safe — the diff-critic's CRITICAL catch: else the mirror
+  rebuild would crash after the first commit). **Checklist fix:** exclude sentinel/None identifiers from the duplicate/vault
+  collision checks; new blocking `singleton_type_already_effective` (R25 pre-commit guard). `finalize_worm` gained a
+  backward-compatible `source_bucket` (one server-side `import-staging→WORM` copy). **POST `/admin/imports/{id}/commit`** (gate
+  **`import.commit`** — the SoD commit tier; 422 `commit_blocked` on unresolved conflicts; 409 in-progress/completed; resume on
+  PartiallyCommitted). **478 unit (incl. 16 new) + 43 ingestion integration green** (full commit / partial+resume / concurrent
+  single-flight / blocked+gate; delta/run-scoped + unique-doc-code per the shared-DB rule); the mirror/records/forms/packs
+  suites re-run green (mirror.py + storage.py + capture_record touched); `0033` round-trips up↔down↔check **+ a populated-DB
+  downgrade** on PG16; redocly green. **Adversarially designed + reviewed** (an 8-reader understand fan-out → AskUserQuestion (4
+  forks) → a 65-agent 6-lens design-critic [46 findings folded pre-code] → implement → a 26-agent 5-lens diff-critic [21
+  findings folded, incl. the CRITICAL mirror-mkdir crash + the reaper anchor + per-item isolation]). **Deferred:** the
+  `reconstruct_revision_chain=true` older-version materialization; the "revise existing vault doc → Rev B+" collision path;
+  bounded-parallelism commit; the staging TTL janitor; a dedicated `import` Celery queue; the web import UI. **Migration head
+  is now `0033`.**
 
 - **Specification** in `docs/` (00–17 + `decisions-register.md`) — complete, adversarially audited, reconciled
   (Register R1–R37 back-propagated). The Register is authoritative.
@@ -562,6 +607,21 @@ create boundary.
   included|excluded|deferred|undecided` filter. The first decision flips the run `Proposed→Reviewing` (a lock-free human
   rest-state; cancel still works; the source-root lock stays freed so a re-import is a new run). Nothing commits unconfirmed
   (R10); commit is S-ing-5. Migration head is now `0032` (next `0033`).
+- **Ingestion: COMMIT (S-ing-5) — API/data only, no UI; the capstone that finally WRITES THE VAULT:** as a System
+  Administrator (gate **`import.commit`** — the SoD commit tier above review/execute), `POST /api/v1/admin/imports/{id}/commit`
+  flips a reviewed run (Proposed/Reviewing) → **Committing** + enqueues the detached commit worker → **202**; a §9.3 blocking
+  conflict → **422 `commit_blocked`**; poll `GET …/{id}` for the terminal **Completed** / **PartiallyCommitted** + `counts.commit`
+  + `report_record_id`. Each `commit_ready` keep-item becomes an **Effective Rev A** controlled document (the preserved doc-code
+  is its `identifier`; a `{type}-<new>` sentinel/rename allocates a fresh `{TYPE}-{AREA}-{SEQ}`) or an immutable **Record** (via
+  `capture_record`); per-item + idempotent (`import_commit_result` ledger) + resumable (**re-POST `/commit`** on a
+  PartiallyCommitted run resumes — the ledger skips done items). Each committed doc carries `import_provenance` + an
+  `import_baseline` signature; its per-doc audit is `GET /documents/{id}/audit-events` (the `IMPORT_ITEM_COMMITTED` creation
+  event). The §12.1 **Import Report** is sealed as a RETAIN_PERMANENT EVIDENCE Record + exported to the mirror's
+  `current/_ImportReport/<run>/Import-Report.md` (the post-commit mirror sync regenerates the Effective-doc tree + this section).
+  **Operator notes:** commit holds NO source-root lock (so a re-import during commit is allowed); a crashed Committing run
+  self-recovers via the Beat `easysynq.ingestion.reap_stalled_commits` (progress-liveness → RE-ENQUEUE, never fails — committed
+  WORM items are permanent); cancel is **409** once committing/committed (WORM is not deletable — withdraw via the normal
+  Obsolete lifecycle). No new service container. Migration head is now `0033` (next `0034`).
 - **⚠ S11 restore + upgrade + encrypted backup (operator):** the durable archive (`easysynq backup run` / the nightly
   Beat job) is now **AES-256-GCM `.tar.enc`** sealed with `BACKUP_ENCRYPTION_KEY` (install.sh generates it into the
   0600 `.env`; **lose it → those archives are unrecoverable** — back it up out-of-band) and bundles the live Keycloak
@@ -698,6 +758,31 @@ create boundary.
   first answer. Reuse the Ed25519 key but **domain-separate** (a distinct preamble + a distinct token length) and **fail
   closed** at mint if the key isn't durably persisted (`verify_token.signing_key_is_persisted()` — an ephemeral-key token
   stops verifying after a restart).
+- **A worker that makes MANY independent transactions (the S-ing-5 per-item commit) opens a FRESH session PER unit, not one
+  reused session.** Reusing one `AsyncSession` across commit→exception→rollback→commit cycles trips a `MissingGreenlet` at the
+  *pool teardown* (a pre-ping on a connection returned in a post-exception state runs outside the greenlet) — invisible to a
+  green local run, fatal in the suite. The worker task hands the body a **sessionmaker** (`_with_sessionmaker`, the fresh-engine
+  precedent) and each item does `async with sm() as s: … await s.commit()`; a failed item's ledger write + the terminal flip
+  each open their own session. Per-item isolation also means an exception in one item never poisons the next.
+- **Cross-process single-flight without a lock = an atomic ledger CLAIM** (the S-ing-5 commit, over a per-run advisory lock —
+  which can't span per-item commits + tripped the teardown bug above). `INSERT … ON CONFLICT(run,file) DO UPDATE SET …
+  WHERE result='failed' RETURNING id` as the LAST write in the per-item txn makes two concurrent workers (a reaper re-enqueue
+  alongside a slow worker) commit each item exactly-once: the loser's INSERT blocks on the winner's uncommitted row, then the
+  `WHERE result='failed'` guard no-ops its DO UPDATE (no row returned) → it rolls its half-built rows back. For an allocated
+  ({TYPE}-{AREA}-{SEQ}) doc the loser's `allocate_seq` increment rolls back with the txn (no counter leak); for a preserved
+  identifier the `documented_information` UNIQUE is the backstop.
+- **Importing a pre-existing controlled doc is its OWN lifecycle path — Effective-directly, NOT the authoring FSM** (S-ing-5):
+  a brand-new imported version is created at `version_state=Effective` + `current_state=Effective` in one per-item txn (INV-1
+  trivially holds — no prior Effective to supersede, so no SERIALIZABLE `_cutover` needed) with a single
+  `signature_event(meaning=import_baseline)` (R2). Do NOT route it through `create_document`/`checkin`/`release` (they commit
+  internally, walk Draft→Approved→Effective, require the ≥1-clause submit gate, and emit approval/release signatures). Its
+  per-doc audit is `IMPORT_ITEM_COMMITTED` (object_type=document, **scope_ref=identifier** so `GET /documents/{id}/audit-events`
+  surfaces it), a deliberate divergence from the authored `DOCUMENT_CREATED`/`RELEASED` shape.
+- **`mirror._write` must be parent-safe** (`path.parent.mkdir(parents=True, exist_ok=True)`): a new two-level mirror section
+  (S-ing-5's `current/_ImportReport/<run>/`) whose parent isn't pre-`mkdir`'d crashes the WHOLE `build_tree`/`sync_mirror` with
+  `FileNotFoundError` — and since `_write` runs after `atomic_swap`-prep, it freezes the published tree. A unit test that drives
+  `build_tree` with a non-None session + a monkeypatched `fetch_import_reports` row exercises the path no other test reaches
+  (the diff-critic's CRITICAL catch — production-only, green-suite-invisible).
 
 ## The four LOCKED foundational decisions (never contradict)
 

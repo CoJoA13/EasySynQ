@@ -76,5 +76,11 @@ app.conf.update(
             "task": "easysynq.ingestion.reap_stalled_runs",
             "schedule": 600.0,  # every 10 minutes
         },
+        # S-ing-5: re-enqueue a Committing run wedged by a crashed commit worker (progress-liveness,
+        # never fails it — committed WORM items are permanent). Same 10-min cadence as the runs job.
+        "ingestion-reap-stalled-commits": {
+            "task": "easysynq.ingestion.reap_stalled_commits",
+            "schedule": 600.0,  # every 10 minutes
+        },
     },
 )

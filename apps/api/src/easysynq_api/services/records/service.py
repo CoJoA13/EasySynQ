@@ -335,9 +335,14 @@ async def _attach_evidence(
     actor: AppUser,
     record_id: uuid.UUID,
     evidence: Sequence[tuple[str, str]],
+    *,
+    source_bucket: str | None = None,
 ) -> list[str]:
     """WORM-seal each unique evidence blob into the records bucket + attach it (idempotent). Returns
-    the de-duplicated, lowercased sha list (the content_hash manifest)."""
+    the de-duplicated, lowercased sha list (the content_hash manifest). ``source_bucket`` defaults
+    to the plain ``staging`` bucket; the S-ing-5 import commit passes the ingestion
+    ``import-staging`` bucket so a confirmed RECORD's evidence promotes directly from the import
+    staging layer (one server-side copy, no plain-staging hop)."""
     settings = get_settings()
     seen: set[str] = set()
     shas: list[str] = []
@@ -366,7 +371,9 @@ async def _attach_evidence(
                     ),
                 )
         else:
-            promoted = await storage.finalize_worm(sha256, bucket=storage._records_bucket())
+            promoted = await storage.finalize_worm(
+                sha256, bucket=storage._records_bucket(), source_bucket=source_bucket
+            )
             if not promoted.exists:
                 raise _validation_error(
                     "evidence", "not_found", "Evidence object not found — upload via :init-upload"
@@ -423,6 +430,7 @@ async def capture_record(
     _correction_of: uuid.UUID | None = None,
     _pin_version: uuid.UUID | None = None,
     _commit: bool = True,
+    _evidence_source_bucket: str | None = None,
 ) -> Record:
     """Capture an immutable record: base + subtype + WORM evidence + content_hash seal + audit, one
     commit. When ``source_document_id`` is a Form/Template, this is **Mode-B** capture: the server
@@ -509,7 +517,9 @@ async def capture_record(
     session.add(record)
     await session.flush()
 
-    shas = await _attach_evidence(session, actor, record.id, evidence)
+    shas = await _attach_evidence(
+        session, actor, record.id, evidence, source_bucket=_evidence_source_bucket
+    )
     record.content_hash = record_content_hash(
         record_type=rtype.value,
         source_version_id=source_version_id,
