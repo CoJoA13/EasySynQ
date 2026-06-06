@@ -58,12 +58,22 @@ mig `0037`) + **S-capa-2** (RootCause + ActionPlan stages + the engine-routed se
 (Implement/Verify/Close — the path that drives a CAPA to Closed, satisfying the S-aud-2 close gate in production:
 `POST /capas/{id}/implement` `capa.capture_effectiveness` + `/verify` `capa.verify` [the REAL `signature_event(meaning=verify)`
 + severity-aware **SoD-4** verifier≠implementer] + `/close` `capa.close` [the **M4 gate**: effective+evidence → Closed, else
-the not-effective loop → RootCause+`cycle_marker++` → re-propose+re-approve]; **zero-migration** — head stays `0038`) shipped.
-**The v1 Audits/Findings/CAPA family is now COMPLETE bar the optional Evidence-Pack scope.** The
+the not-effective loop → RootCause+`cycle_marker++` → re-propose+re-approve]; **zero-migration** — head stays `0038`) +
+**S-aud-capa-pack** (the family close-out — Evidence-Pack **Finding/CAPA scope** + a content-hash-sealed **dossier**, mig
+`0039` = `ALTER TYPE pack_scope_kind ADD VALUE FINDING/CAPA`: `POST /evidence-packs {scope_kind:"FINDING"|"CAPA",
+finding_ids|capa_ids}` resolves the records linked AS EVIDENCE to the finding/CAPA stages [the finding/CAPA SUBJECT is
+NEVER a pack_item — no `evidence_blob`], and bundles per-subject `findings/<id>.json`/`capas/<id>.json` dossiers [the
+finding fields / the CAPA stage trail RootCause→ActionPlan→Verify + e-signature metadata, projected to `{user_id,
+display_name}` ONLY — no email/keycloak_subject] so an auditor can "prove this NC was closed effectively"; the dossier
+folds into `pack_content_hash` as **v2** [`easysynq.evidencepack.v2`; CLAUSE/PROCESS stay byte-identical v1] via a
+`dossier_digest` over the manifest per-file shas [ZIP-reconstructable]; gap report = N/A for finding/CAPA; no new keys/
+enum/task) shipped.
+**The v1 Audits/Findings/CAPA family is now COMPLETE.** The
 family's locked model + workflow + SoD posture is **R39** (+declarative-routing · severity-aware SoD-4 · block-until-corrected
-audit close · `audit_program` own-table · the S-capa-3 addendum: Verify→RootCause loop · M4 = real evidence_for_link gate).
-**Next: S-aud-capa-pack** (the optional Evidence-Pack Finding/CAPA scope — `PackScopeKind += FINDING|CAPA`).
-**Migration head is `0038` (next `0039`).**
+audit close · `audit_program` own-table · the S-capa-3 addendum: Verify→RootCause loop · M4 = real evidence_for_link gate ·
+the S-aud-capa-pack addendum: subject-not-a-pack_item · sealed v2 dossier · PII-projected signers · gap N/A).
+**Next: the owner picks a new v1 backend family** (change-depth / distribution+acks / notification-delivery / planning-clause
+families / owner-assignment) or pivots to the web UI track. **Migration head is `0039` (next `0040`).**
 
 **v1 RECORDS & evidence family (UJ-7 + records) — COMPLETE** ✅ (migs `0023`–`0028`; per-slice
 non-obvious decisions live in the squash-merge commits + the `easysynq-project.md` memory; operating
@@ -329,6 +339,12 @@ create boundary.
   - **Evidence Packs (S-pack-1/2):** `POST /evidence-packs` (DRAFT + R28 preview) → `POST …/generate` (202,
     worker build) → poll SEALED → `GET …/download`. Deliver: `POST …/share` (revocable Ed25519 link, raw
     token returned once) → public `GET /evidence-packs/shared?t=…` + `…/shared/download?format=zip|pdf`.
+  - **Finding/CAPA packs (S-aud-capa-pack):** `POST /evidence-packs {scope_kind:"FINDING",finding_ids:[…]}`
+    or `{scope_kind:"CAPA",capa_ids:[…]}` (gate `report.evidence_pack.generate`; ride SYSTEM overrides). The
+    pack resolves the records linked AS EVIDENCE to the finding / the CAPA's stages (`evidence_for_link`) AND
+    bundles a sealed JSON **dossier** per subject (`findings/<id>.json` / `capas/<id>.json` in the ZIP — the
+    finding fields / the CAPA stage trail + e-signatures, "prove this NC was closed effectively"). The
+    finding/CAPA SUBJECT is **not** a pack_item (no `evidence_blob`); seal is **v2** (gap report N/A).
   - **Mode-B forms (S-rec-3):** create an `FRM` doc → `PUT /documents/{id}/form-schema` →
     `POST …/form-schema:checkin` → map a clause → release Effective; then `POST /records {source_document_id:
     <the FRM doc>, form_field_values}` validates against the pinned schema. Pre-release capture:

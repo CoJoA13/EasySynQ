@@ -2862,10 +2862,12 @@ paths:
       operationId: createEvidencePack
       summary: Create a pack (DRAFT) + compute its preview. Needs report.evidence_pack.generate.
       description: >-
-        Resolves the in-scope record candidates (CLAUSE or PROCESS scope, optional date overlay) and
-        classifies each through the generator's deny-by-default record.read (R28: INCLUDED /
-        EXCLUDED_PERMISSION / EXCLUDED_ABSENCE — nothing silently dropped), persisting the membership +
-        the gap/exclusion summaries. The preview is advisory — POST .../generate seals it.
+        Resolves the in-scope record candidates (CLAUSE / PROCESS / FINDING / CAPA scope, optional
+        date overlay) and classifies each through the generator's deny-by-default record.read (R28:
+        INCLUDED / EXCLUDED_PERMISSION / EXCLUDED_ABSENCE — nothing silently dropped), persisting the
+        membership + the gap/exclusion summaries. A FINDING/CAPA pack also bundles a sealed dossier
+        (the finding fields / CAPA stage trail + e-signatures). The preview is advisory — POST
+        .../generate seals it.
       requestBody:
         required: true
         content:
@@ -2880,8 +2882,8 @@ paths:
         "403": { $ref: "#/components/responses/ProblemResponse" }
         "422":
           description: >-
-            Validation error — bad scope_kind, an empty/invalid clause_ids/process_ids, an unknown
-            clause/process, or period_end before period_start.
+            Validation error — bad scope_kind, an empty/invalid id list for the scope kind, an unknown
+            clause/process/finding/CAPA, or period_end before period_start.
           content:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
@@ -5315,7 +5317,7 @@ components:
       required: [title, scope_kind]
       properties:
         title: { type: string }
-        scope_kind: { type: string, enum: [CLAUSE, PROCESS] }
+        scope_kind: { type: string, enum: [CLAUSE, PROCESS, FINDING, CAPA] }
         clause_ids:
           type: array
           items: { type: string, format: uuid }
@@ -5324,6 +5326,20 @@ components:
           type: array
           items: { type: string, format: uuid }
           description: Required (non-empty) when scope_kind=PROCESS.
+        finding_ids:
+          type: array
+          items: { type: string, format: uuid }
+          description: >-
+            Required (non-empty) when scope_kind=FINDING. Resolves the records linked as evidence to
+            the finding(s) and bundles a sealed dossier (the finding's fields + correction chain +
+            linked CAPA).
+        capa_ids:
+          type: array
+          items: { type: string, format: uuid }
+          description: >-
+            Required (non-empty) when scope_kind=CAPA. Resolves the records linked as evidence to the
+            CAPA's stages and bundles a sealed dossier (the full stage trail + e-signatures) so an
+            auditor can prove the NC was closed effectively.
         period_start: { type: [string, "null"], format: date, description: Optional date overlay (by record captured_at). }
         period_end: { type: [string, "null"], format: date }
 
@@ -5607,7 +5623,7 @@ components:
       properties:
         id: { type: string, format: uuid }
         title: { type: string }
-        scope_kind: { type: string, enum: [CLAUSE, PROCESS] }
+        scope_kind: { type: string, enum: [CLAUSE, PROCESS, FINDING, CAPA] }
         scope_selector: { type: object, additionalProperties: true }
         period_start: { type: [string, "null"], format: date }
         period_end: { type: [string, "null"], format: date }

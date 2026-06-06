@@ -37,7 +37,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...config import get_settings
 from ...db.models._audit_enums import EventType
-from ...db.models._pack_enums import PackInclusionStatus, PackStatus
+from ...db.models._pack_enums import PackInclusionStatus, PackScopeKind, PackStatus
 from ...db.models.app_user import AppUser, UserStatus
 from ...db.models.document_version import DocumentVersion
 from ...db.models.evidence_pack import EvidencePack
@@ -47,6 +47,7 @@ from ..records import repository as records_repo
 from ..vault import storage
 from . import repository as repo
 from . import service
+from .dossier import DossierBuild, build_dossier
 
 
 def _scope_ids(pack: EvidencePack) -> list[uuid.UUID]:
@@ -105,9 +106,12 @@ async def _assemble(
     exclusion: dict[str, Any],
     generated_at: datetime.datetime,
     files: list[tuple[str, bytes]],
+    dossier: DossierBuild | None = None,
 ) -> bytes:
     """Build the pack ZIP: the cover sheet (carries the manifest content hash), the machine-readable
-    traceability manifest, the gap + exclusion reports, and the gathered evidence/version files."""
+    traceability manifest, the gap + exclusion reports, the evidence/version files, and (for
+    FINDING/CAPA scope) the dossier subject files. ``files`` already includes the dossier bytes;
+    ``dossier`` carries its manifest index + the sealed digest."""
     manifest_records: list[dict[str, Any]] = []
     for c in included:
         links = await records_repo.list_evidence_links(session, c.record.id)
@@ -145,7 +149,7 @@ async def _assemble(
     ]
     period_lo = pack.period_start.isoformat() if pack.period_start else None
     period_hi = pack.period_end.isoformat() if pack.period_end else None
-    manifest = {
+    manifest: dict[str, Any] = {
         "evidence_pack_id": str(pack.id),
         "title": pack.title,
         "scope_kind": pack.scope_kind.value,
@@ -162,6 +166,25 @@ async def _assemble(
             for c in excluded
         ],
     }
+    if dossier is not None:
+        # The scope subjects (findings/CAPAs) are NOT pack_item records — they live here, with their
+        # content_hash + dossier path. dossier.digest is reconstructable from these per-file shas.
+        manifest["dossier_subjects"] = dossier.subjects
+        manifest["dossier"] = {"files": dossier.file_manifest, "digest": dossier.digest}
+
+    scheme = "easysynq.evidencepack.v2" if dossier is not None else "easysynq.evidencepack.v1"
+    if gap.get("applicable", True) is False:
+        gap_line = "Gap report:     N/A (finding/CAPA scope)\n"
+    else:
+        gap_line = (
+            f"Gap report:     {gap['gap_count']} of {gap['in_scope_star_clauses']} in-scope "
+            "mandatory clauses lacking current evidence\n"
+        )
+    dossier_line = (
+        f"Dossier:        {len(dossier.subjects)} subject(s), digest {dossier.digest}\n"
+        if dossier is not None
+        else ""
+    )
     cover = (
         "EVIDENCE PACK — controlled audit bundle\n"
         f"Pack ID:        {pack.id}\n"
@@ -171,11 +194,12 @@ async def _assemble(
         f"Generated at:   {generated_at.isoformat()}\n"
         f"Records:        {len(included)} included, {len(excluded)} excluded\n"
         f"Governing docs: {len(versions)} pinned version(s)\n"
-        f"Gap report:     {gap['gap_count']} of {gap['in_scope_star_clauses']} in-scope "
-        "mandatory clauses lacking current evidence\n"
+        f"{gap_line}"
+        f"{dossier_line}"
         f"Content hash:   {content_hash}\n"
-        "\nVerify: re-hash the manifest content list with the easysynq.evidencepack.v1 scheme and\n"
-        "compare to Content hash above. Each evidence/version file's SHA-256 is in the manifest.\n"
+        f"\nVerify: re-hash the manifest content list with the {scheme} scheme and\n"
+        "compare to Content hash above. Each evidence/version/dossier file's SHA-256 is in the\n"
+        "manifest (the dossier digest is the hash over its sorted per-file SHA-256s).\n"
     )
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -272,6 +296,22 @@ async def build(session: AsyncSession, pack_id: uuid.UUID) -> None:
             files.extend(vfiles)
             evidence_shas.extend(vshas)
 
+        # Synthesized dossier for FINDING/CAPA scope (the finding fields / the CAPA stage trail +
+        # e-signatures); sealed via dossier_digest into the v2 hash. None for clause/process.
+        dossier: DossierBuild | None = None
+        dossier_digest: str | None = None
+        if pack.scope_kind in (PackScopeKind.FINDING, PackScopeKind.CAPA):
+            dossier = await build_dossier(
+                session, pack.org_id, scope_kind=pack.scope_kind.value, scope_ids=scope_ids
+            )
+            files.extend(dossier.files)
+            dossier_digest = dossier.digest
+            # The dossier IS material pack content; the seal MUST cover it (else a re-verifier's
+            # content_hash diverges from the cover). A None digest here is a hard build failure
+            # (caught by the try/except → _fail), never a silent uncovered seal.
+            if dossier_digest is None:  # pragma: no cover - build_dossier always returns a digest
+                raise RuntimeError("FINDING/CAPA pack sealed without a dossier digest")
+
         # Seal over the content list (NOT the ZIP bytes — non-deterministic layout).
         excl = service.exclusion_summary(final)
         gap = await service.gap_summary(
@@ -287,6 +327,7 @@ async def build(session: AsyncSession, pack_id: uuid.UUID) -> None:
             evidence_sha256s=evidence_shas,
             excluded_permission_record_ids=excl["permission"],
             excluded_absence_record_ids=excl["absence"],
+            dossier_digest=dossier_digest,
         )
         generated_at = service._now()
         zip_bytes = await _assemble(
@@ -300,6 +341,7 @@ async def build(session: AsyncSession, pack_id: uuid.UUID) -> None:
             exclusion=excl,
             generated_at=generated_at,
             files=files,
+            dossier=dossier,
         )
         zip_sha = hashlib.sha256(zip_bytes).hexdigest()
 

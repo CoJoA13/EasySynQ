@@ -4,9 +4,13 @@ An Evidence Pack (UJ-7) is an on-demand, scope-limited, immutable, self-verifyin
 + their evidence + a traceability manifest for a clause or process (doc 06 §7). The four enums below
 model the pack header + membership:
 
-* ``PackScopeKind`` — the scope a pack is built for. v1 ships CLAUSE + PROCESS (a DATE period is an
-  overlay column, not a scope kind); Finding/CAPA scope is deferred (those entities don't exist yet
-  — the ``EvidenceForTargetType.FINDING``/``CAPA_STAGE`` reserved-only precedent).
+* ``PackScopeKind`` — the scope a pack is built for. CLAUSE + PROCESS (S-pack-1) + FINDING + CAPA
+  (S-aud-capa-pack; a DATE period is an overlay column, not a scope kind). A FINDING/CAPA pack
+  resolves the records linked as evidence to the finding / the CAPA's stages AND bundles a
+  synthesized, content-hash-sealed *dossier* (the finding's fields + the CAPA's full stage trail +
+  the e-signatures) so an auditor can "prove this NC was closed effectively" (doc 06 §7.1). FINDING/
+  CAPA were added by ``ALTER TYPE pack_scope_kind ADD VALUE`` (mig 0039); the
+  ``EvidenceForTargetType.FINDING``/``CAPA_STAGE`` targets were already live (S-aud-2/S-capa-3).
 * ``PackStatus`` — the build lifecycle: DRAFT (preview persisted) → BUILDING (generate enqueued) →
   SEALED (immutable hashed ZIP written + registered as an EVIDENCE Record) | FAILED (build error;
   re-triggerable). SEALED is terminal.
@@ -30,6 +34,8 @@ from sqlalchemy import Enum as SAEnum
 class PackScopeKind(enum.Enum):
     CLAUSE = "CLAUSE"
     PROCESS = "PROCESS"
+    FINDING = "FINDING"  # S-aud-capa-pack: scope to one or more audit findings (+ a dossier)
+    CAPA = "CAPA"  # S-aud-capa-pack: scope to one or more CAPAs (+ the stage-trail dossier)
 
 
 class PackStatus(enum.Enum):

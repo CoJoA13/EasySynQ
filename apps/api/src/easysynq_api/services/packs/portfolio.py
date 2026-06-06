@@ -36,7 +36,12 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...config import get_settings
-from ...db.models._pack_enums import PackInclusionStatus, PackItemType, PackStatus
+from ...db.models._pack_enums import (
+    PackInclusionStatus,
+    PackItemType,
+    PackScopeKind,
+    PackStatus,
+)
 from ...db.models._vault_enums import VersionState
 from ...db.models.blob import Blob
 from ...db.models.document_version import DocumentVersion
@@ -114,9 +119,29 @@ def _merge(pdfs: list[bytes]) -> bytes:
     return out.getvalue()
 
 
+def _is_dossier_scope(pack: EvidencePack) -> bool:
+    return pack.scope_kind in (PackScopeKind.FINDING, PackScopeKind.CAPA)
+
+
 def _cover_lines(pack: EvidencePack, generated_at: datetime.datetime | None) -> list[str]:
     gap = pack.gap_summary or {}
     excl = pack.exclusion_summary or {}
+    # FINDING/CAPA packs are sealed with the v2 scheme (the dossier digest folds into the content
+    # hash); CLAUSE/PROCESS stay v1. The PDF's verify instruction MUST match, or a re-verifier
+    # computes the wrong hash and sees a false tamper signal.
+    scheme = "easysynq.evidencepack.v2" if _is_dossier_scope(pack) else "easysynq.evidencepack.v1"
+    if gap.get("applicable", True) is False:
+        gap_line = "Gap report:    N/A (finding/CAPA scope)"
+    else:
+        gap_line = (
+            f"Gap report:    {gap.get('gap_count', 0)} of {gap.get('in_scope_star_clauses', 0)} "
+            "in-scope mandatory clauses lacking current evidence"
+        )
+    dossier_note = (
+        ["", "Dossier:       the finding/CAPA narrative + e-signatures are in the ZIP variant."]
+        if _is_dossier_scope(pack)
+        else []
+    )
     return [
         "EVIDENCE PACK — controlled audit bundle (portfolio)",
         "",
@@ -129,13 +154,13 @@ def _cover_lines(pack: EvidencePack, generated_at: datetime.datetime | None) -> 
         f"Records:       {pack.item_count} included",
         f"Excluded:      {excl.get('permission_count', 0)} (permission), "
         f"{excl.get('absence_count', 0)} (absence)",
-        f"Gap report:    {gap.get('gap_count', 0)} of {gap.get('in_scope_star_clauses', 0)} "
-        "in-scope mandatory clauses lacking current evidence",
+        gap_line,
+        *dossier_note,
         "",
         "This portfolio is a printable, derived view of the sealed pack. The canonical, content-",
         "addressed artefact is the ZIP variant (its SHA-256 is the integrity anchor); record",
         "evidence files are bundled there. Verify by re-hashing the ZIP manifest content list with",
-        "the easysynq.evidencepack.v1 scheme and comparing to the Content hash above.",
+        f"the {scheme} scheme and comparing to the Content hash above.",
     ]
 
 
@@ -158,10 +183,15 @@ def _index_lines(
         eff = version.effective_from.date().isoformat() if version.effective_from else "—"
         lines.append(f"  • {ident}  Rev {version.revision_label}  effective {eff}  {title}")
     lines += ["", "Gap report (mandatory ★ clauses lacking current evidence)", ""]
-    for clause in gap.get("clauses", []) or []:
-        lines.append(f"  • {clause.get('number')}  {clause.get('title')}  [{clause.get('status')}]")
-    if not (gap.get("clauses") or []):
-        lines.append("  (none — all in-scope mandatory clauses have current evidence)")
+    if gap.get("applicable", True) is False:
+        lines.append("  N/A — gap analysis does not apply to finding/CAPA scope.")
+    else:
+        for clause in gap.get("clauses", []) or []:
+            lines.append(
+                f"  • {clause.get('number')}  {clause.get('title')}  [{clause.get('status')}]"
+            )
+        if not (gap.get("clauses") or []):
+            lines.append("  (none — all in-scope mandatory clauses have current evidence)")
     lines += ["", "Exclusion report (R28 — never silently dropped)", ""]
     lines.append(f"  Excluded (permission): {excl.get('permission_count', 0)}")
     for rid in excl.get("permission", []) or []:

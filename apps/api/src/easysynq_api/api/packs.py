@@ -46,16 +46,22 @@ router = APIRouter(prefix="/api/v1", tags=["evidence-packs"])
 
 class PackCreate(BaseModel):
     title: str
-    scope_kind: Literal["CLAUSE", "PROCESS"]
+    scope_kind: Literal["CLAUSE", "PROCESS", "FINDING", "CAPA"]
     clause_ids: list[uuid.UUID] = []
     process_ids: list[uuid.UUID] = []
+    finding_ids: list[uuid.UUID] = []  # S-aud-capa-pack (scope_kind=FINDING)
+    capa_ids: list[uuid.UUID] = []  # S-aud-capa-pack (scope_kind=CAPA)
     period_start: datetime.date | None = None
     period_end: datetime.date | None = None
 
     def scope_selector(self) -> dict[str, Any]:
         if self.scope_kind == "CLAUSE":
             return {"clause_ids": [str(c) for c in self.clause_ids]}
-        return {"process_ids": [str(p) for p in self.process_ids]}
+        if self.scope_kind == "PROCESS":
+            return {"process_ids": [str(p) for p in self.process_ids]}
+        if self.scope_kind == "FINDING":
+            return {"finding_ids": [str(f) for f in self.finding_ids]}
+        return {"capa_ids": [str(c) for c in self.capa_ids]}
 
 
 class ShareCreate(BaseModel):
