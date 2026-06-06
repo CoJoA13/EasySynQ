@@ -13,8 +13,9 @@ Forward seams (left clean for later slices):
 - ``origin_finding_id`` is a nullable UUID with **NO FK** — ``audit_finding`` does not exist yet;
   S-aud-2 creates that table, adds the FK, and wires the atomic NC→CAPA auto-link + the reverse
   ``audit_finding.auto_capa_id``. S-capa-1 only ever stores NULL here.
-- ``cycle_marker`` is a forward-compat counter (the Verify→ActionPlan effectiveness loop); S-capa-1
-  initializes it to 0 and never mutates it. S-capa-3 bumps it on the Verify→ActionPlan transition.
+- ``cycle_marker`` is the effectiveness-loop counter (the Verify→RootCause loop); S-capa-1
+  initializes it to 0 and never mutates it. S-capa-3 bumps it on the not-effective
+  Verify→RootCause transition (each loop iteration's stages carry the bumped marker).
 """
 
 from __future__ import annotations

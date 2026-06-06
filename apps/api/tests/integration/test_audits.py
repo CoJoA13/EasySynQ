@@ -378,6 +378,96 @@ async def test_close_gate_blocks_until_capa_closed(
     assert r.json()["state"] == "Closed"
 
 
+async def test_audit_closes_after_auto_capa_driven_to_closed(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """The family headline (S-capa-3): an audit with a live NC cannot close until the NC's auto-CAPA
+    is driven to Closed via the REAL S-capa-3 path (containment → RCA → approved plan → implement →
+    verify → close), NOT a direct-set. This is the production proof that the S-aud-2
+    block-until-corrected gate is satisfiable end-to-end."""
+    from .test_capa import (
+        _ACTION_PLAN,
+        _assign_seeded_role,
+        _latest_stage_id,
+        _link_stage_evidence,
+        _my_pending_task,
+    )
+
+    driver_subj = _subject("fam-drv")
+    await _grant(
+        driver_subj,
+        (
+            *_FINDING_KEYS,
+            "capa.update",
+            "capa.record_rca",
+            "capa.plan_action",
+            "capa.capture_effectiveness",
+        ),
+    )
+    h = _auth(token_factory, driver_subj)
+    qm_subj = _subject("fam-qm")
+    await _assign_seeded_role(qm_subj, "QMS Owner")
+    hqm = _auth(token_factory, qm_subj)
+    ver_subj = _subject("fam-ver")
+    await _grant(ver_subj, ("capa.read", "capa.verify", "capa.close", "record.create"))
+    hver = _auth(token_factory, ver_subj)
+
+    audit_id = await _new_audit(app_client, h)
+    await _walk(app_client, h, audit_id, "plan", "conduct")
+    capa_id = (
+        await app_client.post(
+            f"/api/v1/audits/{audit_id}/findings",
+            headers=h,
+            json={"finding_type": "NC", "severity": "Minor"},
+        )
+    ).json()["auto_capa_id"]
+    await _walk(app_client, h, audit_id, "draft-findings", "report", "begin-closing")
+
+    blocked = await app_client.post(f"/api/v1/audits/{audit_id}/close", headers=h)
+    assert blocked.status_code == 409 and blocked.json()["code"] == "audit_close_blocked", (
+        blocked.text
+    )
+
+    # Drive the auto-CAPA Raised → Closed via the real endpoints (distinct implementer / verifier).
+    await app_client.post(
+        f"/api/v1/capas/{capa_id}/containment",
+        headers=h,
+        json={"content_block": {"correction": "contain"}},
+    )
+    await app_client.post(
+        f"/api/v1/capas/{capa_id}/root-cause",
+        headers=h,
+        json={"content_block": {"root_cause": "rc"}},
+    )
+    iid = (
+        await app_client.post(
+            f"/api/v1/capas/{capa_id}/action-plan", headers=h, json={"content_block": _ACTION_PLAN}
+        )
+    ).json()["approval_instance"]["id"]
+    task_id = await _my_pending_task(app_client, hqm, iid)
+    await app_client.post(
+        f"/api/v1/tasks/{task_id}/decision", headers=hqm, json={"outcome": "approve"}
+    )
+    await app_client.post(
+        f"/api/v1/capas/{capa_id}/implement", headers=h, json={"content_block": {"done": "x"}}
+    )
+    impl_stage = await _latest_stage_id(app_client, h, capa_id, "Implement")
+    await _link_stage_evidence(app_client, h, capa_id, impl_stage)
+    await app_client.post(
+        f"/api/v1/capas/{capa_id}/verify",
+        headers=hver,
+        json={"decision": "effective", "content_block": {"c": "x"}},
+    )
+    ver_stage = await _latest_stage_id(app_client, hver, capa_id, "Verify")
+    await _link_stage_evidence(app_client, hver, capa_id, ver_stage)
+    closed = await app_client.post(f"/api/v1/capas/{capa_id}/close", headers=hver)
+    assert closed.status_code == 200 and closed.json()["close_state"] == "Closed", closed.text
+
+    # The live NC now has a Closed CAPA → the audit closes.
+    r = await app_client.post(f"/api/v1/audits/{audit_id}/close", headers=h)
+    assert r.status_code == 200 and r.json()["state"] == "Closed", r.text
+
+
 async def test_block_until_corrected_with_rejected_capa(
     app_client: AsyncClient, token_factory: Callable[..., str]
 ) -> None:

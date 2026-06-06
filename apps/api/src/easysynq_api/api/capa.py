@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import datetime
 import uuid
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Request, status
 from fastapi.responses import JSONResponse
@@ -38,15 +38,19 @@ from ..problems import ProblemException
 from ..services.authz import AuthzAuditSink, enforce, get_authz_audit_sink, require
 from ..services.capa import (
     advance_capa_to_containment,
+    advance_capa_to_implement,
     advance_capa_to_root_cause,
     capture_complaint,
+    close_capa,
     create_ncr,
     propose_action_plan,
     raise_capa,
     record_ncr_disposition,
     spawn_capa_from_complaint,
+    verify_capa,
 )
 from ..services.capa import repository as capa_repo
+from ..services.vault import SignatureEventSink, get_vault_signature_sink
 
 router = APIRouter(prefix="/api/v1", tags=["capa"])
 
@@ -76,6 +80,18 @@ class RootCauseCreate(BaseModel):
 class ActionPlanPropose(BaseModel):
     # The proposed corrective action plan (caller-constructed), e.g.
     # {"action_items": [{"description": "...", "owner": "...", "due_date": "..."}]}.
+    content_block: dict[str, Any]
+
+
+class ImplementCreate(BaseModel):
+    # The action-completion narrative (caller-constructed), e.g. {"actions_done": "..."}.
+    content_block: dict[str, Any]
+
+
+class VerifyCreate(BaseModel):
+    # The verifier's effectiveness decision + narrative. ``decision`` drives the M4 close gate:
+    # ``effective`` is the only value that can close; ``not_effective`` loops back to RootCause.
+    decision: Literal["effective", "not_effective"]
     content_block: dict[str, Any]
 
 
@@ -218,6 +234,9 @@ _complaint_create = require("record.create")  # complaints are ad-hoc records (S
 _capa_update = require("capa.update", async_scope_resolver=_capa_scope)
 _capa_record_rca = require("capa.record_rca", async_scope_resolver=_capa_scope)
 _capa_plan_action = require("capa.plan_action", async_scope_resolver=_capa_scope)
+_capa_implement = require("capa.capture_effectiveness", async_scope_resolver=_capa_scope)
+_capa_verify = require("capa.verify", async_scope_resolver=_capa_scope)
+_capa_close = require("capa.close", async_scope_resolver=_capa_scope)
 _ncr_disposition = require("ncr.record_correction", async_scope_resolver=_ncr_scope)
 
 
@@ -324,6 +343,60 @@ async def capa_action_plan_endpoint(
         "definition_version": instance.definition_version,
     }
     return out
+
+
+@router.post("/capas/{capa_id}/implement")
+async def capa_implement_endpoint(
+    capa_id: uuid.UUID,
+    body: ImplementCreate,
+    caller: AppUser = Depends(_capa_implement),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """ActionPlan → Implement: append the action-completion stage (gate
+    ``capa.capture_effectiveness``). Unsigned; link completion evidence to the new Implement stage
+    via ``POST /records/{id}/evidence-links`` (target_type=capa_stage)."""
+    capa = await advance_capa_to_implement(
+        session, caller, capa_id, content_block=body.content_block
+    )
+    return _capa(capa, await capa_repo.get_identifier(session, capa.id))
+
+
+@router.post("/capas/{capa_id}/verify")
+async def capa_verify_endpoint(
+    capa_id: uuid.UUID,
+    body: VerifyCreate,
+    caller: AppUser = Depends(_capa_verify),
+    session: AsyncSession = Depends(get_session),
+    sig_sink: SignatureEventSink = Depends(get_vault_signature_sink),
+) -> dict[str, Any]:
+    """Implement → Verify: record the effectiveness ``decision`` as a SIGNED Verify stage (gate
+    ``capa.verify``). Severity-aware SoD-4 (verifier ≠ implementer) is enforced in the service layer
+    — after the permission gate, but never bypassed by a SYSTEM grant — before the signature is
+    written (409 ``sod_self_verify``); then writes ``signature_event(meaning=verify)``. Link
+    effectiveness evidence to the new Verify stage (it is then frozen — unlink-blocked)."""
+    capa = await verify_capa(
+        session,
+        caller,
+        capa_id,
+        decision=body.decision,
+        content_block=body.content_block,
+        sig_sink=sig_sink,
+    )
+    return _capa(capa, await capa_repo.get_identifier(session, capa.id))
+
+
+@router.post("/capas/{capa_id}/close")
+async def capa_close_endpoint(
+    capa_id: uuid.UUID,
+    caller: AppUser = Depends(_capa_close),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """The M4 closure gate (gate ``capa.close``): an ``effective`` verification with root_cause +
+    implemented-action-with-evidence + effectiveness-evidence → ``Closed``; a ``not_effective``
+    verification loops back to RootCause (cycle++; re-propose + re-approve a revised plan); an
+    ``effective`` verification still missing evidence → 409 ``capa_close_incomplete``."""
+    capa = await close_capa(session, caller, capa_id)
+    return _capa(capa, await capa_repo.get_identifier(session, capa.id))
 
 
 # --- Complaints -------------------------------------------------------------------------------

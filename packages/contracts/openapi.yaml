@@ -3478,6 +3478,80 @@ paths:
         "404": { $ref: "#/components/responses/ProblemResponse" }
         "409": { $ref: "#/components/responses/ProblemResponse" }
         "422": { $ref: "#/components/responses/ProblemResponse" }
+  /capas/{capa_id}/implement:
+    post:
+      tags: [capa]
+      operationId: capaImplement
+      summary: >-
+        ActionPlan → Implement — append the action-completion stage (unsigned). Link completion
+        evidence to the new Implement stage via POST /records/{id}/evidence-links
+        (target_type=capa_stage). Needs capa.capture_effectiveness. 409 if not in ActionPlan.
+      parameters:
+        - { name: capa_id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/StageBlockCreate" }
+      responses:
+        "200":
+          description: The CAPA (close_state=Implement).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Capa" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409": { $ref: "#/components/responses/ProblemResponse" }
+        "422": { $ref: "#/components/responses/ProblemResponse" }
+  /capas/{capa_id}/verify:
+    post:
+      tags: [capa]
+      operationId: capaVerify
+      summary: >-
+        Implement → Verify — record the effectiveness decision (effective | not_effective) as a
+        SIGNED Verify stage (signature_event meaning=verify). Severity-aware SoD-4 is enforced first
+        (409 sod_self_verify when the verifier is among the implementers — Critical/Major always,
+        Minor unless allow_capa_self_verify). Evidence linked to the new Verify stage is then frozen
+        (unlink-blocked). Needs capa.verify. 409 if not in Implement.
+      parameters:
+        - { name: capa_id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CapaVerifyCreate" }
+      responses:
+        "200":
+          description: The CAPA (close_state=Verify; the decision is sealed into the Verify stage).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Capa" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409": { $ref: "#/components/responses/ProblemResponse" }
+        "422": { $ref: "#/components/responses/ProblemResponse" }
+  /capas/{capa_id}/close:
+    post:
+      tags: [capa]
+      operationId: capaClose
+      summary: >-
+        The M4 closure gate. Requires close_state=Verify. An effective verification with root_cause +
+        implemented-action-with-evidence + effectiveness-evidence → Closed (this is the real path
+        that satisfies the S-aud-2 block-until-corrected audit-close gate). A not_effective
+        verification loops back to RootCause (cycle_marker++; a revised plan must be re-proposed +
+        re-approved). An effective verification still missing evidence → 409 capa_close_incomplete.
+        Needs capa.close.
+      parameters:
+        - { name: capa_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: The CAPA (close_state=Closed, or RootCause with cycle_marker bumped on a loop).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Capa" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409": { $ref: "#/components/responses/ProblemResponse" }
 
   /complaints:
     post:
@@ -4778,7 +4852,23 @@ components:
           description: >-
             The sealed stage block (non-empty). For root-cause: the RCA narrative (e.g. root_cause,
             method). For action-plan: the proposed corrective plan (e.g. action_items[] with
-            description / owner / due_date), which is sealed + signed at approval-complete.
+            description / owner / due_date), which is sealed + signed at approval-complete. For
+            implement: the action-completion narrative.
+    CapaVerifyCreate:
+      type: object
+      additionalProperties: false
+      required: [decision, content_block]
+      properties:
+        decision:
+          type: string
+          enum: [effective, not_effective]
+          description: >-
+            The verifier's effectiveness decision. Only `effective` can close the CAPA (with the M4
+            evidence gate); `not_effective` loops it back to RootCause for a re-approved revised plan.
+        content_block:
+          type: object
+          additionalProperties: true
+          description: The sealed effectiveness-verification narrative (non-empty).
     Complaint:
       type: object
       additionalProperties: false

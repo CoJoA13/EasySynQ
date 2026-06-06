@@ -11,11 +11,14 @@ from collections.abc import Sequence
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ...db.models._evidence_enums import EvidenceForTargetType
 from ...db.models.capa import Capa
 from ...db.models.capa_stage import CapaStage
 from ...db.models.complaint import Complaint
 from ...db.models.documented_information import DocumentedInformation
+from ...db.models.evidence_for_link import EvidenceForLink
 from ...db.models.ncr import Ncr
+from ...db.models.system_config import SystemConfig
 
 
 async def get_capa(
@@ -68,6 +71,35 @@ async def list_capa_stages(session: AsyncSession, capa_id: uuid.UUID) -> Sequenc
         .scalars()
         .all()
     )
+
+
+async def stages_with_evidence(
+    session: AsyncSession, stage_ids: Sequence[uuid.UUID]
+) -> set[uuid.UUID]:
+    """The subset of ``stage_ids`` that carry ≥1 ``evidence_for_link(target_type=CAPA_STAGE)`` row —
+    the M4 "implemented-action-with-evidence" / "effectiveness-evidence" gate (S-capa-3). A record's
+    correction/supersession does NOT auto-remove its evidence links, so a present link counts (the
+    capture is immutable; the auditor's link is the deliberate promotion)."""
+    if not stage_ids:
+        return set()
+    rows = await session.execute(
+        select(EvidenceForLink.target_id).where(
+            EvidenceForLink.target_type == EvidenceForTargetType.CAPA_STAGE,
+            EvidenceForLink.target_id.in_(list(stage_ids)),
+        )
+    )
+    return {tid for (tid,) in rows.all()}
+
+
+async def allow_capa_self_verify(session: AsyncSession, org_id: uuid.UUID) -> bool:
+    """The org's severity-aware SoD-4 relaxation flag (S-capa-3). ``False`` (STRICT — verifier ≠
+    implementer enforced) when no ``system_config`` row exists yet, so the default fails closed (the
+    ``allow_self_disposition`` precedent). Only Minor CAPAs honour a True value — Critical / Major
+    always hard-enforce."""
+    value = await session.scalar(
+        select(SystemConfig.allow_capa_self_verify).where(SystemConfig.org_id == org_id)
+    )
+    return bool(value)
 
 
 async def list_capas(session: AsyncSession, org_id: uuid.UUID) -> Sequence[tuple[Capa, str]]:

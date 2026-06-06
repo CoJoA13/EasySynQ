@@ -53,10 +53,10 @@ class NcSeverity(enum.Enum):
 
 class CapaCloseState(enum.Enum):
     # The doc 10 §6 CAPA lifecycle. Also the ``capa_stage.stage`` discriminator (doc 14 §9: "same as
-    # close_state"). NOT purely linear — Verify loops back to ActionPlan (the effectiveness loop,
-    # wired in S-capa-3 with the cycle_marker bump); Rejected is a terminal branch. S-capa-1 SERVICE
-    # wires only Raised→Containment; the full map is defined in domain/capa/fsm.py for
-    # forward-compat.
+    # close_state"). NOT purely linear — a not-effective Verify loops back to RootCause (the
+    # effectiveness loop, S-capa-3: cycle_marker bump + re-propose/re-approve to ActionPlan).
+    # Rejected is a terminal branch. S-capa-1 SERVICE wires only Raised→Containment; the full map
+    # is defined in domain/capa/fsm.py for forward-compat.
     Raised = "Raised"
     Containment = "Containment"
     RootCause = "RootCause"

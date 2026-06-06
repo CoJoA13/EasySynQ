@@ -27,6 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...config import get_settings
 from ...db.models._audit_enums import ActorType, AuditObjectType, EventType
+from ...db.models._capa_enums import CapaCloseState
 from ...db.models._evidence_enums import EvidenceForTargetType
 from ...db.models._record_enums import RecordType
 from ...db.models._vault_enums import Classification, DocumentCurrentState, DocumentKind
@@ -34,6 +35,7 @@ from ...db.models.app_user import AppUser
 from ...db.models.audit_event import AuditEvent
 from ...db.models.audit_finding import AuditFinding
 from ...db.models.blob import Blob
+from ...db.models.capa import Capa
 from ...db.models.capa_stage import CapaStage
 from ...db.models.document_version import DocumentVersion
 from ...db.models.documented_information import DocumentedInformation
@@ -710,6 +712,28 @@ async def unlink_evidence(
     link = await repo.get_evidence_link_by_id(session, link_id)
     if link is None or link.record_id != record.id or link.org_id != actor.org_id:
         raise ProblemException(status=404, code="not_found", title="Evidence link not found")
+    # S-capa-3 freeze: evidence on a CAPA Verify stage is sealed with the signed verification, and a
+    # Closed CAPA's stage evidence is immutable — neither can be unlinked (the M4 close gate + the
+    # audit-close gate rest on it). 409, not silent. The parent CAPA is loaded FOR UPDATE so the
+    # close_state read serializes against a concurrent close_capa (which holds the same row lock) —
+    # else a READ-COMMITTED unlink could pass the freeze, then a close commits Closed, leaving a
+    # Closed CAPA's evidence deleted. The append-only capa_stage is immutable, so it needs no lock.
+    if link.target_type is EvidenceForTargetType.CAPA_STAGE:
+        stage = await session.get(CapaStage, link.target_id)
+        capa = (
+            await session.get(Capa, stage.capa_id, with_for_update=True)
+            if stage is not None
+            else None
+        )
+        if stage is not None and (
+            stage.stage is CapaCloseState.Verify
+            or (capa is not None and capa.close_state is CapaCloseState.Closed)
+        ):
+            raise ProblemException(
+                status=409,
+                code="evidence_frozen",
+                title="Evidence linked to a verified or closed CAPA stage cannot be unlinked",
+            )
     before = {"target_type": link.target_type.value, "target_id": str(link.target_id)}
     await session.delete(link)
     emit_record_event(session, actor, EventType.RECORD_EVIDENCE_UNLINKED, record_id, before=before)

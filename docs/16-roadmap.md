@@ -139,8 +139,15 @@ Records/evidence capture, retention/disposition, Evidence Packs, audits/findings
 > sequential, Major/Minor = QMS-Owner ANY) + the `/tasks/{id}/decision` CAPA dispatch that, on the
 > completing approval, writes a `signature_event(meaning=approval, signed_object=capa_stage)` + the signed
 > ActionPlan stage and flips `close_state` to ActionPlan, plus a NEW additive **Top Management** role.
-> Implement/Verify + severity-aware SoD-4 + the M4 closure gate stay in S-capa-3. **Migration head is now
-> `0038`.** See `CLAUDE.md` for shipped detail.
+> **S-capa-3** (zero-migration) then ships **Implement / Verify / Close — the M4 closure gate + severity-aware
+> SoD-4**: `/capas/{id}/implement` (`capa.capture_effectiveness`) + `/verify` (`capa.verify`; the real
+> `signature_event(meaning=verify)` + SoD-4 verifier≠implementer, Critical/Major hard / Minor honours
+> `allow_capa_self_verify`) + `/close` (`capa.close`; the M4 gate → Closed, else the `not_effective`
+> effectiveness loop `Verify→RootCause`+`cycle_marker++` re-proposing + re-approving a revised plan, else 409
+> `capa_close_incomplete`), with the `evidence_frozen` unlink guard. This is the production path that drives a
+> CAPA to Closed and satisfies the S-aud-2 block-until-corrected audit-close gate — **the Audits/Findings/CAPA
+> family is complete bar the optional Evidence-Pack Finding/CAPA scope. Migration head is `0038`.** See
+> `CLAUDE.md` for shipped detail.
 
 **Goal:** everything an organization needs to *run and certify* an ISO 9001:2015 QMS, end to end, and to face an external audit with a one-click evidence pack.
 

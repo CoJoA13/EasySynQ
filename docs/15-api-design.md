@@ -535,9 +535,12 @@ The unified multi-stage corrective/preventive container — **a Record whose sta
 | GET | `/capas` | `capa.read` | — | Filter `close_state`, `severity`, `source`, `process_id`, `origin_finding_id`. Sort `due_date` (overdue views). |
 | POST | `/capas` | `capa.create` | ✓ | `{ source, severity, process_id?, origin_finding_id? }`. Starts `Raised`. (Audit-finding NCs **auto-create** a linked CAPA — §8.12.) |
 | GET | `/capas/{id}` | `capa.read` | — | `expand=origin_finding,process`; includes ordered `capa_stage` summaries. |
-| GET | `/capas/{id}/stages` | `capa.read` | — | The append-only stage-block timeline. |
-| POST | `/capas/{id}/stages` | `capa.update` | ✓ | Append the next sealed stage-block (`Containment/RootCause/ActionPlan/Implement/Verify`) with `content_block` + evidence links. Cannot rewrite a prior block. |
-| POST | `/capas/{id}/verify` | `capa.verify` | ✓ | Effectiveness verification (records a `signature_event(meaning=verify)`). **Guard (M4):** `Verify→Closed` requires root cause + ≥1 implemented action with evidence + effectiveness evidence; **verifier ≠ action owner** (SoD-4) → else `403 sod_violation`. |
+| POST | `/capas/{id}/containment` | `capa.update` | — | `Raised→Containment` — append the immediate-correction block. (As built: per-stage endpoints **supersede** the unified `POST /capas/{id}/stages`; R39.) |
+| POST | `/capas/{id}/root-cause` | `capa.record_rca` | — | `Containment→RootCause` — the sealed RCA narrative (unsigned). |
+| POST | `/capas/{id}/action-plan` | `capa.plan_action` | — | Propose the corrective plan + open the severity-routed approval; `close_state` stays RootCause until the approval completes (then ActionPlan, signed). |
+| POST | `/capas/{id}/implement` | `capa.capture_effectiveness` | — | `ActionPlan→Implement` — append the action-completion block (unsigned). Link completion evidence to the new stage via `POST /records/{rid}/evidence-links`. |
+| POST | `/capas/{id}/verify` | `capa.verify` | ✓ | `Implement→Verify` — `{ decision: effective\|not_effective, content_block }`; records a `signature_event(meaning=verify)`. **SoD-4:** verifier ∉ implementer set (Critical/Major hard, Minor honours `allow_capa_self_verify`) → else `409 sod_self_verify`. Effectiveness evidence linked to the Verify stage is then frozen (unlink → `409 evidence_frozen`). |
+| POST | `/capas/{id}/close` | `capa.close` | ✓ | The **M4 gate** (server-derived): `effective` + root cause + ≥1 implemented action with evidence + effectiveness evidence → `Closed`; `not_effective` → loop `Verify→RootCause` (`cycle_marker++`; re-propose + re-approve); `effective` but missing evidence → `409 capa_close_incomplete`. |
 
 ### 8.12 Audits — Internal Audit Program (`/audit-programs`, `/audits`)
 
