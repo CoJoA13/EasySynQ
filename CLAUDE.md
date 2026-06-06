@@ -90,5 +90,6 @@ schedule the `release_due` cutover; RETIRE obsoletes) + enforces the underlying 
 ## Working preferences
 
 - The owner used `/effort ultracode` (multi-agent Workflow orchestration) for the heavy spec/mockup work; `/effort` is per-session — re-enable it to use that approach again.
+- `.claude/agents/diff-critic.md` — a read-only adversarial reviewer pre-loaded with the load-bearing invariants (WORM/append-only · mirror cache · alembic-check traps · run-scoped integration assertions · deny-wins authz). Run it on the branch diff before each PR (`Agent` tool, `subagent_type: diff-critic`).
 - Persistent memory: `~/.claude/projects/-home-cojoa13-Documents-EasySynQ/memory/` (MEMORY.md index). The `easysynq-project.md` memory owns the running per-slice log; keep this file's Current-status to a short pointer.
 - View the mockup: `xdg-open mockup/easysynq-mockup.html` (this laptop has no headless browser, so no auto PNG screenshots).
