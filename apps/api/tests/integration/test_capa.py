@@ -808,3 +808,392 @@ async def test_action_plan_decision_idempotent_replay_carries_capa_fields(
     assert rb["current_state"] == "COMPLETED"
     assert rb["capa_close_state"] == "ActionPlan"
     assert rb["signature_event_id"] == sig_id
+
+
+# --- S-capa-3: Implement / Verify / Close — the M4 gate + severity-aware SoD-4 ---------------
+#
+# The implement key (capa.capture_effectiveness) + verify/close (capa.verify/capa.close) ride SYSTEM
+# overrides (the family precedent). Evidence on a stage is linked by reusing the CAPA's OWN record
+# id as the evidence artifact (the M4 gate only checks for ≥1 evidence_for_link(CAPA_STAGE) row; the
+# capa.id IS a record id). SoD-4 needs a DISTINCT implementer vs verifier (Critical/Major hard).
+
+_IMPLEMENT_KEYS = (*_PROPOSE_KEYS, "capa.capture_effectiveness", "record.create")
+_VERIFY_KEYS = ("capa.read", "capa.verify", "capa.close", "record.create", "record.read")
+
+
+async def _drive_to_action_plan(
+    client: AsyncClient, hp: dict[str, str], ha: dict[str, str], *, severity: str, title: str
+) -> str:
+    """Raise + walk to an APPROVED ActionPlan (single QMS-Owner approval — Minor/Major). Returns the
+    CAPA id at close_state=ActionPlan."""
+    capa_id = await _drive_to_root_cause(client, hp, severity=severity, title=title)
+    iid = (
+        await client.post(
+            f"/api/v1/capas/{capa_id}/action-plan", headers=hp, json={"content_block": _ACTION_PLAN}
+        )
+    ).json()["approval_instance"]["id"]
+    task_id = await _my_pending_task(client, ha, iid)
+    dr = await client.post(
+        f"/api/v1/tasks/{task_id}/decision", headers=ha, json={"outcome": "approve"}
+    )
+    assert dr.status_code == 200, dr.text
+    assert dr.json()["capa_close_state"] == "ActionPlan", dr.text
+    return capa_id
+
+
+async def _latest_stage_id(
+    client: AsyncClient, h: dict[str, str], capa_id: str, stage_name: str
+) -> str:
+    """The latest stage of a type (implement/verify/close return no stages → GET the detail)."""
+    detail = (await client.get(f"/api/v1/capas/{capa_id}", headers=h)).json()
+    matching = [s for s in detail["stages"] if s["stage"] == stage_name]
+    assert matching, f"no {stage_name} stage on {capa_id}: {detail['stages']}"
+    return matching[-1]["id"]
+
+
+async def _link_stage_evidence(
+    client: AsyncClient, h: dict[str, str], evidence_record_id: str, stage_id: str
+) -> str:
+    """Link a record (the CAPA's own record id, the evidence artifact) to a CAPA stage; return its
+    link id."""
+    r = await client.post(
+        f"/api/v1/records/{evidence_record_id}/evidence-links",
+        headers=h,
+        json={"target_type": "capa_stage", "target_id": stage_id},
+    )
+    assert r.status_code == 201, r.text
+    return r.json()["id"]
+
+
+async def test_full_capa_close_happy_path(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """The real path driving a Major CAPA to Closed: implement → link evidence → verify(effective, a
+    DISTINCT actor) → link effectiveness evidence → close. The Verify stage carries a REAL
+    signature_event(meaning=verify); this is the production path that satisfies the S-aud-2
+    audit-close gate."""
+    qm_subj = _subject("qm-cl")
+    await _assign_seeded_role(qm_subj, "QMS Owner")
+    ha = _auth(token_factory, qm_subj)
+    impl_subj = _subject("impl-cl")
+    await _grant(impl_subj, _IMPLEMENT_KEYS)
+    hp = _auth(token_factory, impl_subj)
+    ver_subj = _subject("ver-cl")
+    verifier = await _grant(ver_subj, _VERIFY_KEYS)
+    hv = _auth(token_factory, ver_subj)
+
+    capa_id = await _drive_to_action_plan(app_client, hp, ha, severity="Major", title="Close OK")
+
+    impl = await app_client.post(
+        f"/api/v1/capas/{capa_id}/implement",
+        headers=hp,
+        json={"content_block": {"actions_done": "retrained operators"}},
+    )
+    assert impl.status_code == 200 and impl.json()["close_state"] == "Implement", impl.text
+    impl_stage = await _latest_stage_id(app_client, hp, capa_id, "Implement")
+    await _link_stage_evidence(app_client, hp, capa_id, impl_stage)
+
+    ver = await app_client.post(
+        f"/api/v1/capas/{capa_id}/verify",
+        headers=hv,
+        json={"decision": "effective", "content_block": {"check": "re-audited, no recurrence"}},
+    )
+    assert ver.status_code == 200 and ver.json()["close_state"] == "Verify", ver.text
+    ver_stage = await _latest_stage_id(app_client, hv, capa_id, "Verify")
+    await _link_stage_evidence(app_client, hv, capa_id, ver_stage)
+
+    close = await app_client.post(f"/api/v1/capas/{capa_id}/close", headers=hv)
+    assert close.status_code == 200, close.text
+    assert close.json()["close_state"] == "Closed"
+
+    async with get_sessionmaker()() as s:
+        stage = (
+            await s.execute(select(CapaStage).where(CapaStage.id == uuid.UUID(ver_stage)))
+        ).scalar_one()
+        assert stage.signed_event_id is not None
+        sig = (
+            await s.execute(
+                select(SignatureEvent).where(SignatureEvent.id == stage.signed_event_id)
+            )
+        ).scalar_one()
+        assert sig.meaning.value == "verify"
+        assert sig.signed_object_type.value == "capa_stage"
+        assert sig.signer_user_id == verifier
+
+
+async def test_close_incomplete_when_effectiveness_evidence_missing(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """An effective verification with NO effectiveness evidence on the Verify stage → 409
+    capa_close_incomplete (NOT the loop — the verification is not discarded). Linking the evidence
+    then closes."""
+    qm_subj = _subject("qm-inc")
+    await _assign_seeded_role(qm_subj, "QMS Owner")
+    ha = _auth(token_factory, qm_subj)
+    impl_subj = _subject("impl-inc")
+    await _grant(impl_subj, _IMPLEMENT_KEYS)
+    hp = _auth(token_factory, impl_subj)
+    ver_subj = _subject("ver-inc")
+    await _grant(ver_subj, _VERIFY_KEYS)
+    hv = _auth(token_factory, ver_subj)
+
+    capa_id = await _drive_to_action_plan(app_client, hp, ha, severity="Major", title="Incomplete")
+    await app_client.post(
+        f"/api/v1/capas/{capa_id}/implement", headers=hp, json={"content_block": {"done": "x"}}
+    )
+    impl_stage = await _latest_stage_id(app_client, hp, capa_id, "Implement")
+    await _link_stage_evidence(app_client, hp, capa_id, impl_stage)
+    await app_client.post(
+        f"/api/v1/capas/{capa_id}/verify",
+        headers=hv,
+        json={"decision": "effective", "content_block": {"c": "x"}},
+    )
+
+    close = await app_client.post(f"/api/v1/capas/{capa_id}/close", headers=hv)
+    assert close.status_code == 409, close.text
+    assert close.json()["code"] == "capa_close_incomplete"
+    assert (await app_client.get(f"/api/v1/capas/{capa_id}", headers=hv)).json()[
+        "close_state"
+    ] == "Verify"
+
+    ver_stage = await _latest_stage_id(app_client, hv, capa_id, "Verify")
+    await _link_stage_evidence(app_client, hv, capa_id, ver_stage)
+    close2 = await app_client.post(f"/api/v1/capas/{capa_id}/close", headers=hv)
+    assert close2.status_code == 200 and close2.json()["close_state"] == "Closed", close2.text
+
+
+async def test_sod4_major_implementer_cannot_verify(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """SoD-4 (hard for Major): the actor who recorded the implementation may not verify the CAPA
+    (409 sod_self_verify) — even holding capa.verify."""
+    qm_subj = _subject("qm-sod")
+    await _assign_seeded_role(qm_subj, "QMS Owner")
+    ha = _auth(token_factory, qm_subj)
+    impl_subj = _subject("impl-sod")
+    await _grant(impl_subj, (*_IMPLEMENT_KEYS, "capa.verify", "capa.close"))
+    hp = _auth(token_factory, impl_subj)
+
+    capa_id = await _drive_to_action_plan(app_client, hp, ha, severity="Major", title="SoD Major")
+    await app_client.post(
+        f"/api/v1/capas/{capa_id}/implement", headers=hp, json={"content_block": {"done": "x"}}
+    )
+    blocked = await app_client.post(
+        f"/api/v1/capas/{capa_id}/verify",
+        headers=hp,
+        json={"decision": "effective", "content_block": {"c": "x"}},
+    )
+    assert blocked.status_code == 409, blocked.text
+    assert blocked.json()["code"] == "sod_self_verify"
+
+
+async def test_sod4_minor_respects_self_verify_flag(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """SoD-4 (soft for Minor): the implementer self-verify is blocked by default, but the per-org
+    allow_capa_self_verify flag relaxes it for a Minor CAPA. Flip-and-restore (shared DB)."""
+    qm_subj = _subject("qm-min")
+    await _assign_seeded_role(qm_subj, "QMS Owner")
+    ha = _auth(token_factory, qm_subj)
+    impl_subj = _subject("impl-min")
+    await _grant(impl_subj, (*_IMPLEMENT_KEYS, "capa.verify", "capa.close"))
+    hp = _auth(token_factory, impl_subj)
+    admin_subj = _subject("adm-min")
+    await _grant(admin_subj, ("config.update",))
+    hadmin = _auth(token_factory, admin_subj)
+
+    capa_id = await _drive_to_action_plan(app_client, hp, ha, severity="Minor", title="SoD Minor")
+    await app_client.post(
+        f"/api/v1/capas/{capa_id}/implement", headers=hp, json={"content_block": {"done": "x"}}
+    )
+    blocked = await app_client.post(
+        f"/api/v1/capas/{capa_id}/verify",
+        headers=hp,
+        json={"decision": "effective", "content_block": {"c": "x"}},
+    )
+    assert blocked.status_code == 409 and blocked.json()["code"] == "sod_self_verify", blocked.text
+
+    cfg = await app_client.patch(
+        "/api/v1/admin/config", headers=hadmin, json={"allow_capa_self_verify": True}
+    )
+    assert cfg.status_code == 200 and cfg.json()["allow_capa_self_verify"] is True, cfg.text
+    try:
+        ok = await app_client.post(
+            f"/api/v1/capas/{capa_id}/verify",
+            headers=hp,
+            json={"decision": "effective", "content_block": {"c": "x"}},
+        )
+        assert ok.status_code == 200 and ok.json()["close_state"] == "Verify", ok.text
+    finally:
+        rr = await app_client.patch(
+            "/api/v1/admin/config", headers=hadmin, json={"allow_capa_self_verify": False}
+        )
+        assert rr.status_code == 200 and rr.json()["allow_capa_self_verify"] is False, rr.text
+
+
+async def test_not_effective_loops_to_root_cause_then_reapprove_and_close(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """A not-effective verification loops the CAPA back to RootCause (cycle_marker++); a new plan
+    is re-proposed + re-approved, then a fresh implement/verify(effective) closes it (cycle 1)."""
+    qm_subj = _subject("qm-loop")
+    await _assign_seeded_role(qm_subj, "QMS Owner")
+    ha = _auth(token_factory, qm_subj)
+    impl_subj = _subject("impl-loop")
+    await _grant(impl_subj, _IMPLEMENT_KEYS)
+    hp = _auth(token_factory, impl_subj)
+    ver_subj = _subject("ver-loop")
+    await _grant(ver_subj, _VERIFY_KEYS)
+    hv = _auth(token_factory, ver_subj)
+
+    capa_id = await _drive_to_action_plan(app_client, hp, ha, severity="Major", title="Loop")
+    # cycle 0: implement + verify(not_effective) + close → loops to RootCause, cycle 1.
+    await app_client.post(
+        f"/api/v1/capas/{capa_id}/implement", headers=hp, json={"content_block": {"done": "v1"}}
+    )
+    impl0 = await _latest_stage_id(app_client, hp, capa_id, "Implement")
+    await _link_stage_evidence(app_client, hp, capa_id, impl0)
+    await app_client.post(
+        f"/api/v1/capas/{capa_id}/verify",
+        headers=hv,
+        json={"decision": "not_effective", "content_block": {"c": "recurred"}},
+    )
+    looped = await app_client.post(f"/api/v1/capas/{capa_id}/close", headers=hv)
+    assert looped.status_code == 200, looped.text
+    assert looped.json()["close_state"] == "RootCause"
+    assert looped.json()["cycle_marker"] == 1
+
+    # cycle 1: re-propose + re-approve a revised plan, then implement/verify(effective)/close.
+    iid = (
+        await app_client.post(
+            f"/api/v1/capas/{capa_id}/action-plan", headers=hp, json={"content_block": _ACTION_PLAN}
+        )
+    ).json()["approval_instance"]["id"]
+    task_id = await _my_pending_task(app_client, ha, iid)
+    dr = await app_client.post(
+        f"/api/v1/tasks/{task_id}/decision", headers=ha, json={"outcome": "approve"}
+    )
+    assert dr.status_code == 200 and dr.json()["capa_close_state"] == "ActionPlan", dr.text
+    await app_client.post(
+        f"/api/v1/capas/{capa_id}/implement", headers=hp, json={"content_block": {"done": "v2"}}
+    )
+    impl1 = await _latest_stage_id(app_client, hp, capa_id, "Implement")
+    await _link_stage_evidence(app_client, hp, capa_id, impl1)
+    await app_client.post(
+        f"/api/v1/capas/{capa_id}/verify",
+        headers=hv,
+        json={"decision": "effective", "content_block": {"c": "fixed"}},
+    )
+    ver1 = await _latest_stage_id(app_client, hv, capa_id, "Verify")
+    await _link_stage_evidence(app_client, hv, capa_id, ver1)
+    final = await app_client.post(f"/api/v1/capas/{capa_id}/close", headers=hv)
+    assert final.status_code == 200 and final.json()["close_state"] == "Closed", final.text
+    assert final.json()["cycle_marker"] == 1
+
+
+async def test_verify_stage_evidence_is_frozen(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """Effectiveness evidence on a Verify stage is frozen: an unlink 409s evidence_frozen."""
+    qm_subj = _subject("qm-frz")
+    await _assign_seeded_role(qm_subj, "QMS Owner")
+    ha = _auth(token_factory, qm_subj)
+    impl_subj = _subject("impl-frz")
+    await _grant(impl_subj, _IMPLEMENT_KEYS)
+    hp = _auth(token_factory, impl_subj)
+    ver_subj = _subject("ver-frz")
+    await _grant(ver_subj, _VERIFY_KEYS)
+    hv = _auth(token_factory, ver_subj)
+
+    capa_id = await _drive_to_action_plan(app_client, hp, ha, severity="Major", title="Freeze")
+    await app_client.post(
+        f"/api/v1/capas/{capa_id}/implement", headers=hp, json={"content_block": {"done": "x"}}
+    )
+    await app_client.post(
+        f"/api/v1/capas/{capa_id}/verify",
+        headers=hv,
+        json={"decision": "effective", "content_block": {"c": "x"}},
+    )
+    ver_stage = await _latest_stage_id(app_client, hv, capa_id, "Verify")
+    link_id = await _link_stage_evidence(app_client, hv, capa_id, ver_stage)
+    frozen = await app_client.delete(
+        f"/api/v1/records/{capa_id}/evidence-links/{link_id}", headers=hv
+    )
+    assert frozen.status_code == 409, frozen.text
+    assert frozen.json()["code"] == "evidence_frozen"
+
+
+async def test_implement_requires_action_plan(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """The FSM gate: a freshly-Raised CAPA cannot implement (not at ActionPlan) — 409."""
+    impl_subj = _subject("impl-fsm")
+    await _grant(impl_subj, _IMPLEMENT_KEYS)
+    hp = _auth(token_factory, impl_subj)
+    capa_id = (
+        await app_client.post("/api/v1/capas", headers=hp, json={"title": "x", "severity": "Minor"})
+    ).json()["id"]
+    early = await app_client.post(
+        f"/api/v1/capas/{capa_id}/implement", headers=hp, json={"content_block": {"done": "x"}}
+    )
+    assert early.status_code == 409 and early.json()["code"] == "invalid_capa_transition", (
+        early.text
+    )
+
+
+async def test_close_requires_verify_first(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """The close FSM gate: a CAPA at Implement (not yet verified) cannot close — 409
+    invalid_capa_transition (close acts only from Verify)."""
+    qm_subj = _subject("qm-cv")
+    await _assign_seeded_role(qm_subj, "QMS Owner")
+    ha = _auth(token_factory, qm_subj)
+    impl_subj = _subject("impl-cv")
+    await _grant(impl_subj, (*_IMPLEMENT_KEYS, "capa.close"))
+    hp = _auth(token_factory, impl_subj)
+
+    capa_id = await _drive_to_action_plan(
+        app_client, hp, ha, severity="Major", title="ClosePremature"
+    )
+    await app_client.post(
+        f"/api/v1/capas/{capa_id}/implement", headers=hp, json={"content_block": {"done": "x"}}
+    )
+    early = await app_client.post(f"/api/v1/capas/{capa_id}/close", headers=hp)
+    assert early.status_code == 409, early.text
+    assert early.json()["code"] == "invalid_capa_transition"
+
+
+async def test_close_incomplete_when_implement_evidence_missing(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """The M4 'implemented-action-with-evidence' clause is reachable: an effective verification with
+    NO completion evidence on the Implement stage → 409 capa_close_incomplete naming that clause
+    (the Implement STAGE exists by FSM, but its evidence_for_link is optional)."""
+    qm_subj = _subject("qm-ie")
+    await _assign_seeded_role(qm_subj, "QMS Owner")
+    ha = _auth(token_factory, qm_subj)
+    impl_subj = _subject("impl-ie")
+    await _grant(impl_subj, _IMPLEMENT_KEYS)
+    hp = _auth(token_factory, impl_subj)
+    ver_subj = _subject("ver-ie")
+    await _grant(ver_subj, _VERIFY_KEYS)
+    hv = _auth(token_factory, ver_subj)
+
+    capa_id = await _drive_to_action_plan(app_client, hp, ha, severity="Major", title="NoImplEvid")
+    # Implement but DO NOT link completion evidence to the Implement stage.
+    await app_client.post(
+        f"/api/v1/capas/{capa_id}/implement", headers=hp, json={"content_block": {"done": "x"}}
+    )
+    await app_client.post(
+        f"/api/v1/capas/{capa_id}/verify",
+        headers=hv,
+        json={"decision": "effective", "content_block": {"c": "x"}},
+    )
+    # Link ONLY effectiveness evidence (the Verify stage) → implemented-action-with-evidence fails.
+    ver_stage = await _latest_stage_id(app_client, hv, capa_id, "Verify")
+    await _link_stage_evidence(app_client, hv, capa_id, ver_stage)
+    close = await app_client.post(f"/api/v1/capas/{capa_id}/close", headers=hv)
+    assert close.status_code == 409, close.text
+    assert close.json()["code"] == "capa_close_incomplete"
+    assert "implemented_action_with_evidence" in close.json()["title"]

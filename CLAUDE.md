@@ -54,11 +54,16 @@ the existing `workflow_*` tables, mig `0035`) + **S-capa-1** (the CAPA core + in
 `allow_capa_self_verify`, mig `0036`) + **S-aud-2** (audit findings NC/OBS/OFI + the atomic NC→CAPA auto-link + the REAL
 block-until-corrected audit-close gate + the general finding-retype path + `evidence_for_link` FINDING/CAPA_STAGE,
 mig `0037`) + **S-capa-2** (RootCause + ActionPlan stages + the engine-routed severity-conditional approval + the REAL
-`signature_event` row write for `capa_stage.signed_event_id` + the new **Top Management** role, mig `0038`) shipped. The
+`signature_event` row write for `capa_stage.signed_event_id` + the new **Top Management** role, mig `0038`) + **S-capa-3**
+(Implement/Verify/Close — the path that drives a CAPA to Closed, satisfying the S-aud-2 close gate in production:
+`POST /capas/{id}/implement` `capa.capture_effectiveness` + `/verify` `capa.verify` [the REAL `signature_event(meaning=verify)`
++ severity-aware **SoD-4** verifier≠implementer] + `/close` `capa.close` [the **M4 gate**: effective+evidence → Closed, else
+the not-effective loop → RootCause+`cycle_marker++` → re-propose+re-approve]; **zero-migration** — head stays `0038`) shipped.
+**The v1 Audits/Findings/CAPA family is now COMPLETE bar the optional Evidence-Pack scope.** The
 family's locked model + workflow + SoD posture is **R39** (+declarative-routing · severity-aware SoD-4 · block-until-corrected
-audit close · `audit_program` own-table). **Next: S-capa-3** (Implement + Verify with severity-aware SoD-4 reading
-`allow_capa_self_verify` + the M4 closure gate — the path that drives a CAPA to Closed, satisfying the S-aud-2 close gate).
-**Migration head is now `0038`.**
+audit close · `audit_program` own-table · the S-capa-3 addendum: Verify→RootCause loop · M4 = real evidence_for_link gate).
+**Next: S-aud-capa-pack** (the optional Evidence-Pack Finding/CAPA scope — `PackScopeKind += FINDING|CAPA`).
+**Migration head is `0038` (next `0039`).**
 
 **v1 RECORDS & evidence family (UJ-7 + records) — COMPLETE** ✅ (migs `0023`–`0028`; per-slice
 non-obvious decisions live in the squash-merge commits + the `easysynq-project.md` memory; operating
@@ -145,6 +150,25 @@ Import Report; per-item `import_commit_result` ledger-claim single-flight + resu
   reserved **Top Management** role (`capa.read` only; the candidate-pool 2nd tier; single-op must assign QMS-Owner/Top-Mgmt or
   the approval fails closed `NEEDS_ATTENTION`). NO new permission keys, NO enum, NO Celery task; SoD-4 + `allow_capa_self_verify`
   stay **S-capa-3**. **Migration head is now `0038`.**
+
+- **S-capa-3** Implement + Verify + Close — the M4 closure gate + severity-aware SoD-4 (**zero-migration**; head stays `0038`) —
+  `POST /capas/{id}/implement` (gate `capa.capture_effectiveness`, ActionPlan→Implement, unsigned) + `POST /capas/{id}/verify`
+  (gate `capa.verify`; Implement→Verify; the REAL `signature_event(meaning=verify, signed_object=capa_stage)` written the
+  S-capa-2 way [pre-gen stage UUID + flush + INSERT, NO UPDATE on the append-only table]; the `effective`/`not_effective`
+  decision sealed into the Verify block) + `POST /capas/{id}/close` (gate `capa.close`). **Severity-aware SoD-4** (the R39 fork,
+  `domain/capa/sod.py::capa_self_verify_blocked` — Critical/Major HARD-409 verifier≠implementer; Minor respects
+  `allow_capa_self_verify`) runs UNCONDITIONALLY in verify BEFORE any grant short-circuit (the SoD-6 precedent); the
+  **implementer set** = Implement-stage `created_by` ∪ ActionPlan `action_items[].owner`-that-parse-as-UUID over the WHOLE trail
+  (DELIBERATELY excludes the ActionPlan stage `created_by` — in S-capa-2 that is the plan APPROVER, not a doer). The **M4 gate**
+  (`domain/capa/closure.py`, server-derived under the capa FOR UPDATE): `effective` ∧ root_cause ∧ ≥1 implemented-action-with-
+  `evidence_for_link(CAPA_STAGE)` ∧ effectiveness-evidence → **Closed**; `not_effective` → the loop **Verify→RootCause** +
+  `cycle_marker++` (FSM edge changed from Verify→ActionPlan; a revised plan must be re-proposed + re-approved); `effective` but
+  evidence-incomplete → 409 `capa_close_incomplete` (NOT a loop — the verification is not discarded). Evidence (impl/effectiveness)
+  is **current-cycle-scoped**; root_cause is cycle-agnostic. **Freeze:** `records.unlink_evidence` 409s `evidence_frozen` for a
+  CAPA_STAGE whose stage==Verify OR whose CAPA is Closed. Fixed a latent S-capa-2 replay bug the loop exposes
+  (`_enrich_completed_replay` now scopes to the replayed instance via `content_block.workflow_instance_id`, not `signed[-1]`).
+  Events reuse `CAPA_TRANSITIONED` (no new event type). NO new permission keys/enum/Celery task. The family-level proof: an
+  audit with a live NC closes once its auto-CAPA is driven to Closed via the real path (`test_audits.py`).
 
 - **Specification** in `docs/` (00–17 + `decisions-register.md`) — complete, adversarially audited, reconciled
   (Register R1–R37 back-propagated). The Register is authoritative.
@@ -333,6 +357,17 @@ create boundary.
     NO permission key); on the **completing** approval it writes a `signature_event(meaning=approval)` + the signed ActionPlan
     `capa_stage` (`signed_event_id` set) + flips `close_state`→ActionPlan. Critical needs TWO distinct approvers (QMS-Owner
     then Top-Management); Major/Minor one QMS-Owner. Re-propose is 409 `capa_approval_in_progress` while one is active.
+  - **CAPA Implement/Verify/Close (S-capa-3):** after the plan is approved (`close_state=ActionPlan`):
+    `POST /capas/{id}/implement {content_block}` (gate `capa.capture_effectiveness`) → link completion evidence to the new
+    Implement stage via `POST /records/{rid}/evidence-links {target_type:"capa_stage",target_id:<stage>}` →
+    `POST /capas/{id}/verify {decision:"effective"|"not_effective",content_block}` (gate `capa.verify`; the **verifier must be a
+    DIFFERENT user than the implementer** for Critical/Major — 409 `sod_self_verify`; Minor relaxes only if `allow_capa_self_verify`
+    via `PATCH /admin/config`) → link effectiveness evidence to the Verify stage (it is then **frozen** — unlink 409s
+    `evidence_frozen`) → `POST /capas/{id}/close` (gate `capa.close`): `effective`+evidence → **Closed**; `not_effective` → loops
+    to RootCause (`cycle_marker++` — re-do `/action-plan`+approve+implement+verify); `effective` but missing evidence → 409
+    `capa_close_incomplete`. The implement/verify/close keys ride **SYSTEM overrides** (the family precedent). Reaching Closed
+    here satisfies the S-aud-2 audit-close gate in production. The new endpoints return the CAPA WITHOUT `stages` — `GET /capas/{id}`
+    for the stage ids.
   - **Audit findings (S-aud-2):** log via `POST /audits/{id}/findings {finding_type,severity?,clause_ref?,process_ref?,
     summary?}` (gate `finding.create`; an **NC auto-creates its CAPA** → `auto_capa_id`; NC needs a severity, 422 else;
     409 once the audit is Closed); read `GET /audits/{id}/findings` + `GET /findings/{id}` (gate `finding.read`); retype

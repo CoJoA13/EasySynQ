@@ -23,10 +23,13 @@ def test_forward_chain_is_legal() -> None:
         assert transition_allowed(cur, nxt), f"{cur} → {nxt} should be legal"
 
 
-def test_effectiveness_loop_verify_back_to_actionplan() -> None:
-    # The only non-linear forward edge besides Rejected: Verify → ActionPlan (re-plan, S-capa-3).
-    assert transition_allowed(S.Verify, S.ActionPlan)
-    assert allowed_targets(S.Verify) == frozenset({S.Closed, S.ActionPlan})
+def test_effectiveness_loop_verify_back_to_root_cause() -> None:
+    # The effectiveness loop routes Verify → RootCause (NOT directly to ActionPlan), so the revised
+    # plan is re-proposed + re-approved (RootCause → ActionPlan) — the owner's re-approval choice
+    # (S-capa-3). A direct Verify → ActionPlan is therefore illegal.
+    assert transition_allowed(S.Verify, S.RootCause)
+    assert not transition_allowed(S.Verify, S.ActionPlan)
+    assert allowed_targets(S.Verify) == frozenset({S.Closed, S.RootCause})
 
 
 def test_reject_is_legal_from_every_working_stage() -> None:

@@ -48,7 +48,15 @@ from ...db.models.capa_stage import CapaStage
 from ...db.models.complaint import Complaint
 from ...db.models.ncr import Ncr
 from ...db.models.workflow import Task, WorkflowInstance
-from ...domain.capa import allowed_targets, transition_allowed
+from ...domain.capa import (
+    VERIFIER_DECISIONS,
+    ClosureOutcome,
+    adjudicate_capa_closure,
+    allowed_targets,
+    capa_self_verify_blocked,
+    derive_implementer_ids,
+    transition_allowed,
+)
 from ...domain.vault import format_identifier
 from ...logging import request_id_var
 from ...problems import ProblemException
@@ -559,12 +567,14 @@ async def _assert_capa_approver(
 
 
 async def _enrich_completed_replay(
-    session: AsyncSession, result: dict[str, Any], capa_id: uuid.UUID
+    session: AsyncSession, result: dict[str, Any], capa_id: uuid.UUID, instance_id: uuid.UUID
 ) -> None:
     """Re-derive the CAPA-specific fields (``capa_close_state`` + ``signature_event_id``) for an
     idempotent replay whose original decision COMPLETED the approval — so a retry's response matches
-    the original. Reads the latest SIGNED ActionPlan stage (the one the completing approval sealed),
-    in ``list_capa_stages`` created-at order."""
+    the original. Scoped to THIS instance's sealed ActionPlan stage (each approval seals one stage,
+    tagged with its ``workflow_instance_id``): after an effectiveness-loop re-approval there are
+    MULTIPLE signed ActionPlan stages across cycles, so an unscoped ``signed[-1]`` would return a
+    later cycle's signature on a replay of an earlier cycle's task (S-capa-3 fix)."""
     capa = await repo.get_capa(session, capa_id)
     if capa is None:
         return
@@ -572,7 +582,9 @@ async def _enrich_completed_replay(
     signed = [
         s
         for s in await repo.list_capa_stages(session, capa.id)
-        if s.stage is CapaCloseState.ActionPlan and s.signed_event_id is not None
+        if s.stage is CapaCloseState.ActionPlan
+        and s.signed_event_id is not None
+        and (s.content_block or {}).get("workflow_instance_id") == str(instance_id)
     ]
     result["signature_event_id"] = str(signed[-1].signed_event_id) if signed else None
 
@@ -617,7 +629,7 @@ async def decide_capa_action_plan(
         # completing response carried (so a retry's body matches), then commit (no-op) to release
         # the engine's locks.
         if result.get("current_state") == engine.COMPLETED:
-            await _enrich_completed_replay(session, result, instance.subject_id)
+            await _enrich_completed_replay(session, result, instance.subject_id, instance.id)
         await session.commit()
         return result
 
@@ -682,6 +694,231 @@ async def decide_capa_action_plan(
 
     await session.commit()
     return result
+
+
+async def advance_capa_to_implement(
+    session: AsyncSession,
+    actor: AppUser,
+    capa_id: uuid.UUID,
+    *,
+    content_block: dict[str, Any],
+) -> Capa:
+    """``ActionPlan → Implement``: append the action-completion narrative stage + advance
+    ``close_state`` (gate ``capa.capture_effectiveness``, a Process-Owner key). UNSIGNED — the
+    implementer records what was done; the independent verifier signs at Verify (doc 10 §6.2).
+    Completion evidence is linked to the returned Implement stage via
+    ``POST /records/{id}/evidence-links`` (target_type=capa_stage). Mirrors
+    ``advance_capa_to_root_cause``; the pure FSM 409s any non-ActionPlan source state."""
+    if not content_block:
+        raise _validation_error("content_block", "required", "content_block must be non-empty")
+    capa = await repo.get_capa(session, capa_id, for_update=True)
+    if capa is None or capa.org_id != actor.org_id:
+        raise _not_found("CAPA")
+    if not transition_allowed(capa.close_state, CapaCloseState.Implement):
+        legal = sorted(s.value for s in allowed_targets(capa.close_state))
+        hint = f" (legal next: {', '.join(legal)})" if legal else " (CAPA is terminal)"
+        raise _conflict(
+            "invalid_capa_transition",
+            f"CAPA in {capa.close_state.value} cannot move to Implement{hint}",
+        )
+    session.add(
+        CapaStage(
+            org_id=actor.org_id,
+            capa_id=capa.id,
+            stage=CapaCloseState.Implement,
+            content_block=content_block,
+            cycle_marker=capa.cycle_marker,
+            created_by=actor.id,
+        )
+    )
+    before = capa.close_state
+    capa.close_state = CapaCloseState.Implement
+    emit_record_event(
+        session,
+        actor,
+        EventType.CAPA_TRANSITIONED,
+        capa.id,
+        before={"close_state": before.value},
+        after={"close_state": CapaCloseState.Implement.value, "cycle_marker": capa.cycle_marker},
+    )
+    await session.commit()
+    await session.refresh(capa)
+    return capa
+
+
+async def verify_capa(
+    session: AsyncSession,
+    actor: AppUser,
+    capa_id: uuid.UUID,
+    *,
+    decision: str,
+    content_block: dict[str, Any],
+    sig_sink: SignatureEventSink,
+) -> Capa:
+    """``Implement → Verify``: record the verifier's effectiveness ``decision`` (``effective`` /
+    ``not_effective``) as a SIGNED Verify stage (gate ``capa.verify``, doc 10 §6.2).
+
+    **SoD-4 (severity-aware) is enforced UNCONDITIONALLY here**, before the permission gate has any
+    say (a SYSTEM ``capa.verify`` grant never bypasses it — the SoD-6 precedent): the verifier must
+    not be among the CAPA's implementers (Critical / Major always; Minor unless the org set
+    ``allow_capa_self_verify``). The implementer set is the union over the WHOLE append-only stage
+    trail (every cycle). On a block, 409 ``sod_self_verify``.
+
+    Writes ONE ``signature_event(meaning=verify, signed_object=capa_stage)`` the S-capa-2 way — a
+    pre-generated stage UUID makes the signature (``signed_object_id``) and the stage
+    (``signed_event_id``) two mutually-referencing INSERTs, never an UPDATE on the REVOKE-immutable
+    table. The ``decision`` is sealed into the stage block; the M4 close gate reads it. Evidence
+    linked to the returned Verify stage is then FROZEN (unlink-blocked)."""
+    if decision not in VERIFIER_DECISIONS:
+        raise _validation_error(
+            "decision", "invalid", "decision must be 'effective' or 'not_effective'"
+        )
+    if not content_block:
+        raise _validation_error("content_block", "required", "content_block must be non-empty")
+    capa = await repo.get_capa(session, capa_id, for_update=True)
+    if capa is None or capa.org_id != actor.org_id:
+        raise _not_found("CAPA")
+    if not transition_allowed(capa.close_state, CapaCloseState.Verify):
+        legal = sorted(s.value for s in allowed_targets(capa.close_state))
+        hint = f" (legal next: {', '.join(legal)})" if legal else " (CAPA is terminal)"
+        raise _conflict(
+            "invalid_capa_transition",
+            f"CAPA in {capa.close_state.value} cannot move to Verify{hint}",
+        )
+    # SoD-4: verifier ≠ implementer (severity-aware), under FOR UPDATE, BEFORE any grant has say.
+    stages = await repo.list_capa_stages(session, capa.id)
+    implementer_ids = derive_implementer_ids(
+        (s.stage, s.created_by, s.content_block) for s in stages
+    )
+    allow = await repo.allow_capa_self_verify(session, actor.org_id)
+    if capa_self_verify_blocked(
+        actor.id, implementer_ids, severity=capa.severity, allow_capa_self_verify=allow
+    ):
+        raise _conflict(
+            "sod_self_verify",
+            "Verification refused: the CAPA's action implementer may not verify it (SoD-4)",
+        )
+    sealed: dict[str, Any] = {**content_block, "decision": decision, "verified_by": str(actor.id)}
+    stage_id = uuid.uuid4()  # pre-gen so signature ↔ stage cross-reference with no UPDATE
+    sig = sig_sink.record(
+        session,
+        SignatureEvent(
+            org_id=actor.org_id,
+            signed_object_id=stage_id,
+            meaning="verify",
+            signer_user_id=actor.id,
+            signed_object_type="capa_stage",
+            content_digest=_content_digest(sealed),
+            auth_context={"acr": "SESSION"},
+        ),
+    )
+    await session.flush()  # the sink adds but does NOT flush — populate sig.id for the FK
+    session.add(
+        CapaStage(
+            id=stage_id,
+            org_id=actor.org_id,
+            capa_id=capa.id,
+            stage=CapaCloseState.Verify,
+            content_block=sealed,
+            signed_event_id=sig.id if sig is not None else None,
+            cycle_marker=capa.cycle_marker,
+            created_by=actor.id,
+        )
+    )
+    before = capa.close_state
+    capa.close_state = CapaCloseState.Verify
+    emit_record_event(
+        session,
+        actor,
+        EventType.CAPA_TRANSITIONED,
+        capa.id,
+        before={"close_state": before.value},
+        after={
+            "close_state": CapaCloseState.Verify.value,
+            "decision": decision,
+            "signed_event_id": str(sig.id) if sig is not None else None,
+            "cycle_marker": capa.cycle_marker,
+        },
+    )
+    await session.commit()
+    await session.refresh(capa)
+    return capa
+
+
+async def close_capa(session: AsyncSession, actor: AppUser, capa_id: uuid.UUID) -> Capa:
+    """The M4 closure gate (gate ``capa.close``, doc 10 §6.4). Requires ``close_state == Verify``;
+    reads the CURRENT-cycle Verify decision + derives the M4 evidence booleans server-side under the
+    ``capa`` FOR UPDATE, then adjudicates via the pure :func:`adjudicate_capa_closure`:
+
+    - ``effective`` + root_cause ∧ implemented-action-with-evidence ∧ effectiveness-evidence →
+      ``Verify → Closed`` (the audit-close gate of S-aud-2 becomes satisfiable here in production).
+    - ``not_effective`` → the effectiveness LOOP: ``Verify → RootCause``, ``cycle_marker++`` (a
+      revised plan must be re-proposed + re-approved).
+    - ``effective`` but an evidence clause is missing → 409 ``capa_close_incomplete`` (the recorded
+      verification is NOT discarded — the QM links the missing evidence and re-closes).
+
+    Evidence presence is **current-cycle-scoped** (the Implement / Verify stages of this iteration);
+    ``root_cause`` is cycle-agnostic (the established RCA carries across loop iterations)."""
+    capa = await repo.get_capa(session, capa_id, for_update=True)
+    if capa is None or capa.org_id != actor.org_id:
+        raise _not_found("CAPA")
+    if capa.close_state is not CapaCloseState.Verify:
+        raise _conflict(
+            "invalid_capa_transition",
+            f"CAPA in {capa.close_state.value} cannot be closed (must be Verify)",
+        )
+    cycle = capa.cycle_marker
+    stages = await repo.list_capa_stages(session, capa.id)
+    verify_stages = [
+        s for s in stages if s.stage is CapaCloseState.Verify and s.cycle_marker == cycle
+    ]
+    decision = (verify_stages[-1].content_block or {}).get("decision") if verify_stages else None
+    if decision not in VERIFIER_DECISIONS:  # no valid verification recorded for this cycle
+        raise _conflict(
+            "capa_not_verified", "No effectiveness verification recorded for this cycle"
+        )
+    impl_ids = [
+        s.id for s in stages if s.stage is CapaCloseState.Implement and s.cycle_marker == cycle
+    ]
+    verify_ids = [s.id for s in verify_stages]
+    with_evidence = await repo.stages_with_evidence(session, impl_ids + verify_ids)
+    outcome, missing = adjudicate_capa_closure(
+        decision=decision,
+        has_root_cause=any(s.stage is CapaCloseState.RootCause for s in stages),
+        has_implemented_with_evidence=any(sid in with_evidence for sid in impl_ids),
+        has_effectiveness_evidence=any(sid in with_evidence for sid in verify_ids),
+    )
+    if outcome is ClosureOutcome.INCOMPLETE:
+        raise _conflict(
+            "capa_close_incomplete",
+            "Cannot close (effective verification missing evidence): " + ", ".join(missing),
+        )
+    target = CapaCloseState.Closed if outcome is ClosureOutcome.CLOSE else CapaCloseState.RootCause
+    if not transition_allowed(capa.close_state, target):  # defensive — Verify→{Closed,RootCause}
+        raise _conflict(
+            "invalid_capa_transition",
+            f"CAPA in {capa.close_state.value} cannot move to {target.value}",
+        )
+    before = capa.close_state
+    if outcome is ClosureOutcome.LOOP:
+        capa.cycle_marker = cycle + 1  # the next implement/verify iteration; under FOR UPDATE
+    capa.close_state = target
+    emit_record_event(
+        session,
+        actor,
+        EventType.CAPA_TRANSITIONED,
+        capa.id,
+        before={"close_state": before.value, "cycle_marker": cycle},
+        after={
+            "close_state": target.value,
+            "outcome": outcome.value,
+            "decision": decision,
+            "cycle_marker": capa.cycle_marker,
+        },
+    )
+    await session.commit()
+    await session.refresh(capa)
+    return capa
 
 
 # --- NCR (own table) --------------------------------------------------------------------------
