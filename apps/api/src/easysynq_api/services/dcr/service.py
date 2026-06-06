@@ -37,12 +37,18 @@ from ...db.models._dcr_enums import (
     ImpactDimension,
 )
 from ...db.models._signature_enums import SignatureMeaning, SignedObjectType
-from ...db.models._vault_enums import ChangeSignificance, DocumentKind
+from ...db.models._vault_enums import (
+    ChangeSignificance,
+    DocumentCurrentState,
+    DocumentKind,
+    VersionState,
+)
 from ...db.models._workflow_enums import TaskState, WorkflowSubjectType
 from ...db.models.app_user import AppUser
 from ...db.models.audit_event import AuditEvent
 from ...db.models.dcr import Dcr
 from ...db.models.dcr_stage_event import DcrStageEvent
+from ...db.models.document_version import DocumentVersion
 from ...db.models.documented_information import DocumentedInformation
 from ...db.models.impact_assessment import ImpactAssessment
 from ...db.models.signature_event import SignatureEvent as SignatureEventRow
@@ -51,7 +57,9 @@ from ...domain.dcr import transition_allowed
 from ...domain.vault import format_identifier
 from ...logging import request_id_var
 from ...problems import ProblemException
+from ..vault import lifecycle
 from ..vault import repository as vault_repo
+from ..vault.audit import VaultAuditSink
 from ..vault.signature import SignatureEvent, SignatureEventSink
 from ..workflow import engine
 from ..workflow import repository as wf_repo
@@ -173,10 +181,12 @@ async def raise_dcr(
     source_link_type: DcrSourceLinkType | None = None,
     source_link_id: uuid.UUID | None = None,
     proposed_effective_from: datetime.datetime | None = None,
+    spawn_idempotency_key: str | None = None,
     _commit: bool = True,
 ) -> Dcr:
     """Raise a DCR at ``Open`` (doc 15 POST /dcrs). Allocates a ``DCR-{YYYY}-{SEQ}`` identifier,
-    writes the genesis stage event + the ``DCR_RAISED`` audit, all in one transaction."""
+    writes the genesis stage event + the ``DCR_RAISED`` audit, all in one transaction.
+    ``spawn_idempotency_key`` (S-dcr-5 CAPA→DCR loop) stamps the retry-dedup key."""
     await _resolve_target(session, actor, change_type, target_document_id)
     year = _now().year
     seq = await vault_repo.allocate_seq(session, actor.org_id, _DCR_PREFIX, str(year))
@@ -191,6 +201,7 @@ async def raise_dcr(
         source_link_type=source_link_type,
         source_link_id=source_link_id,
         proposed_effective_from=proposed_effective_from,
+        spawn_idempotency_key=spawn_idempotency_key,
         state=DcrState.Open,
         created_by=actor.id,
     )
@@ -698,3 +709,247 @@ async def decide_dcr_approval(
     result["dcr_state"] = dcr.state.value
     result["signature_event_id"] = str(sig_id) if sig_id is not None else None
     return result
+
+
+# --- S-dcr-5: implement / close (DCR-as-orchestrator; doc 05 §5.5/§6/§7.3) --------------------
+
+
+def _append_implemented(
+    session: AsyncSession,
+    actor: AppUser,
+    dcr: Dcr,
+    *,
+    resulting_version_id: uuid.UUID | None,
+) -> None:
+    """Append the Approved→Implemented stage event + flip ``state`` + emit ``DCR_TRANSITIONED`` (the
+    cancel/route transition skeleton). The caller owns the commit (folded into the vault action's
+    txn for RETIRE, or its own commit for REVISE/CREATE) so the flip is atomic with the change."""
+    before = dcr.state
+    rv = str(resulting_version_id) if resulting_version_id else None
+    session.add(
+        DcrStageEvent(
+            org_id=actor.org_id,
+            dcr_id=dcr.id,
+            from_state=before,
+            to_state=DcrState.Implemented,
+            actor_id=actor.id,
+            payload={"change_type": dcr.change_type.value, "resulting_version_id": rv},
+        )
+    )
+    dcr.state = DcrState.Implemented
+    _emit_dcr(
+        session,
+        actor,
+        EventType.DCR_TRANSITIONED,
+        dcr.id,
+        before={"state": before.value},
+        after={"state": DcrState.Implemented.value, "resulting_version_id": rv},
+    )
+
+
+async def _latest_approved_version(
+    session: AsyncSession, doc_id: uuid.UUID
+) -> DocumentVersion | None:
+    # FOR UPDATE: locking the version row makes the "claim it for this implement" (set dcr_id +
+    # effective_from) atomic vs a concurrent REVISE implement on the same document — without it two
+    # DCRs could both link the same version (the cross-FK has no row-uniqueness; the diff-critic
+    # race).
+    return (
+        await session.execute(
+            select(DocumentVersion)
+            .where(
+                DocumentVersion.document_id == doc_id,
+                DocumentVersion.version_state == VersionState.Approved,
+            )
+            .order_by(DocumentVersion.version_seq.desc())
+            .limit(1)
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+
+
+def _assert_version_unclaimed(version: DocumentVersion) -> None:
+    """A version may be the resulting version of at most one DCR implement — reject a second claim
+    (the cross-FK back-edge would otherwise be silently overwritten). Checked under the version's
+    FOR UPDATE lock so concurrent implements serialize."""
+    if version.dcr_id is not None:
+        raise _conflict(
+            "version_already_linked",
+            "this version was already linked by another DCR's implement",
+        )
+
+
+async def _resolve_implement_version(
+    session: AsyncSession,
+    actor: AppUser,
+    dcr: Dcr,
+    resulting_version_id: uuid.UUID | None,
+) -> DocumentVersion:
+    """The Approved version a REVISE/CREATE implement will release (RETIRE never calls this).
+    REVISE → the target's latest Approved revision (409 ``no_approved_draft`` if none); CREATE → the
+    out-of-band-authored ``resulting_version_id`` (422 if absent; 404 cross-org; 409 if not
+    Approved). Validates the version belongs to a controlled Document so a Record id cannot be
+    released."""
+    if dcr.change_type is DcrChangeType.REVISE:
+        if (
+            dcr.target_document_id is None
+        ):  # defensive (the create-iff-no-target CHECK guarantees it)
+            raise _not_found("Document")
+        version = await _latest_approved_version(session, dcr.target_document_id)
+        if version is None:
+            raise _conflict(
+                "no_approved_draft",
+                "the target has no Approved revision to release; approve the revision first",
+            )
+        _assert_version_unclaimed(version)
+        return version
+    if resulting_version_id is None:  # CREATE
+        raise _validation_error(
+            "resulting_version_id",
+            "required",
+            "a CREATE DCR implement must reference the authored version to release",
+        )
+    version = (
+        await session.execute(
+            select(DocumentVersion)
+            .where(DocumentVersion.id == resulting_version_id)
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if version is None or version.org_id != actor.org_id:
+        raise _not_found("Version")
+    doc = await session.get(DocumentedInformation, version.document_id)
+    if doc is None or doc.org_id != actor.org_id or doc.kind is not DocumentKind.DOCUMENT:
+        raise _not_found("Document")
+    if version.version_state is not VersionState.Approved:
+        raise _conflict(
+            "version_not_approved",
+            f"the resulting version is {version.version_state.value}, not Approved",
+        )
+    _assert_version_unclaimed(version)
+    return version
+
+
+async def implement_dcr(
+    session: AsyncSession,
+    actor: AppUser,
+    dcr_id: uuid.UUID,
+    *,
+    sink: VaultAuditSink,
+    sig_sink: SignatureEventSink,
+    resulting_version_id: uuid.UUID | None = None,
+    force_retire: bool = False,
+    override_justification: str | None = None,
+) -> Dcr:
+    """Approved → Implemented (doc 15 POST /dcrs/{id}/implement). DCR-as-orchestrator: the DCR
+    drives the vault action for its change_type, atomically with the FSM flip:
+
+    - **REVISE/CREATE** → schedule the resulting version's go-live: set ``effective_from``
+      (``proposed_effective_from`` or now) + the cross-FK link (``document_version.dcr_id`` +
+      ``dcr.resulting_version_id``) + flip → Implemented, in ONE commit. The ``release_due``
+      Beat sweep then runs the SERIALIZABLE single-Effective cutover (the human implementer's
+      ``document.release`` + SoD-2 were enforced at the endpoint; the sweep cutover is
+      system-attributed — the scheduled-release norm). Close requires the version Effective.
+    - **RETIRE** → ``lifecycle.obsolete`` (runs the §7.3 gate then mutates + commits the SAME
+      session) atomically with the flip; a coverage gap is 409 unless ``force_retire`` + a reason.
+
+    The endpoint enforces ``changeRequest.implement`` AND the underlying ``document.release`` /
+    ``document.obsolete`` (no DCR side-door past document control) before calling this."""
+    dcr = await repo.get_dcr(session, dcr_id, for_update=True)
+    if dcr is None or dcr.org_id != actor.org_id:
+        raise _not_found("DCR")
+    if not transition_allowed(dcr.state, DcrState.Implemented):
+        raise _conflict(
+            "dcr_not_implementable", f"A DCR in {dcr.state.value} cannot be implemented"
+        )
+
+    if dcr.change_type is DcrChangeType.RETIRE:
+        if dcr.target_document_id is None:  # defensive
+            raise _not_found("Document")
+        doc = await session.get(DocumentedInformation, dcr.target_document_id)
+        if doc is None or doc.org_id != actor.org_id:
+            raise _not_found("Document")
+        _append_implemented(session, actor, dcr, resulting_version_id=None)
+        # obsolete() runs the §7.3 gate then mutates + commits the SAME session — the DCR flip
+        # commits atomically with the obsoletion (a blocked gate / illegal move rolls it back).
+        await lifecycle.obsolete(
+            session,
+            sink,
+            sig_sink,
+            actor,
+            doc,
+            reason=dcr.reason_text,
+            force_retire=force_retire,
+            override_justification=override_justification,
+        )
+        await session.refresh(dcr)
+        return dcr
+
+    # REVISE / CREATE: schedule the cutover (immediate = now → swept on the next release_due tick).
+    version = await _resolve_implement_version(session, actor, dcr, resulting_version_id)
+    version.effective_from = dcr.proposed_effective_from or _now()
+    version.dcr_id = dcr.id
+    dcr.resulting_version_id = version.id
+    _append_implemented(session, actor, dcr, resulting_version_id=version.id)
+    await session.commit()
+    await session.refresh(dcr)
+    return dcr
+
+
+async def _assert_change_effective(session: AsyncSession, dcr: Dcr) -> None:
+    """The §5.5 close gate: the implemented change must have actually taken effect — REVISE/CREATE →
+    the resulting version is Effective (the cutover sweep ran); RETIRE → the target is Obsolete."""
+    if dcr.change_type is DcrChangeType.RETIRE:
+        doc = (
+            await session.get(DocumentedInformation, dcr.target_document_id)
+            if dcr.target_document_id is not None
+            else None
+        )
+        if doc is None or doc.current_state is not DocumentCurrentState.Obsolete:
+            raise _conflict("dcr_effectivity_pending", "the retirement has not yet taken effect")
+        return
+    if dcr.resulting_version_id is None:
+        raise _conflict("dcr_effectivity_pending", "no resulting version is linked yet")
+    version = await session.get(DocumentVersion, dcr.resulting_version_id)
+    # "Took effect" = the cutover ran, i.e. the version LEFT Approved. It may since have been
+    # Superseded by a later revision or Obsoleted — all still count (the change went live). Only a
+    # still-Approved version (immediate-pending OR future-scheduled) blocks the close.
+    if version is None or version.version_state is VersionState.Approved:
+        raise _conflict(
+            "dcr_effectivity_pending",
+            "the resulting version is not yet Effective (the scheduled cutover is pending)",
+        )
+
+
+async def close_dcr(session: AsyncSession, actor: AppUser, dcr_id: uuid.UUID) -> Dcr:
+    """Implemented → Closed (doc 15 POST /dcrs/{id}/close, gate ``changeRequest.close``). The close
+    gate requires the change to have actually taken effect (§5.5); 409 ``dcr_effectivity_pending``
+    while a scheduled cutover is still outstanding."""
+    dcr = await repo.get_dcr(session, dcr_id, for_update=True)
+    if dcr is None or dcr.org_id != actor.org_id:
+        raise _not_found("DCR")
+    if not transition_allowed(dcr.state, DcrState.Closed):
+        raise _conflict("dcr_not_closable", f"A DCR in {dcr.state.value} cannot be closed")
+    await _assert_change_effective(session, dcr)
+    before = dcr.state
+    session.add(
+        DcrStageEvent(
+            org_id=actor.org_id,
+            dcr_id=dcr.id,
+            from_state=before,
+            to_state=DcrState.Closed,
+            actor_id=actor.id,
+        )
+    )
+    dcr.state = DcrState.Closed
+    _emit_dcr(
+        session,
+        actor,
+        EventType.DCR_TRANSITIONED,
+        dcr.id,
+        before={"state": before.value},
+        after={"state": DcrState.Closed.value},
+    )
+    await session.commit()
+    await session.refresh(dcr)
+    return dcr

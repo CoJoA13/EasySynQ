@@ -75,13 +75,17 @@ Celery workers · Keycloak (auth) · Gotenberg/LibreOffice (rendering) · Caddy 
 
 **MVP COMPLETE** (S0–S11). **v1 in progress.** Families shipped: **Records & evidence** (S-rec-1..4 + Evidence
 Packs) ✅ · **Ingestion** (S-ing-1..5) ✅ · **Audits/Findings/CAPA** (S-aud-1/2 + S-wf-engine + S-capa-1/2/3 +
-S-aud-capa-pack) ✅. **Revision & change depth (DCR family, doc 05, R40) — STARTED:** S-dcr-1 (core + intake, mig
-`0040`), S-dcr-2 (where-used/impact + assess, `0041`), S-dcr-3a (metadata + text redline diff, zero-migration),
-S-dcr-3b (worker-async visual page-image diff via pypdfium2+Pillow, `visual_diff` cache table, mig `0042`),
-S-dcr-4 (DCR routing + approval via the declarative engine — `dcr_approval` workflow [ROUTER on significance], per-approver
-signatures, `POST /dcrs/{id}/route` + the DCR `tasks/{id}/decision` dispatch, mig `0043`).
-**Next:** S-dcr-5 (implement/close + effectivity + the CAPA→DCR loop + the obsoletion 409 gate) — closes the DCR family.
-**Migration head `0043` (next `0044`).** Full narrative + deferred v1/v1.x residuals: **`.claude/rules/slice-history.md`**.
+S-aud-capa-pack) ✅ · **Revision & change depth (DCR family, doc 05, R40)** ✅. The DCR family: S-dcr-1 (core +
+intake, mig `0040`), S-dcr-2 (where-used/impact + assess, `0041`), S-dcr-3a (metadata + text redline diff,
+zero-migration), S-dcr-3b (worker-async visual page-image diff via pypdfium2+Pillow, `0042`), S-dcr-4 (DCR routing +
+approval via the declarative engine — `dcr_approval` workflow [ROUTER on significance], per-approver signatures, `0043`),
+**S-dcr-5 (implement/close + the shared-path §7.3 obsoletion gate + the CAPA→DCR loop + the deferred cross-FK, `0044`) —
+CLOSES the DCR family.** DCR-as-orchestrator: `POST /dcrs/{id}/implement` drives the vault action atomically (REVISE/CREATE
+schedule the `release_due` cutover; RETIRE obsoletes) + enforces the underlying `document.release`/`document.obsolete`
+(SoD-2, no side-door); the §7.3 gate now fires on the SHARED `document.obsolete` too (`force_retire`+justification);
+`POST /capas/{id}/raise-dcr` (1:N, Idempotency-Key).
+**Next:** the v1.x drift family (scheduled re-review D5 + drift detection D1–D4); or the next v1 family per the owner.
+**Migration head `0044` (next `0045`).** Full narrative + deferred v1/v1.x residuals: **`.claude/rules/slice-history.md`**.
 
 ## Working preferences
 

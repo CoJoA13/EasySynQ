@@ -766,6 +766,41 @@ The `document_link` table (doc 14 §5.6) is editable metadata (`SELECT,INSERT,DE
 requester_annotation preserved). No new permission keys (where-used=`document.read`, link CRUD=
 `document.manage_metadata`, assess=`changeRequest.assess`, impact=`changeRequest.read`/`.assess`).
 
+**S-dcr-5 addendum (owner — implement/close + the obsoletion gate + the CAPA→DCR loop, mig 0044).** The
+FINAL DCR slice; **the DCR family is now COMPLETE.** Owner decisions: (1) **Implement model = DCR-as-orchestrator**
+— `POST /dcrs/{id}/implement` (gate `changeRequest.implement`, already seeded in 0004) DRIVES the vault action
+for the change_type (reconciling doc 05/15's "DCR drives the release" over doc 10 §3's "spawn-a-revision"): REVISE
+releases the target's Approved revision, CREATE releases the out-of-band-authored `resulting_version_id`, RETIRE
+obsoletes the target. The flip is **atomic by construction** — REVISE/CREATE set the version's `effective_from`
+(`proposed_effective_from` or now) + the cross-FK link + flip → Implemented in ONE commit, and the EXISTING
+`release_due` Beat sweep performs the SERIALIZABLE single-Effective cutover (so a DCR-driven release is
+system-attributed, the scheduled-release norm; no new reaper); RETIRE folds the flip into `lifecycle.obsolete`'s
+own commit. (2) **No DCR side-door past document control** — the implement endpoint ALSO enforces the underlying
+`document.release` (REVISE/CREATE, with the full SoD-2 overlay — author≠releaser + the sole-approver-release gate +
+sig_hook) / `document.obsolete` (RETIRE) IN ADDITION to `changeRequest.implement`. SoD-2 is keyed on
+`document.release` in the PDP, so a hand-rolled service check would silently skip the approver-side leg; the
+endpoint `enforce("document.release", scope)` over the promoted version is the only faithful mechanism (shared with
+the direct release endpoint via the extracted `enrich_release_sod_scope`). So the author of a revision cannot
+self-implement it (403 `sod_violation`). (3) **The §7.3 obsoletion gate moves to the SHARED `lifecycle.obsolete()`
+— BOTH the direct `POST /documents/{id}/obsolete` AND the DCR RETIRE-implement enforce it** (a 409
+`obsoletion_blocked` unless `force_retire` + `override_justification`, recorded on the signature intent + audit) —
+**superseding the S-dcr-2 addendum's "defer to the RETIRE call site / leave document.obsolete untouched"**: the
+gate must have no bypass (doc 05 §7.3 "blocks silent obsoletion" is unconditional). Scoped to the T11
+document-level branch only (a T12 Superseded-version archive removes no coverage). The §7.3 input reads +
+`evaluate_obsoletion` live ONCE in `services/vault/obsoletion.py` (the where-used advisory consumes the same
+function, so gate + advisory can't diverge; no vault→dcr import cycle — dcr→vault is the allowed direction).
+(4) **`Implemented → Closed`** (gate `changeRequest.close`) requires the change to have actually taken effect
+(§5.5 — the resulting version Effective / the target Obsolete; 409 `dcr_effectivity_pending` while a scheduled
+cutover is outstanding). (5) **CAPA→DCR loop = a dedicated `POST /capas/{id}/raise-dcr`** (gate
+`changeRequest.create`; doc 02 Cl 10.2 / doc 05 §5.1, the §10→§7.5 loop) via `raise_dcr(_commit=False,
+source_link_type=capa)`. **1:N** — a CAPA may spawn child DCRs (doc 05 §5.3), so NO one-DCR-per-CAPA latch; an
+`Idempotency-Key` (the new `dcr.spawn_idempotency_key` partial-UNIQUE) makes a retry return the same DCR (201
+new / 200 replay). A terminal (Closed/Rejected) CAPA cannot spawn (409 `capa_terminal`). (6) **The deferred
+cross-FK** `document_version.dcr_id` ↔ `dcr.resulting_version_id` lands (mig 0044, `use_alter` 2-table cycle, the
+`capa.origin_finding_id`↔`audit_finding` precedent). Mig 0044 = the cross-FK pair + `spawn_idempotency_key` +
+partial-UNIQUE + the `changeRequest.implement` grant-backfill (Process Owner + QMS Owner). NO new permission key
+(R5), NO new event type (reuse `DCR_TRANSITIONED`), NO new enum value (`Implemented`/`Closed` exist since 0040).
+
 **Slices.** **S-dcr-1** (DCR core + intake: `dcr` own-table mutable-state FSM + append-only `dcr_stage_event`
 [`REVOKE UPDATE,DELETE`] + `DCR-{YYYY}-{SEQ}` 4-digit identifier + `domain/dcr/fsm.py` + `DCR_RAISED`/
 `DCR_UPDATED`/`DCR_TRANSITIONED` events + `audit_object_type=dcr`; endpoints POST/GET `/dcrs`, GET/PATCH
@@ -773,11 +808,14 @@ requester_annotation preserved). No new permission keys (where-used=`document.re
 `document_link` doc↔doc graph + CRUD + `GET /documents/{id}/where-used` [the §7.2 categories + the §7.3
 `obsoletion_safety` advisory] + `impact_assessment` + `POST /dcrs/{id}/assess` [Open→Assessed, auto-populates
 the 7 §5.3 dimensions] + `GET/PUT /dcrs/{id}/impact`; migration `0041`; obsoletion enforcement deferred to
-S-dcr-5 per the addendum). Next: S-dcr-3 (diff), S-dcr-4 (routing + approval, subject_type=DCR via the engine),
-S-dcr-5 (implement/close + effectivity + the CAPA→DCR loop, the deferred cross-FK
-`document_version.dcr_id` ↔ `dcr.resulting_version_id`).
+S-dcr-5 per the addendum). **S-dcr-3** (diff: metadata + text redline [3a, zero-migration] + visual page-image
+[3b, mig `0042`]). **S-dcr-4** (routing + approval, subject_type=DCR via the engine; mig `0043`). **S-dcr-5**
+(implement/close + the shared-path obsoletion gate + the CAPA→DCR loop + the deferred cross-FK
+`document_version.dcr_id` ↔ `dcr.resulting_version_id`; mig `0044`) — **CLOSES the DCR family.**
 
-**Back-propagation:** 05 (§5.5 reject-loop → Open), 14 (§7), 15 (§8.7), 16. Supersedes B5 (DCR dual-lifecycle).
+**Back-propagation:** 05 (§5.5 reject-loop → Open; §7.3 gate on the shared `document.obsolete`), 14 (§7 cross-FK
+realized), 15 (§8.7 implement/close are explicit gated endpoints — superseding the "engine auto-drives" note),
+16. Supersedes B5 (DCR dual-lifecycle).
 
 ---
 

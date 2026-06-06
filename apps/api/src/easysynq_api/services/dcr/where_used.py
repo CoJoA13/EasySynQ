@@ -20,11 +20,10 @@ from ...db.models._dcr_enums import ImpactDimension
 from ...db.models._process_enums import ProcessState
 from ...db.models._vault_enums import ChangeSignificance
 from ...db.models.dcr import Dcr
-from ...domain.dcr import bucket_links, evaluate_obsoletion
+from ...domain.dcr import bucket_links
 from ..vault import repository as vault_repo
+from ..vault.obsoletion import assemble_obsoletion_safety
 from . import repository as repo
-
-_EFFECTIVE = "Effective"
 
 
 async def build_where_used(
@@ -58,26 +57,10 @@ async def build_where_used(
 
     related = await repo.caused_by_links(session, did)
 
-    # §7.3 obsoletion safety (advisory in S-dcr-2; the blocking gate is S-dcr-5). Build the
-    # (id, label) pairs from the typed ORM rows (not the str|bool dicts) so the predicate's
-    # list[tuple[str, str]] contract holds.
-    governing_active = [
-        (str(proc.id), proc.name)
-        for _link, proc in process_links
-        if proc.state is ProcessState.ACTIVE
-    ]
-    referencing_effective = [
-        (link["document_id"], link["identifier"])
-        for link in buckets["referenced_by"]
-        if link["current_state"] == _EFFECTIVE
-    ]
-    sole_star = await repo.sole_star_coverage(session, oid, did)
-    sole_star_pairs = [(c["number"], f"{c['number']} {c['title']}") for c in sole_star]
-    safety = evaluate_obsoletion(
-        governing_active_processes=governing_active,
-        referencing_effective_documents=referencing_effective,
-        sole_star_clauses=sole_star_pairs,
-    )
+    # §7.3 obsoletion safety — delegated to the shared vault gate so this advisory and the blocking
+    # gate in lifecycle.obsolete() compute the SAME decision from ONE place (S-dcr-5; no vault→dcr
+    # cycle — dcr→vault is the allowed direction).
+    safety = await assemble_obsoletion_safety(session, oid, did)
 
     return {
         "document_id": str(doc_id),

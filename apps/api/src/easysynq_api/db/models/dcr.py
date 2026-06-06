@@ -102,11 +102,26 @@ class Dcr(Base):
     proposed_effective_from: Mapped[datetime.datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
-    # Forward seam: the version this DCR produced. NO FK in S-dcr-1 (S-dcr-5 adds the deferred
-    # cross-FK).
+    # The immutable version this DCR produced (REVISE/CREATE set it at implement; NULL for RETIRE).
+    # S-dcr-5 closes the deferred ``dcr ↔ document_version`` 2-table cycle: this forward edge is a
+    # plain named FK, the reverse ``document_version.dcr_id`` carries ``use_alter`` to break the
+    # metadata sort (the ``current_effective_version_id`` precedent). The name matches mig 0044's
+    # ``op.create_foreign_key`` exactly so ``alembic check`` stays clean.
     resulting_version_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), nullable=True
+        UUID(as_uuid=True),
+        ForeignKey(
+            "document_version.id",
+            ondelete="RESTRICT",
+            name="fk_dcr_resulting_version_id_document_version",
+        ),
+        nullable=True,
     )
+    # S-dcr-5 CAPA→DCR spawn idempotency (POST /capas/{id}/raise-dcr). An ``Idempotency-Key`` header
+    # is stamped here; a migration-managed partial-UNIQUE ``(org_id, source_link_id,
+    # spawn_idempotency_key) WHERE spawn_idempotency_key IS NOT NULL`` makes a retry return the SAME
+    # DCR (scoped to the originating object) while preserving 1:N spawning (distinct keys → distinct
+    # DCRs; the import-decision idempotency precedent).
+    spawn_idempotency_key: Mapped[str | None] = mapped_column(Text, nullable=True)
     state: Mapped[DcrState] = mapped_column(
         dcr_state_enum, server_default=text("'Open'"), nullable=False
     )
