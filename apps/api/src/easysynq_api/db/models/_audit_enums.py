@@ -68,6 +68,11 @@ class AuditObjectType(enum.Enum):
     # ``record``. Added via ``ALTER TYPE audit_object_type ADD VALUE`` in 0036 (the precedent
     # above).
     ncr = "ncr"
+    # the DCR own-table (S-dcr-1, doc 05 §5 / doc 14 §7) — DCR_RAISED / DCR_UPDATED /
+    # DCR_TRANSITIONED key here on the ``dcr.id`` (a mutable workflow object, NOT a record subtype
+    # per R22, so it cannot reuse ``record``). Added via ``ALTER TYPE audit_object_type ADD VALUE``
+    # in 0040 (the ``ncr`` precedent above).
+    dcr = "dcr"
 
 
 class EventType(enum.Enum):
@@ -313,6 +318,14 @@ class EventType(enum.Enum):
     # head`` rebuilds the type from EVENT_TYPE_VALUES, so the members live here too).
     AUDIT_FINDING_CREATED = "AUDIT_FINDING_CREATED"
     AUDIT_FINDING_CORRECTED = "AUDIT_FINDING_CORRECTED"
+    # Document Change Requests (S-dcr-1, doc 05 §5 / doc 14 §7). The DCR is a mutable workflow
+    # object (object_type=dcr, NOT a record). DCR_RAISED = intake (Open); DCR_UPDATED =
+    # edit-while-Open; DCR_TRANSITIONED = any state move (cancel in S-dcr-1; assess/route/approve/
+    # implement/close later). Added via ALTER TYPE event_type ADD VALUE in 0040 (the additive
+    # pattern; a from-scratch ``upgrade head`` rebuilds the type from EVENT_TYPE_VALUES too).
+    DCR_RAISED = "DCR_RAISED"
+    DCR_UPDATED = "DCR_UPDATED"
+    DCR_TRANSITIONED = "DCR_TRANSITIONED"
 
 
 class CheckpointSinkKind(enum.Enum):

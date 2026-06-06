@@ -72,8 +72,24 @@ enum/task) shipped.
 family's locked model + workflow + SoD posture is **R39** (+declarative-routing · severity-aware SoD-4 · block-until-corrected
 audit close · `audit_program` own-table · the S-capa-3 addendum: Verify→RootCause loop · M4 = real evidence_for_link gate ·
 the S-aud-capa-pack addendum: subject-not-a-pack_item · sealed v2 dossier · PII-projected signers · gap N/A).
-**Next: the owner picks a new v1 backend family** (change-depth / distribution+acks / notification-delivery / planning-clause
-families / owner-assignment) or pivots to the web UI track. **Migration head is `0039` (next `0040`).**
+
+**v1 REVISION & CHANGE DEPTH family (doc 05, the DCR family) — STARTED** (owner decisions **R40**: DCR is an own-table
+mutable-state workflow object [R22, NOT a record] · the InApproval changes-requested loop targets **Open** [doc 15 §8.7,
+superseding doc 05 §5.5's Routed] · keys = the seeded `changeRequest.*` family [R5] · scope-forks: **full** diff [meta+text+
+visual] + a **doc↔doc link table** for where-used · scheduled re-review D5 + drift D1–D4 stay in the v1.x drift family):
+- **S-dcr-1** the DCR core + intake (`0040`) — `dcr` own-table (mutable `state` FSM Open→…→Closed/Cancelled/Rejected;
+  `DCR-{YYYY}-{SEQ}` 4-digit id; `target_document_id` NULL⟺CREATE via the `ck_dcr_create_iff_no_target` CHECK; `source_link_id`
+  polymorphic no-FK; `resulting_version_id` nullable seam) + append-only `dcr_stage_event` (`REVOKE UPDATE,DELETE`;
+  `signed_event_id` FK present, populated S-dcr-4) + 4 enums + pure `domain/dcr/fsm.py` + `audit_object_type=dcr` +
+  `DCR_RAISED`/`DCR_UPDATED`/`DCR_TRANSITIONED`. Endpoints `POST/GET /dcrs`, `GET/PATCH /dcrs/{id}` (assess-gated edit-while-Open),
+  `POST /dcrs/{id}/cancel`; service wires the Open intake + Open→Cancelled (the rest of the FSM is declarative/forward-compat).
+  Grant-backfill: the orphaned `changeRequest.assess` + `changeRequest.close` → Process Owner + QMS Owner (PROCESS placeholder,
+  rides SYSTEM overrides). NO new permission keys.
+
+**Next (S-dcr family):** S-dcr-2 (where-used/impact + `document_link` table + `impact_assessment` + assess), S-dcr-3 (full
+redline/diff), S-dcr-4 (routing + approval, subject_type=DCR via the declarative engine — the S-capa-2 pattern), S-dcr-5
+(implement/close + effectivity polish + the CAPA→DCR loop; the deferred cross-FK `document_version.dcr_id` ↔
+`dcr.resulting_version_id`). **Migration head is `0040` (next `0041`).**
 
 **v1 RECORDS & evidence family (UJ-7 + records) — COMPLETE** ✅ (migs `0023`–`0028`; per-slice
 non-obvious decisions live in the squash-merge commits + the `easysynq-project.md` memory; operating
