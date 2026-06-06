@@ -264,6 +264,59 @@ async def spawn_capa_from_complaint(
 # --- CAPA (record subtype) --------------------------------------------------------------------
 
 
+async def build_capa(
+    session: AsyncSession,
+    actor: AppUser,
+    *,
+    title: str,
+    severity: NcSeverity,
+    source: CapaSource,
+    process_id: uuid.UUID | None = None,
+    origin_finding_id: uuid.UUID | None = None,
+    raised_block: dict[str, Any],
+    _commit: bool = True,
+) -> Capa:
+    """The canonical CAPA-create core (S-aud-2 extraction): capture the immutable record, insert the
+    ``Capa`` at ``Raised``, append the sealed ``Raised`` ``capa_stage`` block, emit ``CAPA_RAISED``.
+    With ``_commit=False`` the caller owns the transaction (the S-aud-2 NC->CAPA auto-link sets
+    ``audit_finding.auto_capa_id`` + emits the finding events + commits once). ``origin_finding_id``
+    is the reverse half of the auto-link -- NULL for a directly-raised CAPA (the R39 invariant)."""
+    record = await capture_record(session, actor, record_type="CAPA", title=title, _commit=False)
+    capa = Capa(
+        id=record.id,
+        org_id=actor.org_id,
+        origin_finding_id=origin_finding_id,
+        source=source,
+        severity=severity,
+        process_id=process_id,
+        close_state=CapaCloseState.Raised,
+        cycle_marker=0,
+    )
+    session.add(capa)
+    await session.flush()
+    session.add(
+        CapaStage(
+            org_id=actor.org_id,
+            capa_id=capa.id,
+            stage=CapaCloseState.Raised,
+            content_block=raised_block,
+            cycle_marker=0,
+            created_by=actor.id,
+        )
+    )
+    emit_record_event(
+        session,
+        actor,
+        EventType.CAPA_RAISED,
+        capa.id,
+        after={"source": source.value, "severity": severity.value},
+    )
+    if _commit:
+        await session.commit()
+        await session.refresh(capa)
+    return capa
+
+
 async def raise_capa(
     session: AsyncSession,
     actor: AppUser,
@@ -281,39 +334,16 @@ async def raise_capa(
             "source", "reserved", "review_output is reserved for the Management-Review family"
         )
     await _check_process(session, actor, process_id)
-    record = await capture_record(session, actor, record_type="CAPA", title=title, _commit=False)
-    capa = Capa(
-        id=record.id,
-        org_id=actor.org_id,
-        origin_finding_id=None,
-        source=source,
-        severity=severity,
-        process_id=process_id,
-        close_state=CapaCloseState.Raised,
-        cycle_marker=0,
-    )
-    session.add(capa)
-    await session.flush()
-    session.add(
-        CapaStage(
-            org_id=actor.org_id,
-            capa_id=capa.id,
-            stage=CapaCloseState.Raised,
-            content_block={"problem": problem, "source": source.value, "severity": severity.value},
-            cycle_marker=0,
-            created_by=actor.id,
-        )
-    )
-    emit_record_event(
+    return await build_capa(
         session,
         actor,
-        EventType.CAPA_RAISED,
-        capa.id,
-        after={"source": source.value, "severity": severity.value},
+        title=title,
+        severity=severity,
+        source=source,
+        process_id=process_id,
+        raised_block={"problem": problem, "source": source.value, "severity": severity.value},
+        _commit=True,
     )
-    await session.commit()
-    await session.refresh(capa)
-    return capa
 
 
 async def advance_capa_to_containment(

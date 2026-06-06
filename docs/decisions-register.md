@@ -554,6 +554,10 @@ Several modelling + governance choices were locked by the product owner and an a
   `superseded_by_correction IS NULL`), each requiring a linked CAPA at `close_state=Closed`. A legitimately
   rejected NC must be corrected via a `correction_of` finding retyping it (NC → Observation/OFI), which
   supersedes the original and removes it from the live-NC set. No audit ever closes over an uncorrected NC.
+  *(S-aud-2 owner forks:* the finding correction is a **general any-direction retype** — a retype TO an NC
+  auto-creates its mandatory CAPA on the successor and re-enters the gate, not only NC→OBS/OFI; and the
+  finding-create/correct window is **open-until-Closed** — findings may be logged/corrected in any
+  non-terminal audit state, rejected only once the audit is Closed.*)
 - **`audit_program` is an own-table scheduling container, NOT a `documented_information` subtype** — a
   deliberate divergence from doc 14's "a maintained document" phrasing. A programme is a period + coverage +
   a set of planned audits; a version-less `kind=DOCUMENT` would leave an Effective document with no

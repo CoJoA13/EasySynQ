@@ -51,10 +51,12 @@ UJ-5/UJ-6)** as the next family — now **STARTED** (depth-first): **S-aud-1** (
 record lifecycle FSM, mig `0034`) + **S-wf-engine** (the doc-10 declarative workflow engine — multi-stage routing/quorum on
 the existing `workflow_*` tables, mig `0035`) + **S-capa-1** (the CAPA core + intake — `capa` + append-only `capa_stage` +
 `ncr` + `complaint` + the idempotent complaint→CAPA spawn + Raised/Containment + the slice-0 grant-backfill +
-`allow_capa_self_verify`, mig `0036`) shipped. The family's locked model + workflow + SoD posture is **R39**
-(+declarative-routing · severity-aware SoD-4 · block-until-corrected audit close · `audit_program` own-table). **Next: S-aud-2**
-(findings NC/OBS/OFI + the atomic NC→CAPA auto-link + the REAL block-until-corrected audit close gate + the finding
-correction/retype path + enabling the `evidence_for_link` FINDING/CAPA_STAGE validation). **Migration head is now `0036`.**
+`allow_capa_self_verify`, mig `0036`) + **S-aud-2** (audit findings NC/OBS/OFI + the atomic NC→CAPA auto-link + the REAL
+block-until-corrected audit-close gate + the general finding-retype path + `evidence_for_link` FINDING/CAPA_STAGE,
+mig `0037`) shipped. The family's locked model + workflow + SoD posture is **R39** (+declarative-routing · severity-aware
+SoD-4 · block-until-corrected audit close · `audit_program` own-table). **Next: S-capa-2** (RCA + ActionPlan + the
+engine-routed severity approval + the real `signature_event` row write for `capa_stage.signed_event_id`). **Migration head
+is now `0037`.**
 
 **v1 RECORDS & evidence family (UJ-7 + records) — COMPLETE** ✅ (one line each; per-slice non-obvious
 decisions live in the squash-merge commits + the `easysynq-project.md` memory; operating detail in the
@@ -115,7 +117,7 @@ dev-workflow quick-reference below):
 - **S-aud-1** audit programmes/plans/audits + lifecycle FSM (`0034`) — `audit_program`+`audit_plan` own-table
   scheduling containers + `audit` as a `kind=RECORD` shared-PK subtype (captured via `capture_record(_commit=False)`,
   REC-shared identifier, mutable `state`); the linear FSM Scheduled→…→Closing→Closed (FOR-UPDATE + audited-then-commit;
-  Closing→Closed close-gate is a **no-op stub** until S-aud-2 wires the live-NC-findings check); `/audit-programs`+
+  Closing→Closed close-gate was a no-op stub, **now the real live-NC-findings check** as of S-aud-2); `/audit-programs`+
   `/audit-plans`+`/audits`+6 flat-action transitions (gates `audit.{plan,create,conduct,close,read}` — all pre-seeded,
   PROCESS conduct/close via an `_audit_scope` resolver w/ SYSTEM fallback); programme/plan events reuse
   `audit_object_type=audit`, the audit record's reuse `record`.
@@ -143,7 +145,23 @@ dev-workflow quick-reference below):
   reads at SYSTEM. The **slice-0 grant-backfill** (R39/owner): `capa.update`→Process Owner; `ncr.create`→QMS Owner +
   Internal Auditor; `ncr.record_correction`→QMS Owner (PROCESS-placeholder scope, rides SYSTEM overrides — no new
   keys). `system_config.allow_capa_self_verify` (default OFF, /admin/config) is the S-capa-3 SoD-4 seam. NC→CAPA
-  auto-link + findings are S-aud-2; RCA/ActionPlan/Implement/Verify are S-capa-2..3. **Migration head is now `0036`.**
+  auto-link + findings are S-aud-2; RCA/ActionPlan/Implement/Verify are S-capa-2..3.
+
+- **S-aud-2** audit findings + the NC→CAPA auto-link + the REAL close gate (`0037`) — `audit_finding` (a `kind=RECORD`
+  shared-PK subtype via `capture_record(_commit=False)`; `finding_type` NC/OBSERVATION/OFI, `severity` reuses `nc_severity`
+  + a DB CHECK `ck_audit_finding_nc_has_severity`, soft `clause_ref`/`process_ref`, `auto_capa_id`); the atomic
+  `create_finding` — an **NC mandatorily auto-creates** its CAPA in ONE txn via the extracted `build_capa(_commit=False)`
+  (source=audit, process_id from the audit's plan auditee process, `origin_finding_id`=finding.id; SYSTEM-side under the
+  auditor's `finding.create` authority, NOT gated on `capa.create` — auditor independence). The **deferred cross-FK lands**:
+  `capa.origin_finding_id`→`audit_finding` (use_alter back-edge, name-matched) + `audit_finding.auto_capa_id`→`capa`. The
+  **general retype** path (owner fork A) `POST /findings/{id}/correction` supersedes via the record base
+  `correction_of`/`superseded_by_correction` — ANY direction; a retype TO NC auto-creates its CAPA. The **real
+  `_audit_close_gate`** (block-until-corrected, R39) blocks Closing→Closed (409 `audit_close_blocked`) while any LIVE NC
+  (`finding_type=NC` AND not superseded) lacks a linked `capa.close_state=Closed`, via the pure `finding_blocks_close`
+  predicate under the audit FOR UPDATE. Findings **open-until-Closed** (owner fork B). `evidence_for_link` FINDING/CAPA_STAGE
+  validation **enabled** (org-check; the API `Literal` widened). 4 endpoints on `api/audits.py` (`finding.create` via the
+  `_audit_scope`/`_finding_scope` resolvers; `finding.read` SYSTEM). NO new permission keys, NO new Celery task.
+  **Migration head is now `0037`.**
 
 - **Specification** in `docs/` (00–17 + `decisions-register.md`) — complete, adversarially audited, reconciled
   (Register R1–R37 back-propagated). The Register is authoritative.
@@ -323,6 +341,14 @@ create boundary.
     `POST /ncrs {source,description,severity,process_id?}` (gate `ncr.create`) → `PATCH /ncrs/{id}/disposition
     {disposition,notes?}` (gate `ncr.record_correction`, one-shot 409). All ride **SYSTEM overrides** until
     owner-assignment (the family precedent); `allow_capa_self_verify` via `PATCH /admin/config` (S-capa-3 seam).
+  - **Audit findings (S-aud-2):** log via `POST /audits/{id}/findings {finding_type,severity?,clause_ref?,process_ref?,
+    summary?}` (gate `finding.create`; an **NC auto-creates its CAPA** → `auto_capa_id`; NC needs a severity, 422 else;
+    409 once the audit is Closed); read `GET /audits/{id}/findings` + `GET /findings/{id}` (gate `finding.read`); retype
+    `POST /findings/{id}/correction {finding_type,severity?,…}` (gate `finding.create`; **any direction**; to-NC
+    auto-creates a CAPA; 409 if already superseded). The audit **close gate** now 409s `audit_close_blocked` until every
+    live NC has a `capa.close_state=Closed` (the CAPA FSM only reaches Closed in S-capa-3, so close-over-open-NC stays
+    blocked in v1 until that ships). Link evidence to a finding/CAPA-stage via `POST /records/{id}/evidence-links
+    {target_type:"finding"|"capa_stage",target_id}` (gate `record.create`).
 - **⚠ S11 restore + upgrade + encrypted backup (operator):** the durable archive (`easysynq backup run` / the nightly
   Beat job) is now **AES-256-GCM `.tar.enc`** sealed with `BACKUP_ENCRYPTION_KEY` (install.sh generates it into the
   0600 `.env`; **lose it → those archives are unrecoverable** — back it up out-of-band) and bundles the live Keycloak
@@ -359,6 +385,14 @@ create boundary.
 - **A new model module MUST be imported in `db/models/__init__.py`** (+ added to `__all__`) — that file is the sole place
   `Base.metadata` is populated; a CREATEd table whose model isn't imported makes `alembic check` report a phantom-DROP and
   the `migrations` CI job goes red (the 0027 `form_template` lesson; the `tasks/__init__.py` registration precedent).
+- **A migration-created FK/CHECK on an EXISTING column MUST be mirrored in the ORM with a name-matching constraint**
+  (else `alembic check` phantom-DROPs the FK → migrations CI red — `alembic check` compares FKs but NOT CheckConstraint
+  bodies, so a CHECK *name* mismatch is silent but real). For a **deferred cross-FK closing a 2-table cycle** (S-aud-2
+  `capa.origin_finding_id`↔`audit_finding`), the ORM back-edge needs `use_alter=True` + an explicit name and the migration
+  uses `op.create_foreign_key` with that SAME name (the `documented_information.current_effective_version_id` precedent).
+  For a **`ck` constraint, pass the BARE token** (`name="nc_has_severity"`) in BOTH the ORM `__table_args__` AND the
+  migration — the `ck_%(table_name)s_%(constraint_name)s` convention re-tokenizes a full name → a DOUBLED
+  `ck_audit_finding_ck_audit_finding_…` (caught only by inspecting the live constraint name, not by `alembic check`).
 - **Backup/restore drills run as the OWNER role** (`DATABASE_URL_SYNC`; the app role can't `pg_dump`/`CREATE DATABASE`)
   and **never raise** — a missing binary/crash is an honest FAIL, never a 500.
 - **Run the FULL integration suite for mirror/symlink work** — Py3.12 `rglob` follows symlinks, so dir-finders must filter

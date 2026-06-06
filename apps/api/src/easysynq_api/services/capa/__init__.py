@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from .service import (
     advance_capa_to_containment,
+    build_capa,
     capture_complaint,
     create_ncr,
     raise_capa,
@@ -13,6 +14,7 @@ from .service import (
 
 __all__ = [
     "advance_capa_to_containment",
+    "build_capa",
     "capture_complaint",
     "create_ncr",
     "raise_capa",

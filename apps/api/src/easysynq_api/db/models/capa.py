@@ -46,10 +46,21 @@ class Capa(Base):
     org_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("organization.id", ondelete="RESTRICT"), nullable=False
     )
-    # Nullable UUID, NO FK in S-capa-1 (audit_finding lands in S-aud-2, which adds the FK + the
-    # reverse auto_capa_id). The S-capa-1 service MUST NOT write this — it is ALWAYS NULL here, so
-    # S-aud-2's FK addition is safe (no orphaned values). A complaint-/process-raised CAPA has none.
-    origin_finding_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    # The reverse half of the bidirectional NC->CAPA auto-link (forward half:
+    # audit_finding.auto_capa_id). S-aud-2 adds the FK to audit_finding (S-capa-1 left it NULL +
+    # FK-less, so no orphans; a non-finding CAPA keeps it NULL). capa<->audit_finding is a 2-table
+    # cycle (audit_finding.auto_capa_id -> capa), so this back-edge carries use_alter=True + a name
+    # matching 0037's create_foreign_key (the documented_information back-edge precedent).
+    origin_finding_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "audit_finding.id",
+            ondelete="RESTRICT",
+            name="fk_capa_origin_finding_id_audit_finding",
+            use_alter=True,
+        ),
+        nullable=True,
+    )
     source: Mapped[CapaSource] = mapped_column(capa_source_enum, nullable=False)
     severity: Mapped[NcSeverity] = mapped_column(nc_severity_enum, nullable=False)
     process_id: Mapped[uuid.UUID | None] = mapped_column(

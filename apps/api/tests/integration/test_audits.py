@@ -18,16 +18,18 @@ from httpx import AsyncClient
 from sqlalchemy import func, select
 
 from easysynq_api.db.models._audit_enums import AuditObjectType, EventType
-from easysynq_api.db.models._iso_audit_enums import AuditState
+from easysynq_api.db.models._capa_enums import CapaCloseState
+from easysynq_api.db.models._iso_audit_enums import AuditState, FindingType
 from easysynq_api.db.models.app_user import AppUser
 from easysynq_api.db.models.audit_event import AuditEvent
 from easysynq_api.db.models.authz_grant import PermissionOverride
+from easysynq_api.db.models.capa import Capa
 from easysynq_api.db.models.permission import Permission
 from easysynq_api.db.models.scope import Scope
 from easysynq_api.db.session import get_sessionmaker
 from easysynq_api.domain.authz.types import Effect, ScopeLevel
 from easysynq_api.problems import ProblemException
-from easysynq_api.services.audits import advance_audit
+from easysynq_api.services.audits import advance_audit, create_finding
 
 from .test_vault import _auth, _ensure_user
 
@@ -244,3 +246,325 @@ async def test_audit_read_requires_grant(
     h = _auth(token_factory, subject)
     r = await app_client.get("/api/v1/audit-programs", headers=h)
     assert r.status_code == 403, r.text
+
+
+# --- S-aud-2: findings + the NC→CAPA auto-link + the close gate --------------------------------
+
+_FINDING_KEYS = (
+    *_AUDIT_KEYS,
+    "finding.create",
+    "finding.read",
+    "capa.read",
+    "record.create",
+)
+
+
+async def _new_audit(client: AsyncClient, h: dict[str, str]) -> str:
+    program_id = (
+        await client.post("/api/v1/audit-programs", headers=h, json={"title": "P"})
+    ).json()["id"]
+    plan_id = (
+        await client.post(f"/api/v1/audit-programs/{program_id}/plans", headers=h, json={})
+    ).json()["id"]
+    return (await client.post("/api/v1/audits", headers=h, json={"plan_id": plan_id})).json()["id"]
+
+
+async def _walk(client: AsyncClient, h: dict[str, str], audit_id: str, *steps: str) -> None:
+    for action in steps:
+        r = await client.post(f"/api/v1/audits/{audit_id}/{action}", headers=h)
+        assert r.status_code == 200, f"{action}: {r.text}"
+
+
+async def _set_capa_state(capa_id: str, state: CapaCloseState) -> None:
+    """Force a CAPA's close_state directly (the CAPA service only wires Raised→Containment in
+    S-capa-1; reaching Closed/Rejected is S-capa-3). The close gate only READS close_state."""
+    async with get_sessionmaker()() as s:
+        capa = await s.get(Capa, uuid.UUID(capa_id))
+        assert capa is not None
+        capa.close_state = state
+        await s.commit()
+
+
+async def test_nc_finding_auto_creates_capa(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    subject = _subject("find-nc")
+    await _grant(subject, _FINDING_KEYS)
+    h = _auth(token_factory, subject)
+    audit_id = await _new_audit(app_client, h)
+    await _walk(app_client, h, audit_id, "plan", "conduct")  # InProgress
+
+    r = await app_client.post(
+        f"/api/v1/audits/{audit_id}/findings",
+        headers=h,
+        json={"finding_type": "NC", "severity": "Major", "clause_ref": "8.4"},
+    )
+    assert r.status_code == 201, r.text
+    f = r.json()
+    assert f["finding_type"] == "NC"
+    assert f["severity"] == "Major"
+    assert f["clause_ref"] == "8.4"
+    assert f["identifier"].startswith("REC-")
+    assert f["auto_capa_id"] is not None
+
+    # The auto-created CAPA: source=audit, the reverse link set, at Raised.
+    capa = (await app_client.get(f"/api/v1/capas/{f['auto_capa_id']}", headers=h)).json()
+    assert capa["source"] == "audit"
+    assert capa["severity"] == "Major"
+    assert capa["close_state"] == "Raised"
+    assert capa["origin_finding_id"] == f["id"]
+
+    # Events: the finding-created (object_type=record) + the CAPA_RAISED on the auto-CAPA.
+    assert await _audit_event_count(f["id"], EventType.AUDIT_FINDING_CREATED) == 1
+    assert await _audit_event_count(f["auto_capa_id"], EventType.CAPA_RAISED) == 1
+
+
+async def test_observation_finding_creates_no_capa(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    subject = _subject("find-obs")
+    await _grant(subject, _FINDING_KEYS)
+    h = _auth(token_factory, subject)
+    audit_id = await _new_audit(app_client, h)
+    await _walk(app_client, h, audit_id, "plan", "conduct")
+    r = await app_client.post(
+        f"/api/v1/audits/{audit_id}/findings", headers=h, json={"finding_type": "OBSERVATION"}
+    )
+    assert r.status_code == 201, r.text
+    assert r.json()["auto_capa_id"] is None
+    assert r.json()["severity"] is None
+
+
+async def test_nc_without_severity_is_422(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    subject = _subject("find-422")
+    await _grant(subject, _FINDING_KEYS)
+    h = _auth(token_factory, subject)
+    audit_id = await _new_audit(app_client, h)
+    await _walk(app_client, h, audit_id, "plan", "conduct")
+    r = await app_client.post(
+        f"/api/v1/audits/{audit_id}/findings", headers=h, json={"finding_type": "NC"}
+    )
+    assert r.status_code == 422, r.text
+
+
+async def test_close_gate_blocks_until_capa_closed(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    subject = _subject("find-gate")
+    await _grant(subject, _FINDING_KEYS)
+    h = _auth(token_factory, subject)
+    audit_id = await _new_audit(app_client, h)
+    await _walk(app_client, h, audit_id, "plan", "conduct")
+    capa_id = (
+        await app_client.post(
+            f"/api/v1/audits/{audit_id}/findings",
+            headers=h,
+            json={"finding_type": "NC", "severity": "Critical"},
+        )
+    ).json()["auto_capa_id"]
+    await _walk(app_client, h, audit_id, "draft-findings", "report", "begin-closing")  # Closing
+
+    # The CAPA is at Raised → the audit cannot close.
+    r = await app_client.post(f"/api/v1/audits/{audit_id}/close", headers=h)
+    assert r.status_code == 409, r.text
+    assert r.json()["code"] == "audit_close_blocked"
+
+    # Close the CAPA → the gate passes.
+    await _set_capa_state(capa_id, CapaCloseState.Closed)
+    r = await app_client.post(f"/api/v1/audits/{audit_id}/close", headers=h)
+    assert r.status_code == 200, r.text
+    assert r.json()["state"] == "Closed"
+
+
+async def test_block_until_corrected_with_rejected_capa(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """A Rejected NC-CAPA does NOT satisfy the gate (R39); the auditor must correct the finding
+    (NC→OBSERVATION), which supersedes it out of the live-NC set, before the audit can close."""
+    subject = _subject("find-corr")
+    await _grant(subject, _FINDING_KEYS)
+    h = _auth(token_factory, subject)
+    audit_id = await _new_audit(app_client, h)
+    await _walk(app_client, h, audit_id, "plan", "conduct")
+    f = (
+        await app_client.post(
+            f"/api/v1/audits/{audit_id}/findings",
+            headers=h,
+            json={"finding_type": "NC", "severity": "Minor"},
+        )
+    ).json()
+    await _set_capa_state(f["auto_capa_id"], CapaCloseState.Rejected)
+    await _walk(app_client, h, audit_id, "draft-findings", "report", "begin-closing")
+
+    # Rejected CAPA still blocks.
+    r = await app_client.post(f"/api/v1/audits/{audit_id}/close", headers=h)
+    assert r.status_code == 409, r.text
+    assert r.json()["code"] == "audit_close_blocked"
+
+    # Correct the NC → OBSERVATION (declassify). The original is superseded out of the live set.
+    r = await app_client.post(
+        f"/api/v1/findings/{f['id']}/correction",
+        headers=h,
+        json={"finding_type": "OBSERVATION", "reason": "reclassified on review"},
+    )
+    assert r.status_code == 201, r.text
+    successor = r.json()
+    assert successor["finding_type"] == "OBSERVATION"
+    assert successor["auto_capa_id"] is None
+    # The original now points to its successor.
+    orig = (await app_client.get(f"/api/v1/findings/{f['id']}", headers=h)).json()
+    assert orig["superseded_by_correction"] == successor["id"]
+
+    # Now the audit closes.
+    r = await app_client.post(f"/api/v1/audits/{audit_id}/close", headers=h)
+    assert r.status_code == 200, r.text
+    assert r.json()["state"] == "Closed"
+
+
+async def test_general_retype_observation_to_nc_spawns_capa(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """General retype (fork A): an Observation can be corrected UP to an NC, which auto-creates its
+    mandatory CAPA on the successor."""
+    subject = _subject("find-up")
+    await _grant(subject, _FINDING_KEYS)
+    h = _auth(token_factory, subject)
+    audit_id = await _new_audit(app_client, h)
+    await _walk(app_client, h, audit_id, "plan", "conduct")
+    obs = (
+        await app_client.post(
+            f"/api/v1/audits/{audit_id}/findings", headers=h, json={"finding_type": "OBSERVATION"}
+        )
+    ).json()
+    assert obs["auto_capa_id"] is None
+
+    r = await app_client.post(
+        f"/api/v1/findings/{obs['id']}/correction",
+        headers=h,
+        json={"finding_type": "NC", "severity": "Major"},
+    )
+    assert r.status_code == 201, r.text
+    successor = r.json()
+    assert successor["finding_type"] == "NC"
+    assert successor["auto_capa_id"] is not None
+    assert successor["correction_of"] == obs["id"]
+    capa = (await app_client.get(f"/api/v1/capas/{successor['auto_capa_id']}", headers=h)).json()
+    assert capa["origin_finding_id"] == successor["id"]
+
+
+async def test_finding_on_closed_audit_is_409(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    subject = _subject("find-closed")
+    await _grant(subject, _FINDING_KEYS)
+    h = _auth(token_factory, subject)
+    audit_id = await _new_audit(app_client, h)
+    # No findings → the close gate passes; walk to Closed.
+    await _walk(
+        app_client,
+        h,
+        audit_id,
+        "plan",
+        "conduct",
+        "draft-findings",
+        "report",
+        "begin-closing",
+        "close",
+    )
+    r = await app_client.post(
+        f"/api/v1/audits/{audit_id}/findings",
+        headers=h,
+        json={"finding_type": "OBSERVATION"},
+    )
+    assert r.status_code == 409, r.text
+    assert r.json()["code"] == "audit_finding_audit_closed"
+
+
+async def test_double_correction_is_409(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    subject = _subject("find-dc")
+    await _grant(subject, _FINDING_KEYS)
+    h = _auth(token_factory, subject)
+    audit_id = await _new_audit(app_client, h)
+    await _walk(app_client, h, audit_id, "plan", "conduct")
+    f = (
+        await app_client.post(
+            f"/api/v1/audits/{audit_id}/findings", headers=h, json={"finding_type": "OFI"}
+        )
+    ).json()
+    r1 = await app_client.post(
+        f"/api/v1/findings/{f['id']}/correction", headers=h, json={"finding_type": "OBSERVATION"}
+    )
+    assert r1.status_code == 201, r1.text
+    # Correcting the SAME original again is rejected (it is already superseded).
+    r2 = await app_client.post(
+        f"/api/v1/findings/{f['id']}/correction", headers=h, json={"finding_type": "OFI"}
+    )
+    assert r2.status_code == 409, r2.text
+    assert r2.json()["code"] == "finding_already_corrected"
+
+
+async def test_evidence_link_to_finding_and_capa_stage(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """S-aud-2 enabled the reserved evidence_for_link FINDING / CAPA_STAGE targets (was 422)."""
+    subject = _subject("find-evid")
+    await _grant(subject, _FINDING_KEYS)
+    h = _auth(token_factory, subject)
+    audit_id = await _new_audit(app_client, h)
+    await _walk(app_client, h, audit_id, "plan", "conduct")
+    f = (
+        await app_client.post(
+            f"/api/v1/audits/{audit_id}/findings",
+            headers=h,
+            json={"finding_type": "NC", "severity": "Major"},
+        )
+    ).json()
+    capa_id = f["auto_capa_id"]
+
+    # Link the CAPA record (its id IS a record id) as evidence for the finding.
+    r = await app_client.post(
+        f"/api/v1/records/{capa_id}/evidence-links",
+        headers=h,
+        json={"target_type": "finding", "target_id": f["id"]},
+    )
+    assert r.status_code == 201, r.text
+
+    # Link the finding record as evidence for the CAPA's Raised stage block.
+    stage_id = (await app_client.get(f"/api/v1/capas/{capa_id}", headers=h)).json()["stages"][0][
+        "id"
+    ]
+    r = await app_client.post(
+        f"/api/v1/records/{f['id']}/evidence-links",
+        headers=h,
+        json={"target_type": "capa_stage", "target_id": stage_id},
+    )
+    assert r.status_code == 201, r.text
+
+    # A nonexistent finding target is rejected.
+    r = await app_client.post(
+        f"/api/v1/records/{capa_id}/evidence-links",
+        headers=h,
+        json={"target_type": "finding", "target_id": str(uuid.uuid4())},
+    )
+    assert r.status_code == 422, r.text
+
+
+async def test_cross_org_create_finding_is_denied(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """The service layer is the org boundary (the resolver does not org-check). A cross-org actor
+    cannot log a finding against this org's audit (404 before any write)."""
+    subject = _subject("find-xorg")
+    await _grant(subject, _FINDING_KEYS)
+    h = _auth(token_factory, subject)
+    audit_id = uuid.UUID(await _new_audit(app_client, h))
+    await _walk(app_client, h, str(audit_id), "plan", "conduct")
+    intruder = AppUser(id=uuid.uuid4(), org_id=uuid.uuid4(), keycloak_subject="kc-find-other-org")
+    async with get_sessionmaker()() as s:
+        with pytest.raises(ProblemException) as exc:
+            await create_finding(s, intruder, audit_id, finding_type=FindingType.OBSERVATION)
+    assert exc.value.status == 404

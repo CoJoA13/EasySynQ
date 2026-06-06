@@ -127,8 +127,13 @@ Records/evidence capture, retention/disposition, Evidence Packs, audits/findings
 > `capa_stage` trail; Raised→Containment wired), `ncr` (ISO 8.7 own-table + recorded disposition, R20), `complaint`
 > (R16, a shared-PK subtype) + the idempotent **complaint→CAPA spawn**, the slice-0 grant-backfill of the orphaned
 > `capa.update`/`ncr.create`/`ncr.record_correction` keys, and the `allow_capa_self_verify` SoD-4 config seam (enforced
-> in S-capa-3). NC→CAPA auto-link + findings stay in S-aud-2; RCA/ActionPlan/Implement/Verify stay in S-capa-2..3.
-> **Migration head is now `0036`.** See `CLAUDE.md` for shipped detail.
+> in S-capa-3). **S-aud-2** (migration `0037`) then ships **audit findings + the NC→CAPA auto-link + the REAL close
+> gate**: `audit_finding` (a `kind=RECORD` subtype; NC/OBSERVATION/OFI), the atomic NC→CAPA auto-link (an NC mandatorily
+> auto-creates its CAPA, SYSTEM-side under the auditor's `finding.create`), the deferred bidirectional cross-FK
+> (`capa.origin_finding_id`↔`audit_finding.auto_capa_id`), the **general** finding-retype/correction path, the
+> block-until-corrected **audit-close gate** (409 until every live NC has a Closed CAPA), and the enabled
+> `evidence_for_link` FINDING/CAPA_STAGE targets. RCA/ActionPlan/Implement/Verify stay in S-capa-2..3.
+> **Migration head is now `0037`.** See `CLAUDE.md` for shipped detail.
 
 **Goal:** everything an organization needs to *run and certify* an ISO 9001:2015 QMS, end to end, and to face an external audit with a one-click evidence pack.
 
