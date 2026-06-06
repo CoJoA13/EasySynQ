@@ -25,7 +25,7 @@ from ._ingestion_enums import (
     ImportKind,
     ImportRunStatus,
 )
-from ._iso_audit_enums import AuditState
+from ._iso_audit_enums import AuditState, FindingType
 from ._pack_enums import (
     PackInclusionStatus,
     PackItemType,
@@ -56,6 +56,7 @@ from .audit import Audit
 from .audit_checkpoint import AuditCheckpoint
 from .audit_checkpoint_sink import AuditCheckpointSink
 from .audit_event import AuditEvent
+from .audit_finding import AuditFinding
 from .audit_plan import AuditPlan
 from .audit_program import AuditProgram
 from .authz_grant import PermissionOverride
@@ -120,6 +121,7 @@ __all__ = [
     "AuditCheckpoint",
     "AuditCheckpointSink",
     "AuditEvent",
+    "AuditFinding",
     "AuditObjectType",
     "AuditPlan",
     "AuditProgram",
@@ -149,6 +151,7 @@ __all__ = [
     "EvidenceForLink",
     "EvidenceForTargetType",
     "EvidencePack",
+    "FindingType",
     "FormTemplate",
     "Framework",
     "ImportClassification",

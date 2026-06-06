@@ -305,6 +305,14 @@ class EventType(enum.Enum):
     COMPLAINT_SPAWNED_CAPA = "COMPLAINT_SPAWNED_CAPA"
     NCR_CREATED = "NCR_CREATED"
     NCR_DISPOSITIONED = "NCR_DISPOSITIONED"
+    # audit findings + the NC→CAPA auto-link (S-aud-2, doc 10 §5.3, doc 14 §9). audit_finding is a
+    # kind=RECORD subtype → events key on object_type=record (finding.id IS a record id); the
+    # auto-created CAPA emits its own CAPA_RAISED. AUDIT_FINDING_CORRECTED is the audited supersede
+    # pointer-write on the original when a finding is retyped (general retype, any direction). Added
+    # via ALTER TYPE event_type ADD VALUE in 0037 (the additive pattern; a from-scratch ``upgrade
+    # head`` rebuilds the type from EVENT_TYPE_VALUES, so the members live here too).
+    AUDIT_FINDING_CREATED = "AUDIT_FINDING_CREATED"
+    AUDIT_FINDING_CORRECTED = "AUDIT_FINDING_CORRECTED"
 
 
 class CheckpointSinkKind(enum.Enum):

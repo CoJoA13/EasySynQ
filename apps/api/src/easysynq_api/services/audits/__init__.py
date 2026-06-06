@@ -2,16 +2,20 @@
 
 from .service import (
     advance_audit,
+    correct_finding,
     create_audit,
     create_audit_plan,
     create_audit_program,
+    create_finding,
     update_audit_program,
 )
 
 __all__ = [
     "advance_audit",
+    "correct_finding",
     "create_audit",
     "create_audit_plan",
     "create_audit_program",
+    "create_finding",
     "update_audit_program",
 ]

@@ -32,7 +32,9 @@ from ...db.models._record_enums import RecordType
 from ...db.models._vault_enums import Classification, DocumentCurrentState, DocumentKind
 from ...db.models.app_user import AppUser
 from ...db.models.audit_event import AuditEvent
+from ...db.models.audit_finding import AuditFinding
 from ...db.models.blob import Blob
+from ...db.models.capa_stage import CapaStage
 from ...db.models.document_version import DocumentVersion
 from ...db.models.documented_information import DocumentedInformation
 from ...db.models.evidence_blob import EvidenceBlob
@@ -658,8 +660,18 @@ async def link_evidence(
             raise _validation_error(
                 "target_id", "framework_mismatch", "Document belongs to a different framework"
             )
-    else:  # finding / capa_stage — reserved enum values, no table yet (S-rec-1 API rejects them)
-        raise _validation_error("target_type", "unsupported", "target_type not supported yet")
+    elif ttype is EvidenceForTargetType.FINDING:
+        # S-aud-2: link a record as evidence for an audit finding. Org-check only (a finding is an
+        # internal QMS object, not framework-mapped like a clause/document).
+        finding = await session.get(AuditFinding, target_id)
+        if finding is None or finding.org_id != actor.org_id:
+            raise _validation_error("target_id", "not_found", "Finding not found")
+    else:  # EvidenceForTargetType.CAPA_STAGE
+        # S-aud-2: link a record as evidence for a sealed CAPA stage block (doc 14 §9 attachments
+        # are realized as these edges, R39). Org-check only.
+        stage = await session.get(CapaStage, target_id)
+        if stage is None or stage.org_id != actor.org_id:
+            raise _validation_error("target_id", "not_found", "CAPA stage not found")
 
     if await repo.get_evidence_link(session, record_id, ttype, target_id) is not None:
         raise ProblemException(status=409, code="conflict", title="Evidence link already exists")

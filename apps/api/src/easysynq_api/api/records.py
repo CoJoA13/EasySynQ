@@ -86,7 +86,8 @@ class CorrectionCreate(RecordCreate):
 
 
 class EvidenceLinkCreate(BaseModel):
-    target_type: Literal["clause", "process", "document"]
+    # S-aud-2 enabled finding / capa_stage (reserved targets); clause/process/document from S-rec-1.
+    target_type: Literal["clause", "process", "document", "finding", "capa_stage"]
     target_id: uuid.UUID
     link_reason: str | None = None
 

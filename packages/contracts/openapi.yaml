@@ -2399,12 +2399,99 @@ paths:
     post:
       tags: [audits]
       operationId: closeAudit
-      summary: Closing → Closed (the close gate; a no-op until S-aud-2 wires the NC-CAPA check). Needs audit.close.
+      summary: >-
+        Closing → Closed. The block-until-corrected close gate (R39) returns 409 audit_close_blocked
+        if any live NC finding lacks a linked CAPA at close_state=Closed. Needs audit.close.
       responses:
         "200": { $ref: "#/components/responses/AuditTransition" }
         "403": { $ref: "#/components/responses/ProblemResponse" }
         "404": { $ref: "#/components/responses/ProblemResponse" }
         "409": { $ref: "#/components/responses/AuditTransitionConflict" }
+
+  /audits/{audit_id}/findings:
+    parameters:
+      - { name: audit_id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [audits]
+      operationId: listFindings
+      summary: The audit's findings (oldest first). Needs finding.read.
+      responses:
+        "200":
+          description: Findings.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [data]
+                properties:
+                  data: { type: array, items: { $ref: "#/components/schemas/Finding" } }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+    post:
+      tags: [audits]
+      operationId: createFinding
+      summary: >-
+        Log a finding against an audit. An NC mandatorily auto-creates a linked CAPA in the same
+        transaction (auto_capa_id); OBSERVATION/OFI do not. NC requires a severity (422 otherwise).
+        Rejected once the audit is Closed (409). Needs finding.create (PROCESS, the audit's process).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/FindingCreate" }
+      responses:
+        "201":
+          description: The created finding.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Finding" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409": { $ref: "#/components/responses/ProblemResponse" }
+        "422": { $ref: "#/components/responses/ProblemResponse" }
+
+  /findings/{finding_id}:
+    parameters:
+      - { name: finding_id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [audits]
+      operationId: getFinding
+      summary: A finding by id (with its correction chain). Needs finding.read.
+      responses:
+        "200":
+          description: The finding.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Finding" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+
+  /findings/{finding_id}/correction:
+    parameters:
+      - { name: finding_id, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      tags: [audits]
+      operationId: correctFinding
+      summary: >-
+        Correct/retype a finding by capturing a superseding successor (general retype, any direction).
+        A retype TO NC auto-creates its CAPA (re-entering the close gate); NC→Observation/OFI
+        declassifies. 409 if already superseded or the audit is Closed. Needs finding.create.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/FindingCorrection" }
+      responses:
+        "201":
+          description: The superseding successor finding.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Finding" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409": { $ref: "#/components/responses/ProblemResponse" }
+        "422": { $ref: "#/components/responses/ProblemResponse" }
 
   /admin/imports:
     get:
@@ -4465,7 +4552,7 @@ components:
       properties:
         id: { type: string, format: uuid }
         record_id: { type: string, format: uuid }
-        target_type: { type: string, enum: [clause, process, document] }
+        target_type: { type: string, enum: [clause, process, document, finding, capa_stage] }
         target_id: { type: string, format: uuid }
         link_reason: { type: [string, "null"] }
         created_at: { type: [string, "null"], format: date-time }
@@ -4477,10 +4564,10 @@ components:
       properties:
         target_type:
           type: string
-          enum: [clause, process, document]
+          enum: [clause, process, document, finding, capa_stage]
           description: >-
-            The link target kind. The enum reserves finding/capa_stage for future slices, but the
-            S-rec-1 API accepts only clause/process/document (it validates the target exists).
+            The link target kind. S-aud-2 enabled finding/capa_stage (the reserved targets);
+            clause/process/document since S-rec-1. The API validates the target exists in the org.
         target_id: { type: string, format: uuid }
         link_reason: { type: [string, "null"] }
 
@@ -4777,6 +4864,62 @@ components:
         plan_id: { type: string, format: uuid }
         title: { type: [string, "null"], minLength: 1, maxLength: 300 }
         lead_auditor_user_id: { type: [string, "null"], format: uuid }
+
+    FindingType:
+      type: string
+      enum: [NC, OBSERVATION, OFI]
+      description: NC auto-creates a linked CAPA and gates the audit close; OBSERVATION/OFI do not.
+
+    Finding:
+      type: object
+      additionalProperties: false
+      required: [id, audit_id, finding_type]
+      properties:
+        id: { type: string, format: uuid }
+        identifier: { type: [string, "null"] }
+        audit_id: { type: string, format: uuid }
+        finding_type: { $ref: "#/components/schemas/FindingType" }
+        severity:
+          oneOf:
+            - { $ref: "#/components/schemas/NcSeverity" }
+            - { type: "null" }
+        clause_ref: { type: [string, "null"] }
+        process_ref: { type: [string, "null"] }
+        auto_capa_id:
+          type: [string, "null"]
+          format: uuid
+          description: The mandatory CAPA auto-created for an NC (NULL for OBSERVATION/OFI).
+        correction_of: { type: [string, "null"], format: uuid }
+        superseded_by_correction: { type: [string, "null"], format: uuid }
+
+    FindingCreate:
+      type: object
+      additionalProperties: false
+      required: [finding_type]
+      properties:
+        finding_type: { $ref: "#/components/schemas/FindingType" }
+        severity:
+          oneOf:
+            - { $ref: "#/components/schemas/NcSeverity" }
+            - { type: "null" }
+          description: Required for NC (the auto-CAPA needs one); optional for OBSERVATION/OFI.
+        clause_ref: { type: [string, "null"], maxLength: 100 }
+        process_ref: { type: [string, "null"], maxLength: 300 }
+        summary: { type: [string, "null"], minLength: 1, maxLength: 300 }
+
+    FindingCorrection:
+      type: object
+      additionalProperties: false
+      required: [finding_type]
+      properties:
+        finding_type: { $ref: "#/components/schemas/FindingType" }
+        severity:
+          oneOf:
+            - { $ref: "#/components/schemas/NcSeverity" }
+            - { type: "null" }
+        clause_ref: { type: [string, "null"], maxLength: 100 }
+        process_ref: { type: [string, "null"], maxLength: 300 }
+        reason: { type: [string, "null"], maxLength: 300 }
 
     RetentionPolicy:
       type: object

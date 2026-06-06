@@ -17,9 +17,11 @@ from fastapi import APIRouter, Depends, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..db.models._iso_audit_enums import AuditState
+from ..db.models._capa_enums import NcSeverity
+from ..db.models._iso_audit_enums import AuditState, FindingType
 from ..db.models.app_user import AppUser
 from ..db.models.audit import Audit
+from ..db.models.audit_finding import AuditFinding
 from ..db.models.audit_plan import AuditPlan
 from ..db.models.audit_program import AuditProgram
 from ..db.session import get_session
@@ -27,9 +29,11 @@ from ..domain.authz import ResourceContext
 from ..problems import ProblemException
 from ..services.audits import (
     advance_audit,
+    correct_finding,
     create_audit,
     create_audit_plan,
     create_audit_program,
+    create_finding,
     update_audit_program,
 )
 from ..services.audits import repository as audits_repo
@@ -65,6 +69,23 @@ class AuditCreate(BaseModel):
     plan_id: uuid.UUID
     title: str | None = Field(default=None, min_length=1, max_length=300)
     lead_auditor_user_id: uuid.UUID | None = None
+
+
+class FindingCreate(BaseModel):
+    finding_type: FindingType
+    # Required for NC (the auto-CAPA needs one; service 422s if absent); optional for OBS/OFI.
+    severity: NcSeverity | None = None
+    clause_ref: str | None = Field(default=None, max_length=100)
+    process_ref: str | None = Field(default=None, max_length=300)
+    summary: str | None = Field(default=None, min_length=1, max_length=300)
+
+
+class FindingCorrection(BaseModel):
+    finding_type: FindingType
+    severity: NcSeverity | None = None
+    clause_ref: str | None = Field(default=None, max_length=100)
+    process_ref: str | None = Field(default=None, max_length=300)
+    reason: str | None = Field(default=None, max_length=300)
 
 
 # --- serializers ------------------------------------------------------------------------------
@@ -106,6 +127,28 @@ def _audit(a: Audit) -> dict[str, Any]:
     }
 
 
+def _finding(
+    f: AuditFinding,
+    identifier: str | None,
+    correction_of: uuid.UUID | None = None,
+    superseded_by_correction: uuid.UUID | None = None,
+) -> dict[str, Any]:
+    return {
+        "id": str(f.id),
+        "identifier": identifier,
+        "audit_id": str(f.audit_id),
+        "finding_type": f.finding_type.value,
+        "severity": f.severity.value if f.severity else None,
+        "clause_ref": f.clause_ref,
+        "process_ref": f.process_ref,
+        "auto_capa_id": str(f.auto_capa_id) if f.auto_capa_id else None,
+        "correction_of": str(correction_of) if correction_of else None,
+        "superseded_by_correction": (
+            str(superseded_by_correction) if superseded_by_correction else None
+        ),
+    }
+
+
 # --- scope resolver (PROCESS keys: audit.conduct / audit.close) -------------------------------
 
 
@@ -135,11 +178,41 @@ async def _audit_scope(request: Request, session: AsyncSession) -> ResourceConte
     return ResourceContext(process_ids=frozenset({str(plan.auditee_process_id)}))
 
 
+async def _finding_scope(request: Request, session: AsyncSession) -> ResourceContext:
+    """Resolve a finding's PROCESS authz scope via its audit's plan auditee process (the
+    ``_audit_scope`` shape, one hop deeper). SYSTEM fallback so a SYSTEM grant/override matches; no
+    org-check (the service layer is the org boundary)."""
+    raw = request.path_params.get("finding_id")
+    if not raw:
+        return ResourceContext.system()
+    try:
+        finding_id = uuid.UUID(str(raw))
+    except ValueError:
+        return ResourceContext.system()
+    finding = await audits_repo.get_finding(session, finding_id)
+    if finding is None:
+        return ResourceContext.system()
+    audit = await audits_repo.get_audit(session, finding.audit_id)
+    if audit is None:
+        return ResourceContext.system()
+    plan = await audits_repo.get_audit_plan(session, audit.plan_id)
+    if plan is None or plan.auditee_process_id is None:
+        return ResourceContext.system()
+    return ResourceContext(process_ids=frozenset({str(plan.auditee_process_id)}))
+
+
 _read = require("audit.read")
 _plan_gate = require("audit.plan")
 _create = require("audit.create")
 _conduct = require("audit.conduct", async_scope_resolver=_audit_scope)
 _close = require("audit.close", async_scope_resolver=_audit_scope)
+# finding.create gates the create (scope = the audit's process) + the correction (scope = the
+# finding's audit's process). Keyword async_scope_resolver= is REQUIRED (positional slot is SYNC).
+_finding_create = require("finding.create", async_scope_resolver=_audit_scope)
+_finding_correct = require("finding.create", async_scope_resolver=_finding_scope)
+_finding_read = require(
+    "finding.read"
+)  # SYSTEM default + org-scoped query (the family read precedent)
 
 
 # --- programmes -------------------------------------------------------------------------------
@@ -345,5 +418,82 @@ async def close_audit_endpoint(
     caller: AppUser = Depends(_close),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
-    """Closing → Closed (the close gate; a no-op until S-aud-2 wires the NC-CAPA check)."""
+    """Closing → Closed (the close gate: 409 ``audit_close_blocked`` if any live NC lacks a Closed
+    CAPA)."""
     return _audit(await advance_audit(session, caller, audit_id, AuditState.Closed))
+
+
+# --- findings (record subtype) ----------------------------------------------------------------
+
+
+@router.post("/audits/{audit_id}/findings", status_code=status.HTTP_201_CREATED)
+async def create_finding_endpoint(
+    audit_id: uuid.UUID,
+    body: FindingCreate,
+    caller: AppUser = Depends(_finding_create),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """Log a finding (gate ``finding.create``, PROCESS scope = the audit's auditee process). An NC
+    auto-creates its mandatory CAPA in the same transaction; OBS/OFI do not."""
+    finding = await create_finding(
+        session,
+        caller,
+        audit_id,
+        finding_type=body.finding_type,
+        severity=body.severity,
+        clause_ref=body.clause_ref,
+        process_ref=body.process_ref,
+        summary=body.summary,
+    )
+    return _finding(finding, await audits_repo.get_identifier(session, finding.id))
+
+
+@router.get("/audits/{audit_id}/findings")
+async def list_findings_endpoint(
+    audit_id: uuid.UUID,
+    caller: AppUser = Depends(_finding_read),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    audit = await audits_repo.get_audit(session, audit_id)
+    if audit is None or audit.org_id != caller.org_id:
+        raise ProblemException(status=404, code="not_found", title="Audit not found")
+    rows = await audits_repo.list_findings(session, audit_id)
+    return {"data": [_finding(f, ident, co, sbc) for f, ident, co, sbc in rows]}
+
+
+@router.get("/findings/{finding_id}")
+async def get_finding_endpoint(
+    finding_id: uuid.UUID,
+    caller: AppUser = Depends(_finding_read),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    row = await audits_repo.get_finding_row(session, finding_id)
+    if row is None or row[0].org_id != caller.org_id:
+        raise ProblemException(status=404, code="not_found", title="Finding not found")
+    finding, ident, co, sbc = row
+    return _finding(finding, ident, co, sbc)
+
+
+@router.post("/findings/{finding_id}/correction", status_code=status.HTTP_201_CREATED)
+async def correct_finding_endpoint(
+    finding_id: uuid.UUID,
+    body: FindingCorrection,
+    caller: AppUser = Depends(_finding_correct),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """Correct/retype a finding (gate ``finding.create``). General retype: to NC auto-creates its
+    CAPA; NC->OBS/OFI declassifies (clears the close gate). Returns the superseding successor."""
+    successor = await correct_finding(
+        session,
+        caller,
+        finding_id,
+        finding_type=body.finding_type,
+        severity=body.severity,
+        clause_ref=body.clause_ref,
+        process_ref=body.process_ref,
+        reason=body.reason,
+    )
+    # The successor's correction_of IS the path finding_id (set via capture_record _correction_of).
+    return _finding(
+        successor, await audits_repo.get_identifier(session, successor.id), correction_of=finding_id
+    )
