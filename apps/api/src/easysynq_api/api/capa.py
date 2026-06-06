@@ -38,8 +38,10 @@ from ..problems import ProblemException
 from ..services.authz import AuthzAuditSink, enforce, get_authz_audit_sink, require
 from ..services.capa import (
     advance_capa_to_containment,
+    advance_capa_to_root_cause,
     capture_complaint,
     create_ncr,
+    propose_action_plan,
     raise_capa,
     record_ncr_disposition,
     spawn_capa_from_complaint,
@@ -63,6 +65,17 @@ class CapaRaise(BaseModel):
 class ContainmentCreate(BaseModel):
     # The sealed correction narrative (caller-constructed). Must be non-empty (the service guards;
     # 422 otherwise) — e.g. {"correction": "...", "evidence_note": "..."}.
+    content_block: dict[str, Any]
+
+
+class RootCauseCreate(BaseModel):
+    # The sealed RCA narrative (5-Whys / fishbone), e.g. {"root_cause": "...", "method": "5-whys"}.
+    content_block: dict[str, Any]
+
+
+class ActionPlanPropose(BaseModel):
+    # The proposed corrective action plan (caller-constructed), e.g.
+    # {"action_items": [{"description": "...", "owner": "...", "due_date": "..."}]}.
     content_block: dict[str, Any]
 
 
@@ -203,6 +216,8 @@ _ncr_read = require("ncr.read")
 _complaint_read = require("record.read")
 _complaint_create = require("record.create")  # complaints are ad-hoc records (SYSTEM, no process)
 _capa_update = require("capa.update", async_scope_resolver=_capa_scope)
+_capa_record_rca = require("capa.record_rca", async_scope_resolver=_capa_scope)
+_capa_plan_action = require("capa.plan_action", async_scope_resolver=_capa_scope)
 _ncr_disposition = require("ncr.record_correction", async_scope_resolver=_ncr_scope)
 
 
@@ -270,6 +285,45 @@ async def capa_containment_endpoint(
         session, caller, capa_id, content_block=body.content_block
     )
     return _capa(capa, await capa_repo.get_identifier(session, capa.id))
+
+
+@router.post("/capas/{capa_id}/root-cause")
+async def capa_root_cause_endpoint(
+    capa_id: uuid.UUID,
+    body: RootCauseCreate,
+    caller: AppUser = Depends(_capa_record_rca),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """Containment → RootCause: append the sealed RCA stage block (gate ``capa.record_rca``).
+    Unsigned — RCA is an informational gate; only the Action-Plan approval signs (doc 10 §6.2)."""
+    capa = await advance_capa_to_root_cause(
+        session, caller, capa_id, content_block=body.content_block
+    )
+    return _capa(capa, await capa_repo.get_identifier(session, capa.id))
+
+
+@router.post("/capas/{capa_id}/action-plan")
+async def capa_action_plan_endpoint(
+    capa_id: uuid.UUID,
+    body: ActionPlanPropose,
+    caller: AppUser = Depends(_capa_plan_action),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """Propose the corrective Action Plan + open the severity-routed approval workflow (gate
+    ``capa.plan_action``). ``close_state`` stays RootCause until the approval completes (the flip
+    to ActionPlan happens on the approving ``POST /tasks/{id}/decision``). Returns the CAPA + the
+    opened approval instance (``current_state`` is NEEDS_ATTENTION when no QMS-Owner / Top-Mgmt
+    approver is assigned — assign one and re-propose)."""
+    capa, instance = await propose_action_plan(
+        session, caller, capa_id, content_block=body.content_block
+    )
+    out = _capa(capa, await capa_repo.get_identifier(session, capa.id))
+    out["approval_instance"] = {
+        "id": str(instance.id),
+        "current_state": instance.current_state,
+        "definition_version": instance.definition_version,
+    }
+    return out
 
 
 # --- Complaints -------------------------------------------------------------------------------

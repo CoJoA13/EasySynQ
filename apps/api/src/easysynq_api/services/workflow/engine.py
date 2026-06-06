@@ -343,9 +343,16 @@ async def decide(
     outcome: str,
     comment: str | None,
     idempotency_key: str | None,
+    _commit: bool = True,
 ) -> dict[str, Any]:
     """The generic multi-stage decision (one atomic transaction). Authorization/SoD are the caller's
-    job (the S-capa-2 endpoint); the distinct-approver guard here is the service-level backstop."""
+    job (the S-capa-2 endpoint); the distinct-approver guard here is the service-level backstop.
+
+    ``_commit=False`` (the ``build_capa`` / ``capture_record`` precedent) hands the open transaction
+    back to the caller so a CAPA-subject wrapper can append the signed ``capa_stage`` + write the
+    ``signature_event`` atomically with this decision (S-capa-2). The ``_response`` is built from
+    in-memory state, so it is valid before the caller's commit. The replay early-returns add no rows
+    and never committed, so they are unaffected by the flag."""
     instance = await wf_repo.lock_instance_for_update(session, task.instance_id)
     if instance is None:
         raise ProblemException(status=404, code="not_found", title="Workflow instance not found")
@@ -480,5 +487,6 @@ async def decide(
             after={"from": locked.stage_key, "current_state": instance.current_state},
         )
 
-    await session.commit()
+    if _commit:
+        await session.commit()
     return _response(locked, decision, instance, stage_state=state, signature_spec=signature_spec)

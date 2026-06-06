@@ -24,7 +24,9 @@ from easysynq_api.db.models.audit_event import AuditEvent
 from easysynq_api.db.models.authz_grant import PermissionOverride
 from easysynq_api.db.models.capa_stage import CapaStage
 from easysynq_api.db.models.permission import Permission
+from easysynq_api.db.models.role import Role, RoleAssignment
 from easysynq_api.db.models.scope import Scope
+from easysynq_api.db.models.signature_event import SignatureEvent
 from easysynq_api.db.session import get_sessionmaker
 from easysynq_api.domain.authz.types import Effect, ScopeLevel
 from easysynq_api.problems import ProblemException
@@ -444,3 +446,365 @@ async def test_config_exposes_allow_capa_self_verify(
         "/api/v1/admin/config", headers=h, json={"allow_capa_self_verify": False}
     )
     assert rr.status_code == 200 and rr.json()["allow_capa_self_verify"] is False, rr.text
+
+
+# --- S-capa-2: RCA + Action-Plan + the severity-routed approval ------------------------------
+#
+# The CAPA approval candidate pool resolves by Role MEMBERSHIP (``users_with_roles``), NOT by the
+# SYSTEM permission overrides the proposer rides — so an approver must be ASSIGNED the seeded
+# ``QMS Owner`` / ``Top Management`` role (the S-capa-2 test gotcha). Assertions are run-scoped to
+# the specific CAPA / signature ids this test created (the shared session DB grows the pools).
+
+_PROPOSE_KEYS = (
+    "capa.read",
+    "capa.create",
+    "capa.update",
+    "capa.record_rca",
+    "capa.plan_action",
+)
+
+_ACTION_PLAN = {
+    "action_items": [{"description": "re-train operators", "owner": "diego", "due_date": "2026-08"}]
+}
+
+
+async def _assign_seeded_role(subject: str, role_name: str) -> uuid.UUID:
+    """Assign a SEEDED role (e.g. ``QMS Owner`` / ``Top Management``) to a user via RoleAssignment —
+    candidate pools are role-membership, not SYSTEM permission overrides."""
+    async with get_sessionmaker()() as s:
+        user = await _ensure_user(s, subject)
+        role = (await s.execute(select(Role).where(Role.name == role_name))).scalar_one()
+        s.add(
+            RoleAssignment(
+                org_id=user.org_id,
+                user_id=user.id,
+                role_id=role.id,
+                bound_scope={"level": "SYSTEM"},
+            )
+        )
+        await s.commit()
+        return user.id
+
+
+async def _drive_to_root_cause(
+    client: AsyncClient, headers: dict[str, str], *, severity: str, title: str
+) -> str:
+    """Raise a CAPA at ``severity`` and walk Raised→Containment→RootCause; return its id."""
+    r = await client.post(
+        "/api/v1/capas",
+        headers=headers,
+        json={"title": title, "severity": severity, "problem": "p"},
+    )
+    assert r.status_code == 201, r.text
+    capa_id = r.json()["id"]
+    c = await client.post(
+        f"/api/v1/capas/{capa_id}/containment",
+        headers=headers,
+        json={"content_block": {"correction": "isolate the lot"}},
+    )
+    assert c.status_code == 200, c.text
+    rc = await client.post(
+        f"/api/v1/capas/{capa_id}/root-cause",
+        headers=headers,
+        json={"content_block": {"root_cause": "missing check", "method": "5-whys"}},
+    )
+    assert rc.status_code == 200, rc.text
+    assert rc.json()["close_state"] == "RootCause"
+    return capa_id
+
+
+async def _my_pending_task(client: AsyncClient, headers: dict[str, str], instance_id: str) -> str:
+    """The caller's own PENDING task for an instance (self-scoped My-Tasks; one per candidate)."""
+    r = await client.get(f"/api/v1/tasks?instance_id={instance_id}&state=PENDING", headers=headers)
+    assert r.status_code == 200, r.text
+    tasks = r.json()
+    assert len(tasks) == 1, tasks
+    return tasks[0]["id"]
+
+
+async def test_root_cause_requires_containment_first(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """The RootCause gate is the pure FSM: a freshly-Raised CAPA cannot jump to RootCause (409)."""
+    subject = _subject("rca-fsm")
+    await _grant(subject, _PROPOSE_KEYS)
+    h = _auth(token_factory, subject)
+    capa_id = (
+        await app_client.post("/api/v1/capas", headers=h, json={"title": "x", "severity": "Minor"})
+    ).json()["id"]
+    r = await app_client.post(
+        f"/api/v1/capas/{capa_id}/root-cause", headers=h, json={"content_block": {"rc": "x"}}
+    )
+    assert r.status_code == 409, r.text
+    assert r.json()["code"] == "invalid_capa_transition"
+
+
+async def test_minor_action_plan_qm_approval_writes_signature(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """Minor: a single QMS-Owner approves → the action plan is sealed as a SIGNED ActionPlan stage
+    block (``signature_event(meaning=approval, signed_object=capa_stage)`` + ``signed_event_id``),
+    and ``close_state`` flips RootCause→ActionPlan only at approval-complete."""
+    qm_subj = _subject("qm-minor")
+    approver = await _assign_seeded_role(qm_subj, "QMS Owner")
+    ha = _auth(token_factory, qm_subj)
+
+    proposer_subj = _subject("ap-minor")
+    proposer = await _grant(proposer_subj, _PROPOSE_KEYS)
+    hp = _auth(token_factory, proposer_subj)
+    capa_id = await _drive_to_root_cause(app_client, hp, severity="Minor", title="Minor AP")
+
+    pr = await app_client.post(
+        f"/api/v1/capas/{capa_id}/action-plan", headers=hp, json={"content_block": _ACTION_PLAN}
+    )
+    assert pr.status_code == 200, pr.text
+    body = pr.json()
+    assert body["close_state"] == "RootCause"  # NOT flipped until approval completes
+    iid = body["approval_instance"]["id"]
+    assert body["approval_instance"]["current_state"] == "qm_approval"
+
+    task_id = await _my_pending_task(app_client, ha, iid)
+    dr = await app_client.post(
+        f"/api/v1/tasks/{task_id}/decision", headers=ha, json={"outcome": "approve"}
+    )
+    assert dr.status_code == 200, dr.text
+    decision = dr.json()
+    assert decision["current_state"] == "COMPLETED"
+    assert decision["capa_close_state"] == "ActionPlan"
+    sig_id = decision["signature_event_id"]
+    assert sig_id is not None
+
+    # The CAPA is now ActionPlan with a SIGNED ActionPlan stage carrying the action items + both
+    # actor identities sealed into the immutable block.
+    detail = (await app_client.get(f"/api/v1/capas/{capa_id}", headers=hp)).json()
+    assert detail["close_state"] == "ActionPlan"
+    ap_stages = [s for s in detail["stages"] if s["stage"] == "ActionPlan"]
+    assert len(ap_stages) == 1
+    assert ap_stages[0]["content_block"]["action_items"] == _ACTION_PLAN["action_items"]
+    assert ap_stages[0]["content_block"]["approved_by"] == str(approver)
+    assert ap_stages[0]["content_block"]["proposed_by"] == str(proposer)
+
+    async with get_sessionmaker()() as s:
+        sig = (
+            await s.execute(select(SignatureEvent).where(SignatureEvent.id == uuid.UUID(sig_id)))
+        ).scalar_one()
+        assert sig.meaning.value == "approval"
+        assert sig.signed_object_type.value == "capa_stage"
+        assert sig.signer_user_id == approver
+        stage = (
+            await s.execute(select(CapaStage).where(CapaStage.id == sig.signed_object_id))
+        ).scalar_one()
+        assert stage.stage.value == "ActionPlan"
+        assert stage.signed_event_id == sig.id  # mutual reference, set at INSERT (no UPDATE)
+
+
+async def test_critical_action_plan_two_tier_approval(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """Critical routes to SEQUENTIAL QMS-Owner → Top-Management stages: the QM approval advances the
+    flow (still PENDING), and only the Top-Management approval completes it (the 'QM AND
+    top-management' conjunction, doc 10 §6.3)."""
+    qm_subj, tm_subj = _subject("qm-crit"), _subject("tm-crit")
+    qm = await _assign_seeded_role(qm_subj, "QMS Owner")
+    tm = await _assign_seeded_role(tm_subj, "Top Management")
+    hqm, htm = _auth(token_factory, qm_subj), _auth(token_factory, tm_subj)
+
+    proposer_subj = _subject("ap-crit")
+    await _grant(proposer_subj, _PROPOSE_KEYS)
+    hp = _auth(token_factory, proposer_subj)
+    capa_id = await _drive_to_root_cause(app_client, hp, severity="Critical", title="Crit AP")
+
+    pr = await app_client.post(
+        f"/api/v1/capas/{capa_id}/action-plan", headers=hp, json={"content_block": _ACTION_PLAN}
+    )
+    iid = pr.json()["approval_instance"]["id"]
+    assert pr.json()["approval_instance"]["current_state"] == "crit_qm"
+
+    # QM tier: advances to the Top-Management stage but does NOT complete (no signature yet).
+    qm_task = await _my_pending_task(app_client, hqm, iid)
+    r1 = (
+        await app_client.post(
+            f"/api/v1/tasks/{qm_task}/decision", headers=hqm, json={"outcome": "approve"}
+        )
+    ).json()
+    assert r1["current_state"] == "crit_topmgmt"
+    assert r1.get("signature_event_id") is None
+    assert (await app_client.get(f"/api/v1/capas/{capa_id}", headers=hp)).json()[
+        "close_state"
+    ] == "RootCause"
+
+    # Top-Management tier: completes + signs + flips to ActionPlan.
+    tm_task = await _my_pending_task(app_client, htm, iid)
+    r2 = (
+        await app_client.post(
+            f"/api/v1/tasks/{tm_task}/decision", headers=htm, json={"outcome": "approve"}
+        )
+    ).json()
+    assert r2["current_state"] == "COMPLETED"
+    assert r2["capa_close_state"] == "ActionPlan"
+    async with get_sessionmaker()() as s:
+        sig = (
+            await s.execute(
+                select(SignatureEvent).where(
+                    SignatureEvent.id == uuid.UUID(r2["signature_event_id"])
+                )
+            )
+        ).scalar_one()
+        assert sig.signer_user_id == tm  # the COMPLETING (Top-Management) approver signs
+    del qm  # the QM's approval is the task_outcome trail; one approval signature per plan
+
+
+async def test_critical_dual_role_user_cannot_clear_both_tiers(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """A single user holding BOTH QMS-Owner and Top-Management cannot satisfy the Critical two-tier
+    conjunction alone — the cross-STAGE distinct-approver guard 409s their second decision."""
+    dual_subj = _subject("dual")
+    await _assign_seeded_role(dual_subj, "QMS Owner")
+    await _assign_seeded_role(dual_subj, "Top Management")
+    hd = _auth(token_factory, dual_subj)
+
+    proposer_subj = _subject("ap-dual")
+    await _grant(proposer_subj, _PROPOSE_KEYS)
+    hp = _auth(token_factory, proposer_subj)
+    capa_id = await _drive_to_root_cause(app_client, hp, severity="Critical", title="Dual AP")
+    iid = (
+        await app_client.post(
+            f"/api/v1/capas/{capa_id}/action-plan", headers=hp, json={"content_block": _ACTION_PLAN}
+        )
+    ).json()["approval_instance"]["id"]
+
+    qm_task = await _my_pending_task(app_client, hd, iid)
+    assert (
+        await app_client.post(
+            f"/api/v1/tasks/{qm_task}/decision", headers=hd, json={"outcome": "approve"}
+        )
+    ).json()["current_state"] == "crit_topmgmt"
+    tm_task = await _my_pending_task(app_client, hd, iid)  # they also hold Top Management
+    blocked = await app_client.post(
+        f"/api/v1/tasks/{tm_task}/decision", headers=hd, json={"outcome": "approve"}
+    )
+    assert blocked.status_code == 409, blocked.text
+    # The CAPA is NOT yet approved — it stays RootCause until a DISTINCT top-mgmt member signs.
+    assert (await app_client.get(f"/api/v1/capas/{capa_id}", headers=hp)).json()[
+        "close_state"
+    ] == "RootCause"
+
+
+async def test_action_plan_requires_root_cause_first_and_content(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """The propose endpoint guards the FSM (only from RootCause, 409 else) and rejects an empty plan
+    (422). Engine-level fail-closed on an empty approver pool is covered by test_workflow_engine."""
+    proposer_subj = _subject("ap-guard")
+    await _grant(proposer_subj, _PROPOSE_KEYS)
+    hp = _auth(token_factory, proposer_subj)
+    # A freshly-Raised CAPA cannot propose an action plan (not at RootCause yet).
+    capa_id = (
+        await app_client.post("/api/v1/capas", headers=hp, json={"title": "g", "severity": "Minor"})
+    ).json()["id"]
+    early = await app_client.post(
+        f"/api/v1/capas/{capa_id}/action-plan", headers=hp, json={"content_block": _ACTION_PLAN}
+    )
+    assert early.status_code == 409, early.text
+    assert early.json()["code"] == "invalid_capa_transition"
+    # At RootCause, an empty plan is rejected.
+    rc_capa = await _drive_to_root_cause(app_client, hp, severity="Minor", title="Empty AP")
+    empty = await app_client.post(
+        f"/api/v1/capas/{rc_capa}/action-plan", headers=hp, json={"content_block": {}}
+    )
+    assert empty.status_code == 422, empty.text
+
+
+async def test_repropose_blocked_while_approval_active(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """At most one active approval per CAPA: a second propose while the first is still running 409s
+    ``capa_approval_in_progress``."""
+    await _assign_seeded_role(_subject("qm-repro"), "QMS Owner")
+    proposer_subj = _subject("ap-repro")
+    await _grant(proposer_subj, _PROPOSE_KEYS)
+    hp = _auth(token_factory, proposer_subj)
+    capa_id = await _drive_to_root_cause(app_client, hp, severity="Minor", title="Re-propose AP")
+    first = await app_client.post(
+        f"/api/v1/capas/{capa_id}/action-plan", headers=hp, json={"content_block": _ACTION_PLAN}
+    )
+    assert first.status_code == 200, first.text
+    assert first.json()["approval_instance"]["current_state"] == "qm_approval"  # active
+    second = await app_client.post(
+        f"/api/v1/capas/{capa_id}/action-plan", headers=hp, json={"content_block": _ACTION_PLAN}
+    )
+    assert second.status_code == 409, second.text
+    assert second.json()["code"] == "capa_approval_in_progress"
+
+
+async def test_capa_approval_task_rejects_non_candidate(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """A user who is NOT in the approval candidate pool cannot decide the task (404 collapse) — the
+    role-resolved pool is the authority."""
+    await _assign_seeded_role(_subject("qm-auth"), "QMS Owner")
+    proposer_subj = _subject("ap-auth")
+    await _grant(proposer_subj, _PROPOSE_KEYS)
+    hp = _auth(token_factory, proposer_subj)
+    capa_id = await _drive_to_root_cause(app_client, hp, severity="Minor", title="Authz AP")
+    iid = (
+        await app_client.post(
+            f"/api/v1/capas/{capa_id}/action-plan", headers=hp, json={"content_block": _ACTION_PLAN}
+        )
+    ).json()["approval_instance"]["id"]
+    # The proposer (not a QMS-Owner role member) cannot see the approval task.
+    mine = (await app_client.get(f"/api/v1/tasks?instance_id={iid}", headers=hp)).json()
+    assert mine == []
+    # …and POSTing a decision on the QMS-Owner's task collapses to 404 (the sole authority is the
+    # service's _assert_capa_approver — task-ownership + live-role, both 404, no 403 info leak).
+    from easysynq_api.db.models.workflow import Task as _Task
+
+    async with get_sessionmaker()() as s:
+        qm_task_id = (
+            await s.execute(select(_Task.id).where(_Task.instance_id == uuid.UUID(iid)).limit(1))
+        ).scalar_one()
+    blocked = await app_client.post(
+        f"/api/v1/tasks/{qm_task_id}/decision", headers=hp, json={"outcome": "approve"}
+    )
+    assert blocked.status_code == 404, blocked.text
+
+
+async def test_action_plan_decision_idempotent_replay_carries_capa_fields(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """An idempotent replay (same task + Idempotency-Key) of a COMPLETING approval re-derives the
+    CAPA-specific fields (capa_close_state + signature_event_id), so a retry's body matches."""
+    qm_subj = _subject("qm-idem")
+    await _assign_seeded_role(qm_subj, "QMS Owner")
+    ha = _auth(token_factory, qm_subj)
+    proposer_subj = _subject("ap-idem")
+    await _grant(proposer_subj, _PROPOSE_KEYS)
+    hp = _auth(token_factory, proposer_subj)
+    capa_id = await _drive_to_root_cause(app_client, hp, severity="Minor", title="Idem AP")
+    iid = (
+        await app_client.post(
+            f"/api/v1/capas/{capa_id}/action-plan", headers=hp, json={"content_block": _ACTION_PLAN}
+        )
+    ).json()["approval_instance"]["id"]
+    task_id = await _my_pending_task(app_client, ha, iid)
+    key = "idem-" + uuid.uuid4().hex
+    first = await app_client.post(
+        f"/api/v1/tasks/{task_id}/decision",
+        headers={**ha, "Idempotency-Key": key},
+        json={"outcome": "approve"},
+    )
+    assert first.status_code == 200 and first.json()["current_state"] == "COMPLETED", first.text
+    sig_id = first.json()["signature_event_id"]
+    # Replay with the SAME key → the recorded outcome, NOT a 409, with the CAPA fields re-derived.
+    replay = await app_client.post(
+        f"/api/v1/tasks/{task_id}/decision",
+        headers={**ha, "Idempotency-Key": key},
+        json={"outcome": "approve"},
+    )
+    assert replay.status_code == 200, replay.text
+    rb = replay.json()
+    assert rb.get("replayed") is True
+    assert rb["current_state"] == "COMPLETED"
+    assert rb["capa_close_state"] == "ActionPlan"
+    assert rb["signature_event_id"] == sig_id

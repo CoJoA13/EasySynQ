@@ -152,6 +152,7 @@ async def test_seed_catalog_and_roles(
         "Internal Auditor",
         "Employee (Read-only)",
         "External Auditor (Guest)",
+        "Top Management",  # the Critical CAPA action-plan second-tier approver (S-capa-2, 0038)
     }
 
     approver = next(r for r in roles if r["name"] == "Approver")

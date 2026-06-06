@@ -585,12 +585,40 @@ FK` satellite phrasing, for consistency with the `audit`/`capa` record-subtype f
 of divergence this register made for `audit_program`). `capa_stage`'s doc-14 `attachments` member is
 realized as `evidence_for_link(target_type=CAPA_STAGE)` edges (Mode C), not a column.
 
+**S-capa-2 action-plan approval (the severity-routed engine wiring).** The Action-Plan approval is a
+seeded declarative `workflow_definition` (`capa_action_plan_approval`, subject `CAPA`, migration `0038`,
+seed-only) the propose step instantiates. Routing (doc 10 §6.3): a ROUTER entry on the CAPA `severity`
+context — **Critical** → `crit_qm` (QMS-Owner, ANY) → `crit_topmgmt` (**Top Management**, ANY) as
+SEQUENTIAL stages (the cross-role "QM *and* top-management" conjunction; a single merged-pool `N_OF_M`
+over a [QM,TopMgmt] union would *false-PASS* because two QMs could satisfy it with no top-management
+sign-off); **Major / Minor** → `qm_approval` (QMS-Owner, ANY). A uniform ≤5-business-day SLA (doc 10
+§6.2; informational in v1, no escalation). **"Top Management" is a NEW additive reserved role** (R38
+catalog-growth posture applied to roles; resolved by `Role.name` via the candidate-pool seam — org-role
+resolution stays deferred), holding only `capa.read`; a single-operator install must assign QMS-Owner /
+Top-Management members or the approval fails closed (`NEEDS_ATTENTION`), the records-family SoD posture.
+**Approval model:** the proposed plan rides the mutable `workflow_instance.context` (a draft);
+`capa.close_state` flips RootCause→ActionPlan **only at approval-complete**, so `close_state==ActionPlan`
+⟺ the plan was approved. ONE `signature_event(meaning=approval, signed_object_type=capa_stage)` is written
+per approved plan (signer = the completing approver; per-approver decisions are the `task_outcome` trail;
+per-approver crypto-signatures are a Part-11 refinement); `capa_stage.signed_event_id` is set **at INSERT**
+via a pre-generated stage UUID (the signature `signed_object_id` = that id; the stage `signed_event_id` =
+the flushed signature id) — two mutually-referencing INSERTs, never an UPDATE on the append-only table.
+**Authz:** the approval decision is gated by **candidate-pool membership** (no catalog key gates "approve a
+CAPA action plan" — the role-resolved pool IS the authority, the self-scoped-task doctrine doc 07) +
+a decision-time **live-role re-check** + a **cross-STAGE distinct-approver** guard (a single user holding
+both QMS-Owner and Top-Management cannot clear both Critical tiers alone). SoD-4 (verifier ≠ implementer) +
+`allow_capa_self_verify` remain **S-capa-3**. The per-stage endpoints (`/capas/{id}/root-cause` gate
+`capa.record_rca`; `/capas/{id}/action-plan` gate `capa.plan_action`) follow the shipped `/containment`
+precedent, **superseding** doc 15 §8's unified `POST /capas/{id}/stages` (a single `capa.update` gate).
+
 **Implemented in slices:** S-aud-1 (`audit_program` + `audit_plan` + `audit` + FSM, migration `0034`);
 S-wf-engine (the declarative engine, migration `0035`); **S-capa-1** (the CAPA core + intake —
 `capa` + append-only `capa_stage` + `ncr` + `complaint` + complaint→CAPA spawn + Raised/Containment +
 the grant-backfill of `capa.update`/`ncr.create`/`ncr.record_correction` + the `allow_capa_self_verify`
-flag, migration `0036`); S-aud-2 (findings + NC→CAPA auto-link + the block-until-corrected close gate);
-S-capa-2..3 (RCA/ActionPlan/Implement/Verify + severity-aware SoD-4 + the M4 closure gate); the
+flag, migration `0036`); S-aud-2 (findings + NC→CAPA auto-link + the block-until-corrected close gate,
+migration `0037`); **S-capa-2** (RootCause + ActionPlan stages + the severity-routed engine approval +
+the real `signature_event` write for `capa_stage.signed_event_id` + the Top-Management role, migration
+`0038`); S-capa-3 remaining (Implement/Verify + severity-aware SoD-4 + the M4 closure gate); the
 Evidence-Pack Finding/CAPA scope close-out.
 
 **Back-propagation:** 02 (Cl 9.2/10.2), 06, 07 (§7 SoD-4), 10 (§5-6), 14 (§6/§9/§14), 15, 16.

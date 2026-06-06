@@ -132,8 +132,15 @@ Records/evidence capture, retention/disposition, Evidence Packs, audits/findings
 > auto-creates its CAPA, SYSTEM-side under the auditor's `finding.create`), the deferred bidirectional cross-FK
 > (`capa.origin_finding_id`↔`audit_finding.auto_capa_id`), the **general** finding-retype/correction path, the
 > block-until-corrected **audit-close gate** (409 until every live NC has a Closed CAPA), and the enabled
-> `evidence_for_link` FINDING/CAPA_STAGE targets. RCA/ActionPlan/Implement/Verify stay in S-capa-2..3.
-> **Migration head is now `0037`.** See `CLAUDE.md` for shipped detail.
+> `evidence_for_link` FINDING/CAPA_STAGE targets. **S-capa-2** (migration `0038`, seed-only) then ships
+> **RootCause + ActionPlan stages + the severity-routed engine approval + the real `signature_event`
+> write**: `/capas/{id}/root-cause` (`capa.record_rca`) + `/capas/{id}/action-plan` (`capa.plan_action`,
+> which opens the seeded `capa_action_plan_approval` workflow — Critical = QMS-Owner→Top-Management
+> sequential, Major/Minor = QMS-Owner ANY) + the `/tasks/{id}/decision` CAPA dispatch that, on the
+> completing approval, writes a `signature_event(meaning=approval, signed_object=capa_stage)` + the signed
+> ActionPlan stage and flips `close_state` to ActionPlan, plus a NEW additive **Top Management** role.
+> Implement/Verify + severity-aware SoD-4 + the M4 closure gate stay in S-capa-3. **Migration head is now
+> `0038`.** See `CLAUDE.md` for shipped detail.
 
 **Goal:** everything an organization needs to *run and certify* an ISO 9001:2015 QMS, end to end, and to face an external audit with a one-click evidence pack.
 
