@@ -57,6 +57,17 @@ class Classification(enum.Enum):
     Restricted = "Restricted"
 
 
+class DocumentLinkType(enum.Enum):
+    # The document↔document reference graph (doc 14 §5.6, doc 05 §7.1) — the where-used substrate
+    # (S-dcr-2). parent_of/child_of = the procedure↔work-instruction hierarchy; references = an
+    # embedded cross-ref ("see SOP-QA-003"); supersedes = a replacement pointer. Directional:
+    # from_document_id → to_document_id.
+    parent_of = "parent_of"
+    child_of = "child_of"
+    references = "references"
+    supersedes = "supersedes"
+
+
 def _vals(e: type[enum.Enum]) -> list[str]:
     return [m.value for m in e]
 
@@ -79,3 +90,7 @@ change_significance_enum = SAEnum(
 classification_enum = SAEnum(
     Classification, name="classification", values_callable=_vals, create_type=False
 )
+document_link_type_enum = SAEnum(
+    DocumentLinkType, name="document_link_type", values_callable=_vals, create_type=False
+)
+DOCUMENT_LINK_TYPE_VALUES = tuple(_vals(DocumentLinkType))

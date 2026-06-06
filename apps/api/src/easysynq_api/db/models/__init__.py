@@ -20,6 +20,7 @@ from ._dcr_enums import (
     DcrReasonClass,
     DcrSourceLinkType,
     DcrState,
+    ImpactDimension,
 )
 from ._evidence_enums import EvidenceForTargetType
 from ._ingestion_enums import (
@@ -48,6 +49,7 @@ from ._vault_enums import (
     DocumentCurrentState,
     DocumentKind,
     DocumentLevel,
+    DocumentLinkType,
     VersionState,
 )
 from ._workflow_enums import (
@@ -76,6 +78,7 @@ from .complaint import Complaint
 from .dcr import Dcr
 from .dcr_stage_event import DcrStageEvent
 from .disposition_event import DispositionEvent
+from .document_link import DocumentLink
 from .document_type import DocumentType
 from .document_version import DocumentVersion
 from .documented_information import DocumentedInformation
@@ -84,6 +87,7 @@ from .evidence_for_link import EvidenceForLink
 from .evidence_pack import EvidencePack
 from .form_template import FormTemplate
 from .framework import Framework
+from .impact_assessment import ImpactAssessment
 from .import_classification import ImportClassification
 from .import_commit_result import ImportCommitResult
 from .import_decision import ImportDecision
@@ -157,6 +161,8 @@ __all__ = [
     "DocumentCurrentState",
     "DocumentKind",
     "DocumentLevel",
+    "DocumentLink",
+    "DocumentLinkType",
     "DocumentType",
     "DocumentVersion",
     "DocumentedInformation",
@@ -168,6 +174,8 @@ __all__ = [
     "FindingType",
     "FormTemplate",
     "Framework",
+    "ImpactAssessment",
+    "ImpactDimension",
     "ImportClassification",
     "ImportCommitResult",
     "ImportCommitResultStatus",

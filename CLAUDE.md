@@ -85,11 +85,21 @@ visual] + a **doc↔doc link table** for where-used · scheduled re-review D5 + 
   `POST /dcrs/{id}/cancel`; service wires the Open intake + Open→Cancelled (the rest of the FSM is declarative/forward-compat).
   Grant-backfill: the orphaned `changeRequest.assess` + `changeRequest.close` → Process Owner + QMS Owner (PROCESS placeholder,
   rides SYSTEM overrides). NO new permission keys.
+- **S-dcr-2** where-used / impact + assess (`0041`) — the NEW `document_link` doc↔doc graph (`parent_of`/`child_of`/`references`/
+  `supersedes`; editable metadata `GRANT SELECT,INSERT,DELETE`, the `clause_mapping` precedent; CRUD `POST/GET/DELETE
+  /documents/{id}/links` on `document.manage_metadata`) + `impact_assessment` (one row per the 7 doc-05-§5.3 dimensions) +
+  `GET /documents/{id}/where-used` (`document.read` — the §7.2 categories [processes · child/parent docs · referenced-by ·
+  forms · records-produced-under · clauses · related CAPAs/findings] over `process_link`/`document_link`/`clause_mapping`/
+  records/`dcr.source_link`) + the pure §7.3 `obsoletion_blocked` predicate SURFACED as a `where-used.obsoletion_safety`
+  advisory (governs-active-process / referenced-by-Effective / sole-★-coverage) — **enforcement deferred to S-dcr-5** per
+  the R40 addendum (the shipped `document.obsolete` endpoint untouched) + `POST /dcrs/{id}/assess` (Open→Assessed; mirrors
+  `cancel_dcr` + UPSERTs the impact rows from where-used in one txn; a CREATE DCR → all-N/A) + `GET/PUT /dcrs/{id}/impact`
+  (annotate). NO new permission keys, NO Celery task. The S-dcr-1 `_dcr_doc_scope` (R28 full-context, process_ids) gates assess.
 
-**Next (S-dcr family):** S-dcr-2 (where-used/impact + `document_link` table + `impact_assessment` + assess), S-dcr-3 (full
-redline/diff), S-dcr-4 (routing + approval, subject_type=DCR via the declarative engine — the S-capa-2 pattern), S-dcr-5
-(implement/close + effectivity polish + the CAPA→DCR loop; the deferred cross-FK `document_version.dcr_id` ↔
-`dcr.resulting_version_id`). **Migration head is `0040` (next `0041`).**
+**Next (S-dcr family):** S-dcr-3 (full redline/diff: meta + on-demand Tika text + visual page-image), S-dcr-4 (routing +
+approval, subject_type=DCR via the declarative engine — the S-capa-2 pattern), S-dcr-5 (implement/close + effectivity polish
++ the CAPA→DCR loop + the deferred cross-FK `document_version.dcr_id` ↔ `dcr.resulting_version_id` + the obsoletion 409 gate).
+**Migration head is `0041` (next `0042`).**
 
 **v1 RECORDS & evidence family (UJ-7 + records) — COMPLETE** ✅ (migs `0023`–`0028`; per-slice
 non-obvious decisions live in the squash-merge commits + the `easysynq-project.md` memory; operating

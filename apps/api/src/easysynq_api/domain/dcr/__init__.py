@@ -3,10 +3,16 @@
 from __future__ import annotations
 
 from .fsm import DCR_TRANSITIONS, allowed_targets, is_terminal, transition_allowed
+from .obsoletion import ObsoletionReason, ObsoletionSafety, evaluate_obsoletion
+from .where_used import bucket_links
 
 __all__ = [
     "DCR_TRANSITIONS",
+    "ObsoletionReason",
+    "ObsoletionSafety",
     "allowed_targets",
+    "bucket_links",
+    "evaluate_obsoletion",
     "is_terminal",
     "transition_allowed",
 ]

@@ -28,12 +28,14 @@ from ..db.models._vault_enums import (
     Classification,
     DocumentCurrentState,
     DocumentKind,
+    DocumentLinkType,
     VersionState,
 )
 from ..db.models.app_user import AppUser
 from ..db.models.audit_event import AuditEvent
 from ..db.models.clause import Clause
 from ..db.models.clause_mapping import ClauseMapping
+from ..db.models.document_link import DocumentLink
 from ..db.models.document_type import DocumentType
 from ..db.models.document_version import DocumentVersion
 from ..db.models.documented_information import DocumentedInformation
@@ -46,6 +48,7 @@ from ..domain.authz import RequestContext, ResourceContext, authorize
 from ..logging import request_id_var
 from ..problems import ProblemException
 from ..services.authz import AuthzAuditSink, enforce, gather_grants, get_authz_audit_sink, require
+from ..services.dcr import build_where_used
 from ..services.vault import (
     SignatureEventSink,
     VaultAuditSink,
@@ -844,6 +847,141 @@ async def unlink_process_endpoint(
     )
     await session.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+# --- document↔document links + where-used (S-dcr-2, doc 05 §7, doc 14 §5.6) --------------
+
+
+class DocumentLinkCreate(BaseModel):
+    to_document_id: uuid.UUID
+    link_type: DocumentLinkType
+
+
+def _document_link(link: DocumentLink) -> dict[str, Any]:
+    return {
+        "id": str(link.id),
+        "from_document_id": str(link.from_document_id),
+        "to_document_id": str(link.to_document_id),
+        "link_type": link.link_type.value,
+        "created_at": link.created_at.isoformat(),
+    }
+
+
+@router.get("/documents/{document_id}/links")
+async def list_document_links_endpoint(
+    document_id: uuid.UUID,
+    caller: AppUser = Depends(_read),
+    session: AsyncSession = Depends(get_session),
+) -> list[dict[str, Any]]:
+    """Every document_link touching this document (outbound + inbound). Needs ``document.read``."""
+    await _load_document(session, caller, document_id)
+    rows = (
+        (
+            await session.execute(
+                select(DocumentLink)
+                .where(
+                    (DocumentLink.from_document_id == document_id)
+                    | (DocumentLink.to_document_id == document_id)
+                )
+                .order_by(DocumentLink.created_at.desc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return [_document_link(link) for link in rows]
+
+
+@router.post("/documents/{document_id}/links", status_code=status.HTTP_201_CREATED)
+async def create_document_link_endpoint(
+    document_id: uuid.UUID,
+    body: DocumentLinkCreate,
+    caller: AppUser = Depends(_manage_metadata),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """Create a directed ``from → to`` document link of ``link_type`` (doc 14 §5.6). Both must be
+    in-org controlled Documents; no self-link; 409 on a duplicate (from,to,type). Needs
+    ``document.manage_metadata``."""
+    doc = await _load_document(session, caller, document_id)
+    if body.to_document_id == document_id:
+        raise ProblemException(
+            status=422,
+            code="validation_error",
+            title="A document cannot link to itself",
+            errors=[{"field": "to_document_id", "code": "no_self", "message": "self-link"}],
+        )
+    target = await session.get(DocumentedInformation, body.to_document_id)
+    if target is None or target.org_id != caller.org_id:
+        raise ProblemException(status=404, code="not_found", title="Target document not found")
+    if target.kind != DocumentKind.DOCUMENT:
+        raise ProblemException(
+            status=422,
+            code="validation_error",
+            title="A link target must be a controlled Document (not a Record)",
+            errors=[{"field": "to_document_id", "code": "not_a_document", "message": "not a doc"}],
+        )
+    link = DocumentLink(
+        org_id=doc.org_id,
+        from_document_id=doc.id,
+        to_document_id=body.to_document_id,
+        link_type=body.link_type,
+        created_by=caller.id,
+    )
+    session.add(link)
+    try:
+        await session.flush()  # the UNIQUE(from,to,type) backstop for a concurrent duplicate
+    except IntegrityError:
+        await session.rollback()
+        raise ProblemException(status=409, code="conflict", title="Link already exists") from None
+    _emit_clause_event(
+        session,
+        caller,
+        EventType.DOCUMENT_LINKED,
+        doc.id,
+        after={"to_document_id": str(body.to_document_id), "link_type": body.link_type.value},
+    )
+    await session.commit()
+    return _document_link(link)
+
+
+@router.delete("/documents/{document_id}/links/{link_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_document_link_endpoint(
+    document_id: uuid.UUID,
+    link_id: uuid.UUID,
+    caller: AppUser = Depends(_manage_metadata),
+    session: AsyncSession = Depends(get_session),
+) -> Response:
+    """Remove a document link touching this document. Needs ``document.manage_metadata``."""
+    doc = await _load_document(session, caller, document_id)
+    link = await session.get(DocumentLink, link_id)
+    if (
+        link is None
+        or link.org_id != caller.org_id
+        or document_id not in (link.from_document_id, link.to_document_id)
+    ):
+        raise ProblemException(status=404, code="not_found", title="Document link not found")
+    before = {
+        "to_document_id": str(link.to_document_id),
+        "from_document_id": str(link.from_document_id),
+        "link_type": link.link_type.value,
+    }
+    await session.delete(link)
+    _emit_clause_event(session, caller, EventType.DOCUMENT_UNLINKED, doc.id, before=before)
+    await session.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get("/documents/{document_id}/where-used")
+async def where_used_endpoint(
+    document_id: uuid.UUID,
+    caller: AppUser = Depends(_read),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """The doc 05 §7.2 where-used panel for this document (processes · child/parent documents ·
+    referenced-by · forms/templates · records-produced-under · clauses · related CAPAs/findings) +
+    the §7.3 ``obsoletion_safety`` advisory. Needs ``document.read``."""
+    doc = await _load_document(session, caller, document_id)
+    return await build_where_used(session, caller.org_id, doc.id)
 
 
 # --- check-out / upload / check-in ------------------------------------------------------

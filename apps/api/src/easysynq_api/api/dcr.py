@@ -33,11 +33,12 @@ from ..db.models.dcr import Dcr
 from ..db.models.dcr_stage_event import DcrStageEvent
 from ..db.models.document_type import DocumentType
 from ..db.models.documented_information import DocumentedInformation
+from ..db.models.impact_assessment import ImpactAssessment
 from ..db.session import get_session
 from ..domain.authz import ResourceContext
 from ..problems import ProblemException
 from ..services.authz import AuthzAuditSink, enforce, get_authz_audit_sink, require
-from ..services.dcr import cancel_dcr, patch_dcr, raise_dcr
+from ..services.dcr import annotate_impact, assess_dcr, cancel_dcr, patch_dcr, raise_dcr
 from ..services.dcr import repository as dcr_repo
 from ..services.vault import repository as vault_repo
 
@@ -69,6 +70,11 @@ class DcrCancel(BaseModel):
     comment: str | None = Field(default=None, max_length=2000)
 
 
+class ImpactAnnotate(BaseModel):
+    # Keyed by ImpactDimension value (e.g. {"affected_processes": "Diego to re-validate"}).
+    annotations: dict[str, str]
+
+
 # --- serializers ------------------------------------------------------------------------------
 
 
@@ -91,6 +97,17 @@ def _dcr(d: Dcr) -> dict[str, Any]:
         "decision": d.decision,
         "created_by": str(d.created_by),
         "created_at": d.created_at.isoformat(),
+    }
+
+
+def _impact(ia: ImpactAssessment) -> dict[str, Any]:
+    return {
+        "id": str(ia.id),
+        "dimension": ia.dimension.value,
+        "auto_populated": ia.auto_populated,
+        "requester_annotation": ia.requester_annotation,
+        "created_at": ia.created_at.isoformat(),
+        "updated_at": ia.updated_at.isoformat() if ia.updated_at else None,
     }
 
 
@@ -260,3 +277,46 @@ async def cancel_dcr_endpoint(
     """Withdraw a DCR while not yet approved (gate ``changeRequest.close``)."""
     dcr = await cancel_dcr(session, caller, dcr_id, comment=body.comment)
     return _dcr(dcr)
+
+
+@router.post("/dcrs/{dcr_id}/assess")
+async def assess_dcr_endpoint(
+    dcr_id: uuid.UUID,
+    caller: AppUser = Depends(_dcr_assess),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """Open → Assessed (gate ``changeRequest.assess``). Auto-populates the seven doc 05 §5.3 impact
+    dimensions from the target document's where-used. Returns the DCR + the impact rows."""
+    dcr = await assess_dcr(session, caller, dcr_id)
+    rows = [_impact(ia) for ia in await dcr_repo.list_impact_assessments(session, dcr_id)]
+    out = _dcr(dcr)
+    out["impact_assessment"] = rows
+    return out
+
+
+@router.get("/dcrs/{dcr_id}/impact")
+async def get_dcr_impact_endpoint(
+    dcr_id: uuid.UUID,
+    caller: AppUser = Depends(_dcr_read),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """The DCR's auto-populated impact_assessment rows (gate ``changeRequest.read``)."""
+    dcr = await dcr_repo.get_dcr(session, dcr_id)
+    if dcr is None or dcr.org_id != caller.org_id:
+        raise ProblemException(status=404, code="not_found", title="DCR not found")
+    rows = [_impact(ia) for ia in await dcr_repo.list_impact_assessments(session, dcr_id)]
+    return {"data": rows}
+
+
+@router.put("/dcrs/{dcr_id}/impact")
+async def put_dcr_impact_endpoint(
+    dcr_id: uuid.UUID,
+    body: ImpactAnnotate,
+    caller: AppUser = Depends(_dcr_assess),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """Annotate the impact dimensions (gate ``changeRequest.assess``). ``annotations`` is keyed by
+    ImpactDimension value; the auto_populated facts are untouched."""
+    await annotate_impact(session, caller, dcr_id, body.annotations)
+    rows = [_impact(ia) for ia in await dcr_repo.list_impact_assessments(session, dcr_id)]
+    return {"data": rows}

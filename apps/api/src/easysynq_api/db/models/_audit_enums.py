@@ -326,6 +326,11 @@ class EventType(enum.Enum):
     DCR_RAISED = "DCR_RAISED"
     DCR_UPDATED = "DCR_UPDATED"
     DCR_TRANSITIONED = "DCR_TRANSITIONED"
+    # document↔document links (S-dcr-2, doc 05 §7.1 / doc 14 §5.6) — the where-used reference graph;
+    # keyed on object_type=document (the from_document_id, the CLAUSE_MAPPED precedent). Added via
+    # ALTER TYPE event_type ADD VALUE in 0041.
+    DOCUMENT_LINKED = "DOCUMENT_LINKED"
+    DOCUMENT_UNLINKED = "DOCUMENT_UNLINKED"
 
 
 class CheckpointSinkKind(enum.Enum):

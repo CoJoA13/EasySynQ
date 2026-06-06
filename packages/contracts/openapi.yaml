@@ -1126,6 +1126,77 @@ paths:
         "403": { $ref: "#/components/responses/ProblemResponse" }
         "404": { $ref: "#/components/responses/ProblemResponse" }
 
+  /documents/{document_id}/links:
+    get:
+      tags: [documents]
+      operationId: listDocumentLinks
+      summary: >-
+        Every document↔document link touching this document (outbound + inbound) — the where-used
+        reference graph (doc 14 §5.6, S-dcr-2). Needs document.read.
+      parameters:
+        - { name: document_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: The links touching this document.
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/DocumentLink" } }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+    post:
+      tags: [documents]
+      operationId: createDocumentLink
+      summary: >-
+        Create a directed from→to link of link_type (doc 14 §5.6). Both must be in-org Documents;
+        no self-link (422); 409 on a duplicate (from,to,type). Needs document.manage_metadata.
+      parameters:
+        - { name: document_id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DocumentLinkCreate" }
+      responses:
+        "201":
+          description: The created link.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DocumentLink" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409": { $ref: "#/components/responses/ProblemResponse" }
+        "422": { $ref: "#/components/responses/ProblemResponse" }
+  /documents/{document_id}/links/{link_id}:
+    delete:
+      tags: [documents]
+      operationId: deleteDocumentLink
+      summary: Remove a document link touching this document. Needs document.manage_metadata.
+      parameters:
+        - { name: document_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: link_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "204": { description: Unlinked. }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+  /documents/{document_id}/where-used:
+    get:
+      tags: [documents]
+      operationId: getDocumentWhereUsed
+      summary: >-
+        The doc 05 §7.2 where-used panel (processes · child/parent documents · referenced-by ·
+        forms/templates · records-produced-under · clauses · related CAPAs/findings) + the §7.3
+        obsoletion_safety advisory (S-dcr-2). Needs document.read.
+      parameters:
+        - { name: document_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: The where-used panel.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WhereUsed" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+
   /documents/{document_id}/checkout:
     post:
       tags: [documents]
@@ -3830,6 +3901,81 @@ paths:
         "404": { $ref: "#/components/responses/ProblemResponse" }
         "409": { $ref: "#/components/responses/ProblemResponse" }
 
+  /dcrs/{dcr_id}/assess:
+    post:
+      tags: [dcr]
+      operationId: assessDcr
+      summary: >-
+        Open → Assessed (S-dcr-2). Auto-populates the seven doc 05 §5.3 impact dimensions from the
+        target document's where-used (a CREATE DCR → N/A rows). 409 dcr_not_assessable if not Open.
+        Needs changeRequest.assess.
+      parameters:
+        - { name: dcr_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: The Assessed DCR + the auto-populated impact_assessment rows.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: "#/components/schemas/Dcr" }
+                  - type: object
+                    properties:
+                      impact_assessment:
+                        type: array
+                        items: { $ref: "#/components/schemas/ImpactAssessment" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409": { $ref: "#/components/responses/ProblemResponse" }
+  /dcrs/{dcr_id}/impact:
+    get:
+      tags: [dcr]
+      operationId: getDcrImpact
+      summary: The DCR's auto-populated impact_assessment rows (S-dcr-2). Needs changeRequest.read.
+      parameters:
+        - { name: dcr_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: The impact_assessment rows.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/ImpactAssessment" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+    put:
+      tags: [dcr]
+      operationId: annotateDcrImpact
+      summary: >-
+        Set requester_annotation on the named impact dimensions (keyed by ImpactDimension value);
+        the auto_populated facts are untouched. 422 on an unknown dimension. Needs changeRequest.assess.
+      parameters:
+        - { name: dcr_id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ImpactAnnotate" }
+      responses:
+        "200":
+          description: The updated impact_assessment rows.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/ImpactAssessment" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409": { $ref: "#/components/responses/ProblemResponse" }
+        "422": { $ref: "#/components/responses/ProblemResponse" }
+
 components:
   securitySchemes:
     keycloak:
@@ -5106,6 +5252,63 @@ components:
       additionalProperties: false
       properties:
         comment: { type: [string, "null"], maxLength: 2000 }
+    DocumentLinkType:
+      type: string
+      enum: [parent_of, child_of, references, supersedes]
+    DocumentLink:
+      type: object
+      additionalProperties: false
+      required: [id, from_document_id, to_document_id, link_type, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        from_document_id: { type: string, format: uuid }
+        to_document_id: { type: string, format: uuid }
+        link_type: { $ref: "#/components/schemas/DocumentLinkType" }
+        created_at: { type: string, format: date-time }
+    DocumentLinkCreate:
+      type: object
+      additionalProperties: false
+      required: [to_document_id, link_type]
+      properties:
+        to_document_id: { type: string, format: uuid }
+        link_type: { $ref: "#/components/schemas/DocumentLinkType" }
+    ImpactDimension:
+      type: string
+      description: The seven doc 05 §5.3 structured impact-assessment dimensions.
+      enum:
+        [affected_processes, dependent_documents, records_produced_under, training_awareness,
+         clause_coverage, effectivity_transition, risk]
+    ImpactAssessment:
+      type: object
+      additionalProperties: false
+      required: [id, dimension, auto_populated, requester_annotation, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        dimension: { $ref: "#/components/schemas/ImpactDimension" }
+        auto_populated:
+          type: object
+          additionalProperties: true
+          description: "System-computed facts; applicable=false for a CREATE DCR (no target)."
+        requester_annotation: { type: [string, "null"] }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: [string, "null"], format: date-time }
+    ImpactAnnotate:
+      type: object
+      additionalProperties: false
+      required: [annotations]
+      properties:
+        annotations:
+          type: object
+          additionalProperties: { type: string }
+          description: Keyed by ImpactDimension value → the requester's annotation text.
+    WhereUsed:
+      type: object
+      additionalProperties: true
+      description: >-
+        The doc 05 §7.2 where-used panel: document_id + arrays of processes / child_documents /
+        parent_documents / referenced_by / references_out / forms_templates / supersedes /
+        superseded_by / clauses / related_capas_findings, a records_produced_under {count, sample},
+        and an obsoletion_safety {blocked, reasons[]} advisory (§7.3).
     Complaint:
       type: object
       additionalProperties: false

@@ -78,6 +78,18 @@ class DcrSourceLinkType(enum.Enum):
     risk = "risk"
 
 
+class ImpactDimension(enum.Enum):
+    # The structured impact-assessment dimensions (doc 05 §5.3, S-dcr-2) — one impact_assessment row
+    # per dimension per DCR, auto-populated from the target document's where-used at assess.
+    affected_processes = "affected_processes"
+    dependent_documents = "dependent_documents"
+    records_produced_under = "records_produced_under"
+    training_awareness = "training_awareness"
+    clause_coverage = "clause_coverage"
+    effectivity_transition = "effectivity_transition"
+    risk = "risk"
+
+
 def _vals(e: type[enum.Enum]) -> list[str]:
     return [m.value for m in e]
 
@@ -92,6 +104,9 @@ dcr_reason_class_enum = SAEnum(
 dcr_source_link_type_enum = SAEnum(
     DcrSourceLinkType, name="dcr_source_link_type", values_callable=_vals, create_type=False
 )
+impact_dimension_enum = SAEnum(
+    ImpactDimension, name="impact_dimension", values_callable=_vals, create_type=False
+)
 
 # The canonical v1 value tuples, re-used by the migration's CREATE TYPE so the ORM and the
 # hand-authored DDL never drift (the _capa_enums *_VALUES precedent).
@@ -99,3 +114,4 @@ DCR_STATE_VALUES = tuple(_vals(DcrState))
 DCR_CHANGE_TYPE_VALUES = tuple(_vals(DcrChangeType))
 DCR_REASON_CLASS_VALUES = tuple(_vals(DcrReasonClass))
 DCR_SOURCE_LINK_TYPE_VALUES = tuple(_vals(DcrSourceLinkType))
+IMPACT_DIMENSION_VALUES = tuple(_vals(ImpactDimension))

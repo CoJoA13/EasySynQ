@@ -712,12 +712,28 @@ rejection loops back to. doc 05 §5.5's state diagram shows `InApproval → Rout
   sidecar + visual page-image, S-dcr-3); where-used adds a **`document↔document` link table** (S-dcr-2).
   Scheduled re-review (D5) + drift detection (D1–D4) stay in the **separate v1.x drift family** (roadmap §5 / D-6).
 
+**S-dcr-2 addendum (owner).** doc 05 §7.3 mandates that obsoletion is **blocked** unless replacement /
+`force_retire`+justification. The two authoritative docs do not say WHERE the block is enforced; the owner
+chose to **defer enforcement to S-dcr-5** (the RETIRE-DCR implement call site) rather than wire it into the
+shipped S4 `document.obsolete` endpoint now. So **S-dcr-2 ships the pure `obsoletion_blocked` predicate +
+SURFACES it** (the `GET /documents/{id}/where-used` `obsoletion_safety` advisory + a RETIRE-DCR's
+`impact_assessment` `clause_coverage` dimension) but does NOT block; the 409-blocking gate (with the
+`force_retire` escape hatch) lands in S-dcr-5. The shipped `document.obsolete` endpoint is untouched.
+The `document_link` table (doc 14 §5.6) is editable metadata (`SELECT,INSERT,DELETE`, not append-only);
+`impact_assessment` (doc 14 §7) UPSERTs one row per dimension at assess (auto_populated re-computed, the
+requester_annotation preserved). No new permission keys (where-used=`document.read`, link CRUD=
+`document.manage_metadata`, assess=`changeRequest.assess`, impact=`changeRequest.read`/`.assess`).
+
 **Slices.** **S-dcr-1** (DCR core + intake: `dcr` own-table mutable-state FSM + append-only `dcr_stage_event`
 [`REVOKE UPDATE,DELETE`] + `DCR-{YYYY}-{SEQ}` 4-digit identifier + `domain/dcr/fsm.py` + `DCR_RAISED`/
 `DCR_UPDATED`/`DCR_TRANSITIONED` events + `audit_object_type=dcr`; endpoints POST/GET `/dcrs`, GET/PATCH
-`/dcrs/{id}`, POST `/dcrs/{id}/cancel`; migration `0040`). Next: S-dcr-2 (where-used/impact + assess), S-dcr-3
-(diff), S-dcr-4 (routing + approval, subject_type=DCR via the engine), S-dcr-5 (implement/close + effectivity +
-the CAPA→DCR loop, the deferred cross-FK `document_version.dcr_id` ↔ `dcr.resulting_version_id`).
+`/dcrs/{id}`, POST `/dcrs/{id}/cancel`; migration `0040`). **S-dcr-2** (where-used/impact + assess:
+`document_link` doc↔doc graph + CRUD + `GET /documents/{id}/where-used` [the §7.2 categories + the §7.3
+`obsoletion_safety` advisory] + `impact_assessment` + `POST /dcrs/{id}/assess` [Open→Assessed, auto-populates
+the 7 §5.3 dimensions] + `GET/PUT /dcrs/{id}/impact`; migration `0041`; obsoletion enforcement deferred to
+S-dcr-5 per the addendum). Next: S-dcr-3 (diff), S-dcr-4 (routing + approval, subject_type=DCR via the engine),
+S-dcr-5 (implement/close + effectivity + the CAPA→DCR loop, the deferred cross-FK
+`document_version.dcr_id` ↔ `dcr.resulting_version_id`).
 
 **Back-propagation:** 05 (§5.5 reject-loop → Open), 14 (§7), 15 (§8.7), 16. Supersedes B5 (DCR dual-lifecycle).
 
