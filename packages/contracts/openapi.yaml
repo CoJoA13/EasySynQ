@@ -1536,6 +1536,32 @@ paths:
         "403": { $ref: "#/components/responses/ProblemResponse" }
         "404": { $ref: "#/components/responses/ProblemResponse" }
 
+  /documents/{document_id}/versions/{version_id}/diff:
+    get:
+      tags: [documents]
+      operationId: diffVersions
+      summary: >-
+        The doc 05 §8 redline of `from` → `version_id` (two versions of THIS document): metadata diff
+        (frozen snapshots) + text redline (on-demand Tika extraction + line-LCS; degrades to
+        `unavailable` if text can't be extracted) + both provenance headers. Read-only. Needs
+        document.read_draft (the diff exposes non-released version content). Visual page-image diff is S-dcr-3b.
+      parameters:
+        - { name: document_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: version_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - name: from
+          in: query
+          required: true
+          description: The other version (of the same document) to diff against.
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: The version diff.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VersionDiff" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+
   /documents/{document_id}/versions/{version_id}/download:
     get:
       tags: [documents]
@@ -4417,6 +4443,65 @@ components:
           format: uuid
           description: The successor that superseded this version (supersession chain), or null.
         created_at: { type: [string, "null"], format: date-time }
+
+    DiffProvenance:
+      type: object
+      additionalProperties: false
+      description: The doc 05 §8.1 provenance header for one version (listed, not diffed).
+      required: [version_id, version_seq, revision_label, version_state, change_significance, change_reason, author_user_id, signatures]
+      properties:
+        version_id: { type: string, format: uuid }
+        version_seq: { type: integer }
+        revision_label: { type: string }
+        version_state: { type: string }
+        change_significance: { type: string, enum: [MAJOR, MINOR] }
+        change_reason: { type: string }
+        effective_from: { type: [string, "null"], format: date-time }
+        effective_to: { type: [string, "null"], format: date-time }
+        author_user_id: { type: string, format: uuid }
+        created_at: { type: [string, "null"], format: date-time }
+        signatures:
+          type: array
+          description: The version's signature events (PII-projected — signer_user_id only).
+          items:
+            type: object
+            properties:
+              meaning: { type: string, enum: [approval, release, obsolete] }
+              signer_user_id: { type: [string, "null"], format: uuid }
+              signed_at: { type: [string, "null"], format: date-time }
+    VersionDiff:
+      type: object
+      additionalProperties: false
+      required: [document_id, from, to, metadata_diff, text_diff]
+      properties:
+        document_id: { type: string, format: uuid }
+        from: { $ref: "#/components/schemas/DiffProvenance" }
+        to: { $ref: "#/components/schemas/DiffProvenance" }
+        metadata_diff:
+          type: array
+          description: Field-by-field deltas over the frozen metadata snapshots (doc 05 §8.2).
+          items:
+            type: object
+            properties:
+              field: { type: string }
+              from: {}
+              to: {}
+              changed: { type: boolean }
+        text_diff:
+          type: object
+          description: >-
+            The doc 05 §8.3 inline text redline. status="ok" with hunks, or "unavailable" (Tika down /
+            non-extractable) with a reason.
+          properties:
+            status: { type: string, enum: [ok, unavailable] }
+            reason: { type: string }
+            hunks:
+              type: array
+              items:
+                type: object
+                properties:
+                  op: { type: string, enum: [equal, insert, delete] }
+                  text: { type: string }
 
     CheckInResult:
       allOf:

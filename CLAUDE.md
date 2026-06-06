@@ -95,11 +95,23 @@ visual] + a **doc↔doc link table** for where-used · scheduled re-review D5 + 
   the R40 addendum (the shipped `document.obsolete` endpoint untouched) + `POST /dcrs/{id}/assess` (Open→Assessed; mirrors
   `cancel_dcr` + UPSERTs the impact rows from where-used in one txn; a CREATE DCR → all-N/A) + `GET/PUT /dcrs/{id}/impact`
   (annotate). NO new permission keys, NO Celery task. The S-dcr-1 `_dcr_doc_scope` (R28 full-context, process_ids) gates assess.
+- **S-dcr-3a** redline/diff core (**ZERO-migration**, head stays `0041`) — `GET /documents/{id}/versions/{vid}/diff?from={vid2}`
+  (gate **`document.read_draft`** — the diff exposes non-released version content, so `document.read` alone would leak Draft
+  text to an Employee/Guest; the design-critic catch). The two doc-05-§8.1 core dimensions: **metadata diff** (pure
+  `domain/diff/metadata.py` field-by-field over the frozen `metadata_snapshot` SNAPSHOT_FIELDS; version columns + signatures
+  are NOT diffed — they're the provenance header) + **text redline** (pure `domain/diff/text.py` `difflib` line-LCS over
+  on-demand Tika-extracted text via a `TextExtractor` seam [`services/diff/extractor.py`; default `TikaTextExtractor`, a
+  test injects a fake → deterministic without Tika]; fail-closed → `text_diff: unavailable` if a blob fetch / extraction
+  fails) + the **provenance header** (per version: columns + `signature_event[]` projected to `{signer_user_id}` only — no
+  PII). `document.diff` (doc 05 §11.2's non-authoritative list) is NOT seeded — the diff rides `document.read_draft` (R5).
+  NO new key/model/enum/Celery task. Owner chose **full diff incl. visual** → delivered as 3a (this) + 3b.
+- **S-dcr-3b** (next) the **visual page-image diff** via **pypdfium2** (Apache/BSD prebuilt wheels — NOT PyMuPDF/fitz, passes
+  the `test_no_pymupdf_or_fitz_in_lockfile` AGPL guard; no system dep / air-gap impact) + Pillow `ImageChops`, with on-demand
+  Gotenberg render for non-Effective versions (rendition NULL). The 3a `VersionDiff` envelope extends with a `visual` key.
 
-**Next (S-dcr family):** S-dcr-3 (full redline/diff: meta + on-demand Tika text + visual page-image), S-dcr-4 (routing +
-approval, subject_type=DCR via the declarative engine — the S-capa-2 pattern), S-dcr-5 (implement/close + effectivity polish
-+ the CAPA→DCR loop + the deferred cross-FK `document_version.dcr_id` ↔ `dcr.resulting_version_id` + the obsoletion 409 gate).
-**Migration head is `0041` (next `0042`).**
+**Next (S-dcr family):** S-dcr-3b (visual page-image diff), S-dcr-4 (routing + approval, subject_type=DCR via the declarative
+engine — the S-capa-2 pattern), S-dcr-5 (implement/close + effectivity polish + the CAPA→DCR loop + the deferred cross-FK
+`document_version.dcr_id` ↔ `dcr.resulting_version_id` + the obsoletion 409 gate). **Migration head is `0041` (next `0042`).**
 
 **v1 RECORDS & evidence family (UJ-7 + records) — COMPLETE** ✅ (migs `0023`–`0028`; per-slice
 non-obvious decisions live in the squash-merge commits + the `easysynq-project.md` memory; operating

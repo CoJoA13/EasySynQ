@@ -15,7 +15,7 @@ import re
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, Depends, Request, Response, status
+from fastapi import APIRouter, Depends, Query, Request, Response, status
 from pydantic import BaseModel
 from sqlalchemy import ColumnElement, desc, select
 from sqlalchemy.exc import IntegrityError
@@ -49,6 +49,7 @@ from ..logging import request_id_var
 from ..problems import ProblemException
 from ..services.authz import AuthzAuditSink, enforce, gather_grants, get_authz_audit_sink, require
 from ..services.dcr import build_where_used
+from ..services.diff import build_version_diff
 from ..services.vault import (
     SignatureEventSink,
     VaultAuditSink,
@@ -1259,6 +1260,26 @@ async def get_version_endpoint(
 ) -> dict[str, Any]:
     await _load_document(session, caller, document_id)
     return _version(await _load_version(session, document_id, version_id))
+
+
+@router.get("/documents/{document_id}/versions/{version_id}/diff")
+async def diff_versions_endpoint(
+    document_id: uuid.UUID,
+    version_id: uuid.UUID,
+    from_version_id: uuid.UUID = Query(alias="from"),
+    caller: AppUser = Depends(_read_draft),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """The doc 05 §8 redline of ``from`` → ``version_id`` (both versions of THIS document): the
+    metadata diff (frozen snapshots) + the text redline (on-demand Tika extraction + line-LCS;
+    degrades to ``unavailable`` if text can't be extracted) + both provenance headers. Read-only.
+    Gated on ``document.read_draft`` (the diff exposes non-released version content, like the other
+    version-read endpoints — `document.read` alone must NOT leak Draft text). The visual page-image
+    diff is S-dcr-3b."""
+    await _load_document(session, caller, document_id)
+    to_version = await _load_version(session, document_id, version_id)
+    from_version = await _load_version(session, document_id, from_version_id)
+    return await build_version_diff(session, from_version, to_version)
 
 
 @router.get("/documents/{document_id}/versions/{version_id}/download")
