@@ -647,6 +647,27 @@ replay bug the loop exposes is fixed: `_enrich_completed_replay` now scopes to t
 signature). Lifecycle events reuse `CAPA_TRANSITIONED` (no new event type). No new permission keys / enum
 / Celery task.
 
+**S-aud-capa-pack (Evidence-Pack FINDING/CAPA scope + the sealed dossier — the family close-out).**
+Migration `0039` is a pure `ALTER TYPE pack_scope_kind ADD VALUE 'FINDING'/'CAPA'` (additive, downgrade
+no-op; no new permission keys — pack creation/download ride the existing `report.evidence_pack.generate`
+/ `report.export`). A FINDING/CAPA pack **resolves only the records linked AS EVIDENCE** to the
+finding(s) / the CAPA's stages (`evidence_for_link(target_type=finding|capa_stage)`) — the finding/CAPA
+SUBJECT is **never a pack_item record** (a record subtype carries no `evidence_blob` → no ZIP bytes; a
+phantom INCLUDED member would be unverifiable). The subjects instead get a synthesized, content-hash-
+**sealed dossier** (doc 06 §7.1's "prove this NC was closed effectively"): per scope subject a
+`findings/<id>.json` / `capas/<id>.json` carrying the finding's fields + correction chain + linked CAPA,
+or the CAPA's full append-only stage trail (RootCause→ActionPlan→Verify, grouped by `cycle_marker`) with
+each stage's **e-signature metadata** + per-stage evidence + the origin finding (inline). **PII boundary:**
+every signer/creator is projected to `{user_id, display_name}` ONLY — never `email`/`keycloak_subject`
+(the ZIP is externally shareable). **Seal:** `pack_content_hash` gains a `dossier_digest` param → when
+present the seal is **v2** (`easysynq.evidencepack.v2` preamble + the digest folded in), so the version
+field self-describes; CLAUSE/PROCESS stay byte-identical **v1**. `dossier_digest` hashes the SORTED
+per-file sha256s (those in `manifest["dossier"]["files"]`) so it is reconstructable from the ZIP alone
+(self-verifying per §7.4). **gap analysis is N/A** for FINDING/CAPA (`gap_summary.applicable=False`; the
+cover/manifest/portfolio render N/A, never a misleading 0-of-0); the PDF portfolio's verify-scheme line
+matches the v2 seal. Pure dossier serializers in `domain/packs/dossier.py`; the build orchestration in
+`services/packs/dossier.py`. No new Celery task / event type / enum (beyond the two scope values).
+
 **Implemented in slices:** S-aud-1 (`audit_program` + `audit_plan` + `audit` + FSM, migration `0034`);
 S-wf-engine (the declarative engine, migration `0035`); **S-capa-1** (the CAPA core + intake —
 `capa` + append-only `capa_stage` + `ncr` + `complaint` + complaint→CAPA spawn + Raised/Containment +
@@ -656,10 +677,11 @@ migration `0037`); **S-capa-2** (RootCause + ActionPlan stages + the severity-ro
 the real `signature_event` write for `capa_stage.signed_event_id` + the Top-Management role, migration
 `0038`); **S-capa-3** (Implement/Verify/Close + severity-aware SoD-4 + the M4 closure gate + the
 `Verify→RootCause` effectiveness loop + the `evidence_frozen` unlink guard, **zero-migration**, head stays
-`0038` — the production path that drives a CAPA to Closed and satisfies the S-aud-2 audit-close gate). Only
-the optional Evidence-Pack Finding/CAPA scope close-out remains.
+`0038` — the production path that drives a CAPA to Closed and satisfies the S-aud-2 audit-close gate);
+**S-aud-capa-pack** (Evidence-Pack FINDING/CAPA scope + the content-hash-sealed dossier, migration
+`0039` = `ALTER TYPE pack_scope_kind ADD VALUE`). **The Audits/Findings/CAPA family is now COMPLETE.**
 
-**Back-propagation:** 02 (Cl 9.2/10.2), 06, 07 (§7 SoD-4), 10 (§5-6), 14 (§6/§9/§14), 15, 16.
+**Back-propagation:** 02 (Cl 9.2/10.2), 06 (§7), 07 (§7 SoD-4), 10 (§5-6), 14 (§6/§9/§14), 15, 16.
 
 ---
 

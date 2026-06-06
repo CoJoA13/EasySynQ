@@ -48,7 +48,12 @@ from ..vault import repository as vault_repo
 from . import repository as repo
 from . import share_token
 
-_SCOPE_SELECTOR_KEY = {"CLAUSE": "clause_ids", "PROCESS": "process_ids"}
+_SCOPE_SELECTOR_KEY = {
+    "CLAUSE": "clause_ids",
+    "PROCESS": "process_ids",
+    "FINDING": "finding_ids",  # S-aud-capa-pack
+    "CAPA": "capa_ids",  # S-aud-capa-pack
+}
 
 
 def _now() -> datetime.datetime:
@@ -209,12 +214,24 @@ async def gap_summary(
     """The gap report (doc 06 §7.3 item 6): in-scope mandatory ★ clauses lacking current evidence.
     Reuses the org-wide ``compute_checklist`` (an objective rule, NOT permission-filtered — distinct
     from the exclusion report), intersected with the in-scope clause set. For PROCESS scope the
-    clause set is derived transitively (process → linked docs → clause_mappings)."""
+    clause set is derived transitively (process → linked docs → clause_mappings). FINDING/CAPA scope
+    has no clause-coverage concept — it returns an explicit ``applicable: False`` marker (and skips
+    the org-wide checklist entirely) so the cover/manifest read N/A, never a misleading 0-of-0."""
+    if scope_kind in ("FINDING", "CAPA"):
+        return {
+            "in_scope_star_clauses": 0,
+            "gap_count": 0,
+            "clauses": [],
+            "applicable": False,
+            "note": "Gap analysis is not applicable for finding/CAPA scope.",
+        }
     checklist = await compute_checklist(session, org_id)
     if scope_kind == "CLAUSE":
         in_scope = {str(c) for c in scope_ids}
-    else:
+    elif scope_kind == "PROCESS":
         in_scope = await repo.process_clause_ids(session, org_id, scope_ids)
+    else:  # pragma: no cover - fail-closed; unknown kinds are rejected upstream
+        raise ValueError(f"unknown pack scope_kind: {scope_kind}")
     rows = [r for r in checklist["rows"] if r["clause_id"] in in_scope]
     gaps = [r for r in rows if r["status"] in ("GAP", "PARTIAL")]
     return {
@@ -247,11 +264,23 @@ async def _validate_scope(
             clause = await vault_repo.get_clause(session, cid)
             if clause is None:
                 raise _validation_error(key, "not_found", f"Clause {cid} not found")
-    else:  # PROCESS
+    elif scope_kind == "PROCESS":
         for pid in ids:
             process = await vault_repo.get_process(session, pid)
             if process is None or process.org_id != org_id:
                 raise _validation_error(key, "not_found", f"Process {pid} not found")
+    elif scope_kind == "FINDING":
+        for fid in ids:
+            finding = await repo.get_finding(session, fid)
+            if finding is None or finding.org_id != org_id:
+                raise _validation_error(key, "not_found", f"Finding {fid} not found")
+    elif scope_kind == "CAPA":
+        for cid in ids:
+            capa = await repo.get_capa(session, cid)
+            if capa is None or capa.org_id != org_id:
+                raise _validation_error(key, "not_found", f"CAPA {cid} not found")
+    else:  # pragma: no cover - fail-closed; unknown kinds are rejected upstream
+        raise _validation_error("scope_kind", "invalid", f"unknown scope_kind {scope_kind}")
     return ids
 
 
@@ -313,8 +342,9 @@ async def create_pack_with_preview(
     try:
         kind = PackScopeKind(scope_kind)
     except ValueError as exc:
+        allowed = ", ".join(m.value for m in PackScopeKind)
         raise _validation_error(
-            "scope_kind", "invalid", "scope_kind must be CLAUSE or PROCESS"
+            "scope_kind", "invalid", f"scope_kind must be one of: {allowed}"
         ) from exc
     if period_start is not None and period_end is not None and period_start > period_end:
         raise _validation_error("period_end", "invalid", "period_end precedes period_start")

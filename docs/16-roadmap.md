@@ -145,9 +145,11 @@ Records/evidence capture, retention/disposition, Evidence Packs, audits/findings
 > `allow_capa_self_verify`) + `/close` (`capa.close`; the M4 gate → Closed, else the `not_effective`
 > effectiveness loop `Verify→RootCause`+`cycle_marker++` re-proposing + re-approving a revised plan, else 409
 > `capa_close_incomplete`), with the `evidence_frozen` unlink guard. This is the production path that drives a
-> CAPA to Closed and satisfies the S-aud-2 block-until-corrected audit-close gate — **the Audits/Findings/CAPA
-> family is complete bar the optional Evidence-Pack Finding/CAPA scope. Migration head is `0038`.** See
-> `CLAUDE.md` for shipped detail.
+> CAPA to Closed and satisfies the S-aud-2 block-until-corrected audit-close gate. The close-out slice
+> **S-aud-capa-pack** (migration `0039`) adds Evidence-Pack **Finding/CAPA scope** + a content-hash-sealed
+> dossier (the finding fields / CAPA stage trail + e-signatures — "prove this NC was closed effectively"),
+> so **the Audits/Findings/CAPA family is now COMPLETE. Migration head is `0039`.** See `CLAUDE.md` for
+> shipped detail.
 
 **Goal:** everything an organization needs to *run and certify* an ISO 9001:2015 QMS, end to end, and to face an external audit with a one-click evidence pack.
 
@@ -155,7 +157,7 @@ Records/evidence capture, retention/disposition, Evidence Packs, audits/findings
 |---|---|---|---|
 | ✅ **Records & evidence capture** | Three capture modes (upload, structured-form-from-Effective-template, link-as-evidence); record types catalog; `source_version_id` pinning; immutability + `correction_of`; WORM retention hold. **Shipped (S-rec-1 + S-rec-3).** | 06 §2-4 | MVP vault, forms-as-Documents |
 | ✅ **Retention & disposition** | Retention policies as data; resolution precedence; one-way ratchet; legal hold; disposition lifecycle with tombstones; Beat retention sweep. **Shipped (S-rec-2).** Plus **`/retention-policies` CRUD + soft-archive** and the **creator≠disposer SoD-6** (overridable via `allow_self_disposition`). **Shipped (S-rec-4, R38).** | 06 §5, 07 §7 | records, Beat |
-| ✅ **Traceability chain + Evidence Packs (UJ-7)** | requirement→process→document→record→evidence chain; clause/process/finding-scoped packs; immutable, self-verifying, gap-honest; time-boxed external-auditor guest delivery. **Shipped (S-pack-1/2)** — clause/process scope; **Finding/CAPA scope** awaits those entities. | 06 §6-7 | records, search, authz scope |
+| ✅ **Traceability chain + Evidence Packs (UJ-7)** | requirement→process→document→record→evidence chain; clause/process/finding/CAPA-scoped packs; immutable, self-verifying, gap-honest; time-boxed external-auditor guest delivery. **Shipped (S-pack-1/2 + S-aud-capa-pack)** — clause/process **and** Finding/CAPA scope (the latter with a content-hash-sealed narrative + e-signature dossier). | 06 §6-7 | records, search, authz scope |
 | **Audits & findings (UJ-5)** | Audit program/plan/audit/finding; finding types (NC/Observation/OFI) + severity; NC auto-creates CAPA. | 02 §2 (9.2), 06, 10 | records, authz (auditor independence) |
 | **CAPA / improvement (UJ-6)** | Multi-stage CAPA record (NC → correction → RCA → action → verification → close); close-guards (RCA + action + effectiveness all present, metric M4). | 06, 10 | audits, records |
 | **Revision/change depth** | DCR (reason, impact assessment, routing); where-used/impact analysis; major/minor significance; effectivity windows + scheduled future revisions; redline/diff (text + metadata + visual). | 05 | MVP versions |

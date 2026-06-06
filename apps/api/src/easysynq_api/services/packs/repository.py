@@ -17,6 +17,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...db.models._evidence_enums import EvidenceForTargetType
 from ...db.models._retention_enums import DispositionAction
+from ...db.models._signature_enums import SignedObjectType
+from ...db.models.app_user import AppUser
+from ...db.models.audit import Audit
+from ...db.models.audit_finding import AuditFinding
+from ...db.models.capa import Capa
+from ...db.models.capa_stage import CapaStage
 from ...db.models.clause_mapping import ClauseMapping
 from ...db.models.disposition_event import DispositionEvent
 from ...db.models.document_version import DocumentVersion
@@ -27,6 +33,7 @@ from ...db.models.pack_item import PackItem
 from ...db.models.pack_share_link import PackShareLink
 from ...db.models.process_link import ProcessLink
 from ...db.models.record import Record
+from ...db.models.signature_event import SignatureEvent
 
 # --- pack header CRUD --------------------------------------------------------------------
 
@@ -136,6 +143,55 @@ async def _process_candidate_ids(
     return set(leg_a) | set(leg_b)
 
 
+async def _finding_candidate_ids(
+    session: AsyncSession, org_id: uuid.UUID, finding_ids: list[uuid.UUID]
+) -> set[uuid.UUID]:
+    """FINDING scope: the records linked AS EVIDENCE to the finding(s) — one leg (a finding is a
+    record subtype, never a source document of other records, so no clause-mapping leg). The finding
+    itself is NOT a candidate record (no evidence_blob → no ZIP bytes); its fields live in the
+    synthesized dossier (build_dossier)."""
+    if not finding_ids:
+        return set()
+    rows = (
+        await session.scalars(
+            select(EvidenceForLink.record_id).where(
+                EvidenceForLink.org_id == org_id,
+                EvidenceForLink.target_type == EvidenceForTargetType.FINDING,
+                EvidenceForLink.target_id.in_(finding_ids),
+            )
+        )
+    ).all()
+    return set(rows)
+
+
+async def _capa_candidate_ids(
+    session: AsyncSession, org_id: uuid.UUID, capa_ids: list[uuid.UUID]
+) -> set[uuid.UUID]:
+    """CAPA scope: the records linked AS EVIDENCE to ANY of the CAPA's stages (Implement-completion
+    + Verify-effectiveness evidence). Evidence attaches to ``capa_stage`` rows, NEVER to the CAPA
+    record, so two legs: stage ids of the CAPA(s) → records evidence-for those stages. The CAPA
+    itself (and its origin finding) are NOT candidate records — they live in the dossier."""
+    if not capa_ids:
+        return set()
+    stage_ids = (
+        await session.scalars(
+            select(CapaStage.id).where(CapaStage.org_id == org_id, CapaStage.capa_id.in_(capa_ids))
+        )
+    ).all()
+    if not stage_ids:
+        return set()
+    rows = (
+        await session.scalars(
+            select(EvidenceForLink.record_id).where(
+                EvidenceForLink.org_id == org_id,
+                EvidenceForLink.target_type == EvidenceForTargetType.CAPA_STAGE,
+                EvidenceForLink.target_id.in_(list(stage_ids)),
+            )
+        )
+    ).all()
+    return set(rows)
+
+
 async def resolve_candidates(
     session: AsyncSession,
     org_id: uuid.UUID,
@@ -146,11 +202,18 @@ async def resolve_candidates(
     period_end: datetime.date | None,
 ) -> list[tuple[Record, DocumentedInformation]]:
     """Resolve the in-scope record candidates (Record ⨝ base), DATE overlay applied on
-    ``captured_at`` (the cast-to-date window is inclusive on both ends)."""
+    ``captured_at`` (the cast-to-date window is inclusive on both ends). Dispatch is explicit +
+    fail-closed — a new/unknown scope kind raises rather than silently running a wrong leg."""
     if scope_kind == "CLAUSE":
         ids = await _clause_candidate_ids(session, org_id, scope_ids)
-    else:  # PROCESS
+    elif scope_kind == "PROCESS":
         ids = await _process_candidate_ids(session, org_id, scope_ids)
+    elif scope_kind == "FINDING":
+        ids = await _finding_candidate_ids(session, org_id, scope_ids)
+    elif scope_kind == "CAPA":
+        ids = await _capa_candidate_ids(session, org_id, scope_ids)
+    else:  # pragma: no cover - fail-closed; the API/enum reject an unknown kind first
+        raise ValueError(f"unknown pack scope_kind: {scope_kind}")
     if not ids:
         return []
     stmt = (
@@ -302,3 +365,94 @@ async def list_share_links(session: AsyncSession, pack_id: uuid.UUID) -> list[Pa
         .scalars()
         .all()
     )
+
+
+# --- finding/CAPA scope validation + dossier inputs (S-aud-capa-pack, doc 06 §7.1) -------
+
+
+async def get_finding(session: AsyncSession, finding_id: uuid.UUID) -> AuditFinding | None:
+    return await session.get(AuditFinding, finding_id)
+
+
+async def get_capa(session: AsyncSession, capa_id: uuid.UUID) -> Capa | None:
+    return await session.get(Capa, capa_id)
+
+
+async def get_audit(session: AsyncSession, audit_id: uuid.UUID) -> Audit | None:
+    return await session.get(Audit, audit_id)
+
+
+async def list_capa_stages(session: AsyncSession, capa_id: uuid.UUID) -> list[CapaStage]:
+    """A CAPA's append-only stage trail, chronological (the dossier narrative spine)."""
+    return list(
+        (
+            await session.execute(
+                select(CapaStage)
+                .where(CapaStage.capa_id == capa_id)
+                .order_by(asc(CapaStage.created_at))
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+
+async def signature_events_by_id(
+    session: AsyncSession, sig_ids: list[uuid.UUID]
+) -> dict[uuid.UUID, SignatureEvent]:
+    """The signature_event rows behind signed capa_stage blocks (ActionPlan=approval/Verify=verify),
+    keyed by id — for the dossier's per-stage e-signature metadata (capa_stage targets only)."""
+    if not sig_ids:
+        return {}
+    rows = (
+        await session.scalars(
+            select(SignatureEvent).where(
+                SignatureEvent.id.in_(sig_ids),
+                SignatureEvent.signed_object_type == SignedObjectType.capa_stage,
+            )
+        )
+    ).all()
+    return {s.id: s for s in rows}
+
+
+async def users_by_ids(
+    session: AsyncSession, user_ids: list[uuid.UUID]
+) -> dict[uuid.UUID, AppUser]:
+    """The AppUser rows for a set of signer/creator ids — projected to {user_id, display_name} by
+    the dossier serializer (the PII boundary; email/keycloak_subject never leave it)."""
+    if not user_ids:
+        return {}
+    rows = (await session.scalars(select(AppUser).where(AppUser.id.in_(user_ids)))).all()
+    return {u.id: u for u in rows}
+
+
+async def evidence_records_for_targets(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    target_type: EvidenceForTargetType,
+    target_ids: list[uuid.UUID],
+) -> dict[uuid.UUID, list[tuple[uuid.UUID, str | None]]]:
+    """Per ``target_id`` (a finding id or a capa_stage id), the records linked AS EVIDENCE to it,
+    each with its human identifier — for the dossier's per-stage / per-finding evidence list. The
+    serializer sorts each group by record id for a stable seal."""
+    if not target_ids:
+        return {}
+    rows = (
+        await session.execute(
+            select(
+                EvidenceForLink.target_id,
+                EvidenceForLink.record_id,
+                DocumentedInformation.identifier,
+            )
+            .join(DocumentedInformation, DocumentedInformation.id == EvidenceForLink.record_id)
+            .where(
+                EvidenceForLink.org_id == org_id,
+                EvidenceForLink.target_type == target_type,
+                EvidenceForLink.target_id.in_(target_ids),
+            )
+        )
+    ).all()
+    out: dict[uuid.UUID, list[tuple[uuid.UUID, str | None]]] = {}
+    for target_id, record_id, identifier in rows:
+        out.setdefault(target_id, []).append((record_id, identifier))
+    return out
