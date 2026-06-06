@@ -79,8 +79,8 @@ class DcrSourceLinkType(enum.Enum):
 
 
 class ImpactDimension(enum.Enum):
-    # The structured impact-assessment dimensions (doc 05 §5.3, S-dcr-2) — one impact_assessment row
-    # per dimension per DCR, auto-populated from the target document's where-used at assess.
+    # The structured impact-assessment dimensions (doc 05 §5.3, S-dcr-2) — one impact_assessment
+    # row per dimension per DCR, auto-populated from the target document's where-used at assess.
     affected_processes = "affected_processes"
     dependent_documents = "dependent_documents"
     records_produced_under = "records_produced_under"
@@ -88,6 +88,17 @@ class ImpactDimension(enum.Enum):
     clause_coverage = "clause_coverage"
     effectivity_transition = "effectivity_transition"
     risk = "risk"
+
+
+class VisualDiffStatus(enum.Enum):
+    # The S-dcr-3b visual page-image diff cache result (worker-async). Pending = the task is
+    # rendering/ rasterizing; Ready = page comparisons cached; Failed = a hard error; Unavailable
+    # = a version is non-renderable (R26) so no page images can be produced (the text+metadata
+    # diff still covers it).
+    Pending = "Pending"
+    Ready = "Ready"
+    Failed = "Failed"
+    Unavailable = "Unavailable"
 
 
 def _vals(e: type[enum.Enum]) -> list[str]:
@@ -107,6 +118,9 @@ dcr_source_link_type_enum = SAEnum(
 impact_dimension_enum = SAEnum(
     ImpactDimension, name="impact_dimension", values_callable=_vals, create_type=False
 )
+visual_diff_status_enum = SAEnum(
+    VisualDiffStatus, name="visual_diff_status", values_callable=_vals, create_type=False
+)
 
 # The canonical v1 value tuples, re-used by the migration's CREATE TYPE so the ORM and the
 # hand-authored DDL never drift (the _capa_enums *_VALUES precedent).
@@ -115,3 +129,4 @@ DCR_CHANGE_TYPE_VALUES = tuple(_vals(DcrChangeType))
 DCR_REASON_CLASS_VALUES = tuple(_vals(DcrReasonClass))
 DCR_SOURCE_LINK_TYPE_VALUES = tuple(_vals(DcrSourceLinkType))
 IMPACT_DIMENSION_VALUES = tuple(_vals(ImpactDimension))
+VISUAL_DIFF_STATUS_VALUES = tuple(_vals(VisualDiffStatus))

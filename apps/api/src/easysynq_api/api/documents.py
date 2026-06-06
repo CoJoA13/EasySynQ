@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..auth.dependencies import get_current_user
 from ..db.models._audit_enums import ActorType, AuditObjectType, EventType
+from ..db.models._dcr_enums import VisualDiffStatus
 from ..db.models._signature_enums import SignatureMeaning
 from ..db.models._vault_enums import (
     Classification,
@@ -42,6 +43,7 @@ from ..db.models.documented_information import DocumentedInformation
 from ..db.models.process import Process
 from ..db.models.process_link import ProcessLink
 from ..db.models.signature_event import SignatureEvent as SignatureEventRow
+from ..db.models.visual_diff import VisualDiff
 from ..db.models.working_draft import WorkingDraft
 from ..db.session import get_session
 from ..domain.authz import RequestContext, ResourceContext, authorize
@@ -49,7 +51,7 @@ from ..logging import request_id_var
 from ..problems import ProblemException
 from ..services.authz import AuthzAuditSink, enforce, gather_grants, get_authz_audit_sink, require
 from ..services.dcr import build_where_used
-from ..services.diff import build_version_diff
+from ..services.diff import build_version_diff, get_or_create_visual_diff, get_visual_diff
 from ..services.vault import (
     SignatureEventSink,
     VaultAuditSink,
@@ -76,6 +78,7 @@ from ..services.vault import (
 from ..services.vault import repository as vault_repo
 from ..services.vault.locks import LOCK_TTL_SECONDS
 from ..services.workflow import instantiate_approval
+from ..tasks.visual_diff import visual_diff as visual_diff_task
 
 router = APIRouter(prefix="/api/v1", tags=["documents"])
 
@@ -1280,6 +1283,113 @@ async def diff_versions_endpoint(
     to_version = await _load_version(session, document_id, version_id)
     from_version = await _load_version(session, document_id, from_version_id)
     return await build_version_diff(session, from_version, to_version)
+
+
+def _visual_diff_status(vd: VisualDiff) -> dict[str, Any]:
+    return {
+        "status": vd.status.value,
+        "page_count": vd.page_count,
+        "reason": vd.reason,
+        "pages": (
+            [{"page": p["page"], "changed": p["changed"]} for p in vd.pages] if vd.pages else None
+        ),
+    }
+
+
+@router.post(
+    "/documents/{document_id}/versions/{version_id}/visual-diff",
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def request_visual_diff_endpoint(
+    document_id: uuid.UUID,
+    version_id: uuid.UUID,
+    response: Response,
+    from_version_id: uuid.UUID = Query(alias="from"),
+    caller: AppUser = Depends(_read_draft),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """Request the doc 05 §8.1 visual page-image diff of ``from`` → ``version_id`` (worker-async,
+    since the API can't render). Idempotent — UPSERTs the cached ``visual_diff`` row + enqueues the
+    worker task when not already terminal. 202 while Pending, 200 once Ready (poll GET). Needs
+    ``document.read_draft``."""
+    doc = await _load_document(session, caller, document_id)
+    to_version = await _load_version(session, document_id, version_id)
+    from_version = await _load_version(session, document_id, from_version_id)
+    vd, should_enqueue = await get_or_create_visual_diff(
+        session,
+        org_id=caller.org_id,
+        document_id=doc.id,
+        from_version_id=from_version.id,
+        to_version_id=to_version.id,
+    )
+    if should_enqueue:
+        visual_diff_task.delay(str(vd.id))
+    if vd.status is not VisualDiffStatus.Pending:
+        response.status_code = status.HTTP_200_OK
+    return _visual_diff_status(vd)
+
+
+@router.get("/documents/{document_id}/versions/{version_id}/visual-diff")
+async def get_visual_diff_endpoint(
+    document_id: uuid.UUID,
+    version_id: uuid.UUID,
+    response: Response,
+    from_version_id: uuid.UUID = Query(alias="from"),
+    caller: AppUser = Depends(_read_draft),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """Poll the cached visual-diff result (no side effect). 404 if not yet requested (POST first);
+    202 while Pending; 200 once terminal. Needs ``document.read_draft``."""
+    await _load_document(session, caller, document_id)
+    to_version = await _load_version(session, document_id, version_id)
+    from_version = await _load_version(session, document_id, from_version_id)
+    vd = await get_visual_diff(session, from_version.id, to_version.id)
+    if vd is None or vd.org_id != caller.org_id:
+        raise ProblemException(
+            status=404, code="not_found", title="No visual diff requested (POST to compute)"
+        )
+    if vd.status is VisualDiffStatus.Pending:
+        response.status_code = status.HTTP_202_ACCEPTED
+    return _visual_diff_status(vd)
+
+
+@router.get("/documents/{document_id}/versions/{version_id}/visual-diff/page/{page}")
+async def get_visual_diff_page_endpoint(
+    document_id: uuid.UUID,
+    version_id: uuid.UUID,
+    page: int,
+    from_version_id: uuid.UUID = Query(alias="from"),
+    layer: str = Query(default="diff"),
+    caller: AppUser = Depends(_read_draft),
+    session: AsyncSession = Depends(get_session),
+) -> Response:
+    """Stream one page's rendered PNG (``layer`` = from | to | diff). 404 unless the visual diff is
+    Ready and the page/layer exists. Needs ``document.read_draft``."""
+    if layer not in ("from", "to", "diff"):
+        raise ProblemException(
+            status=422, code="validation_error", title="layer must be from|to|diff"
+        )
+    await _load_document(session, caller, document_id)
+    to_version = await _load_version(session, document_id, version_id)
+    from_version = await _load_version(session, document_id, from_version_id)
+    vd = await get_visual_diff(session, from_version.id, to_version.id)
+    if (
+        vd is None
+        or vd.org_id != caller.org_id
+        or vd.status is not VisualDiffStatus.Ready
+        or not vd.pages
+        or page < 0
+        or page >= len(vd.pages)
+    ):
+        raise ProblemException(status=404, code="not_found", title="Visual-diff page not available")
+    sha = vd.pages[page].get(f"{layer}_blob_sha")
+    if sha is None:
+        raise ProblemException(status=404, code="not_found", title="No image for this page/layer")
+    blob = await vault_repo.get_blob(session, sha)
+    if blob is None:  # pragma: no cover - defensive (the cache wrote the row)
+        raise ProblemException(status=404, code="not_found", title="Page image blob missing")
+    png = await storage.fetch_bytes(blob.object_key, bucket=blob.bucket)
+    return Response(content=png, media_type="image/png")
 
 
 @router.get("/documents/{document_id}/versions/{version_id}/download")

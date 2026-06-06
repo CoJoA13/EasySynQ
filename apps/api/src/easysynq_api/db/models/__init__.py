@@ -21,6 +21,7 @@ from ._dcr_enums import (
     DcrSourceLinkType,
     DcrState,
     ImpactDimension,
+    VisualDiffStatus,
 )
 from ._evidence_enums import EvidenceForTargetType
 from ._ingestion_enums import (
@@ -116,6 +117,7 @@ from .sod import SodConstraint
 from .storage_config import StorageConfig
 from .supplier import Supplier
 from .system_config import SetupState, SystemConfig
+from .visual_diff import VisualDiff
 from .workflow import (
     Task,
     TaskOutcome,
@@ -240,6 +242,8 @@ __all__ = [
     "TaskType",
     "UserStatus",
     "VersionState",
+    "VisualDiff",
+    "VisualDiffStatus",
     "WorkflowDefinition",
     "WorkflowInstance",
     "WorkflowStage",

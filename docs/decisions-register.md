@@ -724,6 +724,18 @@ page-image diff via **pypdfium2** (Apache/BSD, prebuilt wheels — NOT PyMuPDF/f
 `test_no_pymupdf_or_fitz_in_lockfile` AGPL guard; no system dep / air-gap impact) + Pillow, with on-demand
 Gotenberg render for non-Effective versions (whose rendition is NULL). The §8.1 "visual is a complement" framing +
 those constraints justify the 3a/3b split (text+metadata ship first; the dependency-heavy visual follows).
+**S-dcr-3b shipped (mig 0042)** as **worker-async** (owner chose full coverage over in-request-PDF-only, since the
+**API can't render** — `LoggingRenderSink` no-op; rendering is worker-only): a `visual_diff` cache table
+(`UNIQUE(from,to)` idempotency latch + cache key; `VisualDiffStatus` Pending/Ready/Failed/Unavailable; GRANT UPDATE —
+regenerable cache, not append-only) + `easysynq.visual_diff` (FOR-UPDATE early-return idempotent; `acks_late` + re-POST
+self-heal, no Beat reaper) + pure `domain/diff/visual.py` (pypdfium2 rasterize + Pillow per-page `ImageChops` overlay).
+The task obtains each version's PDF (cache-hit on the mirror `rendition_blob_sha256`; else render via the worker's
+`GotenbergRenderSink` **TRANSIENTLY — never persists `rendition_blob_sha256`**, else a Draft's diff-rendition
+[copy_status=state, no verify QR] would poison the mirror's controlled-copy cache when it goes Effective). Contract =
+**POST-compute (202) + pure-GET-poll (404-before-request) + GET page/{n}?layer= PNG stream** (the design-critic-mandated
+shape; the packs/imports async precedent), gated `document.read_draft`. Watermark band-noise (band differs by rev → a
+changed footer region) accepted + documented for v1 (raw-render = v1.x). NO new permission key / event type. **The doc 05
+§8 full diff (metadata + text + visual) is COMPLETE.**
 
 **S-dcr-2 addendum (owner).** doc 05 §7.3 mandates that obsoletion is **blocked** unless replacement /
 `force_retire`+justification. The two authoritative docs do not say WHERE the block is enforced; the owner
