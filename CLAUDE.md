@@ -27,7 +27,7 @@ stay calm, modern, progressively disclosed — never overwhelming.
 
 - `apps/api/` — FastAPI / Python 3.12. Under `src/easysynq_api/`: `api/` (routes) · `services/` (use-cases, txn owners) · `domain/` (pure logic) · `db/models/` (ORM) · `db/seeds/` · `tasks/` (Celery) · `cli/`. Tests in `apps/api/tests/{unit,integration}` (latter via testcontainers).
 - `apps/web/` — React/TS + Mantine SPA (setup wizard + admin stubs; rest of UI deferred).
-- `migrations/` — Alembic (single tree; **head `0041`**, next `0042`; `env.py` excludes migration-managed expression/partial indexes).
+- `migrations/` — Alembic (single tree; current head is in **Current status** below; `env.py` excludes migration-managed expression/partial indexes).
 - `packages/contracts/openapi.yaml` — the living API contract (redocly-lint only; **not** codegen). Document new endpoints in-PR.
 - `infra/compose/` — Docker Compose (S/M/L profiles) + Caddy; `just` recipes wrap it. `docs/` — the spec (`00`–`18` + `decisions-register.md`) + `runbooks/`. `mockup/easysynq-mockup.html` — owner-approved UI mockup.
 
