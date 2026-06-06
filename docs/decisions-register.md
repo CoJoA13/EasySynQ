@@ -712,6 +712,19 @@ rejection loops back to. doc 05 §5.5's state diagram shows `InApproval → Rout
   sidecar + visual page-image, S-dcr-3); where-used adds a **`document↔document` link table** (S-dcr-2).
   Scheduled re-review (D5) + drift detection (D1–D4) stay in the **separate v1.x drift family** (roadmap §5 / D-6).
 
+**S-dcr-3 addendum.** Redline/diff (doc 05 §8) is **full** (owner: metadata + text + visual), delivered in two
+PRs: **S-dcr-3a** = the two §8.1 core dimensions — metadata diff (field-by-field over the frozen
+`metadata_snapshot`; version columns + signatures live in the provenance header, NOT diffed) + text redline
+(on-demand Tika extraction behind a `TextExtractor` seam → `difflib` line-LCS; fail-closed → `text_diff:
+unavailable`) — at `GET /documents/{id}/versions/{vid}/diff?from={vid2}`, **gated on `document.read_draft`** (the
+diff exposes non-released version content, so `document.read` alone would leak Draft text to an Employee/Guest;
+the diff-critic catch). `document.diff` (doc 05 §11.2's non-authoritative "representative" list) is NOT seeded —
+the diff rides the existing read key (R5 closed catalog), so 3a is **zero-migration**. **S-dcr-3b** = the visual
+page-image diff via **pypdfium2** (Apache/BSD, prebuilt wheels — NOT PyMuPDF/fitz, so it passes the
+`test_no_pymupdf_or_fitz_in_lockfile` AGPL guard; no system dep / air-gap impact) + Pillow, with on-demand
+Gotenberg render for non-Effective versions (whose rendition is NULL). The §8.1 "visual is a complement" framing +
+those constraints justify the 3a/3b split (text+metadata ship first; the dependency-heavy visual follows).
+
 **S-dcr-2 addendum (owner).** doc 05 §7.3 mandates that obsoletion is **blocked** unless replacement /
 `force_retire`+justification. The two authoritative docs do not say WHERE the block is enforced; the owner
 chose to **defer enforcement to S-dcr-5** (the RETIRE-DCR implement call site) rather than wire it into the
