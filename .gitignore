@@ -40,3 +40,6 @@ npm-debug.log*
 infra/data/
 qms-mirror/
 backups/
+
+# --- brainstorming visual-companion artifacts ---
+.superpowers/
