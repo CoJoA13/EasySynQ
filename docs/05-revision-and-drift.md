@@ -441,6 +441,8 @@ For `SOP-PUR-002 (Purchasing) Rev 2.0`, the where-used panel shows:
 
 When retiring a document, the where-used graph runs first. If the document is still `governs`-linked to an active process, is `referenced` by an Effective document, or provides ★ mandatory-item coverage with no replacement, EasySynQ **blocks silent obsoletion** and requires either a replacement mapping or an explicit `force_retire` with recorded justification (audited). This prevents creating a coverage gap (supports metric: zero uncontrolled/uncovered mandatory items).
 
+> **Realized (S-dcr-5, mig `0044`).** S-dcr-2 shipped the pure predicate + a read-only `where-used.obsoletion_safety` advisory; **S-dcr-5 enforces it as a `409 obsoletion_blocked` inside the SHARED `lifecycle.obsolete()`** (scoped to the T11 document-level obsolete; a T12 Superseded-version archive removes no coverage) — so **both** the direct `POST /documents/{id}/obsolete` endpoint **and** the DCR RETIRE-implement (`POST /dcrs/{id}/implement`) are guarded by the one check. The override is `{force_retire:true, override_justification}` (recorded on the obsolete `signature_event.intent` + the `MADE_OBSOLETE` audit). The §7.3 inputs + the pure rule live once in `services/vault/obsoletion.py`, which the advisory also consumes — so gate and advisory can never diverge. (Owner decision — this supersedes the earlier "defer enforcement to the RETIRE call site / leave `document.obsolete` untouched" plan; decisions-register R40 S-dcr-5 addendum.)
+
 ---
 
 ## 8. Redline / Diff Between Versions
