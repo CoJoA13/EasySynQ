@@ -7,10 +7,10 @@ later state move appends one append-only ``dcr_stage_event`` and emits ``DCR_TRA
 the SAME transaction (the ``capa`` service atomicity pattern). A DCR id is NOT a record id, so
 its events key on ``audit_object_type='dcr'`` (the ``ncr`` own-table ``_emit_ncr`` precedent).
 
-S-dcr-1 wires only the intake rest-state: ``raise_dcr`` (Open), ``patch_dcr`` (edit
-reason/significance while Open), ``cancel_dcr`` (Open/Assessed/Routed → Cancelled). Assess
-(S-dcr-2), route + approval (S-dcr-4), implement/close (S-dcr-5) are later slices; the full FSM
-is declared in ``domain/dcr/fsm``.
+S-dcr-1 wired the intake rest-state: ``raise_dcr`` (Open), ``patch_dcr`` (edit
+reason/significance while Open), ``cancel_dcr`` (Open/Assessed/Routed → Cancelled). **S-dcr-2
+adds ``assess_dcr``** (Open→Assessed + the doc 05 §5.3 impact auto-population). Route + approval
+(S-dcr-4), implement/close (S-dcr-5) follow; the full FSM is declared in ``domain/dcr/fsm``.
 
 The ``_commit=False`` seam (the ``capa`` precedent) lets a caller open a DCR atomically inside a
 larger transaction — used by S-dcr-5's CAPA-corrective-action → DCR spawn (the §10→§7.5 loop).
@@ -22,6 +22,7 @@ import datetime
 import uuid
 from typing import Any
 
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...db.models._audit_enums import ActorType, AuditObjectType, EventType
@@ -30,6 +31,7 @@ from ...db.models._dcr_enums import (
     DcrReasonClass,
     DcrSourceLinkType,
     DcrState,
+    ImpactDimension,
 )
 from ...db.models._vault_enums import ChangeSignificance, DocumentKind
 from ...db.models.app_user import AppUser
@@ -37,12 +39,14 @@ from ...db.models.audit_event import AuditEvent
 from ...db.models.dcr import Dcr
 from ...db.models.dcr_stage_event import DcrStageEvent
 from ...db.models.documented_information import DocumentedInformation
+from ...db.models.impact_assessment import ImpactAssessment
 from ...domain.dcr import transition_allowed
 from ...domain.vault import format_identifier
 from ...logging import request_id_var
 from ...problems import ProblemException
 from ..vault import repository as vault_repo
 from . import repository as repo
+from .where_used import build_impact_rows, build_where_used
 
 _DCR_PREFIX = "DCR"  # DCR-{YYYY}-{SEQ}: per-(org, "DCR", year) counter; 4-digit SEQ (doc 14 §7).
 
@@ -214,8 +218,8 @@ async def patch_dcr(
     proposed_effective_from: datetime.datetime | None = None,
 ) -> Dcr:
     """Edit a DCR's request details while ``Open`` (doc 15 PATCH /dcrs/{id}). 409 once it has
-    advanced past Open (a routed/approved change is immutable in its request fields). ``None`` means
-    "unchanged"
+    advanced past Open (a routed/approved change is immutable in its request fields). ``None``
+    means "unchanged"
     (S-dcr-1 cannot clear a field — clearing is not an intake need)."""
     dcr = await repo.get_dcr(session, dcr_id, for_update=True)
     if dcr is None or dcr.org_id != actor.org_id:
@@ -284,6 +288,108 @@ async def cancel_dcr(
         before={"state": before.value},
         after={"state": DcrState.Cancelled.value},
     )
+    await session.commit()
+    await session.refresh(dcr)
+    return dcr
+
+
+async def _upsert_impact(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    dcr_id: uuid.UUID,
+    rows: dict[ImpactDimension, dict[str, Any]],
+) -> None:
+    """UPSERT one impact_assessment row per dimension (auto_populated re-computed; the requester's
+    annotation is PRESERVED on conflict — only auto_populated + updated_at change)."""
+    for dimension, auto_populated in rows.items():
+        stmt = pg_insert(ImpactAssessment).values(
+            org_id=org_id,
+            dcr_id=dcr_id,
+            dimension=dimension,
+            auto_populated=auto_populated,
+        )
+        await session.execute(
+            stmt.on_conflict_do_update(
+                index_elements=["dcr_id", "dimension"],
+                set_={"auto_populated": stmt.excluded.auto_populated, "updated_at": _now()},
+            )
+        )
+
+
+async def assess_dcr(session: AsyncSession, actor: AppUser, dcr_id: uuid.UUID) -> Dcr:
+    """Open → Assessed (doc 15 POST /dcrs/{id}/assess). Mirrors ``cancel_dcr`` (FOR UPDATE →
+    transition_allowed → append dcr_stage_event → flip state → DCR_TRANSITIONED) AND, in the SAME
+    txn, auto-populates the seven doc 05 §5.3 impact dimensions from the target document's
+    where-used (a
+    CREATE DCR → N/A rows). 409 ``dcr_not_assessable`` if not in Open."""
+    dcr = await repo.get_dcr(session, dcr_id, for_update=True)
+    if dcr is None or dcr.org_id != actor.org_id:
+        raise _not_found("DCR")
+    if not transition_allowed(dcr.state, DcrState.Assessed):
+        raise _conflict("dcr_not_assessable", f"A DCR in {dcr.state.value} cannot be assessed")
+    before = dcr.state
+    dcr.state = DcrState.Assessed
+    session.add(
+        DcrStageEvent(
+            org_id=actor.org_id,
+            dcr_id=dcr.id,
+            from_state=before,
+            to_state=DcrState.Assessed,
+            actor_id=actor.id,
+        )
+    )
+    where_used: dict[str, Any] = {}
+    if dcr.target_document_id is not None:
+        where_used = await build_where_used(session, actor.org_id, dcr.target_document_id)
+    await _upsert_impact(session, actor.org_id, dcr.id, build_impact_rows(where_used, dcr))
+    _emit_dcr(
+        session,
+        actor,
+        EventType.DCR_TRANSITIONED,
+        dcr.id,
+        before={"state": before.value},
+        after={"state": DcrState.Assessed.value},
+    )
+    await session.commit()
+    await session.refresh(dcr)
+    return dcr
+
+
+async def annotate_impact(
+    session: AsyncSession,
+    actor: AppUser,
+    dcr_id: uuid.UUID,
+    annotations: dict[str, str],
+) -> Dcr:
+    """Set ``requester_annotation`` on the named impact dimensions (doc 15 PUT /dcrs/{id}/impact).
+    Keys are ``ImpactDimension`` values; unknown keys → 422. Emits ``DCR_UPDATED``. The DCR must
+    have
+    been assessed (its impact_assessment rows exist) — annotating an absent dimension is a 409."""
+    dcr = await repo.get_dcr(session, dcr_id, for_update=True)
+    if dcr is None or dcr.org_id != actor.org_id:
+        raise _not_found("DCR")
+    valid = {d.value for d in ImpactDimension}
+    unknown = set(annotations) - valid
+    if unknown:
+        raise _validation_error(
+            "annotations", "unknown_dimension", f"unknown impact dimension(s): {sorted(unknown)}"
+        )
+    existing = {
+        ia.dimension.value: ia for ia in await repo.list_impact_assessments(session, dcr_id)
+    }
+    for dim_value, text in annotations.items():
+        row = existing.get(dim_value)
+        if row is None:
+            raise _conflict("impact_not_assessed", f"dimension {dim_value} has no assessment yet")
+        row.requester_annotation = text
+    if annotations:
+        _emit_dcr(
+            session,
+            actor,
+            EventType.DCR_UPDATED,
+            dcr.id,
+            after={"impact_annotated": sorted(annotations)},
+        )
     await session.commit()
     await session.refresh(dcr)
     return dcr
