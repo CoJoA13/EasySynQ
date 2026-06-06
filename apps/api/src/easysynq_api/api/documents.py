@@ -9,7 +9,6 @@ from the body in-handler; the list is row-filtered to what the caller may ``docu
 
 from __future__ import annotations
 
-import dataclasses
 import datetime
 import re
 import uuid
@@ -24,13 +23,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..auth.dependencies import get_current_user
 from ..db.models._audit_enums import ActorType, AuditObjectType, EventType
 from ..db.models._dcr_enums import VisualDiffStatus
-from ..db.models._signature_enums import SignatureMeaning
 from ..db.models._vault_enums import (
     Classification,
     DocumentCurrentState,
     DocumentKind,
     DocumentLinkType,
-    VersionState,
 )
 from ..db.models.app_user import AppUser
 from ..db.models.audit_event import AuditEvent
@@ -42,7 +39,6 @@ from ..db.models.document_version import DocumentVersion
 from ..db.models.documented_information import DocumentedInformation
 from ..db.models.process import Process
 from ..db.models.process_link import ProcessLink
-from ..db.models.signature_event import SignatureEvent as SignatureEventRow
 from ..db.models.visual_diff import VisualDiff
 from ..db.models.working_draft import WorkingDraft
 from ..db.session import get_session
@@ -77,6 +73,7 @@ from ..services.vault import (
 )
 from ..services.vault import repository as vault_repo
 from ..services.vault.locks import LOCK_TTL_SECONDS
+from ..services.vault.release_scope import enrich_release_sod_scope
 from ..services.workflow import instantiate_approval
 from ..tasks.visual_diff import visual_diff as visual_diff_task
 
@@ -115,6 +112,10 @@ class CheckIn(BaseModel):
 class Obsolete(BaseModel):
     reason: str
     version_id: uuid.UUID | None = None
+    # doc 05 §7.3 (S-dcr-5): override the obsoletion-safety block (coverage gap) with a recorded
+    # justification. Both the direct endpoint and the DCR RETIRE-implement gate on the same check.
+    force_retire: bool = False
+    override_justification: str | None = None
 
 
 class Release(BaseModel):
@@ -307,48 +308,9 @@ async def _release_scope(
     passes to the cutover keeps the guard sound even if multiple Approved versions ever coexist.
     Degrades to the base scope when there is no Approved version (the FSM 409 fires)."""
     base = await _document_scope_by_id(session, doc_id)
-    version: DocumentVersion | None
-    if version_id is not None:
-        version = await session.get(DocumentVersion, version_id)
-        if version is None or version.document_id != doc_id:
-            return base
-    else:
-        version = (
-            await session.execute(
-                select(DocumentVersion)
-                .where(
-                    DocumentVersion.document_id == doc_id,
-                    DocumentVersion.version_state == VersionState.Approved,
-                )
-                .order_by(DocumentVersion.version_seq.desc())
-                .limit(1)
-            )
-        ).scalar_one_or_none()
-    if version is None:
-        return base
-    # approver_user_ids comes from the version's recorded approval signatures. The author-side block
-    # (actor == author_user_id) is the robust, signature-independent backstop; the approver-side
-    # (sole-approver release) is only as strong as in-band signature emission (the decide() path
-    # always emits it). A signature-less Approved version (only reachable by direct DB seeding) thus
-    # leaves the approver-set empty — acceptable since the author-side block still holds.
-    signers = (
-        (
-            await session.execute(
-                select(SignatureEventRow.signer_user_id).where(
-                    SignatureEventRow.signed_object_id == version.id,
-                    SignatureEventRow.meaning == SignatureMeaning.approval,
-                )
-            )
-        )
-        .scalars()
-        .all()
-    )
-    return dataclasses.replace(
-        base,
-        version_id=str(version.id),
-        author_user_id=str(version.author_user_id),
-        approver_user_ids=frozenset(str(s) for s in signers if s is not None),
-    )
+    # The SoD-2 enrichment (author + approver signers for the promoted version) is shared with the
+    # DCR-as-orchestrator implement path so both fire the same overlay (S-dcr-5).
+    return await enrich_release_sod_scope(session, base, doc_id, version_id)
 
 
 async def _load_document(
@@ -1132,6 +1094,8 @@ async def obsolete_endpoint(
             doc,
             reason=body.reason,
             version_id=body.version_id,
+            force_retire=body.force_retire,
+            override_justification=body.override_justification,
         )
     )
 

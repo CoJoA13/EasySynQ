@@ -30,6 +30,8 @@ import json
 import uuid
 from typing import Any
 
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...db.models._audit_enums import ActorType, AuditObjectType, EventType
@@ -40,12 +42,15 @@ from ...db.models._capa_enums import (
     NcrSource,
     NcSeverity,
 )
+from ...db.models._dcr_enums import DcrChangeType, DcrReasonClass, DcrSourceLinkType
+from ...db.models._vault_enums import ChangeSignificance
 from ...db.models._workflow_enums import WorkflowSubjectType
 from ...db.models.app_user import AppUser
 from ...db.models.audit_event import AuditEvent
 from ...db.models.capa import Capa
 from ...db.models.capa_stage import CapaStage
 from ...db.models.complaint import Complaint
+from ...db.models.dcr import Dcr
 from ...db.models.ncr import Ncr
 from ...db.models.workflow import Task, WorkflowInstance
 from ...domain.capa import (
@@ -60,6 +65,7 @@ from ...domain.capa import (
 from ...domain.vault import format_identifier
 from ...logging import request_id_var
 from ...problems import ProblemException
+from ..dcr import raise_dcr
 from ..records.service import capture_record, emit_record_event
 from ..vault import repository as vault_repo
 from ..vault.signature import SignatureEvent, SignatureEventSink
@@ -993,3 +999,89 @@ async def record_ncr_disposition(
     await session.commit()
     await session.refresh(ncr)
     return ncr
+
+
+# --- CAPA → DCR loop (S-dcr-5; doc 02 Cl 10.2 / doc 05 §5.1, the §10→§7.5 closed loop) ---------
+
+_TERMINAL_CAPA_STATES = (CapaCloseState.Closed, CapaCloseState.Rejected)
+
+
+async def _find_spawned_dcr(
+    session: AsyncSession, org_id: uuid.UUID, capa_id: uuid.UUID, idempotency_key: str | None
+) -> Dcr | None:
+    """The DCR this CAPA already spawned for ``idempotency_key`` (None when no key). Scoped to
+    (org, this CAPA, key) so the same key on a DIFFERENT CAPA does not collide — matching the
+    ``(org_id, source_link_id, spawn_idempotency_key)`` partial-UNIQUE."""
+    if idempotency_key is None:
+        return None
+    return (
+        await session.execute(
+            select(Dcr).where(
+                Dcr.org_id == org_id,
+                Dcr.source_link_type == DcrSourceLinkType.capa,
+                Dcr.source_link_id == capa_id,
+                Dcr.spawn_idempotency_key == idempotency_key,
+            )
+        )
+    ).scalar_one_or_none()
+
+
+async def raise_dcr_from_capa(
+    session: AsyncSession,
+    actor: AppUser,
+    capa_id: uuid.UUID,
+    *,
+    change_type: DcrChangeType,
+    change_significance: ChangeSignificance,
+    reason_text: str,
+    target_document_id: uuid.UUID | None = None,
+    reason_class: DcrReasonClass = DcrReasonClass.capa,
+    proposed_effective_from: datetime.datetime | None = None,
+    idempotency_key: str | None = None,
+) -> tuple[Dcr, bool]:
+    """Spawn a DCR from a CAPA corrective action — the §10→§7.5 loop (doc 05 §5.1: the DCR's
+    ``source_link`` = the ``capa_id``, supporting M4 traceability). Returns ``(dcr, created)``;
+    ``created`` is False on an idempotent replay.
+
+    The link lives on the DCR (``source_link_type=capa`` + ``source_link_id``), NOT a column on the
+    CAPA — a CAPA may drive **multiple** document changes (doc 05 §5.3 'spawns child DCRs'), so
+    there is no one-DCR-per-CAPA latch. An ``Idempotency-Key`` (the ``dcr.spawn_idempotency_key``
+    partial-UNIQUE) makes a *retry* return the same DCR while preserving 1:N (distinct keys →
+    distinct DCRs). A terminal (Closed/Rejected) CAPA cannot spawn (409 ``capa_terminal``). Builds
+    the DCR via ``raise_dcr(_commit=False)`` so the spawn + genesis commit in ONE transaction."""
+    capa = await repo.get_capa(session, capa_id)
+    if capa is None or capa.org_id != actor.org_id:
+        raise _not_found("CAPA")
+    # Idempotent replay FIRST (before the terminal gate) so a retry against a now-Closed/Rejected
+    # CAPA still replays the original DCR rather than 409'ing — the complaint→CAPA latch-before-gate
+    # precedent. The dedup is scoped to (this CAPA, key) so the same key on a DIFFERENT CAPA spawns
+    # fresh (the import-decision (run_id, key) precedent).
+    existing = await _find_spawned_dcr(session, actor.org_id, capa.id, idempotency_key)
+    if existing is not None:
+        return existing, False
+    if capa.close_state in _TERMINAL_CAPA_STATES:
+        raise _conflict("capa_terminal", f"a {capa.close_state.value} CAPA cannot spawn a DCR")
+    try:
+        dcr = await raise_dcr(
+            session,
+            actor,
+            change_type=change_type,
+            change_significance=change_significance,
+            reason_class=reason_class,
+            reason_text=reason_text,
+            target_document_id=target_document_id,
+            source_link_type=DcrSourceLinkType.capa,
+            source_link_id=capa.id,
+            proposed_effective_from=proposed_effective_from,
+            spawn_idempotency_key=idempotency_key,
+            _commit=False,
+        )
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        existing = await _find_spawned_dcr(session, actor.org_id, capa.id, idempotency_key)
+        if existing is not None:  # the concurrent winner — idempotent replay
+            return existing, False
+        raise
+    await session.refresh(dcr)
+    return dcr, True

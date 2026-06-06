@@ -14,8 +14,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...db.models._dcr_enums import DcrChangeType, DcrReasonClass, DcrState
 from ...db.models.capa import Capa
-from ...db.models.clause import Clause
-from ...db.models.clause_mapping import ClauseMapping
 from ...db.models.dcr import Dcr
 from ...db.models.dcr_stage_event import DcrStageEvent
 from ...db.models.document_link import DocumentLink
@@ -146,51 +144,6 @@ async def records_produced_under(
         .limit(_RECORDS_SAMPLE_CAP)
     )
     return total, [{"id": str(rid), "identifier": ident} for rid, ident in sample.all()]
-
-
-async def sole_star_coverage(
-    session: AsyncSession, org_id: uuid.UUID, doc_id: uuid.UUID
-) -> list[dict[str, str]]:
-    """The ★ mandatory clauses for which ``doc_id`` is the SOLE Effective coverer — i.e. removing it
-    leaves the clause with no Effective document (the doc 05 §7.3 'no replacement' leg). Counts
-    any OTHER document with an Effective version mapped to the same ★ clause (the checklist
-    coverage
-    semantics: Effective = current_effective_version_id IS NOT NULL)."""
-    # The ★ clauses this doc maps to.
-    doc_star = (
-        select(ClauseMapping.clause_id)
-        .join(Clause, Clause.id == ClauseMapping.clause_id)
-        .where(
-            ClauseMapping.documented_information_id == doc_id, Clause.is_mandatory_star.is_(True)
-        )
-        .subquery()
-    )
-    # Other Effective docs mapped to each of those clauses.
-    other_effective = (
-        select(
-            ClauseMapping.clause_id, func.count(func.distinct(DocumentedInformation.id)).label("n")
-        )
-        .join(
-            DocumentedInformation,
-            DocumentedInformation.id == ClauseMapping.documented_information_id,
-        )
-        .where(
-            ClauseMapping.clause_id.in_(select(doc_star.c.clause_id)),
-            ClauseMapping.documented_information_id != doc_id,
-            DocumentedInformation.org_id == org_id,
-            DocumentedInformation.current_effective_version_id.isnot(None),
-        )
-        .group_by(ClauseMapping.clause_id)
-        .subquery()
-    )
-    rows = await session.execute(
-        select(Clause.number, Clause.title)
-        .join(doc_star, doc_star.c.clause_id == Clause.id)
-        .outerjoin(other_effective, other_effective.c.clause_id == Clause.id)
-        .where(func.coalesce(other_effective.c.n, 0) == 0)
-        .order_by(Clause.number.asc())
-    )
-    return [{"number": num, "title": title} for num, title in rows.all()]
 
 
 async def caused_by_links(session: AsyncSession, doc_id: uuid.UUID) -> list[dict[str, Any]]:

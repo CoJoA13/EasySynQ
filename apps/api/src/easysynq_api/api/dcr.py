@@ -21,7 +21,8 @@ import datetime
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, Depends, Request, status
+from fastapi import APIRouter, Depends, Header, Request, status
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -32,22 +33,34 @@ from ..db.models.app_user import AppUser
 from ..db.models.dcr import Dcr
 from ..db.models.dcr_stage_event import DcrStageEvent
 from ..db.models.document_type import DocumentType
+from ..db.models.document_version import DocumentVersion
 from ..db.models.documented_information import DocumentedInformation
 from ..db.models.impact_assessment import ImpactAssessment
 from ..db.session import get_session
 from ..domain.authz import ResourceContext
 from ..problems import ProblemException
 from ..services.authz import AuthzAuditSink, enforce, get_authz_audit_sink, require
+from ..services.capa import raise_dcr_from_capa
 from ..services.dcr import (
     annotate_impact,
     assess_dcr,
     cancel_dcr,
+    close_dcr,
+    implement_dcr,
     patch_dcr,
     raise_dcr,
     route_dcr,
 )
 from ..services.dcr import repository as dcr_repo
+from ..services.vault import (
+    SignatureEventSink,
+    VaultAuditSink,
+    get_vault_audit_sink,
+    get_vault_signature_sink,
+)
 from ..services.vault import repository as vault_repo
+from ..services.vault.release_scope import enrich_release_sod_scope
+from ..tasks.lifecycle import release_due_versions
 
 router = APIRouter(prefix="/api/v1", tags=["dcr"])
 
@@ -80,6 +93,23 @@ class DcrCancel(BaseModel):
 class ImpactAnnotate(BaseModel):
     # Keyed by ImpactDimension value (e.g. {"affected_processes": "Diego to re-validate"}).
     annotations: dict[str, str]
+
+
+class DcrImplement(BaseModel):
+    # CREATE: the out-of-band-authored Approved version this DCR releases (required for CREATE).
+    resulting_version_id: uuid.UUID | None = None
+    # RETIRE: override the doc 05 §7.3 obsoletion-safety block (coverage gap) with a recorded note.
+    force_retire: bool = False
+    override_justification: str | None = None
+
+
+class DcrFromCapa(BaseModel):
+    change_type: DcrChangeType
+    change_significance: ChangeSignificance
+    reason_text: str = Field(min_length=1, max_length=4000)
+    target_document_id: uuid.UUID | None = None  # required for a REVISE/RETIRE DCR
+    reason_class: DcrReasonClass = DcrReasonClass.capa
+    proposed_effective_from: datetime.datetime | None = None
 
 
 # --- serializers ------------------------------------------------------------------------------
@@ -182,6 +212,51 @@ _dcr_read = require("changeRequest.read")
 _dcr_assess = require("changeRequest.assess", async_scope_resolver=_dcr_scope)
 _dcr_close = require("changeRequest.close", async_scope_resolver=_dcr_scope)
 _dcr_route = require("changeRequest.route", async_scope_resolver=_dcr_scope)
+_dcr_implement = require("changeRequest.implement", async_scope_resolver=_dcr_scope)
+
+
+async def _enforce_underlying_document_control(
+    session: AsyncSession,
+    authz_sink: AuthzAuditSink,
+    request: Request,
+    caller: AppUser,
+    dcr: Dcr,
+    body: DcrImplement,
+) -> None:
+    """Enforce the vault-control permission the DCR implement DRIVES, IN ADDITION to the
+    ``changeRequest.implement`` dependency gate (R40 S-dcr-5 addendum — no DCR side-door past
+    document control). RETIRE → ``document.obsolete`` on the target; REVISE/CREATE →
+    ``document.release`` with the SoD-2 overlay over the promoted version. This is the only path
+    that fires the seeded SoD-2 (author≠releaser) — the PDP keys SoD on ``document.release``, so
+    gating on ``changeRequest.implement`` alone would silently skip it."""
+    if dcr.change_type is DcrChangeType.RETIRE:
+        scope = await _dcr_doc_scope(session, dcr.target_document_id)
+        await enforce(
+            session, authz_sink, request, caller, "document.obsolete", scope, sig_hook=True
+        )
+        return
+    if dcr.change_type is DcrChangeType.CREATE:
+        if body.resulting_version_id is None:
+            raise ProblemException(
+                status=422,
+                code="validation_error",
+                title="resulting_version_id is required for a CREATE DCR implement",
+            )
+        version = await session.get(DocumentVersion, body.resulting_version_id)
+        if version is None or version.org_id != caller.org_id:
+            raise ProblemException(status=404, code="not_found", title="Version not found")
+        doc_id: uuid.UUID = version.document_id
+        version_id: uuid.UUID | None = body.resulting_version_id
+    else:  # REVISE — enrich_release_sod_scope resolves the target's latest Approved version
+        if (
+            dcr.target_document_id is None
+        ):  # defensive (the create-iff-no-target CHECK guarantees it)
+            raise ProblemException(status=404, code="not_found", title="Document not found")
+        doc_id = dcr.target_document_id
+        version_id = None
+    base = await _dcr_doc_scope(session, doc_id)
+    scope = await enrich_release_sod_scope(session, base, doc_id, version_id)
+    await enforce(session, authz_sink, request, caller, "document.release", scope, sig_hook=True)
 
 
 # --- endpoints --------------------------------------------------------------------------------
@@ -316,6 +391,88 @@ async def route_dcr_endpoint(
     out = _dcr(dcr)
     out["approval_instance"] = {"id": str(instance.id), "current_state": instance.current_state}
     return out
+
+
+@router.post("/dcrs/{dcr_id}/implement")
+async def implement_dcr_endpoint(
+    dcr_id: uuid.UUID,
+    body: DcrImplement,
+    request: Request,
+    caller: AppUser = Depends(_dcr_implement),
+    session: AsyncSession = Depends(get_session),
+    authz_sink: AuthzAuditSink = Depends(get_authz_audit_sink),
+    vault_sink: VaultAuditSink = Depends(get_vault_audit_sink),
+    sig_sink: SignatureEventSink = Depends(get_vault_signature_sink),
+) -> dict[str, Any]:
+    """Approved → Implemented (gate ``changeRequest.implement`` + the underlying
+    ``document.release`` / ``document.obsolete`` enforced in-handler with SoD-2). REVISE releases
+    the target's approved revision; CREATE releases the authored ``resulting_version_id``; RETIRE
+    obsoletes the target behind the §7.3 gate (``force_retire`` + a note clears a coverage gap)."""
+    dcr = await dcr_repo.get_dcr(session, dcr_id)
+    if dcr is None or dcr.org_id != caller.org_id:
+        raise ProblemException(status=404, code="not_found", title="DCR not found")
+    await _enforce_underlying_document_control(session, authz_sink, request, caller, dcr, body)
+    dcr = await implement_dcr(
+        session,
+        caller,
+        dcr_id,
+        sink=vault_sink,
+        sig_sink=sig_sink,
+        resulting_version_id=body.resulting_version_id,
+        force_retire=body.force_retire,
+        override_justification=body.override_justification,
+    )
+    # REVISE/CREATE scheduled the cutover (effective_from set); trigger the release_due sweep now
+    # for promptness — the 5-min Beat sweep is the self-healing backstop if this enqueue is lost.
+    if dcr.change_type is not DcrChangeType.RETIRE:
+        release_due_versions.delay()
+    return _dcr(dcr)
+
+
+@router.post("/dcrs/{dcr_id}/close")
+async def close_dcr_endpoint(
+    dcr_id: uuid.UUID,
+    caller: AppUser = Depends(_dcr_close),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """Implemented → Closed (gate ``changeRequest.close``). 409 ``dcr_effectivity_pending`` until
+    the change has taken effect (the resulting version Effective / the target Obsolete)."""
+    dcr = await close_dcr(session, caller, dcr_id)
+    return _dcr(dcr)
+
+
+@router.post("/capas/{capa_id}/raise-dcr")
+async def raise_dcr_from_capa_endpoint(
+    capa_id: uuid.UUID,
+    body: DcrFromCapa,
+    request: Request,
+    caller: AppUser = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+    authz_sink: AuthzAuditSink = Depends(get_authz_audit_sink),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+) -> JSONResponse:
+    """Spawn a DCR from a CAPA corrective action (doc 02 Cl 10.2 / doc 05 §5.1 — closes the §10→§7.5
+    loop; the DCR's ``source_link`` = the capa_id). Gate ``changeRequest.create`` (the DCR-domain
+    key, scope from the target document — the ``POST /dcrs`` precedent). 1:N — a CAPA may spawn
+    child DCRs; an ``Idempotency-Key`` makes a retry return the same DCR (201 new / 200 replay)."""
+    scope = await _dcr_doc_scope(session, body.target_document_id)
+    await enforce(session, authz_sink, request, caller, "changeRequest.create", scope)
+    dcr, created = await raise_dcr_from_capa(
+        session,
+        caller,
+        capa_id,
+        change_type=body.change_type,
+        change_significance=body.change_significance,
+        reason_text=body.reason_text,
+        target_document_id=body.target_document_id,
+        reason_class=body.reason_class,
+        proposed_effective_from=body.proposed_effective_from,
+        idempotency_key=idempotency_key,
+    )
+    return JSONResponse(
+        status_code=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+        content=_dcr(dcr),
+    )
 
 
 @router.get("/dcrs/{dcr_id}/impact")

@@ -1402,7 +1402,10 @@ paths:
     post:
       tags: [documents]
       operationId: obsoleteDocument
-      summary: "Effective→Obsolete (T11), or archive a Superseded version (T12) via version_id. Needs document.obsolete."
+      summary: >-
+        Effective→Obsolete (T11), or archive a Superseded version (T12) via version_id. The doc 05
+        §7.3 obsoletion-safety gate (S-dcr-5) blocks a T11 obsoletion that would create a coverage gap
+        (409 obsoletion_blocked) unless force_retire + override_justification. Needs document.obsolete.
       parameters:
         - { name: document_id, in: path, required: true, schema: { type: string, format: uuid } }
       requestBody:
@@ -1419,7 +1422,9 @@ paths:
         "403": { $ref: "#/components/responses/ProblemResponse" }
         "404": { $ref: "#/components/responses/ProblemResponse" }
         "409":
-          description: Illegal transition (invalid_state_transition; body includes allowed_transitions).
+          description: >-
+            Illegal transition (invalid_state_transition; body includes allowed_transitions) OR a
+            §7.3 coverage gap (obsoletion_blocked; the reasons are in errors[]).
           content:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
@@ -4108,6 +4113,95 @@ paths:
         "409": { $ref: "#/components/responses/ProblemResponse" }
         "422": { $ref: "#/components/responses/ProblemResponse" }
 
+  /dcrs/{dcr_id}/implement:
+    post:
+      tags: [dcr]
+      operationId: implementDcr
+      summary: >-
+        Approved → Implemented (S-dcr-5, DCR-as-orchestrator). REVISE/CREATE schedule the resulting
+        version's go-live (effective_from set + the dcr↔document_version cross-FK) — the release_due
+        sweep then performs the cutover; RETIRE obsoletes the target behind the doc 05 §7.3 gate
+        (force_retire + override_justification to override a coverage gap). Gated changeRequest.implement
+        AND the underlying document.release / document.obsolete enforced in-handler with SoD-2 (the
+        author of a revision cannot self-implement). 409 dcr_not_implementable / no_approved_draft /
+        obsoletion_blocked; 403 sod_violation; 422 (CREATE without resulting_version_id, or force_retire
+        without override_justification).
+      parameters:
+        - { name: dcr_id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DcrImplement" }
+      responses:
+        "200":
+          description: The Implemented DCR.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Dcr" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409": { $ref: "#/components/responses/ProblemResponse" }
+        "422": { $ref: "#/components/responses/ProblemResponse" }
+
+  /dcrs/{dcr_id}/close:
+    post:
+      tags: [dcr]
+      operationId: closeDcr
+      summary: >-
+        Implemented → Closed (S-dcr-5). The close gate requires the change to have actually taken
+        effect (§5.5) — the resulting version Effective (REVISE/CREATE) or the target Obsolete (RETIRE);
+        409 dcr_effectivity_pending while a scheduled cutover is still outstanding. Needs
+        changeRequest.close.
+      parameters:
+        - { name: dcr_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: The Closed DCR.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Dcr" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409": { $ref: "#/components/responses/ProblemResponse" }
+
+  /capas/{capa_id}/raise-dcr:
+    post:
+      tags: [dcr]
+      operationId: raiseDcrFromCapa
+      summary: >-
+        Spawn a DCR from a CAPA corrective action (S-dcr-5; doc 02 Cl 10.2 / doc 05 §5.1 — closes the
+        §10→§7.5 loop; the DCR's source_link = the capa_id). Gated changeRequest.create (scope from the
+        target document). 1:N — a CAPA may spawn child DCRs; an Idempotency-Key makes a retry return the
+        same DCR (201 new / 200 replay). 409 capa_terminal (a Closed/Rejected CAPA cannot spawn).
+      parameters:
+        - { name: capa_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - name: Idempotency-Key
+          in: header
+          required: false
+          schema: { type: string }
+          description: "Retry-dedup key — a replay with the same key returns the same DCR (200)."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DcrFromCapa" }
+      responses:
+        "201":
+          description: A freshly spawned DCR.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Dcr" }
+        "200":
+          description: An idempotent replay — the DCR already spawned for this Idempotency-Key.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Dcr" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409": { $ref: "#/components/responses/ProblemResponse" }
+        "422": { $ref: "#/components/responses/ProblemResponse" }
+
 components:
   securitySchemes:
     keycloak:
@@ -4677,6 +4771,52 @@ components:
           type: [string, "null"]
           format: uuid
           description: "A Superseded version to archive (T12); omit to obsolete the Effective document (T11)."
+        force_retire:
+          type: boolean
+          default: false
+          description: >-
+            Override the doc 05 §7.3 obsoletion-safety block (a coverage gap — governs an active
+            process / referenced by an Effective document / sole ★ coverer). Requires
+            override_justification. Without it a blocked obsoletion is 409 obsoletion_blocked (S-dcr-5).
+        override_justification:
+          type: [string, "null"]
+          description: "Recorded justification for a force_retire override (required when force_retire; §7.3)."
+
+    DcrImplement:
+      type: object
+      additionalProperties: false
+      properties:
+        resulting_version_id:
+          type: [string, "null"]
+          format: uuid
+          description: "CREATE only: the out-of-band-authored Approved version this DCR releases (required for CREATE)."
+        force_retire:
+          type: boolean
+          default: false
+          description: "RETIRE only: override the §7.3 obsoletion-safety block (requires override_justification)."
+        override_justification:
+          type: [string, "null"]
+          description: "RETIRE only: recorded justification for a force_retire override (§7.3)."
+
+    DcrFromCapa:
+      type: object
+      additionalProperties: false
+      required: [change_type, change_significance, reason_text]
+      properties:
+        change_type: { type: string, enum: [REVISE, CREATE, RETIRE] }
+        change_significance: { type: string, enum: [MAJOR, MINOR] }
+        reason_text: { type: string, minLength: 1, maxLength: 4000 }
+        target_document_id:
+          type: [string, "null"]
+          format: uuid
+          description: "Required for a REVISE/RETIRE DCR; must be omitted for CREATE."
+        reason_class:
+          type: string
+          default: capa
+          description: "The classified reason-for-change (defaults to capa for a CAPA-driven DCR)."
+        proposed_effective_from:
+          type: [string, "null"]
+          format: date-time
 
     Release:
       type: object

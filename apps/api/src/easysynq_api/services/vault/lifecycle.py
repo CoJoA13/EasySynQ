@@ -40,6 +40,7 @@ from ...problems import ProblemException
 from . import locks, repository
 from .audit import VaultAuditEvent, VaultAuditSink, get_vault_audit_sink
 from .mirror_sink import get_mirror_enqueue_sink
+from .obsoletion import assert_obsoletion_allowed
 from .signature import SignatureEvent, SignatureEventSink, get_vault_signature_sink
 
 logger = logging.getLogger("easysynq.vault")
@@ -323,10 +324,18 @@ async def obsolete(
     *,
     reason: str,
     version_id: uuid.UUID | None = None,
+    force_retire: bool = False,
+    override_justification: str | None = None,
 ) -> DocumentedInformation:
     """T11 (Effective → Obsolete; clears the effective pointer) or, when a Superseded ``version_id``
     is given, the version-level T12 (Superseded version → Obsolete; document state unchanged).
-    Emits ``signature_event(meaning=obsolete)`` in the same transaction (S5)."""
+    Emits ``signature_event(meaning=obsolete)`` in the same transaction (S5).
+
+    The doc 05 §7.3 obsoletion-safety gate (S-dcr-5) fires on the **T11 document-level** path only
+    (a T12 Superseded-version archive removes no Effective coverage): a coverage/dependency gap is a
+    409 ``obsoletion_blocked`` unless ``force_retire`` + a non-empty ``override_justification``
+    (recorded on the signature intent + audit). Both the direct ``document.obsolete`` endpoint and
+    the DCR RETIRE-implement reach this gate — one check covers both paths."""
     if not reason or not reason.strip():
         raise ProblemException(
             status=422,
@@ -380,11 +389,22 @@ async def obsolete(
         raise IllegalTransition(
             Action.obsolete, doc.current_state, allowed_actions(doc.current_state)
         )
+    # The doc 05 §7.3 gate (S-dcr-5): block a coverage-gap obsoletion unless force_retire +
+    # justification. Runs ONLY here (T11 document-level) — the T12 archive returned early above.
+    await assert_obsoletion_allowed(
+        session,
+        doc.org_id,
+        doc.id,
+        force_retire=force_retire,
+        override_justification=override_justification,
+    )
+    # A forced retire records its justification on the e-signature intent + the audit reason (§7.3).
+    retire_reason = f"{reason} | force_retire: {override_justification}" if force_retire else reason
     effective.version_state = VersionState.Obsolete
     doc.current_effective_version_id = None
     doc.current_state = transition.to_doc_state
     doc.updated_by = actor.id
-    _emit_signature(sig_sink, session, effective, "obsolete", actor, intent=reason)
+    _emit_signature(sig_sink, session, effective, "obsolete", actor, intent=retire_reason)
     _audit(
         session,
         sink,
@@ -394,7 +414,7 @@ async def obsolete(
         "document_version",
         effective.id,
         identifier=doc.identifier,
-        reason=reason,
+        reason=retire_reason,
     )
     await session.commit()
     await session.refresh(doc)

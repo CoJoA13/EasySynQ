@@ -36,11 +36,14 @@ target_metadata = Base.metadata
 #     ``... WHERE executed_at IS NULL AND cancelled_at IS NULL``; slice S-rec-2).
 #   * ``uq_import_decision_run_idem`` — the review-decision idempotency partial UNIQUE (0032,
 #     ``... WHERE idempotency_key IS NOT NULL``; slice S-ing-4).
+#   * ``uq_dcr_spawn_idempotency_key`` — the CAPA→DCR spawn idempotency partial UNIQUE (0044,
+#     ``... WHERE spawn_idempotency_key IS NOT NULL``; slice S-dcr-5).
 _MIGRATION_MANAGED_INDEXES = frozenset(
     {
         "ix_documented_information_search_tsv",
         "ix_worm_destroy_request_open",
         "uq_import_decision_run_idem",
+        "uq_dcr_spawn_idempotency_key",
     }
 )
 
