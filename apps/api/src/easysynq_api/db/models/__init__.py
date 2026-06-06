@@ -15,6 +15,12 @@ from ._capa_enums import (
     NcSeverity,
 )
 from ._clause_enums import PdcaPhase
+from ._dcr_enums import (
+    DcrChangeType,
+    DcrReasonClass,
+    DcrSourceLinkType,
+    DcrState,
+)
 from ._evidence_enums import EvidenceForTargetType
 from ._ingestion_enums import (
     ImportCommitResultStatus,
@@ -67,6 +73,8 @@ from .capa_stage import CapaStage
 from .clause import Clause
 from .clause_mapping import ClauseMapping
 from .complaint import Complaint
+from .dcr import Dcr
+from .dcr_stage_event import DcrStageEvent
 from .disposition_event import DispositionEvent
 from .document_type import DocumentType
 from .document_version import DocumentVersion
@@ -138,6 +146,12 @@ __all__ = [
     "Clause",
     "ClauseMapping",
     "Complaint",
+    "Dcr",
+    "DcrChangeType",
+    "DcrReasonClass",
+    "DcrSourceLinkType",
+    "DcrStageEvent",
+    "DcrState",
     "DispositionAction",
     "DispositionEvent",
     "DocumentCurrentState",

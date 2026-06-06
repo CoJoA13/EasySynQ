@@ -133,6 +133,14 @@ tags:
       output, R20) with a recorded disposition (ncr.create / ncr.record_correction). The PROCESS-
       scoped write keys resolve scope from the relevant process (SYSTEM fallback). All keys are the
       seeded doc-07 catalog (S-capa-1 backfills the orphaned grants — no new keys).
+  - name: dcr
+    description: >-
+      Document Change Request — core + intake (slice S-dcr-1, doc 05 §5, doc 14 §7, doc 15 §8.7). A
+      DCR is a controlled WORKFLOW object with a mutable state + an append-only dcr_stage_event trail
+      (R22 — NOT a kind=RECORD artifact). S-dcr-1 wires the Open intake (raise) + edit-while-Open
+      (PATCH) + cancel; assess (S-dcr-2), route + approval (S-dcr-4), implement/close (S-dcr-5) are
+      later slices. Keys are the seeded changeRequest.* catalog family (R5 normalizes doc 15's
+      dcr.*): create/read are granted by 0004, assess/close backfilled by 0040 — no new keys.
 
 paths:
   /healthz:
@@ -3705,6 +3713,123 @@ paths:
         "404": { $ref: "#/components/responses/ProblemResponse" }
         "409": { $ref: "#/components/responses/ProblemResponse" }
 
+  /dcrs:
+    post:
+      tags: [dcr]
+      operationId: createDcr
+      summary: >-
+        Raise a Document Change Request at Open (doc 15 §8.7). CREATE has no target; REVISE/RETIRE
+        require an in-org controlled Document target (422 otherwise; 422 not_a_document for a Record
+        target). Writes the genesis stage event + a DCR_RAISED audit. Needs changeRequest.create
+        (scope from the target document; SYSTEM fallback for CREATE).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DcrCreate" }
+      responses:
+        "201":
+          description: The raised DCR (state=Open).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Dcr" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "422": { $ref: "#/components/responses/ProblemResponse" }
+    get:
+      tags: [dcr]
+      operationId: listDcrs
+      summary: >-
+        List the org's DCRs. Filter state / change_type / target_document_id / created_by /
+        reason_class. Needs changeRequest.read.
+      parameters:
+        - { name: state, in: query, required: false, schema: { $ref: "#/components/schemas/DcrState" } }
+        - name: change_type
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/DcrChangeType" }
+        - name: target_document_id
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - { name: created_by, in: query, required: false, schema: { type: string, format: uuid } }
+        - name: reason_class
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/DcrReasonClass" }
+      responses:
+        "200":
+          description: The org's DCRs.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { $ref: "#/components/schemas/Dcr" } }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+  /dcrs/{dcr_id}:
+    get:
+      tags: [dcr]
+      operationId: getDcr
+      summary: A DCR with its append-only stage-event trail. Needs changeRequest.read.
+      parameters:
+        - { name: dcr_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: The DCR + stage_events.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Dcr" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+    patch:
+      tags: [dcr]
+      operationId: patchDcr
+      summary: >-
+        Edit a DCR's request details (reason / significance / proposed_effective_from) while Open —
+        409 dcr_not_editable once it has advanced. Writes a DCR_UPDATED audit. Needs
+        changeRequest.assess.
+      parameters:
+        - { name: dcr_id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DcrPatch" }
+      responses:
+        "200":
+          description: The edited DCR.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Dcr" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409": { $ref: "#/components/responses/ProblemResponse" }
+  /dcrs/{dcr_id}/cancel:
+    post:
+      tags: [dcr]
+      operationId: cancelDcr
+      summary: >-
+        Withdraw a DCR while not yet approved (Open / Assessed / Routed → Cancelled) — 409
+        dcr_not_cancellable otherwise. Appends a Cancelled stage event + a DCR_TRANSITIONED audit.
+        Needs changeRequest.close.
+      parameters:
+        - { name: dcr_id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DcrCancel" }
+      responses:
+        "200":
+          description: The cancelled DCR (state=Cancelled).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Dcr" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409": { $ref: "#/components/responses/ProblemResponse" }
+
 components:
   securitySchemes:
     keycloak:
@@ -4871,6 +4996,116 @@ components:
           type: object
           additionalProperties: true
           description: The sealed effectiveness-verification narrative (non-empty).
+    DcrState:
+      type: string
+      description: >-
+        The DCR lifecycle (doc 14 §7). Cancelled/Closed/Rejected are terminal; the InApproval
+        changes-requested loop returns to Open (doc 15 §8.7).
+      enum: [Open, Assessed, Routed, InApproval, Approved, Implemented, Closed, Cancelled, Rejected]
+    DcrChangeType:
+      type: string
+      enum: [REVISE, CREATE, RETIRE]
+    DcrReasonClass:
+      type: string
+      enum:
+        [regulatory, audit_finding, capa, process_improvement, error_correction, periodic_review,
+         customer_requirement, other]
+    DcrSourceLinkType:
+      type: string
+      description: mgmt_review / risk are reserved forward seams (those families are not built in v1).
+      enum: [capa, finding, mgmt_review, risk]
+    ChangeSignificance:
+      type: string
+      enum: [MAJOR, MINOR]
+    DcrStageEvent:
+      type: object
+      additionalProperties: false
+      required: [id, from_state, to_state, actor_id, comment, payload, occurred_at]
+      properties:
+        id: { type: string, format: uuid }
+        from_state:
+          oneOf:
+            - { $ref: "#/components/schemas/DcrState" }
+            - { type: "null" }
+        to_state: { $ref: "#/components/schemas/DcrState" }
+        actor_id: { type: [string, "null"], format: uuid }
+        comment: { type: [string, "null"] }
+        payload: { type: [object, "null"], additionalProperties: true }
+        occurred_at: { type: string, format: date-time }
+    Dcr:
+      type: object
+      additionalProperties: false
+      required:
+        [id, identifier, target_document_id, change_type, change_significance, reason_class,
+         reason_text, state, created_by, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        identifier: { type: string, description: "DCR-{YYYY}-{SEQ} (4-digit SEQ)." }
+        target_document_id:
+          type: [string, "null"]
+          format: uuid
+          description: NULL for a CREATE DCR; the target Document for REVISE/RETIRE.
+        change_type: { $ref: "#/components/schemas/DcrChangeType" }
+        change_significance: { $ref: "#/components/schemas/ChangeSignificance" }
+        reason_class: { $ref: "#/components/schemas/DcrReasonClass" }
+        reason_text: { type: string }
+        source_link_type:
+          oneOf:
+            - { $ref: "#/components/schemas/DcrSourceLinkType" }
+            - { type: "null" }
+        source_link_id: { type: [string, "null"], format: uuid }
+        proposed_effective_from: { type: [string, "null"], format: date-time }
+        resulting_version_id:
+          type: [string, "null"]
+          format: uuid
+          description: NULL in v1 — set when the DCR-driven version is released (S-dcr-5).
+        state: { $ref: "#/components/schemas/DcrState" }
+        decision: { type: [string, "null"] }
+        created_by: { type: string, format: uuid }
+        created_at: { type: string, format: date-time }
+        stage_events:
+          type: array
+          items: { $ref: "#/components/schemas/DcrStageEvent" }
+          description: The append-only transition trail (present on a single read, omitted on list).
+    DcrCreate:
+      type: object
+      additionalProperties: false
+      required: [change_type, change_significance, reason_class, reason_text]
+      properties:
+        change_type: { $ref: "#/components/schemas/DcrChangeType" }
+        change_significance: { $ref: "#/components/schemas/ChangeSignificance" }
+        reason_class: { $ref: "#/components/schemas/DcrReasonClass" }
+        reason_text: { type: string, minLength: 1, maxLength: 4000 }
+        target_document_id:
+          type: [string, "null"]
+          format: uuid
+          description: Required for REVISE/RETIRE; must be omitted/null for CREATE.
+        source_link_type:
+          oneOf:
+            - { $ref: "#/components/schemas/DcrSourceLinkType" }
+            - { type: "null" }
+        source_link_id: { type: [string, "null"], format: uuid }
+        proposed_effective_from: { type: [string, "null"], format: date-time }
+    DcrPatch:
+      type: object
+      additionalProperties: false
+      description: All fields optional; null/absent = unchanged (S-dcr-1 cannot clear a field).
+      properties:
+        reason_text: { type: [string, "null"], minLength: 1, maxLength: 4000 }
+        reason_class:
+          oneOf:
+            - { $ref: "#/components/schemas/DcrReasonClass" }
+            - { type: "null" }
+        change_significance:
+          oneOf:
+            - { $ref: "#/components/schemas/ChangeSignificance" }
+            - { type: "null" }
+        proposed_effective_from: { type: [string, "null"], format: date-time }
+    DcrCancel:
+      type: object
+      additionalProperties: false
+      properties:
+        comment: { type: [string, "null"], maxLength: 2000 }
     Complaint:
       type: object
       additionalProperties: false

@@ -685,6 +685,44 @@ the real `signature_event` write for `capa_stage.signed_event_id` + the Top-Mana
 
 ---
 
+### R40 — Revision & change depth (DCR) family: model + the InApproval reject-loop target (slice family S-dcr)
+
+**Context.** The v1 "Revision & change depth" family (doc 05) was started. doc 05 §5.5 and doc 15 §8.7 — both
+authoritative section docs — **disagree** on one DCR FSM edge: where the InApproval "changes-requested"
+rejection loops back to. doc 05 §5.5's state diagram shows `InApproval → Routed`; doc 15 §8.7's shows
+`InApproval → Open`. The Register is otherwise silent, so the owner resolved it.
+
+**Decision:**
+- **The DCR is an OWN table with a mutable `state` column + an append-only `dcr_stage_event` trail — NOT a
+  `kind=RECORD` subtype** (R22, the `worm_destroy_request` mutable-state precedent). The "closed form retained
+  as a record-like snapshot" (R22) is the frozen `dcr` row + its immutable stage trail — **no separate snapshot
+  table**. A DCR id is not a record id, so its audit events key on a fresh `audit_object_type='dcr'` (the `ncr`
+  own-table precedent), NOT `record`.
+- **The InApproval changes-requested rejection loops to `Open`** (re-assess + re-route), per doc 15 §8.7 —
+  **superseding doc 05 §5.5's `Routed`** (owner decision). Rationale: a substantively changed draft should
+  re-derive its impact assessment + approver routing, so returning to the start of the flow is the safer QMS
+  posture. The pure `domain/dcr/fsm.py` table encodes this. (Also reconciled: `Cancelled` is reachable only
+  from the pre-approval states `{Open, Assessed, Routed}` per doc 15's "while not implemented" — there is **no**
+  `Approved → Cancelled` edge; an InApproval DCR exits via `Rejected` or the changes-requested loop, not Cancel.)
+- **Permission keys = the seeded `changeRequest.*` family** (R5 normalizes doc 15's `dcr.*`). No new keys: the
+  S-dcr-1 slice **backfills** the two orphaned keys it surfaces (`changeRequest.assess` for PATCH-while-Open,
+  `changeRequest.close` for cancel) to Process Owner + QMS Owner, PROCESS-scoped via the `:assignment_process`
+  placeholder (the S-capa-1 / R39 backfill recipe; rides SYSTEM overrides until owner-assignment binds).
+- **Scope-fork breadth (owner):** redline/diff is **full** (metadata + on-demand text via the S-ing-2 Tika
+  sidecar + visual page-image, S-dcr-3); where-used adds a **`document↔document` link table** (S-dcr-2).
+  Scheduled re-review (D5) + drift detection (D1–D4) stay in the **separate v1.x drift family** (roadmap §5 / D-6).
+
+**Slices.** **S-dcr-1** (DCR core + intake: `dcr` own-table mutable-state FSM + append-only `dcr_stage_event`
+[`REVOKE UPDATE,DELETE`] + `DCR-{YYYY}-{SEQ}` 4-digit identifier + `domain/dcr/fsm.py` + `DCR_RAISED`/
+`DCR_UPDATED`/`DCR_TRANSITIONED` events + `audit_object_type=dcr`; endpoints POST/GET `/dcrs`, GET/PATCH
+`/dcrs/{id}`, POST `/dcrs/{id}/cancel`; migration `0040`). Next: S-dcr-2 (where-used/impact + assess), S-dcr-3
+(diff), S-dcr-4 (routing + approval, subject_type=DCR via the engine), S-dcr-5 (implement/close + effectivity +
+the CAPA→DCR loop, the deferred cross-FK `document_version.dcr_id` ↔ `dcr.resulting_version_id`).
+
+**Back-propagation:** 05 (§5.5 reject-loop → Open), 14 (§7), 15 (§8.7), 16. Supersedes B5 (DCR dual-lifecycle).
+
+---
+
 ## Part 4 — Gap-audit finding → resolution map
 
 This table maps **every** gap-audit finding id from `17-gaps-and-open-questions.md` — Section A (Gaps: A1–A14), Section B (Contradictions/Inconsistencies: B1–B15), Section C (Risks & Hard Problems: C1–C12, including C6b), and Section D (Open Questions: D1–D14) — to the R-number(s) that resolve it. Several findings share a resolution (the audit raised the same concern as a gap, a contradiction, and an open question); those rows point to the same R-number.

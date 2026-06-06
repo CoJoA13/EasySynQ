@@ -347,7 +347,7 @@ stateDiagram-v2
     Open --> Assessed: Impact assessment completed
     Assessed --> Routed: Routing computed/confirmed
     Routed --> InApproval: Linked draft submitted for review
-    InApproval --> Routed: Changes requested
+    InApproval --> Open: Changes requested (re-assess + re-route)
     InApproval --> Approved: All required approvals signed
     Approved --> Implemented: Version Released (or scheduled)
     Implemented --> Closed: Effective + downstream actions done
