@@ -1562,6 +1562,81 @@ paths:
         "403": { $ref: "#/components/responses/ProblemResponse" }
         "404": { $ref: "#/components/responses/ProblemResponse" }
 
+  /documents/{document_id}/versions/{version_id}/visual-diff:
+    post:
+      tags: [documents]
+      operationId: requestVisualDiff
+      summary: >-
+        Request the doc 05 §8.1 visual page-image diff of `from` → `version_id` (worker-async — the API
+        can't render). Idempotent (UPSERTs the cached row + enqueues the worker when not terminal). 202
+        Pending / 200 once Ready (then poll GET). Needs document.read_draft.
+      parameters:
+        - { name: document_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: version_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: from, in: query, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "202":
+          description: Accepted (rendering in progress).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VisualDiffStatus" }
+        "200":
+          description: Already terminal (Ready / Failed / Unavailable).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VisualDiffStatus" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+    get:
+      tags: [documents]
+      operationId: getVisualDiff
+      summary: >-
+        Poll the cached visual-diff result (no side effect). 404 if not yet requested (POST first), 202
+        while Pending, 200 once terminal. Needs document.read_draft.
+      parameters:
+        - { name: document_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: version_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: from, in: query, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: The terminal visual-diff result.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VisualDiffStatus" }
+        "202":
+          description: Still rendering.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VisualDiffStatus" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+
+  /documents/{document_id}/versions/{version_id}/visual-diff/page/{page}:
+    get:
+      tags: [documents]
+      operationId: getVisualDiffPage
+      summary: >-
+        Stream one page's rendered PNG (`layer` = from | to | diff). 404 unless the visual diff is Ready
+        and the page/layer exists. Needs document.read_draft.
+      parameters:
+        - { name: document_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: version_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: page, in: path, required: true, schema: { type: integer } }
+        - { name: from, in: query, required: true, schema: { type: string, format: uuid } }
+        - name: layer
+          in: query
+          required: false
+          schema: { type: string, enum: [from, to, diff], default: diff }
+      responses:
+        "200":
+          description: The page image.
+          content:
+            image/png:
+              schema: { type: string, format: binary }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "422": { $ref: "#/components/responses/ProblemResponse" }
+
   /documents/{document_id}/versions/{version_id}/download:
     get:
       tags: [documents]
@@ -4502,6 +4577,26 @@ components:
                 properties:
                   op: { type: string, enum: [equal, insert, delete] }
                   text: { type: string }
+
+    VisualDiffStatus:
+      type: object
+      additionalProperties: false
+      description: >-
+        The S-dcr-3b visual page-image diff cache result (doc 05 §8.1). Page PNGs stream via the
+        `/visual-diff/page/{page}` sub-resource.
+      required: [status]
+      properties:
+        status: { type: string, enum: [Pending, Ready, Failed, Unavailable] }
+        page_count: { type: [integer, "null"] }
+        reason: { type: [string, "null"], description: Why Failed / Unavailable. }
+        pages:
+          type: [array, "null"]
+          description: Per-page result (null until Ready).
+          items:
+            type: object
+            properties:
+              page: { type: integer }
+              changed: { type: boolean }
 
     CheckInResult:
       allOf:

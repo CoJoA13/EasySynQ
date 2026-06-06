@@ -76,10 +76,10 @@ Celery workers · Keycloak (auth) · Gotenberg/LibreOffice (rendering) · Caddy 
 **MVP COMPLETE** (S0–S11). **v1 in progress.** Families shipped: **Records & evidence** (S-rec-1..4 + Evidence
 Packs) ✅ · **Ingestion** (S-ing-1..5) ✅ · **Audits/Findings/CAPA** (S-aud-1/2 + S-wf-engine + S-capa-1/2/3 +
 S-aud-capa-pack) ✅. **Revision & change depth (DCR family, doc 05, R40) — STARTED:** S-dcr-1 (core + intake, mig
-`0040`), S-dcr-2 (where-used/impact + assess, `0041`), S-dcr-3a (metadata + text redline diff, zero-migration).
-**Next:** S-dcr-3b (visual page-image diff via pypdfium2), S-dcr-4 (DCR routing/approval via the engine),
-S-dcr-5 (implement/close + obsoletion gate). **Migration head `0041` (next `0042`).** Full narrative + deferred
-v1/v1.x residuals: **`.claude/rules/slice-history.md`**.
+`0040`), S-dcr-2 (where-used/impact + assess, `0041`), S-dcr-3a (metadata + text redline diff, zero-migration),
+S-dcr-3b (worker-async visual page-image diff via pypdfium2+Pillow, `visual_diff` cache table, mig `0042`).
+**Next:** S-dcr-4 (DCR routing/approval via the engine), S-dcr-5 (implement/close + obsoletion gate).
+**Migration head `0042` (next `0043`).** Full narrative + deferred v1/v1.x residuals: **`.claude/rules/slice-history.md`**.
 
 ## Working preferences
 
