@@ -340,7 +340,7 @@ The logical maintained item (`documented_information` + `document`, `14 §5.2`).
 | POST | `/documents/{id}/submit-review` | `document.submit` | ✓ | `Draft→InReview`; **requires ≥1 `clause_mapping`** (`14 §4`) → else `422`. Instantiates the approval `workflow_instance` (§8.7). _(Key corrected from `document.edit` per the S4 build — the closed doc-07 catalog has a dedicated `document.submit`, which doc-04 T2/T9 uses.)_ |
 | POST | `/documents/{id}/release` | `document.release` | ✓ | On an `Approved` version: makes it the single `Effective` version (partial-unique-index enforced, SERIALIZABLE supersession), writes a `signature_event(meaning=release)`, enqueues the **read-only FS mirror** rewrite. Only released versions ever hit the mirror. |
 | POST | `/documents/{id}/start-revision` | `document.edit` | ✓ | `Effective→UnderRevision` (derived): opens a new draft while the current version keeps governing. |
-| POST | `/documents/{id}/obsolete` | `document.obsolete` | ✓ | Supersede/withdraw → predecessor `Superseded`, document `Obsolete`; pulled from mirror; all versions/records retained (immutability). |
+| POST | `/documents/{id}/obsolete` | `document.obsolete` | ✓ | Supersede/withdraw → predecessor `Superseded`, document `Obsolete`; pulled from mirror; all versions/records retained (immutability). **(S-dcr-5)** the doc 05 §7.3 obsoletion-safety gate fires on the T11 document-level obsolete: a coverage gap (governs an active process / referenced by an Effective document / sole ★ coverer) is `409 obsoletion_blocked` unless `{force_retire:true, override_justification}`. Both this endpoint and the DCR RETIRE-implement share the one gate. |
 | GET | `/documents/{id}/download` | `document.read` | — | Returns a short-lived **MinIO presigned GET URL** to the effective version's PDF rendition (watermarked per classification). |
 | PUT | `/documents/{id}/form-schema` | `document.manage_metadata` | — | **S-rec-3 (Mode-B):** set/replace a Form/Template's editable working `field_schema` (the bespoke field-list DSL). In-service guard: `FRM` document_type + Draft/UnderRevision only (422/409 otherwise). |
 | GET | `/documents/{id}/form-schema` | `document.read` | — | The current working `field_schema` (null if unset). |
@@ -408,8 +408,11 @@ The **Document Change Request** (`14 §7`) is the sanctioned, audited path to re
 | POST | `/dcrs/{id}/assess` | `dcr.update` | ✓ | `Open→Assessed`. |
 | POST | `/dcrs/{id}/route` | `dcr.update` | ✓ | `Assessed→Routed→InApproval`; instantiates the approval `workflow_instance`. |
 | POST | `/dcrs/{id}/cancel` | `dcr.update` | ✓ | →`Cancelled` (while not implemented). |
+| POST | `/dcrs/{id}/implement` | `changeRequest.implement` | ✓ | **(S-dcr-5)** `Approved→Implemented`. DCR-as-orchestrator: drives the vault action for the change_type (REVISE/CREATE schedule the resulting version's go-live + the cross-FK link, the `release_due` sweep does the cutover; RETIRE obsoletes behind the §7.3 gate, `{force_retire?, override_justification?}`). **Also enforces the underlying `document.release`/`document.obsolete` (SoD-2) in addition to `changeRequest.implement`** — no DCR side-door past document control; an author cannot self-implement (403 `sod_violation`). 409 `no_approved_draft`/`obsoletion_blocked`/`version_already_linked`. |
+| POST | `/dcrs/{id}/close` | `changeRequest.close` | ✓ | **(S-dcr-5)** `Implemented→Closed`; 409 `dcr_effectivity_pending` until the change has actually taken effect (the resulting version Effective / the target Obsolete). |
+| POST | `/capas/{id}/raise-dcr` | `changeRequest.create` | ✓ | **(S-dcr-5)** Spawn a DCR from a CAPA corrective action (`source_link={type:capa,id}`; the §10→§7.5 loop). 1:N (a CAPA may spawn child DCRs); an `Idempotency-Key` makes a retry return the same DCR (201 new / 200 replay); 409 `capa_terminal` (a Closed/Rejected CAPA cannot spawn). |
 
-> **Approve / reject of a DCR is not a DCR endpoint** — it is performed via the `task` decision (§8.8), because the spec models the decision as `workflow_stage` + `task` + `signature_event`, not a standalone approval table (reconciliation R6). When the approval workflow completes, the engine drives the DCR `InApproval→Approved→Implemented→Closed` and links `resulting_version_id`.
+> **Approve / reject of a DCR is not a DCR endpoint** — it is performed via the `task` decision (§8.8), because the spec models the decision as `workflow_stage` + `task` + `signature_event`, not a standalone approval table (reconciliation R6). The engine drives only `InApproval→Approved` (on the completing approval task, per-approver `signature_event`s, doc 05 §5.4). **`Implemented` and `Closed` are explicit gated endpoints** `POST /dcrs/{id}/implement` + `/close` (S-dcr-5, DCR-as-orchestrator — this supersedes the earlier "the engine auto-drives `InApproval→Approved→Implemented→Closed`" note; the seeded `changeRequest.implement`/`.close` keys gate human-paced closeout). `implement` produces/links `resulting_version_id`.
 
 ```mermaid
 stateDiagram-v2
@@ -420,8 +423,8 @@ stateDiagram-v2
     Open --> Cancelled: /cancel
     InApproval --> Approved: all approval tasks approved
     InApproval --> Open: task reject (changes requested)
-    Approved --> Implemented: resulting_version applied
-    Implemented --> Closed: closeout (state set Closed; closed form retained as record-like snapshot)
+    Approved --> Implemented: POST /implement (drives the vault action; resulting_version applied/scheduled)
+    Implemented --> Closed: POST /close (effective + downstream done; closed form retained as record-like snapshot)
     Closed --> [*]
     Cancelled --> [*]
 ```
