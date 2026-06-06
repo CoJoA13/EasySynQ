@@ -28,6 +28,7 @@ from ..domain.authz import ResourceContext
 from ..problems import ProblemException
 from ..services.authz import AuthzAuditSink, enforce, get_authz_audit_sink
 from ..services.capa import decide_capa_action_plan
+from ..services.dcr import decide_dcr_approval
 from ..services.vault import (
     SignatureEventSink,
     VaultAuditSink,
@@ -189,6 +190,19 @@ async def decide_endpoint(
     instance = await wf_repo.get_instance(session, task.instance_id)
     if instance is not None and instance.subject_type is WorkflowSubjectType.CAPA:
         return await decide_capa_action_plan(
+            session,
+            task,
+            caller,
+            outcome=body.outcome,
+            comment=body.comment,
+            idempotency_key=idempotency_key,
+            sig_sink=sig_sink,
+        )
+    # A DCR approval routes to the DCR service, which OWNS its authorization (decide_dcr_approval ->
+    # _assert_dcr_approver: candidate-pool + live-role 404-collapse, cross-stage 409); no permission
+    # key gates it (the role-resolved pool IS the authority); it writes the per-approver signatures.
+    if instance is not None and instance.subject_type is WorkflowSubjectType.DCR:
+        return await decide_dcr_approval(
             session,
             task,
             caller,

@@ -38,7 +38,14 @@ from ..db.session import get_session
 from ..domain.authz import ResourceContext
 from ..problems import ProblemException
 from ..services.authz import AuthzAuditSink, enforce, get_authz_audit_sink, require
-from ..services.dcr import annotate_impact, assess_dcr, cancel_dcr, patch_dcr, raise_dcr
+from ..services.dcr import (
+    annotate_impact,
+    assess_dcr,
+    cancel_dcr,
+    patch_dcr,
+    raise_dcr,
+    route_dcr,
+)
 from ..services.dcr import repository as dcr_repo
 from ..services.vault import repository as vault_repo
 
@@ -174,6 +181,7 @@ async def _dcr_scope(request: Request, session: AsyncSession) -> ResourceContext
 _dcr_read = require("changeRequest.read")
 _dcr_assess = require("changeRequest.assess", async_scope_resolver=_dcr_scope)
 _dcr_close = require("changeRequest.close", async_scope_resolver=_dcr_scope)
+_dcr_route = require("changeRequest.route", async_scope_resolver=_dcr_scope)
 
 
 # --- endpoints --------------------------------------------------------------------------------
@@ -291,6 +299,22 @@ async def assess_dcr_endpoint(
     rows = [_impact(ia) for ia in await dcr_repo.list_impact_assessments(session, dcr_id)]
     out = _dcr(dcr)
     out["impact_assessment"] = rows
+    return out
+
+
+@router.post("/dcrs/{dcr_id}/route")
+async def route_dcr_endpoint(
+    dcr_id: uuid.UUID,
+    caller: AppUser = Depends(_dcr_route),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """Assessed → Routed → InApproval (gate ``changeRequest.route``). Instantiates the
+    significance-routed ``dcr_approval`` workflow (MAJOR → Process Owner → QMS Owner; MINOR → QMS
+    Owner) and returns the DCR + the opened approval instance. Approvers decide via
+    ``POST /tasks/{id}/decision``; an empty routed role pool → 409 ``dcr_no_approvers``."""
+    dcr, instance = await route_dcr(session, caller, dcr_id)
+    out = _dcr(dcr)
+    out["approval_instance"] = {"id": str(instance.id), "current_state": instance.current_state}
     return out
 
 

@@ -44,6 +44,7 @@ class SignedObjectType(enum.Enum):
     document_version = "document_version"
     record = "record"
     capa_stage = "capa_stage"
+    dcr = "dcr"  # S-dcr-4: a DCR approval signature (per-approver, signed_object_id = the DCR id)
 
 
 def _vals(e: type[enum.Enum]) -> list[str]:

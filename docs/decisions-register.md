@@ -737,6 +737,23 @@ shape; the packs/imports async precedent), gated `document.read_draft`. Watermar
 changed footer region) accepted + documented for v1 (raw-render = v1.x). NO new permission key / event type. **The doc 05
 §8 full diff (metadata + text + visual) is COMPLETE.**
 
+**S-dcr-4 addendum (owner — routing + approval, mig 0043).** The DCR approval rides the declarative engine
+(subject_type=DCR, the S-capa-2 pattern). Owner decisions: (1) **Routing** = a seeded `dcr_approval`
+`workflow_definition` with a ROUTER on `change_significance` — **MAJOR → Process Owner → QMS Owner (SEQUENTIAL, 2
+distinct approvers); MINOR → QMS Owner (single editorial)** — reusing the existing seeded roles (no new role),
+candidate-pool authz (no permission key; `changeRequest.approve` stays ungranted, the CAPA precedent), the cross-stage
+distinct-approver guard. (2) **Signature model = PER-APPROVER** (doc 05 §5.4 "each approval writes a signature_event",
+the S5 document precedent — NOT the CAPA one-signature model): each approve writes a `signature_event(meaning=approval,
+signed_object_type='dcr', signed_object_id=<DCR id>)`, so a MAJOR DCR carries TWO; the `dcr_stage_event(InApproval→
+Approved).signed_event_id` links the sealing (final) signature. (3) `POST /dcrs/{id}/route` does **Assessed→Routed→
+InApproval atomically** (the approval authorizes the *change* — the resulting version + the cross-FK are S-dcr-5; so
+there is no concrete draft to "submit", and §5.5's draft-submission semantics defer to S-dcr-5; the false "CAPA-precedent"
+rationale from the design draft was struck per the design-critic). (4) A DCR **reject (→Rejected) / changes_requested
+(→Open, the R40 loop) is DECISIVE** — one approver ends the approval (force-terminate the instance + skip sibling PENDING
+tasks), since the engine's ANY quorum does not fail on a single negative when other candidates are live; a re-route after
+a fix opens a FRESH instance. Migration `0043` = one `signed_object_type ADD VALUE 'dcr'` + the seed + the
+`changeRequest.route` grant backfill (`workflow_subject_type.DCR` already existed from 0008). NO new permission key / event type.
+
 **S-dcr-2 addendum (owner).** doc 05 §7.3 mandates that obsoletion is **blocked** unless replacement /
 `force_retire`+justification. The two authoritative docs do not say WHERE the block is enforced; the owner
 chose to **defer enforcement to S-dcr-5** (the RETIRE-DCR implement call site) rather than wire it into the

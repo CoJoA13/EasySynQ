@@ -4028,6 +4028,37 @@ paths:
         "403": { $ref: "#/components/responses/ProblemResponse" }
         "404": { $ref: "#/components/responses/ProblemResponse" }
         "409": { $ref: "#/components/responses/ProblemResponse" }
+
+  /dcrs/{dcr_id}/route:
+    post:
+      tags: [dcr]
+      operationId: routeDcr
+      summary: >-
+        Assessed → Routed → InApproval (S-dcr-4). Instantiates the significance-routed `dcr_approval`
+        workflow (ROUTER on change_significance: MAJOR → Process Owner → QMS Owner SEQUENTIAL; MINOR →
+        QMS Owner) and returns the DCR + the opened approval instance. Approvers then decide via
+        `POST /tasks/{id}/decision`. 409 dcr_not_routable (not Assessed), dcr_approval_in_progress, or
+        dcr_no_approvers (empty routed role pool). Needs changeRequest.route.
+      parameters:
+        - { name: dcr_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: The InApproval DCR + the opened approval instance.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: "#/components/schemas/Dcr" }
+                  - type: object
+                    properties:
+                      approval_instance:
+                        type: object
+                        properties:
+                          id: { type: string, format: uuid }
+                          current_state: { type: string }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409": { $ref: "#/components/responses/ProblemResponse" }
   /dcrs/{dcr_id}/impact:
     get:
       tags: [dcr]
