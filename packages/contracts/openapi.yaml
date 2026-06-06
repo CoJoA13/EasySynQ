@@ -3112,9 +3112,14 @@ paths:
       operationId: decideTask
       summary: "The canonical approval/review trigger — writes signature_event + task_outcome + audit in one txn."
       description: >-
-        Permission is derived from the subject + outcome: approve → document.approve (sig-hook,
-        SoD-1/2 enforced → 403 sod_violation with conflicting_duty); changes_requested/reject →
-        document.review. Idempotent via the Idempotency-Key header (replay on match, else 409).
+        Dispatches on the task's workflow subject. DOCUMENT: permission is derived from the
+        outcome — approve → document.approve (sig-hook, SoD-1/2 enforced → 403 sod_violation with
+        conflicting_duty); changes_requested/reject → document.review. CAPA (action-plan approval):
+        authorized by candidate-pool membership (the role-resolved approver pool — no document
+        permission); on the completing approval it writes a signature_event(meaning=approval,
+        signed_object=capa_stage) + the signed ActionPlan stage and flips the CAPA to ActionPlan;
+        409 if the actor already decided an earlier stage of the same approval. Idempotent via the
+        Idempotency-Key header (replay on match, else 409).
       parameters:
         - { name: task_id, in: path, required: true, schema: { type: string, format: uuid } }
         - name: Idempotency-Key
@@ -3421,6 +3426,58 @@ paths:
         "403": { $ref: "#/components/responses/ProblemResponse" }
         "404": { $ref: "#/components/responses/ProblemResponse" }
         "409": { $ref: "#/components/responses/ProblemResponse" }
+  /capas/{capa_id}/root-cause:
+    post:
+      tags: [capa]
+      operationId: capaRootCause
+      summary: >-
+        Containment → RootCause — append the sealed RCA narrative (5-Whys / fishbone). Unsigned (RCA
+        is an informational gate). Needs capa.record_rca. 409 if not in Containment.
+      parameters:
+        - { name: capa_id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/StageBlockCreate" }
+      responses:
+        "200":
+          description: The CAPA (close_state=RootCause).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Capa" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409": { $ref: "#/components/responses/ProblemResponse" }
+  /capas/{capa_id}/action-plan:
+    post:
+      tags: [capa]
+      operationId: capaProposeActionPlan
+      summary: >-
+        Propose the corrective action plan + open the severity-routed approval workflow (Critical =
+        QMS-Owner → Top-Management sequential; Major/Minor = QMS-Owner ANY). close_state stays
+        RootCause until the approval completes (the flip to ActionPlan happens on the approving
+        POST /tasks/{id}/decision). Needs capa.plan_action. 409 if not in RootCause, or
+        capa_approval_in_progress if one is already running.
+      parameters:
+        - { name: capa_id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/StageBlockCreate" }
+      responses:
+        "200":
+          description: >-
+            The CAPA (still close_state=RootCause) + the opened approval_instance (current_state is
+            NEEDS_ATTENTION when no QMS-Owner / Top-Management approver is assigned).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Capa" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409": { $ref: "#/components/responses/ProblemResponse" }
+        "422": { $ref: "#/components/responses/ProblemResponse" }
 
   /complaints:
     post:
@@ -4710,6 +4767,18 @@ components:
           type: object
           additionalProperties: true
           description: The sealed correction narrative (non-empty).
+    StageBlockCreate:
+      type: object
+      additionalProperties: false
+      required: [content_block]
+      properties:
+        content_block:
+          type: object
+          additionalProperties: true
+          description: >-
+            The sealed stage block (non-empty). For root-cause: the RCA narrative (e.g. root_cause,
+            method). For action-plan: the proposed corrective plan (e.g. action_items[] with
+            description / owner / due_date), which is sealed + signed at approval-complete.
     Complaint:
       type: object
       additionalProperties: false

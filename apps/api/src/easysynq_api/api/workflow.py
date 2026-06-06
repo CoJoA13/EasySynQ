@@ -19,7 +19,7 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..auth.dependencies import get_current_user
-from ..db.models._workflow_enums import TaskState, TaskType
+from ..db.models._workflow_enums import TaskState, TaskType, WorkflowSubjectType
 from ..db.models.app_user import AppUser
 from ..db.models.document_type import DocumentType
 from ..db.models.workflow import Task, WorkflowInstance
@@ -27,6 +27,7 @@ from ..db.session import get_session
 from ..domain.authz import ResourceContext
 from ..problems import ProblemException
 from ..services.authz import AuthzAuditSink, enforce, get_authz_audit_sink
+from ..services.capa import decide_capa_action_plan
 from ..services.vault import (
     SignatureEventSink,
     VaultAuditSink,
@@ -180,6 +181,22 @@ async def decide_endpoint(
     task = await wf_repo.get_task(session, task_id)
     if task is None or task.org_id != caller.org_id:
         raise ProblemException(status=404, code="not_found", title="Task not found")
+    # Dispatch on the subject type: the S5 DOCUMENT path is byte-identical; a CAPA action-plan
+    # approval routes to the CAPA service, which OWNS its authorization (decide_capa_action_plan ->
+    # _assert_capa_approver: task-ownership + live-role both 404-collapse, cross-stage 409;
+    # no document permission key gates a CAPA approval; the role-resolved pool IS the authority,
+    # self-scoped tasks doc 07) and writes the signature + signed ActionPlan stage on completion.
+    instance = await wf_repo.get_instance(session, task.instance_id)
+    if instance is not None and instance.subject_type is WorkflowSubjectType.CAPA:
+        return await decide_capa_action_plan(
+            session,
+            task,
+            caller,
+            outcome=body.outcome,
+            comment=body.comment,
+            idempotency_key=idempotency_key,
+            sig_sink=sig_sink,
+        )
     derived = _OUTCOME_PERMISSION.get(body.outcome)
     if derived is None:
         raise ProblemException(

@@ -21,7 +21,7 @@ and progressively disclosed — never overwhelming.
   e.g. the ISO clause catalog) · `tasks/` (Celery worker/beat) · `cli/` (operator commands). Tests in
   `apps/api/tests/{unit,integration}` (the latter via testcontainers).
 - `apps/web/` — React/TS + Mantine SPA (currently the setup wizard + admin stubs; the rest of the UI is deferred).
-- `migrations/` — Alembic (single tree; head **`0027`**; `env.py` excludes migration-managed expression/partial indexes).
+- `migrations/` — Alembic (single tree; head **`0038`**; `env.py` excludes migration-managed expression/partial indexes).
 - `packages/contracts/openapi.yaml` — the living API contract (redocly-lint only; **not** codegen — server/web aren't generated from it).
 - `infra/compose/` — Docker Compose (S/M/L profiles) + Caddy; `just` recipes wrap it.
 - `docs/` — the authoritative spec (`00`–`18` + `decisions-register.md`); `mockup/` — the owner-approved HTML UI mockup.
@@ -53,63 +53,31 @@ the existing `workflow_*` tables, mig `0035`) + **S-capa-1** (the CAPA core + in
 `ncr` + `complaint` + the idempotent complaint→CAPA spawn + Raised/Containment + the slice-0 grant-backfill +
 `allow_capa_self_verify`, mig `0036`) + **S-aud-2** (audit findings NC/OBS/OFI + the atomic NC→CAPA auto-link + the REAL
 block-until-corrected audit-close gate + the general finding-retype path + `evidence_for_link` FINDING/CAPA_STAGE,
-mig `0037`) shipped. The family's locked model + workflow + SoD posture is **R39** (+declarative-routing · severity-aware
-SoD-4 · block-until-corrected audit close · `audit_program` own-table). **Next: S-capa-2** (RCA + ActionPlan + the
-engine-routed severity approval + the real `signature_event` row write for `capa_stage.signed_event_id`). **Migration head
-is now `0037`.**
+mig `0037`) + **S-capa-2** (RootCause + ActionPlan stages + the engine-routed severity-conditional approval + the REAL
+`signature_event` row write for `capa_stage.signed_event_id` + the new **Top Management** role, mig `0038`) shipped. The
+family's locked model + workflow + SoD posture is **R39** (+declarative-routing · severity-aware SoD-4 · block-until-corrected
+audit close · `audit_program` own-table). **Next: S-capa-3** (Implement + Verify with severity-aware SoD-4 reading
+`allow_capa_self_verify` + the M4 closure gate — the path that drives a CAPA to Closed, satisfying the S-aud-2 close gate).
+**Migration head is now `0038`.**
 
-**v1 RECORDS & evidence family (UJ-7 + records) — COMPLETE** ✅ (one line each; per-slice non-obvious
-decisions live in the squash-merge commits + the `easysynq-project.md` memory; operating detail in the
-dev-workflow quick-reference below):
+**v1 RECORDS & evidence family (UJ-7 + records) — COMPLETE** ✅ (migs `0023`–`0028`; per-slice
+non-obvious decisions live in the squash-merge commits + the `easysynq-project.md` memory; operating
+detail in the dev-workflow quick-reference below): **S-rec-1** capture + evidence-linking + correction
+(atomic WORM-sealed immutable capture, polymorphic `evidence_for_link`, retention-policy-as-data) ·
+**S-rec-2** retention/disposition lifecycle (+ the R27 dual-control WORM-destroy hatch) · **S-pack-1/2**
+Evidence Packs build/seal + external delivery (Ed25519 share-token, public latch-exempt guest surface;
+**completes UJ-7**) · **S-rec-3** Mode-B structured-form capture (`FRM` doc + `form_template`, schema
+pinned at check-in) · **S-rec-4** `/retention-policies` CRUD + creator≠disposer SoD-6 (**R38** additive
+catalog).
 
-- **S-rec-1** Records capture + evidence-linking + correction (PR #43, `0023`) — atomic WORM-sealed
-  immutable capture (`documented_information[kind=RECORD]` + `record` subtype + domain-separated
-  `content_hash`), polymorphic `evidence_for_link`, correction-via-new-record, retention-policy-as-data
-  (5-tier resolver + per-org *System Default* + snapshot-at-capture ratchet).
-- **S-rec-2** Records retention/disposition lifecycle (PR #46, `0024`) — the disposition state machine +
-  daily Beat sweep + legal-hold + the R27 dual-control WORM-destroy-under-legal-order hatch (fail-closed,
-  purge-FIRST, `RECORD_ERASURE_REFUSED` 409); `disposition_event` tombstone + `worm_destroy_request`.
-- **S-pack-1** Evidence Packs build/seal (PR #48, `0025`) — an immutable scope-limited (CLAUSE/PROCESS +
-  date) bundle sealed as a RETAIN_PERMANENT EVIDENCE Record; R28-honest classification (`pack_item` IS the
-  exclusion report) + gap report; an idempotent `.delay` worker build + a stalled-build reaper.
-- **S-pack-2** Evidence Packs external delivery + PDF portfolio — **completes UJ-7** (PR #50, `0026`) — an
-  Ed25519 signed share-token outside the PEP + a DB-backed revocable `pack_share_link`; a public no-auth
-  latch-exempt guest surface (HTML landing + a streamed `zip|pdf` download re-checked per access,
-  `PACK_DOWNLOADED` audited); the PDF portfolio is a best-effort seal Stage 2.
-- **S-rec-3** Mode-B structured-form capture (PR #52, `0027`) — a Form/Template is an `FRM` DOCUMENT + a
-  `form_template` shared-PK subtype holding a dependency-free field-list DSL (no regex → no ReDoS), frozen
-  into `document_version.metadata_snapshot` at check-in; Mode-B capture validates `form_field_values`
-  against the pinned schema.
-- **S-rec-4** Records-family close-out: `/retention-policies` CRUD + creator≠disposer SoD-6 (PR #54, `0028`,
-  **R38**) — opens the catalog ADDITIVELY (R38 refines R5: closed = no rename/removal; additive growth is
-  allowed) with `retention.read`/`.manage`; CRUD + soft-archive (extend-forward-only PATCH); SoD-6 is a
-  service-layer gate (`advance_disposition`, NOT the PDP), relaxed only by `allow_self_disposition`.
-
-**v1 INGESTION engine family (doc 09, UJ-2) — COMPLETE** ✅:
-
-- **S-ing-1** run + scan/inventory foundation (`0029`) — the transient `import_*` staging layer
-  (`import_run` state machine + `import_file` inventory, UNIQUE(run,rel_path)); an idempotent fail-closed
-  scan worker walks a `:ro` source root (NG3 confinement), content-addresses included bytes into
-  `import-staging`, under a Redis source-root lock + a stalled-run reaper. Writes nothing to the vault.
-- **S-ing-2** extract + classify (PR #57, `0030`) — auto-chains scan→extract→classify; an Apache Tika
-  `-full` sidecar (extract + OCR over HTTP) + a pure `RuleHeuristicClassifier` over a versioned YAML
-  rule-pack (capped weighted sum; bands High/Med/Low; kind scored-only, UNKNOWN below a floor — confirmed
-  at S-ing-4, R10). The source-root lock is held continuously across the stages.
-- **S-ing-3** dedup + version-families + proposal (PR #58, `0031`) — auto-chains to Proposed; in-process
-  MinHash behind a `DedupDetector` seam (the §14 path; the OpenSearch container is NOT added — R34), the
-  §7.1 exact→near→family cascade with a provably-total canonical pick, and the §8 per-keep-item proposal
-  (identifier preserve-verbatim-else-`{type}-<new>`; never consumes `NumberingCounter`).
-- **S-ing-4** human-in-the-loop review (PR #60, `0032`) — append-only `import_decision` rows folded at read
-  (`review.fold_file_decisions`, the single commit-gate source: `commit_ready ⇔ included AND
-  kind∈{DOCUMENT,RECORD}`; the R10 kind-confirm rides `after.kind`, NEVER on the engine classification) +
-  live-mutating merge/split + the §9.3 pre-commit checklist. The lock-free `Reviewing` rest-state.
-- **S-ing-5** the COMMIT — writes the confirmed set into the vault (PR #62, `0033`) — `commit_ready`
-  keep-items → Effective **Rev A** documents + immutable Records, per-item txn + idempotent (the
-  `import_commit_result` ledger CLAIM = single-flight) + resumable (PartiallyCommitted → re-POST resumes);
-  the import-baseline cutover (Effective-directly, no SERIALIZABLE cutover, a single
-  `signature_event(meaning=import_baseline)`, R2); `import_provenance` fold (doc 14 §5.1); the §12.1 Import
-  Report (a RETAIN_PERMANENT EVIDENCE Record + the mirror `_ImportReport/` export); per-doc audit
-  (`scope_ref=identifier`, AC#6); `reap_stalled_commits`.
+**v1 INGESTION engine family (doc 09, UJ-2) — COMPLETE** ✅ (migs `0029`–`0033`): **S-ing-1** run +
+scan/inventory (transient `import_*` staging, a `:ro` source root, writes nothing to the vault) ·
+**S-ing-2** extract + classify (Apache Tika `-full` sidecar + a pure `RuleHeuristicClassifier` over a
+versioned YAML rule-pack) · **S-ing-3** dedup + version-families + proposal (in-process MinHash behind a
+`DedupDetector` seam; **OpenSearch deferred, R34**) · **S-ing-4** the human-in-the-loop review
+(append-only `import_decision` folded at read; the lock-free `Reviewing` rest-state) · **S-ing-5** the
+COMMIT — writes the vault (Effective **Rev A** docs + Records + `import_baseline` + provenance + the
+Import Report; per-item `import_commit_result` ledger-claim single-flight + resume).
 
 **v1 AUDITS/FINDINGS/CAPA family (doc 02 Cl 9.2/10.2, doc 10 §5-6, UJ-5/UJ-6) — STARTED** (owner decisions R39:
 +declarative-routing posture · severity-aware SoD-4 · block-until-corrected audit close · `audit_program` own-table):
@@ -161,7 +129,22 @@ dev-workflow quick-reference below):
   predicate under the audit FOR UPDATE. Findings **open-until-Closed** (owner fork B). `evidence_for_link` FINDING/CAPA_STAGE
   validation **enabled** (org-check; the API `Literal` widened). 4 endpoints on `api/audits.py` (`finding.create` via the
   `_audit_scope`/`_finding_scope` resolvers; `finding.read` SYSTEM). NO new permission keys, NO new Celery task.
-  **Migration head is now `0037`.**
+
+- **S-capa-2** RootCause + ActionPlan + the severity-routed engine approval + the REAL signature (`0038`, **seed-only**) —
+  `POST /capas/{id}/root-cause` (gate `capa.record_rca`, Containment→RootCause, unsigned) + `POST /capas/{id}/action-plan`
+  (gate `capa.plan_action`) which **instantiates** the seeded `capa_action_plan_approval` `workflow_definition` (a ROUTER on
+  the CAPA `severity`: **Critical** → `crit_qm`[QMS-Owner,ANY]→`crit_topmgmt`[Top-Management,ANY] SEQUENTIAL; **Major/Minor** →
+  `qm_approval`[QMS-Owner,ANY]; uniform ≤5-day SLA). `close_state` **stays RootCause** during approval; the proposed plan
+  rides `workflow_instance.context` (a draft). The HTTP wiring lands as a **`POST /tasks/{id}/decision` subject-type dispatch**
+  (DOCUMENT byte-identical; CAPA → new `decide_capa_action_plan`): on the COMPLETING approval it writes ONE
+  `signature_event(meaning=approval, signed_object_type=capa_stage)` (signer = completing approver) + appends the SIGNED
+  ActionPlan `capa_stage` (`signed_event_id` set **at INSERT** via a pre-gen stage UUID — two mutually-referencing INSERTs, no
+  UPDATE on the append-only table) + flips `close_state`→ActionPlan, all in ONE txn (`engine.decide(_commit=False)` hands the
+  open txn to the wrapper). **Authz** = candidate-pool membership (no key — self-scoped tasks) + a decision-time **live-role
+  re-check** + a **cross-STAGE distinct-approver** guard (a dual-role user can't clear both Critical tiers). NEW additive
+  reserved **Top Management** role (`capa.read` only; the candidate-pool 2nd tier; single-op must assign QMS-Owner/Top-Mgmt or
+  the approval fails closed `NEEDS_ATTENTION`). NO new permission keys, NO enum, NO Celery task; SoD-4 + `allow_capa_self_verify`
+  stay **S-capa-3**. **Migration head is now `0038`.**
 
 - **Specification** in `docs/` (00–17 + `decisions-register.md`) — complete, adversarially audited, reconciled
   (Register R1–R37 back-propagated). The Register is authoritative.
@@ -341,6 +324,15 @@ create boundary.
     `POST /ncrs {source,description,severity,process_id?}` (gate `ncr.create`) → `PATCH /ncrs/{id}/disposition
     {disposition,notes?}` (gate `ncr.record_correction`, one-shot 409). All ride **SYSTEM overrides** until
     owner-assignment (the family precedent); `allow_capa_self_verify` via `PATCH /admin/config` (S-capa-3 seam).
+  - **CAPA RCA + Action-Plan approval (S-capa-2):** `POST /capas/{id}/root-cause {content_block}` (gate `capa.record_rca`,
+    Containment→RootCause, unsigned) → `POST /capas/{id}/action-plan {content_block:{action_items:[…]}}` (gate
+    `capa.plan_action`) which opens the severity-routed approval (returns `approval_instance`; `close_state` STAYS RootCause).
+    ⚠ Approvers must be **assigned the seeded `QMS Owner` / `Top Management` ROLE** (candidate pools resolve by role
+    membership, NOT SYSTEM overrides; an empty pool → `NEEDS_ATTENTION`). The approver decides via the existing
+    `POST /tasks/{id}/decision {outcome:"approve"}` (dispatched: CAPA → candidate-pool authz + live-role + cross-stage SoD,
+    NO permission key); on the **completing** approval it writes a `signature_event(meaning=approval)` + the signed ActionPlan
+    `capa_stage` (`signed_event_id` set) + flips `close_state`→ActionPlan. Critical needs TWO distinct approvers (QMS-Owner
+    then Top-Management); Major/Minor one QMS-Owner. Re-propose is 409 `capa_approval_in_progress` while one is active.
   - **Audit findings (S-aud-2):** log via `POST /audits/{id}/findings {finding_type,severity?,clause_ref?,process_ref?,
     summary?}` (gate `finding.create`; an **NC auto-creates its CAPA** → `auto_capa_id`; NC needs a severity, 422 else;
     409 once the audit is Closed); read `GET /audits/{id}/findings` + `GET /findings/{id}` (gate `finding.read`); retype

@@ -92,6 +92,55 @@ async def lock_instance_for_update(
     ).scalar_one_or_none()
 
 
+async def find_nonterminal_instance(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    subject_type: WorkflowSubjectType,
+    subject_id: uuid.UUID,
+    terminal_states: tuple[str, ...],
+) -> WorkflowInstance | None:
+    """The active (non-terminal) workflow instance for a subject, if any — the single-active-flow
+    guard (S-capa-2 propose_action_plan: at most one open CAPA approval per CAPA). Filters
+    ``subject_type`` explicitly (the polymorphic ``subject_id`` has no FK) and treats anything NOT
+    in ``terminal_states`` (COMPLETED / REJECTED / NEEDS_ATTENTION) as still-running."""
+    return (
+        await session.execute(
+            select(WorkflowInstance)
+            .where(
+                WorkflowInstance.org_id == org_id,
+                WorkflowInstance.subject_type == subject_type,
+                WorkflowInstance.subject_id == subject_id,
+                WorkflowInstance.current_state.not_in(terminal_states),
+            )
+            .order_by(WorkflowInstance.started_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+
+async def actor_decided_in_instance(
+    session: AsyncSession,
+    instance_id: uuid.UUID,
+    actor_id: uuid.UUID,
+    *,
+    exclude_task_id: uuid.UUID | None = None,
+) -> bool:
+    """True iff ``actor_id`` already recorded an outcome on a task of this instance OTHER than
+    ``exclude_task_id`` — the cross-STAGE distinct-approver guard (S-capa-2). The engine's
+    distinct-approver guard is stage-scoped; this backstops the sequential Critical flow (QMS-Owner
+    stage → Top-Management stage) so a single user holding BOTH roles cannot clear both tiers alone.
+    ``exclude_task_id`` is the task being decided — an idempotent REPLAY of one's OWN task must NOT
+    count as deciding a prior stage (else the replay 409s before the engine's replay logic runs)."""
+    stmt = (
+        select(TaskOutcome.id)
+        .join(Task, Task.id == TaskOutcome.task_id)
+        .where(Task.instance_id == instance_id, TaskOutcome.decided_by == actor_id)
+    )
+    if exclude_task_id is not None:
+        stmt = stmt.where(Task.id != exclude_task_id)
+    return (await session.execute(stmt.limit(1))).scalar_one_or_none() is not None
+
+
 async def all_stages(session: AsyncSession, definition_id: uuid.UUID) -> dict[str, WorkflowStage]:
     """Every stage of a definition, keyed by ``stage.key`` (the engine's stage graph)."""
     rows = (
