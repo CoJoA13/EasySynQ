@@ -8,6 +8,20 @@
 
 body {
   margin: 0;
-  background: var(--es-bg-surface);
-  color: var(--es-fg);
+  background: var(--es-bg);
+  color: var(--es-text);
+}
+
+/* Visible, non-obscured focus ring (WCAG 2.2 — DP-7). */
+:focus-visible {
+  outline: none;
+  box-shadow: var(--es-focus-ring);
+  border-radius: var(--es-radius-sm);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
 }

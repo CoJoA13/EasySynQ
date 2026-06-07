@@ -1,14 +1,185 @@
-/* Design tokens — the single source consumed by BOTH Mantine and Tailwind (doc 11 §3). */
+/* Design tokens — the single source consumed by BOTH Mantine and Tailwind.
+   Ported verbatim from mockup/styles.css (doc 11 §3). Light = :root; dark re-keyed to Mantine. */
 :root {
-  --es-accent: #0d9488; /* teal-600 */
-  --es-bg-surface: #ffffff;
-  --es-fg: #0f172a;
-  --es-state-effective: #16a34a; /* green */
-  --es-state-draft: #64748b; /* slate */
-  --es-radius: 8px;
+  /* --- Surface / background layers (lightest=app bg, darker as it rises) --- */
+  --es-bg:            #f7f8fa;   /* app background (behind everything)        */
+  --es-surface:       #ffffff;   /* primary surface — cards, panels, topbar   */
+  --es-surface-2:     #f2f3f6;   /* recessed surface — table headers, wells   */
+  --es-surface-3:     #eaecf1;   /* deeper recess — hover wells, code         */
+  --es-sidebar:       #fbfbfc;   /* sidebar background                        */
+  --es-overlay:       rgba(16, 18, 27, 0.42); /* modal / drawer scrim         */
+
+  /* --- Text --- */
+  --es-text:          #1a1d27;   /* primary text                              */
+  --es-text-2:        #565b6b;   /* secondary text                            */
+  --es-text-muted:    #8a909e;   /* muted / captions / placeholders           */
+  --es-text-inverse:  #ffffff;   /* text on accent / dark fills               */
+
+  /* --- Border --- */
+  --es-border:        #e4e6ec;   /* default hairline border                   */
+  --es-border-2:      #d6d9e1;   /* stronger border (inputs, dividers)        */
+  --es-border-strong: #c2c6d2;   /* emphasis border / focus track             */
+
+  /* --- Accent (one clear accent — calm indigo/blue) --- */
+  --es-accent:        #4f5bd5;   /* primary accent                            */
+  --es-accent-hover:  #424dc0;   /* accent hover                              */
+  --es-accent-active: #3a44ab;   /* accent pressed                            */
+  --es-accent-soft:   #ecedfb;   /* accent tint (soft fills, active nav)      */
+  --es-accent-soft-2: #dfe1f7;   /* accent tint stronger                      */
+  --es-accent-text:   #3a44ab;   /* accent text on light                      */
+  --es-on-accent:     #ffffff;   /* text/icon on accent fill                  */
+
+  /* --- Focus ring --- */
+  --es-focus:         #6f7be8;   /* focus ring color                          */
+  --es-focus-ring:    0 0 0 3px rgba(79, 91, 213, 0.32); /* focus shadow      */
+
+  /* --- Functional / feedback hues --- */
+  --es-success:       #1f9d5b;
+  --es-success-soft:  #e4f6ec;
+  --es-success-text:  #157346;
+  --es-warning:       #c98a14;
+  --es-warning-soft:  #fcf2dd;
+  --es-warning-text:  #8f6107;
+  --es-danger:        #d64545;
+  --es-danger-soft:   #fbe7e7;
+  --es-danger-text:   #a32d2d;
+  --es-danger-hover:  #c23a3a;
+  --es-info:          #2f86c9;
+  --es-info-soft:     #e3f0fa;
+  --es-info-text:     #1f6299;
+
+  /* --- Diff / redline --- */
+  --es-add-bg:        #e4f6ec;
+  --es-add-text:      #157346;
+  --es-add-marker:    #1f9d5b;
+  --es-del-bg:        #fbe7e7;
+  --es-del-text:      #a32d2d;
+  --es-del-marker:    #d64545;
+
+  /* --- Spacing scale (8px base; includes 2/4 micro steps) --- */
+  --es-space-0:  0;
+  --es-space-1:  2px;
+  --es-space-2:  4px;
+  --es-space-3:  8px;
+  --es-space-4:  12px;
+  --es-space-5:  16px;
+  --es-space-6:  24px;
+  --es-space-7:  32px;
+  --es-space-8:  48px;
+  --es-space-9:  64px;
+  --es-space-10: 96px;
+
+  /* --- Radius scale --- */
+  --es-radius-xs:   4px;
+  --es-radius-sm:   6px;
+  --es-radius-md:   8px;
+  --es-radius-lg:   12px;
+  --es-radius-xl:   16px;
+  --es-radius-2xl:  24px;
+  --es-radius-pill: 999px;
+  --es-radius-circle: 50%;
+
+  /* --- Elevation / shadow scale --- */
+  --es-shadow-xs:  0 1px 2px rgba(16, 18, 27, 0.04);
+  --es-shadow-sm:  0 1px 2px rgba(16, 18, 27, 0.06), 0 1px 1px rgba(16, 18, 27, 0.04);
+  --es-shadow-md:  0 4px 12px rgba(16, 18, 27, 0.08), 0 1px 3px rgba(16, 18, 27, 0.05);
+  --es-shadow-lg:  0 12px 28px rgba(16, 18, 27, 0.12), 0 2px 6px rgba(16, 18, 27, 0.06);
+  --es-shadow-xl:  0 24px 56px rgba(16, 18, 27, 0.18), 0 4px 12px rgba(16, 18, 27, 0.08);
+
+  /* --- Typography --- */
+  --es-font-sans: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --es-font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+
+  --es-fs-display: 32px;  --es-lh-display: 40px;  --es-fw-display: 700;
+  --es-fs-h1:      24px;  --es-lh-h1:      32px;  --es-fw-h1:      650;
+  --es-fs-h2:      19px;  --es-lh-h2:      28px;  --es-fw-h2:      640;
+  --es-fs-h3:      16px;  --es-lh-h3:      24px;  --es-fw-h3:      620;
+  --es-fs-body:    14px;  --es-lh-body:    22px;  --es-fw-body:    400;
+  --es-fs-small:   13px;  --es-lh-small:   20px;  --es-fw-small:   400;
+  --es-fs-caption: 11.5px;--es-lh-caption: 16px;  --es-fw-caption: 560;
+
+  --es-fw-regular:  400;
+  --es-fw-medium:   500;
+  --es-fw-semibold: 600;
+  --es-fw-bold:     700;
+
+  /* --- PDCA accent hues --- */
+  --es-plan:        #4f5bd5;  --es-plan-soft:  #ecedfb;  --es-plan-text:  #3a44ab;
+  --es-do:          #2f86c9;  --es-do-soft:    #e3f0fa;  --es-do-text:    #1f6299;
+  --es-check:       #c98a14;  --es-check-soft: #fcf2dd;  --es-check-text: #8f6107;
+  --es-act:         #1f9d5b;  --es-act-soft:   #e4f6ec;  --es-act-text:   #157346;
+
+  /* --- Layout dimensions --- */
+  --es-sidebar-w:   256px;
+  --es-topbar-h:    60px;
+  --es-drawer-w:    420px;
+  --es-content-max: 1180px;
+
+  /* --- Motion --- */
+  --es-ease:        cubic-bezier(0.4, 0, 0.2, 1);
+  --es-ease-out:    cubic-bezier(0.16, 1, 0.3, 1);
+  --es-dur-fast:    120ms;
+  --es-dur:         180ms;
+  --es-dur-slow:    260ms;
 }
 
 :root[data-mantine-color-scheme="dark"] {
-  --es-bg-surface: #0f172a;
-  --es-fg: #e2e8f0;
+  --es-bg:            #0c0d12;
+  --es-surface:       #16181f;
+  --es-surface-2:     #1d1f28;
+  --es-surface-3:     #262934;
+  --es-sidebar:       #101117;
+  --es-overlay:       rgba(0, 0, 0, 0.58);
+
+  --es-text:          #ecedf1;
+  --es-text-2:        #a4a9b8;
+  --es-text-muted:    #6e7382;
+  --es-text-inverse:  #16181f;
+
+  --es-border:        #262934;
+  --es-border-2:      #303441;
+  --es-border-strong: #3c414f;
+
+  --es-accent:        #7682f0;
+  --es-accent-hover:  #8a94f3;
+  --es-accent-active: #6571e6;
+  --es-accent-soft:   #1f2238;
+  --es-accent-soft-2: #292d49;
+  --es-accent-text:   #aab2f7;
+  --es-on-accent:     #0c0d12;
+
+  --es-focus:         #8a94f3;
+  --es-focus-ring:    0 0 0 3px rgba(118, 130, 240, 0.40);
+
+  --es-success:       #3cc77e;
+  --es-success-soft:  #14271d;
+  --es-success-text:  #6fe0a4;
+  --es-warning:       #e0a93a;
+  --es-warning-soft:  #2a2113;
+  --es-warning-text:  #f0c878;
+  --es-danger:        #ec6262;
+  --es-danger-soft:   #2c1717;
+  --es-danger-text:   #f59a9a;
+  --es-danger-hover:  #ef7575;
+  --es-info:          #59a6e0;
+  --es-info-soft:     #112433;
+  --es-info-text:     #8cc6f0;
+
+  --es-add-bg:        #14271d;
+  --es-add-text:      #6fe0a4;
+  --es-add-marker:    #3cc77e;
+  --es-del-bg:        #2c1717;
+  --es-del-text:      #f59a9a;
+  --es-del-marker:    #ec6262;
+
+  --es-shadow-xs:  0 1px 2px rgba(0, 0, 0, 0.30);
+  --es-shadow-sm:  0 1px 2px rgba(0, 0, 0, 0.40), 0 1px 1px rgba(0, 0, 0, 0.30);
+  --es-shadow-md:  0 4px 12px rgba(0, 0, 0, 0.45), 0 1px 3px rgba(0, 0, 0, 0.35);
+  --es-shadow-lg:  0 12px 28px rgba(0, 0, 0, 0.55), 0 2px 6px rgba(0, 0, 0, 0.40);
+  --es-shadow-xl:  0 24px 56px rgba(0, 0, 0, 0.65), 0 4px 12px rgba(0, 0, 0, 0.45);
+
+  --es-plan:        #7682f0;  --es-plan-soft:  #1f2238;  --es-plan-text:  #aab2f7;
+  --es-do:          #59a6e0;  --es-do-soft:    #112433;  --es-do-text:    #8cc6f0;
+  --es-check:       #e0a93a;  --es-check-soft: #2a2113;  --es-check-text: #f0c878;
+  --es-act:         #3cc77e;  --es-act-soft:   #14271d;  --es-act-text:   #6fe0a4;
 }

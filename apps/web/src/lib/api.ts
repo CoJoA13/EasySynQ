@@ -1,6 +1,9 @@
 // Tiny fetch helper: attaches the bearer token and surfaces the RFC 9457 problem `code` on errors
 // (so callers can branch on e.g. "bootstrap_invalid"). Used by the S8a setup wizard.
 
+import { useMemo } from "react";
+import { useAuth } from "./auth";
+
 export class ApiError extends Error {
   constructor(
     readonly status: number,
@@ -55,3 +58,16 @@ export const apiSend = <T>(
   token: string | null,
   body?: unknown,
 ): Promise<T> => request<T>(method, path, token, body);
+
+// Token-aware client: pulls the bearer token from AuthContext so callers/hooks never thread it.
+export function useApi() {
+  const { token } = useAuth();
+  return useMemo(
+    () => ({
+      get: <T>(path: string): Promise<T> => apiGet<T>(path, token),
+      send: <T>(method: "POST" | "PATCH" | "DELETE", path: string, body?: unknown): Promise<T> =>
+        apiSend<T>(method, path, token, body),
+    }),
+    [token],
+  );
+}
