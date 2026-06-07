@@ -135,8 +135,7 @@ function Shell({
 }
 
 export function App() {
-  const { ready, user, login, logout } = useAuth();
-  const token = user?.access_token ?? null;
+  const { ready, token, login, logout } = useAuth();
 
   // The public setup-state probe decides wizard-vs-shell (S8a). The latch (423) protects the API
   // regardless; this is just the SPA's routing signal. useAuth() stays at the root so the OIDC
