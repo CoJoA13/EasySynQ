@@ -23,6 +23,8 @@ from .api.capa import router as capa_router
 from .api.clauses import router as clauses_router
 from .api.config import router as config_router
 from .api.dcr import router as dcr_router
+from .api.directory import router as directory_router
+from .api.document_types import router as document_types_router
 from .api.documents import router as documents_router
 from .api.health import router as health_router
 from .api.ingestion import router as ingestion_router
@@ -140,6 +142,8 @@ def create_app() -> FastAPI:
     app.include_router(users_router)  # S8d: user-lifecycle admin (roster / invite / enable-disable)
     app.include_router(config_router)  # S-rec-3: PATCH /admin/config (pre-release-capture toggle)
     app.include_router(documents_router)
+    app.include_router(document_types_router)  # S-web-2: read-only document-type catalog
+    app.include_router(directory_router)  # S-web-2: minimal user-name directory (display_name only)
     app.include_router(clauses_router)  # S9: read-only ISO clause spine (GET /clauses)
     app.include_router(processes_router)  # S9c: process IA (graph + authoring + /processes/map)
     app.include_router(records_router)  # S-rec-1: records capture + evidence-linking + correction

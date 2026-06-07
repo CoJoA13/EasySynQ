@@ -786,6 +786,40 @@ paths:
         "403": { $ref: "#/components/responses/ProblemResponse" }
         "404": { $ref: "#/components/responses/ProblemResponse" }
 
+  /document-types:
+    get:
+      tags: [documents]
+      operationId: listDocumentTypes
+      summary: The org's document-type catalog (read-only reference data; slice S-web-2).
+      description: >-
+        Resolves document_type_id (a bare UUID on document rows) to a friendly code/name for the
+        library Type column / facet. Authentication-only (any org member), like GET /documents —
+        the type catalog is innocuous org reference data, not a per-resource document.read object.
+      responses:
+        "200":
+          description: The document-type catalog, ordered by name.
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/DocumentType" } }
+        "401": { $ref: "#/components/responses/ProblemResponse" }
+
+  /directory/users:
+    get:
+      tags: [users]
+      operationId: listDirectoryUsers
+      summary: A minimal user-name directory — display name only (slice S-web-2).
+      description: >-
+        Resolves owner_user_id (a bare UUID on document rows) to a display name for the library Owner
+        column / facet. Returns ONLY {id, display_name} for ACTIVE non-guest members — never the PII
+        (email/keycloak_subject/status/roles) the admin GET /users exposes. Authentication-only.
+      responses:
+        "200":
+          description: ACTIVE non-guest members as {id, display_name}, ordered by display name.
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/DirectoryUser" } }
+        "401": { $ref: "#/components/responses/ProblemResponse" }
+
   /documents:
     get:
       tags: [documents]
@@ -795,9 +829,13 @@ paths:
         Row-filtered by document.read (filter, not 403). Each row carries clause_refs (the mapped
         clause numbers, slice S10). The bracketed filter[field][op] grammar (doc 15 §3.2) narrows
         the candidate set in SQL before the row-filter; an unrecognised field/op → 400 unknown_filter,
-        a bad enum/uuid value → 422. limit remains a pre-authz cap (cursor pagination is deferred).
+        a bad enum/uuid/timestamp value → 422. Pagination (slice S-web-2) returns a {data, page}
+        envelope: limit + offset slice the AUTHZ-FILTERED set (applied after the per-row scope filter,
+        not as a pre-authz SQL OFFSET), so page boundaries are correct for scoped users. page.has_more
+        is derived (no COUNT(*)); it is accurate up to a bounded candidate scan cap.
       parameters:
         - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
+        - { name: offset, in: query, required: false, schema: { type: integer, minimum: 0, default: 0 } }
         - name: "filter[clause_refs][has]"
           in: query
           required: false
@@ -815,12 +853,24 @@ paths:
           in: query
           required: false
           schema: { type: string, enum: [Public, Internal, Confidential, Restricted] }
+        - name: "filter[effective_from][gte]"
+          in: query
+          required: false
+          schema: { type: string, format: date-time }
+          description: >-
+            Documents whose CURRENT effective version's effective_from is ≥ this ISO timestamp
+            (the library "Effective date" facet). Docs with no effective version are excluded.
+        - name: "filter[effective_from][lte]"
+          in: query
+          required: false
+          schema: { type: string, format: date-time }
+          description: As effective_from][gte] but an upper bound (≤).
       responses:
         "200":
-          description: Documents (each with clause_refs).
+          description: A page of documents (each row with clause_refs) plus pagination metadata.
           content:
             application/json:
-              schema: { type: array, items: { $ref: "#/components/schemas/Document" } }
+              schema: { $ref: "#/components/schemas/DocumentPage" }
         "400":
           description: Unknown filter field or operator (code=unknown_filter).
           content:
@@ -4584,6 +4634,13 @@ components:
           type: [string, "null"]
           format: uuid
           description: The single governing Effective version (set at the release cutover), or null.
+        effective_from:
+          type: [string, "null"]
+          format: date-time
+          description: >-
+            The governing effective version's effective_from (slice S-web-2; the library Effective
+            column + artifact-header date). Present on list/detail reads; null when no effective
+            version (or on create/patch responses).
         created_at: { type: [string, "null"], format: date-time }
         clause_refs:
           type: array
@@ -4593,6 +4650,48 @@ components:
             (slice S10). Present on list (GET /documents) and single-resource reads; omitted on
             create/patch responses.
           example: ["8.4"]
+
+    PageMeta:
+      type: object
+      additionalProperties: false
+      required: [limit, offset, returned, has_more]
+      description: Pagination metadata for a {data, page} list envelope (slice S-web-2). No exact total.
+      properties:
+        limit: { type: integer, description: The page size actually applied (clamped 1..100). }
+        offset: { type: integer, description: The zero-based offset into the authz-filtered set. }
+        returned: { type: integer, description: Rows in this page (≤ limit). }
+        has_more: { type: boolean, description: Whether more rows follow (derived; no COUNT). }
+
+    DocumentPage:
+      type: object
+      additionalProperties: false
+      required: [data, page]
+      properties:
+        data: { type: array, items: { $ref: "#/components/schemas/Document" } }
+        page: { $ref: "#/components/schemas/PageMeta" }
+
+    DocumentType:
+      type: object
+      additionalProperties: false
+      required: [id, code, name, document_level, is_singleton]
+      description: A document-type catalog entry (read-only reference data; slice S-web-2).
+      properties:
+        id: { type: string, format: uuid }
+        code: { type: string, example: SOP, description: "The {TYPE} identifier token." }
+        name: { type: string, example: Standard Operating Procedure }
+        document_level: { type: string, enum: [L1_POLICY, L2_PROCEDURE, L3_WORK_INSTRUCTION, L4_FORM] }
+        is_singleton: { type: boolean }
+
+    DirectoryUser:
+      type: object
+      additionalProperties: false
+      required: [id, display_name]
+      description: >-
+        A minimal user-name directory entry (slice S-web-2) — display name only, no PII. ACTIVE
+        non-guest members only.
+      properties:
+        id: { type: string, format: uuid }
+        display_name: { type: [string, "null"] }
 
     DocumentCreate:
       type: object

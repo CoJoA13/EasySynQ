@@ -26,11 +26,11 @@ export function LeftRail() {
               {phase}
             </Text>
             {top.map((c) => (
-              // Clause-filtered library / clause pages are a later slice — link to the Library for now.
+              // S-web-2: a clause link filters the Library by that exact clause number.
               <NavLink
                 key={c.id}
                 component={Link}
-                to="/library"
+                to={`/library?clause=${encodeURIComponent(c.number)}`}
                 label={`${c.number} ${c.title}`}
               />
             ))}
