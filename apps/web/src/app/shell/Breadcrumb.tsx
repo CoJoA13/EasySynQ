@@ -4,6 +4,7 @@ import { Link, useLocation } from "react-router-dom";
 const LABELS: Record<string, string> = {
   "": "Home",
   library: "Library",
+  new: "New document",
   documents: "Document",
   tasks: "Task",
 };

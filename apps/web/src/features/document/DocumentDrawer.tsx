@@ -4,6 +4,7 @@ import { DetailDrawer } from "../../app/shell/DetailDrawer";
 import { useDocumentTypes } from "../../app/shell/useDocumentTypes";
 import { useUserDirectory } from "../../app/shell/useUserDirectory";
 import type { DocumentSummary } from "../../lib/types";
+import { AuthorActions } from "../authoring/AuthorActions";
 import { ArtifactHeader } from "./ArtifactHeader";
 import { HistoryTab } from "./HistoryTab";
 import { OverviewTab } from "./OverviewTab";
@@ -44,6 +45,7 @@ export function DocumentDrawer({
       {doc && (
         <>
           <ArtifactHeader doc={doc} typeName={typeName} ownerName={ownerName} />
+          <AuthorActions doc={doc} />
           <Tabs value={tab} onChange={(v) => setTab(v ?? "overview")} keepMounted={false} mt="md">
             <Tabs.List>
               <Tabs.Tab value="overview">Overview</Tabs.Tab>
