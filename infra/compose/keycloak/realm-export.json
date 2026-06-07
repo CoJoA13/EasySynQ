@@ -21,7 +21,19 @@
       "webOrigins": ["+"],
       "attributes": {
         "pkce.code.challenge.method": "S256"
-      }
+      },
+      "protocolMappers": [
+        {
+          "name": "audience-easysynq-api",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "included.client.audience": "easysynq-api",
+            "id.token.claim": "false",
+            "access.token.claim": "true"
+          }
+        }
+      ]
     },
     {
       "clientId": "easysynq-api",
