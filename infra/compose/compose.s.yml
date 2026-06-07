@@ -17,3 +17,10 @@ services:
   beat:
     deploy:
       replicas: 1      # NEVER more than 1 — two schedulers double-fire.
+  # Dev-only: publish MinIO's S3 API to the host so the browser can reach the presigned PUT/GET URLs
+  # (the in-app upload + controlled-copy download). Activate it by also setting
+  # S3_PUBLIC_ENDPOINT=http://localhost:9000 in .env, so URLs are signed against this host. A real
+  # deploy instead gives MinIO its own public endpoint rather than exposing it on the app host.
+  minio:
+    ports:
+      - "${S3_PORT:-9000}:9000"

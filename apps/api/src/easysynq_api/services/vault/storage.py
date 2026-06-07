@@ -6,7 +6,8 @@ server-side ``copy_object``). The client uploads to the plain ``staging`` bucket
 ``key = sha256``; check-in server-side-copies into the ``documents`` bucket, whose GOVERNANCE
 default retention auto-WORM-locks the object on creation (so check-in can confirm WORM before the
 version row commits). Sync boto3 runs in a worker thread to stay off the event loop, mirroring
-``readiness._check_minio``. Presigned URLs are rewritten to ``s3_public_endpoint`` for the browser.
+``readiness._check_minio``. Presigned URLs are SIGNED AGAINST ``s3_public_endpoint`` (when set) so
+the browser-facing host matches the SigV4 signature; server-side metadata ops use ``s3_endpoint``.
 
 S3 trusts the client-computed ``sha256`` as the content-addressed key (existence + size are
 verified via ``head_object``; bytes are never re-hashed by the api). Cryptographic server-side
@@ -21,7 +22,6 @@ import datetime
 import uuid
 from collections.abc import AsyncIterator
 from typing import Any
-from urllib.parse import urlsplit, urlunsplit
 
 from ...config import get_settings
 
@@ -69,27 +69,32 @@ def _client(*, config: Any = None) -> Any:
     )
 
 
-def _to_public(url: str) -> str:
-    """Rewrite a presigned URL's scheme+host to the browser-reachable origin (preserving the
-    path + all signature query params), so clients in real self-hosted deploys can reach MinIO."""
-    public = get_settings().s3_public_endpoint
-    if not public:
-        return url
-    pub = urlsplit(public)
-    parts = urlsplit(url)
-    return urlunsplit(
-        (pub.scheme or parts.scheme, pub.netloc, parts.path, parts.query, parts.fragment)
+def _presign_client() -> Any:
+    """The boto3 client used to *presign* — its ``endpoint_url`` is the browser-facing host
+    (``s3_public_endpoint`` when set, else the internal ``s3_endpoint``). A presigned URL is
+    SigV4-signed against this host, so the host the browser hits MUST equal what was signed; we sign
+    against the public endpoint directly rather than rewriting the URL's host afterward (which would
+    break the signature → ``SignatureDoesNotMatch``). ``generate_presigned_url`` makes no network
+    call, so the public host need only be reachable by the browser, not by this process."""
+    import boto3
+
+    s = get_settings()
+    return boto3.client(
+        "s3",
+        endpoint_url=s.s3_public_endpoint or s.s3_endpoint,
+        aws_access_key_id=s.s3_access_key,
+        aws_secret_access_key=s.s3_secret_key,
+        region_name=s.s3_region,
     )
 
 
 def _presign(method: str, key: str, bucket: str, params: dict[str, Any]) -> str:
-    client = _client()
-    url: str = client.generate_presigned_url(
+    url: str = _presign_client().generate_presigned_url(
         method,
         Params={"Bucket": bucket, "Key": key, **params},
         ExpiresIn=get_settings().s3_presign_expiry_seconds,
     )
-    return _to_public(url)
+    return url
 
 
 async def presign_put(sha256: str, content_type: str) -> str:
