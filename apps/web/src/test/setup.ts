@@ -19,6 +19,20 @@ Object.defineProperty(window, "matchMedia", {
   }),
 });
 
+// jsdom's Blob/File don't implement arrayBuffer() in this env; the authoring SHA-256 hash
+// (lib/hash.ts) needs it. Delegate to FileReader (which jsdom does implement). Production browsers
+// have the native method, so this only fills the test gap (the matchMedia/ResizeObserver precedent).
+if (typeof Blob !== "undefined" && typeof Blob.prototype.arrayBuffer !== "function") {
+  Blob.prototype.arrayBuffer = function (this: Blob) {
+    return new Promise<ArrayBuffer>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as ArrayBuffer);
+      reader.onerror = () => reject(reader.error);
+      reader.readAsArrayBuffer(this);
+    });
+  };
+}
+
 // jsdom lacks ResizeObserver; Mantine's FloatingIndicator (SegmentedControl / Tabs) needs it.
 class ResizeObserverStub {
   observe() {}
