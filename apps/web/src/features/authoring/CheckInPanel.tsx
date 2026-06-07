@@ -93,6 +93,9 @@ export function CheckInPanel({
       });
       setFile(null);
       setReason("");
+      // Check-in releases the lock + deletes the working draft server-side, so return to the
+      // "check out" affordance — another revision needs a fresh check-out (else a 2nd check-in 409s).
+      setCheckedOut(false);
       onCheckedIn?.(version);
     } catch (e) {
       setError(errMsg(e));

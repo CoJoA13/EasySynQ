@@ -32,6 +32,9 @@ it("checks out, uploads, and checks in a new version (PUT carries no bearer)", a
 
   await waitFor(() => expect(onCheckedIn).toHaveBeenCalledTimes(1));
   expect(putAuth).toBeNull();
+  // after check-in the lock is released server-side → the panel returns to the check-out affordance
+  // (so an iterative second revision in the drawer re-checks-out instead of 409-ing)
+  expect(await screen.findByRole("button", { name: /check out to edit/i })).toBeInTheDocument();
 });
 
 it("disables check-in until a file and a change reason are provided", async () => {
