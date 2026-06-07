@@ -75,6 +75,8 @@ The specification is **19 numbered documents (00–18)** plus the **Decisions Re
 | **17** | `17-gaps-and-open-questions.md` | The **gap audit** (input, not a normative section): findings A1–A14 (gaps), B1–B15 (contradictions), C1–C12 (risks), D1–D14 (open questions). Every finding is **resolved** by the Decisions Register (Part 4 finding→R-number map) — read the register for the binding answer. | 00, all |
 | **18** | `18-mvp-implementation-plan.md` | The **build plan**: the §1 canon-correction set, the ordered MVP slice plan (S0–S11) + the v1 family slices, exit criteria, and CI/verification gates. Read when planning a slice. | 03, 14, 15, 16 |
 
+**Working / operational docs** (not part of the numbered spec, but kept current): `decisions-register.md` (★ above) · `slice-history.md` (the shipped-slice changelog) · `dev-workflow.md` (operator/`.env` + per-feature API quick-reference) · `runbooks/` (operator runbooks) · `superpowers/{specs,plans}/` (web-UI track design specs + plans). The recurring-engineering-patterns catalog + the machine playbook live in `.claude/rules/`.
+
 ---
 
 ## 5. Cross-Cutting Concepts Map

@@ -40,6 +40,8 @@ npm-debug.log*
 infra/data/
 qms-mirror/
 backups/
+.claude/scheduled_tasks.lock
+.claude/settings.local.json
 
 # --- brainstorming visual-companion artifacts ---
 .superpowers/
