@@ -1,5 +1,6 @@
-import { Container, Loader } from "@mantine/core";
+import { Button, Container, Loader, Stack, Text } from "@mantine/core";
 import { useQuery } from "@tanstack/react-query";
+import { useEffect } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 import { SetupWizard } from "./SetupWizard";
 import { AppShell } from "./app/shell/AppShell";
@@ -26,6 +27,23 @@ export function App() {
     queryFn: () => apiGet<{ setup_state: string }>("/api/v1/setup/state"),
   });
 
+  const operational = setupState.data?.setup_state === "OPERATIONAL";
+
+  // Tokens live in memory only (lib/auth), so every reload starts logged-out. When the install is
+  // operational and we hold no token, bounce through Keycloak to re-authenticate (seamless while the
+  // SSO session is live). A one-shot sessionStorage flag stops a failed sign-in from looping.
+  useEffect(() => {
+    if (!ready || setupState.isLoading) return;
+    if (operational && !token) {
+      if (!sessionStorage.getItem("es_auth_redirect")) {
+        sessionStorage.setItem("es_auth_redirect", "1");
+        login();
+      }
+    } else if (token) {
+      sessionStorage.removeItem("es_auth_redirect");
+    }
+  }, [ready, operational, token, login, setupState.isLoading]);
+
   if (!ready || setupState.isLoading) {
     return (
       <Container size="sm" py="xl">
@@ -34,7 +52,27 @@ export function App() {
     );
   }
 
-  const operational = setupState.data?.setup_state === "OPERATIONAL";
+  // Operational but token-less → we're redirecting to Keycloak. Show a calm interstitial (not the
+  // shell, which would flash 401s) with a manual retry in case the auto-redirect was blocked.
+  if (operational && !token) {
+    return (
+      <Container size="sm" py="xl">
+        <Stack align="center" gap="md">
+          <Loader />
+          <Text c="dimmed">Signing in…</Text>
+          <Button
+            variant="subtle"
+            onClick={() => {
+              sessionStorage.removeItem("es_auth_redirect");
+              login();
+            }}
+          >
+            Sign in again
+          </Button>
+        </Stack>
+      </Container>
+    );
+  }
 
   return (
     <Routes>
