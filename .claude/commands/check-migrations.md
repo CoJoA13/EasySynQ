@@ -5,7 +5,7 @@ allowed-tools: Bash
 
 Reproduce the `migrations` CI job locally — the project's most error-prone area. On a throwaway PG16:
 
-1. `alembic upgrade head` (apply the whole tree, currently to head `0041`).
+1. `alembic upgrade head` (apply the whole tree to the current head — see CLAUDE.md Current-status / `alembic heads`; never hard-code a head number here).
 2. `alembic downgrade base` then `alembic upgrade head` again (prove the round-trip).
 3. `alembic check` must be **clean** — no phantom-DROP / phantom-create.
 
