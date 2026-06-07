@@ -617,7 +617,7 @@ def _drop_a_scratch_row(handle: backup_service.ScratchHandle) -> None:
 
 
 async def _stub_auth_probe(monkeypatch: pytest.MonkeyPatch, *, ok: bool) -> None:
-    async def _probe(_issuer: str) -> tuple[bool, str]:
+    async def _probe(_issuer: str, _discovery_url: str | None = None) -> tuple[bool, str]:
         return ok, "stubbed reachable" if ok else "stubbed unreachable"
 
     monkeypatch.setattr(setup_service.auth_check, "probe_oidc_discovery", _probe)
