@@ -84,7 +84,10 @@ CLOSES the DCR family.** DCR-as-orchestrator: `POST /dcrs/{id}/implement` drives
 schedule the `release_due` cutover; RETIRE obsoletes) + enforces the underlying `document.release`/`document.obsolete`
 (SoD-2, no side-door); the §7.3 gate now fires on the SHARED `document.obsolete` too (`force_retire`+justification);
 `POST /capas/{id}/raise-dcr` (1:N, Idempotency-Key).
-**Next:** the v1.x drift family (scheduled re-review D5 + drift detection D1–D4); or the next v1 family per the owner.
+**Next:** the **v1 web-UI track** has started (`apps/web`, React/Mantine SPA) — **S-web-1** shipped the app shell +
+design-system token port + a thin Library (front-end only, NO migration; tests stack-free via vitest+MSW+jest-axe; web
+CI now runs `npm test`). Then S-web-2 (Library facets + Document detail) / S-web-3 (Review & Approve — closes UJ-3).
+Also open: the v1.x drift family (scheduled re-review D5 + drift detection D1–D4).
 **Migration head `0044` (next `0045`).** Full narrative + deferred v1/v1.x residuals: **`.claude/rules/slice-history.md`**.
 
 ## Working preferences
