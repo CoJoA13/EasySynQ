@@ -104,4 +104,4 @@ jobs:
       - working-directory: apps/web
         run: npm ci
       - working-directory: apps/web
-        run: npm run lint && npm run typecheck && npm run build
+        run: npm run lint && npm run typecheck && npm run build && npm test
