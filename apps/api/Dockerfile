@@ -2,7 +2,7 @@
 # apps/api/* and the single migrations/ tree land at predictable paths:
 #   /app/alembic.ini  + script_location %(here)s/../../migrations -> /migrations
 # Build with:  docker build -f apps/api/Dockerfile -t easysynq/api .   (from repo root)
-FROM python:3.12-slim AS base
+FROM python:3.12-slim-bookworm AS base
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     EASYSYNQ_MIGRATIONS_DIR=/migrations

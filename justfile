@@ -59,13 +59,13 @@ migrate-roundtrip:
 
 # --- compose stack ---
 up profile="s":
-    docker compose -f infra/compose/compose.yml -f infra/compose/compose.{{profile}}.yml up -d
+    docker compose --env-file .env -f infra/compose/compose.yml -f infra/compose/compose.{{profile}}.yml up -d
 
 down:
-    docker compose -f infra/compose/compose.yml down
+    docker compose --env-file .env -f infra/compose/compose.yml down
 
 logs:
-    docker compose -f infra/compose/compose.yml logs -f --tail=100
+    docker compose --env-file .env -f infra/compose/compose.yml logs -f --tail=100
 
 # --- packaging ---
 airgap:
@@ -76,6 +76,6 @@ airgap:
 # append to images.lock so a release ships immutable, digest-pinned images (doc 03 §15, S11).
 images-update:
     @grep -vE '^\s*#|^\s*$' infra/images.lock | awk '{print $2}' | while read -r img; do \
-        digest=$(docker manifest inspect "$img" >/dev/null 2>&1 && docker buildx imagetools inspect "$img" --format '{{.Manifest.Digest}}' 2>/dev/null || true); \
+        digest=$(docker manifest inspect "$img" >/dev/null 2>&1 && docker buildx imagetools inspect "$img" --format '{{ "{{" }}.Manifest.Digest}}' 2>/dev/null || true); \
         if [ -n "$digest" ]; then echo "$img@$digest"; else echo "# COULD NOT RESOLVE: $img"; fi; \
     done

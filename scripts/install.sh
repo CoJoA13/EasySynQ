@@ -60,6 +60,7 @@ fi
 
 echo "install: starting the stack (profile: $PROFILE)..."
 docker compose \
+  --env-file "$ENV_FILE" \
   -f infra/compose/compose.yml \
   -f "infra/compose/compose.${PROFILE}.yml" \
   up -d --build
