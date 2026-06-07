@@ -72,7 +72,7 @@ Celery workers · Keycloak (auth) · Gotenberg/LibreOffice (rendering) · Caddy 
 - **`.claude/rules/slice-history.md`** — the shipped-slice changelog (MVP S0–S11 + the v1 families).
 - **`.claude/rules/windows-wsl-dev.md`** — running EasySynQ on this owner's Windows 11 + WSL2 box: localhost-only auth (PKCE secure-context), `OIDC_DISCOVERY_URL`, ephemeral Keycloak (`just demo-user`), and driving WSL from a Windows-native Claude session. Read when on this machine.
 
-## Current status (as of 2026-06-06)
+## Current status (as of 2026-06-07)
 
 **MVP COMPLETE** (S0–S11). **v1 in progress.** Families shipped: **Records & evidence** (S-rec-1..4 + Evidence
 Packs) ✅ · **Ingestion** (S-ing-1..5) ✅ · **Audits/Findings/CAPA** (S-aud-1/2 + S-wf-engine + S-capa-1/2/3 +
@@ -85,10 +85,12 @@ CLOSES the DCR family.** DCR-as-orchestrator: `POST /dcrs/{id}/implement` drives
 schedule the `release_due` cutover; RETIRE obsoletes) + enforces the underlying `document.release`/`document.obsolete`
 (SoD-2, no side-door); the §7.3 gate now fires on the SHARED `document.obsolete` too (`force_retire`+justification);
 `POST /capas/{id}/raise-dcr` (1:N, Idempotency-Key).
-**Next:** the **v1 web-UI track** has started (`apps/web`, React/Mantine SPA) — **S-web-1** shipped the app shell +
-design-system token port + a thin Library (front-end only, NO migration; tests stack-free via vitest+MSW+jest-axe; web
-CI now runs `npm test`). Then S-web-2 (Library facets + Document detail) / S-web-3 (Review & Approve — closes UJ-3).
-Also open: the v1.x drift family (scheduled re-review D5 + drift detection D1–D4).
+**v1 web-UI track in progress** (`apps/web`, React/Mantine SPA). **S-web-1** ✅ (app shell + design-system token port +
+thin Library). **S-web-2** ✅ — faceted Library + a read-only tabbed detail drawer (Overview/History/Where-used);
+**full-stack but NO migration**: minimal authenticated-only read endpoints (`GET /document-types`, `GET /directory/users`
+[display-name only]) + a `{data,page}` **authz-correct** pagination envelope + an `effective_from` date filter/column on
+`GET /documents`. The 3-slice plan was **split**, so: **Next:** S-web-3 (standalone Document detail page) · S-web-4
+(Review & Approve — closes UJ-3). Also open: the v1.x drift family (scheduled re-review D5 + drift detection D1–D4).
 **Migration head `0044` (next `0045`).** Full narrative + deferred v1/v1.x residuals: **`.claude/rules/slice-history.md`**.
 
 ## Working preferences

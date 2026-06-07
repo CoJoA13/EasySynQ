@@ -134,7 +134,12 @@ class FormSchemaCheckin(BaseModel):
 # --- representations --------------------------------------------------------------------
 
 
-def _document(d: DocumentedInformation, *, clause_refs: list[str] | None = None) -> dict[str, Any]:
+def _document(
+    d: DocumentedInformation,
+    *,
+    clause_refs: list[str] | None = None,
+    effective_from: str | None = None,
+) -> dict[str, Any]:
     out: dict[str, Any] = {
         "id": str(d.id),
         "identifier": d.identifier,
@@ -151,6 +156,10 @@ def _document(d: DocumentedInformation, *, clause_refs: list[str] | None = None)
         "current_effective_version_id": (
             str(d.current_effective_version_id) if d.current_effective_version_id else None
         ),
+        # S-web-2: the governing effective version's effective_from (the library "Effective" column
+        # + the artifact-header date). null when no effective version (Draft-only) — computed on the
+        # read paths (list/detail) via _effective_from_map; null on create/patch responses.
+        "effective_from": effective_from,
         "created_at": d.created_at.isoformat() if d.created_at else None,
     }
     # clause_refs (S10, doc 15 §2.1): the mapped clause numbers, derived from clause_mapping (never
@@ -158,6 +167,28 @@ def _document(d: DocumentedInformation, *, clause_refs: list[str] | None = None)
     if clause_refs is not None:
         out["clause_refs"] = clause_refs
     return out
+
+
+async def _effective_from_map(
+    session: AsyncSession, docs: list[DocumentedInformation]
+) -> dict[uuid.UUID, str | None]:
+    """Map each doc → its current effective version's effective_from ISO (S-web-2; batched)."""
+    ver_ids = {d.current_effective_version_id for d in docs if d.current_effective_version_id}
+    if not ver_ids:
+        return {}
+    rows = (
+        await session.execute(
+            select(DocumentVersion.id, DocumentVersion.effective_from).where(
+                DocumentVersion.id.in_(ver_ids)
+            )
+        )
+    ).all()
+    by_ver = {vid: (ef.isoformat() if ef else None) for vid, ef in rows}
+    return {
+        d.id: by_ver.get(d.current_effective_version_id)
+        for d in docs
+        if d.current_effective_version_id
+    }
 
 
 def _version(v: DocumentVersion) -> dict[str, Any]:
@@ -358,7 +389,8 @@ _print = require("document.print_controlled", async_scope_resolver=_document_sco
 # --- GET /documents list filtering (S10, doc 15 §3.2 bracketed grammar) -------------------
 # Only these (field, op) pairs are accepted; anything else matching filter[…][…] → 400
 # unknown_filter (doc 15 §3.2). The list still ROW-FILTERS by document.read in Python (§9.3) — these
-# SQL filters just narrow the candidate set first; ``limit`` remains a pre-authz cap (since S3).
+# SQL filters just narrow the candidate set first; pagination (limit/offset) slices the POST-authz
+# set, with ``_LIST_SCAN_CAP`` the pre-authz candidate cap (S-web-2).
 _FILTER_KEY_RE = re.compile(r"^filter\[([^\]]+)\]\[([^\]]+)\]$")
 _FILTER_ALLOW: frozenset[tuple[str, str]] = frozenset(
     {
@@ -367,12 +399,49 @@ _FILTER_ALLOW: frozenset[tuple[str, str]] = frozenset(
         ("document_type", "eq"),
         ("owner_user_id", "eq"),
         ("classification", "eq"),
+        # S-web-2: the library "Effective date" facet — bounds on the CURRENT effective version's
+        # effective_from (via the current_effective_version join). The client maps relative buckets
+        # (Last 30 days / This quarter / …) to a gte ISO timestamp.
+        ("effective_from", "gte"),
+        ("effective_from", "lte"),
     }
 )
 
+# S-web-2: scan up to this many candidates pre-authz, authz-filter in Python, then slice the page.
+# The document.read scope filter is per-row (folder_path/document_level), not SQL-expressible, so a
+# naive SQL OFFSET would page the wrong pre-authz set. Fine for v1 (hundreds of docs); a bigger
+# install must push the scope filter into SQL (R34 simple-correct-first posture). has_more is exact
+# up to this cap.
+_LIST_SCAN_CAP = 2000
 
-def _filter_condition(field: str, value: str) -> ColumnElement[bool]:
-    """Build one SQL WHERE condition for an allow-listed filter; a bad enum/uuid value → 422."""
+
+def _filter_condition(field: str, op: str, value: str) -> ColumnElement[bool]:
+    """Build one SQL WHERE condition for an allow-listed (field, op); bad value → 422."""
+    # filter[effective_from][gte|lte]=<ISO> — bound on the current effective version
+    if field == "effective_from":
+        try:
+            ts = datetime.datetime.fromisoformat(value)
+        except ValueError as exc:
+            raise ProblemException(
+                status=422, code="validation_error", title="Invalid effective_from filter value"
+            ) from exc
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=datetime.UTC)
+        bound = (
+            DocumentVersion.effective_from >= ts
+            if op == "gte"
+            else DocumentVersion.effective_from <= ts
+        )
+        return (
+            select(1)
+            .select_from(DocumentVersion)
+            .where(
+                DocumentVersion.id == DocumentedInformation.current_effective_version_id,
+                DocumentVersion.effective_from.is_not(None),
+                bound,
+            )
+            .exists()
+        )
     if field == "clause_refs":  # filter[clause_refs][has]=8.4 — exact clause-number membership
         # Constrain to the document's OWN framework (clause.number is unique only per framework —
         # uq_clause_framework_id_number): multi-standard safety (D3), matching the clause-map write
@@ -428,7 +497,7 @@ def _parse_document_filters(request: Request) -> list[ColumnElement[bool]]:
             raise ProblemException(
                 status=400, code="unknown_filter", title=f"Unknown filter: {raw_key}"
             )
-        conditions.append(_filter_condition(field, value))
+        conditions.append(_filter_condition(field, op, value))
     return conditions
 
 
@@ -438,7 +507,10 @@ async def list_documents(
     caller: AppUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
     limit: int = 50,
-) -> list[dict[str, Any]]:
+    offset: int = 0,
+) -> dict[str, Any]:
+    limit = min(max(limit, 1), 100)
+    offset = max(offset, 0)
     filters = _parse_document_filters(request)
     grants = await gather_grants(session, caller.id, caller.org_id, "document.read")
     docs = (
@@ -453,7 +525,8 @@ async def list_documents(
                     *filters,
                 )
                 .order_by(desc(DocumentedInformation.created_at))
-                .limit(min(limit, 100))
+                # S-web-2: scan a bounded candidate window, then authz-filter + slice in Python.
+                .limit(_LIST_SCAN_CAP)
             )
         )
         .scalars()
@@ -478,9 +551,24 @@ async def list_documents(
         )
         if authorize(grants, "document.read", resource, ctx).allow:
             visible.append(d)
-    # clause_refs (S10): one batch join over the visible page (no N+1).
-    refs = await vault_repo.clause_numbers_for_docs(session, [d.id for d in visible])
-    return [_document(d, clause_refs=refs.get(d.id, [])) for d in visible]
+    # S-web-2: pagination is applied AFTER the per-row authz filter so page boundaries are correct
+    # for scoped users (no exact total — has_more is derived, no COUNT(*)).
+    page_rows = visible[offset : offset + limit]
+    # clause_refs (S10) + effective_from (S-web-2): batch over the visible page only (no N+1).
+    refs = await vault_repo.clause_numbers_for_docs(session, [d.id for d in page_rows])
+    eff = await _effective_from_map(session, page_rows)
+    return {
+        "data": [
+            _document(d, clause_refs=refs.get(d.id, []), effective_from=eff.get(d.id))
+            for d in page_rows
+        ],
+        "page": {
+            "limit": limit,
+            "offset": offset,
+            "returned": len(page_rows),
+            "has_more": len(visible) > offset + len(page_rows),
+        },
+    }
 
 
 @router.post("/documents", status_code=status.HTTP_201_CREATED)
@@ -517,7 +605,8 @@ async def get_document_endpoint(
 ) -> dict[str, Any]:
     doc = await _load_document(session, caller, document_id)
     rows = await vault_repo.list_clause_mappings(session, doc.id)
-    return _document(doc, clause_refs=[c.number for _, c in rows])
+    eff = await _effective_from_map(session, [doc])
+    return _document(doc, clause_refs=[c.number for _, c in rows], effective_from=eff.get(doc.id))
 
 
 @router.patch("/documents/{document_id}")

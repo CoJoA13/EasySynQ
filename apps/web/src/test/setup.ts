@@ -19,6 +19,14 @@ Object.defineProperty(window, "matchMedia", {
   }),
 });
 
+// jsdom lacks ResizeObserver; Mantine's FloatingIndicator (SegmentedControl / Tabs) needs it.
+class ResizeObserverStub {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+}
+globalThis.ResizeObserver = ResizeObserverStub as unknown as typeof ResizeObserver;
+
 expect.extend(toHaveNoViolations);
 
 beforeAll(() => server.listen({ onUnhandledRequest: "error" }));

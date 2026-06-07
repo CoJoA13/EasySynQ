@@ -585,7 +585,7 @@ async def test_records_absent_from_documents_and_search(
     # GET /documents excludes Records (kind-scoping), even though they are Effective.
     docs = await app_client.get("/api/v1/documents?limit=100", headers=h)
     assert docs.status_code == 200
-    assert rid not in {d["id"] for d in docs.json()}
+    assert rid not in {d["id"] for d in docs.json()["data"]}
 
     # /search is Effective-DOCUMENTS only — the record's unique title token must not surface it.
     search = await app_client.get(f"/api/v1/search?q={token}", headers=h)
