@@ -16,5 +16,10 @@ export default defineConfig({
     },
   },
   preview: { port: 5173, host: true },
-  test: { environment: "jsdom", globals: true },
+  test: {
+    environment: "jsdom",
+    globals: true,
+    css: true,
+    setupFiles: ["./src/test/setup.ts"],
+  },
 });
