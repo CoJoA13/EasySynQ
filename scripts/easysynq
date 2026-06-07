@@ -31,6 +31,10 @@ usage: easysynq <command>
   setup mint-bootstrap [--ttl-hours N]
                     Mint the one-time first-run bootstrap secret; open /setup,
                     sign in, and paste it to become the first admin.        [S8a]
+  seed-personas --author <sub> --approver <sub> --releaser <sub>
+                    Dev fixture: SoD-correct Priya(author)/Ken(approver)/Mara
+                    (releaser) grants for the full lifecycle. Idempotent.
+                    (Use `just seed-personas` to also create the logins.)    [dev]
 EOF
 }
 
@@ -46,6 +50,11 @@ case "$cmd" in
       exit 2
     fi
     "${COMPOSE[@]}" run --rm api uv run python -m easysynq_api.cli.grant_role --subject "$sub" --role "$role"
+    ;;
+  seed-personas)
+    # Dev fixture: SoD-correct author/approver/releaser grants (S-web-5 demo). `just seed-personas`
+    # wraps this and also provisions the matching Keycloak logins. Idempotent.
+    "${COMPOSE[@]}" run --rm api uv run python -m easysynq_api.cli.seed_personas "$@"
     ;;
   setup)
     # First-run bootstrap (S8a): e.g. `easysynq setup mint-bootstrap [--ttl-hours 24]`.
