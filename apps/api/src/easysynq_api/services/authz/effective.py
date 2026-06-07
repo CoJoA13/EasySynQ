@@ -20,8 +20,8 @@ from .repository import gather_grants, granted_permission_keys
 
 
 def resource_for_scope(level: str | None, scope_id: str | None) -> ResourceContext:
-    """Build the ``ResourceContext`` a ``(scope_level, scope_id)`` query asks about. ``None``/SYSTEM
-    → the system resource (only SYSTEM grants match); the narrower levels bind their one selector."""
+    """The ``ResourceContext`` a ``(scope_level, scope_id)`` query asks about. ``None``/``SYSTEM``
+    yields the system resource; a narrower level binds its single selector."""
     if level is None or level == "SYSTEM":
         return ResourceContext.system()
     if level == "ARTIFACT":
