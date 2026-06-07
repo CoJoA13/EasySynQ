@@ -67,6 +67,19 @@ down:
 logs:
     docker compose --env-file .env -f infra/compose/compose.yml logs -f --tail=100
 
+# (Re)create the Keycloak `demo` dev user for local login. Keycloak has no volume, so its data
+# (incl. this user) is wiped on `just down` / any keycloak recreate; the realm re-imports from
+# realm-export.json. Idempotent; password is the documented dev credential.
+demo-user:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    pw="$(grep -m1 '^KEYCLOAK_ADMIN_PASSWORD=' .env | cut -d= -f2-)"
+    kc() { docker compose --env-file .env -f infra/compose/compose.yml -f infra/compose/compose.s.yml exec -T keycloak /opt/keycloak/bin/kcadm.sh "$@" </dev/null; }
+    kc config credentials --server http://localhost:8080 --realm master --user admin --password "$pw" >/dev/null
+    kc create users -r easysynq -s username=demo -s enabled=true 2>/dev/null || true
+    kc set-password -r easysynq --username demo --new-password "Demo-Password-1"
+    echo "demo / Demo-Password-1 ready - sign in at http://localhost"
+
 # --- packaging ---
 airgap:
     bash scripts/airgap-bundle.sh
