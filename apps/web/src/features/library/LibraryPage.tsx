@@ -12,8 +12,9 @@ import {
   Title,
 } from "@mantine/core";
 import { useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { useDocumentTypes } from "../../app/shell/useDocumentTypes";
+import { usePermissions } from "../../app/shell/usePermissions";
 import { useUserDirectory } from "../../app/shell/useUserDirectory";
 import { DocumentDrawer } from "../document/DocumentDrawer";
 import { StateBadge } from "../document/StateBadge";
@@ -41,6 +42,7 @@ export function LibraryPage() {
   const { data, isLoading, isError } = useDocuments(toDocumentFilters(uf), { limit: size, offset });
   const { data: types } = useDocumentTypes();
   const { data: directory } = useUserDirectory();
+  const { can } = usePermissions();
 
   const [density, setDensity] = useState<"comfortable" | "compact">("comfortable");
 
@@ -105,16 +107,23 @@ export function LibraryPage() {
               : `Showing ${rows.length}${hasMore ? "+" : ""} document${rows.length === 1 ? "" : "s"}`}
           </Text>
         </div>
-        <SegmentedControl
-          size="xs"
-          aria-label="Row density"
-          value={density}
-          onChange={(v) => setDensity(v as "comfortable" | "compact")}
-          data={[
-            { label: "Comfortable", value: "comfortable" },
-            { label: "Compact", value: "compact" },
-          ]}
-        />
+        <Group gap="sm">
+          {can("document.create") && (
+            <Button component={Link} to="/library/new" size="sm">
+              ＋ New document
+            </Button>
+          )}
+          <SegmentedControl
+            size="xs"
+            aria-label="Row density"
+            value={density}
+            onChange={(v) => setDensity(v as "comfortable" | "compact")}
+            data={[
+              { label: "Comfortable", value: "comfortable" },
+              { label: "Compact", value: "compact" },
+            ]}
+          />
+        </Group>
       </Group>
 
       <Grid gutter="md">

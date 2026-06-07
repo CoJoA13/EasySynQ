@@ -46,6 +46,7 @@ from ..domain.authz import RequestContext, ResourceContext, authorize
 from ..logging import request_id_var
 from ..problems import ProblemException
 from ..services.authz import AuthzAuditSink, enforce, gather_grants, get_authz_audit_sink, require
+from ..services.authz.repository import gather_sod_constraints, get_allow_approver_release
 from ..services.dcr import build_where_used
 from ..services.diff import build_version_diff, get_or_create_visual_diff, get_visual_diff
 from ..services.vault import (
@@ -139,6 +140,7 @@ def _document(
     *,
     clause_refs: list[str] | None = None,
     effective_from: str | None = None,
+    capabilities: dict[str, bool] | None = None,
 ) -> dict[str, Any]:
     out: dict[str, Any] = {
         "id": str(d.id),
@@ -166,6 +168,9 @@ def _document(
     # a denormalized column — D2). Omitted unless the handler supplies it (batch-loaded per page).
     if clause_refs is not None:
         out["clause_refs"] = clause_refs
+    # S-web-3 (DP-6): the caller's per-document authoring affordances (detail responses only).
+    if capabilities is not None:
+        out["capabilities"] = capabilities
     return out
 
 
@@ -342,6 +347,51 @@ async def _release_scope(
     # The SoD-2 enrichment (author + approver signers for the promoted version) is shared with the
     # DCR-as-orchestrator implement path so both fire the same overlay (S-dcr-5).
     return await enrich_release_sod_scope(session, base, doc_id, version_id)
+
+
+# S-web-3 (DP-6): the caller's per-document authoring affordances — the AUTHZ answer only (the SPA
+# combines it with lifecycle state + lock state for the final affordance, e.g. "Check out" vs
+# "Locked by X"). Detail-only (GET /documents/{id}); NEVER per-row on the list (O(rows*keys) grant
+# queries). Mirrors the PEP's evaluate() but calls the pure PDP directly, so a capability probe
+# writes no authz-audit row (the effective-permissions precedent). ``document.create`` is absent —
+# it is DOC_CLASS-scoped/coarse and answered by GET /me/permissions, not per-document.
+_CAPABILITY_KEYS: dict[str, str] = {
+    "checkout": "document.checkout",
+    "edit": "document.edit",  # check-in + start-revision
+    "manage_metadata": "document.manage_metadata",  # clause mapping
+    "submit": "document.submit",
+    "read_draft": "document.read_draft",  # history / diff / working-copy download
+}
+
+
+async def _document_capabilities(
+    session: AsyncSession, caller: AppUser, doc: DocumentedInformation
+) -> dict[str, bool]:
+    base = await _document_scope_by_id(session, doc.id)
+    now = datetime.datetime.now(datetime.UTC)
+    ctx = RequestContext(now=now, actor_user_id=str(caller.id))
+    caps: dict[str, bool] = {}
+    for short_key, perm_key in _CAPABILITY_KEYS.items():
+        grants = await gather_grants(session, caller.id, caller.org_id, perm_key)
+        caps[short_key] = authorize(grants, perm_key, base, ctx).allow
+    # obsolete: a sig-hook action (no SoD overlay). The §7.3 coverage gate is a separate runtime
+    # check, not authz — the capability just says "you hold document.obsolete on this doc".
+    obs_grants = await gather_grants(session, caller.id, caller.org_id, "document.obsolete")
+    caps["obsolete"] = authorize(obs_grants, "document.obsolete", base, ctx, sig_hook=True).allow
+    # release: sig-hook + the SoD-2 overlay over the version the cutover would promote (the latest
+    # Approved), so the author-can't-release block is reflected. No Approved version → enrich
+    # degrades to the base scope (the FSM 409 is what blocks release at action time).
+    release_scope = await enrich_release_sod_scope(session, base, doc.id, None)
+    sod = await gather_sod_constraints(session, caller.org_id)
+    allow_approver_release = await get_allow_approver_release(session, caller.org_id)
+    rel_ctx = RequestContext(
+        now=now, actor_user_id=str(caller.id), allow_approver_release=allow_approver_release
+    )
+    rel_grants = await gather_grants(session, caller.id, caller.org_id, "document.release")
+    caps["release"] = authorize(
+        rel_grants, "document.release", release_scope, rel_ctx, sig_hook=True, sod=sod
+    ).allow
+    return caps
 
 
 async def _load_document(
@@ -606,7 +656,13 @@ async def get_document_endpoint(
     doc = await _load_document(session, caller, document_id)
     rows = await vault_repo.list_clause_mappings(session, doc.id)
     eff = await _effective_from_map(session, [doc])
-    return _document(doc, clause_refs=[c.number for _, c in rows], effective_from=eff.get(doc.id))
+    caps = await _document_capabilities(session, caller, doc)
+    return _document(
+        doc,
+        clause_refs=[c.number for _, c in rows],
+        effective_from=eff.get(doc.id),
+        capabilities=caps,
+    )
 
 
 @router.patch("/documents/{document_id}")

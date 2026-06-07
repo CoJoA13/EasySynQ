@@ -192,6 +192,45 @@ export const clauseFixture = [
   },
 ];
 
+// ---- S-web-3 authoring fixtures -------------------------------------------------------
+export const createdDocFixture = {
+  id: "33333333-3333-3333-3333-333333333333",
+  identifier: "SOP-GEN-001",
+  kind: "DOCUMENT",
+  title: "New Draft",
+  document_type_id: "aaaa1111-1111-1111-1111-111111111111",
+  area_code: "GEN",
+  folder_path: null,
+  current_state: "Draft",
+  classification: "Internal",
+  is_singleton: false,
+  owner_user_id: "bbbb1111-1111-1111-1111-111111111111",
+  framework_id: "cccc1111-1111-1111-1111-111111111111",
+  current_effective_version_id: null,
+  effective_from: null,
+  created_at: "2026-06-07T10:00:00+00:00",
+};
+
+function mkVersion(documentId: string) {
+  return {
+    id: "ver-1",
+    document_id: documentId,
+    version_seq: 1,
+    revision_label: "Rev A",
+    version_state: "Draft",
+    change_significance: "MAJOR",
+    change_reason: "Initial version",
+    source_blob_sha256: "sha-new",
+    metadata_snapshot: null,
+    author_user_id: "bbbb1111-1111-1111-1111-111111111111",
+    effective_from: null,
+    effective_to: null,
+    superseded_by_version_id: null,
+    created_at: "2026-06-07T10:05:00+00:00",
+    change_detected: true,
+  };
+}
+
 // A filter + pagination-aware GET /documents so the library facet/pager tests are realistic.
 function listDocuments({ request }: { request: Request }) {
   const sp = new URL(request.url).searchParams;
@@ -250,4 +289,72 @@ export const handlers = [
     }),
   ),
   http.get("/readyz", () => HttpResponse.json({ ready: true, dependencies: [] })),
+
+  // ---- S-web-3 authoring (default happy-path; per-test overrides for error cases) ----
+  // Default: the caller holds no coarse affordances (so existing tests render no "New" entry).
+  http.get("/api/v1/me/permissions", () =>
+    HttpResponse.json({ scope: { level: "SYSTEM", selector: null }, permissions: [] }),
+  ),
+  http.get("/api/v1/documents/:id/clause-mappings", () => HttpResponse.json([])),
+  http.post("/api/v1/documents", () => HttpResponse.json(createdDocFixture, { status: 201 })),
+  http.post("/api/v1/documents/:id/checkout", ({ params }) =>
+    HttpResponse.json({
+      id: "wd-1",
+      document_id: String(params.id),
+      checked_out_by: "bbbb1111-1111-1111-1111-111111111111",
+      checked_out_at: "2026-06-07T10:01:00+00:00",
+      source_version_id: null,
+      lock_ttl_seconds: 28800,
+    }),
+  ),
+  http.post("/api/v1/documents/:id/break-lock", ({ params }) =>
+    HttpResponse.json({ document_id: String(params.id), lock_broken: true }),
+  ),
+  // versions:init-upload — the colon segment needs a RegExp (path-to-regexp treats ":init" as a param).
+  http.post(/\/api\/v1\/documents\/[^/]+\/versions:init-upload$/, () =>
+    HttpResponse.json({
+      dedup: false,
+      object_key: "sha-new",
+      upload_url: "https://minio.test/staging/sha-new",
+    }),
+  ),
+  // the presigned MinIO PUT — cross-origin, no bearer.
+  http.put(/^https:\/\/minio\.test\//, () => new HttpResponse(null, { status: 200 })),
+  http.post("/api/v1/documents/:id/checkin", ({ params }) =>
+    HttpResponse.json(mkVersion(String(params.id)), { status: 201 }),
+  ),
+  http.post("/api/v1/documents/:id/clause-mappings", async ({ params, request }) => {
+    const body = (await request.json()) as { clause_id: string };
+    return HttpResponse.json(
+      {
+        id: "cm-1",
+        document_id: String(params.id),
+        clause_id: body.clause_id,
+        clause_number: "8.4",
+        clause_title: "Control of external providers",
+        is_requirement_level: false,
+        framework_id: "f1",
+        created_at: "2026-06-07T10:06:00+00:00",
+      },
+      { status: 201 },
+    );
+  }),
+  http.delete(
+    "/api/v1/documents/:id/clause-mappings/:clauseId",
+    () => new HttpResponse(null, { status: 204 }),
+  ),
+  http.post("/api/v1/documents/:id/submit-review", ({ params }) =>
+    HttpResponse.json({ ...createdDocFixture, id: String(params.id), current_state: "InReview" }),
+  ),
+  http.post("/api/v1/documents/:id/start-revision", ({ params }) =>
+    HttpResponse.json({
+      ...createdDocFixture,
+      id: String(params.id),
+      current_state: "UnderRevision",
+    }),
+  ),
+  http.get(
+    "/api/v1/documents/:id/versions/:vid/download",
+    () => HttpResponse.json({ download_url: "https://minio.test/staging/working-copy" }),
+  ),
 ];

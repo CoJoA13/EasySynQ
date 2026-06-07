@@ -27,7 +27,7 @@ modern, progressively disclosed, never overwhelming.
 ## Repository layout
 
 - `apps/api/` — FastAPI / Python 3.12. Under `src/easysynq_api/`: `api/` (routes) · `services/` (use-cases, txn owners) · `domain/` (pure logic) · `db/models/` (ORM) · `db/seeds/` · `tasks/` (Celery) · `cli/`. Tests in `apps/api/tests/{unit,integration}` (latter via testcontainers).
-- `apps/web/` — React/TS + Mantine + Tailwind SPA. Shipped: first-run wizard, admin stubs, **S-web-1** (shell + token port) and **S-web-2** (faceted Library + read-only detail drawer). Feature UI ongoing (next: S-web-3 authoring). Stack-free tests: vitest + MSW + jest-axe (`npm test`); under `src/`: `app/shell/` · `features/` · `lib/` · `theme/` · `test/`.
+- `apps/web/` — React/TS + Mantine + Tailwind SPA. Shipped: first-run wizard, admin stubs, **S-web-1** (shell + token port), **S-web-2** (faceted Library + read-only detail drawer), **S-web-3** (Document Authoring). Feature UI ongoing (next: S-web-4 detail page). Stack-free tests: vitest + MSW + jest-axe (`npm test`); under `src/`: `app/shell/` · `features/` · `lib/` · `theme/` · `test/`.
 - `migrations/` — Alembic (single tree; current head in **Current status**; `env.py` excludes migration-managed expression/partial indexes).
 - `packages/contracts/openapi.yaml` — the living API contract (redocly-lint only; **not** codegen). Document new endpoints in-PR.
 - `infra/compose/` — Docker Compose (S/M/L) + Caddy; `just` recipes wrap it. `docs/` — the spec (`00`–`18` + `decisions-register.md`) + `runbooks/`. `mockup/easysynq-mockup.html` — owner-approved UI mockup.
@@ -92,7 +92,8 @@ Celery workers · Keycloak (auth) · Gotenberg/LibreOffice (rendering) · Caddy 
 ## Current status (as of 2026-06-07)
 
 **MVP COMPLETE** (S0–S11). **v1 in progress** — families ✅: Records & evidence · Ingestion · Audits/Findings/CAPA ·
-Revision & change depth (DCR). **Web-UI track:** S-web-1 ✅, S-web-2 ✅ (faceted Library + read-only drawer). **Next:
-S-web-3 = Document Authoring** (in-browser create→check-out→check-in→release) · S-web-4 = Document detail page ·
-S-web-5 = Review & Approve. Also open: the v1.x drift family (D1–D5). **Migration head `0044` (next `0045`).** Full
-per-slice narrative + deferred residuals: `docs/slice-history.md`.
+Revision & change depth (DCR). **Web-UI track:** S-web-1 ✅, S-web-2 ✅ (faceted Library + read-only drawer), **S-web-3
+✅ = Document Authoring** (in-browser create→check-out→check-in→submit-review; `GET /me/permissions` + per-doc
+`capabilities` drive DP-6 gating; no migration/key). **Next:** S-web-4 = read-only Document detail page · S-web-5 =
+Review & Approve. Also open: the v1.x drift family (D1–D5). **Migration head `0044` (next `0045`).** Full per-slice
+narrative + deferred residuals: `docs/slice-history.md`.

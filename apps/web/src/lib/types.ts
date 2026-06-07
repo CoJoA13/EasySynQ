@@ -20,6 +20,20 @@ export interface DocumentSummary {
   effective_from: string | null;
   created_at: string | null;
   clause_refs?: string[];
+  // S-web-3: per-document authoring affordances (DP-6) — present only on detail reads.
+  capabilities?: DocumentCapabilities;
+}
+
+// S-web-3: GET /documents/{id}.capabilities — the authz answer per authoring key (detail-only). The
+// UI combines these with lifecycle state + lock state for the final affordance (DP-6, no dead button).
+export interface DocumentCapabilities {
+  checkout: boolean;
+  edit: boolean; // check-in + start-revision
+  manage_metadata: boolean; // clause mapping
+  submit: boolean;
+  release: boolean; // reflects the version-relative SoD-2
+  obsolete: boolean;
+  read_draft: boolean;
 }
 
 // S-web-2: the GET /documents pagination envelope.
@@ -130,4 +144,63 @@ export interface Clause {
   is_mandatory_star: boolean;
   pdca_phase: PdcaPhase;
   requirement_node: boolean;
+}
+
+// ---- S-web-3 (Document Authoring) -------------------------------------------------------
+
+// GET /me/permissions — the caller's own effective grants (DP-6 affordance gating).
+export interface MePermissionEntry {
+  key: string;
+  effect: "ALLOW" | "DENY";
+  source: string | null;
+}
+
+export interface MePermissions {
+  scope: { level: string; selector: Record<string, unknown> | null };
+  permissions: MePermissionEntry[];
+}
+
+export type ChangeSignificance = "MAJOR" | "MINOR";
+
+// POST /documents body.
+export interface DocumentCreate {
+  title: string;
+  document_type_id: string;
+  area_code?: string;
+  folder_path?: string;
+  classification?: string;
+}
+
+// POST /documents/{id}/checkout response (also the working-draft mirror row).
+export interface WorkingDraft {
+  id: string;
+  document_id: string;
+  checked_out_by: string;
+  checked_out_at: string;
+  source_version_id: string | null;
+  lock_ttl_seconds: number;
+}
+
+// POST /documents/{id}/versions:init-upload response.
+export interface InitUploadResult {
+  dedup: boolean;
+  object_key: string;
+  upload_url: string | null;
+}
+
+// POST /documents/{id}/checkin response (the new version + a no-op-detection flag).
+export interface CheckinResult extends DocumentVersion {
+  change_detected: boolean;
+}
+
+// GET/POST /documents/{id}/clause-mappings item.
+export interface ClauseMapping {
+  id: string;
+  document_id: string;
+  clause_id: string;
+  clause_number: string;
+  clause_title: string;
+  is_requirement_level: boolean;
+  framework_id: string;
+  created_at: string;
 }
