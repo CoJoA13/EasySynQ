@@ -7,10 +7,16 @@ export default {
   theme: {
     extend: {
       colors: {
+        canvas: "var(--es-bg)",
+        surface: "var(--es-surface)",
         accent: "var(--es-accent)",
-        surface: "var(--es-bg-surface)",
-        "state-effective": "var(--es-state-effective)",
-        "state-draft": "var(--es-state-draft)",
+        "text-primary": "var(--es-text)",
+        "text-secondary": "var(--es-text-2)",
+        border: "var(--es-border)",
+      },
+      fontFamily: {
+        sans: "var(--es-font-sans)",
+        mono: "var(--es-font-mono)",
       },
     },
   },
