@@ -25,7 +25,6 @@ from ..db.models.permission import Permission
 from ..db.models.role import Role, RoleAssignment, RoleGrant
 from ..db.models.scope import Scope
 from ..db.session import get_session
-from ..domain.authz import RequestContext, ResourceContext, authorize
 from ..domain.authz.types import Effect, ScopeLevel
 from ..logging import request_id_var
 from ..problems import ProblemException
@@ -33,12 +32,11 @@ from ..services.authz import (
     AuthzAuditSink,
     assert_can_assign_role,
     assert_can_grant,
-    gather_grants,
     get_authz_audit_sink,
-    granted_permission_keys,
     invalidate_user_permissions,
     require,
 )
+from ..services.authz.effective import compute_effective_permissions
 
 router = APIRouter(prefix="/api/v1", tags=["authz"])
 
@@ -194,22 +192,6 @@ async def _resolve_role(
     if role is None:
         raise ProblemException(status=404, code="not_found", title="Role not found")
     return role
-
-
-def _resource_for(level: str | None, scope_id: str | None) -> ResourceContext:
-    if level is None or level == "SYSTEM":
-        return ResourceContext.system()
-    if level == "ARTIFACT":
-        return ResourceContext(artifact_id=scope_id)
-    if level == "PROCESS":
-        return ResourceContext(process_ids=frozenset({scope_id}) if scope_id else frozenset())
-    if level == "FOLDER":
-        return ResourceContext(folder_path=scope_id)
-    if level == "DOC_CLASS":
-        return ResourceContext(document_level=scope_id)
-    if level == "FRAMEWORK":
-        return ResourceContext(framework_id=scope_id)
-    return ResourceContext.system()
 
 
 # --- catalog & roles (read) -------------------------------------------------------------
@@ -463,26 +445,10 @@ async def effective_permissions(
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
     target = await _get_user(session, user_id, caller.org_id)
-    resource = _resource_for(scope_level, scope_id)
-    ctx = RequestContext(now=datetime.datetime.now(datetime.UTC))
-    keys = await granted_permission_keys(session, target.id, target.org_id)
-
-    permissions: list[dict[str, Any]] = []
-    for key in sorted(keys):
-        grants = await gather_grants(session, target.id, target.org_id, key)
-        decision = authorize(grants, key, resource, ctx)
-        if decision.reason in ("allow", "explicit_deny"):
-            permissions.append(
-                {
-                    "key": key,
-                    "effect": "ALLOW" if decision.allow else "DENY",
-                    "source": decision.source,
-                }
-            )
-    return {
-        "scope": {
-            "level": scope_level or "SYSTEM",
-            "selector": {"scope_id": scope_id} if scope_id else None,
-        },
-        "permissions": permissions,
-    }
+    return await compute_effective_permissions(
+        session,
+        user_id=target.id,
+        org_id=target.org_id,
+        scope_level=scope_level,
+        scope_id=scope_id,
+    )
