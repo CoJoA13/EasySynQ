@@ -463,6 +463,42 @@ paths:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
 
+  /me/permissions:
+    get:
+      tags: [auth]
+      operationId: getMyPermissions
+      summary: The caller's own effective permissions at a scope (DP-6 affordance gating; slice S-web-3).
+      description: >-
+        Authentication-only — it reports the caller's OWN grants, so it gates nothing (the GET /me
+        precedent; deliberately not user.read-gated, which would stop an ordinary author from
+        discovering their own affordances). A coarse SYSTEM-scope answer by default; the optional
+        scope_level/scope_id refine it (e.g. document.create at a DOC_CLASS). Per-document write
+        buttons gate on the document's capabilities block (GET /documents/{id}) instead.
+      parameters:
+        - name: scope_level
+          in: query
+          required: false
+          description: Scope to resolve at (default SYSTEM).
+          schema:
+            type: string
+            enum: [SYSTEM, FRAMEWORK, PROCESS, FOLDER, DOC_CLASS, ARTIFACT]
+        - name: scope_id
+          in: query
+          required: false
+          description: The scope selector value (process id / folder path / artifact id / doc class).
+          schema: { type: string }
+      responses:
+        "200":
+          description: The caller's effective permissions with provenance.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EffectivePermissions" }
+        "401":
+          description: Missing, invalid, or expired token.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
   /auth/step-up:
     post:
       tags: [auth]
@@ -4650,6 +4686,25 @@ components:
             (slice S10). Present on list (GET /documents) and single-resource reads; omitted on
             create/patch responses.
           example: ["8.4"]
+        capabilities:
+          $ref: "#/components/schemas/DocumentCapabilities"
+
+    DocumentCapabilities:
+      type: object
+      additionalProperties: false
+      description: >-
+        The caller's per-document authoring affordances (DP-6 gating; slice S-web-3) — the authz
+        answer ONLY (the SPA combines it with lifecycle state + lock state). Present on detail reads
+        (GET /documents/{id}); omitted on the list. release reflects the version-relative SoD-2 (the
+        author of the latest Approved version cannot release it).
+      properties:
+        checkout: { type: boolean }
+        edit: { type: boolean, description: check-in + start-revision (document.edit). }
+        manage_metadata: { type: boolean, description: clause mapping / metadata (document.manage_metadata). }
+        submit: { type: boolean }
+        release: { type: boolean }
+        obsolete: { type: boolean }
+        read_draft: { type: boolean, description: history / diff / working-copy download (document.read_draft). }
 
     PageMeta:
       type: object

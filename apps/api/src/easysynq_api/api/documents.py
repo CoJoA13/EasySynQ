@@ -351,7 +351,7 @@ async def _release_scope(
 
 # S-web-3 (DP-6): the caller's per-document authoring affordances — the AUTHZ answer only (the SPA
 # combines it with lifecycle state + lock state for the final affordance, e.g. "Check out" vs
-# "Locked by X"). Detail-only (GET /documents/{id}); NEVER per-row on the list (O(rows×keys) grant
+# "Locked by X"). Detail-only (GET /documents/{id}); NEVER per-row on the list (O(rows*keys) grant
 # queries). Mirrors the PEP's evaluate() but calls the pure PDP directly, so a capability probe
 # writes no authz-audit row (the effective-permissions precedent). ``document.create`` is absent —
 # it is DOC_CLASS-scoped/coarse and answered by GET /me/permissions, not per-document.
@@ -656,7 +656,13 @@ async def get_document_endpoint(
     doc = await _load_document(session, caller, document_id)
     rows = await vault_repo.list_clause_mappings(session, doc.id)
     eff = await _effective_from_map(session, [doc])
-    return _document(doc, clause_refs=[c.number for _, c in rows], effective_from=eff.get(doc.id))
+    caps = await _document_capabilities(session, caller, doc)
+    return _document(
+        doc,
+        clause_refs=[c.number for _, c in rows],
+        effective_from=eff.get(doc.id),
+        capabilities=caps,
+    )
 
 
 @router.patch("/documents/{document_id}")
