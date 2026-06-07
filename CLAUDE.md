@@ -26,7 +26,7 @@ stay calm, modern, progressively disclosed — never overwhelming.
 ## Repository layout
 
 - `apps/api/` — FastAPI / Python 3.12. Under `src/easysynq_api/`: `api/` (routes) · `services/` (use-cases, txn owners) · `domain/` (pure logic) · `db/models/` (ORM) · `db/seeds/` · `tasks/` (Celery) · `cli/`. Tests in `apps/api/tests/{unit,integration}` (latter via testcontainers).
-- `apps/web/` — React/TS + Mantine SPA (setup wizard + admin stubs; rest of UI deferred).
+- `apps/web/` — React/TS + Mantine + Tailwind SPA. Shipped: the first-run setup wizard, admin stubs, and **S-web-1** (the app shell + design-system token port + a thin Library — the start of the web-UI track). The rest of the feature UI is in progress (S-web-2/3+). Stack-free tests: vitest + MSW + jest-axe (`npm test`); structure under `src/`: `app/shell/` · `features/` · `lib/` · `theme/` · `test/`.
 - `migrations/` — Alembic (single tree; current head is in **Current status** below; `env.py` excludes migration-managed expression/partial indexes).
 - `packages/contracts/openapi.yaml` — the living API contract (redocly-lint only; **not** codegen). Document new endpoints in-PR.
 - `infra/compose/` — Docker Compose (S/M/L profiles) + Caddy; `just` recipes wrap it. `docs/` — the spec (`00`–`18` + `decisions-register.md`) + `runbooks/`. `mockup/easysynq-mockup.html` — owner-approved UI mockup.
@@ -94,5 +94,5 @@ Also open: the v1.x drift family (scheduled re-review D5 + drift detection D1–
 
 - The owner used `/effort ultracode` (multi-agent Workflow orchestration) for the heavy spec/mockup work; `/effort` is per-session — re-enable it to use that approach again.
 - `.claude/agents/diff-critic.md` — a read-only adversarial reviewer pre-loaded with the load-bearing invariants (WORM/append-only · mirror cache · alembic-check traps · run-scoped integration assertions · deny-wins authz). Run it on the branch diff before each PR (`Agent` tool, `subagent_type: diff-critic`).
-- Persistent memory: `~/.claude/projects/-home-cojoa13-Documents-EasySynQ/memory/` (MEMORY.md index). The `easysynq-project.md` memory owns the running per-slice log; keep this file's Current-status to a short pointer.
+- Persistent memory: `~/.claude/projects/<project-key>/memory/` (MEMORY.md index) — the key is **derived from the project's absolute path**, so it differs per machine/OS (e.g. `-var-home-cojoa13-Documents-EasySynQ` on this bazzite box; `-home-…` on the prior Ubuntu box; a `C--Users-…`-style key on Windows). The `easysynq-project.md` memory owns the running per-slice log; keep this file's Current-status to a short pointer.
 - View the mockup: `xdg-open mockup/easysynq-mockup.html` (this laptop has no headless browser, so no auto PNG screenshots).
