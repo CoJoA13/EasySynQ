@@ -153,6 +153,13 @@ Records/evidence capture, retention/disposition, Evidence Packs, audits/findings
 > `0042` · routing+approval `0043` · implement/close + the shared-path §7.3 obsoletion gate + the CAPA→DCR loop +
 > the deferred cross-FK `0044`) — **the DCR family is COMPLETE** (deferred to the v1.x drift family: scheduled
 > re-review D5 + drift detection D1–D4). **Migration head is `0044`.** See `CLAUDE.md` for shipped detail.
+>
+> **Web-UI track (`apps/web`, React/Mantine SPA) — STARTED.** The deferred SPA is being built as a vertical
+> operational journey: **S-web-1** ✅ (app shell + design-system token port + thin Library) and **S-web-2** ✅
+> (faceted Library + a read-only tabbed detail drawer; minimal authz-correct read endpoints — `GET /document-types`,
+> `GET /directory/users`, a `{data,page}` paginated `GET /documents`; no migration). **Next:** S-web-3 (in-browser
+> document authoring) · S-web-4 (Document detail page) · S-web-5 (Review & Approve — closes UJ-3). Design
+> specs/plans in `docs/superpowers/{specs,plans}/`; per-slice detail in `docs/slice-history.md`.
 
 **Goal:** everything an organization needs to *run and certify* an ISO 9001:2015 QMS, end to end, and to face an external audit with a one-click evidence pack.
 
