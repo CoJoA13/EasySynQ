@@ -70,6 +70,7 @@ Celery workers · Keycloak (auth) · Gotenberg/LibreOffice (rendering) · Caddy 
 - **`.claude/rules/engineering-patterns.md`** — the recurring-patterns catalog (migrations · blob/WORM · workers · workflow engine · authz · testing).
 - **`.claude/rules/dev-workflow.md`** — operator/`.env` detail + the per-feature API quick-reference.
 - **`.claude/rules/slice-history.md`** — the shipped-slice changelog (MVP S0–S11 + the v1 families).
+- **`.claude/rules/windows-wsl-dev.md`** — running EasySynQ on this owner's Windows 11 + WSL2 box: localhost-only auth (PKCE secure-context), `OIDC_DISCOVERY_URL`, ephemeral Keycloak (`just demo-user`), and driving WSL from a Windows-native Claude session. Read when on this machine.
 
 ## Current status (as of 2026-06-06)
 
