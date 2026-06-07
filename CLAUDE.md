@@ -84,16 +84,21 @@ Celery workers · Keycloak (auth) · Gotenberg/LibreOffice (rendering) · Caddy 
 
 ## Recent learnings  <!-- capped ~12, newest first; demote stale ones to engineering-patterns -->
 
-- 2026-06-07 — Admin ≠ content reader: a System-Administrator user (e.g. `demo`) holds **no `document.*`**, so the Library is empty until granted a content role (`easysynq grant-role <kc-sub> "QMS Owner"`), then restart the api to clear its permission cache.
-- 2026-06-07 — SoD is enforced at the PEP, not the vault services — a single actor can drive create→checkin→submit→approve→release at the **service layer** (useful for server-side demo seeds; no token needed).
-- 2026-06-07 — `GET /documents` returns a **`{data, page}` envelope** (S-web-2), not a bare array — consumers read `.data`.
-- 2026-06-07 — Local `-m integration` failures in `test_backup`/`test_restore` are an env gap (no `pg_dump` on this WSL box), **not** regressions; CI passes them.
+- 2026-06-07 — **Web SPA tokens are in-memory only** (`lib/auth`, never persisted) → every reload starts logged-out; an operational, token-less app now auto-bounces to Keycloak to re-auth (PR #91). "All API calls 401 right after a reload" = re-auth in flight or an expired SSO session (sign in again: `demo`/`Demo-Password-1`), NOT a backend bug.
+- 2026-06-07 — **Browser upload/download** (authoring presigned PUT, controlled-copy GET) need MinIO browser-reachable: set `S3_PUBLIC_ENDPOINT=http://localhost:9000` in `.env` (the `s` profile publishes `9000`). Presigning SIGNS AGAINST that host (SigV4 signs the host) — never rewrite the URL host post-signing (PR #90).
+- 2026-06-07 — **`just seed-personas`** seeds the SoD-correct author/approver/releaser logins+grants (`priya`/`ken`/`mara`, all `Demo-Password-1`) — the S-web-5 fixture. Re-run after `just down` (Keycloak is volumeless). The full create→approve→release loop needs **3 DISTINCT** users (SoD-1/2 are non-overridable).
+- 2026-06-07 — Admin ≠ content author: `demo` (System Administrator) holds **no `document.*`**. To author, grant **SYSTEM overrides** of the authoring keys (the integration-test pattern), NOT `grant-role "QMS Owner"` (that role is **reads-only**). No api restart needed (grants resolve per-request). ⚠ This install's org short_code is **`AHT`** → `grant-role` needs `--org AHT`.
+- 2026-06-07 — **CI runs from source, not the built image** → a new CLI module or a `storage.py`/Dockerfile change needs `docker compose … build api` (or `up -d --build`) before the running container picks it up. Green CI ≠ deployed.
+- 2026-06-07 — `GET /documents` returns a **`{data, page}` envelope** (S-web-2), not a bare array — read `.data`. `GET /documents/{id}` carries a per-doc **`capabilities`** block (S-web-3, detail-only) for DP-6 button gating.
+- 2026-06-07 — SoD is enforced at the PEP, not the vault services — a single actor can drive the lifecycle at the **service layer** (server-side demo seeds; no token needed).
+- 2026-06-07 — Local `-m integration` failures in `test_backup`/`test_restore` are an env gap (no `pg_dump`), **not** regressions; CI passes them. A `testcontainers-ryuk … 404 containers/create` failure is a runner flake → re-run the shard.
 
 ## Current status (as of 2026-06-07)
 
 **MVP COMPLETE** (S0–S11). **v1 in progress** — families ✅: Records & evidence · Ingestion · Audits/Findings/CAPA ·
 Revision & change depth (DCR). **Web-UI track:** S-web-1 ✅, S-web-2 ✅ (faceted Library + read-only drawer), **S-web-3
 ✅ = Document Authoring** (in-browser create→check-out→check-in→submit-review; `GET /me/permissions` + per-doc
-`capabilities` drive DP-6 gating; no migration/key). **Next:** S-web-4 = read-only Document detail page · S-web-5 =
-Review & Approve. Also open: the v1.x drift family (D1–D5). **Migration head `0044` (next `0045`).** Full per-slice
-narrative + deferred residuals: `docs/slice-history.md`.
+`capabilities` drive DP-6 gating; no migration/key). Browser flow verified live; dev/infra follow-ups merged
+(#89 `seed-personas` fixture · #90 browser-reachable presigned MinIO · #91 reload re-auth). **Next:** S-web-4 =
+read-only Document detail page · S-web-5 = Review & Approve. Also open: the v1.x drift family (D1–D5).
+**Migration head `0044` (next `0045`).** Full per-slice narrative + deferred residuals: `docs/slice-history.md`.
