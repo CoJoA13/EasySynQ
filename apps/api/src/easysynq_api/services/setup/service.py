@@ -569,7 +569,9 @@ async def configure_auth(
             status=422, code="validation_error", title="method must be LOCAL or FEDERATED"
         )
 
-    verified, detail = await auth_check.probe_oidc_discovery(get_settings().oidc_issuer)
+    verified, detail = await auth_check.probe_oidc_discovery(
+        get_settings().oidc_issuer, get_settings().oidc_discovery_url or None
+    )
     if not verified:
         cfg = await _load_config(session, actor.org_id, lock=True)
         cfg.auth_test_login_at = _now()

@@ -44,6 +44,11 @@ test:
 test-contract:
     cd apps/api && uv run pytest -m contract
 
+# Local CI: the full api + web fast loops (uv/node toolchain; no Docker). Mirror of the green gates.
+check:
+    cd apps/api && uv run ruff check . && uv run ruff format --check . && uv run mypy src && uv run pytest -m unit
+    cd apps/web && npm run lint && npm run typecheck && npm run build && npm test
+
 # --- migrations (single tree at repo root) ---
 migrate-new msg="":
     cd apps/api && uv run alembic revision --autogenerate -m "{{msg}}"
@@ -59,13 +64,26 @@ migrate-roundtrip:
 
 # --- compose stack ---
 up profile="s":
-    docker compose -f infra/compose/compose.yml -f infra/compose/compose.{{profile}}.yml up -d
+    docker compose --env-file .env -f infra/compose/compose.yml -f infra/compose/compose.{{profile}}.yml up -d
 
 down:
-    docker compose -f infra/compose/compose.yml down
+    docker compose --env-file .env -f infra/compose/compose.yml down
 
 logs:
-    docker compose -f infra/compose/compose.yml logs -f --tail=100
+    docker compose --env-file .env -f infra/compose/compose.yml logs -f --tail=100
+
+# (Re)create the Keycloak `demo` dev user for local login. Keycloak has no volume, so its data
+# (incl. this user) is wiped on `just down` / any keycloak recreate; the realm re-imports from
+# realm-export.json. Idempotent; password is the documented dev credential.
+demo-user:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    pw="$(grep -m1 '^KEYCLOAK_ADMIN_PASSWORD=' .env | cut -d= -f2-)"
+    kc() { docker compose --env-file .env -f infra/compose/compose.yml -f infra/compose/compose.s.yml exec -T keycloak /opt/keycloak/bin/kcadm.sh "$@" </dev/null; }
+    kc config credentials --server http://localhost:8080 --realm master --user admin --password "$pw" >/dev/null
+    kc create users -r easysynq -s username=demo -s enabled=true 2>/dev/null || true
+    kc set-password -r easysynq --username demo --new-password "Demo-Password-1"
+    echo "demo / Demo-Password-1 ready - sign in at http://localhost"
 
 # --- packaging ---
 airgap:
@@ -76,6 +94,6 @@ airgap:
 # append to images.lock so a release ships immutable, digest-pinned images (doc 03 §15, S11).
 images-update:
     @grep -vE '^\s*#|^\s*$' infra/images.lock | awk '{print $2}' | while read -r img; do \
-        digest=$(docker manifest inspect "$img" >/dev/null 2>&1 && docker buildx imagetools inspect "$img" --format '{{.Manifest.Digest}}' 2>/dev/null || true); \
+        digest=$(docker manifest inspect "$img" >/dev/null 2>&1 && docker buildx imagetools inspect "$img" --format '{{ "{{" }}.Manifest.Digest}}' 2>/dev/null || true); \
         if [ -n "$digest" ]; then echo "$img@$digest"; else echo "# COULD NOT RESOLVE: $img"; fi; \
     done

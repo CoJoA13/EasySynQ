@@ -198,7 +198,10 @@ services:
       - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddydata:/data
       - caddyconfig:/config
-    networks: [internal]
+    networks:
+      internal:
+        aliases:
+          - easysynq.local
 
   # Dev-only SMTP catcher (email is best-effort in MVP). Enable with --profile dev.
   mailpit:

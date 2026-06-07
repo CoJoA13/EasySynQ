@@ -15,7 +15,10 @@ export default defineConfig({
       "/readyz": { target: API_TARGET, changeOrigin: true },
     },
   },
-  preview: { port: 5173, host: true },
+  // Vite preview sits behind Caddy on the internal network (D1) and is never directly
+  // exposed, so the Host-header allowlist is redundant; allow any host so a prod domain
+  // / air-gap hostname (e.g. easysynq.local) is served rather than blocked.
+  preview: { port: 5173, host: true, allowedHosts: true },
   test: {
     environment: "jsdom",
     globals: true,

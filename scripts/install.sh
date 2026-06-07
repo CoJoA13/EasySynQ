@@ -54,12 +54,16 @@ if [ ! -f "$ENV_FILE" ]; then
 
   chmod 600 "$ENV_FILE"
   echo "install: secrets generated (.env is 0600 — keep it safe; it is gitignored)."
+  echo "install: NOTE set OIDC_ISSUER/OIDC_JWKS_URL in .env to your Keycloak realm before"
+  echo "install:      first-run setup. For a reverse-proxied/localhost issuer the API container"
+  echo "install:      cannot reach, also set OIDC_DISCOVERY_URL (see .env.example)."
 else
   echo "install: $ENV_FILE already exists — leaving it untouched."
 fi
 
 echo "install: starting the stack (profile: $PROFILE)..."
 docker compose \
+  --env-file "$ENV_FILE" \
   -f infra/compose/compose.yml \
   -f "infra/compose/compose.${PROFILE}.yml" \
   up -d --build

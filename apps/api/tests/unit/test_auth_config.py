@@ -107,6 +107,30 @@ async def test_probe_fails_on_empty_issuer() -> None:
     assert ok is False
 
 
+async def test_probe_with_internal_discovery_url_skips_issuer_match(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With an explicit internal discovery URL (a reverse-proxied issuer the API host can't reach),
+    the doc's issuer legitimately differs from the public issuer, so the strict issuer-match is
+    skipped; reachability + jwks_uri remain the real checks (the G-D internal-discovery fix)."""
+    internal = {"issuer": "http://kc:8080/realms/x", "jwks_uri": "http://kc:8080/c"}
+    _patch_client(monkeypatch, _FakeClient(resp=_FakeResp(200, internal)))
+    ok, _ = await auth_check.probe_oidc_discovery(
+        _ISSUER, discovery_url="http://kc:8080/realms/x/.well-known/openid-configuration"
+    )
+    assert ok is True
+
+
+async def test_probe_with_discovery_url_still_requires_issuer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Even via an internal discovery URL the doc must advertise a well-formed issuer + jwks_uri."""
+    _patch_client(monkeypatch, _FakeClient(resp=_FakeResp(200, {"jwks_uri": "x"})))
+    ok, detail = await auth_check.probe_oidc_discovery(_ISSUER, discovery_url="http://kc:8080/d")
+    assert ok is False
+    assert "issuer" in detail
+
+
 def test_new_event_types_present() -> None:
     """0015's three ALTER TYPE ADD VALUEs must also be Python EventType members, or a from-scratch
     ``upgrade head`` (which rebuilds the type from EVENT_TYPE_VALUES) drops them → inserts crash."""
