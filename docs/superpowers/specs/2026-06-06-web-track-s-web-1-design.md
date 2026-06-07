@@ -102,8 +102,16 @@ styling systems:
    (Inter + JetBrains Mono for identifiers/diffs/hashes), radius, shadows (the 4-step elevation ramp), spacing.
 3. **Tailwind config** references the same CSS vars (e.g. `colors: { canvas: 'var(--bg-canvas)', … }`) so utility
    classes and Mantine share one source — re-theming is a token edit, not a rebuild.
-4. **Fonts self-hosted** (Inter + JetBrains Mono via `@font-face`) — no outbound fetch (D1 self-hosted constraint).
-5. Light/dark via the existing `defaultColorScheme="auto"` + the dark `:root` override.
+4. **Fonts = the system stack** (`--es-font-sans` / `--es-font-mono` from the mockup). The realized mockup
+   deliberately uses no web fonts ("opens offline… no CDN"), which also satisfies the D1 self-hosted / air-gap
+   constraint with zero font assets. *(doc 11 §3.1's Inter + JetBrains Mono is a deferred polish option — not
+   S-web-1. This corrects the earlier draft, which had lifted Inter/JetBrains from doc 11 before the mockup was
+   inspected.)*
+5. Light/dark via the existing `defaultColorScheme="auto"`; the mockup's `[data-theme="dark"]` block (styles.css
+   lines 139–198) is re-keyed to Mantine's `:root[data-mantine-color-scheme="dark"]`.
+6. **Reconcile the stub:** today's `tokens.css`, `tailwind.config.ts`, and `index.css` reference names absent from
+   the mockup (`--es-bg-surface`, `--es-fg`, `--es-state-*`). The port adopts the mockup's canonical `--es-*` names
+   (styles.css `:root` lines 13–134) and updates those three files to match.
 
 All token pairings already satisfy WCAG 2.2 AA contrast (doc 11 §3); the state/record status colors carry an
 icon + label (never color-only).
@@ -132,10 +140,14 @@ icon + label (never color-only).
 3. **Auth/API plumbing** — `AuthProvider` + token-aware api client + React Query hooks (`useDocuments`, `useClauses`).
 4. **Routing** — `AppShell` at `/`; Home + Library live; `/documents/:id` + `/tasks/:id` routes reserved;
    `/setup` + `/admin` unchanged.
-5. **Thin Library list** — a real table from `GET /documents` with columns: identifier · title · type · state
-   badge (state-color tokens) · clause chips · owner; row click → drawer overview. Light pagination; facets
-   deferred to Slice 2. *(The mockup's "Next review" column is intentionally omitted — it depends on
-   `next_review_due`, which the schema does not have yet; see §11.)*
+5. **Thin Library list** — a real table from `GET /documents` with columns: **identifier · title · state badge ·
+   clause chips**; row click → drawer overview (which shows the fuller raw field set). Light pagination; facets
+   deferred to Slice 2. *(The list endpoint returns only `document_type_id` / `owner_user_id` (UUIDs), so the
+   mockup's friendly "Type" and "Owner" columns need document-type + user lookups the endpoint doesn't provide —
+   deferred to Slice 2. The mockup's "Next review" column is omitted — `next_review_due` doesn't exist in the schema
+   yet; see §11.)* The `GET /documents` row shape is: `id · identifier · kind · title · document_type_id ·
+   area_code · folder_path · current_state · classification · is_singleton · owner_user_id · framework_id ·
+   current_effective_version_id · created_at · clause_refs[]`.
 6. **Home placeholder** — one calm card so `/` is not empty (full PDCA dashboard is a later slice).
 7. **Accessibility** — skip-link, semantic landmarks, visible focus ring, keyboard-operable rail + drawer,
    `prefers-reduced-motion`; **jest-axe** assertion wired into CI.
