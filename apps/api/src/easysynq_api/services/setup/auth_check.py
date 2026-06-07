@@ -19,7 +19,7 @@ _DISCOVERY_PATH = "/.well-known/openid-configuration"
 _TIMEOUT_SECONDS = 5.0
 
 
-async def probe_oidc_discovery(issuer: str) -> tuple[bool, str]:
+async def probe_oidc_discovery(issuer: str, discovery_url: str | None = None) -> tuple[bool, str]:
     """GET the issuer's OIDC discovery doc and confirm it is well-formed + self-consistent.
 
     Returns ``(verified, detail)``. Verified iff: HTTP 200, the doc's ``issuer`` equals the
@@ -29,7 +29,7 @@ async def probe_oidc_discovery(issuer: str) -> tuple[bool, str]:
     issuer = (issuer or "").rstrip("/")
     if not issuer:
         return False, "no OIDC issuer is configured"
-    url = f"{issuer}{_DISCOVERY_PATH}"
+    url = discovery_url or f"{issuer}{_DISCOVERY_PATH}"
     try:
         async with httpx.AsyncClient(timeout=_TIMEOUT_SECONDS) as client:
             resp = await client.get(url)
@@ -44,7 +44,11 @@ async def probe_oidc_discovery(issuer: str) -> tuple[bool, str]:
     if not isinstance(doc, dict):
         return False, "discovery document is not a JSON object"
     doc_issuer = doc.get("issuer")
-    if not isinstance(doc_issuer, str) or doc_issuer.rstrip("/") != issuer:
+    if discovery_url is not None and (not isinstance(doc_issuer, str) or not doc_issuer):
+        return False, "discovery document advertises no issuer"
+    if discovery_url is None and (
+        not isinstance(doc_issuer, str) or doc_issuer.rstrip("/") != issuer
+    ):
         return False, "discovery 'issuer' does not match the configured issuer"
     jwks_uri = doc.get("jwks_uri")
     if not isinstance(jwks_uri, str) or not jwks_uri:

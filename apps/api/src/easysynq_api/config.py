@@ -76,6 +76,10 @@ class Settings(BaseSettings):
     oidc_issuer: str = ""
     oidc_audience: str = "easysynq-api"
     oidc_jwks_url: str = ""
+    # Optional internal OIDC discovery URL for the G-D setup probe when the public (browser-
+    # facing) issuer is not reachable from the API host (a reverse-proxied localhost/hostname
+    # issuer). Empty -> derive discovery from oidc_issuer (default; when the issuer is reachable).
+    oidc_discovery_url: str = ""
     oidc_client_id: str = "easysynq-web"
 
     # renderer + mirror
