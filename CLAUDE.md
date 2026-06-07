@@ -86,11 +86,14 @@ schedule the `release_due` cutover; RETIRE obsoletes) + enforces the underlying 
 (SoD-2, no side-door); the §7.3 gate now fires on the SHARED `document.obsolete` too (`force_retire`+justification);
 `POST /capas/{id}/raise-dcr` (1:N, Idempotency-Key).
 **v1 web-UI track in progress** (`apps/web`, React/Mantine SPA). **S-web-1** ✅ (app shell + design-system token port +
-thin Library). **S-web-2** ✅ — faceted Library + a read-only tabbed detail drawer (Overview/History/Where-used);
-**full-stack but NO migration**: minimal authenticated-only read endpoints (`GET /document-types`, `GET /directory/users`
-[display-name only]) + a `{data,page}` **authz-correct** pagination envelope + an `effective_from` date filter/column on
-`GET /documents`. The 3-slice plan was **split**, so: **Next:** S-web-3 (standalone Document detail page) · S-web-4
-(Review & Approve — closes UJ-3). Also open: the v1.x drift family (scheduled re-review D5 + drift detection D1–D4).
+thin Library). **S-web-2** ✅ — faceted Library + a read-only tabbed detail drawer (full-stack, NO migration: minimal
+authenticated-only read endpoints + the `{data,page}` **authz-correct** pagination envelope + `effective_from`).
+**S-web-3** ✅ — **Document Authoring** (the author's half: create → check-out → upload/check-in → map clauses →
+submit-review): `GET /me/permissions` + a per-document `capabilities` block (full-stack, **NO migration, no new key**)
+drive DP-6 affordance gating; a New-Document wizard + "Author actions" in the drawer + the presigned-PUT upload
+(SoD-1 stops the slice at submit-review). The 3-slice plan was **re-sequenced**, so: **Next:** S-web-4 (read-only
+Document detail page) · S-web-5 (Review & Approve — closes UJ-3). Also open: the v1.x drift family (scheduled re-review
+D5 + drift detection D1–D4).
 **Migration head `0044` (next `0045`).** Full narrative + deferred v1/v1.x residuals: **`.claude/rules/slice-history.md`**.
 
 ## Working preferences
