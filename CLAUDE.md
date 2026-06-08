@@ -27,7 +27,7 @@ modern, progressively disclosed, never overwhelming.
 ## Repository layout
 
 - `apps/api/` — FastAPI / Python 3.12. Under `src/easysynq_api/`: `api/` (routes) · `services/` (use-cases, txn owners) · `domain/` (pure logic) · `db/models/` (ORM) · `db/seeds/` · `tasks/` (Celery) · `cli/`. Tests in `apps/api/tests/{unit,integration}` (latter via testcontainers).
-- `apps/web/` — React/TS + Mantine + Tailwind SPA. Shipped: first-run wizard, admin stubs, **S-web-1** (shell + token port), **S-web-2** (faceted Library + read-only detail drawer), **S-web-3** (Document Authoring). Feature UI ongoing (next: S-web-4 detail page). Stack-free tests: vitest + MSW + jest-axe (`npm test`); under `src/`: `app/shell/` · `features/` · `lib/` · `theme/` · `test/`.
+- `apps/web/` — React/TS + Mantine + Tailwind SPA. Shipped: first-run wizard, admin stubs, **S-web-1** (shell + token port), **S-web-2** (faceted Library + read-only detail drawer), **S-web-3** (Document Authoring), **S-web-4** (Document detail page + text/metadata redline). Feature UI ongoing (next: S-web-4b visual page-image diff, then S-web-5 Review & Approve). Stack-free tests: vitest + MSW + jest-axe (`npm test`); under `src/`: `app/shell/` · `features/` · `lib/` · `theme/` · `test/`.
 - `migrations/` — Alembic (single tree; current head in **Current status**; `env.py` excludes migration-managed expression/partial indexes).
 - `packages/contracts/openapi.yaml` — the living API contract (redocly-lint only; **not** codegen). Document new endpoints in-PR.
 - `infra/compose/` — Docker Compose (S/M/L) + Caddy; `just` recipes wrap it. `docs/` — the spec (`00`–`18` + `decisions-register.md`) + `runbooks/`. `mockup/easysynq-mockup.html` — owner-approved UI mockup.
@@ -84,6 +84,7 @@ Celery workers · Keycloak (auth) · Gotenberg/LibreOffice (rendering) · Caddy 
 
 ## Recent learnings  <!-- capped ~12, newest first; demote stale ones to engineering-patterns -->
 
+- 2026-06-08 — **S-web-4b (worker-async visual page-image diff viewer) is FRONT-END ONLY** — no migration/key/contract; the S-dcr-3b backend trio was already built+contracted (`POST/GET …/visual-diff?from=` + `GET …/visual-diff/page/{n}?from=&layer=`, **0-based** page, gated `document.read_draft`). `useVisualDiff` = a **POST-trigger that seeds the poll cache** so the GET poll never races the 404-before-request + `refetchInterval` only while `Pending` (halts at any terminal status); `VisualDiffViewer` = a single pane + Before/After/Diff toggle + a changed-page rail + `n`/`p`, wired as a `?mode=visual` `SegmentedControl` in `VersionCompare` (**RedlineViewer byte-identical**). The page-PNG endpoint is **authed, NOT presigned** → a bare `<img src>` 403s; new `apiGetBlob`/`useApi().getBlob` fetches with the bearer → `objectURL` (revoked on change/unmount — the **only** API-proxied binary in the SPA). `Unavailable` / a page-404 / dev-renderer-off-`Pending` are all **calm**, not errors.
 - 2026-06-08 — **S-web-4 (read-only Document detail page + redline) is FRONT-END ONLY** — no migration/key/contract; every read already existed + was contracted (`GET /documents/{id}` `capabilities` · `…/versions` · `…/versions/{vid}/diff?from=` · `…/where-used` · `…/download`). The `/documents/:id` page reuses `ArtifactHeader`/`AuthorActions` verbatim (gated, DP-6); the redline is **synchronous** text+metadata (`useVersionDiff`, `read_draft` 403→quiet, `<ins>`/`<del>` + `+`/`−` non-color markers, `n`/`p` nav), **URL-driven** (`?from=&to=`); the worker-async **visual page-image diff** (POST→poll→PNG layers, already contracted) is carved to **S-web-4b** (PR #93).
 - 2026-06-07 — **Web SPA tokens are in-memory only** (`lib/auth`, never persisted) → every reload starts logged-out; an operational, token-less app now auto-bounces to Keycloak to re-auth (PR #91). "All API calls 401 right after a reload" = re-auth in flight or an expired SSO session (sign in again: `demo`/`Demo-Password-1`), NOT a backend bug.
 - 2026-06-07 — **Browser upload/download** (authoring presigned PUT, controlled-copy GET) need MinIO browser-reachable: set `S3_PUBLIC_ENDPOINT=http://localhost:9000` in `.env` (the `s` profile publishes `9000`). Presigning SIGNS AGAINST that host (SigV4 signs the host) — never rewrite the URL host post-signing (PR #90).
@@ -99,9 +100,10 @@ Celery workers · Keycloak (auth) · Gotenberg/LibreOffice (rendering) · Caddy 
 **MVP COMPLETE** (S0–S11). **v1 in progress** — families ✅: Records & evidence · Ingestion · Audits/Findings/CAPA ·
 Revision & change depth (DCR). **Web-UI track:** S-web-1 ✅, S-web-2 ✅ (faceted Library + read-only drawer), S-web-3
 ✅ = Document Authoring (`GET /me/permissions` + per-doc `capabilities` drive DP-6 gating; no migration/key), dev/infra
-follow-ups merged (#89 `seed-personas` · #90 browser-reachable presigned MinIO · #91 reload re-auth). **S-web-4**
-(read-only Document detail page + the text/metadata redline) **implemented — PR #93 open** (front-end only; no
-migration/key/contract; reuses `AuthorActions`/`ArtifactHeader`; URL-driven redline gated `read_draft`; rendition
-card + Open/Download; visual page-image diff carved to S-web-4b). **Next:** S-web-4b = visual page-image diff viewer ·
-S-web-5 = Review & Approve. Also open: the v1.x drift family (D1–D5).
+follow-ups merged (#89 `seed-personas` · #90 browser-reachable presigned MinIO · #91 reload re-auth). **S-web-4** ✅
+(read-only Document detail page + the text/metadata redline; #93). **S-web-4b** (the worker-async **visual page-image
+diff viewer** — the doc-11 §4.7 page-image mode S-web-4 deferred) **implemented — PR open** (front-end only; no
+migration/key/contract; the S-dcr-3b backend trio reused; single-pane Before/After/Diff toggle + a changed-page rail,
+authed `getBlob`→objectURL `<img>`, `?mode=visual` `SegmentedControl` in `VersionCompare`, RedlineViewer byte-identical;
+diff-critic CLEAN). **Next:** S-web-5 = Review & Approve. Also open: the v1.x drift family (D1–D5).
 **Migration head `0044` (next `0045`).** Full per-slice narrative + deferred residuals: `docs/slice-history.md`.

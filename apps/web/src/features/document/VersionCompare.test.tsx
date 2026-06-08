@@ -1,6 +1,7 @@
 import { axe } from "jest-axe";
 import { expect, test } from "vitest";
 import { screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { renderWithProviders } from "../../test/render";
 import { versionFixture } from "../../test/msw/handlers";
 import { VersionCompare } from "./VersionCompare";
@@ -41,11 +42,50 @@ test("VersionCompare is hidden when there is nothing to compare (<2 versions)", 
   expect(screen.queryByText("Compare from")).not.toBeInTheDocument();
 });
 
-test("VersionCompare has no a11y violations", async () => {
+test("VersionCompare defaults to the Text redline and exposes a Text|Visual switch", async () => {
+  renderWithProviders(<VersionCompare documentId={DOC} versions={versions} />, {
+    route: `/documents/${DOC}?from=${FROM}&to=${TO}`,
+  });
+  await screen.findByText(/Added weighted scoring/); // text redline (default mode)
+  expect(screen.getByText("Text")).toBeInTheDocument();
+  expect(screen.getByText("Visual")).toBeInTheDocument();
+});
+
+test("VersionCompare switches to the visual diff via the mode toggle", async () => {
+  const user = userEvent.setup();
+  renderWithProviders(<VersionCompare documentId={DOC} versions={versions} />, {
+    route: `/documents/${DOC}?from=${FROM}&to=${TO}`,
+  });
+  await screen.findByText(/Added weighted scoring/);
+  await user.click(screen.getByText("Visual"));
+  await screen.findByText("Page images"); // the visual viewer mounted
+  expect(screen.queryByText(/Added weighted scoring/)).not.toBeInTheDocument();
+});
+
+test("VersionCompare honours ?mode=visual from the URL (deep-link), keeping the pair", async () => {
+  renderWithProviders(<VersionCompare documentId={DOC} versions={versions} />, {
+    route: `/documents/${DOC}?from=${FROM}&to=${TO}&mode=visual`,
+  });
+  await screen.findByText("Page images");
+  // the same pair drives the visual viewer — its changed-page rail is present
+  expect(screen.getByRole("button", { name: "Page 2, changed" })).toBeInTheDocument();
+  expect(screen.queryByText(/Added weighted scoring/)).not.toBeInTheDocument();
+});
+
+test("VersionCompare has no a11y violations (text mode)", async () => {
   const { container } = renderWithProviders(
     <VersionCompare documentId={DOC} versions={versions} />,
     { route: `/documents/${DOC}?from=${FROM}&to=${TO}` },
   );
   await screen.findByText(/Added weighted scoring/);
+  expect(await axe(container)).toHaveNoViolations();
+});
+
+test("VersionCompare has no a11y violations (visual mode)", async () => {
+  const { container } = renderWithProviders(
+    <VersionCompare documentId={DOC} versions={versions} />,
+    { route: `/documents/${DOC}?from=${FROM}&to=${TO}&mode=visual` },
+  );
+  await screen.findByAltText(/Diff layer/);
   expect(await axe(container)).toHaveNoViolations();
 });

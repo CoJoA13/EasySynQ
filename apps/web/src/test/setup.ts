@@ -33,6 +33,12 @@ if (typeof Blob !== "undefined" && typeof Blob.prototype.arrayBuffer !== "functi
   };
 }
 
+// jsdom implements neither URL.createObjectURL nor revokeObjectURL; the S-web-4b visual-diff
+// viewer fetches each page PNG → Blob → objectURL → <img src> and revokes on cleanup. A fixed
+// stub URL is enough for the tests (they assert the authed fetch + the <img> alt, not the pixels).
+URL.createObjectURL = (() => "blob:mock") as unknown as typeof URL.createObjectURL;
+URL.revokeObjectURL = (() => {}) as unknown as typeof URL.revokeObjectURL;
+
 // jsdom lacks ResizeObserver; Mantine's FloatingIndicator (SegmentedControl / Tabs) needs it.
 class ResizeObserverStub {
   observe() {}
