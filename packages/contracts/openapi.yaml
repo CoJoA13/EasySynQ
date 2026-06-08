@@ -1463,6 +1463,26 @@ paths:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
 
+  /documents/{document_id}/approval:
+    get:
+      tags: [documents]
+      operationId: getDocumentApproval
+      summary: "The document's current approval cycle (latest workflow instance + tasks), or null if none. Gated document.read."
+      description: "S-web-5 discovery read for the Approvals stepper. Returns the LATEST workflow_instance for the document (tasks expanded), or null when it was never submitted (calm, not 404). No task.*/workflow.* permission key exists; the gate is document.read on the subject, matching GET /workflow-instances/{id}."
+      parameters:
+        - { name: document_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: "The latest workflow instance for the document (tasks expanded), or null."
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/WorkflowInstance" }
+                  - { type: "null" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+
   /documents/{document_id}/start-revision:
     post:
       tags: [documents]

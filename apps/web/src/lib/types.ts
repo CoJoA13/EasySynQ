@@ -295,3 +295,83 @@ export interface VisualDiffStatus {
   reason: string | null;
   pages: VisualDiffPage[] | null;
 }
+
+// ---- S-web-5 (Review & Approve) ---------------------------------------------------------
+export type TaskState = "PENDING" | "CLAIMED" | "DONE" | "SKIPPED" | "ESCALATED" | "EXPIRED";
+export type TaskType =
+  | "APPROVE"
+  | "REVIEW"
+  | "PERIODIC_REVIEW"
+  | "AUDIT_TASK"
+  | "FINDING_ACK"
+  | "CAPA_STAGE"
+  | "CAPA_ACTION"
+  | "VERIFY"
+  | "MR_INPUT"
+  | "MR_ACTION"
+  | "DCR_TRIAGE";
+
+// GET /tasks · GET /tasks/{id} · the tasks[] of GET /workflow-instances/{id}?expand=tasks.
+export interface Task {
+  id: string;
+  instance_id: string;
+  stage_key: string;
+  type: TaskType;
+  state: TaskState;
+  assignee_user_id: string | null;
+  candidate_pool: string[] | null;
+  action_expected: string | null;
+  due_at: string | null;
+}
+
+// current_state is free-form Text server-side — keep it an open string, do NOT enum-validate.
+export type WorkflowInstanceState =
+  | "IN_APPROVAL"
+  | "APPROVED"
+  | "REJECTED_TO_DRAFT"
+  | "NEEDS_ATTENTION"
+  | (string & {});
+
+// GET /documents/{id}/approval · GET /workflow-instances/{id}.
+export interface WorkflowInstance {
+  id: string;
+  definition_id: string;
+  definition_version: number;
+  subject_type: string;
+  subject_id: string;
+  current_state: WorkflowInstanceState;
+  started_at: string | null;
+  revision: number;
+  tasks?: Task[];
+}
+
+export type DecisionOutcome = "approve" | "changes_requested" | "reject";
+
+// POST /tasks/{id}/decision body.
+export interface DecisionBody {
+  outcome: DecisionOutcome;
+  comment?: string;
+  effective_from?: string;
+}
+
+export interface SignatureEventSummary {
+  id: string;
+  meaning: string;
+  method: string;
+  content_digest: string | null;
+  auth_context: Record<string, unknown> | null;
+  reauth_at: string | null;
+  crypto_signature: string | null;
+}
+
+// POST /tasks/{id}/decision response.
+export interface DecisionResult {
+  task_id: string;
+  instance_id: string;
+  stage_key: string;
+  outcome: DecisionOutcome;
+  decided_at: string | null;
+  decided_by: string;
+  signature_event: SignatureEventSummary | null;
+  comment: string | null;
+}

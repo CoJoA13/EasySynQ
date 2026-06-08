@@ -191,6 +191,9 @@ services:
       # "tls internal" (the self-signed CA) since ACME is unreachable offline.
       SITE_ADDRESS: ${SITE_ADDRESS:-:80}
       CADDY_TLS_DIRECTIVE: ${CADDY_TLS_DIRECTIVE:-}
+      # Browser presigned upload/download go DIRECTLY to the object store (a different origin), so the
+      # SPA CSP connect-src must allow it (empty when the object store is same-origin behind Caddy).
+      S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-}
     ports:
       - "${HTTP_PORT:-80}:80"
       - "${HTTPS_PORT:-443}:443"

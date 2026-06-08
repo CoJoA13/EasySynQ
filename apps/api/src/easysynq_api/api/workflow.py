@@ -266,3 +266,35 @@ async def get_instance_endpoint(
     await enforce(session, authz_sink, request, caller, "document.read", resource)
     tasks = await wf_repo.list_instance_tasks(session, instance.id) if expand == "tasks" else None
     return _instance(instance, tasks)
+
+
+@router.get("/documents/{document_id}/approval", tags=["documents"])
+async def get_document_approval_endpoint(
+    document_id: uuid.UUID,
+    request: Request,
+    caller: AppUser = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+    authz_sink: AuthzAuditSink = Depends(get_authz_audit_sink),
+) -> dict[str, Any] | None:
+    """The document's current approval cycle (S-web-5) — the LATEST workflow instance for the
+    document + its tasks, or ``null`` when it was never submitted. Gated ``document.read`` on the
+    subject (the closed catalog has no ``task.*``/``workflow.*`` key — same gate as
+    ``GET /workflow-instances/{id}``). Returns ``null`` (not 404) for a Draft with no cycle."""
+    doc = await vault_repo.get_document(session, document_id)
+    if doc is None or doc.org_id != caller.org_id:
+        raise ProblemException(status=404, code="not_found", title="Document not found")
+    level: str | None = None
+    if doc.document_type_id:
+        dt = await session.get(DocumentType, doc.document_type_id)
+        level = dt.document_level.value if dt else None
+    resource = ResourceContext(
+        artifact_id=str(doc.id), folder_path=doc.folder_path, document_level=level
+    )
+    await enforce(session, authz_sink, request, caller, "document.read", resource)
+    instance = await wf_repo.latest_instance_for_subject(
+        session, caller.org_id, WorkflowSubjectType.DOCUMENT, doc.id
+    )
+    if instance is None:
+        return None
+    tasks = await wf_repo.list_instance_tasks(session, instance.id)
+    return _instance(instance, tasks)

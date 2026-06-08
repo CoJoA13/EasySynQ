@@ -17,6 +17,12 @@ export function LeftRail() {
         label="Library"
         active={pathname.startsWith("/library")}
       />
+      <NavLink
+        component={Link}
+        to="/tasks"
+        label="Review & Approve"
+        active={pathname.startsWith("/tasks")}
+      />
       {PHASES.map((phase) => {
         const top = (clauses ?? []).filter((c) => c.pdca_phase === phase && c.parent_id === null);
         if (top.length === 0) return null;

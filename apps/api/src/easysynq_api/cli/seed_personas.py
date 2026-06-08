@@ -39,6 +39,8 @@ from ..domain.authz.types import Effect, ScopeLevel
 # The author needs the full authoring chain. NB the Author role alone can't map clauses
 # (no document.manage_metadata) and Process Owner is PROCESS-scoped — so the proven path is the
 # SYSTEM-override set (the "ride a SYSTEM override" pattern the slices use until owner-assignment).
+# clauseMap.read lets the UI clause picker (GET /clauses) render for the author — the
+# ≥1-clause-mapping submit gate is otherwise unusable from the browser (the S-web-5 live-smoke gap).
 _AUTHOR_KEYS: tuple[str, ...] = (
     "document.read",
     "document.read_draft",
@@ -47,6 +49,7 @@ _AUTHOR_KEYS: tuple[str, ...] = (
     "document.edit",
     "document.manage_metadata",
     "document.submit",
+    "clauseMap.read",
 )
 # document.release is granted to no seeded role (the export/record precedent) → a SYSTEM override.
 _RELEASER_KEYS: tuple[str, ...] = ("document.read", "document.read_draft", "document.release")

@@ -1,0 +1,110 @@
+import { Alert, Button, Card, Checkbox, Group, Radio, Stack, Text, Textarea } from "@mantine/core";
+import { useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { ApiError } from "../../lib/api";
+import { useAuth } from "../../lib/auth";
+import type { DecisionOutcome } from "../../lib/types";
+import { useDecideTask } from "./hooks";
+
+const NEEDS_COMMENT: DecisionOutcome[] = ["changes_requested", "reject"];
+
+// S-web-5: the approver's decision form. Approve signs (a v1 logged confirmation, the signature_event
+// is the audit record); request-changes/reject require a comment (the server 422s otherwise). SoD is
+// enforced server-side — a 403 sod_violation is rendered calmly (the version author never reaches a
+// decidable task, but the branch backstops an override-only edge case).
+export function DecisionCard({ taskId, documentId }: { taskId: string; documentId: string }) {
+  const { user } = useAuth();
+  const decide = useDecideTask();
+  const navigate = useNavigate();
+  const [outcome, setOutcome] = useState<DecisionOutcome | "">("");
+  const [comment, setComment] = useState("");
+  const [signed, setSigned] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [idemKey] = useState(() => crypto.randomUUID());
+
+  const commentRequired = NEEDS_COMMENT.includes(outcome as DecisionOutcome);
+  const commentMissing = commentRequired && comment.trim().length === 0;
+  const needsSig = outcome === "approve";
+  const disabled = outcome === "" || commentMissing || (needsSig && !signed) || decide.isPending;
+  const who = user?.profile?.name ?? user?.profile?.preferred_username ?? "you";
+
+  async function submit() {
+    setError(null);
+    if (outcome === "") return;
+    try {
+      await decide.mutateAsync({
+        taskId,
+        documentId,
+        idempotencyKey: idemKey,
+        body: { outcome, comment: comment.trim() || undefined },
+      });
+      navigate("/tasks");
+    } catch (e) {
+      if (e instanceof ApiError) {
+        if (e.status === 403 && e.code === "sod_violation")
+          setError("You can't approve this version (separation of duties).");
+        else if (e.status === 409) setError("This task was already decided.");
+        else if (e.status === 403 && e.code === "step_up_required")
+          setError("Re-authentication is required to sign.");
+        else setError(e.message);
+      } else setError("Something went wrong. Please retry.");
+    }
+  }
+
+  return (
+    <Card withBorder>
+      <Stack gap="md">
+        <Text fw={600}>Decision</Text>
+        {error && (
+          <Alert color="red" withCloseButton onClose={() => setError(null)}>
+            {error}
+          </Alert>
+        )}
+        <Radio.Group
+          value={outcome}
+          onChange={(v) => setOutcome(v as DecisionOutcome)}
+          label="Your decision"
+          withAsterisk
+        >
+          <Stack gap="xs" mt="xs">
+            <Radio value="approve" label="Approve" />
+            <Radio value="changes_requested" label="Request changes" />
+            <Radio value="reject" label="Reject" />
+          </Stack>
+        </Radio.Group>
+        <Textarea
+          label="Comment"
+          value={comment}
+          onChange={(e) => setComment(e.currentTarget.value)}
+          required={commentRequired}
+          withAsterisk={commentRequired}
+          aria-describedby="decision-comment-rule"
+          error={commentMissing ? "A comment is required to request changes or reject." : undefined}
+        />
+        <Text id="decision-comment-rule" size="xs" c="dimmed">
+          Required when requesting changes or rejecting.
+        </Text>
+        {needsSig && (
+          <Stack gap={4}>
+            <Checkbox
+              checked={signed}
+              onChange={(e) => setSigned(e.currentTarget.checked)}
+              label={`Signing as ${who} — meaning: approval`}
+            />
+            <Text size="xs" c="dimmed">
+              v1 — single-factor logged confirmation.
+            </Text>
+          </Stack>
+        )}
+        <Group justify="flex-end">
+          <Button variant="subtle" onClick={() => navigate("/tasks")}>
+            Cancel
+          </Button>
+          <Button onClick={() => void submit()} loading={decide.isPending} disabled={disabled}>
+            Submit decision
+          </Button>
+        </Group>
+      </Stack>
+    </Card>
+  );
+}

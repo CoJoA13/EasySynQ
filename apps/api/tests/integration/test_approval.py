@@ -25,7 +25,7 @@ from easysynq_api.db.models.workflow import Task, TaskOutcome, WorkflowInstance
 from easysynq_api.db.session import get_sessionmaker
 
 from . import s5_helpers as s5
-from .test_vault import _auth, _checkin, _create, _map_clause, _upload
+from .test_vault import _auth, _checkin, _create, _ensure_user, _map_clause, _upload
 
 pytestmark = pytest.mark.integration
 
@@ -223,6 +223,91 @@ async def test_changes_requested_requires_comment(
         f"/api/v1/tasks/{task_id}/decision", headers=hb, json={"outcome": "changes_requested"}
     )
     assert r.status_code == 422, r.text
+
+
+async def test_document_approval_returns_instance_with_tasks(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    """GET /documents/{id}/approval returns the active instance + its APPROVE task (S-web-5)."""
+    await s5.grant_lifecycle(subj.a)
+    await s5.grant_role(subj.b, "Approver")
+    ha = _auth(token_factory, subj.a)
+    did = await _to_in_review(app_client, ha, await s5.type_id("SOP"))
+
+    r = await app_client.get(f"/api/v1/documents/{did}/approval", headers=ha)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body is not None
+    assert body["subject_id"] == did
+    assert body["subject_type"] == "DOCUMENT"
+    assert body["current_state"] == "IN_APPROVAL"
+    assert len(body["tasks"]) == 1
+    assert body["tasks"][0]["type"] == "APPROVE"
+    assert body["tasks"][0]["state"] == "PENDING"
+
+
+async def test_document_approval_null_when_never_submitted(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    """A fresh Draft (never submitted) has no cycle → 200 with a null body (calm, not 404)."""
+    await s5.grant_lifecycle(subj.a)
+    ha = _auth(token_factory, subj.a)
+    did = (await _create(app_client, ha, await s5.type_id("SOP")))["id"]
+
+    r = await app_client.get(f"/api/v1/documents/{did}/approval", headers=ha)
+    assert r.status_code == 200, r.text
+    assert r.json() is None
+
+
+async def test_document_approval_404_for_unknown_document(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    await s5.grant_lifecycle(subj.a)
+    ha = _auth(token_factory, subj.a)
+    r = await app_client.get(f"/api/v1/documents/{uuid.uuid4()}/approval", headers=ha)
+    assert r.status_code == 404, r.text
+
+
+async def test_document_approval_403_without_document_read(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    """A provisioned user with no grants is denied (deny-by-default)."""
+    await s5.grant_lifecycle(subj.a)
+    await s5.grant_role(subj.b, "Approver")
+    ha = _auth(token_factory, subj.a)
+    did = await _to_in_review(app_client, ha, await s5.type_id("SOP"))
+
+    stranger = f"kc-stranger-{uuid.uuid4().hex[:8]}"
+    async with get_sessionmaker()() as s:
+        await _ensure_user(s, stranger)
+        await s.commit()
+    hs = _auth(token_factory, stranger)
+    r = await app_client.get(f"/api/v1/documents/{did}/approval", headers=hs)
+    assert r.status_code == 403, r.text
+
+
+async def test_document_approval_returns_the_decided_instance(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    """The discovery read is 'latest', NOT nonterminal-filtered: after approval the instance lingers
+    ``APPROVED`` (``release`` never closes it) and the endpoint still returns it + its DONE task.
+
+    (The empty-pool ``NEEDS_ATTENTION`` case — the other state ``find_nonterminal_instance`` would
+    wrongly skip — is not isolable in the shared integration DB: other tests' Approver-role grants
+    populate the org-wide candidate pool, so a submit-review here resolves IN_APPROVAL, not an empty
+    pool. That branch rides code review; this proves the 'returns a non-fresh instance' half.)"""
+    await s5.grant_lifecycle(subj.a)
+    await s5.grant_role(subj.b, "Approver")
+    ha, hb = _auth(token_factory, subj.a), _auth(token_factory, subj.b)
+    did = await s5.drive_to_approved(app_client, ha, hb, await s5.type_id("SOP"), b"approval-disc")
+
+    r = await app_client.get(f"/api/v1/documents/{did}/approval", headers=ha)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body is not None
+    assert body["current_state"] == "APPROVED"
+    assert len(body["tasks"]) == 1
+    assert body["tasks"][0]["state"] == "DONE"
 
 
 async def test_decision_rolls_back_as_one_unit(

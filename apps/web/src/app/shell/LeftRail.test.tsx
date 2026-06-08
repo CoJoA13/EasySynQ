@@ -12,3 +12,8 @@ test("LeftRail shows Home/Library nav + PDCA clause groups", async () => {
   expect(screen.getByText("CHECK")).toBeInTheDocument();
   expect(screen.getByText("ACT")).toBeInTheDocument();
 });
+
+test("LeftRail shows the Review & Approve nav link", () => {
+  renderWithProviders(<LeftRail />, { route: "/library" });
+  expect(screen.getByRole("link", { name: "Review & Approve" })).toHaveAttribute("href", "/tasks");
+});

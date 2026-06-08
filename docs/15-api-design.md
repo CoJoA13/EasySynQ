@@ -437,12 +437,15 @@ Per reconciliation **R6**, "approvals" are **not** standalone tables: an approva
 |---|---|---|---|---|
 | GET | `/workflow-definitions` | `workflow.read` | — | The configured templates (`subject_type`, stages, quorum). |
 | GET | `/workflow-instances/{id}` | `workflow.read` | — | `expand=tasks`; `current_state`, pinned `definition_version`, subject. |
+| GET | `/documents/{id}/approval` | `document.read` (on the subject) | — | **S-web-5 (implemented).** The document → its current approval cycle: the **latest** `workflow_instance` (+ tasks) or `null` when never submitted (calm, not 404). Powers the Approvals stepper. |
 | GET | `/tasks?assignee=me&state=PENDING` | `task.read` | — | The reviewer/approver queue. Filter `type`, `state`, `instance_id`, `stage_key`, `due_at`. Also surfaced via `/me/actions`. |
 | GET | `/tasks/{id}` | `task.read` | — | Task detail + the subject it acts on. |
 | POST | `/tasks/{id}/claim` | `task.claim` | ✓ | Claim a pool task (`PENDING→CLAIMED`). |
 | POST | `/tasks/{id}/decision` | derived from subject (`document.approve` \| `dcr.approve` \| `capa.verify` \| `record.approve`) | ✓ | `{ outcome:"approve"\|"reject"\|"acknowledge"\|"complete"\|"verify"\|"changes_requested", comment? }` (idempotent via `client_token`). Writes a `task_outcome` **and** a `signature_event` and an `audit_event` in one transaction. **SoD enforced:** an author/auditor excluded by `sod_author_excluded`/`sod_constraint` → `403 sod_violation`. May require `acr=mfa` (config) → else `403 step_up_required`. Reject returns the subject to `Draft`/`Open` with the comment. |
 | POST | `/tasks/{id}/reassign` | `task.reassign` | ✓ | `{ to_user_id, reason }` (delegation-aware). |
 | POST | `/tasks/{id}/escalate` | `task.escalate` | ✓ | Manual escalation; SLA breach auto-escalates via Beat (`task` state `ESCALATED`). |
+
+> **Implemented-gate note (S5/S-web-5):** the closed v1 catalog has **no `task.*`/`workflow.*` keys**, so the implementation gates differ from the aspirational columns above: `GET /tasks` and `/tasks/{id}` are **self-scoped** (caller is assignee or in the candidate pool — no permission key), and `GET /workflow-instances/{id}` and `GET /documents/{id}/approval` gate on **`document.read` on the subject document** (not `workflow.read`). `POST /tasks/{id}/decision` derives the key from the (subject, outcome) as shown (`document.approve`/`document.review`).
 
 **`POST /tasks/{id}/decision` 200 (note the e-signature-ready shape — the Part 11 hook):**
 ```json
