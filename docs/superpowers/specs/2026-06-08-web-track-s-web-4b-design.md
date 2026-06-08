@@ -89,8 +89,10 @@ frontend hits the **page sub-endpoint** per page+layer.
   page images exist. **NOT an error** — a terminal "no visual diff possible" state. The synchronous text/metadata
   redline (S-web-4) still covers the pair; degrade to a calm note + the §4.7 source-download fallback. Do **not**
   retry.
-- **`Failed`** — defensive (a `from`/`to` `DocumentVersion` row vanished); show a scoped, recoverable banner with
-  `reason` + Retry.
+- **`Failed`** — defensive (a `from`/`to` `DocumentVersion` row vanished). **Terminal and NOT re-drivable** —
+  `get_or_create_visual_diff` re-enqueues only a `Pending` row (`services/diff/visual.py:211`), so a re-POST of a
+  Failed row just returns Failed forever; show a calm banner with `reason` + the source-download fallback and **no
+  Retry** (a dead button — DP-6). Re-requesting a stalled render is offered on **`Pending` only**.
 - **`Pending`** — render in progress. **⚠ In dev a Gotenberg/renderer outage leaves the row `Pending` forever**
   (a render timeout/503 maps to `RenderResult.pending()`, which the worker swallows by leaving the row Pending —
   it is **not** `Failed`/`Unavailable`). A re-POST re-enqueues a stalled `Pending` row. The viewer must poll
@@ -174,10 +176,13 @@ Honours the contract: **POST to request, GET to poll, never compute from a GET, 
   api.get<VisualDiffStatus>(`/api/v1/documents/${documentId}/versions/${toVid}/visual-diff?from=${fromVid}`),
   enabled: enabled && <POST has run>, refetchInterval: (q) => q.state.data?.status === "Pending" ? 2500 : false })`
   — polls **only while `Pending`**, stops at any terminal status (the `SetupWizard.tsx:64-108` precedent).
-- **Returned shape:** `{ status: VisualDiffStatus | undefined, isPending (render-in-flight), isError, error
-  (ApiError — 403 quiet), retry() }`. The displayed status is `poll.data ?? mutation.data` (so the POST's
-  immediate 202/200 body shows before the first poll lands). `retry()` re-fires the POST (clears the cache +
-  refetches) — for the `Failed` recoverable banner.
+- **Returned shape:** `{ status: VisualDiffStatus | undefined, isLoading, isError, error (ApiError — 403 quiet),
+  retry() }`. The displayed status is read **from the pair-keyed poll cache** (`poll.data`, seeded by the POST's
+  `onSuccess`) — **not** the unkeyed mutation result — so a version-pair change while the hook stays mounted never
+  flashes the prior pair's pages or fires page requests for a not-yet-requested diff (the poll's `enabled` is
+  likewise keyed: `active && qc.getQueryData(key)?.status === "Pending"`). `retry()` clears the cache + re-POSTs —
+  for the **`Pending` "Re-request render"** affordance only (the dev renderer-off case); a terminal `Failed` row is
+  not re-drivable, so retry is not offered there.
 - **Enabled gating** matches `useVersionDiff`: only when `documentId && toVid && fromVid && toVid !== fromVid`
   **and** the visual mode is active (so switching to Visual is what triggers the POST — a Text-mode view never
   enqueues a render).
@@ -197,8 +202,12 @@ Uses `useVisualDiff`. State machine, all states calm (doc 11 §4.9):
   images…"), and an `aria-live="polite"` region announcing the phase — **never a frozen UI**; the Text/Metadata
   tab and the rest of the page stay interactive. The poll continues underneath. A manual "Re-request render"
   affordance covers the dev renderer-off "Pending forever" case.
-- **Failed** (`status.status === "Failed"`) → a **scoped, recoverable** Mantine `Alert color="red"` inside the
-  pane (not a takeover) stating `reason` + a **Retry** button → `retry()` (re-POST). (§4.9 Error row.)
+- **Failed** (`status.status === "Failed"`) → a calm Mantine `Alert color="red"` inside the pane (not a takeover)
+  stating `reason` + the **source-download fallback** — **no Retry** (a terminal Failed row can't be re-driven by a
+  re-POST; only a `Pending` row re-enqueues). (§4.9 Error row, minus the dead action.)
+- **Selected page resets on a pair change** — `picked` (the rail selection) is cleared in a `useEffect` keyed on
+  `(documentId, fromVid, toVid)`, so a stale high page from a longer diff never points past the new pair's page
+  list (an out-of-range request → a misleading 404).
 - **Unavailable** (`status.status === "Unavailable"`) → a calm `Alert` (neutral/yellow) "Visual diff unavailable —
   {reason}" + the **source-download fallback** (per-version `…/versions/{vid}/download` → `window.open`, the
   `RedlineViewer.tsx:74-83` `openSource` idiom) — **not** an error. The text redline (other tab) still works.
@@ -324,7 +333,7 @@ VersionCompare (?from,&to,&mode)
   body). **403** (versions/diff/visual-diff) → quiet "no access" (DP-6); **404** on the page endpoint with code
   "No image…" → the per-layer no-image note (a 404 here is **normal** for an added/removed page side); **422** (bad
   layer) is a programming error the UI never triggers (the toggle only emits `from|to|diff`). `Failed` →
-  recoverable Retry; `Unavailable` → calm source-download fallback; `Pending` → the phased poll (with a manual
+  a calm source-download fallback (no Retry — a terminal Failed row isn't re-drivable); `Unavailable` → calm source-download fallback; `Pending` → the phased poll (with a manual
   re-request for the dev renderer-off case).
 - **No write calls** beyond the idempotent `POST …/visual-diff` (a compute trigger, not a mutation of vault state).
 
@@ -359,3 +368,11 @@ VersionCompare (?from,&to,&mode)
 - New code lives in **`features/document/`** (`useVisualDiff`, `VisualDiffViewer`, the `VersionCompare` switch) +
   one **`lib/api.ts`** helper (`getBlob`) + the `lib/types.ts` `VisualDiffStatus` types + the `test/setup.ts`
   objectURL stub. No backend, no contract, no migration.
+- **Post-review (Codex P2 ×3, PR #95):** (1) **No dead Retry on `Failed`** — the backend re-enqueues only a
+  `Pending` row (`get_or_create_visual_diff` returns `should_enqueue = row.status is Pending`), so a terminal
+  `Failed` row is not re-drivable; the viewer renders `Failed` as a calm terminal with the source-download fallback
+  and the re-request affordance lives on `Pending` only. (2) **`useVisualDiff` is strictly pair-keyed** — `status`
+  and the poll's `enabled` read the pair-keyed poll cache (seeded by the POST), never the unkeyed mutation result,
+  so a version-pair change never flashes the prior pair's pages or fires page requests for a not-yet-requested
+  diff. (3) **The viewer resets `picked`** in a `useEffect` keyed on the pair, so a stale page index from a longer
+  diff never requests an out-of-range page (a misleading 404) on the new pair.

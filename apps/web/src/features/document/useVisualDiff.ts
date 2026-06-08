@@ -11,6 +11,12 @@ import type { VisualDiffStatus } from "../../lib/types";
 // the SetupWizard refetchInterval precedent. Gated document.read_draft server-side: a 403 surfaces
 // as an ApiError, which the viewer renders quietly (DP-6). `enabled` lets the caller withhold the
 // request until the visual mode is actually active (a Text-mode view never triggers a render).
+//
+// Everything the caller renders is read from the POLL CACHE, which is KEYED by (documentId, toVid,
+// fromVid). So when the version pair changes while this hook stays mounted, it never falls back to
+// the previous pair's result (no stale Ready/Failed pages, no page-image requests for a diff that
+// hasn't been requested yet) and the poll is enabled only once THIS pair's row exists and is
+// Pending.
 export function useVisualDiff(
   documentId: string | null,
   toVid: string | null,
@@ -37,21 +43,28 @@ export function useVisualDiff(
     if (active) request.mutate();
   }, [active, documentId, toVid, fromVid]);
 
+  // The cache entry for THIS pair (seeded by the POST's onSuccess). Reading it here is keyed by the
+  // pair and reactive via the useQuery subscription below, so `enabled` flips correctly when the
+  // POST resolves — and a different pair reads its own (initially empty) cache, never this one's.
+  const seeded = qc.getQueryData<VisualDiffStatus>(key);
+
   const poll = useQuery({
     queryKey: key,
     queryFn: () => api.get<VisualDiffStatus>(url),
-    // Enabled ONLY when the POST came back Pending — a terminal POST result never triggers a
-    // redundant GET. Once enabled, refetchInterval keeps polling until a poll returns a terminal
-    // status, then halts. (Gating on request.data, not poll.data, keeps this non-circular.)
-    enabled: active && request.data?.status === "Pending",
+    // Enabled ONLY once THIS pair's row is seeded AND Pending — never before the POST (no
+    // 404-before-request) and never on a terminal row (no redundant GET). refetchInterval then
+    // polls until a poll returns a terminal status, and halts.
+    enabled: active && seeded?.status === "Pending",
     refetchInterval: (q) => (q.state.data?.status === "Pending" ? 2500 : false),
   });
 
-  const status: VisualDiffStatus | undefined = poll.data ?? request.data;
-  const error: Error | null = request.error ?? poll.error;
+  const status: VisualDiffStatus | undefined = poll.data;
   const isError = request.isError || poll.isError;
+  const error: Error | null = request.error ?? poll.error;
 
-  // Re-request a stalled/failed render: clear the cached status, reset the mutation, POST again.
+  // Re-request a STALLED (Pending) render — e.g. the dev renderer was off when the row was created.
+  // (A terminal Failed/Unavailable row is NOT re-drivable: get_or_create_visual_diff only re-enqueues
+  // a Pending row, so the viewer offers this only from the Pending state, never from Failed.)
   function retry() {
     qc.removeQueries({ queryKey: key });
     request.reset();
@@ -60,7 +73,7 @@ export function useVisualDiff(
 
   return {
     status,
-    // The POST is in flight and nothing has come back yet — the viewer shows the phased skeleton
+    // The POST is in flight and nothing has been seeded yet — the viewer shows the phased skeleton
     // (as it also does for status==="Pending").
     isLoading: active && status === undefined && !isError,
     isError,

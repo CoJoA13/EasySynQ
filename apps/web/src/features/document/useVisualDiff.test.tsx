@@ -95,22 +95,41 @@ test("useVisualDiff surfaces a 403 as an ApiError (document.read_draft)", async 
   expect((result.current.error as ApiError).status).toBe(403);
 });
 
-test("useVisualDiff retry() re-POSTs a failed render", async () => {
+test("useVisualDiff retry() re-requests a stalled (Pending) render", async () => {
   let posts = 0;
   server.use(
     http.post(VD, () => {
       posts += 1;
-      return HttpResponse.json(
-        posts === 1
-          ? { status: "Failed", page_count: null, reason: "transient", pages: null }
-          : visualDiffFixture,
-      );
+      return HttpResponse.json(posts === 1 ? pending : visualDiffFixture);
     }),
+    http.get(VD, () => HttpResponse.json(pending)), // the row stays Pending until the re-request
   );
   const { result } = renderHook(() => useVisualDiff(DOC, TO, FROM, true), { wrapper });
-  await waitFor(() => expect(result.current.status?.status).toBe("Failed"));
+  await waitFor(() => expect(result.current.status?.status).toBe("Pending"));
 
   act(() => result.current.retry());
   await waitFor(() => expect(result.current.status?.status).toBe("Ready"));
   expect(posts).toBe(2);
+});
+
+test("useVisualDiff reads the keyed poll cache — a pair change never shows the prior pair's result", async () => {
+  const TO2 = "dddd2222-2222-2222-2222-222222222222";
+  server.use(
+    http.post(VD, ({ params }) =>
+      HttpResponse.json(
+        params.vid === TO
+          ? visualDiffFixture // pair #1 → Ready
+          : { status: "Pending", page_count: null, reason: null, pages: null }, // pair #2 → still rendering
+      ),
+    ),
+    http.get(VD, () => HttpResponse.json({ status: "Pending", page_count: null, reason: null, pages: null })),
+  );
+  const { result, rerender } = renderHook(({ to }) => useVisualDiff(DOC, to, FROM, true), {
+    wrapper,
+    initialProps: { to: TO },
+  });
+  await waitFor(() => expect(result.current.status?.status).toBe("Ready"));
+  // switch to a different pair whose diff is still Pending — must NOT keep showing pair #1's Ready
+  rerender({ to: TO2 });
+  await waitFor(() => expect(result.current.status?.status).toBe("Pending"));
 });

@@ -94,6 +94,13 @@ export function VisualDiffViewer({
   const page = picked ?? firstPage;
   const railRefs = useRef<(HTMLButtonElement | null)[]>([]);
 
+  // Reset the selected page when the compared pair changes — a stale `picked` from a longer diff
+  // could point past the new pair's page list, requesting an out-of-range page (a misleading 404)
+  // until the user clicked a valid rail entry.
+  useEffect(() => {
+    setPicked(null);
+  }, [documentId, fromVid, toVid]);
+
   const isReady = status?.status === "Ready";
   const img = usePageImage(api, documentId, toVid, fromVid, page, layer, isReady);
 
@@ -171,15 +178,25 @@ export function VisualDiffViewer({
     );
   }
 
-  // --- Failed → scoped, recoverable banner (§4.9 error row) ---
+  // --- Failed → a TERMINAL render failure. NOT re-drivable: get_or_create_visual_diff only
+  //     re-enqueues a Pending row, so a re-POST of a Failed row just returns Failed forever — we do
+  //     NOT advertise a retry that can't work (DP-6). Calm, with the source-download fallback. ---
   if (status?.status === "Failed") {
     return (
       <Alert color="red" title="Visual diff failed">
         <Stack gap="xs">
-          <Text size="sm">{status.reason ?? "The page images could not be rendered."}</Text>
-          <Anchor component="button" type="button" onClick={retry}>
-            Retry
-          </Anchor>
+          <Text size="sm">
+            {status.reason ?? "The page images could not be rendered."}{" "}
+            The text redline still works; or open the source files:
+          </Text>
+          <Group gap="md">
+            <Anchor component="button" type="button" onClick={() => void openSource(fromVid)}>
+              Download Before source
+            </Anchor>
+            <Anchor component="button" type="button" onClick={() => void openSource(toVid)}>
+              Download After source
+            </Anchor>
+          </Group>
         </Stack>
       </Alert>
     );

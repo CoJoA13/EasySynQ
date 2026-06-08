@@ -5,7 +5,7 @@ import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderWithProviders } from "../../test/render";
 import { server } from "../../test/msw/server";
-import { visualDiffFixture, PNG_1x1 } from "../../test/msw/handlers";
+import { PNG_1x1 } from "../../test/msw/handlers";
 import { VisualDiffViewer } from "./VisualDiffViewer";
 
 const DOC = "11111111-1111-1111-1111-111111111111";
@@ -81,25 +81,35 @@ test("VisualDiffViewer (Pending) shows the phased long-op affordance, not a froz
   expect(screen.getByRole("button", { name: "Re-request render" })).toBeInTheDocument();
 });
 
-test("VisualDiffViewer (Failed) shows a scoped Retry that re-POSTs", async () => {
-  let posts = 0;
+test("VisualDiffViewer (Failed) is a calm terminal with a source-download fallback (no dead Retry)", async () => {
+  const openSpy = vi.spyOn(window, "open").mockReturnValue(null);
   server.use(
-    http.post(VD, () => {
-      posts += 1;
-      return HttpResponse.json(
-        posts === 1
-          ? { status: "Failed", page_count: null, reason: "render crashed", pages: null }
-          : visualDiffFixture,
-      );
-    }),
-    http.get(PAGE, () => png()),
+    http.post(VD, () =>
+      HttpResponse.json({ status: "Failed", page_count: null, reason: "render crashed", pages: null }),
+    ),
   );
   const user = userEvent.setup();
   renderWithProviders(<VisualDiffViewer documentId={DOC} fromVid={FROM} toVid={TO} />);
-  await waitFor(() => expect(screen.getByText("render crashed")).toBeInTheDocument());
-  await user.click(screen.getByRole("button", { name: "Retry" }));
-  await screen.findByAltText(/Diff layer/);
-  expect(posts).toBe(2);
+  await waitFor(() => expect(screen.getByText(/render crashed/)).toBeInTheDocument());
+  // a terminal Failed row can't be re-driven (the backend only re-enqueues Pending) — no dead Retry
+  expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: /Download After source/ }));
+  await waitFor(() => expect(openSpy).toHaveBeenCalled());
+});
+
+test("VisualDiffViewer resets the selected page when the compared pair changes", async () => {
+  const TO2 = "dddd2222-2222-2222-2222-222222222222";
+  const user = userEvent.setup();
+  server.use(http.get(PAGE, () => png()));
+  const { rerender } = renderWithProviders(
+    <VisualDiffViewer documentId={DOC} fromVid={FROM} toVid={TO} />,
+  );
+  await screen.findByAltText("Page 2 of 3 — Diff layer (changed)"); // default = first changed page
+  await user.click(screen.getByRole("button", { name: "Page 3, changed" }));
+  await screen.findByAltText("Page 3 of 3 — Diff layer (changed)"); // user selected the last page
+  // change the pair — the selection must reset to the NEW diff's first changed page, not stay on 3
+  rerender(<VisualDiffViewer documentId={DOC} fromVid={TO} toVid={TO2} />);
+  await screen.findByAltText("Page 2 of 3 — Diff layer (changed)");
 });
 
 test("VisualDiffViewer (Unavailable) offers the source-download fallback, not an error", async () => {
