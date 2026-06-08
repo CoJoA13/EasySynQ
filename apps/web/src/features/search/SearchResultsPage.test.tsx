@@ -37,3 +37,9 @@ test("has no axe violations (results + empty)", async () => {
   const empty = renderWithProviders(<SearchResultsPage />, { route: "/search" });
   expect(await axe(empty.container)).toHaveNoViolations();
 });
+
+test("shows a calm error state when the search request fails", async () => {
+  server.use(http.get("/api/v1/search", () => new HttpResponse(null, { status: 500 })));
+  renderWithProviders(<SearchResultsPage />, { route: "/search?q=boom" });
+  expect(await screen.findByText(/Search is unavailable/)).toBeInTheDocument();
+});

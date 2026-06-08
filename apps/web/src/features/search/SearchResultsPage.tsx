@@ -1,4 +1,4 @@
-import { Container, Loader, Stack, Text, Title } from "@mantine/core";
+import { Alert, Container, Loader, Stack, Text, Title } from "@mantine/core";
 import { useSearchParams } from "react-router-dom";
 import { useSearch } from "./hooks";
 import { SearchResultRow } from "./SearchResultRow";
@@ -7,7 +7,7 @@ export function SearchResultsPage() {
   const [params] = useSearchParams();
   const q = params.get("q") ?? "";
   const term = q.trim();
-  const { data, isLoading } = useSearch(q);
+  const { data, isLoading, isError } = useSearch(q);
 
   return (
     <Container size="lg" py="md">
@@ -18,17 +18,21 @@ export function SearchResultsPage() {
         <Text c="dimmed">Type a query to search documents.</Text>
       ) : isLoading ? (
         <Loader />
+      ) : isError || !data ? (
+        <Alert color="red" title="Search is unavailable">
+          Something went wrong running your search. Please try again.
+        </Alert>
       ) : (
         <Stack gap="xs">
           <Text c="dimmed" size="sm">
             Searches title, identifier &amp; clause refs — Effective documents only.
           </Text>
-          {data && data.results.length === 0 ? (
+          {data.results.length === 0 ? (
             <Text>No matching documents.</Text>
           ) : (
-            data?.results.map((hit) => <SearchResultRow key={hit.id} hit={hit} />)
+            data.results.map((hit) => <SearchResultRow key={hit.id} hit={hit} />)
           )}
-          {data && data.hidden_by_scope > 0 && (
+          {data.hidden_by_scope > 0 && (
             <Text c="dimmed" size="sm">
               {data.hidden_by_scope} hidden by your access scope.
             </Text>
