@@ -286,20 +286,28 @@ async def test_document_approval_403_without_document_read(
     assert r.status_code == 403, r.text
 
 
-async def test_document_approval_surfaces_needs_attention_instance(
+async def test_document_approval_returns_the_decided_instance(
     app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
 ) -> None:
-    """Submit with NO approver-role holder → empty pool → NEEDS_ATTENTION instance, STILL returned
-    (the discovery read is 'latest', not 'non-terminal')."""
-    await s5.grant_lifecycle(subj.a)  # author only; nobody holds the Approver role
-    ha = _auth(token_factory, subj.a)
-    did = await _to_in_review(app_client, ha, await s5.type_id("SOP"))
+    """The discovery read is 'latest', NOT nonterminal-filtered: after approval the instance lingers
+    ``APPROVED`` (``release`` never closes it) and the endpoint still returns it + its DONE task.
+
+    (The empty-pool ``NEEDS_ATTENTION`` case — the other state ``find_nonterminal_instance`` would
+    wrongly skip — is not isolable in the shared integration DB: other tests' Approver-role grants
+    populate the org-wide candidate pool, so a submit-review here resolves IN_APPROVAL, not an empty
+    pool. That branch rides code review; this proves the 'returns a non-fresh instance' half.)"""
+    await s5.grant_lifecycle(subj.a)
+    await s5.grant_role(subj.b, "Approver")
+    ha, hb = _auth(token_factory, subj.a), _auth(token_factory, subj.b)
+    did = await s5.drive_to_approved(app_client, ha, hb, await s5.type_id("SOP"), b"approval-disc")
 
     r = await app_client.get(f"/api/v1/documents/{did}/approval", headers=ha)
     assert r.status_code == 200, r.text
     body = r.json()
     assert body is not None
-    assert body["current_state"] == "NEEDS_ATTENTION"
+    assert body["current_state"] == "APPROVED"
+    assert len(body["tasks"]) == 1
+    assert body["tasks"][0]["state"] == "DONE"
 
 
 async def test_decision_rolls_back_as_one_unit(
