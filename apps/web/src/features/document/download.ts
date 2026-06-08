@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import { useApi } from "../../lib/api";
-import { useAuth } from "../../lib/auth";
 import type { DocumentDownload } from "../../lib/types";
 
 // Shared controlled-copy download (the drawer Overview tab + the page's RenditionCard). Fetches the
@@ -32,44 +31,4 @@ export function useControlledCopyDownload(documentId: string) {
   }
 
   return { open, downloading, rendition };
-}
-
-// S-web-4: export a fresh per-request stamped controlled-copy PDF (GET /documents/{id}/export, gate
-// document.export). Unlike /download this is an AUTHENTICATED stream (not a presign), so it needs the
-// bearer — fetch → blob → object URL → open. Held by no seeded role, so the button is quiet-absent by
-// default (the caller gates on can("document.export")). A transient failure is non-fatal (quiet).
-export function useDocumentExport(documentId: string) {
-  const { token } = useAuth();
-  const [exporting, setExporting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  async function exportCopy() {
-    setExporting(true);
-    setError(null);
-    try {
-      const resp = await fetch(`/api/v1/documents/${documentId}/export`, {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-      });
-      if (!resp.ok) {
-        // 409 no_controlled_rendition is a STABLE state (no controlled PDF yet), not a transient
-        // blip — give the grantee a redirect hint rather than a silent no-op.
-        setError(
-          resp.status === 409
-            ? "Controlled copy is still rendering — use Download instead."
-            : "Could not export the controlled copy. Please retry.",
-        );
-        return;
-      }
-      const blob = await resp.blob();
-      const url = URL.createObjectURL(blob);
-      window.open(url, "_blank", "noopener,noreferrer");
-      setTimeout(() => URL.revokeObjectURL(url), 60_000);
-    } catch {
-      setError("Could not export the controlled copy. Please retry.");
-    } finally {
-      setExporting(false);
-    }
-  }
-
-  return { exportCopy, exporting, error };
 }

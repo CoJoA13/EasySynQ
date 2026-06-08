@@ -1,17 +1,5 @@
-import {
-  Alert,
-  Anchor,
-  Button,
-  Card,
-  Grid,
-  Group,
-  SimpleGrid,
-  Skeleton,
-  Stack,
-  Text,
-} from "@mantine/core";
+import { Alert, Anchor, Card, Grid, SimpleGrid, Skeleton, Stack, Text } from "@mantine/core";
 import { Link, useParams } from "react-router-dom";
-import { usePermissions } from "../../app/shell/usePermissions";
 import { useDocumentTypes } from "../../app/shell/useDocumentTypes";
 import { useUserDirectory } from "../../app/shell/useUserDirectory";
 import { ApiError } from "../../lib/api";
@@ -23,7 +11,6 @@ import { RenditionCard } from "./RenditionCard";
 import { VersionCompare } from "./VersionCompare";
 import { WhereUsedTab } from "./WhereUsedTab";
 import { useDocument } from "./useDocument";
-import { useDocumentExport } from "./download";
 import { useDocumentVersions } from "./useDocumentVersions";
 
 function Tile({
@@ -62,8 +49,6 @@ export function DocumentDetailPage() {
   const { data: types } = useDocumentTypes();
   const { data: directory } = useUserDirectory();
   const { data: versions } = useDocumentVersions(id, id !== null);
-  const { can } = usePermissions();
-  const exportable = useDocumentExport(id ?? "");
 
   if (isLoading && !doc) {
     return (
@@ -110,25 +95,7 @@ export function DocumentDetailPage() {
 
   return (
     <Stack gap="lg">
-      <Group justify="space-between" align="flex-start" wrap="nowrap">
-        <ArtifactHeader doc={doc} typeName={typeName} ownerName={ownerName} />
-        {can("document.export") && (
-          <Stack gap={4} align="flex-end">
-            <Button
-              variant="default"
-              loading={exportable.exporting}
-              onClick={() => void exportable.exportCopy()}
-            >
-              ⤓ Export controlled copy
-            </Button>
-            {exportable.error && (
-              <Text size="xs" c="dimmed" maw={240} ta="right">
-                {exportable.error}
-              </Text>
-            )}
-          </Stack>
-        )}
-      </Group>
+      <ArtifactHeader doc={doc} typeName={typeName} ownerName={ownerName} />
 
       {/* Author actions (D-A): capability + state + lock gated; quiet-absent for readers (DP-6). */}
       <AuthorActions doc={doc} />

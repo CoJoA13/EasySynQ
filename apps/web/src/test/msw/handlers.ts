@@ -344,15 +344,6 @@ export const handlers = [
       rendition: "controlled_copy",
     }),
   ),
-  // The authenticated /export stream (a fresh stamped controlled-copy PDF; gate document.export).
-  // A string body (not a jsdom Blob — it lacks .stream() that MSW needs); resp.blob() still works.
-  http.get(
-    "/api/v1/documents/:id/export",
-    () =>
-      new HttpResponse("%PDF-1.4 mock export", {
-        headers: { "Content-Type": "application/pdf" },
-      }),
-  ),
   http.get("/api/v1/documents/:id", ({ params }) => {
     const doc = docFixture.find((d) => d.id === params.id);
     return doc

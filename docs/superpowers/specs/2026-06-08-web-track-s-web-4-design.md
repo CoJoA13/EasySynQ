@@ -338,3 +338,11 @@ route /documents/:id ──useParams──▶ DocumentDetailPage
 - New code lives in **`features/document/`** (the page, `RenditionCard`, `ControlMetadata`, `useVersionDiff`,
   `RedlineViewer`); it reuses `features/authoring/AuthorActions` exactly as the drawer does (no new import cycle).
   One small test-backed `ControlMetadata`/download extraction from `OverviewTab` keeps the drawer byte-identical.
+- **Post-review (Codex P2 ×2):** (1) the shell `Breadcrumb` now subscribes to `['document', id]` via a
+  fetch-less `useQuery` observer — the original `getQueryData()` read did not re-render, so a cold/bookmarked
+  `/documents/:id` stuck on the "Document" fallback. (2) **The Export-controlled-copy button (D-A) was dropped:**
+  its SYSTEM-scope `can("document.export")` gate under-claims a PROCESS/ARTIFACT-scoped grant, and the only
+  correct gate is the per-document `capabilities` block — a backend change out of this front-end-only slice.
+  `document.export` is held by no seeded role (the button was invisible in v1 anyway); controlled-copy access
+  stays on the rendition card's `document.read` download. Reinstating Export = a one-field `capabilities.export`
+  addition when role-scoped export lands.
