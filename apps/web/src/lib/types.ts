@@ -375,3 +375,58 @@ export interface DecisionResult {
   signature_event: SignatureEventSummary | null;
   comment: string | null;
 }
+
+// ---- S-web-6 (Global Search + Compliance Checklist) -------------------------------------
+
+// GET /search → ranked metadata-plane hits (Effective documents only). `snippet` is PostgreSQL
+// ts_headline output: matched terms wrapped in literal <b>…</b> (rendered safely, never as HTML).
+export interface SearchHit {
+  type: string; // "document" (the only indexed type in v1)
+  id: string;
+  identifier: string;
+  title: string;
+  current_state: DocumentCurrentState;
+  clause_refs: string[];
+  snippet: string;
+  rank: number;
+}
+
+export interface SearchResults {
+  query: string;
+  results: SearchHit[];
+  hidden_by_scope: number; // count of candidate hits the caller's access scope hid
+}
+
+// GET /search/suggest → lightweight identifier/title type-ahead.
+export interface Suggestion {
+  id: string;
+  identifier: string;
+  title: string;
+}
+
+// GET /reports/compliance-checklist — ★ mandatory-clause coverage (hard-gated
+// report.compliance_checklist.read; 403 for callers without the key).
+export type CoverageStatus = "COVERED" | "PARTIAL" | "GAP";
+
+export interface ChecklistRollup {
+  total: number;
+  covered: number;
+  partial: number;
+  gap: number;
+}
+
+export interface ChecklistRow {
+  clause_id: string;
+  number: string;
+  title: string;
+  pdca_phase: PdcaPhase;
+  mapped_count: number;
+  effective_count: number;
+  status: CoverageStatus;
+}
+
+export interface ComplianceChecklist {
+  framework: string;
+  rollup: ChecklistRollup;
+  rows: ChecklistRow[];
+}

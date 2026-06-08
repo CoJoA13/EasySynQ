@@ -1,6 +1,7 @@
 import { Box, NavLink, Stack, Text } from "@mantine/core";
 import { Link, useLocation } from "react-router-dom";
 import type { PdcaPhase } from "../../lib/types";
+import { usePermissions } from "./usePermissions";
 import { useClauses } from "./useClauses";
 
 const PHASES: PdcaPhase[] = ["PLAN", "DO", "CHECK", "ACT"];
@@ -8,6 +9,7 @@ const PHASES: PdcaPhase[] = ["PLAN", "DO", "CHECK", "ACT"];
 export function LeftRail() {
   const { pathname } = useLocation();
   const { data: clauses } = useClauses();
+  const { can } = usePermissions();
   return (
     <Stack gap="xs" p="sm">
       <NavLink component={Link} to="/" label="Home" active={pathname === "/"} />
@@ -23,6 +25,15 @@ export function LeftRail() {
         label="Review & Approve"
         active={pathname.startsWith("/tasks")}
       />
+      {can("report.compliance_checklist.read") && (
+        // S-web-6: gated — only QMS Owner / Internal Auditor hold the SYSTEM report key.
+        <NavLink
+          component={Link}
+          to="/compliance"
+          label="Compliance"
+          active={pathname.startsWith("/compliance")}
+        />
+      )}
       {PHASES.map((phase) => {
         const top = (clauses ?? []).filter((c) => c.pdca_phase === phase && c.parent_id === null);
         if (top.length === 0) return null;

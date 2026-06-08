@@ -1,12 +1,18 @@
 import { AppShell as MantineAppShell } from "@mantine/core";
-import { useDisclosure } from "@mantine/hooks";
+import { useDisclosure, useHotkeys } from "@mantine/hooks";
 import { Outlet } from "react-router-dom";
+import { CommandPalette } from "../../features/search/CommandPalette";
 import { Breadcrumb } from "./Breadcrumb";
 import { LeftRail } from "./LeftRail";
 import { TopBar } from "./TopBar";
 
 export function AppShell() {
   const [navOpened, { toggle: toggleNav }] = useDisclosure(false);
+  const [searchOpened, { open: openSearch, close: closeSearch }] = useDisclosure(false);
+  // ⌘K / Ctrl-K must fire even while focus is in an input (empty tagsToIgnore); "/" must NOT hijack
+  // typing (the default ignore-list covers INPUT/TEXTAREA/SELECT). Hence two separate bindings.
+  useHotkeys([["mod+K", openSearch]], []);
+  useHotkeys([["/", openSearch]]);
   return (
     <MantineAppShell
       header={{ height: 60 }}
@@ -33,7 +39,7 @@ export function AppShell() {
         Skip to content
       </a>
       <MantineAppShell.Header>
-        <TopBar navOpened={navOpened} onToggleNav={toggleNav} />
+        <TopBar navOpened={navOpened} onToggleNav={toggleNav} onOpenSearch={openSearch} />
       </MantineAppShell.Header>
       <MantineAppShell.Navbar>
         <LeftRail />
@@ -42,6 +48,7 @@ export function AppShell() {
         <Breadcrumb />
         <Outlet />
       </MantineAppShell.Main>
+      <CommandPalette opened={searchOpened} onClose={closeSearch} />
     </MantineAppShell>
   );
 }
