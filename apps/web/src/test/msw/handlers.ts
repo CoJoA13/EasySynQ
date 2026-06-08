@@ -377,6 +377,49 @@ export const approvalFixture = {
 };
 export const taskFixture = approvalFixture.tasks;
 
+// ---- S-web-6 search + compliance fixtures ----
+export const searchFixture = {
+  query: "supplier",
+  results: [
+    {
+      type: "document",
+      id: "11111111-1111-1111-1111-111111111111",
+      identifier: "SOP-PUR-014",
+      title: "Supplier Selection & Evaluation",
+      current_state: "Effective",
+      clause_refs: ["8.4"],
+      snippet: "…<b>Supplier</b> Selection & Evaluation SOP-PUR-014",
+      rank: 0.61,
+    },
+  ],
+  hidden_by_scope: 2,
+};
+
+export const suggestFixture = {
+  suggestions: [
+    {
+      id: "11111111-1111-1111-1111-111111111111",
+      identifier: "SOP-PUR-014",
+      title: "Supplier Selection & Evaluation",
+    },
+    {
+      id: "22222222-2222-2222-2222-222222222222",
+      identifier: "SOP-PRD-007",
+      title: "Production Control",
+    },
+  ],
+};
+
+export const complianceFixture = {
+  framework: "iso9001:2015",
+  rollup: { total: 3, covered: 1, partial: 1, gap: 1 },
+  rows: [
+    { clause_id: "c43", number: "4.3", title: "Scope of the QMS", pdca_phase: "PLAN", mapped_count: 1, effective_count: 1, status: "COVERED" },
+    { clause_id: "c62", number: "6.2", title: "Quality objectives", pdca_phase: "PLAN", mapped_count: 1, effective_count: 0, status: "PARTIAL" },
+    { clause_id: "c84", number: "8.4", title: "External providers", pdca_phase: "DO", mapped_count: 0, effective_count: 0, status: "GAP" },
+  ],
+};
+
 export const handlers = [
   http.get("/api/v1/documents", listDocuments),
   http.get("/api/v1/document-types", () => HttpResponse.json(typeFixture)),
@@ -411,6 +454,10 @@ export const handlers = [
       : HttpResponse.json({ code: "not_found", title: "Not found" }, { status: 404 });
   }),
   http.get("/api/v1/clauses", () => HttpResponse.json(clauseFixture)),
+  // ---- S-web-6 search + compliance (default happy-path; per-test overrides for 403/empty) ----
+  http.get("/api/v1/search", () => HttpResponse.json(searchFixture)),
+  http.get("/api/v1/search/suggest", () => HttpResponse.json(suggestFixture)),
+  http.get("/api/v1/reports/compliance-checklist", () => HttpResponse.json(complianceFixture)),
   // ---- S-web-5 review/approve (default happy-path; per-test overrides for error cases) ----
   http.get("/api/v1/documents/:id/approval", () => HttpResponse.json(approvalFixture)),
   http.get("/api/v1/tasks", () => HttpResponse.json(taskFixture)),
