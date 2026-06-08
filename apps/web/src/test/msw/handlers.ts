@@ -96,6 +96,76 @@ export const versionFixture = [
   },
 ];
 
+// S-web-4: the default per-document capabilities (detail-only). All-false except read_draft → the
+// page renders READ-ONLY (no author actions) but can load history/diff. Author tests override this.
+export const detailCapabilities = {
+  checkout: false,
+  edit: false,
+  manage_metadata: false,
+  submit: false,
+  release: false,
+  obsolete: false,
+  read_draft: true,
+};
+
+// S-web-4: GET /documents/{id}/versions/{vid}/diff?from={vid2} — Rev A → Rev B (doc 05 §8).
+export const diffFixture = {
+  document_id: "11111111-1111-1111-1111-111111111111",
+  from: {
+    version_id: "eeee1111-1111-1111-1111-111111111111",
+    version_seq: 1,
+    revision_label: "Rev A",
+    version_state: "Superseded",
+    change_significance: "MAJOR",
+    change_reason: "Initial release",
+    effective_from: "2025-01-01T00:00:00+00:00",
+    effective_to: "2026-03-14T00:00:00+00:00",
+    author_user_id: "bbbb2222-2222-2222-2222-222222222222",
+    created_at: "2025-01-01T09:00:00+00:00",
+    signatures: [],
+  },
+  to: {
+    version_id: "dddd1111-1111-1111-1111-111111111111",
+    version_seq: 2,
+    revision_label: "Rev B",
+    version_state: "Effective",
+    change_significance: "MAJOR",
+    change_reason: "Added weighted scoring & conditional tier after audit AF-204",
+    effective_from: "2026-03-14T00:00:00+00:00",
+    effective_to: null,
+    author_user_id: "bbbb1111-1111-1111-1111-111111111111",
+    created_at: "2026-03-14T09:00:00+00:00",
+    signatures: [
+      {
+        meaning: "release",
+        signer_user_id: "bbbb1111-1111-1111-1111-111111111111",
+        signed_at: "2026-03-14T09:00:00+00:00",
+      },
+    ],
+  },
+  metadata_diff: [
+    {
+      field: "title",
+      from: "Supplier Selection",
+      to: "Supplier Selection & Evaluation",
+      changed: true,
+    },
+    { field: "classification", from: "Internal", to: "Internal", changed: false },
+  ],
+  text_diff: {
+    status: "ok",
+    hunks: [
+      { op: "equal", text: "1. Purpose & Scope" },
+      { op: "delete", text: "Suppliers are scored on quality history." },
+      {
+        op: "insert",
+        text: "Suppliers are scored on quality history, capacity and certification.",
+      },
+      { op: "insert", text: "A weighted score >= 70 is required for the Approved tier." },
+    ],
+  },
+};
+
 export const whereUsedFixture = {
   document_id: "11111111-1111-1111-1111-111111111111",
   processes: [{ id: "p1", name: "Purchasing", state: "ACTIVE", is_active: true }],
@@ -265,10 +335,19 @@ export const handlers = [
   http.get("/api/v1/directory/users", () => HttpResponse.json(directoryFixture)),
   http.get("/api/v1/documents/:id/versions", () => HttpResponse.json(versionFixture)),
   http.get("/api/v1/documents/:id/where-used", () => HttpResponse.json(whereUsedFixture)),
+  // S-web-4: the version diff (text redline + metadata diff) + the controlled-copy download.
+  http.get("/api/v1/documents/:id/versions/:vid/diff", () => HttpResponse.json(diffFixture)),
+  http.get("/api/v1/documents/:id/download", () =>
+    HttpResponse.json({
+      download_url: "https://minio.test/cc/sop-pur-014.pdf",
+      content_type: "application/pdf",
+      rendition: "controlled_copy",
+    }),
+  ),
   http.get("/api/v1/documents/:id", ({ params }) => {
     const doc = docFixture.find((d) => d.id === params.id);
     return doc
-      ? HttpResponse.json(doc)
+      ? HttpResponse.json({ ...doc, capabilities: detailCapabilities })
       : HttpResponse.json({ code: "not_found", title: "Not found" }, { status: 404 });
   }),
   http.get("/api/v1/clauses", () => HttpResponse.json(clauseFixture)),
@@ -353,8 +432,7 @@ export const handlers = [
       current_state: "UnderRevision",
     }),
   ),
-  http.get(
-    "/api/v1/documents/:id/versions/:vid/download",
-    () => HttpResponse.json({ download_url: "https://minio.test/staging/working-copy" }),
+  http.get("/api/v1/documents/:id/versions/:vid/download", () =>
+    HttpResponse.json({ download_url: "https://minio.test/staging/working-copy" }),
   ),
 ];

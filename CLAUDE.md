@@ -84,6 +84,7 @@ Celery workers · Keycloak (auth) · Gotenberg/LibreOffice (rendering) · Caddy 
 
 ## Recent learnings  <!-- capped ~12, newest first; demote stale ones to engineering-patterns -->
 
+- 2026-06-08 — **S-web-4 (read-only Document detail page + redline) is FRONT-END ONLY** — no migration/key/contract; every read already existed + was contracted (`GET /documents/{id}` `capabilities` · `…/versions` · `…/versions/{vid}/diff?from=` · `…/where-used` · `…/download`). The `/documents/:id` page reuses `ArtifactHeader`/`AuthorActions` verbatim (gated, DP-6); the redline is **synchronous** text+metadata (`useVersionDiff`, `read_draft` 403→quiet, `<ins>`/`<del>` + `+`/`−` non-color markers, `n`/`p` nav), **URL-driven** (`?from=&to=`); the worker-async **visual page-image diff** (POST→poll→PNG layers, already contracted) is carved to **S-web-4b** (PR #93).
 - 2026-06-07 — **Web SPA tokens are in-memory only** (`lib/auth`, never persisted) → every reload starts logged-out; an operational, token-less app now auto-bounces to Keycloak to re-auth (PR #91). "All API calls 401 right after a reload" = re-auth in flight or an expired SSO session (sign in again: `demo`/`Demo-Password-1`), NOT a backend bug.
 - 2026-06-07 — **Browser upload/download** (authoring presigned PUT, controlled-copy GET) need MinIO browser-reachable: set `S3_PUBLIC_ENDPOINT=http://localhost:9000` in `.env` (the `s` profile publishes `9000`). Presigning SIGNS AGAINST that host (SigV4 signs the host) — never rewrite the URL host post-signing (PR #90).
 - 2026-06-07 — **`just seed-personas`** seeds the SoD-correct author/approver/releaser logins+grants (`priya`/`ken`/`mara`, all `Demo-Password-1`) — the S-web-5 fixture. Re-run after `just down` (Keycloak is volumeless). The full create→approve→release loop needs **3 DISTINCT** users (SoD-1/2 are non-overridable).
@@ -93,12 +94,14 @@ Celery workers · Keycloak (auth) · Gotenberg/LibreOffice (rendering) · Caddy 
 - 2026-06-07 — SoD is enforced at the PEP, not the vault services — a single actor can drive the lifecycle at the **service layer** (server-side demo seeds; no token needed).
 - 2026-06-07 — Local `-m integration` failures in `test_backup`/`test_restore` are an env gap (no `pg_dump`), **not** regressions; CI passes them. A `testcontainers-ryuk … 404 containers/create` failure is a runner flake → re-run the shard.
 
-## Current status (as of 2026-06-07)
+## Current status (as of 2026-06-08)
 
 **MVP COMPLETE** (S0–S11). **v1 in progress** — families ✅: Records & evidence · Ingestion · Audits/Findings/CAPA ·
-Revision & change depth (DCR). **Web-UI track:** S-web-1 ✅, S-web-2 ✅ (faceted Library + read-only drawer), **S-web-3
-✅ = Document Authoring** (in-browser create→check-out→check-in→submit-review; `GET /me/permissions` + per-doc
-`capabilities` drive DP-6 gating; no migration/key). Browser flow verified live; dev/infra follow-ups merged
-(#89 `seed-personas` fixture · #90 browser-reachable presigned MinIO · #91 reload re-auth). **Next:** S-web-4 =
-read-only Document detail page · S-web-5 = Review & Approve. Also open: the v1.x drift family (D1–D5).
+Revision & change depth (DCR). **Web-UI track:** S-web-1 ✅, S-web-2 ✅ (faceted Library + read-only drawer), S-web-3
+✅ = Document Authoring (`GET /me/permissions` + per-doc `capabilities` drive DP-6 gating; no migration/key), dev/infra
+follow-ups merged (#89 `seed-personas` · #90 browser-reachable presigned MinIO · #91 reload re-auth). **S-web-4**
+(read-only Document detail page + the text/metadata redline) **implemented — PR #93 open** (front-end only; no
+migration/key/contract; reuses `AuthorActions`/`ArtifactHeader`; URL-driven redline gated `read_draft`; rendition
+card + Open/Download; visual page-image diff carved to S-web-4b). **Next:** S-web-4b = visual page-image diff viewer ·
+S-web-5 = Review & Approve. Also open: the v1.x drift family (D1–D5).
 **Migration head `0044` (next `0045`).** Full per-slice narrative + deferred residuals: `docs/slice-history.md`.

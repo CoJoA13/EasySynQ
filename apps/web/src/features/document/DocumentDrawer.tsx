@@ -1,5 +1,6 @@
-import { Loader, Tabs } from "@mantine/core";
+import { Anchor, Loader, Tabs } from "@mantine/core";
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { DetailDrawer } from "../../app/shell/DetailDrawer";
 import { useDocumentTypes } from "../../app/shell/useDocumentTypes";
 import { useUserDirectory } from "../../app/shell/useUserDirectory";
@@ -45,6 +46,11 @@ export function DocumentDrawer({
       {doc && (
         <>
           <ArtifactHeader doc={doc} typeName={typeName} ownerName={ownerName} />
+          {documentId && (
+            <Anchor component={Link} to={`/documents/${documentId}`} size="sm">
+              ⤢ Open full page
+            </Anchor>
+          )}
           <AuthorActions doc={doc} />
           <Tabs value={tab} onChange={(v) => setTab(v ?? "overview")} keepMounted={false} mt="md">
             <Tabs.List>
