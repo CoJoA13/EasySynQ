@@ -35,7 +35,7 @@ export function CommandPalette({ opened, onClose }: { opened: boolean; onClose: 
     navigate(`/search?q=${encodeURIComponent(term)}`);
   }
   function activate(i: number) {
-    if (i < suggestions.length) goDoc(suggestions[i].id);
+    if (i < suggestions.length) goDoc(suggestions[i]!.id);
     else goSearch();
   }
   function onKeyDown(e: KeyboardEvent<HTMLInputElement>) {
