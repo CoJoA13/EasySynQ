@@ -118,6 +118,32 @@ async def find_nonterminal_instance(
     ).scalar_one_or_none()
 
 
+async def latest_instance_for_subject(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    subject_type: WorkflowSubjectType,
+    subject_id: uuid.UUID,
+) -> WorkflowInstance | None:
+    """The most recent workflow instance for a subject (ANY state), newest first — the document→
+    approval discovery read (S-web-5). Unlike :func:`find_nonterminal_instance` it does NOT filter
+    terminal states: a released doc's instance lingers as ``APPROVED`` (release never closes it)
+    and a ``NEEDS_ATTENTION`` (empty-pool) instance must still surface, so 'latest' is the correct
+    lens for the approval stepper. Filters ``subject_type`` explicitly (polymorphic ``subject_id``,
+    no FK)."""
+    return (
+        await session.execute(
+            select(WorkflowInstance)
+            .where(
+                WorkflowInstance.org_id == org_id,
+                WorkflowInstance.subject_type == subject_type,
+                WorkflowInstance.subject_id == subject_id,
+            )
+            .order_by(WorkflowInstance.started_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+
 async def actor_decided_in_instance(
     session: AsyncSession,
     instance_id: uuid.UUID,
