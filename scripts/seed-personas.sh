@@ -7,8 +7,15 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-pw="$(grep -m1 '^KEYCLOAK_ADMIN_PASSWORD=' .env | cut -d= -f2-)"
-kc() { docker compose --env-file .env -f infra/compose/compose.yml -f infra/compose/compose.s.yml exec -T keycloak /opt/keycloak/bin/kcadm.sh "$@" </dev/null; }
+# Read the admin password the way docker compose parses .env: drop an inline `# comment` and any
+# surrounding whitespace (a fresh `install.sh` .env leaves `KEYCLOAK_ADMIN_PASSWORD=CHANGE_ME  # …`,
+# and a naive `cut -d=` would otherwise feed the comment into kcadm as part of the password).
+pw="$(grep -m1 '^KEYCLOAK_ADMIN_PASSWORD=' .env | cut -d= -f2- | sed -E 's/[[:space:]]+#.*$//; s/^[[:space:]]*//; s/[[:space:]]*$//')"
+# MSYS_NO_PATHCONV=1: on native Windows + Git Bash, MSYS rewrites the container path
+# `/opt/keycloak/bin/kcadm.sh` into a host path (`C:/Program Files/Git/opt/…`) before docker sees it,
+# so the exec fails with `exit 127`. Disabling path conversion for this call keeps it a container
+# path; the flag is a harmless no-op on Linux/macOS.
+kc() { MSYS_NO_PATHCONV=1 docker compose --env-file .env -f infra/compose/compose.yml -f infra/compose/compose.s.yml exec -T keycloak /opt/keycloak/bin/kcadm.sh "$@" </dev/null; }
 kc config credentials --server http://localhost:8080 --realm master --user admin --password "$pw" >/dev/null
 
 sub_for() {

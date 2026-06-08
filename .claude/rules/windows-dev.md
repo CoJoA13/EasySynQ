@@ -47,6 +47,13 @@ audience mapper + redirect URIs). Postgres/MinIO data persists across `just down
 ## Native-Windows gotchas (the ones that bite)
 - **`bash.exe` MUST be on PATH** (Git for Windows installer → "Git from the command line and also from
   3rd-party software"). Without it, `just` recipes AND Claude Code's `.sh` format hooks silently no-op.
+- **MSYS path conversion mangles container paths.** Git Bash rewrites a Unix-looking absolute path
+  passed to a native exe (e.g. `docker compose exec keycloak /opt/keycloak/bin/kcadm.sh`) into a host
+  path (`C:/Program Files/Git/opt/…`) → the exec fails with **`exit 127`**. Prefix such calls with
+  **`MSYS_NO_PATHCONV=1`** (a no-op off-Windows). The `demo-user`/`seed-personas` scripts already do
+  this for their kcadm `exec`; do the same for any new `docker … exec <ctr> /abs/container/path`. ⚠
+  This is distinct from `-f infra/compose/...` (a *host* file path, which converts correctly) — only
+  **container-internal** absolute paths must be shielded.
 - **Keep the repo on the Windows filesystem** (`C:\dev\…`), not inside a WSL distro; avoid paths with
   spaces. Docker Desktop must be **running** (Linux-containers mode) with the repo's drive shared.
 - **Demo precondition for authoring:** `demo` (System Administrator) holds **no `document.*`** — grant
