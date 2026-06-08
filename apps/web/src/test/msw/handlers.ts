@@ -420,7 +420,234 @@ export const complianceFixture = {
   ],
 };
 
+// ---- S-ing-4b ingestion fixtures (a tiny Proposed run spanning the row states) ----
+export const ingestionRunFixture = {
+  id: "10000000-0000-0000-0000-000000000001",
+  status: "Proposed",
+  source_root: "/srv/import/legacy-qms-share",
+  profile: null,
+  ocr_enabled: true,
+  classifier_version: "rules-heuristic v1.4",
+  counts: {
+    scan: { total_files: 6 },
+    classify: { band: { HIGH: 2, MEDIUM: 1, LOW: 2, AMBIGUOUS: 0 } },
+    review: { undecided: 4, kind_confirmed: 1, commit_ready: 1 },
+    queues: { needs: 4, medium: 1, high: 2, quarantine: 1, vault: 0 },
+  },
+  error: null,
+  created_by: "bbbb1111-1111-1111-1111-111111111111",
+  committed_by: null,
+  report_record_id: null,
+  created_at: "2026-06-08T10:00:00+00:00",
+  scan_started_at: "2026-06-08T10:00:01+00:00",
+  completed_at: null,
+};
+
+function ingFile(over: Record<string, unknown>) {
+  return {
+    id: "00000000-0000-0000-0000-000000000000",
+    rel_path: "x.docx",
+    filename: "x.docx",
+    ext: "docx",
+    size_bytes: 1024,
+    mime_type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    sha256: "abc",
+    staged_blob_uri: "s3://import-staging/abc",
+    scan_flags: { disposition: "included" },
+    included_candidate: true,
+    mtime: null,
+    ctime: null,
+    classification: null,
+    review: null,
+    ...over,
+  };
+}
+
+const HIGH_DOC = ingFile({
+  id: "f0000000-0000-0000-0000-0000000000a1",
+  rel_path: "SOP-PUR-014 Purchasing.docx",
+  filename: "SOP-PUR-014 Purchasing.docx",
+  classification: {
+    kind: "DOCUMENT", kind_conf: 92, type_code: "SOP", type_conf: 90,
+    clause_numbers: ["8.4"], clause_conf: 88, process_names: ["Purchasing"], process_conf: 80,
+    pdca_phase: "DO", band: "HIGH", ambiguous: false, top2_margin: 30, classifier_version: "v1.4",
+  },
+  review: {
+    disposition: "undecided", kind: "UNCONFIRMED", identifier: "SOP-PUR-014",
+    identifier_source: "preserved_doc_code", type_code: "SOP", clause_numbers: ["8.4"],
+    process_names: ["Purchasing"], owner: null, decided: false, last_action: null,
+    commit_ready: false, identifier_collidable: true,
+  },
+});
+const MED_DOC = ingFile({
+  id: "f0000000-0000-0000-0000-0000000000a2",
+  rel_path: "Final Inspection WI rev1.docx",
+  filename: "Final Inspection WI rev1.docx",
+  classification: {
+    kind: "DOCUMENT", kind_conf: 73, type_code: "WI", type_conf: 70,
+    clause_numbers: ["8.6"], clause_conf: 65, process_names: ["Production"], process_conf: 60,
+    pdca_phase: "DO", band: "MEDIUM", ambiguous: false, top2_margin: 15, classifier_version: "v1.4",
+  },
+  review: {
+    disposition: "undecided", kind: "UNCONFIRMED", identifier: "WI-PRD-022",
+    identifier_source: "preserved_doc_code", type_code: "WI", clause_numbers: ["8.6"],
+    process_names: ["Production"], owner: null, decided: false, last_action: null,
+    commit_ready: false, identifier_collidable: true,
+  },
+});
+const LOW_UNKNOWN = ingFile({
+  id: "f0000000-0000-0000-0000-0000000000a3",
+  rel_path: "scan0421.pdf",
+  filename: "scan0421.pdf",
+  classification: {
+    kind: "UNKNOWN", kind_conf: 22, type_code: null, type_conf: 0,
+    clause_numbers: [], clause_conf: 0, process_names: null, process_conf: 0,
+    pdca_phase: null, band: "LOW", ambiguous: false, top2_margin: 5, classifier_version: "v1.4",
+  },
+  review: {
+    disposition: "undecided", kind: "UNCONFIRMED", identifier: null, identifier_source: null,
+    type_code: null, clause_numbers: [], process_names: [], owner: null, decided: false,
+    last_action: null, commit_ready: false, identifier_collidable: false,
+  },
+});
+const DUP_FILE = ingFile({
+  id: "f0000000-0000-0000-0000-0000000000a4",
+  rel_path: "SOP-PUR v2 FINAL.docx",
+  filename: "SOP-PUR v2 FINAL.docx",
+  classification: {
+    kind: "DOCUMENT", kind_conf: 90, type_code: "SOP", type_conf: 88,
+    clause_numbers: ["8.4"], clause_conf: 85, process_names: ["Purchasing"], process_conf: 78,
+    pdca_phase: "DO", band: "HIGH", ambiguous: false, top2_margin: 25, classifier_version: "v1.4",
+  },
+  review: {
+    disposition: "undecided", kind: "UNCONFIRMED", identifier: "SOP-PUR-014",
+    identifier_source: "preserved_doc_code", type_code: "SOP", clause_numbers: ["8.4"],
+    process_names: ["Purchasing"], owner: null, decided: false, last_action: null,
+    commit_ready: false, identifier_collidable: true,
+  },
+});
+const QUARANTINE_FILE = ingFile({
+  id: "f0000000-0000-0000-0000-0000000000a5",
+  rel_path: "broken.bin",
+  filename: "broken.bin",
+  sha256: null,
+  staged_blob_uri: null,
+  scan_flags: { disposition: "quarantine", reason: "sniff_failed", detail: "unrecognized content" },
+  included_candidate: false,
+});
+
+export const ingestionFilesFixture = [HIGH_DOC, DUP_FILE, MED_DOC, LOW_UNKNOWN, QUARANTINE_FILE];
+
+export const ingestionFileDetailFixture = {
+  ...HIGH_DOC,
+  run_id: ingestionRunFixture.id,
+  extract: {
+    status: "extracted", full_text: "Purchasing procedure…", text_truncated: false,
+    header_block: "SOP-PUR-014", language: "en", ocr_used: false, ocr_confidence: null,
+    char_count: 4200, page_count: 3, error: null, extractor_version: "tika-2",
+  },
+  dedup: {
+    in_exact_cluster: false, in_near_cluster: true, is_canonical: true, redundant_of_file_id: null,
+    in_version_family: true, is_effective: true, superseded_by_file_id: null,
+  },
+  proposal: {
+    proposed_identifier: "SOP-PUR-014", identifier_source: "preserved_doc_code",
+    target_ia_path: "DO/08-Operation", proposed_owner: null, owner_source: null,
+    conflict_flags: { duplicate_identifier_within_import: ["f0000000-0000-0000-0000-0000000000a4"] },
+  },
+};
+
+export const ingestionDupeClustersFixture = {
+  run_id: ingestionRunFixture.id,
+  clusters: [
+    {
+      id: "c0000000-0000-0000-0000-0000000000c1", method: "near",
+      member_file_ids: [HIGH_DOC.id, DUP_FILE.id], canonical_file_id: HIGH_DOC.id,
+      jaccard: 0.91, evidence: {},
+    },
+  ],
+};
+
+export const ingestionVersionFamiliesFixture = {
+  run_id: ingestionRunFixture.id,
+  families: [
+    {
+      id: "v0000000-0000-0000-0000-0000000000v1", family_key: "SOP-PUR-014",
+      base_name: "SOP-PUR-014 Purchasing", doc_code: "SOP-PUR-014",
+      ordered_member_file_ids: [HIGH_DOC.id, DUP_FILE.id], effective_file_id: HIGH_DOC.id,
+      reconstruct_revision_chain: false, evidence: {},
+    },
+  ],
+};
+
+export const ingestionChecklistFixture = {
+  run_id: ingestionRunFixture.id,
+  status: "Proposed",
+  ready: false,
+  blocking: [
+    { code: "duplicate_identifier_within_import", identifier: "SOP-PUR-014",
+      file_ids: [HIGH_DOC.id, DUP_FILE.id] },
+  ],
+  advisory: {
+    star_coverage: { total: 20, satisfied: 17 },
+    unknown_low: 2,
+    kind_unconfirmed: 4,
+  },
+  review: {
+    keep_items: 4, decided: 0, accepted: 0, corrected: 0, excluded: 0, deferred: 0,
+    undecided: 4, kind_confirmed: 1, commit_ready: 1,
+  },
+};
+
+export const ingestionDecisionsFixture = { run_id: ingestionRunFixture.id, decisions: [] };
+
 export const handlers = [
+  // ---- S-ing-4b ingestion (default happy-path; per-test override for 403/empty/error) ----
+  http.get("/api/v1/admin/imports", () => HttpResponse.json([ingestionRunFixture])),
+  http.get("/api/v1/admin/imports/:id", () => HttpResponse.json(ingestionRunFixture)),
+  http.get("/api/v1/admin/imports/:id/files", ({ request }) => {
+    const url = new URL(request.url);
+    const band = url.searchParams.get("band");
+    const disposition = url.searchParams.get("disposition");
+    const reviewStatus = url.searchParams.get("review_status");
+    const kind = url.searchParams.get("kind");
+    // Cast to a common shape so strict tsc can filter the mixed-literal tuple.
+    type FileRow = { classification: { band: string; kind: string } | null; scan_flags: { disposition: string }; review: { disposition: string } | null };
+    let files: FileRow[] = ingestionFilesFixture as unknown as FileRow[];
+    if (band) files = files.filter((f) => f.classification?.band === band);
+    if (disposition) files = files.filter((f) => f.scan_flags.disposition === disposition);
+    if (reviewStatus) files = files.filter((f) => f.review?.disposition === reviewStatus);
+    if (kind) files = files.filter((f) => f.classification?.kind === kind);
+    return HttpResponse.json({ run_id: ingestionRunFixture.id, files });
+  }),
+  http.get("/api/v1/admin/imports/:id/files/:fid", () =>
+    HttpResponse.json(ingestionFileDetailFixture),
+  ),
+  http.get("/api/v1/admin/imports/:id/dupe-clusters", () =>
+    HttpResponse.json(ingestionDupeClustersFixture),
+  ),
+  http.get("/api/v1/admin/imports/:id/version-families", () =>
+    HttpResponse.json(ingestionVersionFamiliesFixture),
+  ),
+  http.get("/api/v1/admin/imports/:id/checklist", () =>
+    HttpResponse.json(ingestionChecklistFixture),
+  ),
+  http.get("/api/v1/admin/imports/:id/decisions", () =>
+    HttpResponse.json(ingestionDecisionsFixture),
+  ),
+  http.post("/api/v1/admin/imports", () =>
+    HttpResponse.json({ ...ingestionRunFixture, status: "Created" }, { status: 202 }),
+  ),
+  http.post("/api/v1/admin/imports/:id/files/:fid/decision", () => HttpResponse.json({ ok: true })),
+  http.post("/api/v1/admin/imports/:id/decisions", () => HttpResponse.json({ applied: 1 })),
+  http.post("/api/v1/admin/imports/:id/merge", () => HttpResponse.json({ ok: true })),
+  http.post("/api/v1/admin/imports/:id/split", () => HttpResponse.json({ ok: true })),
+  http.post("/api/v1/admin/imports/:id/cancel", () =>
+    HttpResponse.json({ ...ingestionRunFixture, status: "Cancelled" }),
+  ),
+  http.post("/api/v1/admin/imports/:id/commit", () =>
+    HttpResponse.json({ ...ingestionRunFixture, status: "Committing" }, { status: 202 }),
+  ),
   http.get("/api/v1/documents", listDocuments),
   http.get("/api/v1/document-types", () => HttpResponse.json(typeFixture)),
   http.get("/api/v1/directory/users", () => HttpResponse.json(directoryFixture)),
