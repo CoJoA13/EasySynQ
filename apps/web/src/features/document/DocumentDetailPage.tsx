@@ -4,6 +4,7 @@ import { useDocumentTypes } from "../../app/shell/useDocumentTypes";
 import { useUserDirectory } from "../../app/shell/useUserDirectory";
 import { ApiError } from "../../lib/api";
 import { AuthorActions } from "../authoring/AuthorActions";
+import { ApprovalsTab } from "./ApprovalsTab";
 import { ArtifactHeader } from "./ArtifactHeader";
 import { ControlMetadata } from "./ControlMetadata";
 import { HistoryTab } from "./HistoryTab";
@@ -135,6 +136,12 @@ export function DocumentDetailPage() {
         {/* Right: the version history + compare/redline, and the control metadata. */}
         <Grid.Col span={{ base: 12, md: 5 }}>
           <Stack gap="lg">
+            <Card withBorder>
+              <Stack gap="sm">
+                <Text fw={600}>Approvals</Text>
+                <ApprovalsTab doc={doc} />
+              </Stack>
+            </Card>
             <Card withBorder>
               <Stack gap="md">
                 <Text fw={600}>Version history</Text>

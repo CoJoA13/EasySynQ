@@ -11,12 +11,10 @@ import { NewDocumentWizard } from "./features/authoring/NewDocumentWizard";
 import { DocumentDetailPage } from "./features/document/DocumentDetailPage";
 import { HomePage } from "./features/home/HomePage";
 import { LibraryPage } from "./features/library/LibraryPage";
+import { ReviewApprovePage } from "./features/review/ReviewApprovePage";
+import { TasksInbox } from "./features/review/TasksInbox";
 import { apiGet } from "./lib/api";
 import { useAuth } from "./lib/auth";
-
-function Reserved({ what }: { what: string }) {
-  return <div>{what} — coming in a later slice.</div>;
-}
 
 export function App() {
   const { ready, token, login } = useAuth();
@@ -104,7 +102,8 @@ export function App() {
         <Route path="library" element={<LibraryPage />} />
         <Route path="library/new" element={<NewDocumentWizard />} />
         <Route path="documents/:id" element={<DocumentDetailPage />} />
-        <Route path="tasks/:id" element={<Reserved what="Review & approve" />} />
+        <Route path="tasks" element={<TasksInbox />} />
+        <Route path="tasks/:id" element={<ReviewApprovePage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

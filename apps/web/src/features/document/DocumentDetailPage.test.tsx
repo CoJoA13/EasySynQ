@@ -49,6 +49,13 @@ test("DocumentDetailPage renders the header, tiles, rendition, history, where-us
   expect(screen.getByText("Control metadata")).toBeInTheDocument();
 });
 
+test("DocumentDetailPage renders the Approvals stepper card", async () => {
+  renderPage();
+  await screen.findByRole("heading", { name: /Supplier Selection/ });
+  expect(screen.getByText("Approvals")).toBeInTheDocument();
+  expect(await screen.findByText("Quality approval")).toBeInTheDocument();
+});
+
 test("DocumentDetailPage shows a loading skeleton before the document resolves", () => {
   renderPage();
   expect(screen.getByLabelText("Loading document")).toBeInTheDocument();
