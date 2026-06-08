@@ -1,6 +1,11 @@
 export type DocumentCurrentState =
-  | "Draft" | "InReview" | "Approved" | "Effective"
-  | "UnderRevision" | "Superseded" | "Obsolete";
+  | "Draft"
+  | "InReview"
+  | "Approved"
+  | "Effective"
+  | "UnderRevision"
+  | "Superseded"
+  | "Obsolete";
 
 export interface DocumentSummary {
   id: string;
@@ -204,3 +209,68 @@ export interface ClauseMapping {
   framework_id: string;
   created_at: string;
 }
+
+// ---- S-web-4 (Document detail page + the redline) ---------------------------------------
+
+// GET /documents/{id}/download — the controlled-copy presign (rendition card; gate document.read).
+// rendition: controlled_copy = the watermarked PDF rendition; source = no controlled rendition yet
+// (still rendering, or a non-renderable R26 format).
+export interface DocumentDownload {
+  download_url: string;
+  content_type?: string;
+  rendition: "controlled_copy" | "source";
+}
+
+// GET /documents/{id}/versions/{vid}/diff?from={vid2} — doc 05 §8 (gate document.read_draft).
+// One version's signature event (PII-projected — signer_user_id only).
+export interface DiffSignature {
+  meaning: "approval" | "release" | "obsolete";
+  signer_user_id: string | null;
+  signed_at: string | null;
+}
+
+// The §8.1 provenance header for one version (listed, not diffed).
+export interface DiffProvenance {
+  version_id: string;
+  version_seq: number;
+  revision_label: string;
+  version_state: string;
+  change_significance: ChangeSignificance;
+  change_reason: string;
+  effective_from: string | null;
+  effective_to: string | null;
+  author_user_id: string;
+  created_at: string | null;
+  signatures: DiffSignature[];
+}
+
+// A field-by-field delta over the frozen metadata snapshots (§8.2).
+export interface MetadataDiffEntry {
+  field: string;
+  from: unknown;
+  to: unknown;
+  changed: boolean;
+}
+
+// One inline text-redline hunk (line-level LCS; §8.3).
+export interface TextDiffHunk {
+  op: "equal" | "insert" | "delete";
+  text: string;
+}
+
+// status="ok" with hunks, or "unavailable" (Tika down / non-extractable) with a reason.
+export interface TextDiff {
+  status: "ok" | "unavailable";
+  reason?: string;
+  hunks?: TextDiffHunk[];
+}
+
+export interface VersionDiff {
+  document_id: string;
+  from: DiffProvenance;
+  to: DiffProvenance;
+  metadata_diff: MetadataDiffEntry[];
+  text_diff: TextDiff;
+}
+
+// NB the worker-async visual page-image diff (VisualDiffStatus) is S-web-4b — not typed here yet.

@@ -8,6 +8,7 @@ import { AdminShell } from "./admin/AdminShell";
 import { RolesAdmin } from "./admin/RolesAdmin";
 import { UsersAdmin } from "./admin/UsersAdmin";
 import { NewDocumentWizard } from "./features/authoring/NewDocumentWizard";
+import { DocumentDetailPage } from "./features/document/DocumentDetailPage";
 import { HomePage } from "./features/home/HomePage";
 import { LibraryPage } from "./features/library/LibraryPage";
 import { apiGet } from "./lib/api";
@@ -82,7 +83,11 @@ export function App() {
           operational ? (
             <Navigate to="/" replace />
           ) : (
-            <SetupWizard token={token} login={login} onFinalized={() => void setupState.refetch()} />
+            <SetupWizard
+              token={token}
+              login={login}
+              onFinalized={() => void setupState.refetch()}
+            />
           )
         }
       />
@@ -98,7 +103,7 @@ export function App() {
         <Route index element={<HomePage />} />
         <Route path="library" element={<LibraryPage />} />
         <Route path="library/new" element={<NewDocumentWizard />} />
-        <Route path="documents/:id" element={<Reserved what="Document detail" />} />
+        <Route path="documents/:id" element={<DocumentDetailPage />} />
         <Route path="tasks/:id" element={<Reserved what="Review & approve" />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
