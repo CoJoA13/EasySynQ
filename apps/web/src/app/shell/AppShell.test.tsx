@@ -34,6 +34,6 @@ test("⌘K opens the command palette", async () => {
 test("clicking the TopBar search box opens the palette", async () => {
   const user = userEvent.setup();
   renderWithProviders(<AppShell />, { route: "/" });
-  await user.click(screen.getByLabelText("Open search"));
+  await user.click(screen.getByRole("button", { name: /search/i }));
   expect(await screen.findByLabelText("Search query")).toBeInTheDocument();
 });

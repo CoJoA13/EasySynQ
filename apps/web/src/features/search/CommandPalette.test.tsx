@@ -50,6 +50,20 @@ test("Enter with no selection runs the full search", async () => {
   await waitFor(() => expect(screen.getByTestId("loc")).toHaveTextContent("/search?q=pump"));
 });
 
+test("does not jump to a stale suggestion when the query changes after results loaded", async () => {
+  const user = userEvent.setup();
+  open();
+  const input = screen.getByLabelText("Search query");
+  await user.type(input, "sop");
+  // Suggestions for "sop" have loaded (debounce settled).
+  await screen.findByText("Supplier Selection & Evaluation");
+  // Type more + Enter before the 150ms debounce catches up: the stale "sop" rows must be
+  // suppressed, so Enter runs the full search for the CURRENT text — never the stale doc.
+  await user.type(input, "zzz{Enter}");
+  await waitFor(() => expect(screen.getByTestId("loc")).toHaveTextContent("/search?q=sopzzz"));
+  expect(screen.getByTestId("loc")).not.toHaveTextContent("/documents/");
+});
+
 test("has no axe violations when open", async () => {
   open();
   await screen.findByLabelText("Search query");
