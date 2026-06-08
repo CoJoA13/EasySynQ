@@ -67,6 +67,9 @@ async def test_seed_personas_grants_sod_trio(app_under_test: object) -> None:
     assert await _allows(author.id, author.org_id, "document.create")
     assert await _allows(author.id, author.org_id, "document.manage_metadata")
     assert await _allows(author.id, author.org_id, "document.submit")
+    # clauseMap.read so the UI clause picker (GET /clauses) renders for the author — the ≥1-clause
+    # submit gate is otherwise unusable from the browser (the S-web-5 live-smoke gap).
+    assert await _allows(author.id, author.org_id, "clauseMap.read")
     assert not await _allows(author.id, author.org_id, "document.approve")
     assert not await _allows(author.id, author.org_id, "document.release")
 
