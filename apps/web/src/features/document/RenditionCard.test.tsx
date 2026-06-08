@@ -68,6 +68,29 @@ test("RenditionCard shows an empty state with no effective version", () => {
   expect(screen.queryByRole("button", { name: /open controlled copy/i })).not.toBeInTheDocument();
 });
 
+test("RenditionCard clears a stale rendition note when the document changes", async () => {
+  vi.spyOn(window, "open").mockReturnValue(null);
+  server.use(
+    http.get("/api/v1/documents/:id/download", () =>
+      HttpResponse.json({
+        download_url: "https://minio.test/staging/src.docx",
+        rendition: "source",
+      }),
+    ),
+  );
+  const user = userEvent.setup();
+  const { rerender } = renderWithProviders(<RenditionCard doc={doc} />);
+  await user.click(screen.getByRole("button", { name: /open controlled copy/i }));
+  await waitFor(() => expect(screen.getByText(/still rendering/i)).toBeInTheDocument());
+  // navigate to a different document (the route element is reused — a param-only change)
+  rerender(
+    <RenditionCard
+      doc={{ ...doc, id: "22222222-2222-2222-2222-222222222222", identifier: "SOP-PRD-007" }}
+    />,
+  );
+  await waitFor(() => expect(screen.queryByText(/still rendering/i)).not.toBeInTheDocument());
+});
+
 test("RenditionCard has no a11y violations", async () => {
   const { container } = renderWithProviders(<RenditionCard doc={doc} />);
   expect(await axe(container)).toHaveNoViolations();

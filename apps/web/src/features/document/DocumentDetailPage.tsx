@@ -113,13 +113,20 @@ export function DocumentDetailPage() {
       <Group justify="space-between" align="flex-start" wrap="nowrap">
         <ArtifactHeader doc={doc} typeName={typeName} ownerName={ownerName} />
         {can("document.export") && (
-          <Button
-            variant="default"
-            loading={exportable.exporting}
-            onClick={() => void exportable.exportCopy()}
-          >
-            ⤓ Export controlled copy
-          </Button>
+          <Stack gap={4} align="flex-end">
+            <Button
+              variant="default"
+              loading={exportable.exporting}
+              onClick={() => void exportable.exportCopy()}
+            >
+              ⤓ Export controlled copy
+            </Button>
+            {exportable.error && (
+              <Text size="xs" c="dimmed" maw={240} ta="right">
+                {exportable.error}
+              </Text>
+            )}
+          </Stack>
         )}
       </Group>
 

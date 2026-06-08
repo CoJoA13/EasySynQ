@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useApi } from "../../lib/api";
 import { useAuth } from "../../lib/auth";
 import type { DocumentDownload } from "../../lib/types";
@@ -11,6 +11,12 @@ export function useControlledCopyDownload(documentId: string) {
   const api = useApi();
   const [downloading, setDownloading] = useState(false);
   const [rendition, setRendition] = useState<DocumentDownload["rendition"] | null>(null);
+
+  // Reset the rendition note when the page navigates to a different document — the /documents/:id
+  // route element is reused across a param-only change, so the local state would otherwise linger.
+  useEffect(() => {
+    setRendition(null);
+  }, [documentId]);
 
   async function open() {
     setDownloading(true);
@@ -35,24 +41,35 @@ export function useControlledCopyDownload(documentId: string) {
 export function useDocumentExport(documentId: string) {
   const { token } = useAuth();
   const [exporting, setExporting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   async function exportCopy() {
     setExporting(true);
+    setError(null);
     try {
       const resp = await fetch(`/api/v1/documents/${documentId}/export`, {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
-      if (!resp.ok) return;
+      if (!resp.ok) {
+        // 409 no_controlled_rendition is a STABLE state (no controlled PDF yet), not a transient
+        // blip — give the grantee a redirect hint rather than a silent no-op.
+        setError(
+          resp.status === 409
+            ? "Controlled copy is still rendering — use Download instead."
+            : "Could not export the controlled copy. Please retry.",
+        );
+        return;
+      }
       const blob = await resp.blob();
       const url = URL.createObjectURL(blob);
       window.open(url, "_blank", "noopener,noreferrer");
       setTimeout(() => URL.revokeObjectURL(url), 60_000);
     } catch {
-      /* quiet — a transient export failure is non-fatal for a read-only view */
+      setError("Could not export the controlled copy. Please retry.");
     } finally {
       setExporting(false);
     }
   }
 
-  return { exportCopy, exporting };
+  return { exportCopy, exporting, error };
 }

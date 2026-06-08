@@ -1,8 +1,9 @@
 import { http, HttpResponse } from "msw";
 import { axe } from "jest-axe";
-import { afterEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { Route, Routes } from "react-router-dom";
 import { screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { renderWithProviders } from "../../test/render";
 import { server } from "../../test/msw/server";
 import { detailCapabilities, docFixture } from "../../test/msw/handlers";
@@ -30,6 +31,24 @@ function serveDocWithCaps(caps: Partial<typeof detailCapabilities>) {
     }),
   );
 }
+
+// document.export is held by no seeded role; grant it (a SYSTEM override) to surface the Export button.
+function grantExport() {
+  server.use(
+    http.get("/api/v1/me/permissions", () =>
+      HttpResponse.json({
+        scope: { level: "SYSTEM", selector: null },
+        permissions: [{ key: "document.export", effect: "ALLOW", source: "override:system" }],
+      }),
+    ),
+  );
+}
+
+beforeEach(() => {
+  // jsdom doesn't implement URL.createObjectURL/revokeObjectURL; the export blob path needs them.
+  globalThis.URL.createObjectURL = vi.fn(() => "blob:mock");
+  globalThis.URL.revokeObjectURL = vi.fn();
+});
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -112,4 +131,30 @@ test("DocumentDetailPage has no a11y violations (with author actions)", async ()
   const { container } = renderPage();
   await screen.findByRole("button", { name: /Start revision/ });
   expect(await axe(container)).toHaveNoViolations();
+});
+
+test("DocumentDetailPage exports the controlled copy via the authenticated stream", async () => {
+  const openSpy = vi.spyOn(window, "open").mockReturnValue(null);
+  grantExport();
+  const user = userEvent.setup();
+  renderPage();
+  await user.click(await screen.findByRole("button", { name: /Export controlled copy/ }));
+  await waitFor(() =>
+    expect(openSpy).toHaveBeenCalledWith("blob:mock", "_blank", "noopener,noreferrer"),
+  );
+});
+
+test("DocumentDetailPage surfaces a 409 no_controlled_rendition without exporting", async () => {
+  const openSpy = vi.spyOn(window, "open").mockReturnValue(null);
+  grantExport();
+  server.use(
+    http.get("/api/v1/documents/:id/export", () =>
+      HttpResponse.json({ code: "no_controlled_rendition" }, { status: 409 }),
+    ),
+  );
+  const user = userEvent.setup();
+  renderPage();
+  await user.click(await screen.findByRole("button", { name: /Export controlled copy/ }));
+  await waitFor(() => expect(screen.getByText(/still rendering/i)).toBeInTheDocument());
+  expect(openSpy).not.toHaveBeenCalled();
 });
