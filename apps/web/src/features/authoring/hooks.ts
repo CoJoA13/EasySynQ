@@ -24,6 +24,7 @@ function useInvalidateDocument(): (documentId: string) => void {
     void qc.invalidateQueries({ queryKey: ["document-versions", documentId] });
     void qc.invalidateQueries({ queryKey: ["clause-mappings", documentId] });
     void qc.invalidateQueries({ queryKey: ["where-used", documentId] });
+    void qc.invalidateQueries({ queryKey: ["document-approval", documentId] });
     void qc.invalidateQueries({ queryKey: ["documents"] });
   };
 }
@@ -136,6 +137,18 @@ export function useSubmitReview() {
   return useMutation({
     mutationFn: (documentId: string) =>
       api.send<DocumentSummary>("POST", `/api/v1/documents/${documentId}/submit-review`),
+    onSuccess: (_d, documentId) => invalidate(documentId),
+  });
+}
+
+// S-web-5: release an Approved version → Effective (SoD-2 gated server-side; the UI only shows the
+// button when capabilities.release is true, which already reflects the SoD-2 author/approver block).
+export function useReleaseDocument() {
+  const api = useApi();
+  const invalidate = useInvalidateDocument();
+  return useMutation({
+    mutationFn: (documentId: string) =>
+      api.send<DocumentSummary>("POST", `/api/v1/documents/${documentId}/release`, {}),
     onSuccess: (_d, documentId) => invalidate(documentId),
   });
 }
