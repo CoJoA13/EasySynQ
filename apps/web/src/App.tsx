@@ -13,6 +13,8 @@ import { HomePage } from "./features/home/HomePage";
 import { LibraryPage } from "./features/library/LibraryPage";
 import { ReviewApprovePage } from "./features/review/ReviewApprovePage";
 import { TasksInbox } from "./features/review/TasksInbox";
+import { SearchResultsPage } from "./features/search/SearchResultsPage";
+import { CompliancePage } from "./features/compliance/CompliancePage";
 import { apiGet } from "./lib/api";
 import { useAuth } from "./lib/auth";
 
@@ -104,6 +106,8 @@ export function App() {
         <Route path="documents/:id" element={<DocumentDetailPage />} />
         <Route path="tasks" element={<TasksInbox />} />
         <Route path="tasks/:id" element={<ReviewApprovePage />} />
+        <Route path="search" element={<SearchResultsPage />} />
+        <Route path="compliance" element={<CompliancePage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

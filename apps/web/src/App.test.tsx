@@ -9,6 +9,16 @@ test("operational app renders the shell + Library at /library", async () => {
   expect(screen.getAllByRole("link", { name: "Home" }).length).toBeGreaterThan(0); // shell rail
 });
 
+test("the /search route renders the results page", async () => {
+  renderWithProviders(<App />, { route: "/search?q=supplier" });
+  expect(await screen.findByRole("heading", { name: "Search" })).toBeInTheDocument();
+});
+
+test("the /compliance route renders the checklist", async () => {
+  renderWithProviders(<App />, { route: "/compliance" });
+  expect(await screen.findByRole("heading", { name: "Compliance Checklist" })).toBeInTheDocument();
+});
+
 test("operational app with no token bounces to sign-in (in-memory tokens, post-reload)", async () => {
   sessionStorage.removeItem("es_auth_redirect");
   const login = vi.fn();
