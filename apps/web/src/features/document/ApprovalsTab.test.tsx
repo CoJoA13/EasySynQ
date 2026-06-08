@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 import type { DocumentSummary } from "../../lib/types";
-import { renderWithProviders } from "../../test/render";
+import { renderWithProviders, TEST_AUTH } from "../../test/render";
 import { ApprovalsTab } from "./ApprovalsTab";
 
 function doc(over: Partial<DocumentSummary> = {}): DocumentSummary {
@@ -33,8 +33,15 @@ function doc(over: Partial<DocumentSummary> = {}): DocumentSummary {
   };
 }
 
-test("shows the stepper + the Review & approve CTA for a candidate", async () => {
-  const { findByText, findByRole } = renderWithProviders(<ApprovalsTab doc={doc()} />);
+test("shows the Review & approve CTA via the /me app_user id, not the OIDC sub", async () => {
+  // Regression: candidate-pool membership must compare against /me.id (the app_user id =
+  // candidate_pool member bbbb1111…), NOT profile.sub. Force them to differ so a profile.sub-based
+  // gate would (wrongly) hide the link — the bug diff-critic caught.
+  const auth = {
+    ...TEST_AUTH,
+    user: { profile: { sub: "9999zzzz-0000-0000-0000-000000000000" } } as typeof TEST_AUTH.user,
+  };
+  const { findByText, findByRole } = renderWithProviders(<ApprovalsTab doc={doc()} />, { auth });
   expect(await findByText("Quality approval")).toBeInTheDocument();
   expect(await findByRole("link", { name: /review & approve/i })).toBeInTheDocument();
 });

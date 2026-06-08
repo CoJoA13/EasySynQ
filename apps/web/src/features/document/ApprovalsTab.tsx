@@ -1,9 +1,9 @@
 import { Alert, Anchor, Button, Group, Stack, Text } from "@mantine/core";
 import { useState } from "react";
 import { Link } from "react-router-dom";
+import { useMe } from "../../app/shell/useMe";
 import { useUserDirectory } from "../../app/shell/useUserDirectory";
 import { ApiError } from "../../lib/api";
-import { useAuth } from "../../lib/auth";
 import type { DocumentSummary } from "../../lib/types";
 import { useReleaseDocument } from "../authoring/hooks";
 import { ApprovalStepper } from "./ApprovalStepper";
@@ -13,8 +13,9 @@ import { useDocumentApproval } from "./useDocumentApproval";
 // when capabilities.release is true (already SoD-2-enriched) AND the doc is Approved; the "Review &
 // approve" link shows only when the caller is on the open APPROVE task (candidate-pool membership).
 export function ApprovalsTab({ doc }: { doc: DocumentSummary }) {
-  const { user } = useAuth();
-  const myId = user?.profile?.sub ?? null;
+  // app_user.id (GET /me), NOT the OIDC sub — candidate_pool/assignee_user_id are app_user ids.
+  const { data: me } = useMe();
+  const myId = me?.id ?? null;
   const { data: instance, isLoading, isError, error } = useDocumentApproval(doc.id);
   const { data: directory } = useUserDirectory();
   const release = useReleaseDocument();
