@@ -16,7 +16,11 @@ export function CommandPalette({ opened, onClose }: { opened: boolean; onClose: 
   const term = q.trim();
   const [debouncedQ] = useDebouncedValue(q, 150);
   const { data, isFetching } = useSuggest(debouncedQ);
-  const suggestions = data?.suggestions ?? [];
+  // Only surface suggestions once the debounce has caught up to the CURRENT input. While the user
+  // is still typing (debouncedQ ≠ term), the previous query's rows are stale — showing them would
+  // let Enter/click jump to a document that doesn't match what's typed (`goSearch` uses the live
+  // `term`). During that window the listbox falls back to just the "Search '<q>' →" action.
+  const suggestions = debouncedQ.trim() === term ? (data?.suggestions ?? []) : [];
   // Option indices: 0..n-1 = suggestions, n = the "Search …" footer action.
   const optionCount = suggestions.length + 1;
 
