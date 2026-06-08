@@ -1,12 +1,15 @@
-import { Group, Select, Stack, Text } from "@mantine/core";
+import { Group, SegmentedControl, Select, Stack, Text } from "@mantine/core";
 import { useSearchParams } from "react-router-dom";
 import type { DocumentVersion } from "../../lib/types";
 import { RedlineViewer } from "./RedlineViewer";
+import { VisualDiffViewer } from "./VisualDiffViewer";
 
 // S-web-4: the doc 11 §4.6 inline "Compare" picker — two version selects whose choice is the page's
 // URL state (?from=&to=), so the redline is deep-linkable/shareable. On a COLD visit (no URL pair) it
 // DEFAULTS to the prior → newest revision pair (the primary "what changed in the latest rev" view);
 // the RedlineViewer renders below for any distinct pair. Hidden when there's nothing to compare.
+// S-web-4b: a ?mode=text|visual SegmentedControl swaps the (synchronous) text/metadata RedlineViewer
+// and the (worker-async) VisualDiffViewer over the SAME version pair. RedlineViewer is unchanged.
 export function VersionCompare({
   documentId,
   versions,
@@ -22,13 +25,14 @@ export function VersionCompare({
   const ordered = [...versions].sort((a, b) => b.version_seq - a.version_seq);
   const from = params.get("from") ?? ordered[1]?.id ?? null;
   const to = params.get("to") ?? ordered[0]?.id ?? null;
+  const mode = params.get("mode") === "visual" ? "visual" : "text";
 
   const options = ordered.map((v) => ({
     value: v.id,
     label: `${v.revision_label} · ${v.version_state}`,
   }));
 
-  function set(key: "from" | "to", value: string | null) {
+  function set(key: "from" | "to" | "mode", value: string | null) {
     setParams((p) => {
       if (value) p.set(key, value);
       else p.delete(key);
@@ -66,7 +70,26 @@ export function VersionCompare({
           Pick two different versions to compare.
         </Text>
       )}
-      {showViewer && <RedlineViewer documentId={documentId} fromVid={from} toVid={to} />}
+      {showViewer && (
+        <Stack gap="sm">
+          <SegmentedControl
+            size="xs"
+            aria-label="Diff mode"
+            value={mode}
+            onChange={(m) => set("mode", m)}
+            data={[
+              { value: "text", label: "Text" },
+              { value: "visual", label: "Visual" },
+            ]}
+            w="fit-content"
+          />
+          {mode === "visual" ? (
+            <VisualDiffViewer documentId={documentId} fromVid={from} toVid={to} />
+          ) : (
+            <RedlineViewer documentId={documentId} fromVid={from} toVid={to} />
+          )}
+        </Stack>
+      )}
     </Stack>
   );
 }

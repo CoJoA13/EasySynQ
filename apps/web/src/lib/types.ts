@@ -273,4 +273,25 @@ export interface VersionDiff {
   text_diff: TextDiff;
 }
 
-// NB the worker-async visual page-image diff (VisualDiffStatus) is S-web-4b — not typed here yet.
+// ---- S-web-4b (the worker-async visual page-image diff) ---------------------------------
+// POST/GET /documents/{id}/versions/{vid}/visual-diff?from={vid2} → VisualDiffStatus (gate
+// document.read_draft). The page PNGs stream from …/visual-diff/page/{n}?layer=from|to|diff.
+export type VisualDiffLayer = "from" | "to" | "diff";
+
+// One page of the diff. `page` is a 0-BASED index (label it 1-based in the UI). `changed` drives
+// the changed-page rail's non-color marker + the n/p nav targets.
+export interface VisualDiffPage {
+  page: number;
+  changed: boolean;
+}
+
+// Pending → render in progress (a dev renderer outage leaves it Pending, NOT Failed — re-POST
+// re-drives). Ready → page_count + pages populated. Unavailable → a version is non-renderable
+// (R26) — terminal, NOT an error (fall back to source download). Failed → defensive (a version
+// row vanished) — recoverable via re-POST. page_count/pages are null until Ready.
+export interface VisualDiffStatus {
+  status: "Pending" | "Ready" | "Failed" | "Unavailable";
+  page_count: number | null;
+  reason: string | null;
+  pages: VisualDiffPage[] | null;
+}

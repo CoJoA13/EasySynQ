@@ -166,6 +166,28 @@ export const diffFixture = {
   },
 };
 
+// S-web-4b: GET/POST …/visual-diff → a Ready status. Page 0 unchanged, 1 & 2 changed (0-based).
+export const visualDiffFixture = {
+  status: "Ready",
+  page_count: 3,
+  reason: null,
+  pages: [
+    { page: 0, changed: false },
+    { page: 1, changed: true },
+    { page: 2, changed: true },
+  ],
+};
+
+// A valid 1×1 PNG — the page sub-endpoint streams image/png; tests assert the authed fetch + the
+// <img> alt, not the pixels (jsdom can't decode), so any real PNG body suffices.
+export const PNG_1x1 = new Uint8Array([
+  0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+  0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
+  0x89, 0x00, 0x00, 0x00, 0x0a, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0x00, 0x01, 0x00, 0x00,
+  0x05, 0x00, 0x01, 0x0d, 0x0a, 0x2d, 0xb4, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae,
+  0x42, 0x60, 0x82,
+]);
+
 export const whereUsedFixture = {
   document_id: "11111111-1111-1111-1111-111111111111",
   processes: [{ id: "p1", name: "Purchasing", state: "ACTIVE", is_active: true }],
@@ -343,6 +365,18 @@ export const handlers = [
       content_type: "application/pdf",
       rendition: "controlled_copy",
     }),
+  ),
+  // S-web-4b: the worker-async visual diff. POST = request (idempotent); GET = poll; page = PNG.
+  // Defaults are terminal (Ready); per-test overrides drive Pending→Ready / Failed / Unavailable / 403.
+  http.post("/api/v1/documents/:id/versions/:vid/visual-diff", () =>
+    HttpResponse.json(visualDiffFixture),
+  ),
+  http.get("/api/v1/documents/:id/versions/:vid/visual-diff", () =>
+    HttpResponse.json(visualDiffFixture),
+  ),
+  http.get(
+    "/api/v1/documents/:id/versions/:vid/visual-diff/page/:page",
+    () => new HttpResponse(PNG_1x1, { headers: { "Content-Type": "image/png" } }),
   ),
   http.get("/api/v1/documents/:id", ({ params }) => {
     const doc = docFixture.find((d) => d.id === params.id);

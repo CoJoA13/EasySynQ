@@ -52,6 +52,27 @@ async function request<T>(
 export const apiGet = <T>(path: string, token: string | null = null): Promise<T> =>
   request<T>("GET", path, token);
 
+// Authed BINARY fetch (S-web-4b): the visual-diff page PNG streams image/png through the
+// authenticated API (gate document.read_draft, NOT a presigned URL), so a bare <img src> can't
+// carry the bearer. Fetch the bytes with the token → Blob (the caller URL.createObjectURLs it,
+// and MUST URL.revokeObjectURL on cleanup). Surfaces the RFC 9457 problem code like request<T>:
+// 403 → quiet, 404 → "no image for this page/layer", 422 → bad layer.
+export async function apiGetBlob(path: string, token: string | null = null): Promise<Blob> {
+  const headers: Record<string, string> = {};
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const resp = await fetch(path, { headers });
+  if (!resp.ok) {
+    let problem: Problem = {};
+    try {
+      problem = (await resp.json()) as Problem;
+    } catch {
+      /* non-JSON error body */
+    }
+    throw new ApiError(resp.status, problem.code ?? "error", problem.detail ?? problem.title ?? `HTTP ${resp.status}`);
+  }
+  return await resp.blob();
+}
+
 export const apiSend = <T>(
   method: "POST" | "PATCH" | "DELETE",
   path: string,
@@ -65,6 +86,7 @@ export function useApi() {
   return useMemo(
     () => ({
       get: <T>(path: string): Promise<T> => apiGet<T>(path, token),
+      getBlob: (path: string): Promise<Blob> => apiGetBlob(path, token),
       send: <T>(method: "POST" | "PATCH" | "DELETE", path: string, body?: unknown): Promise<T> =>
         apiSend<T>(method, path, token, body),
     }),
