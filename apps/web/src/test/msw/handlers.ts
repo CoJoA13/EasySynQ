@@ -351,6 +351,32 @@ function listDocuments({ request }: { request: Request }) {
   });
 }
 
+// S-web-5: the document's approval cycle (GET /documents/{id}/approval + GET /workflow-instances/{id}).
+// candidate_pool contains TEST_AUTH.sub (bbbb1111…) so the candidate-gated affordances render in tests.
+const approveTask = {
+  id: "task1111-1111-1111-1111-111111111111",
+  instance_id: "wf111111-1111-1111-1111-111111111111",
+  stage_key: "quality_approval",
+  type: "APPROVE",
+  state: "PENDING",
+  assignee_user_id: null,
+  candidate_pool: ["bbbb1111-1111-1111-1111-111111111111"],
+  action_expected: "approve",
+  due_at: null,
+};
+export const approvalFixture = {
+  id: "wf111111-1111-1111-1111-111111111111",
+  definition_id: "def11111-1111-1111-1111-111111111111",
+  definition_version: 1,
+  subject_type: "DOCUMENT",
+  subject_id: "11111111-1111-1111-1111-111111111111",
+  current_state: "IN_APPROVAL",
+  started_at: "2026-06-08T09:00:00+00:00",
+  revision: 0,
+  tasks: [approveTask],
+};
+export const taskFixture = approvalFixture.tasks;
+
 export const handlers = [
   http.get("/api/v1/documents", listDocuments),
   http.get("/api/v1/document-types", () => HttpResponse.json(typeFixture)),
@@ -385,6 +411,26 @@ export const handlers = [
       : HttpResponse.json({ code: "not_found", title: "Not found" }, { status: 404 });
   }),
   http.get("/api/v1/clauses", () => HttpResponse.json(clauseFixture)),
+  // ---- S-web-5 review/approve (default happy-path; per-test overrides for error cases) ----
+  http.get("/api/v1/documents/:id/approval", () => HttpResponse.json(approvalFixture)),
+  http.get("/api/v1/tasks", () => HttpResponse.json(taskFixture)),
+  http.get("/api/v1/tasks/:id", () => HttpResponse.json(approveTask)),
+  http.get("/api/v1/workflow-instances/:id", () => HttpResponse.json(approvalFixture)),
+  http.post("/api/v1/tasks/:id/decision", () =>
+    HttpResponse.json({
+      task_id: approveTask.id,
+      instance_id: approvalFixture.id,
+      stage_key: "quality_approval",
+      outcome: "approve",
+      decided_at: "2026-06-08T10:00:00+00:00",
+      decided_by: "bbbb1111-1111-1111-1111-111111111111",
+      signature_event: null,
+      comment: null,
+    }),
+  ),
+  http.post("/api/v1/documents/:id/release", ({ params }) =>
+    HttpResponse.json({ ...docFixture[0], id: String(params.id), current_state: "Effective" }),
+  ),
   http.get("/api/v1/me", () =>
     HttpResponse.json({
       id: "bbbb1111-1111-1111-1111-111111111111",

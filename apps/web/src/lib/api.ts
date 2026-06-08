@@ -25,8 +25,9 @@ async function request<T>(
   path: string,
   token: string | null,
   body?: unknown,
+  extraHeaders?: Record<string, string>,
 ): Promise<T> {
-  const headers: Record<string, string> = {};
+  const headers: Record<string, string> = { ...(extraHeaders ?? {}) };
   if (token) headers.Authorization = `Bearer ${token}`;
   if (body !== undefined) headers["Content-Type"] = "application/json";
   const resp = await fetch(path, {
@@ -78,7 +79,8 @@ export const apiSend = <T>(
   path: string,
   token: string | null,
   body?: unknown,
-): Promise<T> => request<T>(method, path, token, body);
+  headers?: Record<string, string>,
+): Promise<T> => request<T>(method, path, token, body, headers);
 
 // Token-aware client: pulls the bearer token from AuthContext so callers/hooks never thread it.
 export function useApi() {
@@ -87,8 +89,12 @@ export function useApi() {
     () => ({
       get: <T>(path: string): Promise<T> => apiGet<T>(path, token),
       getBlob: (path: string): Promise<Blob> => apiGetBlob(path, token),
-      send: <T>(method: "POST" | "PATCH" | "DELETE", path: string, body?: unknown): Promise<T> =>
-        apiSend<T>(method, path, token, body),
+      send: <T>(
+        method: "POST" | "PATCH" | "DELETE",
+        path: string,
+        body?: unknown,
+        headers?: Record<string, string>,
+      ): Promise<T> => apiSend<T>(method, path, token, body, headers),
     }),
     [token],
   );
