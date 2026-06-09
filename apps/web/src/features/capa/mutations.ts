@@ -109,14 +109,17 @@ export function useCreateNcr() {
   });
 }
 
-// One-shot ISO 8.7 disposition (409 ncr_already_dispositioned if already set — the caller surfaces it calmly).
+// One-shot ISO 8.7 disposition (409 ncr_already_dispositioned if already set — the caller surfaces it
+// calmly). Invalidate on SETTLE (success OR error), not just success: a 409 race means another user
+// already disposed this NCR, so the list is stale (still shows the "Record disposition" action) — the
+// refetch flips the row to its read-only disposed state behind the calm error.
 export function useNcrDisposition(ncrId: string) {
   const api = useApi();
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (body: NcrDispositionBody) =>
       api.send<Ncr>("PATCH", `/api/v1/ncrs/${ncrId}/disposition`, body),
-    onSuccess: () => void qc.invalidateQueries({ queryKey: ["ncrs"] }),
+    onSettled: () => void qc.invalidateQueries({ queryKey: ["ncrs"] }),
   });
 }
 

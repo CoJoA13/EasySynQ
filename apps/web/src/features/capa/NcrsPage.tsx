@@ -1,16 +1,25 @@
-import { Alert, Badge, Button, Container, Group, Loader, Table, Text, Title } from "@mantine/core";
+import { Alert, Badge, Button, Container, Group, Loader, Stack, Table, Text, Title } from "@mantine/core";
 import { useState } from "react";
 import { usePermissions } from "../../app/shell/usePermissions";
-import type { Ncr } from "../../lib/types";
+import { useUserDirectory } from "../../app/shell/useUserDirectory";
+import type { DirectoryUser, Ncr } from "../../lib/types";
 import { SEVERITY_LABEL } from "./columns";
 import { DispositionModal } from "./DispositionModal";
 import { useNcrs } from "./hooks";
 import { DISPOSITION_LABEL, NCR_SOURCE_LABEL } from "./intake";
 import { NcrForm } from "./NcrForm";
 
+// Resolve a disposition authorizer's id → display name, degrading to a short id when the directory
+// isn't loaded/permitted (the CapaTimeline `actorLabel` pattern — the table is the only NCR surface,
+// so it carries the one-shot audit context the backend returns).
+function actorLabel(userId: string, directory: DirectoryUser[]): string {
+  return directory.find((u) => u.id === userId)?.display_name ?? `${userId.slice(0, 8)}…`;
+}
+
 export function NcrsPage() {
   const { data, isLoading, isError, forbidden } = useNcrs();
   const { can } = usePermissions();
+  const { data: directory } = useUserDirectory();
   const [formOpen, setFormOpen] = useState(false);
   const [disposeNcr, setDisposeNcr] = useState<Ncr | null>(null);
 
@@ -77,16 +86,26 @@ export function NcrsPage() {
                 </Table.Td>
                 <Table.Td>
                   {n.disposition ? (
-                    <Group gap="xs">
-                      <Badge variant="light" color="gray">
-                        {DISPOSITION_LABEL[n.disposition]}
-                      </Badge>
-                      {n.disposition_notes && (
-                        <Text size="sm" c="dimmed">
-                          {n.disposition_notes}
+                    <Stack gap={2}>
+                      <Group gap="xs">
+                        <Badge variant="light" color="gray">
+                          {DISPOSITION_LABEL[n.disposition]}
+                        </Badge>
+                        {n.disposition_notes && (
+                          <Text size="sm" c="dimmed">
+                            {n.disposition_notes}
+                          </Text>
+                        )}
+                      </Group>
+                      {(n.disposition_authorized_by || n.disposed_at) && (
+                        <Text size="xs" c="dimmed">
+                          {n.disposition_authorized_by &&
+                            `by ${actorLabel(n.disposition_authorized_by, directory ?? [])}`}
+                          {n.disposition_authorized_by && n.disposed_at && " · "}
+                          {n.disposed_at && new Date(n.disposed_at).toISOString().slice(0, 10)}
                         </Text>
                       )}
-                    </Group>
+                    </Stack>
                   ) : can("ncr.record_correction") ? (
                     <Button size="xs" variant="light" onClick={() => setDisposeNcr(n)}>
                       Record disposition

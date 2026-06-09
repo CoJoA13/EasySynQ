@@ -38,12 +38,15 @@ test("hides 'Raise NCR' without ncr.create; shows + opens it with the key", asyn
   expect(await screen.findByLabelText(/^Source/)).toBeInTheDocument();
 });
 
-test("a disposed NCR shows its disposition read-only (no action button)", async () => {
+test("a disposed NCR shows its disposition + who/when read-only (no action button)", async () => {
   grant(["ncr.record_correction"]);
   renderWithProviders(<NcrsPage />, { route: "/capa/ncrs" });
   const row = await screen.findByRole("row", { name: /NCR-000049/ });
   expect(within(row).getByText("Rework")).toBeInTheDocument();
   expect(within(row).queryByRole("button", { name: /Record disposition/ })).toBeNull();
+  // who/when audit context (the table is the only NCR surface) — authorizer resolved via the directory.
+  expect(await within(row).findByText(/Mara Quality/)).toBeInTheDocument();
+  expect(within(row).getByText(/2026-06-04/)).toBeInTheDocument();
 });
 
 test("records a disposition (PATCH) for an undisposed NCR", async () => {
@@ -89,6 +92,44 @@ test("a one-shot 409 (already dispositioned) is surfaced calmly", async () => {
   await u.click(await screen.findByRole("option", { name: "Scrap" }));
   await u.click(within(dialog).getByRole("button", { name: /Record disposition/ }));
   expect(await screen.findByText(/Already dispositioned/)).toBeInTheDocument();
+});
+
+test("a 409 race refetches the list so the row flips to its disposed read-only state", async () => {
+  grant(["ncr.record_correction"]);
+  let raced = false; // another user won the race: our PATCH 409s, but the server is now disposed.
+  server.use(
+    http.get("/api/v1/ncrs", () =>
+      HttpResponse.json({
+        data: [
+          { id: "nc000001-0001-0001-0001-000000000001", identifier: "NCR-000052", source: "process", description: "Torque out of spec", severity: "Major", process_id: null, disposition: raced ? "scrap" : null, disposition_authorized_by: null, disposition_notes: null, disposed_at: raced ? "2026-06-09T00:00:00+00:00" : null, created_at: "2026-06-03T09:00:00+00:00" },
+        ],
+      }),
+    ),
+    http.patch("/api/v1/ncrs/:id/disposition", () => {
+      raced = true;
+      return HttpResponse.json({ code: "ncr_already_dispositioned", title: "Already dispositioned" }, { status: 409 });
+    }),
+  );
+  const u = userEvent.setup();
+  renderWithProviders(<NcrsPage />, { route: "/capa/ncrs" });
+  const row = await screen.findByRole("row", { name: /NCR-000052/ });
+  await u.click(within(row).getByRole("button", { name: /Record disposition/ }));
+  const dialog = screen.getByRole("dialog");
+  const [dispInput] = within(dialog).getAllByLabelText(/Disposition/);
+  await u.click(dispInput!);
+  await u.click(await screen.findByRole("option", { name: "Scrap" }));
+  await u.click(within(dialog).getByRole("button", { name: /Record disposition/ }));
+  // the calm 409 message shows AND the invalidate-on-settle refetch flips the row to read-only — the
+  // stale "Record disposition" action is gone (asserting the button, not "Scrap", which the open
+  // modal's Select also shows).
+  expect(await screen.findByText(/Already dispositioned/)).toBeInTheDocument();
+  await waitFor(() =>
+    expect(
+      within(screen.getByRole("row", { name: /NCR-000052/ })).queryByRole("button", {
+        name: /Record disposition/,
+      }),
+    ).toBeNull(),
+  );
 });
 
 test("renders a calm no-access panel on a 403", async () => {
