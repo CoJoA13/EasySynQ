@@ -7,7 +7,7 @@ import { CloseGateStepper } from "./CloseGateStepper";
 import { useCapa } from "./hooks";
 
 export function CapaDrawer({ capaId, onClose }: { capaId: string | null; onClose: () => void }) {
-  const { data: capa, isLoading } = useCapa(capaId);
+  const { data: capa, isLoading, isError } = useCapa(capaId);
   const { data: directory } = useUserDirectory();
 
   return (
@@ -29,9 +29,11 @@ export function CapaDrawer({ capaId, onClose }: { capaId: string | null; onClose
     >
       {isLoading ? (
         <Loader />
-      ) : !capa ? (
+      ) : isError || !capa ? (
         // The detail fetch failed (a stale board row, a 404/403/500, or a permission change between
-        // the list and detail reads) — surface it calmly instead of spinning forever.
+        // the list and detail reads) — surface it calmly instead of spinning forever. `isError` is
+        // honored even when React Query still holds stale cached data from an earlier successful open,
+        // so a later failed refetch never renders out-of-date details.
         <Alert color="red" title="Couldn't load this CAPA">
           It may have been removed, or you may not have access. Close this panel and try again.
         </Alert>

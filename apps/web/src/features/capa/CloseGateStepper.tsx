@@ -7,20 +7,21 @@ export interface GateState {
   effectiveness: boolean;
 }
 
-// `cycleMarker` is the CAPA's current effectiveness-loop counter. Stages carry the marker they were
-// appended under, so after a `not_effective` Verify→RootCause loop the PRIOR cycle's RootCause/Action
-// stages linger in `stages` with an earlier marker — the server still requires a fresh revised plan in
-// the current cycle. Scope the rootCause/action checks to the current cycle so a looped CAPA doesn't
-// show a false green for work done in a superseded cycle.
+// Mirrors the server's M4 close gate (`close_capa`): `has_root_cause` is CYCLE-AGNOSTIC (the
+// established RCA carries across loop iterations — a `not_effective` loop bumps `cycle_marker` without
+// appending a new RootCause stage, and the FSM offers no path to re-record one), while the implemented
+// action is CURRENT-cycle (after a loop the prior cycle's ActionPlan/Implement no longer counts — a
+// fresh revised plan is required). So root-cause = any RootCause stage; action = a current-cycle one.
 export function deriveGate(
   stages: CapaStage[],
   closeState: CapaCloseState,
   cycleMarker: number,
 ): GateState {
+  const hasAny = (s: CapaStage["stage"]) => stages.some((x) => x.stage === s);
   const hasCurrent = (s: CapaStage["stage"]) =>
     stages.some((x) => x.stage === s && x.cycle_marker === cycleMarker);
   return {
-    rootCause: hasCurrent("RootCause"),
+    rootCause: hasAny("RootCause"),
     action: hasCurrent("ActionPlan") || hasCurrent("Implement"),
     // Effectiveness-EVIDENCE completeness isn't in the read payload — the M4 close gate also requires
     // evidence linked to the Implement/Verify stages. The only state where that gate has DEFINITIVELY

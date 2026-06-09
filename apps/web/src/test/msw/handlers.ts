@@ -444,14 +444,18 @@ export const capaDetailFixture = {
   ],
 } satisfies Capa;
 
-// A cycle_marker>0 detail: the Verify→RootCause loop ran once (two RootCause + a not_effective Verify).
+// A cycle_marker>0 detail: a not_effective Verify looped the CAPA once. The loop bumps cycle_marker
+// WITHOUT appending a new RootCause stage (the established RCA carries forward; the FSM offers no path
+// to re-record one) — the current cycle re-plans + re-verifies. Matches the backend close-gate model.
 export const capaLoopDetailFixture = {
   ...capaListFixture.data[4]!,
   raised_by: "bbbb1111-1111-1111-1111-111111111111",
   stages: [
     { id: "lp000001-0001-0001-0001-000000000001", stage: "RootCause", content_block: { root_cause: "Planning hand-off undefined." }, cycle_marker: 0, created_by: "bbbb1111-1111-1111-1111-111111111111", created_at: "2026-05-11T09:00:00+00:00" },
-    { id: "lp000002-0002-0002-0002-000000000002", stage: "Verify", content_block: { decision: "not_effective", narrative: "Late deliveries recurred." }, cycle_marker: 0, created_by: "bbbb1111-1111-1111-1111-111111111111", created_at: "2026-05-18T09:00:00+00:00" },
-    { id: "lp000003-0003-0003-0003-000000000003", stage: "RootCause", content_block: { root_cause: "Capacity model wrong." }, cycle_marker: 1, created_by: "bbbb1111-1111-1111-1111-111111111111", created_at: "2026-05-19T09:00:00+00:00" },
+    { id: "lp000002-0002-0002-0002-000000000002", stage: "ActionPlan", content_block: { action_items: ["Add a planning hand-off checklist"] }, cycle_marker: 0, created_by: "bbbb1111-1111-1111-1111-111111111111", created_at: "2026-05-13T09:00:00+00:00" },
+    { id: "lp000003-0003-0003-0003-000000000003", stage: "Verify", content_block: { decision: "not_effective", narrative: "Late deliveries recurred." }, cycle_marker: 0, created_by: "bbbb1111-1111-1111-1111-111111111111", created_at: "2026-05-18T09:00:00+00:00" },
+    { id: "lp000004-0004-0004-0004-000000000004", stage: "ActionPlan", content_block: { action_items: ["Re-baseline the capacity model"] }, cycle_marker: 1, created_by: "bbbb1111-1111-1111-1111-111111111111", created_at: "2026-05-19T09:00:00+00:00" },
+    { id: "lp000005-0005-0005-0005-000000000005", stage: "Verify", content_block: { decision: "effective", narrative: "On-time rate recovered." }, cycle_marker: 1, created_by: "bbbb1111-1111-1111-1111-111111111111", created_at: "2026-05-21T09:00:00+00:00" },
   ],
 } satisfies Capa;
 

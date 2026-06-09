@@ -31,10 +31,16 @@ test("deriveGate: rootCause/action from current-cycle stages; effectiveness only
   ).toMatchObject({ effectiveness: true });
 });
 
-test("a prior-cycle action does NOT satisfy the current cycle after a not_effective loop", () => {
-  // CAPA looped to cycle 1 (RootCause): the cycle-0 ActionPlan lingers but a fresh plan is required.
+test("after a not_effective loop: root-cause carries forward, but a prior-cycle action does not", () => {
+  // CAPA looped to cycle 1 (close_state RootCause). The loop bumps cycle_marker WITHOUT a new
+  // RootCause stage (the RCA carries forward → root-cause stays satisfied), but the cycle-0 ActionPlan
+  // no longer counts — the current cycle needs a fresh plan.
   expect(
-    deriveGate([mk("ActionPlan", {}, 0), mk("Verify", { decision: "not_effective" }, 0), mk("RootCause", {}, 1)], "RootCause", 1),
+    deriveGate(
+      [mk("RootCause", {}, 0), mk("ActionPlan", {}, 0), mk("Verify", { decision: "not_effective" }, 0)],
+      "RootCause",
+      1,
+    ),
   ).toEqual({ rootCause: true, action: false, effectiveness: false });
 });
 

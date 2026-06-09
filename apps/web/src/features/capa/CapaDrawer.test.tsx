@@ -17,7 +17,9 @@ test("renders the title, the closed-loop thread and the close gate", async () =>
 
 test("renders the Verify→RootCause loop honestly (cycle_marker>0)", async () => {
   renderWithProviders(<CapaDrawer capaId="ca000005-0005-0005-0005-000000000005" onClose={vi.fn()} />);
-  expect(await screen.findByText(/Cycle 2/)).toBeInTheDocument();
+  // the loop fixture carries multiple current-cycle (cycle 1) stages, each labelled "Cycle 2"
+  const loopLabels = await screen.findAllByText(/Cycle 2/);
+  expect(loopLabels.length).toBeGreaterThan(0);
 });
 
 test("surfaces a calm error (not an endless spinner) when the detail load fails", async () => {
