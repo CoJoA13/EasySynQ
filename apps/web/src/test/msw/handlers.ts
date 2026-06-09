@@ -817,7 +817,10 @@ export const handlers = [
   http.post("/api/v1/capas/:id/close", ({ params }) => HttpResponse.json({ ...capaDetailFixture, id: String(params.id), close_state: "Closed" })),
   http.get("/api/v1/capas/:id/approval", () => HttpResponse.json(null)),
   http.get("/api/v1/records", () => HttpResponse.json(recordsFixture)),
-  http.post("/api/v1/records/:id/evidence-links", () => HttpResponse.json({ id: "el-new", record_id: "re000001-0001-0001-0001-000000000001", record_identifier: "REC-000041", link_reason: null, created_at: "2026-06-09T09:00:00+00:00" }, { status: 201 })),
+  // Pinned to the real _evidence_link serializer (api/records.py): {id, record_id, target_type, target_id,
+  // link_reason, created_at} — NOT a record_identifier (that field only exists on the per-stage projection).
+  // The UI ignores this body (it invalidates + refetches), but the fixture must match the real shape.
+  http.post("/api/v1/records/:id/evidence-links", () => HttpResponse.json({ id: "el-new", record_id: "re000001-0001-0001-0001-000000000001", target_type: "capa_stage", target_id: "cr000003-0003-0003-0003-000000000003", link_reason: null, created_at: "2026-06-09T09:00:00+00:00" }, { status: 201 })),
   // ---- S-web-6 search + compliance (default happy-path; per-test overrides for 403/empty) ----
   http.get("/api/v1/search", () => HttpResponse.json(searchFixture)),
   http.get("/api/v1/search/suggest", () => HttpResponse.json(suggestFixture)),

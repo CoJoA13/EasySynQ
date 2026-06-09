@@ -10,10 +10,10 @@ const directory = [
   { id: "bbbb1111-1111-1111-1111-111111111111", display_name: "Mara Quality" },
 ];
 
-function wrap(stages: CapaStage[]) {
+function wrap(stages: CapaStage[], cycleMarker = 0) {
   return render(
     <MantineProvider theme={theme}>
-      <CapaTimeline stages={stages} directory={directory} capaId="ca1" />
+      <CapaTimeline stages={stages} directory={directory} capaId="ca1" cycleMarker={cycleMarker} />
     </MantineProvider>,
   );
 }
@@ -54,6 +54,7 @@ test("an Implement stage shows its linked records (as labels) + a stage-scoped e
     <CapaTimeline
       capaId="ca1"
       directory={directory}
+      cycleMarker={0}
       stages={[
         {
           id: "im",
@@ -73,4 +74,25 @@ test("an Implement stage shows its linked records (as labels) + a stage-scoped e
   expect(screen.getByText("REC-000041")).toBeInTheDocument();
   // the linker's label is suffixed by the stage so two linkers never collide
   expect(await screen.findByLabelText("Record (Implement)")).toBeInTheDocument();
+});
+
+test("a looped CAPA renders the linker only on the CURRENT cycle's Verify (no duplicate label)", async () => {
+  // Two Verify stages (cycle 0 + cycle 1); at cycleMarker=1 only the current-cycle one gets a linker, so
+  // "Record (Verify)" resolves to a SINGLE element (the S-web-6 duplicate-accessible-name trap is avoided),
+  // and the superseded-cycle stage shows its historical evidence as a read-only chip but no linker.
+  renderWithProviders(
+    <CapaTimeline
+      capaId="ca1"
+      directory={directory}
+      cycleMarker={1}
+      stages={[
+        { id: "v0", stage: "Verify", content_block: { decision: "not_effective" }, cycle_marker: 0, created_by: "u", created_at: "2026-05-18T09:00:00+00:00", evidence_links: [{ id: "e0", record_id: "r0", record_identifier: "REC-OLD", link_reason: null, created_at: null }] },
+        { id: "v1", stage: "Verify", content_block: { decision: "effective" }, cycle_marker: 1, created_by: "u", created_at: "2026-05-21T09:00:00+00:00", evidence_links: [] },
+      ]}
+    />,
+  );
+  // exactly one current-cycle linker → getByLabelText (single-match) does not throw
+  expect(await screen.findByLabelText("Record (Verify)")).toBeInTheDocument();
+  // the superseded cycle's historical evidence still shows as a chip
+  expect(screen.getByText("REC-OLD")).toBeInTheDocument();
 });

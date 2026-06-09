@@ -59,7 +59,12 @@ export function CapaDrawer({ capaId, onClose }: { capaId: string | null; onClose
             <Title order={5} mb="sm">
               Closed-loop thread
             </Title>
-            <CapaTimeline stages={capa.stages ?? []} directory={directory ?? []} capaId={capa.id} />
+            <CapaTimeline
+              stages={capa.stages ?? []}
+              directory={directory ?? []}
+              capaId={capa.id}
+              cycleMarker={capa.cycle_marker}
+            />
           </div>
 
           <div>

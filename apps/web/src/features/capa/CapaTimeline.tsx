@@ -18,10 +18,12 @@ export function CapaTimeline({
   stages,
   directory,
   capaId,
+  cycleMarker,
 }: {
   stages: CapaStage[];
   directory: DirectoryUser[];
   capaId: string;
+  cycleMarker: number;
 }) {
   if (stages.length === 0) {
     return (
@@ -65,10 +67,13 @@ export function CapaTimeline({
               ))}
             </Group>
           )}
-          {EVIDENCE_STAGES.has(s.stage) && (
+          {/* Only the CURRENT cycle's Implement/Verify stages get a linker: links on a superseded cycle
+              can't satisfy the close gate (which reads current-cycle evidence), and rendering past-cycle
+              linkers would duplicate the "Record (Verify)" accessible name across cycles (the S-web-6
+              getByLabelText trap). Within one cycle there is at most one Implement + one Verify, so the
+              per-stage suffix keeps the two labels distinct. */}
+          {EVIDENCE_STAGES.has(s.stage) && s.cycle_marker === cycleMarker && (
             <div style={{ marginTop: 6 }}>
-              {/* Unique label suffix per stage so two linkers (Implement + Verify) don't collide on a
-                  duplicate "Record"/"Reason" accessible name (the S-web-6 getByLabelText trap). */}
               <EvidenceLinker capaId={capaId} stageId={s.id} labelSuffix={` (${s.stage})`} />
             </div>
           )}
