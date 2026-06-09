@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { ApiError, useApi } from "../../lib/api";
-import type { Capa, CapaApproval, CapaList, RecordSummary } from "../../lib/types";
+import type { Capa, CapaApproval, CapaList, ComplaintList, NcrList, RecordSummary } from "../../lib/types";
 
 // GET /capas is gated capa.read; the demo admin holds NO capa.* (S-web-6 calm-403 case, NOT S-ing-4b).
 // Surface a `forbidden` flag so the page renders a calm no-access panel. retry:false — don't hammer a
@@ -48,4 +48,29 @@ export function useRecords() {
     queryFn: () => api.get<RecordSummary[]>("/api/v1/records?limit=100"),
     retry: false,
   });
+}
+
+// GET /complaints — gated record.read; the demo admin holds none of these keys (calm-403). retry:false.
+export function useComplaints() {
+  const api = useApi();
+  const query = useQuery({
+    queryKey: ["complaints"],
+    queryFn: async () => (await api.get<ComplaintList>("/api/v1/complaints")).data,
+    retry: false,
+  });
+  const forbidden = query.error instanceof ApiError && query.error.status === 403;
+  return { ...query, forbidden };
+}
+
+// GET /ncrs — gated ncr.read (QMS-Owner / Internal-Auditor); the demo admin holds none → calm-403
+// (a SYSTEM override is granted only for the live smoke). retry:false.
+export function useNcrs() {
+  const api = useApi();
+  const query = useQuery({
+    queryKey: ["ncrs"],
+    queryFn: async () => (await api.get<NcrList>("/api/v1/ncrs")).data,
+    retry: false,
+  });
+  const forbidden = query.error instanceof ApiError && query.error.status === 403;
+  return { ...query, forbidden };
 }
