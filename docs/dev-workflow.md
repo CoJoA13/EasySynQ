@@ -1,7 +1,7 @@
 # Dev workflow + operator notes + feature API quick-reference (read on demand)
 
 > Operating detail consulted per-task, not every turn. Endpoints + gates are in `docs/15` + `packages/contracts/openapi.yaml`;
-> per-feature operating depth also in the `easysynq-project.md` memory + the squash-merge commits.
+> the per-slice narrative is in `docs/slice-history.md` + the squash-merge commits.
 
 ## Branch + PR flow
 

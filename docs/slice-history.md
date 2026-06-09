@@ -1,7 +1,7 @@
 # Slice history — shipped work (read on demand)
 
-> The running per-slice changelog. The deep per-slice rationale also lives in the squash-merge commits +
-> the `easysynq-project.md` memory. This file is the narrative; CLAUDE.md holds only the current head pointer.
+> The running per-slice changelog + the deep per-slice rationale (this file IS the canonical narrative; it
+> also lives in the squash-merge commits). CLAUDE.md holds only the current head pointer.
 > **Migration head: `0044` (next `0045`).** Code: https://github.com/CoJoA13/EasySynQ (`main` protected, PR + green CI).
 
 ## MVP (S0–S11) — COMPLETE ✅
