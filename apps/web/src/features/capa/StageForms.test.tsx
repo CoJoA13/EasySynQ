@@ -11,7 +11,13 @@ import type { Capa } from "../../lib/types";
 import { theme } from "../../theme/mantine";
 import { server } from "../../test/msw/server";
 import { TEST_AUTH } from "../../test/render";
-import { CloseAction, ContainmentForm, RootCauseForm, VerifyForm } from "./StageForms";
+import {
+  ActionPlanForm,
+  CloseAction,
+  ContainmentForm,
+  RootCauseForm,
+  VerifyForm,
+} from "./StageForms";
 
 const capa = (over: Partial<Capa> = {}): Capa => ({
   id: "ca000008-0008-0008-0008-000000000008",
@@ -94,4 +100,37 @@ test("CloseAction at a not_effective Verify offers 'Return to root cause'", () =
   });
   wrap(<CloseAction capa={looped} />);
   expect(screen.getByRole("button", { name: /Return to root cause/ })).toBeInTheDocument();
+});
+
+test("ActionPlanForm sends only the non-empty action items", async () => {
+  let sent: { content_block?: { action_items?: string[] } } | null = null;
+  server.use(
+    http.post("/api/v1/capas/:id/action-plan", async ({ request }) => {
+      sent = (await request.json()) as typeof sent;
+      return HttpResponse.json({});
+    }),
+  );
+  const u = userEvent.setup();
+  wrap(<ActionPlanForm capa={capa({ close_state: "RootCause" })} />);
+  await u.type(screen.getByLabelText("Action item 1"), "Schedule reminders");
+  await u.click(screen.getByRole("button", { name: /Add item/ }));
+  // leave "Action item 2" blank → it must be filtered out before sending
+  await u.click(screen.getByRole("button", { name: /Propose action plan/ }));
+  await waitFor(() => expect(sent).not.toBeNull());
+  expect(sent!.content_block!.action_items).toEqual(["Schedule reminders"]);
+});
+
+test("VerifyForm surfaces a 409 sod_self_verify as a calm SoD-4 message", async () => {
+  server.use(
+    http.post("/api/v1/capas/:id/verify", () =>
+      HttpResponse.json({ code: "sod_self_verify", title: "Refused" }, { status: 409 }),
+    ),
+  );
+  const u = userEvent.setup();
+  wrap(<VerifyForm capa={capa({ close_state: "Implement" })} />);
+  await u.click(screen.getByLabelText("Effective"));
+  await u.type(screen.getByLabelText(/Verification narrative/), "Looks good");
+  await u.click(screen.getByLabelText(/Signing as/));
+  await u.click(screen.getByRole("button", { name: /Record verification/ }));
+  expect(await screen.findByText(/SoD-4/)).toBeInTheDocument();
 });

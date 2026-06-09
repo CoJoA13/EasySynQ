@@ -151,9 +151,12 @@ export function ActionPlanForm({ capa }: { capa: Capa }) {
           key={i}
           aria-label={`Action item ${i + 1}`}
           value={it}
-          onChange={(e) =>
-            setItems((prev) => prev.map((p, j) => (j === i ? e.currentTarget.value : p)))
-          }
+          onChange={(e) => {
+            // Capture the value BEFORE the functional updater runs — React nulls the synthetic event's
+            // currentTarget after the handler returns, so reading it inside setItems() throws.
+            const next = e.currentTarget.value;
+            setItems((prev) => prev.map((p, j) => (j === i ? next : p)));
+          }}
         />
       ))}
       <Group justify="space-between">
