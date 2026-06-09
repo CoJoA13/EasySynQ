@@ -47,7 +47,13 @@ export function EvidenceLinker({ capaId, stageId }: { capaId: string; stageId: s
           placeholder="Pick a record"
           searchable
           value={recordId}
-          onChange={setRecordId}
+          onChange={(v) => {
+            // A new selection means a new (not-yet-submitted) link — drop the prior "Linked."/error so
+            // the banners describe the CURRENT selection, not the last one.
+            setRecordId(v);
+            setDone(false);
+            setError(null);
+          }}
           comboboxProps={{ keepMounted: false }}
           data={(records ?? []).map((r) => ({
             value: r.id,
@@ -55,8 +61,8 @@ export function EvidenceLinker({ capaId, stageId }: { capaId: string; stageId: s
           }))}
         />
         <TextInput
-          aria-label="Link reason"
-          placeholder="Reason (optional)"
+          label="Reason"
+          placeholder="Optional"
           value={reason}
           onChange={(e) => setReason(e.currentTarget.value)}
         />

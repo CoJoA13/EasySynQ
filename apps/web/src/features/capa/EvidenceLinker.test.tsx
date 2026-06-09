@@ -32,3 +32,14 @@ test("links a selected record as evidence for the stage", async () => {
   await u.click(link);
   await waitFor(() => expect(screen.getByText(/Linked/)).toBeInTheDocument());
 });
+
+test("the Link button is disabled until a record is picked", async () => {
+  const u = userEvent.setup();
+  wrap(
+    <EvidenceLinker capaId="ca000008-0008-0008-0008-000000000008" stageId="cr000002-0002-0002-0002-000000000002" />,
+  );
+  expect(screen.getByRole("button", { name: /Link evidence/ })).toBeDisabled();
+  await u.click(await screen.findByLabelText("Record"));
+  await u.click(await screen.findByRole("option", { name: /REC-000041/ }));
+  expect(screen.getByRole("button", { name: /Link evidence/ })).toBeEnabled();
+});
