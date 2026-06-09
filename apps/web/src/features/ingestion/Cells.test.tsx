@@ -127,6 +127,27 @@ test("TypeCell renders a dash for a null classification or a missing type_code",
   expect(screen.getByText("—")).toBeInTheDocument();
 });
 
+test("TypeCell prefers the corrected effective type over the classifier proposal", () => {
+  // A "Correct to type" decision folds onto review.type_code; the cell must show that (WI), not the
+  // immutable classifier proposal (SOP), and must NOT show the classifier's "ambiguous" caption.
+  renderWithProviders(
+    <TypeCell
+      effectiveTypeCode="WI"
+      classification={classification({ type_code: "SOP", ambiguous: true })}
+    />,
+  );
+  expect(screen.getByText("WI")).toBeInTheDocument();
+  expect(screen.queryByText("SOP")).not.toBeInTheDocument();
+  expect(screen.queryByText("ambiguous")).not.toBeInTheDocument();
+});
+
+test("TypeCell falls back to the classifier proposal when no corrected type", () => {
+  renderWithProviders(
+    <TypeCell effectiveTypeCode={null} classification={classification({ type_code: "SOP" })} />,
+  );
+  expect(screen.getByText("SOP")).toBeInTheDocument();
+});
+
 // ---- a11y: a small wrapper rendering all three cells together ----
 test("all three cells together have no axe violations", async () => {
   const { container } = renderWithProviders(

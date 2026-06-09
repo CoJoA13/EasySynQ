@@ -1,4 +1,4 @@
-import { Stack } from "@mantine/core";
+import { Alert, Stack, Text } from "@mantine/core";
 import { useCallback, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { usePermissions } from "../../app/shell/usePermissions";
@@ -49,7 +49,9 @@ export function ReviewCockpit({ runId, run }: { runId: string; run: ImportRun })
   const [activeFileId, setActiveFileId] = useState<string | null>(null);
 
   const filter = useMemo(() => queueToFilesQuery(queue, conf), [queue, conf]);
-  const filesQuery = useImportFiles(runId, filter, offset);
+  // The "vault" queue has no per-file listing in v1 (it renders an explainer) — don't fetch files for
+  // it (the empty {} filter would otherwise pull page 1 of ALL files).
+  const filesQuery = useImportFiles(runId, filter, offset, queue !== "vault");
   const clustersQuery = useDupeClusters(runId);
   const familiesQuery = useVersionFamilies(runId);
   const checklistQuery = useChecklist(runId);
@@ -128,6 +130,7 @@ export function ReviewCockpit({ runId, run }: { runId: string; run: ImportRun })
   );
   const onConf = useCallback(
     (c: ConfidenceChoice) => {
+      setSelected(new Set()); // a confidence change can hide selected rows — drop the stale selection
       setParams((p) => {
         if (c === "ALL") p.delete("conf");
         else p.set("conf", c);
@@ -157,14 +160,12 @@ export function ReviewCockpit({ runId, run }: { runId: string; run: ImportRun })
       return next;
     });
   }, []);
-  // Only SELECTABLE rows feed select-all: a quarantined file is not a commit candidate (the backend
-  // 422s an explicit bulk target whose included_candidate is false), so it must never be swept into
-  // the selection by "select all on page".
+  // Only SELECTABLE rows feed select-all: a non-candidate file (included_candidate === false — which
+  // covers quarantine AND any other scan-excluded disposition) is not a commit candidate (the backend
+  // 422s an explicit bulk target whose included_candidate is false), so it must never be swept into the
+  // selection by "select all on page". This MUST match TriageTable's per-row `selectable` predicate.
   const pageIds = useMemo(
-    () =>
-      files
-        .filter((f) => f.included_candidate && f.scan_flags.disposition !== "quarantine")
-        .map((f) => f.id),
+    () => files.filter((f) => f.included_candidate).map((f) => f.id),
     [files],
   );
   const allOnPageSelected = pageIds.length > 0 && pageIds.every((id) => selected.has(id));
@@ -251,26 +252,45 @@ export function ReviewCockpit({ runId, run }: { runId: string; run: ImportRun })
         <MergeMenu runId={runId} selectedFileIds={[...selected]} onDone={() => setSelected(new Set())} />
       )}
 
-      <TriageTable
-        files={files}
-        dupeMap={dupeMap}
-        familyMap={familyMap}
-        loading={filesQuery.isLoading}
-        selected={selected}
-        onToggle={onToggle}
-        onToggleAllOnPage={onToggleAllOnPage}
-        allOnPageSelected={allOnPageSelected}
-        onConfirmKind={onConfirmKind}
-        onOpenDetail={setActiveFileId}
-        onRowAction={onRowAction}
-      />
-      <TriagePagination
-        offset={offset}
-        hasMore={hasMore}
-        onOffset={onOffset}
-        total={total}
-        pageCount={files.length}
-      />
+      {queue === "vault" ? (
+        // "Already in vault" has no per-file listing in v1 — the empty {} filter would otherwise show
+        // page 1 of ALL files while the badge says 0. Show the calm registry explainer instead, and
+        // do NOT render/paginate the files table for this queue.
+        <Alert
+          variant="light"
+          color="gray"
+          title="Already in the vault"
+          aria-label="Already in vault"
+        >
+          <Text size="sm">
+            Files that are already controlled in the vault are skipped on commit (they will not be
+            re-imported). A per-file listing for this view isn't available yet.
+          </Text>
+        </Alert>
+      ) : (
+        <>
+          <TriageTable
+            files={files}
+            dupeMap={dupeMap}
+            familyMap={familyMap}
+            loading={filesQuery.isLoading}
+            selected={selected}
+            onToggle={onToggle}
+            onToggleAllOnPage={onToggleAllOnPage}
+            allOnPageSelected={allOnPageSelected}
+            onConfirmKind={onConfirmKind}
+            onOpenDetail={setActiveFileId}
+            onRowAction={onRowAction}
+          />
+          <TriagePagination
+            offset={offset}
+            hasMore={hasMore}
+            onOffset={onOffset}
+            total={total}
+            pageCount={files.length}
+          />
+        </>
+      )}
 
       {checklist && (
         <>

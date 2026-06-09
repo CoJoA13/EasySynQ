@@ -12,6 +12,13 @@ const FILES = ingestionFilesFixture as unknown as ImportFile[];
 const HIGH = FILES[0]!;
 const DUP = FILES[1]!;
 
+// A clone of HIGH with the named review fields overridden — to exercise the per-row render guards
+// (null process_names, a corrected effective type) and the non-candidate gating, without mutating the
+// shared fixture.
+function highWith(reviewOver: Partial<NonNullable<ImportFile["review"]>>): ImportFile {
+  return { ...HIGH, review: { ...HIGH.review!, ...reviewOver } };
+}
+
 // DUP (a4) is the redundant member of the near-cluster whose canonical id is SOP-PUR-014; HIGH (a1)
 // is the canonical effective member of a 2-member family. The maps are the ReviewCockpit join output.
 const DUPE_MAP = new Map<string, string>([[DUP.id, "SOP-PUR-014"]]);
@@ -65,6 +72,40 @@ test("the quarantine row's selection checkbox is disabled (not a commit candidat
   renderWithProviders(<TriageTable {...baseProps()} />);
   // a quarantined file is not selectable — its checkbox is disabled so select-all can't sweep it in.
   expect(screen.getByRole("checkbox", { name: "Select broken.bin" })).toBeDisabled();
+});
+
+test("a non-candidate (non-quarantine) row's checkbox is also disabled", () => {
+  // included_candidate === false covers more than quarantine (other scan-excluded dispositions). Such
+  // a row classifies/renders normally but must NOT be selectable (the backend 422s a decision on it).
+  const nonCandidate: ImportFile = {
+    ...HIGH,
+    id: "f0000000-0000-0000-0000-0000000000b1",
+    filename: "excluded-by-scan.docx",
+    rel_path: "excluded-by-scan.docx",
+    scan_flags: { disposition: "excluded" },
+    included_candidate: false,
+  };
+  renderWithProviders(<TriageTable {...baseProps({ files: [nonCandidate] })} />);
+  expect(screen.getByRole("checkbox", { name: "Select excluded-by-scan.docx" })).toBeDisabled();
+});
+
+test("a row whose review.process_names is null renders '—' (no crash)", () => {
+  // The backend folds process_names to null (no process signal); the cell must guard before .length.
+  renderWithProviders(
+    <TriageTable {...baseProps({ files: [highWith({ process_names: null })] })} />,
+  );
+  const row = screen.getByText("SOP-PUR-014 Purchasing.docx").closest("tr")!;
+  // The process cell degrades to a dash rather than throwing on null.length.
+  expect(within(row).getByText("—")).toBeInTheDocument();
+});
+
+test("the type column shows the corrected effective type, overriding the classifier proposal", () => {
+  // HIGH's classifier proposes SOP; a "Correct to type" decision folds WI onto review.type_code.
+  renderWithProviders(<TriageTable {...baseProps({ files: [highWith({ type_code: "WI" })] })} />);
+  const row = screen.getByText("SOP-PUR-014 Purchasing.docx").closest("tr")!;
+  // The type cell shows the corrected WI, not the classifier's SOP.
+  expect(within(row).getByText("WI")).toBeInTheDocument();
+  expect(within(row).queryByText("SOP")).not.toBeInTheDocument();
 });
 
 test("toggling a row checkbox calls onToggle(file.id)", async () => {

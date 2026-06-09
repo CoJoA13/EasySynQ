@@ -1,4 +1,4 @@
-import { Badge, Button, Divider, Group, Loader, Stack, Text } from "@mantine/core";
+import { Badge, Button, Divider, Group, Loader, Menu, Stack, Text } from "@mantine/core";
 import { DetailDrawer } from "../../app/shell/DetailDrawer";
 import type {
   ConfirmedKind,
@@ -9,13 +9,16 @@ import type {
   ImportExtract,
   ImportProposalNode,
 } from "../../lib/types";
-import { useDecisions, useImportFile } from "./hooks";
+import { useImportFile } from "./hooks";
 
 // The per-item review detail (DP-3, reuses app/shell/DetailDrawer for focus-trap + Esc + ARIA dialog).
 // Presentational: ReviewCockpit (Task 14) owns the active fileId + the decision handlers; this leaf
-// reads its own detail (useImportFile, enabled only when fileId is set) + the run decision log
-// (filtered to this file). The detail read is import.review-gated like the page → no separate 403.
-// Per-item actions call the handlers passed down (the cockpit threads them through the Task 3-4 hooks);
+// reads its own detail (useImportFile, enabled only when fileId is set). The detail read is
+// import.review-gated like the page → no separate 403. The decision history comes from the SAME detail
+// response (detail.review.decision_history is this file's history) — no separate run-wide /decisions
+// fetch. Per-item write actions call the handlers passed down (the cockpit threads them through the
+// Task 3-4 hooks), and are shown only for a commit CANDIDATE (included_candidate === true) — a
+// non-candidate (quarantine / scan-excluded) is inspect-only since the backend 422s any decision on it.
 // Split is offered only when the file belongs to a cluster/family (server-authoritative — D-4).
 export function ItemDetailDrawer({
   runId,
@@ -33,11 +36,12 @@ export function ItemDetailDrawer({
   onSplit: () => void;
 }) {
   const { data: detail, isLoading } = useImportFile(runId, fileId);
-  const { data: decisionLog } = useDecisions(runId);
-  // Filter the append-only run decision log to this file (guard the array under noUncheckedIndexedAccess).
-  const history: ImportDecision[] = (decisionLog?.decisions ?? []).filter(
-    (d) => d.file_id === fileId,
-  );
+  // The detail endpoint already returns THIS file's decision history under review.decision_history —
+  // read it from there (guard under noUncheckedIndexedAccess) rather than fetching the whole run log.
+  const history: ImportDecision[] = detail?.review?.decision_history ?? [];
+  // A non-candidate (quarantine / scan-excluded) file can't take a per-item decision (the backend 422s
+  // any decision/confirm/split on it) → render inspect-only. `detail` is undefined while loading.
+  const isCandidate = detail?.included_candidate === true;
 
   return (
     <DetailDrawer opened={fileId !== null} onClose={onClose} title="Item detail">
@@ -60,48 +64,72 @@ export function ItemDetailDrawer({
             )}
           </Stack>
 
-          {/* Per-item actions — call the handlers the cockpit threads through the hooks (Task 3-4). */}
-          <Group gap="xs">
-            <Button size="xs" aria-label="Accept item" onClick={() => onDecision({ action: "accept" })}>
-              Accept
-            </Button>
-            <Button
-              size="xs"
-              variant="default"
-              aria-label="Exclude item"
-              onClick={() => onDecision({ action: "exclude" })}
-            >
-              Exclude
-            </Button>
-            <Button
-              size="xs"
-              variant="default"
-              aria-label="Defer item"
-              onClick={() => onDecision({ action: "defer" })}
-            >
-              Defer
-            </Button>
-            <Button
-              size="xs"
-              variant="light"
-              aria-label="Confirm kind as Document"
-              onClick={() => onConfirmKind("DOCUMENT")}
-            >
-              Confirm kind
-            </Button>
-            {(detail.dedup.in_version_family ||
-              detail.dedup.in_exact_cluster ||
-              detail.dedup.in_near_cluster) && (
+          {/* Per-item actions — call the handlers the cockpit threads through the hooks (Task 3-4).
+              Shown ONLY for a commit candidate; a non-candidate (quarantine / scan-excluded) gets an
+              inspect-only note since every decision/confirm/split would 422. */}
+          {isCandidate ? (
+            <Group gap="xs">
+              <Button
+                size="xs"
+                aria-label="Accept item"
+                onClick={() => onDecision({ action: "accept" })}
+              >
+                Accept
+              </Button>
               <Button
                 size="xs"
                 variant="default"
-                aria-label="Split out of group"
-                onClick={onSplit}
+                aria-label="Exclude item"
+                onClick={() => onDecision({ action: "exclude" })}
               >
-                Split out of group
+                Exclude
               </Button>
-            )}
-          </Group>
+              <Button
+                size="xs"
+                variant="default"
+                aria-label="Defer item"
+                onClick={() => onDecision({ action: "defer" })}
+              >
+                Defer
+              </Button>
+              {/* R10: kind is an always-human confirm — offer BOTH Document and Record (a "Confirm
+                  kind" that always posted DOCUMENT couldn't classify a record). Mirrors KindCell. */}
+              <Menu position="bottom-start" withinPortal>
+                <Menu.Target>
+                  <Button
+                    size="xs"
+                    variant="light"
+                    aria-label="Confirm kind"
+                    rightSection={<span aria-hidden="true">▾</span>}
+                  >
+                    Confirm kind
+                  </Button>
+                </Menu.Target>
+                <Menu.Dropdown>
+                  <Menu.Item onClick={() => onConfirmKind("DOCUMENT")}>Document</Menu.Item>
+                  <Menu.Item onClick={() => onConfirmKind("RECORD")}>Record</Menu.Item>
+                </Menu.Dropdown>
+              </Menu>
+              {(detail.dedup.in_version_family ||
+                detail.dedup.in_exact_cluster ||
+                detail.dedup.in_near_cluster) && (
+                <Button
+                  size="xs"
+                  variant="default"
+                  aria-label="Split out of group"
+                  onClick={onSplit}
+                >
+                  Split out of group
+                </Button>
+              )}
+            </Group>
+          ) : (
+            <Text size="sm" c="dimmed">
+              Inspect-only — this file is not a commit candidate
+              {detail.scan_flags.disposition === "quarantine" ? " (quarantined)" : ""}, so no decision
+              can be recorded against it.
+            </Text>
+          )}
 
           <Divider label="Classification" labelPosition="left" />
           <ClassificationEvidence evidence={detail.classification?.evidence} />

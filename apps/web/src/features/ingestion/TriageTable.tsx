@@ -136,13 +136,20 @@ export function TriageTable({
             );
           }
 
+          // A non-candidate file (included_candidate === false — quarantine is one case, but also any
+          // other scan-excluded disposition) can never be a bulk target: the backend 422s an explicit
+          // target whose included_candidate is false. Its checkbox is disabled so select-all (which
+          // filters to included_candidate rows) and a manual click both refuse to sweep it in.
+          const selectable = file.included_candidate;
           return (
             <Table.Tr key={file.id}>
               <Table.Td>
                 <Checkbox
                   aria-label={`Select ${file.filename}`}
-                  checked={selected.has(file.id)}
-                  onChange={() => onToggle(file.id)}
+                  checked={selectable ? selected.has(file.id) : false}
+                  disabled={!selectable}
+                  readOnly={!selectable}
+                  onChange={selectable ? () => onToggle(file.id) : undefined}
                 />
               </Table.Td>
               <Table.Td>{sourceCell}</Table.Td>
@@ -157,7 +164,12 @@ export function TriageTable({
                 />
               </Table.Td>
               <Table.Td>
-                <TypeCell classification={file.classification} />
+                {/* Show the EFFECTIVE type: a "Correct to type" decision folds onto review.type_code
+                    (the corrected value); fall back to the immutable classifier proposal, else "—". */}
+                <TypeCell
+                  effectiveTypeCode={file.review?.type_code ?? null}
+                  classification={file.classification}
+                />
               </Table.Td>
               <Table.Td ta="center">
                 <Text size="sm" ff="monospace">
@@ -168,8 +180,8 @@ export function TriageTable({
               </Table.Td>
               <Table.Td>
                 <Text size="sm" c="dimmed">
-                  {file.review?.process_names.length
-                    ? file.review.process_names.join(", ")
+                  {(file.review?.process_names ?? []).length
+                    ? (file.review?.process_names ?? []).join(", ")
                     : "—"}
                 </Text>
               </Table.Td>

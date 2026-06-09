@@ -499,7 +499,7 @@ export interface ImportFileReview {
   identifier_source: string | null;
   type_code: string | null;
   clause_numbers: string[];
-  process_names: string[];
+  process_names: string[] | null;
   owner: string | null;
   decided: boolean;
   last_action: ImportDecisionAction | null;

@@ -100,7 +100,7 @@ test("clicking Accept calls onDecision with action \"accept\"", async () => {
   expect(onDecision).toHaveBeenCalledWith({ action: "accept" });
 });
 
-test("clicking Confirm kind calls onConfirmKind with DOCUMENT", async () => {
+test("Confirm kind offers Document AND Record, firing the right kind", async () => {
   const user = userEvent.setup();
   const onConfirmKind = vi.fn();
   renderWithProviders(
@@ -113,8 +113,14 @@ test("clicking Confirm kind calls onConfirmKind with DOCUMENT", async () => {
       onSplit={noop}
     />,
   );
-  await user.click(await screen.findByRole("button", { name: "Confirm kind as Document" }));
-  expect(onConfirmKind).toHaveBeenCalledWith("DOCUMENT");
+  // The kind-confirm is a Menu (R10 — always-human, both Document and Record). Choose Record first.
+  await user.click(await screen.findByRole("button", { name: "Confirm kind" }));
+  await user.click(await screen.findByRole("menuitem", { name: "Record" }));
+  expect(onConfirmKind).toHaveBeenLastCalledWith("RECORD");
+  // Then Document.
+  await user.click(screen.getByRole("button", { name: "Confirm kind" }));
+  await user.click(await screen.findByRole("menuitem", { name: "Document" }));
+  expect(onConfirmKind).toHaveBeenLastCalledWith("DOCUMENT");
 });
 
 test("the Split control shows for a grouped file and calls onSplit", async () => {
@@ -166,37 +172,34 @@ test("the Split control is hidden for an ungrouped file", async () => {
   expect(screen.queryByRole("button", { name: "Split out of group" })).not.toBeInTheDocument();
 });
 
-test("renders a decision-history entry filtered to this file", async () => {
+test("renders the decision history from the detail response (no separate /decisions fetch)", async () => {
+  // The detail endpoint already returns THIS file's history under review.decision_history; the drawer
+  // reads it from there (no run-wide /decisions GET). A failing /decisions handler proves the drawer
+  // never calls it (this test would still pass).
   server.use(
     http.get("/api/v1/admin/imports/:id/decisions", () =>
+      HttpResponse.json({ message: "should not be called" }, { status: 500 }),
+    ),
+    http.get("/api/v1/admin/imports/:id/files/:fid", () =>
       HttpResponse.json({
-        run_id: RID,
-        decisions: [
-          {
-            id: "d1",
-            action: "accept",
-            file_id: FID,
-            cluster_id: null,
-            target_kind: "DOCUMENT",
-            before: null,
-            after: { kind: "DOCUMENT" },
-            reason: null,
-            decided_by: "bbbb1111-1111-1111-1111-111111111111",
-            decided_at: "2026-06-08T11:00:00+00:00",
-          },
-          {
-            id: "d2",
-            action: "exclude",
-            file_id: "f0000000-0000-0000-0000-0000000000a9",
-            cluster_id: null,
-            target_kind: "DOCUMENT",
-            before: null,
-            after: null,
-            reason: null,
-            decided_by: "bbbb1111-1111-1111-1111-111111111111",
-            decided_at: "2026-06-08T11:01:00+00:00",
-          },
-        ],
+        ...ingestionFileDetailFixture,
+        review: {
+          effective: ingestionFileDetailFixture.review.effective,
+          decision_history: [
+            {
+              id: "d1",
+              action: "accept",
+              file_id: FID,
+              cluster_id: null,
+              target_kind: "DOCUMENT",
+              before: null,
+              after: { kind: "DOCUMENT" },
+              reason: null,
+              decided_by: "bbbb1111-1111-1111-1111-111111111111",
+              decided_at: "2026-06-08T11:00:00+00:00",
+            },
+          ],
+        },
       }),
     ),
   );
@@ -210,9 +213,41 @@ test("renders a decision-history entry filtered to this file", async () => {
       onSplit={noop}
     />,
   );
-  // This file's "accept" decision is listed; the other file's "exclude" is filtered out.
+  // This file's "accept" decision is listed from the detail's decision_history.
   expect(await screen.findByText(/accept/)).toBeInTheDocument();
-  expect(screen.queryByText(/exclude/)).not.toBeInTheDocument();
+});
+
+test("a non-candidate file is inspect-only — no decision/confirm/split actions", async () => {
+  // included_candidate === false (quarantine / scan-excluded) → every decision would 422, so the
+  // drawer hides Accept/Exclude/Defer/Confirm-kind/Split and shows an inspect-only note. The
+  // classification/evidence display is kept.
+  server.use(
+    http.get("/api/v1/admin/imports/:id/files/:fid", () =>
+      HttpResponse.json({
+        ...ingestionFileDetailFixture,
+        included_candidate: false,
+        scan_flags: { disposition: "quarantine", reason: "sniff_failed" },
+      }),
+    ),
+  );
+  renderWithProviders(
+    <ItemDetailDrawer
+      runId={RID}
+      fileId={FID}
+      onClose={noop}
+      onConfirmKind={noop}
+      onDecision={noop}
+      onSplit={noop}
+    />,
+  );
+  expect(await screen.findByText(/not a commit candidate/i)).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Accept item" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Exclude item" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Defer item" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Confirm kind" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Split out of group" })).not.toBeInTheDocument();
+  // The classification evidence is still shown (inspect-only, not hidden).
+  expect(screen.getByText(/preserved/i)).toBeInTheDocument();
 });
 
 test("has no axe violations when open", async () => {

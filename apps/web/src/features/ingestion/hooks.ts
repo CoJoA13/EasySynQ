@@ -46,13 +46,18 @@ export function useImportRun(runId: string | null) {
   });
 }
 
-export function useImportFiles(runId: string | null, filter: FilesFilter, offset: number) {
+export function useImportFiles(
+  runId: string | null,
+  filter: FilesFilter,
+  offset: number,
+  enabled = true,
+) {
   const api = useApi();
   const qs = buildFilesQuery(filter, { limit: FILES_PAGE_SIZE, offset });
   return useQuery({
     queryKey: ["import-files", runId, filter, offset],
     queryFn: () => api.get<ImportFileList>(`/api/v1/admin/imports/${runId}/files?${qs}`),
-    enabled: runId !== null,
+    enabled: runId !== null && enabled,
   });
 }
 

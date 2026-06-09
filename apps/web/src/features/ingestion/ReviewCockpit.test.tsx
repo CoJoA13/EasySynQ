@@ -59,6 +59,30 @@ test("the commit button is disabled when the run is not ready (fixture ready=fal
   expect(commit).toBeDisabled();
 });
 
+test("the 'Already in vault' tab shows the explainer, not the files table", async () => {
+  const user = userEvent.setup();
+  renderCockpit();
+  await screen.findByText("SOP-PUR-014 Purchasing.docx");
+  await user.click(screen.getByRole("tab", { name: /Already in vault/ }));
+  // The calm registry explainer renders; the triage table does NOT (the empty {} filter would
+  // otherwise list page 1 of ALL files while the badge says 0).
+  expect(await screen.findByText(/already controlled in the vault are skipped/i)).toBeInTheDocument();
+  expect(screen.queryByRole("table", { name: "Triage queue" })).not.toBeInTheDocument();
+});
+
+test("changing the confidence facet clears the current selection", async () => {
+  const user = userEvent.setup();
+  renderCockpit();
+  await screen.findByText("SOP-PUR-014 Purchasing.docx");
+  // Select a row → the bulk action bar appears.
+  await user.click(screen.getByLabelText("Select SOP-PUR-014 Purchasing.docx"));
+  expect(await screen.findByRole("region", { name: "Bulk actions" })).toBeInTheDocument();
+  // Narrow the confidence facet (the SegmentedControl radio) → the selection (which may now be hidden)
+  // is dropped, so the bulk bar disappears.
+  await user.click(screen.getByRole("radio", { name: "High" }));
+  expect(screen.queryByRole("region", { name: "Bulk actions" })).not.toBeInTheDocument();
+});
+
 test("has no axe violations", async () => {
   const { container } = renderCockpit();
   await screen.findByText("SOP-PUR-014 Purchasing.docx");
