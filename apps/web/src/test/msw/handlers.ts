@@ -1,4 +1,5 @@
 import { http, HttpResponse } from "msw";
+import type { Capa } from "../../lib/types";
 
 export const docFixture = [
   {
@@ -420,6 +421,44 @@ export const complianceFixture = {
   ],
 };
 
+// ---- S-web-7 CAPA fixtures -------------------------------------------------------
+export const capaListFixture = {
+  data: [
+    { id: "ca000001-0001-0001-0001-000000000001", identifier: "REC-000031", title: "Supplier re-evaluation overdue for 2 vendors", source: "audit", severity: "Major", process_id: "pr000001-0001-0001-0001-000000000001", close_state: "RootCause", cycle_marker: 0, origin_finding_id: null, raised_by: null, created_at: "2026-05-20T09:00:00+00:00" },
+    { id: "ca000002-0002-0002-0002-000000000002", identifier: "REC-000034", title: "Delivered batch missing CoA documents", source: "complaint", severity: "Critical", process_id: null, close_state: "Containment", cycle_marker: 0, origin_finding_id: null, raised_by: null, created_at: "2026-05-28T09:00:00+00:00" },
+    { id: "ca000003-0003-0003-0003-000000000003", identifier: "REC-000035", title: "Calibration label missing on torque wrench", source: "process", severity: "Minor", process_id: null, close_state: "Raised", cycle_marker: 0, origin_finding_id: null, raised_by: null, created_at: "2026-06-01T09:00:00+00:00" },
+    { id: "ca000004-0004-0004-0004-000000000004", identifier: "REC-000028", title: "Scrap-rate spike on Line 2", source: "process", severity: "Major", process_id: null, close_state: "Implement", cycle_marker: 0, origin_finding_id: null, raised_by: null, created_at: "2026-05-15T09:00:00+00:00" },
+    { id: "ca000005-0005-0005-0005-000000000005", identifier: "REC-000025", title: "Recurring late deliveries", source: "audit", severity: "Major", process_id: null, close_state: "Verify", cycle_marker: 1, origin_finding_id: null, raised_by: null, created_at: "2026-05-10T09:00:00+00:00" },
+    { id: "ca000006-0006-0006-0006-000000000006", identifier: "REC-000019", title: "Document control numbering gap", source: "audit", severity: "Minor", process_id: null, close_state: "Closed", cycle_marker: 0, origin_finding_id: null, raised_by: null, created_at: "2026-04-30T09:00:00+00:00" },
+    { id: "ca000007-0007-0007-0007-000000000007", identifier: "REC-000012", title: "Duplicate complaint — withdrawn", source: "complaint", severity: "Minor", process_id: null, close_state: "Rejected", cycle_marker: 0, origin_finding_id: null, raised_by: null, created_at: "2026-04-20T09:00:00+00:00" },
+  ],
+} satisfies { data: Capa[] };
+
+export const capaDetailFixture = {
+  ...capaListFixture.data[0]!,
+  raised_by: "bbbb1111-1111-1111-1111-111111111111",
+  stages: [
+    { id: "st000001-0001-0001-0001-000000000001", stage: "Raised", content_block: { problem: "Two approved vendors past their re-evaluation date.", source: "audit", severity: "Major" }, cycle_marker: 0, created_by: "bbbb1111-1111-1111-1111-111111111111", created_at: "2026-05-20T09:00:00+00:00" },
+    { id: "st000002-0002-0002-0002-000000000002", stage: "Containment", content_block: { correction: "Froze new POs to both vendors pending review." }, cycle_marker: 0, created_by: "bbbb9999-9999-9999-9999-999999999999", created_at: "2026-05-21T09:00:00+00:00" },
+    { id: "st000003-0003-0003-0003-000000000003", stage: "RootCause", content_block: { root_cause: "Re-eval reminders never scheduled.", method: "5-whys" }, cycle_marker: 0, created_by: "bbbb1111-1111-1111-1111-111111111111", created_at: "2026-05-22T09:00:00+00:00" },
+  ],
+} satisfies Capa;
+
+// A cycle_marker>0 detail: a not_effective Verify looped the CAPA once. The loop bumps cycle_marker
+// WITHOUT appending a new RootCause stage (the established RCA carries forward; the FSM offers no path
+// to re-record one) — the current cycle re-plans + re-verifies. Matches the backend close-gate model.
+export const capaLoopDetailFixture = {
+  ...capaListFixture.data[4]!,
+  raised_by: "bbbb1111-1111-1111-1111-111111111111",
+  stages: [
+    { id: "lp000001-0001-0001-0001-000000000001", stage: "RootCause", content_block: { root_cause: "Planning hand-off undefined." }, cycle_marker: 0, created_by: "bbbb1111-1111-1111-1111-111111111111", created_at: "2026-05-11T09:00:00+00:00" },
+    { id: "lp000002-0002-0002-0002-000000000002", stage: "ActionPlan", content_block: { action_items: ["Add a planning hand-off checklist"] }, cycle_marker: 0, created_by: "bbbb1111-1111-1111-1111-111111111111", created_at: "2026-05-13T09:00:00+00:00" },
+    { id: "lp000003-0003-0003-0003-000000000003", stage: "Verify", content_block: { decision: "not_effective", narrative: "Late deliveries recurred." }, cycle_marker: 0, created_by: "bbbb1111-1111-1111-1111-111111111111", created_at: "2026-05-18T09:00:00+00:00" },
+    { id: "lp000004-0004-0004-0004-000000000004", stage: "ActionPlan", content_block: { action_items: ["Re-baseline the capacity model"] }, cycle_marker: 1, created_by: "bbbb1111-1111-1111-1111-111111111111", created_at: "2026-05-19T09:00:00+00:00" },
+    { id: "lp000005-0005-0005-0005-000000000005", stage: "Verify", content_block: { decision: "effective", narrative: "On-time rate recovered." }, cycle_marker: 1, created_by: "bbbb1111-1111-1111-1111-111111111111", created_at: "2026-05-21T09:00:00+00:00" },
+  ],
+} satisfies Capa;
+
 // ---- S-ing-4b ingestion fixtures (a tiny Proposed run spanning the row states) ----
 export const ingestionRunFixture = {
   id: "10000000-0000-0000-0000-000000000001",
@@ -698,6 +737,14 @@ export const handlers = [
       : HttpResponse.json({ code: "not_found", title: "Not found" }, { status: 404 });
   }),
   http.get("/api/v1/clauses", () => HttpResponse.json(clauseFixture)),
+  // ---- S-web-7 CAPA (default happy-path; per-test overrides for 403/empty/error) ----
+  http.get("/api/v1/capas", () => HttpResponse.json(capaListFixture)),
+  http.get("/api/v1/capas/:id", ({ params }) => {
+    if (params.id === "ca000005-0005-0005-0005-000000000005") {
+      return HttpResponse.json(capaLoopDetailFixture);
+    }
+    return HttpResponse.json({ ...capaDetailFixture, id: String(params.id) });
+  }),
   // ---- S-web-6 search + compliance (default happy-path; per-test overrides for 403/empty) ----
   http.get("/api/v1/search", () => HttpResponse.json(searchFixture)),
   http.get("/api/v1/search/suggest", () => HttpResponse.json(suggestFixture)),

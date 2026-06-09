@@ -1197,3 +1197,37 @@ async def test_close_incomplete_when_implement_evidence_missing(
     assert close.status_code == 409, close.text
     assert close.json()["code"] == "capa_close_incomplete"
     assert "implemented_action_with_evidence" in close.json()["title"]
+
+
+async def test_capa_list_and_detail_carry_title_created_at_raised_by(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    subject = _subject("capa")
+    await _grant(subject, _CAPA_KEYS)
+    h = _auth(token_factory, subject)
+
+    raised = (
+        await app_client.post(
+            "/api/v1/capas",
+            headers=h,
+            json={"title": "Torque wrench miscalibration", "severity": "Minor"},
+        )
+    ).json()
+    capa_id = raised["id"]
+    # the create response itself carries the metadata (every single-CAPA endpoint runs through
+    # _capa_full now, so a write response never returns a null title for a CAPA that has one)
+    assert raised["title"] == "Torque wrench miscalibration"
+    assert raised["created_at"] is not None
+
+    # list row carries title + created_at (raised_by is detail-only → null on the list row)
+    listing = (await app_client.get("/api/v1/capas", headers=h)).json()
+    row = next(r for r in listing["data"] if r["id"] == capa_id)
+    assert row["title"] == "Torque wrench miscalibration"
+    assert row["created_at"] is not None
+    assert row["raised_by"] is None
+
+    # detail carries title + created_at + raised_by (the Raised stage's actor)
+    detail = (await app_client.get(f"/api/v1/capas/{capa_id}", headers=h)).json()
+    assert detail["title"] == "Torque wrench miscalibration"
+    assert detail["created_at"] is not None
+    assert detail["raised_by"] == detail["stages"][0]["created_by"]

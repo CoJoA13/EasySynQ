@@ -135,21 +135,49 @@ def _stage(s: CapaStage) -> dict[str, Any]:
 
 
 def _capa(
-    c: Capa, identifier: str | None, stages: list[dict[str, Any]] | None = None
+    c: Capa,
+    identifier: str | None,
+    *,
+    title: str | None = None,
+    created_at: datetime.datetime | None = None,
+    raised_by: str | None = None,
+    stages: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     out: dict[str, Any] = {
         "id": str(c.id),
         "identifier": identifier,
+        "title": title,
         "source": c.source.value,
         "severity": c.severity.value,
         "process_id": str(c.process_id) if c.process_id else None,
         "close_state": c.close_state.value,
         "cycle_marker": c.cycle_marker,
         "origin_finding_id": str(c.origin_finding_id) if c.origin_finding_id else None,
+        "raised_by": raised_by,
+        "created_at": created_at.isoformat() if created_at else None,
     }
     if stages is not None:
         out["stages"] = stages
     return out
+
+
+async def _capa_full(
+    session: AsyncSession, capa: Capa, stages: list[dict[str, Any]] | None = None
+) -> dict[str, Any]:
+    """Serialize a CAPA with its record header (identifier/title/created_at) populated — the single
+    response builder for every single-CAPA endpoint (create + each transition + detail), so a write
+    response never returns ``title``/``created_at`` as null for a CAPA that has them. ``raised_by``
+    is derived from the loaded ``stages`` (detail only); ``None`` when stages aren't passed."""
+    header = await capa_repo.get_capa_header(session, capa.id)
+    raised_by = stages[0]["created_by"] if stages else None
+    return _capa(
+        capa,
+        header[0] if header else None,
+        title=header[1] if header else None,
+        created_at=header[2] if header else None,
+        raised_by=raised_by,
+        stages=stages,
+    )
 
 
 def _complaint(c: Complaint, identifier: str | None) -> dict[str, Any]:
@@ -267,7 +295,7 @@ async def raise_capa_endpoint(
         process_id=body.process_id,
         problem=body.problem,
     )
-    return _capa(capa, await capa_repo.get_identifier(session, capa.id))
+    return await _capa_full(session, capa)
 
 
 @router.get("/capas")
@@ -276,7 +304,11 @@ async def list_capas_endpoint(
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
     rows = await capa_repo.list_capas(session, caller.org_id)
-    return {"data": [_capa(c, ident) for c, ident in rows]}
+    return {
+        "data": [
+            _capa(c, ident, title=title, created_at=created) for c, ident, title, created in rows
+        ]
+    }
 
 
 @router.get("/capas/{capa_id}")
@@ -289,7 +321,7 @@ async def get_capa_endpoint(
     if capa is None or capa.org_id != caller.org_id:
         raise ProblemException(status=404, code="not_found", title="CAPA not found")
     stages = [_stage(s) for s in await capa_repo.list_capa_stages(session, capa_id)]
-    return _capa(capa, await capa_repo.get_identifier(session, capa.id), stages=stages)
+    return await _capa_full(session, capa, stages=stages)
 
 
 @router.post("/capas/{capa_id}/containment")
@@ -303,7 +335,7 @@ async def capa_containment_endpoint(
     capa = await advance_capa_to_containment(
         session, caller, capa_id, content_block=body.content_block
     )
-    return _capa(capa, await capa_repo.get_identifier(session, capa.id))
+    return await _capa_full(session, capa)
 
 
 @router.post("/capas/{capa_id}/root-cause")
@@ -318,7 +350,7 @@ async def capa_root_cause_endpoint(
     capa = await advance_capa_to_root_cause(
         session, caller, capa_id, content_block=body.content_block
     )
-    return _capa(capa, await capa_repo.get_identifier(session, capa.id))
+    return await _capa_full(session, capa)
 
 
 @router.post("/capas/{capa_id}/action-plan")
@@ -336,7 +368,7 @@ async def capa_action_plan_endpoint(
     capa, instance = await propose_action_plan(
         session, caller, capa_id, content_block=body.content_block
     )
-    out = _capa(capa, await capa_repo.get_identifier(session, capa.id))
+    out = await _capa_full(session, capa)
     out["approval_instance"] = {
         "id": str(instance.id),
         "current_state": instance.current_state,
@@ -358,7 +390,7 @@ async def capa_implement_endpoint(
     capa = await advance_capa_to_implement(
         session, caller, capa_id, content_block=body.content_block
     )
-    return _capa(capa, await capa_repo.get_identifier(session, capa.id))
+    return await _capa_full(session, capa)
 
 
 @router.post("/capas/{capa_id}/verify")
@@ -382,7 +414,7 @@ async def capa_verify_endpoint(
         content_block=body.content_block,
         sig_sink=sig_sink,
     )
-    return _capa(capa, await capa_repo.get_identifier(session, capa.id))
+    return await _capa_full(session, capa)
 
 
 @router.post("/capas/{capa_id}/close")
@@ -396,7 +428,7 @@ async def capa_close_endpoint(
     verification loops back to RootCause (cycle++; re-propose + re-approve a revised plan); an
     ``effective`` verification still missing evidence → 409 ``capa_close_incomplete``."""
     capa = await close_capa(session, caller, capa_id)
-    return _capa(capa, await capa_repo.get_identifier(session, capa.id))
+    return await _capa_full(session, capa)
 
 
 # --- Complaints -------------------------------------------------------------------------------
@@ -460,7 +492,7 @@ async def spawn_capa_endpoint(
     )
     return JSONResponse(
         status_code=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
-        content=_capa(capa, await capa_repo.get_identifier(session, capa.id)),
+        content=await _capa_full(session, capa),
     )
 
 

@@ -709,3 +709,38 @@ export interface ImportRunCreate {
 // Decision/merge/split results are loosely typed — the UI invalidates + refetches rather than reading
 // the body; keep a permissive shape so a handler can return e.g. {applied: 3} or the family/split row.
 export type ImportMutationResult = Record<string, unknown>;
+
+// ---- S-web-7 (Nonconformity & CAPA) -----------------------------------------------------
+export type NcSeverity = "Critical" | "Major" | "Minor";
+export type CapaSource = "audit" | "process" | "complaint" | "review_output";
+export type CapaCloseState =
+  | "Raised" | "Containment" | "RootCause" | "ActionPlan" | "Implement" | "Verify"
+  | "Closed" | "Rejected";
+
+export interface Capa {
+  id: string;
+  identifier: string | null; // the record identifier, e.g. "REC-000031"
+  title: string | null;
+  source: CapaSource;
+  severity: NcSeverity;
+  process_id: string | null;
+  close_state: CapaCloseState;
+  cycle_marker: number; // effectiveness-loop counter; >0 => the Verify→RootCause loop ran
+  origin_finding_id: string | null; // NULL in v1
+  raised_by: string | null; // detail-only (the Raised stage's actor); null on list rows
+  created_at: string | null;
+  stages?: CapaStage[]; // detail-only
+}
+
+export interface CapaStage {
+  id: string;
+  stage: CapaCloseState;
+  content_block: Record<string, unknown>; // free-form
+  cycle_marker: number;
+  created_by: string; // an app_user id; resolve via the user directory
+  created_at: string;
+}
+
+export interface CapaList {
+  data: Capa[];
+}
