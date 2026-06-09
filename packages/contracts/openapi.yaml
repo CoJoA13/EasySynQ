@@ -3859,7 +3859,8 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/CapaApproval" }
-        "404": { description: CAPA not found }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
 
   /complaints:
     post:

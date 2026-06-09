@@ -564,10 +564,11 @@ async def test_minor_action_plan_qm_approval_writes_signature(
     assert body["approval_instance"]["current_state"] == "qm_approval"
 
     task_id = await _my_pending_task(app_client, ha, iid)
-    # the single-task read now carries the subject discriminator (subject_type/subject_id)
+    # the single-task read carries the subject discriminator; this is a CAPA action-plan approval
+    # task, so it points back at the CAPA it approves
     detail_task = (await app_client.get(f"/api/v1/tasks/{task_id}", headers=ha)).json()
-    assert detail_task["subject_type"] in {"DOCUMENT", "CAPA", "DCR"}
-    assert detail_task["subject_id"]
+    assert detail_task["subject_type"] == "CAPA"
+    assert detail_task["subject_id"] == capa_id
     dr = await app_client.post(
         f"/api/v1/tasks/{task_id}/decision", headers=ha, json={"outcome": "approve"}
     )
@@ -1246,11 +1247,11 @@ async def test_capa_detail_stage_carries_evidence_links(
     subject = _subject("capaev")
     await _grant(subject, _CAPA_KEYS)
     h = _auth(token_factory, subject)
-    raised = (
-        await app_client.post(
-            "/api/v1/capas", headers=h, json={"title": "Evidence shape", "severity": "Minor"}
-        )
-    ).json()
+    rr = await app_client.post(
+        "/api/v1/capas", headers=h, json={"title": "Evidence shape", "severity": "Minor"}
+    )
+    assert rr.status_code == 201, rr.text
+    raised = rr.json()
     detail = (await app_client.get(f"/api/v1/capas/{raised['id']}", headers=h)).json()
     # every stage now carries an evidence_links array (empty until a record is linked)
     assert all("evidence_links" in s for s in detail["stages"])
