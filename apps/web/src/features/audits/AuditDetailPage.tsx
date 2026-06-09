@@ -1,13 +1,16 @@
 import {
   Alert, Anchor, Breadcrumbs, Container, Grid, Group, Loader, Paper, Text, Title,
 } from "@mantine/core";
+import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { useUserDirectory } from "../../app/shell/useUserDirectory";
 import type { Finding } from "../../lib/types";
 import { AuditStateBadge } from "./badges";
+import { CorrectFindingModal } from "./CorrectFindingModal";
 import { FindingsCard } from "./FindingsCard";
 import { useAudit, useAuditPlan, useAuditPrograms, useProcesses } from "./hooks";
 import { AuditLifecyclePanel } from "./AuditLifecyclePanel";
+import { LogFindingModal } from "./LogFindingModal";
 
 // The /audits/:id destination (outside the tab layout — the documents/:id precedent). Hosts the
 // plan/programme context card + (Tasks 13/14) the lifecycle panel and the findings card. The FSM
@@ -19,6 +22,8 @@ export function AuditDetailPage() {
   const programs = useAuditPrograms(); // cached list — programme title lookup, no extra endpoint
   const processes = useProcesses();
   const { data: directory } = useUserDirectory();
+  const [logOpen, setLogOpen] = useState(false);
+  const [correcting, setCorrecting] = useState<Finding | null>(null);
 
   if (audit.forbidden) {
     return (
@@ -90,7 +95,12 @@ export function AuditDetailPage() {
       </Group>
       <Grid gutter="md">
         <Grid.Col span={{ base: 12, md: 7 }}>
-          <FindingsCard audit={a} scope={scope} onLog={() => {}} onCorrect={(_f: Finding) => {}} />
+          <FindingsCard
+            audit={a}
+            scope={scope}
+            onLog={() => setLogOpen(true)}
+            onCorrect={setCorrecting}
+          />
         </Grid.Col>
         <Grid.Col span={{ base: 12, md: 5 }}>
           <Paper withBorder p="md" mb="md">
@@ -113,6 +123,16 @@ export function AuditDetailPage() {
           <AuditLifecyclePanel audit={a} scope={scope} />
         </Grid.Col>
       </Grid>
+      <LogFindingModal auditId={a.id} opened={logOpen} onClose={() => setLogOpen(false)} />
+      {correcting && (
+        <CorrectFindingModal
+          key={correcting.id}
+          finding={correcting}
+          auditId={a.id}
+          opened
+          onClose={() => setCorrecting(null)}
+        />
+      )}
     </Container>
   );
 }
