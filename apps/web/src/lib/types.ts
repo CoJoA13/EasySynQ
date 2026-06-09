@@ -430,3 +430,282 @@ export interface ComplianceChecklist {
   rollup: ChecklistRollup;
   rows: ChecklistRow[];
 }
+
+// ---- S-ing-4b (Ingestion Review UI) — types for the /admin/imports/* surface ----------------
+// Several response bodies are `object`/additionalProperties:true in openapi.yaml; the shapes below
+// are pinned from the backend (apps/api/.../services/ingestion/review.py) and typed here WITHOUT a
+// contract change. The UI must tolerate `status` strings beyond ImportRunStatus (additive stages).
+
+export type ImportRunStatus =
+  | "Created" | "Scanning" | "Scanned" | "Extracting" | "Classifying" | "Classified"
+  | "Deduping" | "Proposing" | "Proposed" | "Reviewing"
+  | "Committing" | "Completed" | "PartiallyCommitted" | "Failed" | "Cancelled";
+
+export type ImportKind = "DOCUMENT" | "RECORD" | "UNKNOWN";
+export type ConfirmedKind = "DOCUMENT" | "RECORD"; // R10: confirmable kind, never UNKNOWN
+export type ImportConfidenceBand = "HIGH" | "MEDIUM" | "LOW" | "AMBIGUOUS";
+export type ImportDisposition = "included" | "excluded" | "quarantine"; // scan_flags.disposition
+export type ImportReviewStatus = "included" | "excluded" | "deferred" | "undecided"; // folded
+export type ImportDecisionAction = "accept" | "correct" | "exclude" | "defer";
+
+export interface ImportRun {
+  id: string;
+  status: ImportRunStatus | string; // tolerate additive stages
+  source_root: string;
+  profile: string | null;
+  ocr_enabled: boolean;
+  classifier_version: string | null;
+  counts: Record<string, unknown> | null; // stage-namespaced; read via narrow accessors
+  error: string | null;
+  created_by: string;
+  committed_by: string | null;
+  report_record_id: string | null;
+  created_at: string | null;
+  scan_started_at: string | null;
+  completed_at: string | null;
+}
+
+export interface ImportClassificationEvidence {
+  dimension: string;
+  candidate: string;
+  signal_type: string;
+  weight: number;
+  explanation: string;
+}
+
+export interface ImportClassification {
+  kind: ImportKind;
+  kind_conf: number;
+  type_code: string | null;
+  type_conf: number;
+  clause_numbers: string[];
+  clause_conf: number;
+  process_names: string[] | null;
+  process_conf: number;
+  pdca_phase: "PLAN" | "DO" | "CHECK" | "ACT" | null;
+  band: ImportConfidenceBand;
+  ambiguous: boolean;
+  top2_margin: number;
+  classifier_version: string;
+  evidence?: ImportClassificationEvidence[]; // detail endpoint only
+}
+
+// The S-ing-4 folded effective state (EffectiveFileState.as_dict()). `kind === "UNCONFIRMED"` until
+// a human confirms (R10); `commit_ready === (disposition === "included" && kind in DOCUMENT|RECORD)`.
+export interface ImportFileReview {
+  disposition: ImportReviewStatus;
+  kind: ImportKind | "UNCONFIRMED";
+  identifier: string | null;
+  identifier_source: string | null;
+  type_code: string | null;
+  clause_numbers: string[];
+  process_names: string[] | null;
+  owner: string | null;
+  decided: boolean;
+  last_action: ImportDecisionAction | null;
+  commit_ready: boolean;
+  identifier_collidable: boolean;
+}
+
+export interface ImportFileScanFlags {
+  disposition: ImportDisposition;
+  reason?: string | null;
+  detail?: string | null;
+}
+
+export interface ImportFile {
+  id: string;
+  rel_path: string;
+  filename: string;
+  ext: string | null;
+  size_bytes: number;
+  mime_type: string | null;
+  sha256: string | null;
+  staged_blob_uri: string | null;
+  scan_flags: ImportFileScanFlags;
+  included_candidate: boolean;
+  mtime: string | null;
+  ctime: string | null;
+  classification: ImportClassification | null;
+  review: ImportFileReview | null;
+}
+
+export interface ImportFileList {
+  run_id: string;
+  files: ImportFile[];
+}
+
+export interface ImportDedupMembership {
+  in_exact_cluster: boolean;
+  in_near_cluster: boolean;
+  is_canonical: boolean | null;
+  redundant_of_file_id: string | null;
+  in_version_family: boolean;
+  is_effective: boolean | null;
+  superseded_by_file_id: string | null;
+}
+
+export interface ImportProposalNode {
+  proposed_identifier: string | null;
+  identifier_source: string | null;
+  target_ia_path: string | null;
+  proposed_owner: string | null;
+  owner_source: string | null;
+  conflict_flags: Record<string, unknown>;
+}
+
+export interface ImportExtract {
+  status: "extracted" | "ocr" | "empty" | "failed";
+  full_text: string | null;
+  text_truncated: boolean;
+  header_block: string | null;
+  language: string | null;
+  ocr_used: boolean;
+  ocr_confidence: number | null;
+  char_count: number | null;
+  page_count: number | null;
+  error: string | null;
+  extractor_version: string | null;
+}
+
+// The DETAIL endpoint (GET /admin/imports/{id}/files/{fid}) nests the review under `effective`
+// (get_file_review → { effective: <flat ImportFileReview>, decision_history: [...] }) — UNLIKE the LIST
+// endpoint, whose `review` IS the flat ImportFileReview. Override the inherited flat `review` here.
+export interface ImportFileReviewDetail {
+  effective: ImportFileReview;
+  decision_history: ImportDecision[];
+}
+
+export interface ImportFileDetail extends Omit<ImportFile, "review"> {
+  run_id: string;
+  extract: ImportExtract | null;
+  dedup: ImportDedupMembership;
+  proposal: ImportProposalNode | null;
+  review: ImportFileReviewDetail | null;
+}
+
+export interface ImportDupeCluster {
+  id: string;
+  method: "exact" | "near";
+  member_file_ids: string[];
+  canonical_file_id: string;
+  jaccard: number | null;
+  evidence: Record<string, unknown>;
+}
+export interface ImportDupeClusterList {
+  run_id: string;
+  clusters: ImportDupeCluster[];
+}
+
+export interface ImportVersionFamily {
+  id: string;
+  family_key: string;
+  base_name: string;
+  doc_code: string | null;
+  ordered_member_file_ids: string[];
+  effective_file_id: string;
+  reconstruct_revision_chain: boolean;
+  evidence: Record<string, unknown>;
+}
+export interface ImportVersionFamilyList {
+  run_id: string;
+  families: ImportVersionFamily[];
+}
+
+// GET /admin/imports/{id}/checklist (review.py:983-994). `ready === blocking.length === 0`; advisory
+// never affects ready. A blocker carries a `type` + type-specific members (kept loose) — e.g. an
+// `identifier` + a `file_ids` list of the offending files.
+export interface ImportChecklistBlocker {
+  type: string;
+  identifier?: string;
+  file_ids?: string[];
+  [k: string]: unknown;
+}
+export interface ImportChecklistReviewStats {
+  keep_items: number;
+  decided: number;
+  accepted: number;
+  corrected: number;
+  excluded: number;
+  deferred: number;
+  undecided: number;
+  kind_confirmed: number;
+  commit_ready: number;
+}
+export interface ImportChecklist {
+  run_id: string;
+  status: string;
+  ready: boolean;
+  blocking: ImportChecklistBlocker[];
+  advisory: {
+    star_coverage?: { total?: number; satisfied?: number; [k: string]: unknown } | null;
+    unknown_low?: number;
+    kind_unconfirmed?: number;
+  };
+  review: ImportChecklistReviewStats;
+}
+
+export interface ImportDecision {
+  id: string;
+  action: string; // accept|correct|merge|split|exclude|defer
+  file_id: string | null;
+  cluster_id: string | null;
+  target_kind: string;
+  before: Record<string, unknown> | null;
+  after: Record<string, unknown> | null;
+  reason: string | null;
+  decided_by: string;
+  decided_at: string;
+}
+export interface ImportDecisionLog {
+  run_id: string;
+  decisions: ImportDecision[];
+}
+
+// ---- request bodies ----
+export interface ImportDecisionAfter {
+  kind?: ConfirmedKind;
+  type_code?: string;
+  clause_numbers?: string[];
+  process_names?: string[];
+  identifier?: string;
+  owner?: string;
+}
+export interface ImportFileDecisionRequest {
+  action: ImportDecisionAction;
+  after?: ImportDecisionAfter;
+  reason?: string | null;
+}
+export interface ImportBulkSelector {
+  kind?: string | null;
+  band?: string | null;
+  disposition?: string | null;
+}
+export interface ImportBulkDecisionRequest {
+  action: ImportDecisionAction;
+  file_ids?: string[] | null;
+  selector?: ImportBulkSelector | null;
+  after?: ImportDecisionAfter;
+  reason?: string | null;
+}
+export interface ImportMergeRequest {
+  file_ids: string[];
+  effective_file_id?: string | null;
+  reconstruct_revision_chain?: boolean | null;
+  reason?: string | null;
+}
+export interface ImportSplitRequest {
+  target_kind: "dupe_cluster" | "version_family";
+  target_id: string;
+  separate_file_ids: string[];
+  reason?: string | null;
+}
+export interface ImportRunCreate {
+  source_root: string;
+  profile?: string | null;
+  ocr_enabled?: boolean;
+  classifier_version?: string | null;
+}
+// Decision/merge/split results are loosely typed — the UI invalidates + refetches rather than reading
+// the body; keep a permissive shape so a handler can return e.g. {applied: 3} or the family/split row.
+export type ImportMutationResult = Record<string, unknown>;

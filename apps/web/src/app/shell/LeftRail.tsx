@@ -34,6 +34,15 @@ export function LeftRail() {
           active={pathname.startsWith("/compliance")}
         />
       )}
+      {can("import.review") && (
+        // S-ing-4b: gated — import review is an admin-only SYSTEM key (no ABAC scope).
+        <NavLink
+          component={Link}
+          to="/ingestion"
+          label="Import"
+          active={pathname.startsWith("/ingestion")}
+        />
+      )}
       {PHASES.map((phase) => {
         const top = (clauses ?? []).filter((c) => c.pdca_phase === phase && c.parent_id === null);
         if (top.length === 0) return null;

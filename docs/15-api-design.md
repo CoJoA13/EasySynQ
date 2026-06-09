@@ -683,6 +683,8 @@ Point the install at an existing QMS and ingest into the controlled vault (locke
 
 > **Import permission family is canonical.** The subsystem is the `imports` collection (mounted under `/admin`) with the three actions `import.execute` (run the scan/classify), `import.review` (review/correct classifications), and `import.commit` (commit to vault). These **REPLACE the legacy `import.initiate` / `import.administer` keys everywhere** (reconciled per Decisions Register R5).
 
+> **S-ing-4b — now UI-backed (web, 2026-06-08).** The full `/admin/imports/*` surface above is surfaced by the **Ingestion Review UI** (`apps/web/src/features/ingestion/` — a four-faces run page + the review cockpit; **closes UJ-2**). Front-end only — **no endpoint, contract, or permission change**. Note for FE consumers: `run.counts` is a **flat, top-level-merged bag** (`by_band`, top-level `quarantine`, `dedup`, `proposal`, `commit` — no `queues`/`review` block), and the folded review stats (`undecided`/`kind_confirmed`/`keep_items`) are read from `…/checklist`.
+
 **Import flow (ingest into controlled vault; FS becomes read-only mirror):**
 
 ```mermaid

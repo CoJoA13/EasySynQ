@@ -15,6 +15,8 @@ import { ReviewApprovePage } from "./features/review/ReviewApprovePage";
 import { TasksInbox } from "./features/review/TasksInbox";
 import { SearchResultsPage } from "./features/search/SearchResultsPage";
 import { CompliancePage } from "./features/compliance/CompliancePage";
+import { IngestionRunsPage } from "./features/ingestion/IngestionRunsPage";
+import { IngestionRunPage } from "./features/ingestion/IngestionRunPage";
 import { apiGet } from "./lib/api";
 import { useAuth } from "./lib/auth";
 
@@ -108,6 +110,8 @@ export function App() {
         <Route path="tasks/:id" element={<ReviewApprovePage />} />
         <Route path="search" element={<SearchResultsPage />} />
         <Route path="compliance" element={<CompliancePage />} />
+        <Route path="ingestion" element={<IngestionRunsPage />} />
+        <Route path="ingestion/:runId" element={<IngestionRunPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
