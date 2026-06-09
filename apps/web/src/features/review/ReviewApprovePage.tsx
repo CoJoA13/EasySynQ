@@ -42,19 +42,14 @@ export function ReviewApprovePage() {
   }
 
   const decidable = task.state === "PENDING";
-  const decisionPane = decidable ? (
-    <DecisionCard
-      taskId={task.id}
-      subjectType={isCapa ? "CAPA" : "DOCUMENT"}
-      subjectId={(isCapa ? task.subject_id : docId) ?? ""}
-    />
-  ) : (
+  const decidedAlert = (
     <Alert color="blue" title="Decided">
       This task has already been decided.
     </Alert>
   );
 
   if (isCapa) {
+    // The CAPA subject id is on the task (no document.read-gated instance read) → always present here.
     return (
       <Stack gap="lg">
         <Title order={2}>Review &amp; Approve — Action plan</Title>
@@ -62,7 +57,13 @@ export function ReviewApprovePage() {
           <Grid.Col span={{ base: 12, md: 7 }}>
             <CapaApprovalContext capaId={task.subject_id!} />
           </Grid.Col>
-          <Grid.Col span={{ base: 12, md: 5 }}>{decisionPane}</Grid.Col>
+          <Grid.Col span={{ base: 12, md: 5 }}>
+            {decidable ? (
+              <DecisionCard taskId={task.id} subjectType="CAPA" subjectId={task.subject_id!} />
+            ) : (
+              decidedAlert
+            )}
+          </Grid.Col>
         </Grid>
       </Stack>
     );
@@ -78,7 +79,15 @@ export function ReviewApprovePage() {
             {docId && <VersionCompare documentId={docId} versions={versions ?? []} />}
           </Stack>
         </Grid.Col>
-        <Grid.Col span={{ base: 12, md: 5 }}>{decisionPane}</Grid.Col>
+        <Grid.Col span={{ base: 12, md: 5 }}>
+          {/* Byte-identical to S-web-5: gate on docId too, so the card only renders once the instance→doc
+              resolved (subjectId is a real document id, never "") and the cache invalidation is correct. */}
+          {decidable && docId ? (
+            <DecisionCard taskId={task.id} subjectType="DOCUMENT" subjectId={docId} />
+          ) : (
+            decidedAlert
+          )}
+        </Grid.Col>
       </Grid>
     </Stack>
   );
