@@ -2,6 +2,7 @@ import {
   Alert,
   Badge,
   Box,
+  Button,
   Card,
   Container,
   Group,
@@ -16,11 +17,13 @@ import {
   Title,
 } from "@mantine/core";
 import { useMemo, useState } from "react";
+import { usePermissions } from "../../app/shell/usePermissions";
 import type { Capa, CapaCloseState, CapaSource, NcSeverity } from "../../lib/types";
 import { CapaCard } from "./CapaCard";
 import { CapaDrawer } from "./CapaDrawer";
 import { CAPA_COLUMNS, columnKeyFor, SEVERITY_LABEL, SOURCE_LABEL } from "./columns";
 import { useCapas } from "./hooks";
+import { RaiseCapaModal } from "./RaiseCapaModal";
 
 const TERMINAL: CapaCloseState[] = ["Closed", "Rejected"];
 
@@ -31,6 +34,8 @@ export function CapaBoardPage() {
   const [severity, setSeverity] = useState<NcSeverity | "">("");
   const [state, setState] = useState<CapaCloseState | "">("");
   const [selected, setSelected] = useState<string | null>(null);
+  const [raiseOpen, setRaiseOpen] = useState(false);
+  const perms = usePermissions();
 
   const rows = data ?? [];
   const filtered = useMemo(
@@ -86,14 +91,19 @@ export function CapaBoardPage() {
     <Container size="xl" py="md">
       <Group justify="space-between" mb="md">
         <Title order={2}>Nonconformity &amp; CAPA</Title>
-        <SegmentedControl
-          value={view}
-          onChange={(v) => setView(v as "board" | "list")}
-          data={[
-            { value: "board", label: "Board" },
-            { value: "list", label: "List" },
-          ]}
-        />
+        <Group gap="sm">
+          {perms.can("capa.create") && (
+            <Button onClick={() => setRaiseOpen(true)}>＋ Raise CAPA</Button>
+          )}
+          <SegmentedControl
+            value={view}
+            onChange={(v) => setView(v as "board" | "list")}
+            data={[
+              { value: "board", label: "Board" },
+              { value: "list", label: "List" },
+            ]}
+          />
+        </Group>
       </Group>
 
       <SimpleGrid cols={{ base: 1, sm: 2 }} mb="md">
@@ -223,6 +233,11 @@ export function CapaBoardPage() {
       )}
 
       <CapaDrawer capaId={selected} onClose={() => setSelected(null)} />
+      <RaiseCapaModal
+        opened={raiseOpen}
+        onClose={() => setRaiseOpen(false)}
+        onCreated={(id) => setSelected(id)}
+      />
     </Container>
   );
 }
