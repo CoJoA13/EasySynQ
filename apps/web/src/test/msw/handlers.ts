@@ -428,11 +428,25 @@ export const ingestionRunFixture = {
   profile: null,
   ocr_enabled: true,
   classifier_version: "rules-heuristic v1.4",
+  // The REAL run.counts shape: a flat, top-level-merged bag of per-stage keys (build_summary +
+  // classify {classified,by_kind,by_band,extract} + dedup + proposal + commit). There is NO
+  // `queues`/`classify`/`review` namespace — the folded review stats live on the checklist endpoint
+  // (ingestionChecklistFixture.review).
   counts: {
-    scan: { total_files: 6 },
-    classify: { band: { HIGH: 2, MEDIUM: 1, LOW: 2, AMBIGUOUS: 0 } },
-    review: { keep_items: 4, undecided: 4, kind_confirmed: 1, commit_ready: 1 },
-    queues: { needs: 4, medium: 1, high: 2, quarantine: 1, vault: 0 },
+    total_files: 6,
+    total_bytes: 102400,
+    included: 4,
+    excluded: 0,
+    quarantine: 1,
+    ext_histogram: { docx: 3, pdf: 1, xlsx: 1, bin: 1 },
+    exact_dup_clusters: 0,
+    exact_dup_files: 0,
+    classified: 4,
+    by_kind: { DOCUMENT: 3, RECORD: 0, UNKNOWN: 1 },
+    by_band: { HIGH: 2, MEDIUM: 1, LOW: 1, AMBIGUOUS: 0 },
+    extract: { extracted: 4, ocr: 0, empty: 0, failed: 0 },
+    dedup: { exact_clusters: 0, near_clusters: 1, version_families: 1 },
+    proposal: { keep_items: 4, conflicts: 1, needs_identifier: 1 },
   },
   error: null,
   created_by: "bbbb1111-1111-1111-1111-111111111111",

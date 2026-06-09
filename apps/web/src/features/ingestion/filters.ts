@@ -5,7 +5,8 @@ import type {
   ImportReviewStatus,
 } from "../../lib/types";
 
-// The five queue tabs (mockup order). `countKey` indexes run.counts.queues for the tab badge.
+// The five queue tabs (mockup order). `countKey` indexes the derived queueCounts map (built in
+// ReviewCockpit from run.counts.by_band/quarantine + the checklist review stats) for the tab badge.
 export type IngestionQueue = "needs" | "medium" | "high" | "quarantine" | "vault";
 export const QUEUES: { value: IngestionQueue; label: string; countKey: string }[] = [
   { value: "needs", label: "Needs decision", countKey: "needs" },

@@ -17,7 +17,7 @@ import { ItemDetailDrawer } from "./ItemDetailDrawer";
 import { MergeMenu } from "./MergeMenu";
 import { PreCommitChecklist } from "./PreCommitChecklist";
 import { QueueTabs } from "./QueueTabs";
-import { RunSummaryTiles } from "./RunSummaryTiles";
+import { RunSummaryTiles, countAt } from "./RunSummaryTiles";
 import { TriagePagination } from "./TriagePagination";
 import { TriageTable } from "./TriageTable";
 import {
@@ -62,12 +62,20 @@ export function ReviewCockpit({ runId, run }: { runId: string; run: ImportRun })
   const canCommit = can("import.commit");
 
   const files = useMemo(() => filesQuery.data?.files ?? [], [filesQuery.data]);
-  const queueCounts = useMemo(() => {
-    const q = (run.counts?.["queues"] ?? {}) as Record<string, unknown>;
-    const out: Record<string, number> = {};
-    for (const [k, v] of Object.entries(q)) out[k] = typeof v === "number" ? v : 0;
-    return out;
-  }, [run.counts]);
+  const review = checklistQuery.data?.review;
+  // run.counts has NO `queues` block — derive each tab's badge from the real flat counts (by_band /
+  // quarantine) + the folded checklist review stats (undecided). "Already in vault" has no count
+  // source in v1 (the tab renders a calm explainer), so it stays 0.
+  const queueCounts = useMemo<Record<string, number>>(
+    () => ({
+      needs: review?.undecided ?? 0,
+      medium: countAt(run.counts, "by_band", "MEDIUM"),
+      high: countAt(run.counts, "by_band", "HIGH"),
+      quarantine: countAt(run.counts, "quarantine"),
+      vault: 0,
+    }),
+    [run.counts, review],
+  );
 
   // dupeMap: each NON-canonical member fileId → the canonical member's review.identifier (or "—").
   const dupeMap = useMemo(() => {
@@ -217,7 +225,7 @@ export function ReviewCockpit({ runId, run }: { runId: string; run: ImportRun })
 
   return (
     <Stack gap="md" component="section" aria-label="Review cockpit">
-      <RunSummaryTiles run={run} />
+      <RunSummaryTiles run={run} review={review} />
       <ImportPlanBanner />
       <QueueTabs counts={queueCounts} value={queue} onChange={onQueue} />
       <IngestionFacetBar conf={conf} onConf={onConf} />

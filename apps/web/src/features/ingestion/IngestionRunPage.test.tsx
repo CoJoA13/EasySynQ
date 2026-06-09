@@ -2,7 +2,8 @@ import { http, HttpResponse } from "msw";
 import { axe } from "jest-axe";
 import { expect, test } from "vitest";
 import { Route, Routes } from "react-router-dom";
-import { screen } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { renderWithProviders } from "../../test/render";
 import { server } from "../../test/msw/server";
 import { ingestionRunFixture } from "../../test/msw/handlers";
@@ -70,6 +71,26 @@ test("IngestionRunPage renders the terminal summary for a Completed run", async 
   );
   renderPage();
   expect(await screen.findByText(/Import complete/)).toBeInTheDocument();
+});
+
+test("a PartiallyCommitted run shows a Resume button that re-POSTs commit", async () => {
+  let resumed = false;
+  server.use(
+    http.get("/api/v1/admin/imports/:id", () =>
+      HttpResponse.json({
+        ...ingestionRunFixture,
+        status: "PartiallyCommitted",
+        counts: { commit: { committed: 3, failed: 1 } },
+      }),
+    ),
+    http.post("/api/v1/admin/imports/:id/commit", () => {
+      resumed = true;
+      return HttpResponse.json({ ...ingestionRunFixture, status: "Committing" }, { status: 202 });
+    }),
+  );
+  renderPage();
+  await userEvent.click(await screen.findByRole("button", { name: "Resume commit" }));
+  await waitFor(() => expect(resumed).toBe(true));
 });
 
 test("IngestionRunPage shows a calm not-found panel on a 404", async () => {

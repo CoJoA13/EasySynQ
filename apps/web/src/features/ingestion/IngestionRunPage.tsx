@@ -5,7 +5,7 @@ import { CommitProgress } from "./CommitProgress";
 import { ReviewCockpit } from "./ReviewCockpit";
 import { RunTerminalSummary } from "./RunTerminalSummary";
 import { ScanProgress } from "./ScanProgress";
-import { useCancelRun, useImportRun } from "./hooks";
+import { useCancelRun, useCommitRun, useImportRun } from "./hooks";
 
 // The human-paced rest states (review cockpit) + the commit + terminal states. Anything NOT in this
 // set (Created/Scanning/Extracting/… and any additive stage) is "the engine is still settling" →
@@ -21,6 +21,7 @@ export function IngestionRunPage() {
   const { runId = null } = useParams();
   const { data: run, isLoading, isError, error } = useImportRun(runId);
   const cancelRun = useCancelRun(runId);
+  const commitRun = useCommitRun(runId);
 
   if (isLoading && !run) {
     return (
@@ -61,7 +62,8 @@ export function IngestionRunPage() {
     return <CommitProgress run={run} />;
   }
   if (TERMINAL_STATES.has(status)) {
-    return <RunTerminalSummary run={run} />;
+    // PartiallyCommitted → resume is an idempotent re-commit (already-landed items are skipped).
+    return <RunTerminalSummary run={run} onResume={() => commitRun.mutate()} />;
   }
   // pre-Proposed (Created/Scanning/Extracting/Classifying/… ) and any additive stage → scan progress.
   return <ScanProgress run={run} onCancel={() => cancelRun.mutate()} />;

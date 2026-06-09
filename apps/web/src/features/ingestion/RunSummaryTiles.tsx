@@ -1,11 +1,12 @@
 import { Group, Paper, SimpleGrid, Stack, Text } from "@mantine/core";
-import type { ImportRun } from "../../lib/types";
+import type { ImportChecklistReviewStats, ImportRun } from "../../lib/types";
 
-// run.counts is stage-namespaced + loosely typed (Record<string, unknown> | null). Walk it safely:
-// every step degrades to 0 on a missing/non-object node, so a partial or null counts never crashes
-// and never yields NaN (noUncheckedIndexedAccess — no bare index without a fallback). DP-7: every
-// tile is glyph + label + value (never color-only); aria-labels are distinct per tile.
-function countAt(counts: Record<string, unknown> | null, ...path: string[]): number {
+// run.counts is a FLAT, top-level-merged bag of per-stage keys (e.g. by_band.HIGH, quarantine,
+// proposal.keep_items, commit.committed) — there is NO `classify`/`queues`/`review` namespace; the
+// folded review stats live ONLY on the checklist endpoint. countAt walks the bag safely: every step
+// degrades to 0 on a missing/non-object node, so a partial or null counts never crashes and never
+// yields NaN (noUncheckedIndexedAccess). DP-7: every tile is glyph + label + value; labels distinct.
+export function countAt(counts: Record<string, unknown> | null, ...path: string[]): number {
   let node: unknown = counts;
   for (const key of path) {
     if (node === null || typeof node !== "object") return 0;
@@ -52,13 +53,22 @@ function MetricTile({
   );
 }
 
-export function RunSummaryTiles({ run }: { run: ImportRun }) {
+export function RunSummaryTiles({
+  run,
+  review,
+}: {
+  run: ImportRun;
+  review?: ImportChecklistReviewStats;
+}) {
   const counts = run.counts;
-  const high = countAt(counts, "classify", "band", "HIGH");
-  const medium = countAt(counts, "classify", "band", "MEDIUM");
-  const needs = countAt(counts, "queues", "needs");
-  const kindConfirmed = countAt(counts, "review", "kind_confirmed");
-  const keepItems = countAt(counts, "review", "keep_items");
+  // High/Medium come from the run's flat band histogram; "Needs decision" + "Kind confirmed" are
+  // folded review stats that exist ONLY on the checklist (passed in from ReviewCockpit) — never on
+  // run.counts. Absent review → 0 (calm during the checklist's first load).
+  const high = countAt(counts, "by_band", "HIGH");
+  const medium = countAt(counts, "by_band", "MEDIUM");
+  const needs = review?.undecided ?? 0;
+  const kindConfirmed = review?.kind_confirmed ?? 0;
+  const keepItems = review?.keep_items ?? 0;
 
   return (
     <SimpleGrid cols={{ base: 1, sm: 2, lg: 4 }} spacing="md">
