@@ -65,7 +65,11 @@ export function CapaDrawer({ capaId, onClose }: { capaId: string | null; onClose
             <Title order={5} mb="sm">
               Close gate
             </Title>
-            <CloseGateStepper stages={capa.stages ?? []} closeState={capa.close_state} />
+            <CloseGateStepper
+              stages={capa.stages ?? []}
+              closeState={capa.close_state}
+              cycleMarker={capa.cycle_marker}
+            />
           </div>
         </Stack>
       )}
