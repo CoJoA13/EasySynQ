@@ -78,7 +78,7 @@ Records/evidence capture, retention/disposition, Evidence Packs, audits/findings
 
 - A document goes Draft → In Review → Approved → Effective with a recorded approval; the prior Effective atomically becomes Superseded; **two Effective versions are provably impossible** (concurrency test).
 - An edit to a file in the read-only mirror is overwritten from the vault on next sync (drift cannot win).
-- A user with `document.checkin@process:X` but a per-user deny on a specific document is **denied** on that document (precedence works).
+- A user with `document.checkout@process:X` but a per-user deny on a specific document is **denied** on that document (precedence works).
 - Avery (`system.*`) is **denied** `document.approve` by default (system ≠ content boundary).
 - Setup completes only after a **tested restore** passes (recoverability before data).
 - Every step above appears in the append-only audit trail and cannot be edited.

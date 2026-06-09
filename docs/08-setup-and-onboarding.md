@@ -344,7 +344,7 @@ The wizard pre-creates bundles mirroring the canonical personas so the org start
 | **System Administrator** | Avery | `user.*`, `role.*`, `storage.*`, `backup.*`, `restore.*`, `config.*`, `import.execute`, `import.review`, `import.commit`, `system.audit_log.read` — **no** QMS content caps | System |
 | **Quality Manager** | Mara | QMS-wide `document.read`, `framework.configure`, `lifecycle.configure`, `orgrole.manage`, `audit.*`, `mgmtreview.own`, `evidencepack.generate`, `capa.verify` | Org-wide |
 | **Process Owner** | Diego | `document.read` (all), `{document.create, document.edit, document.submit}`/`record.create`/`capa.*` **scoped to owned process** | Per-process |
-| **Author** | Priya | `document.checkin`, `document.edit`, `document.submit` within assigned folders/processes | Folder/process |
+| **Author** | Priya | `document.checkout`, `document.edit`, `document.submit` within assigned folders/processes | Folder/process |
 | **Approver** | Ken | `document.review`, `document.approve|reject` (the signature hook) within scope | Folder/process |
 | **Internal Auditor** | Ingrid | broad `document.read` + `record.read`, `audit.conduct`, `finding.create`, `capa.link` — **explicitly NO** `{document.create, document.edit, document.submit}`/`document.approve` (independence) | Org-wide read |
 | **Read-only Employee** | Sam | `document.read` (Released only) within area; optional `acknowledge.read` | Area/process |
