@@ -7,6 +7,17 @@ import { server } from "../../test/msw/server";
 import { renderWithProviders } from "../../test/render";
 import { AuditsListPage } from "./AuditsListPage";
 
+function grant(keys: string[]) {
+  server.use(
+    http.get("/api/v1/me/permissions", () =>
+      HttpResponse.json({
+        scope: { level: "SYSTEM", selector: null },
+        permissions: keys.map((key) => ({ key, effect: "ALLOW", source: null })),
+      }),
+    ),
+  );
+}
+
 test("renders honest tiles (Total / Active / Closed) from the list", async () => {
   renderWithProviders(<AuditsListPage />, { route: "/audits" });
   // 3 fixture audits: InProgress + Closing (active) and Closed.
@@ -75,4 +86,16 @@ test("no axe violations", async () => {
   const { container } = renderWithProviders(<AuditsListPage />, { route: "/audits" });
   await screen.findByText("REC-000061");
   expect(await axe(container)).toHaveNoViolations();
+});
+
+test("New audit hidden without audit.create; shown + opens with the key", async () => {
+  renderWithProviders(<AuditsListPage />, { route: "/audits" });
+  await screen.findByText("REC-000061");
+  expect(screen.queryByRole("button", { name: /New audit/ })).toBeNull();
+
+  grant(["audit.create"]);
+  const u = userEvent.setup();
+  renderWithProviders(<AuditsListPage />, { route: "/audits" });
+  await u.click(await screen.findByRole("button", { name: /New audit/ }));
+  expect(await screen.findByRole("dialog")).toBeInTheDocument();
 });

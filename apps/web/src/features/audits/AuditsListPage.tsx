@@ -1,12 +1,14 @@
 import {
-  Alert, Anchor, Container, Group, Loader, Paper, SegmentedControl, SimpleGrid, Table, Text, Title,
+  Alert, Anchor, Button, Container, Group, Loader, Paper, SegmentedControl, SimpleGrid, Table, Text, Title,
 } from "@mantine/core";
 import { useState } from "react";
 import { Link } from "react-router-dom";
+import { usePermissions } from "../../app/shell/usePermissions";
 import { useUserDirectory } from "../../app/shell/useUserDirectory";
 import type { Audit, DirectoryUser } from "../../lib/types";
 import { AuditStateBadge } from "./badges";
 import { useAudits } from "./hooks";
+import { NewAuditModal } from "./NewAuditModal";
 
 function leadLabel(userId: string | null, directory: DirectoryUser[]): string {
   if (!userId) return "—";
@@ -30,6 +32,8 @@ export function AuditsListPage() {
   const { data, isLoading, isError, forbidden } = useAudits();
   const { data: directory } = useUserDirectory();
   const [filter, setFilter] = useState<"all" | "active" | "closed">("all");
+  const { can } = usePermissions();
+  const [newOpen, setNewOpen] = useState(false);
 
   if (forbidden) {
     return (
@@ -77,6 +81,7 @@ export function AuditsListPage() {
     <Container size="xl" py="md">
       <Group justify="space-between" mb="md">
         <Title order={3}>Internal Audit</Title>
+        {can("audit.create") && <Button onClick={() => setNewOpen(true)}>＋ New audit</Button>}
       </Group>
       <SimpleGrid cols={{ base: 1, sm: 3 }} mb="md">
         {/* "… audits" labels: distinct from the segmented control's All/Active/Closed radio names. */}
@@ -128,6 +133,7 @@ export function AuditsListPage() {
           </Table.Tbody>
         </Table>
       )}
+      <NewAuditModal opened={newOpen} onClose={() => setNewOpen(false)} />
     </Container>
   );
 }
