@@ -709,3 +709,10 @@ export interface ImportRunCreate {
 // Decision/merge/split results are loosely typed — the UI invalidates + refetches rather than reading
 // the body; keep a permissive shape so a handler can return e.g. {applied: 3} or the family/split row.
 export type ImportMutationResult = Record<string, unknown>;
+
+// ---- S-web-7 (Nonconformity & CAPA) -----------------------------------------------------
+export type NcSeverity = "Critical" | "Major" | "Minor";
+export type CapaSource = "audit" | "process" | "complaint" | "review_output";
+export type CapaCloseState =
+  | "Raised" | "Containment" | "RootCause" | "ActionPlan" | "Implement" | "Verify"
+  | "Closed" | "Rejected";
