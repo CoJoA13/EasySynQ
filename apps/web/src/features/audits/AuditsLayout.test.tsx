@@ -36,3 +36,18 @@ test("clicking a tab navigates the outlet", async () => {
   await u.click(screen.getByRole("tab", { name: "Programme" }));
   expect(await screen.findByText("PROGRAMME-FACE")).toBeInTheDocument();
 });
+
+test("the static programme route outranks /audits/:id (the route-shadow guard)", async () => {
+  renderWithProviders(
+    <Routes>
+      <Route path="audits" element={<AuditsLayout />}>
+        <Route index element={<div>AUDITS-FACE</div>} />
+        <Route path="programme" element={<div>PROGRAMME-FACE</div>} />
+      </Route>
+      <Route path="audits/:id" element={<div>DETAIL-FACE</div>} />
+    </Routes>,
+    { route: "/audits/programme" },
+  );
+  expect(await screen.findByText("PROGRAMME-FACE")).toBeInTheDocument();
+  expect(screen.queryByText("DETAIL-FACE")).toBeNull();
+});

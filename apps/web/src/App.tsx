@@ -19,6 +19,10 @@ import { CapaBoardPage } from "./features/capa/CapaBoardPage";
 import { CapaLayout } from "./features/capa/CapaLayout";
 import { ComplaintsPage } from "./features/capa/ComplaintsPage";
 import { NcrsPage } from "./features/capa/NcrsPage";
+import { AuditsLayout } from "./features/audits/AuditsLayout";
+import { AuditsListPage } from "./features/audits/AuditsListPage";
+import { AuditDetailPage } from "./features/audits/AuditDetailPage";
+import { ProgrammePage } from "./features/audits/ProgrammePage";
 import { IngestionRunsPage } from "./features/ingestion/IngestionRunsPage";
 import { IngestionRunPage } from "./features/ingestion/IngestionRunPage";
 import { apiGet } from "./lib/api";
@@ -119,6 +123,11 @@ export function App() {
           <Route path="complaints" element={<ComplaintsPage />} />
           <Route path="ncrs" element={<NcrsPage />} />
         </Route>
+        <Route path="audits" element={<AuditsLayout />}>
+          <Route index element={<AuditsListPage />} />
+          <Route path="programme" element={<ProgrammePage />} />
+        </Route>
+        <Route path="audits/:id" element={<AuditDetailPage />} />
         <Route path="ingestion" element={<IngestionRunsPage />} />
         <Route path="ingestion/:runId" element={<IngestionRunPage />} />
       </Route>
