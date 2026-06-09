@@ -1,5 +1,5 @@
 import { http, HttpResponse } from "msw";
-import type { Capa, Complaint, Ncr } from "../../lib/types";
+import type { AuditList, AuditPlanList, AuditProgramList, Capa, Complaint, Finding, FindingList, Ncr } from "../../lib/types";
 
 export const docFixture = [
   {
@@ -734,6 +734,63 @@ export const ingestionChecklistFixture = {
 
 export const ingestionDecisionsFixture = { run_id: ingestionRunFixture.id, decisions: [] };
 
+// ---- S-web-7d audit fixtures (pinned to api/audits.py _program/_plan/_audit/_finding + the
+// S-web-7d read-enrichment: _audit carries identifier/title/created_at, _finding carries title) ----
+export const auditProgramsFixture = {
+  data: [
+    { id: "ap000001-0001-0001-0001-000000000001", identifier: "AUDPROG-000001", title: "2026 Internal Audit Programme", period: "2026", coverage: null, archived: false, created_at: "2026-01-05T09:00:00+00:00" },
+    { id: "ap000002-0002-0002-0002-000000000002", identifier: "AUDPROG-000002", title: "2025 Programme", period: "2025", coverage: null, archived: true, created_at: "2025-01-06T09:00:00+00:00" },
+  ],
+} satisfies AuditProgramList;
+
+export const auditPlansFixture = {
+  data: [
+    { id: "pl000001-0001-0001-0001-000000000001", program_id: "ap000001-0001-0001-0001-000000000001", auditee_process_id: "pr000001-0001-0001-0001-000000000001", lead_auditor_user_id: "bbbb1111-1111-1111-1111-111111111111", scheduled_date: "2026-05-28", checklist_ref: "FRM-AUD-002", created_at: "2026-01-10T09:00:00+00:00" },
+    { id: "pl000002-0002-0002-0002-000000000002", program_id: "ap000001-0001-0001-0001-000000000001", auditee_process_id: null, lead_auditor_user_id: null, scheduled_date: "2026-09-01", checklist_ref: null, created_at: "2026-01-11T09:00:00+00:00" },
+  ],
+} satisfies AuditPlanList;
+
+export const auditListFixture = {
+  data: [
+    { id: "au000001-0001-0001-0001-000000000001", identifier: "REC-000061", title: "Purchasing & Suppliers audit", plan_id: "pl000001-0001-0001-0001-000000000001", lead_auditor_user_id: "bbbb1111-1111-1111-1111-111111111111", state: "InProgress", started_at: "2026-05-28", completed_at: null, result_summary: null, created_at: "2026-05-20T09:00:00+00:00" },
+    { id: "au000002-0002-0002-0002-000000000002", identifier: "REC-000055", title: "Document Control audit", plan_id: "pl000002-0002-0002-0002-000000000002", lead_auditor_user_id: null, state: "Closed", started_at: "2026-04-01", completed_at: "2026-04-30", result_summary: null, created_at: "2026-03-25T09:00:00+00:00" },
+    { id: "au000003-0003-0003-0003-000000000003", identifier: "REC-000066", title: "Competence & Training audit", plan_id: "pl000001-0001-0001-0001-000000000001", lead_auditor_user_id: "bbbb1111-1111-1111-1111-111111111111", state: "Closing", started_at: "2026-05-01", completed_at: null, result_summary: null, created_at: "2026-04-25T09:00:00+00:00" },
+  ],
+} satisfies AuditList;
+
+// Findings of au000001: a live Major NC (its CAPA ca000001 is at RootCause → BLOCKS close), an OFI,
+// and a corrected pair (fd000003 NC superseded by fd000004 OBSERVATION → does NOT block).
+export const findingsFixture = {
+  data: [
+    { id: "fd000001-0001-0001-0001-000000000001", identifier: "REC-000062", title: "Supplier re-evaluation overdue for 2 vendors", audit_id: "au000001-0001-0001-0001-000000000001", finding_type: "NC", severity: "Major", clause_ref: "8.4", process_ref: "Purchasing", auto_capa_id: "ca000001-0001-0001-0001-000000000001", correction_of: null, superseded_by_correction: null },
+    { id: "fd000002-0002-0002-0002-000000000002", identifier: "REC-000063", title: "Consider automating the supplier scorecard", audit_id: "au000001-0001-0001-0001-000000000001", finding_type: "OFI", severity: null, clause_ref: "8.4", process_ref: null, auto_capa_id: null, correction_of: null, superseded_by_correction: null },
+    { id: "fd000003-0003-0003-0003-000000000003", identifier: "REC-000064", title: "Mis-typed as an NC at first triage", audit_id: "au000001-0001-0001-0001-000000000001", finding_type: "NC", severity: "Minor", clause_ref: null, process_ref: null, auto_capa_id: "ca000006-0006-0006-0006-000000000006", correction_of: null, superseded_by_correction: "fd000004-0004-0004-0004-000000000004" },
+    { id: "fd000004-0004-0004-0004-000000000004", identifier: "REC-000065", title: "Vendor file index stored outside the library", audit_id: "au000001-0001-0001-0001-000000000001", finding_type: "OBSERVATION", severity: null, clause_ref: null, process_ref: null, auto_capa_id: null, correction_of: "fd000003-0003-0003-0003-000000000003", superseded_by_correction: null },
+  ],
+} satisfies FindingList;
+
+// A created NC finding (the POST /audits/{id}/findings default response) — auto_capa_id SET.
+export const createdNcFindingFixture = {
+  id: "fd-new-00-0000-0000-0000-000000000000",
+  identifier: "REC-000070",
+  title: "New NC finding",
+  audit_id: "au000001-0001-0001-0001-000000000001",
+  finding_type: "NC",
+  severity: "Major",
+  clause_ref: null,
+  process_ref: null,
+  auto_capa_id: "ca-auto-00-0000-0000-0000-000000000000",
+  correction_of: null,
+  superseded_by_correction: null,
+} satisfies Finding;
+
+// GET /processes returns a BARE ARRAY (api/processes.py list_processes_endpoint) — pin the full
+// _process row shape (the SPA reads id+name only, but the fixture mirrors the serializer).
+export const processesFixture = [
+  { id: "pr000001-0001-0001-0001-000000000001", org_id: "or000001-0001-0001-0001-000000000001", name: "Purchasing", parent_id: null, owner_org_role_id: null, pdca_phase: "DO", criteria: null, state: "ACTIVE", excluded: false, is_outsourced: false, outsourced_supplier_id: null, created_at: "2026-01-01T09:00:00+00:00" },
+  { id: "pr000002-0002-0002-0002-000000000002", org_id: "or000001-0001-0001-0001-000000000001", name: "Production", parent_id: null, owner_org_role_id: null, pdca_phase: "DO", criteria: null, state: "ACTIVE", excluded: false, is_outsourced: false, outsourced_supplier_id: null, created_at: "2026-01-01T09:00:00+00:00" },
+];
+
 export const handlers = [
   // ---- S-ing-4b ingestion (default happy-path; per-test override for 403/empty/error) ----
   http.get("/api/v1/admin/imports", () => HttpResponse.json([ingestionRunFixture])),
@@ -847,6 +904,59 @@ export const handlers = [
   http.patch("/api/v1/ncrs/:id/disposition", ({ params }) =>
     HttpResponse.json({ ...ncrListFixture.data[0]!, id: String(params.id), disposition: "rework", disposition_authorized_by: "bbbb1111-1111-1111-1111-111111111111", disposed_at: "2026-06-09T09:00:00+00:00" }),
   ),
+  // ---- S-web-7d audits & findings (default happy-path; per-test overrides for 403/409/422) ----
+  http.get("/api/v1/audit-programs", () => HttpResponse.json(auditProgramsFixture)),
+  http.get("/api/v1/audit-programs/:id/plans", () => HttpResponse.json(auditPlansFixture)),
+  http.get("/api/v1/audit-plans/:id", ({ params }) =>
+    HttpResponse.json(
+      auditPlansFixture.data.find((p) => p.id === params.id) ?? auditPlansFixture.data[0]!,
+    ),
+  ),
+  http.post("/api/v1/audit-programs", () =>
+    HttpResponse.json(
+      { ...auditProgramsFixture.data[0]!, id: "ap-new-00-0000-0000-0000-000000000000", identifier: "AUDPROG-000003" },
+      { status: 201 },
+    ),
+  ),
+  http.patch("/api/v1/audit-programs/:id", ({ params }) =>
+    HttpResponse.json({ ...auditProgramsFixture.data[0]!, id: String(params.id) }),
+  ),
+  http.post("/api/v1/audit-programs/:id/plans", () =>
+    HttpResponse.json(
+      { ...auditPlansFixture.data[0]!, id: "pl-new-00-0000-0000-0000-000000000000" },
+      { status: 201 },
+    ),
+  ),
+  http.get("/api/v1/audits", () => HttpResponse.json(auditListFixture)),
+  http.get("/api/v1/audits/:id", ({ params }) => {
+    const audit = auditListFixture.data.find((a) => a.id === params.id);
+    return audit
+      ? HttpResponse.json(audit)
+      : HttpResponse.json({ code: "not_found", title: "Audit not found" }, { status: 404 });
+  }),
+  http.post("/api/v1/audits", () =>
+    HttpResponse.json(
+      { ...auditListFixture.data[0]!, id: "au-new-00-0000-0000-0000-000000000000", identifier: "REC-000069", state: "Scheduled", started_at: null },
+      { status: 201 },
+    ),
+  ),
+  // The 6 FSM transitions — each returns the audit advanced to its target state.
+  http.post("/api/v1/audits/:id/plan", ({ params }) => HttpResponse.json({ ...auditListFixture.data[0]!, id: String(params.id), state: "Planned" })),
+  http.post("/api/v1/audits/:id/conduct", ({ params }) => HttpResponse.json({ ...auditListFixture.data[0]!, id: String(params.id), state: "InProgress" })),
+  http.post("/api/v1/audits/:id/draft-findings", ({ params }) => HttpResponse.json({ ...auditListFixture.data[0]!, id: String(params.id), state: "FindingsDraft" })),
+  http.post("/api/v1/audits/:id/report", ({ params }) => HttpResponse.json({ ...auditListFixture.data[0]!, id: String(params.id), state: "Reported" })),
+  http.post("/api/v1/audits/:id/begin-closing", ({ params }) => HttpResponse.json({ ...auditListFixture.data[0]!, id: String(params.id), state: "Closing" })),
+  http.post("/api/v1/audits/:id/close", ({ params }) => HttpResponse.json({ ...auditListFixture.data[0]!, id: String(params.id), state: "Closed", completed_at: "2026-06-09" })),
+  http.get("/api/v1/audits/:id/findings", () => HttpResponse.json(findingsFixture)),
+  http.post("/api/v1/audits/:id/findings", () => HttpResponse.json(createdNcFindingFixture, { status: 201 })),
+  // The successor's title is the correction REASON (the record title), not the original's text.
+  http.post("/api/v1/findings/:id/correction", ({ params }) =>
+    HttpResponse.json(
+      { ...findingsFixture.data[1]!, id: "fd-corr-0-0000-0000-0000-000000000000", title: "Reclassified as an improvement", correction_of: String(params.id) },
+      { status: 201 },
+    ),
+  ),
+  http.get("/api/v1/processes", () => HttpResponse.json(processesFixture)),
   // Pinned to the real _evidence_link serializer (api/records.py): {id, record_id, target_type, target_id,
   // link_reason, created_at} — NOT a record_identifier (that field only exists on the per-stage projection).
   // The UI ignores this body (it invalidates + refetches), but the fixture must match the real shape.

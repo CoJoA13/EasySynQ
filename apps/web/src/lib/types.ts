@@ -852,3 +852,86 @@ export interface NcrCreateBody {
   process_id?: string;
 }
 export interface NcrDispositionBody { disposition: NcrDisposition; notes?: string; }
+
+// ---- S-web-7d audits & findings (pinned to api/audits.py _program/_plan/_audit/_finding) ----
+export type AuditState =
+  | "Scheduled" | "Planned" | "InProgress" | "FindingsDraft"
+  | "Reported" | "Closing" | "Closed";
+export type FindingType = "NC" | "OBSERVATION" | "OFI";
+
+export interface AuditProgram {
+  id: string;
+  identifier: string;            // AUDPROG-NNN
+  title: string;
+  period: string | null;
+  coverage: Record<string, unknown> | null;
+  archived: boolean;
+  created_at: string;
+}
+export interface AuditPlan {
+  id: string;
+  program_id: string;
+  auditee_process_id: string | null;
+  lead_auditor_user_id: string | null;
+  scheduled_date: string | null;  // date (YYYY-MM-DD)
+  checklist_ref: string | null;
+  created_at: string;
+}
+export interface Audit {
+  id: string;
+  identifier: string | null;      // S-web-7d enrichment (REC-…)
+  title: string | null;           // S-web-7d enrichment
+  plan_id: string;
+  lead_auditor_user_id: string | null;
+  state: AuditState;
+  started_at: string | null;      // date
+  completed_at: string | null;    // date
+  result_summary: string | null;  // never written in v1 — not rendered
+  created_at: string | null;      // S-web-7d enrichment
+}
+export interface Finding {
+  id: string;
+  identifier: string | null;
+  title: string | null;           // S-web-7d enrichment (the logged summary / correction reason)
+  audit_id: string;
+  finding_type: FindingType;
+  severity: NcSeverity | null;
+  clause_ref: string | null;
+  process_ref: string | null;
+  auto_capa_id: string | null;
+  correction_of: string | null;
+  superseded_by_correction: string | null;
+}
+export interface AuditProgramList { data: AuditProgram[]; }
+export interface AuditPlanList { data: AuditPlan[]; }
+export interface AuditList { data: Audit[]; }
+export interface FindingList { data: Finding[]; }
+
+// request bodies
+export interface AuditProgramCreateBody { title: string; period?: string; }
+export interface AuditProgramUpdateBody { title?: string; period?: string; archived?: boolean; }
+export interface AuditPlanCreateBody {
+  auditee_process_id?: string;
+  lead_auditor_user_id?: string;
+  scheduled_date?: string;
+  checklist_ref?: string;
+}
+export interface AuditCreateBody { plan_id: string; title?: string; lead_auditor_user_id?: string; }
+export interface FindingCreateBody {
+  finding_type: FindingType;
+  severity?: NcSeverity;
+  clause_ref?: string;
+  process_ref?: string;
+  summary?: string;
+}
+export interface FindingCorrectionBody {
+  finding_type: FindingType;
+  severity?: NcSeverity;
+  clause_ref?: string;
+  process_ref?: string;
+  reason?: string;
+}
+
+// GET /processes (bare array; _process in api/processes.py) — the SPA reads id + name only,
+// but extra fields arrive (structural subset typing).
+export interface ProcessRow { id: string; name: string; }

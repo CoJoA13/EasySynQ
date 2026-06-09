@@ -115,27 +115,46 @@ def _plan(p: AuditPlan) -> dict[str, Any]:
     }
 
 
-def _audit(a: Audit) -> dict[str, Any]:
+def _audit(
+    a: Audit,
+    identifier: str | None = None,
+    title: str | None = None,
+    created_at: datetime.datetime | None = None,
+) -> dict[str, Any]:
     return {
         "id": str(a.id),
+        "identifier": identifier,
+        "title": title,
         "plan_id": str(a.plan_id),
         "lead_auditor_user_id": str(a.lead_auditor_user_id) if a.lead_auditor_user_id else None,
         "state": a.state.value,
         "started_at": a.started_at.isoformat() if a.started_at else None,
         "completed_at": a.completed_at.isoformat() if a.completed_at else None,
         "result_summary": a.result_summary,
+        "created_at": created_at.isoformat() if created_at else None,
     }
+
+
+async def _audit_full(session: AsyncSession, a: Audit) -> dict[str, Any]:
+    """Serialize an audit with its record header populated — used by every single-audit response
+    (create + detail + each FSM transition), so a write never returns identifier/title as null."""
+    header = await audits_repo.get_audit_header(session, a.id)
+    identifier, title, created_at = header if header else (None, None, None)
+    return _audit(a, identifier, title, created_at)
 
 
 def _finding(
     f: AuditFinding,
     identifier: str | None,
+    title: str | None = None,
+    *,
     correction_of: uuid.UUID | None = None,
     superseded_by_correction: uuid.UUID | None = None,
 ) -> dict[str, Any]:
     return {
         "id": str(f.id),
         "identifier": identifier,
+        "title": title,
         "audit_id": str(f.audit_id),
         "finding_type": f.finding_type.value,
         "severity": f.severity.value if f.severity else None,
@@ -333,7 +352,7 @@ async def create_audit_endpoint(
         title=body.title,
         lead_auditor_user_id=body.lead_auditor_user_id,
     )
-    return _audit(audit)
+    return await _audit_full(session, audit)
 
 
 @router.get("/audits")
@@ -342,7 +361,7 @@ async def list_audits_endpoint(
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
     rows = await audits_repo.list_audits(session, caller.org_id)
-    return {"data": [_audit(a) for a in rows]}
+    return {"data": [_audit(a, ident, title, created) for a, ident, title, created in rows]}
 
 
 @router.get("/audits/{audit_id}")
@@ -354,7 +373,7 @@ async def get_audit_endpoint(
     audit = await audits_repo.get_audit(session, audit_id)
     if audit is None or audit.org_id != caller.org_id:
         raise ProblemException(status=404, code="not_found", title="Audit not found")
-    return _audit(audit)
+    return await _audit_full(session, audit)
 
 
 # --- FSM transitions (flat-action sub-resources, doc 15) --------------------------------------
@@ -369,7 +388,8 @@ async def plan_audit_endpoint(
     """Scheduled → Planned (the lead auditor finalizes the plan). The audit-INSTANCE FSM is
     uniformly auditor-driven (audit.conduct / audit.close, PROCESS scope); audit.plan governs the
     programme + plan SCHEDULE, not an instance transition."""
-    return _audit(await advance_audit(session, caller, audit_id, AuditState.Planned))
+    audit = await advance_audit(session, caller, audit_id, AuditState.Planned)
+    return await _audit_full(session, audit)
 
 
 @router.post("/audits/{audit_id}/conduct")
@@ -379,7 +399,8 @@ async def conduct_audit_endpoint(
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
     """Planned → InProgress (the auditor begins)."""
-    return _audit(await advance_audit(session, caller, audit_id, AuditState.InProgress))
+    audit = await advance_audit(session, caller, audit_id, AuditState.InProgress)
+    return await _audit_full(session, audit)
 
 
 @router.post("/audits/{audit_id}/draft-findings")
@@ -389,7 +410,8 @@ async def draft_findings_endpoint(
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
     """InProgress → FindingsDraft."""
-    return _audit(await advance_audit(session, caller, audit_id, AuditState.FindingsDraft))
+    audit = await advance_audit(session, caller, audit_id, AuditState.FindingsDraft)
+    return await _audit_full(session, audit)
 
 
 @router.post("/audits/{audit_id}/report")
@@ -399,7 +421,8 @@ async def report_audit_endpoint(
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
     """FindingsDraft → Reported."""
-    return _audit(await advance_audit(session, caller, audit_id, AuditState.Reported))
+    audit = await advance_audit(session, caller, audit_id, AuditState.Reported)
+    return await _audit_full(session, audit)
 
 
 @router.post("/audits/{audit_id}/begin-closing")
@@ -409,7 +432,8 @@ async def begin_closing_endpoint(
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
     """Reported → Closing."""
-    return _audit(await advance_audit(session, caller, audit_id, AuditState.Closing))
+    audit = await advance_audit(session, caller, audit_id, AuditState.Closing)
+    return await _audit_full(session, audit)
 
 
 @router.post("/audits/{audit_id}/close")
@@ -420,7 +444,8 @@ async def close_audit_endpoint(
 ) -> dict[str, Any]:
     """Closing → Closed (the close gate: 409 ``audit_close_blocked`` if any live NC lacks a Closed
     CAPA)."""
-    return _audit(await advance_audit(session, caller, audit_id, AuditState.Closed))
+    audit = await advance_audit(session, caller, audit_id, AuditState.Closed)
+    return await _audit_full(session, audit)
 
 
 # --- findings (record subtype) ----------------------------------------------------------------
@@ -445,7 +470,13 @@ async def create_finding_endpoint(
         process_ref=body.process_ref,
         summary=body.summary,
     )
-    return _finding(finding, await audits_repo.get_identifier(session, finding.id))
+    row = await audits_repo.get_finding_row(session, finding.id)
+    if row is None:  # pragma: no cover — written in this txn; structured 500 over a bare assert
+        raise ProblemException(
+            status=500, code="internal_error", title="Finding row missing after create"
+        )
+    f, ident, title, co, sbc = row
+    return _finding(f, ident, title, correction_of=co, superseded_by_correction=sbc)
 
 
 @router.get("/audits/{audit_id}/findings")
@@ -458,7 +489,12 @@ async def list_findings_endpoint(
     if audit is None or audit.org_id != caller.org_id:
         raise ProblemException(status=404, code="not_found", title="Audit not found")
     rows = await audits_repo.list_findings(session, audit_id)
-    return {"data": [_finding(f, ident, co, sbc) for f, ident, co, sbc in rows]}
+    return {
+        "data": [
+            _finding(f, ident, title, correction_of=co, superseded_by_correction=sbc)
+            for f, ident, title, co, sbc in rows
+        ]
+    }
 
 
 @router.get("/findings/{finding_id}")
@@ -470,8 +506,8 @@ async def get_finding_endpoint(
     row = await audits_repo.get_finding_row(session, finding_id)
     if row is None or row[0].org_id != caller.org_id:
         raise ProblemException(status=404, code="not_found", title="Finding not found")
-    finding, ident, co, sbc = row
-    return _finding(finding, ident, co, sbc)
+    finding, ident, title, co, sbc = row
+    return _finding(finding, ident, title, correction_of=co, superseded_by_correction=sbc)
 
 
 @router.post("/findings/{finding_id}/correction", status_code=status.HTTP_201_CREATED)
@@ -493,7 +529,10 @@ async def correct_finding_endpoint(
         process_ref=body.process_ref,
         reason=body.reason,
     )
-    # The successor's correction_of IS the path finding_id (set via capture_record _correction_of).
-    return _finding(
-        successor, await audits_repo.get_identifier(session, successor.id), correction_of=finding_id
-    )
+    row = await audits_repo.get_finding_row(session, successor.id)
+    if row is None:  # pragma: no cover — written in this txn; structured 500 over a bare assert
+        raise ProblemException(
+            status=500, code="internal_error", title="Finding row missing after correction"
+        )
+    f, ident, title, co, sbc = row
+    return _finding(f, ident, title, correction_of=co, superseded_by_correction=sbc)

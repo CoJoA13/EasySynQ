@@ -84,6 +84,7 @@ Celery workers · Keycloak (auth) · Gotenberg/LibreOffice (rendering) · Caddy 
 
 ## Recent learnings  <!-- capped ~12, newest first; demote stale ones to engineering-patterns -->
 
+- 2026-06-09 — **S-web-7d (Audits & findings) COMPLETES the S-web-7 epic** — `/audits` (Audits·Programme tabs) + `/audits/:id`; ONE thin read-enrichment (`_audit` +identifier/title/created_at via `_audit_full` on ALL single-audit responses; `_finding` +title) — no migration/key/endpoint. ⚠ Traps confirmed live: a **persistently-mounted modal keeps its post-success state across reopens** (conditionally render so close unmounts it — the suite missed it because no test REOPENED the modal); an **omitted optional field on a correction/PATCH inherits server-side** (send an explicit `""` to express a clear); a smoke override grant must land on the app_user row matching the **LIVE login's Keycloak subject** (re-created Keycloak users mint new JIT rows). Demo smoke = `audit.*`+`finding.*`+`capa.read` SYSTEM overrides (org AHT). Narrative: `docs/slice-history.md`.
 - 2026-06-09 — **S-web-7c (Complaint & NCR intake) — FRONT-END ONLY** (no migration/key/contract): the `/complaints*`+`/ncrs*` surface as **tabbed sub-routes under `/capa`** (a thin `CapaLayout`; the board stays unchanged bar a `?capa=<id>` deep-link seam). Per-key gating diverges from the board — `demo` holds none → calm-403; `ncr.create`/`ncr.record_correction` are **SYSTEM-override-only in v1**. **Spawn-CAPA REQUIRES a severity** (the backend 422s without one) → a `SpawnCapaModal` confirm; a silent inherit dead-ended in the live smoke. Disposition is one-shot. Narrative: `docs/slice-history.md`; recurring SPA patterns now in engineering-patterns "Web SPA testing".
 - 2026-06-09 — **S-web-7b (CAPA lifecycle writes) CLOSES the ACT-phase CAPA write loop** (raise→…→close + the M4 evidence close gate). Thin read-enrichment (no migration/key): `_task.subject_type`/`subject_id`, **`GET /capas/{id}/approval`**, `_stage.evidence_links`. ⚠ The seeded **Top-Mgmt CAPA approver holds ONLY `capa.read`** → the approval path must avoid `document.read` entirely (route via `task.subject_type` + the capa.read approval read, never the instance read / `GET /documents/{capa_id}`). Details: `docs/slice-history.md`.
 - 2026-06-08 — **S-ing-4b (Ingestion Review UI) CLOSES UJ-2 — FRONT-END ONLY**. ⚠ `run.counts` is a **FLAT top-level-merged bag** (`by_band.HIGH`, top-level `quarantine`/`proposal`/`commit` — **NO `classify`/`queues`/`review` namespace**; folded review stats live on the **checklist** endpoint) — a fabricated fixture hid it (diff-critic CRITICAL → the "pin fixtures to the real serializer" rule is now in engineering-patterns). `demo` holds all 3 import keys (drives the loop, no personas). Scale needs **NO virtualization** (server `offset`/`limit`). Details: `docs/slice-history.md`.
@@ -112,7 +113,12 @@ board Raise modal) over a thin read-enrichment (`_task.subject_type` · `GET /ca
 — no migration/key); **S-web-7c** ✅ (#103) = Complaint & **NCR intake** — front-end-only **tabbed sub-routes under
 `/capa`** (a thin `CapaLayout` Board·Complaints·NCRs; the board gained a `?capa=<id>` deep-link seam) = complaints
 list/log/**idempotent spawn-CAPA** + NCRs list/raise/**one-shot ISO 8.7 disposition**, per-key calm-403 gating (the demo
-admin holds none; `ncr.create`/`ncr.record_correction` are SYSTEM-override-only in v1). **429 web tests**; subagent-driven
-TDD (8 tasks, per-task spec→quality review). Still open: **S-web-7d** (audits/findings) of the epic; the
+admin holds none; `ncr.create`/`ncr.record_correction` are SYSTEM-override-only in v1); **S-web-7d** ✅ = Audits &
+**findings** — **COMPLETES the epic** (the CHECK-phase internal-audit module over ONE thin read-enrichment [`_audit`
++identifier/title/created_at · `_finding` +title — no migration/key/endpoint]: `/audits` Audits·Programme tabs + the
+`/audits/:id` page = programmes/plans upkeep · the New-audit cascade · the 7-node lifecycle stepper with ONE legal
+Advance [conduct→close gate swap] · findings log/correct with the NC→**auto-CAPA** deep-linking the board drawer ·
+the **R39 close gate** surfaced calmly + an honest client close-readiness note mirroring `finding_blocks_close`).
+**499 web tests**; subagent-driven TDD (16 tasks, per-task spec→quality review). Still open: the
 v1.x drift family (D1–D5); the PDCA dashboard (deferred until acks/objectives land). **Migration head `0044` (next `0045`)
-— 7b + 7c added no migration.** Full per-slice narrative + deferred residuals: `docs/slice-history.md`.
+— 7b/7c/7d added no migration.** Full per-slice narrative + deferred residuals: `docs/slice-history.md`.

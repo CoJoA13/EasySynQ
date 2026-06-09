@@ -658,3 +658,83 @@ async def test_cross_org_create_finding_is_denied(
         with pytest.raises(ProblemException) as exc:
             await create_finding(s, intruder, audit_id, finding_type=FindingType.OBSERVATION)
     assert exc.value.status == 404
+
+
+async def test_audit_list_detail_and_writes_carry_record_header(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """S-web-7d enrichment: _audit carries identifier/title/created_at on list + detail + writes."""
+    subject = _subject("aud-enrich")
+    await _grant(subject, _AUDIT_KEYS)
+    h = _auth(token_factory, subject)
+
+    r = await app_client.post("/api/v1/audit-programs", headers=h, json={"title": "Enrich P"})
+    assert r.status_code == 201, r.text
+    r = await app_client.post(f"/api/v1/audit-programs/{r.json()['id']}/plans", headers=h, json={})
+    assert r.status_code == 201, r.text
+    r = await app_client.post(
+        "/api/v1/audits",
+        headers=h,
+        json={"plan_id": r.json()["id"], "title": "Audit of Purchasing (enrich)"},
+    )
+    assert r.status_code == 201, r.text
+    created = r.json()
+    audit_id = created["id"]
+    # The CREATE response already carries the record header (the _capa_full precedent).
+    assert created["identifier"].startswith("REC-")
+    assert created["title"] == "Audit of Purchasing (enrich)"
+    assert created["created_at"] is not None
+
+    r = await app_client.get("/api/v1/audits", headers=h)
+    row = next(a for a in r.json()["data"] if a["id"] == audit_id)
+    assert row["identifier"].startswith("REC-")
+    assert row["title"] == "Audit of Purchasing (enrich)"
+    assert row["created_at"] is not None
+
+    r = await app_client.get(f"/api/v1/audits/{audit_id}", headers=h)
+    assert r.json()["title"] == "Audit of Purchasing (enrich)"
+
+    # A transition response carries the header too (no null-flash after a write).
+    r = await app_client.post(f"/api/v1/audits/{audit_id}/plan", headers=h)
+    assert r.status_code == 200, r.text
+    assert r.json()["identifier"].startswith("REC-")
+    assert r.json()["title"] == "Audit of Purchasing (enrich)"
+
+
+async def test_finding_serializer_carries_title(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """S-web-7d enrichment: _finding carries title (the logged summary / correction reason)."""
+    subject = _subject("fnd-enrich")
+    await _grant(subject, (*_AUDIT_KEYS, "finding.create", "finding.read"))
+    h = _auth(token_factory, subject)
+
+    r = await app_client.post("/api/v1/audit-programs", headers=h, json={"title": "Enrich F"})
+    assert r.status_code == 201, r.text
+    r = await app_client.post(f"/api/v1/audit-programs/{r.json()['id']}/plans", headers=h, json={})
+    assert r.status_code == 201, r.text
+    r = await app_client.post("/api/v1/audits", headers=h, json={"plan_id": r.json()["id"]})
+    assert r.status_code == 201, r.text
+    audit_id = r.json()["id"]
+
+    r = await app_client.post(
+        f"/api/v1/audits/{audit_id}/findings",
+        headers=h,
+        json={"finding_type": "OBSERVATION", "summary": "Vendor index outside the library"},
+    )
+    assert r.status_code == 201, r.text
+    finding = r.json()
+    assert finding["title"] == "Vendor index outside the library"
+
+    r = await app_client.get(f"/api/v1/audits/{audit_id}/findings", headers=h)
+    row = next(f for f in r.json()["data"] if f["id"] == finding["id"])
+    assert row["title"] == "Vendor index outside the library"
+
+    r = await app_client.post(
+        f"/api/v1/findings/{finding['id']}/correction",
+        headers=h,
+        json={"finding_type": "OFI", "reason": "Reclassified as an improvement"},
+    )
+    assert r.status_code == 201, r.text
+    assert r.json()["title"] == "Reclassified as an improvement"
+    assert r.json()["correction_of"] == finding["id"]
