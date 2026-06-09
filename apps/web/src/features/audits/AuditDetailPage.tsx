@@ -5,6 +5,7 @@ import { Link, useParams } from "react-router-dom";
 import { useUserDirectory } from "../../app/shell/useUserDirectory";
 import { AuditStateBadge } from "./badges";
 import { useAudit, useAuditPlan, useAuditPrograms, useProcesses } from "./hooks";
+import { AuditLifecyclePanel } from "./AuditLifecyclePanel";
 
 // The /audits/:id destination (outside the tab layout — the documents/:id precedent). Hosts the
 // plan/programme context card + (Tasks 13/14) the lifecycle panel and the findings card. The FSM
@@ -65,7 +66,6 @@ export function AuditDetailPage() {
   const scope: { level: string; id?: string } = p?.auditee_process_id
     ? { level: "PROCESS", id: p.auditee_process_id }
     : { level: "SYSTEM" };
-  void scope; // consumed by <AuditLifecyclePanel> (Task 13) and <FindingsCard> (Task 14)
 
   return (
     <Container size="xl" py="md">
@@ -108,7 +108,7 @@ export function AuditDetailPage() {
               </Text>
             )}
           </Paper>
-          {/* Task 13 mounts <AuditLifecyclePanel audit={a} scope={scope} /> here. */}
+          <AuditLifecyclePanel audit={a} scope={scope} />
         </Grid.Col>
       </Grid>
     </Container>
