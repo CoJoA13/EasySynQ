@@ -40,7 +40,7 @@ export function QueueTabs({
       </Tabs.List>
       {/* Empty panels satisfy aria-controls validity (content rendered by ReviewCockpit). */}
       {QUEUES.map((q) => (
-        <Tabs.Panel key={q.value} value={q.value} />
+        <Tabs.Panel key={q.value} value={q.value}>{null}</Tabs.Panel>
       ))}
     </Tabs>
   );
