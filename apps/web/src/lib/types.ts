@@ -748,7 +748,9 @@ export interface CapaList {
   data: Capa[];
 }
 
-// An evidence-for link pointing at a capa_stage (from POST /records/{id}/evidence-links).
+// The per-stage PROJECTION of an evidence-for link, as returned inside CapaStage.evidence_links by the
+// CAPA detail (list_stage_evidence) — it omits the general link's target_type/target_id (the stage IS the
+// target). The write uses EvidenceLinkBody; 7b never lists a record's full evidence links.
 export interface EvidenceLink {
   id: string;
   record_id: string;

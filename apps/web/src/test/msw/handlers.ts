@@ -477,12 +477,15 @@ export const capaCloseReadyFixture = {
   created_at: "2026-05-25T09:00:00+00:00",
   stages: [
     { id: "cr000001-0001-0001-0001-000000000001", stage: "RootCause", content_block: { root_cause: "Interlock unmaintained." }, cycle_marker: 0, created_by: "bbbb1111-1111-1111-1111-111111111111", created_at: "2026-05-26T09:00:00+00:00", evidence_links: [] },
-    { id: "cr000002-0002-0002-0002-000000000002", stage: "Implement", content_block: { actions_done: "Replaced + scheduled PM." }, cycle_marker: 0, created_by: "bbbb1111-1111-1111-1111-111111111111", created_at: "2026-05-27T09:00:00+00:00", evidence_links: [{ id: "el1", record_id: "re000001-0001-0001-0001-000000000001", record_identifier: "REC-000041", link_reason: "PM schedule", created_at: "2026-05-27T09:10:00+00:00" }] },
-    { id: "cr000003-0003-0003-0003-000000000003", stage: "Verify", content_block: { decision: "effective", narrative: "No recurrence in 30 days." }, cycle_marker: 0, created_by: "bbbb1111-1111-1111-1111-111111111111", created_at: "2026-05-28T09:00:00+00:00", evidence_links: [{ id: "el2", record_id: "re000002-0002-0002-0002-000000000002", record_identifier: "REC-000042", link_reason: "audit re-check", created_at: "2026-05-28T09:10:00+00:00" }] },
+    { id: "cr000002-0002-0002-0002-000000000002", stage: "ActionPlan", content_block: { action_items: ["Replace the interlock", "Add a PM task"] }, cycle_marker: 0, created_by: "bbbb1111-1111-1111-1111-111111111111", created_at: "2026-05-26T12:00:00+00:00", evidence_links: [] },
+    { id: "cr000003-0003-0003-0003-000000000003", stage: "Implement", content_block: { actions_done: "Replaced + scheduled PM." }, cycle_marker: 0, created_by: "bbbb1111-1111-1111-1111-111111111111", created_at: "2026-05-27T09:00:00+00:00", evidence_links: [{ id: "el1", record_id: "re000001-0001-0001-0001-000000000001", record_identifier: "REC-000041", link_reason: "PM schedule", created_at: "2026-05-27T09:10:00+00:00" }] },
+    { id: "cr000004-0004-0004-0004-000000000004", stage: "Verify", content_block: { decision: "effective", narrative: "No recurrence in 30 days." }, cycle_marker: 0, created_by: "bbbb1111-1111-1111-1111-111111111111", created_at: "2026-05-28T09:00:00+00:00", evidence_links: [{ id: "el2", record_id: "re000002-0002-0002-0002-000000000002", record_identifier: "REC-000042", link_reason: "audit re-check", created_at: "2026-05-28T09:10:00+00:00" }] },
   ],
 } satisfies Capa;
 
 // GET /capas/{id}/approval — a pending action-plan approval (the proposer's drawer + the approver's page).
+// Per-test override (the default /approval handler returns null): server.use(http.get(".../approval", () =>
+// HttpResponse.json(capaApprovalFixture))). capaApprovalTask is the matching CAPA-subject GET /tasks/{id}.
 export const capaApprovalFixture = {
   instance: {
     id: "wfca1111-1111-1111-1111-111111111111",
