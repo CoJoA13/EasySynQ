@@ -710,8 +710,11 @@ async def test_finding_serializer_carries_title(
     h = _auth(token_factory, subject)
 
     r = await app_client.post("/api/v1/audit-programs", headers=h, json={"title": "Enrich F"})
+    assert r.status_code == 201, r.text
     r = await app_client.post(f"/api/v1/audit-programs/{r.json()['id']}/plans", headers=h, json={})
+    assert r.status_code == 201, r.text
     r = await app_client.post("/api/v1/audits", headers=h, json={"plan_id": r.json()["id"]})
+    assert r.status_code == 201, r.text
     audit_id = r.json()["id"]
 
     r = await app_client.post(

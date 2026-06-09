@@ -471,7 +471,10 @@ async def create_finding_endpoint(
         summary=body.summary,
     )
     row = await audits_repo.get_finding_row(session, finding.id)
-    assert row is not None  # noqa: S101 — just created in this txn
+    if row is None:  # pragma: no cover — written in this txn; structured 500 over a bare assert
+        raise ProblemException(
+            status=500, code="internal_error", title="Finding row missing after create"
+        )
     f, ident, title, co, sbc = row
     return _finding(f, ident, title, correction_of=co, superseded_by_correction=sbc)
 
@@ -527,6 +530,9 @@ async def correct_finding_endpoint(
         reason=body.reason,
     )
     row = await audits_repo.get_finding_row(session, successor.id)
-    assert row is not None  # noqa: S101 — just created in this txn
+    if row is None:  # pragma: no cover — written in this txn; structured 500 over a bare assert
+        raise ProblemException(
+            status=500, code="internal_error", title="Finding row missing after correction"
+        )
     f, ident, title, co, sbc = row
     return _finding(f, ident, title, correction_of=co, superseded_by_correction=sbc)

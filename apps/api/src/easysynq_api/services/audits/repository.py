@@ -81,6 +81,7 @@ async def list_audits(
         )
         .join(DocumentedInformation, DocumentedInformation.id == Audit.id)
         .where(Audit.org_id == org_id)
+        .order_by(DocumentedInformation.created_at.desc())
     )
     return [(a, ident, title, created) for a, ident, title, created in rows.all()]
 
@@ -104,7 +105,7 @@ async def get_audit_header(
 # --- findings (S-aud-2) -----------------------------------------------------------------------
 
 # A finding read row: (finding, identifier, title, correction_of, superseded_by_correction).
-FindingRow = tuple[AuditFinding, str, str | None, uuid.UUID | None, uuid.UUID | None]
+FindingRow = tuple[AuditFinding, str | None, str | None, uuid.UUID | None, uuid.UUID | None]
 
 
 def _finding_select() -> Select[Any]:
