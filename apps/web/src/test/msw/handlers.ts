@@ -431,7 +431,7 @@ export const ingestionRunFixture = {
   counts: {
     scan: { total_files: 6 },
     classify: { band: { HIGH: 2, MEDIUM: 1, LOW: 2, AMBIGUOUS: 0 } },
-    review: { undecided: 4, kind_confirmed: 1, commit_ready: 1 },
+    review: { keep_items: 4, undecided: 4, kind_confirmed: 1, commit_ready: 1 },
     queues: { needs: 4, medium: 1, high: 2, quarantine: 1, vault: 0 },
   },
   error: null,
