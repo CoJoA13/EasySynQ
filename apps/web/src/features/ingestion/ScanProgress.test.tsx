@@ -15,7 +15,8 @@ test("a Scanning run shows the human stage label, the caption, and a Cancel butt
   const user = userEvent.setup();
   const onCancel = vi.fn();
   renderWithProviders(<ScanProgress run={runWith({ status: "Scanning" })} onCancel={onCancel} />);
-  expect(screen.getByText("Scanning files")).toBeInTheDocument();
+  // label now appears in both the heading and the stepper step marker
+  expect(screen.getAllByText("Scanning files").length).toBeGreaterThan(0);
   expect(screen.getByText(/Scanning…/)).toBeInTheDocument();
   await user.click(screen.getByRole("button", { name: "Cancel import" }));
   expect(onCancel).toHaveBeenCalled();
@@ -23,7 +24,8 @@ test("a Scanning run shows the human stage label, the caption, and a Cancel butt
 
 test("a Classifying run names the classify stage", () => {
   renderWithProviders(<ScanProgress run={runWith({ status: "Classifying" })} onCancel={() => {}} />);
-  expect(screen.getByText("Classifying content")).toBeInTheDocument();
+  // label now appears in both the heading and the stepper step marker
+  expect(screen.getAllByText("Classifying content").length).toBeGreaterThan(0);
 });
 
 test("a Failed run shows a calm error alert with run.error (no Cancel)", () => {
@@ -36,7 +38,8 @@ test("a Failed run shows a calm error alert with run.error (no Cancel)", () => {
 
 test("an unknown additive stage degrades calmly (no crash)", () => {
   renderWithProviders(<ScanProgress run={runWith({ status: "Renaming" })} onCancel={() => {}} />);
-  expect(screen.getByText(/Working…/)).toBeInTheDocument();
+  // "Working…" appears in both the heading and the caption fallback — assert at least one match
+  expect(screen.getAllByText(/Working…/).length).toBeGreaterThan(0);
 });
 
 test("has no axe violations (scanning + failed)", async () => {

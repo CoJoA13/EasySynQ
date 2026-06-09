@@ -45,7 +45,7 @@ export function ScanProgress({ run, onCancel }: { run: ImportRun; onCancel: () =
   const known = run.status in STATUS_TO_STEP;
   const step = STATUS_TO_STEP[run.status] ?? 0;
   const current = known ? (STAGES[step] ?? null) : null;
-  const caption = current?.caption ?? "Processing…";
+  const caption = current?.caption ?? "Working…";
 
   return (
     <Card withBorder padding="lg">
@@ -62,7 +62,7 @@ export function ScanProgress({ run, onCancel }: { run: ImportRun; onCancel: () =
       </Group>
       <Stepper active={step} size="sm" aria-label="Import pipeline progress">
         {STAGES.map((s, i) => (
-          <Stepper.Step key={s.key} aria-label={`Stage ${i + 1}: ${s.label}`} />
+          <Stepper.Step key={s.key} label={s.label} aria-label={`Stage ${i + 1}: ${s.label}`} />
         ))}
       </Stepper>
       <Text c="dimmed" size="sm" mt="md">
