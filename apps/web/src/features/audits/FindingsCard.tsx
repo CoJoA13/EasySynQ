@@ -56,8 +56,10 @@ export function FindingsCard({
   );
   const blocking =
     capas.forbidden ? 0 : rows.filter((f) => isBlocking(f, capaStates)).length;
+  // isSuccess: while the CAPA list is loading, the empty map would over-count every live NC as
+  // blocking — wait for the resolved list so the note is honest in both directions.
   const showReadiness =
-    !capas.forbidden && (audit.state === "Reported" || audit.state === "Closing") && blocking > 0;
+    capas.isSuccess && (audit.state === "Reported" || audit.state === "Closing") && blocking > 0;
 
   return (
     <Paper withBorder p="md">

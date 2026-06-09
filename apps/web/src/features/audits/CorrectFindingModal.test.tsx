@@ -81,3 +81,28 @@ test("409 finding_already_corrected renders calmly", async () => {
   await u.click(within(dialog).getByRole("button", { name: /Save correction/ }));
   expect(await within(dialog).findByText(/already superseded/)).toBeInTheDocument();
 });
+
+// diff-critic minor: an OMITTED clause/process ref INHERITS the original's value server-side —
+// clearing the pre-filled field must send an explicit "" or the user's clear is silently undone.
+test("clearing the pre-filled clause ref sends an explicit empty string (not an omit)", async () => {
+  let body: Record<string, unknown> | null = null;
+  server.use(
+    http.post("/api/v1/findings/:id/correction", async ({ request }) => {
+      body = (await request.json()) as typeof body;
+      return HttpResponse.json(
+        { id: "fd-corr", identifier: "REC-000073", title: "Cleared refs", audit_id: nc.audit_id, finding_type: "NC", severity: "Major", clause_ref: null, process_ref: "Purchasing", auto_capa_id: "ca-x", correction_of: nc.id, superseded_by_correction: null },
+        { status: 201 },
+      );
+    }),
+  );
+  const u = userEvent.setup();
+  renderWithProviders(
+    <CorrectFindingModal finding={nc} auditId={nc.audit_id} opened onClose={() => {}} />,
+  );
+  const dialog = await screen.findByRole("dialog");
+  await u.clear(within(dialog).getByLabelText(/Clause ref/));
+  await u.click(within(dialog).getByRole("button", { name: /Save correction/ }));
+  await waitFor(() => expect(body).not.toBeNull());
+  expect(body!["clause_ref"]).toBe("");
+  expect(body!["process_ref"]).toBe("Purchasing"); // untouched pre-fill still travels
+});

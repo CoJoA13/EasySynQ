@@ -90,7 +90,8 @@ export function ProgrammePage() {
                 <Table.Td>
                   <Text lineClamp={1}>{p.title}</Text>
                 </Table.Td>
-                <Table.Td>{p.period ?? "—"}</Table.Td>
+                {/* || not ??: a cleared period arrives as "" — render the same em-dash as null. */}
+                <Table.Td>{p.period || "—"}</Table.Td>
                 <Table.Td>
                   {p.archived ? (
                     <Badge variant="light" color="gray">

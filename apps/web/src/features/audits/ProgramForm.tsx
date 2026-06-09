@@ -26,8 +26,11 @@ export function ProgramForm({
     if (!title.trim()) return;
     const onSuccess = () => onClose();
     if (program) {
+      // Send period only when it actually changed — and send "" when the user CLEARED a set value
+      // (omitting it would silently keep the old one; the PATCH treats absent as no-change).
+      const periodChanged = period.trim() !== (program.period ?? "");
       update.mutate(
-        { title: title.trim(), ...(period.trim() ? { period: period.trim() } : {}), archived },
+        { title: title.trim(), ...(periodChanged ? { period: period.trim() } : {}), archived },
         { onSuccess },
       );
     } else {

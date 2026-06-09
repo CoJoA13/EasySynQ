@@ -41,8 +41,10 @@ export function CorrectFindingModal({
         body: {
           finding_type: type,
           ...(severity ? { severity } : {}),
-          ...(clauseRef.trim() ? { clause_ref: clauseRef.trim() } : {}),
-          ...(processRef.trim() ? { process_ref: processRef.trim() } : {}),
+          // clause/process ALWAYS sent (possibly "") — an omitted field INHERITS the original's
+          // value server-side, so a user's clear would be silently undone; "" expresses the clear.
+          clause_ref: clauseRef.trim(),
+          process_ref: processRef.trim(),
           ...(reason.trim() ? { reason: reason.trim() } : {}),
         },
       },

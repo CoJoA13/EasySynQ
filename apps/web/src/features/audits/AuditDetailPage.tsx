@@ -123,7 +123,9 @@ export function AuditDetailPage() {
           <AuditLifecyclePanel audit={a} scope={scope} />
         </Grid.Col>
       </Grid>
-      <LogFindingModal auditId={a.id} opened={logOpen} onClose={() => setLogOpen(false)} />
+      {/* Conditionally rendered so close UNMOUNTS it — its post-NC confirmation state must not
+          survive a reopen (the CorrectFindingModal / ProgramForm keyed-remount precedent). */}
+      {logOpen && <LogFindingModal auditId={a.id} opened onClose={() => setLogOpen(false)} />}
       {correcting && (
         <CorrectFindingModal
           key={correcting.id}

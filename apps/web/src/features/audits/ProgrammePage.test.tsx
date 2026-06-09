@@ -168,3 +168,24 @@ test("the process picker is omitted when GET /processes 403s (degrade)", async (
   expect(within(dialog).getByLabelText(/Scheduled date/)).toBeInTheDocument();
   expect(within(dialog).queryByLabelText(/Auditee process/)).toBeNull();
 });
+
+// diff-critic minor: the PATCH treats an ABSENT period as keep — clearing a set period must send "".
+test("clearing a pre-filled Period sends an explicit empty string on save", async () => {
+  grant(["audit.plan"]);
+  let body: Record<string, unknown> | null = null;
+  server.use(
+    http.patch("/api/v1/audit-programs/:id", async ({ request, params }) => {
+      body = (await request.json()) as typeof body;
+      return HttpResponse.json({ id: String(params.id), identifier: "AUDPROG-000001", title: "2026 Internal Audit Programme", period: null, coverage: null, archived: false, created_at: "2026-01-05T09:00:00+00:00" });
+    }),
+  );
+  const u = userEvent.setup();
+  renderWithProviders(<ProgrammePage />, { route: "/audits/programme" });
+  const row = await screen.findByRole("row", { name: /AUDPROG-000001/ });
+  await u.click(within(row).getByRole("button", { name: /Edit/ }));
+  const dialog = await screen.findByRole("dialog");
+  await u.clear(within(dialog).getByLabelText(/Period/));
+  await u.click(within(dialog).getByRole("button", { name: /Save programme/ }));
+  await waitFor(() => expect(body).not.toBeNull());
+  expect(body!["period"]).toBe("");
+});
