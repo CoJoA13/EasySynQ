@@ -2,16 +2,17 @@ import { Alert, Anchor, Button, Container, Group, Loader, Table, Text, Title } f
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { usePermissions } from "../../app/shell/usePermissions";
+import type { Complaint } from "../../lib/types";
 import { SEVERITY_LABEL } from "./columns";
 import { ComplaintForm } from "./ComplaintForm";
 import { useComplaints } from "./hooks";
-import { useSpawnCapa } from "./mutations";
+import { SpawnCapaModal } from "./SpawnCapaModal";
 
 export function ComplaintsPage() {
   const { data, isLoading, isError, forbidden } = useComplaints();
   const { can } = usePermissions();
-  const spawn = useSpawnCapa();
   const [formOpen, setFormOpen] = useState(false);
+  const [spawnComplaint, setSpawnComplaint] = useState<Complaint | null>(null);
 
   if (forbidden) {
     return (
@@ -52,11 +53,6 @@ export function ComplaintsPage() {
         <Title order={3}>Complaints</Title>
         {can("record.create") && <Button onClick={() => setFormOpen(true)}>＋ Log complaint</Button>}
       </Group>
-      {spawn.isError && (
-        <Alert color="red" mb="sm">
-          Could not spawn a CAPA. Please try again.
-        </Alert>
-      )}
       {rows.length === 0 ? (
         <Text c="dimmed">No complaints logged yet.</Text>
       ) : (
@@ -87,12 +83,7 @@ export function ComplaintsPage() {
                       View CAPA
                     </Anchor>
                   ) : can("capa.create") ? (
-                    <Button
-                      size="xs"
-                      variant="light"
-                      loading={spawn.isPending && spawn.variables?.complaintId === c.id}
-                      onClick={() => spawn.mutate({ complaintId: c.id, severity: c.severity ?? undefined })}
-                    >
+                    <Button size="xs" variant="light" onClick={() => setSpawnComplaint(c)}>
                       Spawn CAPA
                     </Button>
                   ) : (
@@ -107,6 +98,13 @@ export function ComplaintsPage() {
         </Table>
       )}
       <ComplaintForm opened={formOpen} onClose={() => setFormOpen(false)} />
+      {spawnComplaint && (
+        <SpawnCapaModal
+          complaint={spawnComplaint}
+          opened
+          onClose={() => setSpawnComplaint(null)}
+        />
+      )}
     </Container>
   );
 }

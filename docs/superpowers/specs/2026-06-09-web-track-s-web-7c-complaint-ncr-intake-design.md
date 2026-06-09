@@ -115,6 +115,7 @@ Consequences:
 | `CapaLayout.tsx` | secondary tab strip (Board · Complaints · NCRs) + `<Outlet/>`; active from pathname |
 | `ComplaintsPage.tsx` | title + "Log complaint" btn (gated `record.create`) + complaints table; calm-403 on `record.read` deny; per-row spawn/view-CAPA action |
 | `ComplaintForm.tsx` | create modal: `description*` · customer · received_at · channel · severity |
+| `SpawnCapaModal.tsx` | severity-confirm modal (pre-filled from the complaint, **required**) → `POST /complaints/{id}/spawn-capa {severity}`. **A CAPA requires a severity** (backend 422s without one), and a complaint can be logged severity-less, so spawn confirms severity rather than silently inheriting (also matches the backend's "request severity = late triage" intent). |
 | `NcrsPage.tsx` | title + "Raise NCR" btn (gated `ncr.create`) + NCR table; calm-403 on `ncr.read` deny; per-row disposition action (gated `ncr.record_correction`) |
 | `NcrForm.tsx` | create modal: `source*` · `description*` · `severity*` (process_id omitted — owner-assignment deferred, the 7b Raise-scope decision) |
 | `DispositionModal.tsx` | one-shot PATCH modal: `disposition*` (6 labelled values) · notes |
@@ -141,10 +142,18 @@ Hooks + mutations extend the existing `features/capa/hooks.ts` and `mutations.ts
 ### 5.1 Spawn-CAPA (idempotent — surfaced as state, never an error)
 
 The `_complaint` row carries `spawned_capa_id`. The per-row action reads:
-- **"Spawn CAPA"** when `spawned_capa_id == null` → calls `useSpawnCapa()` (inheriting the complaint's
-  severity; no process picker). On success: invalidate, and surface the returned CAPA identifier inline
-  ("Created CAPA-NNN").
+- **"Spawn CAPA"** when `spawned_capa_id == null` → opens `SpawnCapaModal` (a severity-confirm step) →
+  `useSpawnCapa().mutate({complaintId, severity})`. **A CAPA requires a severity** — the backend 422s if
+  neither the request nor the complaint supplies one (`service.py:244`), and a complaint can be logged
+  severity-less, so the modal pre-fills the complaint's severity (one confirm click when present) and
+  **forces a pick when absent** (no unrecoverable dead-end). This also matches the backend's intent —
+  the request severity is the *preferred* "late triage" value (`service.py:227`). Errors surface calmly
+  in the modal (`ApiError.message`). On success: invalidate `["complaints"]` + `["capas"]`.
 - **"View CAPA"** (→ `/capa`) when `spawned_capa_id != null`.
+
+> **Revision (live smoke, 2026-06-09):** the original design was a *silent one-click inherit* — but the
+> smoke logged a severity-less complaint, and spawn dead-ended on the 422 behind a generic "Please try
+> again" with no way to supply the missing severity. Replaced with the `SpawnCapaModal` confirm step.
 
 A racing `200` replay (double-submit) resolves normally — we never read the HTTP status (`api.send`
 discards it and we are not changing the api lib; `spawned_capa_id` is the source of truth). After a
