@@ -69,6 +69,8 @@ flowchart LR
 
 ### 2.1 The unified search model: one box, two planes
 
+> **Status (2026-06-09):** Shipped (S10 backend + S-web-6 UI) = the **metadata plane** (titles / identifiers / clause-refs, Effective docs) + the ⌘K palette + the ★ Compliance Checklist. **Deferred (v1.x):** the **content plane** (body-text / OCR FTS), OpenSearch faceting, saved searches, and the §3–§7 reports. The §2 narrative below describes the full design intent.
+
 EasySynQ presents a **single global search bar** (always in the top app bar, primary keyboard shortcut `Cmd-K` / `Ctrl-K`, with `/` as a secondary focus shortcut) (reconciled per Decisions Register R23) that searches two planes simultaneously and merges them:
 
 1. **Content plane** — full text extracted from the document binary (the Effective version's PDF rendition / source) and from record attachments, including OCR'd image-PDFs (deferred-OCR is a worker job; until OCR completes, the record is searchable by metadata only).

@@ -23,7 +23,7 @@ This section specifies how an EasySynQ instance goes from a freshly-installed Do
 This is a **separation-of-duties** boundary enforced in three concrete ways, repeated as a design rule everywhere below:
 
 1. **Distinct surfaces.** Avery operates in **ADMIN** (the bottom nav group, outside the PLAN/DO/CHECK/ACT spine). The wizard is an ADMIN surface. QMS authoring/approval lives in the clause spine and is invisible-by-action to Avery unless explicitly granted QMS permissions.
-2. **Default permission posture.** The seeded `System Administrator` permission bundle contains **system** capabilities (`user.*`, `role.*`, `storage.*`, `backup.*`, `restore.*`, `config.*`, `import.execute`, `import.review`, `import.commit`, `audit.read`) but **excludes** QMS content capabilities (`document.create`, `document.edit`, `document.submit`, `document.approve`, `record.create`, `capa.*`, `audit.*` conduct/manage) (reconciled per Decisions Register R5). Avery *can* self-grant them, but doing so is itself a logged, deliberately friction-laden act (see §10.4) so the boundary is never crossed silently.
+2. **Default permission posture.** The seeded `System Administrator` permission bundle contains **system** capabilities (`user.*`, `role.*`, `storage.*`, `backup.*`, `restore.*`, `config.*`, `import.execute`, `import.review`, `import.commit`, `system.audit_log.read`) but **excludes** QMS content capabilities (`document.create`, `document.edit`, `document.submit`, `document.approve`, `record.create`, `capa.*`, `audit.*` conduct/manage) (reconciled per Decisions Register R5). Avery *can* self-grant them, but doing so is itself a logged, deliberately friction-laden act (see §10.4) so the boundary is never crossed silently.
 3. **The wizard scaffolds, humans fill.** The wizard creates the **scope shell**, **empty/seeded process nodes**, **role bundles**, and **accounts**. It explicitly **does not** author a Quality Policy, write procedures, or approve anything. The final wizard screen hands the QMS to Mara with a checklist of "what only a QMS owner should now do."
 
 > **Design rationale.** Conflating "system admin" with "quality content owner" is precisely persona **Avery's** stated pain (Vision §6.2) and a recurring real-world audit weakness. Keeping the boundary structural (permission bundles + surface separation), not merely advisory, is what makes EasySynQ defensible under independence scrutiny and pre-positions clean Part-11 separation later.
@@ -341,7 +341,7 @@ The wizard pre-creates bundles mirroring the canonical personas so the org start
 
 | Seeded Role bundle | Maps to persona | Typical capabilities (illustrative — full catalog in Permissions doc) | Default scope |
 |---|---|---|---|
-| **System Administrator** | Avery | `user.*`, `role.*`, `storage.*`, `backup.*`, `restore.*`, `config.*`, `import.execute`, `import.review`, `import.commit`, `audit.read` — **no** QMS content caps | System |
+| **System Administrator** | Avery | `user.*`, `role.*`, `storage.*`, `backup.*`, `restore.*`, `config.*`, `import.execute`, `import.review`, `import.commit`, `system.audit_log.read` — **no** QMS content caps | System |
 | **Quality Manager** | Mara | QMS-wide `document.read`, `framework.configure`, `lifecycle.configure`, `orgrole.manage`, `audit.*`, `mgmtreview.own`, `evidencepack.generate`, `capa.verify` | Org-wide |
 | **Process Owner** | Diego | `document.read` (all), `{document.create, document.edit, document.submit}`/`record.create`/`capa.*` **scoped to owned process** | Per-process |
 | **Author** | Priya | `document.checkin`, `document.edit`, `document.submit` within assigned folders/processes | Folder/process |
@@ -712,7 +712,7 @@ The dashboard explicitly **does not** show QMS health (objectives, audits, CAPAs
 
 ### 15.7 Audit log (read-only for Avery)
 
-Avery has `audit.read` (system right) and can search/export the append-only trail (logins, permission changes, storage/backup/auth changes, setup events, import initiations, self-grants). Avery **cannot** edit or delete audit rows (append-only, partitioned, WORM-aligned) — not even the super-user. This is the tamper-evidence guarantee (Vision G7) and a Part-11 pre-requisite. QMS-content audit views (who approved which document) are visible but remain QMS evidence, not admin-editable.
+Avery has `system.audit_log.read` (system right) and can search/export the append-only trail (logins, permission changes, storage/backup/auth changes, setup events, import initiations, self-grants). Avery **cannot** edit or delete audit rows (append-only, partitioned, WORM-aligned) — not even the super-user. This is the tamper-evidence guarantee (Vision G7) and a Part-11 pre-requisite. QMS-content audit views (who approved which document) are visible but remain QMS evidence, not admin-editable.
 
 ---
 

@@ -358,7 +358,7 @@ stateDiagram-v2
 
 | Severity | Containment SLA | Root-cause depth required | Action-plan approval | Verification |
 |---|---|---|---|---|
-| **Critical** | ≤ 24h | full RCA mandatory | QM **and** top-management OrgRole (N_OF_M 2of2) | mandatory independent verify + management-review visibility |
+| **Critical** | ≤ 24h | full RCA mandatory | QM (ANY) → Top Management (ANY) — **sequential** two-stage | mandatory independent verify + management-review visibility |
 | **Major** | ≤ 3 days | full RCA mandatory | QM | mandatory independent verify |
 | **Minor** | ≤ 10 days | lightweight cause note allowed | process owner | verify may be same owner if `capa.verify` self-verification is permitted (audited) |
 

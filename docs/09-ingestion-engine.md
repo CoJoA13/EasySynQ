@@ -101,10 +101,10 @@ stateDiagram-v2
     Extracting --> Classifying: text/metadata/OCR done
     Classifying --> Deduping: classifications scored
     Deduping --> Proposing: clusters + version families resolved
-    Proposing --> ReviewReady: target tree + numbering drafted
-    ReviewReady --> InReview: Mara opens review
-    InReview --> InReview: confirm / correct / merge / exclude
-    InReview --> Committing: Mara clicks Commit (confirmed set)
+    Proposing --> Proposed: target tree + numbering drafted
+    Proposed --> Reviewing: Mara opens review
+    Reviewing --> Reviewing: confirm / correct / merge / exclude
+    Reviewing --> Committing: Mara clicks Commit (confirmed set)
     Committing --> MirrorSync: vault writes complete
     MirrorSync --> Completed: mirror regenerated
     Completed --> [*]
@@ -117,7 +117,7 @@ stateDiagram-v2
     Committing --> PartiallyCommitted: some items failed
     PartiallyCommitted --> Committing: resume remaining
     Failed --> Scanning: resume from checkpoint
-    InReview --> Cancelled: Avery/Mara abort
+    Reviewing --> Cancelled: Avery/Mara abort
     Cancelled --> [*]
 
     note right of Committing
@@ -137,7 +137,7 @@ stateDiagram-v2
 | **Classifying** | `classify_file` (parallel) | `import_extract` + `import_file` | `import_classification` (kind/type/clauses/process/pdca + scores + evidence) | `(run_id, file_id, classifier_version)` |
 | **Deduping** | `detect_dupes` (clustering), `detect_versions` | sha256s, shingles, classifications | `import_dupe_cluster`, `import_version_family` | `(run_id)` recomputed deterministically |
 | **Proposing** | `build_proposal` | classifications + clusters + families | `import_proposal_node` (target tree), suggested `identifier`s | `(run_id)` |
-| **InReview** | (interactive via `api`) | proposal | `import_decision` rows (Mara's edits) | `(run_id, file_id/cluster_id)` |
+| **Reviewing** | (interactive via `api`) | proposal | `import_decision` rows (Mara's edits) | `(run_id, file_id/cluster_id)` |
 | **Committing** | `commit_item` (parallel, bounded) | confirmed decisions | vault `Document`/`Version`/blob rows; `import_commit_result` | `(run_id, file_id)` + content-hash check |
 | **MirrorSync** | `mirror_sync` (reuses standard mirror task) | committed released versions | filesystem mirror | full regenerate (idempotent) |
 
@@ -477,7 +477,7 @@ flowchart LR
 
 The review UI **must scale to thousands of low-confidence items** — a real import can land many thousands of Medium/Low/Unknown units, and one-at-a-time review would not be viable. The screen is therefore built for **high-volume bulk triage**, not occasional single-item review:
 
-- **Virtualized, paginated queues** (High / Medium / Needs Decision / Quarantine) render and scroll smoothly at thousands of rows; nothing renders a full 10,000-row table on first paint (§4.3, §14).
+- **Server-paginated queues** (High / Medium / Needs Decision / Quarantine): server `offset`/`limit` pagination bounds the DOM to one page, so nothing renders a full 10,000-row table on first paint (no client virtualization needed) (§4.3, §14).
 - **Filter, sort, group, and saved facets** — by clause, process, type, confidence, folder-path token, OCR/low-text flag — let Mara carve a large Low/Unknown pile into homogeneous subsets.
 - **Multi-select + bulk actions** apply Accept / Correct-to-X / Exclude / Reassign-owner / Edit-identifier across an entire selection in one keyboard-driven action, so thousands of similar low-confidence items are triaged in batches rather than individually.
 - **Bulk `kind` confirm is explicit, not implicit.** Bulk operations may *set* a `kind` across a selection, but the action is itself the required human confirmation; `kind` is never auto-finalized by a confidence threshold (R10, §6.1). Mara can bulk-confirm "all of these are Records" — a deliberate human act over a reviewed selection.

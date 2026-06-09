@@ -279,7 +279,7 @@ Compares two immutable versions.
 | Mode | Behavior |
 |---|---|
 | **Text redline** | Word-level inline diff (insertions underlined/green, deletions struck/red) for text-extractable renditions; not color-only — insert/delete carry `ins`/`del` semantics and markers. |
-| **Side-by-side** | Two synced-scroll PDF.js panes with a change minimap; default for binary/visual docs. |
+| **Side-by-side** | A single image pane with a Before/After/Diff layer toggle + a changed-page rail (the worker-async page-image diff; S-web-4b). |
 | **Metadata diff** | A table of changed control fields (owner, clause map, retention, etc.). |
 
 - Header pins which two versions (e.g., `Rev C → Rev D`), the change reason of the newer, and approver.
@@ -486,7 +486,7 @@ ACT › Improvement › Nonconformity & CAPA              [ + Raise CAPA ]
 ────────────────────────────────────────────────────────────────────────────
 View: ( Board )  ( List )      Filter: [Owner ▾][Process ▾][Age ▾][Source ▾]
 ────────────────────────────────────────────────────────────────────────────
- OPEN/NC          CORRECTION       ROOT CAUSE        CORRECTIVE     VERIFY/CLOSE
+ OPEN        CORRECTION     ROOT CAUSE     ACTION        VERIFY       CLOSED
 ┌────────────┐  ┌────────────┐   ┌────────────┐   ┌───────────┐  ┌───────────┐
 │CAPA-031    │  │CAPA-028    │   │CAPA-025    │   │CAPA-019   │  │CAPA-012   │
 │Supplier    │  │8.5 scrap   │   │8.4 late    │   │7.2 comp.  │  │closed when│
