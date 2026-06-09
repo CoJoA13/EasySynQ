@@ -243,7 +243,9 @@ export function VerifyForm({ capa }: { capa: Capa }) {
         label="Verification narrative"
         value={narrative}
         onChange={(e) => setNarrative(e.currentTarget.value)}
+        autosize
         minRows={2}
+        withAsterisk
       />
       <Text size="xs" c="dimmed">
         Link effectiveness evidence to the new Verify stage below (required to close).

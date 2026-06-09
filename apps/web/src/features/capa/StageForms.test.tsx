@@ -57,7 +57,7 @@ test("VerifyForm sends decision + narrative and shows the signing confirmation",
   const u = userEvent.setup();
   wrap(<VerifyForm capa={capa({ close_state: "Implement" })} />);
   await u.click(screen.getByLabelText("Effective"));
-  await u.type(screen.getByLabelText("Verification narrative"), "No recurrence");
+  await u.type(screen.getByLabelText(/Verification narrative/), "No recurrence");
   // signing checkbox gates submit
   const submit = screen.getByRole("button", { name: /Record verification/ });
   expect(submit).toBeDisabled();
