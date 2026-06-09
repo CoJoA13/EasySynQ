@@ -765,7 +765,9 @@ export interface CapaApproval {
     definition_version: number;
     subject_type: string;
     subject_id: string;
-    tasks: Task[];
+    // the _approval_task serializer omits instance_id (the instance is the parent) — narrow the type so a
+    // consumer can't read a field the API never sends.
+    tasks: Omit<Task, "instance_id">[];
   };
   proposed_action_plan: Record<string, unknown> | null;
 }
