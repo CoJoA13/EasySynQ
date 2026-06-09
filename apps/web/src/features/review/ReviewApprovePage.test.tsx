@@ -3,6 +3,7 @@ import { Route, Routes } from "react-router-dom";
 import { expect, test } from "vitest";
 import { server } from "../../test/msw/server";
 import { renderWithProviders } from "../../test/render";
+import { capaApprovalFixture, capaApprovalTask } from "../../test/msw/handlers";
 import { ReviewApprovePage } from "./ReviewApprovePage";
 
 function mount(route: string) {
@@ -50,4 +51,14 @@ test("a decided (non-pending) task shows the read-only summary, not the form", a
   const { findByText, queryByRole } = mount("/tasks/task1111-1111-1111-1111-111111111111");
   expect(await findByText("This task has already been decided.")).toBeInTheDocument();
   expect(queryByRole("button", { name: "Submit decision" })).toBeNull();
+});
+
+test("a CAPA action-plan task renders the proposed plan + a working decision card", async () => {
+  server.use(
+    http.get("/api/v1/tasks/:id", () => HttpResponse.json(capaApprovalTask)),
+    http.get("/api/v1/capas/:id/approval", () => HttpResponse.json(capaApprovalFixture)),
+  );
+  const { findByText, findByRole } = mount("/tasks/tkca1111-1111-1111-1111-111111111111");
+  expect(await findByText(/Schedule supplier re-evaluations/)).toBeInTheDocument();
+  expect(await findByRole("button", { name: "Submit decision" })).toBeInTheDocument();
 });

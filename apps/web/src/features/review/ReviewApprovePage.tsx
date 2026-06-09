@@ -4,17 +4,21 @@ import { ApiError } from "../../lib/api";
 import { useDocument } from "../document/useDocument";
 import { useDocumentVersions } from "../document/useDocumentVersions";
 import { VersionCompare } from "../document/VersionCompare";
+import { CapaApprovalContext } from "./CapaApprovalContext";
 import { DecisionCard } from "./DecisionCard";
 import { useTask, useWorkflowInstance } from "./hooks";
 
-// S-web-5: the per-task focus page. Task → instance → subject document → the redline of what changed
-// + the decision card (rendered only for a PENDING task the caller can see; GET /tasks/{id}
-// 404-collapses otherwise, which we render calmly).
+// S-web-5 + S-web-7b: the per-task focus page. Branches on the task's subject type:
+//  - DOCUMENT → instance → document → redline + the decision card (unchanged).
+//  - CAPA → the CAPA approval context (identity + proposed plan, gated capa.read) + the decision card.
+// The decision POST dispatches on subject type server-side, so the same DecisionCard drives both.
 export function ReviewApprovePage() {
   const { id: taskId = null } = useParams();
   const { data: task, isLoading, isError, error } = useTask(taskId);
-  const { data: instance } = useWorkflowInstance(task?.instance_id ?? null);
-  const docId = instance?.subject_id ?? null;
+  const isCapa = task?.subject_type === "CAPA";
+  // Document branch (unchanged): resolve the subject doc via the instance. Disabled for a CAPA task.
+  const { data: instance } = useWorkflowInstance(!isCapa && task ? task.instance_id : null);
+  const docId = !isCapa ? (instance?.subject_id ?? null) : null;
   const { data: doc } = useDocument(docId, { enabled: docId !== null });
   const { data: versions } = useDocumentVersions(docId, docId !== null);
 
@@ -38,6 +42,32 @@ export function ReviewApprovePage() {
   }
 
   const decidable = task.state === "PENDING";
+  const decisionPane = decidable ? (
+    <DecisionCard
+      taskId={task.id}
+      subjectType={isCapa ? "CAPA" : "DOCUMENT"}
+      subjectId={(isCapa ? task.subject_id : docId) ?? ""}
+    />
+  ) : (
+    <Alert color="blue" title="Decided">
+      This task has already been decided.
+    </Alert>
+  );
+
+  if (isCapa) {
+    return (
+      <Stack gap="lg">
+        <Title order={2}>Review &amp; Approve — Action plan</Title>
+        <Grid gutter="lg" align="flex-start">
+          <Grid.Col span={{ base: 12, md: 7 }}>
+            <CapaApprovalContext capaId={task.subject_id!} />
+          </Grid.Col>
+          <Grid.Col span={{ base: 12, md: 5 }}>{decisionPane}</Grid.Col>
+        </Grid>
+      </Stack>
+    );
+  }
+
   return (
     <Stack gap="lg">
       <Title order={2}>Review &amp; Approve{doc ? ` — ${doc.identifier}` : ""}</Title>
@@ -48,15 +78,7 @@ export function ReviewApprovePage() {
             {docId && <VersionCompare documentId={docId} versions={versions ?? []} />}
           </Stack>
         </Grid.Col>
-        <Grid.Col span={{ base: 12, md: 5 }}>
-          {decidable && docId ? (
-            <DecisionCard taskId={task.id} documentId={docId} />
-          ) : (
-            <Alert color="blue" title="Decided">
-              This task has already been decided.
-            </Alert>
-          )}
-        </Grid.Col>
+        <Grid.Col span={{ base: 12, md: 5 }}>{decisionPane}</Grid.Col>
       </Grid>
     </Stack>
   );
