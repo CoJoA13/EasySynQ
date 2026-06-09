@@ -79,6 +79,28 @@ test("at RootCause with no approval, shows the propose form", async () => {
   expect(await screen.findByRole("button", { name: /Propose action plan/ })).toBeInTheDocument();
 });
 
+test("at RootCause with a NEEDS_ATTENTION instance, prompts to assign an approver", async () => {
+  grant("capa.plan_action");
+  server.use(
+    http.get("/api/v1/capas/:id/approval", () =>
+      HttpResponse.json({
+        instance: {
+          id: "wfca1111-1111-1111-1111-111111111111",
+          current_state: "NEEDS_ATTENTION",
+          definition_version: 1,
+          subject_type: "CAPA",
+          subject_id: "ca000001-0001-0001-0001-000000000001",
+          tasks: [],
+        },
+        proposed_action_plan: null,
+      }),
+    ),
+  );
+  wrap(<AdvancePanel capa={capa({ close_state: "RootCause" })} />);
+  expect(await screen.findByText(/No approver assigned/)).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /Propose action plan/ })).toBeNull();
+});
+
 test("renders nothing for a terminal CAPA", () => {
   grant("capa.close");
   const { container } = wrap(<AdvancePanel capa={capa({ close_state: "Closed" })} />);

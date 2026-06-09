@@ -42,6 +42,9 @@ export function AdvancePanel({ capa }: { capa: Capa }) {
     case "Containment":
       return gated("capa.record_rca", <RootCauseForm capa={capa} />);
     case "RootCause": {
+      // Wait for the approval read before deciding propose-vs-awaiting — otherwise the propose form flashes
+      // briefly (data is undefined) before the "awaiting approval" banner replaces it.
+      if (approval.isLoading) return <Loader size="sm" />;
       const inst = approval.data?.instance;
       if (inst && inst.current_state === "NEEDS_ATTENTION")
         return (
