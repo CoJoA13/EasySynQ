@@ -136,10 +136,10 @@ The `permission` table is seeded from the **doc 07 canonical catalog**. The seed
 
 | Family | Seeded keys (verbatim) |
 |---|---|
-| Document | `document.read`, `document.read_draft`, `document.create`, `document.edit`, `document.checkin`, `document.submit`, `document.approve`, `document.release`, `document.obsolete`, `document.export` |
+| Document | `document.read`, `document.read_draft`, `document.create`, `document.checkout`, `document.edit`, `document.submit`, `document.approve`, `document.release`, `document.obsolete`, `document.export` |
 | Record | `record.create`, `record.read`, **`record.dispose`** |
 | Change Request (DCR) | `changeRequest.create`, `changeRequest.assess`, `changeRequest.route`, `changeRequest.approve`, `changeRequest.implement`, `changeRequest.close` |
-| CAPA | `capa.create`, `capa.update`, `capa.verify`, `capa.close` (`capa.own` is a **role concept, not a permission**) |
+| CAPA | `capa.create`, `capa.read`, `capa.update`, `capa.record_rca`, `capa.plan_action`, `capa.capture_effectiveness`, `capa.verify`, `capa.close` (`capa.own` is a **role concept, not a permission**) |
 | Internal audit | `audit.conduct` (and the rest of the `audit.*` namespace — **NOT** `audit_qms.*`) |
 | Import | **`import.execute`** (run the scan/classify), **`import.review`** (review/correct classifications), **`import.commit`** (commit to vault) |
 | Grant/revoke | `permission.grant`, `permission.revoke` — scopable to CONTENT domains within QMS scope for the QMS Owner; system-permission granting stays SYSTEM-scope admin-only |

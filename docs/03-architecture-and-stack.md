@@ -33,7 +33,7 @@ The following is the **single concrete recommended stack**. Alternatives and rat
 | --- | --- | --- | --- |
 | **Frontend framework** | **React + TypeScript** (Vite build) | React 18+, TS 5+ | SPA delivering progressive-disclosure, clause-aligned UI |
 | **UI components / styling** | **Mantine** component library + **Tailwind CSS** utility layer + CSS variables design-token system | Mantine 7+, Tailwind 3+ | Accessible primitives (WCAG 2.2 AA baseline), calm theming, dark/light |
-| **Client data layer** | **TanStack Query** + typed API client generated from OpenAPI | — | Caching, optimistic UX, request dedupe |
+| **Client data layer** | **TanStack Query** + a hand-written typed API client (`apps/web/src/lib/api.ts`); `openapi.yaml` is the contract (redocly-lint only, **not** codegen) | — | Caching, optimistic UX, request dedupe |
 | **Backend language/framework** | **Python 3.12 + FastAPI** (ASGI, Uvicorn/Gunicorn) | FastAPI 0.11x | REST/JSON API, OpenAPI-first, async I/O |
 | **ORM / migrations** | **SQLAlchemy 2.x + Alembic** | — | Typed data access, versioned schema migrations |
 | **Relational database** | **PostgreSQL** | 16+ | Source of truth for metadata, lifecycle, audit, permissions |
@@ -55,7 +55,7 @@ The following is the **single concrete recommended stack**. Alternatives and rat
 
 | Decision | Chosen | Main alternative(s) | Why chosen (brief) |
 | --- | --- | --- | --- |
-| Backend | **Python / FastAPI** | Node.js/NestJS, Java/Spring Boot, Go | FastAPI is OpenAPI-first (auto-generated typed client + interactive docs aids the spec-driven approach), async-capable, and Python's document/PDF/Office tooling (LibreOffice UNO, pypdf, ReportLab) is the deepest. Spring is heavier to operate single-host; Node lacks Python's doc-processing depth; Go is excellent for throughput but slower to build the rich domain logic and lacks library breadth here. The workload is I/O-bound (DB, storage, rendering), where FastAPI shines. |
+| Backend | **Python / FastAPI** | Node.js/NestJS, Java/Spring Boot, Go | FastAPI is OpenAPI-first (interactive docs + a lint-checked hand-authored contract aid the spec-driven approach), async-capable, and Python's document/PDF/Office tooling (LibreOffice UNO, pypdf, ReportLab) is the deepest. Spring is heavier to operate single-host; Node lacks Python's doc-processing depth; Go is excellent for throughput but slower to build the rich domain logic and lacks library breadth here. The workload is I/O-bound (DB, storage, rendering), where FastAPI shines. |
 | Database | **PostgreSQL** | MySQL/MariaDB, SQL Server | Postgres offers transactional integrity, `JSONB` for flexible metadata + extensible standards mapping, robust row-level constructs, partitioning for the append-only audit table, and full open-source self-hosting with no licensing cost. Best fit for an immutable, audit-heavy vault. |
 | Blob store | **MinIO (S3 API)** | Filesystem-only, MongoDB GridFS, Ceph | S3 semantics give object-lock/versioning (WORM), content-addressing, and a clean swap to AWS S3 / Azure Blob later **without code change**. Filesystem-only loses WORM + integrity guarantees and conflicts with our "filesystem = read-only mirror" rule. Ceph is overkill for single-host. |
 | Search | **OpenSearch** | Elasticsearch, Postgres FTS, Typesense, Meilisearch | OpenSearch is Apache-2.0 (clean license for redistribution in a self-hosted product), powerful faceting/highlighting, and scales later. Postgres FTS is tempting for small installs but caps facet/relevance richness; we keep Postgres FTS as a **fallback profile** for tiny installs to save RAM (see §7). Elasticsearch's SSPL license complicates redistribution. |
@@ -359,7 +359,7 @@ Observability stack is **opt-in** (a `--profile observability` overlay) so the S
 | **Security/compliance** | Deny-by-default authz, centralized server-side enforcement, immutable audit, encrypted at rest + in transit, MFA-capable. Architected (not built) for 21 CFR Part 11 e-signatures and multi-standard mappings. |
 | **Supported browsers** | Latest two stable major versions of **Chrome, Edge, Firefox, and Safari** (desktop) at release time; responsive down to tablet width. No IE11. JavaScript required (it is an SPA). |
 | **Privacy / residency** | All data remains within the customer boundary; no outbound telemetry without explicit admin opt-in; PII (user identities) minimized and tied to retention policy. |
-| **Maintainability** | OpenAPI-first contract; generated typed client; Alembic migrations gated in CI; semantic-versioned images; documented upgrade path with backup-before-upgrade enforced. |
+| **Maintainability** | OpenAPI-first contract; a hand-written typed client against a lint-checked OpenAPI contract; Alembic migrations gated in CI; semantic-versioned images; documented upgrade path with backup-before-upgrade enforced. |
 
 ### 11.1 Single-host SPOFs & fast-restart runbook (reconciled per Decisions Register R14)
 

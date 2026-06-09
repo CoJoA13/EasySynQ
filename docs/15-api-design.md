@@ -378,7 +378,7 @@ Immutable snapshots (`14 §5.3`). Two-step presigned upload keeps large blobs of
 | POST | `/documents/{id}/checkin` | `document.checkout` | ✓ | Finalize (see §8.5): server verifies the uploaded object's `sha256` + `size_bytes`, dedups against existing `blob`, creates the immutable `document_version`, bumps `version_seq`. |
 | GET | `/documents/{id}/versions/{vid}` | `document.read` | — | Includes `metadata_snapshot` (title/type/owner/clause map **as they were**). |
 | GET | `/documents/{id}/versions/{vid}/download` | `document.read` | — | Presigned GET to the immutable source or PDF rendition. |
-| GET | `/documents/{id}/versions/{vid}/diff?from={vid2}` | `document.read` | — | Rendered/text diff between two versions (the drift-prevention view). |
+| GET | `/documents/{id}/versions/{vid}/diff?from={vid2}` | `document.read_draft` | — | Rendered/text diff between two versions (the drift-prevention view). Gated `document.read_draft` because the diff can expose non-released Draft content (S-dcr-3a). |
 
 **`versions:init-upload` 200:**
 ```json
@@ -400,14 +400,14 @@ The **Document Change Request** (`14 §7`) is the sanctioned, audited path to re
 
 | Method | Path | Perm | Idem | Notes |
 |---|---|---|---|---|
-| GET | `/dcrs` | `dcr.read` | — | Filter `state`, `change_type`, `target_document_id`, `created_by`, `reason_for_change`. |
-| POST | `/dcrs` | `dcr.create` | ✓ | `{ change_type:"REVISE"\|"CREATE"\|"RETIRE", target_document_id?, change_significance, reason_for_change, source_link?:{type,id} }`. `target_document_id` null for `CREATE`. Starts `Open`. |
-| GET | `/dcrs/{id}` | `dcr.read` | — | `expand=target_document,impact_assessment,resulting_version`. |
-| PATCH | `/dcrs/{id}` | `dcr.update` | — | Edit reason/annotations while `Open`. |
-| GET / PUT | `/dcrs/{id}/impact` | `dcr.read` / `dcr.update` | — | `impact_assessment` rows, auto-populated from `where-used`. |
-| POST | `/dcrs/{id}/assess` | `dcr.update` | ✓ | `Open→Assessed`. |
-| POST | `/dcrs/{id}/route` | `dcr.update` | ✓ | `Assessed→Routed→InApproval`; instantiates the approval `workflow_instance`. |
-| POST | `/dcrs/{id}/cancel` | `dcr.update` | ✓ | →`Cancelled` (while not implemented). |
+| GET | `/dcrs` | `changeRequest.read` | — | Filter `state`, `change_type`, `target_document_id`, `created_by`, `reason_for_change`. |
+| POST | `/dcrs` | `changeRequest.create` | ✓ | `{ change_type:"REVISE"\|"CREATE"\|"RETIRE", target_document_id?, change_significance, reason_for_change, source_link?:{type,id} }`. `target_document_id` null for `CREATE`. Starts `Open`. |
+| GET | `/dcrs/{id}` | `changeRequest.read` | — | `expand=target_document,impact_assessment,resulting_version`. |
+| PATCH | `/dcrs/{id}` | `changeRequest.assess` | — | Edit reason/annotations while `Open`. |
+| GET / PUT | `/dcrs/{id}/impact` | `changeRequest.read` / `changeRequest.assess` | — | `impact_assessment` rows, auto-populated from `where-used`. |
+| POST | `/dcrs/{id}/assess` | `changeRequest.assess` | ✓ | `Open→Assessed`. |
+| POST | `/dcrs/{id}/route` | `changeRequest.route` | ✓ | `Assessed→Routed→InApproval`; instantiates the approval `workflow_instance`. |
+| POST | `/dcrs/{id}/cancel` | `changeRequest.close` | ✓ | →`Cancelled` (while not implemented). |
 | POST | `/dcrs/{id}/implement` | `changeRequest.implement` | ✓ | **(S-dcr-5)** `Approved→Implemented`. DCR-as-orchestrator: drives the vault action for the change_type (REVISE/CREATE schedule the resulting version's go-live + the cross-FK link, the `release_due` sweep does the cutover; RETIRE obsoletes behind the §7.3 gate, `{force_retire?, override_justification?}`). **Also enforces the underlying `document.release`/`document.obsolete` (SoD-2) in addition to `changeRequest.implement`** — no DCR side-door past document control; an author cannot self-implement (403 `sod_violation`). 409 `no_approved_draft`/`obsoletion_blocked`/`version_already_linked`. |
 | POST | `/dcrs/{id}/close` | `changeRequest.close` | ✓ | **(S-dcr-5)** `Implemented→Closed`; 409 `dcr_effectivity_pending` until the change has actually taken effect (the resulting version Effective / the target Obsolete). |
 | POST | `/capas/{id}/raise-dcr` | `changeRequest.create` | ✓ | **(S-dcr-5)** Spawn a DCR from a CAPA corrective action (`source_link={type:capa,id}`; the §10→§7.5 loop). 1:N (a CAPA may spawn child DCRs); an `Idempotency-Key` makes a retry return the same DCR (201 new / 200 replay); 409 `capa_terminal` (a Closed/Rejected CAPA cannot spawn). |
@@ -540,7 +540,8 @@ The unified multi-stage corrective/preventive container — **a Record whose sta
 |---|---|---|---|---|
 | GET | `/capas` | `capa.read` | — | Filter `close_state`, `severity`, `source`, `process_id`, `origin_finding_id`. Sort `due_date` (overdue views). |
 | POST | `/capas` | `capa.create` | ✓ | `{ source, severity, process_id?, origin_finding_id? }`. Starts `Raised`. (Audit-finding NCs **auto-create** a linked CAPA — §8.12.) |
-| GET | `/capas/{id}` | `capa.read` | — | `expand=origin_finding,process`; includes ordered `capa_stage` summaries. |
+| GET | `/capas/{id}` | `capa.read` | — | `expand=origin_finding,process`; includes ordered `capa_stage` summaries (each stage carries its `evidence_links[]` — linked record identifiers, S-web-7b). |
+| GET | `/capas/{id}/approval` | `capa.read` | — | **(S-web-7b)** The latest action-plan approval cycle (the `GET /documents/{id}/approval` mirror): `{ instance{…, tasks[]}, proposed_action_plan }` or `null`. The `_task` detail also carries `subject_type`/`subject_id` so the SPA routes a CAPA approval via `capa.read` without the `document.read`-gated workflow-instance read. |
 | POST | `/capas/{id}/containment` | `capa.update` | — | `Raised→Containment` — append the immediate-correction block. (As built: per-stage endpoints **supersede** the unified `POST /capas/{id}/stages`; R39.) |
 | POST | `/capas/{id}/root-cause` | `capa.record_rca` | — | `Containment→RootCause` — the sealed RCA narrative (unsigned). |
 | POST | `/capas/{id}/action-plan` | `capa.plan_action` | — | Propose the corrective plan + open the severity-routed approval; `close_state` stays RootCause until the approval completes (then ActionPlan, signed). |

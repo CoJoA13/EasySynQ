@@ -75,7 +75,9 @@ The specification is **19 numbered documents (00–18)** plus the **Decisions Re
 | **17** | `17-gaps-and-open-questions.md` | The **gap audit** (input, not a normative section): findings A1–A14 (gaps), B1–B15 (contradictions), C1–C12 (risks), D1–D14 (open questions). Every finding is **resolved** by the Decisions Register (Part 4 finding→R-number map) — read the register for the binding answer. | 00, all |
 | **18** | `18-mvp-implementation-plan.md` | The **build plan**: the §1 canon-correction set, the ordered MVP slice plan (S0–S11) + the v1 family slices, exit criteria, and CI/verification gates. Read when planning a slice. | 03, 14, 15, 16 |
 
-**Working / operational docs** (not part of the numbered spec, but kept current): `decisions-register.md` (★ above) · `slice-history.md` (the shipped-slice changelog) · `dev-workflow.md` (operator/`.env` + per-feature API quick-reference) · `runbooks/` (operator runbooks) · `superpowers/{specs,plans}/` (web-UI track design specs + plans). The recurring-engineering-patterns catalog + the machine playbook live in `.claude/rules/`.
+**Working / operational docs** (not part of the numbered spec, but kept current): `decisions-register.md` (★ above) · `slice-history.md` (the shipped-slice changelog) · `dev-workflow.md` (operator/`.env` + per-feature API quick-reference) · `runbooks/` (operator runbooks) · `superpowers/{specs,plans}/` (web-UI track **per-slice** design specs + plans — see `superpowers/README.md` for the index; read the one matching your slice, not eagerly). The recurring-engineering-patterns catalog + the machine playbook live in `.claude/rules/`.
+
+> **Build status — what's shipped vs designed.** Sections 01–18 are the **static design spec** (the *intended* system), not a progress board. For what is actually **built**, read `CLAUDE.md` "Current status" + `slice-history.md`. As of 2026-06-09: MVP complete (S0–S11); the v1 families (Records & evidence · Ingestion · Audits/Findings/CAPA · Revision/DCR) shipped; the web-UI track is at S-web-7c.
 
 ---
 
