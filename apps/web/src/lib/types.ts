@@ -802,3 +802,53 @@ export interface EvidenceLinkBody {
   target_id: string;
   link_reason?: string;
 }
+
+// ---- S-web-7c (Complaint + NCR intake) ----
+export type NcrSource = "audit" | "process" | "complaint" | "internal";
+export type NcrDisposition =
+  | "use_as_is" | "rework" | "scrap" | "return" | "concession" | "regrade";
+
+// Pinned to the _complaint serializer (api/capa.py:217). identifier may be null (get_identifier).
+export interface Complaint {
+  id: string;
+  identifier: string | null;
+  customer: string | null;
+  received_at: string | null;
+  channel: string | null;
+  description: string;
+  severity: NcSeverity | null;
+  spawned_capa_id: string | null; // set once a CAPA has been spawned (idempotency latch)
+}
+export interface ComplaintList { data: Complaint[]; }
+
+// Pinned to the _ncr serializer (api/capa.py:230). identifier is NCR-NNN, non-null (ncr.identifier nullable=False).
+export interface Ncr {
+  id: string;
+  identifier: string;
+  source: NcrSource;
+  description: string;
+  severity: NcSeverity;
+  process_id: string | null;
+  disposition: NcrDisposition | null;
+  disposition_authorized_by: string | null;
+  disposition_notes: string | null;
+  disposed_at: string | null;
+  created_at: string;
+}
+export interface NcrList { data: Ncr[]; }
+
+export interface ComplaintCreateBody {
+  description: string;
+  customer?: string;
+  received_at?: string;
+  channel?: string;
+  severity?: NcSeverity;
+}
+export interface SpawnCapaBody { severity?: NcSeverity; process_id?: string; }
+export interface NcrCreateBody {
+  source: NcrSource;
+  description: string;
+  severity: NcSeverity;
+  process_id?: string;
+}
+export interface NcrDispositionBody { disposition: NcrDisposition; notes?: string; }
