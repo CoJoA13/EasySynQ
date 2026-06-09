@@ -114,7 +114,11 @@ test("shows 'View CAPA' (not Spawn) for an already-spawned complaint", async () 
   grant(["capa.create"]);
   renderWithProviders(<ComplaintsPage />, { route: "/capa/complaints" });
   const row = await screen.findByRole("row", { name: /CMP-000006/ });
-  expect(within(row).getByRole("link", { name: /View CAPA/ })).toBeInTheDocument();
+  // CMP-000006 carries spawned_capa_id ca000002… → the link deep-links that CAPA's board drawer.
+  expect(within(row).getByRole("link", { name: /View CAPA/ })).toHaveAttribute(
+    "href",
+    "/capa?capa=ca000002-0002-0002-0002-000000000002",
+  );
   expect(within(row).queryByRole("button", { name: /Spawn CAPA/ })).toBeNull();
 });
 

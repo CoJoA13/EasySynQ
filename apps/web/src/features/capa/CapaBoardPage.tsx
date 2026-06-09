@@ -16,7 +16,8 @@ import {
   Text,
   Title,
 } from "@mantine/core";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { usePermissions } from "../../app/shell/usePermissions";
 import type { Capa, CapaCloseState, CapaSource, NcSeverity } from "../../lib/types";
 import { CapaCard } from "./CapaCard";
@@ -33,9 +34,35 @@ export function CapaBoardPage() {
   const [source, setSource] = useState<CapaSource | "">("");
   const [severity, setSeverity] = useState<NcSeverity | "">("");
   const [state, setState] = useState<CapaCloseState | "">("");
-  const [selected, setSelected] = useState<string | null>(null);
+  // Drawer state is local, but URL-seedable: ?capa=<id> deep-links a specific CAPA's drawer open (so
+  // other surfaces — e.g. Complaints' "View CAPA" — can link to it). Mirrors the S-web-4 ?from=&to=
+  // redline pattern. Card/list/raise opens stay local-only (URL untouched) to keep the board unchanged.
+  const [params, setParams] = useSearchParams();
+  const [selected, setSelected] = useState<string | null>(() => params.get("capa"));
   const [raiseOpen, setRaiseOpen] = useState(false);
   const perms = usePermissions();
+
+  // Open the drawer for ?capa=<id> on mount + whenever the param changes (a deep-link while mounted).
+  // Guarded on a non-null id so clearing the param on close never re-opens the drawer.
+  useEffect(() => {
+    const capa = params.get("capa");
+    if (capa) setSelected(capa);
+  }, [params]);
+
+  function closeDrawer() {
+    setSelected(null);
+    // Only touch the URL when a deep-link param is actually present, so the common (local) open/close
+    // path leaves history untouched. Replace, so closing doesn't leave a back-step that re-opens it.
+    if (params.has("capa")) {
+      setParams(
+        (p) => {
+          p.delete("capa");
+          return p;
+        },
+        { replace: true },
+      );
+    }
+  }
 
   const rows = data ?? [];
   const filtered = useMemo(
@@ -232,7 +259,7 @@ export function CapaBoardPage() {
         </Table>
       )}
 
-      <CapaDrawer capaId={selected} onClose={() => setSelected(null)} />
+      <CapaDrawer capaId={selected} onClose={closeDrawer} />
       <RaiseCapaModal
         opened={raiseOpen}
         onClose={() => setRaiseOpen(false)}

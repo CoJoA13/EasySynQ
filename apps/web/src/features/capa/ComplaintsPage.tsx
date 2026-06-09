@@ -79,7 +79,7 @@ export function ComplaintsPage() {
                 </Table.Td>
                 <Table.Td>
                   {c.spawned_capa_id ? (
-                    <Anchor component={Link} to="/capa">
+                    <Anchor component={Link} to={`/capa?capa=${c.spawned_capa_id}`}>
                       View CAPA
                     </Anchor>
                   ) : can("capa.create") ? (
