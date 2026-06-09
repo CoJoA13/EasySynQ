@@ -51,7 +51,7 @@ export function TriageTable({
 }) {
   if (loading) {
     return (
-      <Stack gap="xs" aria-label="Loading files">
+      <Stack gap="xs" role="status" aria-label="Loading files">
         {Array.from({ length: 5 }).map((_, i) => (
           <Skeleton key={i} height={44} />
         ))}
