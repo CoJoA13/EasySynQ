@@ -1,6 +1,8 @@
 import { screen } from "@testing-library/react";
 import { axe } from "jest-axe";
+import { http, HttpResponse } from "msw";
 import { expect, test, vi } from "vitest";
+import { server } from "../../test/msw/server";
 import { renderWithProviders } from "../../test/render";
 import { CapaDrawer } from "./CapaDrawer";
 
@@ -16,6 +18,16 @@ test("renders the title, the closed-loop thread and the close gate", async () =>
 test("renders the Verify→RootCause loop honestly (cycle_marker>0)", async () => {
   renderWithProviders(<CapaDrawer capaId="ca000005-0005-0005-0005-000000000005" onClose={vi.fn()} />);
   expect(await screen.findByText(/Cycle 2/)).toBeInTheDocument();
+});
+
+test("surfaces a calm error (not an endless spinner) when the detail load fails", async () => {
+  server.use(
+    http.get("/api/v1/capas/:id", () =>
+      HttpResponse.json({ code: "not_found", title: "Not found" }, { status: 404 }),
+    ),
+  );
+  renderWithProviders(<CapaDrawer capaId="ca000099-0099-0099-0099-000000000099" onClose={vi.fn()} />);
+  expect(await screen.findByText(/Couldn't load this CAPA/)).toBeInTheDocument();
 });
 
 test("is closed (renders no dialog) when capaId is null", () => {

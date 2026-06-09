@@ -1,5 +1,5 @@
 import { List, ThemeIcon } from "@mantine/core";
-import type { CapaStage } from "../../lib/types";
+import type { CapaCloseState, CapaStage } from "../../lib/types";
 
 export interface GateState {
   rootCause: boolean;
@@ -7,15 +7,16 @@ export interface GateState {
   effectiveness: boolean;
 }
 
-export function deriveGate(stages: CapaStage[]): GateState {
+export function deriveGate(stages: CapaStage[], closeState: CapaCloseState): GateState {
   const has = (s: CapaStage["stage"]) => stages.some((x) => x.stage === s);
-  const effective = stages.some(
-    (x) => x.stage === "Verify" && x.content_block?.decision === "effective",
-  );
   return {
     rootCause: has("RootCause"),
     action: has("ActionPlan") || has("Implement"),
-    effectiveness: effective,
+    // Effectiveness-EVIDENCE completeness isn't in the read payload — the M4 close gate also requires
+    // evidence linked to the Implement/Verify stages. The only state where that gate has DEFINITIVELY
+    // passed is Closed, so derive this from the lifecycle state, NOT the Verify decision (which can be
+    // `effective` while the API still 409s capa_close_incomplete for missing evidence).
+    effectiveness: closeState === "Closed",
   };
 }
 
@@ -33,8 +34,14 @@ function Step({ done, label }: { done: boolean; label: string }) {
   );
 }
 
-export function CloseGateStepper({ stages }: { stages: CapaStage[] }) {
-  const gate = deriveGate(stages);
+export function CloseGateStepper({
+  stages,
+  closeState,
+}: {
+  stages: CapaStage[];
+  closeState: CapaCloseState;
+}) {
+  const gate = deriveGate(stages, closeState);
   return (
     <List spacing="xs" size="sm" center>
       <Step done={gate.rootCause} label="Root cause documented" />

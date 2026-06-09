@@ -1,4 +1,4 @@
-import { Badge, Group, Loader, Stack, Text, Title } from "@mantine/core";
+import { Alert, Badge, Group, Loader, Stack, Text, Title } from "@mantine/core";
 import { DetailDrawer } from "../../app/shell/DetailDrawer";
 import { useUserDirectory } from "../../app/shell/useUserDirectory";
 import { SEVERITY_COLOR, SEVERITY_LABEL, SOURCE_LABEL } from "./columns";
@@ -27,8 +27,14 @@ export function CapaDrawer({ capaId, onClose }: { capaId: string | null; onClose
         )
       }
     >
-      {isLoading || !capa ? (
+      {isLoading ? (
         <Loader />
+      ) : !capa ? (
+        // The detail fetch failed (a stale board row, a 404/403/500, or a permission change between
+        // the list and detail reads) — surface it calmly instead of spinning forever.
+        <Alert color="red" title="Couldn't load this CAPA">
+          It may have been removed, or you may not have access. Close this panel and try again.
+        </Alert>
       ) : (
         <Stack gap="lg">
           <Group gap="xs">
@@ -59,7 +65,7 @@ export function CapaDrawer({ capaId, onClose }: { capaId: string | null; onClose
             <Title order={5} mb="sm">
               Close gate
             </Title>
-            <CloseGateStepper stages={capa.stages ?? []} />
+            <CloseGateStepper stages={capa.stages ?? []} closeState={capa.close_state} />
           </div>
         </Stack>
       )}

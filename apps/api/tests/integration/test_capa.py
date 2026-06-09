@@ -1214,6 +1214,10 @@ async def test_capa_list_and_detail_carry_title_created_at_raised_by(
         )
     ).json()
     capa_id = raised["id"]
+    # the create response itself carries the metadata (every single-CAPA endpoint runs through
+    # _capa_full now, so a write response never returns a null title for a CAPA that has one)
+    assert raised["title"] == "Torque wrench miscalibration"
+    assert raised["created_at"] is not None
 
     # list row carries title + created_at (raised_by is detail-only → null on the list row)
     listing = (await app_client.get("/api/v1/capas", headers=h)).json()
