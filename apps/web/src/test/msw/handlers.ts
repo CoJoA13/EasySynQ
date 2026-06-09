@@ -949,9 +949,10 @@ export const handlers = [
   http.post("/api/v1/audits/:id/close", ({ params }) => HttpResponse.json({ ...auditListFixture.data[0]!, id: String(params.id), state: "Closed", completed_at: "2026-06-09" })),
   http.get("/api/v1/audits/:id/findings", () => HttpResponse.json(findingsFixture)),
   http.post("/api/v1/audits/:id/findings", () => HttpResponse.json(createdNcFindingFixture, { status: 201 })),
+  // The successor's title is the correction REASON (the record title), not the original's text.
   http.post("/api/v1/findings/:id/correction", ({ params }) =>
     HttpResponse.json(
-      { ...findingsFixture.data[1]!, id: "fd-corr-0-0000-0000-0000-000000000000", correction_of: String(params.id) },
+      { ...findingsFixture.data[1]!, id: "fd-corr-0-0000-0000-0000-000000000000", title: "Reclassified as an improvement", correction_of: String(params.id) },
       { status: 201 },
     ),
   ),
