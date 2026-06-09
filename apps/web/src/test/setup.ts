@@ -47,6 +47,14 @@ class ResizeObserverStub {
 }
 globalThis.ResizeObserver = ResizeObserverStub as unknown as typeof ResizeObserver;
 
+// jsdom doesn't implement Element.scrollIntoView; Mantine's Combobox scrolls the active option into
+// view on a timer when a dropdown opens. Left unstubbed, that timer throws "scrollIntoView is not a
+// function" AFTER a test that leaves a Select open tears down → an unhandled error (false-positive risk).
+// A no-op stub fills the gap (the matchMedia/ResizeObserver precedent).
+if (typeof Element !== "undefined" && typeof Element.prototype.scrollIntoView !== "function") {
+  Element.prototype.scrollIntoView = function () {};
+}
+
 expect.extend(toHaveNoViolations);
 
 beforeAll(() => server.listen({ onUnhandledRequest: "error" }));
