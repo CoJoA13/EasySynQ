@@ -58,8 +58,8 @@ test("an unknown/additive status degrades calmly to the scan-progress face (inva
   );
   renderPage();
   // the default switch branch routes an unknown status to ScanProgress, which shows the generic
-  // "Working…" caption (Task 16 fix) rather than crashing or going blank.
-  expect(await screen.findByText(/Working…/)).toBeInTheDocument();
+  // "Working…" in both the heading and the caption (Task 16 fix) rather than crashing or going blank.
+  expect((await screen.findAllByText(/Working…/)).length).toBeGreaterThan(0);
 });
 
 test("IngestionRunPage renders the terminal summary for a Completed run", async () => {

@@ -45,7 +45,7 @@ export function ScanProgress({ run, onCancel }: { run: ImportRun; onCancel: () =
   const known = run.status in STATUS_TO_STEP;
   const step = STATUS_TO_STEP[run.status] ?? 0;
   const current = known ? (STAGES[step] ?? null) : null;
-  const caption = current?.caption ?? "Please wait…";
+  const caption = current?.caption ?? "Working…";
 
   return (
     <Card withBorder padding="lg">
