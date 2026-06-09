@@ -64,3 +64,11 @@ test("shows the gated Import entry when the caller holds import.review", async (
   const link = await screen.findByRole("link", { name: "Import" });
   expect(link).toHaveAttribute("href", "/ingestion");
 });
+
+test("Internal Audit entry is unconditional (the CAPA precedent — calm-403 lives on the page)", async () => {
+  renderWithProviders(<LeftRail />);
+  expect(await screen.findByRole("link", { name: "Internal Audit" })).toHaveAttribute(
+    "href",
+    "/audits",
+  );
+});
