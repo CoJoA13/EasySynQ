@@ -62,3 +62,13 @@ test("a CAPA action-plan task renders the proposed plan + a working decision car
   expect(await findByText(/Schedule supplier re-evaluations/)).toBeInTheDocument();
   expect(await findByRole("button", { name: "Submit decision" })).toBeInTheDocument();
 });
+
+test("a decided CAPA task shows the read-only summary, not the decision form", async () => {
+  server.use(
+    http.get("/api/v1/tasks/:id", () => HttpResponse.json({ ...capaApprovalTask, state: "DONE" })),
+    http.get("/api/v1/capas/:id/approval", () => HttpResponse.json(capaApprovalFixture)),
+  );
+  const { findByText, queryByRole } = mount("/tasks/tkca1111-1111-1111-1111-111111111111");
+  expect(await findByText("This task has already been decided.")).toBeInTheDocument();
+  expect(queryByRole("button", { name: "Submit decision" })).toBeNull();
+});
