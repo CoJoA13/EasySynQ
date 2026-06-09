@@ -8,7 +8,18 @@ import { useLinkEvidence } from "./mutations";
 // Light "link an existing record as evidence" affordance (epic §7: no net-new upload). The picked record
 // is linked to THIS capa_stage (target_type=capa_stage) — the M4 close gate needs ≥1 link on the
 // current-cycle Implement + Verify stages.
-export function EvidenceLinker({ capaId, stageId }: { capaId: string; stageId: string }) {
+export function EvidenceLinker({
+  capaId,
+  stageId,
+  labelSuffix = "",
+}: {
+  capaId: string;
+  stageId: string;
+  // Appended to the "Record"/"Reason" labels so two linkers on one screen (Implement + Verify stages)
+  // don't share an accessible name (the S-web-6 duplicate-getByLabelText trap). Default "" keeps the
+  // standalone labels plain.
+  labelSuffix?: string;
+}) {
   const { data: records } = useRecords();
   const link = useLinkEvidence(capaId);
   const [recordId, setRecordId] = useState<string | null>(null);
@@ -43,7 +54,7 @@ export function EvidenceLinker({ capaId, stageId }: { capaId: string; stageId: s
       )}
       <Group align="flex-end" gap="xs">
         <Select
-          label="Record"
+          label={`Record${labelSuffix}`}
           placeholder="Pick a record"
           searchable
           value={recordId}
@@ -61,7 +72,7 @@ export function EvidenceLinker({ capaId, stageId }: { capaId: string; stageId: s
           }))}
         />
         <TextInput
-          label="Reason"
+          label={`Reason${labelSuffix}`}
           placeholder="Optional"
           value={reason}
           onChange={(e) => setReason(e.currentTarget.value)}

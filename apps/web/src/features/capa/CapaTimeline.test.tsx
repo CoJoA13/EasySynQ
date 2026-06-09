@@ -3,6 +3,7 @@ import { MantineProvider } from "@mantine/core";
 import { expect, test } from "vitest";
 import { theme } from "../../theme/mantine";
 import type { CapaStage } from "../../lib/types";
+import { renderWithProviders } from "../../test/render";
 import { CapaTimeline } from "./CapaTimeline";
 
 const directory = [
@@ -45,4 +46,31 @@ test("marks the effectiveness loop when a stage has cycle_marker > 0", () => {
 test("renders an empty stage list calmly", () => {
   wrap([]);
   expect(screen.getByText(/no stages/i)).toBeInTheDocument();
+});
+
+test("an Implement stage shows its linked records (as labels) + a stage-scoped evidence linker", async () => {
+  // EvidenceLinker (mounted on Implement/Verify) uses react-query, so render with the full providers.
+  renderWithProviders(
+    <CapaTimeline
+      capaId="ca1"
+      directory={directory}
+      stages={[
+        {
+          id: "im",
+          stage: "Implement",
+          content_block: { actions_done: "done" },
+          cycle_marker: 0,
+          created_by: "bbbb1111-1111-1111-1111-111111111111",
+          created_at: "2026-05-27T09:00:00+00:00",
+          evidence_links: [
+            { id: "el1", record_id: "r1", record_identifier: "REC-000041", link_reason: null, created_at: null },
+          ],
+        },
+      ]}
+    />,
+  );
+  expect(screen.getByText("Linked records:")).toBeInTheDocument();
+  expect(screen.getByText("REC-000041")).toBeInTheDocument();
+  // the linker's label is suffixed by the stage so two linkers never collide
+  expect(await screen.findByLabelText("Record (Implement)")).toBeInTheDocument();
 });

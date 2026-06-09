@@ -76,5 +76,6 @@ test("renders the Advance panel form for the caller's permitted stage", async ()
     ),
   );
   renderWithProviders(<CapaDrawer capaId="ca000002-0002-0002-0002-000000000002" onClose={() => {}} />);
+  expect(await screen.findByText("Next step")).toBeInTheDocument();
   expect(await screen.findByRole("button", { name: /Record root cause/ })).toBeInTheDocument();
 });

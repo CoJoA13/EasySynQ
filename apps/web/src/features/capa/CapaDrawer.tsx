@@ -16,6 +16,8 @@ export function CapaDrawer({ capaId, onClose }: { capaId: string | null; onClose
       opened={capaId !== null}
       onClose={onClose}
       title={
+        // Gate the header on !isError too: a failed refetch can leave stale cached data, and we must not
+        // show an out-of-date identifier/title above an error body.
         capa && !isError ? (
           <Stack gap={2}>
             <Text size="xs" c="dimmed">
