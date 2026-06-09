@@ -1,0 +1,297 @@
+import { Stack } from "@mantine/core";
+import { useCallback, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
+import { usePermissions } from "../../app/shell/usePermissions";
+import type {
+  ConfirmedKind,
+  ImportDecisionAction,
+  ImportDecisionAfter,
+  ImportFile,
+  ImportRun,
+} from "../../lib/types";
+import { BulkActionBar } from "./BulkActionBar";
+import { CommitCard } from "./CommitCard";
+import { IngestionFacetBar } from "./IngestionFacetBar";
+import { ImportPlanBanner } from "./ImportPlanBanner";
+import { ItemDetailDrawer } from "./ItemDetailDrawer";
+import { MergeMenu } from "./MergeMenu";
+import { PreCommitChecklist } from "./PreCommitChecklist";
+import { QueueTabs } from "./QueueTabs";
+import { RunSummaryTiles } from "./RunSummaryTiles";
+import { TriagePagination } from "./TriagePagination";
+import { TriageTable } from "./TriageTable";
+import {
+  FILES_PAGE_SIZE,
+  parseRunUrl,
+  queueToFilesQuery,
+  type ConfidenceChoice,
+  type IngestionQueue,
+} from "./filters";
+import {
+  useBulkDecision,
+  useChecklist,
+  useCommitRun,
+  useDupeClusters,
+  useFileDecision,
+  useImportFiles,
+  useSplit,
+  useVersionFamilies,
+} from "./hooks";
+
+// The review-face spine. Owns the selection Set, the active drawer file id, and the queue/conf/offset
+// URL state; joins clusters/families into the per-row dupe/family maps; threads handlers down to the
+// presentational children. Every write generates a fresh Idempotency-Key (one per bulk op).
+export function ReviewCockpit({ runId, run }: { runId: string; run: ImportRun }) {
+  const [params, setParams] = useSearchParams();
+  const { queue, conf, offset } = parseRunUrl(params);
+
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [activeFileId, setActiveFileId] = useState<string | null>(null);
+
+  const filter = useMemo(() => queueToFilesQuery(queue, conf), [queue, conf]);
+  const filesQuery = useImportFiles(runId, filter, offset);
+  const clustersQuery = useDupeClusters(runId);
+  const familiesQuery = useVersionFamilies(runId);
+  const checklistQuery = useChecklist(runId);
+
+  const fileDecision = useFileDecision(runId);
+  const bulkDecision = useBulkDecision(runId);
+  const commitRun = useCommitRun(runId);
+  const splitRun = useSplit(runId);
+  const { can } = usePermissions();
+  const canCommit = can("import.commit");
+
+  const files = useMemo(() => filesQuery.data?.files ?? [], [filesQuery.data]);
+  const queueCounts = useMemo(() => {
+    const q = (run.counts?.["queues"] ?? {}) as Record<string, unknown>;
+    const out: Record<string, number> = {};
+    for (const [k, v] of Object.entries(q)) out[k] = typeof v === "number" ? v : 0;
+    return out;
+  }, [run.counts]);
+
+  // dupeMap: each NON-canonical member fileId → the canonical member's review.identifier (or "—").
+  const dupeMap = useMemo(() => {
+    const idById = new Map<string, string>();
+    for (const f of files) if (f.review?.identifier) idById.set(f.id, f.review.identifier);
+    const m = new Map<string, string>();
+    for (const c of clustersQuery.data?.clusters ?? []) {
+      for (const fid of c.member_file_ids) {
+        if (fid !== c.canonical_file_id) m.set(fid, idById.get(c.canonical_file_id) ?? "—");
+      }
+    }
+    return m;
+  }, [files, clustersQuery.data]);
+
+  // familyMap: each member fileId → its family's ordered-member count.
+  const familyMap = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const fam of familiesQuery.data?.families ?? []) {
+      const n = fam.ordered_member_file_ids.length;
+      for (const fid of fam.ordered_member_file_ids) m.set(fid, n);
+    }
+    return m;
+  }, [familiesQuery.data]);
+
+  // splitTargetMap: each member fileId → the group it can be split out of (a version family takes
+  // priority over a dupe cluster). Used by the drawer's "Split out of group" action.
+  const splitTargetMap = useMemo(() => {
+    const m = new Map<string, { target_kind: "version_family" | "dupe_cluster"; target_id: string }>();
+    for (const fam of familiesQuery.data?.families ?? [])
+      for (const fid of fam.ordered_member_file_ids)
+        m.set(fid, { target_kind: "version_family", target_id: fam.id });
+    for (const c of clustersQuery.data?.clusters ?? [])
+      for (const fid of c.member_file_ids)
+        if (!m.has(fid)) m.set(fid, { target_kind: "dupe_cluster", target_id: c.id });
+    return m;
+  }, [familiesQuery.data, clustersQuery.data]);
+
+  // ---- URL patch helpers (the LibraryPage idiom: a queue/conf change resets offset) ----
+  const onQueue = useCallback(
+    (q: IngestionQueue) => {
+      setSelected(new Set()); // a queue change drops a stale cross-queue selection
+      setParams((p) => {
+        if (q === "needs") p.delete("queue");
+        else p.set("queue", q);
+        p.delete("offset");
+        return p;
+      });
+    },
+    [setParams],
+  );
+  const onConf = useCallback(
+    (c: ConfidenceChoice) => {
+      setParams((p) => {
+        if (c === "ALL") p.delete("conf");
+        else p.set("conf", c);
+        p.delete("offset");
+        return p;
+      });
+    },
+    [setParams],
+  );
+  const onOffset = useCallback(
+    (o: number) => {
+      setParams((p) => {
+        if (o > 0) p.set("offset", String(o));
+        else p.delete("offset");
+        return p;
+      });
+    },
+    [setParams],
+  );
+
+  // ---- selection ----
+  const onToggle = useCallback((id: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+  const pageIds = useMemo(() => files.map((f) => f.id), [files]);
+  const allOnPageSelected = pageIds.length > 0 && pageIds.every((id) => selected.has(id));
+  const onToggleAllOnPage = useCallback(() => {
+    setSelected((prev) => {
+      const allSelected = pageIds.length > 0 && pageIds.every((id) => prev.has(id));
+      if (allSelected) {
+        const next = new Set(prev);
+        for (const id of pageIds) next.delete(id);
+        return next;
+      }
+      const next = new Set(prev);
+      for (const id of pageIds) next.add(id);
+      return next;
+    });
+  }, [pageIds]);
+
+  // ---- writes (a fresh key per user action; one key per bulk op) ----
+  const onConfirmKind = useCallback(
+    (fileId: string, kind: ConfirmedKind) => {
+      fileDecision.mutate({
+        fileId,
+        body: { action: "accept", after: { kind } },
+        idempotencyKey: crypto.randomUUID(),
+      });
+    },
+    [fileDecision],
+  );
+  const onRowAction = useCallback(
+    (file: ImportFile, action: ImportDecisionAction) => {
+      fileDecision.mutate({
+        fileId: file.id,
+        body: { action },
+        idempotencyKey: crypto.randomUUID(),
+      });
+    },
+    [fileDecision],
+  );
+  const onBulk = useCallback(
+    (action: ImportDecisionAction, after?: ImportDecisionAfter) => {
+      bulkDecision.mutate({
+        body: { action, file_ids: [...selected], after },
+        idempotencyKey: crypto.randomUUID(),
+      });
+    },
+    [bulkDecision, selected],
+  );
+  const onBulkConfirmKind = useCallback(
+    (kind: ConfirmedKind) => {
+      bulkDecision.mutate({
+        body: { action: "accept", file_ids: [...selected], after: { kind } },
+        idempotencyKey: crypto.randomUUID(),
+      });
+    },
+    [bulkDecision, selected],
+  );
+  const onAcceptAllHigh = useCallback(() => {
+    bulkDecision.mutate({
+      body: { action: "accept", selector: { band: "HIGH" } },
+      idempotencyKey: crypto.randomUUID(),
+    });
+  }, [bulkDecision]);
+
+  const checklist = checklistQuery.data;
+  const total = queueCounts[queue] ?? 0;
+  const hasMore = files.length === FILES_PAGE_SIZE;
+
+  return (
+    <Stack gap="md" component="section" aria-label="Review cockpit">
+      <RunSummaryTiles run={run} />
+      <ImportPlanBanner />
+      <QueueTabs counts={queueCounts} value={queue} onChange={onQueue} />
+      <IngestionFacetBar conf={conf} onConf={onConf} />
+
+      {selected.size > 0 && (
+        <BulkActionBar
+          count={selected.size}
+          onBulk={onBulk}
+          onConfirmKind={onBulkConfirmKind}
+          onAcceptAllHigh={onAcceptAllHigh}
+        />
+      )}
+      {selected.size >= 2 && (
+        <MergeMenu runId={runId} selectedFileIds={[...selected]} onDone={() => setSelected(new Set())} />
+      )}
+
+      <TriageTable
+        files={files}
+        dupeMap={dupeMap}
+        familyMap={familyMap}
+        loading={filesQuery.isLoading}
+        selected={selected}
+        onToggle={onToggle}
+        onToggleAllOnPage={onToggleAllOnPage}
+        allOnPageSelected={allOnPageSelected}
+        onConfirmKind={onConfirmKind}
+        onOpenDetail={setActiveFileId}
+        onRowAction={onRowAction}
+      />
+      <TriagePagination
+        offset={offset}
+        hasMore={hasMore}
+        onOffset={onOffset}
+        total={total}
+        pageCount={files.length}
+      />
+
+      {checklist && (
+        <>
+          <PreCommitChecklist checklist={checklist} onShowBlocker={() => onQueue("needs")} />
+          <CommitCard
+            checklist={checklist}
+            canCommit={canCommit}
+            committing={commitRun.isPending}
+            onCommit={() => commitRun.mutate()}
+          />
+        </>
+      )}
+
+      <ItemDetailDrawer
+        runId={runId}
+        fileId={activeFileId}
+        onClose={() => setActiveFileId(null)}
+        onConfirmKind={(kind) => {
+          if (activeFileId) onConfirmKind(activeFileId, kind);
+        }}
+        onDecision={({ action }) => {
+          if (activeFileId)
+            fileDecision.mutate({
+              fileId: activeFileId,
+              body: { action },
+              idempotencyKey: crypto.randomUUID(),
+            });
+        }}
+        onSplit={() => {
+          if (!activeFileId) return;
+          const target = splitTargetMap.get(activeFileId);
+          if (target)
+            splitRun.mutate({
+              body: { ...target, separate_file_ids: [activeFileId] },
+              idempotencyKey: crypto.randomUUID(),
+            });
+        }}
+      />
+    </Stack>
+  );
+}
