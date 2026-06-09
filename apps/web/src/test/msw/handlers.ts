@@ -364,6 +364,8 @@ const approveTask = {
   candidate_pool: ["bbbb1111-1111-1111-1111-111111111111"],
   action_expected: "approve",
   due_at: null,
+  subject_type: "DOCUMENT",
+  subject_id: "11111111-1111-1111-1111-111111111111",
 };
 export const approvalFixture = {
   id: "wf111111-1111-1111-1111-111111111111",
@@ -438,9 +440,9 @@ export const capaDetailFixture = {
   ...capaListFixture.data[0]!,
   raised_by: "bbbb1111-1111-1111-1111-111111111111",
   stages: [
-    { id: "st000001-0001-0001-0001-000000000001", stage: "Raised", content_block: { problem: "Two approved vendors past their re-evaluation date.", source: "audit", severity: "Major" }, cycle_marker: 0, created_by: "bbbb1111-1111-1111-1111-111111111111", created_at: "2026-05-20T09:00:00+00:00" },
-    { id: "st000002-0002-0002-0002-000000000002", stage: "Containment", content_block: { correction: "Froze new POs to both vendors pending review." }, cycle_marker: 0, created_by: "bbbb9999-9999-9999-9999-999999999999", created_at: "2026-05-21T09:00:00+00:00" },
-    { id: "st000003-0003-0003-0003-000000000003", stage: "RootCause", content_block: { root_cause: "Re-eval reminders never scheduled.", method: "5-whys" }, cycle_marker: 0, created_by: "bbbb1111-1111-1111-1111-111111111111", created_at: "2026-05-22T09:00:00+00:00" },
+    { id: "st000001-0001-0001-0001-000000000001", stage: "Raised", content_block: { problem: "Two approved vendors past their re-evaluation date.", source: "audit", severity: "Major" }, cycle_marker: 0, created_by: "bbbb1111-1111-1111-1111-111111111111", created_at: "2026-05-20T09:00:00+00:00", evidence_links: [] },
+    { id: "st000002-0002-0002-0002-000000000002", stage: "Containment", content_block: { correction: "Froze new POs to both vendors pending review." }, cycle_marker: 0, created_by: "bbbb9999-9999-9999-9999-999999999999", created_at: "2026-05-21T09:00:00+00:00", evidence_links: [] },
+    { id: "st000003-0003-0003-0003-000000000003", stage: "RootCause", content_block: { root_cause: "Re-eval reminders never scheduled.", method: "5-whys" }, cycle_marker: 0, created_by: "bbbb1111-1111-1111-1111-111111111111", created_at: "2026-05-22T09:00:00+00:00", evidence_links: [] },
   ],
 } satisfies Capa;
 
@@ -451,13 +453,70 @@ export const capaLoopDetailFixture = {
   ...capaListFixture.data[4]!,
   raised_by: "bbbb1111-1111-1111-1111-111111111111",
   stages: [
-    { id: "lp000001-0001-0001-0001-000000000001", stage: "RootCause", content_block: { root_cause: "Planning hand-off undefined." }, cycle_marker: 0, created_by: "bbbb1111-1111-1111-1111-111111111111", created_at: "2026-05-11T09:00:00+00:00" },
-    { id: "lp000002-0002-0002-0002-000000000002", stage: "ActionPlan", content_block: { action_items: ["Add a planning hand-off checklist"] }, cycle_marker: 0, created_by: "bbbb1111-1111-1111-1111-111111111111", created_at: "2026-05-13T09:00:00+00:00" },
-    { id: "lp000003-0003-0003-0003-000000000003", stage: "Verify", content_block: { decision: "not_effective", narrative: "Late deliveries recurred." }, cycle_marker: 0, created_by: "bbbb1111-1111-1111-1111-111111111111", created_at: "2026-05-18T09:00:00+00:00" },
-    { id: "lp000004-0004-0004-0004-000000000004", stage: "ActionPlan", content_block: { action_items: ["Re-baseline the capacity model"] }, cycle_marker: 1, created_by: "bbbb1111-1111-1111-1111-111111111111", created_at: "2026-05-19T09:00:00+00:00" },
-    { id: "lp000005-0005-0005-0005-000000000005", stage: "Verify", content_block: { decision: "effective", narrative: "On-time rate recovered." }, cycle_marker: 1, created_by: "bbbb1111-1111-1111-1111-111111111111", created_at: "2026-05-21T09:00:00+00:00" },
+    { id: "lp000001-0001-0001-0001-000000000001", stage: "RootCause", content_block: { root_cause: "Planning hand-off undefined." }, cycle_marker: 0, created_by: "bbbb1111-1111-1111-1111-111111111111", created_at: "2026-05-11T09:00:00+00:00", evidence_links: [] },
+    { id: "lp000002-0002-0002-0002-000000000002", stage: "ActionPlan", content_block: { action_items: ["Add a planning hand-off checklist"] }, cycle_marker: 0, created_by: "bbbb1111-1111-1111-1111-111111111111", created_at: "2026-05-13T09:00:00+00:00", evidence_links: [] },
+    { id: "lp000003-0003-0003-0003-000000000003", stage: "Verify", content_block: { decision: "not_effective", narrative: "Late deliveries recurred." }, cycle_marker: 0, created_by: "bbbb1111-1111-1111-1111-111111111111", created_at: "2026-05-18T09:00:00+00:00", evidence_links: [] },
+    { id: "lp000004-0004-0004-0004-000000000004", stage: "ActionPlan", content_block: { action_items: ["Re-baseline the capacity model"] }, cycle_marker: 1, created_by: "bbbb1111-1111-1111-1111-111111111111", created_at: "2026-05-19T09:00:00+00:00", evidence_links: [] },
+    { id: "lp000005-0005-0005-0005-000000000005", stage: "Verify", content_block: { decision: "effective", narrative: "On-time rate recovered." }, cycle_marker: 1, created_by: "bbbb1111-1111-1111-1111-111111111111", created_at: "2026-05-21T09:00:00+00:00", evidence_links: [] },
   ],
 } satisfies Capa;
+
+// A close-READY CAPA: at Verify (cycle 0) with a current-cycle Implement + an effective Verify, BOTH
+// carrying an evidence link → the honest close gate is satisfied (close succeeds).
+export const capaCloseReadyFixture = {
+  id: "ca000008-0008-0008-0008-000000000008",
+  identifier: "REC-000040",
+  title: "Press guard interlock bypass",
+  source: "audit",
+  severity: "Major",
+  process_id: "pr000001-0001-0001-0001-000000000001",
+  close_state: "Verify",
+  cycle_marker: 0,
+  origin_finding_id: null,
+  raised_by: "bbbb1111-1111-1111-1111-111111111111",
+  created_at: "2026-05-25T09:00:00+00:00",
+  stages: [
+    { id: "cr000001-0001-0001-0001-000000000001", stage: "RootCause", content_block: { root_cause: "Interlock unmaintained." }, cycle_marker: 0, created_by: "bbbb1111-1111-1111-1111-111111111111", created_at: "2026-05-26T09:00:00+00:00", evidence_links: [] },
+    { id: "cr000002-0002-0002-0002-000000000002", stage: "Implement", content_block: { actions_done: "Replaced + scheduled PM." }, cycle_marker: 0, created_by: "bbbb1111-1111-1111-1111-111111111111", created_at: "2026-05-27T09:00:00+00:00", evidence_links: [{ id: "el1", record_id: "re000001-0001-0001-0001-000000000001", record_identifier: "REC-000041", link_reason: "PM schedule", created_at: "2026-05-27T09:10:00+00:00" }] },
+    { id: "cr000003-0003-0003-0003-000000000003", stage: "Verify", content_block: { decision: "effective", narrative: "No recurrence in 30 days." }, cycle_marker: 0, created_by: "bbbb1111-1111-1111-1111-111111111111", created_at: "2026-05-28T09:00:00+00:00", evidence_links: [{ id: "el2", record_id: "re000002-0002-0002-0002-000000000002", record_identifier: "REC-000042", link_reason: "audit re-check", created_at: "2026-05-28T09:10:00+00:00" }] },
+  ],
+} satisfies Capa;
+
+// GET /capas/{id}/approval — a pending action-plan approval (the proposer's drawer + the approver's page).
+export const capaApprovalFixture = {
+  instance: {
+    id: "wfca1111-1111-1111-1111-111111111111",
+    current_state: "qm_approval",
+    definition_version: 1,
+    subject_type: "CAPA",
+    subject_id: "ca000001-0001-0001-0001-000000000001",
+    tasks: [
+      { id: "tkca1111-1111-1111-1111-111111111111", stage_key: "qm_approval", type: "APPROVE", state: "PENDING", assignee_user_id: null, candidate_pool: ["bbbb1111-1111-1111-1111-111111111111"], action_expected: "approve_capa_action_plan", due_at: null },
+    ],
+  },
+  proposed_action_plan: { action_items: ["Schedule supplier re-evaluations", "Add a calendar reminder"] },
+};
+
+// A CAPA-subject task detail (GET /tasks/{id}) — the approver routes through ReviewApprovePage's CAPA branch.
+export const capaApprovalTask = {
+  id: "tkca1111-1111-1111-1111-111111111111",
+  instance_id: "wfca1111-1111-1111-1111-111111111111",
+  stage_key: "qm_approval",
+  type: "APPROVE",
+  state: "PENDING",
+  assignee_user_id: null,
+  candidate_pool: ["bbbb1111-1111-1111-1111-111111111111"],
+  action_expected: "approve_capa_action_plan",
+  due_at: null,
+  subject_type: "CAPA",
+  subject_id: "ca000001-0001-0001-0001-000000000001",
+};
+
+// GET /records — the evidence picker source (a bare array).
+export const recordsFixture = [
+  { id: "re000001-0001-0001-0001-000000000001", identifier: "REC-000041", title: "Preventive-maintenance schedule", record_type: "EVIDENCE" },
+  { id: "re000002-0002-0002-0002-000000000002", identifier: "REC-000042", title: "Audit re-check checklist", record_type: "EVIDENCE" },
+];
 
 // ---- S-ing-4b ingestion fixtures (a tiny Proposed run spanning the row states) ----
 export const ingestionRunFixture = {
@@ -740,11 +799,22 @@ export const handlers = [
   // ---- S-web-7 CAPA (default happy-path; per-test overrides for 403/empty/error) ----
   http.get("/api/v1/capas", () => HttpResponse.json(capaListFixture)),
   http.get("/api/v1/capas/:id", ({ params }) => {
-    if (params.id === "ca000005-0005-0005-0005-000000000005") {
-      return HttpResponse.json(capaLoopDetailFixture);
-    }
+    if (params.id === "ca000005-0005-0005-0005-000000000005") return HttpResponse.json(capaLoopDetailFixture);
+    if (params.id === "ca000008-0008-0008-0008-000000000008") return HttpResponse.json(capaCloseReadyFixture);
     return HttpResponse.json({ ...capaDetailFixture, id: String(params.id) });
   }),
+  // S-web-7b writes (default happy-path; per-test overrides for the 409s). Each returns a CAPA-ish body
+  // the UI ignores (it invalidates + refetches).
+  http.post("/api/v1/capas", () => HttpResponse.json({ ...capaDetailFixture, id: "ca-new-0000-0000-0000-000000000000" }, { status: 201 })),
+  http.post("/api/v1/capas/:id/containment", ({ params }) => HttpResponse.json({ ...capaDetailFixture, id: String(params.id) })),
+  http.post("/api/v1/capas/:id/root-cause", ({ params }) => HttpResponse.json({ ...capaDetailFixture, id: String(params.id) })),
+  http.post("/api/v1/capas/:id/action-plan", ({ params }) => HttpResponse.json({ ...capaDetailFixture, id: String(params.id), approval_instance: { id: "wfca1111-1111-1111-1111-111111111111", current_state: "qm_approval", definition_version: 1 } })),
+  http.post("/api/v1/capas/:id/implement", ({ params }) => HttpResponse.json({ ...capaDetailFixture, id: String(params.id) })),
+  http.post("/api/v1/capas/:id/verify", ({ params }) => HttpResponse.json({ ...capaDetailFixture, id: String(params.id) })),
+  http.post("/api/v1/capas/:id/close", ({ params }) => HttpResponse.json({ ...capaDetailFixture, id: String(params.id), close_state: "Closed" })),
+  http.get("/api/v1/capas/:id/approval", () => HttpResponse.json(null)),
+  http.get("/api/v1/records", () => HttpResponse.json(recordsFixture)),
+  http.post("/api/v1/records/:id/evidence-links", () => HttpResponse.json({ id: "el-new", record_id: "re000001-0001-0001-0001-000000000001", record_identifier: "REC-000041", link_reason: null, created_at: "2026-06-09T09:00:00+00:00" }, { status: 201 })),
   // ---- S-web-6 search + compliance (default happy-path; per-test overrides for 403/empty) ----
   http.get("/api/v1/search", () => HttpResponse.json(searchFixture)),
   http.get("/api/v1/search/suggest", () => HttpResponse.json(suggestFixture)),

@@ -322,6 +322,8 @@ export interface Task {
   candidate_pool: string[] | null;
   action_expected: string | null;
   due_at: string | null;
+  subject_type?: string; // detail-only (GET /tasks/{id}); "DOCUMENT" | "CAPA" | "DCR"
+  subject_id?: string;
 }
 
 // current_state is free-form Text server-side — keep it an open string, do NOT enum-validate.
@@ -739,8 +741,60 @@ export interface CapaStage {
   cycle_marker: number;
   created_by: string; // an app_user id; resolve via the user directory
   created_at: string;
+  evidence_links?: EvidenceLink[]; // detail-only; links pointing AT this stage (target_type=capa_stage)
 }
 
 export interface CapaList {
   data: Capa[];
+}
+
+// An evidence-for link pointing at a capa_stage (from POST /records/{id}/evidence-links).
+export interface EvidenceLink {
+  id: string;
+  record_id: string;
+  record_identifier: string | null;
+  link_reason: string | null;
+  created_at: string | null;
+}
+
+// GET /capas/{id}/approval — the latest action-plan approval cycle, or null (no cycle opened).
+export interface CapaApproval {
+  instance: {
+    id: string;
+    current_state: string; // a stage key while running; COMPLETED | REJECTED | NEEDS_ATTENTION terminal
+    definition_version: number;
+    subject_type: string;
+    subject_id: string;
+    tasks: Task[];
+  };
+  proposed_action_plan: Record<string, unknown> | null;
+}
+
+// GET /records (a bare array; filter-not-403) — the evidence picker's source. Minimal shape.
+export interface RecordSummary {
+  id: string;
+  identifier: string | null;
+  title: string;
+  record_type: string;
+}
+
+// ---- request bodies (CAPA writes) ----
+export interface CapaRaiseBody {
+  title: string;
+  severity: NcSeverity;
+  source?: CapaSource;
+  process_id?: string;
+  problem?: string;
+}
+export interface StageBlockBody {
+  content_block: Record<string, unknown>;
+}
+export interface CapaVerifyBody {
+  decision: "effective" | "not_effective";
+  content_block: Record<string, unknown>;
+}
+export interface EvidenceLinkBody {
+  target_type: "capa_stage";
+  target_id: string;
+  link_reason?: string;
 }
