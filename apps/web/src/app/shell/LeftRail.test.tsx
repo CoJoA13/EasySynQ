@@ -20,6 +20,11 @@ test("LeftRail shows the Review & Approve nav link", () => {
   expect(screen.getByRole("link", { name: "Review & Approve" })).toHaveAttribute("href", "/tasks");
 });
 
+test("the Nonconformity & CAPA entry is always shown (discoverable; page handles 403)", async () => {
+  renderWithProviders(<LeftRail />, { route: "/" });
+  expect(await screen.findByText("Nonconformity & CAPA")).toBeInTheDocument();
+});
+
 test("hides the Compliance entry when the caller lacks report.compliance_checklist.read", async () => {
   renderWithProviders(<LeftRail />, { route: "/" });
   await screen.findByText("Library");

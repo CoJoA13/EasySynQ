@@ -34,6 +34,12 @@ export function LeftRail() {
           active={pathname.startsWith("/compliance")}
         />
       )}
+      <NavLink
+        component={Link}
+        to="/capa"
+        label="Nonconformity & CAPA"
+        active={pathname.startsWith("/capa")}
+      />
       {can("import.review") && (
         // S-ing-4b: gated — import review is an admin-only SYSTEM key (no ABAC scope).
         <NavLink
