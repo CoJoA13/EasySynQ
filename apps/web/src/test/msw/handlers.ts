@@ -1,5 +1,5 @@
 import { http, HttpResponse } from "msw";
-import type { Capa } from "../../lib/types";
+import type { Capa, Complaint, Ncr } from "../../lib/types";
 
 export const docFixture = [
   {
@@ -521,6 +521,21 @@ export const recordsFixture = [
   { id: "re000002-0002-0002-0002-000000000002", identifier: "REC-000042", title: "Audit re-check checklist", record_type: "EVIDENCE" },
 ];
 
+// ---- S-web-7c complaint + NCR fixtures (pinned to the _complaint / _ncr serializers) ----
+export const complaintListFixture = {
+  data: [
+    { id: "cm000001-0001-0001-0001-000000000001", identifier: "CMP-000007", customer: "Northwind Foods Ltd.", received_at: "2026-06-02T09:00:00+00:00", channel: "email", description: "Delivered batch missing CoA documents.", severity: "Critical", spawned_capa_id: null },
+    { id: "cm000002-0002-0002-0002-000000000002", identifier: "CMP-000006", customer: "Acme Pharma", received_at: "2026-05-30T09:00:00+00:00", channel: "phone", description: "Late delivery on PO-44821.", severity: "Minor", spawned_capa_id: "ca000002-0002-0002-0002-000000000002" },
+  ],
+} satisfies { data: Complaint[] };
+
+export const ncrListFixture = {
+  data: [
+    { id: "nc000001-0001-0001-0001-000000000001", identifier: "NCR-000052", source: "process", description: "Nonconforming output: torque out of spec on Line 2.", severity: "Major", process_id: null, disposition: null, disposition_authorized_by: null, disposition_notes: null, disposed_at: null, created_at: "2026-06-03T09:00:00+00:00" },
+    { id: "nc000002-0002-0002-0002-000000000002", identifier: "NCR-000049", source: "audit", description: "Mislabelled retain samples.", severity: "Minor", process_id: null, disposition: "rework", disposition_authorized_by: "bbbb1111-1111-1111-1111-111111111111", disposition_notes: "Re-labelled + re-inspected.", disposed_at: "2026-06-04T09:00:00+00:00", created_at: "2026-06-01T09:00:00+00:00" },
+  ],
+} satisfies { data: Ncr[] };
+
 // ---- S-ing-4b ingestion fixtures (a tiny Proposed run spanning the row states) ----
 export const ingestionRunFixture = {
   id: "10000000-0000-0000-0000-000000000001",
@@ -817,6 +832,21 @@ export const handlers = [
   http.post("/api/v1/capas/:id/close", ({ params }) => HttpResponse.json({ ...capaDetailFixture, id: String(params.id), close_state: "Closed" })),
   http.get("/api/v1/capas/:id/approval", () => HttpResponse.json(null)),
   http.get("/api/v1/records", () => HttpResponse.json(recordsFixture)),
+  // ---- S-web-7c complaints + NCRs (default happy-path; per-test overrides for 403/empty/error) ----
+  http.get("/api/v1/complaints", () => HttpResponse.json(complaintListFixture)),
+  http.post("/api/v1/complaints", () =>
+    HttpResponse.json({ ...complaintListFixture.data[0]!, id: "cm-new-0000-0000-0000-000000000000", spawned_capa_id: null }, { status: 201 }),
+  ),
+  http.post("/api/v1/complaints/:id/spawn-capa", () =>
+    HttpResponse.json({ ...capaDetailFixture, id: "ca-spawn-0000-0000-0000-000000000000", source: "complaint" }, { status: 201 }),
+  ),
+  http.get("/api/v1/ncrs", () => HttpResponse.json(ncrListFixture)),
+  http.post("/api/v1/ncrs", () =>
+    HttpResponse.json({ ...ncrListFixture.data[0]!, id: "nc-new-0000-0000-0000-000000000000" }, { status: 201 }),
+  ),
+  http.patch("/api/v1/ncrs/:id/disposition", ({ params }) =>
+    HttpResponse.json({ ...ncrListFixture.data[0]!, id: String(params.id), disposition: "rework", disposition_authorized_by: "bbbb1111-1111-1111-1111-111111111111", disposed_at: "2026-06-09T09:00:00+00:00" }),
+  ),
   // Pinned to the real _evidence_link serializer (api/records.py): {id, record_id, target_type, target_id,
   // link_reason, created_at} — NOT a record_identifier (that field only exists on the per-stage projection).
   // The UI ignores this body (it invalidates + refetches), but the fixture must match the real shape.

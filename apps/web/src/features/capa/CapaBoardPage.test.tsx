@@ -1,11 +1,17 @@
-import { screen, within } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { http, HttpResponse } from "msw";
+import { useLocation } from "react-router-dom";
 import { expect, test } from "vitest";
 import { server } from "../../test/msw/server";
 import { renderWithProviders } from "../../test/render";
 import { CapaBoardPage } from "./CapaBoardPage";
+
+function LocationProbe() {
+  const loc = useLocation();
+  return <div data-testid="loc">{loc.pathname + loc.search}</div>;
+}
 
 test("groups CAPAs into lifecycle columns (ActionPlan+Implement merge; Rejected in Closed)", async () => {
   renderWithProviders(<CapaBoardPage />, { route: "/capa" });
@@ -47,6 +53,33 @@ test("a list-view row opens the drawer via keyboard (Enter), not mouse-only", as
   row.focus();
   await userEvent.keyboard("{Enter}");
   expect(await screen.findByText("Closed-loop thread")).toBeInTheDocument();
+});
+
+test("deep-links the detail drawer open from ?capa=<id> on mount", async () => {
+  // ca000008 maps to the close-ready fixture (REC-000040 / "Press guard interlock bypass"), which is
+  // NOT in the board list — so its appearance proves the drawer opened for exactly that id, not a card.
+  renderWithProviders(<CapaBoardPage />, {
+    route: "/capa?capa=ca000008-0008-0008-0008-000000000008",
+  });
+  expect(await screen.findByText("Press guard interlock bypass")).toBeInTheDocument();
+  expect(screen.getByText("REC-000040")).toBeInTheDocument();
+  expect(screen.getByText("Closed-loop thread")).toBeInTheDocument();
+});
+
+test("closing the deep-linked drawer clears the ?capa param", async () => {
+  const u = userEvent.setup();
+  renderWithProviders(
+    <>
+      <CapaBoardPage />
+      <LocationProbe />
+    </>,
+    { route: "/capa?capa=ca000008-0008-0008-0008-000000000008" },
+  );
+  await screen.findByText("Press guard interlock bypass");
+  expect(screen.getByTestId("loc")).toHaveTextContent("capa=ca000008");
+  await u.keyboard("{Escape}");
+  await waitFor(() => expect(screen.queryByText("Press guard interlock bypass")).toBeNull());
+  expect(screen.getByTestId("loc")).not.toHaveTextContent("capa=");
 });
 
 test("renders a calm no-access panel on a 403", async () => {

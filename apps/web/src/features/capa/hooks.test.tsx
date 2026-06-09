@@ -6,7 +6,7 @@ import { expect, test } from "vitest";
 import { AuthContext } from "../../lib/auth";
 import { TEST_AUTH } from "../../test/render";
 import { server } from "../../test/msw/server";
-import { useCapa, useCapas } from "./hooks";
+import { useCapa, useCapas, useComplaints, useNcrs } from "./hooks";
 
 function wrapper({ children }: { children: ReactNode }) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -43,4 +43,38 @@ test("useCapa returns the detail with stages", async () => {
 test("useCapa is disabled when id is null", () => {
   const { result } = renderHook(() => useCapa(null), { wrapper });
   expect(result.current.fetchStatus).toBe("idle");
+});
+
+test("useComplaints returns the {data} rows", async () => {
+  const { result } = renderHook(() => useComplaints(), { wrapper });
+  await waitFor(() => expect(result.current.data).toBeDefined());
+  expect(result.current.data!.length).toBeGreaterThan(0);
+  expect(result.current.forbidden).toBe(false);
+});
+
+test("useComplaints surfaces a 403 as forbidden", async () => {
+  server.use(
+    http.get("/api/v1/complaints", () =>
+      HttpResponse.json({ code: "forbidden", title: "Forbidden" }, { status: 403 }),
+    ),
+  );
+  const { result } = renderHook(() => useComplaints(), { wrapper });
+  await waitFor(() => expect(result.current.forbidden).toBe(true));
+});
+
+test("useNcrs returns the {data} rows", async () => {
+  const { result } = renderHook(() => useNcrs(), { wrapper });
+  await waitFor(() => expect(result.current.data).toBeDefined());
+  expect(result.current.data!.length).toBeGreaterThan(0);
+  expect(result.current.forbidden).toBe(false);
+});
+
+test("useNcrs surfaces a 403 as forbidden", async () => {
+  server.use(
+    http.get("/api/v1/ncrs", () =>
+      HttpResponse.json({ code: "forbidden", title: "Forbidden" }, { status: 403 }),
+    ),
+  );
+  const { result } = renderHook(() => useNcrs(), { wrapper });
+  await waitFor(() => expect(result.current.forbidden).toBe(true));
 });
