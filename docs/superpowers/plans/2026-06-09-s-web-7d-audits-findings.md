@@ -286,6 +286,11 @@ Call sites:
 
 (same for `successor.id` in the correction endpoint — and drop the now-unused trailing comment about `_correction_of`).
 
+After this refactor `audits_repo.get_identifier` has NO remaining callers (both endpoint uses are
+replaced by `get_finding_row`; the service layer never used it) — **delete it** from
+`services/audits/repository.py` (verify with a grep for `get_identifier` scoped to the audits
+package first; the capa repository has its own same-named helper, leave that one alone).
+
 - [ ] **Step 5: Contract field-adds** in `packages/contracts/openapi.yaml`:
 
 To the `Audit` schema properties (line ~6016):
@@ -472,6 +477,10 @@ git commit -m "feat(s-web-7d): audit-family types + FSM label/transition maps"
 - Modify: `apps/web/src/test/msw/handlers.ts` (append fixtures + handlers; export everything)
 
 No test of its own (every later test consumes these); `tsc` + the existing suite staying green is the gate. The `satisfies` clauses make strict tsc enforce the §3+§4 shapes.
+
+> ⚠ These fixtures presuppose Task 1's enrichment (identifier/title/created_at on `_audit`, title on
+> `_finding`) — Task 1 precedes this task and its CI integration tests + the pre-merge live smoke are
+> the cross-checks that the REAL serializer matches what's mocked here (the recurring false-PASS class).
 
 - [ ] **Step 1: Append the audit-family fixtures** to `apps/web/src/test/msw/handlers.ts` (after the S-ing-4b block, before `export const handlers`). Add `AuditList, AuditPlanList, AuditProgramList, Finding, FindingList` to the existing `import type { … } from "../../lib/types"`:
 
@@ -2406,7 +2415,8 @@ test("renders header (identifier · title · state) + plan/programme context", a
   harness("au000001-0001-0001-0001-000000000001");
   expect(await screen.findByText("REC-000061")).toBeInTheDocument();
   expect(screen.getByText("Purchasing & Suppliers audit")).toBeInTheDocument();
-  expect(screen.getByText(/● In progress/)).toBeInTheDocument();
+  // getAllBy: once Task 13 mounts the stepper, "● In progress" appears twice (badge + current node).
+  expect(screen.getAllByText(/● In progress/).length).toBeGreaterThan(0);
   expect(screen.getByText("Mara Quality")).toBeInTheDocument(); // lead via directory
   // Plan context: scheduled date + checklist ref + auditee process + the programme title.
   expect(await screen.findByText(/2026-05-28/)).toBeInTheDocument();
@@ -2667,8 +2677,9 @@ const SYSTEM = { level: "SYSTEM" } as const;
 test("renders the 7-node stepper with done/current/pending and aria-current on the current step", async () => {
   grant(["audit.conduct"]);
   renderWithProviders(<AuditLifecyclePanel audit={base} scope={SYSTEM} />);
-  const current = await screen.findByText(/In progress/, { selector: "[aria-current=step] *" });
-  expect(current).toBeInTheDocument();
+  // The current node sits inside the aria-current="step" wrapper.
+  const current = await screen.findByText(/● In progress/);
+  expect(current.closest("[aria-current='step']")).not.toBeNull();
   // Done steps carry the ✓ glyph; pending the ○.
   expect(screen.getByText(/✓ Scheduled/)).toBeInTheDocument();
   expect(screen.getByText(/○ Reported/)).toBeInTheDocument();
@@ -3083,7 +3094,7 @@ export function FindingPanel({
 }) {
   const superseded = finding.superseded_by_correction !== null;
   return (
-    <Paper withBorder p="sm" data-finding opacity={superseded ? 0.6 : 1}>
+    <Paper withBorder p="sm" data-finding style={{ opacity: superseded ? 0.6 : 1 }}>
       <Group justify="space-between" mb={4}>
         <Text size="sm" fw={600}>
           {finding.identifier ?? finding.id.slice(0, 8)}
@@ -3246,25 +3257,15 @@ export function FindingsCard({
 }
 ```
 
-- [ ] **Step 6: Mount it in `AuditDetailPage.tsx`** (replace the Task-14 comment) with the modal-state seams Task 15 will use:
+- [ ] **Step 6: Mount it in `AuditDetailPage.tsx`** (replace the Task-14 comment in the left
+column). The modal STATE arrives with the modals in Task 15 — here the callbacks are no-ops, so no
+unused-local sneaks in:
 
 ```tsx
-  const [logOpen, setLogOpen] = useState(false);
-  const [correcting, setCorrecting] = useState<Finding | null>(null);
+          <FindingsCard audit={a} scope={scope} onLog={() => {}} onCorrect={() => {}} />
 ```
 
-```tsx
-          <FindingsCard
-            audit={a}
-            scope={scope}
-            onLog={() => setLogOpen(true)}
-            onCorrect={setCorrecting}
-          />
-```
-
-(+ imports `useState`, `Finding`, `FindingsCard`. `logOpen`/`correcting` are consumed by Task 15's
-modals; until then reference them in a no-op fragment to satisfy lint: `{logOpen && null}
-{correcting && null}` — Task 15 REPLACES that fragment with the real modal mounts.)
+(+ the `FindingsCard` import. Task 15 replaces the two no-op callbacks with real state setters.)
 
 - [ ] **Step 7: Run to verify pass**
 
@@ -3685,7 +3686,26 @@ export function CorrectFindingModal({
 }
 ```
 
-- [ ] **Step 6: Mount the modals** in `AuditDetailPage.tsx` — replace the Task-14 no-op fragment (`{logOpen && null}{correcting && null}`) with:
+- [ ] **Step 6: Mount the modals** in `AuditDetailPage.tsx` — add the state (top of the component,
+with the other hooks):
+
+```tsx
+  const [logOpen, setLogOpen] = useState(false);
+  const [correcting, setCorrecting] = useState<Finding | null>(null);
+```
+
+Replace Task 14's no-op callbacks on the `FindingsCard` mount:
+
+```tsx
+          <FindingsCard
+            audit={a}
+            scope={scope}
+            onLog={() => setLogOpen(true)}
+            onCorrect={setCorrecting}
+          />
+```
+
+And mount the modals before the closing `</Container>`:
 
 ```tsx
       <LogFindingModal auditId={a.id} opened={logOpen} onClose={() => setLogOpen(false)} />
@@ -3700,7 +3720,7 @@ export function CorrectFindingModal({
       )}
 ```
 
-(+ imports.)
+(+ imports: `useState`, `Finding` type, `LogFindingModal`, `CorrectFindingModal`.)
 
 - [ ] **Step 7: Run to verify pass**
 
