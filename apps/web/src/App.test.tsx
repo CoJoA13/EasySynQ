@@ -30,3 +30,16 @@ test("operational app with no token bounces to sign-in (in-memory tokens, post-r
   expect(screen.getByText(/signing in/i)).toBeInTheDocument(); // interstitial, not the 401-ing shell
   expect(screen.queryByText("Document Library")).not.toBeInTheDocument();
 });
+
+test("the /ingestion route renders the runs landing", async () => {
+  renderWithProviders(<App />, { route: "/ingestion" });
+  expect(await screen.findByRole("heading", { name: "Import" })).toBeInTheDocument();
+});
+
+test("the /ingestion/:runId route renders the run page cockpit", async () => {
+  renderWithProviders(<App />, {
+    route: "/ingestion/10000000-0000-0000-0000-000000000001",
+  });
+  // the Proposed run fixture rests at the review cockpit (IngestionRunPage → ReviewCockpit)
+  expect(await screen.findByRole("region", { name: "Review cockpit" })).toBeInTheDocument();
+});
