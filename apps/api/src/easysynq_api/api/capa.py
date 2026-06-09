@@ -135,17 +135,26 @@ def _stage(s: CapaStage) -> dict[str, Any]:
 
 
 def _capa(
-    c: Capa, identifier: str | None, stages: list[dict[str, Any]] | None = None
+    c: Capa,
+    identifier: str | None,
+    *,
+    title: str | None = None,
+    created_at: datetime.datetime | None = None,
+    raised_by: str | None = None,
+    stages: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     out: dict[str, Any] = {
         "id": str(c.id),
         "identifier": identifier,
+        "title": title,
         "source": c.source.value,
         "severity": c.severity.value,
         "process_id": str(c.process_id) if c.process_id else None,
         "close_state": c.close_state.value,
         "cycle_marker": c.cycle_marker,
         "origin_finding_id": str(c.origin_finding_id) if c.origin_finding_id else None,
+        "raised_by": raised_by,
+        "created_at": created_at.isoformat() if created_at else None,
     }
     if stages is not None:
         out["stages"] = stages
@@ -276,7 +285,11 @@ async def list_capas_endpoint(
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
     rows = await capa_repo.list_capas(session, caller.org_id)
-    return {"data": [_capa(c, ident) for c, ident in rows]}
+    return {
+        "data": [
+            _capa(c, ident, title=title, created_at=created) for c, ident, title, created in rows
+        ]
+    }
 
 
 @router.get("/capas/{capa_id}")
@@ -289,7 +302,17 @@ async def get_capa_endpoint(
     if capa is None or capa.org_id != caller.org_id:
         raise ProblemException(status=404, code="not_found", title="CAPA not found")
     stages = [_stage(s) for s in await capa_repo.list_capa_stages(session, capa_id)]
-    return _capa(capa, await capa_repo.get_identifier(session, capa.id), stages=stages)
+    header = await capa_repo.get_capa_header(session, capa_id)
+    ident = header[0] if header else None
+    raised_by = stages[0]["created_by"] if stages else None
+    return _capa(
+        capa,
+        ident,
+        title=header[1] if header else None,
+        created_at=header[2] if header else None,
+        raised_by=raised_by,
+        stages=stages,
+    )
 
 
 @router.post("/capas/{capa_id}/containment")

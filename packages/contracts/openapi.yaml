@@ -5616,6 +5616,9 @@ components:
           type: [string, "null"]
           format: uuid
           description: NULL in v1 — the NC→CAPA auto-link (audit_finding) lands in S-aud-2.
+        title: { type: [string, "null"] }
+        created_at: { type: [string, "null"], format: date-time }
+        raised_by: { type: [string, "null"], format: uuid }
         stages:
           type: array
           items: { $ref: "#/components/schemas/CapaStage" }

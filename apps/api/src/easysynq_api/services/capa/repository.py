@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Sequence
+from datetime import datetime
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -102,14 +103,37 @@ async def allow_capa_self_verify(session: AsyncSession, org_id: uuid.UUID) -> bo
     return bool(value)
 
 
-async def list_capas(session: AsyncSession, org_id: uuid.UUID) -> Sequence[tuple[Capa, str]]:
+async def list_capas(
+    session: AsyncSession, org_id: uuid.UUID
+) -> Sequence[tuple[Capa, str | None, str | None, datetime | None]]:
     rows = await session.execute(
-        select(Capa, DocumentedInformation.identifier)
+        select(
+            Capa,
+            DocumentedInformation.identifier,
+            DocumentedInformation.title,
+            DocumentedInformation.created_at,
+        )
         .join(DocumentedInformation, DocumentedInformation.id == Capa.id)
         .where(Capa.org_id == org_id)
         .order_by(DocumentedInformation.created_at.desc())
     )
-    return [(c, ident) for c, ident in rows.all()]
+    return [(c, ident, title, created) for c, ident, title, created in rows.all()]
+
+
+async def get_capa_header(
+    session: AsyncSession, capa_id: uuid.UUID
+) -> tuple[str | None, str | None, datetime | None] | None:
+    """(identifier, title, created_at) for a CAPA's record — one row, for the detail serializer."""
+    row = (
+        await session.execute(
+            select(
+                DocumentedInformation.identifier,
+                DocumentedInformation.title,
+                DocumentedInformation.created_at,
+            ).where(DocumentedInformation.id == capa_id)
+        )
+    ).first()
+    return (row[0], row[1], row[2]) if row else None
 
 
 async def list_complaints(
