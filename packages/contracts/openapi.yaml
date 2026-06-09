@@ -6015,6 +6015,9 @@ components:
       required: [id, plan_id, state]
       properties:
         id: { type: string, format: uuid }
+        identifier: { type: [string, "null"], description: The audit record's human identifier (REC-…) — from the documented_information base row. }
+        title: { type: [string, "null"] }
+        created_at: { type: [string, "null"], format: date-time }
         plan_id: { type: string, format: uuid }
         lead_auditor_user_id: { type: [string, "null"], format: uuid }
         state:
@@ -6045,6 +6048,7 @@ components:
       properties:
         id: { type: string, format: uuid }
         identifier: { type: [string, "null"] }
+        title: { type: [string, "null"], description: The logged summary (or correction reason) — the record title. }
         audit_id: { type: string, format: uuid }
         finding_type: { $ref: "#/components/schemas/FindingType" }
         severity:
