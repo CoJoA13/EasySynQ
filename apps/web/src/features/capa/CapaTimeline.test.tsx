@@ -12,7 +12,7 @@ const directory = [
 function wrap(stages: CapaStage[]) {
   return render(
     <MantineProvider theme={theme}>
-      <CapaTimeline stages={stages} directory={directory} />
+      <CapaTimeline stages={stages} directory={directory} capaId="ca1" />
     </MantineProvider>,
   );
 }
