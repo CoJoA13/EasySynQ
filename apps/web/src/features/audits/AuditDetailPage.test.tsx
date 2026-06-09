@@ -26,7 +26,8 @@ test("renders header (identifier · title · state) + plan/programme context", a
   // Plan context: scheduled date + checklist ref + auditee process + the programme title.
   expect(await screen.findByText(/2026-05-28/)).toBeInTheDocument();
   expect(screen.getByText(/FRM-AUD-002/)).toBeInTheDocument();
-  expect(screen.getByText(/Purchasing$/)).toBeInTheDocument();
+  // getAllBy: FindingsCard now also renders "Purchasing" as a process_ref badge (Task 14).
+  expect(screen.getAllByText(/Purchasing$/).length).toBeGreaterThan(0);
   expect(screen.getByText(/2026 Internal Audit Programme/)).toBeInTheDocument();
 });
 

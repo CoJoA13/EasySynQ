@@ -3,7 +3,9 @@ import {
 } from "@mantine/core";
 import { Link, useParams } from "react-router-dom";
 import { useUserDirectory } from "../../app/shell/useUserDirectory";
+import type { Finding } from "../../lib/types";
 import { AuditStateBadge } from "./badges";
+import { FindingsCard } from "./FindingsCard";
 import { useAudit, useAuditPlan, useAuditPrograms, useProcesses } from "./hooks";
 import { AuditLifecyclePanel } from "./AuditLifecyclePanel";
 
@@ -88,7 +90,7 @@ export function AuditDetailPage() {
       </Group>
       <Grid gutter="md">
         <Grid.Col span={{ base: 12, md: 7 }}>
-          {/* Task 14 mounts <FindingsCard audit={a} scope={scope} /> here. */}
+          <FindingsCard audit={a} scope={scope} onLog={() => {}} onCorrect={(_f: Finding) => {}} />
         </Grid.Col>
         <Grid.Col span={{ base: 12, md: 5 }}>
           <Paper withBorder p="md" mb="md">
