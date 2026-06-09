@@ -38,7 +38,11 @@ export function NewAuditModal({ opened, onClose }: { opened: boolean; onClose: (
 
   return (
     <Modal opened={opened} onClose={onClose} title="New audit">
-      {!programs.isLoading && programRows.length === 0 ? (
+      {programs.isError ? (
+        <Alert color="red" title="Couldn't load programmes">
+          Please try again.
+        </Alert>
+      ) : !programs.isLoading && programRows.length === 0 ? (
         <Text c="dimmed">
           No audit plans yet — create a programme and add a plan on the Programme tab first.
         </Text>

@@ -127,7 +127,8 @@ export function AuditsListPage() {
                 <Table.Td>
                   <AuditStateBadge state={a.state} />
                 </Table.Td>
-                <Table.Td>{a.started_at ?? (a.created_at ? a.created_at.slice(0, 10) : "—")}</Table.Td>
+                {/* "—" for an unstarted audit — a created_at fallback would mislabel it as started. */}
+                <Table.Td>{a.started_at ?? "—"}</Table.Td>
               </Table.Tr>
             ))}
           </Table.Tbody>
