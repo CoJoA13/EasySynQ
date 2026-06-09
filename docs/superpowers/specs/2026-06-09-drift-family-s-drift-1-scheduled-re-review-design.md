@@ -64,7 +64,7 @@ On `documented_information`:
 
 | Column | Type | Null | Meaning |
 |---|---|---|---|
-| `review_period` | `INTERVAL` | yes | Per-doc currency interval (doc 04 §6.1, doc 14). NULL = not scheduled (legacy/opt-out). |
+| `review_period_months` | `INTEGER` | yes | Per-doc currency interval in months. NULL = not scheduled (legacy/opt-out). **Amended from doc 14's literal `INTERVAL`:** psycopg3 cannot load a PG interval containing month components into `timedelta` — an `INTERVAL '24 months'` column would crash every ORM read. Months-as-int is the honest storage; date math via a pure `add_months()` (day-clamped). |
 | `next_review_due` | `DATE` | yes | **Stored** (not derivable: review-confirm resets it from the *review* date). |
 | `last_reviewed_at` | `TIMESTAMPTZ` | yes | Set by review-confirm; makes the recompute rule deterministic. |
 
@@ -79,9 +79,8 @@ On `documented_information`:
   precedent): one SEQUENTIAL stage `review`, task type `PERIODIC_REVIEW`, assignee resolved at
   instantiate to the document owner. Downgrade deletes the seed guarded `NOT EXISTS(<child instance>)`
   (the 0023 lesson).
-- **API representation:** `review_period` is exposed as **`review_period_months` (int, 1–120, or
-  null)** in all payloads; the serializer/service converts to/from the stored interval
-  (`make_interval(months => n)` semantics). Avoids ISO-8601-duration churn in the SPA.
+- **API representation:** **`review_period_months` (int, 1–120, or null)** in all payloads — the
+  column and the API field are the same unit, no conversion layer.
 - **`metadata_snapshot`:** `review_period` is Snapshot-✔ (doc 04 §6.1) — add it to the shared
   `_snapshot(doc)` builder so new versions freeze it (the doc 05 §8.2 metadata-diff worked example
   literally shows "Review interval 24 → 12 months" — this falls out of the existing metadata diff for
@@ -93,9 +92,14 @@ On `documented_information`:
 **The recompute rule (single source of truth, one domain function):**
 
 ```
-next_review_due = date_in_org_tz(last_reviewed_at or effective_from) + review_period
-                  (NULL if review_period is NULL or neither anchor exists)
+anchor          = the LATER of (last_reviewed_at, effective_from)   # whichever exist
+next_review_due = date_in_org_tz(anchor) + review_period_months     # add_months, day-clamped
+                  (NULL if review_period_months is NULL or no anchor exists)
 ```
+
+(Amended from the earlier `last_reviewed_at or effective_from`: max-of-the-two makes ONE rule
+correct at every trigger — a re-release after a confirm anchors on the newer `effective_from`, a
+confirm after a release anchors on the newer review date.)
 
 | Trigger | Behavior |
 |---|---|
@@ -103,7 +107,7 @@ next_review_due = date_in_org_tz(last_reviewed_at or effective_from) + review_pe
 | **Release / cutover** (T6 immediate release AND the `release_due_versions` scheduled cutover) | recompute: `next_review_due = effective_from + review_period` ("recomputed on release", doc 04 §6.1). |
 | **Review-confirm** (decision outcome `complete`, §5) | `last_reviewed_at = now()`; recompute from the review date ("recomputed on review"). |
 | **`PATCH /documents/{id}`** (`document.manage_metadata`) | accepts `review_period_months` (int or null); recompute on change. Setting it on a legacy doc is the **opt-in** path (§0.4). Clearing to null exempts the doc from the sweep (next_review_due → NULL). |
-| **T2 submit gate** | `review_period` joins the required-fields set enforced at `Draft → InReview` (doc 04 §6.1 header). Given the create-default it never fires in practice — defense-in-depth; a 422 names the field. |
+| **T2 submit gate** | **Amended from a 422 to an auto-default:** at `Draft → InReview`, a NULL `review_period_months` is set to the 24-month default (not rejected). Rationale: a legacy doc revised between S-drift-1 and S-web-8 would otherwise be STRANDED at submit (the SPA has no field to set it yet; API-PATCH-only escape). Auto-default = the create-default applied late — every doc that passes T2 has a period (the doc 04 §6.1 intent) and nothing ever blocks. |
 | **S-ing-5 import baseline** | leaves `review_period` **NULL** — imports are exactly the "pre-existing documents" class the owner opted out of backfilling (§0.4); a bulk import of legacy docs with past as-of dates must not instantly flood overdue tasks. Owners opt in per doc (or per family later) via PATCH. |
 
 **`review_state` (derived projection, never stored):**
