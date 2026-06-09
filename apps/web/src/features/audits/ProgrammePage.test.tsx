@@ -87,3 +87,84 @@ test("no axe violations", async () => {
   await screen.findByText("AUDPROG-000001");
   expect(await axe(container)).toHaveNoViolations();
 });
+
+test("shows the selected programme's plans (process + lead resolved, degrade-friendly)", async () => {
+  renderWithProviders(<ProgrammePage />, { route: "/audits/programme" });
+  // Newest programme (AUDPROG-000001) is selected by default → its plans render.
+  expect(await screen.findByText("Plans — AUDPROG-000001")).toBeInTheDocument();
+  const planRows = await screen.findAllByRole("row", { name: /2026-/ });
+  expect(within(planRows[0]!).getByText("2026-05-28")).toBeInTheDocument();
+  expect(within(planRows[0]!).getByText("Purchasing")).toBeInTheDocument(); // process name
+  expect(within(planRows[0]!).getByText("Mara Quality")).toBeInTheDocument(); // lead via directory
+  expect(within(planRows[0]!).getByText("FRM-AUD-002")).toBeInTheDocument();
+});
+
+test("Add plan POSTs to the selected programme (date + process + checklist ref)", async () => {
+  grant(["audit.plan"]);
+  let body: Record<string, unknown> | null = null;
+  let target = "";
+  server.use(
+    http.post("/api/v1/audit-programs/:id/plans", async ({ request, params }) => {
+      target = String(params.id);
+      body = (await request.json()) as typeof body;
+      return HttpResponse.json(
+        { id: "pl-new-00-0000-0000-0000-000000000000", program_id: target, auditee_process_id: null, lead_auditor_user_id: null, scheduled_date: "2026-11-01", checklist_ref: "FRM-AUD-002", created_at: "2026-06-09T09:00:00+00:00" },
+        { status: 201 },
+      );
+    }),
+  );
+  const u = userEvent.setup();
+  renderWithProviders(<ProgrammePage />, { route: "/audits/programme" });
+  await u.click(await screen.findByRole("button", { name: /Add plan/ }));
+  const dialog = await screen.findByRole("dialog");
+  await u.type(within(dialog).getByLabelText(/Scheduled date/), "2026-11-01");
+  await u.click(within(dialog).getByLabelText(/Auditee process/));
+  await u.click(await screen.findByRole("option", { name: "Purchasing" }));
+  await u.type(within(dialog).getByLabelText(/Checklist ref/), "FRM-AUD-002");
+  await u.click(within(dialog).getByRole("button", { name: /Save plan/ }));
+  await waitFor(() => expect(body).not.toBeNull());
+  expect(target).toBe("ap000001-0001-0001-0001-000000000001");
+  expect(body!["scheduled_date"]).toBe("2026-11-01");
+  expect(body!["auditee_process_id"]).toBe("pr000001-0001-0001-0001-000000000001");
+  expect(body!["checklist_ref"]).toBe("FRM-AUD-002");
+});
+
+test("an archived selected programme hides Add plan; a racing 409 surfaces calmly", async () => {
+  grant(["audit.plan"]);
+  const u = userEvent.setup();
+  renderWithProviders(<ProgrammePage />, { route: "/audits/programme" });
+  // Select the archived programme → no Add plan.
+  await u.click(await screen.findByText("AUDPROG-000002"));
+  expect(screen.queryByRole("button", { name: /Add plan/ })).toBeNull();
+  // Back on the active one, a server 409 (race: archived elsewhere) renders calmly in the modal.
+  await u.click(screen.getByText("AUDPROG-000001"));
+  server.use(
+    http.post("/api/v1/audit-programs/:id/plans", () =>
+      HttpResponse.json(
+        { code: "program_archived", title: "Cannot add a plan to an archived programme" },
+        { status: 409 },
+      ),
+    ),
+  );
+  await u.click(await screen.findByRole("button", { name: /Add plan/ }));
+  const dialog = await screen.findByRole("dialog");
+  await u.click(within(dialog).getByRole("button", { name: /Save plan/ }));
+  expect(
+    await within(dialog).findByText(/Cannot add a plan to an archived programme/),
+  ).toBeInTheDocument();
+});
+
+test("the process picker is omitted when GET /processes 403s (degrade)", async () => {
+  grant(["audit.plan"]);
+  server.use(
+    http.get("/api/v1/processes", () =>
+      HttpResponse.json({ code: "forbidden", title: "Forbidden" }, { status: 403 }),
+    ),
+  );
+  const u = userEvent.setup();
+  renderWithProviders(<ProgrammePage />, { route: "/audits/programme" });
+  await u.click(await screen.findByRole("button", { name: /Add plan/ }));
+  const dialog = await screen.findByRole("dialog");
+  expect(within(dialog).getByLabelText(/Scheduled date/)).toBeInTheDocument();
+  expect(within(dialog).queryByLabelText(/Auditee process/)).toBeNull();
+});

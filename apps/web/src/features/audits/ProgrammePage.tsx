@@ -1,8 +1,10 @@
 import { Alert, Badge, Button, Container, Group, Loader, Table, Text, Title } from "@mantine/core";
 import { useState } from "react";
 import { usePermissions } from "../../app/shell/usePermissions";
+import { useUserDirectory } from "../../app/shell/useUserDirectory";
 import type { AuditProgram } from "../../lib/types";
-import { useAuditPrograms } from "./hooks";
+import { useAuditPlans, useAuditPrograms, useProcesses } from "./hooks";
+import { PlanForm } from "./PlanForm";
 import { ProgramForm } from "./ProgramForm";
 
 export function ProgrammePage() {
@@ -11,6 +13,16 @@ export function ProgrammePage() {
   // null = closed; "new" = create; a programme = edit. Keyed remount resets the form state.
   const [editing, setEditing] = useState<AuditProgram | "new" | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [planFormOpen, setPlanFormOpen] = useState(false);
+
+  // Derive selected BEFORE early returns so hooks below can be called unconditionally.
+  const rows = data ?? [];
+  const selected = rows.find((p) => p.id === selectedId) ?? rows[0] ?? null;
+
+  // All hooks called unconditionally (Rules of Hooks) — enabled guards handle the null case.
+  const plans = useAuditPlans(selected?.id ?? null);
+  const processes = useProcesses();
+  const { data: directory } = useUserDirectory();
 
   if (forbidden) {
     return (
@@ -44,9 +56,6 @@ export function ProgrammePage() {
       </Container>
     );
   }
-
-  const rows = data ?? [];
-  const selected = rows.find((p) => p.id === selectedId) ?? rows[0] ?? null;
 
   return (
     <Container size="xl" py="md">
@@ -112,7 +121,55 @@ export function ProgrammePage() {
           </Table.Tbody>
         </Table>
       )}
-      {/* Task 11 mounts the selected programme's plans section here (uses `selected`). */}
+      {selected && (
+        <>
+          <Group justify="space-between" mb="sm">
+            <Title order={4}>Plans — {selected.identifier}</Title>
+            {can("audit.plan") && !selected.archived && (
+              <Button variant="light" onClick={() => setPlanFormOpen(true)}>
+                ＋ Add plan
+              </Button>
+            )}
+          </Group>
+          {(plans.data ?? []).length === 0 ? (
+            <Text c="dimmed">No plans in this programme yet.</Text>
+          ) : (
+            <Table striped>
+              <Table.Thead>
+                <Table.Tr>
+                  <Table.Th>Scheduled</Table.Th>
+                  <Table.Th>Auditee process</Table.Th>
+                  <Table.Th>Lead auditor</Table.Th>
+                  <Table.Th>Checklist ref</Table.Th>
+                </Table.Tr>
+              </Table.Thead>
+              <Table.Tbody>
+                {(plans.data ?? []).map((p) => (
+                  <Table.Tr key={p.id}>
+                    <Table.Td>{p.scheduled_date ?? "—"}</Table.Td>
+                    <Table.Td>
+                      {p.auditee_process_id
+                        ? ((processes.data ?? []).find((x) => x.id === p.auditee_process_id)?.name ??
+                          `${p.auditee_process_id.slice(0, 8)}…`)
+                        : "—"}
+                    </Table.Td>
+                    <Table.Td>
+                      {p.lead_auditor_user_id
+                        ? ((directory ?? []).find((u) => u.id === p.lead_auditor_user_id)
+                            ?.display_name ?? `${p.lead_auditor_user_id.slice(0, 8)}…`)
+                        : "—"}
+                    </Table.Td>
+                    <Table.Td>{p.checklist_ref ?? "—"}</Table.Td>
+                  </Table.Tr>
+                ))}
+              </Table.Tbody>
+            </Table>
+          )}
+          {planFormOpen && (
+            <PlanForm programId={selected.id} opened onClose={() => setPlanFormOpen(false)} />
+          )}
+        </>
+      )}
       {editing !== null && (
         <ProgramForm
           key={editing === "new" ? "new" : editing.id}
