@@ -564,6 +564,11 @@ async def test_minor_action_plan_qm_approval_writes_signature(
     assert body["approval_instance"]["current_state"] == "qm_approval"
 
     task_id = await _my_pending_task(app_client, ha, iid)
+    # the single-task read carries the subject discriminator; this is a CAPA action-plan approval
+    # task, so it points back at the CAPA it approves
+    detail_task = (await app_client.get(f"/api/v1/tasks/{task_id}", headers=ha)).json()
+    assert detail_task["subject_type"] == "CAPA"
+    assert detail_task["subject_id"] == capa_id
     dr = await app_client.post(
         f"/api/v1/tasks/{task_id}/decision", headers=ha, json={"outcome": "approve"}
     )
@@ -1231,3 +1236,55 @@ async def test_capa_list_and_detail_carry_title_created_at_raised_by(
     assert detail["title"] == "Torque wrench miscalibration"
     assert detail["created_at"] is not None
     assert detail["raised_by"] == detail["stages"][0]["created_by"]
+
+
+# --- S-web-7b: thin read-enrichments (stage evidence_links + /approval) ----------------------
+
+
+async def test_capa_detail_stage_carries_evidence_links(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    subject = _subject("capaev")
+    await _grant(subject, _CAPA_KEYS)
+    h = _auth(token_factory, subject)
+    rr = await app_client.post(
+        "/api/v1/capas", headers=h, json={"title": "Evidence shape", "severity": "Minor"}
+    )
+    assert rr.status_code == 201, rr.text
+    raised = rr.json()
+    detail = (await app_client.get(f"/api/v1/capas/{raised['id']}", headers=h)).json()
+    # every stage now carries an evidence_links array (empty until a record is linked)
+    assert all("evidence_links" in s for s in detail["stages"])
+    assert detail["stages"][0]["evidence_links"] == []
+
+
+async def test_capa_approval_read_null_then_pending(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    subject = _subject("capaap")
+    await _grant(subject, (*_CAPA_KEYS, "capa.record_rca", "capa.plan_action"))
+    h = _auth(token_factory, subject)
+    raised = (
+        await app_client.post(
+            "/api/v1/capas", headers=h, json={"title": "Approval read", "severity": "Minor"}
+        )
+    ).json()
+    cid = raised["id"]
+    # no cycle yet → null
+    assert (await app_client.get(f"/api/v1/capas/{cid}/approval", headers=h)).json() is None
+    # walk to RootCause then propose an action plan → a non-null approval with the proposed plan
+    await app_client.post(
+        f"/api/v1/capas/{cid}/containment", headers=h, json={"content_block": {"correction": "x"}}
+    )
+    await app_client.post(
+        f"/api/v1/capas/{cid}/root-cause", headers=h, json={"content_block": {"root_cause": "y"}}
+    )
+    await app_client.post(
+        f"/api/v1/capas/{cid}/action-plan",
+        headers=h,
+        json={"content_block": {"action_items": ["fix it"]}},
+    )
+    approval = (await app_client.get(f"/api/v1/capas/{cid}/approval", headers=h)).json()
+    assert approval is not None
+    assert approval["instance"]["subject_id"] == cid
+    assert approval["proposed_action_plan"] == {"action_items": ["fix it"]}

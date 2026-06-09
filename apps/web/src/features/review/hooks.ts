@@ -40,7 +40,8 @@ export function useWorkflowInstance(instanceId: string | null) {
 
 export interface DecideInput {
   taskId: string;
-  documentId: string; // for cache invalidation (the task payload has no doc id)
+  subjectType: "DOCUMENT" | "CAPA";
+  subjectId: string; // the document id or capa id — for cache invalidation
   idempotencyKey: string;
   body: DecisionBody;
 }
@@ -53,12 +54,18 @@ export function useDecideTask() {
       api.send<DecisionResult>("POST", `/api/v1/tasks/${taskId}/decision`, body, {
         "Idempotency-Key": idempotencyKey,
       }),
-    onSuccess: (_d, { taskId, documentId }) => {
+    onSuccess: (_d, { taskId, subjectType, subjectId }) => {
       void qc.invalidateQueries({ queryKey: ["task", taskId] });
       void qc.invalidateQueries({ queryKey: ["tasks"] });
-      void qc.invalidateQueries({ queryKey: ["document", documentId] });
-      void qc.invalidateQueries({ queryKey: ["document-approval", documentId] });
-      void qc.invalidateQueries({ queryKey: ["document-versions", documentId] });
+      if (subjectType === "DOCUMENT") {
+        void qc.invalidateQueries({ queryKey: ["document", subjectId] });
+        void qc.invalidateQueries({ queryKey: ["document-approval", subjectId] });
+        void qc.invalidateQueries({ queryKey: ["document-versions", subjectId] });
+      } else {
+        void qc.invalidateQueries({ queryKey: ["capa", subjectId] });
+        void qc.invalidateQueries({ queryKey: ["capas"] });
+        void qc.invalidateQueries({ queryKey: ["capa-approval", subjectId] });
+      }
     },
   });
 }

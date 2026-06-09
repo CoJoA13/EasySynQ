@@ -47,7 +47,8 @@ test("useDecideTask posts a decision with an Idempotency-Key header", async () =
   const { result } = renderHook(() => useDecideTask(), { wrapper });
   await result.current.mutateAsync({
     taskId: "task1111-1111-1111-1111-111111111111",
-    documentId: "11111111-1111-1111-1111-111111111111",
+    subjectType: "DOCUMENT",
+    subjectId: "11111111-1111-1111-1111-111111111111",
     idempotencyKey: "key-123",
     body: { outcome: "approve" },
   });

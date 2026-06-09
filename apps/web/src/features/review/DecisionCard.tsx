@@ -12,7 +12,7 @@ const NEEDS_COMMENT: DecisionOutcome[] = ["changes_requested", "reject"];
 // is the audit record); request-changes/reject require a comment (the server 422s otherwise). SoD is
 // enforced server-side — a 403 sod_violation is rendered calmly (the version author never reaches a
 // decidable task, but the branch backstops an override-only edge case).
-export function DecisionCard({ taskId, documentId }: { taskId: string; documentId: string }) {
+export function DecisionCard({ taskId, subjectType, subjectId }: { taskId: string; subjectType: "DOCUMENT" | "CAPA"; subjectId: string }) {
   const { user } = useAuth();
   const decide = useDecideTask();
   const navigate = useNavigate();
@@ -34,7 +34,8 @@ export function DecisionCard({ taskId, documentId }: { taskId: string; documentI
     try {
       await decide.mutateAsync({
         taskId,
-        documentId,
+        subjectType,
+        subjectId,
         idempotencyKey: idemKey,
         body: { outcome, comment: comment.trim() || undefined },
       });

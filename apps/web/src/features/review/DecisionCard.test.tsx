@@ -12,7 +12,7 @@ const DOC = "11111111-1111-1111-1111-111111111111";
 test("Submit is disabled until a valid decision (comment required to reject)", async () => {
   const u = userEvent.setup();
   const { getByRole, getByLabelText } = renderWithProviders(
-    <DecisionCard taskId={TASK} documentId={DOC} />,
+    <DecisionCard taskId={TASK} subjectType="DOCUMENT" subjectId={DOC} />,
     { route: `/tasks/${TASK}` },
   );
   const submit = getByRole("button", { name: "Submit decision" });
@@ -26,7 +26,7 @@ test("Submit is disabled until a valid decision (comment required to reject)", a
 test("approve requires the signature confirmation before submit", async () => {
   const u = userEvent.setup();
   const { getByRole, getByLabelText } = renderWithProviders(
-    <DecisionCard taskId={TASK} documentId={DOC} />,
+    <DecisionCard taskId={TASK} subjectType="DOCUMENT" subjectId={DOC} />,
     { route: `/tasks/${TASK}` },
   );
   const submit = getByRole("button", { name: "Submit decision" });
@@ -44,7 +44,7 @@ test("surfaces a 403 sod_violation calmly", async () => {
   );
   const u = userEvent.setup();
   const { getByRole, getByLabelText, findByText } = renderWithProviders(
-    <DecisionCard taskId={TASK} documentId={DOC} />,
+    <DecisionCard taskId={TASK} subjectType="DOCUMENT" subjectId={DOC} />,
     { route: `/tasks/${TASK}` },
   );
   await u.click(getByLabelText("Approve"));
@@ -54,7 +54,7 @@ test("surfaces a 403 sod_violation calmly", async () => {
 });
 
 test("has no a11y violations", async () => {
-  const { container } = renderWithProviders(<DecisionCard taskId={TASK} documentId={DOC} />, {
+  const { container } = renderWithProviders(<DecisionCard taskId={TASK} subjectType="DOCUMENT" subjectId={DOC} />, {
     route: `/tasks/${TASK}`,
   });
   expect(await axe(container)).toHaveNoViolations();

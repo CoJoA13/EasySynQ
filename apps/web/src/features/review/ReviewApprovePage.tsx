@@ -4,19 +4,27 @@ import { ApiError } from "../../lib/api";
 import { useDocument } from "../document/useDocument";
 import { useDocumentVersions } from "../document/useDocumentVersions";
 import { VersionCompare } from "../document/VersionCompare";
+import { useCapaApproval } from "../capa/hooks";
+import { CapaApprovalContext } from "./CapaApprovalContext";
 import { DecisionCard } from "./DecisionCard";
 import { useTask, useWorkflowInstance } from "./hooks";
 
-// S-web-5: the per-task focus page. Task → instance → subject document → the redline of what changed
-// + the decision card (rendered only for a PENDING task the caller can see; GET /tasks/{id}
-// 404-collapses otherwise, which we render calmly).
+// S-web-5 + S-web-7b: the per-task focus page. Branches on the task's subject type:
+//  - DOCUMENT → instance → document → redline + the decision card (unchanged).
+//  - CAPA → the CAPA approval context (identity + proposed plan, gated capa.read) + the decision card.
+// The decision POST dispatches on subject type server-side, so the same DecisionCard drives both.
 export function ReviewApprovePage() {
   const { id: taskId = null } = useParams();
   const { data: task, isLoading, isError, error } = useTask(taskId);
-  const { data: instance } = useWorkflowInstance(task?.instance_id ?? null);
-  const docId = instance?.subject_id ?? null;
+  const isCapa = task?.subject_type === "CAPA";
+  // Document branch (unchanged): resolve the subject doc via the instance. Disabled for a CAPA task.
+  const { data: instance } = useWorkflowInstance(!isCapa && task ? task.instance_id : null);
+  const docId = !isCapa ? (instance?.subject_id ?? null) : null;
   const { data: doc } = useDocument(docId, { enabled: docId !== null });
   const { data: versions } = useDocumentVersions(docId, docId !== null);
+  // For a CAPA task, the approver signs the PROPOSED action plan — load it (gated capa.read) and gate the
+  // decision card on it, so they never approve before the plan they're signing has actually loaded.
+  const capaApproval = useCapaApproval(isCapa ? (task?.subject_id ?? null) : null);
 
   if (isLoading) return <Loader aria-label="Loading task" />;
   if (isError || !task) {
@@ -38,6 +46,39 @@ export function ReviewApprovePage() {
   }
 
   const decidable = task.state === "PENDING";
+  const decidedAlert = (
+    <Alert color="blue" title="Decided">
+      This task has already been decided.
+    </Alert>
+  );
+
+  if (isCapa) {
+    // The CAPA subject id is on the task (no document.read-gated instance read) → always present here.
+    return (
+      <Stack gap="lg">
+        <Title order={2}>Review &amp; Approve — Action plan</Title>
+        <Grid gutter="lg" align="flex-start">
+          <Grid.Col span={{ base: 12, md: 7 }}>
+            <CapaApprovalContext capaId={task.subject_id!} />
+          </Grid.Col>
+          <Grid.Col span={{ base: 12, md: 5 }}>
+            {!decidable ? (
+              decidedAlert
+            ) : capaApproval.isLoading ? (
+              <Loader aria-label="Loading the action plan" />
+            ) : capaApproval.data?.proposed_action_plan ? (
+              <DecisionCard taskId={task.id} subjectType="CAPA" subjectId={task.subject_id!} />
+            ) : (
+              <Alert color="yellow" title="Action plan unavailable">
+                The proposed action plan couldn't be loaded — refresh before approving.
+              </Alert>
+            )}
+          </Grid.Col>
+        </Grid>
+      </Stack>
+    );
+  }
+
   return (
     <Stack gap="lg">
       <Title order={2}>Review &amp; Approve{doc ? ` — ${doc.identifier}` : ""}</Title>
@@ -49,12 +90,12 @@ export function ReviewApprovePage() {
           </Stack>
         </Grid.Col>
         <Grid.Col span={{ base: 12, md: 5 }}>
+          {/* Byte-identical to S-web-5: gate on docId too, so the card only renders once the instance→doc
+              resolved (subjectId is a real document id, never "") and the cache invalidation is correct. */}
           {decidable && docId ? (
-            <DecisionCard taskId={task.id} documentId={docId} />
+            <DecisionCard taskId={task.id} subjectType="DOCUMENT" subjectId={docId} />
           ) : (
-            <Alert color="blue" title="Decided">
-              This task has already been decided.
-            </Alert>
+            decidedAlert
           )}
         </Grid.Col>
       </Grid>

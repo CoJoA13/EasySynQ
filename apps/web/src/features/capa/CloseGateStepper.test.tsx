@@ -2,52 +2,57 @@ import { render, screen } from "@testing-library/react";
 import { MantineProvider } from "@mantine/core";
 import { expect, test } from "vitest";
 import { theme } from "../../theme/mantine";
-import type { CapaCloseState, CapaStage } from "../../lib/types";
+import type { CapaStage, EvidenceLink } from "../../lib/types";
 import { CloseGateStepper, deriveGate } from "./CloseGateStepper";
+
+const ev = (): EvidenceLink => ({
+  id: "e", record_id: "r", record_identifier: "REC-1", link_reason: null, created_at: null,
+});
 
 const mk = (
   stage: CapaStage["stage"],
   block: Record<string, unknown> = {},
   cycle = 0,
+  evidence = 0,
 ): CapaStage => ({
   id: `${stage}-${cycle}`, stage, content_block: block, cycle_marker: cycle, created_by: "u",
-  created_at: "2026-05-20T09:00:00+00:00",
+  created_at: "2026-05-20T09:00:00+00:00", evidence_links: Array.from({ length: evidence }, ev),
 });
 
-test("deriveGate: rootCause/action from current-cycle stages; effectiveness only when Closed", () => {
-  expect(deriveGate([mk("Raised")], "Raised", 0)).toEqual({
+test("deriveGate: root cause is cycle-agnostic; action/effectiveness need current-cycle evidence", () => {
+  expect(deriveGate([mk("Raised")], 0)).toEqual({
     rootCause: false, action: false, effectiveness: false,
   });
-  expect(deriveGate([mk("RootCause"), mk("Implement")], "Implement", 0)).toEqual({
-    rootCause: true, action: true, effectiveness: false,
+  // an Implement WITHOUT evidence does NOT satisfy the action step (the M4 gate needs a linked record)
+  expect(deriveGate([mk("RootCause"), mk("Implement")], 0)).toEqual({
+    rootCause: true, action: false, effectiveness: false,
   });
-  // An effective Verify ALONE does not mark effectiveness done — evidence may still be missing (the
-  // API 409s capa_close_incomplete). Only a Closed CAPA has definitively passed the evidence gate.
-  expect(deriveGate([mk("Verify", { decision: "effective" })], "Verify", 0)).toMatchObject({
-    effectiveness: false,
-  });
-  expect(
-    deriveGate([mk("RootCause"), mk("Implement"), mk("Verify", { decision: "effective" })], "Closed", 0),
-  ).toMatchObject({ effectiveness: true });
-});
-
-test("after a not_effective loop: root-cause carries forward, but a prior-cycle action does not", () => {
-  // CAPA looped to cycle 1 (close_state RootCause). The loop bumps cycle_marker WITHOUT a new
-  // RootCause stage (the RCA carries forward → root-cause stays satisfied), but the cycle-0 ActionPlan
-  // no longer counts — the current cycle needs a fresh plan.
+  // with a current-cycle Implement + an effective Verify, BOTH carrying evidence → all met
   expect(
     deriveGate(
-      [mk("RootCause", {}, 0), mk("ActionPlan", {}, 0), mk("Verify", { decision: "not_effective" }, 0)],
-      "RootCause",
+      [mk("RootCause"), mk("Implement", {}, 0, 1), mk("Verify", { decision: "effective" }, 0, 1)],
+      0,
+    ),
+  ).toEqual({ rootCause: true, action: true, effectiveness: true });
+  // a not_effective Verify (even with evidence) does NOT mark effectiveness
+  expect(
+    deriveGate([mk("Verify", { decision: "not_effective" }, 0, 1)], 0).effectiveness,
+  ).toBe(false);
+});
+
+test("after a not_effective loop: root-cause carries forward, a prior-cycle action does not", () => {
+  expect(
+    deriveGate(
+      [mk("RootCause", {}, 0), mk("Implement", {}, 0, 1), mk("Verify", { decision: "not_effective" }, 0, 1)],
       1,
     ),
   ).toEqual({ rootCause: true, action: false, effectiveness: false });
 });
 
-function wrap(stages: CapaStage[], closeState: CapaCloseState = "Raised", cycleMarker = 0) {
+function wrap(stages: CapaStage[], cycleMarker = 0) {
   return render(
     <MantineProvider theme={theme}>
-      <CloseGateStepper stages={stages} closeState={closeState} cycleMarker={cycleMarker} />
+      <CloseGateStepper stages={stages} cycleMarker={cycleMarker} />
     </MantineProvider>,
   );
 }

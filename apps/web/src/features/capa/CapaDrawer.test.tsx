@@ -44,3 +44,38 @@ test("no axe violations when open", async () => {
   await screen.findByText(/Supplier re-evaluation overdue/);
   expect(await axe(container)).toHaveNoViolations();
 });
+
+test("renders the Advance panel form for the caller's permitted stage", async () => {
+  server.use(
+    http.get("/api/v1/me/permissions", () =>
+      HttpResponse.json({
+        scope: { level: "PROCESS", selector: null },
+        permissions: [{ key: "capa.record_rca", effect: "ALLOW", source: null }],
+      }),
+    ),
+  );
+  // Use a Containment-state CAPA to exercise the root-cause form:
+  server.use(
+    http.get("/api/v1/capas/:id", () =>
+      HttpResponse.json({
+        id: "ca000002-0002-0002-0002-000000000002",
+        identifier: "REC-000034",
+        title: "Containment-state CAPA",
+        source: "complaint",
+        severity: "Critical",
+        process_id: "pr1",
+        close_state: "Containment",
+        cycle_marker: 0,
+        origin_finding_id: null,
+        raised_by: "bbbb1111-1111-1111-1111-111111111111",
+        created_at: "2026-05-28T09:00:00+00:00",
+        stages: [
+          { id: "s1", stage: "Raised", content_block: { problem: "x" }, cycle_marker: 0, created_by: "bbbb1111-1111-1111-1111-111111111111", created_at: "2026-05-28T09:00:00+00:00", evidence_links: [] },
+        ],
+      }),
+    ),
+  );
+  renderWithProviders(<CapaDrawer capaId="ca000002-0002-0002-0002-000000000002" onClose={() => {}} />);
+  expect(await screen.findByText("Next step")).toBeInTheDocument();
+  expect(await screen.findByRole("button", { name: /Record root cause/ })).toBeInTheDocument();
+});

@@ -64,3 +64,19 @@ test("no axe violations", async () => {
   await screen.findByText(/Supplier re-evaluation/);
   expect(await axe(container)).toHaveNoViolations();
 });
+
+test("shows the Raise CAPA button when the caller holds capa.create and opens the modal", async () => {
+  server.use(
+    http.get("/api/v1/me/permissions", () =>
+      HttpResponse.json({
+        scope: { level: "SYSTEM", selector: null },
+        permissions: [{ key: "capa.create", effect: "ALLOW", source: null }],
+      }),
+    ),
+  );
+  const u = userEvent.setup();
+  renderWithProviders(<CapaBoardPage />, { route: "/capa" });
+  const raise = await screen.findByRole("button", { name: /Raise CAPA/ });
+  await u.click(raise);
+  expect(await screen.findByLabelText(/^Title/)).toBeInTheDocument();
+});

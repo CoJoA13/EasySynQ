@@ -1,6 +1,7 @@
 import { Alert, Badge, Group, Loader, Stack, Text, Title } from "@mantine/core";
 import { DetailDrawer } from "../../app/shell/DetailDrawer";
 import { useUserDirectory } from "../../app/shell/useUserDirectory";
+import { AdvancePanel } from "./AdvancePanel";
 import { SEVERITY_COLOR, SEVERITY_LABEL, SOURCE_LABEL } from "./columns";
 import { CapaTimeline } from "./CapaTimeline";
 import { CloseGateStepper } from "./CloseGateStepper";
@@ -15,9 +16,9 @@ export function CapaDrawer({ capaId, onClose }: { capaId: string | null; onClose
       opened={capaId !== null}
       onClose={onClose}
       title={
+        // Gate the header on !isError too: a failed refetch can leave stale cached data, and we must not
+        // show an out-of-date identifier/title above an error body.
         capa && !isError ? (
-          // Gate the title on !isError too, so a failed refetch with stale cached data doesn't leave
-          // an out-of-date identifier/title in the header while the body shows the error.
           <Stack gap={2}>
             <Text size="xs" c="dimmed">
               {capa.identifier ?? "CAPA"}
@@ -32,10 +33,6 @@ export function CapaDrawer({ capaId, onClose }: { capaId: string | null; onClose
       {isLoading ? (
         <Loader />
       ) : isError || !capa ? (
-        // The detail fetch failed (a stale board row, a 404/403/500, or a permission change between
-        // the list and detail reads) — surface it calmly instead of spinning forever. `isError` is
-        // honored even when React Query still holds stale cached data from an earlier successful open,
-        // so a later failed refetch never renders out-of-date details.
         <Alert color="red" title="Couldn't load this CAPA">
           It may have been removed, or you may not have access. Close this panel and try again.
         </Alert>
@@ -62,18 +59,27 @@ export function CapaDrawer({ capaId, onClose }: { capaId: string | null; onClose
             <Title order={5} mb="sm">
               Closed-loop thread
             </Title>
-            <CapaTimeline stages={capa.stages ?? []} directory={directory ?? []} />
+            <CapaTimeline
+              stages={capa.stages ?? []}
+              directory={directory ?? []}
+              capaId={capa.id}
+              cycleMarker={capa.cycle_marker}
+              closeState={capa.close_state}
+            />
           </div>
 
           <div>
             <Title order={5} mb="sm">
               Close gate
             </Title>
-            <CloseGateStepper
-              stages={capa.stages ?? []}
-              closeState={capa.close_state}
-              cycleMarker={capa.cycle_marker}
-            />
+            <CloseGateStepper stages={capa.stages ?? []} cycleMarker={capa.cycle_marker} />
+          </div>
+
+          <div>
+            <Title order={5} mb="sm">
+              Next step
+            </Title>
+            <AdvancePanel capa={capa} />
           </div>
         </Stack>
       )}

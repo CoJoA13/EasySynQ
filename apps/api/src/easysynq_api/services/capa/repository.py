@@ -8,6 +8,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Sequence
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -90,6 +91,39 @@ async def stages_with_evidence(
         )
     )
     return {tid for (tid,) in rows.all()}
+
+
+async def list_stage_evidence(
+    session: AsyncSession, stage_ids: list[uuid.UUID]
+) -> dict[uuid.UUID, list[dict[str, Any]]]:
+    """Evidence links pointing AT each capa_stage (target_type=capa_stage), joined to the linking
+    record's identifier — one query for all of a CAPA's stages. The M4 close gate needs ≥1 link
+    on the current-cycle Implement + Verify stages; the drawer renders the list per stage."""
+    if not stage_ids:
+        return {}
+    rows = (
+        await session.execute(
+            select(EvidenceForLink, DocumentedInformation.identifier)
+            .join(DocumentedInformation, DocumentedInformation.id == EvidenceForLink.record_id)
+            .where(
+                EvidenceForLink.target_type == EvidenceForTargetType.CAPA_STAGE,
+                EvidenceForLink.target_id.in_(stage_ids),
+            )
+            .order_by(EvidenceForLink.created_at)
+        )
+    ).all()
+    out: dict[uuid.UUID, list[dict[str, Any]]] = {}
+    for link, identifier in rows:
+        out.setdefault(link.target_id, []).append(
+            {
+                "id": str(link.id),
+                "record_id": str(link.record_id),
+                "record_identifier": identifier,
+                "link_reason": link.link_reason,
+                "created_at": link.created_at.isoformat() if link.created_at else None,
+            }
+        )
+    return out
 
 
 async def allow_capa_self_verify(session: AsyncSession, org_id: uuid.UUID) -> bool:
