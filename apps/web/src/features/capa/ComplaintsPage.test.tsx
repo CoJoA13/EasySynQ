@@ -18,10 +18,13 @@ function grant(keys: string[]) {
   );
 }
 
-test("lists complaints from {data}", async () => {
+test("lists complaints from {data}; hides write affordances without the keys (default perms)", async () => {
   renderWithProviders(<ComplaintsPage />, { route: "/capa/complaints" });
   expect(await screen.findByText("CMP-000007")).toBeInTheDocument();
   expect(screen.getByText(/Delivered batch missing CoA/)).toBeInTheDocument();
+  // Default /me/permissions is empty → neither write affordance renders (negative-gating).
+  expect(screen.queryByRole("button", { name: /Log complaint/ })).toBeNull();
+  expect(screen.queryByRole("button", { name: /Spawn CAPA/ })).toBeNull();
 });
 
 test("hides 'Log complaint' without record.create; shows + opens it with the key", async () => {

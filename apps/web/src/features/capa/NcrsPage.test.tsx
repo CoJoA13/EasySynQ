@@ -23,6 +23,11 @@ test("lists NCRs from {data} with friendly source labels", async () => {
   expect(await screen.findByText("NCR-000052")).toBeInTheDocument();
   const row = screen.getByRole("row", { name: /NCR-000052/ });
   expect(within(row).getByText("Process")).toBeInTheDocument();
+  // Default /me/permissions is empty → no write affordances (negative-gating); the undisposed row
+  // shows "Pending", not a "Record disposition" button.
+  expect(screen.queryByRole("button", { name: /Raise NCR/ })).toBeNull();
+  expect(within(row).queryByRole("button", { name: /Record disposition/ })).toBeNull();
+  expect(within(row).getByText("Pending")).toBeInTheDocument();
 });
 
 test("hides 'Raise NCR' without ncr.create; shows + opens it with the key", async () => {
