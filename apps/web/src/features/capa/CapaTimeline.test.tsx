@@ -13,7 +13,13 @@ const directory = [
 function wrap(stages: CapaStage[], cycleMarker = 0) {
   return render(
     <MantineProvider theme={theme}>
-      <CapaTimeline stages={stages} directory={directory} capaId="ca1" cycleMarker={cycleMarker} />
+      <CapaTimeline
+        stages={stages}
+        directory={directory}
+        capaId="ca1"
+        cycleMarker={cycleMarker}
+        closeState="RootCause"
+      />
     </MantineProvider>,
   );
 }
@@ -55,6 +61,7 @@ test("an Implement stage shows its linked records (as labels) + a stage-scoped e
       capaId="ca1"
       directory={directory}
       cycleMarker={0}
+      closeState="Implement"
       stages={[
         {
           id: "im",
@@ -85,6 +92,7 @@ test("a looped CAPA renders the linker only on the CURRENT cycle's Verify (no du
       capaId="ca1"
       directory={directory}
       cycleMarker={1}
+      closeState="Verify"
       stages={[
         { id: "v0", stage: "Verify", content_block: { decision: "not_effective" }, cycle_marker: 0, created_by: "u", created_at: "2026-05-18T09:00:00+00:00", evidence_links: [{ id: "e0", record_id: "r0", record_identifier: "REC-OLD", link_reason: null, created_at: null }] },
         { id: "v1", stage: "Verify", content_block: { decision: "effective" }, cycle_marker: 1, created_by: "u", created_at: "2026-05-21T09:00:00+00:00", evidence_links: [] },
@@ -95,4 +103,22 @@ test("a looped CAPA renders the linker only on the CURRENT cycle's Verify (no du
   expect(await screen.findByLabelText("Record (Verify)")).toBeInTheDocument();
   // the superseded cycle's historical evidence still shows as a chip
   expect(screen.getByText("REC-OLD")).toBeInTheDocument();
+});
+
+test("a terminal (Closed) CAPA shows linked evidence read-only but offers NO evidence linker", () => {
+  // Post-closure the evidence trail is frozen — the Implement/Verify stages must not expose a linker.
+  renderWithProviders(
+    <CapaTimeline
+      capaId="ca1"
+      directory={directory}
+      cycleMarker={0}
+      closeState="Closed"
+      stages={[
+        { id: "im", stage: "Implement", content_block: {}, cycle_marker: 0, created_by: "u", created_at: "2026-05-27T09:00:00+00:00", evidence_links: [{ id: "e1", record_id: "r1", record_identifier: "REC-000041", link_reason: null, created_at: null }] },
+        { id: "vf", stage: "Verify", content_block: { decision: "effective" }, cycle_marker: 0, created_by: "u", created_at: "2026-05-28T09:00:00+00:00", evidence_links: [{ id: "e2", record_id: "r2", record_identifier: "REC-000042", link_reason: null, created_at: null }] },
+      ]}
+    />,
+  );
+  expect(screen.getByText("REC-000041")).toBeInTheDocument(); // historical evidence still shown
+  expect(screen.queryByLabelText(/^Record/)).toBeNull(); // but no linker on a closed CAPA
 });

@@ -64,6 +64,7 @@ export function CapaDrawer({ capaId, onClose }: { capaId: string | null; onClose
               directory={directory ?? []}
               capaId={capa.id}
               cycleMarker={capa.cycle_marker}
+              closeState={capa.close_state}
             />
           </div>
 

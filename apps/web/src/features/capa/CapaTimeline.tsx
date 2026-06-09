@@ -1,5 +1,5 @@
 import { Badge, Group, Text, Timeline } from "@mantine/core";
-import type { CapaStage, DirectoryUser } from "../../lib/types";
+import type { CapaCloseState, CapaStage, DirectoryUser } from "../../lib/types";
 import { ContentBlock } from "./ContentBlock";
 import { EvidenceLinker } from "./EvidenceLinker";
 
@@ -13,18 +13,24 @@ function formatDate(iso: string): string {
 }
 
 const EVIDENCE_STAGES = new Set(["Implement", "Verify"]);
+const TERMINAL_STATES = new Set<CapaCloseState>(["Closed", "Rejected"]);
 
 export function CapaTimeline({
   stages,
   directory,
   capaId,
   cycleMarker,
+  closeState,
 }: {
   stages: CapaStage[];
   directory: DirectoryUser[];
   capaId: string;
   cycleMarker: number;
+  closeState: CapaCloseState;
 }) {
+  // A terminal CAPA's evidence trail is frozen (closed/rejected) — never offer to append new links to its
+  // stages post-closure (the server only org-checks the link, so the client must guard the affordance).
+  const terminal = TERMINAL_STATES.has(closeState);
   if (stages.length === 0) {
     return (
       <Text size="sm" c="dimmed">
@@ -72,7 +78,7 @@ export function CapaTimeline({
               linkers would duplicate the "Record (Verify)" accessible name across cycles (the S-web-6
               getByLabelText trap). Within one cycle there is at most one Implement + one Verify, so the
               per-stage suffix keeps the two labels distinct. */}
-          {EVIDENCE_STAGES.has(s.stage) && s.cycle_marker === cycleMarker && (
+          {!terminal && EVIDENCE_STAGES.has(s.stage) && s.cycle_marker === cycleMarker && (
             <div style={{ marginTop: 6 }}>
               <EvidenceLinker capaId={capaId} stageId={s.id} labelSuffix={` (${s.stage})`} />
             </div>

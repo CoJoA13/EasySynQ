@@ -4,6 +4,7 @@ import { ApiError } from "../../lib/api";
 import { useDocument } from "../document/useDocument";
 import { useDocumentVersions } from "../document/useDocumentVersions";
 import { VersionCompare } from "../document/VersionCompare";
+import { useCapaApproval } from "../capa/hooks";
 import { CapaApprovalContext } from "./CapaApprovalContext";
 import { DecisionCard } from "./DecisionCard";
 import { useTask, useWorkflowInstance } from "./hooks";
@@ -21,6 +22,9 @@ export function ReviewApprovePage() {
   const docId = !isCapa ? (instance?.subject_id ?? null) : null;
   const { data: doc } = useDocument(docId, { enabled: docId !== null });
   const { data: versions } = useDocumentVersions(docId, docId !== null);
+  // For a CAPA task, the approver signs the PROPOSED action plan — load it (gated capa.read) and gate the
+  // decision card on it, so they never approve before the plan they're signing has actually loaded.
+  const capaApproval = useCapaApproval(isCapa ? (task?.subject_id ?? null) : null);
 
   if (isLoading) return <Loader aria-label="Loading task" />;
   if (isError || !task) {
@@ -58,10 +62,16 @@ export function ReviewApprovePage() {
             <CapaApprovalContext capaId={task.subject_id!} />
           </Grid.Col>
           <Grid.Col span={{ base: 12, md: 5 }}>
-            {decidable ? (
+            {!decidable ? (
+              decidedAlert
+            ) : capaApproval.isLoading ? (
+              <Loader aria-label="Loading the action plan" />
+            ) : capaApproval.data?.proposed_action_plan ? (
               <DecisionCard taskId={task.id} subjectType="CAPA" subjectId={task.subject_id!} />
             ) : (
-              decidedAlert
+              <Alert color="yellow" title="Action plan unavailable">
+                The proposed action plan couldn't be loaded — refresh before approving.
+              </Alert>
             )}
           </Grid.Col>
         </Grid>

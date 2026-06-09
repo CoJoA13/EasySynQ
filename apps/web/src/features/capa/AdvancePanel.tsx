@@ -1,5 +1,5 @@
 // apps/web/src/features/capa/AdvancePanel.tsx
-import { Alert, Loader, Text } from "@mantine/core";
+import { Alert, Loader, Stack, Text } from "@mantine/core";
 import { usePermissions } from "../../app/shell/usePermissions";
 import type { Capa } from "../../lib/types";
 import { ContentBlock } from "./ContentBlock";
@@ -47,10 +47,16 @@ export function AdvancePanel({ capa }: { capa: Capa }) {
       if (approval.isLoading) return <Loader size="sm" />;
       const inst = approval.data?.instance;
       if (inst && inst.current_state === "NEEDS_ATTENTION")
+        // NEEDS_ATTENTION = an abandoned, fail-closed instance (no approver was assignable) — the server
+        // treats it as terminal and ALLOWS a fresh proposal. So show the warning AND the propose form, or
+        // the user is stuck (the latest instance stays NEEDS_ATTENTION until a new proposal is submitted).
         return (
-          <Alert color="yellow" title="No approver assigned">
-            Assign a QMS Owner / Top Management approver, then propose again.
-          </Alert>
+          <Stack gap="sm">
+            <Alert color="yellow" title="No approver assigned">
+              Assign a QMS Owner / Top Management approver, then propose a revised action plan below.
+            </Alert>
+            {gated("capa.plan_action", <ActionPlanForm capa={capa} />)}
+          </Stack>
         );
       if (inst && !APPROVAL_TERMINAL.includes(inst.current_state))
         return (

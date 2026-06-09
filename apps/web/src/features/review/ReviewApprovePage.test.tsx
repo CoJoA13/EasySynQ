@@ -63,6 +63,17 @@ test("a CAPA action-plan task renders the proposed plan + a working decision car
   expect(await findByRole("button", { name: "Submit decision" })).toBeInTheDocument();
 });
 
+test("a CAPA task whose action plan can't load does NOT offer the decision form (no blind signing)", async () => {
+  server.use(
+    http.get("/api/v1/tasks/:id", () => HttpResponse.json(capaApprovalTask)),
+    // approval read returns null (no plan) → the approver must not be able to sign blind
+    http.get("/api/v1/capas/:id/approval", () => HttpResponse.json(null)),
+  );
+  const { findByText, queryByRole } = mount("/tasks/tkca1111-1111-1111-1111-111111111111");
+  expect(await findByText(/Action plan unavailable/)).toBeInTheDocument();
+  expect(queryByRole("button", { name: "Submit decision" })).toBeNull();
+});
+
 test("a decided CAPA task shows the read-only summary, not the decision form", async () => {
   server.use(
     http.get("/api/v1/tasks/:id", () => HttpResponse.json({ ...capaApprovalTask, state: "DONE" })),

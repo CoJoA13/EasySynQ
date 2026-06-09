@@ -79,7 +79,7 @@ test("at RootCause with no approval, shows the propose form", async () => {
   expect(await screen.findByRole("button", { name: /Propose action plan/ })).toBeInTheDocument();
 });
 
-test("at RootCause with a NEEDS_ATTENTION instance, prompts to assign an approver", async () => {
+test("at RootCause with a NEEDS_ATTENTION instance, prompts to assign an approver AND lets you re-propose", async () => {
   grant("capa.plan_action");
   server.use(
     http.get("/api/v1/capas/:id/approval", () =>
@@ -98,7 +98,8 @@ test("at RootCause with a NEEDS_ATTENTION instance, prompts to assign an approve
   );
   wrap(<AdvancePanel capa={capa({ close_state: "RootCause" })} />);
   expect(await screen.findByText(/No approver assigned/)).toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: /Propose action plan/ })).toBeNull();
+  // NEEDS_ATTENTION is server-terminal → the propose form must STILL be available to re-propose
+  expect(screen.getByRole("button", { name: /Propose action plan/ })).toBeInTheDocument();
 });
 
 test("renders nothing for a terminal CAPA", () => {
