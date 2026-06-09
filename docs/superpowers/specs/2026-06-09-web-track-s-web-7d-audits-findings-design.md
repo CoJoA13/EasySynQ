@@ -1,6 +1,6 @@
 # S-web-7d — Audits & findings (slice design)
 
-> **Status:** owner forks resolved (2026-06-09); spec pending owner review. **Track:** web-UI.
+> **Status:** approved (owner, 2026-06-09). **Track:** web-UI.
 > **Epic:** S-web-7 Nonconformity & CAPA front door
 > (`docs/superpowers/specs/2026-06-08-web-track-s-web-7-nc-capa-design.md`), PR 4 of 4 — the LAST slice.
 > **Depends on:** 7a (#101) + 7b (#102) + 7c (#103) — all shipped (the `?capa=<id>` board deep-link seam
