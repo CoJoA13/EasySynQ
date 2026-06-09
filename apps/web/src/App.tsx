@@ -16,6 +16,9 @@ import { TasksInbox } from "./features/review/TasksInbox";
 import { SearchResultsPage } from "./features/search/SearchResultsPage";
 import { CompliancePage } from "./features/compliance/CompliancePage";
 import { CapaBoardPage } from "./features/capa/CapaBoardPage";
+import { CapaLayout } from "./features/capa/CapaLayout";
+import { ComplaintsPage } from "./features/capa/ComplaintsPage";
+import { NcrsPage } from "./features/capa/NcrsPage";
 import { IngestionRunsPage } from "./features/ingestion/IngestionRunsPage";
 import { IngestionRunPage } from "./features/ingestion/IngestionRunPage";
 import { apiGet } from "./lib/api";
@@ -111,7 +114,11 @@ export function App() {
         <Route path="tasks/:id" element={<ReviewApprovePage />} />
         <Route path="search" element={<SearchResultsPage />} />
         <Route path="compliance" element={<CompliancePage />} />
-        <Route path="capa" element={<CapaBoardPage />} />
+        <Route path="capa" element={<CapaLayout />}>
+          <Route index element={<CapaBoardPage />} />
+          <Route path="complaints" element={<ComplaintsPage />} />
+          <Route path="ncrs" element={<NcrsPage />} />
+        </Route>
         <Route path="ingestion" element={<IngestionRunsPage />} />
         <Route path="ingestion/:runId" element={<IngestionRunPage />} />
       </Route>
