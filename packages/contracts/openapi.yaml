@@ -3846,6 +3846,21 @@ paths:
         "404": { $ref: "#/components/responses/ProblemResponse" }
         "409": { $ref: "#/components/responses/ProblemResponse" }
 
+  /capas/{capa_id}/approval:
+    get:
+      tags: [capa]
+      operationId: getCapaApproval
+      summary: The CAPA's current action-plan approval cycle (or null)
+      parameters:
+        - { name: capa_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: The latest approval instance + proposed plan, or null
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CapaApproval" }
+        "404": { description: CAPA not found }
+
   /complaints:
     post:
       tags: [capa]
@@ -5195,6 +5210,8 @@ components:
           description: "Resolved candidate approver ids (role-derived); My-Tasks filters containment."
         action_expected: { type: [string, "null"] }
         due_at: { type: [string, "null"], format: date-time }
+        subject_type: { type: [string, "null"] }
+        subject_id: { type: [string, "null"], format: uuid }
 
     WorkflowInstance:
       type: object
@@ -5600,6 +5617,29 @@ components:
         cycle_marker: { type: integer }
         created_by: { type: string, format: uuid }
         created_at: { type: string, format: date-time }
+        evidence_links:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string, format: uuid }
+              record_id: { type: string, format: uuid }
+              record_identifier: { type: [string, "null"] }
+              link_reason: { type: [string, "null"] }
+              created_at: { type: [string, "null"], format: date-time }
+    CapaApproval:
+      type: [object, "null"]
+      properties:
+        instance:
+          type: object
+          properties:
+            id: { type: string, format: uuid }
+            current_state: { type: string }
+            definition_version: { type: integer }
+            subject_type: { type: string }
+            subject_id: { type: string, format: uuid }
+            tasks: { type: array, items: { type: object, additionalProperties: true } }
+        proposed_action_plan: { type: [object, "null"], additionalProperties: true }
     Capa:
       type: object
       additionalProperties: false

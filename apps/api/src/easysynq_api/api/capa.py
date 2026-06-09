@@ -27,11 +27,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..auth.dependencies import get_current_user
 from ..db.models._capa_enums import CapaSource, NcrDisposition, NcrSource, NcSeverity
+from ..db.models._workflow_enums import WorkflowSubjectType
 from ..db.models.app_user import AppUser
 from ..db.models.capa import Capa
 from ..db.models.capa_stage import CapaStage
 from ..db.models.complaint import Complaint
 from ..db.models.ncr import Ncr
+from ..db.models.workflow import Task, WorkflowInstance
 from ..db.session import get_session
 from ..domain.authz import ResourceContext
 from ..problems import ProblemException
@@ -51,6 +53,7 @@ from ..services.capa import (
 )
 from ..services.capa import repository as capa_repo
 from ..services.vault import SignatureEventSink, get_vault_signature_sink
+from ..services.workflow import repository as wf_repo
 
 router = APIRouter(prefix="/api/v1", tags=["capa"])
 
@@ -123,8 +126,8 @@ class NcrDispositionBody(BaseModel):
 # --- serializers ------------------------------------------------------------------------------
 
 
-def _stage(s: CapaStage) -> dict[str, Any]:
-    return {
+def _stage(s: CapaStage, *, evidence_links: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    out: dict[str, Any] = {
         "id": str(s.id),
         "stage": s.stage.value,
         "content_block": s.content_block,
@@ -132,6 +135,9 @@ def _stage(s: CapaStage) -> dict[str, Any]:
         "created_by": str(s.created_by),
         "created_at": s.created_at.isoformat(),
     }
+    if evidence_links is not None:
+        out["evidence_links"] = evidence_links
+    return out
 
 
 def _capa(
@@ -178,6 +184,34 @@ async def _capa_full(
         raised_by=raised_by,
         stages=stages,
     )
+
+
+def _approval_task(t: Task) -> dict[str, Any]:
+    return {
+        "id": str(t.id),
+        "stage_key": t.stage_key,
+        "type": t.type.value,
+        "state": t.state.value,
+        "assignee_user_id": str(t.assignee_user_id) if t.assignee_user_id else None,
+        "candidate_pool": t.candidate_pool,
+        "action_expected": t.action_expected,
+        "due_at": t.due_at.isoformat() if t.due_at else None,
+    }
+
+
+def _approval(instance: WorkflowInstance, tasks: list[Task]) -> dict[str, Any]:
+    ctx = instance.context or {}
+    return {
+        "instance": {
+            "id": str(instance.id),
+            "current_state": instance.current_state,
+            "definition_version": instance.definition_version,
+            "subject_type": instance.subject_type.value,
+            "subject_id": str(instance.subject_id),
+            "tasks": [_approval_task(t) for t in tasks],
+        },
+        "proposed_action_plan": ctx.get("action_plan"),
+    }
 
 
 def _complaint(c: Complaint, identifier: str | None) -> dict[str, Any]:
@@ -320,8 +354,33 @@ async def get_capa_endpoint(
     capa = await capa_repo.get_capa(session, capa_id)
     if capa is None or capa.org_id != caller.org_id:
         raise ProblemException(status=404, code="not_found", title="CAPA not found")
-    stages = [_stage(s) for s in await capa_repo.list_capa_stages(session, capa_id)]
+    stage_rows = await capa_repo.list_capa_stages(session, capa_id)
+    evidence = await capa_repo.list_stage_evidence(session, [s.id for s in stage_rows])
+    stages = [_stage(s, evidence_links=evidence.get(s.id, [])) for s in stage_rows]
     return await _capa_full(session, capa, stages=stages)
+
+
+@router.get("/capas/{capa_id}/approval")
+async def get_capa_approval_endpoint(
+    capa_id: uuid.UUID,
+    caller: AppUser = Depends(_capa_read),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any] | None:
+    """The CAPA's current action-plan approval cycle (the latest CAPA workflow instance + its
+    tasks + the proposed action plan from the instance context), or ``null`` when none has opened.
+    Gated ``capa.read`` (the S-web-5 ``GET /documents/{id}/approval`` mirror) — so a
+    Top-Management approver, who holds only ``capa.read``, can read what they sign without
+    ``document.read``."""
+    capa = await capa_repo.get_capa(session, capa_id)
+    if capa is None or capa.org_id != caller.org_id:
+        raise ProblemException(status=404, code="not_found", title="CAPA not found")
+    instance = await wf_repo.latest_instance_for_subject(
+        session, caller.org_id, WorkflowSubjectType.CAPA, capa.id
+    )
+    if instance is None:
+        return None
+    tasks = await wf_repo.list_instance_tasks(session, instance.id)
+    return _approval(instance, tasks)
 
 
 @router.post("/capas/{capa_id}/containment")

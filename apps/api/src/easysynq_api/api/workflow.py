@@ -51,8 +51,10 @@ class Decision(BaseModel):
 # --- representations --------------------------------------------------------------------
 
 
-def _task(t: Task) -> dict[str, Any]:
-    return {
+def _task(
+    t: Task, *, subject_type: str | None = None, subject_id: str | None = None
+) -> dict[str, Any]:
+    out: dict[str, Any] = {
         "id": str(t.id),
         "instance_id": str(t.instance_id),
         "stage_key": t.stage_key,
@@ -63,6 +65,10 @@ def _task(t: Task) -> dict[str, Any]:
         "action_expected": t.action_expected,
         "due_at": t.due_at.isoformat() if t.due_at else None,
     }
+    if subject_type is not None:
+        out["subject_type"] = subject_type
+        out["subject_id"] = subject_id
+    return out
 
 
 def _instance(i: WorkflowInstance, tasks: list[Task] | None = None) -> dict[str, Any]:
@@ -164,7 +170,13 @@ async def get_task_endpoint(
     caller: AppUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
-    return _task(await _own_task(session, caller, task_id))
+    task = await _own_task(session, caller, task_id)
+    instance = await wf_repo.get_instance(session, task.instance_id)
+    return _task(
+        task,
+        subject_type=instance.subject_type.value if instance else None,
+        subject_id=str(instance.subject_id) if instance else None,
+    )
 
 
 @router.post("/tasks/{task_id}/decision")
