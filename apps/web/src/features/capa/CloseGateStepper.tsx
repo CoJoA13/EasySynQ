@@ -20,7 +20,7 @@ export function deriveGate(stages: CapaStage[], cycleMarker: number): GateState 
   return {
     rootCause: hasAnyRootCause,
     action: currentWithEvidence("Implement"),
-    effectiveness: currentWithEvidence("Verify", (s) => s.content_block?.decision === "effective"),
+    effectiveness: currentWithEvidence("Verify", (s) => s.content_block["decision"] === "effective"),
   };
 }
 
