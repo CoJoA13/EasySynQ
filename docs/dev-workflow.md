@@ -6,25 +6,27 @@
 ## Branch + PR flow
 
 `main` is protected. Do slice work on a `feat/sN-*` branch → open a PR → green CI → squash-merge.
-CI jobs (all five required): `contracts` (redocly), `api` (ruff/mypy-strict/unit), `migrations` (alembic up↔down + `alembic check`), `web` (eslint/tsc/build), `integration` (pytest -m integration via testcontainers).
+CI jobs (all five required): `contracts` (redocly), `api` (ruff/mypy-strict/unit), `migrations` (alembic up↔down + `alembic check`), `web` (eslint/tsc/build/test), `integration` (pytest -m integration via testcontainers).
 admin-bypass on for the solo owner.
 
-## Toolchain (this machine)
+## Toolchain (Linux CI / a Linux dev host)
+
+> ⚠ The owner's primary box is **native Windows 11 + Git Bash** (Docker Desktop, no WSL) — see `.claude/rules/windows-dev.md` for that machine (the Linux-only notes below — `~/.local/bin/uv`, `chmod docker.sock` — don't apply there).
 
 `uv` + a managed **Python 3.12** at `~/.local/bin/uv` (system `python3` is 3.14; `pip` needs `--break-system-packages`). Node 22 + npm. Docker v29.x. Lockfiles committed (`uv.lock`, `package-lock.json`); CI uses `uv sync --frozen` / `npm ci`.
-- **Docker socket:** the user is in the `docker` group, so a fresh login session should use Docker directly. If a shell still gets "permission denied", re-run `sudo chmod 666 /var/run/docker.sock` (personal, non-shared device).
+- **Docker socket (Linux host):** the user is in the `docker` group, so a fresh login session should use Docker directly. If a shell still gets "permission denied", re-run `sudo chmod 666 /var/run/docker.sock` (personal, non-shared device).
 
 ## Local loops (fast; no commit needed to iterate)
 
 - API: `cd apps/api && uv run ruff check . && uv run ruff format --check . && uv run mypy src && uv run pytest` (unit always; `-m integration` needs Docker for testcontainers).
-- Web: `cd apps/web && npm run lint && npm run typecheck && npm run build`.
+- Web: `cd apps/web && npm run lint && npm run typecheck && npm run build && npm test` (or the `/check-web` skill).
 - **No Docker?** Every slice is still buildable + unit-testable on the uv/3.12 loop; CI runs the stack-dependent proofs.
 
 ## Run the stack
 
-`just up s` (or `docker compose -f infra/compose/compose.yml -f infra/compose/compose.s.yml up -d --build`). Open **http://localhost**. Stop with `just down`. A gitignored `.env` holds dev secrets + `OIDC_ISSUER=http://localhost/realms/easysynq`. OpenSearch + gotenberg are intentionally not run in MVP dev (R34 / not needed until S7).
+`just up s` (or `docker compose -f infra/compose/compose.yml -f infra/compose/compose.s.yml up -d --build`). Open **http://localhost**. Stop with `just down`. A gitignored `.env` holds dev secrets + `OIDC_ISSUER=http://localhost/realms/easysynq`. gotenberg (`renderer`) runs (S7b rendering is live); **OpenSearch is omitted from the `s` profile** (Postgres-FTS fallback, R34).
 
-- **Dev login:** `demo` / `Demo-Password-1` (created at runtime in Keycloak, **not committed**; realm policy requires ≥12-char passwords). After a Keycloak container reset, recreate with `kcadm.sh` (`create users -r easysynq -s username=demo -s enabled=true` then `set-password`).
+- **Dev login:** `demo` / `Demo-Password-1` (created at runtime in Keycloak, **not committed**; realm policy requires ≥12-char passwords). After a Keycloak container reset, run **`just demo-user`** (or `bash scripts/demo-user.sh` outside `just`) — the raw `kcadm.sh` path still works but is superseded.
 - **Authz break-glass (`grant-role`):** assigns a seeded role directly, bypassing the wizard + PEP — `easysynq grant-role <keycloak-subject> ["Role Name"]` (default "System Administrator"; idempotent; JIT-creates the `app_user`; runs as the DB owner). Use it to recover a botched bootstrap or to seed the first admin before the UI is reachable. ⚠ It defaults to `--org DEFAULT`, but **this install's org short_code is `AHT`** → pass `--org AHT`.
 - **Dev persona fixture (`seed-personas`):** `just seed-personas` creates the SoD-correct `priya`(author)/`ken`(approver)/`mara`(releaser) Keycloak logins **+** their grants (all `Demo-Password-1`) — the reproducible **S-web-5** fixture (the author's-half S-web-3 needs only one). Re-run after `just down` (Keycloak is volumeless; re-created KC users get new subjects). The full create→approve→release loop needs **3 DISTINCT** users (SoD-1/2 are non-overridable). NB `demo` (System Administrator) holds **no `document.*`** — to author as `demo`, grant **SYSTEM overrides** of the authoring keys (the integration-test pattern); `grant-role "QMS Owner"` is **reads-only**. No api restart needed (grants resolve per-request).
 - **Browser upload/download (`S3_PUBLIC_ENDPOINT`):** the in-app authoring upload (presigned PUT) + controlled-copy download (presigned GET) need MinIO reachable from the **browser**. Set `S3_PUBLIC_ENDPOINT=http://localhost:9000` in `.env`; the `s` profile publishes MinIO's `9000`. Presigning **signs against** this host (SigV4) — never rewrite the host afterward (→ `SignatureDoesNotMatch`); server-side/worker fetches keep using the internal `s3_endpoint`. ⚠ A `storage.py`/Dockerfile change or a new CLI module needs `docker compose … build api` (CI runs from source, not the running image).
