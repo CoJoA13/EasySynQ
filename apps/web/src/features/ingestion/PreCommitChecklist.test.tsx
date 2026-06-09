@@ -31,6 +31,14 @@ test("renders the duplicate-identifier blocking row with a Show items button tha
   expect(onShowBlocker).toHaveBeenCalledWith(CHECKLIST.blocking[0]);
 });
 
+test("the blocking row surfaces the offending identifier + file count inline", () => {
+  renderWithProviders(<PreCommitChecklist checklist={CHECKLIST} onShowBlocker={() => {}} />);
+  const blockerRow = screen.getByLabelText("Blocking: Duplicate-identifier conflicts");
+  // identifier "SOP-PUR-014" + "2 files" (file_ids has the two offenders) render next to the label.
+  expect(within(blockerRow).getByText(/SOP-PUR-014/)).toBeInTheDocument();
+  expect(within(blockerRow).getByText(/2 files/)).toBeInTheDocument();
+});
+
 test("renders the ★ mandatory ISO clause coverage as '17 / 20 satisfied' (advisory, not a blocker)", () => {
   renderWithProviders(<PreCommitChecklist checklist={CHECKLIST} onShowBlocker={() => {}} />);
   const coverageRow = screen.getByLabelText("Advisory: Mandatory ISO clause coverage");

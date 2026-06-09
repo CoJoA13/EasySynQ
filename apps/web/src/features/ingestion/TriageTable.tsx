@@ -109,10 +109,14 @@ export function TriageTable({
             return (
               <Table.Tr key={file.id}>
                 <Table.Td>
+                  {/* A quarantined file is not a commit candidate (the backend 422s an explicit bulk
+                      target whose included_candidate is false) → its checkbox is disabled, never
+                      toggled, so a select-all can't sweep it into the selection. */}
                   <Checkbox
                     aria-label={`Select ${file.filename}`}
-                    checked={selected.has(file.id)}
-                    onChange={() => onToggle(file.id)}
+                    checked={false}
+                    disabled
+                    readOnly
                   />
                 </Table.Td>
                 <Table.Td>{sourceCell}</Table.Td>
@@ -173,16 +177,13 @@ export function TriageTable({
                 <ConfidenceCell classification={file.classification} />
               </Table.Td>
               <Table.Td>
+                {/* No row-level "Correct": it would post a `correct` decision with no `after`, which
+                    the backend rejects (422 — a correction must change a dimension). Dimensional
+                    correction is done via the BulkActionBar's "Correct to type/owner/clause" menus or
+                    the detail drawer. */}
                 <Group gap={4} wrap="nowrap">
                   <Button variant="subtle" size="compact-sm" onClick={() => onRowAction(file, "accept")}>
                     Accept
-                  </Button>
-                  <Button
-                    variant="subtle"
-                    size="compact-sm"
-                    onClick={() => onRowAction(file, "correct")}
-                  >
-                    Correct ▾
                   </Button>
                   <Button
                     variant="subtle"

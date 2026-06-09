@@ -1,5 +1,6 @@
 import { Alert, Anchor, Container, Loader, Title } from "@mantine/core";
 import { Link, useParams } from "react-router-dom";
+import { usePermissions } from "../../app/shell/usePermissions";
 import { ApiError } from "../../lib/api";
 import { CommitProgress } from "./CommitProgress";
 import { ReviewCockpit } from "./ReviewCockpit";
@@ -22,6 +23,7 @@ export function IngestionRunPage() {
   const { data: run, isLoading, isError, error } = useImportRun(runId);
   const cancelRun = useCancelRun(runId);
   const commitRun = useCommitRun(runId);
+  const { can } = usePermissions();
 
   if (isLoading && !run) {
     return (
@@ -62,9 +64,18 @@ export function IngestionRunPage() {
     return <CommitProgress run={run} />;
   }
   if (TERMINAL_STATES.has(status)) {
-    // PartiallyCommitted → resume is an idempotent re-commit (already-landed items are skipped).
-    return <RunTerminalSummary run={run} onResume={() => commitRun.mutate()} />;
+    // PartiallyCommitted → resume is an idempotent re-commit (already-landed items are skipped). Gate
+    // the affordance on import.commit (RunTerminalSummary hides Resume when onResume is undefined).
+    return (
+      <RunTerminalSummary
+        run={run}
+        onResume={can("import.commit") ? () => commitRun.mutate() : undefined}
+      />
+    );
   }
   // pre-Proposed (Created/Scanning/Extracting/Classifying/… ) and any additive stage → scan progress.
-  return <ScanProgress run={run} onCancel={() => cancelRun.mutate()} />;
+  // Cancel is gated on import.execute (ScanProgress hides the button when onCancel is undefined).
+  return (
+    <ScanProgress run={run} onCancel={can("import.execute") ? () => cancelRun.mutate() : undefined} />
+  );
 }

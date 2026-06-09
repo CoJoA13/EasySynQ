@@ -76,6 +76,13 @@ test("IngestionRunPage renders the terminal summary for a Completed run", async 
 test("a PartiallyCommitted run shows a Resume button that re-POSTs commit", async () => {
   let resumed = false;
   server.use(
+    // Resume is gated on import.commit — grant it so the button renders (else onResume is undefined).
+    http.get("/api/v1/me/permissions", () =>
+      HttpResponse.json({
+        scope: { level: "SYSTEM", selector: null },
+        permissions: [{ key: "import.commit", effect: "ALLOW", source: "role" }],
+      }),
+    ),
     http.get("/api/v1/admin/imports/:id", () =>
       HttpResponse.json({
         ...ingestionRunFixture,
@@ -91,6 +98,22 @@ test("a PartiallyCommitted run shows a Resume button that re-POSTs commit", asyn
   renderPage();
   await userEvent.click(await screen.findByRole("button", { name: "Resume commit" }));
   await waitFor(() => expect(resumed).toBe(true));
+});
+
+test("a PartiallyCommitted run hides Resume without import.commit", async () => {
+  server.use(
+    http.get("/api/v1/admin/imports/:id", () =>
+      HttpResponse.json({
+        ...ingestionRunFixture,
+        status: "PartiallyCommitted",
+        counts: { commit: { committed: 3, failed: 1 } },
+      }),
+    ),
+  );
+  renderPage();
+  // the partial heading still renders; the gated Resume affordance does not (default no permissions).
+  await screen.findByText("Import partially committed");
+  expect(screen.queryByRole("button", { name: "Resume commit" })).not.toBeInTheDocument();
 });
 
 test("IngestionRunPage shows a calm not-found panel on a 404", async () => {

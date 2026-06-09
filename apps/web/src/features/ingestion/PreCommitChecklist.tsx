@@ -1,7 +1,7 @@
 import { Button, Card, Group, Stack, Text } from "@mantine/core";
 import type { ImportChecklist, ImportChecklistBlocker } from "../../lib/types";
 
-// A human label for each known blocker `code`; an unknown code degrades to a title-cased fallback so
+// A human label for each known blocker `type`; an unknown type degrades to a title-cased fallback so
 // a future backend blocker type never renders a raw enum token (the "tolerate additive" rule).
 const BLOCKER_LABELS: Record<string, string> = {
   duplicate_identifier_within_import: "Duplicate-identifier conflicts",
@@ -10,10 +10,10 @@ const BLOCKER_LABELS: Record<string, string> = {
   ambiguous_unresolved: "Ambiguous classification unresolved",
 };
 
-function blockerLabel(code: string): string {
+function blockerLabel(type: string): string {
   return (
-    BLOCKER_LABELS[code] ??
-    code.replace(/_/g, " ").replace(/^\w/, (c) => c.toUpperCase())
+    BLOCKER_LABELS[type] ??
+    type.replace(/_/g, " ").replace(/^\w/, (c) => c.toUpperCase())
   );
 }
 
@@ -27,7 +27,15 @@ function BlockerRow({
   blocker: ImportChecklistBlocker;
   onShowBlocker: (b: ImportChecklistBlocker) => void;
 }) {
-  const label = blockerLabel(blocker.code);
+  const label = blockerLabel(blocker.type);
+  // The offending files inline — the identifier (when present) + a guarded count — so the reviewer can
+  // identify the conflicting files even for an already-accepted conflict (the filter-jump only helps
+  // the undecided case). file_ids may be absent for a type that carries no file list.
+  const fileCount = blocker.file_ids?.length;
+  const detailBits = [
+    blocker.identifier ? `“${blocker.identifier}”` : null,
+    fileCount ? `${fileCount} file${fileCount === 1 ? "" : "s"}` : null,
+  ].filter(Boolean) as string[];
   return (
     <Group
       justify="space-between"
@@ -43,6 +51,11 @@ function BlockerRow({
         <Text span size="sm">
           {label}
         </Text>
+        {detailBits.length > 0 && (
+          <Text span size="sm" c="dimmed">
+            {detailBits.join(" · ")}
+          </Text>
+        )}
       </Group>
       <Button variant="light" color="var(--es-danger)" size="compact-sm" onClick={() => onShowBlocker(blocker)}>
         Show items
@@ -124,7 +137,7 @@ export function PreCommitChecklist({
 
       <Stack gap={0}>
         {blocking.map((b, i) => (
-          <BlockerRow key={`${b.code}-${i}`} blocker={b} onShowBlocker={onShowBlocker} />
+          <BlockerRow key={`${b.type}-${i}`} blocker={b} onShowBlocker={onShowBlocker} />
         ))}
         <AdvisoryRow
           label="Kind confirmed on every item"

@@ -28,6 +28,12 @@ test("a Classifying run names the classify stage", () => {
   expect(screen.getAllByText("Classifying content").length).toBeGreaterThan(0);
 });
 
+test("the Cancel button is hidden when no onCancel is provided (lacks import.execute)", () => {
+  renderWithProviders(<ScanProgress run={runWith({ status: "Scanning" })} />);
+  expect(screen.getAllByText("Scanning files").length).toBeGreaterThan(0);
+  expect(screen.queryByRole("button", { name: "Cancel import" })).not.toBeInTheDocument();
+});
+
 test("a Failed run shows a calm error alert with run.error (no Cancel)", () => {
   renderWithProviders(
     <ScanProgress run={runWith({ status: "Failed", error: "extractor crashed on broken.bin" })} onCancel={() => {}} />,

@@ -157,7 +157,16 @@ export function ReviewCockpit({ runId, run }: { runId: string; run: ImportRun })
       return next;
     });
   }, []);
-  const pageIds = useMemo(() => files.map((f) => f.id), [files]);
+  // Only SELECTABLE rows feed select-all: a quarantined file is not a commit candidate (the backend
+  // 422s an explicit bulk target whose included_candidate is false), so it must never be swept into
+  // the selection by "select all on page".
+  const pageIds = useMemo(
+    () =>
+      files
+        .filter((f) => f.included_candidate && f.scan_flags.disposition !== "quarantine")
+        .map((f) => f.id),
+    [files],
+  );
   const allOnPageSelected = pageIds.length > 0 && pageIds.every((id) => selected.has(id));
   const onToggleAllOnPage = useCallback(() => {
     setSelected((prev) => {

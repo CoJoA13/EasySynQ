@@ -49,7 +49,9 @@ export function ItemDetailDrawer({
           <Stack gap={2}>
             <Text fw={600}>{detail.filename}</Text>
             <Text ff="monospace" size="sm" c="dimmed">
-              {detail.review?.identifier ?? detail.proposal?.proposed_identifier ?? "— no identifier"}
+              {detail.review?.effective?.identifier ??
+                detail.proposal?.proposed_identifier ??
+                "— no identifier"}
             </Text>
             {detail.rel_path !== detail.filename && (
               <Text size="xs" c="dimmed">

@@ -1,5 +1,5 @@
 import { Button, Checkbox, Popover, Radio, Stack, Text } from "@mantine/core";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMerge } from "./hooks";
 
 // The mockup §8b "Merge ▾" control. Given ≥2 selected files, pick the effective member (Radio over
@@ -22,6 +22,15 @@ export function MergeMenu({
   const [reconstruct, setReconstruct] = useState(false);
   const merge = useMerge(runId);
   const tooFew = selectedFileIds.length < 2;
+
+  // The selection can change while the menu is mounted (the cockpit owns it). Clamp the chosen
+  // effective member back into the current selection so we never submit an effective_file_id that
+  // isn't a merge member (it must be one of file_ids server-side).
+  useEffect(() => {
+    if (!selectedFileIds.includes(effective)) {
+      setEffective(selectedFileIds[0] ?? "");
+    }
+  }, [selectedFileIds, effective]);
 
   function submit() {
     const effective_file_id = effective || (selectedFileIds[0] ?? "");

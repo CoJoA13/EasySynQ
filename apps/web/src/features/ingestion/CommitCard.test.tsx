@@ -11,7 +11,7 @@ const NOT_READY: ImportChecklist = {
   run_id: "10000000-0000-0000-0000-000000000001",
   status: "Reviewing",
   ready: false,
-  blocking: [{ code: "duplicate_identifier_within_import" }],
+  blocking: [{ type: "duplicate_identifier_within_import" }],
   advisory: { star_coverage: { total: 20, satisfied: 17 }, unknown_low: 2, kind_unconfirmed: 4 },
   review: {
     keep_items: 4, decided: 0, accepted: 0, corrected: 0, excluded: 0, deferred: 0,

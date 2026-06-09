@@ -555,6 +555,9 @@ export const ingestionFilesFixture = [HIGH_DOC, DUP_FILE, MED_DOC, LOW_UNKNOWN, 
 export const ingestionFileDetailFixture = {
   ...HIGH_DOC,
   run_id: ingestionRunFixture.id,
+  // The DETAIL endpoint nests the folded review under `effective` (get_file_review) — unlike the LIST
+  // row, whose `review` is the flat ImportFileReview. HIGH_DOC's flat review becomes `effective` here.
+  review: { effective: HIGH_DOC.review, decision_history: [] },
   extract: {
     status: "extracted", full_text: "Purchasing procedure…", text_truncated: false,
     header_block: "SOP-PUR-014", language: "en", ocr_used: false, ocr_confidence: null,
@@ -599,7 +602,7 @@ export const ingestionChecklistFixture = {
   status: "Proposed",
   ready: false,
   blocking: [
-    { code: "duplicate_identifier_within_import", identifier: "SOP-PUR-014",
+    { type: "duplicate_identifier_within_import", identifier: "SOP-PUR-014",
       file_ids: [HIGH_DOC.id, DUP_FILE.id] },
   ],
   advisory: {

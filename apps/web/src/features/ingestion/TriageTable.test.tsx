@@ -61,6 +61,12 @@ test("the quarantine row shows the reason and offers no Accept action", () => {
   expect(within(cell).queryByRole("button", { name: "Accept" })).not.toBeInTheDocument();
 });
 
+test("the quarantine row's selection checkbox is disabled (not a commit candidate)", () => {
+  renderWithProviders(<TriageTable {...baseProps()} />);
+  // a quarantined file is not selectable — its checkbox is disabled so select-all can't sweep it in.
+  expect(screen.getByRole("checkbox", { name: "Select broken.bin" })).toBeDisabled();
+});
+
 test("toggling a row checkbox calls onToggle(file.id)", async () => {
   const user = userEvent.setup();
   const onToggle = vi.fn();

@@ -568,11 +568,20 @@ export interface ImportExtract {
   extractor_version: string | null;
 }
 
-export interface ImportFileDetail extends ImportFile {
+// The DETAIL endpoint (GET /admin/imports/{id}/files/{fid}) nests the review under `effective`
+// (get_file_review → { effective: <flat ImportFileReview>, decision_history: [...] }) — UNLIKE the LIST
+// endpoint, whose `review` IS the flat ImportFileReview. Override the inherited flat `review` here.
+export interface ImportFileReviewDetail {
+  effective: ImportFileReview;
+  decision_history: ImportDecision[];
+}
+
+export interface ImportFileDetail extends Omit<ImportFile, "review"> {
   run_id: string;
   extract: ImportExtract | null;
   dedup: ImportDedupMembership;
   proposal: ImportProposalNode | null;
+  review: ImportFileReviewDetail | null;
 }
 
 export interface ImportDupeCluster {
@@ -604,9 +613,12 @@ export interface ImportVersionFamilyList {
 }
 
 // GET /admin/imports/{id}/checklist (review.py:983-994). `ready === blocking.length === 0`; advisory
-// never affects ready. A blocker carries a `code` + code-specific members (kept loose).
+// never affects ready. A blocker carries a `type` + type-specific members (kept loose) — e.g. an
+// `identifier` + a `file_ids` list of the offending files.
 export interface ImportChecklistBlocker {
-  code: string;
+  type: string;
+  identifier?: string;
+  file_ids?: string[];
   [k: string]: unknown;
 }
 export interface ImportChecklistReviewStats {

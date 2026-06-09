@@ -29,7 +29,7 @@ const STATUS_TO_STEP: Record<string, number> = {
   Proposed: 4,
 };
 
-export function ScanProgress({ run, onCancel }: { run: ImportRun; onCancel: () => void }) {
+export function ScanProgress({ run, onCancel }: { run: ImportRun; onCancel?: () => void }) {
   if (run.status === "Failed") {
     return (
       <Card withBorder padding="lg">
@@ -56,9 +56,11 @@ export function ScanProgress({ run, onCancel }: { run: ImportRun; onCancel: () =
             {current ? current.label : "Working…"}
           </Text>
         </Group>
-        <Button variant="default" onClick={onCancel} aria-label="Cancel import">
-          Cancel import
-        </Button>
+        {onCancel && (
+          <Button variant="default" onClick={onCancel} aria-label="Cancel import">
+            Cancel import
+          </Button>
+        )}
       </Group>
       <Stepper active={step} size="sm" aria-label="Import pipeline progress">
         {STAGES.map((s, i) => (

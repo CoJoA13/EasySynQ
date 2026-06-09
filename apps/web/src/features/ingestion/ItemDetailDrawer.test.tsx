@@ -45,7 +45,7 @@ test("renders the filename, identifier, and a classification evidence explanatio
   expect(
     await screen.findByText("SOP-PUR-014 Purchasing.docx"),
   ).toBeInTheDocument();
-  // The proposed identifier surfaces.
+  // The effective review identifier surfaces (the DETAIL endpoint nests review under `effective`).
   expect(screen.getAllByText(/SOP-PUR-014/).length).toBeGreaterThan(0);
   // The classification dimension/explanation list is present (evidence array, guarded for null).
   expect(screen.getByText(/preserved/i)).toBeInTheDocument();

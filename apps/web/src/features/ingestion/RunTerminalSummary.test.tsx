@@ -11,7 +11,7 @@ function runWith(over: Partial<ImportRun>): ImportRun {
   return { ...(ingestionRunFixture as unknown as ImportRun), ...over };
 }
 
-test("a Completed run shows the committed/failed counts and links to the Import Report record", () => {
+test("a Completed run shows the committed/failed counts and names the captured Import Report record", () => {
   renderWithProviders(
     <RunTerminalSummary
       run={runWith({
@@ -24,8 +24,32 @@ test("a Completed run shows the committed/failed counts and links to the Import 
   expect(screen.getByText("Import complete")).toBeInTheDocument();
   expect(screen.getByLabelText("Committed: 5")).toBeInTheDocument();
   expect(screen.getByLabelText("Failed: 0")).toBeInTheDocument();
-  const link = screen.getByRole("link", { name: /Import Report/ });
-  expect(link).toHaveAttribute("href", "/records/r0000000-0000-0000-0000-0000000000r1");
+  // There is no /records/:id route — the report surfaces as a calm text note (the record id), not a link.
+  expect(screen.queryByRole("link", { name: /Import Report/ })).not.toBeInTheDocument();
+  expect(
+    screen.getByText(/Import Report captured — record r0000000-0000-0000-0000-0000000000r1/),
+  ).toBeInTheDocument();
+});
+
+test("a Failed run shows the failed heading + run.error and no counts / no Library link", () => {
+  renderWithProviders(
+    <RunTerminalSummary
+      run={runWith({ status: "Failed", error: "commit aborted: vault write failed", counts: { commit: { committed: 2, failed: 1 } } })}
+    />,
+  );
+  expect(screen.getByText("Import failed")).toBeInTheDocument();
+  expect(screen.getByText(/commit aborted: vault write failed/)).toBeInTheDocument();
+  // a Failed run shows no commit tallies and no Library link
+  expect(screen.queryByLabelText(/Committed:/)).not.toBeInTheDocument();
+  expect(screen.queryByRole("link", { name: /Library/ })).not.toBeInTheDocument();
+});
+
+test("a Cancelled run shows the cancelled heading and a calm note (no counts / no Library link)", () => {
+  renderWithProviders(<RunTerminalSummary run={runWith({ status: "Cancelled" })} />);
+  expect(screen.getByText("Import cancelled")).toBeInTheDocument();
+  expect(screen.getByText(/Nothing touched the vault/)).toBeInTheDocument();
+  expect(screen.queryByLabelText(/Committed:/)).not.toBeInTheDocument();
+  expect(screen.queryByRole("link", { name: /Library/ })).not.toBeInTheDocument();
 });
 
 test("a Completed run with no report record shows a calm note instead of a link", () => {
