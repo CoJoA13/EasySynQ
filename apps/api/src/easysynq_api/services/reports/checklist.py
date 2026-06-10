@@ -13,7 +13,8 @@ This is **status against a rule, never an auto-compliance verdict** (doc 13 N9).
 the **exact** ★ clause (no subtree rollup — the discrete-item intuition of doc 02 §2.1). The view is
 org-wide (gated on the SYSTEM key ``report.compliance_checklist.read``), so counts are not per-doc
 permission-filtered. Each row also carries ``overdue_review`` (True when ≥1 Effective mapped doc has
-``next_review_due`` ≤ today) — orthogonal to the COVERED/PARTIAL/GAP status. Deferred (need unbuilt
+``next_review_due`` ≤ today) — orthogonal to the COVERED/PARTIAL/GAP status; the rollup carries
+``overdue_review`` as the COUNT of flagged rows. Deferred (need unbuilt
 schema): the "linked evidence" leg (records), and R31 scope-conditional coverage (Scope authoring
 unbuilt) — all ★ rows are shown unconditionally.
 """

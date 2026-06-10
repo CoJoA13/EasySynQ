@@ -1241,3 +1241,4 @@ async def test_document_serializer_carries_review_fields(
     assert row.get("review_period_months") == REVIEW_PERIOD_DEFAULT_MONTHS
     assert row.get("next_review_due") == yesterday.isoformat()
     assert row.get("review_state") == "overdue"
+    assert row.get("last_reviewed_at") is None  # never confirmed — all four fields on the list row
