@@ -1,4 +1,5 @@
 import { Alert, Anchor, Card, Grid, SimpleGrid, Skeleton, Stack, Text } from "@mantine/core";
+import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { useDocumentTypes } from "../../app/shell/useDocumentTypes";
 import { useUserDirectory } from "../../app/shell/useUserDirectory";
@@ -9,8 +10,11 @@ import { ArtifactHeader } from "./ArtifactHeader";
 import { ControlMetadata } from "./ControlMetadata";
 import { HistoryTab } from "./HistoryTab";
 import { RenditionCard } from "./RenditionCard";
+import { ReviewPeriodModal } from "./ReviewPeriodModal";
+import { ReviewStateBadge } from "./ReviewStateBadge";
 import { VersionCompare } from "./VersionCompare";
 import { WhereUsedTab } from "./WhereUsedTab";
+import { daysUntil } from "./reviewDates";
 import { useDocument } from "./useDocument";
 import { useDocumentVersions } from "./useDocumentVersions";
 
@@ -32,7 +36,7 @@ function Tile({
         {value}
       </Text>
       {sub && (
-        <Text size="xs" c="dimmed">
+        <Text size="xs" c="dimmed" component="div">
           {sub}
         </Text>
       )}
@@ -50,14 +54,15 @@ export function DocumentDetailPage() {
   const { data: types } = useDocumentTypes();
   const { data: directory } = useUserDirectory();
   const { data: versions } = useDocumentVersions(id, id !== null);
+  const [reviewEditOpen, setReviewEditOpen] = useState(false);
 
   if (isLoading && !doc) {
     return (
       <Stack gap="md" aria-label="Loading document">
         <Skeleton height={40} width="60%" />
         <Skeleton height={20} width="40%" />
-        <SimpleGrid cols={{ base: 1, sm: 3 }}>
-          {Array.from({ length: 3 }).map((_, i) => (
+        <SimpleGrid cols={{ base: 1, sm: 2, md: 4 }}>
+          {Array.from({ length: 4 }).map((_, i) => (
             <Skeleton key={i} height={72} />
           ))}
         </SimpleGrid>
@@ -93,6 +98,7 @@ export function DocumentDetailPage() {
     (v) => v.id === doc.current_effective_version_id,
   )?.revision_label;
   const effectiveDate = doc.effective_from ? doc.effective_from.slice(0, 10) : null;
+  const reviewDays = doc.next_review_due ? daysUntil(doc.next_review_due) : null;
 
   return (
     <Stack gap="lg">
@@ -101,7 +107,7 @@ export function DocumentDetailPage() {
       {/* Author actions (D-A): capability + state + lock gated; quiet-absent for readers (DP-6). */}
       <AuthorActions doc={doc} />
 
-      <SimpleGrid cols={{ base: 1, sm: 3 }}>
+      <SimpleGrid cols={{ base: 1, sm: 2, md: 4 }}>
         <Tile
           label="Governing revision"
           value={governingRev ?? (doc.current_effective_version_id ? "Effective" : "—")}
@@ -116,6 +122,25 @@ export function DocumentDetailPage() {
           label="Versions"
           value={versionList.length || "—"}
           sub={versionList.length ? "retained · newest first" : "history not in scope"}
+        />
+        <Tile
+          label="Next review"
+          value={
+            reviewDays === null
+              ? "—"
+              : reviewDays >= 0
+                ? `${reviewDays} days`
+                : `${-reviewDays} days overdue`
+          }
+          sub={
+            doc.next_review_due ? (
+              <>
+                {doc.next_review_due} <ReviewStateBadge state={doc.review_state} />
+              </>
+            ) : (
+              "No scheduled review"
+            )
+          }
         />
       </SimpleGrid>
 
@@ -152,12 +177,20 @@ export function DocumentDetailPage() {
             <Card withBorder>
               <Stack gap="sm">
                 <Text fw={600}>Control metadata</Text>
-                <ControlMetadata doc={doc} typeName={typeName} ownerName={ownerName} />
+                <ControlMetadata
+                  doc={doc}
+                  typeName={typeName}
+                  ownerName={ownerName}
+                  onEditReviewPeriod={doc.capabilities?.manage_metadata ? () => setReviewEditOpen(true) : undefined}
+                />
               </Stack>
             </Card>
           </Stack>
         </Grid.Col>
       </Grid>
+      {reviewEditOpen && (
+        <ReviewPeriodModal doc={doc} opened onClose={() => setReviewEditOpen(false)} />
+      )}
     </Stack>
   );
 }
