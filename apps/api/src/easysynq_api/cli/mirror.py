@@ -116,7 +116,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     result = asyncio.run(_sync(force=args.command == "rebuild"))
     if result is None:
-        print("mirror sync skipped: another sync is already in progress")
+        print("mirror sync skipped: another sync/scan is already in progress")
         return 0
     print(
         f"mirror synced: documents={result.documents} files={result.files} "

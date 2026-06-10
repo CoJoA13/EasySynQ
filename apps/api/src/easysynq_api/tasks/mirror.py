@@ -47,10 +47,12 @@ async def _run_mirror_sync() -> int:
                 "mirror.sync.done",
                 extra={
                     "extra_fields": {
-                        "documents": result.documents if result else 0,
-                        "files": result.files if result else 0,
-                        "symlinks": result.symlinks if result else 0,
-                        "pending_renditions": result.pending_renditions if result else 0,
+                        "documents": result.documents if result is not None else 0,
+                        "files": result.files if result is not None else 0,
+                        "symlinks": result.symlinks if result is not None else 0,
+                        "pending_renditions": (
+                            result.pending_renditions if result is not None else 0
+                        ),
                         "scan_status": report.status,
                         "scan_findings": len(report.findings),
                     }
