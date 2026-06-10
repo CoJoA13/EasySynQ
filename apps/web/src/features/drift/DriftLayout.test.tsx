@@ -49,5 +49,6 @@ describe("LeftRail drift gating", () => {
     );
     renderWithProviders(<LeftRail />);
     expect(await screen.findByText("Drift")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Drift" })).toHaveAttribute("href", "/drift");
   });
 });
