@@ -634,7 +634,23 @@ async def scan_mirror(
     try:
         rows = await _pointer_rows(session)
         pointer, cur = resolve_pointer(current_target, current_is_real_path, rows)
-        if pointer == "none":
+
+        builds_root = root / ".builds"
+        # The whole served-build area is compromised when ``.builds`` is NOT a real directory — a
+        # symlink (``is_dir()`` on a child would follow it and walk/hash out-of-tree content) OR a
+        # planted regular file/special (the corrective rebuild's ``builds.mkdir`` would then raise,
+        # wedging correction). Never scan THROUGH it, and quarantine it below — independent of
+        # whether ``current`` matched a registry row (Codex P2: cur is None for missing/rogue/
+        # foreign current, yet the rebuild still writes through a symlinked ``.builds``).
+        builds_root_compromised = builds_root.is_symlink() or (
+            builds_root.exists() and not builds_root.is_dir()
+        )
+
+        # Empty-registry no-baseline is benign ONLY if ``.builds`` is also clean. A fresh/pre-0046
+        # install with a planted/symlinked ``.builds`` must NOT early-return — the rebuild would
+        # otherwise write the first build through the compromised parent (Codex P2). Fall through so
+        # the builds-compromised branch below flags + quarantines it.
+        if pointer == "none" and not builds_root_compromised:
             return ScanReport(
                 scan_id=scan_id,
                 started_at=started_at,
@@ -651,17 +667,6 @@ async def scan_mirror(
         is_current = False
         build_dir: Path | None = None
         build_dir_scannable = False
-
-        builds_root = root / ".builds"
-        # The whole served-build area is compromised when ``.builds`` is NOT a real directory — a
-        # symlink (``is_dir()`` on a child would follow it and walk/hash out-of-tree content) OR a
-        # planted regular file/special (the corrective rebuild's ``builds.mkdir`` would then raise,
-        # wedging correction). Never scan THROUGH it, and quarantine it below — independent of
-        # whether ``current`` matched a registry row (Codex P2: cur is None for missing/rogue/
-        # foreign current, yet the rebuild still writes through a symlinked ``.builds``).
-        builds_root_compromised = builds_root.is_symlink() or (
-            builds_root.exists() and not builds_root.is_dir()
-        )
 
         if pointer in ("missing", "rogue", "foreign"):
             findings.append(Finding("current", CLASS_POINTER, symlink_found=current_target))
@@ -907,9 +912,11 @@ async def scan_and_sync(
     (rebuilds on DIVERGENT / behind-vault / no-baseline; NOT on FAILED — a scan failure is not
     evidence the mirror is wrong, and the nightly sync remains the convergence backstop). Two
     §11.5 guards: unpersisted FINDINGS defer the rebuild (it would erase the on-disk evidence the
-    next scan needs to re-detect and audit — and a broken PG fails the rebuild anyway), and after
-    any failure the advisory-lock ownership is re-verified (a dropped connection frees the
-    session-level lock silently). The caller holds ``LOCK_MIRROR_SYNC``."""
+    next scan needs to re-detect and audit — and a broken PG fails the rebuild anyway), and the
+    advisory-lock ownership is re-verified on the SAME session immediately before EVERY rebuild
+    (Codex P2 — persist commits first, and a silently dropped/replaced connection anywhere up to
+    that point frees the session-level lock; the recheck must guard the normal divergent/
+    behind-vault path too, not just the failure paths). The caller holds ``LOCK_MIRROR_SYNC``."""
     report = await scan_mirror(session, mirror_path=mirror_path)
     needs = report.status == "DIVERGENT" or report.baseline == "none" or not report.is_current
     do_rebuild = rebuild == "always" or (report.status != "FAILED" and needs)
@@ -922,12 +929,15 @@ async def scan_and_sync(
             extra={"extra_fields": report.counts()},
         )
         do_rebuild = False
-    if do_rebuild and (report.status == "FAILED" or not persisted):
-        if not await holds_advisory_lock(session, LOCK_MIRROR_SYNC):
-            logger.error("mirror.scan: advisory lock lost; skipping the rebuild this tick")
-            return report, None
     result: MirrorSyncResult | None = None
     if do_rebuild:
+        # Re-verify lock ownership on THIS session right before the swap — after persist's commit
+        # and regardless of scan status: a silently-dropped/replaced connection anywhere up to here
+        # frees the session-level lock, and a lockless sync_mirror swap could race a concurrent
+        # sync's prune. Must guard the normal divergent/behind-vault path too, not just failures.
+        if not await holds_advisory_lock(session, LOCK_MIRROR_SYNC):
+            logger.error("mirror.scan: advisory lock not held; skipping the rebuild this tick")
+            return report, None
         result = await sync_mirror(
             mirror_path=mirror_path, render_sink=render_sink, session=session
         )

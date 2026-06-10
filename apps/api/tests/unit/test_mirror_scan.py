@@ -363,6 +363,29 @@ async def test_empty_registry_real_dir_current_is_rogue(
     assert not (tmp_path / "current").exists()  # moved aside → the swap can recreate the symlink
 
 
+async def test_empty_registry_compromised_builds_not_waved_through(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex P2: an EMPTY registry is the benign no-baseline ONLY if `.builds` is also clean. With
+    `.builds` planted (here a regular file) and `current` absent, the scan must NOT early-return
+    'none' — it flags + quarantines the compromised parent so the rebuild's builds.mkdir won't
+    write through / wedge on it. No symlink — cross-platform."""
+
+    async def _no_rows(session: object) -> list[PointerRow]:
+        return []
+
+    monkeypatch.setattr(scan_mod, "_pointer_rows", _no_rows)
+    (tmp_path / ".builds").write_bytes(b"PLANTED-ON-FRESH-INSTALL")  # a file; current is absent
+
+    report = await scan_mirror(None, mirror_path=tmp_path)  # type: ignore[arg-type]
+    assert report.status == "DIVERGENT"  # NOT a clean no-baseline
+    assert any(f.path == ".builds" and f.classification == CLASS_POINTER for f in report.findings)
+    qdirs = list((tmp_path / ".quarantine").iterdir())
+    assert len(qdirs) == 1
+    assert (qdirs[0] / ".builds").read_bytes() == b"PLANTED-ON-FRESH-INSTALL"
+    assert not (tmp_path / ".builds").exists()
+
+
 async def test_regular_file_builds_parent_is_quarantined(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

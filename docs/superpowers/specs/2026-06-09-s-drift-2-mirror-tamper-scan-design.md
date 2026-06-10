@@ -342,6 +342,14 @@ the existing posture; the same lock serializes scan↔sync so a swap can never p
     fail on a file). (d) `_known_digests` for STALE counts only versions that were once the
     controlled copy — **Effective/Superseded/Obsolete** — so planted Draft/InReview/Approved bytes
     are alarm-worthy `MIRROR_TAMPER`, never a soft `MIRROR_STALE` (the mirror is Effective-only).
+11. **Codex P2 round 4 (2026-06-10):** (a) the **empty-registry `none` early-return** is taken only
+    when `.builds` is ALSO clean — `builds_root_compromised` is computed *before* the return, so a
+    fresh/pre-0046 install with a planted/symlinked `.builds` falls through to flag + quarantine it
+    rather than rebuilding through the compromised parent. (b) The advisory-lock recheck on the
+    SAME session now fires **immediately before EVERY rebuild** (not only the FAILED/unpersisted
+    paths) — `persist_scan_results` commits, and a silently dropped/replaced connection up to that
+    point frees the session-level lock, so the normal divergent/behind-vault rebuild needs the
+    guard too.
 
 ## 12. Docs in-PR
 
