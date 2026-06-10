@@ -77,7 +77,11 @@ class ScanReport:
         by: dict[str, int] = {}
         for f in self.findings:
             by[f.classification] = by.get(f.classification, 0) + 1
-        present_divergent = sum(1 for f in self.findings if f.classification != CLASS_MISSING)
+        # MISSING findings have no on-disk path and POINTER findings are about the `current`
+        # symlink itself — neither was a walked path, so neither subtracts from `ok`.
+        present_divergent = sum(
+            1 for f in self.findings if f.classification not in (CLASS_MISSING, CLASS_POINTER)
+        )
         out: dict[str, object] = {
             "scanned": self.scanned,
             "ok": max(self.scanned - present_divergent, 0),
