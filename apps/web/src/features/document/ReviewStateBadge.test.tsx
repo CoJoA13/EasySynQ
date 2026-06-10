@@ -1,32 +1,26 @@
-import { render, screen } from "@testing-library/react";
-import { MantineProvider } from "@mantine/core";
+import { screen } from "@testing-library/react";
 import { describe, expect, test } from "vitest";
-import { theme } from "../../theme/mantine";
+import { renderWithProviders } from "../../test/render";
 import { ReviewStateBadge } from "./ReviewStateBadge";
 
-function renderBadge(state: "current" | "due_soon" | "overdue" | null) {
-  return render(
-    <MantineProvider theme={theme}>
-      <ReviewStateBadge state={state} />
-    </MantineProvider>,
-  );
-}
-
 describe("ReviewStateBadge", () => {
-  test("current renders Current", () => {
-    renderBadge("current");
+  test("current renders Current with its accessible name", () => {
+    renderWithProviders(<ReviewStateBadge state="current" />);
+    expect(screen.getByLabelText("Review state: Current")).toBeInTheDocument();
     expect(screen.getByText("Current")).toBeInTheDocument();
   });
-  test("due_soon renders Due soon", () => {
-    renderBadge("due_soon");
+  test("due_soon renders Due soon with its accessible name", () => {
+    renderWithProviders(<ReviewStateBadge state="due_soon" />);
+    expect(screen.getByLabelText("Review state: Due soon")).toBeInTheDocument();
     expect(screen.getByText("Due soon")).toBeInTheDocument();
   });
-  test("overdue renders Overdue", () => {
-    renderBadge("overdue");
+  test("overdue renders Overdue with its accessible name", () => {
+    renderWithProviders(<ReviewStateBadge state="overdue" />);
+    expect(screen.getByLabelText("Review state: Overdue")).toBeInTheDocument();
     expect(screen.getByText("Overdue")).toBeInTheDocument();
   });
   test("null (not scheduled) renders nothing", () => {
-    renderBadge(null);
+    renderWithProviders(<ReviewStateBadge state={null} />);
     expect(screen.queryByText(/current|due soon|overdue/i)).toBeNull();
   });
 });
