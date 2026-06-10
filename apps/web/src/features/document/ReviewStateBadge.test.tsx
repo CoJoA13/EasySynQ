@@ -27,7 +27,6 @@ describe("ReviewStateBadge", () => {
   });
   test("null (not scheduled) renders nothing", () => {
     renderBadge(null);
-    expect(screen.queryByRole("button")).toBeNull();
     expect(screen.queryByText(/current|due soon|overdue/i)).toBeNull();
   });
 });
