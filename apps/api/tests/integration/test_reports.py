@@ -161,3 +161,84 @@ async def test_internal_auditor_holds_checklist_key(
     r = await app_client.get(_CHECKLIST, headers=_auth(token_factory, subj.c))
     assert r.status_code == 200, r.text
     assert len(r.json()["rows"]) == 20
+
+
+async def test_checklist_overdue_review_leg(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    """The overdue_review flag on rows and the rollup count.
+
+    Sequence:
+      1. Release a doc mapped to ★ clause 8.4.
+      2. Backdate next_review_due to yesterday → GET checklist → 8.4 row overdue_review True;
+         rollup overdue_review >= 1.
+      3. Reset next_review_due to today + 90d → GET checklist → 8.4 row overdue_review False.
+         (The flip-back assertion relies on no other test backdating next_review_due on a
+         ★-mapped doc — currently true; keep it that way.)
+    """
+    import datetime
+
+    from sqlalchemy import text
+
+    from easysynq_api.db.session import get_sessionmaker
+    from easysynq_api.services.vault.review import _org_tz
+
+    await s5.grant_lifecycle(subj.a)
+    await s5.grant_lifecycle(subj.b)
+    await _grant(subj.a, ("report.compliance_checklist.read",))
+    org_id = await s5.default_org_id()
+    await s5.set_approver_release(org_id, True)
+    ha = _auth(token_factory, subj.a)
+    hb = _auth(token_factory, subj.b)
+
+    clause_84 = await _clause_by_number("8.4")
+
+    # Release a doc (clause "10" mapped by drive_to_effective for the submit gate), then also
+    # add the 8.4 mapping so the checklist sees it in the 8.4 row.
+    eff = await s5.drive_to_effective(
+        app_client, ha, hb, hb, await s5.type_id("SOP"), f"overdue-84-{subj.a}".encode()
+    )
+    doc_id = eff["id"]
+    await _map(app_client, ha, doc_id, clause_84)
+
+    today_date = datetime.datetime.now(_org_tz()).date()
+    yesterday = today_date - datetime.timedelta(days=1)
+
+    doc_uuid = uuid.UUID(doc_id)
+
+    # Step 2: backdate next_review_due to yesterday → 8.4 row overdue_review True.
+    async with get_sessionmaker()() as s:
+        await s.execute(
+            text("UPDATE documented_information SET next_review_due = :d WHERE id = :id"),
+            {"d": yesterday, "id": doc_uuid},
+        )
+        await s.commit()
+
+    r_overdue = await app_client.get(_CHECKLIST, headers=ha)
+    assert r_overdue.status_code == 200, r_overdue.text
+    body_overdue = r_overdue.json()
+    row_overdue = _row(body_overdue, "8.4")
+    assert row_overdue["overdue_review"] is True, (
+        f"expected 8.4 overdue_review True after backdating, got {row_overdue['overdue_review']}"
+    )
+    assert body_overdue["rollup"]["overdue_review"] >= 1, (
+        f"expected rollup overdue_review >= 1, got {body_overdue['rollup']['overdue_review']}"
+    )
+
+    # Step 3: reset next_review_due to today + 90 days → 8.4 row overdue_review False.
+    future_date = today_date + datetime.timedelta(days=90)
+    async with get_sessionmaker()() as s:
+        await s.execute(
+            text("UPDATE documented_information SET next_review_due = :d WHERE id = :id"),
+            {"d": future_date, "id": doc_uuid},
+        )
+        await s.commit()
+
+    r_current = await app_client.get(_CHECKLIST, headers=ha)
+    assert r_current.status_code == 200, r_current.text
+    body_current = r_current.json()
+    row_current = _row(body_current, "8.4")
+    assert row_current["overdue_review"] is False, (
+        f"expected 8.4 overdue_review False after resetting to future, "
+        f"got {row_current['overdue_review']}"
+    )

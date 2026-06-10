@@ -75,7 +75,7 @@ from ..services.vault import (
 from ..services.vault import repository as vault_repo
 from ..services.vault.locks import LOCK_TTL_SECONDS
 from ..services.vault.release_scope import enrich_release_sod_scope
-from ..services.vault.review import compute_next_review_due
+from ..services.vault.review import compute_next_review_due, review_state, today_org
 from ..services.workflow import instantiate_approval
 from ..tasks.visual_diff import visual_diff as visual_diff_task
 
@@ -165,6 +165,10 @@ def _document(
         # read paths (list/detail) via _effective_from_map; null on create/patch responses.
         "effective_from": effective_from,
         "created_at": d.created_at.isoformat() if d.created_at else None,
+        "review_period_months": d.review_period_months,
+        "next_review_due": d.next_review_due.isoformat() if d.next_review_due else None,
+        "last_reviewed_at": d.last_reviewed_at.isoformat() if d.last_reviewed_at else None,
+        "review_state": review_state(d.next_review_due, today_org()),
     }
     # clause_refs (S10, doc 15 §2.1): the mapped clause numbers, derived from clause_mapping (never
     # a denormalized column — D2). Omitted unless the handler supplies it (batch-loaded per page).

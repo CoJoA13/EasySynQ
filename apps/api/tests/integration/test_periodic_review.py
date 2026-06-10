@@ -1172,3 +1172,72 @@ async def test_decide_rejects_non_owner_and_bad_outcomes(
     assert sig_count == 1, (
         f"idempotent replay must not add a second review_confirmed sig, got {sig_count}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Task 7: read surface — review fields on the document serializer
+# ---------------------------------------------------------------------------
+
+
+async def test_document_serializer_carries_review_fields(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    subj: SimpleNamespace,
+) -> None:
+    """GET /documents/{id} carries review_period_months, next_review_due, last_reviewed_at,
+    review_state; GET /documents (list) carries the same four fields on every row.
+
+    Sequence:
+      1. Release a doc → detail GET → review_period_months==24, next_review_due is a date ISO,
+         last_reviewed_at is None, review_state=="current".
+      2. Backdate next_review_due to today-1d directly → detail GET →
+         review_state=="overdue".
+      3. List GET → find THIS doc's row by id → same four fields, same values.
+    """
+    await s5.grant_lifecycle(subj.a)
+    await s5.grant_lifecycle(subj.b)
+    await s5.set_approver_release(await s5.default_org_id(), True)
+    ha = _auth(token_factory, subj.a)
+    hb = _auth(token_factory, subj.b)
+    type_id = await s5.type_id("SOP")
+    content = f"drift-serializer-{subj.a}".encode()
+
+    did, body = await _release_doc(app_client, ha, hb, type_id, content)
+
+    # Step 1: after release — four fields present, review_state is "current".
+    assert body.get("review_period_months") == REVIEW_PERIOD_DEFAULT_MONTHS
+    nrd = body.get("next_review_due")
+    assert nrd is not None, "next_review_due must be set after release"
+    # Validate it's a parseable date ISO string.
+    datetime.date.fromisoformat(nrd)
+    assert body.get("last_reviewed_at") is None
+    assert body.get("review_state") == "current"
+
+    # Step 2: backdate next_review_due to yesterday → overdue.
+    today_date = datetime.datetime.now(_org_tz()).date()
+    yesterday = today_date - datetime.timedelta(days=1)
+    async with get_sessionmaker()() as s:
+        await s.execute(
+            text("UPDATE documented_information SET next_review_due = :d WHERE id = :id"),
+            {"d": yesterday, "id": uuid.UUID(did)},
+        )
+        await s.commit()
+
+    body2 = (await app_client.get(f"/api/v1/documents/{did}", headers=ha)).json()
+    assert body2.get("next_review_due") == yesterday.isoformat()
+    assert body2.get("review_state") == "overdue"
+
+    # Step 3: list endpoint — find this doc's row by id; same four fields present.
+    list_r = await app_client.get("/api/v1/documents", headers=ha)
+    assert list_r.status_code == 200, list_r.text
+    list_body = list_r.json()
+    # The list response uses {"data": [...], "page": {...}}.
+    doc_rows = list_body.get("data", [])
+    matching = [r for r in doc_rows if r.get("id") == did]
+    assert len(matching) == 1, (
+        f"expected 1 row for doc {did} in the list response, got {len(matching)}"
+    )
+    row = matching[0]
+    assert row.get("review_period_months") == REVIEW_PERIOD_DEFAULT_MONTHS
+    assert row.get("next_review_due") == yesterday.isoformat()
+    assert row.get("review_state") == "overdue"
