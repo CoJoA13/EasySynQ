@@ -57,7 +57,9 @@ async def _release_doc(
         f"/api/v1/tasks/{task_id}/decision", headers=hb, json={"outcome": "approve"}
     )
     assert dec.status_code == 200, dec.text
-    rel = await app_client.post(f"/api/v1/documents/{did}/release", headers=ha, json={})
+    # SoD-2: the editor may never release their own edit — the APPROVER releases (the
+    # set_approver_release(org, True) flag each caller sets; the test_lifecycle pattern).
+    rel = await app_client.post(f"/api/v1/documents/{did}/release", headers=hb, json={})
     assert rel.status_code == 200, rel.text
     body = (await app_client.get(f"/api/v1/documents/{did}", headers=ha)).json()
     return did, body
