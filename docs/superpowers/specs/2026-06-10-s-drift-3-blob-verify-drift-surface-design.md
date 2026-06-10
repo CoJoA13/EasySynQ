@@ -264,6 +264,29 @@ All-static paths (no `/{id}` shadow concern). Router mounted with the other admi
   both endpoints as `demo` (holds `drift.read` natively post-0047); confirm the re-alarm, restore
   (delete the planted row), confirm CLEAN.
 
+## 10a. Amendments — the diff-critic fold (2026-06-10, post-implementation; 1 MAJOR + 2 MINOR confirmed)
+
+1. **(MAJOR) The alarm latch is now an explicit PIN — `blob.verify_failed_at` (added to mig
+   0047).** §3.4's stamp-on-OK-only-without-a-pin had a hole: a blob stamped OK once and corrupted
+   LATER keeps its old `verified_at`, sorting BEHIND every never-verified (NULL) row — so a
+   NULL-cursor influx larger than the sample size (a bulk import) crowds a DETECTED corruption out
+   of the daily rolling sample and the latest-per-kind status read goes CLEAN over it (the exact
+   false-PASS the design was meant to prevent; both re-alarm tests used `full=True`, which
+   bypasses the ordering — a rolling-path latch test now exists). The fix: a finding sets
+   `verify_failed_at` (cleared on the next pass); the sample orders
+   `verify_failed_at IS NOT NULL DESC → verified_at NULLS FIRST → oldest → sha`, so an unresolved
+   finding is in EVERY rolling sample. `verified_at` keeps its pure "last verified OK" meaning;
+   `blob_coverage` gains a `failing` count (contract updated).
+2. **(MINOR) Disposal-race prune.** An `OBJECT_MISSING` finding whose blob ROW is also gone at
+   persist time was a legal R27 disposal racing the scan (bytes destroyed + row dropped between
+   the sample SELECT and the hash) — `persist_blob_verify` now re-checks row existence for
+   MISSING findings and prunes the disposed ones (info-log), so no permanent false alarm lands in
+   the append-only trail. Bytes-gone-row-present (the real broken invariant) still alarms.
+3. **(MINOR) Bind-parameter cap + CLI honesty.** The stamp UPDATEs are chunked (10k per statement;
+   psycopg's extended-protocol Bind caps at 65,535 parameters — a `--full` pass over a larger
+   vault would have rolled the WHOLE persist back), and the CLI now surfaces a persist failure
+   (explicit WARNING + exit 1) instead of discarding the bool and printing success.
+
 ## 11. Docs in-PR
 
 `docs/05` §9.1 (mark D1 + D4 shipped — the family complete) · `docs/03` §8.2 (pointer to the

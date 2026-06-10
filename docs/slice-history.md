@@ -13,13 +13,22 @@ org lookup — this install renamed the short_code). Owner forks: a NEW `drift.r
 `storage.read` (the D4 report isn't storage; riding widens storage-config readers); ONE
 `BLOB_INTEGRITY_FAILED` event (classification HASH_MISMATCH/OBJECT_MISSING/READ_ERROR in the
 payload — no severity split exists, unlike MIRROR_STALE/TAMPER); daily rolling cadence where
-**rotation IS the periodic full set** (verified_at NULLS FIRST → oldest, default 500/day, CLI
-`--full` on demand). **Stamp-on-OK-only is the slice's load-bearing call**: `blob.verified_at` is
-both the rotation cursor and the alarm latch — a finding stays at the head and re-alarms every run
-(no auto-correction exists for blobs; restore-from-backup per the new
-`runbooks/blob-integrity-verify.md`), and stamping a bad blob would let the next clean sample mask
-it as CLEAN on the latest-per-kind status read. Per-object errors are findings; connection-class
-errors ABORT as FAILED salvaging findings (no noise-event storms when MinIO is down). D4 is a LIVE
+**rotation IS the periodic full set** (FAILED-pinned first → verified_at NULLS FIRST → oldest,
+default 500/day, CLI `--full` on demand). **The alarm latch is the slice's load-bearing call** —
+and the diff-critic MAJOR reshaped it: `blob.verified_at` stays the pure "last verified OK" cursor
+(stamped on a pass only), while a finding sets **`blob.verify_failed_at`** (mig 0047), the explicit
+pin that sorts FIRST in every rolling sample — a finding re-alarms every run until restored (no
+auto-correction exists for blobs; restore-from-backup per the new
+`runbooks/blob-integrity-verify.md`). ⚠ The original stamp-on-OK-only-without-a-pin design had a
+hole: a once-stamped-then-corrupted blob sorts BEHIND every never-verified row, so a NULL-cursor
+influx > sample size (a bulk import) crowds a DETECTED corruption out of the daily sample and the
+latest-per-kind status read goes CLEAN over it. The status surface exposes the pin directly
+(`blob_coverage.failing`). Two sibling diff-critic folds: an `OBJECT_MISSING` finding whose ROW is
+gone at persist time was a legal R27 disposal racing the scan → pruned (info-log), never a
+permanent false alarm; the stamp UPDATEs are chunked (10k) under psycopg's 65,535-bind-param cap
+and the CLI surfaces a persist failure (warning + exit 1). Per-object errors are findings;
+connection-class errors ABORT as FAILED salvaging findings (no noise-event storms when MinIO is
+down). D4 is a LIVE
 read — `EXPORTED`/`PRINTED` events × now-Superseded/Obsolete versions is sound by construction
 (`render_dynamic_copy` only ever serves the then-Effective version); no decrement leg (the `/verify`
 token is the per-copy resolution). New surface: `GET /admin/drift/status` +

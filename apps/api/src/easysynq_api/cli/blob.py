@@ -23,8 +23,10 @@ from ..services.common.pg_locks import LOCK_BLOB_VERIFY, pg_advisory_lock
 from ..services.vault.blob_verify import BlobVerifyReport, persist_blob_verify, verify_blobs
 
 
-async def _verify(*, full: bool, sample_size: int | None) -> BlobVerifyReport | None:
-    """The scan+persist pipeline under the advisory lock; ``None`` if another verify holds it."""
+async def _verify(*, full: bool, sample_size: int | None) -> tuple[BlobVerifyReport, bool] | None:
+    """The scan+persist pipeline under the advisory lock; ``None`` if another verify holds it.
+    Returns the report AND whether persistence succeeded — an unpersisted pass recorded nothing
+    (no stamps, no summary row), and the operator must know."""
     engine = create_async_engine(get_settings().database_url)
     sessionmaker: async_sessionmaker[AsyncSession] = async_sessionmaker(
         engine, expire_on_commit=False
@@ -34,8 +36,8 @@ async def _verify(*, full: bool, sample_size: int | None) -> BlobVerifyReport | 
             if not held:
                 return None
             report = await verify_blobs(session, sample_size=sample_size, full=full)
-            await persist_blob_verify(session, report, triggered_by="cli")
-            return report
+            persisted = await persist_blob_verify(session, report, triggered_by="cli")
+            return report, persisted
     finally:
         await engine.dispose()
 
@@ -55,17 +57,23 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    report = asyncio.run(_verify(full=args.full, sample_size=args.sample_size))
-    if report is None:
+    result = asyncio.run(_verify(full=args.full, sample_size=args.sample_size))
+    if result is None:
         print("blob verify skipped: another verify is already in progress")
         return 0
+    report, persisted = result
     c = report.counts()
     print(
         f"blob verify: status={report.status} scanned={c['scanned']} ok={c['ok']} "
         f"mismatched={c['mismatched']} missing={c['missing']} read_errors={c['read_errors']} "
-        f"total_blobs={c['total_blobs']} full={c['full']}"
+        f"total_blobs={c['total_blobs']} full={c['full']} persisted={persisted}"
     )
-    return 1 if report.status == "FAILED" else 0
+    if not persisted:
+        print(
+            "WARNING: persist failed — NOTHING was recorded (no stamps, no events, no summary "
+            "row); the next run resamples. Check the worker/DB logs."
+        )
+    return 1 if report.status == "FAILED" or not persisted else 0
 
 
 if __name__ == "__main__":

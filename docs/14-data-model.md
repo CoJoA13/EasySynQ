@@ -267,7 +267,7 @@ erDiagram
 
 | Entity | Key attributes | Notes |
 |---|---|---|
-| `blob` | `sha256` PK, `org_id`, `size_bytes`, `mime_type`, `bucket`, `object_key`, `worm_until`, `sse`, `verified_at` | Content-addressed, deduplicated, WORM. Identity *is* the hash (`04 §2.1`, `12 §5`). `verified_at` = the D1 rolling-verify cursor (S-drift-3): stamped on a passing re-hash ONLY, so findings stay at the rotation head and re-alarm. |
+| `blob` | `sha256` PK, `org_id`, `size_bytes`, `mime_type`, `bucket`, `object_key`, `worm_until`, `sse`, `verified_at`, `verify_failed_at` | Content-addressed, deduplicated, WORM. Identity *is* the hash (`04 §2.1`, `12 §5`). `verified_at` = the D1 rolling-verify cursor (S-drift-3): stamped on a passing re-hash ONLY. `verify_failed_at` (mig 0047) = the alarm latch: set on a finding, cleared on a pass, sorted FIRST in the rotation sample — an unresolved finding re-alarms every run regardless of the never-verified backlog. |
 | `rendition` | `id` PK, `document_version_id` FK (or `record_id`), `rendition_type` enum(`pdf`,`thumbnail`,`extracted_text`), `blob_sha256` FK | Derived, rebuildable, never authoritative. |
 | `working_draft` | `id` PK, `document_id` FK (unique — at most one active), `checked_out_by`, `checked_out_at`, `source_version_id`, `scratch_blob_ref`, `lock_ttl` | The only mutable surface; frozen into a version on check-in (`04 §2.1`). |
 

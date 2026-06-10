@@ -158,6 +158,6 @@ async def test_drift_status_shape_and_blob_rehash_leg(app_under_test: object) ->
     assert leg["triggered_by"] in ("beat", "sync", "cli")
     assert "scan_id" in leg["counts"]
     cov = status["blob_coverage"]
-    assert cov["total"] >= 0 and cov["never_verified"] >= 0
+    assert cov["total"] >= 0 and cov["never_verified"] >= 0 and cov["failing"] >= 0
     sc = status["superseded_copies"]
     assert sc["versions"] >= 0 and sc["copies"] >= 0

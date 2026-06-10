@@ -2,28 +2,36 @@
 
 Re-hash vault blobs against their content-addressed identity (``blob.sha256`` IS the PK) and alarm
 on divergence — the only detector for bit-rot, storage-layer tamper, or a broken
-blob-row-iff-bytes invariant. **Rolling sample:** each run verifies the K least-recently-verified
-rows (``verified_at NULLS FIRST → oldest``), so rotation covers every HEALTHY blob within ⌈N/K⌉
-runs in the all-clean steady state (doc 03 §8.2's "rolling sample + full set periodically";
-``full=True`` is the on-demand complete pass). M unresolved findings occupy M sample slots every
-run (deliberately — see stamp-on-OK-only below), stretching healthy coverage toward
-⌈(N-M)/(K-M)⌉; M ≥ K means the vault is on fire and every scan covering the bad set is correct.
+blob-row-iff-bytes invariant. **Rolling sample:** each run verifies the K rows ordered FAILED-pin
+first (``verify_failed_at IS NOT NULL``), then least-recently-verified (``verified_at NULLS FIRST
+→ oldest``), so rotation covers every healthy blob within ⌈N/K⌉ runs in the all-clean steady
+state (doc 03 §8.2's "rolling sample + full set periodically"; ``full=True`` is the on-demand
+complete pass) and M unresolved findings occupy the FIRST M slots of every run, stretching
+healthy coverage toward ⌈(N-M)/(K-M)⌉; M ≥ K means the vault is on fire and every scan covering
+the bad set is correct.
 
-**Stamp-on-OK-only is load-bearing:** a finding leaves the blob at the rotation head, so every
-subsequent scan re-detects and re-alarms until the operator restores the object — there is no
-auto-correction here (unlike the mirror's vault-wins rebuild), and stamping a bad blob would let
-the next run's clean sample mask an unresolved corruption as CLEAN on the latest-per-kind status
-read. A transient READ_ERROR self-clears the same way (unstamped → re-verified next run).
+**The alarm latch is load-bearing:** ``verified_at`` is stamped on a PASSING re-hash only (its
+meaning stays "last verified OK"); a finding instead sets ``verify_failed_at`` (cleared on the
+next pass), which sorts FIRST in the rotation — so an unresolved finding is in EVERY rolling
+sample and re-alarms every run until the operator restores the object. There is no
+auto-correction here (unlike the mirror's vault-wins rebuild). Without the pin, a
+once-stamped-then-corrupted blob would sort behind every never-verified row, and a NULL-cursor
+influx larger than K (a bulk import) would crowd a DETECTED corruption out of the daily sample —
+the latest-per-kind status read would report CLEAN over it (the diff-critic MAJOR). A transient
+READ_ERROR self-clears the same way (pinned → re-verified next run → pin cleared on pass).
 
 Posture mirrors ``mirror_scan``: the scan NEVER raises — an object-scoped error is a finding, an
 infrastructure-class failure (MinIO/PG down) is an honest FAILED report that salvages the findings
 collected so far and mints NO noise findings for unreached rows. ``persist_blob_verify`` writes
 the per-finding ``BLOB_INTEGRITY_FAILED`` audit events (``object_type=config`` keyed on the org —
 a deduplicated blob has no single owning document; the ``after`` payload carries the sha256), the
-``verified_at`` stamps, and the ``drift_scan`` ``kind=BLOB_REHASH`` summary row in ONE
-transaction — a persist failure stamps nothing, so the next run redoes the same sample
-(self-healing, no ledger). Reads go through the INTERNAL client (``storage.hash_object``) — never
-presign (D1 is a worker read, not a browser read).
+``verified_at``/``verify_failed_at`` stamps, and the ``drift_scan`` ``kind=BLOB_REHASH`` summary
+row in ONE transaction — a persist failure stamps nothing, so the next run redoes the same sample
+(self-healing, no ledger). An ``OBJECT_MISSING`` finding whose ROW is also gone at persist time
+was a legal R27 disposal racing the scan (bytes destroyed + row dropped between the sample SELECT
+and the hash) — pruned with an info log, never a permanent false alarm in the append-only trail;
+a REAL broken invariant (bytes gone, row present) still alarms. Reads go through the INTERNAL
+client (``storage.hash_object``) — never presign (D1 is a worker read, not a browser read).
 """
 
 from __future__ import annotations
@@ -36,7 +44,7 @@ from collections.abc import Awaitable, Callable, Sequence
 from typing import Any
 
 from botocore.exceptions import ClientError
-from sqlalchemy import Select, func, select, update
+from sqlalchemy import Select, desc, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...config import get_settings
@@ -168,11 +176,14 @@ async def verify_rows(
 
 
 def _sample_stmt(*, limit: int | None) -> Select[Any]:
-    """The rotation sample: never-verified rows first (NULLS FIRST), then the oldest stamps, with
-    a deterministic sha tiebreak. Column-select, never entities (identity-map hygiene). ``None``
-    = the full set."""
+    """The rotation sample: FAILED-pinned rows first (the alarm latch — an unresolved finding is
+    in EVERY rolling sample, however large the never-verified backlog), then never-verified
+    (NULLS FIRST), then the oldest stamps, with a deterministic sha tiebreak. Column-select,
+    never entities (identity-map hygiene). ``None`` = the full set."""
     stmt = select(Blob.sha256, Blob.bucket, Blob.object_key, Blob.size_bytes).order_by(
-        Blob.verified_at.asc().nulls_first(), Blob.sha256
+        desc(Blob.verify_failed_at.is_not(None)),
+        Blob.verified_at.asc().nulls_first(),
+        Blob.sha256,
     )
     return stmt if limit is None else stmt.limit(limit)
 
@@ -221,11 +232,57 @@ async def verify_blobs(
         )
 
 
+# psycopg's extended-protocol Bind caps parameters at 65,535 — a --full pass over a larger vault
+# would blow the expanding-IN stamp UPDATE and roll the WHOLE persist back. Chunk well under it.
+_STAMP_CHUNK = 10_000
+
+
+async def _prune_disposed_missing(
+    session: AsyncSession, report: BlobVerifyReport
+) -> BlobVerifyReport:
+    """Drop OBJECT_MISSING findings whose blob ROW no longer exists: a legal R27 disposal racing
+    the scan (bytes destroyed + row dropped between the sample SELECT and the hash) is an erasure,
+    not tamper — the blob-row-iff-bytes invariant HOLDS. Without the prune it would mint a
+    permanent false alarm into the append-only trail. A REAL broken invariant (bytes gone, row
+    present) still alarms."""
+    missing = [f.sha256 for f in report.findings if f.classification == CLASS_MISSING]
+    if not missing:
+        return report
+    present = {
+        row[0]
+        for row in (
+            await session.execute(select(Blob.sha256).where(Blob.sha256.in_(missing)))
+        ).all()
+    }
+    disposed = [
+        f for f in report.findings if f.classification == CLASS_MISSING and f.sha256 not in present
+    ]
+    if not disposed:
+        return report
+    logger.info(
+        "blob.verify: pruned %d OBJECT_MISSING finding(s) whose row was disposed mid-scan "
+        "(legal erasure, not tamper): %s",
+        len(disposed),
+        [f.sha256 for f in disposed],
+    )
+    kept = [f for f in report.findings if f not in set(disposed)]
+    return build_report(
+        findings=kept,
+        ok_shas=report.ok_shas,
+        total_blobs=report.total_blobs,
+        sample_limit=report.sample_limit,
+        error=report.error,
+        scan_id=report.scan_id,
+        started_at=report.started_at,
+    )
+
+
 async def persist_blob_verify(
     session: AsyncSession, report: BlobVerifyReport, *, triggered_by: str
 ) -> bool:
-    """ONE txn: a ``BLOB_INTEGRITY_FAILED`` audit event per finding + the verified_at stamps
-    (OK rows only) + the ``drift_scan`` BLOB_REHASH summary row. Returns success: a failure is
+    """ONE txn: a ``BLOB_INTEGRITY_FAILED`` audit event per finding + the stamps (OK rows:
+    ``verified_at=now()`` + the latch cleared; finding rows: ``verify_failed_at=now()`` — the
+    rotation pin) + the ``drift_scan`` BLOB_REHASH summary row. Returns success: a failure is
     logged, never raised, and stamps nothing — the next run redoes the same sample (self-healing).
     NO per-clean-scan audit event (the hourly-CLEAN-spam rule); EVERY scan gets its summary row
     (the row-per-scan contract)."""
@@ -236,6 +293,7 @@ async def persist_blob_verify(
         if org_id is None:
             logger.warning("blob.verify: no organization yet; results not persisted")
             return False
+        report = await _prune_disposed_missing(session, report)
         finished_at = _now()
         for f in report.findings:
             after: dict[str, object] = {
@@ -261,9 +319,20 @@ async def persist_blob_verify(
                     after=after,
                 )
             )
-        if report.ok_shas:
+        for i in range(0, len(report.ok_shas), _STAMP_CHUNK):
             await session.execute(
-                update(Blob).where(Blob.sha256.in_(report.ok_shas)).values(verified_at=func.now())
+                update(Blob)
+                .where(Blob.sha256.in_(report.ok_shas[i : i + _STAMP_CHUNK]))
+                .values(verified_at=func.now(), verify_failed_at=None)
+            )
+        failed_shas = [f.sha256 for f in report.findings]
+        for i in range(0, len(failed_shas), _STAMP_CHUNK):
+            # The rotation pin: verified_at stays untouched ("last verified OK"); a row already
+            # disposed mid-scan was pruned above, and a disposed-after-prune row just no-ops.
+            await session.execute(
+                update(Blob)
+                .where(Blob.sha256.in_(failed_shas[i : i + _STAMP_CHUNK]))
+                .values(verify_failed_at=func.now())
             )
         session.add(
             DriftScan(

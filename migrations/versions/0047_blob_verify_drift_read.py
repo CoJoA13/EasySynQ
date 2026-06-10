@@ -7,7 +7,13 @@ Slice S-drift-3 (doc 03 §8.2, doc 05 §9.1 rows D1/D4, doc 07 §3.9, R38/R41) �
    DRIFT_SCAN_KIND_VALUES, which already carries the member).
 2. **event_type += BLOB_INTEGRITY_FAILED** — the D1 mismatch alarm (one event type, owner fork;
    classification rides the payload).
-3. **R38/R41: the drift.read SYSTEM-domain key** (is_system_domain=true, sod_sensitive=false,
+3. **blob.verify_failed_at** (nullable timestamptz) — the D1 alarm LATCH: set on a finding,
+   cleared on a passing re-hash, and sorted FIRST in the rotation sample. Without it a
+   once-stamped-then-corrupted blob sorts behind every never-verified row, so a NULL-cursor
+   influx larger than the sample size crowds a detected-but-unresolved corruption out of the
+   daily sample and the latest-per-kind status read goes CLEAN over it (the diff-critic MAJOR).
+   ``verified_at`` keeps its pure "last verified OK" meaning (the 0005 column).
+4. **R38/R41: the drift.read SYSTEM-domain key** (is_system_domain=true, sod_sensitive=false,
    sig_hook=false, finest_scope=SYSTEM) + one role_grant to System Administrator. ⚠ Org lookup =
    the RESILIENT pattern (scalar_one_or_none on 'DEFAULT' + a fall-back to the only org — a
    deliberately SOFTENED variant of the 0043/0045 ``scalar_one()`` recipe, PR #107): setup G-E
@@ -49,7 +55,13 @@ def upgrade() -> None:
     op.execute("ALTER TYPE drift_scan_kind ADD VALUE IF NOT EXISTS 'BLOB_REHASH'")
     op.execute("ALTER TYPE event_type ADD VALUE IF NOT EXISTS 'BLOB_INTEGRITY_FAILED'")
 
-    # 2. R38/R41: seed the drift.read SYSTEM key (idempotent).
+    # 2. The D1 alarm latch (nullable, no default — NULL = never failed; the app role already
+    # holds UPDATE on blob, the verified_at precedent).
+    op.add_column(
+        "blob", sa.Column("verify_failed_at", sa.DateTime(timezone=True), nullable=True)
+    )
+
+    # 3. R38/R41: seed the drift.read SYSTEM key (idempotent).
     permission_t = sa.table(
         "permission",
         sa.column("key", sa.Text),
@@ -78,7 +90,7 @@ def upgrade() -> None:
         .on_conflict_do_nothing(index_elements=["key"])
     )
 
-    # 3. Grant to System Administrator — resilient org lookup (#107: setup G-E renames the
+    # 4. Grant to System Administrator — resilient org lookup (#107: setup G-E renames the
     # short_code, so DEFAULT-only would skip an operational install). ⚠ Deliberately SOFTER than
     # the 0043/0045 ``scalar_one()`` recipe: on ≠1 orgs the GRANT is skipped (the permission row
     # is still seeded) rather than aborting — a missing role grant is operator-recoverable
@@ -124,6 +136,7 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     bind = op.get_bind()
+    op.drop_column("blob", "verify_failed_at")
     # role_grant BEFORE permission (the RESTRICT FK) so a populated-DB downgrade does not abort.
     bind.execute(
         sa.text(

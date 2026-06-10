@@ -3684,10 +3684,15 @@ paths:
                           - { type: "null" }
                   blob_coverage:
                     type: object
-                    required: [total, never_verified, oldest_verified_at]
+                    required: [total, never_verified, failing, oldest_verified_at]
                     properties:
                       total: { type: integer }
                       never_verified: { type: integer }
+                      failing:
+                        type: integer
+                        description: >-
+                          Unresolved-finding pins (blob.verify_failed_at set) — the rows
+                          re-alarming every scan until restored; 0 once every alarm is resolved.
                       oldest_verified_at: { type: [string, "null"], format: date-time }
                   superseded_copies:
                     type: object
@@ -3707,6 +3712,7 @@ paths:
                 blob_coverage:
                   total: 1240
                   never_verified: 1240
+                  failing: 0
                   oldest_verified_at: null
                 superseded_copies: { versions: 3, copies: 7 }
         "403": { $ref: "#/components/responses/ProblemResponse" }

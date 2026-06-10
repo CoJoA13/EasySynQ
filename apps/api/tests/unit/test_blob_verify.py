@@ -119,16 +119,20 @@ def test_report_is_failed_even_with_zero_findings_when_error() -> None:
     assert r.status == "FAILED"
 
 
-def test_sample_stmt_orders_nulls_first_then_oldest() -> None:
-    """The rotation contract lives in the SQL: never-verified rows first, then oldest stamps,
-    deterministic sha tiebreak — compiled against the postgresql dialect so the assertion checks
-    what PG will actually execute."""
+def test_sample_stmt_orders_pinned_then_nulls_then_oldest() -> None:
+    """The rotation contract lives in the SQL: FAILED-pinned rows FIRST (the alarm latch — an
+    unresolved finding is in EVERY rolling sample regardless of the never-verified backlog), then
+    never-verified, then oldest stamps, deterministic sha tiebreak — compiled against the
+    postgresql dialect so the assertion checks what PG will actually execute."""
     from sqlalchemy.dialects import postgresql
 
     from easysynq_api.services.vault.blob_verify import _sample_stmt
 
     sql = str(_sample_stmt(limit=5).compile(dialect=postgresql.dialect()))
-    assert "ORDER BY blob.verified_at ASC NULLS FIRST, blob.sha256" in sql
+    assert (
+        "ORDER BY blob.verify_failed_at IS NOT NULL DESC, "
+        "blob.verified_at ASC NULLS FIRST, blob.sha256" in sql
+    )
     assert "LIMIT" in sql
     full_sql = str(_sample_stmt(limit=None).compile(dialect=postgresql.dialect()))
     assert "LIMIT" not in full_sql

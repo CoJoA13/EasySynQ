@@ -12,6 +12,7 @@ come from the approver, never the author.
 
 from __future__ import annotations
 
+import datetime
 import hashlib
 import uuid
 from collections.abc import Callable
@@ -19,7 +20,7 @@ from types import SimpleNamespace
 
 import pytest
 from httpx import AsyncClient
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select, update
 
 from easysynq_api.db.models._audit_enums import EventType
 from easysynq_api.db.models._drift_enums import DriftScanKind, DriftScanStatus
@@ -178,16 +179,18 @@ async def test_planted_tamper_alarms_and_realarm_until_resolved(
         row = await _scan_row(report.scan_id)
         assert row is not None and row.status is DriftScanStatus.DIVERGENT
 
-        # Findings are NOT stamped → still at the rotation head → the NEXT scan re-alarms.
+        # Findings keep verified_at NULL ("last verified OK" stays pure) AND gain the
+        # verify_failed_at pin → the rotation head → the NEXT scan re-alarms.
         async with get_sessionmaker()() as s:
             stamps = (
                 await s.execute(
-                    select(Blob.sha256, Blob.verified_at).where(
+                    select(Blob.sha256, Blob.verified_at, Blob.verify_failed_at).where(
                         Blob.sha256.in_([fake_sha, missing_sha])
                     )
                 )
             ).all()
-        assert all(v is None for _, v in stamps)
+        assert all(v is None for _, v, _pin in stamps)
+        assert all(pin is not None for _, _v, pin in stamps)
 
         async with get_sessionmaker()() as s:
             report2 = await verify_blobs(s, full=True)
@@ -207,10 +210,107 @@ async def test_rolling_sample_orders_by_verified_at_nulls_first(
     subj: SimpleNamespace,
 ) -> None:
     """sample_size=0 → empty sample (CLEAN, nothing scanned) proves the LIMIT is honored end to
-    end; the NULLS-FIRST/oldest ordering contract is proven by the compiled-SQL unit test
-    (test_sample_stmt_orders_nulls_first_then_oldest) — a shared-DB ordering assertion would race
-    other tests' rows."""
+    end; the pinned-first/NULLS-FIRST/oldest ordering contract is proven by the compiled-SQL unit
+    test (test_sample_stmt_orders_pinned_then_nulls_then_oldest) and the ROLLING latch test below
+    — a bare shared-DB ordering assertion would race other tests' rows."""
     async with get_sessionmaker()() as s:
         report = await verify_blobs(s, sample_size=0)
     assert report.status == "CLEAN"
     assert report.counts()["scanned"] == 0
+
+
+async def _pinned_count() -> int:
+    async with get_sessionmaker()() as s:
+        return int(
+            (
+                await s.execute(
+                    select(func.count()).select_from(Blob).where(Blob.verify_failed_at.is_not(None))
+                )
+            ).scalar_one()
+        )
+
+
+async def test_rolling_latch_pins_findings_ahead_of_null_backlog(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    subj: SimpleNamespace,
+) -> None:
+    """The diff-critic MAJOR's regression proof, on the ROLLING path the daily task actually runs:
+    a detected finding is verify_failed_at-pinned and stays in the sample ahead of a fresh
+    never-verified (NULL) backlog — and a pinned row that re-hashes CLEAN is unpinned + stamped.
+    Sample sizes are computed from the LIVE pinned count, so foreign pinned rows (none today)
+    cannot flake the proof."""
+    await _grant_release_actors(subj)
+    ha, hb = _auth(token_factory, subj.a), _auth(token_factory, subj.b)
+    doc = await s5.drive_to_effective(
+        app_client, ha, hb, hb, await s5.type_id("SOP"), f"D1-LATCH-{subj.salt}".encode()
+    )
+    real = await _source_blob_of(doc["id"])
+    bad_sha = hashlib.sha256(f"planted-latch-{subj.salt}".encode()).hexdigest()
+
+    async with get_sessionmaker()() as s:
+        s.add(
+            Blob(
+                sha256=bad_sha,
+                org_id=real.org_id,
+                size_bytes=real.size_bytes,
+                mime_type="application/octet-stream",
+                bucket=real.bucket,
+                object_key=real.object_key,  # real bytes, wrong claimed digest → MISMATCH
+            )
+        )
+        await s.commit()
+
+    try:
+        # 1. Detect + pin (full pass: deterministic first detection).
+        async with get_sessionmaker()() as s:
+            report = await verify_blobs(s, full=True)
+            assert await persist_blob_verify(s, report, triggered_by="beat") is True
+        assert bad_sha in {f.sha256 for f in report.findings}
+
+        # 2. Grow a fresh NULL backlog (a new doc → a new never-verified blob).
+        doc2 = await s5.drive_to_effective(
+            app_client, ha, hb, hb, await s5.type_id("SOP"), f"D1-LATCH2-{subj.salt}".encode()
+        )
+        fresh = await _source_blob_of(doc2["id"])
+        assert fresh.verified_at is None
+
+        # 3. A ROLLING scan sized to the pinned set must still contain the pinned finding —
+        #    pre-fix, the NULL backlog would crowd it out and the scan would read CLEAN.
+        k = await _pinned_count()
+        assert k >= 1
+        async with get_sessionmaker()() as s:
+            rolling = await verify_blobs(s, sample_size=k)
+            assert await persist_blob_verify(s, rolling, triggered_by="beat") is True
+        assert bad_sha in {f.sha256 for f in rolling.findings}
+        assert rolling.status == "DIVERGENT"
+        row = await _scan_row(rolling.scan_id)
+        assert row is not None and row.status is DriftScanStatus.DIVERGENT
+
+        # 4. Clear-on-pass: pin the REAL (clean) blob by hand, roll a pinned-set-sized sample —
+        #    it re-hashes OK → unpinned + verified_at stamped (the operator-restored path).
+        async with get_sessionmaker()() as s:
+            await s.execute(
+                update(Blob)
+                .where(Blob.sha256 == real.sha256)
+                .values(verify_failed_at=datetime.datetime.now(datetime.UTC))
+            )
+            await s.commit()
+        k = await _pinned_count()
+        async with get_sessionmaker()() as s:
+            clearing = await verify_blobs(s, sample_size=k)
+            assert await persist_blob_verify(s, clearing, triggered_by="beat") is True
+        assert real.sha256 in clearing.ok_shas
+        async with get_sessionmaker()() as s:
+            pin, stamp = (
+                await s.execute(
+                    select(Blob.verify_failed_at, Blob.verified_at).where(
+                        Blob.sha256 == real.sha256
+                    )
+                )
+            ).one()
+        assert pin is None and stamp is not None
+    finally:
+        async with get_sessionmaker()() as s:
+            await s.execute(delete(Blob).where(Blob.sha256 == bad_sha))
+            await s.commit()

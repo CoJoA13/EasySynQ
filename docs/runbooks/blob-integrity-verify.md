@@ -3,9 +3,11 @@
 **What it is.** A daily Beat task (`easysynq.blob.verify`, `BLOB_VERIFY_INTERVAL_SECONDS` default
 86400) re-hashes the `BLOB_VERIFY_SAMPLE_SIZE` (default 500) least-recently-verified vault blobs
 against their content-addressed identity (`blob.sha256`). Rotation covers the FULL set every
-⌈N/sample⌉ days. `blob.verified_at` is stamped on a passing re-hash ONLY — a failing blob stays at
-the rotation head and **re-alarms on every run until you resolve it**. Status:
-`GET /admin/drift/status` (`drift.read`).
+⌈N/sample⌉ days. `blob.verified_at` is stamped on a passing re-hash ONLY; a failing blob is
+**pinned** (`blob.verify_failed_at`) to the head of every sample — it **re-alarms on every run
+until you resolve it**, even while a large backlog of never-verified blobs exists (e.g. after a
+bulk import). Status: `GET /admin/drift/status` (`drift.read`) — `blob_coverage.failing` is the
+live count of pinned, unresolved findings.
 
 **On a `BLOB_INTEGRITY_FAILED` audit event** (`after.classification`):
 
@@ -20,7 +22,10 @@ the rotation head and **re-alarms on every run until you resolve it**. Status:
   target per the backup-restore runbook (R37 — never mutate the locked bucket in place).
 - After the restore, run `MSYS_NO_PATHCONV=1 docker compose --env-file .env -f
   infra/compose/compose.yml exec worker python -m easysynq_api.cli.blob verify --full` and
-  confirm the re-hash passes (the alarm clears: the blob is stamped and leaves the rotation head).
+  confirm the re-hash passes (the alarm clears: the pin is removed, the blob is stamped, and
+  `blob_coverage.failing` drops).
+- A record legally disposed (R27/retention) mid-scan is NOT an alarm: a vanished object whose blob
+  ROW is also gone is pruned at persist time (info-logged) — only bytes-gone-row-present alarms.
 - A `FAILED` scan status (not a finding) means infrastructure trouble (MinIO/PG unreachable) — the
   scan aborts honestly instead of minting noise findings; check `/readyz` and the worker logs.
 

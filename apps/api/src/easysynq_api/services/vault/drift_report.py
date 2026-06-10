@@ -140,11 +140,14 @@ async def drift_status(session: AsyncSession) -> dict[str, Any]:
             "counts": row.counts,
             "triggered_by": row.triggered_by,
         }
-    total, never, oldest = (
+    total, never, failing, oldest = (
         await session.execute(
             select(
                 func.count(),
                 func.count().filter(Blob.verified_at.is_(None)),
+                # The unresolved-finding pins (verify_failed_at) — the direct operator signal
+                # behind a DIVERGENT BLOB_REHASH leg; 0 once every alarm is resolved.
+                func.count().filter(Blob.verify_failed_at.is_not(None)),
                 func.min(Blob.verified_at),
             ).select_from(Blob)
         )
@@ -155,6 +158,7 @@ async def drift_status(session: AsyncSession) -> dict[str, Any]:
         "blob_coverage": {
             "total": int(total),
             "never_verified": int(never),
+            "failing": int(failing),
             "oldest_verified_at": oldest.isoformat() if oldest is not None else None,
         },
         "superseded_copies": {"versions": versions, "copies": copies},
