@@ -293,7 +293,13 @@ the existing posture; the same lock serializes scan↔sync so a swap can never p
    type-swap findings carry no `note` (`note` is the error channel feeding `counts.errors`);
    findings imply rebuild on the hourly path so quarantine/audit never re-fires hourly for the
    same divergence.
-7. **Test hardening (false-PASS folds):** the lock test drives the real `_run_mirror_scan`
+7. **The `current` target SHAPE is verified, not just its basename** (Task-4 spec-review fold,
+   2026-06-10): only the relative `.builds/<name>` form `atomic_swap` writes is parsed to a build
+   name (`_parse_current_target`); an absolute / out-of-tree / nested / traversal target — even
+   one whose basename collides with the registered build — classifies **foreign → MIRROR_TAMPER**
+   with the raw target preserved as evidence, and is NEVER resolved against the filesystem (no
+   walking or moving of out-of-tree paths).
+8. **Test hardening (false-PASS folds):** the lock test drives the real `_run_mirror_scan`
    skip-tick (not the bare primitive); the FAILED family (never-raise, always-rebuilds vs
    if_needed-skips, the FAILED row) is explicitly tested; a CLEAN scan's `drift_scan` row is
    asserted (the row-per-scan contract); the stale leg also covers an **older-rendition** digest;

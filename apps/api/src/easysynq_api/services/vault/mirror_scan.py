@@ -22,7 +22,7 @@ import logging
 import os
 import shutil
 import uuid
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Literal
 
 from sqlalchemy import func, select, update
@@ -390,6 +390,19 @@ class PointerRow:
     swapped_at: datetime.datetime | None
 
 
+def _parse_current_target(raw: str) -> str | None:
+    """The ONLY legitimate ``current`` target shape is the relative ``.builds/<name>`` that
+    ``atomic_swap`` writes (backslashes on a Windows-written link). Anything else — absolute,
+    out-of-tree, nested, traversal — returns ``None``: the caller treats the RAW string as a
+    foreign pointer (evidence-only; never resolved, walked, or moved). Closes the
+    basename-collision bypass: an out-of-tree dir named like the registered build must not
+    resolve "ok" while its evil twin is being served."""
+    parts = PurePosixPath(raw.replace("\\", "/")).parts
+    if len(parts) == 2 and parts[0] == ".builds" and parts[1] not in ("", ".", ".."):
+        return parts[1]
+    return None
+
+
 def resolve_pointer(
     current_target: str | None, current_is_real_dir: bool, rows: list[PointerRow]
 ) -> tuple[str, PointerRow | None]:
@@ -491,10 +504,19 @@ async def scan_mirror(
     root = Path(mirror_path) if mirror_path is not None else Path(get_settings().mirror_path)
     current = root / "current"
     current_is_real_dir = current.is_dir() and not current.is_symlink()
+    conforming_name: str | None = None
+    current_target: str | None = None
     try:
-        current_target: str | None = Path(os.readlink(current)).name
+        raw_target: str | None = os.readlink(current)
     except OSError:
-        current_target = None
+        raw_target = None
+    if raw_target is not None:
+        conforming_name = _parse_current_target(raw_target)
+        # A non-conforming target (absolute / out-of-tree / nested) can never match a registry
+        # row — resolve_pointer classifies it "foreign" and the RAW string rides the report as
+        # evidence. It is never resolved against the filesystem: a basename collision with the
+        # registered build must not scan the genuine tree while an evil one is being served.
+        current_target = conforming_name if conforming_name is not None else raw_target
     build_name = current_target
     try:
         rows = await _pointer_rows(session)
@@ -546,7 +568,7 @@ async def scan_mirror(
             if pointer in ("ok", "selfheal"):
                 is_current = await _is_current(session, row.manifest)
 
-        builds_findings = _scan_builds_area(root, {r.build_name for r in rows}, current_target)
+        builds_findings = _scan_builds_area(root, {r.build_name for r in rows}, conforming_name)
         findings.extend(builds_findings)
 
         if findings:
@@ -558,8 +580,10 @@ async def scan_mirror(
             if pointer == "rogue_dir":
                 pf = next(f for f in findings if f.classification == CLASS_POINTER)
                 quarantine_tree(qdir, current, pf)  # also unblocks the next atomic swap
-            elif pointer == "foreign" and current_target is not None:
-                src = root / ".builds" / current_target
+            elif pointer == "foreign" and conforming_name is not None:
+                # Only a conforming in-builds target is movable; a non-conforming (out-of-tree)
+                # target is audit-payload evidence ONLY — never touch paths outside the mirror.
+                src = root / ".builds" / conforming_name
                 if src.is_dir():
                     pf = next(f for f in findings if f.classification == CLASS_POINTER)
                     quarantine_tree(qdir, src, pf)

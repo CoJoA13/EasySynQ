@@ -469,3 +469,19 @@ def test_counts_math() -> None:
     assert c["errors"] == 1
     assert c["baseline"] == "ok" and c["is_current"] is True
     assert c["scan_id"] == str(report.scan_id)
+
+
+def test_parse_current_target_rejects_non_conforming() -> None:
+    """Spec S11.8: only the relative `.builds/<name>` shape atomic_swap writes is legitimate —
+    an out-of-tree target whose BASENAME matches the registered build must classify foreign,
+    never resolve "ok" (the basename-collision bypass)."""
+    from easysynq_api.services.vault.mirror_scan import _parse_current_target
+
+    assert _parse_current_target(".builds/abc123") == "abc123"
+    assert _parse_current_target(".builds\\abc123") == "abc123"  # a Windows-written link
+    assert _parse_current_target("/srv/evil/abc123") is None  # absolute out-of-tree
+    assert _parse_current_target("C:/evil/abc123") is None
+    assert _parse_current_target(".builds/a/b") is None  # nested
+    assert _parse_current_target("../outside/abc") is None  # traversal
+    assert _parse_current_target(".builds/..") is None
+    assert _parse_current_target("abc123") is None  # bare name, not .builds-anchored
