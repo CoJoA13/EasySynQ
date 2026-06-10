@@ -388,12 +388,19 @@ def _quarantine_dir(mirror_root: Path, scan_id: uuid.UUID) -> Path:
     return qdir
 
 
+# Preserved evidence lands under this reserved subdir so a build path can never collide with the
+# top-level ``quarantine.json`` index (an attacker could plant a build file literally named
+# ``quarantine.json`` whose copy would otherwise overwrite the index, or vice-versa; Codex P2).
+_QUARANTINE_FILES = "files"
+
+
 def quarantine_tree(qdir: Path, src: Path, finding: Finding) -> None:
     """Quarantine a whole foreign/rogue path BY MOVE (same-volume rename; ``shutil.move`` handles a
     file or a directory): preserves the bytes exactly, takes them out of ``_prune_builds``' reach,
     and (for a rogue ``current`` that is a real file or dir) unblocks the next atomic swap. A move
-    failure is noted, never raised."""
-    dest = qdir / finding.path
+    failure is noted, never raised. Lands under the reserved ``files/`` subdir (never colliding
+    with the ``quarantine.json`` index)."""
+    dest = qdir / _QUARANTINE_FILES / finding.path
     try:
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(str(src), str(dest))
@@ -416,11 +423,12 @@ def write_quarantine(
     ``found_sha256`` and are recorded in the index only. Each copy is RE-HASHED
     (``quarantined_sha256`` — chain of custody: the preserved bytes must provably match the audited
     ``found_sha256``). A copy failure is noted on the finding, never raised — quarantine must not
-    block correction."""
+    block correction. Copies land under the reserved ``files/`` subdir, never colliding with the
+    top-level ``quarantine.json`` index (Codex P2)."""
     for f in findings:
         if f.found_sha256 is None:
             continue
-        dest = qdir / f.path
+        dest = qdir / _QUARANTINE_FILES / f.path
         try:
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(base / f.path, dest)
@@ -494,29 +502,27 @@ def resolve_pointer(
     current_is_real_path: bool,
     rows: list[PointerRow],
     *,
-    current_symlink_conforming: bool = True,
+    current_is_nonconforming_symlink: bool = False,
 ) -> tuple[str, PointerRow | None]:
     """Pure pointer-integrity matrix (spec §11.1): verify `current` against the registry, never
     trust it. Returns (pointer_state, the row to scan against or None). States: 'none' (empty
     registry — the only benign no-baseline), 'ok', 'selfheal' (the swap-then-crash window:
     current → the newest not-yet-stamped row; persist completes the bookkeeping), and the four
     MIRROR_TAMPER states 'missing' (current absent/broken) / 'rogue' (current is a real
-    file-or-dir, not a symlink) / 'foreign' / 'rollback'. ``current_is_real_path`` = current
-    exists and is NOT a symlink (a planted file or dir to quarantine, vs a truly-absent link).
-    ``current_symlink_conforming`` = current is a symlink whose target parses to the
-    ``.builds/<name>`` shape (vs an out-of-tree target) — consulted only on the empty-registry
-    leg."""
+    file-or-dir, not a symlink) / 'foreign' / 'rollback'. ``current_target`` is ONLY ever the
+    conforming ``.builds/<name>`` name (the caller passes None for a non-conforming symlink, so a
+    raw target can never collide with a registered build_name). ``current_is_real_path`` = current
+    exists and is NOT a symlink. ``current_is_nonconforming_symlink`` = current is a symlink whose
+    target is NOT the ``.builds/<name>`` shape — always foreign, never looked up (Codex P1)."""
+    if current_is_nonconforming_symlink:
+        # An out-of-tree / bare / nested symlink target — never matched against the registry
+        # (regardless of rows), so its raw string can't masquerade as a registered build.
+        return ("foreign", None)
     if not rows:
-        # Empty registry (fresh install / pre-0046) is the benign no-baseline — UNLESS:
-        #  • a real file/dir is planted at `current` (atomic_swap can't os.replace a dir) → rogue;
-        #  • `current` is a symlink to an OUT-OF-TREE / non-conforming target (Codex P2) → foreign,
-        #    so the bad link is audited as POINTER_DIVERGENT, not silently overwritten clean. A
-        #    CONFORMING ``.builds/<name>`` symlink with no row yet IS the benign pre-0046 state.
-        if current_is_real_path:
-            return ("rogue", None)
-        if current_target is not None and not current_symlink_conforming:
-            return ("foreign", None)
-        return ("none", None)
+        # Empty registry (fresh install / pre-0046) is the benign no-baseline UNLESS a real
+        # file/dir is planted at `current` (atomic_swap can't os.replace a dir) → rogue. A
+        # CONFORMING ``.builds/<name>`` symlink with no row yet IS the benign pre-0046 state.
+        return ("rogue" if current_is_real_path else "none", None)
     swapped = [r for r in rows if r.swapped_at is not None]
     newest_swapped = max(swapped, key=lambda r: r.built_at) if swapped else None
     newest_overall = max(rows, key=lambda r: r.built_at)
@@ -627,19 +633,23 @@ async def scan_mirror(
     # rogue evidence to quarantine before the rebuild overwrites it — not just a directory.
     current_is_real_path = current.exists() and not current.is_symlink()
     conforming_name: str | None = None
-    current_target: str | None = None
     try:
         raw_target: str | None = os.readlink(current)
     except OSError:
         raw_target = None
-    if raw_target is not None:
+    nonconforming_symlink = False
+    if raw_target is not None:  # current is a symlink
         conforming_name = _parse_current_target(raw_target)
-        # A non-conforming target (absolute / out-of-tree / nested) can never match a registry
-        # row — resolve_pointer classifies it "foreign" and the RAW string rides the report as
-        # evidence. It is never resolved against the filesystem: a basename collision with the
-        # registered build must not scan the genuine tree while an evil one is being served.
-        current_target = conforming_name if conforming_name is not None else raw_target
-    build_name = current_target
+        # A non-conforming symlink target (absolute / out-of-tree / nested / bare) is NEVER looked
+        # up against the registry: its raw string could collide with a registered build_name (e.g.
+        # ``current -> <bare-uuid>`` at the root, which would wrongly scan ``.builds/<uuid>`` while
+        # `current` serves elsewhere — Codex P1). Only the CONFORMING ``.builds/<name>`` name is
+        # ever resolved; a non-conforming symlink is always foreign.
+        nonconforming_symlink = conforming_name is None
+    # Only a conforming name is ever matched against rows; the raw target rides the report/findings
+    # as evidence.
+    current_target = conforming_name
+    build_name = conforming_name if conforming_name is not None else raw_target
     # Pre-declared so a mid-scan failure can SALVAGE what was already classified + quarantined
     # into the FAILED report — persist still audits them (it rolls back first, then emits events).
     findings: list[Finding] = []
@@ -649,7 +659,7 @@ async def scan_mirror(
             current_target,
             current_is_real_path,
             rows,
-            current_symlink_conforming=conforming_name is not None,
+            current_is_nonconforming_symlink=nonconforming_symlink,
         )
 
         builds_root = root / ".builds"
@@ -686,7 +696,8 @@ async def scan_mirror(
         build_dir_scannable = False
 
         if pointer in ("missing", "rogue", "foreign"):
-            findings.append(Finding("current", CLASS_POINTER, symlink_found=current_target))
+            # build_name carries the RAW symlink target (or conforming name) as evidence.
+            findings.append(Finding("current", CLASS_POINTER, symlink_found=build_name))
         if builds_root_compromised:
             findings.append(
                 Finding(
@@ -710,6 +721,11 @@ async def scan_mirror(
                     )
                 ).scalar_one()
                 tree_findings, scanned = compare_tree(build_dir, row.manifest, row.manifest_sha256)
+                # Salvage FIRST (same Finding objects, mutated in place below) so a raising
+                # _known_digests/UUID step can't drop already-detected tree findings from the
+                # FAILED report — else the always-rebuild path would prune divergent bytes
+                # unaudited (Codex P2).
+                findings.extend(tree_findings)
                 for f in tree_findings:
                     if f.classification == _CONTENT_MISMATCH:
                         known: set[str] = set()
@@ -720,7 +736,6 @@ async def scan_mirror(
                                 uuid.UUID(f.version_id) if f.version_id else None,
                             )
                         f.classification = classify_mismatch(f.found_sha256 or "", known)
-                findings.extend(tree_findings)
                 if pointer in ("ok", "selfheal"):
                     is_current = await _is_current(session, row.manifest)
             elif not builds_root_compromised:
@@ -739,7 +754,7 @@ async def scan_mirror(
             if pointer == "rollback":
                 # The per-file pass above covered the tree against ITS OWN row's manifest (known
                 # old vault bytes — no wholesale quarantine needed); this is the pointer event.
-                findings.append(Finding("current", CLASS_POINTER, symlink_found=current_target))
+                findings.append(Finding("current", CLASS_POINTER, symlink_found=build_name))
 
         builds_findings = _scan_builds_area(root, {r.build_name for r in rows}, conforming_name)
         findings.extend(builds_findings)

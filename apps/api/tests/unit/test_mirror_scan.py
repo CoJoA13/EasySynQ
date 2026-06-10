@@ -272,9 +272,9 @@ def test_quarantine_copies_divergent_and_extra_only(tmp_path: Path) -> None:
     write_quarantine_index(qdir, "abc", scan_id, findings)
     qdirs = list((mirror_root / ".quarantine").iterdir())
     assert len(qdirs) == 1 and scan_id.hex in qdirs[0].name
-    assert (qdirs[0] / "a" / "source.pdf").read_bytes() == b"EVIL"
-    assert (qdirs[0] / "STRAY.txt").read_bytes() == b"STRAY"
-    assert not (qdirs[0] / "gone.pdf").exists()
+    assert (qdirs[0] / "files" / "a" / "source.pdf").read_bytes() == b"EVIL"
+    assert (qdirs[0] / "files" / "STRAY.txt").read_bytes() == b"STRAY"
+    assert not (qdirs[0] / "files" / "gone.pdf").exists()
     index = json.loads((qdirs[0] / "quarantine.json").read_text())
     assert index["build_name"] == "abc" and index["scan_id"] == str(scan_id)
     assert len(index["findings"]) == 4  # ALL findings recorded, even uncopyable ones
@@ -323,7 +323,8 @@ def test_quarantine_tree_moves_bytes_out(tmp_path: Path) -> None:
     qdir = _quarantine_dir(mirror_root, uuid.uuid4())
     quarantine_tree(qdir, feral, finding)
     assert not feral.exists()  # moved, not copied
-    assert (qdir / ".builds" / "feral" / "deep" / "payload.bin").read_bytes() == b"PLANTED"
+    payload = qdir / "files" / ".builds" / "feral" / "deep" / "payload.bin"
+    assert payload.read_bytes() == b"PLANTED"
     assert finding.quarantine_path is not None
 
 
@@ -359,7 +360,7 @@ async def test_empty_registry_real_dir_current_is_rogue(
     assert report.status == "DIVERGENT"
     qdirs = list((tmp_path / ".quarantine").iterdir())
     assert len(qdirs) == 1
-    assert (qdirs[0] / "current" / "planted.txt").read_bytes() == b"PLANTED-DIR-CONTENT"
+    assert (qdirs[0] / "files" / "current" / "planted.txt").read_bytes() == b"PLANTED-DIR-CONTENT"
     assert not (tmp_path / "current").exists()  # moved aside → the swap can recreate the symlink
 
 
@@ -382,7 +383,7 @@ async def test_empty_registry_compromised_builds_not_waved_through(
     assert any(f.path == ".builds" and f.classification == CLASS_POINTER for f in report.findings)
     qdirs = list((tmp_path / ".quarantine").iterdir())
     assert len(qdirs) == 1
-    assert (qdirs[0] / ".builds").read_bytes() == b"PLANTED-ON-FRESH-INSTALL"
+    assert (qdirs[0] / "files" / ".builds").read_bytes() == b"PLANTED-ON-FRESH-INSTALL"
     assert not (tmp_path / ".builds").exists()
 
 
@@ -406,7 +407,7 @@ async def test_regular_file_builds_parent_is_quarantined(
     assert any(f.path == ".builds" and f.classification == CLASS_POINTER for f in report.findings)
     qdirs = list((tmp_path / ".quarantine").iterdir())
     assert len(qdirs) == 1
-    assert (qdirs[0] / ".builds").read_bytes() == b"PLANTED-BUILDS-FILE"
+    assert (qdirs[0] / "files" / ".builds").read_bytes() == b"PLANTED-BUILDS-FILE"
     assert not (tmp_path / ".builds").exists()  # moved aside → builds.mkdir won't wedge
 
 
@@ -469,14 +470,21 @@ def test_resolve_pointer_matrix() -> None:
     assert resolve_pointer("z", False, [a, orphan_old, orphan_new]) == ("rollback", orphan_old)
     # …and current at the NEWEST unswapped build IS the legitimate swap-then-crash window.
     assert resolve_pointer("c", False, [a, orphan_old, orphan_new]) == ("selfheal", orphan_new)
-    # Codex P2: empty registry + an OUT-OF-TREE current symlink is foreign (audited), not benign;
-    # a CONFORMING `.builds/<name>` symlink with no row yet is the benign pre-0046 case.
-    assert resolve_pointer("/out/of/tree", False, [], current_symlink_conforming=False) == (
+    # Codex P1/P2: a NON-conforming current symlink (caller passes current_target=None) is foreign
+    # regardless of rows — its raw target is never looked up, so it can't masquerade as a
+    # registered build_name even when the bare string collides with one.
+    assert resolve_pointer(None, False, [], current_is_nonconforming_symlink=True) == (
         "foreign",
         None,
     )
-    assert resolve_pointer("abc", False, [], current_symlink_conforming=True) == ("none", None)
-    assert resolve_pointer(None, False, []) == ("none", None)  # truly-absent current stays benign
+    assert resolve_pointer(None, False, [a, b], current_is_nonconforming_symlink=True) == (
+        "foreign",
+        None,
+    )
+    # A CONFORMING `.builds/<name>` symlink with no row yet (empty registry) is the benign pre-0046
+    # no-baseline; a truly-absent current is likewise benign.
+    assert resolve_pointer("abc", False, []) == ("none", None)
+    assert resolve_pointer(None, False, []) == ("none", None)
 
 
 async def test_scan_empty_registry_is_no_baseline(
@@ -521,7 +529,7 @@ async def test_rogue_regular_file_current_is_quarantined(
     assert len(pointer_findings) == 1
     qdirs = list((tmp_path / ".quarantine").iterdir())
     assert len(qdirs) == 1
-    assert (qdirs[0] / "current").read_bytes() == b"PLANTED-AT-CURRENT"  # bytes preserved
+    assert (qdirs[0] / "files" / "current").read_bytes() == b"PLANTED-AT-CURRENT"  # preserved
     assert not (tmp_path / "current").exists()  # moved aside → the swap can recreate the symlink
 
 

@@ -361,6 +361,17 @@ the existing posture; the same lock serializes scan↔sync so a swap can never p
     `holds_advisory_lock` verifies `pid = pg_backend_pid()`, so two backends cannot both be the
     holder. The in-session recheck covers the only live risk — this worker's own connection
     silently dropping mid-op.
+13. **Codex round 6 (2026-06-10):** (a, P1) a **non-conforming `current` symlink whose raw target
+    equals a registered `build_name`** (e.g. `current -> <bare-uuid>` at the mirror root) no longer
+    matches a registry row — the caller passes `current_target = conforming_name` (None for a
+    non-conforming symlink) and `resolve_pointer` returns `foreign` for any non-conforming symlink
+    *before* the row lookup, so a raw target can never masquerade as a registered build. (b, P2)
+    quarantined evidence now lands under a reserved `<scan>/files/` subdir, so a build file planted
+    literally as `quarantine.json` can't collide with / overwrite the top-level
+    `<scan>/quarantine.json` index. (c, P2) `scan_mirror` extends `findings` with the tree findings
+    **before** the `_known_digests` stale-classification loop, so a raising lookup can't drop
+    already-detected divergences from the salvaged FAILED report (which would let the always-rebuild
+    path prune unaudited bytes).
 
 ## 12. Docs in-PR
 

@@ -240,8 +240,8 @@ async def test_tamper_detect_quarantine_audit_correct(
     # R11: the tampered bytes were quarantined before the rebuild pruned the old tree.
     qdirs = list((mirror / ".quarantine").iterdir())
     assert len(qdirs) == 1
-    assert (qdirs[0] / rel_src).read_bytes() == b"TAMPER-EVIL"
-    assert (qdirs[0] / "STRAY.txt").read_bytes() == b"not from the vault"
+    assert (qdirs[0] / "files" / rel_src).read_bytes() == b"TAMPER-EVIL"
+    assert (qdirs[0] / "files" / "STRAY.txt").read_bytes() == b"not from the vault"
 
     # Audited per anomaly — all MIRROR_TAMPER; the doc-owned ones attributed to the document.
     events = await _events_for_scan(report.scan_id)
@@ -537,7 +537,9 @@ async def test_foreign_builds_tree_quarantined_by_move(
     assert not feral.exists()  # moved, not copied — out of _prune_builds' reach
     qdirs = list((mirror / ".quarantine").iterdir())
     assert len(qdirs) == 1
-    assert (qdirs[0] / ".builds" / "feral" / "deep" / "payload.bin").read_bytes() == b"PLANTED"
+    assert (
+        qdirs[0] / "files" / ".builds" / "feral" / "deep" / "payload.bin"
+    ).read_bytes() == b"PLANTED"
 
 
 async def test_destroyed_served_tree_is_tamper_not_clean(
@@ -601,7 +603,7 @@ async def test_planted_file_at_served_build_root_is_quarantined(
     assert any(f.classification == "POINTER_DIVERGENT" for f in report.findings)
     qdirs = list((mirror / ".quarantine").iterdir())
     assert len(qdirs) == 1
-    assert (qdirs[0] / ".builds" / build_name).read_bytes() == b"PLANTED-AT-BUILD-ROOT"
+    assert (qdirs[0] / "files" / ".builds" / build_name).read_bytes() == b"PLANTED-AT-BUILD-ROOT"
     assert result is not None  # corrected: a fresh registered build now serves
 
 
