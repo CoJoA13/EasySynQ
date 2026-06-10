@@ -131,11 +131,40 @@ def _due_at(stage: WorkflowStage, default_sla: dict[str, Any] | None) -> datetim
     return _now() + datetime.timedelta(hours=float(hours))
 
 
+def _context_user_ids(context: dict[str, Any] | None, ref: str) -> list[uuid.UUID]:
+    """Parse user ids named by a stage's ``context_users`` spec key out of the instance context
+    (one id or a list). Malformed/missing values resolve to [] — the caller's empty-pool check
+    then fails closed to NEEDS_ATTENTION (the engine's standard posture)."""
+    raw = (context or {}).get(ref)
+    values = raw if isinstance(raw, list) else [raw]
+    out: list[uuid.UUID] = []
+    for v in values:
+        try:
+            out.append(uuid.UUID(str(v)))
+        except (ValueError, TypeError, AttributeError):
+            continue
+    return out
+
+
 async def _resolve_pool(
-    session: AsyncSession, org_id: uuid.UUID, stage: WorkflowStage
+    session: AsyncSession, instance: WorkflowInstance, stage: WorkflowStage
 ) -> list[uuid.UUID]:
-    roles = list(_stage_spec(stage).get("roles", []))
-    return await wf_repo.users_with_roles(session, org_id, roles)
+    """Resolve the candidate pool for a stage.
+
+    Combines two additive sources (S-drift-1 owner-assignment seam):
+    - ``roles``: users in any of the stage's named roles (the pre-S-drift-1 path, byte-identical
+      for any stage without ``context_users``).
+    - ``context_users``: a key naming one user-id or a list of user-ids in the instance context
+      (e.g. ``"owner_user_id"`` for the periodic-review stage seeded in 0045).  Duplicates are
+      suppressed; the role-pool members come first."""
+    spec = _stage_spec(stage)
+    pool = await wf_repo.users_with_roles(session, instance.org_id, list(spec.get("roles", [])))
+    ref = spec.get("context_users")
+    if isinstance(ref, str):
+        for uid in _context_user_ids(instance.context, ref):
+            if uid not in pool:
+                pool.append(uid)
+    return pool
 
 
 async def _materialize_stage(
@@ -155,7 +184,7 @@ async def _materialize_stage(
     quorum = resolve_conditional(stage.quorum, instance.context)
     if quorum is None:
         return False
-    pool = await _resolve_pool(session, instance.org_id, stage)
+    pool = await _resolve_pool(session, instance, stage)
     if not pool or len(pool) < required_approvals(quorum, len(pool)):
         return False
     spec = _stage_spec(stage)
@@ -261,7 +290,7 @@ async def instantiate(
     subject_type: WorkflowSubjectType,
     subject_id: uuid.UUID,
     context: dict[str, Any] | None,
-    actor: AppUser,
+    actor: AppUser | None,
 ) -> WorkflowInstance:
     """Open a multi-stage ``workflow_instance`` for ``subject_id`` from the effective definition and
     materialize the entry stage's tasks. Adds rows WITHOUT committing (the caller commits). A

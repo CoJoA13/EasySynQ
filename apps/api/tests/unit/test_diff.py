@@ -39,6 +39,26 @@ def test_diff_metadata_only_emits_snapshot_fields() -> None:
     assert fields <= set(SNAPSHOT_FIELDS)
 
 
+def test_diff_metadata_review_period_months() -> None:
+    # S-drift-1: review_period_months is now a snapshot field.
+    # Old snapshot lacking the key → new snapshot with 24: reads old as None, diffs as None→24.
+    old: dict = {"identifier": "SOP-GEN-001", "title": "T"}
+    new: dict = {"identifier": "SOP-GEN-001", "title": "T", "review_period_months": 24}
+    deltas = {d.field: d for d in diff_metadata(old, new)}
+    assert "review_period_months" in deltas
+    assert deltas["review_period_months"].from_value is None
+    assert deltas["review_period_months"].to_value == 24
+    assert deltas["review_period_months"].changed is True
+
+    # 24 → 12 diffs as a change.
+    old2: dict = {"review_period_months": 24}
+    new2: dict = {"review_period_months": 12}
+    deltas2 = {d.field: d for d in diff_metadata(old2, new2)}
+    assert deltas2["review_period_months"].from_value == 24
+    assert deltas2["review_period_months"].to_value == 12
+    assert deltas2["review_period_months"].changed is True
+
+
 # --- text redline -----------------------------------------------------------------------------
 
 

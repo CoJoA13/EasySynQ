@@ -41,6 +41,7 @@ from . import locks, repository
 from .audit import VaultAuditEvent, VaultAuditSink, get_vault_audit_sink
 from .mirror_sink import get_mirror_enqueue_sink
 from .obsoletion import assert_obsoletion_allowed
+from .review import REVIEW_PERIOD_DEFAULT_MONTHS, compute_next_review_due
 from .signature import SignatureEvent, SignatureEventSink, get_vault_signature_sink
 
 logger = logging.getLogger("easysynq.vault")
@@ -198,6 +199,10 @@ async def submit_review(
                 }
             ],
         )
+    if doc.review_period_months is None:
+        # T2 auto-default (spec §3 amendment): the create-default applied late, so a legacy doc
+        # is never stranded at submit while the SPA lacks the field (pre-S-web-8).
+        doc.review_period_months = REVIEW_PERIOD_DEFAULT_MONTHS
     return await _advance_active_version(
         session, actor, doc, Action.submit_review, "SUBMITTED_FOR_REVIEW"
     )
@@ -506,6 +511,9 @@ async def _cutover(
     doc.current_state = transition.to_doc_state  # Effective
     if actor is not None:
         doc.updated_by = actor.id
+    doc.next_review_due = compute_next_review_due(
+        doc.review_period_months, doc.last_reviewed_at, eff_from
+    )
 
     # T6: append the release signature + the RELEASED/SUPERSEDED audit rows INSIDE the cutover txn
     # (before commit) so they are atomic with the promotion and roll back with a race loser — no

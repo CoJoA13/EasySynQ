@@ -1164,6 +1164,10 @@ async def test_commit_writes_documents_and_records_to_vault(
         assert doc.import_provenance and doc.import_provenance["run_id"] == run_id
         assert doc.import_provenance["source_sha256"]
         assert doc.current_effective_version_id is not None
+        # S-drift-1: import-baseline opt-out — imported docs skip the create-default so the
+        # owner can choose whether to enrol them in the re-review schedule post-import.
+        assert doc.review_period_months is None
+        assert doc.next_review_due is None
         ver = (
             await s.execute(select(DocumentVersion).where(DocumentVersion.document_id == doc.id))
         ).scalar_one()

@@ -15,7 +15,7 @@ import uuid
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query, Request, Response, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import ColumnElement, desc, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -75,6 +75,7 @@ from ..services.vault import (
 from ..services.vault import repository as vault_repo
 from ..services.vault.locks import LOCK_TTL_SECONDS
 from ..services.vault.release_scope import enrich_release_sod_scope
+from ..services.vault.review import compute_next_review_due, review_state, today_org
 from ..services.workflow import instantiate_approval
 from ..tasks.visual_diff import visual_diff as visual_diff_task
 
@@ -96,6 +97,7 @@ class MetadataUpdate(BaseModel):
     title: str | None = None
     folder_path: str | None = None
     classification: str | None = None
+    review_period_months: int | None = Field(default=None, ge=1, le=120)
 
 
 class InitUpload(BaseModel):
@@ -163,6 +165,10 @@ def _document(
         # read paths (list/detail) via _effective_from_map; null on create/patch responses.
         "effective_from": effective_from,
         "created_at": d.created_at.isoformat() if d.created_at else None,
+        "review_period_months": d.review_period_months,
+        "next_review_due": d.next_review_due.isoformat() if d.next_review_due else None,
+        "last_reviewed_at": d.last_reviewed_at.isoformat() if d.last_reviewed_at else None,
+        "review_state": review_state(d.next_review_due, today_org()),
     }
     # clause_refs (S10, doc 15 §2.1): the mapped clause numbers, derived from clause_mapping (never
     # a denormalized column — D2). Omitted unless the handler supplies it (batch-loaded per page).
@@ -403,6 +409,7 @@ async def _load_document(
                 select(DocumentedInformation)
                 .where(DocumentedInformation.id == raw_id)
                 .with_for_update()
+                .execution_options(populate_existing=True)
             )
         ).scalar_one_or_none()
     else:
@@ -674,7 +681,19 @@ async def update_metadata_endpoint(
 ) -> dict[str, Any]:
     from ..db.models._vault_enums import Classification
 
-    doc = await _load_document(session, caller, document_id)
+    # Load once, lock-aware up front: if review_period_months is being set we need a FOR UPDATE
+    # lock so the recompute of next_review_due can't race a concurrent cutover that commits a new
+    # current_effective_version_id between our read and our write.
+    # ⚠ The authz dependency (_manage_metadata → _document_scope → _document_scope_by_id) calls
+    # session.get(DocumentedInformation, doc_id) BEFORE this handler runs, so the row is already
+    # in the session's identity map. Without populate_existing=True the locked SELECT acquires the
+    # DB lock but returns the pre-lock attribute snapshot — a concurrent commit (e.g. a cutover or
+    # review-confirm) that landed while we waited for the lock stays invisible and the recompute
+    # clobbers the fresh next_review_due. populate_existing forces SQLAlchemy to overwrite the
+    # identity-map entry with the locked row's current column values. This applies to ALL
+    # for_update=True callers of _load_document (unmap_clause, submit_review, this handler).
+    wants_review_update = "review_period_months" in body.model_fields_set
+    doc = await _load_document(session, caller, document_id, for_update=wants_review_update)
     if body.title is not None:
         doc.title = body.title
     if body.folder_path is not None:
@@ -686,6 +705,15 @@ async def update_metadata_endpoint(
             raise ProblemException(
                 status=422, code="validation_error", title="Invalid classification"
             ) from exc
+    if wants_review_update:
+        doc.review_period_months = body.review_period_months
+        eff_from = None
+        if doc.current_effective_version_id is not None:
+            ver = await session.get(DocumentVersion, doc.current_effective_version_id)
+            eff_from = ver.effective_from if ver is not None else None
+        doc.next_review_due = compute_next_review_due(
+            doc.review_period_months, doc.last_reviewed_at, eff_from
+        )
     doc.updated_by = caller.id
     await session.commit()
     await session.refresh(doc)

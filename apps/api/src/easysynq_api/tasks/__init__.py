@@ -14,6 +14,7 @@ from . import (  # noqa: F401  (registers the Celery tasks)
     mirror,
     packs,
     records,
+    review,
     visual_diff,
 )
 from .app import app

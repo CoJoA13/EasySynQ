@@ -41,6 +41,7 @@ from ...logging import request_id_var
 from ...problems import ProblemException
 from . import locks, repository, storage, watermark
 from .audit import VaultAuditEvent, VaultAuditSink
+from .review import REVIEW_PERIOD_DEFAULT_MONTHS
 
 logger = logging.getLogger("easysynq.vault")
 
@@ -102,6 +103,7 @@ def _snapshot(
         "folder_path": doc.folder_path,
         "classification": doc.classification.value,
         "framework_id": str(doc.framework_id),
+        "review_period_months": doc.review_period_months,
     }
     if field_schema is not None:
         snap["field_schema"] = field_schema
@@ -150,6 +152,7 @@ async def create_document(
         current_state=DocumentCurrentState.Draft,
         is_singleton=dt.is_singleton,
         classification=klass,
+        review_period_months=REVIEW_PERIOD_DEFAULT_MONTHS,
         created_by=actor.id,
     )
     session.add(doc)

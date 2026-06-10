@@ -12,9 +12,11 @@ This is **status against a rule, never an auto-compliance verdict** (doc 13 N9).
 **any** clause mapping (``is_requirement_level`` ignored — a finer, rarely-set qualifier) targeting
 the **exact** ★ clause (no subtree rollup — the discrete-item intuition of doc 02 §2.1). The view is
 org-wide (gated on the SYSTEM key ``report.compliance_checklist.read``), so counts are not per-doc
-permission-filtered. Deferred (need unbuilt schema): the doc 13 "overdue review" leg (no
-``next_review_due``) and "linked evidence" leg (records), and R31 scope-conditional coverage (Scope
-authoring unbuilt) — all ★ rows are shown unconditionally.
+permission-filtered. Each row also carries ``overdue_review`` (True when ≥1 Effective mapped doc has
+``next_review_due`` ≤ today) — orthogonal to the COVERED/PARTIAL/GAP status; the rollup carries
+``overdue_review`` as the COUNT of flagged rows. Deferred (need unbuilt
+schema): the "linked evidence" leg (records), and R31 scope-conditional coverage (Scope authoring
+unbuilt) — all ★ rows are shown unconditionally.
 """
 
 from __future__ import annotations
@@ -26,10 +28,12 @@ import sqlalchemy as sa
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ...db.models._vault_enums import DocumentCurrentState
 from ...db.models.clause import Clause
 from ...db.models.clause_mapping import ClauseMapping
 from ...db.models.documented_information import DocumentedInformation
 from ..vault.repository import get_framework
+from ..vault.review import today_org
 
 
 def coverage_status(mapped: int, effective: int) -> str:
@@ -75,9 +79,19 @@ async def compute_checklist(
             empty["projected_rollup"] = {"total": 0, "covered": 0, "partial": 0, "gap": 0}
         return empty
 
+    today = today_org()
     mapped_count = func.count(func.distinct(DocumentedInformation.id))
     effective_count = func.count(func.distinct(DocumentedInformation.id)).filter(
         DocumentedInformation.current_effective_version_id.isnot(None)
+    )
+    overdue_count = (
+        sa.func.count(sa.distinct(DocumentedInformation.id))
+        .filter(
+            DocumentedInformation.current_state == DocumentCurrentState.Effective,
+            DocumentedInformation.next_review_due.is_not(None),
+            DocumentedInformation.next_review_due <= today,
+        )
+        .label("overdue")
     )
     rows = (
         await session.execute(
@@ -88,6 +102,7 @@ async def compute_checklist(
                 Clause.pdca_phase,
                 mapped_count.label("mapped"),
                 effective_count.label("effective"),
+                overdue_count,
             )
             .select_from(Clause)
             .outerjoin(
@@ -111,7 +126,8 @@ async def compute_checklist(
     out_rows: list[dict[str, Any]] = []
     covered = partial = gap = 0
     proj_covered = proj_partial = proj_gap = 0
-    for clause_id, number, title, pdca_phase, mapped, effective in rows:
+    overdue_review_count = 0
+    for clause_id, number, title, pdca_phase, mapped, effective, overdue in rows:
         status = coverage_status(mapped, effective)
         if status == "COVERED":
             covered += 1
@@ -119,6 +135,9 @@ async def compute_checklist(
             partial += 1
         else:
             gap += 1
+        overdue_flag = overdue > 0
+        if overdue_flag:
+            overdue_review_count += 1
         row: dict[str, Any] = {
             "clause_id": str(clause_id),
             "number": number,
@@ -127,6 +146,7 @@ async def compute_checklist(
             "mapped_count": mapped,
             "effective_count": effective,
             "status": status,
+            "overdue_review": overdue_flag,
         }
         if projecting:
             # An import only ever IMPROVES coverage: a confirmed-DOCUMENT mapping to a GAP/PARTIAL
@@ -148,6 +168,7 @@ async def compute_checklist(
             "covered": covered,
             "partial": partial,
             "gap": gap,
+            "overdue_review": overdue_review_count,
         },
         "rows": out_rows,
     }

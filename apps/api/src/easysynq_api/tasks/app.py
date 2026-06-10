@@ -62,6 +62,11 @@ app.conf.update(
             "task": "easysynq.records.retention_sweep",
             "schedule": 86400.0,  # daily
         },
+        # S-drift-1: daily D5 periodic re-review sweep (doc 04 §9.1)
+        "documents-review-sweep": {
+            "task": "easysynq.documents.review_sweep",
+            "schedule": 86400.0,  # daily
+        },
         # S-pack-1: daily reaper for evidence-pack builds stuck in BUILDING (a hard worker kill
         # between the BUILDING commit and the build's error handler strands them) → FAILED.
         "packs-reap-stalled-builds": {
