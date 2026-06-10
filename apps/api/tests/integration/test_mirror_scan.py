@@ -535,6 +535,40 @@ async def test_destroyed_served_tree_is_tamper_not_clean(
     assert result is not None  # the hourly path rebuilt rather than reporting a false CLEAN
 
 
+async def test_planted_file_at_served_build_root_is_quarantined(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    subj: SimpleNamespace,
+    tmp_path: Path,
+) -> None:
+    """Codex P2: when `current` still names a registered build but `.builds/<name>` has been
+    replaced by a regular FILE, the planted bytes are quarantined before the corrective rebuild
+    prunes them — the served build root is not a registered-child the .builds sweep would move."""
+    mirror = tmp_path / "m"
+    await _grant_release_actors(subj)
+    ha, hb = _auth(token_factory, subj.a), _auth(token_factory, subj.b)
+    await s5.drive_to_effective(app_client, ha, hb, hb, await s5.type_id("SOP"), b"REPLACED-V1")
+    await _sync(mirror)
+    build_name = Path(os.readlink(mirror / "current")).name
+    shutil.rmtree(mirror / ".builds" / build_name)
+    (mirror / ".builds" / build_name).write_bytes(b"PLANTED-AT-BUILD-ROOT")  # a file, not a dir
+
+    async with get_sessionmaker()() as s:
+        report, result = await scan_and_sync(
+            s,
+            rebuild="if_needed",
+            triggered_by="beat",
+            mirror_path=mirror,
+            render_sink=LoggingRenderSink(),
+        )
+    assert report.status == "DIVERGENT"
+    assert any(f.classification == "POINTER_DIVERGENT" for f in report.findings)
+    qdirs = list((mirror / ".quarantine").iterdir())
+    assert len(qdirs) == 1
+    assert (qdirs[0] / ".builds" / build_name).read_bytes() == b"PLANTED-AT-BUILD-ROOT"
+    assert result is not None  # corrected: a fresh registered build now serves
+
+
 async def test_scan_task_skips_when_sync_lock_held(
     app_client: AsyncClient,
     token_factory: Callable[..., str],

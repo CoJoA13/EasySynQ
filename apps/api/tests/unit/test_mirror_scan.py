@@ -191,6 +191,69 @@ def test_unreadable_file_is_a_tamper_finding(
     assert f.note is not None and "unreadable" in f.note
 
 
+def test_classify_entry_regular_file(tmp_path: Path) -> None:
+    """A plain regular file classifies "file"; the FIFO/device "special" path is exercised by
+    test_special_file_is_tamper_never_opened (a real FIFO is POSIX-only / Linux CI)."""
+    from easysynq_api.services.vault.mirror_scan import _classify_entry
+
+    p = tmp_path / "x"
+    p.write_bytes(b"hi")
+    assert _classify_entry(p) == "file"
+
+
+def test_special_file_is_tamper_never_opened(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex P2: a non-regular entry (FIFO/device/socket) where a regular file is expected is
+    UNEXPECTED tamper and is NEVER opened — _hash_file on a FIFO would block forever under the
+    lock. Stub the walk to mark the source 'special' and assert _hash_file is never called for it
+    (the manifest self-check is allowed through)."""
+    build = tmp_path / "b"
+    manifest, msha = _make_build(build, {"a/source.pdf": b"P"})
+
+    monkeypatch.setattr(
+        scan_mod,
+        "_walk_tree",
+        lambda root: {"a/source.pdf": "special", "_meta/manifest.json": "file"},
+    )
+
+    def _guarded(path: Path) -> str:
+        if path.name == "manifest.json":
+            return msha
+        raise AssertionError(f"opened a non-regular file: {path}")
+
+    monkeypatch.setattr(scan_mod, "_hash_file", _guarded)
+    findings, _ = compare_tree(build, manifest, msha)
+    f = _by_path(findings)["a/source.pdf"]
+    assert f.classification == CLASS_UNEXPECTED
+    assert f.found_sha256 is None  # never hashed
+    assert f.note == "non-regular file"
+
+
+def test_file_replacing_expected_symlink_is_quarantined(tmp_path: Path) -> None:
+    """Codex P2: a regular file planted where a symlink is expected is a CLASS_SYMLINK type-swap
+    that STILL carries real bytes — hash it and quarantine it (the old code recorded only the
+    type-swap with no found_sha256, so the rebuild deleted the planted bytes). No on-disk symlink
+    needed, so this runs on every platform."""
+    mirror_root = tmp_path / "m"
+    build = mirror_root / ".builds" / "abc"
+    manifest, msha = _make_build(build, {"real/doc/source.pdf": b"P"})  # no links → no os.symlink
+    # Declare a symlink in the manifest, but plant a REGULAR FILE on disk where it belongs.
+    manifest.append({"path": "alias/doc", "symlink_to": "../real/doc"})
+    (build / "alias").mkdir()
+    (build / "alias" / "doc").write_bytes(b"PLANTED-FILE-BYTES")
+
+    findings, _ = compare_tree(build, manifest, msha)
+    f = _by_path(findings)["alias/doc"]
+    assert f.classification == CLASS_SYMLINK
+    assert f.found_sha256 == _sha(b"PLANTED-FILE-BYTES")  # hashed so quarantine preserves it
+
+    qdir = _quarantine_dir(mirror_root, uuid.uuid4())
+    write_quarantine(qdir, build, [f])
+    assert f.quarantine_path is not None
+    assert Path(f.quarantine_path).read_bytes() == b"PLANTED-FILE-BYTES"
+
+
 def test_quarantine_copies_divergent_and_extra_only(tmp_path: Path) -> None:
     mirror_root = tmp_path / "m"
     build = mirror_root / ".builds" / "abc"
@@ -262,6 +325,23 @@ def test_quarantine_tree_moves_bytes_out(tmp_path: Path) -> None:
     assert not feral.exists()  # moved, not copied
     assert (qdir / ".builds" / "feral" / "deep" / "payload.bin").read_bytes() == b"PLANTED"
     assert finding.quarantine_path is not None
+
+
+def test_quarantine_dir_rejects_symlinked_parent(tmp_path: Path) -> None:
+    """Codex P2: a pre-planted `.quarantine` symlink would redirect the forensic evidence OUTSIDE
+    the mirror; _quarantine_dir removes the redirect and writes the real dir under the mirror root.
+    (Creates a symlink → runs on Linux CI; WinError 1314 on a non-Developer-Mode Windows box.)"""
+    mirror_root = tmp_path / "m"
+    mirror_root.mkdir()
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    os.symlink(elsewhere, mirror_root / ".quarantine", target_is_directory=True)
+
+    qdir = _quarantine_dir(mirror_root, uuid.uuid4())
+    assert not (mirror_root / ".quarantine").is_symlink()  # the redirect was removed
+    assert qdir.is_dir()
+    assert str(qdir).startswith(str(mirror_root))  # evidence lands UNDER the mirror, not elsewhere
+    assert not any(elsewhere.iterdir())  # nothing written through the old redirect
 
 
 # --- orchestration (no-DB paths via the stubbed registry probe; DB paths are integration) ---

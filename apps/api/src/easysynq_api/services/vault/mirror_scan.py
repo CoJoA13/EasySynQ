@@ -21,6 +21,7 @@ import json
 import logging
 import os
 import shutil
+import stat
 import uuid
 from pathlib import Path, PurePath
 from typing import Literal
@@ -146,10 +147,23 @@ def _hash_file(path: Path) -> str:
     return h.hexdigest()
 
 
+def _classify_entry(full: Path) -> str:
+    """``'symlink'`` | ``'file'`` (a REGULAR file) | ``'special'`` (FIFO/device/socket/anything
+    else). Built on ``lstat`` (no-follow) so a planted FIFO is never opened — ``_hash_file`` would
+    block on it indefinitely while ``LOCK_MIRROR_SYNC`` is held, wedging both scans and the
+    corrective rebuild (Codex P2). The caller classifies ``special`` as tamper without opening."""
+    if full.is_symlink():
+        return "symlink"
+    try:
+        return "file" if stat.S_ISREG(full.lstat().st_mode) else "special"
+    except OSError:
+        return "special"
+
+
 def _walk_tree(root: Path) -> dict[str, str]:
-    """Relative-posix-path → ``'file' | 'symlink'`` for everything under ``root``. Built on
-    ``os.walk(followlinks=False)`` — NEVER ``rglob`` (Py3.12 follows symlinks); a symlinked dir is
-    recorded as a symlink and pruned so its contents are never entered (in-tree aliases would
+    """Relative-posix-path → ``'file' | 'symlink' | 'special'`` for everything under ``root``.
+    Built on ``os.walk(followlinks=False)`` — NEVER ``rglob`` (Py3.12 follows symlinks); a symlinked
+    dir is recorded as a symlink and pruned so its contents are never entered (in-tree aliases would
     double-walk, out-of-tree targets must never be read)."""
     found: dict[str, str] = {}
     for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
@@ -161,8 +175,7 @@ def _walk_tree(root: Path) -> dict[str, str]:
                 dirnames.remove(d)
         for name in filenames:
             full = base / name
-            kind = "symlink" if full.is_symlink() else "file"
-            found[full.relative_to(root).as_posix()] = kind
+            found[full.relative_to(root).as_posix()] = _classify_entry(full)
     return found
 
 
@@ -206,6 +219,18 @@ def compare_tree(
                 )
             )
             continue
+        if kind == "special":
+            # A FIFO/device/socket where a regular file is expected — TAMPER, never opened.
+            findings.append(
+                Finding(
+                    rel,
+                    CLASS_UNEXPECTED,
+                    expected_sha256=expected,
+                    document_id=doc_id,
+                    note="non-regular file",
+                )
+            )
+            continue
         try:
             got = _hash_file(build_dir / rel)
         except OSError as exc:
@@ -237,8 +262,25 @@ def compare_tree(
         if kind is None:
             findings.append(Finding(rel, CLASS_MISSING, symlink_expected=target))
         elif kind == "file":
-            # A type swap (symlink → file): symlink_expected with no symlink_found conveys it.
-            findings.append(Finding(rel, CLASS_SYMLINK, symlink_expected=target))
+            # A type swap (symlink → regular file): a PLANTED file with real bytes. Hash it so
+            # ``write_quarantine`` preserves the evidence before the rebuild prunes it (Codex P2);
+            # the classification stays CLASS_SYMLINK (type divergence) — found_sha256 is what
+            # routes it to quarantine.
+            try:
+                planted = _hash_file(build_dir / rel)
+            except OSError as exc:
+                findings.append(
+                    Finding(rel, CLASS_SYMLINK, symlink_expected=target, note=f"unreadable: {exc}")
+                )
+            else:
+                findings.append(
+                    Finding(rel, CLASS_SYMLINK, symlink_expected=target, found_sha256=planted)
+                )
+        elif kind == "special":
+            # A FIFO/device/socket where a symlink is expected — TAMPER, never opened.
+            findings.append(
+                Finding(rel, CLASS_SYMLINK, symlink_expected=target, note="non-regular file")
+            )
         else:
             actual = os.readlink(build_dir / rel)
             if actual != target:
@@ -252,7 +294,33 @@ def compare_tree(
             continue
         if rel == MANIFEST_PATH:
             # The manifest is expected on disk but lives OUTSIDE its own entry list — verify it
-            # byte-wise against the build-time digest (never read it as authority).
+            # byte-wise against the build-time digest (never read it as authority). A symlinked or
+            # special manifest is TAMPER — never follow/hash it (a symlink to bytes matching the
+            # digest would otherwise read clean / read out-of-tree; Codex P2).
+            if kind == "symlink":
+                try:
+                    mlink: str | None = os.readlink(build_dir / rel)
+                except OSError:
+                    mlink = None
+                findings.append(
+                    Finding(
+                        rel,
+                        CLASS_UNEXPECTED,
+                        expected_sha256=manifest_sha256,
+                        symlink_found=mlink,
+                    )
+                )
+                continue
+            if kind == "special":
+                findings.append(
+                    Finding(
+                        rel,
+                        CLASS_UNEXPECTED,
+                        expected_sha256=manifest_sha256,
+                        note="non-regular file",
+                    )
+                )
+                continue
             try:
                 got = _hash_file(build_dir / rel)
             except OSError as exc:
@@ -281,6 +349,9 @@ def compare_tree(
             except OSError:
                 actual_link = None
             findings.append(Finding(rel, CLASS_EXTRA, symlink_found=actual_link))
+        elif kind == "special":
+            # A FIFO/device/socket extra — EXTRA, never opened.
+            findings.append(Finding(rel, CLASS_EXTRA, note="non-regular file"))
         else:
             try:
                 got_extra: str | None = _hash_file(build_dir / rel)
@@ -300,11 +371,18 @@ def compare_tree(
 def _quarantine_dir(mirror_root: Path, scan_id: uuid.UUID) -> Path:
     """The per-scan quarantine dir, created 0o700 — users on the mirror export must never be able
     to browse tampered lookalike content (the 4-lens fold §11.6; chmod is weak on Windows — the
-    production mount is Linux)."""
+    production mount is Linux). If ``.quarantine`` was pre-planted as a SYMLINK, ``mkdir`` would
+    follow it and write the forensic evidence (copies, moves, the index) OUTSIDE the mirror, where
+    the same tamperer could read or redirect it — so remove the redirect and recreate the real dir
+    before use (Codex P2)."""
+    qbase = mirror_root / ".quarantine"
+    if qbase.is_symlink():
+        qbase.unlink()
+    qbase.mkdir(parents=True, exist_ok=True)
+    os.chmod(qbase, 0o700)
     stamp = _now().strftime("%Y%m%dT%H%M%SZ")
-    qdir = mirror_root / ".quarantine" / f"{stamp}__{scan_id.hex}"
+    qdir = qbase / f"{stamp}__{scan_id.hex}"
     qdir.mkdir(parents=True, exist_ok=True)
-    os.chmod(qdir.parent, 0o700)
     os.chmod(qdir, 0o700)
     return qdir
 
@@ -330,18 +408,16 @@ def write_quarantine(
     base: Path,
     findings: list[Finding],
 ) -> None:
-    """R11: copy divergent bytes OUT of the tree BEFORE any rebuild can prune it. Copies every
-    readable divergent/extra regular file (``found_sha256`` set, final classification), resolved
-    against ``base``; MISSING/symlink findings have no bytes to copy and are recorded in the index
-    only. Each copy is RE-HASHED (``quarantined_sha256`` — chain of custody: the preserved bytes
-    must provably match the audited ``found_sha256``). A copy failure is noted on the finding,
-    never raised — quarantine must not block correction."""
+    """R11: copy divergent bytes OUT of the tree BEFORE any rebuild can prune it. Copies EVERY
+    finding that carries bytes (``found_sha256`` set), resolved against ``base`` — including a
+    regular file planted where a symlink was expected (a CLASS_SYMLINK type-swap that still has
+    real bytes worth preserving; Codex P2). MISSING / retargeted-symlink / special findings have no
+    ``found_sha256`` and are recorded in the index only. Each copy is RE-HASHED
+    (``quarantined_sha256`` — chain of custody: the preserved bytes must provably match the audited
+    ``found_sha256``). A copy failure is noted on the finding, never raised — quarantine must not
+    block correction."""
     for f in findings:
-        if f.found_sha256 is None or f.classification not in (
-            CLASS_STALE,
-            CLASS_UNEXPECTED,
-            CLASS_EXTRA,
-        ):
+        if f.found_sha256 is None:
             continue
         dest = qdir / f.path
         try:
@@ -467,7 +543,9 @@ def _scan_builds_area(
     deliberately out of scope."""
     findings: list[Finding] = []
     builds = root / ".builds"
-    if not builds.is_dir():
+    # A symlinked ``.builds`` is handled as a pointer event by scan_mirror; never iterate THROUGH
+    # it here (``iterdir`` on a symlinked dir would enumerate out-of-tree entries; Codex P2).
+    if builds.is_symlink() or not builds.is_dir():
         return findings
     for child in sorted(builds.iterdir()):
         if child.name in registered or child.name == conforming_current_name:
@@ -562,13 +640,22 @@ async def scan_mirror(
         build_dir: Path | None = None
         build_dir_scannable = False
 
+        builds_root = root / ".builds"
+        # The whole served-build area redirected: ``.builds`` itself is a symlink. ``is_dir()`` on a
+        # child would follow it and walk/hash out-of-tree content (Codex P2 — only the FINAL build
+        # component was symlink-checked before). Treat the area as compromised → never scan it.
+        builds_root_compromised = builds_root.is_symlink()
+
         if pointer in ("missing", "rogue", "foreign"):
             findings.append(Finding("current", CLASS_POINTER, symlink_found=current_target))
         if cur is not None:
-            build_dir = root / ".builds" / cur.build_name
-            # NEVER walk a symlinked build dir (``is_dir()`` follows the link → out-of-tree
-            # content would be hashed + copied; the db79af8 pointer-shape lesson, one level down).
-            build_dir_scannable = build_dir.is_dir() and not build_dir.is_symlink()
+            build_dir = builds_root / cur.build_name
+            # NEVER walk a symlinked build dir or a symlinked ``.builds`` parent (``is_dir()``
+            # follows the link → out-of-tree content would be hashed + copied; the db79af8
+            # pointer-shape lesson, one level down + Codex P2 for the parent).
+            build_dir_scannable = (
+                not builds_root_compromised and build_dir.is_dir() and not build_dir.is_symlink()
+            )
             if build_dir_scannable:
                 row = (
                     await session.execute(
@@ -589,15 +676,22 @@ async def scan_mirror(
                 findings.extend(tree_findings)
                 if pointer in ("ok", "selfheal"):
                     is_current = await _is_current(session, row.manifest)
+            elif builds_root_compromised:
+                # The whole `.builds` area is a symlink — flag (and quarantine below) the symlink
+                # itself, not the registered child path through it.
+                findings.append(
+                    Finding(".builds", CLASS_POINTER, note="the .builds parent is a symlink")
+                )
             else:
-                # The registered build's served tree is GONE or replaced by a symlink — the bytes
-                # `current` resolves to are missing/tampered. MIRROR_TAMPER; is_current stays False
-                # so the hourly path rebuilds (a CLEAN here would silently hide the basic tamper).
+                # The registered build's served tree is GONE or replaced by a file/symlink/special
+                # — the bytes `current` resolves to are missing/tampered. MIRROR_TAMPER; is_current
+                # stays False so the hourly path rebuilds (a CLEAN here would hide the basic
+                # tamper). A planted (lexisting) object is quarantined below (Codex P2).
                 findings.append(
                     Finding(
                         f".builds/{cur.build_name}",
                         CLASS_POINTER,
-                        note="served build tree is missing or replaced by a symlink",
+                        note="served build tree is missing or replaced",
                     )
                 )
             if pointer == "rollback":
@@ -614,17 +708,30 @@ async def scan_mirror(
                 write_quarantine(qdir, build_dir, tree_findings)
             for f in builds_findings:
                 quarantine_tree(qdir, root / f.path, f)
+            # Preserve the planted object at the served build root before the rebuild prunes it
+            # (Codex P2). ``shutil.move`` uses ``os.rename`` (same-volume) so a symlink moves as
+            # the link inode — out-of-tree targets are never followed.
+            if cur is not None and not build_dir_scannable:
+                if builds_root_compromised:
+                    pf = next(f for f in findings if f.path == ".builds")
+                    quarantine_tree(qdir, builds_root, pf)
+                elif build_dir is not None and (build_dir.is_symlink() or build_dir.exists()):
+                    pf = next(f for f in findings if f.path == f".builds/{cur.build_name}")
+                    quarantine_tree(qdir, build_dir, pf)
             if pointer == "rogue":
                 # A planted file OR directory at `current` — move it aside so its bytes are
                 # preserved (R11) AND the next atomic_swap can recreate the symlink over the gap.
-                pf = next(f for f in findings if f.classification == CLASS_POINTER)
+                pf = next(f for f in findings if f.path == "current")
                 quarantine_tree(qdir, current, pf)
-            elif pointer == "foreign" and conforming_name is not None:
-                # Only a conforming in-builds target is movable; a non-conforming (out-of-tree)
-                # target is audit-payload evidence ONLY — never touch paths outside the mirror.
-                src = root / ".builds" / conforming_name
-                if src.is_dir() and not src.is_symlink():
-                    pf = next(f for f in findings if f.classification == CLASS_POINTER)
+            elif (
+                pointer == "foreign" and conforming_name is not None and not builds_root_compromised
+            ):
+                # A conforming-but-unregistered target: quarantine WHATEVER is at .builds/<name>
+                # (dir, file, or symlink) by move — preserves the planted bytes/link, clears the
+                # path. A non-conforming (out-of-tree) target is audit evidence ONLY (untouched).
+                src = builds_root / conforming_name
+                if src.is_symlink() or src.exists():
+                    pf = next(f for f in findings if f.path == "current")
                     quarantine_tree(qdir, src, pf)
             write_quarantine_index(qdir, build_name, scan_id, findings)
 

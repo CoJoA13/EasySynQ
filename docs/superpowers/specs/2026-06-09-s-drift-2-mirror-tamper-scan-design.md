@@ -311,6 +311,23 @@ the existing posture; the same lock serializes scan↔sync so a swap can never p
    if_needed-skips, the FAILED row) is explicitly tested; a CLEAN scan's `drift_scan` row is
    asserted (the row-per-scan contract); the stale leg also covers an **older-rendition** digest;
    the pointer matrix is a pure unit-tested function (`resolve_pointer`).
+9. **Adversarial-filesystem hardening (Codex P2 round 2, 2026-06-10) — a tamper scanner must be
+   robust against adversarial FS objects, not just byte edits:** (a) `_walk_tree` classifies every
+   entry via `lstat` into `symlink`/`file`(regular)/**`special`** (FIFO/device/socket); a `special`
+   is tamper that is **NEVER opened** — `_hash_file` on a FIFO would block forever while
+   `LOCK_MIRROR_SYNC` is held, wedging scans AND the corrective rebuild (a DoS). (b) The
+   `_meta/manifest.json` self-check rejects a **symlinked or special** manifest as UNEXPECTED
+   without following/hashing it (a symlink to bytes matching the digest would otherwise read
+   clean). (c) A regular **file planted where a symlink is expected** is hashed so
+   `write_quarantine` preserves its bytes (the guard is now "any finding with `found_sha256`", not
+   a classification allow-list). (d) `build_dir_scannable` and `_scan_builds_area` reject a
+   **symlinked `.builds` parent** (only the final component was symlink-checked → `is_dir()`
+   followed the parent link and walked out-of-tree). (e) A planted file/symlink at the **served
+   build root** (`.builds/<registered-name>`) is quarantined by move before the rebuild prunes it
+   (it is neither a registered-child the sweep moves nor a content finding). (f) `_quarantine_dir`
+   removes a pre-planted **symlinked `.quarantine`** before use, so forensic evidence can't be
+   redirected outside the mirror. Quarantine-by-move never follows a symlink (`shutil.move` →
+   `os.rename` on the same volume moves the link inode).
 
 ## 12. Docs in-PR
 
