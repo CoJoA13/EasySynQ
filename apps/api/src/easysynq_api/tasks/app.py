@@ -67,6 +67,13 @@ app.conf.update(
             "task": "easysynq.documents.review_sweep",
             "schedule": 86400.0,  # daily
         },
+        # S-drift-2: the D2+D3 mirror integrity scan (doc 05 §9.2.1 / R11 — the accepted drift
+        # window equals this interval; default hourly, configurable via
+        # MIRROR_SCAN_INTERVAL_SECONDS). The nightly mirror-sync also scans (scan-first pipeline).
+        "mirror-scan": {
+            "task": "easysynq.mirror.scan",
+            "schedule": float(_settings.mirror_scan_interval_seconds),
+        },
         # S-pack-1: daily reaper for evidence-pack builds stuck in BUILDING (a hard worker kill
         # between the BUILDING commit and the build's error handler strands them) → FAILED.
         "packs-reap-stalled-builds": {
