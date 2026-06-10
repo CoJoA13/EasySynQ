@@ -48,7 +48,8 @@ the `/check-migrations` skill (throwaway PG16 via Docker).
 | `migrations/versions/0046_mirror_drift_scan.py` | Create | tables + enums + event values + grants |
 | `apps/api/src/easysynq_api/services/common/org.py` | Create | `get_single_org_id` (resilient runtime org lookup) |
 | `apps/api/src/easysynq_api/services/vault/mirror.py` | Modify | `_write(extra=…)` doc-id enrichment; `mirror_build` insert + keep-last-20 prune in `sync_mirror`; docstring fix |
-| `apps/api/src/easysynq_api/services/vault/mirror_scan.py` | Create | the scanner: pure core + DB orchestration |
+| `apps/api/src/easysynq_api/services/vault/mirror_scan.py` | Create | the scanner: pure core + pointer integrity + DB orchestration |
+| `apps/api/src/easysynq_api/services/common/pg_locks.py` | Modify | `holds_advisory_lock` (the lock-loss re-check, spec §11.5) |
 | `apps/api/src/easysynq_api/config.py` | Modify | `mirror_scan_interval_seconds: int = 3600` |
 | `apps/api/src/easysynq_api/tasks/mirror.py` | Modify | sync task → `scan_and_sync(always)`; NEW `easysynq.mirror.scan` task |
 | `apps/api/src/easysynq_api/tasks/app.py` | Modify | hourly `mirror-scan` Beat entry (settings-driven) |
@@ -156,6 +157,13 @@ class MirrorBuild(Base):
     built_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+    # Stamped in a small post-swap commit — the pointer-integrity anchor (spec §11.1): the scan
+    # verifies `current` against the newest SWAPPED row, so a repointed/rolled-back/planted tree
+    # is MIRROR_TAMPER, never mistaken for the benign no-baseline state. NULL = built-not-swapped
+    # (a commit-then-swap crash orphan, or the swap-then-crash window the scan self-heals).
+    swapped_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     manifest: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False)
     # sha256 of the EXACT bytes written to _meta/manifest.json (generated_at is non-deterministic).
     manifest_sha256: Mapped[str] = mapped_column(Text, nullable=False)
@@ -188,7 +196,12 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from ..base import Base
-from ._drift_enums import DriftScanKind, DriftScanStatus, drift_scan_kind_enum, drift_scan_status_enum
+from ._drift_enums import (
+    DriftScanKind,
+    DriftScanStatus,
+    drift_scan_kind_enum,
+    drift_scan_status_enum,
+)
 
 
 class DriftScan(Base):
@@ -313,6 +326,7 @@ def upgrade() -> None:
         sa.Column(
             "built_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
         ),
+        sa.Column("swapped_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("manifest", postgresql.JSONB(astext_type=sa.Text()), nullable=False),
         sa.Column("manifest_sha256", sa.Text(), nullable=False),
         sa.Column("documents", sa.Integer(), nullable=False),
@@ -355,13 +369,14 @@ def upgrade() -> None:
     op.create_index("ix_drift_scan_kind_started_at", "drift_scan", ["kind", "started_at"])
 
     # 5. Least-privilege grants (pg_roles-guarded — the 0042 pattern). mirror_build needs DELETE
-    # for the keep-last-20 prune; drift_scan is write-once (no UPDATE for either).
+    # for the keep-last-20 prune + UPDATE for the post-swap/self-heal ``swapped_at`` stamp;
+    # drift_scan is write-once (no UPDATE).
     op.execute(
         f"""
         DO $$
         BEGIN
             IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '{_APP_ROLE}') THEN
-                EXECUTE 'GRANT SELECT, INSERT, DELETE ON mirror_build TO {_APP_ROLE}';
+                EXECUTE 'GRANT SELECT, INSERT, UPDATE, DELETE ON mirror_build TO {_APP_ROLE}';
                 EXECUTE 'GRANT SELECT, INSERT ON drift_scan TO {_APP_ROLE}';
             END IF;
         END $$;
@@ -519,7 +534,9 @@ def _write(
             build_root,
             extra=doc_ref,
         )
-        _write(doc_dir / "CHANGELOG.md", _changelog_md(eff).encode(), manifest, build_root, extra=doc_ref)
+        _write(
+            doc_dir / "CHANGELOG.md", _changelog_md(eff).encode(), manifest, build_root, extra=doc_ref
+        )
 ```
 
 - [ ] **Step 5: Run the test — expect PASS**
@@ -540,13 +557,15 @@ from ..common.org import get_single_org_id
 
 (b) module constant near the top (under `logger`): `_KEEP_BUILD_ROWS = 20`
 
-(c) in `sync_mirror._build`, between `build_tree(...)` returning and `await s.commit()`:
+(c) in `sync_mirror._build`, between `build_tree(...)` returning and `await s.commit()`
+(`current_target` is computed once at the top of `sync_mirror` — see (d)):
 
 ```python
         # S-drift-2: persist the build manifest as the scan's expected-state baseline (keyed by
         # the .builds/<name> dir — commit-then-swap means an orphan row for a never-swapped build
-        # is harmless; the scan looks up current's ACTUAL target). manifest_sha256 = the EXACT
-        # bytes just written (generated_at makes recompute impossible — deliberate).
+        # is harmless; the scan verifies current's target against the newest SWAPPED row).
+        # manifest_sha256 = the EXACT bytes just written (generated_at makes recompute impossible
+        # — deliberate).
         manifest_bytes = (build_root / "_meta" / "manifest.json").read_bytes()
         org_id = await get_single_org_id(s)
         if org_id is None:
@@ -564,10 +583,14 @@ from ..common.org import get_single_org_id
                 )
             )
             await s.flush()
+            # Keep-last-N prune — but NEVER the row `current` still points at: under a
+            # persistent swap-failure mode, orphan rows pile above it and deleting it would
+            # silently disable tamper detection on the still-served tree (the 4-lens fold §11.4).
             stale_ids = (
                 (
                     await s.execute(
                         select(MirrorBuild.id)
+                        .where(MirrorBuild.build_name != (current_target or ""))
                         .order_by(MirrorBuild.built_at.desc(), MirrorBuild.id.desc())
                         .offset(_KEEP_BUILD_ROWS)
                     )
@@ -578,6 +601,47 @@ from ..common.org import get_single_org_id
             if stale_ids:
                 await s.execute(delete(MirrorBuild).where(MirrorBuild.id.in_(stale_ids)))
 ```
+
+(d) restructure `sync_mirror`'s tail so the swap happens INSIDE the session scope and the
+pointer-integrity stamp lands right after it (the 4-lens fold §11.1). Replace everything from
+`if session is not None:` to the final `return MirrorSyncResult(...)` with:
+
+```python
+    # The row `current` points at must survive the prune (see _build); resolve it up front.
+    try:
+        current_target: str | None = Path(os.readlink(root / "current")).name
+    except OSError:
+        current_target = None
+
+    async def _build_swap_stamp(s: AsyncSession) -> tuple[list[dict[str, object]], int, int]:
+        manifest, pending, count = await _build(s)  # commits: renditions + the baseline row
+        atomic_swap(root, build_root)
+        # Stamp swap success (pointer integrity, spec §11.1). A crash between the swap and this
+        # commit self-heals: the scan treats current→newest-unswapped-row as the crash window
+        # and persist_scan_results stamps it. No-op when the baseline row was skipped (no org).
+        await s.execute(
+            update(MirrorBuild)
+            .where(MirrorBuild.build_name == build_root.name)
+            .values(swapped_at=func.now())
+        )
+        await s.commit()
+        return manifest, pending, count
+
+    if session is not None:
+        manifest, pending, count = await _build_swap_stamp(session)
+    else:
+        async with get_sessionmaker()() as own:
+            manifest, pending, count = await _build_swap_stamp(own)
+
+    files = sum(1 for entry in manifest if "sha256" in entry)
+    symlinks = sum(1 for entry in manifest if "symlink_to" in entry)
+    return MirrorSyncResult(
+        documents=count, files=files, symlinks=symlinks, pending_renditions=pending
+    )
+```
+
+(`func` comes via the existing `from sqlalchemy import …` line — extend it with `func` if not
+already imported in mirror.py; `update` is already imported.)
 
 - [ ] **Step 7: Fix the stale docstring** — in `mirror.py`'s module docstring, replace the final
   "**Deferred (with seams):**" sentence about the scan with:
@@ -645,9 +709,12 @@ from easysynq_api.services.vault.mirror_scan import (
     CLASS_UNEXPECTED,
     _CONTENT_MISMATCH,
     Finding,
+    _quarantine_dir,
     classify_mismatch,
     compare_tree,
+    quarantine_tree,
     write_quarantine,
+    write_quarantine_index,
 )
 
 
@@ -656,7 +723,10 @@ def _sha(data: bytes) -> str:
 
 
 def _make_build(
-    build: Path, files: dict[str, bytes], links: dict[str, str] | None = None, **extra_by_path: dict[str, Any]
+    build: Path,
+    files: dict[str, bytes],
+    links: dict[str, str] | None = None,
+    **extra_by_path: dict[str, Any],
 ) -> tuple[list[dict[str, Any]], str]:
     """Lay a fabricated build tree + its manifest (the build_tree output shape) into ``build``.
     Returns (manifest entry list, manifest_sha256-of-the-on-disk-manifest.json)."""
@@ -816,7 +886,9 @@ def test_quarantine_copies_divergent_and_extra_only(tmp_path: Path) -> None:
         Finding("link", CLASS_SYMLINK, symlink_expected="../a", symlink_found="../b"),
     ]
     scan_id = uuid.uuid4()
-    write_quarantine(mirror_root, build, "abc", scan_id, findings)
+    qdir = _quarantine_dir(mirror_root, scan_id)
+    write_quarantine(qdir, build, findings)
+    write_quarantine_index(qdir, "abc", scan_id, findings)
     qdirs = list((mirror_root / ".quarantine").iterdir())
     assert len(qdirs) == 1 and scan_id.hex in qdirs[0].name
     assert (qdirs[0] / "a" / "source.pdf").read_bytes() == b"EVIL"
@@ -826,6 +898,7 @@ def test_quarantine_copies_divergent_and_extra_only(tmp_path: Path) -> None:
     assert index["build_name"] == "abc" and index["scan_id"] == str(scan_id)
     assert len(index["findings"]) == 4  # ALL findings recorded, even uncopyable ones
     assert findings[0].quarantine_path is not None  # stamped back for the audit payload
+    assert findings[0].quarantined_sha256 == _sha(b"EVIL")  # chain of custody: re-hashed copy
     assert findings[2].quarantine_path is None
 
 
@@ -841,18 +914,40 @@ def test_quarantine_copy_failure_is_noted_never_raises(
         raise OSError("disk full")
 
     monkeypatch.setattr(scan_mod.shutil, "copy2", _boom)
-    write_quarantine(mirror_root, build, "abc", uuid.uuid4(), findings)  # must not raise
+    qdir = _quarantine_dir(mirror_root, uuid.uuid4())
+    write_quarantine(qdir, build, findings)  # must not raise
     assert findings[0].quarantine_path is None
     assert findings[0].note is not None and "quarantine copy failed" in findings[0].note
 
 
-def test_no_quarantine_dir_when_clean(tmp_path: Path) -> None:
+def test_manifest_deleted_is_a_missing_finding(tmp_path: Path) -> None:
+    """A DELETED manifest.json is flagged, not silent (the tampered case alone is asymmetric)."""
+    build = tmp_path / "b"
+    manifest, msha = _make_build(build, {"a/source.pdf": b"P"})
+    (build / "_meta" / "manifest.json").unlink()
+    findings, _ = compare_tree(build, manifest, msha)
+    f = _by_path(findings)["_meta/manifest.json"]
+    assert f.classification == CLASS_MISSING
+    assert f.expected_sha256 == msha
+
+
+def test_quarantine_tree_moves_bytes_out(tmp_path: Path) -> None:
+    """A foreign/rogue tree is quarantined BY MOVE — bytes preserved exactly, source gone (so
+    _prune_builds can never destroy it and a rogue `current` dir no longer blocks the swap)."""
     mirror_root = tmp_path / "m"
-    build = mirror_root / ".builds" / "abc"
-    _make_build(build, {"a/source.pdf": b"P"})
-    write_quarantine(mirror_root, build, "abc", uuid.uuid4(), [])
-    assert not (mirror_root / ".quarantine").exists()
+    feral = mirror_root / ".builds" / "feral"
+    (feral / "deep").mkdir(parents=True)
+    (feral / "deep" / "payload.bin").write_bytes(b"PLANTED")
+    finding = Finding(".builds/feral", CLASS_EXTRA)
+    qdir = _quarantine_dir(mirror_root, uuid.uuid4())
+    quarantine_tree(qdir, feral, finding)
+    assert not feral.exists()  # moved, not copied
+    assert (qdir / ".builds" / "feral" / "deep" / "payload.bin").read_bytes() == b"PLANTED"
+    assert finding.quarantine_path is not None
 ```
+
+(The "no quarantine dir when clean" behavior now lives at the orchestration level — `scan_mirror`
+creates the dir only when findings exist — and is asserted by the integration clean-scan test.)
 
 - [ ] **Step 2: Run them — expect FAIL (import error)**
 
@@ -899,6 +994,9 @@ CLASS_UNEXPECTED = "UNEXPECTED_CONTENT"
 CLASS_EXTRA = "EXTRA"
 CLASS_MISSING = "MISSING"
 CLASS_SYMLINK = "SYMLINK_DIVERGENT"
+# The `current` pointer itself diverges (missing / a real directory / a foreign target / a
+# rollback to an older swapped build) — always MIRROR_TAMPER (spec §11.1).
+CLASS_POINTER = "POINTER_DIVERGENT"
 # Pre-classification: a digest mismatch awaiting the vault digest check (scan_mirror resolves it
 # to STALE_REVISION or UNEXPECTED_CONTENT).
 _CONTENT_MISMATCH = "CONTENT_MISMATCH"
@@ -911,23 +1009,28 @@ class Finding:
     expected_sha256: str | None = None
     found_sha256: str | None = None
     document_id: str | None = None
+    version_id: str | None = None  # the expected entry's version — STALE excludes its own digests
     note: str | None = None
     symlink_expected: str | None = None
     symlink_found: str | None = None
     quarantine_path: str | None = None
+    quarantined_sha256: str | None = None
 
 
 @dataclasses.dataclass(slots=True)
 class ScanReport:
     scan_id: uuid.UUID
     started_at: datetime.datetime
-    baseline: str  # "ok" | "none" (pre-0046 build / missing current — rebuild establishes one)
+    baseline: str  # "ok" | "none" (EMPTY registry only — fresh install / pre-0046 upgrade)
     status: str  # "CLEAN" | "DIVERGENT" | "FAILED"
     is_current: bool
     build_name: str | None
     findings: list[Finding]
     scanned: int = 0
     error: str | None = None
+    # resolve_pointer's verdict on `current` itself (spec §11.1):
+    # "ok" | "none" | "selfheal" | "missing" | "rogue_dir" | "foreign" | "rollback"
+    pointer: str = "ok"
 
     def counts(self) -> dict[str, object]:
         by: dict[str, int] = {}
@@ -940,7 +1043,7 @@ class ScanReport:
             "stale": by.get(CLASS_STALE, 0),
             "tampered": sum(
                 by.get(c, 0)
-                for c in (CLASS_UNEXPECTED, CLASS_EXTRA, CLASS_MISSING, CLASS_SYMLINK)
+                for c in (CLASS_UNEXPECTED, CLASS_EXTRA, CLASS_MISSING, CLASS_SYMLINK, CLASS_POINTER)
             ),
             "extra": by.get(CLASS_EXTRA, 0),
             "missing": by.get(CLASS_MISSING, 0),
@@ -950,6 +1053,7 @@ class ScanReport:
             "build_name": self.build_name,
             "is_current": self.is_current,
             "baseline": self.baseline,
+            "pointer": self.pointer,
             "scan_id": str(self.scan_id),
         }
         if self.error:
@@ -1009,6 +1113,7 @@ def compare_tree(
     for rel, entry in files.items():
         expected = str(entry["sha256"])
         doc_id = str(entry["document_id"]) if "document_id" in entry else None
+        ver_id = str(entry["version_id"]) if "version_id" in entry else None
         kind = found.get(rel)
         if kind is None:
             findings.append(
@@ -1016,6 +1121,8 @@ def compare_tree(
             )
             continue
         if kind == "symlink":
+            # A type swap (file → symlink): expected_sha256 + symlink_found convey it; `note`
+            # stays reserved for the error channel feeding counts()["errors"].
             findings.append(
                 Finding(
                     rel,
@@ -1023,7 +1130,6 @@ def compare_tree(
                     expected_sha256=expected,
                     document_id=doc_id,
                     symlink_found=os.readlink(build_dir / rel),
-                    note="expected a regular file, found a symlink",
                 )
             )
             continue
@@ -1048,6 +1154,7 @@ def compare_tree(
                     expected_sha256=expected,
                     found_sha256=got,
                     document_id=doc_id,
+                    version_id=ver_id,
                 )
             )
 
@@ -1057,14 +1164,8 @@ def compare_tree(
         if kind is None:
             findings.append(Finding(rel, CLASS_MISSING, symlink_expected=target))
         elif kind == "file":
-            findings.append(
-                Finding(
-                    rel,
-                    CLASS_SYMLINK,
-                    symlink_expected=target,
-                    note="expected a symlink, found a regular file",
-                )
-            )
+            # A type swap (symlink → file): symlink_expected with no symlink_found conveys it.
+            findings.append(Finding(rel, CLASS_SYMLINK, symlink_expected=target))
         else:
             actual = os.readlink(build_dir / rel)
             if actual != target:
@@ -1110,26 +1211,52 @@ def compare_tree(
                 continue
             findings.append(Finding(rel, CLASS_EXTRA, found_sha256=got_extra))
 
+    # A DELETED manifest.json must be flagged too — it lives outside its own entry list, so the
+    # MISSING loop above never sees it (the 4-lens fold §11.6: only the tampered case was caught).
+    if MANIFEST_PATH not in found:
+        findings.append(Finding(MANIFEST_PATH, CLASS_MISSING, expected_sha256=manifest_sha256))
+
     return findings, len(found)
 
 
-def write_quarantine(
-    mirror_root: Path,
-    build_dir: Path,
-    build_name: str | None,
-    scan_id: uuid.UUID,
-    findings: list[Finding],
-) -> None:
-    """R11: copy divergent bytes OUT of the build tree BEFORE any rebuild can prune it. Copies
-    every readable divergent/extra regular file (``found_sha256`` set, final classification);
-    MISSING/symlink findings have no bytes to copy and are recorded in ``quarantine.json`` only.
-    A copy failure is noted on the finding, never raised — quarantine must not block correction.
-    No-op when there are no findings. Never auto-pruned (owner fork: forensic evidence; the
-    runbook documents operator cleanup)."""
-    if not findings:
-        return
+def _quarantine_dir(mirror_root: Path, scan_id: uuid.UUID) -> Path:
+    """The per-scan quarantine dir, created 0o700 — users on the mirror export must never be able
+    to browse tampered lookalike content (the 4-lens fold §11.6; chmod is weak on Windows — the
+    production mount is Linux)."""
     stamp = _now().strftime("%Y%m%dT%H%M%SZ")
     qdir = mirror_root / ".quarantine" / f"{stamp}__{scan_id.hex}"
+    qdir.mkdir(parents=True, exist_ok=True)
+    os.chmod(qdir.parent, 0o700)
+    os.chmod(qdir, 0o700)
+    return qdir
+
+
+def quarantine_tree(qdir: Path, src: Path, finding: Finding) -> None:
+    """Quarantine a whole foreign/rogue tree BY MOVE (same-volume rename): preserves the bytes
+    exactly, takes them out of ``_prune_builds``' reach, and (for a rogue real-dir ``current``)
+    unblocks the next atomic swap. A move failure is noted, never raised."""
+    dest = qdir / finding.path
+    try:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(src), str(dest))
+        finding.quarantine_path = str(dest)
+    except OSError as exc:
+        finding.note = (f"{finding.note}; " if finding.note else "") + (
+            f"quarantine move failed: {exc}"
+        )
+
+
+def write_quarantine(
+    qdir: Path,
+    base: Path,
+    findings: list[Finding],
+) -> None:
+    """R11: copy divergent bytes OUT of the tree BEFORE any rebuild can prune it. Copies every
+    readable divergent/extra regular file (``found_sha256`` set, final classification), resolved
+    against ``base``; MISSING/symlink findings have no bytes to copy and are recorded in the index
+    only. Each copy is RE-HASHED (``quarantined_sha256`` — chain of custody: the preserved bytes
+    must provably match the audited ``found_sha256``). A copy failure is noted on the finding,
+    never raised — quarantine must not block correction."""
     for f in findings:
         if f.found_sha256 is None or f.classification not in (
             CLASS_STALE,
@@ -1140,11 +1267,21 @@ def write_quarantine(
         dest = qdir / f.path
         try:
             dest.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(build_dir / f.path, dest)
+            shutil.copy2(base / f.path, dest)
             f.quarantine_path = str(dest)
+            f.quarantined_sha256 = _hash_file(dest)
+            if f.quarantined_sha256 != f.found_sha256:
+                f.note = (f"{f.note}; " if f.note else "") + (
+                    "quarantined bytes differ from the scanned digest (concurrent writer?)"
+                )
         except OSError as exc:
             f.note = (f"{f.note}; " if f.note else "") + f"quarantine copy failed: {exc}"
-    qdir.mkdir(parents=True, exist_ok=True)
+
+
+def write_quarantine_index(
+    qdir: Path, build_name: str | None, scan_id: uuid.UUID, findings: list[Finding]
+) -> None:
+    """The per-scan ``quarantine.json`` — every finding is recorded, even uncopyable ones."""
     index = {
         "schema": "easysynq.mirror.quarantine/1",
         "scan_id": str(scan_id),
@@ -1156,6 +1293,7 @@ def write_quarantine(
                 "classification": f.classification,
                 "expected_sha256": f.expected_sha256,
                 "found_sha256": f.found_sha256,
+                "quarantined_sha256": f.quarantined_sha256,
                 "symlink_expected": f.symlink_expected,
                 "symlink_found": f.symlink_found,
                 "quarantine_path": f.quarantine_path,
@@ -1167,6 +1305,12 @@ def write_quarantine(
     (qdir / "quarantine.json").write_bytes(
         (json.dumps(index, indent=2, sort_keys=True) + "\n").encode()
     )
+```
+
+and add the `quarantined_sha256` field to the `Finding` dataclass (after `quarantine_path`):
+
+```python
+    quarantined_sha256: str | None = None
 ```
 
 NOTE for the implementer: `write_quarantine` is called AFTER `_CONTENT_MISMATCH` resolution (Task
@@ -1193,38 +1337,192 @@ git commit -m "feat(s-drift-2): scanner pure core — compare_tree classificatio
 
 ---
 
-### Task 4: DB orchestration — `scan_mirror`, `persist_scan_results`, `scan_and_sync`
+### Task 4: DB orchestration — pointer integrity, `scan_mirror`, `persist_scan_results`, `scan_and_sync`
 
 **Files:**
 - Modify: `apps/api/src/easysynq_api/services/vault/mirror_scan.py`
+- Modify: `apps/api/src/easysynq_api/services/common/pg_locks.py` (add `holds_advisory_lock`)
 - Test: `apps/api/tests/unit/test_mirror_scan.py` (append)
 
 - [ ] **Step 1: Write the failing tests** — append to `tests/unit/test_mirror_scan.py`:
 
 ```python
-# --- orchestration (the no-DB paths; the DB paths are tests/integration/test_mirror_scan.py) ---
+# --- orchestration (no-DB paths via the stubbed registry probe; DB paths are integration) ---
 
-from easysynq_api.services.vault.mirror_scan import ScanReport, scan_mirror  # noqa: E402
+from easysynq_api.services.vault.mirror_scan import (  # noqa: E402
+    CLASS_POINTER,
+    PointerRow,
+    ScanReport,
+    resolve_pointer,
+    scan_and_sync,
+    scan_mirror,
+)
 
 
-async def test_scan_no_current_symlink_is_no_baseline(tmp_path: Path) -> None:
-    """A fresh install (no mirror yet) → baseline 'none', CLEAN, zero findings, NO DB touched
-    (session is never used on this path — None proves it)."""
+def _prow(name: str, built: str, swapped: str | None) -> PointerRow:
+    import datetime as dt
+
+    def _ts(s: str) -> dt.datetime:
+        return dt.datetime.fromisoformat(s).replace(tzinfo=dt.UTC)
+
+    return PointerRow(name, _ts(built), _ts(swapped) if swapped else None)
+
+
+def test_resolve_pointer_matrix() -> None:
+    """The spec §11.1 pointer-integrity matrix, pure: the `current` symlink is verified against
+    the registry, never trusted."""
+    a = _prow("a", "2026-06-01T00:00:00", "2026-06-01T00:00:01")
+    b = _prow("b", "2026-06-02T00:00:00", "2026-06-02T00:00:01")
+    orphan_new = _prow("c", "2026-06-03T00:00:00", None)  # commit-then-swap-crash, newest
+    orphan_old = _prow("z", "2026-05-01T00:00:00", None)  # ancient never-swapped orphan
+
+    assert resolve_pointer(None, False, []) == ("none", None)  # empty registry: benign
+    assert resolve_pointer("b", False, [a, b]) == ("ok", b)  # normal
+    assert resolve_pointer(None, False, [a, b]) == ("missing", None)  # current deleted: TAMPER
+    assert resolve_pointer(None, True, [a, b]) == ("rogue_dir", None)  # current is a real dir
+    assert resolve_pointer("x", False, [a, b]) == ("foreign", None)  # planted/renamed tree
+    assert resolve_pointer("a", False, [a, b]) == ("rollback", a)  # an older swapped build
+    assert resolve_pointer("c", False, [a, b, orphan_new]) == ("selfheal", orphan_new)
+    assert resolve_pointer("z", False, [a, b, orphan_old]) == ("rollback", orphan_old)
+
+
+async def test_scan_empty_registry_is_no_baseline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Fresh install / pre-0046 upgrade: an EMPTY registry is the ONLY benign no-baseline —
+    zero findings, zero quarantine. The registry probe is stubbed; session=None proves the
+    path makes no other DB call."""
+
+    async def _no_rows(session: object) -> list[PointerRow]:
+        return []
+
+    monkeypatch.setattr(scan_mod, "_pointer_rows", _no_rows)
     report = await scan_mirror(None, mirror_path=tmp_path)  # type: ignore[arg-type]
     assert report.baseline == "none"
+    assert report.pointer == "none"
     assert report.status == "CLEAN"
     assert report.is_current is False
     assert report.findings == []
+    assert not (tmp_path / ".quarantine").exists()
 
 
-async def test_scan_dangling_current_is_no_baseline(tmp_path: Path) -> None:
-    """current points at a pruned build dir → same graceful no-baseline posture."""
-    (tmp_path / ".builds").mkdir(parents=True)
-    os.symlink(os.path.join(".builds", "gone"), tmp_path / "current")
+async def test_scan_failure_is_failed_never_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An infrastructure failure (the registry probe explodes) → an honest FAILED report, no
+    raise (the backup posture; spec §8)."""
+
+    async def _boom(session: object) -> list[PointerRow]:
+        raise RuntimeError("pg exploded")
+
+    monkeypatch.setattr(scan_mod, "_pointer_rows", _boom)
     report = await scan_mirror(None, mirror_path=tmp_path)  # type: ignore[arg-type]
-    assert report.baseline == "none"
-    assert report.status == "CLEAN"
-    assert report.build_name == "gone"
+    assert report.status == "FAILED"
+    assert report.error is not None and "pg exploded" in report.error
+    assert report.findings == []
+
+
+def _report(
+    status: str,
+    *,
+    findings: list[Finding] | None = None,
+    baseline: str = "ok",
+    is_current: bool = True,
+) -> ScanReport:
+    return ScanReport(
+        scan_id=uuid.uuid4(),
+        started_at=scan_mod._now(),
+        baseline=baseline,
+        status=status,
+        is_current=is_current,
+        build_name="abc",
+        findings=findings or [],
+    )
+
+
+async def test_scan_and_sync_failed_gating(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Spec §8: `always` (the sync path) rebuilds even on FAILED; `if_needed` (the hourly path)
+    does NOT — a scan failure is not evidence the mirror is wrong."""
+    calls: list[str] = []
+
+    async def _failed_scan(session: object, *, mirror_path: object = None) -> ScanReport:
+        return _report("FAILED")
+
+    async def _persist_ok(session: object, report: object, **kw: object) -> bool:
+        return True
+
+    async def _fake_sync(**kw: object) -> object:
+        calls.append("rebuild")
+        return object()
+
+    async def _lock_held(session: object, key: int) -> bool:
+        return True
+
+    monkeypatch.setattr(scan_mod, "scan_mirror", _failed_scan)
+    monkeypatch.setattr(scan_mod, "persist_scan_results", _persist_ok)
+    monkeypatch.setattr(scan_mod, "sync_mirror", _fake_sync)
+    monkeypatch.setattr(scan_mod, "holds_advisory_lock", _lock_held)
+
+    _, result = await scan_and_sync(None, rebuild="if_needed", triggered_by="beat")  # type: ignore[arg-type]
+    assert result is None and calls == []  # hourly: no rebuild on FAILED
+
+    _, result = await scan_and_sync(None, rebuild="always", triggered_by="sync")  # type: ignore[arg-type]
+    assert result is not None and calls == ["rebuild"]  # sync: correction never blocked
+
+
+async def test_scan_and_sync_defers_rebuild_when_findings_not_persisted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Spec §11.5: unpersisted findings defer the correction — the rebuild would erase the
+    on-disk evidence the next scan needs to re-detect and audit."""
+    calls: list[str] = []
+    divergent = _report("DIVERGENT", findings=[Finding("a", CLASS_UNEXPECTED, "e", "f")])
+
+    async def _scan(session: object, *, mirror_path: object = None) -> ScanReport:
+        return divergent
+
+    async def _persist_fails(session: object, report: object, **kw: object) -> bool:
+        return False
+
+    async def _fake_sync(**kw: object) -> object:
+        calls.append("rebuild")
+        return object()
+
+    monkeypatch.setattr(scan_mod, "scan_mirror", _scan)
+    monkeypatch.setattr(scan_mod, "persist_scan_results", _persist_fails)
+    monkeypatch.setattr(scan_mod, "sync_mirror", _fake_sync)
+
+    _, result = await scan_and_sync(None, rebuild="always", triggered_by="sync")  # type: ignore[arg-type]
+    assert result is None and calls == []
+
+
+async def test_scan_and_sync_skips_rebuild_when_lock_lost(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Spec §11.5: a mid-scan connection loss FREES the session-level advisory lock — a lockless
+    rebuild could race a concurrent sync's prune, so the pipeline re-verifies before correcting."""
+    calls: list[str] = []
+
+    async def _failed_scan(session: object, *, mirror_path: object = None) -> ScanReport:
+        return _report("FAILED")
+
+    async def _persist_ok(session: object, report: object, **kw: object) -> bool:
+        return True
+
+    async def _fake_sync(**kw: object) -> object:
+        calls.append("rebuild")
+        return object()
+
+    async def _lock_lost(session: object, key: int) -> bool:
+        return False
+
+    monkeypatch.setattr(scan_mod, "scan_mirror", _failed_scan)
+    monkeypatch.setattr(scan_mod, "persist_scan_results", _persist_ok)
+    monkeypatch.setattr(scan_mod, "sync_mirror", _fake_sync)
+    monkeypatch.setattr(scan_mod, "holds_advisory_lock", _lock_lost)
+
+    _, result = await scan_and_sync(None, rebuild="always", triggered_by="sync")  # type: ignore[arg-type]
+    assert result is None and calls == []
 
 
 def test_counts_math() -> None:
@@ -1257,18 +1555,44 @@ def test_counts_math() -> None:
     assert c["scan_id"] == str(report.scan_id)
 ```
 
-- [ ] **Step 2: Run them — expect FAIL**
+- [ ] **Step 2: Run them — expect a whole-file collection error**
 
 Run: `uv run pytest tests/unit/test_mirror_scan.py -v`
-Expected: the two new async tests FAIL with `ImportError`/`AttributeError` (`scan_mirror` not
-defined); `test_counts_math` passes already (counts shipped in Task 3) — that is fine.
+Expected: the FILE errors at collection — the new module-level import names (`PointerRow`,
+`resolve_pointer`, `scan_mirror`, `scan_and_sync`) do not exist yet, which takes Task 3's
+passing tests down with it until Step 3 lands. That whole-file ImportError IS the red state
+(`test_counts_math` will pass immediately once the file collects — counts shipped in Task 3).
 
-- [ ] **Step 3: Append the orchestration layer to `mirror_scan.py`** — new imports at the top:
+- [ ] **Step 3a: Add `holds_advisory_lock` to `services/common/pg_locks.py`** (after
+  `pg_advisory_lock`):
+
+```python
+async def holds_advisory_lock(session: AsyncSession, key: int) -> bool:
+    """Does THIS session's connection still hold session-level advisory lock ``key``? A dropped
+    connection silently FREES the lock while the Python context manager believes it is held —
+    the pool then hands the next statement a fresh, lockless connection. Callers doing
+    work-after-failure (the S-drift-2 scan pipeline) re-verify before irreversible steps.
+    (Single-arg ``pg_try_advisory_lock(bigint)`` stores the key as classid=high32/objid=low32;
+    our keys fit in 32 bits, so classid is 0.)"""
+    return bool(
+        (
+            await session.execute(
+                text(
+                    "SELECT EXISTS(SELECT 1 FROM pg_locks WHERE locktype = 'advisory' "
+                    "AND classid = 0 AND objid = :k AND pid = pg_backend_pid())"
+                ),
+                {"k": key},
+            )
+        ).scalar()
+    )
+```
+
+- [ ] **Step 3b: Append the orchestration layer to `mirror_scan.py`** — new imports at the top:
 
 ```python
 from typing import Literal
 
-from sqlalchemy import select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...config import get_settings
@@ -1281,6 +1605,7 @@ from ...db.models.documented_information import DocumentedInformation
 from ...db.models.drift_scan import DriftScan
 from ...db.models.mirror_build import MirrorBuild
 from ..common.org import get_single_org_id
+from ..common.pg_locks import LOCK_MIRROR_SYNC, holds_advisory_lock
 from .mirror import MirrorSyncResult, sync_mirror
 from .render import RenderSink
 ```
@@ -1288,16 +1613,82 @@ from .render import RenderSink
 and the functions (append after `write_quarantine`):
 
 ```python
-async def _known_digests(session: AsyncSession, document_id: uuid.UUID) -> set[str]:
-    """Every digest the vault knows for this document — any version's source bytes or cached
-    controlled-copy rendition (the mirrored content file is the rendition when renderable)."""
+@dataclasses.dataclass(frozen=True, slots=True)
+class PointerRow:
+    """The (build_name, built_at, swapped_at) projection the pointer-integrity check needs."""
+
+    build_name: str
+    built_at: datetime.datetime
+    swapped_at: datetime.datetime | None
+
+
+def resolve_pointer(
+    current_target: str | None, current_is_real_dir: bool, rows: list[PointerRow]
+) -> tuple[str, PointerRow | None]:
+    """Pure pointer-integrity matrix (spec §11.1): verify `current` against the registry, never
+    trust it. Returns (pointer_state, the row to scan against or None). States: 'none' (empty
+    registry — the only benign no-baseline), 'ok', 'selfheal' (the swap-then-crash window:
+    current → the newest not-yet-stamped row; persist completes the bookkeeping), and the four
+    MIRROR_TAMPER states 'missing' / 'rogue_dir' / 'foreign' / 'rollback'."""
+    if not rows:
+        return ("none", None)
+    swapped = [r for r in rows if r.swapped_at is not None]
+    newest_swapped = max(swapped, key=lambda r: r.built_at) if swapped else None
+    if current_target is None:
+        return ("rogue_dir" if current_is_real_dir else "missing", None)
+    cur = next((r for r in rows if r.build_name == current_target), None)
+    if cur is None:
+        return ("foreign", None)
+    if cur.swapped_at is None:
+        if newest_swapped is None or cur.built_at >= newest_swapped.built_at:
+            return ("selfheal", cur)
+        return ("rollback", cur)  # an ancient never-swapped orphan resurrected under current
+    if newest_swapped is not None and cur.build_name != newest_swapped.build_name:
+        return ("rollback", cur)
+    return ("ok", cur)
+
+
+async def _pointer_rows(session: AsyncSession) -> list[PointerRow]:
     rows = (
         await session.execute(
-            select(DocumentVersion.source_sha256, DocumentVersion.rendition_blob_sha256).where(
-                DocumentVersion.document_id == document_id
-            )
+            select(
+                MirrorBuild.build_name, MirrorBuild.built_at, MirrorBuild.swapped_at
+            ).order_by(MirrorBuild.built_at)
         )
     ).all()
+    return [PointerRow(name, built, swapped) for name, built, swapped in rows]
+
+
+def _scan_builds_area(
+    root: Path, registered: set[str], current_target: str | None
+) -> list[Finding]:
+    """Unregistered ``.builds/`` children are EXTRA → MIRROR_TAMPER: the next sync's
+    ``_prune_builds`` would rmtree them UNAUDITED (spec §11.2; they get quarantined BY MOVE).
+    Registered orphans (failed-swap leftovers) are benign; current's own target belongs to the
+    pointer check. Mirror-root siblings stay deliberately out of scope."""
+    findings: list[Finding] = []
+    builds = root / ".builds"
+    if not builds.is_dir():
+        return findings
+    for child in sorted(builds.iterdir()):
+        if child.name in registered or child.name == current_target:
+            continue
+        findings.append(Finding(f".builds/{child.name}", CLASS_EXTRA))
+    return findings
+
+
+async def _known_digests(
+    session: AsyncSession, document_id: uuid.UUID, exclude_version_id: uuid.UUID | None
+) -> set[str]:
+    """Every digest the vault knows for this document EXCEPT the expected version's own (spec
+    §11.3 — doc 05's STALE is "matches an OLDER version"; same-version bytes in the wrong role,
+    e.g. raw source bytes over the banded controlled-copy rendition, are TAMPER)."""
+    stmt = select(DocumentVersion.source_sha256, DocumentVersion.rendition_blob_sha256).where(
+        DocumentVersion.document_id == document_id
+    )
+    if exclude_version_id is not None:
+        stmt = stmt.where(DocumentVersion.id != exclude_version_id)
+    rows = (await session.execute(stmt)).all()
     return {digest for row in rows for digest in row if digest}
 
 
@@ -1319,55 +1710,95 @@ async def _is_current(session: AsyncSession, manifest: list[dict[str, object]]) 
     return expected == {str(v) for v in live}
 
 
-def _no_baseline(
-    scan_id: uuid.UUID, started_at: datetime.datetime, build_name: str | None
-) -> ScanReport:
-    return ScanReport(
-        scan_id=scan_id,
-        started_at=started_at,
-        baseline="none",
-        status="CLEAN",
-        is_current=False,
-        build_name=build_name,
-        findings=[],
-    )
-
-
 async def scan_mirror(
     session: AsyncSession, *, mirror_path: str | os.PathLike[str] | None = None
 ) -> ScanReport:
-    """The D2+D3 scan: resolve ``current`` → load the PG baseline → walk + classify → QUARANTINE
-    divergent bytes (R11, before any rebuild). Read-only on the DB; the session is untouched on
-    the no-baseline early returns. NEVER raises — an infrastructure failure returns an honest
-    FAILED report (the backup posture). Persistence is ``persist_scan_results``."""
+    """The D2+D3 scan: verify the `current` POINTER against the registry (spec §11.1) → load the
+    PG baseline → walk + classify → sweep the .builds area → QUARANTINE divergent bytes (R11,
+    before any rebuild; foreign/rogue trees by MOVE). Read-only on the DB. NEVER raises — an
+    infrastructure failure returns an honest FAILED report (the backup posture). Persistence is
+    ``persist_scan_results``."""
     scan_id = uuid.uuid4()
     started_at = _now()
     root = Path(mirror_path) if mirror_path is not None else Path(get_settings().mirror_path)
+    current = root / "current"
+    current_is_real_dir = current.is_dir() and not current.is_symlink()
     try:
-        target = os.readlink(root / "current")
+        current_target: str | None = Path(os.readlink(current)).name
     except OSError:
-        return _no_baseline(scan_id, started_at, None)  # fresh install: no mirror yet
-    build_name = Path(target).name
-    build_dir = root / ".builds" / build_name
-    if not build_dir.is_dir():
-        return _no_baseline(scan_id, started_at, build_name)
+        current_target = None
+    build_name = current_target
     try:
-        row = (
-            await session.execute(select(MirrorBuild).where(MirrorBuild.build_name == build_name))
-        ).scalar_one_or_none()
-        if row is None:
-            # A pre-0046 build (upgrade path): zero false alarms; the rebuild establishes the
-            # baseline.
-            return _no_baseline(scan_id, started_at, build_name)
-        findings, scanned = compare_tree(build_dir, row.manifest, row.manifest_sha256)
-        for f in findings:
-            if f.classification == _CONTENT_MISMATCH:
-                known: set[str] = set()
-                if f.document_id is not None and f.found_sha256 is not None:
-                    known = await _known_digests(session, uuid.UUID(f.document_id))
-                f.classification = classify_mismatch(f.found_sha256 or "", known)
-        write_quarantine(root, build_dir, build_name, scan_id, findings)
-        is_current = await _is_current(session, row.manifest)
+        rows = await _pointer_rows(session)
+        pointer, cur = resolve_pointer(current_target, current_is_real_dir, rows)
+        if pointer == "none":
+            return ScanReport(
+                scan_id=scan_id,
+                started_at=started_at,
+                baseline="none",
+                status="CLEAN",
+                is_current=False,
+                build_name=build_name,
+                findings=[],
+                pointer="none",
+            )
+
+        findings: list[Finding] = []
+        tree_findings: list[Finding] = []
+        scanned = 0
+        is_current = False
+        build_dir: Path | None = None
+
+        if pointer in ("missing", "rogue_dir", "foreign"):
+            findings.append(Finding("current", CLASS_POINTER, symlink_found=current_target))
+        if cur is not None:
+            row = (
+                await session.execute(
+                    select(MirrorBuild).where(MirrorBuild.build_name == cur.build_name)
+                )
+            ).scalar_one()
+            build_dir = root / ".builds" / cur.build_name
+            if build_dir.is_dir():
+                tree_findings, scanned = compare_tree(
+                    build_dir, row.manifest, row.manifest_sha256
+                )
+                for f in tree_findings:
+                    if f.classification == _CONTENT_MISMATCH:
+                        known: set[str] = set()
+                        if f.document_id is not None and f.found_sha256 is not None:
+                            known = await _known_digests(
+                                session,
+                                uuid.UUID(f.document_id),
+                                uuid.UUID(f.version_id) if f.version_id else None,
+                            )
+                        f.classification = classify_mismatch(f.found_sha256 or "", known)
+                findings.extend(tree_findings)
+            if pointer == "rollback":
+                # The per-file pass above covered the tree against ITS OWN row's manifest (known
+                # old vault bytes — no wholesale quarantine needed); this is the pointer event.
+                findings.append(Finding("current", CLASS_POINTER, symlink_found=current_target))
+            if pointer in ("ok", "selfheal"):
+                is_current = await _is_current(session, row.manifest)
+
+        builds_findings = _scan_builds_area(root, {r.build_name for r in rows}, current_target)
+        findings.extend(builds_findings)
+
+        if findings:
+            qdir = _quarantine_dir(root, scan_id)
+            if build_dir is not None and build_dir.is_dir():
+                write_quarantine(qdir, build_dir, tree_findings)
+            for f in builds_findings:
+                quarantine_tree(qdir, root / f.path, f)
+            if pointer == "rogue_dir":
+                pf = next(f for f in findings if f.classification == CLASS_POINTER)
+                quarantine_tree(qdir, current, pf)  # also unblocks the next atomic swap
+            elif pointer == "foreign" and current_target is not None:
+                src = root / ".builds" / current_target
+                if src.is_dir():
+                    pf = next(f for f in findings if f.classification == CLASS_POINTER)
+                    quarantine_tree(qdir, src, pf)
+            write_quarantine_index(qdir, build_name, scan_id, findings)
+
         return ScanReport(
             scan_id=scan_id,
             started_at=started_at,
@@ -1377,6 +1808,7 @@ async def scan_mirror(
             build_name=build_name,
             findings=findings,
             scanned=scanned,
+            pointer=pointer,
         )
     except Exception as exc:  # noqa: BLE001 — an infra failure is an honest FAILED, never a raise
         logger.exception("mirror.scan.failed")
@@ -1394,22 +1826,35 @@ async def scan_mirror(
 
 async def persist_scan_results(
     session: AsyncSession, report: ScanReport, *, rebuild_triggered: bool, triggered_by: str
-) -> None:
+) -> bool:
     """One txn: a ``MIRROR_STALE``/``MIRROR_TAMPER`` audit event per anomaly (doc-attributable →
     object_type=document + scope_ref=identifier, the S-ing-5 precedent; else config keyed on the
-    org) + the ``drift_scan`` summary row. Quarantine files are already durably written (a crash
-    between leaves bytes-without-events; the divergence is still on disk, so the next scan
-    re-detects — self-healing). NO per-clean-scan audit event (hourly CLEAN events would spam the
-    trail). Best-effort: a persistence failure is logged, never raised (it must not block the
-    vault-wins correction)."""
+    org) + the ``drift_scan`` summary row + the selfheal ``swapped_at`` stamp (spec §11.1).
+    Quarantine files are already durably written (a crash between leaves bytes-without-events;
+    the divergence is still on disk, so the next scan re-detects — self-healing). NO
+    per-clean-scan audit event (hourly CLEAN events would spam the trail) — but EVERY scan gets
+    its summary row (the row-per-scan contract). Returns success: a failure is logged, never
+    raised, and the caller defers the rebuild when findings would otherwise go unrecorded
+    (spec §11.5)."""
     if report.status == "FAILED":
         await session.rollback()  # the failed scan may have poisoned the txn
     try:
         org_id = await get_single_org_id(session)
         if org_id is None:
             logger.warning("mirror.scan: no organization yet; scan results not persisted")
-            return
+            return False
         finished_at = _now()
+        if report.pointer == "selfheal" and report.build_name is not None:
+            # The swap-then-crash window: complete the crashed bookkeeping (the scan itself
+            # stays read-only; an attacker cannot mint registry rows without DB write access).
+            await session.execute(
+                update(MirrorBuild)
+                .where(
+                    MirrorBuild.build_name == report.build_name,
+                    MirrorBuild.swapped_at.is_(None),
+                )
+                .values(swapped_at=func.now())
+            )
         for f in report.findings:
             event_type = (
                 EventType.MIRROR_STALE
@@ -1419,18 +1864,32 @@ async def persist_scan_results(
             object_type, object_id, scope_ref = AuditObjectType.config, org_id, None
             if f.document_id is not None:
                 doc_uuid = uuid.UUID(f.document_id)
-                doc = await session.get(DocumentedInformation, doc_uuid)
-                object_type, object_id = AuditObjectType.document, doc_uuid
-                scope_ref = doc.identifier if doc is not None else None
+                # Column-select, NOT session.get — a full entity would sit STALE in the identity
+                # map when this same session's rebuild re-reads documents (the 4-lens fold §11.6).
+                identifier = (
+                    await session.execute(
+                        select(DocumentedInformation.identifier).where(
+                            DocumentedInformation.id == doc_uuid
+                        )
+                    )
+                ).scalar_one_or_none()
+                object_type, object_id, scope_ref = (
+                    AuditObjectType.document,
+                    doc_uuid,
+                    identifier,
+                )
             after: dict[str, object] = {
                 "path": f.path,
                 "classification": f.classification,
                 "expected_sha256": f.expected_sha256,
                 "found_sha256": f.found_sha256,
                 "quarantine_path": f.quarantine_path,
+                "quarantined_sha256": f.quarantined_sha256,
                 "build_name": report.build_name,
                 "scan_id": str(report.scan_id),
             }
+            if f.classification == CLASS_POINTER:
+                after["pointer_state"] = report.pointer
             if f.note:
                 after["note"] = f.note
             if f.symlink_expected:
@@ -1462,9 +1921,11 @@ async def persist_scan_results(
             )
         )
         await session.commit()
-    except Exception:  # noqa: BLE001 — persistence must never block the vault-wins correction
+        return True
+    except Exception:  # noqa: BLE001 — persistence must never raise into the pipeline
         logger.exception("mirror.scan: failed to persist scan results")
         await session.rollback()
+        return False
 
 
 async def scan_and_sync(
@@ -1479,17 +1940,32 @@ async def scan_and_sync(
     as the vault-wins correction. ``always`` = the sync path (R11's per-sync leg; rebuilds even on
     a FAILED scan — a broken scan must never block correction). ``if_needed`` = the hourly path
     (rebuilds on DIVERGENT / behind-vault / no-baseline; NOT on FAILED — a scan failure is not
-    evidence the mirror is wrong, and the nightly sync remains the convergence backstop). The
-    caller holds ``LOCK_MIRROR_SYNC``."""
+    evidence the mirror is wrong, and the nightly sync remains the convergence backstop). Two
+    §11.5 guards: unpersisted FINDINGS defer the rebuild (it would erase the on-disk evidence the
+    next scan needs to re-detect and audit — and a broken PG fails the rebuild anyway), and after
+    any failure the advisory-lock ownership is re-verified (a dropped connection frees the
+    session-level lock silently). The caller holds ``LOCK_MIRROR_SYNC``."""
     report = await scan_mirror(session, mirror_path=mirror_path)
     needs = report.status == "DIVERGENT" or report.baseline == "none" or not report.is_current
     do_rebuild = rebuild == "always" or (report.status != "FAILED" and needs)
-    await persist_scan_results(
+    persisted = await persist_scan_results(
         session, report, rebuild_triggered=do_rebuild, triggered_by=triggered_by
     )
+    if do_rebuild and not persisted and report.findings:
+        logger.error(
+            "mirror.scan: findings not persisted; deferring the rebuild to preserve re-detection",
+            extra={"extra_fields": report.counts()},
+        )
+        do_rebuild = False
+    if do_rebuild and (report.status == "FAILED" or not persisted):
+        if not await holds_advisory_lock(session, LOCK_MIRROR_SYNC):
+            logger.error("mirror.scan: advisory lock lost; skipping the rebuild this tick")
+            return report, None
     result: MirrorSyncResult | None = None
     if do_rebuild:
-        result = await sync_mirror(mirror_path=mirror_path, render_sink=render_sink, session=session)
+        result = await sync_mirror(
+            mirror_path=mirror_path, render_sink=render_sink, session=session
+        )
     return report, result
 ```
 
@@ -1537,7 +2013,10 @@ def test_scan_task_registered() -> None:
     assert "easysynq.mirror.scan" in app.tasks
 
 
-def test_beat_entry_uses_settings_interval() -> None:
+def test_beat_entry_schedule_matches_settings() -> None:
+    # Under default env both sides are 3600.0, so a hardcoded schedule would also pass — the
+    # real knob proof is test_default_interval_is_hourly_r11 + the settings-driven app.py wiring
+    # (the literal-pinning limitation matches the existing task-registration convention).
     entry = app.conf.beat_schedule["mirror-scan"]
     assert entry["task"] == "easysynq.mirror.scan"
     assert entry["schedule"] == float(get_settings().mirror_scan_interval_seconds)
@@ -1715,9 +2194,17 @@ async def _sync(*, force: bool) -> MirrorSyncResult | None:
             if not held:
                 return None
             if force:
-                # Deliberate blanket null (single-org per install, D1; runs under LOCK_MIRROR_SYNC).
-                # Add a WHERE (org/document) predicate if multi-org or selective rebuild ever lands.
-                await session.execute(update(DocumentVersion).values(rendition_blob_sha256=None))
+                # Scoped to Effective (spec §11.6): only Effective versions ever re-render, so a
+                # blanket null would PERMANENTLY destroy superseded-rendition digests and
+                # mis-classify every future rendition-rollback tamper as TAMPER instead of STALE.
+                # Committed BEFORE the pipeline — persist_scan_results rolls back on a FAILED
+                # scan and would otherwise silently undo the forced re-render.
+                await session.execute(
+                    update(DocumentVersion)
+                    .where(DocumentVersion.version_state == VersionState.Effective)
+                    .values(rendition_blob_sha256=None)
+                )
+                await session.commit()
             # Render for real (S7b) — like the Beat task; without this the CLI rebuild would write
             # every doc as render_status="pending" (the no-op default sink).
             _report, result = await scan_and_sync(
@@ -1729,7 +2216,8 @@ async def _sync(*, force: bool) -> MirrorSyncResult | None:
 ```
 
 (The `from ..services.vault.mirror import MirrorSyncResult, sync_mirror` import line drops
-`sync_mirror` — it is no longer called directly here; keep `MirrorSyncResult` for the type.)
+`sync_mirror` — it is no longer called directly here; keep `MirrorSyncResult` for the type. Add
+`from ..db.models._vault_enums import VersionState` for the scoped force-clear.)
 
 add the runner:
 
@@ -1814,16 +2302,20 @@ approver-releases SoD posture).
 Tamper the LIVE mirror tree four ways (foreign bytes / an older revision's bytes / extra / missing)
 → the scan classifies (MIRROR_TAMPER vs MIRROR_STALE), QUARANTINES before the rebuild (R11),
 audits per anomaly, writes the drift_scan summary, and the scan_and_sync pipeline corrects the
-tree (a re-scan is CLEAN). Plus: the baseline write + keep-last-N on sync, the no-baseline upgrade
-path, and the shared LOCK_MIRROR_SYNC serialization. ⚠ Run-scoped/delta assertions only (the
-shared session DB): every audit/drift_scan lookup keys on THIS scan's scan_id; SoD-2: releases
-come from the approver (subj.b), never the author.
+tree (a re-scan is CLEAN). Plus the §11 folds: pointer integrity (a rollback'd / unregistered
+`current` is TAMPER, never benign), the foreign-.builds quarantine-by-move, the
+current-row-protected keep-last-N prune, the CLEAN/FAILED row-per-scan contract, and the REAL
+task-path lock skip-tick. ⚠ Run-scoped/delta assertions only (the shared session DB): every
+audit/drift_scan lookup keys on THIS scan's scan_id; SoD-2: releases come from the approver
+(subj.b), never the author.
 """
 
 from __future__ import annotations
 
+import datetime
 import hashlib
 import os
+import shutil
 import uuid
 from collections.abc import Callable
 from pathlib import Path
@@ -1838,7 +2330,7 @@ from easysynq_api.db.models.audit_event import AuditEvent
 from easysynq_api.db.models.drift_scan import DriftScan
 from easysynq_api.db.models.mirror_build import MirrorBuild
 from easysynq_api.db.session import get_sessionmaker
-from easysynq_api.services.common.pg_locks import LOCK_MIRROR_SYNC, pg_advisory_lock
+from easysynq_api.services.common.pg_locks import LOCK_MIRROR_SYNC
 from easysynq_api.services.vault import mirror as mirror_mod
 from easysynq_api.services.vault.mirror import sync_mirror
 from easysynq_api.services.vault.mirror_scan import (
@@ -1846,6 +2338,7 @@ from easysynq_api.services.vault.mirror_scan import (
     CLASS_MISSING,
     CLASS_STALE,
     CLASS_UNEXPECTED,
+    ScanReport,
     persist_scan_results,
     scan_and_sync,
     scan_mirror,
@@ -1916,6 +2409,7 @@ async def test_sync_writes_baseline_row(
     assert row.manifest_sha256 == hashlib.sha256(manifest_bytes).hexdigest()
     assert any("document_id" in e for e in row.manifest)
     assert row.files == sum(1 for e in row.manifest if "sha256" in e)
+    assert row.swapped_at is not None  # the post-swap pointer-integrity stamp (spec §11.1)
 
 
 async def test_baseline_keep_last_n_prune(
@@ -1925,9 +2419,11 @@ async def test_baseline_keep_last_n_prune(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The keep-last-N prune holds (N monkeypatched to 1 so the proof needs two syncs, not 21).
-    Run-scoped: only THIS test's two build rows are asserted on (pruning other tests' stale rows
-    is the prune doing its job — the registry is regenerable)."""
+    """The keep-last-N prune holds (N monkeypatched to 1 so the proof needs three syncs, not 23)
+    AND it never deletes the row `current` points at (spec §11.4). At each sync's prune, the
+    then-current build's row is excluded — so it takes a THIRD sync for the first build's row to
+    become prunable. Run-scoped: only THIS test's three build rows are asserted on (pruning other
+    tests' stale rows is the prune doing its job — the registry is regenerable)."""
     mirror = tmp_path / "m"
     await _grant_release_actors(subj)
     ha, hb = _auth(token_factory, subj.a), _auth(token_factory, subj.b)
@@ -1938,21 +2434,36 @@ async def test_baseline_keep_last_n_prune(
     first_build = Path(os.readlink(mirror / "current")).name
     await _sync(mirror)
     second_build = Path(os.readlink(mirror / "current")).name
-    assert first_build != second_build
-
+    # After sync 2: first's row SURVIVES — it was current's target during sync 2's prune (the
+    # §11.4 exclusion: never disarm detection on the still-served tree).
     async with get_sessionmaker()() as s:
-        rows = (
+        names = set(
             (
                 await s.execute(
                     select(MirrorBuild.build_name).where(
                         MirrorBuild.build_name.in_([first_build, second_build])
                     )
                 )
-            )
-            .scalars()
-            .all()
+            ).scalars()
         )
-    assert rows == [second_build]  # the first build's row was pruned; the newest survives
+    assert names == {first_build, second_build}
+
+    await _sync(mirror)
+    third_build = Path(os.readlink(mirror / "current")).name
+    assert len({first_build, second_build, third_build}) == 3
+    # After sync 3 (current was second during its prune): first is finally beyond keep-1 and
+    # unprotected → pruned; second (protected) and third (newest) survive.
+    async with get_sessionmaker()() as s:
+        names = set(
+            (
+                await s.execute(
+                    select(MirrorBuild.build_name).where(
+                        MirrorBuild.build_name.in_([first_build, second_build, third_build])
+                    )
+                )
+            ).scalars()
+        )
+    assert names == {second_build, third_build}
 
 
 async def test_clean_scan_after_sync(
@@ -1969,13 +2480,21 @@ async def test_clean_scan_after_sync(
 
     async with get_sessionmaker()() as s:
         report = await scan_mirror(s, mirror_path=mirror)
+        persisted = await persist_scan_results(
+            s, report, rebuild_triggered=False, triggered_by="cli"
+        )
     assert report.status == "CLEAN"
     assert report.baseline == "ok"
+    assert report.pointer == "ok"
     assert report.is_current is True
     assert report.findings == []
     assert not (mirror / ".quarantine").exists()
-    # A clean scan writes NO audit events (noise posture) — run-scoped check.
+    assert persisted is True
+    # The noise posture is meaningful only through persist: NO audit events for a clean scan…
     assert await _events_for_scan(report.scan_id) == []
+    # …but EVERY scan gets its drift_scan summary row (the row-per-scan contract, spec §6).
+    row = await _scan_row(report.scan_id)
+    assert row is not None and row.status.value == "CLEAN"
 
 
 async def test_tamper_detect_quarantine_audit_correct(
@@ -2087,6 +2606,26 @@ async def test_stale_revision_classification(
     events = await _events_for_scan(report.scan_id)
     assert [e.event_type for e in events] == [EventType.MIRROR_STALE]
 
+    # The OLDER-RENDITION leg (spec §11.7): a rollback to a superseded version's cached
+    # controlled-copy rendition digest is STALE too (drops if rendition_blob_sha256 ever falls
+    # out of _known_digests). Seed a fake rendition digest on the superseded version, then
+    # plant bytes with exactly that digest.
+    old_rendition = b"OLD-RENDITION-BYTES"
+    async with get_sessionmaker()() as s:
+        await s.execute(
+            text(
+                "UPDATE document_version SET rendition_blob_sha256 = :sha "
+                "WHERE document_id = :doc AND version_state = 'Superseded'"
+            ),
+            {"sha": hashlib.sha256(old_rendition).hexdigest(), "doc": did},
+        )
+        await s.commit()
+    src.write_bytes(old_rendition)
+    async with get_sessionmaker()() as s:
+        report2 = await scan_mirror(s, mirror_path=mirror)
+    f2 = next(f for f in report2.findings if f.path == rel_src)
+    assert f2.classification == CLASS_STALE
+
 
 async def test_behind_vault_build_is_not_current_no_audit(
     app_client: AsyncClient,
@@ -2116,18 +2655,24 @@ async def test_behind_vault_build_is_not_current_no_audit(
     assert report.is_current is False  # but the vault moved on
     assert report.findings == []
     assert await _events_for_scan(report.scan_id) == []  # behind-vault is never audited
+    row = await _scan_row(report.scan_id)  # the row-per-scan contract holds for CLEAN scans
+    assert row is not None and row.status.value == "CLEAN"
+    assert row.counts["rebuild_triggered"] is True
     assert result is not None  # the rebuild caught the mirror up
     assert _doc_dir(mirror, doc2["identifier"]).is_dir()
 
 
-async def test_no_baseline_upgrade_path_is_graceful(
+async def test_unregistered_current_is_foreign_tamper(
     app_client: AsyncClient,
     token_factory: Callable[..., str],
     subj: SimpleNamespace,
     tmp_path: Path,
 ) -> None:
-    """A current build with NO mirror_build row (pre-0046 upgrade) → zero false alarms; the
-    if_needed pipeline rebuilds, which establishes the baseline."""
+    """Spec §11.1: with a NON-empty registry, a current target with no row is FOREIGN →
+    MIRROR_TAMPER (a planted/renamed tree must never pass as the benign no-baseline); the
+    pipeline still corrects and the fresh build is registered. (The TRUE empty-registry
+    no-baseline — the pre-0046 production upgrade — is the stubbed unit test: the shared
+    integration DB always carries other tests' registry rows.)"""
     mirror = tmp_path / "m"
     await _grant_release_actors(subj)
     ha, hb = _auth(token_factory, subj.a), _auth(token_factory, subj.b)
@@ -2147,26 +2692,147 @@ async def test_no_baseline_upgrade_path_is_graceful(
             mirror_path=mirror,
             render_sink=LoggingRenderSink(),
         )
-    assert report.baseline == "none"
-    assert report.findings == []
-    assert result is not None  # the rebuild established a fresh baseline
+    assert report.pointer == "foreign"
+    assert report.status == "DIVERGENT"
+    assert [f.classification for f in report.findings if f.path == "current"] == [
+        "POINTER_DIVERGENT"
+    ]
+    events = await _events_for_scan(report.scan_id)
+    assert {e.event_type for e in events} == {EventType.MIRROR_TAMPER}
+    assert result is not None  # corrected: a fresh, registered build serves
     new_build = Path(os.readlink(mirror / "current")).name
+    assert new_build != build_name
     async with get_sessionmaker()() as s:
         row = (
             await s.execute(select(MirrorBuild).where(MirrorBuild.build_name == new_build))
         ).scalar_one_or_none()
-    assert row is not None
+    assert row is not None and row.swapped_at is not None  # the post-swap stamp landed
 
 
-async def test_scan_skips_when_sync_lock_held(app_under_test: object) -> None:
-    """Scan and sync share LOCK_MIRROR_SYNC — a held lock means skip-this-tick (never a
-    mid-walk prune)."""
-    sm = get_sessionmaker()
-    async with sm() as holder, sm() as contender:
-        async with pg_advisory_lock(holder, LOCK_MIRROR_SYNC) as held_a:
-            assert held_a is True
-            async with pg_advisory_lock(contender, LOCK_MIRROR_SYNC) as held_b:
-                assert held_b is False
+async def test_persist_writes_failed_row(app_under_test: object) -> None:
+    """Spec §8/§11.7: a FAILED report still gets its drift_scan summary row — the runbook's
+    'persistent FAILED stream' operator signal depends on it. (The report is constructed
+    directly; producing a real infra failure is the unit suite's job.)"""
+    report = ScanReport(
+        scan_id=uuid.uuid4(),
+        started_at=datetime.datetime.now(tz=datetime.UTC),
+        baseline="ok",
+        status="FAILED",
+        is_current=False,
+        build_name="deadbeef",
+        findings=[],
+        error="simulated",
+    )
+    async with get_sessionmaker()() as s:
+        persisted = await persist_scan_results(
+            s, report, rebuild_triggered=False, triggered_by="cli"
+        )
+    assert persisted is True
+    row = await _scan_row(report.scan_id)
+    assert row is not None and row.status.value == "FAILED"
+    assert row.counts["error"] == "simulated"
+
+
+async def test_pointer_rollback_is_tamper(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    subj: SimpleNamespace,
+    tmp_path: Path,
+) -> None:
+    """Spec §11.1: repointing `current` at a restored OLDER swapped build is MIRROR_TAMPER
+    (POINTER_DIVERGENT) — whole-tree rollback must never pass as a benign stale mirror."""
+    mirror = tmp_path / "m"
+    await _grant_release_actors(subj)
+    ha, hb = _auth(token_factory, subj.a), _auth(token_factory, subj.b)
+    await s5.drive_to_effective(app_client, ha, hb, hb, await s5.type_id("SOP"), b"PTR-V1")
+    await _sync(mirror)
+    first_build = Path(os.readlink(mirror / "current")).name
+    saved = tmp_path / "saved-old-build"
+    shutil.copytree(mirror / ".builds" / first_build, saved, symlinks=True)
+
+    await s5.drive_to_effective(app_client, ha, hb, hb, await s5.type_id("SOP"), b"PTR-V2")
+    await _sync(mirror)  # second build supersedes; _prune_builds removed the first dir
+
+    # The attack: restore the old build dir and repoint current at it.
+    shutil.copytree(saved, mirror / ".builds" / first_build, symlinks=True)
+    tmp_link = mirror / ".current.attack.tmp"
+    os.symlink(os.path.join(".builds", first_build), tmp_link)
+    os.replace(tmp_link, mirror / "current")
+
+    async with get_sessionmaker()() as s:
+        report, result = await scan_and_sync(
+            s,
+            rebuild="if_needed",
+            triggered_by="beat",
+            mirror_path=mirror,
+            render_sink=LoggingRenderSink(),
+        )
+    assert report.pointer == "rollback"
+    assert report.status == "DIVERGENT"
+    pointer_findings = [f for f in report.findings if f.path == "current"]
+    assert len(pointer_findings) == 1
+    events = await _events_for_scan(report.scan_id)
+    assert EventType.MIRROR_TAMPER in {e.event_type for e in events}
+    assert result is not None  # corrected: current repointed at a fresh build
+    rescan_target = Path(os.readlink(mirror / "current")).name
+    assert rescan_target != first_build
+
+
+async def test_foreign_builds_tree_quarantined_by_move(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    subj: SimpleNamespace,
+    tmp_path: Path,
+) -> None:
+    """Spec §11.2: an unregistered .builds/ child is EXTRA→TAMPER and is MOVED to quarantine —
+    otherwise the next sync's prune would rmtree the planted bytes unaudited."""
+    mirror = tmp_path / "m"
+    await _grant_release_actors(subj)
+    ha, hb = _auth(token_factory, subj.a), _auth(token_factory, subj.b)
+    await s5.drive_to_effective(app_client, ha, hb, hb, await s5.type_id("SOP"), b"FERAL-V1")
+    await _sync(mirror)
+    feral = mirror / ".builds" / "feral"
+    (feral / "deep").mkdir(parents=True)
+    (feral / "deep" / "payload.bin").write_bytes(b"PLANTED")
+
+    async with get_sessionmaker()() as s:
+        report = await scan_mirror(s, mirror_path=mirror)
+    f = next(f for f in report.findings if f.path == ".builds/feral")
+    assert f.classification == CLASS_EXTRA
+    assert not feral.exists()  # moved, not copied — out of _prune_builds' reach
+    qdirs = list((mirror / ".quarantine").iterdir())
+    assert len(qdirs) == 1
+    assert (qdirs[0] / ".builds" / "feral" / "deep" / "payload.bin").read_bytes() == b"PLANTED"
+
+
+async def test_scan_task_skips_when_sync_lock_held(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    subj: SimpleNamespace,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Scan and sync share LOCK_MIRROR_SYNC — the REAL task path skip-ticks while a holder holds
+    the lock (the test_mirror_sync_advisory_lock_serializes convention: drive _run_mirror_scan,
+    not the bare primitive — a vacuous two-session lock test passes even if the task never takes
+    the lock)."""
+    from easysynq_api.config import get_settings
+    from easysynq_api.tasks.mirror import _run_mirror_scan
+
+    monkeypatch.setenv("MIRROR_PATH", str(tmp_path / "m"))
+    get_settings.cache_clear()
+    try:
+        async with get_sessionmaker()() as holder:
+            held = (
+                await holder.execute(
+                    text("SELECT pg_try_advisory_lock(:k)"), {"k": LOCK_MIRROR_SYNC}
+                )
+            ).scalar()
+            assert held is True
+            assert await _run_mirror_scan() == {"skipped_lock_held": 1}  # contended → skipped
+            await holder.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": LOCK_MIRROR_SYNC})
+    finally:
+        get_settings.cache_clear()
 ```
 
 NOTE for the implementer: the `from .test_mirror import _doc_dir, _grant_release_actors,
@@ -2230,9 +2896,15 @@ summarized in the `drift_scan` table.
 
 ## Quarantine
 
-- Location: `<mirror_path>/.quarantine/<UTC-stamp>__<scan-id>/` (tree-preserving copies of the
-  divergent bytes + a `quarantine.json` index). The area inherits the mirror mount contract
-  (writable only by the worker — see `nfs-root-squash-mirror-caveat.md`).
+- Location: `<mirror_path>/.quarantine/<UTC-stamp>__<scan-id>/` (tree-preserving, re-hashed
+  copies of divergent bytes + a `quarantine.json` index; created `0o700` — not user-browsable).
+  Foreign/rogue whole trees (a planted `.builds/` dir, a hijacked `current`) are quarantined
+  **by move**, so the bytes are preserved exactly and the sync's build-prune can never destroy
+  them. The area inherits the mirror mount contract (writable only by the worker — see
+  `nfs-root-squash-mirror-caveat.md`).
+- The `current` symlink itself is verified against the vault-side build registry: a repointed,
+  rolled-back, or replaced-by-a-directory `current` raises `MIRROR_TAMPER`
+  (`classification: POINTER_DIVERGENT`) — treat it as a deliberate-action signal.
 - **Never auto-deleted** — it is forensic evidence. Review `MIRROR_TAMPER` events before cleanup;
   the audit rows keep the path + both digests, so digest-level evidence survives deletion. Clean
   up manually once an investigation closes: `rm -rf <mirror_path>/.quarantine/<stamp>__<id>/`.

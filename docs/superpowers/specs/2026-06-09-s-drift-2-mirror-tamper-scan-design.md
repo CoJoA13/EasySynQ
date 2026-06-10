@@ -253,7 +253,53 @@ the existing posture; the same lock serializes scan↔sync so a swap can never p
   the `drift_scan` row + the corrected tree; then a clean re-scan. (Backend smoke mechanics per the
   established heredoc pattern; no token needed.)
 
-## 11. Docs in-PR
+## 11. Amendments — the 4-lens fold (2026-06-09, post-plan adversarial pass; 1 CRITICAL / 8 MAJOR confirmed)
+
+1. **Pointer integrity (CRITICAL).** The `current` symlink is itself verified, never trusted:
+   `mirror_build` gains **`swapped_at`** (stamped in a small post-swap commit; a swap-then-crash
+   window self-heals — the scan reports `pointer=selfheal` and `persist_scan_results` stamps it).
+   `NO_BASELINE` is reserved for an **empty registry** (fresh install / pre-0046). With any
+   registry rows: a missing/unreadable `current`, a real-directory `current`, a target with no row
+   (`foreign`), or a target pointing at an **older swapped** build (`rollback`) is a
+   **`POINTER_DIVERGENT` finding → `MIRROR_TAMPER`** + rebuild. A foreign/rogue tree is
+   quarantined **by move** (same-volume rename — preserves the bytes exactly, unblocks the swap,
+   and takes it out of `_prune_builds`' reach); a rollback tree is additionally scanned per-file
+   against ITS OWN row's manifest.
+2. **The build area is in scope.** Unregistered `.builds/` children are `EXTRA` → `MIRROR_TAMPER`
+   + quarantine-by-move (the next sync's prune would otherwise destroy them unaudited).
+   **Mirror-root siblings stay out of scope** (deliberate: correcting them would mean deleting
+   operator files outside the published tree, and an uncorrectable finding would re-fire every
+   scan — the mount contract owns the root).
+3. **STALE excludes the expected version's own digests** — replacing the controlled-copy rendition
+   with the SAME version's raw source bytes (no banding/QR) is `UNEXPECTED_CONTENT`/TAMPER, per
+   doc 05's "matches an *older* version".
+4. **Prune safety:** the keep-last-20 prune **never deletes the row `current` points at** (under a
+   persistent swap-failure mode, orphan rows otherwise pile above it and detection silently
+   disables).
+5. **Persist/lock hardening:** `persist_scan_results` returns success; a persist failure **with
+   findings** defers the rebuild (PG-down means the rebuild would fail anyway; the on-disk
+   divergence is preserved for re-detection). After a FAILED scan or failed persist, the pipeline
+   **re-verifies advisory-lock ownership** (`pg_locks.holds_advisory_lock`) before rebuilding — a
+   mid-scan connection loss frees the session-level lock and a lockless rebuild could race a
+   concurrent sync's prune.
+6. **Smaller folds:** a *deleted* `_meta/manifest.json` is a `MISSING` finding (only the tampered
+   case was caught); quarantine dirs are created `0o700` (users could otherwise browse tampered
+   lookalikes forever); quarantined copies are **re-hashed** (`quarantined_sha256` in
+   `quarantine.json`, chain of custody); the CLI `rebuild` force-clear is scoped
+   `WHERE version_state = Effective` (a blanket null permanently destroys superseded-rendition
+   digests → mis-classifies future rollbacks) and **committed before** the pipeline (a FAILED-scan
+   rollback silently undid it); `persist_scan_results` fetches `identifier` by column-select (a
+   `session.get` would leave a stale entity in the identity map for the rebuild's reads);
+   type-swap findings carry no `note` (`note` is the error channel feeding `counts.errors`);
+   findings imply rebuild on the hourly path so quarantine/audit never re-fires hourly for the
+   same divergence.
+7. **Test hardening (false-PASS folds):** the lock test drives the real `_run_mirror_scan`
+   skip-tick (not the bare primitive); the FAILED family (never-raise, always-rebuilds vs
+   if_needed-skips, the FAILED row) is explicitly tested; a CLEAN scan's `drift_scan` row is
+   asserted (the row-per-scan contract); the stale leg also covers an **older-rendition** digest;
+   the pointer matrix is a pure unit-tested function (`resolve_pointer`).
+
+## 12. Docs in-PR
 
 `docs/05` §9.1/§9.2 (mark the D2/D3 seam closed; event names confirmed) · `docs/14` (the two tables)
 · `docs/12` §3 pointer (the integrity-alert row now has a concrete emitter) · a runbook note
