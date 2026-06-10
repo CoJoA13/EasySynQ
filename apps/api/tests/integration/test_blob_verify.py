@@ -4,8 +4,10 @@ Synthetic tamper via planted blob ROWS (never fight WORM object-lock): a row who
 match the real bytes it points at → HASH_MISMATCH; a row pointing at a nonexistent key →
 OBJECT_MISSING. ⚠ Run-scoped/delta assertions only (the shared session DB): every audit/drift_scan
 lookup keys on THIS scan's scan_id; planted rows are run-unique and DELETED in finally (a leaked
-plant would fail other runs' clean passes). SoD-2: releases come from the approver, never the
-author.
+plant would fail other runs' clean passes). ⚠ The full=True passes here STAMP verified_at on every
+clean blob in the shared DB — a future test asserting ``verified_at IS NULL`` on a blob created in
+an EARLIER file would silently break (assert only on rows you created this-test). SoD-2: releases
+come from the approver, never the author.
 """
 
 from __future__ import annotations
