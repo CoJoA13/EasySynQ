@@ -373,6 +373,26 @@ the existing posture; the same lock serializes scan↔sync so a swap can never p
     already-detected divergences from the salvaged FAILED report (which would let the always-rebuild
     path prune unaudited bytes).
 
+## 11a. Deferred / not-implemented review items (owner-accepted, 2026-06-10)
+
+These were raised in review, evaluated, and **deliberately not implemented** — recorded here for
+future reference and re-evaluation (owner accepted the dispositions 2026-06-10: "ok with the
+pushback and reasoning… disregard nitpicks and unreachable bugs; just document them").
+
+- **Advisory-lock connection pinning (Codex round-5 P1 — assessed NOT reachable).** The proposed
+  race (two workers both rebuilding because the session-level advisory lock sits on a pooled
+  connection) requires two workers to **share a connection pool**. They do not: each Celery task /
+  CLI invocation builds its **own** `create_async_engine` (isolated pool, `dispose()` in `finally`),
+  and the **global** `pg_try_advisory_lock` at task entry (`if not held: return`) serializes workers
+  *before* `scan_and_sync` runs. Postgres advisory locks are globally exclusive and
+  `holds_advisory_lock` verifies `pid = pg_backend_pid()`, so two backends cannot both report
+  themselves the holder — the in-session recheck (before every rebuild) covers the only live risk,
+  this worker's own connection silently dropping mid-op. **A dedicated pinned lock-connection held
+  across scan+rebuild would be a clarity/defence-in-depth improvement but fixes no reachable bug.**
+  ⚠ **Re-evaluation trigger:** if these tasks are ever changed to **share a process-wide engine /
+  connection pool** across concurrent runs (instead of a fresh per-invocation engine), this race
+  becomes reachable — pin the lock connection then.
+
 ## 12. Docs in-PR
 
 `docs/05` §9.1/§9.2 (mark the D2/D3 seam closed; event names confirmed) · `docs/14` (the two tables)
