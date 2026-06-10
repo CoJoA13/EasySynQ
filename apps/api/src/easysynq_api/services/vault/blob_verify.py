@@ -3,9 +3,11 @@
 Re-hash vault blobs against their content-addressed identity (``blob.sha256`` IS the PK) and alarm
 on divergence — the only detector for bit-rot, storage-layer tamper, or a broken
 blob-row-iff-bytes invariant. **Rolling sample:** each run verifies the K least-recently-verified
-rows (``verified_at NULLS FIRST → oldest``), so rotation provably covers the FULL set every ⌈N/K⌉
-runs (doc 03 §8.2's "rolling sample + full set periodically"; ``full=True`` is the on-demand
-complete pass).
+rows (``verified_at NULLS FIRST → oldest``), so rotation covers every HEALTHY blob within ⌈N/K⌉
+runs in the all-clean steady state (doc 03 §8.2's "rolling sample + full set periodically";
+``full=True`` is the on-demand complete pass). M unresolved findings occupy M sample slots every
+run (deliberately — see stamp-on-OK-only below), stretching healthy coverage toward
+⌈(N−M)/(K−M)⌉; M ≥ K means the vault is on fire and every scan covering the bad set is correct.
 
 **Stamp-on-OK-only is load-bearing:** a finding leaves the blob at the rotation head, so every
 subsequent scan re-detects and re-alarms until the operator restores the object — there is no
