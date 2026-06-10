@@ -37,6 +37,11 @@ async def _run_blob_verify() -> dict[str, object]:
             report = await verify_blobs(session)
             persisted = await persist_blob_verify(session, report, triggered_by="beat")
             summary: dict[str, object] = {**report.counts(), "persisted": persisted}
+            if not persisted:
+                # Findings (if any) went unrecorded — nothing was stamped, so the next run
+                # resamples the same rotation head and re-detects. Surface it at the task layer
+                # (the service's logger.exception rides easysynq.vault, not this logger).
+                logger.warning("blob.verify: persist failed", extra={"extra_fields": summary})
             logger.info("blob.verify.done", extra={"extra_fields": summary})
             return summary
     finally:
