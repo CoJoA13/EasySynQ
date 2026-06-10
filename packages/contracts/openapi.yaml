@@ -3412,7 +3412,9 @@ paths:
         permission); on the completing approval it writes a signature_event(meaning=approval,
         signed_object=capa_stage) + the signed ActionPlan stage and flips the CAPA to ActionPlan;
         409 if the actor already decided an earlier stage of the same approval. Idempotent via the
-        Idempotency-Key header (replay on match, else 409).
+        Idempotency-Key header (replay on match, else 409). For PERIODIC_REVIEW subjects the accepted
+        outcomes are complete ("no change needed" — emits the review_confirmed signature and resets
+        next_review_due) and changes_requested.
       parameters:
         - { name: task_id, in: path, required: true, schema: { type: string, format: uuid } }
         - name: Idempotency-Key
@@ -4714,6 +4716,13 @@ components:
             column + artifact-header date). Present on list/detail reads; null when no effective
             version (or on create/patch responses).
         created_at: { type: [string, "null"], format: date-time }
+        review_period_months: { type: [integer, "null"], minimum: 1, maximum: 120 }
+        next_review_due: { type: [string, "null"], format: date }
+        last_reviewed_at: { type: [string, "null"], format: date-time }
+        review_state:
+          type: [string, "null"]
+          enum: [current, due_soon, overdue, null]
+          description: "Derived currency projection (D5, doc 05 §9.3); null = no review scheduled."
         clause_refs:
           type: array
           items: { type: string }
@@ -4802,6 +4811,11 @@ components:
         title: { type: [string, "null"] }
         folder_path: { type: [string, "null"] }
         classification: { type: [string, "null"], enum: [Public, Internal, Confidential, Restricted, null] }
+        review_period_months:
+          type: [integer, "null"]
+          minimum: 1
+          maximum: 120
+          description: "Months between periodic reviews. Explicit null clears the schedule (opt-out)."
 
     DocumentVersion:
       type: object
@@ -5243,7 +5257,7 @@ components:
       properties:
         outcome:
           type: string
-          enum: [approve, changes_requested, reject]
+          enum: [approve, changes_requested, reject, complete]
           description: "approve signs (document.approve); changes_requested/reject returns to Draft (document.review)."
         comment:
           type: [string, "null"]
@@ -5276,7 +5290,7 @@ components:
         task_id: { type: string, format: uuid }
         instance_id: { type: string, format: uuid }
         stage_key: { type: string }
-        outcome: { type: string, enum: [approve, changes_requested, reject] }
+        outcome: { type: string, enum: [approve, changes_requested, reject, complete] }
         decided_at: { type: [string, "null"], format: date-time }
         decided_by: { type: string, format: uuid }
         signature_event:
@@ -5285,6 +5299,9 @@ components:
             - { type: "null" }
           description: "Present for an approval; null for changes_requested/reject."
         comment: { type: [string, "null"] }
+        document_id: { type: [string, "null"], format: uuid }
+        next_review_due: { type: [string, "null"], format: date }
+        signature_event_id: { type: [string, "null"], format: uuid }
 
     AuditEvent:
       type: object
@@ -5403,7 +5420,7 @@ components:
     ChecklistRow:
       type: object
       additionalProperties: false
-      required: [clause_id, number, title, pdca_phase, mapped_count, effective_count, status]
+      required: [clause_id, number, title, pdca_phase, mapped_count, effective_count, status, overdue_review]
       properties:
         clause_id: { type: string, format: uuid }
         number: { type: string, example: "8.4" }
@@ -5412,16 +5429,20 @@ components:
         mapped_count: { type: integer, description: "Distinct documents mapped to this ★ clause." }
         effective_count: { type: integer, description: "Of those, how many have an Effective version." }
         status: { type: string, enum: [COVERED, PARTIAL, GAP] }
+        overdue_review:
+          type: boolean
+          description: "True iff any mapped Effective document is past its next_review_due."
 
     ChecklistRollup:
       type: object
       additionalProperties: false
-      required: [total, covered, partial, gap]
+      required: [total, covered, partial, gap, overdue_review]
       properties:
         total: { type: integer, example: 20 }
         covered: { type: integer }
         partial: { type: integer }
         gap: { type: integer }
+        overdue_review: { type: integer, description: "Count of rows with overdue_review=true." }
 
     ComplianceChecklist:
       type: object
