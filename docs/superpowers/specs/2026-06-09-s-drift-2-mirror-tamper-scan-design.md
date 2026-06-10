@@ -298,7 +298,14 @@ the existing posture; the same lock serializes scan↔sync so a swap can never p
    name (`_parse_current_target`); an absolute / out-of-tree / nested / traversal target — even
    one whose basename collides with the registered build — classifies **foreign → MIRROR_TAMPER**
    with the raw target preserved as evidence, and is NEVER resolved against the filesystem (no
-   walking or moving of out-of-tree paths).
+   walking or moving of out-of-tree paths). **Codex P2 folds (2026-06-10):** the shape parse uses
+   the **native `PurePath` flavor** so a backslash separator is honored only on Windows — a
+   `.builds\<name>` target on a Linux deployment is correctly foreign, not silently resolved.
+   A `current` replaced by a **regular file** (not just a directory) with a non-empty registry is
+   the `rogue` state → MIRROR_TAMPER + the planted bytes are **moved to quarantine before** the
+   rebuild overwrites them. And `selfheal` (the swap-then-crash window) fires **only when `current`
+   points at the NEWEST build overall** — an unswapped orphan that is merely newer than the newest
+   *swapped* row is a rollback, not a crash window to silently stamp.
 8. **Test hardening (false-PASS folds):** the lock test drives the real `_run_mirror_scan`
    skip-tick (not the bare primitive); the FAILED family (never-raise, always-rebuilds vs
    if_needed-skips, the FAILED row) is explicitly tested; a CLEAN scan's `drift_scan` row is

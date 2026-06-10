@@ -22,7 +22,7 @@ import logging
 import os
 import shutil
 import uuid
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePath
 from typing import Literal
 
 from sqlalchemy import func, select, update
@@ -88,7 +88,7 @@ class ScanReport:
     scanned: int = 0
     error: str | None = None
     # resolve_pointer's verdict on `current` itself (spec §11.1):
-    # "ok" | "none" | "selfheal" | "missing" | "rogue_dir" | "foreign" | "rollback"
+    # "ok" | "none" | "selfheal" | "missing" | "rogue" | "foreign" | "rollback"
     pointer: str = "ok"
 
     def counts(self) -> dict[str, object]:
@@ -310,9 +310,10 @@ def _quarantine_dir(mirror_root: Path, scan_id: uuid.UUID) -> Path:
 
 
 def quarantine_tree(qdir: Path, src: Path, finding: Finding) -> None:
-    """Quarantine a whole foreign/rogue tree BY MOVE (same-volume rename): preserves the bytes
-    exactly, takes them out of ``_prune_builds``' reach, and (for a rogue real-dir ``current``)
-    unblocks the next atomic swap. A move failure is noted, never raised."""
+    """Quarantine a whole foreign/rogue path BY MOVE (same-volume rename; ``shutil.move`` handles a
+    file or a directory): preserves the bytes exactly, takes them out of ``_prune_builds``' reach,
+    and (for a rogue ``current`` that is a real file or dir) unblocks the next atomic swap. A move
+    failure is noted, never raised."""
     dest = qdir / finding.path
     try:
         dest.parent.mkdir(parents=True, exist_ok=True)
@@ -396,38 +397,49 @@ class PointerRow:
 
 def _parse_current_target(raw: str) -> str | None:
     """The ONLY legitimate ``current`` target shape is the relative ``.builds/<name>`` that
-    ``atomic_swap`` writes (backslashes on a Windows-written link). Anything else — absolute,
-    out-of-tree, nested, traversal — returns ``None``: the caller treats the RAW string as a
-    foreign pointer (evidence-only; never resolved, walked, or moved). Closes the
-    basename-collision bypass: an out-of-tree dir named like the registered build must not
-    resolve "ok" while its evil twin is being served."""
-    parts = PurePosixPath(raw.replace("\\", "/")).parts
+    ``atomic_swap`` writes via ``os.path.join`` (so the separator is the RUNNING OS's — ``/`` on
+    Linux, ``\\`` on a Windows dev box). Parse with the **native** ``PurePath`` flavor so a
+    backslash is a separator ONLY on Windows and a literal filename character on Linux — a
+    `.builds\\<name>` target on a Linux deployment is therefore correctly rejected as foreign, not
+    silently resolved to the registered build (Codex P2). Anything else — absolute, out-of-tree,
+    nested, traversal — returns ``None``: the caller treats the RAW string as a foreign pointer
+    (evidence-only; never resolved, walked, or moved). Closes the basename-collision bypass: an
+    out-of-tree dir named like the registered build must not resolve "ok" while its evil twin is
+    served."""
+    parts = PurePath(raw).parts
     if len(parts) == 2 and parts[0] == ".builds" and parts[1] not in ("", ".", ".."):
         return parts[1]
     return None
 
 
 def resolve_pointer(
-    current_target: str | None, current_is_real_dir: bool, rows: list[PointerRow]
+    current_target: str | None, current_is_real_path: bool, rows: list[PointerRow]
 ) -> tuple[str, PointerRow | None]:
     """Pure pointer-integrity matrix (spec §11.1): verify `current` against the registry, never
     trust it. Returns (pointer_state, the row to scan against or None). States: 'none' (empty
     registry — the only benign no-baseline), 'ok', 'selfheal' (the swap-then-crash window:
     current → the newest not-yet-stamped row; persist completes the bookkeeping), and the four
-    MIRROR_TAMPER states 'missing' / 'rogue_dir' / 'foreign' / 'rollback'."""
+    MIRROR_TAMPER states 'missing' (current absent/broken) / 'rogue' (current is a real
+    file-or-dir, not a symlink) / 'foreign' / 'rollback'. ``current_is_real_path`` = current
+    exists and is NOT a symlink (a planted file or dir to quarantine, vs a truly-absent link)."""
     if not rows:
         return ("none", None)
     swapped = [r for r in rows if r.swapped_at is not None]
     newest_swapped = max(swapped, key=lambda r: r.built_at) if swapped else None
+    newest_overall = max(rows, key=lambda r: r.built_at)
     if current_target is None:
-        return ("rogue_dir" if current_is_real_dir else "missing", None)
+        return ("rogue" if current_is_real_path else "missing", None)
     cur = next((r for r in rows if r.build_name == current_target), None)
     if cur is None:
         return ("foreign", None)
     if cur.swapped_at is None:
-        if newest_swapped is None or cur.built_at >= newest_swapped.built_at:
+        # The legitimate swap-then-crash window leaves current at the NEWEST build overall (the
+        # one being swapped to). An unswapped build that is NOT the newest — even if newer than
+        # the newest SWAPPED row — is an orphan resurrected under current = rollback, NOT a
+        # crash window to silently stamp (Codex P2: ≥2 unswapped rows after repeated swap crashes).
+        if cur.build_name == newest_overall.build_name:
             return ("selfheal", cur)
-        return ("rollback", cur)  # an ancient never-swapped orphan resurrected under current
+        return ("rollback", cur)
     if newest_swapped is not None and cur.build_name != newest_swapped.build_name:
         return ("rollback", cur)
     return ("ok", cur)
@@ -509,7 +521,9 @@ async def scan_mirror(
     started_at = _now()
     root = Path(mirror_path) if mirror_path is not None else Path(get_settings().mirror_path)
     current = root / "current"
-    current_is_real_dir = current.is_dir() and not current.is_symlink()
+    # A planted file OR directory at `current` (anything that exists and is NOT a symlink) is
+    # rogue evidence to quarantine before the rebuild overwrites it — not just a directory.
+    current_is_real_path = current.exists() and not current.is_symlink()
     conforming_name: str | None = None
     current_target: str | None = None
     try:
@@ -529,7 +543,7 @@ async def scan_mirror(
     findings: list[Finding] = []
     try:
         rows = await _pointer_rows(session)
-        pointer, cur = resolve_pointer(current_target, current_is_real_dir, rows)
+        pointer, cur = resolve_pointer(current_target, current_is_real_path, rows)
         if pointer == "none":
             return ScanReport(
                 scan_id=scan_id,
@@ -548,7 +562,7 @@ async def scan_mirror(
         build_dir: Path | None = None
         build_dir_scannable = False
 
-        if pointer in ("missing", "rogue_dir", "foreign"):
+        if pointer in ("missing", "rogue", "foreign"):
             findings.append(Finding("current", CLASS_POINTER, symlink_found=current_target))
         if cur is not None:
             build_dir = root / ".builds" / cur.build_name
@@ -600,9 +614,11 @@ async def scan_mirror(
                 write_quarantine(qdir, build_dir, tree_findings)
             for f in builds_findings:
                 quarantine_tree(qdir, root / f.path, f)
-            if pointer == "rogue_dir":
+            if pointer == "rogue":
+                # A planted file OR directory at `current` — move it aside so its bytes are
+                # preserved (R11) AND the next atomic_swap can recreate the symlink over the gap.
                 pf = next(f for f in findings if f.classification == CLASS_POINTER)
-                quarantine_tree(qdir, current, pf)  # also unblocks the next atomic swap
+                quarantine_tree(qdir, current, pf)
             elif pointer == "foreign" and conforming_name is not None:
                 # Only a conforming in-builds target is movable; a non-conforming (out-of-tree)
                 # target is audit-payload evidence ONLY — never touch paths outside the mirror.

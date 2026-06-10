@@ -267,6 +267,7 @@ def test_quarantine_tree_moves_bytes_out(tmp_path: Path) -> None:
 # --- orchestration (no-DB paths via the stubbed registry probe; DB paths are integration) ---
 
 from easysynq_api.services.vault.mirror_scan import (  # noqa: E402
+    CLASS_POINTER,
     PointerRow,
     ScanReport,
     resolve_pointer,
@@ -295,11 +296,16 @@ def test_resolve_pointer_matrix() -> None:
     assert resolve_pointer(None, False, []) == ("none", None)  # empty registry: benign
     assert resolve_pointer("b", False, [a, b]) == ("ok", b)  # normal
     assert resolve_pointer(None, False, [a, b]) == ("missing", None)  # current deleted: TAMPER
-    assert resolve_pointer(None, True, [a, b]) == ("rogue_dir", None)  # current is a real dir
+    assert resolve_pointer(None, True, [a, b]) == ("rogue", None)  # current is a real file/dir
     assert resolve_pointer("x", False, [a, b]) == ("foreign", None)  # planted/renamed tree
     assert resolve_pointer("a", False, [a, b]) == ("rollback", a)  # an older swapped build
     assert resolve_pointer("c", False, [a, b, orphan_new]) == ("selfheal", orphan_new)
     assert resolve_pointer("z", False, [a, b, orphan_old]) == ("rollback", orphan_old)
+    # Codex P2: ≥2 unswapped rows — current at the OLDER orphan (not the newest overall) is a
+    # rollback to a resurrected orphan, NOT a crash window to silently self-heal/stamp.
+    assert resolve_pointer("z", False, [a, orphan_old, orphan_new]) == ("rollback", orphan_old)
+    # …and current at the NEWEST unswapped build IS the legitimate swap-then-crash window.
+    assert resolve_pointer("c", False, [a, orphan_old, orphan_new]) == ("selfheal", orphan_new)
 
 
 async def test_scan_empty_registry_is_no_baseline(
@@ -320,6 +326,32 @@ async def test_scan_empty_registry_is_no_baseline(
     assert report.is_current is False
     assert report.findings == []
     assert not (tmp_path / ".quarantine").exists()
+
+
+async def test_rogue_regular_file_current_is_quarantined(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex P2: a `current` replaced by a regular FILE (not a symlink) with a non-empty registry
+    is MIRROR_TAMPER (rogue) and the planted bytes are MOVED to quarantine before any rebuild —
+    not silently overwritten by the swap. No symlinks needed, so this runs on every platform."""
+
+    async def _one_row(session: object) -> list[PointerRow]:
+        import datetime as _dt
+
+        return [PointerRow("abc", _dt.datetime(2026, 6, 1, tzinfo=_dt.UTC), None)]
+
+    monkeypatch.setattr(scan_mod, "_pointer_rows", _one_row)
+    (tmp_path / "current").write_bytes(b"PLANTED-AT-CURRENT")  # a regular file, not a symlink
+
+    report = await scan_mirror(None, mirror_path=tmp_path)  # type: ignore[arg-type]
+    assert report.pointer == "rogue"
+    assert report.status == "DIVERGENT"
+    pointer_findings = [f for f in report.findings if f.classification == CLASS_POINTER]
+    assert len(pointer_findings) == 1
+    qdirs = list((tmp_path / ".quarantine").iterdir())
+    assert len(qdirs) == 1
+    assert (qdirs[0] / "current").read_bytes() == b"PLANTED-AT-CURRENT"  # bytes preserved
+    assert not (tmp_path / "current").exists()  # moved aside → the swap can recreate the symlink
 
 
 async def test_scan_failure_is_failed_never_raises(
@@ -510,13 +542,20 @@ def test_counts_math() -> None:
 
 
 def test_parse_current_target_rejects_non_conforming() -> None:
-    """Spec S11.8: only the relative `.builds/<name>` shape atomic_swap writes is legitimate —
+    """Spec S11.7: only the relative `.builds/<name>` shape atomic_swap writes is legitimate —
     an out-of-tree target whose BASENAME matches the registered build must classify foreign,
     never resolve "ok" (the basename-collision bypass)."""
+    import os as _os
+
     from easysynq_api.services.vault.mirror_scan import _parse_current_target
 
-    assert _parse_current_target(".builds/abc123") == "abc123"
-    assert _parse_current_target(".builds\\abc123") == "abc123"  # a Windows-written link
+    assert _parse_current_target(".builds/abc123") == "abc123"  # always (forward slash)
+    # Backslash is a separator ONLY on Windows (native PurePath flavor); on a Linux deployment a
+    # `.builds\\<name>` target is a literal one-segment filename → foreign (Codex P2).
+    if _os.name == "nt":
+        assert _parse_current_target(".builds\\abc123") == "abc123"
+    else:
+        assert _parse_current_target(".builds\\abc123") is None
     assert _parse_current_target("/srv/evil/abc123") is None  # absolute out-of-tree
     assert _parse_current_target("C:/evil/abc123") is None
     assert _parse_current_target(".builds/a/b") is None  # nested
