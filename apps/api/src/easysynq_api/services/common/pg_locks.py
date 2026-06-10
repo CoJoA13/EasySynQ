@@ -31,6 +31,10 @@ LOCK_RESTORE_LIVE = 7710005
 # S-drift-1: serialize the daily D5 periodic re-review sweep (one open-instance pass + the
 # once-per-cycle overdue-audit pass) so two overlapping Beat fires cannot double-open instances.
 LOCK_REVIEW_SWEEP = 7710006
+# S-drift-3: serialize the daily D1 blob re-hash — one rotation pass at a time (a second
+# concurrent verify skips its tick). DISTINCT from LOCK_MIRROR_SYNC: blob verify never touches
+# the mirror, and sharing would couple unrelated cadences.
+LOCK_BLOB_VERIFY = 7710007
 # (The S-ing-5 commit single-flight is the per-item ledger CLAIM — INSERT ON CONFLICT DO UPDATE
 # WHERE result='failed' — in ingestion.repository.claim_commit_result, NOT an advisory lock.)
 

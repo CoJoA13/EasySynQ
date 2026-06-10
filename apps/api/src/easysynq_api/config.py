@@ -89,9 +89,12 @@ class Settings(BaseSettings):
     # configurable — the ACCEPTED DRIFT WINDOW equals this interval; tightening narrows the
     # window at the cost of I/O).
     mirror_scan_interval_seconds: int = 3600
-    # S-drift-3: D1 blob integrity verify (doc 03 §8.2, doc 05 §9.1 row D1). Rolling sample size
-    # per Beat run (NULLS-FIRST rotation). Covers the FULL set every ⌈N/K⌉ runs. A ``full``
-    # pass (CLI ``mirror scan --full``) ignores this and walks all blobs unconditionally.
+    # S-drift-3: the D1 blob integrity verify (doc 03 §8.2 / doc 05 §9.1 D1) — a daily rolling
+    # re-hash of the K least-recently-verified blobs; rotation provably covers the FULL set every
+    # ⌈N/K⌉ days (a separate full-set schedule is deliberately NOT needed; CLI --full on demand).
+    blob_verify_interval_seconds: int = 86400
+    # Rolling sample size per Beat run (NULLS-FIRST rotation). A ``full`` pass (CLI
+    # ``mirror scan --full``) ignores this and walks all blobs unconditionally.
     blob_verify_sample_size: int = 500
 
     # S8b2 backup: the default filesystem destination for durable archives + the restore-test drill

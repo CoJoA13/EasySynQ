@@ -74,6 +74,14 @@ app.conf.update(
             "task": "easysynq.mirror.scan",
             "schedule": float(_settings.mirror_scan_interval_seconds),
         },
+        # S-drift-3: the D1 blob integrity verify (doc 03 §8.2 / doc 05 §9.1 D1) — a daily
+        # rolling re-hash of the least-recently-verified blobs (BLOB_VERIFY_INTERVAL_SECONDS,
+        # default daily; sample size BLOB_VERIFY_SAMPLE_SIZE, default 500 → full coverage every
+        # ⌈N/500⌉ days by rotation).
+        "blob-verify": {
+            "task": "easysynq.blob.verify",
+            "schedule": float(_settings.blob_verify_interval_seconds),
+        },
         # S-pack-1: daily reaper for evidence-pack builds stuck in BUILDING (a hard worker kill
         # between the BUILDING commit and the build's error handler strands them) → FAILED.
         "packs-reap-stalled-builds": {
