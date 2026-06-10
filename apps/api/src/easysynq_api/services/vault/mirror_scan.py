@@ -433,10 +433,24 @@ def write_quarantine(
     for f in findings:
         if f.found_sha256 is None:
             continue
+        src = base / f.path
+        # Re-lstat (NO-FOLLOW) immediately before the copy: if the hashed regular file was raced to
+        # a FIFO/device/symlink since ``_hash_file``, ``shutil.copy2`` would follow/open it — a FIFO
+        # blocks forever under ``LOCK_MIRROR_SYNC`` (DoS) and a symlink reads out-of-tree/different
+        # bytes (Codex P2). Skip + note instead; the finding keeps the original audited digest.
+        try:
+            if not stat.S_ISREG(os.lstat(src).st_mode):
+                f.note = (f"{f.note}; " if f.note else "") + (
+                    "not quarantined: raced to a non-regular file before copy"
+                )
+                continue
+        except OSError as exc:
+            f.note = (f"{f.note}; " if f.note else "") + f"quarantine stat failed: {exc}"
+            continue
         dest = qdir / _QUARANTINE_FILES / f.path
         try:
             dest.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(base / f.path, dest)
+            shutil.copy2(src, dest, follow_symlinks=False)
             f.quarantine_path = str(dest)
             f.quarantined_sha256 = _hash_file(dest)
             if f.quarantined_sha256 != f.found_sha256:
@@ -851,9 +865,16 @@ async def persist_scan_results(
             logger.warning("mirror.scan: no organization yet; scan results not persisted")
             return False
         finished_at = _now()
-        if report.pointer == "selfheal" and report.build_name is not None:
-            # The swap-then-crash window: complete the crashed bookkeeping (the scan itself
-            # stays read-only; an attacker cannot mint registry rows without DB write access).
+        # Only complete the swap-then-crash bookkeeping when the served build root is INTACT — a
+        # POINTER finding means `.builds/<name>` is missing/replaced/symlinked, so stamping
+        # swapped_at would record a tampered/unwalkable build as a clean swap in the registry
+        # (Codex P2). The scan itself stays read-only; an attacker can't mint rows without DB write.
+        has_pointer_finding = any(f.classification == CLASS_POINTER for f in report.findings)
+        if (
+            report.pointer == "selfheal"
+            and report.build_name is not None
+            and not has_pointer_finding
+        ):
             await session.execute(
                 update(MirrorBuild)
                 .where(

@@ -291,7 +291,7 @@ def test_quarantine_copy_failure_is_noted_never_raises(
     _manifest, _msha = _make_build(build, {"a/source.pdf": b"GOOD"})
     findings = [Finding("a/source.pdf", CLASS_UNEXPECTED, _sha(b"GOOD"), _sha(b"EVIL"))]
 
-    def _boom(src: object, dst: object) -> None:
+    def _boom(src: object, dst: object, **kwargs: object) -> None:
         raise OSError("disk full")
 
     monkeypatch.setattr(scan_mod.shutil, "copy2", _boom)
@@ -299,6 +299,40 @@ def test_quarantine_copy_failure_is_noted_never_raises(
     write_quarantine(qdir, build, findings)  # must not raise
     assert findings[0].quarantine_path is None
     assert findings[0].note is not None and "quarantine copy failed" in findings[0].note
+
+
+def test_quarantine_skips_source_raced_to_nonregular(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex P2: if the hashed regular file is raced to a FIFO/symlink before the copy, the
+    re-lstat (no-follow) skips it with a note instead of letting shutil.copy2 follow/open it (a
+    FIFO would block forever under LOCK_MIRROR_SYNC). copy2 is patched to assert it's never
+    called for the raced finding. Cross-platform (os.lstat is stubbed to a FIFO mode)."""
+    import stat as _stat
+
+    mirror_root = tmp_path / "m"
+    build = mirror_root / ".builds" / "abc"
+    _make_build(build, {"a/source.pdf": b"GOOD"})
+    (build / "a" / "source.pdf").write_bytes(b"EVIL")
+    findings = [Finding("a/source.pdf", CLASS_UNEXPECTED, _sha(b"GOOD"), _sha(b"EVIL"))]
+
+    real_lstat = scan_mod.os.lstat
+
+    class _FifoMode:
+        st_mode = _stat.S_IFIFO | 0o600
+
+    def _lstat(path: object, *a: object, **k: object) -> object:
+        return _FifoMode() if str(path).endswith("source.pdf") else real_lstat(path)
+
+    def _must_not_copy(*a: object, **k: object) -> None:
+        raise AssertionError("must not copy/open a source raced to a non-regular file")
+
+    monkeypatch.setattr(scan_mod.os, "lstat", _lstat)
+    monkeypatch.setattr(scan_mod.shutil, "copy2", _must_not_copy)
+    qdir = _quarantine_dir(mirror_root, uuid.uuid4())
+    write_quarantine(qdir, build, findings)  # must not raise / must not copy
+    assert findings[0].quarantine_path is None
+    assert findings[0].note is not None and "raced to a non-regular file" in findings[0].note
 
 
 def test_manifest_deleted_is_a_missing_finding(tmp_path: Path) -> None:

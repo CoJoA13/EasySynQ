@@ -116,8 +116,13 @@ def upgrade() -> None:
     op.create_index("ix_drift_scan_kind_started_at", "drift_scan", ["kind", "started_at"])
 
     # 5. Least-privilege grants (pg_roles-guarded — the 0042 pattern). mirror_build needs DELETE
-    # for the keep-last-20 prune + UPDATE for the post-swap/self-heal ``swapped_at`` stamp;
-    # drift_scan is write-once (no UPDATE).
+    # for the keep-last-20 prune + UPDATE for the post-swap/self-heal ``swapped_at`` stamp.
+    # drift_scan is write-once: the GRANT alone doesn't enforce that, because 0010 set ALTER
+    # DEFAULT PRIVILEGES granting SELECT,INSERT,UPDATE,DELETE on future public tables to the app
+    # role — so REVOKE UPDATE,DELETE explicitly, making the insert-only summary actually immutable
+    # at the DB layer (a compromised worker / app-side SQL bug can't rewrite or delete summaries;
+    # Codex P2). Not the tamper-evident record (that's the hash-chained audit_event), but a sound
+    # least-privilege posture for an operational integrity table.
     op.execute(
         f"""
         DO $$
@@ -125,6 +130,7 @@ def upgrade() -> None:
             IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '{_APP_ROLE}') THEN
                 EXECUTE 'GRANT SELECT, INSERT, UPDATE, DELETE ON mirror_build TO {_APP_ROLE}';
                 EXECUTE 'GRANT SELECT, INSERT ON drift_scan TO {_APP_ROLE}';
+                EXECUTE 'REVOKE UPDATE, DELETE ON drift_scan FROM {_APP_ROLE}';
             END IF;
         END $$;
         """

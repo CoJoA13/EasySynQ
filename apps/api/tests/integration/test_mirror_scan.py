@@ -513,6 +513,41 @@ async def test_pointer_rollback_is_tamper(
     assert rescan_target != first_build
 
 
+async def test_selfheal_does_not_stamp_a_missing_build(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    subj: SimpleNamespace,
+    tmp_path: Path,
+) -> None:
+    """Codex P2: the swap-then-crash self-heal stamps swapped_at ONLY when the served build root
+    is intact. Simulate the crash window (NULL the stamp) AND delete the served tree → the scan
+    must record a POINTER finding and NOT stamp the build as a clean swap (registry integrity)."""
+    mirror = tmp_path / "m"
+    await _grant_release_actors(subj)
+    ha, hb = _auth(token_factory, subj.a), _auth(token_factory, subj.b)
+    await s5.drive_to_effective(app_client, ha, hb, hb, await s5.type_id("SOP"), b"SELFHEAL-V1")
+    await _sync(mirror)
+    build_name = Path(os.readlink(mirror / "current")).name
+    async with get_sessionmaker()() as s:  # re-create the swap-then-crash window
+        await s.execute(
+            text("UPDATE mirror_build SET swapped_at = NULL WHERE build_name = :b"),
+            {"b": build_name},
+        )
+        await s.commit()
+    shutil.rmtree(mirror / ".builds" / build_name)  # …and the served tree goes missing
+
+    async with get_sessionmaker()() as s:
+        report = await scan_mirror(s, mirror_path=mirror)
+        await persist_scan_results(s, report, rebuild_triggered=False, triggered_by="cli")
+    assert report.pointer == "selfheal"  # current still names the newest unswapped row
+    assert any(f.classification == "POINTER_DIVERGENT" for f in report.findings)
+    async with get_sessionmaker()() as s:
+        row = (
+            await s.execute(select(MirrorBuild).where(MirrorBuild.build_name == build_name))
+        ).scalar_one()
+    assert row.swapped_at is None  # NOT stamped — a missing tree is never recorded as a clean swap
+
+
 async def test_foreign_builds_tree_quarantined_by_move(
     app_client: AsyncClient,
     token_factory: Callable[..., str],
