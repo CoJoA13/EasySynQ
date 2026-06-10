@@ -15,7 +15,7 @@ import uuid
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query, Request, Response, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import ColumnElement, desc, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -75,6 +75,7 @@ from ..services.vault import (
 from ..services.vault import repository as vault_repo
 from ..services.vault.locks import LOCK_TTL_SECONDS
 from ..services.vault.release_scope import enrich_release_sod_scope
+from ..services.vault.review import compute_next_review_due
 from ..services.workflow import instantiate_approval
 from ..tasks.visual_diff import visual_diff as visual_diff_task
 
@@ -96,6 +97,7 @@ class MetadataUpdate(BaseModel):
     title: str | None = None
     folder_path: str | None = None
     classification: str | None = None
+    review_period_months: int | None = Field(default=None, ge=1, le=120)
 
 
 class InitUpload(BaseModel):
@@ -686,6 +688,19 @@ async def update_metadata_endpoint(
             raise ProblemException(
                 status=422, code="validation_error", title="Invalid classification"
             ) from exc
+    if "review_period_months" in body.model_fields_set:
+        # Re-load the doc row LOCKED before the recompute: an unlocked read racing a concurrent
+        # cutover would recompute from a stale current_effective_version_id and clobber the
+        # cutover's fresh next_review_due.
+        doc = await _load_document(session, caller, document_id, for_update=True)
+        doc.review_period_months = body.review_period_months
+        eff_from = None
+        if doc.current_effective_version_id is not None:
+            ver = await session.get(DocumentVersion, doc.current_effective_version_id)
+            eff_from = ver.effective_from if ver is not None else None
+        doc.next_review_due = compute_next_review_due(
+            doc.review_period_months, doc.last_reviewed_at, eff_from
+        )
     doc.updated_by = caller.id
     await session.commit()
     await session.refresh(doc)

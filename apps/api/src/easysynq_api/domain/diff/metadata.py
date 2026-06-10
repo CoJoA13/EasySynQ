@@ -4,10 +4,9 @@ Compares two versions' frozen ``metadata_snapshot`` JSONB field-by-field over th
 ``_snapshot()`` field set (``services/vault/service.py`` — the only fields actually frozen onto a
 version). Version COLUMNS (revision_label, change_significance, change_reason, version_state,
 effective window, …) are NOT diffed here — they live in the provenance header band (doc 05 §8.1:
-"Approval / provenance — listed, not diffed"). doc 05 §8.2's worked-example fields "Required
-approvers" / "Review interval" / "Read-acknowledge required" are NOT in the v1 data model (no
-``review_interval`` / approver-set is frozen on a version), so they are out of scope for the
-diff.
+"Approval / provenance — listed, not diffed"). doc 05 §8.2's worked-example "Review interval" is
+``review_period_months`` (added in S-drift-1 / migration 0045 — previously out of scope).
+doc 05 §8.2's "Required approvers" / "Read-acknowledge required" remain out of scope in v1.
 """
 
 from __future__ import annotations
@@ -27,6 +26,7 @@ SNAPSHOT_FIELDS: tuple[str, ...] = (
     "classification",
     "framework_id",
     "field_schema",
+    "review_period_months",
 )
 
 
