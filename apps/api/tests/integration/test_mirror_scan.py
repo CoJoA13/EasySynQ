@@ -391,15 +391,22 @@ async def test_unregistered_current_is_foreign_tamper(
     """Spec §11.1: with a NON-empty registry, a current target with no row is FOREIGN →
     MIRROR_TAMPER (a planted/renamed tree must never pass as the benign no-baseline); the
     pipeline still corrects and the fresh build is registered. (The TRUE empty-registry
-    no-baseline — the pre-0046 production upgrade — is the stubbed unit test: the shared
-    integration DB always carries other tests' registry rows.)"""
+    no-baseline — the pre-0046 production upgrade — is the stubbed unit test.) The non-empty
+    registry is SELF-PROVIDED: a prior build's row survives the delete below — never lean on
+    other tests' rows (the shard re-split made this test run first in a fresh-DB shard and the
+    registry was empty → benign 'none', not 'foreign')."""
     mirror = tmp_path / "m"
     await _grant_release_actors(subj)
     ha, hb = _auth(token_factory, subj.a), _auth(token_factory, subj.b)
     await s5.drive_to_effective(app_client, ha, hb, hb, await s5.type_id("SOP"), b"UPGRADE-V1")
     await _sync(mirror)
+    prior_build = Path(os.readlink(mirror / "current")).name  # this row survives the delete
+
+    await s5.drive_to_effective(app_client, ha, hb, hb, await s5.type_id("SOP"), b"UPGRADE-V2")
+    await _sync(mirror)
 
     build_name = Path(os.readlink(mirror / "current")).name
+    assert build_name != prior_build  # content changed → a distinct second build
     async with get_sessionmaker()() as s:
         await s.execute(text("DELETE FROM mirror_build WHERE build_name = :b"), {"b": build_name})
         await s.commit()
