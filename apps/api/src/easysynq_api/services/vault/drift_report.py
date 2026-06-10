@@ -106,11 +106,7 @@ async def superseded_copies(
             "identifier": r.identifier,
             "version_id": str(r.version_id),
             "revision_label": r.revision_label,
-            "version_state": (
-                r.version_state.value
-                if isinstance(r.version_state, VersionState)
-                else str(r.version_state)
-            ),
+            "version_state": r.version_state.value,
             "current_revision_label": r.current_revision_label,
             "exported": int(r.exported),
             "printed": int(r.printed),

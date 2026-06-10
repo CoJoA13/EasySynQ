@@ -140,13 +140,11 @@ async def test_superseded_copies_counts_only_non_effective_versions(
     assert after["total"]["copies"] >= before["total"]["copies"] + 2
 
 
-async def test_drift_status_shape_and_blob_rehash_leg(
-    app_client: AsyncClient,
-    token_factory: Callable[..., str],
-    subj: SimpleNamespace,
-) -> None:
+async def test_drift_status_shape_and_blob_rehash_leg(app_under_test: object) -> None:
     """After a verify run, the BLOB_REHASH leg is non-null with the summary shape; coverage and
-    headline blocks are present (run-scoped: ≥ / non-null, never absolutes on the shared DB)."""
+    headline blocks are present (run-scoped: ≥ / non-null, never absolutes on the shared DB).
+    No HTTP — but app_under_test still repoints get_sessionmaker() to the testcontainer DB
+    (the S-wf-engine engineering-patterns rule)."""
     async with get_sessionmaker()() as s:
         report = await verify_blobs(s, sample_size=1)
         assert await persist_blob_verify(s, report, triggered_by="cli") is True
