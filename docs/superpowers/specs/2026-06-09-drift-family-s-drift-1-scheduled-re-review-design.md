@@ -76,9 +76,13 @@ On `documented_information`:
 - **`event_type` enum:** `ALTER TYPE … ADD VALUE` (additive, no-op downgrade — the 0011 pattern,
   tuples sourced from the ORM `*_VALUES`): `REVIEW_CONFIRMED`, `REVIEW_OVERDUE`.
 - **Seed:** a `periodic_review` workflow definition (single stage, the 0043 `dcr_approval` seed
-  precedent): one SEQUENTIAL stage `review`, task type `PERIODIC_REVIEW`, assignee resolved at
-  instantiate to the document owner. Downgrade deletes the seed guarded `NOT EXISTS(<child instance>)`
-  (the 0023 lesson).
+  precedent): one stage `review` (mode `PARALLEL` + quorum ANY — the 0043 house shape; the engine
+  materializes a one-person SEQUENTIAL identically), task type `PERIODIC_REVIEW`, assignee resolved
+  at instantiate to the document owner via a new additive `context_users` assignee-spec key.
+  Downgrade deletes the seed guarded `NOT EXISTS(<child instance>)` (the 0023 lesson).
+  ⚠ The org lookup must NOT copy 0043's `WHERE short_code='DEFAULT'` `scalar_one()` — an
+  operational install renames the short_code at setup G-E (this live box: `AHT`), so 0045 falls
+  back to the D1 single-org row (never skip-if-absent: a missing seed = the sweep 500s daily).
 - **API representation:** **`review_period_months` (int, 1–120, or null)** in all payloads — the
   column and the API field are the same unit, no conversion layer.
 - **`metadata_snapshot`:** `review_period` is Snapshot-✔ (doc 04 §6.1) — add it to the shared
@@ -126,7 +130,9 @@ additive). The projection lives in ONE domain function used by every serializer 
 
 `easysynq.documents.review_sweep`, **daily** (86400 s) Beat entry — the retention-sweep module shape
 (fresh disposed async engine, `asyncio.run`, registered in `tasks/__init__.py` + the `app.tasks`
-membership unit test).
+membership unit test), **single-flighted via a session advisory lock** (`LOCK_REVIEW_SWEEP`,
+skip-if-held — the mirror-sync posture; no schema constraint stops two open instances per subject,
+and acks-late re-delivery makes concurrent runs real).
 
 Per run, over docs where `kind = DOCUMENT` AND `current_state = Effective` AND
 `next_review_due IS NOT NULL`:
@@ -142,10 +148,12 @@ Per run, over docs where `kind = DOCUMENT` AND `current_state = Effective` AND
    `GET /documents/{id}/audit-events` surfaces it — the S-ing-5 precedent). ⚠ Do **NOT** flip the
    task to `ESCALATED`: `engine.decide()` accepts only `PENDING` tasks (engine.py:390), so an
    ESCALATED task would be **undecidable** — and widening the shared engine guard is off-limits (the
-   keep-the-welded-path rule). Idempotence anchor: skip if a `REVIEW_OVERDUE` event for this
-   `object_id` already exists with `occurred_at > instance.started_at` (the `(object_id)` audit index
-   serves this). The overdue *signal* to humans is the derived `review_state = overdue` + the task's
-   own `due_at` — both already serializable; email stays best-effort/out of scope.
+   keep-the-welded-path rule). Idempotence anchor: stamp the workflow-instance id into the event's
+   `after` and skip if a `REVIEW_OVERDUE` for this `object_id` with that `after.instance_id` exists
+   — once per CYCLE (a new cycle's instance re-arms it), and clock-skew-proof (an
+   `occurred_at`-vs-`started_at` comparison would race the PG clock). The overdue *signal* to humans
+   is the derived `review_state = overdue` + the task's own `due_at` — both already serializable;
+   email stays best-effort/out of scope.
 3. **Re-nag semantics (deliberate):** a `changes_requested` decision (§5) closes the instance without
    resetting the clock — if the owner then checks the doc out, `current_state` leaves `Effective` and
    the sweep skips it (the state filter); if they do nothing, the next sweep opens a fresh task. A doc
@@ -157,8 +165,11 @@ Per run, over docs where `kind = DOCUMENT` AND `current_state = Effective` AND
 ## 5. The review decision — `POST /tasks/{id}/decision`, `PERIODIC_REVIEW` dispatch
 
 The existing decision endpoint gains a `PERIODIC_REVIEW` subject handler (the S-dcr-4 dispatch
-precedent; the DOCUMENT and DCR and CAPA paths stay byte-identical). Membership = the existing
-assignee/candidate-pool semantics.
+precedent; the DOCUMENT and DCR and CAPA paths stay byte-identical). Membership follows the FULL
+sibling posture (`_assert_dcr_approver`/`_assert_capa_approver`): non-membership **404-collapses**
+(never a 403 that leaks another user's task), and authority is re-checked LIVE — the caller must be
+the document's CURRENT `owner_user_id`, not merely in the pool frozen at sweep time (the
+`context_users` analogue of the siblings' live role re-check).
 
 | Outcome | Doc 04 §9.2 row | Effect (one transaction) |
 |---|---|---|
@@ -189,15 +200,17 @@ Other outcome kinds (`approve`, `reject`, `verify`, `acknowledge`) → 422 for t
 - **No auto-DCR** on `changes_requested` (the owner raises it; deep-link prefill is S-web-8's call).
 - **No grace→Finding policy** (doc 04 §9.1 marks it optional).
 - **No org-config** for the default period or lead window (constants; `system_config` later is additive).
-- **No email/notification engine work** (in-app task + ESCALATED state only).
+- **No email/notification engine work** (the in-app task + the derived `overdue` state + the
+  `REVIEW_OVERDUE` audit are the only signals; task state is never flipped — §4.2).
 - **No backfill** of existing docs, **no import-path default** (§0.4, §3).
 - **No currency/overdue *report* endpoint** (doc 13's saved-search/report leg stays in the v1.x
   reporting family; the checklist flag + serializer fields are this slice's reporting surface).
 
 ## 8. Testing & verification
 
-- **Unit:** the recompute rule + `review_state` projection (boundary dates, org-tz, null anchors);
-  T2 gate 422; serializer months↔interval conversion; sweep task registered in `app.tasks`.
+- **Unit:** the recompute rule (max-anchor, org-tz non-identity, null anchors, `add_months`
+  day-clamping) + the `review_state` projection boundaries; sweep task registered in `app.tasks`.
+  (The T2 leg is the auto-default — integration-tested; periods are plain ints, no conversion.)
 - **Integration (Linux-CI-only on this box):** migration round-trip via `/check-migrations` locally;
   sweep creates exactly one instance/task per due doc and is idempotent on re-run; escalation writes
   `REVIEW_OVERDUE` once; `complete` writes the `review_confirmed` signature bound to the Effective version's digest +

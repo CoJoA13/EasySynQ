@@ -39,9 +39,18 @@ All `uv run …` commands run from `apps/api/`.
   `review_period_months INTEGER` (spec §2 amendment).
 - `AuditEvent.scope_ref` exists (`db/models/audit_event.py:77`); `AuditObjectType.document` is the
   vault's object type.
-- The 0043 seed recipe (`migrations/versions/0043_dcr_approval.py`) resolves the org via
-  `SELECT id FROM organization WHERE short_code = 'DEFAULT'` — it ran clean on this live install and
-  CI; copy it verbatim.
+- ⚠ The 0043 seed recipe's org lookup (`WHERE short_code = 'DEFAULT'` + `scalar_one()`) **must NOT
+  be copied**: the setup G-E gate RENAMES the single org's short_code in place and forbids
+  `'DEFAULT'` (`services/setup/service.py:363,380`); the live install's only org is `AHT`
+  (renamed 2026-06-07 — AFTER 0043/0044 ran, which is the only reason they "ran clean"). A verbatim
+  copy makes 0045 abort the live upgrade with `NoResultFound` (the 0018/0021 migrations document
+  this exact trap). Use the resilient single-org lookup in Task 1 Step 3 — and never the
+  skip-if-absent posture (a skipped seed = the sweep 500s daily).
+- The 4-lens pass confirmed: `Decision`/`DecisionResult` in the contract are
+  `additionalProperties: false` with outcome enum `[approve, changes_requested, reject]` — without
+  the Task 8 edits the new `complete` outcome and the handler's added response keys are
+  contract-violations, and `domain/diff/metadata.py::SNAPSHOT_FIELDS` is a FIXED tuple — the
+  metadata diff shows `review_period_months` only if Task 4 appends it there.
 
 ---
 
@@ -167,10 +176,15 @@ def upgrade() -> None:
         postgresql_where=sa.text("next_review_due IS NOT NULL"),
     )
 
-    # 3. The periodic_review definition (the 0043 recipe).
+    # 3. The periodic_review definition (the 0043 stage/seed shape, but NOT its org lookup:
+    # an OPERATIONAL install renames short_code away from 'DEFAULT' at setup G-E — the 0018/0021
+    # trap; this live install's org is 'AHT'. D1 = single-org, so fall back to the only row.
+    # NEVER skip-if-absent: a missing seed makes the daily sweep raise 500 forever.
     org_id = bind.execute(
         sa.text("SELECT id FROM organization WHERE short_code = 'DEFAULT'")
-    ).scalar_one()
+    ).scalar_one_or_none()
+    if org_id is None:
+        org_id = bind.execute(sa.text("SELECT id FROM organization")).scalar_one()
     definition_t = sa.table(
         "workflow_definition",
         sa.column("org_id", postgresql.UUID(as_uuid=True)),
@@ -357,6 +371,18 @@ def test_review_state_projection_boundaries() -> None:
     assert review_state(due, due - datetime.timedelta(days=1)) == "due_soon"
     assert review_state(due, due) == "overdue"  # boundary: the due day itself
     assert review_state(due, due + datetime.timedelta(days=30)) == "overdue"
+
+
+def test_compute_converts_anchor_to_org_timezone(monkeypatch) -> None:
+    # The org-tz conversion must be load-bearing, not identity (the default tz is UTC, so without
+    # this test deleting .astimezone(_org_tz()) passes the whole suite — 4-lens F9).
+    import easysynq_api.services.vault.review as review_mod
+    from zoneinfo import ZoneInfo
+
+    monkeypatch.setattr(review_mod, "_org_tz", lambda: ZoneInfo("Pacific/Auckland"))
+    # 23:00 UTC Jan 10 is already Jan 11 in Auckland (UTC+13 in January) → anchors on Jan 11.
+    eff = datetime.datetime(2026, 1, 10, 23, 0, tzinfo=UTC)
+    assert review_mod.compute_next_review_due(12, None, eff) == datetime.date(2027, 1, 11)
 ```
 
 - [ ] **Step 2: Run to verify failure**
@@ -626,7 +652,10 @@ async def test_patch_review_period_recomputes_and_null_clears(
     ...  # on a released doc: PATCH {"review_period_months": 12} → 200,
     # next_review_due == effective_from + 12 months;
     # PATCH {"review_period_months": None} → next_review_due None, review_state None;
-    # PATCH {"review_period_months": 0} → 422 (ge=1)
+    # PATCH {"review_period_months": 0} → 422 (ge=1);
+    # ⚠ then re-set 12 and PATCH {"title": "t2"} (field OMITTED) → review_period_months STILL 12,
+    # next_review_due unchanged — the omitted-vs-explicit-null distinction (the S-web-7d trap,
+    # 4-lens F3: an unconditional assignment without model_fields_set passes the other 3 cases).
 
 
 async def test_submit_review_autodefaults_null_period(app_client, token_factory, subj) -> None:
@@ -637,6 +666,12 @@ async def test_submit_review_autodefaults_null_period(app_client, token_factory,
 
 Write the four tests FULLY (no `...` in the real file) — model every HTTP call on
 `test_lifecycle.py`'s existing sequences.
+
+Also (4-lens F5): in the EXISTING S-ing-5 import-commit integration test (grep
+`tests/integration` for the commit test that asserts a committed `documented_information` row),
+add three assertions on the committed doc: `review_period_months is None`,
+`next_review_due is None` — pinning the spec §3 import-baseline NULL exemption (nothing pins it
+today; a future ORM/server default would silently schedule every imported legacy doc).
 
 - [ ] **Step 2: Verify the new tests are collected (cannot execute here)**
 
@@ -696,6 +731,10 @@ In `update_metadata_endpoint`, after the classification block (⚠ sent-null vs 
 
 ```python
     if "review_period_months" in body.model_fields_set:
+        # Re-load the doc row LOCKED before the recompute (4-lens F4): an unlocked read racing a
+        # concurrent cutover would recompute from a stale current_effective_version_id and clobber
+        # the cutover's fresh next_review_due.
+        doc = await _load_document(session, caller, document_id, for_update=True)
         doc.review_period_months = body.review_period_months
         eff_from = None
         if doc.current_effective_version_id is not None:
@@ -707,7 +746,16 @@ In `update_metadata_endpoint`, after the classification block (⚠ sent-null vs 
 ```
 
 with `from ..services.vault.review import compute_next_review_due` added to the imports (match the
-file's existing relative-import style) and `DocumentVersion` imported if not already.
+file's existing relative-import style) and `DocumentVersion` imported if not already. (Verify
+`_load_document`'s `for_update` kwarg name at `api/documents.py:397-414` — it exists per the 4-lens
+pass; adapt if the signature differs.)
+
+(e) `domain/diff/metadata.py` — **append `"review_period_months"` to the `SNAPSHOT_FIELDS` tuple**
+(line ~21-30) and update the module docstring (it currently says review interval is "out of scope
+for the diff" — stale once 0045 lands). Without this the metadata redline NEVER shows the field
+(`diff_metadata` iterates ONLY that fixed tuple — 4-lens F4; the spec's "falls out for free" was
+wrong). Extend the existing metadata-diff unit test with one case: old snapshot lacking the key →
+new snapshot `24` diffs as `None → 24`; `24 → 12` diffs as a change.
 
 - [ ] **Step 4: Static checks**
 
@@ -720,8 +768,9 @@ Expected: clean.
 git add apps/api/src/easysynq_api/services/vault/service.py \
         apps/api/src/easysynq_api/services/vault/lifecycle.py \
         apps/api/src/easysynq_api/api/documents.py \
-        apps/api/tests/integration/test_periodic_review.py
-git commit -m "feat(s-drift-1): review-period write paths — create default, T2 auto-default, release recompute, PATCH"
+        apps/api/src/easysynq_api/domain/diff/metadata.py \
+        apps/api/tests/
+git commit -m "feat(s-drift-1): review-period write paths — create default, T2 auto-default, release recompute, PATCH, diff field"
 ```
 
 ---
@@ -763,12 +812,23 @@ Expected: FAIL (task name not in `app.tasks`).
 
 - [ ] **Step 3: Implement the sweep service function**
 
-Append to `services/vault/review.py` (new imports at top: `uuid`, `select`/`update` from
+First add the lock id to `services/common/pg_locks.py` (next to the existing `LOCK_*` constants,
+following their numbering scheme):
+
+```python
+LOCK_REVIEW_SWEEP = 7710006  # adjust to the file's actual id sequence — pick the next free id
+```
+
+Then append to `services/vault/review.py` (new imports at top: `logging` → module
+`logger = logging.getLogger("easysynq.documents.review")`, `uuid`, `select`/`update` from
 sqlalchemy, the models — `AuditEvent, ActorType, AuditObjectType, DocumentCurrentState,
 DocumentKind, DocumentedInformation, EventType, Task, TaskState, WorkflowInstance,
 WorkflowSubjectType`, `AsyncSession`, `from ..workflow import engine as wf_engine`,
-`from ..workflow import repository as wf_repo`; copy the `_now`/`_rid` helpers exactly from
-`services/records/service.py` — `_rid` reads the request-id contextvar and is None-safe in Beat):
+`from ..workflow import repository as wf_repo`, the advisory-lock helper + `LOCK_REVIEW_SWEEP`
+from `..common.pg_locks` — ⚠ copy the EXACT try-lock helper name and skip-if-held call shape from
+`tasks/mirror.py:35-37` (the mirror-sync single-flight precedent); copy the `_now`/`_rid` helpers
+exactly from `services/records/service.py` — `_rid` reads the request-id contextvar and is
+None-safe in Beat):
 
 ```python
 _TERMINAL_INSTANCE_STATES = (wf_engine.COMPLETED, wf_engine.REJECTED, wf_engine.NEEDS_ATTENTION)
@@ -779,9 +839,21 @@ async def sweep_reviews(session: AsyncSession) -> dict[str, int]:
     """The daily D5 sweep (doc 04 §9.1). Pass 1: open ONE periodic_review instance+task per
     Effective doc inside the lead window (idempotent — the open-instance check is the WHERE NOT
     EXISTS guard; NEEDS_ATTENTION counts as terminal so a failed-closed instance may be retried,
-    the CAPA precedent). Pass 2: once-per-cycle REVIEW_OVERDUE audit for past-due open tasks —
-    NEVER flips task state (decide() accepts only PENDING; engine.py:390). One commit; re-run and
-    acks-late safe."""
+    the CAPA precedent — accepted: a persistent fail-closed mode would grow one NEEDS_ATTENTION
+    row per day, unreachable today since owner_user_id is NOT NULL). Pass 2: once-per-cycle
+    REVIEW_OVERDUE audit for past-due open tasks — NEVER flips task state (decide() accepts only
+    PENDING; engine.py:390). Single-flight via the session-scoped advisory lock (no schema
+    constraint stops two open instances per subject — 4-lens F1; acks-late re-delivery past the
+    Redis visibility timeout makes concurrent runs real, the mirror.sync posture). One commit;
+    accepted benign races: a stray REVIEW_OVERDUE for a just-decided task, and a task created from
+    a snapshot the owner confirmed seconds earlier — both self-heal next cycle."""
+    if not await pg_try_advisory_lock(session, LOCK_REVIEW_SWEEP):
+        return {"tasks_created": 0, "escalated": 0, "skipped_lock_held": 1}
+
+    # Resolve the definition ONCE; a mis-seeded org must degrade to a logged no-op, not a
+    # 500-shaped Beat failure every day that also kills the escalation pass (4-lens L2-F2).
+    # (Use the org of the first due doc — D1 single-org; if no docs are due, pass 1 is a no-op
+    # and the definition is only needed there.)
     today = today_org()
     horizon = today + datetime.timedelta(days=REVIEW_LEAD_DAYS)
     created = escalated = 0
@@ -800,6 +872,14 @@ async def sweep_reviews(session: AsyncSession) -> dict[str, int]:
         .scalars()
         .all()
     )
+    if docs and (
+        await wf_repo.effective_definition(
+            session, docs[0].org_id, _DEF_KEY, WorkflowSubjectType.PERIODIC_REVIEW
+        )
+        is None
+    ):
+        logger.error("review_sweep: no effective periodic_review definition — seed missing")
+        docs = []
     for doc in docs:
         if (
             await wf_repo.find_nonterminal_instance(
@@ -822,8 +902,10 @@ async def sweep_reviews(session: AsyncSession) -> dict[str, int]:
             actor=None,
         )
         await session.flush()
+        # Org-local midnight (NOT UTC): review_state flips overdue at org-tz midnight, so due_at
+        # must anchor on the same instant or the two signals disagree by the UTC offset (4-lens F6).
         due_at = datetime.datetime.combine(
-            doc.next_review_due, datetime.time(0, 0), tzinfo=datetime.UTC
+            doc.next_review_due, datetime.time(0, 0), tzinfo=_org_tz()
         )
         await session.execute(
             update(Task).where(Task.instance_id == instance.id).values(due_at=due_at)
@@ -843,6 +925,10 @@ async def sweep_reviews(session: AsyncSession) -> dict[str, int]:
         )
     ).all()
     for task, instance in overdue_rows:
+        # Dedup anchored on the INSTANCE id stamped into `after` (one escalation per review
+        # CYCLE — a fresh cycle's new instance id re-arms it), NOT on occurred_at vs
+        # instance.started_at: that compared the Python clock against the PG clock and a skewed
+        # box could double-write (4-lens L2-F3 nit).
         already = (
             await session.execute(
                 select(AuditEvent.id)
@@ -850,7 +936,7 @@ async def sweep_reviews(session: AsyncSession) -> dict[str, int]:
                     AuditEvent.object_type == AuditObjectType.document,
                     AuditEvent.object_id == instance.subject_id,
                     AuditEvent.event_type == EventType.REVIEW_OVERDUE,
-                    AuditEvent.occurred_at >= instance.started_at,
+                    AuditEvent.after["instance_id"].astext == str(instance.id),
                 )
                 .limit(1)
             )
@@ -868,7 +954,10 @@ async def sweep_reviews(session: AsyncSession) -> dict[str, int]:
                 object_type=AuditObjectType.document,
                 object_id=instance.subject_id,
                 scope_ref=doc_row.identifier if doc_row is not None else None,
-                after={"due_at": task.due_at.isoformat() if task.due_at else None},
+                after={
+                    "instance_id": str(instance.id),
+                    "due_at": task.due_at.isoformat() if task.due_at else None,
+                },
                 request_id=_rid(),
             )
         )
@@ -942,22 +1031,33 @@ doc/instance, never global counts):
 
 ```python
 async def test_sweep_creates_one_task_idempotently(app_client, token_factory, subj) -> None:
-    ...  # release a doc; UPDATE its next_review_due = today (direct session);
+    ...  # release a doc; UPDATE its next_review_due = today + 30d EXACTLY (direct session — the
+    # horizon boundary, 4-lens F10: a `<` vs `<=` slip fails here);
     # await sweep_reviews(session) → instance+task exist for THIS doc
     # (find by subject_id == doc id; task.assignee_user_id == the owner's app_user.id;
-    #  task.type == PERIODIC_REVIEW; task.due_at.date() == next_review_due);
+    #  task.type == PERIODIC_REVIEW; task.state == PENDING — the load-bearing assertion: a
+    #  fail-closed NEEDS_ATTENTION instance or a typo'd-stage sentinel materializes NO task, and
+    #  ONLY this assertion catches it (4-lens Q3); task.due_at.date() == next_review_due);
     # await sweep_reviews(session) AGAIN → still exactly ONE non-terminal instance for this doc
 
 
 async def test_sweep_skips_non_effective_and_unscheduled(app_client, token_factory, subj) -> None:
-    ...  # a Draft doc with next_review_due set directly + an Effective doc with NULL period:
-    # sweep → NO instance for either (subject-scoped lookups)
+    ...  # (4-lens F4 — both legs must be NON-vacuous:)
+    # Draft leg: a Draft doc with next_review_due = today set DIRECTLY (inside the horizon —
+    #   otherwise the skip proves nothing); sweep → no instance for it.
+    # Unscheduled leg: a RELEASED doc, then PATCH {"review_period_months": null} → assert
+    #   next_review_due is None FIRST; sweep → no instance for it (clearing via the real API
+    #   path, not a column poke that leaves next_review_due behind).
 
 
 async def test_sweep_escalates_overdue_once(app_client, token_factory, subj) -> None:
     ...  # released doc; next_review_due = today - 40d (direct UPDATE); sweep → task created
-    # AND one REVIEW_OVERDUE audit_event (object_id == doc id, scope_ref == identifier);
-    # sweep again → STILL exactly one REVIEW_OVERDUE for this doc id
+    # AND one REVIEW_OVERDUE audit_event (object_id == doc id, scope_ref == identifier,
+    # after.instance_id == the instance id); sweep again → STILL exactly one REVIEW_OVERDUE
+    # for this doc id.
+    # Negative (4-lens F7 — pins the subject_type filter): backdate THIS test's own
+    # document-APPROVAL task due_at (from the release flow) → sweep → still zero REVIEW_OVERDUE
+    # rows for any OTHER doc id this test created and no new row for the approval task's doc.
 ```
 
 Write fully; use the `app_under_test`-backed `get_sessionmaker()` pattern from
@@ -971,12 +1071,13 @@ Run: `uv run ruff check . && uv run ruff format --check . && uv run mypy src` �
 
 ```bash
 git add apps/api/src/easysynq_api/services/vault/review.py \
+        apps/api/src/easysynq_api/services/common/pg_locks.py \
         apps/api/src/easysynq_api/tasks/review.py \
         apps/api/src/easysynq_api/tasks/__init__.py \
         apps/api/src/easysynq_api/tasks/app.py \
         apps/api/tests/unit/test_review_task_registration.py \
         apps/api/tests/integration/test_periodic_review.py
-git commit -m "feat(s-drift-1): daily review sweep — lead-window task creation + once-per-cycle overdue audit"
+git commit -m "feat(s-drift-1): daily review sweep — single-flight, lead-window tasks, once-per-cycle overdue audit"
 ```
 
 ---
@@ -1001,28 +1102,49 @@ Append to `tests/integration/test_periodic_review.py`:
 
 ```python
 async def test_decide_complete_confirms_review(app_client, token_factory, subj) -> None:
-    ...  # release as subj.a (the owner); sweep → task; decide as the OWNER:
+    ...  # release as subj.a (the owner); ⚠ BACKDATE the Effective version's effective_from by
+    # ~400 days AND set next_review_due = today (direct UPDATEs, run-scoped) — otherwise
+    # effective_from ≈ now and the anchor wiring is indistinguishable (4-lens F2: a handler
+    # passing (None, eff_from) or even an unguarded `if next_review_due is None` cutover would
+    # pass). Sweep → task; decide as the OWNER:
     # POST /tasks/{tid}/decision {"outcome": "complete"} → 200,
     # body["current_state"] == "COMPLETED", body["next_review_due"] is the reset date.
     # Assert (run-scoped): one signature_event meaning=review_confirmed,
     # signed_object_type=document_version, signed_object_id == effective version id,
     # content_digest == that version's source_blob_sha256;
     # one REVIEW_CONFIRMED audit (object_id == doc id, scope_ref == identifier);
-    # doc.last_reviewed_at set; doc.next_review_due == today_org() + period months;
+    # doc.last_reviewed_at set; next_review_due == add_months(GET-back last_reviewed_at's date,
+    # 24) (compute the expectation from the response, not a re-read of the clock — midnight-safe)
+    # AND != backdated effective_from + 24 months (the anchor proof);
     # re-run sweep → NO new instance (clock reset, doc not due).
 
 
 async def test_decide_changes_requested_keeps_clock_and_renag(
     app_client, token_factory, subj
 ) -> None:
-    ...  # released+due doc; sweep → task; owner decides changes_requested → 200,
-    # instance current_state == "REJECTED"; doc.next_review_due UNCHANGED;
-    # NO review_confirmed signature for this doc; sweep again → a NEW open instance
-    # (the deliberate re-nag while the doc stays Effective and due).
+    ...  # released+due doc (next_review_due = today - 40d); sweep → task; owner decides
+    # changes_requested → 200, instance current_state == "REJECTED";
+    # doc.next_review_due UNCHANGED; NO review_confirmed signature for this doc;
+    # sweep again → a NEW open instance (the deliberate re-nag while Effective and due)
+    # AND a SECOND REVIEW_OVERDUE audit for this doc (after.instance_id == the NEW instance id)
+    # — pins once-per-CYCLE vs once-EVER (4-lens F8).
+
+
+async def test_decide_obsoleted_doc_409_keeps_task_pending(
+    app_client, token_factory, subj
+) -> None:
+    ...  # (4-lens F1 — the rollback path is load-bearing:) released+due doc; sweep → task;
+    # POST /documents/{did}/obsolete (T11 nulls current_effective_version_id);
+    # owner decides complete → 409; assert the task is STILL PENDING, ZERO review_confirmed
+    # signatures for the doc, instance still non-terminal (the engine rows rolled back with the
+    # txn); then owner decides changes_requested → 200 / REJECTED (the task wasn't poisoned).
 
 
 async def test_decide_rejects_non_owner_and_bad_outcomes(app_client, token_factory, subj) -> None:
-    ...  # subj.b (not the owner, no candidate membership) decides → 403;
+    ...  # subj.b (not the owner, no candidate membership) decides → 404 (the 404-COLLAPSE —
+    # never a 403 leak; the _assert_dcr_approver posture);
+    # reassign owner_user_id to subj.b directly, then subj.a (still in the frozen pool)
+    # decides → 404 (the LIVE-authority re-check; restore the owner after);
     # owner decides {"outcome": "approve"} → 422 (whitelist);
     # owner decides complete twice with the same Idempotency-Key header → second is a
     # 200 replay with NO second signature_event (count review_confirmed sigs for this doc == 1).
@@ -1060,11 +1182,22 @@ async def decide_periodic_review(
     instance = ...  # lock instance FOR UPDATE — the exact helper decide_dcr_approval uses
     if instance is None or instance.org_id != actor.org_id:
         raise ProblemException(status=404, code="not_found", title="Task not found")
+    # 404-COLLAPSE non-membership (the _assert_dcr_approver/_assert_capa_approver posture — never
+    # leak another user's task existence with a 403; 4-lens F2) AND re-check LIVE authority: the
+    # pool was frozen at sweep time, so an owner reassigned since must not confirm — the live
+    # owner check is the context_users analogue of the siblings' live users_with_roles re-check.
     pool = [str(u) for u in (task.candidate_pool or [])]
     if task.assignee_user_id != actor.id and str(actor.id) not in pool:
-        raise ProblemException(
-            status=403, code="forbidden", title="Not a candidate for this review task"
+        raise ProblemException(status=404, code="not_found", title="Task not found")
+    doc = (
+        await session.execute(
+            select(DocumentedInformation)
+            .where(DocumentedInformation.id == instance.subject_id)
+            .with_for_update()
         )
+    ).scalar_one_or_none()
+    if doc is None or doc.owner_user_id != actor.id:
+        raise ProblemException(status=404, code="not_found", title="Task not found")
     if outcome not in _ALLOWED_REVIEW_OUTCOMES:
         raise ProblemException(
             status=422,
@@ -1081,19 +1214,16 @@ async def decide_periodic_review(
         idempotency_key=idempotency_key,
         _commit=False,
     )
-    if result.get("replayed") or result.get("stage_state") == "ALREADY_SATISFIED":
+    if result.get("replayed"):
+        # Response-parity on replay (the DCR _enrich_replay recipe — 4-lens L1-F3): if the
+        # instance is COMPLETED, re-derive document_id / next_review_due / the latest
+        # review_confirmed signature id for this doc so a retried request's body matches the
+        # original. No rows are added either way.
         await session.commit()
         return result
 
     if result.get("current_state") == wf_engine.COMPLETED and outcome == "complete":
-        doc = (
-            await session.execute(
-                select(DocumentedInformation)
-                .where(DocumentedInformation.id == instance.subject_id)
-                .with_for_update()
-            )
-        ).scalar_one_or_none()
-        if doc is None or doc.current_effective_version_id is None:
+        if doc.current_effective_version_id is None:
             # raising here rolls the whole txn back (engine rows included, _commit=False) —
             # the task stays PENDING and can be re-decided once the doc's state settles.
             raise ProblemException(
@@ -1209,10 +1339,14 @@ async def test_document_serializer_carries_review_fields(app_client, token_facto
     # the LIST endpoint row for THIS doc id carries the same four fields.
 ```
 
-Extend the existing checklist integration test file with one run-scoped test: release a doc mapped
-to a known clause, set its `next_review_due` past, call `GET /reports/compliance-checklist`, find
-THIS clause's row → `overdue_review is True` and `rollup["overdue_review"] >= 1`; reset the date to
-future → row flips back to `False`. (Delta-style: only assert on the clause this test mapped.)
+Extend the existing checklist integration test file (`tests/integration/test_reports.py`) with one
+run-scoped test: release a doc mapped to a **★ clause via `_clause_by_number` — use `8.4`** (⚠ NOT
+the lifecycle helpers' default `_first_clause_id`, which maps clause `"10"` — not a ★ row, so the
+row lookup would find nothing; 4-lens F6), set its `next_review_due` past, call
+`GET /reports/compliance-checklist`, find THIS clause's row → `overdue_review is True` and
+`rollup["overdue_review"] >= 1`; reset the date to future → row flips back to `False`. (Delta-style:
+only assert on the clause this test mapped; add a comment that the flip-back assertion relies on no
+other test backdating `next_review_due` on a ★-mapped doc.)
 
 - [ ] **Step 2: Implement the serializer fields**
 
@@ -1318,6 +1452,19 @@ git commit -m "feat(s-drift-1): read surface — review fields on documents + ch
 `PERIODIC_REVIEW` subjects the accepted outcomes are `complete` ("no change needed" — emits the
 `review_confirmed` signature and resets `next_review_due`) and `changes_requested`.
 
+(f) ⚠ BLOCKING (4-lens F3 — both schemas are `additionalProperties: false`, so without these edits
+the new outcome/keys are contract violations):
+- `Decision` (~line 5239): add `complete` to the `outcome` enum
+  (`[approve, changes_requested, reject, complete]`).
+- `DecisionResult` (~line 5271): add `complete` to ITS `outcome` enum, and add three nullable
+  properties the PERIODIC_REVIEW handler returns:
+
+```yaml
+        document_id: { type: [string, "null"], format: uuid }
+        next_review_due: { type: [string, "null"], format: date }
+        signature_event_id: { type: [string, "null"], format: uuid }
+```
+
 Match the file's exact YAML style (2-space, inline `{ }` where neighbors use it).
 
 - [ ] **Step 2: Lint + commit**
@@ -1345,20 +1492,29 @@ git commit -m "feat(s-drift-1): contract — review fields, MetadataUpdate, chec
 - `uv run pytest tests/integration/test_periodic_review.py --collect-only -q` → collects
 (Full unit + integration suites run in Linux CI on the PR.)
 
-- [ ] **Step 2: Docs**
+- [ ] **Step 2: Docs (the house habit — prior migration slices updated the section docs in-PR)**
 
 - `docs/slice-history.md`: add the S-drift-1 entry (family kickoff; mig 0045; the
   context_users engine seam; the INT-months psycopg amendment; the T2 auto-default; the re-nag
   semantics; checklist overdue leg closed).
 - `CLAUDE.md` Current status: drift family started, S-drift-1 ✅ pending merge; **migration head
   `0045` (next `0046`)**.
+- `docs/14-data-model.md`: update the three review rows (~line 234-236) — `review_period_months`
+  int (NOT interval — the psycopg months trap), `next_review_due` date STORED, `review_state`
+  derived-never-stored — and the index row (~line 596): single-column partial index on
+  `next_review_due` (the fork §0.5 "deliberate, noted divergence" gets noted WHERE the original
+  claim lives).
+- `docs/16-roadmap.md`: the §4 "Drift detection" row gains a 🟡-partial marker naming S-drift-1
+  (D5 ✅); the "Migration head is `0044`" line (~155) → `0045`.
+- `docs/dev-workflow.md`: one periodic-review row in the per-feature API quick-reference (the
+  S-dcr-5 precedent).
 - Spec header: leave status as approved (it is).
 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add docs/slice-history.md CLAUDE.md
-git commit -m "docs(s-drift-1): slice history + current status (mig head 0045)"
+git add docs/slice-history.md CLAUDE.md docs/14-data-model.md docs/16-roadmap.md docs/dev-workflow.md
+git commit -m "docs(s-drift-1): slice history + section-doc updates (mig head 0045)"
 ```
 
 ---
