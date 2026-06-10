@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 
+import pytest
 from botocore.exceptions import ClientError, EndpointConnectionError
 
 from easysynq_api.services.vault.blob_verify import (
@@ -136,3 +137,76 @@ def test_sample_stmt_orders_pinned_then_nulls_then_oldest() -> None:
     assert "LIMIT" in sql
     full_sql = str(_sample_stmt(limit=None).compile(dialect=postgresql.dialect()))
     assert "LIMIT" not in full_sql
+
+
+class _FakePruneSession:
+    """Stands in for AsyncSession in _prune_disposed_missing: every execute() records the call
+    and reports the intersection of the queried shas with the configured present set."""
+
+    def __init__(self, present: set[str]) -> None:
+        self._present = present
+        self.executed: list[list[str]] = []
+
+    async def execute(self, stmt: object) -> object:
+        # The IN-list rides the compiled params as ONE expanding bind whose value is the list.
+        params = stmt.compile().params  # type: ignore[attr-defined]
+        shas: list[str] = []
+        for v in params.values():
+            if isinstance(v, str):
+                shas.append(v)
+            elif isinstance(v, (list, tuple)):
+                shas.extend(x for x in v if isinstance(x, str))
+        self.executed.append(shas)
+        hits = [(s,) for s in shas if s in self._present]
+
+        class _Res:
+            def all(self) -> list[tuple[str]]:
+                return hits
+
+        return _Res()
+
+
+async def test_prune_drops_only_disposed_missing_and_chunks_the_lookup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A disposal racing the scan (row gone at persist) is pruned; a REAL broken invariant (row
+    present) is kept; non-MISSING findings are never touched; and the present-row lookup is
+    CHUNKED (a vanished bucket classifies EVERY blob OBJECT_MISSING — an unchunked IN-list would
+    blow the 65,535-bind cap during exactly that catastrophe)."""
+    import easysynq_api.services.vault.blob_verify as bv
+
+    findings = [
+        bv.BlobFinding("aa", _B, "k1", 1, CLASS_MISSING),  # row gone -> pruned
+        bv.BlobFinding("bb", _B, "k2", 1, CLASS_MISSING),  # row present -> KEPT (invariant break)
+        bv.BlobFinding("cc", _B, "k3", 1, CLASS_MISMATCH, found_sha256="zz"),  # untouched
+    ]
+    report = build_report(findings=findings, ok_shas=["dd"], total_blobs=4, sample_limit=None)
+    session = _FakePruneSession(present={"bb"})
+
+    monkeypatch.setattr(bv, "_STAMP_CHUNK", 1)  # force chunking: 2 MISSING shas -> 2 queries
+    pruned = await bv._prune_disposed_missing(session, report)  # type: ignore[arg-type]
+
+    assert [f.sha256 for f in pruned.findings] == ["bb", "cc"]
+    assert pruned.status == "DIVERGENT"  # still divergent (bb + cc remain)
+    assert pruned.ok_shas == ["dd"] and pruned.scan_id == report.scan_id
+    assert len(session.executed) == 2  # chunked lookup
+    assert sorted(sha for chunk in session.executed for sha in chunk) == ["aa", "bb"]
+
+
+async def test_prune_keeps_failed_status_and_goes_clean_when_all_pruned() -> None:
+    """FAILED survives the prune (the error field drives status); an all-pruned DIVERGENT report
+    becomes CLEAN (nothing real remains to alarm)."""
+    import easysynq_api.services.vault.blob_verify as bv
+
+    gone = [bv.BlobFinding("aa", _B, "k1", 1, CLASS_MISSING)]
+    session = _FakePruneSession(present=set())
+
+    failed = build_report(
+        findings=list(gone), ok_shas=[], total_blobs=1, sample_limit=None, error="conn lost"
+    )
+    pruned_failed = await bv._prune_disposed_missing(session, failed)  # type: ignore[arg-type]
+    assert pruned_failed.status == "FAILED" and pruned_failed.findings == []
+
+    divergent = build_report(findings=list(gone), ok_shas=[], total_blobs=1, sample_limit=None)
+    pruned_clean = await bv._prune_disposed_missing(session, divergent)  # type: ignore[arg-type]
+    assert pruned_clean.status == "CLEAN" and pruned_clean.findings == []

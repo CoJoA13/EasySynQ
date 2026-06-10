@@ -6,8 +6,9 @@
 
 Acquires the same ``LOCK_BLOB_VERIFY`` the Beat task uses, so a manual run and the scheduler
 cannot race (skips if held). After restoring a corrupted object from backup, re-run ``verify``
-to clear the alarm (stamp-on-OK-only: a finding re-alarms every run until the re-hash passes).
-Exit 1 on a FAILED (infrastructure) scan.
+to clear the alarm (a finding is pinned via ``blob.verify_failed_at`` and re-alarms every run
+until the re-hash passes, which clears the pin). Exit 1 on a FAILED (infrastructure) scan OR an
+unpersisted pass (nothing was recorded — the operator must know).
 """
 
 from __future__ import annotations

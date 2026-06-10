@@ -1,8 +1,9 @@
 """Celery/Beat task for the D1 blob integrity verify (S-drift-3, doc 03 §8.2, doc 05 §9.1 D1).
 
-Daily rolling re-hash of the K least-recently-verified vault blobs against their sha256 PK.
-Stamp-on-OK-only: a finding re-alarms every run until the operator restores the object (there is
-no auto-correction for blobs — restore-from-backup is the runbook action). Single-flight under
+Daily rolling re-hash of vault blobs against their sha256 PK — FAILED-pinned rows first
+(``blob.verify_failed_at``, the alarm latch), then least-recently-verified. A finding is pinned
+and re-alarms every run until the operator restores the object (there is no auto-correction for
+blobs — restore-from-backup is the runbook action); the pin clears on a pass. Single-flight under
 ``LOCK_BLOB_VERIFY`` (skip-if-held); own disposed async engine per ``asyncio.run`` (the app's
 non-owner role); the scan itself NEVER raises (an infra failure is an honest FAILED summary row).
 """

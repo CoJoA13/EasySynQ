@@ -248,12 +248,19 @@ async def _prune_disposed_missing(
     missing = [f.sha256 for f in report.findings if f.classification == CLASS_MISSING]
     if not missing:
         return report
-    present = {
-        row[0]
-        for row in (
-            await session.execute(select(Blob.sha256).where(Blob.sha256.in_(missing)))
-        ).all()
-    }
+    # Chunked like the stamp UPDATEs: a vanished BUCKET classifies EVERY blob OBJECT_MISSING (one
+    # ClientError per row, not an infra abort), and an unchunked IN-list here would blow the
+    # 65,535-bind cap and roll the whole persist back during exactly that catastrophe.
+    present: set[str] = set()
+    for i in range(0, len(missing), _STAMP_CHUNK):
+        present |= {
+            row[0]
+            for row in (
+                await session.execute(
+                    select(Blob.sha256).where(Blob.sha256.in_(missing[i : i + _STAMP_CHUNK]))
+                )
+            ).all()
+        }
     disposed = [
         f for f in report.findings if f.classification == CLASS_MISSING and f.sha256 not in present
     ]
