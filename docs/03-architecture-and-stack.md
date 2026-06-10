@@ -281,7 +281,7 @@ The **S sizing profile runs Postgres-FTS-only with OpenSearch disabled**, and th
 ### 8.2 Data at rest
 - **PostgreSQL**: full-volume encryption via host-level LUKS / dm-crypt (recommended in install guide); sensitive columns (federation secrets, SMTP creds) encrypted with an app-managed data key sealed by a master key from `.env`/secret file.
 - **MinIO**: server-side encryption (SSE-S3) enabled; **object-lock / WORM** retention on the document/record buckets to enforce immutability (versions and retained records cannot be deleted or overwritten before retention expiry).
-- **Blob integrity**: every blob stored under its SHA-256; a scheduled `verify` job re-hashes a rolling sample and the full set periodically, raising an audit alarm on mismatch (tamper/bit-rot detection).
+- **Blob integrity**: every blob stored under its SHA-256; a scheduled `verify` job re-hashes a rolling sample and the full set periodically, raising an audit alarm on mismatch (tamper/bit-rot detection). *(✅ S-drift-3: `easysynq.blob.verify` — daily rolling sample, default 500/day, rotation = full coverage; `BLOB_INTEGRITY_FAILED` on mismatch.)*
 - **Secrets**: never baked into images; injected via Docker secrets / `.env` with restricted file perms; Keycloak client secrets and the app master key are rotatable.
 
 ### 8.3 AuthN / AuthZ

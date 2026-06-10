@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import datetime
+import hashlib
 import uuid
 from collections.abc import AsyncIterator
 from typing import Any
@@ -204,6 +205,28 @@ async def stream_object(object_key: str, *, bucket: str) -> AsyncIterator[bytes]
             yield chunk
     finally:
         await asyncio.to_thread(body.close)
+
+
+def _hash_object_sync(object_key: str, bucket: str) -> str:
+    digest = hashlib.sha256()
+    body = _client().get_object(Bucket=bucket, Key=object_key)["Body"]
+    try:
+        while True:
+            chunk: bytes = body.read(_STREAM_CHUNK)
+            if not chunk:
+                break
+            digest.update(chunk)
+    finally:
+        body.close()
+    return digest.hexdigest()
+
+
+async def hash_object(object_key: str, *, bucket: str | None = None) -> str:
+    """Stream-hash a blob's bytes server-side (the S-drift-3 D1 verify read): sha256 over 1 MiB
+    chunks — bounded memory unlike :func:`fetch_bytes`, which materialises the whole object. The
+    **internal** worker path (D1 reads bytes directly, never presigns). WORM object-lock blocks
+    writes/deletes, not GETs."""
+    return await asyncio.to_thread(_hash_object_sync, object_key, bucket or _doc_bucket())
 
 
 def _put_bytes_sync(data: bytes, object_key: str, bucket: str, content_type: str) -> None:

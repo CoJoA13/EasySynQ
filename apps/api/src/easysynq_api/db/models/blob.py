@@ -2,9 +2,11 @@
 
 Identity **is** the content hash: ``sha256`` (lowercase hex) is the PK, so identical bytes
 are one row globally — that is the point of content-addressing (re-upload of identical bytes
-creates no new blob and, downstream, no new version). ``org_id`` is provenance. Immutable —
-no UPDATE path; WORM object-lock in MinIO backs the storage layer (the ``documents`` bucket's
-GOVERNANCE default retention auto-locks on PUT).
+creates no new blob and, downstream, no new version). ``org_id`` is provenance. Content/identity
+immutable — the ONLY updates are the two D1 operational stamps (``verified_at`` = last passing
+re-hash, S-drift-3; ``verify_failed_at`` = the alarm latch, set on a finding / cleared on a pass,
+sorted first in the rotation sample); WORM object-lock in MinIO backs the storage layer (the
+``documents`` bucket's GOVERNANCE default retention auto-locks on PUT).
 """
 
 from __future__ import annotations
@@ -36,6 +38,12 @@ class Blob(Base):
     )
     sse: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     verified_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # S-drift-3 (mig 0047): the D1 alarm latch — set when a re-hash FAILS, cleared when it passes,
+    # and sorted FIRST in the rotation sample so an unresolved finding is in EVERY rolling scan
+    # regardless of how large the never-verified (NULL verified_at) backlog grows.
+    verify_failed_at: Mapped[datetime.datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
     created_at: Mapped[datetime.datetime] = mapped_column(
