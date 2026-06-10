@@ -40,6 +40,9 @@ class DriftScan(Base):
     finished_at: Mapped[datetime.datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # Always supplied by the caller — the row is written ONCE at scan terminal with the final
+    # result, so a server_default would only mask a partial write (deliberately none, unlike the
+    # mutable-status visual_diff precedent).
     status: Mapped[DriftScanStatus] = mapped_column(drift_scan_status_enum, nullable=False)
     counts: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     triggered_by: Mapped[str] = mapped_column(Text, nullable=False)  # 'beat' | 'sync' | 'cli'

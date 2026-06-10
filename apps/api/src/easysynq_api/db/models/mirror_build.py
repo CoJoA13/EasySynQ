@@ -34,7 +34,8 @@ class MirrorBuild(Base):
     built_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
-    # Stamped in a small post-swap commit — the pointer-integrity anchor (spec §11.1): the scan
+    # Stamped in a small post-swap commit — the pointer-integrity anchor (the S-drift-2 design
+    # doc §11.1, docs/superpowers/specs/2026-06-09-s-drift-2-mirror-tamper-scan-design.md): the scan
     # verifies `current` against the newest SWAPPED row, so a repointed/rolled-back/planted tree
     # is MIRROR_TAMPER, never mistaken for the benign no-baseline state. NULL = built-not-swapped
     # (a commit-then-swap crash orphan, or the swap-then-crash window the scan self-heals).

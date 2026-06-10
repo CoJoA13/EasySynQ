@@ -33,6 +33,7 @@ drift_scan_status_enum = SAEnum(
     DriftScanStatus, name="drift_scan_status", values_callable=_vals, create_type=False
 )
 
-# Re-used by the 0046 CREATE TYPE so the ORM and the hand-authored DDL never drift.
+# Re-used by the 0046 CREATE TYPE (and any future from-scratch ``upgrade head`` rebuild — the
+# EVENT_TYPE_VALUES precedent) so the ORM and the hand-authored DDL never drift.
 DRIFT_SCAN_KIND_VALUES = tuple(_vals(DriftScanKind))
 DRIFT_SCAN_STATUS_VALUES = tuple(_vals(DriftScanStatus))
