@@ -43,7 +43,7 @@ for g in (1, 2, 3, 4):
         )
     merged.update(shard)
 out = pathlib.Path(".test_durations")
-out.write_text(json.dumps(dict(sorted(merged.items())), indent=4))
+out.write_text(json.dumps(dict(sorted(merged.items())), indent=4), newline="\n")
 print(f"wrote apps/api/.test_durations with {len(merged)} entries")
 PYEOF
 )
