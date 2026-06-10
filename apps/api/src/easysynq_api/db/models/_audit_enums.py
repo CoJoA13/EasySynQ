@@ -348,6 +348,14 @@ class EventType(enum.Enum):
     # from-scratch ``upgrade head`` rebuilds from EVENT_TYPE_VALUES).
     MIRROR_STALE = "MIRROR_STALE"
     MIRROR_TAMPER = "MIRROR_TAMPER"
+    # S-drift-3 (doc 03 §8.2 / doc 05 §9.1 D1): the blob integrity verify alarm. ONE event type
+    # (owner fork) — the classification rides after.classification (HASH_MISMATCH | OBJECT_MISSING
+    # | READ_ERROR); every class is equally alarm-worthy (OBJECT_MISSING = storage tamper OR a
+    # broken blob-row-iff-bytes invariant, never skippable). object_type=config keyed on the org
+    # (a deduplicated blob has no single owning document); the after payload carries the sha256.
+    # Added via ALTER TYPE event_type ADD VALUE in 0047 (the additive pattern; a from-scratch
+    # ``upgrade head`` rebuilds from EVENT_TYPE_VALUES).
+    BLOB_INTEGRITY_FAILED = "BLOB_INTEGRITY_FAILED"
 
 
 class CheckpointSinkKind(enum.Enum):

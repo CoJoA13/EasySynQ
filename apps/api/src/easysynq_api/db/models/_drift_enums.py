@@ -14,6 +14,10 @@ from sqlalchemy import Enum as SAEnum
 
 class DriftScanKind(enum.Enum):
     MIRROR = "MIRROR"
+    # S-drift-3: the D1 blob integrity re-hash (doc 03 §8.2, doc 05 §9.1 row D1). Added via
+    # ``ALTER TYPE drift_scan_kind ADD VALUE`` in 0047 (the additive pattern; a from-scratch
+    # ``upgrade head`` rebuilds the type from DRIFT_SCAN_KIND_VALUES, so the member lives here too).
+    BLOB_REHASH = "BLOB_REHASH"
 
 
 class DriftScanStatus(enum.Enum):
