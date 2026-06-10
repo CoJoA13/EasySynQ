@@ -401,6 +401,14 @@ pushback and reasoning… disregard nitpicks and unreachable bugs; just document
   a transient one-time install state. Accepted as a narrow audit-completeness gap, not a
   correctness/wedge bug.
 
+- **Symlink→file race-within-a-race (Codex round-8 P2 — narrow, NOT fixed).** If a path
+  `_walk_tree` classified as a symlink is swapped to a **regular file** in the microsecond between
+  the walk and `_safe_readlink`, the finding is recorded as a byte-less `SYMLINK_DIVERGENT`
+  (`symlink_found=None`), so the planted file's bytes aren't copied to quarantine. The divergence is
+  **still detected, audited as `MIRROR_TAMPER`, and corrected** by the rebuild — only the forensic
+  byte-copy of that doubly-raced object is missed (an attacker must win a TOCTOU race *twice*).
+  Accepted as a narrow forensic-completeness gap, not a detection/correctness gap.
+
 - **CLI `mirror sync` skip-vs-deferred message (Codex round-7 P2 — cosmetic, NOT fixed).** When
   `scan_and_sync(rebuild="always")` defers the rebuild (unpersisted findings / lock re-check), the
   CLI prints the lock-contended "another sync/scan is already in progress" message. The deferred
