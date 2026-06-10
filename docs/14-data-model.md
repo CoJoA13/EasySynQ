@@ -231,9 +231,10 @@ erDiagram
 | `document_type` | enum | Quality Policy, Manual, Scope Statement, Process Definition, Procedure/SOP, Work Instruction, Form/Template, Quality Objective, Register, … (catalog: see `document_type` entity in §6). |
 | `document_level` | enum(`L1_POLICY`,`L2_PROCEDURE`,`L3_WORK_INSTRUCTION`,`L4_FORM`) | Explicit ISO documentation level (extensible); the `DOC_CLASS` authz scope (`07`) matches on `document_level` (and optionally `kind`+`type`), and doc 10 routing key `document_class` resolves to `document_level` (reconciled per Decisions Register R7). |
 | `is_singleton` | bool | Quality Policy / Scope Statement (vault refuses a 2nd **Effective** at a time, not a 2nd ever — see §5.2 singleton note, reconciled per Decisions Register R25). |
-| `review_period` | interval | → `next_review_due`. |
-| `next_review_due` | date (derived) | `effective_from + review_period`. |
-| `review_state` | enum(`current`,`due_soon`,`overdue`) | `05 §9.3`. |
+| `review_period_months` | integer (months) | Nullable; `null` = no scheduled review. **NOT `interval`** — psycopg3 cannot load month-bearing PG intervals into `timedelta` (S-drift-1). |
+| `next_review_due` | date STORED | Nullable. Recomputed on release (`_cutover`), on `review_confirmed`, and on PATCH. Anchor = `MAX(last_reviewed_at, effective_from)` + months (day-clamped). (S-drift-1) |
+| `last_reviewed_at` | timestamptz | Nullable; set to `now()` on `review_confirmed`. (S-drift-1) |
+| `review_state` | derived at read (`current`/`due_soon`/`overdue`) | **Never stored/indexed** — computed from `next_review_due` + org-tz. `05 §9.3`. (S-drift-1) |
 | `classification` | enum(`Public`,`Internal`,`Confidential`,`Restricted`) | Watermark + export gating. |
 | `acknowledgement_required` | bool | |
 | `retention_of_superseded` | uuid FK → `retention_policy` | How long superseded versions kept. |
@@ -593,7 +594,7 @@ The upstream sections were internally consistent on the big decisions but drifte
 | `(documented_information_id)` on `clause_mapping`, `process_link` | Lens queries, where-used. | `13 §3.4` |
 | `(record_id)` on `evidence_blob`; `source_version_id` on `record` | Traceability chain bottom-up. | `06 §6` |
 | `(occurred_at)` partition + `(object_id)`,`(actor_id)`,`(event_type)` on `audit_event` | Audit search, whole-partition lifecycle. | `12 §4.4` |
-| `(next_review_due, review_state)` on `document` | Beat review-sweep, Plan/Do dashboard. | `05 §9.3` |
+| **Partial** `ix_documented_information_next_review_due` on `(next_review_due)` WHERE NOT NULL on `documented_information` | Beat review-sweep + dashboard. `review_state` is **derived, never stored/indexed** (S-drift-1). | `05 §9.3` |
 | `(retention_basis_date, disposition_state)` on `record` | Beat retention-sweep. | `06 §5.3` |
 | `(assignee_user_id, state)` and `(instance_id)` on `task` | My-Actions inbox. | `10 §8` |
 | `UNIQUE (run_id, rel_path)` on `import_file`; `UNIQUE (run_id, file_id)` on `import_commit_result` | Import idempotency. | `09 §11.1` |
