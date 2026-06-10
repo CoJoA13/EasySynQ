@@ -95,10 +95,14 @@ class ScanReport:
         by: dict[str, int] = {}
         for f in self.findings:
             by[f.classification] = by.get(f.classification, 0) + 1
-        # MISSING findings have no on-disk path and POINTER findings are about the `current`
-        # symlink itself — neither was a walked path, so neither subtracts from `ok`.
+        # `ok` = clean WALKED files. MISSING/POINTER findings and ``.builds/``-area sweep findings
+        # were never walked paths in the compared tree (``scanned`` counts only the latter), so
+        # none of them subtract from `ok`.
         present_divergent = sum(
-            1 for f in self.findings if f.classification not in (CLASS_MISSING, CLASS_POINTER)
+            1
+            for f in self.findings
+            if f.classification not in (CLASS_MISSING, CLASS_POINTER)
+            and not f.path.startswith(".builds/")
         )
         out: dict[str, object] = {
             "scanned": self.scanned,
@@ -441,18 +445,20 @@ async def _pointer_rows(session: AsyncSession) -> list[PointerRow]:
 
 
 def _scan_builds_area(
-    root: Path, registered: set[str], current_target: str | None
+    root: Path, registered: set[str], conforming_current_name: str | None
 ) -> list[Finding]:
     """Unregistered ``.builds/`` children are EXTRA → MIRROR_TAMPER: the next sync's
     ``_prune_builds`` would rmtree them UNAUDITED (spec §11.2; they get quarantined BY MOVE).
-    Registered orphans (failed-swap leftovers) are benign; current's own target belongs to the
-    pointer check. Mirror-root siblings stay deliberately out of scope."""
+    Registered orphans (failed-swap leftovers) are benign; current's own (conforming) target
+    belongs to the pointer check — pass ``conforming_current_name`` (NOT the raw target), so a
+    bare-name foreign pointer's ``.builds`` twin is still swept here. Mirror-root siblings stay
+    deliberately out of scope."""
     findings: list[Finding] = []
     builds = root / ".builds"
     if not builds.is_dir():
         return findings
     for child in sorted(builds.iterdir()):
-        if child.name in registered or child.name == current_target:
+        if child.name in registered or child.name == conforming_current_name:
             continue
         findings.append(Finding(f".builds/{child.name}", CLASS_EXTRA))
     return findings
@@ -518,6 +524,9 @@ async def scan_mirror(
         # registered build must not scan the genuine tree while an evil one is being served.
         current_target = conforming_name if conforming_name is not None else raw_target
     build_name = current_target
+    # Pre-declared so a mid-scan failure can SALVAGE what was already classified + quarantined
+    # into the FAILED report — persist still audits them (it rolls back first, then emits events).
+    findings: list[Finding] = []
     try:
         rows = await _pointer_rows(session)
         pointer, cur = resolve_pointer(current_target, current_is_real_dir, rows)
@@ -533,22 +542,25 @@ async def scan_mirror(
                 pointer="none",
             )
 
-        findings: list[Finding] = []
         tree_findings: list[Finding] = []
         scanned = 0
         is_current = False
         build_dir: Path | None = None
+        build_dir_scannable = False
 
         if pointer in ("missing", "rogue_dir", "foreign"):
             findings.append(Finding("current", CLASS_POINTER, symlink_found=current_target))
         if cur is not None:
-            row = (
-                await session.execute(
-                    select(MirrorBuild).where(MirrorBuild.build_name == cur.build_name)
-                )
-            ).scalar_one()
             build_dir = root / ".builds" / cur.build_name
-            if build_dir.is_dir():
+            # NEVER walk a symlinked build dir (``is_dir()`` follows the link → out-of-tree
+            # content would be hashed + copied; the db79af8 pointer-shape lesson, one level down).
+            build_dir_scannable = build_dir.is_dir() and not build_dir.is_symlink()
+            if build_dir_scannable:
+                row = (
+                    await session.execute(
+                        select(MirrorBuild).where(MirrorBuild.build_name == cur.build_name)
+                    )
+                ).scalar_one()
                 tree_findings, scanned = compare_tree(build_dir, row.manifest, row.manifest_sha256)
                 for f in tree_findings:
                     if f.classification == _CONTENT_MISMATCH:
@@ -561,19 +573,30 @@ async def scan_mirror(
                             )
                         f.classification = classify_mismatch(f.found_sha256 or "", known)
                 findings.extend(tree_findings)
+                if pointer in ("ok", "selfheal"):
+                    is_current = await _is_current(session, row.manifest)
+            else:
+                # The registered build's served tree is GONE or replaced by a symlink — the bytes
+                # `current` resolves to are missing/tampered. MIRROR_TAMPER; is_current stays False
+                # so the hourly path rebuilds (a CLEAN here would silently hide the basic tamper).
+                findings.append(
+                    Finding(
+                        f".builds/{cur.build_name}",
+                        CLASS_POINTER,
+                        note="served build tree is missing or replaced by a symlink",
+                    )
+                )
             if pointer == "rollback":
                 # The per-file pass above covered the tree against ITS OWN row's manifest (known
                 # old vault bytes — no wholesale quarantine needed); this is the pointer event.
                 findings.append(Finding("current", CLASS_POINTER, symlink_found=current_target))
-            if pointer in ("ok", "selfheal"):
-                is_current = await _is_current(session, row.manifest)
 
         builds_findings = _scan_builds_area(root, {r.build_name for r in rows}, conforming_name)
         findings.extend(builds_findings)
 
         if findings:
             qdir = _quarantine_dir(root, scan_id)
-            if build_dir is not None and build_dir.is_dir():
+            if build_dir is not None and build_dir_scannable:
                 write_quarantine(qdir, build_dir, tree_findings)
             for f in builds_findings:
                 quarantine_tree(qdir, root / f.path, f)
@@ -584,7 +607,7 @@ async def scan_mirror(
                 # Only a conforming in-builds target is movable; a non-conforming (out-of-tree)
                 # target is audit-payload evidence ONLY — never touch paths outside the mirror.
                 src = root / ".builds" / conforming_name
-                if src.is_dir():
+                if src.is_dir() and not src.is_symlink():
                     pf = next(f for f in findings if f.classification == CLASS_POINTER)
                     quarantine_tree(qdir, src, pf)
             write_quarantine_index(qdir, build_name, scan_id, findings)
@@ -601,16 +624,21 @@ async def scan_mirror(
             pointer=pointer,
         )
     except Exception as exc:  # an infra failure is an honest FAILED, never a raise
-        logger.exception("mirror.scan.failed")
+        logger.exception(
+            "mirror.scan.failed",
+            extra={"extra_fields": {"salvaged_findings": len(findings)}},
+        )
         return ScanReport(
             scan_id=scan_id,
             started_at=started_at,
-            baseline="ok",
+            baseline="unknown",  # the scan never established the baseline state
             status="FAILED",
             is_current=False,
             build_name=build_name,
-            findings=[],
+            # Salvage anything already classified + quarantined — persist still audits it.
+            findings=findings,
             error=str(exc),
+            pointer="unknown",
         )
 
 
@@ -620,12 +648,14 @@ async def persist_scan_results(
     """One txn: a ``MIRROR_STALE``/``MIRROR_TAMPER`` audit event per anomaly (doc-attributable →
     object_type=document + scope_ref=identifier, the S-ing-5 precedent; else config keyed on the
     org) + the ``drift_scan`` summary row + the selfheal ``swapped_at`` stamp (spec §11.1).
-    Quarantine files are already durably written (a crash between leaves bytes-without-events;
-    the divergence is still on disk, so the next scan re-detects — self-healing). NO
+    Quarantine files are already durably written. Self-healing on a persist crash holds for
+    COPY-quarantined findings (the divergent bytes stay on disk, so the next scan re-detects) but
+    NOT for BY-MOVE ones (a feral tree moved into ``.quarantine`` is gone from ``.builds`` — its
+    event is lost if persist then fails); the scan-then-persist ordering minimizes that window and
+    a persist failure defers the rebuild (spec §11.5), but it is best-effort, not guaranteed. NO
     per-clean-scan audit event (hourly CLEAN events would spam the trail) — but EVERY scan gets
     its summary row (the row-per-scan contract). Returns success: a failure is logged, never
-    raised, and the caller defers the rebuild when findings would otherwise go unrecorded
-    (spec §11.5)."""
+    raised, and the caller defers the rebuild when findings would otherwise go unrecorded."""
     if report.status == "FAILED":
         await session.rollback()  # the failed scan may have poisoned the txn
     try:

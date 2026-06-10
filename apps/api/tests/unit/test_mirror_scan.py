@@ -356,15 +356,52 @@ def _report(
     )
 
 
+async def test_scan_and_sync_persists_then_rebuilds_on_clean(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The happy path pins the gate ORDER: persist ALWAYS runs (the row-per-scan contract) and
+    runs BEFORE the rebuild; a behind-vault CLEAN scan still rebuilds, with rebuild_triggered=True
+    recorded on the persisted row."""
+    calls: list[str] = []
+    seen_kw: dict[str, object] = {}
+
+    async def _scan(session: object, *, mirror_path: object = None) -> ScanReport:
+        return _report("CLEAN", is_current=False)  # behind-vault → needs rebuild
+
+    async def _persist(session: object, report: object, **kw: object) -> bool:
+        calls.append("persist")
+        seen_kw.update(kw)
+        return True
+
+    async def _fake_sync(**kw: object) -> object:
+        calls.append("rebuild")
+        return object()
+
+    async def _lock_held(session: object, key: int) -> bool:
+        return True
+
+    monkeypatch.setattr(scan_mod, "scan_mirror", _scan)
+    monkeypatch.setattr(scan_mod, "persist_scan_results", _persist)
+    monkeypatch.setattr(scan_mod, "sync_mirror", _fake_sync)
+    monkeypatch.setattr(scan_mod, "holds_advisory_lock", _lock_held)
+
+    _, result = await scan_and_sync(None, rebuild="if_needed", triggered_by="beat")  # type: ignore[arg-type]
+    assert result is not None
+    assert calls == ["persist", "rebuild"]  # persist BEFORE rebuild, both ran
+    assert seen_kw["rebuild_triggered"] is True
+
+
 async def test_scan_and_sync_failed_gating(monkeypatch: pytest.MonkeyPatch) -> None:
     """Spec §8: `always` (the sync path) rebuilds even on FAILED; `if_needed` (the hourly path)
-    does NOT — a scan failure is not evidence the mirror is wrong."""
+    does NOT — a scan failure is not evidence the mirror is wrong. Both still PERSIST (the
+    row-per-scan contract — a FAILED stream is the operator signal)."""
     calls: list[str] = []
 
     async def _failed_scan(session: object, *, mirror_path: object = None) -> ScanReport:
         return _report("FAILED")
 
     async def _persist_ok(session: object, report: object, **kw: object) -> bool:
+        calls.append("persist")
         return True
 
     async def _fake_sync(**kw: object) -> object:
@@ -380,10 +417,11 @@ async def test_scan_and_sync_failed_gating(monkeypatch: pytest.MonkeyPatch) -> N
     monkeypatch.setattr(scan_mod, "holds_advisory_lock", _lock_held)
 
     _, result = await scan_and_sync(None, rebuild="if_needed", triggered_by="beat")  # type: ignore[arg-type]
-    assert result is None and calls == []  # hourly: no rebuild on FAILED
+    assert result is None and calls == ["persist"]  # hourly: persisted, no rebuild on FAILED
 
+    calls.clear()
     _, result = await scan_and_sync(None, rebuild="always", triggered_by="sync")  # type: ignore[arg-type]
-    assert result is not None and calls == ["rebuild"]  # sync: correction never blocked
+    assert result is not None and calls == ["persist", "rebuild"]  # sync: persist then rebuild
 
 
 async def test_scan_and_sync_defers_rebuild_when_findings_not_persisted(

@@ -2805,6 +2805,37 @@ async def test_foreign_builds_tree_quarantined_by_move(
     assert (qdirs[0] / ".builds" / "feral" / "deep" / "payload.bin").read_bytes() == b"PLANTED"
 
 
+async def test_destroyed_served_tree_is_tamper_not_clean(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    subj: SimpleNamespace,
+    tmp_path: Path,
+) -> None:
+    """C1 (Task-4 quality fold): destroying the served build tree while `current` stays valid
+    must be MIRROR_TAMPER (POINTER) + rebuild — NOT a silent CLEAN (the most basic tamper)."""
+    mirror = tmp_path / "m"
+    await _grant_release_actors(subj)
+    ha, hb = _auth(token_factory, subj.a), _auth(token_factory, subj.b)
+    await s5.drive_to_effective(app_client, ha, hb, hb, await s5.type_id("SOP"), b"GONE-V1")
+    await _sync(mirror)
+    build_name = Path(os.readlink(mirror / "current")).name
+    shutil.rmtree(mirror / ".builds" / build_name)  # current symlink intact, target gone
+
+    async with get_sessionmaker()() as s:
+        report, result = await scan_and_sync(
+            s,
+            rebuild="if_needed",
+            triggered_by="beat",
+            mirror_path=mirror,
+            render_sink=LoggingRenderSink(),
+        )
+    assert report.status == "DIVERGENT"
+    assert any(f.classification == "POINTER_DIVERGENT" for f in report.findings)
+    events = await _events_for_scan(report.scan_id)
+    assert EventType.MIRROR_TAMPER in {e.event_type for e in events}
+    assert result is not None  # the hourly path rebuilt rather than reporting a false CLEAN
+
+
 async def test_scan_task_skips_when_sync_lock_held(
     app_client: AsyncClient,
     token_factory: Callable[..., str],
