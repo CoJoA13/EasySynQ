@@ -133,7 +133,13 @@ describe("S-web-8 review surfaces", () => {
     );
     renderDetail();
     await userEvent.click(await screen.findByRole("button", { name: "Edit review period" }));
-    expect(await screen.findByLabelText("Review period (months)")).toBeInTheDocument();
+    // Dirty the field BEFORE cancelling — a persistently-mounted modal would keep "36" across the
+    // reopen and this test would miss the S-web-7d trap entirely (a pristine field can't tell
+    // remount from persistence).
+    const input = await screen.findByLabelText("Review period (months)");
+    await userEvent.clear(input);
+    await userEvent.type(input, "36");
+    expect(input).toHaveValue("36");
     await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
     // Reopen — conditional render means a fresh mount (the S-web-7d reopen trap)
     await userEvent.click(screen.getByRole("button", { name: "Edit review period" }));

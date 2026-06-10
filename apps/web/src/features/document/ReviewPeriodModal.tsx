@@ -27,6 +27,7 @@ export function ReviewPeriodModal({
     mutationFn: (review_period_months: number | null) =>
       api.send<DocumentSummary>("PATCH", `/api/v1/documents/${doc.id}`, { review_period_months }),
     onSuccess: () => {
+      setError(null);
       void qc.invalidateQueries({ queryKey: ["document", doc.id] });
       onClose();
     },
