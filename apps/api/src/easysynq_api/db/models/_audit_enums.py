@@ -339,6 +339,15 @@ class EventType(enum.Enum):
     # EVENT_TYPE_VALUES).
     REVIEW_CONFIRMED = "REVIEW_CONFIRMED"  # D5: periodic review concluded "no change needed"
     REVIEW_OVERDUE = "REVIEW_OVERDUE"  # D5: open review task past next_review_due (once per cycle)
+    # S-drift-2 (doc 05 §9.1 D2/D3 + §9.2, R11): the mirror integrity scan. MIRROR_STALE = a
+    # mirrored file's divergent digest matches known vault bytes of the SAME document (an older
+    # version's source/rendition — STALE_REVISION); MIRROR_TAMPER = foreign bytes / extra / missing
+    # / symlink divergence (UNEXPECTED_CONTENT et al. — the alarm-worthy class). Doc-attributable
+    # anomalies key object_type=document (scope_ref=identifier); generated/top-level paths key on
+    # config. Added via ALTER TYPE event_type ADD VALUE in 0046 (the additive pattern; a
+    # from-scratch ``upgrade head`` rebuilds from EVENT_TYPE_VALUES).
+    MIRROR_STALE = "MIRROR_STALE"
+    MIRROR_TAMPER = "MIRROR_TAMPER"
 
 
 class CheckpointSinkKind(enum.Enum):

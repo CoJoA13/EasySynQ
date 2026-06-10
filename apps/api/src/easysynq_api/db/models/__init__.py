@@ -23,6 +23,7 @@ from ._dcr_enums import (
     ImpactDimension,
     VisualDiffStatus,
 )
+from ._drift_enums import DriftScanKind, DriftScanStatus
 from ._evidence_enums import EvidenceForTargetType
 from ._ingestion_enums import (
     ImportCommitResultStatus,
@@ -83,6 +84,7 @@ from .document_link import DocumentLink
 from .document_type import DocumentType
 from .document_version import DocumentVersion
 from .documented_information import DocumentedInformation
+from .drift_scan import DriftScan
 from .evidence_blob import EvidenceBlob
 from .evidence_for_link import EvidenceForLink
 from .evidence_pack import EvidencePack
@@ -98,6 +100,7 @@ from .import_file import ImportFile
 from .import_proposal_node import ImportProposalNode
 from .import_run import ImportRun
 from .import_version_family import ImportVersionFamily
+from .mirror_build import MirrorBuild
 from .ncr import Ncr
 from .numbering_counter import NumberingCounter
 from .org_role import OrgRole
@@ -168,6 +171,9 @@ __all__ = [
     "DocumentType",
     "DocumentVersion",
     "DocumentedInformation",
+    "DriftScan",
+    "DriftScanKind",
+    "DriftScanStatus",
     "EventType",
     "EvidenceBlob",
     "EvidenceForLink",
@@ -194,6 +200,7 @@ __all__ = [
     "ImportRun",
     "ImportRunStatus",
     "ImportVersionFamily",
+    "MirrorBuild",
     "NcSeverity",
     "Ncr",
     "NcrDisposition",
