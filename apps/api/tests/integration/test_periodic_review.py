@@ -404,12 +404,17 @@ async def test_sweep_escalates_overdue_once(
     app_under_test: object,
 ) -> None:
     """sweep_reviews emits exactly one REVIEW_OVERDUE audit event per overdue cycle; a second
-    sweep does NOT create a second REVIEW_OVERDUE for the same instance. Also: a backdated
-    document-APPROVAL task's due_at does NOT trigger REVIEW_OVERDUE (subject_type filter)."""
+    sweep does NOT create a second REVIEW_OVERDUE for the same instance (dedup proof).
+
+    Negative (load-bearing subject_type filter): a second doc left in InReview has a genuinely
+    PENDING DOCUMENT-subject approval task whose due_at is backdated to the past. The sweep must
+    NOT emit a REVIEW_OVERDUE for it — proving the WorkflowSubjectType.PERIODIC_REVIEW filter is
+    what prevents escalation, not the Task.state filter (which would also exclude a DONE task).
+    """
     from easysynq_api.db.models._audit_enums import AuditObjectType, EventType
-    from easysynq_api.db.models._workflow_enums import WorkflowSubjectType
+    from easysynq_api.db.models._workflow_enums import TaskState, WorkflowSubjectType
     from easysynq_api.db.models.audit_event import AuditEvent
-    from easysynq_api.db.models.workflow import WorkflowInstance
+    from easysynq_api.db.models.workflow import Task, WorkflowInstance
     from easysynq_api.services.vault.review import sweep_reviews
 
     await s5.grant_lifecycle(subj.a)
@@ -434,38 +439,67 @@ async def test_sweep_escalates_overdue_once(
         )
         await s.commit()
 
-    # Negative: backdate this test's document-APPROVAL task's due_at so we confirm the
-    # subject_type filter prevents a REVIEW_OVERDUE from appearing for it.
+    # Negative (load-bearing): create a SECOND doc and leave it in InReview (no approval).
+    # Its DOCUMENT-subject approval task is genuinely PENDING — so the Task.state == PENDING
+    # filter alone does NOT exclude it. Only the subject_type == PERIODIC_REVIEW filter stops
+    # the escalation pass from producing a REVIEW_OVERDUE for this instance.
+    neg_content = f"drift-overdue-neg-{subj.a}".encode()
+    neg_doc = await _create(app_client, ha, type_id)
+    neg_did = neg_doc["id"]
+    neg_uuid = uuid.UUID(neg_did)
+    await app_client.post(f"/api/v1/documents/{neg_did}/checkout", headers=ha)
+    neg_sha = await _upload(app_client, ha, neg_did, neg_content)
+    neg_ci = await _checkin(
+        app_client, ha, neg_did, neg_sha, change_reason="neg", change_significance="MAJOR"
+    )
+    assert neg_ci.status_code == 201, neg_ci.text
+    await _map_clause(app_client, ha, neg_did)
+    neg_sr = await app_client.post(f"/api/v1/documents/{neg_did}/submit-review", headers=ha)
+    assert neg_sr.status_code == 200, neg_sr.text
+    # neg_did is now InReview — deliberately NOT approved, so its approval task stays PENDING.
+
+    # Find the DOCUMENT-subject instance for the negative doc and backdate its pending task.
     async with get_sessionmaker()() as s:
-        # Find the document approval instance (subject_type==DOCUMENT) for this doc.
-        doc_instance = (
+        neg_doc_instance = (
             await s.execute(
                 select(WorkflowInstance)
                 .where(
                     WorkflowInstance.subject_type == WorkflowSubjectType.DOCUMENT,
-                    WorkflowInstance.subject_id == doc_uuid,
+                    WorkflowInstance.subject_id == neg_uuid,
                 )
                 .order_by(WorkflowInstance.started_at.desc())
                 .limit(1)
             )
         ).scalar_one_or_none()
-        if doc_instance is not None:
-            # Backdate all its tasks to look overdue — should NOT produce REVIEW_OVERDUE.
+        assert neg_doc_instance is not None, "expected a DOCUMENT workflow instance for neg doc"
+        # Confirm the task is genuinely PENDING (not DONE/SKIPPED), then backdate it.
+        neg_task = (
             await s.execute(
-                text(
-                    "UPDATE task SET due_at = now() - interval '50 days' WHERE instance_id = :iid"
-                ),
-                {"iid": doc_instance.id},
+                select(Task)
+                .where(
+                    Task.instance_id == neg_doc_instance.id,
+                    Task.state == TaskState.PENDING,
+                )
+                .limit(1)
             )
-            await s.commit()
+        ).scalar_one_or_none()
+        assert neg_task is not None, "expected a PENDING approval task for the InReview neg doc"
+        neg_task_id = neg_task.id
+        # Backdate due_at so the escalation pass would fire if the filter were absent.
+        await s.execute(
+            text("UPDATE task SET due_at = now() - interval '50 days' WHERE id = :tid"),
+            {"tid": neg_task_id},
+        )
+        await s.commit()
 
-    # First sweep — creates the instance + task, then escalates (task is already past due_at
-    # because we set next_review_due in the past → due_at will be in the past).
+    # First sweep — creates the PERIODIC_REVIEW instance + task for did; the task's due_at is
+    # already in the past (overdue_date is 40 days ago) so the escalation pass also fires in
+    # this same sweep.
     async with get_sessionmaker()() as session:
         result = await sweep_reviews(session)
     assert result["tasks_created"] >= 1
 
-    # Find the PERIODIC_REVIEW instance just created.
+    # Find the PERIODIC_REVIEW instance just created for this run's doc.
     async with get_sessionmaker()() as s:
         pr_instance = (
             await s.execute(
@@ -479,89 +513,82 @@ async def test_sweep_escalates_overdue_once(
             )
         ).scalar_one_or_none()
         assert pr_instance is not None
+        pr_instance_id = pr_instance.id
 
-        # Backdate the task's due_at so the escalation pass fires on the second sweep
-        # (the first sweep's task was just created, so its due_at is in the past already
-        # because we set overdue_date 40 days ago → but to be explicit, force it).
+        # Backdate the task's due_at so the escalation pass fires again on the next sweep
+        # (makes the dedup proof non-trivial — the sweep actively tries to escalate again).
         await s.execute(
             text(
                 "UPDATE task SET due_at = now() - interval '1 hour'"
                 " WHERE instance_id = :iid AND state = 'PENDING'"
             ),
-            {"iid": pr_instance.id},
+            {"iid": pr_instance_id},
         )
         await s.commit()
 
-    # Second sweep — escalation fires; instance already exists so tasks_created == 0 for this doc.
-    async with get_sessionmaker()() as session:
-        result2 = await sweep_reviews(session)
-    assert result2["escalated"] >= 1
-
-    # Exactly ONE REVIEW_OVERDUE audit event for this doc.
+    # Run-scoped assert after FIRST sweep: exactly one REVIEW_OVERDUE for this instance.
     async with get_sessionmaker()() as s:
-        events = (
+        events_after_sweep1 = (
             (
                 await s.execute(
                     select(AuditEvent).where(
                         AuditEvent.object_type == AuditObjectType.document,
                         AuditEvent.object_id == doc_uuid,
                         AuditEvent.event_type == EventType.REVIEW_OVERDUE,
+                        AuditEvent.after["instance_id"].astext == str(pr_instance_id),
                     )
                 )
             )
             .scalars()
             .all()
         )
-        assert len(events) >= 1, "expected at least one REVIEW_OVERDUE audit event"
-        # The event's after must include the correct instance_id.
-        assert any(
-            e.after is not None and e.after.get("instance_id") == str(pr_instance.id)
-            for e in events
-        ), "REVIEW_OVERDUE event must carry the PERIODIC_REVIEW instance_id"
-        # scope_ref must be the doc's identifier.
-        assert any(e.scope_ref == identifier for e in events), (
-            f"expected scope_ref={identifier!r} on the REVIEW_OVERDUE event"
-        )
+    assert len(events_after_sweep1) == 1, (
+        f"expected exactly 1 REVIEW_OVERDUE after first sweep, got {len(events_after_sweep1)}"
+    )
+    # scope_ref must carry the doc's identifier (run-scoped — only this instance qualifies).
+    assert events_after_sweep1[0].scope_ref == identifier, (
+        f"expected scope_ref={identifier!r}, got {events_after_sweep1[0].scope_ref!r}"
+    )
 
-    # Third sweep — still exactly the same number of REVIEW_OVERDUE events (dedup).
+    # Second sweep — dedup proof: the escalation pass sees the overdue task again but the
+    # guard (existing REVIEW_OVERDUE for this instance) prevents a duplicate event.
     async with get_sessionmaker()() as session:
         await sweep_reviews(session)
 
+    # Run-scoped assert after SECOND sweep: still exactly one REVIEW_OVERDUE for this instance.
     async with get_sessionmaker()() as s:
-        events_after = (
+        events_after_sweep2 = (
             (
                 await s.execute(
                     select(AuditEvent).where(
                         AuditEvent.object_type == AuditObjectType.document,
                         AuditEvent.object_id == doc_uuid,
                         AuditEvent.event_type == EventType.REVIEW_OVERDUE,
-                        AuditEvent.after["instance_id"].astext == str(pr_instance.id),
+                        AuditEvent.after["instance_id"].astext == str(pr_instance_id),
                     )
                 )
             )
             .scalars()
             .all()
         )
-        assert len(events_after) == 1, (
-            f"expected exactly 1 REVIEW_OVERDUE after dedup sweep, got {len(events_after)}"
-        )
+    assert len(events_after_sweep2) == 1, (
+        f"expected exactly 1 REVIEW_OVERDUE after dedup sweep, got {len(events_after_sweep2)}"
+    )
 
-    # Negative: no REVIEW_OVERDUE for the document-APPROVAL task we backdated — the
-    # subject_type filter (WorkflowSubjectType.PERIODIC_REVIEW) stops the escalation pass
-    # from touching tasks whose instance is a DOCUMENT-subject workflow.
-    if doc_instance is not None:
-        async with get_sessionmaker()() as s:
-            doc_overdue = (
-                await s.execute(
-                    select(AuditEvent.id)
-                    .where(
-                        AuditEvent.object_id == doc_uuid,
-                        AuditEvent.event_type == EventType.REVIEW_OVERDUE,
-                        AuditEvent.after["instance_id"].astext == str(doc_instance.id),
-                    )
-                    .limit(1)
+    # Negative: no REVIEW_OVERDUE must exist for the InReview doc's DOCUMENT-subject instance.
+    # Its approval task was genuinely PENDING and backdated — only the subject_type filter stops it.
+    async with get_sessionmaker()() as s:
+        neg_overdue = (
+            await s.execute(
+                select(AuditEvent.id)
+                .where(
+                    AuditEvent.object_id == neg_uuid,
+                    AuditEvent.event_type == EventType.REVIEW_OVERDUE,
                 )
-            ).first()
-        assert doc_overdue is None, (
-            "a backdated DOCUMENT-subject task must NOT produce a REVIEW_OVERDUE event"
-        )
+                .limit(1)
+            )
+        ).first()
+    assert neg_overdue is None, (
+        "a PENDING DOCUMENT-subject task must NOT produce a REVIEW_OVERDUE event"
+        " — the subject_type == PERIODIC_REVIEW filter is the load-bearing guard"
+    )
