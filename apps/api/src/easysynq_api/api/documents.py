@@ -409,6 +409,7 @@ async def _load_document(
                 select(DocumentedInformation)
                 .where(DocumentedInformation.id == raw_id)
                 .with_for_update()
+                .execution_options(populate_existing=True)
             )
         ).scalar_one_or_none()
     else:
@@ -682,9 +683,15 @@ async def update_metadata_endpoint(
 
     # Load once, lock-aware up front: if review_period_months is being set we need a FOR UPDATE
     # lock so the recompute of next_review_due can't race a concurrent cutover that commits a new
-    # current_effective_version_id between our read and our write. Loading at the TOP of the
-    # handler means the session's identity map is empty, so the locked SELECT always returns a
-    # fresh row from the DB (no stale cached attributes via the identity map).
+    # current_effective_version_id between our read and our write.
+    # ⚠ The authz dependency (_manage_metadata → _document_scope → _document_scope_by_id) calls
+    # session.get(DocumentedInformation, doc_id) BEFORE this handler runs, so the row is already
+    # in the session's identity map. Without populate_existing=True the locked SELECT acquires the
+    # DB lock but returns the pre-lock attribute snapshot — a concurrent commit (e.g. a cutover or
+    # review-confirm) that landed while we waited for the lock stays invisible and the recompute
+    # clobbers the fresh next_review_due. populate_existing forces SQLAlchemy to overwrite the
+    # identity-map entry with the locked row's current column values. This applies to ALL
+    # for_update=True callers of _load_document (unmap_clause, submit_review, this handler).
     wants_review_update = "review_period_months" in body.model_fields_set
     doc = await _load_document(session, caller, document_id, for_update=wants_review_update)
     if body.title is not None:

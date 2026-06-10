@@ -1078,7 +1078,7 @@ async def test_decide_rejects_non_owner_and_bad_outcomes(
     type_id = await s5.type_id("SOP")
     content = f"drift-decide-authz-{subj.a}".encode()
 
-    _did, doc_uuid = await _due_released_doc(app_client, ha, hb, type_id, content)
+    did, doc_uuid = await _due_released_doc(app_client, ha, hb, type_id, content)
 
     # Ensure subj.b's app_user row exists.
     async with get_sessionmaker()() as s:
@@ -1153,6 +1153,25 @@ async def test_decide_rejects_non_owner_and_bad_outcomes(
     )
     assert r2.status_code == 200, r2.text
 
+    # Replay-parity: the second response must carry the same document_id, next_review_due,
+    # and signature_event_id as the first.  The replay-enrichment branch is the point.
+    b1 = r1.json()
+    b2 = r2.json()
+    assert b2.get("document_id") == b1.get("document_id") == did, (
+        f"replayed body document_id {b2.get('document_id')!r} != original {b1.get('document_id')!r}"
+    )
+    assert b2.get("next_review_due") == b1.get("next_review_due"), (
+        f"replayed next_review_due {b2.get('next_review_due')!r} "
+        f"!= original {b1.get('next_review_due')!r}"
+    )
+    assert b1.get("signature_event_id") is not None, (
+        "first response must carry a signature_event_id"
+    )
+    assert b2.get("signature_event_id") == b1.get("signature_event_id"), (
+        f"replayed signature_event_id {b2.get('signature_event_id')!r} "
+        f"!= original {b1.get('signature_event_id')!r}"
+    )
+
     async with get_sessionmaker()() as s:
         di = await s.get(DocumentedInformation, doc_uuid)
         assert di is not None
@@ -1171,6 +1190,79 @@ async def test_decide_rejects_non_owner_and_bad_outcomes(
         )
     assert sig_count == 1, (
         f"idempotent replay must not add a second review_confirmed sig, got {sig_count}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# populate_existing interleave proof (fix for the authz-dependency identity-map bug)
+# ---------------------------------------------------------------------------
+
+
+async def test_locked_load_sees_concurrent_commit(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    subj: SimpleNamespace,
+    app_under_test: object,
+) -> None:
+    """_load_document(for_update=True) must return the DB-current row, not the stale
+    pre-lock snapshot the authz dependency cached in the session's identity map.
+
+    Without populate_existing=True the authz dependency's session.get() primes the
+    identity-map entry, and the subsequent locked SELECT acquires the row lock but
+    hands back the cached (stale) attributes — a concurrent commit that landed while
+    we waited for the lock stays invisible.
+
+    With populate_existing=True the locked SELECT overwrites the identity-map entry
+    with the locked row's current column values, so the handler sees the committed
+    change (this is the diff-critic MAJOR fix).
+    """
+    from easysynq_api.api.documents import _load_document
+    from easysynq_api.db.models.app_user import AppUser
+    from easysynq_api.db.models.documented_information import DocumentedInformation
+
+    await s5.grant_lifecycle(subj.a)
+    await s5.grant_lifecycle(subj.b)
+    await s5.set_approver_release(await s5.default_org_id(), True)
+    ha = _auth(token_factory, subj.a)
+    hb = _auth(token_factory, subj.b)
+    type_id = await s5.type_id("SOP")
+    content = f"drift-interleave-{subj.a}".encode()
+
+    # Release a doc so it has a valid DocumentedInformation row.
+    did, _body = await _release_doc(app_client, ha, hb, type_id, content)
+    doc_uuid = uuid.UUID(did)
+
+    # Open session S — this simulates the per-request session.
+    async with get_sessionmaker()() as session_s:
+        # Prime the identity map — exactly what the authz dependency does.
+        cached = await session_s.get(DocumentedInformation, doc_uuid)
+        assert cached is not None
+        original_period = cached.review_period_months
+
+        # In a SEPARATE session B: commit a change to review_period_months (sentinel = 7).
+        sentinel_period = 7
+        async with get_sessionmaker()() as session_b:
+            di_b = await session_b.get(DocumentedInformation, doc_uuid)
+            assert di_b is not None
+            di_b.review_period_months = sentinel_period
+            await session_b.commit()
+
+        # Resolve the caller AppUser for session_s (needed by _load_document's org_id check).
+        caller = (
+            await session_s.execute(select(AppUser).where(AppUser.keycloak_subject == subj.a))
+        ).scalar_one()
+
+        # Call _load_document with for_update=True — this is the path under test.
+        # Before the fix, it returned original_period (stale identity-map snapshot).
+        # After the fix (populate_existing=True), it must return sentinel_period.
+        doc = await _load_document(session_s, caller, doc_uuid, for_update=True)
+
+    assert doc.review_period_months == sentinel_period, (
+        f"_load_document(for_update=True) returned stale period "
+        f"{doc.review_period_months!r} (from identity-map cache) "
+        f"instead of the committed value {sentinel_period!r}. "
+        f"Original was {original_period!r}. "
+        "populate_existing=True is required on the locked SELECT."
     )
 
 
