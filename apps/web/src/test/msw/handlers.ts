@@ -559,7 +559,7 @@ export const driftStatusFixture = {
       status: "DIVERGENT",
       started_at: "2026-06-10T04:00:00+00:00",
       finished_at: "2026-06-10T04:01:10+00:00",
-      counts: { scanned: 500, ok: 498, mismatched: 1, missing: 1, read_errors: 0, stamped: 498, full: false, sample_size: 500, total_blobs: 1240 },
+      counts: { scanned: 500, ok: 498, mismatched: 1, missing: 1, read_errors: 0, stamped: 498, full: false, sample_limit: 500, total_blobs: 1240 },
       triggered_by: "beat",
     },
   },
