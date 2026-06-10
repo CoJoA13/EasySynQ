@@ -36,6 +36,7 @@ from ..services.vault import (
     get_vault_signature_sink,
 )
 from ..services.vault import repository as vault_repo
+from ..services.vault.review import decide_periodic_review
 from ..services.workflow import decide as decide_service
 from ..services.workflow import repository as wf_repo
 
@@ -215,6 +216,16 @@ async def decide_endpoint(
     # key gates it (the role-resolved pool IS the authority); it writes the per-approver signatures.
     if instance is not None and instance.subject_type is WorkflowSubjectType.DCR:
         return await decide_dcr_approval(
+            session,
+            task,
+            caller,
+            outcome=body.outcome,
+            comment=body.comment,
+            idempotency_key=idempotency_key,
+            sig_sink=sig_sink,
+        )
+    if instance is not None and instance.subject_type is WorkflowSubjectType.PERIODIC_REVIEW:
+        return await decide_periodic_review(
             session,
             task,
             caller,

@@ -11,6 +11,7 @@ import calendar
 import datetime
 import logging
 import uuid
+from typing import Any
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import select, update
@@ -18,15 +19,21 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...config import get_settings
 from ...db.models._audit_enums import ActorType, AuditObjectType, EventType
+from ...db.models._signature_enums import SignatureMeaning, SignedObjectType
 from ...db.models._vault_enums import DocumentCurrentState, DocumentKind
 from ...db.models._workflow_enums import TaskState, WorkflowSubjectType
+from ...db.models.app_user import AppUser
 from ...db.models.audit_event import AuditEvent
+from ...db.models.document_version import DocumentVersion
 from ...db.models.documented_information import DocumentedInformation
+from ...db.models.signature_event import SignatureEvent as SignatureEventRow
 from ...db.models.workflow import Task, WorkflowInstance
 from ...logging import request_id_var
+from ...problems import ProblemException
 from ..common.pg_locks import LOCK_REVIEW_SWEEP, pg_advisory_lock
 from ..workflow import engine as wf_engine
 from ..workflow import repository as wf_repo
+from .signature import SignatureEvent, SignatureEventSink
 
 REVIEW_PERIOD_DEFAULT_MONTHS = 24  # doc 04's "e.g. 12/24/36 months" middle value (owner fork)
 REVIEW_LEAD_DAYS = 30  # doc 04 §9.1's lead window ("e.g. 30 days"); org-config later, additive
@@ -230,3 +237,144 @@ async def sweep_reviews(session: AsyncSession) -> dict[str, int]:
 
         await session.commit()
         return {"tasks_created": created, "escalated": escalated}
+
+
+_ALLOWED_REVIEW_OUTCOMES = {"complete", "changes_requested"}
+
+
+async def decide_periodic_review(
+    session: AsyncSession,
+    task: Task,
+    actor: AppUser,
+    *,
+    outcome: str,
+    comment: str | None,
+    idempotency_key: str | None,
+    sig_sink: SignatureEventSink,
+) -> dict[str, Any]:
+    """Decide a PERIODIC_REVIEW task (doc 04 §9.2). ``complete`` = "no change needed" → the
+    review_confirmed signature bound to the CURRENT Effective version's source digest + the clock
+    reset from the review date. ``changes_requested`` = "change needed" → terminal REJECTED, no
+    clock reset (the sweep re-nags while the doc stays Effective and due — deliberate).
+    "Obsolete it" is NOT a task outcome (rides the obsolete endpoint).
+
+    Membership follows the sibling posture (_assert_dcr_approver/_assert_capa_approver):
+    non-membership 404-COLLAPSES (never a 403 that leaks another user's task), and authority is
+    re-checked LIVE — the caller must be the document's CURRENT owner_user_id, not merely in the
+    pool frozen at sweep time (the context_users analogue of the siblings' live role re-check)."""
+    instance = await wf_repo.lock_instance_for_update(session, task.instance_id)
+    if instance is None or instance.org_id != actor.org_id:
+        raise ProblemException(status=404, code="not_found", title="Task not found")
+    pool = [str(u) for u in (task.candidate_pool or [])]
+    if task.assignee_user_id != actor.id and str(actor.id) not in pool:
+        raise ProblemException(status=404, code="not_found", title="Task not found")
+    doc = (
+        await session.execute(
+            select(DocumentedInformation)
+            .where(DocumentedInformation.id == instance.subject_id)
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if doc is None or doc.owner_user_id != actor.id:
+        raise ProblemException(status=404, code="not_found", title="Task not found")
+    if outcome not in _ALLOWED_REVIEW_OUTCOMES:
+        raise ProblemException(
+            status=422,
+            code="validation_error",
+            title="Periodic review accepts outcome complete | changes_requested",
+        )
+
+    result = await wf_engine.decide(
+        session,
+        task,
+        actor,
+        outcome=outcome,
+        comment=comment,
+        idempotency_key=idempotency_key,
+        _commit=False,
+    )
+    if result.get("replayed"):
+        # Response-parity on replay: if the instance is COMPLETED, re-derive document_id /
+        # next_review_due / the latest review_confirmed signature id for this doc so a retried
+        # request's body matches the original. No rows are added either way.
+        if result.get("current_state") == wf_engine.COMPLETED:
+            result["document_id"] = str(doc.id)
+            result["next_review_due"] = (
+                doc.next_review_due.isoformat() if doc.next_review_due else None
+            )
+            sig = (
+                await session.execute(
+                    select(SignatureEventRow)
+                    .where(
+                        SignatureEventRow.signed_object_id == doc.current_effective_version_id,
+                        SignatureEventRow.signed_object_type == SignedObjectType.document_version,
+                        SignatureEventRow.meaning == SignatureMeaning.review_confirmed,
+                    )
+                    .order_by(SignatureEventRow.created_at.desc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            result["signature_event_id"] = str(sig.id) if sig is not None else None
+        await session.commit()
+        return result
+
+    if result.get("current_state") == wf_engine.COMPLETED and outcome == "complete":
+        if doc.current_effective_version_id is None:
+            # raising rolls the whole txn back (engine rows included, _commit=False) — the task
+            # stays PENDING and can be re-decided once the doc's state settles.
+            raise ProblemException(
+                status=409,
+                code="conflict",
+                title="Document no longer has an Effective version to confirm",
+            )
+        version = await session.get(DocumentVersion, doc.current_effective_version_id)
+        if version is None:  # FK-guaranteed; guard for mypy
+            raise ProblemException(
+                status=409,
+                code="conflict",
+                title="Document no longer has an Effective version to confirm",
+            )
+        sig = sig_sink.record(
+            session,
+            SignatureEvent(
+                org_id=actor.org_id,
+                signed_object_id=version.id,
+                meaning="review_confirmed",
+                signer_user_id=actor.id,
+                signed_object_type="document_version",
+                content_digest=version.source_blob_sha256,
+                auth_context={"acr": "SESSION"},
+            ),
+        )
+        await session.flush()
+        now = _now()
+        doc.last_reviewed_at = now
+        doc.next_review_due = compute_next_review_due(
+            doc.review_period_months, now, version.effective_from
+        )
+        session.add(
+            AuditEvent(
+                org_id=actor.org_id,
+                occurred_at=now,
+                actor_id=actor.id,
+                actor_type=ActorType.user,
+                event_type=EventType.REVIEW_CONFIRMED,
+                object_type=AuditObjectType.document,
+                object_id=doc.id,
+                scope_ref=doc.identifier,
+                after={
+                    "revision_label": version.revision_label,
+                    "next_review_due": (
+                        doc.next_review_due.isoformat() if doc.next_review_due else None
+                    ),
+                    "signature_event_id": str(sig.id) if sig is not None else None,
+                },
+                request_id=_rid(),
+            )
+        )
+        result["document_id"] = str(doc.id)
+        result["next_review_due"] = doc.next_review_due.isoformat() if doc.next_review_due else None
+        result["signature_event_id"] = str(sig.id) if sig is not None else None
+
+    await session.commit()
+    return result

@@ -592,3 +592,592 @@ async def test_sweep_escalates_overdue_once(
         "a PENDING DOCUMENT-subject task must NOT produce a REVIEW_OVERDUE event"
         " — the subject_type == PERIODIC_REVIEW filter is the load-bearing guard"
     )
+
+
+# ---------------------------------------------------------------------------
+# Task 6: PERIODIC_REVIEW decision handler — integration proofs
+# ---------------------------------------------------------------------------
+
+
+async def _due_released_doc(
+    app_client: AsyncClient,
+    ha: dict[str, str],
+    hb: dict[str, str],
+    type_id: str,
+    content: bytes,
+    *,
+    backdate_days: int = 400,
+) -> tuple[str, uuid.UUID]:
+    """Release a doc then backdate its effective_from by backdate_days and set next_review_due
+    to today (making it overdue) so sweep_reviews creates a PERIODIC_REVIEW task.
+    Returns (doc_id_str, doc_uuid)."""
+    from easysynq_api.db.models.document_version import DocumentVersion
+    from easysynq_api.db.models.documented_information import DocumentedInformation
+
+    did, _body = await _release_doc(app_client, ha, hb, type_id, content)
+    doc_uuid = uuid.UUID(did)
+    today_date = datetime.datetime.now(_org_tz()).date()
+    async with get_sessionmaker()() as s:
+        di = await s.get(DocumentedInformation, doc_uuid)
+        assert di is not None
+        ver = await s.get(DocumentVersion, di.current_effective_version_id)
+        assert ver is not None
+        # Backdate effective_from so anchor is NOT confused with last_reviewed_at (test proof).
+        new_eff_from = ver.effective_from - datetime.timedelta(days=backdate_days)
+        ver.effective_from = new_eff_from
+        di.next_review_due = today_date
+        await s.commit()
+    return did, doc_uuid
+
+
+async def _pr_task_for_doc(doc_uuid: uuid.UUID) -> uuid.UUID:
+    """Find the latest open PERIODIC_REVIEW task for this doc."""
+    from easysynq_api.db.models._workflow_enums import TaskState, WorkflowSubjectType
+    from easysynq_api.db.models.workflow import Task, WorkflowInstance
+
+    async with get_sessionmaker()() as s:
+        instance = (
+            await s.execute(
+                select(WorkflowInstance)
+                .where(
+                    WorkflowInstance.subject_type == WorkflowSubjectType.PERIODIC_REVIEW,
+                    WorkflowInstance.subject_id == doc_uuid,
+                    WorkflowInstance.current_state.not_in(
+                        ("COMPLETED", "REJECTED", "NEEDS_ATTENTION")
+                    ),
+                )
+                .order_by(WorkflowInstance.started_at.desc())
+                .limit(1)
+            )
+        ).scalar_one()
+        task = (
+            await s.execute(
+                select(Task)
+                .where(
+                    Task.instance_id == instance.id,
+                    Task.state == TaskState.PENDING,
+                )
+                .limit(1)
+            )
+        ).scalar_one()
+        return task.id
+
+
+async def test_decide_complete_confirms_review(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    subj: SimpleNamespace,
+    app_under_test: object,
+) -> None:
+    """complete → COMPLETED, review_confirmed sig on the Effective version, clock reset from
+    review date (NOT from backdated effective_from — the anchor proof)."""
+    from easysynq_api.db.models._audit_enums import AuditObjectType, EventType
+    from easysynq_api.db.models._signature_enums import SignatureMeaning, SignedObjectType
+    from easysynq_api.db.models.audit_event import AuditEvent
+    from easysynq_api.db.models.document_version import DocumentVersion
+    from easysynq_api.db.models.documented_information import DocumentedInformation
+    from easysynq_api.db.models.signature_event import SignatureEvent as SignatureEventRow
+    from easysynq_api.services.vault.review import sweep_reviews
+
+    await s5.grant_lifecycle(subj.a)
+    await s5.grant_lifecycle(subj.b)
+    await s5.set_approver_release(await s5.default_org_id(), True)
+    ha = _auth(token_factory, subj.a)
+    hb = _auth(token_factory, subj.b)
+    type_id = await s5.type_id("SOP")
+    content = f"drift-decide-complete-{subj.a}".encode()
+
+    _did, doc_uuid = await _due_released_doc(app_client, ha, hb, type_id, content)
+
+    # Capture backdated effective_from before sweep for the anchor proof.
+    async with get_sessionmaker()() as s:
+        di = await s.get(DocumentedInformation, doc_uuid)
+        assert di is not None
+        ver_id = di.current_effective_version_id
+        assert ver_id is not None
+        ver = await s.get(DocumentVersion, ver_id)
+        assert ver is not None
+        backdated_eff_from = ver.effective_from
+
+    # Sweep → creates a PERIODIC_REVIEW task.
+    async with get_sessionmaker()() as session:
+        result = await sweep_reviews(session)
+    assert result["tasks_created"] >= 1
+
+    task_id = await _pr_task_for_doc(doc_uuid)
+
+    # Owner (subj.a) decides complete.
+    dr = await app_client.post(
+        f"/api/v1/tasks/{task_id}/decision",
+        headers=ha,
+        json={"outcome": "complete"},
+    )
+    assert dr.status_code == 200, dr.text
+    body = dr.json()
+    assert body["current_state"] == "COMPLETED"
+    next_due_str = body.get("next_review_due")
+    assert next_due_str is not None
+
+    # Run-scoped assertions.
+    async with get_sessionmaker()() as s:
+        # Exactly one review_confirmed sig for this version, run-scoped.
+        sigs = (
+            (
+                await s.execute(
+                    select(SignatureEventRow).where(
+                        SignatureEventRow.signed_object_id == ver_id,
+                        SignatureEventRow.signed_object_type == SignedObjectType.document_version,
+                        SignatureEventRow.meaning == SignatureMeaning.review_confirmed,
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert len(sigs) == 1, f"expected 1 review_confirmed sig, got {len(sigs)}"
+        sig = sigs[0]
+        assert sig.content_digest == ver.source_blob_sha256
+
+        # One REVIEW_CONFIRMED audit event for this doc.
+        audit_rows = (
+            (
+                await s.execute(
+                    select(AuditEvent).where(
+                        AuditEvent.object_type == AuditObjectType.document,
+                        AuditEvent.object_id == doc_uuid,
+                        AuditEvent.event_type == EventType.REVIEW_CONFIRMED,
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert len(audit_rows) == 1, f"expected 1 REVIEW_CONFIRMED audit, got {len(audit_rows)}"
+        assert audit_rows[0].scope_ref is not None
+
+        # doc.last_reviewed_at is set; next_review_due is reset from review date (NOT eff_from).
+        di = await s.get(DocumentedInformation, doc_uuid)
+        assert di is not None
+        assert di.last_reviewed_at is not None
+        assert di.next_review_due is not None
+
+        # The anchor proof: next_review_due == add_months(last_reviewed_at date, 24)
+        # and must differ from add_months(backdated effective_from date, 24).
+        last_reviewed_date = di.last_reviewed_at.astimezone(_org_tz()).date()
+        from_review_date = add_months(last_reviewed_date, 24)
+        backdated_eff_date = backdated_eff_from.astimezone(_org_tz()).date()
+        from_eff_date = add_months(backdated_eff_date, 24)
+        assert di.next_review_due == from_review_date, (
+            f"next_review_due {di.next_review_due} != "
+            f"add_months(last_reviewed_at, 24) {from_review_date}"
+        )
+        assert di.next_review_due != from_eff_date, (
+            "anchor proof failed: next_review_due equals the backdated effective_from anchor "
+            "— the handler is not using last_reviewed_at as the anchor"
+        )
+
+    # Re-run sweep → no new non-terminal PERIODIC_REVIEW instance (clock reset, not due yet).
+    async with get_sessionmaker()() as session:
+        await sweep_reviews(session)
+
+    async with get_sessionmaker()() as s:
+        non_terminal_count = len(
+            (
+                await s.execute(
+                    select(
+                        __import__(
+                            "easysynq_api.db.models.workflow",
+                            fromlist=["WorkflowInstance"],
+                        ).WorkflowInstance
+                    ).where(
+                        __import__(
+                            "easysynq_api.db.models.workflow",
+                            fromlist=["WorkflowInstance"],
+                        ).WorkflowInstance.subject_type
+                        == __import__(
+                            "easysynq_api.db.models._workflow_enums",
+                            fromlist=["WorkflowSubjectType"],
+                        ).WorkflowSubjectType.PERIODIC_REVIEW,
+                        __import__(
+                            "easysynq_api.db.models.workflow",
+                            fromlist=["WorkflowInstance"],
+                        ).WorkflowInstance.subject_id
+                        == doc_uuid,
+                        __import__(
+                            "easysynq_api.db.models.workflow",
+                            fromlist=["WorkflowInstance"],
+                        ).WorkflowInstance.current_state.not_in(
+                            ("COMPLETED", "REJECTED", "NEEDS_ATTENTION")
+                        ),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+    assert non_terminal_count == 0, (
+        "after a complete decision, sweep must not create a new PERIODIC_REVIEW instance "
+        f"(clock was reset, doc is not yet due) — got {non_terminal_count}"
+    )
+
+
+async def test_decide_changes_requested_keeps_clock_and_renag(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    subj: SimpleNamespace,
+    app_under_test: object,
+) -> None:
+    """changes_requested → REJECTED, clock unchanged, sweep re-nags with a new instance."""
+    from easysynq_api.db.models._audit_enums import AuditObjectType, EventType
+    from easysynq_api.db.models._signature_enums import SignatureMeaning
+    from easysynq_api.db.models.audit_event import AuditEvent
+    from easysynq_api.db.models.documented_information import DocumentedInformation
+    from easysynq_api.db.models.signature_event import SignatureEvent as SignatureEventRow
+    from easysynq_api.db.models.workflow import Task, WorkflowInstance
+    from easysynq_api.services.vault.review import sweep_reviews
+
+    await s5.grant_lifecycle(subj.a)
+    await s5.grant_lifecycle(subj.b)
+    await s5.set_approver_release(await s5.default_org_id(), True)
+    ha = _auth(token_factory, subj.a)
+    hb = _auth(token_factory, subj.b)
+    type_id = await s5.type_id("SOP")
+    content = f"drift-decide-cr-{subj.a}".encode()
+
+    # Backdate 40 days past due.
+    _did, doc_uuid = await _due_released_doc(app_client, ha, hb, type_id, content, backdate_days=40)
+
+    # Capture the original next_review_due so we can assert it's unchanged.
+    async with get_sessionmaker()() as s:
+        di = await s.get(DocumentedInformation, doc_uuid)
+        assert di is not None
+        original_next_review_due = di.next_review_due
+        ver_id = di.current_effective_version_id
+
+    # Sweep → task.
+    async with get_sessionmaker()() as session:
+        await sweep_reviews(session)
+
+    task_id = await _pr_task_for_doc(doc_uuid)
+    first_task_id = task_id
+
+    # Owner decides changes_requested.
+    dr = await app_client.post(
+        f"/api/v1/tasks/{task_id}/decision",
+        headers=ha,
+        json={"outcome": "changes_requested"},
+    )
+    assert dr.status_code == 200, dr.text
+    assert dr.json()["current_state"] == "REJECTED"
+
+    # Clock must be unchanged.
+    async with get_sessionmaker()() as s:
+        di = await s.get(DocumentedInformation, doc_uuid)
+        assert di is not None
+        assert di.next_review_due == original_next_review_due, (
+            f"changes_requested must not reset next_review_due: "
+            f"got {di.next_review_due}, want {original_next_review_due}"
+        )
+        # Zero review_confirmed signatures for this doc's versions.
+        sig_count = len(
+            (
+                await s.execute(
+                    select(SignatureEventRow).where(
+                        SignatureEventRow.signed_object_id == ver_id,
+                        SignatureEventRow.meaning == SignatureMeaning.review_confirmed,
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert sig_count == 0, (
+            f"changes_requested must produce no review_confirmed sig, got {sig_count}"
+        )
+
+    # Sweep again → a NEW non-terminal PERIODIC_REVIEW instance (re-nag).
+    async with get_sessionmaker()() as session:
+        r2 = await sweep_reviews(session)
+    assert r2["tasks_created"] >= 1
+
+    async with get_sessionmaker()() as s:
+        from easysynq_api.db.models._workflow_enums import TaskState, WorkflowSubjectType
+
+        instances = (
+            (
+                await s.execute(
+                    select(WorkflowInstance)
+                    .where(
+                        WorkflowInstance.subject_type == WorkflowSubjectType.PERIODIC_REVIEW,
+                        WorkflowInstance.subject_id == doc_uuid,
+                        WorkflowInstance.current_state.not_in(
+                            ("COMPLETED", "REJECTED", "NEEDS_ATTENTION")
+                        ),
+                    )
+                    .order_by(WorkflowInstance.started_at.desc())
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert len(instances) == 1, (
+            f"expected exactly 1 new non-terminal instance after re-nag sweep, got {len(instances)}"
+        )
+        new_instance = instances[0]
+
+        # The new instance must be different from the one that was decided.
+        new_task = (
+            await s.execute(
+                select(Task)
+                .where(
+                    Task.instance_id == new_instance.id,
+                    Task.state == TaskState.PENDING,
+                )
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        assert new_task is not None
+        assert new_task.id != first_task_id, "re-nag must produce a NEW task, not the old one"
+
+        # REVIEW_OVERDUE for the new instance (once-per-CYCLE, not once-EVER):
+        # the sweep emitted REVIEW_OVERDUE for the old instance id; the new one gets its own.
+        second_overdue = (
+            (
+                await s.execute(
+                    select(AuditEvent).where(
+                        AuditEvent.object_type == AuditObjectType.document,
+                        AuditEvent.object_id == doc_uuid,
+                        AuditEvent.event_type == EventType.REVIEW_OVERDUE,
+                        AuditEvent.after["instance_id"].astext == str(new_instance.id),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        # The new task's due_at is in the past (overdue_date), so the escalation pass fires.
+        assert len(second_overdue) == 1, (
+            f"expected 1 REVIEW_OVERDUE for the NEW instance, got {len(second_overdue)}"
+        )
+
+
+async def test_decide_obsoleted_doc_409_keeps_task_pending(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    subj: SimpleNamespace,
+    app_under_test: object,
+) -> None:
+    """complete on an obsoleted doc → 409; task stays PENDING; then changes_requested → 200."""
+    from easysynq_api.db.models._signature_enums import SignatureMeaning
+    from easysynq_api.db.models._workflow_enums import TaskState, WorkflowSubjectType
+    from easysynq_api.db.models.documented_information import DocumentedInformation
+    from easysynq_api.db.models.signature_event import SignatureEvent as SignatureEventRow
+    from easysynq_api.db.models.workflow import Task, WorkflowInstance
+    from easysynq_api.services.vault.review import sweep_reviews
+
+    await s5.grant_lifecycle(subj.a)
+    await s5.grant_lifecycle(subj.b)
+    await s5.set_approver_release(await s5.default_org_id(), True)
+    ha = _auth(token_factory, subj.a)
+    hb = _auth(token_factory, subj.b)
+    type_id = await s5.type_id("SOP")
+    content = f"drift-decide-409-{subj.a}".encode()
+
+    did, doc_uuid = await _due_released_doc(app_client, ha, hb, type_id, content)
+
+    # Sweep → task.
+    async with get_sessionmaker()() as session:
+        await sweep_reviews(session)
+
+    task_id = await _pr_task_for_doc(doc_uuid)
+
+    # Obsolete the doc (subj.a holds document.obsolete via lifecycle perms).
+    obs_r = await app_client.post(
+        f"/api/v1/documents/{did}/obsolete",
+        headers=ha,
+        json={"reason": "test obsolete for 409 gate"},
+    )
+    assert obs_r.status_code == 200, obs_r.text
+
+    # Owner decides complete → 409 (no Effective version).
+    dr = await app_client.post(
+        f"/api/v1/tasks/{task_id}/decision",
+        headers=ha,
+        json={"outcome": "complete"},
+    )
+    assert dr.status_code == 409, dr.text
+
+    # Task must still be PENDING; instance non-terminal; zero review_confirmed sigs.
+    async with get_sessionmaker()() as s:
+        di = await s.get(DocumentedInformation, doc_uuid)
+        assert di is not None
+        # current_effective_version_id should be None after obsolete.
+        assert di.current_effective_version_id is None
+
+        instances = (
+            (
+                await s.execute(
+                    select(WorkflowInstance).where(
+                        WorkflowInstance.subject_type == WorkflowSubjectType.PERIODIC_REVIEW,
+                        WorkflowInstance.subject_id == doc_uuid,
+                        WorkflowInstance.current_state.not_in(
+                            ("COMPLETED", "REJECTED", "NEEDS_ATTENTION")
+                        ),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert len(instances) == 1, (
+            f"409 must leave instance non-terminal, got {len(instances)} non-terminal"
+        )
+        task_row = (
+            await s.execute(
+                select(Task).where(
+                    Task.id == task_id,
+                )
+            )
+        ).scalar_one()
+        assert task_row.state == TaskState.PENDING, (
+            f"409 must leave task PENDING, got {task_row.state}"
+        )
+        sig_count = len(
+            (
+                await s.execute(
+                    select(SignatureEventRow).where(
+                        SignatureEventRow.signed_object_id == doc_uuid,
+                        SignatureEventRow.meaning == SignatureMeaning.review_confirmed,
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert sig_count == 0, f"409 path must emit no review_confirmed sig, got {sig_count}"
+
+    # Task was NOT poisoned — changes_requested still works.
+    dr2 = await app_client.post(
+        f"/api/v1/tasks/{task_id}/decision",
+        headers=ha,
+        json={"outcome": "changes_requested"},
+    )
+    assert dr2.status_code == 200, dr2.text
+    assert dr2.json()["current_state"] == "REJECTED"
+
+
+async def test_decide_rejects_non_owner_and_bad_outcomes(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    subj: SimpleNamespace,
+    app_under_test: object,
+) -> None:
+    """Non-member 404; live-authority re-check 404; bad outcome 422; idempotent replay."""
+    from easysynq_api.db.models._signature_enums import SignatureMeaning
+    from easysynq_api.db.models.app_user import AppUser
+    from easysynq_api.db.models.documented_information import DocumentedInformation
+    from easysynq_api.db.models.signature_event import SignatureEvent as SignatureEventRow
+    from easysynq_api.services.vault.review import sweep_reviews
+
+    await s5.grant_lifecycle(subj.a)
+    await s5.grant_lifecycle(subj.b)
+    await s5.set_approver_release(await s5.default_org_id(), True)
+    ha = _auth(token_factory, subj.a)
+    hb = _auth(token_factory, subj.b)
+    type_id = await s5.type_id("SOP")
+    content = f"drift-decide-authz-{subj.a}".encode()
+
+    _did, doc_uuid = await _due_released_doc(app_client, ha, hb, type_id, content)
+
+    # Ensure subj.b's app_user row exists.
+    async with get_sessionmaker()() as s:
+        b_user = (
+            await s.execute(select(AppUser).where(AppUser.keycloak_subject == subj.b))
+        ).scalar_one_or_none()
+        assert b_user is not None, "subj.b user must exist after grant_lifecycle"
+        b_user_id = b_user.id
+
+    # Sweep → task.
+    async with get_sessionmaker()() as session:
+        await sweep_reviews(session)
+
+    task_id = await _pr_task_for_doc(doc_uuid)
+
+    # subj.b (not the owner, not in candidate pool) → 404 (the 404-COLLAPSE).
+    r_non_member = await app_client.post(
+        f"/api/v1/tasks/{task_id}/decision",
+        headers=hb,
+        json={"outcome": "complete"},
+    )
+    assert r_non_member.status_code == 404, r_non_member.text
+
+    # Reassign owner_user_id to subj.b — subj.a is still in the FROZEN candidate pool.
+    async with get_sessionmaker()() as s:
+        di = await s.get(DocumentedInformation, doc_uuid)
+        assert di is not None
+        di.owner_user_id = b_user_id
+        await s.commit()
+
+    # subj.a (in frozen pool but no longer the live owner) → 404 (the live-authority re-check).
+    r_live_check = await app_client.post(
+        f"/api/v1/tasks/{task_id}/decision",
+        headers=ha,
+        json={"outcome": "complete"},
+    )
+    assert r_live_check.status_code == 404, r_live_check.text
+
+    # Restore owner to subj.a.
+    async with get_sessionmaker()() as s:
+        a_user = (
+            await s.execute(select(AppUser).where(AppUser.keycloak_subject == subj.a))
+        ).scalar_one()
+        di = await s.get(DocumentedInformation, doc_uuid)
+        assert di is not None
+        di.owner_user_id = a_user.id
+        await s.commit()
+
+    # Bad outcome → 422 (whitelist: complete | changes_requested only).
+    r_bad = await app_client.post(
+        f"/api/v1/tasks/{task_id}/decision",
+        headers=ha,
+        json={"outcome": "approve"},
+    )
+    assert r_bad.status_code == 422, r_bad.text
+
+    # Successful complete with an Idempotency-Key.
+    idem_key = uuid.uuid4().hex
+    r1 = await app_client.post(
+        f"/api/v1/tasks/{task_id}/decision",
+        headers={**ha, "Idempotency-Key": idem_key},
+        json={"outcome": "complete"},
+    )
+    assert r1.status_code == 200, r1.text
+    assert r1.json()["current_state"] == "COMPLETED"
+
+    # Retry the same Idempotency-Key → 200 replay, still exactly 1 review_confirmed sig.
+    r2 = await app_client.post(
+        f"/api/v1/tasks/{task_id}/decision",
+        headers={**ha, "Idempotency-Key": idem_key},
+        json={"outcome": "complete"},
+    )
+    assert r2.status_code == 200, r2.text
+
+    async with get_sessionmaker()() as s:
+        di = await s.get(DocumentedInformation, doc_uuid)
+        assert di is not None
+        ver_id = di.current_effective_version_id
+        sig_count = len(
+            (
+                await s.execute(
+                    select(SignatureEventRow).where(
+                        SignatureEventRow.signed_object_id == ver_id,
+                        SignatureEventRow.meaning == SignatureMeaning.review_confirmed,
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+    assert sig_count == 1, (
+        f"idempotent replay must not add a second review_confirmed sig, got {sig_count}"
+    )
