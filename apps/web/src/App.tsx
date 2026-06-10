@@ -25,6 +25,9 @@ import { AuditDetailPage } from "./features/audits/AuditDetailPage";
 import { ProgrammePage } from "./features/audits/ProgrammePage";
 import { IngestionRunsPage } from "./features/ingestion/IngestionRunsPage";
 import { IngestionRunPage } from "./features/ingestion/IngestionRunPage";
+import { DriftLayout } from "./features/drift/DriftLayout";
+import { DriftStatusPage } from "./features/drift/DriftStatusPage";
+import { SupersededCopiesPage } from "./features/drift/SupersededCopiesPage";
 import { apiGet } from "./lib/api";
 import { useAuth } from "./lib/auth";
 
@@ -130,6 +133,10 @@ export function App() {
         <Route path="audits/:id" element={<AuditDetailPage />} />
         <Route path="ingestion" element={<IngestionRunsPage />} />
         <Route path="ingestion/:runId" element={<IngestionRunPage />} />
+        <Route path="drift" element={<DriftLayout />}>
+          <Route index element={<DriftStatusPage />} />
+          <Route path="superseded-copies" element={<SupersededCopiesPage />} />
+        </Route>
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

@@ -55,6 +55,16 @@ export function LeftRail() {
           active={pathname.startsWith("/ingestion")}
         />
       )}
+      {can("drift.read") && (
+        // S-web-8: gated — drift.read is the admin-side SYSTEM key (R41); System Administrator
+        // holds it natively (seeded 0047).
+        <NavLink
+          component={Link}
+          to="/drift"
+          label="Drift"
+          active={pathname.startsWith("/drift")}
+        />
+      )}
       {PHASES.map((phase) => {
         const top = (clauses ?? []).filter((c) => c.pdca_phase === phase && c.parent_id === null);
         if (top.length === 0) return null;
