@@ -528,7 +528,8 @@ export const capaApprovalTask = {
 };
 
 // A PERIODIC_REVIEW task detail (GET /tasks/{id}) — S-web-8 routes it via ReviewApprovePage's
-// periodic branch. due_at = org-midnight of next_review_due (the sweep's anchor).
+// periodic branch. due_at = org-midnight of the THEN-current next_review_due (the sweep's anchor);
+// it deliberately predates docFixture[0].next_review_due, which reads as the post-reset clock.
 export const periodicReviewTask = {
   id: "tkpr1111-1111-1111-1111-111111111111",
   instance_id: "wfpr1111-1111-1111-1111-111111111111",

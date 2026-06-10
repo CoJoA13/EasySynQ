@@ -30,7 +30,7 @@ export interface DocumentSummary {
   // due_soon window) — the client never recomputes it.
   review_period_months: number | null;
   next_review_due: string | null; // a DATE — "YYYY-MM-DD"
-  last_reviewed_at: string | null;
+  last_reviewed_at: string | null; // an ISO DATETIME with offset (unlike next_review_due)
   review_state: ReviewState | null;
   clause_refs?: string[];
   // S-web-3: per-document authoring affordances (DP-6) — present only on detail reads.
