@@ -76,8 +76,11 @@ export function DecisionCard({ taskId, subjectType, subjectId }: { taskId: strin
         if (e.status === 403 && e.code === "sod_violation")
           setError("You can't approve this version (separation of duties).");
         else if (e.status === 409)
+          // A periodic 409 is two distinct servers-side conflicts: no-Effective-version
+          // (review.py) vs a stale double-decide ("Task already decided", engine.py) — a second
+          // tab has its own per-mount idempotency key, so the replay path never masks it.
           setError(
-            subjectType === "PERIODIC_REVIEW"
+            subjectType === "PERIODIC_REVIEW" && e.message.includes("Effective version")
               ? "The document no longer has an Effective version to confirm — it may have been obsoleted or be under revision."
               : "This task was already decided.",
           );

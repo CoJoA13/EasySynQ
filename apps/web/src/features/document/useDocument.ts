@@ -6,7 +6,10 @@ import type { DocumentSummary } from "../../lib/types";
 // list). `seed` (the clicked list row) is used as initialData to avoid a fetch/flash on the click path.
 export function useDocument(
   documentId: string | null,
-  opts: { enabled: boolean; seed?: DocumentSummary },
+  // retry: pass false where a 403 is an EXPECTED outcome (the periodic-review context) so the
+  // calm panel appears without re-hammering a deterministic deny; undefined keeps the
+  // react-query default for the existing detail/drawer call sites.
+  opts: { enabled: boolean; seed?: DocumentSummary; retry?: boolean | number },
 ) {
   const api = useApi();
   const seed = opts.seed && opts.seed.id === documentId ? opts.seed : undefined;
@@ -15,5 +18,9 @@ export function useDocument(
     queryFn: () => api.get<DocumentSummary>(`/api/v1/documents/${documentId}`),
     enabled: opts.enabled && documentId !== null,
     initialData: seed,
+    // Spread, not `retry: opts.retry` — an explicit `retry: undefined` key would OVERRIDE the
+    // QueryClient defaultOptions (options spread wins), silently re-enabling retries where a
+    // test/app default disabled them.
+    ...(opts.retry !== undefined ? { retry: opts.retry } : {}),
   });
 }

@@ -128,6 +128,24 @@ describe("DecisionCard — PERIODIC_REVIEW", () => {
     expect(screen.queryByText("This task was already decided.")).not.toBeInTheDocument();
   });
 
+  test("a stale double-decide 409 keeps the already-decided copy (diff-critic)", async () => {
+    // The engine's "Task already decided" 409 (a second tab with its own idempotency key) must
+    // NOT be misreported as the document having been obsoleted.
+    server.use(
+      http.post("/api/v1/tasks/:id/decision", () =>
+        HttpResponse.json({ code: "conflict", title: "Task already decided" }, { status: 409 }),
+      ),
+    );
+    renderCard({ subjectType: "PERIODIC_REVIEW" });
+    await userEvent.click(screen.getByLabelText("Confirm — no change needed"));
+    await userEvent.click(screen.getByRole("checkbox"));
+    await userEvent.click(screen.getByRole("button", { name: "Submit decision" }));
+    expect(await screen.findByText("This task was already decided.")).toBeInTheDocument();
+    expect(
+      screen.queryByText(/no longer has an Effective version to confirm/),
+    ).not.toBeInTheDocument();
+  });
+
   test("DOCUMENT card is unchanged (regression pin)", () => {
     renderCard({ subjectType: "DOCUMENT" });
     expect(screen.getByLabelText("Approve")).toBeInTheDocument();

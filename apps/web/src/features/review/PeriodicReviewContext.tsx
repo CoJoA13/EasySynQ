@@ -8,7 +8,12 @@ import { useDocument } from "../document/useDocument";
 // via document.read. A 403 degrades calmly and never blocks the decision card: the decision
 // authority is server-side ownership (live re-check), not this read.
 export function PeriodicReviewContext({ documentId }: { documentId: string }) {
-  const { data: doc, isLoading, isError, error } = useDocument(documentId, { enabled: true });
+  // retry:false — a 403 here is the EXPECTED no-document.read outcome (the calm panel), not a
+  // transient; the production QueryClient would otherwise re-hammer the deny 3× with backoff.
+  const { data: doc, isLoading, isError, error } = useDocument(documentId, {
+    enabled: true,
+    retry: false,
+  });
 
   if (isLoading && !doc) return <Text c="dimmed">Loading the document under review…</Text>;
   if (isError || !doc) {

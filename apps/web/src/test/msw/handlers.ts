@@ -1133,8 +1133,12 @@ export const handlers = [
     const body = (await request.json()) as { review_period_months?: number | null };
     const doc = docFixture.find((d) => d.id === params.id) ?? docFixture[0]!;
     const months = body.review_period_months ?? null;
+    // The real PATCH response is bare _document(doc): NO clause_refs/capabilities (handler-supplied
+    // read-path extras) and a null effective_from — the UI must invalidate, never consume this body.
+    const bare: Record<string, unknown> = { ...doc };
+    delete bare.clause_refs;
     return HttpResponse.json({
-      ...doc,
+      ...bare,
       effective_from: null,
       review_period_months: months,
       next_review_due: months === null ? null : "2028-03-14",
