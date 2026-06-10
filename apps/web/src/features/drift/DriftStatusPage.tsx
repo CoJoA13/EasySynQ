@@ -60,10 +60,14 @@ function ScanCard({ title, scan }: { title: string; scan: DriftScanSummary | nul
         </Group>
         <Text size="xs" c="dimmed">
           Started {fmt(scan.started_at)} ·{" "}
-          {scan.finished_at ? `finished ${fmt(scan.finished_at)}` : "not finished"} · by{" "}
-          {scan.triggered_by}
+          {scan.finished_at
+            ? `finished ${fmt(scan.finished_at)}`
+            : scan.status === "FAILED"
+              ? "aborted"
+              : "in progress"}{" "}
+          · by {scan.triggered_by}
         </Text>
-        <Table withRowBorders={false} verticalSpacing={2}>
+        <Table withRowBorders={false} verticalSpacing={2} aria-label={`${title} scan counts`}>
           <Table.Tbody>
             {Object.entries(scan.counts)
               .sort(([a], [b]) => a.localeCompare(b))
@@ -112,6 +116,9 @@ export function DriftStatusPage() {
   if (isError || !data) {
     return (
       <Container size="lg" py="md">
+        <Title order={2} mb="md">
+          Drift status
+        </Title>
         <Alert color="red" title="Couldn't load the drift status">
           Please try again.
         </Alert>
@@ -127,8 +134,9 @@ export function DriftStatusPage() {
         <div>
           <Title order={2}>Drift status</Title>
           <Text c="dimmed" size="sm">
-            The vault&rsquo;s integrity scanners (D1–D4). The vault is the source of truth — these
-            are detection reads, not corrections.
+            The vault&rsquo;s integrity detection legs: blob re-hash, mirror tamper/staleness, and
+            outstanding superseded copies. The vault is the source of truth — these are detection
+            reads, not corrections.
           </Text>
         </div>
         <SimpleGrid cols={{ base: 1, md: 2 }}>

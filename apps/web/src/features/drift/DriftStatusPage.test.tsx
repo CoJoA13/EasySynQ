@@ -49,11 +49,12 @@ describe("DriftStatusPage", () => {
     expect(await screen.findAllByText("Never run yet.")).toHaveLength(2);
   });
 
-  test("failing > 0 surfaces the unresolved-findings alarm", async () => {
+  test("failing > 0 surfaces the unresolved-findings alarm with the live count", async () => {
     renderWithProviders(<DriftStatusPage />);
-    expect(
-      await screen.findByText(/2 unresolved integrity findings — re-alarming until restored/),
-    ).toBeInTheDocument();
+    // Structural: the alarm is a real alert element carrying the fixture's live failing count.
+    const alarm = await screen.findByRole("alert");
+    expect(alarm).toHaveTextContent(/unresolved integrity findings — re-alarming until restored/);
+    expect(alarm).toHaveTextContent(String(driftStatusFixture.blob_coverage.failing));
   });
 
   test("failing = 0 shows no alarm", async () => {
