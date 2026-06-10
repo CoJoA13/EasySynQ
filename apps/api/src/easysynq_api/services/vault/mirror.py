@@ -626,7 +626,8 @@ async def build_tree(
     format to source + R26 ``no_controlled_rendition``. The doc folder is placed under
     ``{PHASE}/{NN}-{Word}/`` for its numerically-lowest mapped clause, with a relative symlink from
     each other mapped clause folder; an unmapped doc lands in ``_unmapped/``. Returns the manifest
-    entry list (file entries carry ``sha256``; symlink entries carry ``symlink_to``) + the count of
+    entry list (file entries carry ``sha256``, doc-owned ones also ``document_id``/``version_id``;
+    symlink entries carry ``symlink_to``) + the count of
     pending renditions. ``session`` (the worker's, under the advisory lock) is needed to cache
     renditions; without one (pure-unit / no-op sink) rendering still writes the bytes but does not
     persist the cache. ``clauses_by_doc`` / ``top_words`` default to empty (the unit render tests
@@ -705,8 +706,10 @@ async def build_tree(
             )
 
     _write(build_root / "INDEX.md", _index_md(effs, cbd).encode(), manifest, build_root)
-    # The machine manifest (doc 04 §10.3). Generated artifact only — NO scan/diff consumes it in S7
-    # (drift detection is v1, D-6). ``generated_at`` is the one non-deterministic field by design.
+    # The machine manifest (doc 04 §10.3). A generated artifact the S-drift-2 scan byte-VERIFIES
+    # against the PG-persisted ``manifest_sha256`` but never reads as authority (the
+    # ``mirror_build`` row is the expected state). ``generated_at`` is the one non-deterministic
+    # field by design — it makes recompute impossible; the stored byte digest is the sound check.
     manifest_doc = {
         "schema": "easysynq.mirror.manifest/1",
         "generated_at": datetime.datetime.now(tz=datetime.UTC).isoformat(),
@@ -758,9 +761,12 @@ async def sync_mirror(
     """Full rebuild + atomic swap of the read-only mirror. Idempotent: a duplicate call re-converges
     on the same content (renditions are cached after the first render). ``mirror_path`` defaults to
     ``settings.mirror_path`` (tests override it); ``session`` is opened from the app sessionmaker
-    (the non-owner ``easysynq_app`` role — SELECT the vault + INSERT a rendition ``blob`` + UPDATE
-    the rendition FK is all it needs) when not supplied. The session is held through ``build_tree``
-    and **committed** so cached renditions persist; the atomic swap then publishes the tree."""
+    (the non-owner ``easysynq_app`` role — SELECT the vault, INSERT a rendition ``blob`` + UPDATE
+    the rendition FK, plus S-drift-2's ``mirror_build`` INSERT/UPDATE/DELETE and ``organization``
+    SELECT, all granted by 0046) when not supplied. The session is held through ``build_tree`` and
+    **committed** (renditions + the baseline row); the atomic swap then publishes the tree, and a
+    final small commit stamps ``swapped_at`` (the pointer-integrity anchor — a crash between swap
+    and stamp self-heals at the next scan)."""
     root = Path(mirror_path) if mirror_path is not None else Path(get_settings().mirror_path)
     sink = render_sink if render_sink is not None else get_render_sink()
 
