@@ -1,6 +1,6 @@
 # EasySynQ Decisions Register
 
-This document is the **single authoritative source of truth** for the EasySynQ self-hosted ISO 9001:2015 QMS specification. It records the locked foundational decisions, the locked stakeholder decisions, and the normative resolutions (R1–R40) to every finding raised in the gap audit (`17-gaps-and-open-questions.md`); R38 (slice S-rec-4) is the first post-v1 *additive* decision (additive catalog extensibility + SoD-6), R39 (slice family S-aud/S-capa) locks the Audits/Findings/CAPA model + workflow posture, and R40 (slice family S-dcr) locks the Revision & change-depth (DCR) family model + the InApproval reject-loop target.
+This document is the **single authoritative source of truth** for the EasySynQ self-hosted ISO 9001:2015 QMS specification. It records the locked foundational decisions, the locked stakeholder decisions, and the normative resolutions (R1–R41) to every finding raised in the gap audit (`17-gaps-and-open-questions.md`); R38 (slice S-rec-4) is the first post-v1 *additive* decision (additive catalog extensibility + SoD-6), R39 (slice family S-aud/S-capa) locks the Audits/Findings/CAPA model + workflow posture, R40 (slice family S-dcr) locks the Revision & change-depth (DCR) family model + the InApproval reject-loop target, and R41 (slice S-drift-3) adds the `drift.read` SYSTEM-domain permission key.
 
 **Precedence:** Where this register conflicts with any text in sections `01`–`15`, **this register supersedes that text.** Section editors MUST back-propagate the changes listed under each resolution's *Back-propagation* note. The exact tokens, enum values, state names, and field names quoted here are **canonical and verbatim** — they must be reproduced character-for-character (case, snake_case, dot-namespacing, and all) wherever the underlying concept appears. Do not soften, rename, abbreviate, or omit any token.
 
@@ -816,6 +816,21 @@ S-dcr-5 per the addendum). **S-dcr-3** (diff: metadata + text redline [3a, zero-
 **Back-propagation:** 05 (§5.5 reject-loop → Open; §7.3 gate on the shared `document.obsolete`), 14 (§7 cross-FK
 realized), 15 (§8.7 implement/close are explicit gated endpoints — superseding the "engine auto-drives" note),
 16. Supersedes B5 (DCR dual-lifecycle).
+
+---
+
+## R41 — `drift.read` (S-drift-3): the second R38-additive catalog key
+
+**Decision (owner, 2026-06-10).** The admin drift-status surface (`GET /admin/drift/status`,
+`GET /admin/drift/superseded-copies`) is gated on a NEW SYSTEM-domain key **`drift.read`**
+(`is_system_domain=true`, `sod_sensitive=false`, `sig_hook=false`, `finest_scope=SYSTEM`), seeded
+in migration 0047 and granted to **System Administrator**. Riding `storage.read` was rejected:
+that key is storage *config*, the D4 copies report isn't storage at all, and riding would silently
+widen every storage-config reader's view. Per R38: additive only — no rename/removal; the catalog
+count moves 98 → 99. The trailing S-web-8 UI gates on the same key. Related S-drift-3 owner forks
+(spec §0): ONE `BLOB_INTEGRITY_FAILED` event type (classification in the payload); D1 cadence =
+one daily rolling task (rotation = the periodic full set; `--full` CLI on demand); D4 is a live
+read (no persisted scan).
 
 ---
 

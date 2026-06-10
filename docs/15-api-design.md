@@ -648,6 +648,8 @@ The ADMIN super-user sits **outside the QMS** (`03 §4`): first-run setup, users
 | GET / PATCH | `/admin/config/workflow` | `workflow_definition`s (versioned); per-doc-type approval chains, MFA-on-approval toggle, SLAs. |
 | GET | `/admin/system/health` | Liveness/readiness of PG, MinIO, OpenSearch, Redis, Keycloak, renderer, queue depth (mirrors `/readyz`, `03 §10`). |
 | GET | `/admin/jobs/{id}` | Generic async-job status (the `202` follow-up): `{ id, kind, status:queued\|running\|succeeded\|failed, progress, result_url?, error? }`. |
+| GET | `/admin/drift/status` | **S-drift-3:** latest `drift_scan` per kind + D1 blob coverage + the D4 headline. Gated on the SYSTEM-domain `drift.read` (R41); pure read, no scan trigger. |
+| GET | `/admin/drift/superseded-copies` | **S-drift-3 (D4, R11):** outstanding EXPORTED/PRINTED copies of now-Superseded/Obsolete versions (`limit`/`offset`; totals over the full set). The only detection leg reaching copies outside the mirror; the public `/verify` token is the per-copy resolution. |
 | POST | `/admin/export` | **Whole-vault export stub** (`vault.export`): a portable, full-QMS export — documents + records + audit in open formats — for tenant migration/decommission, **distinct** from scoped Evidence Packs and from backups. Async: returns `202` + a job (poll `/admin/jobs/{id}`); the archive lands in MinIO and is returned via presigned URL. Declared for the v1.x roadmap (`16`) (reconciled per Decisions Register R33). |
 
 ### 8.18 Backup (`/admin/backups`)

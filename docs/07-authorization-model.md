@@ -215,6 +215,7 @@ Permissions are named `resource.action`. The catalog below is **complete for v1*
 | `storage.read` / `storage.manage` | Vault storage (DB/MinIO) & mirror config | SYSTEM | – |
 | `backup.read` / `backup.run` / `backup.configure` | Admin-controlled backups | SYSTEM | – |
 | `restore.run` | Restore from a backup | SYSTEM | always `PRIVILEGE_SENSITIVE` audit event |
+| `drift.read` | Read the drift-detection status surface (latest scans, blob coverage, the D4 superseded-copies report) | SYSTEM | **R41 additive (R38)**, S-drift-3; granted to System Administrator |
 | `import.execute` | Run the import scan/classify pass against a QMS to ingest | SYSTEM | admin-only at SYSTEM scope (reconciled per Decisions Register R5; replaces `import.initiate` / `import.administer`) |
 | `import.review` | Review/correct import classifications | SYSTEM | admin-only at SYSTEM scope (reconciled per Decisions Register R5) |
 | `import.commit` | Commit the reviewed import to the vault | SYSTEM | admin-only at SYSTEM scope (reconciled per Decisions Register R5) |
