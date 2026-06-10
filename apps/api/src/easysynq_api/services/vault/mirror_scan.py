@@ -147,6 +147,17 @@ def _hash_file(path: Path) -> str:
     return h.hexdigest()
 
 
+def _safe_readlink(path: Path) -> str | None:
+    """``os.readlink`` that returns None instead of raising — a symlink deleted/swapped between the
+    walk and the readlink (a TOCTOU race under concurrent tampering) must become a recorded finding,
+    NOT an uncaught OSError that aborts the whole scan into a findings-less FAILED report (which the
+    always-rebuild path would then prune without an audit/quarantine; Codex P2)."""
+    try:
+        return os.readlink(path)
+    except OSError:
+        return None
+
+
 def _classify_entry(full: Path) -> str:
     """``'symlink'`` | ``'file'`` (a REGULAR file) | ``'special'`` (FIFO/device/socket/anything
     else). Built on ``lstat`` (no-follow) so a planted FIFO is never opened — ``_hash_file`` would
@@ -215,7 +226,7 @@ def compare_tree(
                     CLASS_SYMLINK,
                     expected_sha256=expected,
                     document_id=doc_id,
-                    symlink_found=os.readlink(build_dir / rel),
+                    symlink_found=_safe_readlink(build_dir / rel),
                 )
             )
             continue
@@ -282,7 +293,7 @@ def compare_tree(
                 Finding(rel, CLASS_SYMLINK, symlink_expected=target, note="non-regular file")
             )
         else:
-            actual = os.readlink(build_dir / rel)
+            actual = _safe_readlink(build_dir / rel)  # None if it raced away → still divergent
             if actual != target:
                 findings.append(
                     Finding(rel, CLASS_SYMLINK, symlink_expected=target, symlink_found=actual)
@@ -298,16 +309,12 @@ def compare_tree(
             # special manifest is TAMPER — never follow/hash it (a symlink to bytes matching the
             # digest would otherwise read clean / read out-of-tree; Codex P2).
             if kind == "symlink":
-                try:
-                    mlink: str | None = os.readlink(build_dir / rel)
-                except OSError:
-                    mlink = None
                 findings.append(
                     Finding(
                         rel,
                         CLASS_UNEXPECTED,
                         expected_sha256=manifest_sha256,
-                        symlink_found=mlink,
+                        symlink_found=_safe_readlink(build_dir / rel),
                     )
                 )
                 continue
@@ -344,11 +351,9 @@ def compare_tree(
                 )
             continue
         if kind == "symlink":
-            try:
-                actual_link: str | None = os.readlink(build_dir / rel)
-            except OSError:
-                actual_link = None
-            findings.append(Finding(rel, CLASS_EXTRA, symlink_found=actual_link))
+            findings.append(
+                Finding(rel, CLASS_EXTRA, symlink_found=_safe_readlink(build_dir / rel))
+            )
         elif kind == "special":
             # A FIFO/device/socket extra — EXTRA, never opened.
             findings.append(Finding(rel, CLASS_EXTRA, note="non-regular file"))

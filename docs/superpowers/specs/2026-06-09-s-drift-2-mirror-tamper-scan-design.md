@@ -393,6 +393,21 @@ pushback and reasoning… disregard nitpicks and unreachable bugs; just document
   connection pool** across concurrent runs (instead of a fresh per-invocation engine), this race
   becomes reachable — pin the lock connection then.
 
+- **Empty-registry broken-conforming-`current`-link audit gap (Codex round-7 P2 — narrow, NOT
+  fixed).** On a fresh/pre-0046 install (empty registry) where `current` is a conforming
+  `.builds/<name>` symlink but that target directory was deleted/replaced, the scan early-returns
+  the benign `none` no-baseline (no `POINTER_DIVERGENT` audit). The mirror is **still corrected**
+  (baseline=`none` → the rebuild runs and re-points `current`); only the audit event is absent, on
+  a transient one-time install state. Accepted as a narrow audit-completeness gap, not a
+  correctness/wedge bug.
+
+- **CLI `mirror sync` skip-vs-deferred message (Codex round-7 P2 — cosmetic, NOT fixed).** When
+  `scan_and_sync(rebuild="always")` defers the rebuild (unpersisted findings / lock re-check), the
+  CLI prints the lock-contended "another sync/scan is already in progress" message. The deferred
+  case is rare (a persist/connection failure) and already `logger.error`-logged with the counts;
+  the operator-facing wording is imprecise but not misleading about success (exit stays 0, the
+  mirror was not silently declared correct). Accepted as a cosmetic messaging nit.
+
 ## 12. Docs in-PR
 
 `docs/05` §9.1/§9.2 (mark the D2/D3 seam closed; event names confirmed) · `docs/14` (the two tables)
