@@ -21,6 +21,10 @@ usage: easysynq <command>
                     blob-snapshot aligned; checkpoint-not-ahead check; chain
                     re-verify). Leaves a standing target; cut over per runbook. [S11]
   mirror rebuild    Regenerate the read-only filesystem mirror from the vault. [S7]
+  blob verify [--full] [--sample-size N]
+                    D1 integrity re-hash of vault blobs against blob.sha256
+                    (rolling sample by default; --full = the complete pass;
+                    re-run after a restore to clear the alarm).        [S-drift-3]
   upgrade --confirm Pre-backup -> migrate -> health-gate (pre-backup is the
                     disaster safety net on a failed migration).             [S11]
   migrate           Run 'alembic upgrade head' inside the api image.
@@ -79,6 +83,11 @@ case "$cmd" in
     ;;
   mirror)
     "${COMPOSE[@]}" run --rm api uv run python -m easysynq_api.cli.mirror "$@"
+    ;;
+  blob)
+    # S-drift-3 (D1): rolling/--full blob integrity re-hash under LOCK_BLOB_VERIFY. Runs on the
+    # WORKER (the same internal-read path the Beat task uses; exit 1 on a FAILED infra scan).
+    "${COMPOSE[@]}" run --rm worker uv run python -m easysynq_api.cli.blob "$@"
     ;;
   ""|-h|--help|help)
     usage

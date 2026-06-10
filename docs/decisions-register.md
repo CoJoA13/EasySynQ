@@ -819,7 +819,7 @@ realized), 15 (§8.7 implement/close are explicit gated endpoints — supersedin
 
 ---
 
-## R41 — `drift.read` (S-drift-3): the second R38-additive catalog key
+### R41 — `drift.read` (S-drift-3): the second R38-additive catalog key
 
 **Decision (owner, 2026-06-10).** The admin drift-status surface (`GET /admin/drift/status`,
 `GET /admin/drift/superseded-copies`) is gated on a NEW SYSTEM-domain key **`drift.read`**
