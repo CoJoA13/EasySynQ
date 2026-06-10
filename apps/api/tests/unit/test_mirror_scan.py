@@ -469,6 +469,14 @@ def test_resolve_pointer_matrix() -> None:
     assert resolve_pointer("z", False, [a, orphan_old, orphan_new]) == ("rollback", orphan_old)
     # …and current at the NEWEST unswapped build IS the legitimate swap-then-crash window.
     assert resolve_pointer("c", False, [a, orphan_old, orphan_new]) == ("selfheal", orphan_new)
+    # Codex P2: empty registry + an OUT-OF-TREE current symlink is foreign (audited), not benign;
+    # a CONFORMING `.builds/<name>` symlink with no row yet is the benign pre-0046 case.
+    assert resolve_pointer("/out/of/tree", False, [], current_symlink_conforming=False) == (
+        "foreign",
+        None,
+    )
+    assert resolve_pointer("abc", False, [], current_symlink_conforming=True) == ("none", None)
+    assert resolve_pointer(None, False, []) == ("none", None)  # truly-absent current stays benign
 
 
 async def test_scan_empty_registry_is_no_baseline(

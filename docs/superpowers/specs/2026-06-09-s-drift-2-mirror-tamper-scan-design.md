@@ -350,6 +350,17 @@ the existing posture; the same lock serializes scan↔sync so a swap can never p
     paths) — `persist_scan_results` commits, and a silently dropped/replaced connection up to that
     point frees the session-level lock, so the normal divergent/behind-vault rebuild needs the
     guard too.
+12. **Codex round 5 (2026-06-10):** (a, P2 — fixed) an **empty registry with a `current` symlink
+    to an OUT-OF-TREE / non-conforming target** is now `foreign → MIRROR_TAMPER` (audited), not the
+    benign no-baseline — a conforming `.builds/<name>` symlink with no row yet stays the benign
+    pre-0046 case (`resolve_pointer` gains `current_symlink_conforming`). (b, P1 — assessed not
+    reachable, no code change) the connection-pinning race requires two workers to share a pool:
+    each Celery task builds its **own** `create_async_engine` (isolated pool, `dispose()` in
+    `finally`), and the **global** `pg_try_advisory_lock` at task entry (`if not held: return`)
+    serializes workers *before* `scan_and_sync`; advisory locks are globally exclusive and
+    `holds_advisory_lock` verifies `pid = pg_backend_pid()`, so two backends cannot both be the
+    holder. The in-session recheck covers the only live risk — this worker's own connection
+    silently dropping mid-op.
 
 ## 12. Docs in-PR
 

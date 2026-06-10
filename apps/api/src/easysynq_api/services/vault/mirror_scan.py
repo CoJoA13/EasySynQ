@@ -490,7 +490,11 @@ def _parse_current_target(raw: str) -> str | None:
 
 
 def resolve_pointer(
-    current_target: str | None, current_is_real_path: bool, rows: list[PointerRow]
+    current_target: str | None,
+    current_is_real_path: bool,
+    rows: list[PointerRow],
+    *,
+    current_symlink_conforming: bool = True,
 ) -> tuple[str, PointerRow | None]:
     """Pure pointer-integrity matrix (spec §11.1): verify `current` against the registry, never
     trust it. Returns (pointer_state, the row to scan against or None). States: 'none' (empty
@@ -498,13 +502,21 @@ def resolve_pointer(
     current → the newest not-yet-stamped row; persist completes the bookkeeping), and the four
     MIRROR_TAMPER states 'missing' (current absent/broken) / 'rogue' (current is a real
     file-or-dir, not a symlink) / 'foreign' / 'rollback'. ``current_is_real_path`` = current
-    exists and is NOT a symlink (a planted file or dir to quarantine, vs a truly-absent link)."""
+    exists and is NOT a symlink (a planted file or dir to quarantine, vs a truly-absent link).
+    ``current_symlink_conforming`` = current is a symlink whose target parses to the
+    ``.builds/<name>`` shape (vs an out-of-tree target) — consulted only on the empty-registry
+    leg."""
     if not rows:
-        # Empty registry (fresh install / pre-0046) is the benign no-baseline — UNLESS a real
-        # file/dir is already planted at `current`: the first rebuild's atomic_swap can't
-        # os.replace a directory, so it must be quarantined aside first (Codex P2), not waved
-        # through as no-baseline.
-        return ("rogue" if current_is_real_path else "none", None)
+        # Empty registry (fresh install / pre-0046) is the benign no-baseline — UNLESS:
+        #  • a real file/dir is planted at `current` (atomic_swap can't os.replace a dir) → rogue;
+        #  • `current` is a symlink to an OUT-OF-TREE / non-conforming target (Codex P2) → foreign,
+        #    so the bad link is audited as POINTER_DIVERGENT, not silently overwritten clean. A
+        #    CONFORMING ``.builds/<name>`` symlink with no row yet IS the benign pre-0046 state.
+        if current_is_real_path:
+            return ("rogue", None)
+        if current_target is not None and not current_symlink_conforming:
+            return ("foreign", None)
+        return ("none", None)
     swapped = [r for r in rows if r.swapped_at is not None]
     newest_swapped = max(swapped, key=lambda r: r.built_at) if swapped else None
     newest_overall = max(rows, key=lambda r: r.built_at)
@@ -633,7 +645,12 @@ async def scan_mirror(
     findings: list[Finding] = []
     try:
         rows = await _pointer_rows(session)
-        pointer, cur = resolve_pointer(current_target, current_is_real_path, rows)
+        pointer, cur = resolve_pointer(
+            current_target,
+            current_is_real_path,
+            rows,
+            current_symlink_conforming=conforming_name is not None,
+        )
 
         builds_root = root / ".builds"
         # The whole served-build area is compromised when ``.builds`` is NOT a real directory — a
