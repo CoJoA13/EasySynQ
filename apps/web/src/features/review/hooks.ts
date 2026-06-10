@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useApi } from "../../lib/api";
-import type { DecisionBody, DecisionResult, Task, TaskState, WorkflowInstance } from "../../lib/types";
+import type { DecisionBody, DecisionResult, DecisionSubjectType, PeriodicReviewDecisionResult, Task, TaskState, WorkflowInstance } from "../../lib/types";
 
 // S-web-5 review/approve reads + the decision mutation. All on useApi (token implicit). The inbox is
 // self-scoped server-side (GET /tasks returns the caller's own/candidate tasks — no permission key).
@@ -40,7 +40,7 @@ export function useWorkflowInstance(instanceId: string | null) {
 
 export interface DecideInput {
   taskId: string;
-  subjectType: "DOCUMENT" | "CAPA";
+  subjectType: DecisionSubjectType;
   subjectId: string; // the document id or capa id — for cache invalidation
   idempotencyKey: string;
   body: DecisionBody;
@@ -51,7 +51,7 @@ export function useDecideTask() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ taskId, body, idempotencyKey }: DecideInput) =>
-      api.send<DecisionResult>("POST", `/api/v1/tasks/${taskId}/decision`, body, {
+      api.send<DecisionResult | PeriodicReviewDecisionResult>("POST", `/api/v1/tasks/${taskId}/decision`, body, {
         "Idempotency-Key": idempotencyKey,
       }),
     onSuccess: (_d, { taskId, subjectType, subjectId }) => {
@@ -61,6 +61,10 @@ export function useDecideTask() {
         void qc.invalidateQueries({ queryKey: ["document", subjectId] });
         void qc.invalidateQueries({ queryKey: ["document-approval", subjectId] });
         void qc.invalidateQueries({ queryKey: ["document-versions", subjectId] });
+      } else if (subjectType === "PERIODIC_REVIEW") {
+        // subjectId IS the document id — the clock reset must show on the doc page + library.
+        void qc.invalidateQueries({ queryKey: ["document", subjectId] });
+        void qc.invalidateQueries({ queryKey: ["documents"] });
       } else {
         void qc.invalidateQueries({ queryKey: ["capa", subjectId] });
         void qc.invalidateQueries({ queryKey: ["capas"] });
