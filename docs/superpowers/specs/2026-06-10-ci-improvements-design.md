@@ -96,20 +96,27 @@ machinery on hosted runners; revisit only if Docker Hub rate limiting ever bites
 1. **Concurrency** (top level):
    ```yaml
    concurrency:
-     group: ci-${{ github.workflow }}-${{ github.ref }}
+     group: ci-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
    ```
-   PR pushes cancel the superseded run; `main` pushes never cancel.
-2. **Caching**: bump `astral-sh/setup-uv@v3` → `@v8` in `api`, `migrations`, `integration-shards`
-   with `enable-cache: true` + `cache-dependency-glob: "apps/api/uv.lock"`. Add `cache: npm` +
+   PR pushes cancel the superseded run. Push (main) runs get a **unique group per run** — GitHub
+   allows only one running + one pending run per group regardless of `cancel-in-progress`, so a
+   shared main group would queue-cancel the middle run of three back-to-back merges (diff-critic
+   finding).
+2. **Caching**: bump `astral-sh/setup-uv@v3` → `@v8.2.0` (exact pin — setup-uv stopped publishing
+   floating major tags at v8; a bare `@v8` does not resolve, diff-critic CRITICAL) in `api`,
+   `migrations`, `integration-shards` with `enable-cache: true` +
+   `cache-dependency-glob: "apps/api/uv.lock"`. Add `cache: npm` +
    `cache-dependency-path: apps/web/package-lock.json` to the `web` job's setup-node. (`contracts`
    stays as-is — a 20 s npx job, not worth a cache key.)
 3. **Durations stay fresh** (the refresh pipeline): each shard's pytest invocation gains
    `--store-durations --clean-durations` (pytest-split 0.11: at session finish the file is replaced
    with **exactly the tests this shard ran**, freshly timed; the *input* split still reads the
    committed file at collection). A subsequent `actions/upload-artifact@v4` step (success-only,
-   `retention-days: 7`) publishes `test-durations-{group}`. Every green run is now a refresh source;
-   storing timings adds no measurable test time.
+   `retention-days: 7`) publishes `test-durations-{group}` — with **`include-hidden-files: true`**
+   (v4 excludes dotfiles by default: without it the upload silently matches zero files and stays
+   green — diff-critic MAJOR) and **`if-no-files-found: error`** so that failure mode stays loud.
+   Every green run is now a refresh source; storing timings adds no measurable test time.
 
 ### `scripts/refresh-test-durations.sh` (new)
 

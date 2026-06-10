@@ -8,7 +8,8 @@
 #
 # Usage: scripts/refresh-test-durations.sh [run-id]
 #   run-id  a ci.yml run whose integration shards were green; defaults to the latest
-#           successful run on main.
+#           successful run on main. Artifacts expire after 7 days — if the default run is
+#           older, gh fails at download; pass a fresher run id (or let any PR run one).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
