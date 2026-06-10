@@ -262,3 +262,210 @@ def test_quarantine_tree_moves_bytes_out(tmp_path: Path) -> None:
     assert not feral.exists()  # moved, not copied
     assert (qdir / ".builds" / "feral" / "deep" / "payload.bin").read_bytes() == b"PLANTED"
     assert finding.quarantine_path is not None
+
+
+# --- orchestration (no-DB paths via the stubbed registry probe; DB paths are integration) ---
+
+from easysynq_api.services.vault.mirror_scan import (  # noqa: E402
+    PointerRow,
+    ScanReport,
+    resolve_pointer,
+    scan_and_sync,
+    scan_mirror,
+)
+
+
+def _prow(name: str, built: str, swapped: str | None) -> PointerRow:
+    import datetime as dt
+
+    def _ts(s: str) -> dt.datetime:
+        return dt.datetime.fromisoformat(s).replace(tzinfo=dt.UTC)
+
+    return PointerRow(name, _ts(built), _ts(swapped) if swapped else None)
+
+
+def test_resolve_pointer_matrix() -> None:
+    """The spec §11.1 pointer-integrity matrix, pure: the `current` symlink is verified against
+    the registry, never trusted."""
+    a = _prow("a", "2026-06-01T00:00:00", "2026-06-01T00:00:01")
+    b = _prow("b", "2026-06-02T00:00:00", "2026-06-02T00:00:01")
+    orphan_new = _prow("c", "2026-06-03T00:00:00", None)  # commit-then-swap-crash, newest
+    orphan_old = _prow("z", "2026-05-01T00:00:00", None)  # ancient never-swapped orphan
+
+    assert resolve_pointer(None, False, []) == ("none", None)  # empty registry: benign
+    assert resolve_pointer("b", False, [a, b]) == ("ok", b)  # normal
+    assert resolve_pointer(None, False, [a, b]) == ("missing", None)  # current deleted: TAMPER
+    assert resolve_pointer(None, True, [a, b]) == ("rogue_dir", None)  # current is a real dir
+    assert resolve_pointer("x", False, [a, b]) == ("foreign", None)  # planted/renamed tree
+    assert resolve_pointer("a", False, [a, b]) == ("rollback", a)  # an older swapped build
+    assert resolve_pointer("c", False, [a, b, orphan_new]) == ("selfheal", orphan_new)
+    assert resolve_pointer("z", False, [a, b, orphan_old]) == ("rollback", orphan_old)
+
+
+async def test_scan_empty_registry_is_no_baseline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Fresh install / pre-0046 upgrade: an EMPTY registry is the ONLY benign no-baseline —
+    zero findings, zero quarantine. The registry probe is stubbed; session=None proves the
+    path makes no other DB call."""
+
+    async def _no_rows(session: object) -> list[PointerRow]:
+        return []
+
+    monkeypatch.setattr(scan_mod, "_pointer_rows", _no_rows)
+    report = await scan_mirror(None, mirror_path=tmp_path)  # type: ignore[arg-type]
+    assert report.baseline == "none"
+    assert report.pointer == "none"
+    assert report.status == "CLEAN"
+    assert report.is_current is False
+    assert report.findings == []
+    assert not (tmp_path / ".quarantine").exists()
+
+
+async def test_scan_failure_is_failed_never_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An infrastructure failure (the registry probe explodes) → an honest FAILED report, no
+    raise (the backup posture; spec §8)."""
+
+    async def _boom(session: object) -> list[PointerRow]:
+        raise RuntimeError("pg exploded")
+
+    monkeypatch.setattr(scan_mod, "_pointer_rows", _boom)
+    report = await scan_mirror(None, mirror_path=tmp_path)  # type: ignore[arg-type]
+    assert report.status == "FAILED"
+    assert report.error is not None and "pg exploded" in report.error
+    assert report.findings == []
+
+
+def _report(
+    status: str,
+    *,
+    findings: list[Finding] | None = None,
+    baseline: str = "ok",
+    is_current: bool = True,
+) -> ScanReport:
+    return ScanReport(
+        scan_id=uuid.uuid4(),
+        started_at=scan_mod._now(),
+        baseline=baseline,
+        status=status,
+        is_current=is_current,
+        build_name="abc",
+        findings=findings or [],
+    )
+
+
+async def test_scan_and_sync_failed_gating(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Spec §8: `always` (the sync path) rebuilds even on FAILED; `if_needed` (the hourly path)
+    does NOT — a scan failure is not evidence the mirror is wrong."""
+    calls: list[str] = []
+
+    async def _failed_scan(session: object, *, mirror_path: object = None) -> ScanReport:
+        return _report("FAILED")
+
+    async def _persist_ok(session: object, report: object, **kw: object) -> bool:
+        return True
+
+    async def _fake_sync(**kw: object) -> object:
+        calls.append("rebuild")
+        return object()
+
+    async def _lock_held(session: object, key: int) -> bool:
+        return True
+
+    monkeypatch.setattr(scan_mod, "scan_mirror", _failed_scan)
+    monkeypatch.setattr(scan_mod, "persist_scan_results", _persist_ok)
+    monkeypatch.setattr(scan_mod, "sync_mirror", _fake_sync)
+    monkeypatch.setattr(scan_mod, "holds_advisory_lock", _lock_held)
+
+    _, result = await scan_and_sync(None, rebuild="if_needed", triggered_by="beat")  # type: ignore[arg-type]
+    assert result is None and calls == []  # hourly: no rebuild on FAILED
+
+    _, result = await scan_and_sync(None, rebuild="always", triggered_by="sync")  # type: ignore[arg-type]
+    assert result is not None and calls == ["rebuild"]  # sync: correction never blocked
+
+
+async def test_scan_and_sync_defers_rebuild_when_findings_not_persisted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Spec §11.5: unpersisted findings defer the correction — the rebuild would erase the
+    on-disk evidence the next scan needs to re-detect and audit."""
+    calls: list[str] = []
+    divergent = _report("DIVERGENT", findings=[Finding("a", CLASS_UNEXPECTED, "e", "f")])
+
+    async def _scan(session: object, *, mirror_path: object = None) -> ScanReport:
+        return divergent
+
+    async def _persist_fails(session: object, report: object, **kw: object) -> bool:
+        return False
+
+    async def _fake_sync(**kw: object) -> object:
+        calls.append("rebuild")
+        return object()
+
+    monkeypatch.setattr(scan_mod, "scan_mirror", _scan)
+    monkeypatch.setattr(scan_mod, "persist_scan_results", _persist_fails)
+    monkeypatch.setattr(scan_mod, "sync_mirror", _fake_sync)
+
+    _, result = await scan_and_sync(None, rebuild="always", triggered_by="sync")  # type: ignore[arg-type]
+    assert result is None and calls == []
+
+
+async def test_scan_and_sync_skips_rebuild_when_lock_lost(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Spec §11.5: a mid-scan connection loss FREES the session-level advisory lock — a lockless
+    rebuild could race a concurrent sync's prune, so the pipeline re-verifies before correcting."""
+    calls: list[str] = []
+
+    async def _failed_scan(session: object, *, mirror_path: object = None) -> ScanReport:
+        return _report("FAILED")
+
+    async def _persist_ok(session: object, report: object, **kw: object) -> bool:
+        return True
+
+    async def _fake_sync(**kw: object) -> object:
+        calls.append("rebuild")
+        return object()
+
+    async def _lock_lost(session: object, key: int) -> bool:
+        return False
+
+    monkeypatch.setattr(scan_mod, "scan_mirror", _failed_scan)
+    monkeypatch.setattr(scan_mod, "persist_scan_results", _persist_ok)
+    monkeypatch.setattr(scan_mod, "sync_mirror", _fake_sync)
+    monkeypatch.setattr(scan_mod, "holds_advisory_lock", _lock_lost)
+
+    _, result = await scan_and_sync(None, rebuild="always", triggered_by="sync")  # type: ignore[arg-type]
+    assert result is None and calls == []
+
+
+def test_counts_math() -> None:
+    findings = [
+        Finding("a", CLASS_STALE, "e", "f", quarantine_path="/q/a"),
+        Finding("b", CLASS_UNEXPECTED, "e", "f", note="unreadable: x"),
+        Finding("c", CLASS_EXTRA, None, "f", quarantine_path="/q/c"),
+        Finding("d", CLASS_MISSING, "e", None),
+        Finding("e", CLASS_SYMLINK, symlink_expected="x", symlink_found="y"),
+    ]
+    report = ScanReport(
+        scan_id=uuid.uuid4(),
+        started_at=scan_mod._now(),
+        baseline="ok",
+        status="DIVERGENT",
+        is_current=True,
+        build_name="abc",
+        findings=findings,
+        scanned=10,
+    )
+    c = report.counts()
+    assert c["scanned"] == 10
+    assert c["ok"] == 6  # 10 walked - 4 present-divergent (MISSING is not on disk)
+    assert c["stale"] == 1
+    assert c["tampered"] == 4
+    assert (c["extra"], c["missing"], c["symlink_divergent"]) == (1, 1, 1)
+    assert c["quarantined"] == 2
+    assert c["errors"] == 1
+    assert c["baseline"] == "ok" and c["is_current"] is True
+    assert c["scan_id"] == str(report.scan_id)
