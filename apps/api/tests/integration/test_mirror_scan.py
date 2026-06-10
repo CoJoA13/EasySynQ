@@ -31,7 +31,7 @@ from easysynq_api.db.models.audit_event import AuditEvent
 from easysynq_api.db.models.drift_scan import DriftScan
 from easysynq_api.db.models.mirror_build import MirrorBuild
 from easysynq_api.db.session import get_sessionmaker
-from easysynq_api.services.common.pg_locks import LOCK_MIRROR_SYNC
+from easysynq_api.services.common.pg_locks import LOCK_MIRROR_SYNC, pg_advisory_lock
 from easysynq_api.services.vault import mirror as mirror_mod
 from easysynq_api.services.vault.mirror import sync_mirror
 from easysynq_api.services.vault.mirror_scan import (
@@ -61,6 +61,21 @@ def subj() -> SimpleNamespace:
 
 async def _sync(mirror: Path) -> None:
     await sync_mirror(mirror_path=mirror, render_sink=LoggingRenderSink())
+
+
+async def _scan_and_sync_locked(mirror: Path) -> tuple[ScanReport, object]:
+    """Drive the if_needed pipeline holding LOCK_MIRROR_SYNC, exactly as the production task runner
+    does — scan_and_sync re-verifies lock ownership on the session before EVERY rebuild, so a
+    caller that doesn't hold the lock would (correctly) skip the rebuild."""
+    async with get_sessionmaker()() as s, pg_advisory_lock(s, LOCK_MIRROR_SYNC) as held:
+        assert held
+        return await scan_and_sync(
+            s,
+            rebuild="if_needed",
+            triggered_by="beat",
+            mirror_path=mirror,
+            render_sink=LoggingRenderSink(),
+        )
 
 
 async def _events_for_scan(scan_id: uuid.UUID) -> list[AuditEvent]:
@@ -219,14 +234,7 @@ async def test_tamper_detect_quarantine_audit_correct(
     changelog = _doc_dir(mirror, doc["identifier"]) / "CHANGELOG.md"
     changelog.unlink()
 
-    async with get_sessionmaker()() as s:
-        report, result = await scan_and_sync(
-            s,
-            rebuild="if_needed",
-            triggered_by="beat",
-            mirror_path=mirror,
-            render_sink=LoggingRenderSink(),
-        )
+    report, result = await _scan_and_sync_locked(mirror)
 
     assert report.status == "DIVERGENT"
     assert result is not None  # the rebuild ran
@@ -378,14 +386,7 @@ async def test_behind_vault_build_is_not_current_no_audit(
     await _sync(mirror)
     doc2 = await s5.drive_to_effective(app_client, ha, hb, hb, type_id, b"CURRENT-V2-DOC")
 
-    async with get_sessionmaker()() as s:
-        report, result = await scan_and_sync(
-            s,
-            rebuild="if_needed",
-            triggered_by="beat",
-            mirror_path=mirror,
-            render_sink=LoggingRenderSink(),
-        )
+    report, result = await _scan_and_sync_locked(mirror)
     assert report.status == "CLEAN"  # the tree matches its baseline — nothing was tampered
     assert report.is_current is False  # but the vault moved on
     assert report.findings == []
@@ -419,14 +420,7 @@ async def test_unregistered_current_is_foreign_tamper(
         await s.execute(text("DELETE FROM mirror_build WHERE build_name = :b"), {"b": build_name})
         await s.commit()
 
-    async with get_sessionmaker()() as s:
-        report, result = await scan_and_sync(
-            s,
-            rebuild="if_needed",
-            triggered_by="beat",
-            mirror_path=mirror,
-            render_sink=LoggingRenderSink(),
-        )
+    report, result = await _scan_and_sync_locked(mirror)
     assert report.pointer == "foreign"
     assert report.status == "DIVERGENT"
     assert [f.classification for f in report.findings if f.path == "current"] == [
@@ -494,14 +488,7 @@ async def test_pointer_rollback_is_tamper(
     os.symlink(os.path.join(".builds", first_build), tmp_link)
     os.replace(tmp_link, mirror / "current")
 
-    async with get_sessionmaker()() as s:
-        report, result = await scan_and_sync(
-            s,
-            rebuild="if_needed",
-            triggered_by="beat",
-            mirror_path=mirror,
-            render_sink=LoggingRenderSink(),
-        )
+    report, result = await _scan_and_sync_locked(mirror)
     assert report.pointer == "rollback"
     assert report.status == "DIVERGENT"
     pointer_findings = [f for f in report.findings if f.path == "current"]
@@ -593,14 +580,7 @@ async def test_destroyed_served_tree_is_tamper_not_clean(
     build_name = Path(os.readlink(mirror / "current")).name
     shutil.rmtree(mirror / ".builds" / build_name)  # current symlink intact, target gone
 
-    async with get_sessionmaker()() as s:
-        report, result = await scan_and_sync(
-            s,
-            rebuild="if_needed",
-            triggered_by="beat",
-            mirror_path=mirror,
-            render_sink=LoggingRenderSink(),
-        )
+    report, result = await _scan_and_sync_locked(mirror)
     assert report.status == "DIVERGENT"
     assert any(f.classification == "POINTER_DIVERGENT" for f in report.findings)
     events = await _events_for_scan(report.scan_id)
@@ -626,14 +606,7 @@ async def test_planted_file_at_served_build_root_is_quarantined(
     shutil.rmtree(mirror / ".builds" / build_name)
     (mirror / ".builds" / build_name).write_bytes(b"PLANTED-AT-BUILD-ROOT")  # a file, not a dir
 
-    async with get_sessionmaker()() as s:
-        report, result = await scan_and_sync(
-            s,
-            rebuild="if_needed",
-            triggered_by="beat",
-            mirror_path=mirror,
-            render_sink=LoggingRenderSink(),
-        )
+    report, result = await _scan_and_sync_locked(mirror)
     assert report.status == "DIVERGENT"
     assert any(f.classification == "POINTER_DIVERGENT" for f in report.findings)
     qdirs = list((mirror / ".quarantine").iterdir())
