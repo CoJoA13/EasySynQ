@@ -327,6 +327,66 @@ def test_quarantine_tree_moves_bytes_out(tmp_path: Path) -> None:
     assert finding.quarantine_path is not None
 
 
+def test_quarantine_dir_rejects_regular_file_parent(tmp_path: Path) -> None:
+    """Codex P2: a `.quarantine` pre-planted as a regular FILE would make mkdir raise
+    FileExistsError and abort quarantine; _quarantine_dir removes it and creates the real dir.
+    No symlink — cross-platform."""
+    mirror_root = tmp_path / "m"
+    mirror_root.mkdir()
+    (mirror_root / ".quarantine").write_bytes(b"OBSTRUCTION")  # a file where a dir must be
+
+    qdir = _quarantine_dir(mirror_root, uuid.uuid4())
+    assert (mirror_root / ".quarantine").is_dir()  # the obstruction was removed + a real dir made
+    assert qdir.is_dir()
+
+
+async def test_empty_registry_real_dir_current_is_rogue(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex P2: with an EMPTY registry, a real DIRECTORY planted at `current` must be `rogue`
+    (quarantined aside) — not waved through as the benign no-baseline, because the first rebuild's
+    atomic_swap can't os.replace a directory. No symlink — cross-platform (current is a dir)."""
+
+    async def _no_rows(session: object) -> list[PointerRow]:
+        return []
+
+    monkeypatch.setattr(scan_mod, "_pointer_rows", _no_rows)
+    (tmp_path / "current").mkdir()
+    (tmp_path / "current" / "planted.txt").write_bytes(b"PLANTED-DIR-CONTENT")
+
+    report = await scan_mirror(None, mirror_path=tmp_path)  # type: ignore[arg-type]
+    assert report.pointer == "rogue"
+    assert report.status == "DIVERGENT"
+    qdirs = list((tmp_path / ".quarantine").iterdir())
+    assert len(qdirs) == 1
+    assert (qdirs[0] / "current" / "planted.txt").read_bytes() == b"PLANTED-DIR-CONTENT"
+    assert not (tmp_path / "current").exists()  # moved aside → the swap can recreate the symlink
+
+
+async def test_regular_file_builds_parent_is_quarantined(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex P2: a regular FILE planted at `.builds` (with `current` absent → cur is None) is a
+    compromised parent — flagged and moved aside so the rebuild's builds.mkdir doesn't wedge. No
+    symlink — cross-platform."""
+    import datetime as _dt
+
+    async def _one_row(session: object) -> list[PointerRow]:
+        return [PointerRow("abc", _dt.datetime(2026, 6, 1, tzinfo=_dt.UTC), None)]
+
+    monkeypatch.setattr(scan_mod, "_pointer_rows", _one_row)
+    (tmp_path / ".builds").write_bytes(b"PLANTED-BUILDS-FILE")  # a file where the dir must be
+    # `current` is absent → resolve_pointer → "missing" (cur is None); .builds is the focus here.
+
+    report = await scan_mirror(None, mirror_path=tmp_path)  # type: ignore[arg-type]
+    assert report.status == "DIVERGENT"
+    assert any(f.path == ".builds" and f.classification == CLASS_POINTER for f in report.findings)
+    qdirs = list((tmp_path / ".quarantine").iterdir())
+    assert len(qdirs) == 1
+    assert (qdirs[0] / ".builds").read_bytes() == b"PLANTED-BUILDS-FILE"
+    assert not (tmp_path / ".builds").exists()  # moved aside → builds.mkdir won't wedge
+
+
 def test_quarantine_dir_rejects_symlinked_parent(tmp_path: Path) -> None:
     """Codex P2: a pre-planted `.quarantine` symlink would redirect the forensic evidence OUTSIDE
     the mirror; _quarantine_dir removes the redirect and writes the real dir under the mirror root.

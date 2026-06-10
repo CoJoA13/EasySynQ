@@ -373,10 +373,11 @@ def _quarantine_dir(mirror_root: Path, scan_id: uuid.UUID) -> Path:
     to browse tampered lookalike content (the 4-lens fold §11.6; chmod is weak on Windows — the
     production mount is Linux). If ``.quarantine`` was pre-planted as a SYMLINK, ``mkdir`` would
     follow it and write the forensic evidence (copies, moves, the index) OUTSIDE the mirror, where
-    the same tamperer could read or redirect it — so remove the redirect and recreate the real dir
-    before use (Codex P2)."""
+    the same tamperer could read or redirect it; if planted as a regular FILE (or other
+    non-directory), ``mkdir`` would raise ``FileExistsError`` and abort quarantine entirely. Either
+    way, remove the planted obstruction and recreate the real dir before use (Codex P2)."""
     qbase = mirror_root / ".quarantine"
-    if qbase.is_symlink():
+    if qbase.is_symlink() or (qbase.exists() and not qbase.is_dir()):
         qbase.unlink()
     qbase.mkdir(parents=True, exist_ok=True)
     os.chmod(qbase, 0o700)
@@ -499,7 +500,11 @@ def resolve_pointer(
     file-or-dir, not a symlink) / 'foreign' / 'rollback'. ``current_is_real_path`` = current
     exists and is NOT a symlink (a planted file or dir to quarantine, vs a truly-absent link)."""
     if not rows:
-        return ("none", None)
+        # Empty registry (fresh install / pre-0046) is the benign no-baseline — UNLESS a real
+        # file/dir is already planted at `current`: the first rebuild's atomic_swap can't
+        # os.replace a directory, so it must be quarantined aside first (Codex P2), not waved
+        # through as no-baseline.
+        return ("rogue" if current_is_real_path else "none", None)
     swapped = [r for r in rows if r.swapped_at is not None]
     newest_swapped = max(swapped, key=lambda r: r.built_at) if swapped else None
     newest_overall = max(rows, key=lambda r: r.built_at)
@@ -557,11 +562,18 @@ def _scan_builds_area(
 async def _known_digests(
     session: AsyncSession, document_id: uuid.UUID, exclude_version_id: uuid.UUID | None
 ) -> set[str]:
-    """Every digest the vault knows for this document EXCEPT the expected version's own (spec
-    §11.3 — doc 05's STALE is "matches an OLDER version"; same-version bytes in the wrong role,
-    e.g. raw source bytes over the banded controlled-copy rendition, are TAMPER)."""
+    """The digests STALE may legitimately match: bytes of this document that were once the
+    controlled (Effective) copy — i.e. versions in **Effective / Superseded / Obsolete** only,
+    EXCEPT the expected version's own (spec §11.3 — doc 05's STALE is "matches an OLDER version").
+    Draft / InReview / Approved versions have NEVER been the controlled copy, and the mirror is
+    Effective-only — so planted unreleased-draft bytes are alarm-worthy TAMPER, never a soft STALE
+    (Codex P2). Same-version bytes in the wrong role (raw source over the banded rendition) are
+    also TAMPER (the version_id exclusion)."""
     stmt = select(DocumentVersion.source_blob_sha256, DocumentVersion.rendition_blob_sha256).where(
-        DocumentVersion.document_id == document_id
+        DocumentVersion.document_id == document_id,
+        DocumentVersion.version_state.in_(
+            [VersionState.Effective, VersionState.Superseded, VersionState.Obsolete]
+        ),
     )
     if exclude_version_id is not None:
         stmt = stmt.where(DocumentVersion.id != exclude_version_id)
@@ -641,16 +653,29 @@ async def scan_mirror(
         build_dir_scannable = False
 
         builds_root = root / ".builds"
-        # The whole served-build area redirected: ``.builds`` itself is a symlink. ``is_dir()`` on a
-        # child would follow it and walk/hash out-of-tree content (Codex P2 — only the FINAL build
-        # component was symlink-checked before). Treat the area as compromised → never scan it.
-        builds_root_compromised = builds_root.is_symlink()
+        # The whole served-build area is compromised when ``.builds`` is NOT a real directory — a
+        # symlink (``is_dir()`` on a child would follow it and walk/hash out-of-tree content) OR a
+        # planted regular file/special (the corrective rebuild's ``builds.mkdir`` would then raise,
+        # wedging correction). Never scan THROUGH it, and quarantine it below — independent of
+        # whether ``current`` matched a registry row (Codex P2: cur is None for missing/rogue/
+        # foreign current, yet the rebuild still writes through a symlinked ``.builds``).
+        builds_root_compromised = builds_root.is_symlink() or (
+            builds_root.exists() and not builds_root.is_dir()
+        )
 
         if pointer in ("missing", "rogue", "foreign"):
             findings.append(Finding("current", CLASS_POINTER, symlink_found=current_target))
+        if builds_root_compromised:
+            findings.append(
+                Finding(
+                    ".builds",
+                    CLASS_POINTER,
+                    note="the .builds parent is not a directory (symlink/file/special)",
+                )
+            )
         if cur is not None:
             build_dir = builds_root / cur.build_name
-            # NEVER walk a symlinked build dir or a symlinked ``.builds`` parent (``is_dir()``
+            # NEVER walk a symlinked build dir or a compromised ``.builds`` parent (``is_dir()``
             # follows the link → out-of-tree content would be hashed + copied; the db79af8
             # pointer-shape lesson, one level down + Codex P2 for the parent).
             build_dir_scannable = (
@@ -676,17 +701,12 @@ async def scan_mirror(
                 findings.extend(tree_findings)
                 if pointer in ("ok", "selfheal"):
                     is_current = await _is_current(session, row.manifest)
-            elif builds_root_compromised:
-                # The whole `.builds` area is a symlink — flag (and quarantine below) the symlink
-                # itself, not the registered child path through it.
-                findings.append(
-                    Finding(".builds", CLASS_POINTER, note="the .builds parent is a symlink")
-                )
-            else:
+            elif not builds_root_compromised:
                 # The registered build's served tree is GONE or replaced by a file/symlink/special
                 # — the bytes `current` resolves to are missing/tampered. MIRROR_TAMPER; is_current
                 # stays False so the hourly path rebuilds (a CLEAN here would hide the basic
-                # tamper). A planted (lexisting) object is quarantined below (Codex P2).
+                # tamper). A planted (lexisting) object is quarantined below (Codex P2). (When
+                # ``.builds`` itself is compromised, the ".builds" finding above already covers it.)
                 findings.append(
                     Finding(
                         f".builds/{cur.build_name}",
@@ -711,11 +731,13 @@ async def scan_mirror(
             # Preserve the planted object at the served build root before the rebuild prunes it
             # (Codex P2). ``shutil.move`` uses ``os.rename`` (same-volume) so a symlink moves as
             # the link inode — out-of-tree targets are never followed.
-            if cur is not None and not build_dir_scannable:
-                if builds_root_compromised:
-                    pf = next(f for f in findings if f.path == ".builds")
-                    quarantine_tree(qdir, builds_root, pf)
-                elif build_dir is not None and (build_dir.is_symlink() or build_dir.exists()):
+            if builds_root_compromised:
+                # Move the compromised ``.builds`` (symlink/file/special) aside so the rebuild's
+                # ``builds.mkdir`` recreates a clean real dir — fires regardless of `cur`.
+                pf = next(f for f in findings if f.path == ".builds")
+                quarantine_tree(qdir, builds_root, pf)
+            elif cur is not None and not build_dir_scannable:
+                if build_dir is not None and (build_dir.is_symlink() or build_dir.exists()):
                     pf = next(f for f in findings if f.path == f".builds/{cur.build_name}")
                     quarantine_tree(qdir, build_dir, pf)
             if pointer == "rogue":

@@ -326,6 +326,42 @@ async def test_stale_revision_classification(
     assert f2.classification == CLASS_STALE
 
 
+async def test_draft_bytes_are_tamper_not_stale(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    subj: SimpleNamespace,
+    tmp_path: Path,
+) -> None:
+    """Codex P2: the mirror is Effective-only, so planted UNRELEASED (Draft) bytes of the same
+    document are alarm-worthy MIRROR_TAMPER, NOT a soft MIRROR_STALE — _known_digests only counts
+    versions that were once the controlled copy (Effective/Superseded/Obsolete)."""
+    mirror = tmp_path / "m"
+    await _grant_release_actors(subj)
+    ha, hb = _auth(token_factory, subj.a), _auth(token_factory, subj.b)
+    type_id = await s5.type_id("SOP")
+    doc = await s5.drive_to_effective(app_client, ha, hb, hb, type_id, b"DRAFT-TEST-V1")
+    did = doc["id"]
+    # Create a v2 DRAFT (checked-in, NOT submitted/released) with known bytes — never Effective.
+    await app_client.post(f"/api/v1/documents/{did}/start-revision", headers=ha)
+    draft_bytes = b"UNRELEASED-DRAFT-V2-BYTES"
+    sha2 = await _upload(app_client, ha, did, draft_bytes)
+    await _checkin(app_client, ha, did, sha2, change_reason="v2 draft", change_significance="MINOR")
+    await _sync(mirror)  # mirror still holds v1 (Effective-only)
+
+    src = _source_in(_doc_dir(mirror, doc["identifier"]))
+    assert src.read_bytes() == b"DRAFT-TEST-V1"
+    src.write_bytes(draft_bytes)  # plant the unreleased Draft's bytes into the served file
+
+    async with get_sessionmaker()() as s:
+        report = await scan_mirror(s, mirror_path=mirror)
+        await persist_scan_results(s, report, rebuild_triggered=False, triggered_by="cli")
+    rel_src = src.relative_to(mirror / "current").as_posix()
+    f = next(f for f in report.findings if f.path == rel_src)
+    assert f.classification == CLASS_UNEXPECTED  # Draft bytes are TAMPER, not STALE
+    events = await _events_for_scan(report.scan_id)
+    assert EventType.MIRROR_TAMPER in {e.event_type for e in events}
+
+
 async def test_behind_vault_build_is_not_current_no_audit(
     app_client: AsyncClient,
     token_factory: Callable[..., str],

@@ -328,6 +328,20 @@ the existing posture; the same lock serializes scan↔sync so a swap can never p
    removes a pre-planted **symlinked `.quarantine`** before use, so forensic evidence can't be
    redirected outside the mirror. Quarantine-by-move never follows a symlink (`shutil.move` →
    `os.rename` on the same volume moves the link inode).
+10. **Corrective-rebuild-wedge hardening (Codex P2 round 3, 2026-06-10) — generalizing §9: a
+    non-directory object planted at ANY structural path the rebuild needs must be cleared before
+    the rebuild, in EVERY pointer state, else the correction wedges or loses evidence:** (a)
+    `_quarantine_dir` removes a `.quarantine` planted as a regular **file** (not just a symlink) —
+    `mkdir` would otherwise raise and abort quarantine on the always-rebuild sync path. (b) An
+    **empty registry with a real-dir/file `current`** is `rogue` (quarantined aside), not the
+    benign no-baseline — `atomic_swap`'s `os.replace` can't replace a directory, so a fresh install
+    would wedge until manual cleanup. (c) `builds_root_compromised` now covers a `.builds` planted
+    as a **regular file/special** (not just a symlink) and is flagged + quarantined **independent
+    of whether `current` matched a registry row** (a missing/rogue/foreign `current` leaves
+    `cur=None`, yet the rebuild's `builds.mkdir` would still write through a symlinked `.builds` or
+    fail on a file). (d) `_known_digests` for STALE counts only versions that were once the
+    controlled copy — **Effective/Superseded/Obsolete** — so planted Draft/InReview/Approved bytes
+    are alarm-worthy `MIRROR_TAMPER`, never a soft `MIRROR_STALE` (the mirror is Effective-only).
 
 ## 12. Docs in-PR
 
