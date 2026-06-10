@@ -622,13 +622,9 @@ async def test_scan_and_sync_persists_then_rebuilds_on_clean(
         calls.append("rebuild")
         return object()
 
-    async def _lock_held(session: object, key: int) -> bool:
-        return True
-
     monkeypatch.setattr(scan_mod, "scan_mirror", _scan)
     monkeypatch.setattr(scan_mod, "persist_scan_results", _persist)
     monkeypatch.setattr(scan_mod, "sync_mirror", _fake_sync)
-    monkeypatch.setattr(scan_mod, "holds_advisory_lock", _lock_held)
 
     _, result = await scan_and_sync(None, rebuild="if_needed", triggered_by="beat")  # type: ignore[arg-type]
     assert result is not None
@@ -653,13 +649,9 @@ async def test_scan_and_sync_failed_gating(monkeypatch: pytest.MonkeyPatch) -> N
         calls.append("rebuild")
         return object()
 
-    async def _lock_held(session: object, key: int) -> bool:
-        return True
-
     monkeypatch.setattr(scan_mod, "scan_mirror", _failed_scan)
     monkeypatch.setattr(scan_mod, "persist_scan_results", _persist_ok)
     monkeypatch.setattr(scan_mod, "sync_mirror", _fake_sync)
-    monkeypatch.setattr(scan_mod, "holds_advisory_lock", _lock_held)
 
     _, result = await scan_and_sync(None, rebuild="if_needed", triggered_by="beat")  # type: ignore[arg-type]
     assert result is None and calls == ["persist"]  # hourly: persisted, no rebuild on FAILED
@@ -690,35 +682,6 @@ async def test_scan_and_sync_defers_rebuild_when_findings_not_persisted(
     monkeypatch.setattr(scan_mod, "scan_mirror", _scan)
     monkeypatch.setattr(scan_mod, "persist_scan_results", _persist_fails)
     monkeypatch.setattr(scan_mod, "sync_mirror", _fake_sync)
-
-    _, result = await scan_and_sync(None, rebuild="always", triggered_by="sync")  # type: ignore[arg-type]
-    assert result is None and calls == []
-
-
-async def test_scan_and_sync_skips_rebuild_when_lock_lost(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Spec §11.5: a mid-scan connection loss FREES the session-level advisory lock — a lockless
-    rebuild could race a concurrent sync's prune, so the pipeline re-verifies before correcting."""
-    calls: list[str] = []
-
-    async def _failed_scan(session: object, *, mirror_path: object = None) -> ScanReport:
-        return _report("FAILED")
-
-    async def _persist_ok(session: object, report: object, **kw: object) -> bool:
-        return True
-
-    async def _fake_sync(**kw: object) -> object:
-        calls.append("rebuild")
-        return object()
-
-    async def _lock_lost(session: object, key: int) -> bool:
-        return False
-
-    monkeypatch.setattr(scan_mod, "scan_mirror", _failed_scan)
-    monkeypatch.setattr(scan_mod, "persist_scan_results", _persist_ok)
-    monkeypatch.setattr(scan_mod, "sync_mirror", _fake_sync)
-    monkeypatch.setattr(scan_mod, "holds_advisory_lock", _lock_lost)
 
     _, result = await scan_and_sync(None, rebuild="always", triggered_by="sync")  # type: ignore[arg-type]
     assert result is None and calls == []

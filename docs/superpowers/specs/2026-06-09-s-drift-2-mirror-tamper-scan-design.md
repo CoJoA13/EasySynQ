@@ -386,12 +386,20 @@ pushback and reasoning… disregard nitpicks and unreachable bugs; just document
   and the **global** `pg_try_advisory_lock` at task entry (`if not held: return`) serializes workers
   *before* `scan_and_sync` runs. Postgres advisory locks are globally exclusive and
   `holds_advisory_lock` verifies `pid = pg_backend_pid()`, so two backends cannot both report
-  themselves the holder — the in-session recheck (before every rebuild) covers the only live risk,
-  this worker's own connection silently dropping mid-op. **A dedicated pinned lock-connection held
-  across scan+rebuild would be a clarity/defence-in-depth improvement but fixes no reachable bug.**
+  themselves the holder. ⚠ **CORRECTION (2026-06-10, after CI):** an in-session `holds_advisory_lock`
+  recheck I had added before each rebuild was **REMOVED** — it was unreliable, which vindicated the
+  *pooled-connection* half of Codex's concern (the two-worker race remains unreachable). A
+  SQLAlchemy `Session` **releases its connection on `commit()`**, so after `persist_scan_results`
+  commits, the recheck runs on a *recycled* backend that doesn't hold the session-level lock → it
+  returned False and **skipped the rebuild even in the normal single-worker case** (CI red on
+  integration shard 3). The fix is to NOT recheck (and NOT pin): mutual exclusion rests on the
+  proven S7 posture — the caller acquires `LOCK_MIRROR_SYNC` once at task entry, and the lock stays
+  held on its original backend in the pool (globally exclusive) for the whole operation; another
+  worker's `pg_try_advisory_lock` sees it and skips. The only residual (this worker's own connection
+  dying mid-op frees the lock) is the same one S7 has always accepted.
   ⚠ **Re-evaluation trigger:** if these tasks are ever changed to **share a process-wide engine /
-  connection pool** across concurrent runs (instead of a fresh per-invocation engine), this race
-  becomes reachable — pin the lock connection then.
+  connection pool** across concurrent runs (instead of a fresh per-invocation engine), pin a
+  dedicated lock connection then.
 
 - **Empty-registry broken-conforming-`current`-link audit gap (Codex round-7 P2 — narrow, NOT
   fixed).** On a fresh/pre-0046 install (empty registry) where `current` is a conforming

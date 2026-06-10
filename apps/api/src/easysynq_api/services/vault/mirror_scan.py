@@ -39,7 +39,6 @@ from ...db.models.documented_information import DocumentedInformation
 from ...db.models.drift_scan import DriftScan
 from ...db.models.mirror_build import MirrorBuild
 from ..common.org import get_single_org_id
-from ..common.pg_locks import LOCK_MIRROR_SYNC, holds_advisory_lock
 from .mirror import MirrorSyncResult, sync_mirror
 from .render import RenderSink
 
@@ -968,13 +967,18 @@ async def scan_and_sync(
     as the vault-wins correction. ``always`` = the sync path (R11's per-sync leg; rebuilds even on
     a FAILED scan — a broken scan must never block correction). ``if_needed`` = the hourly path
     (rebuilds on DIVERGENT / behind-vault / no-baseline; NOT on FAILED — a scan failure is not
-    evidence the mirror is wrong, and the nightly sync remains the convergence backstop). Two
-    §11.5 guards: unpersisted FINDINGS defer the rebuild (it would erase the on-disk evidence the
-    next scan needs to re-detect and audit — and a broken PG fails the rebuild anyway), and the
-    advisory-lock ownership is re-verified on the SAME session immediately before EVERY rebuild
-    (Codex P2 — persist commits first, and a silently dropped/replaced connection anywhere up to
-    that point frees the session-level lock; the recheck must guard the normal divergent/
-    behind-vault path too, not just the failure paths). The caller holds ``LOCK_MIRROR_SYNC``."""
+    evidence the mirror is wrong, and the nightly sync remains the convergence backstop). Guard:
+    unpersisted FINDINGS defer the rebuild (it would erase the on-disk evidence the next scan needs
+    to re-detect and audit — and a broken PG fails the rebuild anyway). Mutual exclusion is the
+    proven S7 posture: the caller acquires ``LOCK_MIRROR_SYNC`` at task entry (`if not held:
+    return`) and that session-level lock stays held on its backend in the pool for the whole
+    operation — globally exclusive, so no second worker can be inside here concurrently. (An
+    earlier in-session ``holds_advisory_lock`` recheck before the rebuild was REMOVED: a Session
+    releases its connection on ``commit()``, so the recheck after ``persist_scan_results`` lands on
+    a recycled backend that doesn't hold the session lock and wrongly skips the rebuild — Codex's
+    round-5 concern was right about the pooled-connection fragility; the fix is to not recheck, not
+    to pin. The residual — this worker's own connection dying mid-op frees the lock — is the same
+    one S7 has always accepted.)"""
     report = await scan_mirror(session, mirror_path=mirror_path)
     needs = report.status == "DIVERGENT" or report.baseline == "none" or not report.is_current
     do_rebuild = rebuild == "always" or (report.status != "FAILED" and needs)
@@ -989,13 +993,6 @@ async def scan_and_sync(
         do_rebuild = False
     result: MirrorSyncResult | None = None
     if do_rebuild:
-        # Re-verify lock ownership on THIS session right before the swap — after persist's commit
-        # and regardless of scan status: a silently-dropped/replaced connection anywhere up to here
-        # frees the session-level lock, and a lockless sync_mirror swap could race a concurrent
-        # sync's prune. Must guard the normal divergent/behind-vault path too, not just failures.
-        if not await holds_advisory_lock(session, LOCK_MIRROR_SYNC):
-            logger.error("mirror.scan: advisory lock not held; skipping the rebuild this tick")
-            return report, None
         result = await sync_mirror(
             mirror_path=mirror_path, render_sink=render_sink, session=session
         )

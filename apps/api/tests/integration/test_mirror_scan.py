@@ -315,16 +315,26 @@ async def test_stale_revision_classification(
 
     # The OLDER-RENDITION leg (spec §11.7): a rollback to a superseded version's cached
     # controlled-copy rendition digest is STALE too (drops if rendition_blob_sha256 ever falls
-    # out of _known_digests). Seed a fake rendition digest on the superseded version, then
-    # plant bytes with exactly that digest.
+    # out of _known_digests). Insert a real blob row (rendition_blob_sha256 has an FK to blob),
+    # point the superseded version at it, then plant bytes with exactly that digest.
     old_rendition = b"OLD-RENDITION-BYTES"
+    old_sha = hashlib.sha256(old_rendition).hexdigest()
+    org_id = await s5.default_org_id()
     async with get_sessionmaker()() as s:
+        await s.execute(
+            text(
+                "INSERT INTO blob (sha256, org_id, size_bytes, mime_type, bucket, object_key, "
+                "worm_locked, sse) VALUES (:sha, :org, :sz, 'application/pdf', 'renditions', "
+                ":sha, false, false) ON CONFLICT (sha256) DO NOTHING"
+            ),
+            {"sha": old_sha, "org": org_id, "sz": len(old_rendition)},
+        )
         await s.execute(
             text(
                 "UPDATE document_version SET rendition_blob_sha256 = :sha "
                 "WHERE document_id = :doc AND version_state = 'Superseded'"
             ),
-            {"sha": hashlib.sha256(old_rendition).hexdigest(), "doc": did},
+            {"sha": old_sha, "doc": did},
         )
         await s.commit()
     src.write_bytes(old_rendition)
