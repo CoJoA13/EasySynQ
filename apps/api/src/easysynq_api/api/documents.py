@@ -676,7 +676,13 @@ async def update_metadata_endpoint(
 ) -> dict[str, Any]:
     from ..db.models._vault_enums import Classification
 
-    doc = await _load_document(session, caller, document_id)
+    # Load once, lock-aware up front: if review_period_months is being set we need a FOR UPDATE
+    # lock so the recompute of next_review_due can't race a concurrent cutover that commits a new
+    # current_effective_version_id between our read and our write. Loading at the TOP of the
+    # handler means the session's identity map is empty, so the locked SELECT always returns a
+    # fresh row from the DB (no stale cached attributes via the identity map).
+    wants_review_update = "review_period_months" in body.model_fields_set
+    doc = await _load_document(session, caller, document_id, for_update=wants_review_update)
     if body.title is not None:
         doc.title = body.title
     if body.folder_path is not None:
@@ -688,11 +694,7 @@ async def update_metadata_endpoint(
             raise ProblemException(
                 status=422, code="validation_error", title="Invalid classification"
             ) from exc
-    if "review_period_months" in body.model_fields_set:
-        # Re-load the doc row LOCKED before the recompute: an unlocked read racing a concurrent
-        # cutover would recompute from a stale current_effective_version_id and clobber the
-        # cutover's fresh next_review_due.
-        doc = await _load_document(session, caller, document_id, for_update=True)
+    if wants_review_update:
         doc.review_period_months = body.review_period_months
         eff_from = None
         if doc.current_effective_version_id is not None:
