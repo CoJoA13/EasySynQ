@@ -37,6 +37,8 @@ async def test_hash_object_streams_and_matches_sha256(monkeypatch: pytest.Monkey
     monkeypatch.setattr(storage, "_client", lambda: _FakeClient())
     digest = await storage.hash_object("ab/cd/key", bucket="docs")
     assert digest == hashlib.sha256(data).hexdigest()
-    # Bounded memory: every read was chunk-sized, and the body was closed.
+    # Bounded memory: the impl never REQUESTED an unbounded read (a single read(-1) would fail
+    # here), it took multiple chunked reads to cover >3 MiB, and the body was closed.
     assert all(n == 1 << 20 for n in body.reads)
+    assert len(body.reads) >= 4  # ≥3 data chunks + the empty terminator
     assert body.closed
