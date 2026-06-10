@@ -259,7 +259,7 @@ The audit trail is the **spine of ISO 9001 traceability** and the **evidentiary 
 | **Document lifecycle** | create, check-out, check-in (new version), submit-for-review, review comment, approve, release/effective, supersede, obsolete |
 | **Record lifecycle** | capture, correction-of chain creation, retention/disposition (archive, destroy), legal hold set/release |
 | **Content access** | view/download of a controlled doc or record (configurable; default on for records & released docs, sampled for drafts) |
-| **Integrity** | blob re-hash verify pass/fail, audit-chain verify pass/fail, mirror-sync regeneration |
+| **Integrity** | blob re-hash verify pass/fail, audit-chain verify pass/fail, mirror-sync regeneration, mirror tamper/staleness scan (`MIRROR_STALE`/`MIRROR_TAMPER`, S-drift-2) |
 | **Admin/system** | user create/disable, storage/backup config change, IdP/federation config change, restore performed, retention-policy change, audit-export performed |
 
 ### 4.2 Audit record schema (PostgreSQL, append-only, partitioned)

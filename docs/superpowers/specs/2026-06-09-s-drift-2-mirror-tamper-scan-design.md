@@ -102,7 +102,7 @@ append-only REVOKE (the `visual_diff` posture).
 | `kind` | native enum `drift_scan_kind` = `('MIRROR')` | S-drift-3 adds `BLOB_REHASH` via additive `ALTER TYPE` |
 | `started_at` / `finished_at` | TIMESTAMPTZ | started NOT NULL; finished set at terminal |
 | `status` | native enum `drift_scan_status` = `('CLEAN','DIVERGENT','FAILED')` | |
-| `counts` | JSONB NOT NULL | `{scanned, ok, stale, tampered, extra, missing, symlink_divergent, quarantined, errors, build_name, is_current, rebuilt, baseline}` |
+| `counts` | JSONB NOT NULL | `{scanned, ok, stale, tampered, extra, missing, symlink_divergent, quarantined, errors, build_name, is_current, pointer, scan_id, baseline, rebuild_triggered}` (as built: `scan_mirror` is DB-read-only; `persist_scan_results` writes the events + this summary row in one txn, stamping `rebuild_triggered` — the rebuild decision at persist time) |
 | `triggered_by` | TEXT NOT NULL | `'beat'` \| `'sync'` \| `'cli'` |
 
 Index `(kind, started_at DESC)` — the S-drift-3 latest-per-kind read. Written once at scan terminal
