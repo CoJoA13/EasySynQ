@@ -36,10 +36,10 @@ under D1 (one organization per install) the per-doc ``{identifier}_{revision_lab
 is globally unique, so clause-bucketing introduces no cross-org collision. Multi-tenant namespacing
 is out of scope for v1 (this is pre-existing S7 behavior, not introduced here).
 
-**Deferred (with seams):** rendering is S7b (live). The SHA-256 drift scan /
-quarantine / ``MIRROR_DRIFT_DETECTED`` alarm are **v1** (D-6): the ``_meta/manifest.json`` here is a
-generated artifact only (file entries carry ``sha256``; symlink entries carry ``symlink_to``) —
-there is no comparison/scan code yet.
+**The drift scan (S-drift-2):** the D2+D3 SHA-256 integrity scan / quarantine / ``MIRROR_STALE`` +
+``MIRROR_TAMPER`` audit events live in ``mirror_scan.py``; this module persists each build's
+manifest into ``mirror_build`` (the scan's vault-side expected state — the on-disk
+``_meta/manifest.json`` is a generated artifact, verified but never trusted as authority).
 """
 
 from __future__ import annotations
@@ -55,7 +55,7 @@ import shutil
 import uuid
 from pathlib import Path
 
-from sqlalchemy import select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -70,13 +70,16 @@ from ...db.models.document_version import DocumentVersion
 from ...db.models.documented_information import DocumentedInformation
 from ...db.models.evidence_blob import EvidenceBlob
 from ...db.models.import_run import ImportRun
+from ...db.models.mirror_build import MirrorBuild
 from ...db.models.process import Process
 from ...db.models.process_link import ProcessLink
 from ...db.session import get_sessionmaker
+from ..common.org import get_single_org_id
 from . import storage, verify_token
 from .render import RenderRequest, RenderSink, RenderStatus, get_render_sink
 
 logger = logging.getLogger("easysynq.mirror")
+_KEEP_BUILD_ROWS = 20
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -494,16 +497,24 @@ def _metadata(
     return (json.dumps(meta, indent=2, sort_keys=True) + "\n").encode()
 
 
-def _write(path: Path, data: bytes, manifest: list[dict[str, object]], rel_root: Path) -> None:
+def _write(
+    path: Path,
+    data: bytes,
+    manifest: list[dict[str, object]],
+    rel_root: Path,
+    *,
+    extra: dict[str, object] | None = None,
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)  # parent-safe (the _ImportReport/<label>/ case)
     path.write_bytes(data)
-    manifest.append(
-        {
-            "path": str(path.relative_to(rel_root)),
-            "sha256": hashlib.sha256(data).hexdigest(),
-            "size_bytes": len(data),
-        }
-    )
+    entry: dict[str, object] = {
+        "path": str(path.relative_to(rel_root)),
+        "sha256": hashlib.sha256(data).hexdigest(),
+        "size_bytes": len(data),
+    }
+    if extra:
+        entry.update(extra)
+    manifest.append(entry)
 
 
 def _write_symlink(
@@ -642,14 +653,26 @@ async def build_tree(
         doc_dir = build_root / primary_dir / dirname
         doc_dir.mkdir(parents=True, exist_ok=True)
         source_filename = _source_filename(eff, ext)
-        _write(doc_dir / source_filename, content, manifest, build_root)
+        # S-drift-2: doc attribution for the scan (additive manifest keys — schema stays /1).
+        doc_ref: dict[str, object] = {
+            "document_id": str(eff.document_id),
+            "version_id": str(eff.version_id),
+        }
+        _write(doc_dir / source_filename, content, manifest, build_root, extra=doc_ref)
         _write(
             doc_dir / "metadata.json",
             _metadata(eff, source_filename, render_status, no_rendition, refs, proc_refs),
             manifest,
             build_root,
+            extra=doc_ref,
         )
-        _write(doc_dir / "CHANGELOG.md", _changelog_md(eff).encode(), manifest, build_root)
+        _write(
+            doc_dir / "CHANGELOG.md",
+            _changelog_md(eff).encode(),
+            manifest,
+            build_root,
+            extra=doc_ref,
+        )
         # §10.3: reachable from EVERY mapped clause — real bytes once, a relative symlink each.
         for other in other_dirs:
             _write_symlink(build_root / other / dirname, doc_dir, build_root, manifest)
@@ -745,6 +768,12 @@ async def sync_mirror(
     build_root = builds / uuid.uuid4().hex
     build_root.mkdir(parents=True, exist_ok=True)
 
+    # The row `current` points at must survive the prune (see _build); resolve it up front.
+    try:
+        current_target: str | None = Path(os.readlink(root / "current")).name
+    except OSError:
+        current_target = None
+
     async def _build(s: AsyncSession) -> tuple[list[dict[str, object]], int, int]:
         effs = await list_effective_versions(s)
         doc_ids = [e.document_id for e in effs]
@@ -760,16 +789,68 @@ async def sync_mirror(
             top_words=top_words,
             processes_by_doc=processes_by_doc,
         )
-        await s.commit()  # persist the rendition cache writes (blob rows + version FKs)
+        # S-drift-2: persist the build manifest as the scan's expected-state baseline (keyed by
+        # the .builds/<name> dir — commit-then-swap means an orphan row for a never-swapped build
+        # is harmless; the scan verifies current's target against the newest SWAPPED row).
+        # manifest_sha256 = the EXACT bytes just written (generated_at makes recompute impossible
+        # — deliberate).
+        manifest_bytes = (build_root / "_meta" / "manifest.json").read_bytes()
+        org_id = await get_single_org_id(s)
+        if org_id is None:
+            logger.info("mirror.sync: no organization yet; baseline row skipped")
+        else:
+            s.add(
+                MirrorBuild(
+                    org_id=org_id,
+                    build_name=build_root.name,
+                    manifest=manifest,
+                    manifest_sha256=hashlib.sha256(manifest_bytes).hexdigest(),
+                    documents=len(effs),
+                    files=sum(1 for e in manifest if "sha256" in e),
+                    symlinks=sum(1 for e in manifest if "symlink_to" in e),
+                )
+            )
+            await s.flush()
+            # Keep-last-N prune — but NEVER the row `current` still points at: under a
+            # persistent swap-failure mode, orphan rows pile above it and deleting it would
+            # silently disable tamper detection on the still-served tree (the 4-lens fold §11.4).
+            stale_ids = (
+                (
+                    await s.execute(
+                        select(MirrorBuild.id)
+                        .where(MirrorBuild.build_name != (current_target or ""))
+                        .order_by(MirrorBuild.built_at.desc(), MirrorBuild.id.desc())
+                        .offset(_KEEP_BUILD_ROWS)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            if stale_ids:
+                await s.execute(delete(MirrorBuild).where(MirrorBuild.id.in_(stale_ids)))
+        await s.commit()  # persist the rendition cache writes (blob rows + version FKs) + baseline
         return manifest, pending, len(effs)
 
+    async def _build_swap_stamp(s: AsyncSession) -> tuple[list[dict[str, object]], int, int]:
+        manifest, pending, count = await _build(s)  # commits: renditions + the baseline row
+        atomic_swap(root, build_root)
+        # Stamp swap success (pointer integrity, spec §11.1). A crash between the swap and this
+        # commit self-heals: the scan treats current→newest-unswapped-row as the crash window
+        # and persist_scan_results stamps it. No-op when the baseline row was skipped (no org).
+        await s.execute(
+            update(MirrorBuild)
+            .where(MirrorBuild.build_name == build_root.name)
+            .values(swapped_at=func.now())
+        )
+        await s.commit()
+        return manifest, pending, count
+
     if session is not None:
-        manifest, pending, count = await _build(session)
+        manifest, pending, count = await _build_swap_stamp(session)
     else:
         async with get_sessionmaker()() as own:
-            manifest, pending, count = await _build(own)
+            manifest, pending, count = await _build_swap_stamp(own)
 
-    atomic_swap(root, build_root)
     files = sum(1 for entry in manifest if "sha256" in entry)
     symlinks = sum(1 for entry in manifest if "symlink_to" in entry)
     return MirrorSyncResult(
