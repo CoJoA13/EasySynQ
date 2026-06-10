@@ -21,6 +21,10 @@ const doc: DocumentSummary = {
   current_effective_version_id: "v1",
   effective_from: "2026-03-14T00:00:00+00:00",
   created_at: null,
+  review_period_months: null,
+  next_review_due: null,
+  last_reviewed_at: null,
+  review_state: null,
   clause_refs: ["8.4", "8.5"],
 };
 

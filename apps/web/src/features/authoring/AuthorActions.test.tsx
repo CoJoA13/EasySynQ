@@ -23,6 +23,10 @@ const baseDoc: DocumentSummary = {
   current_effective_version_id: null,
   effective_from: null,
   created_at: "2026-06-07T10:00:00+00:00",
+  review_period_months: null,
+  next_review_due: null,
+  last_reviewed_at: null,
+  review_state: null,
 };
 
 const allCaps: DocumentCapabilities = {

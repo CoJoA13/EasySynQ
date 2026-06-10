@@ -1,5 +1,5 @@
 import { http, HttpResponse } from "msw";
-import type { AuditList, AuditPlanList, AuditProgramList, Capa, Complaint, Finding, FindingList, Ncr } from "../../lib/types";
+import type { AuditList, AuditPlanList, AuditProgramList, Capa, Complaint, DriftStatus, Finding, FindingList, Ncr, SupersededCopies } from "../../lib/types";
 
 export const docFixture = [
   {
@@ -18,6 +18,10 @@ export const docFixture = [
     current_effective_version_id: "dddd1111-1111-1111-1111-111111111111",
     effective_from: "2026-03-14T00:00:00+00:00",
     created_at: "2026-03-14T09:12:00+00:00",
+    review_period_months: 24,
+    next_review_due: "2027-03-14",
+    last_reviewed_at: null,
+    review_state: "current",
     clause_refs: ["8.4"],
   },
   {
@@ -36,6 +40,10 @@ export const docFixture = [
     current_effective_version_id: null,
     effective_from: null,
     created_at: "2026-05-29T11:00:00+00:00",
+    review_period_months: null,
+    next_review_due: null,
+    last_reviewed_at: null,
+    review_state: null,
     clause_refs: ["8.5"],
   },
 ];
@@ -302,6 +310,10 @@ export const createdDocFixture = {
   current_effective_version_id: null,
   effective_from: null,
   created_at: "2026-06-07T10:00:00+00:00",
+  review_period_months: null,
+  next_review_due: null,
+  last_reviewed_at: null,
+  review_state: null,
 };
 
 function mkVersion(documentId: string) {
@@ -415,11 +427,11 @@ export const suggestFixture = {
 
 export const complianceFixture = {
   framework: "iso9001:2015",
-  rollup: { total: 3, covered: 1, partial: 1, gap: 1 },
+  rollup: { total: 3, covered: 1, partial: 1, gap: 1, overdue_review: 1 },
   rows: [
-    { clause_id: "c43", number: "4.3", title: "Scope of the QMS", pdca_phase: "PLAN", mapped_count: 1, effective_count: 1, status: "COVERED" },
-    { clause_id: "c62", number: "6.2", title: "Quality objectives", pdca_phase: "PLAN", mapped_count: 1, effective_count: 0, status: "PARTIAL" },
-    { clause_id: "c84", number: "8.4", title: "External providers", pdca_phase: "DO", mapped_count: 0, effective_count: 0, status: "GAP" },
+    { clause_id: "c43", number: "4.3", title: "Scope of the QMS", pdca_phase: "PLAN", mapped_count: 1, effective_count: 1, status: "COVERED", overdue_review: true },
+    { clause_id: "c62", number: "6.2", title: "Quality objectives", pdca_phase: "PLAN", mapped_count: 1, effective_count: 0, status: "PARTIAL", overdue_review: false },
+    { clause_id: "c84", number: "8.4", title: "External providers", pdca_phase: "DO", mapped_count: 0, effective_count: 0, status: "GAP", overdue_review: false },
   ],
 };
 
@@ -514,6 +526,53 @@ export const capaApprovalTask = {
   subject_type: "CAPA",
   subject_id: "ca000001-0001-0001-0001-000000000001",
 };
+
+// A PERIODIC_REVIEW task detail (GET /tasks/{id}) — S-web-8 routes it via ReviewApprovePage's
+// periodic branch. due_at = org-midnight of next_review_due (the sweep's anchor).
+export const periodicReviewTask = {
+  id: "tkpr1111-1111-1111-1111-111111111111",
+  instance_id: "wfpr1111-1111-1111-1111-111111111111",
+  stage_key: "review",
+  type: "PERIODIC_REVIEW",
+  state: "PENDING",
+  assignee_user_id: null,
+  candidate_pool: ["bbbb1111-1111-1111-1111-111111111111"],
+  action_expected: "periodic_review",
+  due_at: "2026-06-10T00:00:00-05:00",
+  subject_type: "PERIODIC_REVIEW",
+  subject_id: "11111111-1111-1111-1111-111111111111",
+};
+
+// ---- S-web-8 drift fixtures (pinned to drift_report.py + the openapi getDriftStatus example) ----
+
+export const driftStatusFixture = {
+  scans: {
+    MIRROR: {
+      status: "CLEAN",
+      started_at: "2026-06-10T03:00:00+00:00",
+      finished_at: "2026-06-10T03:00:04+00:00",
+      counts: { scanned: 41, ok: 41, stale: 0, tampered: 0, rebuild_triggered: false },
+      triggered_by: "beat",
+    },
+    BLOB_REHASH: {
+      status: "DIVERGENT",
+      started_at: "2026-06-10T04:00:00+00:00",
+      finished_at: "2026-06-10T04:01:10+00:00",
+      counts: { scanned: 500, ok: 498, mismatched: 1, missing: 1, read_errors: 0, stamped: 498, full: false, sample_size: 500, total_blobs: 1240 },
+      triggered_by: "beat",
+    },
+  },
+  blob_coverage: { total: 1240, never_verified: 612, failing: 2, oldest_verified_at: "2026-06-01T04:00:00+00:00" },
+  superseded_copies: { versions: 2, copies: 5 },
+} satisfies DriftStatus;
+
+export const supersededCopiesFixture = {
+  total: { versions: 2, copies: 5 },
+  items: [
+    { document_id: "11111111-1111-1111-1111-111111111111", identifier: "SOP-PUR-014", version_id: "eeee1111-1111-1111-1111-111111111111", revision_label: "Rev A", version_state: "Superseded", current_revision_label: "Rev B", exported: 2, printed: 1, last_copy_at: "2026-05-30T14:22:00+00:00" },
+    { document_id: "99999999-9999-9999-9999-999999999999", identifier: "SOP-OBS-001", version_id: "ffff1111-1111-1111-1111-111111111111", revision_label: "Rev C", version_state: "Obsolete", current_revision_label: null, exported: 0, printed: 2, last_copy_at: "2026-05-12T08:00:00+00:00" },
+  ],
+} satisfies SupersededCopies;
 
 // GET /records — the evidence picker source (a bare array).
 export const recordsFixture = [
@@ -961,6 +1020,17 @@ export const handlers = [
   // link_reason, created_at} — NOT a record_identifier (that field only exists on the per-stage projection).
   // The UI ignores this body (it invalidates + refetches), but the fixture must match the real shape.
   http.post("/api/v1/records/:id/evidence-links", () => HttpResponse.json({ id: "el-new", record_id: "re000001-0001-0001-0001-000000000001", target_type: "capa_stage", target_id: "cr000003-0003-0003-0003-000000000003", link_reason: null, created_at: "2026-06-09T09:00:00+00:00" }, { status: 201 })),
+  // ---- S-web-8 drift surface (default happy-path; per-test overrides for 403/null-scans) ----
+  http.get("/api/v1/admin/drift/status", () => HttpResponse.json(driftStatusFixture)),
+  http.get("/api/v1/admin/drift/superseded-copies", ({ request }) => {
+    const sp = new URL(request.url).searchParams;
+    const limit = Number(sp.get("limit") ?? "50");
+    const offset = Number(sp.get("offset") ?? "0");
+    return HttpResponse.json({
+      total: supersededCopiesFixture.total,
+      items: supersededCopiesFixture.items.slice(offset, offset + limit),
+    });
+  }),
   // ---- S-web-6 search + compliance (default happy-path; per-test overrides for 403/empty) ----
   http.get("/api/v1/search", () => HttpResponse.json(searchFixture)),
   http.get("/api/v1/search/suggest", () => HttpResponse.json(suggestFixture)),
@@ -968,7 +1038,9 @@ export const handlers = [
   // ---- S-web-5 review/approve (default happy-path; per-test overrides for error cases) ----
   http.get("/api/v1/documents/:id/approval", () => HttpResponse.json(approvalFixture)),
   http.get("/api/v1/tasks", () => HttpResponse.json(taskFixture)),
-  http.get("/api/v1/tasks/:id", () => HttpResponse.json(approveTask)),
+  http.get("/api/v1/tasks/:id", ({ params }) =>
+    HttpResponse.json(params.id === periodicReviewTask.id ? periodicReviewTask : approveTask),
+  ),
   http.get("/api/v1/workflow-instances/:id", () => HttpResponse.json(approvalFixture)),
   http.post("/api/v1/tasks/:id/decision", () =>
     HttpResponse.json({
@@ -1056,6 +1128,18 @@ export const handlers = [
     "/api/v1/documents/:id/clause-mappings/:clauseId",
     () => new HttpResponse(null, { status: 204 }),
   ),
+  http.patch("/api/v1/documents/:id", async ({ params, request }) => {
+    const body = (await request.json()) as { review_period_months?: number | null };
+    const doc = docFixture.find((d) => d.id === params.id) ?? docFixture[0]!;
+    const months = body.review_period_months ?? null;
+    return HttpResponse.json({
+      ...doc,
+      effective_from: null,
+      review_period_months: months,
+      next_review_due: months === null ? null : "2028-03-14",
+      review_state: months === null ? null : "current",
+    });
+  }),
   http.post("/api/v1/documents/:id/submit-review", ({ params }) =>
     HttpResponse.json({ ...createdDocFixture, id: String(params.id), current_state: "InReview" }),
   ),
