@@ -85,6 +85,10 @@ class Settings(BaseSettings):
     # renderer + mirror
     gotenberg_url: str = "http://localhost:3000"
     mirror_path: str = "/var/lib/easysynq/qms-mirror"
+    # S-drift-2: the D2+D3 mirror integrity-scan cadence (doc 05 §9.2.1 / R11: default hourly,
+    # configurable — the ACCEPTED DRIFT WINDOW equals this interval; tightening narrows the
+    # window at the cost of I/O).
+    mirror_scan_interval_seconds: int = 3600
 
     # S8b2 backup: the default filesystem destination for durable archives + the restore-test drill
     # (the per-org backup_policy.destination overrides). A mounted volume / NFS path in MVP

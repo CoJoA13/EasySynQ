@@ -49,3 +49,24 @@ async def pg_advisory_lock(session: AsyncSession, key: int) -> AsyncIterator[boo
     finally:
         if acquired:
             await session.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": key})
+
+
+async def holds_advisory_lock(session: AsyncSession, key: int) -> bool:
+    """Does THIS session's connection still hold session-level advisory lock ``key``? A dropped
+    connection silently FREES the lock while the Python context manager believes it is held —
+    the pool then hands the next statement a fresh, lockless connection. Callers doing
+    work-after-failure (the S-drift-2 scan pipeline) re-verify before irreversible steps.
+    (Single-arg ``pg_try_advisory_lock(bigint)`` stores the key as classid=high32/objid=low32
+    with ``objsubid = 1``; our keys fit in 32 bits, so classid is 0. The ``objsubid = 1`` guard
+    distinguishes it from a hypothetical two-arg ``(0, key)`` lock, whose objsubid is 2.)"""
+    return bool(
+        (
+            await session.execute(
+                text(
+                    "SELECT EXISTS(SELECT 1 FROM pg_locks WHERE locktype = 'advisory' "
+                    "AND classid = 0 AND objid = :k AND objsubid = 1 AND pid = pg_backend_pid())"
+                ),
+                {"k": key},
+            )
+        ).scalar()
+    )

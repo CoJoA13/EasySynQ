@@ -530,3 +530,32 @@ async def test_build_tree_unmapped_doc_with_process_link(
     link = build / "by-process" / "Purchasing" / dirname
     assert real.is_dir() and not real.is_symlink()
     assert link.is_symlink() and link.resolve() == real.resolve()
+
+
+async def test_build_tree_manifest_carries_doc_ids(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """S-drift-2: every doc-owned manifest entry (source + metadata.json + CHANGELOG.md) carries
+    additive document_id/version_id keys (the scan's attribution + STALE classification hook);
+    generated top-level entries (INDEX.md) carry neither. Schema marker stays /1 (additive)."""
+
+    async def _fetch(key: str, *, bucket: str) -> bytes:
+        return b"PDF"
+
+    monkeypatch.setattr(mirror_mod.storage, "fetch_bytes", _fetch)
+    eff = _eff()
+    build = tmp_path / "b"
+    manifest, _ = await build_tree(build, [eff], LoggingRenderSink())
+
+    doc_entries = [e for e in manifest if "document_id" in e]
+    assert len(doc_entries) == 3  # source file + metadata.json + CHANGELOG.md
+    for entry in doc_entries:
+        assert entry["document_id"] == str(eff.document_id)
+        assert entry["version_id"] == str(eff.version_id)
+        assert "sha256" in entry  # still a normal file entry
+
+    index_entry = next(e for e in manifest if e["path"] == "INDEX.md")
+    assert "document_id" not in index_entry and "version_id" not in index_entry
+
+    raw = json.loads((build / "_meta" / "manifest.json").read_text())
+    assert raw["schema"] == "easysynq.mirror.manifest/1"
