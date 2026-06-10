@@ -3648,6 +3648,138 @@ paths:
               schema: { $ref: "#/components/schemas/OrgConfig" }
         "403": { $ref: "#/components/responses/ProblemResponse" }
 
+  /admin/drift/status:
+    get:
+      tags: [admin]
+      operationId: getDriftStatus
+      summary: Latest drift-scan per kind + D1 blob coverage + the D4 headline. Needs drift.read (SYSTEM, R41).
+      description: >-
+        The thin admin drift-status read (S-drift-3, doc 05 §9.1). scans.MIRROR / scans.BLOB_REHASH
+        carry the latest drift_scan summary per kind (null until that scanner's first run);
+        blob_coverage reports the D1 rolling re-hash cursor (verified_at: total rows,
+        never-verified count, oldest stamp); superseded_copies is the D4 headline — outstanding
+        EXPORTED/PRINTED copies of now-Superseded/Obsolete versions. Pure read; no scan is
+        triggered.
+      responses:
+        "200":
+          description: The drift status snapshot.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [scans, blob_coverage, superseded_copies]
+                properties:
+                  scans:
+                    type: object
+                    description: Latest summary per drift_scan kind; null until first run.
+                    required: [MIRROR, BLOB_REHASH]
+                    properties:
+                      MIRROR:
+                        anyOf:
+                          - $ref: "#/components/schemas/DriftScanSummary"
+                          - { type: "null" }
+                      BLOB_REHASH:
+                        anyOf:
+                          - $ref: "#/components/schemas/DriftScanSummary"
+                          - { type: "null" }
+                  blob_coverage:
+                    type: object
+                    required: [total, never_verified, oldest_verified_at]
+                    properties:
+                      total: { type: integer }
+                      never_verified: { type: integer }
+                      oldest_verified_at: { type: [string, "null"], format: date-time }
+                  superseded_copies:
+                    type: object
+                    required: [versions, copies]
+                    properties:
+                      versions: { type: integer }
+                      copies: { type: integer }
+              example:
+                scans:
+                  MIRROR:
+                    status: CLEAN
+                    started_at: "2026-06-10T03:00:00+00:00"
+                    finished_at: "2026-06-10T03:00:04+00:00"
+                    counts: { scanned: 41, ok: 41, scan_id: "9b2f0a7e-1d2c-4e5f-8a9b-0c1d2e3f4a5b" }
+                    triggered_by: beat
+                  BLOB_REHASH: null
+                blob_coverage:
+                  total: 1240
+                  never_verified: 1240
+                  oldest_verified_at: null
+                superseded_copies: { versions: 3, copies: 7 }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+
+  /admin/drift/superseded-copies:
+    get:
+      tags: [admin]
+      operationId: getSupersededCopies
+      summary: The D4 outstanding exported/printed copies of now-superseded versions. Needs drift.read.
+      description: >-
+        Doc 05 §9.1 D4 / R11 — the only detection leg that reaches copies OUTSIDE the mirror.
+        EXPORTED/PRINTED audit events are emitted only for the then-Effective version, so every
+        event whose version is now Superseded/Obsolete is an outstanding copy of a superseded
+        rendition. No decrement leg exists (a paper copy cannot be un-printed): the count is the
+        honest upper bound; the public /verify token is the per-copy resolution. Totals cover the
+        FULL filtered set, not the page.
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 500, default: 50 }
+        - name: offset
+          in: query
+          schema: { type: integer, minimum: 0, default: 0 }
+      responses:
+        "200":
+          description: Per-version outstanding-copy rows, newest copy first.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [total, items]
+                properties:
+                  total:
+                    type: object
+                    required: [versions, copies]
+                    properties:
+                      versions: { type: integer }
+                      copies: { type: integer }
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required:
+                        [document_id, identifier, version_id, revision_label, version_state,
+                         current_revision_label, exported, printed, last_copy_at]
+                      properties:
+                        document_id: { type: string, format: uuid }
+                        identifier: { type: string }
+                        version_id: { type: string, format: uuid }
+                        revision_label: { type: string }
+                        version_state:
+                          type: string
+                          enum: [Superseded, Obsolete]
+                        current_revision_label:
+                          type: [string, "null"]
+                          description: The document's CURRENT effective revision (null when obsoleted).
+                        exported: { type: integer }
+                        printed: { type: integer }
+                        last_copy_at: { type: string, format: date-time }
+              example:
+                total: { versions: 1, copies: 3 }
+                items:
+                  - document_id: "5e0c8a7e-1d2c-4e5f-8a9b-0c1d2e3f4a5b"
+                    identifier: SOP-PUR-002
+                    version_id: "77aa0a7e-1d2c-4e5f-8a9b-0c1d2e3f4a5b"
+                    revision_label: "2.0"
+                    version_state: Superseded
+                    current_revision_label: "2.1"
+                    exported: 2
+                    printed: 1
+                    last_copy_at: "2026-05-30T14:22:00+00:00"
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+
   /capas:
     post:
       tags: [capa]
@@ -5862,6 +5994,28 @@ components:
       properties:
         to_document_id: { type: string, format: uuid }
         link_type: { $ref: "#/components/schemas/DocumentLinkType" }
+
+    DriftScanSummary:
+      type: object
+      description: >-
+        The latest drift_scan row for one kind (S-drift-2 mig 0046; S-drift-3 added the
+        BLOB_REHASH kind). counts is the kind-specific summary bag (see the drift_scan model
+        docstring) — clients must treat unknown keys as additive. The status payload wraps this
+        in anyOf-null (no row yet for that kind).
+      required: [status, started_at, finished_at, counts, triggered_by]
+      properties:
+        status:
+          type: string
+          enum: [CLEAN, DIVERGENT, FAILED]
+        started_at: { type: string, format: date-time }
+        finished_at: { type: [string, "null"], format: date-time }
+        counts:
+          type: object
+          additionalProperties: true
+        triggered_by:
+          type: string
+          enum: [beat, sync, cli]
+
     ImpactDimension:
       type: string
       description: The seven doc 05 §5.3 structured impact-assessment dimensions.
