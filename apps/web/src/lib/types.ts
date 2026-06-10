@@ -330,7 +330,7 @@ export interface Task {
   candidate_pool: string[] | null;
   action_expected: string | null;
   due_at: string | null;
-  subject_type?: string; // detail-only (GET /tasks/{id}); "DOCUMENT" | "CAPA" | "DCR"
+  subject_type?: string; // detail-only (GET /tasks/{id}); "DOCUMENT" | "CAPA" | "DCR" | "PERIODIC_REVIEW"
   subject_id?: string;
 }
 
