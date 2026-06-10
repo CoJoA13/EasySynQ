@@ -5,6 +5,12 @@ on:
     branches: [main]
   pull_request:
 
+# A newer push to the same PR supersedes the in-flight run — cancel it. Pushes to main are never
+# cancelled (every merged commit keeps a full CI record).
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   contracts:
     runs-on: ubuntu-latest
@@ -20,7 +26,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: install uv
-        uses: astral-sh/setup-uv@v3
+        uses: astral-sh/setup-uv@v8
+        with:
+          enable-cache: true
+          cache-dependency-glob: "apps/api/uv.lock"
       - name: sync
         working-directory: apps/api
         run: uv sync --frozen
@@ -52,7 +61,10 @@ jobs:
       DATABASE_URL: postgresql+psycopg://easysynq:easysynq@localhost:5432/easysynq
     steps:
       - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v3
+      - uses: astral-sh/setup-uv@v8
+        with:
+          enable-cache: true
+          cache-dependency-glob: "apps/api/uv.lock"
       - working-directory: apps/api
         run: uv sync --frozen
       - name: upgrade head then downgrade base (reversible) then back to head
@@ -64,7 +76,12 @@ jobs:
 
   # The integration suite is sharded across N parallel runners (pytest-split, balanced by the
   # committed apps/api/.test_durations). Each shard is its own process spinning its own testcontainers
-  # → the single-DB / single-org contract holds per shard. ~27 min serial → ~7 min wall.
+  # → the single-DB / single-org contract holds per shard. ~45 min serial → ~13 min wall.
+  #
+  # Each green shard also re-times exactly the tests it ran (--store-durations --clean-durations
+  # replaces the workspace file with this shard's fresh timings; the *split* still reads the
+  # committed file) and publishes them as an artifact. scripts/refresh-test-durations.sh merges the
+  # four into apps/api/.test_durations — re-run it whenever shard wall-clocks drift apart.
   integration-shards:
     runs-on: ubuntu-latest
     strategy:
@@ -73,12 +90,24 @@ jobs:
         group: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v3
+      - uses: astral-sh/setup-uv@v8
+        with:
+          enable-cache: true
+          cache-dependency-glob: "apps/api/uv.lock"
       - working-directory: apps/api
         run: uv sync --frozen
       - name: integration tests (shard ${{ matrix.group }}/4, testcontainers spin their own Postgres)
         working-directory: apps/api
-        run: uv run pytest -m integration --splits 4 --group ${{ matrix.group }} --durations-path .test_durations
+        run: >-
+          uv run pytest -m integration --splits 4 --group ${{ matrix.group }}
+          --durations-path .test_durations --store-durations --clean-durations
+      - name: publish fresh shard durations
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-durations-${{ matrix.group }}
+          path: apps/api/.test_durations
+          retention-days: 7
 
   # Aggregator gate: keeps the required-status-check name "integration" stable (no branch-protection
   # change needed) and passes iff EVERY shard passed.
@@ -100,7 +129,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with: { node-version: "22" }
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
       - working-directory: apps/web
         run: npm ci
       - working-directory: apps/web
