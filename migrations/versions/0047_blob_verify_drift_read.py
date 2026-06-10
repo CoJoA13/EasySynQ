@@ -9,10 +9,12 @@ Slice S-drift-3 (doc 03 §8.2, doc 05 §9.1 rows D1/D4, doc 07 §3.9, R38/R41) �
    classification rides the payload).
 3. **R38/R41: the drift.read SYSTEM-domain key** (is_system_domain=true, sod_sensitive=false,
    sig_hook=false, finest_scope=SYSTEM) + one role_grant to System Administrator. ⚠ Org lookup =
-   the RESILIENT pattern (scalar_one_or_none on 'DEFAULT' + a fall-back to the only org — the
-   0043/0045 recipe, PR #107): setup G-E renames the short_code, so a DEFAULT-only lookup (the
-   0028 shape) silently skips an operational install. If the fallback finds ≠1 org, the grant is
-   skipped (permission still seeded) — never abort the upgrade.
+   the RESILIENT pattern (scalar_one_or_none on 'DEFAULT' + a fall-back to the only org — a
+   deliberately SOFTENED variant of the 0043/0045 ``scalar_one()`` recipe, PR #107): setup G-E
+   renames the short_code, so a DEFAULT-only lookup (the 0028 shape) silently skips an
+   operational install. If the fallback finds ≠1 org, the GRANT is skipped (permission still
+   seeded) — never abort the upgrade; a missing grant is operator-recoverable, unlike a
+   load-bearing workflow seed (0045), where skipping would be wrong.
 
 Neither new enum value is used by a row in THIS migration (the PG16 in-txn rule is satisfied).
 Downgrade: role_grant rows BEFORE the permission row (the RESTRICT FK); the ADD VALUEs are
@@ -76,8 +78,12 @@ def upgrade() -> None:
         .on_conflict_do_nothing(index_elements=["key"])
     )
 
-    # 3. Grant to System Administrator — resilient org lookup (the 0043/0045 recipe, #107):
-    # setup G-E renames the short_code, so DEFAULT-only would skip an operational install.
+    # 3. Grant to System Administrator — resilient org lookup (#107: setup G-E renames the
+    # short_code, so DEFAULT-only would skip an operational install). ⚠ Deliberately SOFTER than
+    # the 0043/0045 ``scalar_one()`` recipe: on ≠1 orgs the GRANT is skipped (the permission row
+    # is still seeded) rather than aborting — a missing role grant is operator-recoverable
+    # (grant-role CLI / authz admin), unlike 0045's workflow seed whose absence 500s a sweep.
+    # Do NOT copy this softened form for a seed whose absence is load-bearing.
     org_id = bind.execute(
         sa.text("SELECT id FROM organization WHERE short_code = 'DEFAULT'")
     ).scalar_one_or_none()
