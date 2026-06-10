@@ -16,7 +16,18 @@ import datetime
 import uuid
 from typing import Any
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Text, UniqueConstraint, func, text
+from sqlalchemy import (
+    Boolean,
+    Date,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    Text,
+    UniqueConstraint,
+    func,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -48,6 +59,11 @@ class DocumentedInformation(Base):
             postgresql_where=text(
                 "current_state = 'Effective'::document_current_state AND is_singleton = true"
             ),
+        ),
+        Index(
+            "ix_documented_information_next_review_due",
+            "next_review_due",
+            postgresql_where=text("next_review_due IS NOT NULL"),
         ),
     )
 
@@ -88,6 +104,14 @@ class DocumentedInformation(Base):
     )  # S4: the single governing Effective version (set atomically at the release cutover)
     classification: Mapped[Classification] = mapped_column(
         classification_enum, default=Classification.Internal, nullable=False
+    )
+    # S-drift-1 (D5, doc 04 §9): periodic re-review. NULL review_period_months = not scheduled
+    # (legacy/opt-out — the owner's no-backfill fork). next_review_due is STORED, not derived:
+    # review-confirm resets it from the review date, not from effective_from.
+    review_period_months: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    next_review_due: Mapped[datetime.date | None] = mapped_column(Date, nullable=True)
+    last_reviewed_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
     )
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()

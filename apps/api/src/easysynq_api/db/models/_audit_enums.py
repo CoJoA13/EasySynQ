@@ -331,6 +331,14 @@ class EventType(enum.Enum):
     # ALTER TYPE event_type ADD VALUE in 0041.
     DOCUMENT_LINKED = "DOCUMENT_LINKED"
     DOCUMENT_UNLINKED = "DOCUMENT_UNLINKED"
+    # periodic re-review (S-drift-1, D5, doc 04 §9). REVIEW_CONFIRMED = owner acknowledges the
+    # document is current ("no change needed" for this review cycle); REVIEW_OVERDUE = the Beat
+    # sweep fired the once-per-cycle overdue flag (next_review_due is past + no task yet). Both
+    # key on object_type=document (the document under review). Added via ALTER TYPE event_type
+    # ADD VALUE in 0045 (the additive pattern; a from-scratch ``upgrade head`` rebuilds from
+    # EVENT_TYPE_VALUES).
+    REVIEW_CONFIRMED = "REVIEW_CONFIRMED"  # D5: periodic review concluded "no change needed"
+    REVIEW_OVERDUE = "REVIEW_OVERDUE"  # D5: open review task past next_review_due (once per cycle)
 
 
 class CheckpointSinkKind(enum.Enum):
