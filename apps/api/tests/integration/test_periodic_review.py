@@ -673,10 +673,12 @@ async def test_decide_complete_confirms_review(
     review date (NOT from backdated effective_from — the anchor proof)."""
     from easysynq_api.db.models._audit_enums import AuditObjectType, EventType
     from easysynq_api.db.models._signature_enums import SignatureMeaning, SignedObjectType
+    from easysynq_api.db.models._workflow_enums import WorkflowSubjectType
     from easysynq_api.db.models.audit_event import AuditEvent
     from easysynq_api.db.models.document_version import DocumentVersion
     from easysynq_api.db.models.documented_information import DocumentedInformation
     from easysynq_api.db.models.signature_event import SignatureEvent as SignatureEventRow
+    from easysynq_api.db.models.workflow import WorkflowInstance
     from easysynq_api.services.vault.review import sweep_reviews
 
     await s5.grant_lifecycle(subj.a)
@@ -784,29 +786,10 @@ async def test_decide_complete_confirms_review(
         non_terminal_count = len(
             (
                 await s.execute(
-                    select(
-                        __import__(
-                            "easysynq_api.db.models.workflow",
-                            fromlist=["WorkflowInstance"],
-                        ).WorkflowInstance
-                    ).where(
-                        __import__(
-                            "easysynq_api.db.models.workflow",
-                            fromlist=["WorkflowInstance"],
-                        ).WorkflowInstance.subject_type
-                        == __import__(
-                            "easysynq_api.db.models._workflow_enums",
-                            fromlist=["WorkflowSubjectType"],
-                        ).WorkflowSubjectType.PERIODIC_REVIEW,
-                        __import__(
-                            "easysynq_api.db.models.workflow",
-                            fromlist=["WorkflowInstance"],
-                        ).WorkflowInstance.subject_id
-                        == doc_uuid,
-                        __import__(
-                            "easysynq_api.db.models.workflow",
-                            fromlist=["WorkflowInstance"],
-                        ).WorkflowInstance.current_state.not_in(
+                    select(WorkflowInstance).where(
+                        WorkflowInstance.subject_type == WorkflowSubjectType.PERIODIC_REVIEW,
+                        WorkflowInstance.subject_id == doc_uuid,
+                        WorkflowInstance.current_state.not_in(
                             ("COMPLETED", "REJECTED", "NEEDS_ATTENTION")
                         ),
                     )
@@ -985,6 +968,14 @@ async def test_decide_obsoleted_doc_409_keeps_task_pending(
 
     did, doc_uuid = await _due_released_doc(app_client, ha, hb, type_id, content)
 
+    # Capture the Effective version id BEFORE obsoleting so the sig assertion
+    # targets the right object (the handler signs the VERSION, not the doc).
+    async with get_sessionmaker()() as s:
+        di_pre = await s.get(DocumentedInformation, doc_uuid)
+        assert di_pre is not None
+        ver_id = di_pre.current_effective_version_id
+        assert ver_id is not None
+
     # Sweep → task.
     async with get_sessionmaker()() as session:
         await sweep_reviews(session)
@@ -1046,7 +1037,7 @@ async def test_decide_obsoleted_doc_409_keeps_task_pending(
             (
                 await s.execute(
                     select(SignatureEventRow).where(
-                        SignatureEventRow.signed_object_id == doc_uuid,
+                        SignatureEventRow.signed_object_id == ver_id,
                         SignatureEventRow.meaning == SignatureMeaning.review_confirmed,
                     )
                 )
