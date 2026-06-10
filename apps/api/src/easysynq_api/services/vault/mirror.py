@@ -36,10 +36,11 @@ under D1 (one organization per install) the per-doc ``{identifier}_{revision_lab
 is globally unique, so clause-bucketing introduces no cross-org collision. Multi-tenant namespacing
 is out of scope for v1 (this is pre-existing S7 behavior, not introduced here).
 
-**The drift scan (S-drift-2):** the D2+D3 SHA-256 integrity scan / quarantine / ``MIRROR_STALE`` +
-``MIRROR_TAMPER`` audit events live in ``mirror_scan.py``; this module persists each build's
-manifest into ``mirror_build`` (the scan's vault-side expected state — the on-disk
-``_meta/manifest.json`` is a generated artifact, verified but never trusted as authority).
+**Rendering is S7b (live). The drift scan is S-drift-2:** the D2+D3 SHA-256 integrity scan /
+quarantine / ``MIRROR_STALE`` + ``MIRROR_TAMPER`` audit events live in ``mirror_scan.py``; this
+module persists each build's manifest into ``mirror_build`` (the scan's vault-side expected state —
+the on-disk ``_meta/manifest.json`` is a generated artifact, verified but never trusted as
+authority).
 """
 
 from __future__ import annotations
