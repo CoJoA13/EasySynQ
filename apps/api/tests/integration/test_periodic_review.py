@@ -15,10 +15,10 @@ from types import SimpleNamespace
 
 import pytest
 from httpx import AsyncClient
-from sqlalchemy import text
+from sqlalchemy import select, text
 
 from easysynq_api.db.session import get_sessionmaker
-from easysynq_api.services.vault.review import REVIEW_PERIOD_DEFAULT_MONTHS, add_months
+from easysynq_api.services.vault.review import REVIEW_PERIOD_DEFAULT_MONTHS, _org_tz, add_months
 
 from . import s5_helpers as s5
 from .test_vault import _auth, _checkin, _create, _map_clause, _upload
@@ -209,3 +209,359 @@ async def test_submit_review_autodefaults_null_period(
     # GET → review_period_months == 24 (the T2 auto-default).
     body = (await app_client.get(f"/api/v1/documents/{did}", headers=ha)).json()
     assert body.get("review_period_months") == REVIEW_PERIOD_DEFAULT_MONTHS  # 24
+
+
+# ---------------------------------------------------------------------------
+# Task 5: Beat sweep — integration proofs
+# ---------------------------------------------------------------------------
+
+
+async def test_sweep_creates_one_task_idempotently(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    subj: SimpleNamespace,
+    app_under_test: object,
+) -> None:
+    """sweep_reviews opens exactly one PERIODIC_REVIEW task per Effective doc inside the lead
+    window; a second sweep leaves exactly one non-terminal instance (idempotency proof)."""
+    from easysynq_api.db.models._workflow_enums import TaskState, TaskType, WorkflowSubjectType
+    from easysynq_api.db.models.app_user import AppUser
+    from easysynq_api.db.models.workflow import Task, WorkflowInstance
+    from easysynq_api.services.vault.review import sweep_reviews
+
+    await s5.grant_lifecycle(subj.a)
+    await s5.grant_lifecycle(subj.b)
+    await s5.set_approver_release(await s5.default_org_id(), True)
+    ha = _auth(token_factory, subj.a)
+    hb = _auth(token_factory, subj.b)
+    type_id = await s5.type_id("SOP")
+    content = f"drift-sweep-idem-{subj.a}".encode()
+
+    did, _body = await _release_doc(app_client, ha, hb, type_id, content)
+    doc_uuid = uuid.UUID(did)
+
+    # SET next_review_due to today + 30 days exactly (horizon boundary: <=, not <).
+    today_date = datetime.datetime.now(_org_tz()).date()
+    horizon_date = today_date + datetime.timedelta(days=30)
+    async with get_sessionmaker()() as s:
+        await s.execute(
+            text("UPDATE documented_information SET next_review_due = :d WHERE id = :id"),
+            {"d": horizon_date, "id": doc_uuid},
+        )
+        await s.commit()
+
+    # First sweep — should create exactly one instance + task for this doc.
+    async with get_sessionmaker()() as session:
+        result = await sweep_reviews(session)
+    assert result["tasks_created"] >= 1
+
+    async with get_sessionmaker()() as s:
+        # Exactly ONE non-terminal PERIODIC_REVIEW instance for this doc.
+        instance = (
+            await s.execute(
+                select(WorkflowInstance)
+                .where(
+                    WorkflowInstance.subject_type == WorkflowSubjectType.PERIODIC_REVIEW,
+                    WorkflowInstance.subject_id == doc_uuid,
+                    WorkflowInstance.current_state.not_in(
+                        ("COMPLETED", "REJECTED", "NEEDS_ATTENTION")
+                    ),
+                )
+                .order_by(WorkflowInstance.started_at.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        assert instance is not None, "expected a non-terminal PERIODIC_REVIEW instance"
+
+        # The task for this instance — the LOAD-BEARING assertion: a NEEDS_ATTENTION instance
+        # materializes no task (fail-closed); a typo'd stage sentinel would also miss here.
+        task = (
+            await s.execute(
+                select(Task)
+                .where(
+                    Task.instance_id == instance.id,
+                    Task.state == TaskState.PENDING,
+                )
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        assert task is not None, "expected a PENDING task for the PERIODIC_REVIEW instance"
+        assert task.type == TaskType.PERIODIC_REVIEW
+
+        # The task is assigned to the doc owner.
+        owner_row = await s.get(AppUser, task.assignee_user_id)
+        assert owner_row is not None
+        # The owner is the creator (subj.a was the author who created the doc).
+        assert owner_row.keycloak_subject == subj.a
+
+        # due_at must be org-tz midnight on the horizon_date we set.
+        assert task.due_at is not None
+        assert task.due_at.date() == horizon_date
+
+    # Second sweep — still exactly ONE non-terminal instance (idempotency).
+    async with get_sessionmaker()() as session:
+        await sweep_reviews(session)
+
+    async with get_sessionmaker()() as s:
+        count = await s.execute(
+            select(WorkflowInstance).where(
+                WorkflowInstance.subject_type == WorkflowSubjectType.PERIODIC_REVIEW,
+                WorkflowInstance.subject_id == doc_uuid,
+                WorkflowInstance.current_state.not_in(("COMPLETED", "REJECTED", "NEEDS_ATTENTION")),
+            )
+        )
+        rows = count.scalars().all()
+    assert len(rows) == 1, (
+        f"expected exactly 1 non-terminal instance after 2 sweeps, got {len(rows)}"
+    )
+
+
+async def test_sweep_skips_non_effective_and_unscheduled(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    subj: SimpleNamespace,
+    app_under_test: object,
+) -> None:
+    """Sweep skips docs that are not Effective AND docs with no review schedule.
+    Both legs are non-vacuous: the Draft doc has next_review_due inside the horizon,
+    and the unscheduled doc is Effective but null-period."""
+    from easysynq_api.db.models._workflow_enums import WorkflowSubjectType
+    from easysynq_api.db.models.workflow import WorkflowInstance
+    from easysynq_api.services.vault.review import sweep_reviews
+
+    await s5.grant_lifecycle(subj.a)
+    await s5.grant_lifecycle(subj.b)
+    await s5.set_approver_release(await s5.default_org_id(), True)
+    ha = _auth(token_factory, subj.a)
+    hb = _auth(token_factory, subj.b)
+    type_id = await s5.type_id("SOP")
+    today_date = datetime.datetime.now(_org_tz()).date()
+
+    # --- Draft leg: a Draft doc with next_review_due = today (inside the horizon) ---
+    draft_doc = await _create(app_client, ha, type_id)
+    draft_id = uuid.UUID(draft_doc["id"])
+    # Set next_review_due to today directly (it stays Draft — no checkin/release).
+    async with get_sessionmaker()() as s:
+        await s.execute(
+            text("UPDATE documented_information SET next_review_due = :d WHERE id = :id"),
+            {"d": today_date, "id": draft_id},
+        )
+        await s.commit()
+
+    # --- Unscheduled leg: release a doc, then PATCH review_period_months = null ---
+    unsched_content = f"drift-unsched-{subj.a}".encode()
+    unsched_did, _ = await _release_doc(app_client, ha, hb, type_id, unsched_content)
+    unsched_uuid = uuid.UUID(unsched_did)
+
+    r = await app_client.patch(
+        f"/api/v1/documents/{unsched_did}", headers=ha, json={"review_period_months": None}
+    )
+    assert r.status_code == 200, r.text
+    # Assert next_review_due is actually None in the DB before sweeping.
+    async with get_sessionmaker()() as s:
+        from easysynq_api.db.models.documented_information import DocumentedInformation
+
+        di = await s.get(DocumentedInformation, unsched_uuid)
+        assert di is not None
+        assert di.next_review_due is None, "expected next_review_due to be cleared"
+
+    # Sweep — neither doc should get a PERIODIC_REVIEW instance.
+    async with get_sessionmaker()() as session:
+        await sweep_reviews(session)
+
+    async with get_sessionmaker()() as s:
+        # Draft doc: no instance.
+        draft_instance = (
+            await s.execute(
+                select(WorkflowInstance)
+                .where(
+                    WorkflowInstance.subject_type == WorkflowSubjectType.PERIODIC_REVIEW,
+                    WorkflowInstance.subject_id == draft_id,
+                )
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        assert draft_instance is None, "Draft doc must not get a PERIODIC_REVIEW instance"
+
+        # Unscheduled (null-period) doc: no instance.
+        unsched_instance = (
+            await s.execute(
+                select(WorkflowInstance)
+                .where(
+                    WorkflowInstance.subject_type == WorkflowSubjectType.PERIODIC_REVIEW,
+                    WorkflowInstance.subject_id == unsched_uuid,
+                )
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        assert unsched_instance is None, "Unscheduled doc must not get a PERIODIC_REVIEW instance"
+
+
+async def test_sweep_escalates_overdue_once(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    subj: SimpleNamespace,
+    app_under_test: object,
+) -> None:
+    """sweep_reviews emits exactly one REVIEW_OVERDUE audit event per overdue cycle; a second
+    sweep does NOT create a second REVIEW_OVERDUE for the same instance. Also: a backdated
+    document-APPROVAL task's due_at does NOT trigger REVIEW_OVERDUE (subject_type filter)."""
+    from easysynq_api.db.models._audit_enums import AuditObjectType, EventType
+    from easysynq_api.db.models._workflow_enums import WorkflowSubjectType
+    from easysynq_api.db.models.audit_event import AuditEvent
+    from easysynq_api.db.models.workflow import WorkflowInstance
+    from easysynq_api.services.vault.review import sweep_reviews
+
+    await s5.grant_lifecycle(subj.a)
+    await s5.grant_lifecycle(subj.b)
+    await s5.set_approver_release(await s5.default_org_id(), True)
+    ha = _auth(token_factory, subj.a)
+    hb = _auth(token_factory, subj.b)
+    type_id = await s5.type_id("SOP")
+    content = f"drift-overdue-{subj.a}".encode()
+
+    did, body = await _release_doc(app_client, ha, hb, type_id, content)
+    doc_uuid = uuid.UUID(did)
+    identifier = body.get("identifier")
+
+    # Backdate next_review_due to 40 days ago so the doc is overdue AND inside the lead window.
+    today_date = datetime.datetime.now(_org_tz()).date()
+    overdue_date = today_date - datetime.timedelta(days=40)
+    async with get_sessionmaker()() as s:
+        await s.execute(
+            text("UPDATE documented_information SET next_review_due = :d WHERE id = :id"),
+            {"d": overdue_date, "id": doc_uuid},
+        )
+        await s.commit()
+
+    # Negative: backdate this test's document-APPROVAL task's due_at so we confirm the
+    # subject_type filter prevents a REVIEW_OVERDUE from appearing for it.
+    async with get_sessionmaker()() as s:
+        # Find the document approval instance (subject_type==DOCUMENT) for this doc.
+        doc_instance = (
+            await s.execute(
+                select(WorkflowInstance)
+                .where(
+                    WorkflowInstance.subject_type == WorkflowSubjectType.DOCUMENT,
+                    WorkflowInstance.subject_id == doc_uuid,
+                )
+                .order_by(WorkflowInstance.started_at.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if doc_instance is not None:
+            # Backdate all its tasks to look overdue — should NOT produce REVIEW_OVERDUE.
+            await s.execute(
+                text(
+                    "UPDATE task SET due_at = now() - interval '50 days' WHERE instance_id = :iid"
+                ),
+                {"iid": doc_instance.id},
+            )
+            await s.commit()
+
+    # First sweep — creates the instance + task, then escalates (task is already past due_at
+    # because we set next_review_due in the past → due_at will be in the past).
+    async with get_sessionmaker()() as session:
+        result = await sweep_reviews(session)
+    assert result["tasks_created"] >= 1
+
+    # Find the PERIODIC_REVIEW instance just created.
+    async with get_sessionmaker()() as s:
+        pr_instance = (
+            await s.execute(
+                select(WorkflowInstance)
+                .where(
+                    WorkflowInstance.subject_type == WorkflowSubjectType.PERIODIC_REVIEW,
+                    WorkflowInstance.subject_id == doc_uuid,
+                )
+                .order_by(WorkflowInstance.started_at.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        assert pr_instance is not None
+
+        # Backdate the task's due_at so the escalation pass fires on the second sweep
+        # (the first sweep's task was just created, so its due_at is in the past already
+        # because we set overdue_date 40 days ago → but to be explicit, force it).
+        await s.execute(
+            text(
+                "UPDATE task SET due_at = now() - interval '1 hour'"
+                " WHERE instance_id = :iid AND state = 'PENDING'"
+            ),
+            {"iid": pr_instance.id},
+        )
+        await s.commit()
+
+    # Second sweep — escalation fires; instance already exists so tasks_created == 0 for this doc.
+    async with get_sessionmaker()() as session:
+        result2 = await sweep_reviews(session)
+    assert result2["escalated"] >= 1
+
+    # Exactly ONE REVIEW_OVERDUE audit event for this doc.
+    async with get_sessionmaker()() as s:
+        events = (
+            (
+                await s.execute(
+                    select(AuditEvent).where(
+                        AuditEvent.object_type == AuditObjectType.document,
+                        AuditEvent.object_id == doc_uuid,
+                        AuditEvent.event_type == EventType.REVIEW_OVERDUE,
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert len(events) >= 1, "expected at least one REVIEW_OVERDUE audit event"
+        # The event's after must include the correct instance_id.
+        assert any(
+            e.after is not None and e.after.get("instance_id") == str(pr_instance.id)
+            for e in events
+        ), "REVIEW_OVERDUE event must carry the PERIODIC_REVIEW instance_id"
+        # scope_ref must be the doc's identifier.
+        assert any(e.scope_ref == identifier for e in events), (
+            f"expected scope_ref={identifier!r} on the REVIEW_OVERDUE event"
+        )
+
+    # Third sweep — still exactly the same number of REVIEW_OVERDUE events (dedup).
+    async with get_sessionmaker()() as session:
+        await sweep_reviews(session)
+
+    async with get_sessionmaker()() as s:
+        events_after = (
+            (
+                await s.execute(
+                    select(AuditEvent).where(
+                        AuditEvent.object_type == AuditObjectType.document,
+                        AuditEvent.object_id == doc_uuid,
+                        AuditEvent.event_type == EventType.REVIEW_OVERDUE,
+                        AuditEvent.after["instance_id"].astext == str(pr_instance.id),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert len(events_after) == 1, (
+            f"expected exactly 1 REVIEW_OVERDUE after dedup sweep, got {len(events_after)}"
+        )
+
+    # Negative: no REVIEW_OVERDUE for the document-APPROVAL task we backdated — the
+    # subject_type filter (WorkflowSubjectType.PERIODIC_REVIEW) stops the escalation pass
+    # from touching tasks whose instance is a DOCUMENT-subject workflow.
+    if doc_instance is not None:
+        async with get_sessionmaker()() as s:
+            doc_overdue = (
+                await s.execute(
+                    select(AuditEvent.id)
+                    .where(
+                        AuditEvent.object_id == doc_uuid,
+                        AuditEvent.event_type == EventType.REVIEW_OVERDUE,
+                        AuditEvent.after["instance_id"].astext == str(doc_instance.id),
+                    )
+                    .limit(1)
+                )
+            ).first()
+        assert doc_overdue is None, (
+            "a backdated DOCUMENT-subject task must NOT produce a REVIEW_OVERDUE event"
+        )
