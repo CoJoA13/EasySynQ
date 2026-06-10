@@ -99,9 +99,14 @@ def upgrade() -> None:
     # 1. The DCR-approval signature object type (not used here → same-txn ADD VALUE is safe).
     op.execute("ALTER TYPE signed_object_type ADD VALUE IF NOT EXISTS 'dcr'")
 
+    # An OPERATIONAL install renames short_code away from 'DEFAULT' at setup G-E (the 0018/0021
+    # trap) — a bare scalar_one() would abort an upgrade from a restored pre-0043 DB. D1 =
+    # single-org, so fall back to the only row (the 0045 recipe).
     org_id = bind.execute(
         sa.text("SELECT id FROM organization WHERE short_code = 'DEFAULT'")
-    ).scalar_one()
+    ).scalar_one_or_none()
+    if org_id is None:
+        org_id = bind.execute(sa.text("SELECT id FROM organization")).scalar_one()
 
     # 2. The effective dcr_approval definition.
     definition_t = sa.table(

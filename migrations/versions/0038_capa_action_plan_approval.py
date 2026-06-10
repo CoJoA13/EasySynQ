@@ -86,9 +86,14 @@ _STAGES: tuple[dict[str, Any], ...] = (
 
 def upgrade() -> None:
     bind = op.get_bind()
+    # An OPERATIONAL install renames short_code away from 'DEFAULT' at setup G-E (the 0018/0021
+    # trap) — a bare scalar_one() would abort an upgrade from a restored pre-0038 DB. D1 =
+    # single-org, so fall back to the only row (the 0045 recipe).
     org_id = bind.execute(
         sa.text("SELECT id FROM organization WHERE short_code = 'DEFAULT'")
-    ).scalar_one()
+    ).scalar_one_or_none()
+    if org_id is None:
+        org_id = bind.execute(sa.text("SELECT id FROM organization")).scalar_one()
 
     # 1. The Top-Management role (additive; reserved governance role, no grants beyond capa.read).
     role_t = sa.table(
