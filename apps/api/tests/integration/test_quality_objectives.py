@@ -110,6 +110,63 @@ async def test_create_rejects_unknown_policy_id(
     assert r.status_code == 422, r.text
 
 
+async def test_create_rejects_unknown_process_id(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    # A bad process_id is a clean 422 BEFORE create_document commits — no orphan base doc.
+    subject = f"obj-{uuid.uuid4()}"
+    h = _auth(token_factory, subject)
+    await _grant(subject, _OBJ_KEYS)
+    r = await app_client.post(
+        "/api/v1/objectives",
+        headers=h,
+        json={
+            "title": "Bad process link",
+            "target_value": "5",
+            "unit": "count",
+            "direction": "LOWER_IS_BETTER",
+            "due_date": "2026-12-31",
+            "process_id": str(uuid.uuid4()),
+        },
+    )
+    assert r.status_code == 422, r.text
+
+
+async def test_measurement_unit_must_match_objective(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    subject = f"obj-{uuid.uuid4()}"
+    h = _auth(token_factory, subject)
+    await _grant(subject, _OBJ_KEYS)
+    oid = (
+        await app_client.post(
+            "/api/v1/objectives",
+            headers=h,
+            json={
+                "title": "Percent objective",
+                "target_value": "98",
+                "unit": "%",
+                "direction": "HIGHER_IS_BETTER",
+                "due_date": "2026-12-31",
+            },
+        )
+    ).json()["id"]
+    # a reading in a different unit is rejected (would corrupt RAG)
+    bad = await app_client.post(
+        f"/api/v1/objectives/{oid}/measurements",
+        headers=h,
+        json={"period": "2026-06-30", "value": "5", "unit": "count"},
+    )
+    assert bad.status_code == 422, bad.text
+    # the matching unit succeeds
+    ok = await app_client.post(
+        f"/api/v1/objectives/{oid}/measurements",
+        headers=h,
+        json={"period": "2026-06-30", "value": "95", "unit": "%"},
+    )
+    assert ok.status_code == 201, ok.text
+
+
 async def test_record_measurements_roll_up_latest_period_wins(
     app_client: AsyncClient, token_factory: Callable[..., str]
 ) -> None:

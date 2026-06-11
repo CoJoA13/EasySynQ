@@ -7282,7 +7282,7 @@ components:
           type: string
           enum: [green, amber, red, unmeasured]
           description: "Direction-aware RAG; 'unmeasured' when there is no current_value yet."
-        pct_toward_target: { type: [number, "null"], description: "Fraction toward target from baseline (0.0–1.0; may exceed 1.0 or be negative); null when unmeasured or zero span." }
+        pct_toward_target: { type: [number, "null"], description: "Direction-aware fraction toward target from baseline (typically 0.0–1.0; may exceed 1.0 when met-or-better, or be negative); null when unmeasured, zero span, or a lower-is-better objective has no baseline." }
         attainment: { type: string, enum: [in_progress, met, missed], description: "Attainment band (computed at read)." }
         plans:
           type: array

@@ -23,6 +23,7 @@ from ...db.models.document_type import DocumentType
 from ...db.models.documented_information import DocumentedInformation
 from ...db.models.kpi_measurement import KpiMeasurement
 from ...db.models.objective_plan import ObjectivePlan
+from ...db.models.process import Process
 from ...db.models.quality_objective import QualityObjective
 from ...problems import ProblemException
 from ..records import capture_record
@@ -92,6 +93,17 @@ async def create_objective(
                 status=422,
                 code="validation_error",
                 title="policy_id must be the current Effective Quality Policy",
+            )
+    # Validate process_id BEFORE create_document (which commits the base doc): a bad/foreign
+    # process_id would otherwise FK-abort the satellite insert AFTER the base OBJ document was
+    # already committed, orphaning a base documented_information row with no quality_objective.
+    if process_id is not None:
+        proc = await session.get(Process, process_id)
+        if proc is None or proc.org_id != actor.org_id:
+            raise ProblemException(
+                status=422,
+                code="validation_error",
+                title="Unknown process_id (must be a process in your organization)",
             )
     dt_id = await _obj_document_type_id(session, actor.org_id)
     # create_document commits the base doc (the form_template two-step precedent).
@@ -180,6 +192,14 @@ async def record_measurement(
     ).scalar_one_or_none()
     if qo is None:
         raise ProblemException(status=404, code="not_found", title="Objective not found")
+    # The reading must be in the objective's own unit — current_value/RAG compare the raw value
+    # against target_value with no conversion, so a mismatched unit would corrupt the scorecard.
+    if unit != qo.unit:
+        raise ProblemException(
+            status=422,
+            code="validation_error",
+            title=f"Measurement unit '{unit}' must match the objective unit '{qo.unit}'",
+        )
 
     target_at_capture = qo.target_value
 

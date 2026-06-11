@@ -48,14 +48,33 @@ def test_no_threshold_collapses_amber_to_red() -> None:
     assert rag_status(current=D(95), target=D(90), direction=HI, at_risk_threshold=None) == "green"
 
 
-def test_pct_toward_target() -> None:
+def test_pct_toward_target_higher_is_better() -> None:
     # baseline 50, target 100, current 75 → 50%
-    assert pct_toward_target(current=D(75), target=D(100), baseline=D(50)) == pytest.approx(0.5)
+    assert pct_toward_target(
+        current=D(75), target=D(100), baseline=D(50), direction=HI
+    ) == pytest.approx(0.5)
     # no baseline → fraction of target
-    assert pct_toward_target(current=D(45), target=D(90), baseline=None) == pytest.approx(0.5)
-    # current None → None; zero denominator → None
-    assert pct_toward_target(current=None, target=D(90), baseline=None) is None
-    assert pct_toward_target(current=D(75), target=D(50), baseline=D(50)) is None
+    assert pct_toward_target(
+        current=D(45), target=D(90), baseline=None, direction=HI
+    ) == pytest.approx(0.5)
+    # current None → None; zero span → None
+    assert pct_toward_target(current=None, target=D(90), baseline=None, direction=HI) is None
+    assert pct_toward_target(current=D(75), target=D(50), baseline=D(50), direction=HI) is None
+
+
+def test_pct_toward_target_lower_is_better() -> None:
+    # baseline 10 (start), target 5, current 8 → (10-8)/(10-5) = 40% (NOT 160%)
+    assert pct_toward_target(
+        current=D(8), target=D(5), baseline=D(10), direction=LO
+    ) == pytest.approx(0.4)
+    # met-or-better reads ≥100%: current 5 → 100%, current 3 → 140%
+    assert pct_toward_target(
+        current=D(5), target=D(5), baseline=D(10), direction=LO
+    ) == pytest.approx(1.0)
+    # lower-is-better WITHOUT a baseline is undefined → None (the no-160%-bug case)
+    assert pct_toward_target(current=D(8), target=D(5), baseline=None, direction=LO) is None
+    # zero span → None
+    assert pct_toward_target(current=D(7), target=D(5), baseline=D(5), direction=LO) is None
 
 
 def test_attainment_met_missed_in_progress() -> None:

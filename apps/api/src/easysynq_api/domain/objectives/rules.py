@@ -46,16 +46,31 @@ def rag_status(
 
 
 def pct_toward_target(
-    *, current: Numeric | None, target: Numeric, baseline: Numeric | None
+    *,
+    current: Numeric | None,
+    target: Numeric,
+    baseline: Numeric | None,
+    direction: ObjectiveDirection,
 ) -> float | None:
-    """Fraction of the way from baseline (or 0) to target. None when unmeasured or zero span."""
+    """Fraction toward target, **direction-aware**. None when unmeasured, when the span is zero, or
+    when a LOWER_IS_BETTER objective has no baseline (no start point; a worse value would otherwise
+    read as >100% 'progress')."""
     if current is None:
         return None
-    base = baseline if baseline is not None else Decimal(0)
-    span = target - base
+    if direction is ObjectiveDirection.HIGHER_IS_BETTER:
+        base = baseline if baseline is not None else Decimal(0)
+        span = target - base
+        if span == 0:
+            return None
+        return float((current - base) / span)
+    # LOWER_IS_BETTER: progress runs from a (higher) baseline DOWN to a (lower) target. Without an
+    # explicit baseline there is no meaningful start, so 'fraction toward target' is undefined.
+    if baseline is None:
+        return None
+    span = baseline - target
     if span == 0:
         return None
-    return float((current - base) / span)
+    return float((baseline - current) / span)
 
 
 def attainment(

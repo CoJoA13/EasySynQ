@@ -135,6 +135,7 @@ def _objective(
             current=qo.current_value,
             target=qo.target_value,
             baseline=qo.baseline_value,
+            direction=qo.direction,
         ),
         "attainment": attainment(
             current=qo.current_value,
