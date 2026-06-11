@@ -1,9 +1,10 @@
 import { http, HttpResponse } from "msw";
 import { Route, Routes } from "react-router-dom";
-import { expect, test } from "vitest";
+import { describe, expect, test } from "vitest";
+import { screen } from "@testing-library/react";
 import { server } from "../../test/msw/server";
 import { renderWithProviders } from "../../test/render";
-import { capaApprovalFixture, capaApprovalTask } from "../../test/msw/handlers";
+import { approvalFixture, capaApprovalFixture, capaApprovalTask, periodicReviewTask } from "../../test/msw/handlers";
 import { ReviewApprovePage } from "./ReviewApprovePage";
 
 function mount(route: string) {
@@ -13,6 +14,10 @@ function mount(route: string) {
     </Routes>,
     { route },
   );
+}
+
+function renderAtTask(id: string) {
+  return mount(`/tasks/${id}`);
 }
 
 test("renders the document context + the decision card for a pending task", async () => {
@@ -82,4 +87,46 @@ test("a decided CAPA task shows the read-only summary, not the decision form", a
   const { findByText, queryByRole } = mount("/tasks/tkca1111-1111-1111-1111-111111111111");
   expect(await findByText("This task has already been decided.")).toBeInTheDocument();
   expect(queryByRole("button", { name: "Submit decision" })).toBeNull();
+});
+
+describe("ReviewApprovePage — PERIODIC_REVIEW", () => {
+  test("renders the doc context + the periodic decision card, and never reads the workflow instance", async () => {
+    let instanceHit = false;
+    server.use(
+      http.get("/api/v1/workflow-instances/:id", () => {
+        instanceHit = true;
+        return HttpResponse.json(approvalFixture);
+      }),
+    );
+    renderAtTask(periodicReviewTask.id);
+    expect(await screen.findByText("Periodic review")).toBeInTheDocument();
+    expect(await screen.findByText("SOP-PUR-014")).toBeInTheDocument();
+    expect(screen.getByText("Supplier Selection & Evaluation")).toBeInTheDocument();
+    expect(screen.getByLabelText("Confirm — no change needed")).toBeInTheDocument();
+    // the obsolete path is a LINK to the doc page, not a task outcome
+    expect(screen.getByText(/Obsolete it from the document page/)).toBeInTheDocument();
+    expect(instanceHit).toBe(false);
+  });
+
+  test("a document-read 403 degrades calmly — the decision card still renders", async () => {
+    server.use(
+      http.get("/api/v1/documents/:id", () =>
+        HttpResponse.json({ code: "forbidden", title: "Forbidden" }, { status: 403 }),
+      ),
+    );
+    renderAtTask(periodicReviewTask.id);
+    expect(await screen.findByText("Document details not visible to you")).toBeInTheDocument();
+    expect(screen.getByLabelText("Confirm — no change needed")).toBeInTheDocument();
+  });
+
+  test("a decided task shows the Decided alert instead of the card", async () => {
+    server.use(
+      http.get("/api/v1/tasks/:id", () =>
+        HttpResponse.json({ ...periodicReviewTask, state: "DONE" }),
+      ),
+    );
+    renderAtTask(periodicReviewTask.id);
+    expect(await screen.findByText("This task has already been decided.")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Confirm — no change needed")).not.toBeInTheDocument();
+  });
 });

@@ -1,4 +1,4 @@
-import { Alert, Anchor, Container, Group, Loader, Table, Text, Title } from "@mantine/core";
+import { Alert, Anchor, Badge, Container, Group, Loader, Table, Text, Title } from "@mantine/core";
 import { Link } from "react-router-dom";
 import { CoverageBadge } from "./CoverageBadge";
 import { useComplianceChecklist } from "./useComplianceChecklist";
@@ -53,6 +53,7 @@ export function CompliancePage() {
         <Text>✓ Covered: {rollup.covered}</Text>
         <Text>◔ Partial: {rollup.partial}</Text>
         <Text>✕ Gap: {rollup.gap}</Text>
+        <Text>⏰ Review overdue: {rollup.overdue_review}</Text>
       </Group>
       <Table striped highlightOnHover>
         <Table.Thead>
@@ -63,6 +64,7 @@ export function CompliancePage() {
             <Table.Th>Mapped</Table.Th>
             <Table.Th>Effective</Table.Th>
             <Table.Th>Status</Table.Th>
+            <Table.Th>Review</Table.Th>
           </Table.Tr>
         </Table.Thead>
         <Table.Tbody>
@@ -79,6 +81,22 @@ export function CompliancePage() {
               <Table.Td>{r.effective_count}</Table.Td>
               <Table.Td>
                 <CoverageBadge status={r.status} />
+              </Table.Td>
+              <Table.Td>
+                {r.overdue_review ? (
+                  <Badge
+                    variant="light"
+                    color="var(--es-danger)"
+                    leftSection={<span aria-hidden="true">▲</span>}
+                    aria-label="Review overdue"
+                  >
+                    Overdue
+                  </Badge>
+                ) : (
+                  <Text c="dimmed" size="sm">
+                    —
+                  </Text>
+                )}
               </Table.Td>
             </Table.Tr>
           ))}

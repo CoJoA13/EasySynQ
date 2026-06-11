@@ -1,8 +1,9 @@
 import { http, HttpResponse } from "msw";
 import { axe } from "jest-axe";
-import { afterEach, expect, test, vi } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { Route, Routes } from "react-router-dom";
 import { screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { renderWithProviders } from "../../test/render";
 import { server } from "../../test/msw/server";
 import { detailCapabilities, docFixture } from "../../test/msw/handlers";
@@ -100,4 +101,48 @@ test("DocumentDetailPage has no a11y violations (with author actions)", async ()
   const { container } = renderPage();
   await screen.findByRole("button", { name: /Start revision/ });
   expect(await axe(container)).toHaveNoViolations();
+});
+
+// S-web-8 review surfaces — the Next-review tile + the manage_metadata-gated edit modal.
+// renderDetail is the same route helper as renderPage, aliased for readability.
+const renderDetail = () => renderPage(`/documents/${ID}`);
+
+describe("S-web-8 review surfaces", () => {
+  test("renders the Next-review tile with days + badge", async () => {
+    renderDetail();
+    // "Next review" appears in the tile AND the ControlMetadata table row — both are correct.
+    expect((await screen.findAllByText("Next review")).length).toBeGreaterThan(0);
+    expect(screen.getByText(/\d+ days/)).toBeInTheDocument();
+    expect(screen.getAllByLabelText("Review state: Current").length).toBeGreaterThan(0);
+  });
+
+  test("no manage_metadata → no edit affordance", async () => {
+    renderDetail();
+    await screen.findAllByText("Next review");
+    expect(screen.queryByRole("button", { name: "Edit review period" })).not.toBeInTheDocument();
+  });
+
+  test("manage_metadata → the modal opens, saves, and a REOPEN is pristine", async () => {
+    server.use(
+      http.get("/api/v1/documents/:id", () =>
+        HttpResponse.json({
+          ...docFixture[0],
+          capabilities: { ...detailCapabilities, manage_metadata: true },
+        }),
+      ),
+    );
+    renderDetail();
+    await userEvent.click(await screen.findByRole("button", { name: "Edit review period" }));
+    // Dirty the field BEFORE cancelling — a persistently-mounted modal would keep "36" across the
+    // reopen and this test would miss the S-web-7d trap entirely (a pristine field can't tell
+    // remount from persistence).
+    const input = await screen.findByLabelText("Review period (months)");
+    await userEvent.clear(input);
+    await userEvent.type(input, "36");
+    expect(input).toHaveValue("36");
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    // Reopen — conditional render means a fresh mount (the S-web-7d reopen trap)
+    await userEvent.click(screen.getByRole("button", { name: "Edit review period" }));
+    expect(await screen.findByLabelText("Review period (months)")).toHaveValue("24");
+  });
 });

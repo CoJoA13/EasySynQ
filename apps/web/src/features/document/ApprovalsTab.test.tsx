@@ -20,6 +20,10 @@ function doc(over: Partial<DocumentSummary> = {}): DocumentSummary {
     current_effective_version_id: null,
     effective_from: null,
     created_at: null,
+    review_period_months: null,
+    next_review_due: null,
+    last_reviewed_at: null,
+    review_state: null,
     capabilities: {
       checkout: false,
       edit: false,

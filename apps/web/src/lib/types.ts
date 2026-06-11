@@ -7,6 +7,8 @@ export type DocumentCurrentState =
   | "Superseded"
   | "Obsolete";
 
+export type ReviewState = "current" | "due_soon" | "overdue";
+
 export interface DocumentSummary {
   id: string;
   identifier: string;
@@ -24,6 +26,12 @@ export interface DocumentSummary {
   // S-web-2: the governing effective version's effective_from (null when no effective version).
   effective_from: string | null;
   created_at: string | null;
+  // S-drift-1 review scheduling (always emitted). review_state is server-derived (org tz, 30-day
+  // due_soon window) — the client never recomputes it.
+  review_period_months: number | null;
+  next_review_due: string | null; // a DATE — "YYYY-MM-DD"
+  last_reviewed_at: string | null; // an ISO DATETIME with offset (unlike next_review_due)
+  review_state: ReviewState | null;
   clause_refs?: string[];
   // S-web-3: per-document authoring affordances (DP-6) — present only on detail reads.
   capabilities?: DocumentCapabilities;
@@ -322,7 +330,7 @@ export interface Task {
   candidate_pool: string[] | null;
   action_expected: string | null;
   due_at: string | null;
-  subject_type?: string; // detail-only (GET /tasks/{id}); "DOCUMENT" | "CAPA" | "DCR"
+  subject_type?: string; // detail-only (GET /tasks/{id}); "DOCUMENT" | "CAPA" | "DCR" | "PERIODIC_REVIEW"
   subject_id?: string;
 }
 
@@ -347,7 +355,19 @@ export interface WorkflowInstance {
   tasks?: Task[];
 }
 
-export type DecisionOutcome = "approve" | "changes_requested" | "reject";
+export type DecisionOutcome = "approve" | "changes_requested" | "reject" | "complete";
+
+export type DecisionSubjectType = "DOCUMENT" | "CAPA" | "PERIODIC_REVIEW";
+
+// POST /tasks/{id}/decision for a PERIODIC_REVIEW subject returns the wf-engine dict, NOT
+// DecisionResult (services/vault/review.py:245-380). The UI ignores the body (invalidate+refetch).
+export interface PeriodicReviewDecisionResult {
+  current_state: string;
+  replayed: boolean;
+  document_id?: string;
+  next_review_due?: string | null;
+  signature_event_id?: string | null;
+}
 
 // POST /tasks/{id}/decision body.
 export interface DecisionBody {
@@ -415,6 +435,7 @@ export interface ChecklistRollup {
   covered: number;
   partial: number;
   gap: number;
+  overdue_review: number; // S-drift-1: count of rows with overdue_review=true
 }
 
 export interface ChecklistRow {
@@ -425,6 +446,7 @@ export interface ChecklistRow {
   mapped_count: number;
   effective_count: number;
   status: CoverageStatus;
+  overdue_review: boolean; // orthogonal to status — never a fourth coverage state
 }
 
 export interface ComplianceChecklist {
@@ -935,3 +957,45 @@ export interface FindingCorrectionBody {
 // GET /processes (bare array; _process in api/processes.py) — the SPA reads id + name only,
 // but extra fields arrive (structural subset typing).
 export interface ProcessRow { id: string; name: string; }
+
+// ---- S-web-8 drift surface ----
+
+export type DriftScanStatusValue = "CLEAN" | "DIVERGENT" | "FAILED";
+
+// One drift_scan row (openapi DriftScanSummary). counts is an OPEN bag — unknown keys are
+// additive (S-drift-3 §10a); render generically, never destructure a closed set.
+export interface DriftScanSummary {
+  status: DriftScanStatusValue;
+  started_at: string;
+  finished_at: string | null;
+  counts: Record<string, unknown>;
+  triggered_by: "beat" | "sync" | "cli";
+}
+
+export interface DriftStatus {
+  scans: { MIRROR: DriftScanSummary | null; BLOB_REHASH: DriftScanSummary | null };
+  blob_coverage: {
+    total: number;
+    never_verified: number;
+    failing: number; // unresolved verify_failed_at pins — the live alarm count
+    oldest_verified_at: string | null;
+  };
+  superseded_copies: { versions: number; copies: number };
+}
+
+export interface SupersededCopyRow {
+  document_id: string;
+  identifier: string;
+  version_id: string;
+  revision_label: string;
+  version_state: "Superseded" | "Obsolete";
+  current_revision_label: string | null; // null when the document is obsoleted
+  exported: number;
+  printed: number;
+  last_copy_at: string;
+}
+
+export interface SupersededCopies {
+  total: { versions: number; copies: number }; // FULL-set totals, not the page
+  items: SupersededCopyRow[];
+}

@@ -7,6 +7,7 @@ import { VersionCompare } from "../document/VersionCompare";
 import { useCapaApproval } from "../capa/hooks";
 import { CapaApprovalContext } from "./CapaApprovalContext";
 import { DecisionCard } from "./DecisionCard";
+import { PeriodicReviewContext } from "./PeriodicReviewContext";
 import { useTask, useWorkflowInstance } from "./hooks";
 
 // S-web-5 + S-web-7b: the per-task focus page. Branches on the task's subject type:
@@ -17,9 +18,12 @@ export function ReviewApprovePage() {
   const { id: taskId = null } = useParams();
   const { data: task, isLoading, isError, error } = useTask(taskId);
   const isCapa = task?.subject_type === "CAPA";
-  // Document branch (unchanged): resolve the subject doc via the instance. Disabled for a CAPA task.
-  const { data: instance } = useWorkflowInstance(!isCapa && task ? task.instance_id : null);
-  const docId = !isCapa ? (instance?.subject_id ?? null) : null;
+  const isPeriodic = task?.subject_type === "PERIODIC_REVIEW";
+  // Document branch (unchanged): resolve the subject doc via the instance. Disabled for CAPA AND
+  // periodic tasks — the subject id is on the task itself; the deciding owner may hold no workflow
+  // read at all.
+  const { data: instance } = useWorkflowInstance(!isCapa && !isPeriodic && task ? task.instance_id : null);
+  const docId = !isCapa && !isPeriodic ? (instance?.subject_id ?? null) : null;
   const { data: doc } = useDocument(docId, { enabled: docId !== null });
   const { data: versions } = useDocumentVersions(docId, docId !== null);
   // For a CAPA task, the approver signs the PROPOSED action plan — load it (gated capa.read) and gate the
@@ -72,6 +76,31 @@ export function ReviewApprovePage() {
               <Alert color="yellow" title="Action plan unavailable">
                 The proposed action plan couldn't be loaded — refresh before approving.
               </Alert>
+            )}
+          </Grid.Col>
+        </Grid>
+      </Stack>
+    );
+  }
+
+  if (isPeriodic) {
+    // The subject id is on the task (S-web-7b's detail enrichment) → always present here.
+    return (
+      <Stack gap="lg">
+        <Title order={2}>Periodic review</Title>
+        <Grid gutter="lg" align="flex-start">
+          <Grid.Col span={{ base: 12, md: 7 }}>
+            <PeriodicReviewContext documentId={task.subject_id!} />
+          </Grid.Col>
+          <Grid.Col span={{ base: 12, md: 5 }}>
+            {decidable ? (
+              <DecisionCard
+                taskId={task.id}
+                subjectType="PERIODIC_REVIEW"
+                subjectId={task.subject_id!}
+              />
+            ) : (
+              decidedAlert
             )}
           </Grid.Col>
         </Grid>
