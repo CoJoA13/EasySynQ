@@ -1,5 +1,6 @@
+import { screen } from "@testing-library/react";
 import { http, HttpResponse } from "msw";
-import { expect, test } from "vitest";
+import { describe, expect, test } from "vitest";
 import { server } from "../../test/msw/server";
 import { renderWithProviders } from "../../test/render";
 import { TasksInbox } from "./TasksInbox";
@@ -24,4 +25,16 @@ test("surfaces a 403 quietly", async () => {
   );
   const { findByText } = renderWithProviders(<TasksInbox />, { route: "/tasks" });
   expect(await findByText(/don't have access/i)).toBeInTheDocument();
+});
+
+describe("TasksInbox routing", () => {
+  test("?type=DOC_ACK renders the AckInbox", async () => {
+    renderWithProviders(<TasksInbox />, { route: "/tasks?type=DOC_ACK" });
+    expect(await screen.findByRole("heading", { name: "Acknowledgements" })).toBeInTheDocument();
+  });
+
+  test("no type param renders the default review queue", async () => {
+    renderWithProviders(<TasksInbox />, { route: "/tasks" });
+    expect(await screen.findByText("Review & Approve")).toBeInTheDocument();
+  });
 });

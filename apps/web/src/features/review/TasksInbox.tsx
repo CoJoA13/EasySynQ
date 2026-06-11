@@ -1,13 +1,17 @@
 import { Loader, Stack, Table, Text, Title } from "@mantine/core";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { ApiError } from "../../lib/api";
 import { TaskStateBadge } from "../document/TaskStateBadge";
+import { AckInbox } from "./AckInbox";
 import { useTasks } from "./hooks";
 
 // S-web-5: the self-scoped reviewer/approver work queue (GET /tasks). The document identity is shown
 // on the review page (one click away) — a per-row Document column is a deferred enhancement (it needs
 // an instance→doc resolution that would N+1 the list).
 export function TasksInbox() {
+  const [sp] = useSearchParams();
+  if (sp.get("type") === "DOC_ACK") return <AckInbox />;
+
   const { data: tasks, isLoading, isError, error } = useTasks({ state: "PENDING" });
 
   if (isLoading) return <Loader aria-label="Loading tasks" />;
