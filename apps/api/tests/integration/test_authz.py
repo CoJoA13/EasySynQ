@@ -128,8 +128,9 @@ async def test_seed_catalog_and_roles(
     h = _auth(token_factory, subj.admin)
 
     perms = (await app_client.get("/api/v1/permissions", headers=h)).json()
-    # 96 closed v1 keys + the 2 additive retention.* keys (0028) + drift.read (0047) — R38.
-    assert len(perms) == 99
+    # 96 closed v1 keys + the 2 additive retention.* keys (0028) + drift.read (0047)
+    # + document.distribute (0048) — R38/R42.
+    assert len(perms) == 100
     by_key = {p["key"]: p for p in perms}
     assert by_key["user.read"]["is_system_domain"] is True
     assert by_key["document.read"]["is_system_domain"] is False
@@ -144,6 +145,10 @@ async def test_seed_catalog_and_roles(
     assert by_key["drift.read"]["is_system_domain"] is True
     assert by_key["drift.read"]["sig_hook"] is False
     assert by_key["drift.read"]["sod_sensitive"] is False
+    # R38/R42: document.distribute is CONTENT-domain, ARTIFACT-finest, non-sig-hook, non-SoD.
+    assert by_key["document.distribute"]["is_system_domain"] is False
+    assert by_key["document.distribute"]["sig_hook"] is False
+    assert by_key["document.distribute"]["sod_sensitive"] is False
 
     roles = (await app_client.get("/api/v1/roles", headers=h)).json()
     names = {r["name"] for r in roles}
