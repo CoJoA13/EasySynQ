@@ -19,7 +19,7 @@ export function AttestationCard({ taskId, documentId }: { taskId: string; docume
   const [error, setError] = useState<string | null>(null);
   // best-effort label for the copy (the obligation stands regardless of read).
   const { data: doc } = useDocument(documentId, { enabled: true, retry: false });
-  const label = doc ? `${doc.identifier}${doc.current_effective_version_id ? "" : ""}` : "this document";
+  const label = doc ? doc.identifier : "this document";
 
   async function submit() {
     setError(null);

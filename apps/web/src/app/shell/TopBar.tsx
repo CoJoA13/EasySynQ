@@ -50,7 +50,7 @@ export function TopBar({
             &#9684;
           </ActionIcon>
         </Indicator>
-        <Indicator label={ackCount} size={16} disabled={ackCount === 0} aria-label={`${ackCount} open acknowledgements`}>
+        <Indicator label={ackCount} size={16} disabled={ackCount === 0}>
           <ActionIcon component={Link} to="/tasks?type=DOC_ACK&state=PENDING" variant="subtle" aria-label="Acknowledgements">
             &#128276;
           </ActionIcon>
