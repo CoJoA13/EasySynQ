@@ -441,7 +441,9 @@ async def test_major_release_rearms_and_cancels_stale(
 ) -> None:
     """An undecided obligation pinned to v1 is cancelled by the post-MAJOR sweep (task SKIPPED,
     instance CANCELLED, the disappearance audited) and ONE fresh PENDING task pinned to the new
-    version is minted in the SAME pass; deciding the stale task id is a 409 ack_superseded."""
+    version is minted in the SAME pass; deciding the stale task BEFORE the sweep catches up is a
+    409 ack_superseded that rolls the engine rows back (the sweep can still cancel it); deciding
+    it AFTER the sweep is the engine's 409 conflict (a SKIPPED task is not decidable)."""
     sam_id = await _setup_actors(subj)
     ha = _auth(token_factory, subj.a)
     hb = _auth(token_factory, subj.b)
@@ -468,6 +470,15 @@ async def test_major_release_rearms_and_cancels_stale(
         app_client, ha, hb, did, f"ack-major-v2-{subj.a}".encode(), "MAJOR"
     )
     assert new_ver_id != old_pinned
+
+    # Deciding the stale task BEFORE the sweep catches up (still PENDING, boundary moved) hits
+    # the fresh-path re-check: 409 ack_superseded — and the raise rolls the engine's uncommitted
+    # rows back, so the task stays PENDING (proven below: the sweep still cancels exactly it).
+    dr_stale = await app_client.post(
+        f"/api/v1/tasks/{old_task_id}/decision", headers=hs, json={"outcome": "acknowledge"}
+    )
+    assert dr_stale.status_code == 409, dr_stale.text
+    assert dr_stale.json()["code"] == "ack_superseded"
 
     result = await _run_sweep(document_id=doc_uuid, trigger="release")
     assert result["tasks_created"] == 1, result
@@ -510,12 +521,13 @@ async def test_major_release_rearms_and_cancels_stale(
     assert assignee == sam_id
     assert ctx.get("document_version_id") == new_ver_id
 
-    # Deciding the OLD task id is dead: 409 ack_superseded.
+    # Deciding the swept (now SKIPPED) task id is dead: the engine's decidability guard 409s
+    # before the obligation re-checks (replay-parity order — the re-checks are fresh-path only).
     dr = await app_client.post(
         f"/api/v1/tasks/{old_task_id}/decision", headers=hs, json={"outcome": "acknowledge"}
     )
     assert dr.status_code == 409, dr.text
-    assert dr.json()["code"] == "ack_superseded"
+    assert dr.json()["code"] == "conflict"
 
 
 async def test_major_release_rearms_after_satisfied(
@@ -599,8 +611,10 @@ async def test_decide_authz_matrix(
 ) -> None:
     """(a) a non-member 404-collapses; (b) an audience member WITHOUT document.acknowledge gets a
     calm 403 permission_denied; (c) a non-ack outcome is 422; (d) an Idempotency-Key replay is
-    200-parity (same acknowledgement_id, exactly ONE row); (e) the flag flipped off mid-flight is
-    a 409 ack_obligation_lapsed."""
+    200-parity (same acknowledgement_id, exactly ONE row); (e) the flag flipped off mid-flight
+    409s a FRESH decide ack_obligation_lapsed and rolls the engine rows back (task stays PENDING,
+    no TaskOutcome); (f) the SAME-key retry of the already-committed ack still replays 200 after
+    the lapse (replay-parity beats the lapse ladder — Codex P2)."""
     sam_id = await _setup_actors(subj)
     await grant_keys(subj.outsider, ())  # row only — NO keys, NOT in any audience
     u2_id = await grant_keys(subj.u2, ())  # row only — joins the audience key-less below
@@ -687,7 +701,10 @@ async def test_decide_authz_matrix(
         )
         assert len(sam_acks) == 1, f"replay must not add a second ack row, got {len(sam_acks)}"
 
-    # (e) flag-off mid-flight: the obligation no longer stands → 409 ack_obligation_lapsed.
+    # (e) flag-off mid-flight: a FRESH decide (u2's still-PENDING task — sam's is DONE, so only
+    # u2 exercises the fresh path's re-checks) → 409 ack_obligation_lapsed, and the raise rolls
+    # the engine's uncommitted rows back: the task stays PENDING with no TaskOutcome residue.
+    await grant_keys(subj.u2, ("document.acknowledge",))  # the key was the ONLY 403 cause in (b)
     async with get_sessionmaker()() as s:
         await s.execute(
             text(
@@ -697,10 +714,34 @@ async def test_decide_authz_matrix(
         )
         await s.commit()
     re_ = await app_client.post(
-        f"/api/v1/tasks/{sam_task}/decision", headers=hs, json={"outcome": "acknowledge"}
+        f"/api/v1/tasks/{u2_task}/decision", headers=h2, json={"outcome": "acknowledge"}
     )
     assert re_.status_code == 409, re_.text
     assert re_.json()["code"] == "ack_obligation_lapsed"
+    async with get_sessionmaker()() as s:
+        u2_task_row = await s.get(Task, uuid.UUID(u2_task))
+        assert u2_task_row is not None
+        assert u2_task_row.state is TaskState.PENDING, "a 409'd fresh decide must stay PENDING"
+        residue = (
+            await s.execute(select(TaskOutcome).where(TaskOutcome.task_id == uuid.UUID(u2_task)))
+        ).scalar_one_or_none()
+        assert residue is None, "a 409'd fresh decide must leave no TaskOutcome row"
+
+    # (f) replay-parity SURVIVES the lapse: the SAME-key retry of sam's already-committed ack
+    # replays 200 with the same acknowledgement_id — the decision already happened, so the
+    # lapse ladder never runs against it (Codex P2).
+    r3 = await app_client.post(
+        f"/api/v1/tasks/{sam_task}/decision",
+        headers={**hs, "Idempotency-Key": idem},
+        json={"outcome": "acknowledge"},
+    )
+    assert r3.status_code == 200, r3.text
+    b3 = r3.json()
+    assert b3["replayed"] is True
+    assert b3["acknowledgement_id"] == b1["acknowledgement_id"], (
+        f"post-lapse replay acknowledgement_id {b3['acknowledgement_id']!r} "
+        f"!= original {b1['acknowledgement_id']!r}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -892,7 +933,8 @@ async def test_matrix_gated_and_shaped(
     app_under_test: object,
 ) -> None:
     """GET /documents/{id}/acknowledgements is R42-gated (Sam without document.distribute → 403)
-    and shaped: pending-with-due_at before the ack, acknowledged-with-label after."""
+    and shaped: pending-with-due_at before the ack, acknowledged-with-label after; flipping the
+    flag off empties the matrix while coverage reads all-zeros (the matrix honors the flag)."""
     sam_id = await _setup_actors(subj)
     ha = _auth(token_factory, subj.a)
     hb = _auth(token_factory, subj.b)
@@ -937,6 +979,24 @@ async def test_matrix_gated_and_shaped(
     assert sam_rows2[0]["acknowledged_at"] is not None
     assert sam_rows2[0]["acknowledged_revision_label"] is not None
     assert sam_rows2[0]["due_at"] is None
+
+    # Flag off ⇒ no obligations exist — the matrix honors the flag and goes empty, while the
+    # distribution read still 200s with all-zero coverage (an entries-only chase list would
+    # contradict coverage_counts' zeros; Codex P2).
+    async with get_sessionmaker()() as s:
+        await s.execute(
+            text(
+                "UPDATE documented_information SET acknowledgement_required = false WHERE id = :id"
+            ),
+            {"id": doc_uuid},
+        )
+        await s.commit()
+    rm3 = await app_client.get(f"/api/v1/documents/{did}/acknowledgements", headers=ha)
+    assert rm3.status_code == 200, rm3.text
+    assert rm3.json() == [], "the flag-off matrix must be empty even while entries remain"
+    rd = await app_client.get(f"/api/v1/documents/{did}/distribution", headers=ha)
+    assert rd.status_code == 200, rd.text
+    assert rd.json()["coverage"] == {"required": 0, "acknowledged": 0, "pending": 0, "overdue": 0}
 
 
 # ---------------------------------------------------------------------------

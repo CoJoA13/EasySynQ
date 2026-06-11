@@ -26,6 +26,7 @@ from ...db.models.audit_event import AuditEvent
 from ...db.models.document_type import DocumentType
 from ...db.models.document_version import DocumentVersion
 from ...db.models.documented_information import DocumentedInformation
+from ...db.models.process_link import ProcessLink
 from ...db.models.workflow import Task, WorkflowInstance
 from ...domain.authz import ResourceContext
 from ...logging import request_id_var
@@ -113,10 +114,18 @@ async def decide_doc_ack(
     if doc.document_type_id:
         dt = await session.get(DocumentType, doc.document_type_id)
         level = dt.document_level.value if dt else None
+    process_ids = (
+        await session.execute(
+            select(ProcessLink.process_id).where(ProcessLink.documented_information_id == doc.id)
+        )
+    ).scalars()
+    # R28: the FULL context — the seeded Employee grant is PROCESS-scoped; without process_ids
+    # the PDP can never match it (Codex P1).
     resource = ResourceContext(
         artifact_id=str(doc.id),
         folder_path=doc.folder_path,
         document_level=level,
+        process_ids=frozenset(str(p) for p in process_ids),
         lifecycle_state=doc.current_state.value,
     )
     await enforce(session, authz_sink, request, actor, "document.acknowledge", resource)
@@ -128,6 +137,43 @@ async def decide_doc_ack(
             title="A DOC_ACK task accepts outcome acknowledge",
         )
 
+    result = await wf_engine.decide(
+        session,
+        task,
+        actor,
+        outcome=outcome,
+        comment=comment,
+        idempotency_key=idempotency_key,
+        _commit=False,
+    )
+    if result.get("replayed"):
+        # Response-parity on replay: re-derive the ack row's id (no rows are added). The pinned
+        # version parses LENIENTLY — an unreadable context just leaves the enrichment fields
+        # None; it never 409s a replay (the decision already happened).
+        replay_pinned: uuid.UUID | None
+        try:
+            replay_pinned = uuid.UUID(str((instance.context or {}).get("document_version_id")))
+        except (ValueError, TypeError):
+            replay_pinned = None
+        ack: Acknowledgement | None = None
+        if replay_pinned is not None:
+            ack = (
+                await session.execute(
+                    select(Acknowledgement).where(
+                        Acknowledgement.user_id == actor.id,
+                        Acknowledgement.document_version_id == replay_pinned,
+                    )
+                )
+            ).scalar_one_or_none()
+        result["document_id"] = str(doc.id)
+        result["document_version_id"] = str(replay_pinned) if replay_pinned else None
+        result["acknowledgement_id"] = str(ack.id) if ack is not None else None
+        await session.commit()
+        return result
+
+    # Fresh decisions only — a replay's decision already happened, so lapse re-checks would
+    # break replay-parity (Codex P2). Raising here rolls the engine's uncommitted rows back;
+    # the task stays PENDING (the decide_periodic_review trick).
     # The obligation must still stand (the sweep may not have caught up).
     # NOTE the in-force predicate matches the sweep's: a governing Effective version exists —
     # NOT current_state == Effective (an UnderRevision doc still governs; R1/T7).
@@ -165,31 +211,6 @@ async def decide_doc_ack(
             code="ack_superseded",
             title="A newer MAJOR revision superseded this acknowledgement task",
         )
-
-    result = await wf_engine.decide(
-        session,
-        task,
-        actor,
-        outcome=outcome,
-        comment=comment,
-        idempotency_key=idempotency_key,
-        _commit=False,
-    )
-    if result.get("replayed"):
-        # Response-parity on replay: re-derive the ack row's id (no rows are added).
-        ack = (
-            await session.execute(
-                select(Acknowledgement).where(
-                    Acknowledgement.user_id == actor.id,
-                    Acknowledgement.document_version_id == pinned_version_id,
-                )
-            )
-        ).scalar_one_or_none()
-        result["document_id"] = str(doc.id)
-        result["document_version_id"] = str(pinned_version_id)
-        result["acknowledgement_id"] = str(ack.id) if ack is not None else None
-        await session.commit()
-        return result
 
     reason_raw = str(ctx.get("created_reason", AckCreatedReason.target_entry.value))
     try:

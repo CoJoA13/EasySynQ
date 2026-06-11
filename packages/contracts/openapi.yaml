@@ -1547,7 +1547,7 @@ paths:
         - { name: document_id, in: path, required: true, schema: { type: string, format: uuid } }
       responses:
         "200":
-          description: "One row per current audience member (empty when no Effective version or no audience)."
+          description: "One row per current audience member (empty when acknowledgement is not required, no Effective version, or no audience)."
           content:
             application/json:
               schema:

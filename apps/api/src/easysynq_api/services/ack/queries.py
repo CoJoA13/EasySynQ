@@ -221,6 +221,10 @@ async def coverage_matrix(
     session: AsyncSession, doc: DocumentedInformation
 ) -> list[dict[str, Any]]:
     """The named per-user status list (the QM chase view, gate document.distribute)."""
+    # Flag off ⇒ no obligations exist — an entries-only chase list would contradict
+    # coverage_counts' zeros (Codex P2).
+    if not doc.acknowledgement_required:
+        return []
     boundary = await boundary_seq(session, doc)
     if boundary is None:
         return []

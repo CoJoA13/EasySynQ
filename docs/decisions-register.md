@@ -911,12 +911,15 @@ as-built form.
   the pointer.
 - **The decide leg** (the fourth `POST /tasks/{id}/decision` dispatch): membership
   **404-collapse**, then **`document.acknowledge` enforced at the document's scope** (the key's
-  FIRST consumer; a missing key is a calm 403), outcome whitelist **`{acknowledge}`** (422
-  anything else), obligation re-checks → **409 `ack_obligation_lapsed`** | **409 `ack_superseded`**
-  (pinned seq < the boundary), then engine `decide(_commit=False)` + the `acknowledgement` INSERT
-  + `DOCUMENT_ACKNOWLEDGED` (object_type=document, scope_ref=identifier) in ONE transaction;
-  Idempotency-Key replay re-derives ids. **No `signature_event`.** Bulk-ack (doc 10 §8.2) = the
-  client loops this endpoint.
+  FIRST consumer; a missing key is a calm 403; the ResourceContext carries the document's
+  `process_ids` so the seeded PROCESS-scoped Employee grant is PDP-reachable), outcome whitelist
+  **`{acknowledge}`** (422 anything else), then engine `decide(_commit=False)` **with
+  replay-parity** (an Idempotency-Key replay re-derives ids and returns 200 BEFORE any lapse
+  re-check — the decision already happened), then the FRESH-path obligation re-checks → **409
+  `ack_obligation_lapsed`** | **409 `ack_superseded`** (pinned seq < the boundary; a raise rolls
+  the engine's uncommitted rows back, the task stays PENDING), then the `acknowledgement` INSERT
+  + `DOCUMENT_ACKNOWLEDGED` (object_type=document, scope_ref=identifier) in ONE transaction.
+  **No `signature_event`.** Bulk-ack (doc 10 §8.2) = the client loops this endpoint.
 - **Coverage truth = distribution × acknowledgements** — never the tasks (the to-do surface only).
   The live audience = `user` targets ∪ `org_role` members (via `RoleAssignment.role_id`, ACTIVE
   non-guest only); `ACK_DUE_DAYS` (env, default 14) sets informational-only due dates (no
@@ -931,10 +934,11 @@ as-built form.
   delegable** (a personal awareness attestation; recorded here for the delegation family to
   inherit); ack retention/GDPR posture (`client_ip` is PII-adjacent and the table holds no
   retention class — the next R27 pass); the seeded Employee role's PROCESS-scoped
-  `document.acknowledge` grant cannot yet ALLOW through the decide leg's ResourceContext (no
-  `process_ids` — the sibling `_document_scope_by_id` shape); v1 rides SYSTEM overrides (the
-  standing pattern) — the owner-assignment track binds it together with the deferred
-  `process`/`folder` targets.
+  `document.acknowledge` grant: the decide leg's ResourceContext now populates `process_ids` from
+  the document's process-links (the PDP reach is wired — Codex P1); what stays deferred is only
+  the owner-assignment *binding* default (the seeded `:assignment_process` placeholder
+  resolution) — until it lands, v1 rides SYSTEM overrides (the standing pattern), bound by the
+  owner-assignment track together with the deferred `process`/`folder` targets.
 
 **Implemented in slice S-ack-1 (migration `0048`):** `distribution_entry` + `acknowledgement` +
 `documented_information.acknowledgement_required` + the additive `DOC_ACK` /
