@@ -3,7 +3,8 @@
 ``last_major_seq`` is the R43 satisfaction boundary: a user is satisfied iff they hold an
 acknowledgement on a version with ``version_seq >= last_major_seq`` (acks stay version-pinned
 evidence; only THIS computation walks MINOR chains). A chain with no MAJOR version is real
-(check-in defaults MINOR) — the boundary falls back to the LOWEST seq (any-version ack satisfies;
+(the API requires the caller to pick MAJOR or MINOR at check-in — a chain's first version can
+legally be MINOR) — the boundary falls back to the LOWEST seq (any-version ack satisfies;
 the doc never had a substantive change boundary).
 
 ``plan_obligations`` is the sweep's set-algebra: cancel-before-mint (a stale open task must never
@@ -45,5 +46,7 @@ def plan_obligations(
     already_done = set(open_tasks) & satisfied
     to_cancel = stale | left | already_done
     surviving_open = set(open_tasks) - to_cancel
-    to_mint = (audience - satisfied - surviving_open) | ((stale & audience) - satisfied)
+    # A stale-pinned audience member is NOT in surviving_open (stale ⊆ to_cancel), so the single
+    # term already re-mints them in this same pass — cancel-before-mint needs no second clause.
+    to_mint = audience - satisfied - surviving_open
     return to_mint, to_cancel

@@ -73,3 +73,12 @@ def test_plan_cancels_satisfied_open_tasks_defensively() -> None:
     )
     assert to_mint == set()
     assert to_cancel == {U1}
+
+
+def test_plan_boundary_pinned_eq_last_major_survives() -> None:
+    # pinned == last_major: the task is fresh — not stale, not cancelled, not re-minted.
+    to_mint, to_cancel = plan_obligations(
+        audience={U1}, satisfied=set(), open_tasks={U1: 3}, last_major=3
+    )
+    assert to_mint == set()
+    assert to_cancel == set()
