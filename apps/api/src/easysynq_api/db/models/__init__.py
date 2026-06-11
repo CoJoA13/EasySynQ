@@ -102,9 +102,11 @@ from .import_file import ImportFile
 from .import_proposal_node import ImportProposalNode
 from .import_run import ImportRun
 from .import_version_family import ImportVersionFamily
+from .kpi_measurement import KpiMeasurement
 from .mirror_build import MirrorBuild
 from .ncr import Ncr
 from .numbering_counter import NumberingCounter
+from .objective_plan import ObjectivePlan
 from .org_role import OrgRole
 from .organization import Organization
 from .pack_item import PackItem
@@ -113,6 +115,7 @@ from .permission import Permission
 from .process import Process
 from .process_edge import ProcessEdge
 from .process_link import ProcessLink
+from .quality_objective import QualityObjective
 from .record import Record
 from .retention_policy import RetentionPolicy
 from .role import Role, RoleAssignment, RoleGrant
@@ -204,12 +207,14 @@ __all__ = [
     "ImportRun",
     "ImportRunStatus",
     "ImportVersionFamily",
+    "KpiMeasurement",
     "MirrorBuild",
     "NcSeverity",
     "Ncr",
     "NcrDisposition",
     "NcrSource",
     "NumberingCounter",
+    "ObjectivePlan",
     "OrgRole",
     "Organization",
     "PackInclusionStatus",
@@ -225,6 +230,7 @@ __all__ = [
     "ProcessEdge",
     "ProcessLink",
     "ProcessState",
+    "QualityObjective",
     "Record",
     "RecordDispositionState",
     "RecordType",

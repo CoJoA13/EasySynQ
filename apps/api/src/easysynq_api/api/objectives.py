@@ -1,0 +1,338 @@
+"""The Quality Objectives surface (S-obj-1; clause 6.2).
+
+Rides the seeded objective.*/kpi.* keys (PROCESS-scoped). create = in-handler enforce on the body
+process_id (the raise_capa precedent); path-id writes use the _objective_scope resolver (the
+_capa_scope precedent). Reads gate at the key + an org-scoped query. RAG/pct/attainment are
+computed in the serializer from the pure rule.
+"""
+
+from __future__ import annotations
+
+import datetime
+import uuid
+from decimal import Decimal
+from typing import Any
+
+from fastapi import APIRouter, Depends, Request, Response, status
+from pydantic import BaseModel, Field
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from ..auth.dependencies import get_current_user
+from ..db.models._objective_enums import ObjectiveDirection
+from ..db.models.app_user import AppUser
+from ..db.models.kpi_measurement import KpiMeasurement
+from ..db.models.objective_plan import ObjectivePlan
+from ..db.models.quality_objective import QualityObjective
+from ..db.session import get_session
+from ..domain.authz import ResourceContext
+from ..domain.objectives.rules import attainment, pct_toward_target, rag_status
+from ..problems import ProblemException
+from ..services.authz import AuthzAuditSink, enforce, get_authz_audit_sink, require
+from ..services.objectives import (
+    add_objective_plan,
+    create_objective,
+    get_objective,
+    list_measurements,
+    list_objectives,
+    list_plans,
+    record_measurement,
+    remove_objective_plan,
+)
+from ..services.objectives import queries as obj_queries  # noqa: F401 — available for future use
+from ..services.vault import VaultAuditSink, get_vault_audit_sink
+
+router = APIRouter(prefix="/api/v1", tags=["objectives"])
+
+
+# --- request bodies ---
+class ObjectiveCreate(BaseModel):
+    title: str = Field(min_length=1, max_length=300)
+    target_value: Decimal
+    unit: str = Field(min_length=1, max_length=50)
+    direction: ObjectiveDirection
+    due_date: datetime.date
+    baseline_value: Decimal | None = None
+    at_risk_threshold: Decimal | None = None
+    process_id: uuid.UUID | None = None
+    policy_id: uuid.UUID | None = None
+
+
+class MeasurementCreate(BaseModel):
+    period: datetime.date
+    value: Decimal
+    unit: str = Field(min_length=1, max_length=50)
+    source: str | None = Field(default=None, max_length=300)
+
+
+class PlanCreate(BaseModel):
+    action: str = Field(min_length=1, max_length=2000)
+    resource: str | None = Field(default=None, max_length=500)
+    responsible_user_id: uuid.UUID | None = None
+    due_date: datetime.date | None = None
+
+
+# --- serializers ---
+def _measurement(m: KpiMeasurement) -> dict[str, Any]:
+    return {
+        "id": str(m.id),
+        "objective_id": str(m.objective_id) if m.objective_id else None,
+        "record_id": str(m.record_id),
+        "period": m.period.isoformat(),
+        "value": str(m.value),
+        "target_at_capture": str(m.target_at_capture),
+        "unit": m.unit,
+        "source": m.source,
+        "created_at": m.created_at.isoformat(),
+    }
+
+
+def _plan(p: ObjectivePlan) -> dict[str, Any]:
+    return {
+        "id": str(p.id),
+        "objective_id": str(p.objective_id),
+        "action": p.action,
+        "resource": p.resource,
+        "responsible_user_id": str(p.responsible_user_id) if p.responsible_user_id else None,
+        "due_date": p.due_date.isoformat() if p.due_date else None,
+    }
+
+
+def _objective(
+    qo: QualityObjective,
+    *,
+    identifier: str,
+    title: str,
+    current_state: Any,
+    today: datetime.date,
+    plans: list[ObjectivePlan] | None = None,
+) -> dict[str, Any]:
+    rag = rag_status(
+        current=qo.current_value,
+        target=qo.target_value,
+        direction=qo.direction,
+        at_risk_threshold=qo.at_risk_threshold,
+    )
+    return {
+        "id": str(qo.id),
+        "identifier": identifier,
+        "title": title,
+        "current_state": (
+            current_state.value if hasattr(current_state, "value") else str(current_state)
+        ),
+        "target_value": str(qo.target_value),
+        "unit": qo.unit,
+        "baseline_value": str(qo.baseline_value) if qo.baseline_value is not None else None,
+        "current_value": str(qo.current_value) if qo.current_value is not None else None,
+        "direction": qo.direction.value,
+        "at_risk_threshold": (
+            str(qo.at_risk_threshold) if qo.at_risk_threshold is not None else None
+        ),
+        "due_date": qo.due_date.isoformat(),
+        "process_id": str(qo.process_id) if qo.process_id else None,
+        "policy_id": str(qo.policy_id) if qo.policy_id else None,
+        "rag": rag,
+        "pct_toward_target": pct_toward_target(
+            current=qo.current_value,
+            target=qo.target_value,
+            baseline=qo.baseline_value,
+            direction=qo.direction,
+        ),
+        "attainment": attainment(
+            current=qo.current_value,
+            target=qo.target_value,
+            direction=qo.direction,
+            due_date=qo.due_date,
+            today=today,
+        ),
+        "plans": [_plan(p) for p in (plans or [])],
+    }
+
+
+# --- scope helpers ---
+def _process_scope(process_id: uuid.UUID | None) -> ResourceContext:
+    if process_id is None:
+        return ResourceContext.system()
+    return ResourceContext(process_ids=frozenset({str(process_id)}))
+
+
+async def _objective_scope(
+    request: Request, session: AsyncSession = Depends(get_session)
+) -> ResourceContext:
+    raw = request.path_params.get("objective_id")
+    if not raw:
+        return ResourceContext.system()
+    try:
+        oid = uuid.UUID(str(raw))
+    except ValueError:
+        return ResourceContext.system()
+    qo = await session.get(QualityObjective, oid)
+    if qo is None or qo.process_id is None:
+        return ResourceContext.system()
+    return ResourceContext(process_ids=frozenset({str(qo.process_id)}))
+
+
+_objective_read = require("objective.read")
+_kpi_read = require("kpi.read", async_scope_resolver=_objective_scope)
+_objective_manage_path = require("objective.manage", async_scope_resolver=_objective_scope)
+_kpi_record = require("kpi.record", async_scope_resolver=_objective_scope)
+
+
+def _today() -> datetime.date:
+    return datetime.date.today()
+
+
+# --- endpoints ---
+# NOTE: /objectives/scorecard is declared BEFORE /objectives/{objective_id} so the
+# literal path isn't shadowed by the {objective_id} str-convertor (S-pack-2 lesson).
+
+
+@router.post("/objectives", status_code=status.HTTP_201_CREATED)
+async def create_objective_endpoint(
+    body: ObjectiveCreate,
+    request: Request,
+    caller: AppUser = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+    authz_sink: AuthzAuditSink = Depends(get_authz_audit_sink),
+    vault_sink: VaultAuditSink = Depends(get_vault_audit_sink),
+) -> dict[str, Any]:
+    await enforce(
+        session, authz_sink, request, caller, "objective.manage", _process_scope(body.process_id)
+    )
+    qo = await create_objective(
+        session,
+        vault_sink,
+        caller,
+        title=body.title,
+        target_value=body.target_value,
+        unit=body.unit,
+        direction=body.direction,
+        due_date=body.due_date,
+        baseline_value=body.baseline_value,
+        at_risk_threshold=body.at_risk_threshold,
+        process_id=body.process_id,
+        policy_id=body.policy_id,
+    )
+    row = await get_objective(session, qo.id)
+    if row is None:  # pragma: no cover — just created, cannot be absent
+        raise ProblemException(
+            status=500, code="internal_error", title="Objective row not found after create"
+        )
+    _, ident, title, state = row
+    return _objective(qo, identifier=ident, title=title, current_state=state, today=_today())
+
+
+@router.get("/objectives")
+async def list_objectives_endpoint(
+    process_id: uuid.UUID | None = None,
+    caller: AppUser = Depends(_objective_read),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    rows = await list_objectives(session, caller.org_id, process_id=process_id)
+    today = _today()
+    return {
+        "data": [
+            _objective(qo, identifier=i, title=t, current_state=s, today=today)
+            for qo, i, t, s in rows
+        ]
+    }
+
+
+@router.get("/objectives/scorecard")
+async def scorecard_endpoint(
+    process_id: uuid.UUID | None = None,
+    caller: AppUser = Depends(_objective_read),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    rows = await list_objectives(session, caller.org_id, process_id=process_id)
+    today = _today()
+    serialized = [
+        _objective(qo, identifier=i, title=t, current_state=s, today=today) for qo, i, t, s in rows
+    ]
+    by_rag: dict[str, int] = {"green": 0, "amber": 0, "red": 0, "unmeasured": 0}
+    for o in serialized:
+        rag_val = o["rag"]
+        if isinstance(rag_val, str) and rag_val in by_rag:
+            by_rag[rag_val] += 1
+    return {
+        "total": len(serialized),
+        "on_target": by_rag["green"],
+        "by_rag": by_rag,
+        "objectives": serialized,
+    }
+
+
+@router.get("/objectives/{objective_id}")
+async def get_objective_endpoint(
+    objective_id: uuid.UUID,
+    caller: AppUser = Depends(_objective_read),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    row = await get_objective(session, objective_id)
+    if row is None:
+        raise ProblemException(status=404, code="not_found", title="Objective not found")
+    qo, ident, title, state = row
+    plans = await list_plans(session, objective_id)
+    return _objective(
+        qo, identifier=ident, title=title, current_state=state, today=_today(), plans=plans
+    )
+
+
+@router.post("/objectives/{objective_id}/measurements", status_code=status.HTTP_201_CREATED)
+async def record_measurement_endpoint(
+    objective_id: uuid.UUID,
+    body: MeasurementCreate,
+    caller: AppUser = Depends(_kpi_record),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    m = await record_measurement(
+        session,
+        caller,
+        objective_id=objective_id,
+        period=body.period,
+        value=body.value,
+        unit=body.unit,
+        source=body.source,
+    )
+    return _measurement(m)
+
+
+@router.get("/objectives/{objective_id}/measurements")
+async def list_measurements_endpoint(
+    objective_id: uuid.UUID,
+    caller: AppUser = Depends(_kpi_read),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    return {"data": [_measurement(m) for m in await list_measurements(session, objective_id)]}
+
+
+@router.post("/objectives/{objective_id}/plans", status_code=status.HTTP_201_CREATED)
+async def add_plan_endpoint(
+    objective_id: uuid.UUID,
+    body: PlanCreate,
+    caller: AppUser = Depends(_objective_manage_path),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    plan = await add_objective_plan(
+        session,
+        caller,
+        objective_id=objective_id,
+        action=body.action,
+        resource=body.resource,
+        responsible_user_id=body.responsible_user_id,
+        due_date=body.due_date,
+    )
+    return _plan(plan)
+
+
+@router.delete(
+    "/objectives/{objective_id}/plans/{plan_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def remove_plan_endpoint(
+    objective_id: uuid.UUID,
+    plan_id: uuid.UUID,
+    caller: AppUser = Depends(_objective_manage_path),
+    session: AsyncSession = Depends(get_session),
+) -> Response:
+    await remove_objective_plan(session, caller, objective_id=objective_id, plan_id=plan_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

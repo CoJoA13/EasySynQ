@@ -52,7 +52,7 @@ Proceed with the **full reconcile-and-harden pass** — i.e., adopt R1–R37 bel
 
 ---
 
-## Part 3 — Resolutions R1–R43
+## Part 3 — Resolutions R1–R44
 
 Each resolution states the decision, the exact canonical tokens/enums/states/field-names verbatim, and a Back-propagation note listing the section files that change.
 
@@ -951,6 +951,50 @@ outcome, 3 paths (4 operations) + 5 schemas (and closed a pre-existing `Decision
 **Back-propagation:** 04 (§8.2 reconciliation note; §12 key parenthetical), 08 (§10.1 spelling),
 10 (§8.4 MAJOR-only note), 13 (§6.3 status note), 14 (§5.6 as-built note; §7 enum members), 15
 (§8.5 split; §8.8 non-sig-hook carve-out), 16 (v1 row).
+
+---
+
+### R44 — Quality Objectives family (clause 6.2) — slice S-obj-1
+
+**Decision (owner, 2026-06-11).** A Quality Objective is a maintained Document (kind=DOCUMENT
+shared-PK subtype of `documented_information`, document_type `OBJ`) per R3 — the `form_template`
+precedent — so the commitment (title, target, direction, due date) is versioned and approved
+through the existing vault lifecycle, while the operational `current_value` is a mutable rollup
+rolled OUTSIDE the version by append-only `KPI_READING` evidence records (`target_at_capture`
+frozen at capture, never rewritten). Each measurement is an ad-hoc `KPI_READING` record
+(`capture_record(..., _commit=False)` — no `source_document_id`, the `capture_complaint`
+precedent; pinning a non-FRM source triggers the R21 422, and a Draft objective has no version to
+pin) with a `kpi_measurement` projection; recording one rolls `current_value` up under
+`FOR UPDATE` + `populate_existing` (the S-drift-1 stale-identity-map trap).
+
+On/off-target is **direction-aware + amber-banded**, computed at read from the pure
+`domain/objectives/rules.py` (`rag_status` → `green`/`amber`/`red`/`unmeasured`), **never
+stored** (N9 — against a rule; N6 — no SPC/forecast). `direction` (`HIGHER_IS_BETTER` /
+`LOWER_IS_BETTER`, the `objective_direction` enum) + `at_risk_threshold` (nullable) +
+`baseline_value` are added versus the original doc-14 spec; `owner_user_id` is the BASE
+`documented_information.owner_user_id` (not duplicated on the satellite).
+
+The Quality Policy is the R25 singleton (already-seeded `POL` document_type);
+`objective.policy_id` records the consistency link (a validation hint, validated by the service
+against the current Effective POL — doc 02 §502). Each objective auto-maps to clause `6.2` at
+create (a `clause_mapping` insert; standard `_objective_scope` PROCESS resolver + SYSTEM
+fallback).
+
+The family **rides the already-seeded `objective.*` / `kpi.*` keys** (PROCESS finest-scope;
+seeded + granted to QMS Owner in `0004_seed_authz.py`) — **no new permission key, catalog stays
+100, no R38 change**. Audit: lifecycle events reuse existing `DOCUMENT_*` types; new acts emit
+additive `OBJECTIVE_MEASUREMENT_RECORDED` / `OBJECTIVE_PLAN_ADDED` / `OBJECTIVE_PLAN_REMOVED`
+event types with `object_type='document'` + `scope_ref=<identifier>` (R39 reuse — no new
+`audit_object_type`). No new `SignatureMeaning` (R2 closed). **Migration `0049`.**
+
+**Implemented in slice S-obj-1 (migration `0049`):** `quality_objective` subtype + `objective_plan`
+action rows + append-only `kpi_measurement` projection (REVOKE UPDATE,DELETE) + the
+`objective_direction` enum + the three additive `OBJECTIVE_*` event types + the `OBJ` document_type
+seed. `/objectives` router (create/list/get/measurements/plans CRUD/scorecard). `_objective_scope`
+PROCESS-level authz resolver. 24 unit + integration tests.
+
+**Back-propagation:** 14 (§6 as-built quality_objective/objective_plan/kpi_measurement note), 16
+(PDCA dashboard now buildable — objectives + acks both landed).
 
 ---
 
