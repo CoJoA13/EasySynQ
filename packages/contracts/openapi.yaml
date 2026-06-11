@@ -5580,6 +5580,12 @@ components:
         signature_event_id: { type: [string, "null"], format: uuid }
         document_version_id: { type: [string, "null"], format: uuid }
         acknowledgement_id: { type: [string, "null"], format: uuid }
+        # The engine's _response() always emits these four; additionalProperties:false made the
+        # contract reject every real response (a pre-existing gap closed with S-ack-1).
+        stage_state: { type: [string, "null"] }
+        current_state: { type: [string, "null"] }
+        signature_spec: { type: [object, "null"] }
+        replayed: { type: [boolean, "null"] }
 
     AuditEvent:
       type: object
