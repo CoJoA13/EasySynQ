@@ -1,5 +1,7 @@
 import { ActionIcon, Burger, Button, Group, Indicator, Menu, Text } from "@mantine/core";
+import { Link } from "react-router-dom";
 import { useAuth } from "../../lib/auth";
+import { useAckCount } from "./useAckCount";
 
 // S-web-6: the search box is a real button (not a read-only text input) — assistive tech announces an
 // action, not an edit field — and it is rendered on every breakpoint (no `visibleFrom`) so touch users
@@ -17,6 +19,7 @@ export function TopBar({
   onOpenSearch: () => void;
 }) {
   const { logout } = useAuth();
+  const ackCount = useAckCount();
   return (
     <Group h="100%" px="md" justify="space-between" wrap="nowrap">
       <Group gap="sm" wrap="nowrap">
@@ -47,8 +50,8 @@ export function TopBar({
             &#9684;
           </ActionIcon>
         </Indicator>
-        <Indicator disabled>
-          <ActionIcon variant="subtle" aria-label="Acknowledgements">
+        <Indicator label={ackCount} size={16} disabled={ackCount === 0}>
+          <ActionIcon component={Link} to="/tasks?type=DOC_ACK&state=PENDING" variant="subtle" aria-label="Acknowledgements">
             &#128276;
           </ActionIcon>
         </Indicator>

@@ -34,7 +34,7 @@ function serveDocWithCaps(caps: Partial<typeof detailCapabilities>) {
 
 afterEach(() => vi.restoreAllMocks());
 
-test("DocumentDetailPage renders the header, tiles, rendition, history, where-used and metadata", async () => {
+test("DocumentDetailPage renders the header, tiles, rendition and metadata (Overview tab)", async () => {
   renderPage();
   expect(
     await screen.findByRole("heading", { name: "Supplier Selection & Evaluation" }),
@@ -44,16 +44,30 @@ test("DocumentDetailPage renders the header, tiles, rendition, history, where-us
   expect(screen.getByText("Versions")).toBeInTheDocument();
   // governing revision resolves from the version list (current_effective_version_id → Rev B)
   await waitFor(() => expect(screen.getAllByText("Rev B").length).toBeGreaterThanOrEqual(1));
+  // Overview tab (default): the rendition + control metadata.
   expect(screen.getByText("Controlled rendition")).toBeInTheDocument();
-  expect(screen.getByText("Where-used")).toBeInTheDocument();
-  expect(screen.getByText("Version history")).toBeInTheDocument();
   expect(screen.getByText("Control metadata")).toBeInTheDocument();
 });
 
-test("DocumentDetailPage renders the Approvals stepper card", async () => {
+test("DocumentDetailPage shows Version history under the History tab", async () => {
   renderPage();
   await screen.findByRole("heading", { name: /Supplier Selection/ });
-  expect(screen.getByText("Approvals")).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("tab", { name: /history/i }));
+  expect(await screen.findByText("Version history")).toBeInTheDocument();
+});
+
+test("DocumentDetailPage shows Where-used under its tab", async () => {
+  renderPage();
+  await screen.findByRole("heading", { name: /Supplier Selection/ });
+  await userEvent.click(screen.getByRole("tab", { name: /where-used/i }));
+  // unique WhereUsedTab content (from the fixture) appears only when the panel is active.
+  expect(await screen.findByText("Records produced under")).toBeInTheDocument();
+});
+
+test("DocumentDetailPage renders the Approvals stepper card under its tab", async () => {
+  renderPage();
+  await screen.findByRole("heading", { name: /Supplier Selection/ });
+  await userEvent.click(screen.getByRole("tab", { name: /approvals/i }));
   expect(await screen.findByText("Quality approval")).toBeInTheDocument();
 });
 
@@ -144,5 +158,28 @@ describe("S-web-8 review surfaces", () => {
     // Reopen — conditional render means a fresh mount (the S-web-7d reopen trap)
     await userEvent.click(screen.getByRole("button", { name: "Edit review period" }));
     expect(await screen.findByLabelText("Review period (months)")).toHaveValue("24");
+  });
+});
+
+// S-ack-2: the Acknowledged tile + the Acks tab.
+describe("S-ack-2 acknowledgements", () => {
+  test("renders the Acknowledged tile from the distribution coverage", async () => {
+    renderPage();
+    // the metric tile (persistent, above the tabs) shows the ratio.
+    expect(await screen.findByText("Acknowledged")).toBeInTheDocument();
+    expect(await screen.findByText("41 / 47")).toBeInTheDocument();
+  });
+
+  test("the Acks tab shows coverage; deep-link via ?tab=acks", async () => {
+    renderPage(`/documents/${ID}?tab=acks`);
+    // coverage ring is in the panel too (87% appears).
+    expect(await screen.findByText("87%")).toBeInTheDocument();
+  });
+
+  test("clicking the Acks tab activates it", async () => {
+    renderPage();
+    await screen.findByText("Acknowledged"); // page loaded
+    await userEvent.click(screen.getByRole("tab", { name: /acknowledgements/i }));
+    expect(await screen.findByText(/Read-and-understood coverage/)).toBeInTheDocument();
   });
 });

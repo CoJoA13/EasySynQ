@@ -1,13 +1,27 @@
 import { Loader, Stack, Table, Text, Title } from "@mantine/core";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { ApiError } from "../../lib/api";
 import { TaskStateBadge } from "../document/TaskStateBadge";
+import { AckInbox } from "./AckInbox";
 import { useTasks } from "./hooks";
 
 // S-web-5: the self-scoped reviewer/approver work queue (GET /tasks). The document identity is shown
 // on the review page (one click away) — a per-row Document column is a deferred enhancement (it needs
 // an instance→doc resolution that would N+1 the list).
+//
+// S-ack-2: `?type=DOC_ACK` swaps in the bulk AckInbox. The branch lives in a thin dispatcher whose ONLY
+// hook is useSearchParams — the general queue's useTasks lives in GeneralTasksInbox below. `/tasks` and
+// `/tasks?type=DOC_ACK` resolve to the SAME route element (App.tsx), so a param-only transition does not
+// remount; branching to two distinct child components keeps each child's hook order invariant (a
+// conditional return placed BEFORE useTasks would change the dispatcher's hook count between renders and
+// throw "Rendered fewer hooks than expected" on the bell→inbox navigation).
 export function TasksInbox() {
+  const [sp] = useSearchParams();
+  if (sp.get("type") === "DOC_ACK") return <AckInbox />;
+  return <GeneralTasksInbox />;
+}
+
+function GeneralTasksInbox() {
   const { data: tasks, isLoading, isError, error } = useTasks({ state: "PENDING" });
 
   if (isLoading) return <Loader aria-label="Loading tasks" />;

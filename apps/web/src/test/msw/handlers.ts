@@ -1,5 +1,5 @@
 import { http, HttpResponse } from "msw";
-import type { AuditList, AuditPlanList, AuditProgramList, Capa, Complaint, DriftStatus, Finding, FindingList, Ncr, SupersededCopies } from "../../lib/types";
+import type { AckDecisionResult, AckMatrixRow, AuditList, AuditPlanList, AuditProgramList, Capa, Complaint, DistributionPayload, DriftStatus, Finding, FindingList, Ncr, SupersededCopies } from "../../lib/types";
 
 export const docFixture = [
   {
@@ -851,6 +851,80 @@ export const processesFixture = [
   { id: "pr000002-0002-0002-0002-000000000002", org_id: "or000001-0001-0001-0001-000000000001", name: "Production", parent_id: null, owner_org_role_id: null, pdca_phase: "DO", criteria: null, state: "ACTIVE", excluded: false, is_outsourced: false, outsourced_supplier_id: null, created_at: "2026-01-01T09:00:00+00:00" },
 ];
 
+// ---- S-ack-2 acknowledgements fixtures (pinned to the S-ack-1 serializers) ----
+// The doc-detail document (docFixture[0], SOP-PUR-014) is flag-on with a fuller audience.
+export const distributionFixture = {
+  acknowledgement_required: true,
+  entries: [
+    { id: "de000001-0001-0001-0001-000000000001", target_type: "user", target_id: "bbbb1111-1111-1111-1111-111111111111", ack_required: true, created_at: "2026-03-15T09:00:00+00:00" },
+    { id: "de000002-0002-0002-0002-000000000002", target_type: "org_role", target_id: "ro000001-0001-0001-0001-000000000001", ack_required: true, created_at: "2026-03-15T09:05:00+00:00" },
+  ],
+  coverage: { required: 47, acknowledged: 41, pending: 6, overdue: 2 },
+} satisfies DistributionPayload;
+
+// Flag ON but no Effective version → coverage null (queries.coverage_counts boundary None).
+export const distributionNoEffectiveFixture = {
+  acknowledgement_required: true,
+  entries: [],
+  coverage: null,
+} satisfies DistributionPayload;
+
+// Flag OFF but an Effective version exists → honest zeros, not null.
+export const distributionFlagOffFixture = {
+  acknowledgement_required: false,
+  entries: [],
+  coverage: { required: 0, acknowledged: 0, pending: 0, overdue: 0 },
+} satisfies DistributionPayload;
+
+export const ackMatrixFixture = [
+  { user_id: "bbbb1111-1111-1111-1111-111111111111", display_name: "Mara Quality", status: "acknowledged", acknowledged_at: "2026-03-16T10:00:00+00:00", acknowledged_revision_label: "Rev B", due_at: null },
+  { user_id: "bbbb2222-2222-2222-2222-222222222222", display_name: "Diego Owner", status: "pending", acknowledged_at: null, acknowledged_revision_label: null, due_at: "2026-03-30T00:00:00+00:00" },
+  { user_id: "bbbb3333-3333-3333-3333-333333333333", display_name: "Sam Patel", status: "overdue", acknowledged_at: null, acknowledged_revision_label: null, due_at: "2026-03-20T00:00:00+00:00" },
+] satisfies AckMatrixRow[];
+
+// A DOC_ACK task detail (GET /tasks/{id}) — subject_type/subject_id are DETAIL-ONLY (the list omits them).
+export const docAckTask = {
+  id: "tkak1111-1111-1111-1111-111111111111",
+  instance_id: "wfak1111-1111-1111-1111-111111111111",
+  stage_key: "acknowledge",
+  type: "DOC_ACK",
+  state: "PENDING",
+  assignee_user_id: "bbbb1111-1111-1111-1111-111111111111",
+  candidate_pool: ["bbbb1111-1111-1111-1111-111111111111"],
+  action_expected: "acknowledge",
+  due_at: "2026-03-30T00:00:00+00:00",
+  subject_type: "DOC_ACK",
+  subject_id: "11111111-1111-1111-1111-111111111111",
+};
+// The list row (GET /tasks?type=DOC_ACK) — subject_type/subject_id STRIPPED (matches _task without them).
+export const docAckListRow = {
+  id: docAckTask.id, instance_id: docAckTask.instance_id, stage_key: docAckTask.stage_key,
+  type: "DOC_ACK", state: "PENDING", assignee_user_id: docAckTask.assignee_user_id,
+  candidate_pool: docAckTask.candidate_pool, action_expected: "acknowledge", due_at: docAckTask.due_at,
+};
+
+export const ackDecisionResultFixture = {
+  task_id: docAckTask.id,
+  instance_id: docAckTask.instance_id,
+  stage_key: "acknowledge",
+  outcome: "acknowledge",
+  decided_at: "2026-06-11T10:00:00+00:00",
+  decided_by: "bbbb1111-1111-1111-1111-111111111111",
+  stage_state: "COMPLETED",
+  current_state: "ACKNOWLEDGED",
+  signature_spec: null,
+  comment: null,
+  replayed: false,
+  document_id: "11111111-1111-1111-1111-111111111111",
+  document_version_id: "dddd1111-1111-1111-1111-111111111111",
+  acknowledgement_id: "ack00001-0001-0001-0001-000000000001",
+} satisfies AckDecisionResult;
+
+export const rolesFixture = [
+  { id: "ro000001-0001-0001-0001-000000000001", name: "Employee", description: "All staff", is_reserved: true },
+  { id: "ro000002-0002-0002-0002-000000000002", name: "Process Owner", description: null, is_reserved: true },
+];
+
 export const handlers = [
   // ---- S-ing-4b ingestion (default happy-path; per-test override for 403/empty/error) ----
   http.get("/api/v1/admin/imports", () => HttpResponse.json([ingestionRunFixture])),
@@ -1036,25 +1110,37 @@ export const handlers = [
   http.get("/api/v1/search", () => HttpResponse.json(searchFixture)),
   http.get("/api/v1/search/suggest", () => HttpResponse.json(suggestFixture)),
   http.get("/api/v1/reports/compliance-checklist", () => HttpResponse.json(complianceFixture)),
+  // ---- S-ack-2 acknowledgements (default happy-path; per-test overrides for 403/409/null-coverage) ----
+  http.get("/api/v1/documents/:id/distribution", () => HttpResponse.json(distributionFixture)),
+  http.post("/api/v1/documents/:id/distribution", () => HttpResponse.json(distributionFixture)),
+  http.delete(
+    "/api/v1/documents/:id/distribution/:entryId",
+    () => new HttpResponse(null, { status: 204 }),
+  ),
+  http.get("/api/v1/documents/:id/acknowledgements", () => HttpResponse.json(ackMatrixFixture)),
+  http.get("/api/v1/roles", () => HttpResponse.json(rolesFixture)),
   // ---- S-web-5 review/approve (default happy-path; per-test overrides for error cases) ----
   http.get("/api/v1/documents/:id/approval", () => HttpResponse.json(approvalFixture)),
-  http.get("/api/v1/tasks", () => HttpResponse.json(taskFixture)),
-  http.get("/api/v1/tasks/:id", ({ params }) =>
-    HttpResponse.json(params.id === periodicReviewTask.id ? periodicReviewTask : approveTask),
-  ),
+  http.get("/api/v1/tasks", ({ request }) => {
+    const type = new URL(request.url).searchParams.get("type");
+    if (type === "DOC_ACK") return HttpResponse.json([docAckListRow]);
+    return HttpResponse.json(taskFixture);
+  }),
+  http.get("/api/v1/tasks/:id", ({ params }) => {
+    if (params.id === periodicReviewTask.id) return HttpResponse.json(periodicReviewTask);
+    if (params.id === docAckTask.id) return HttpResponse.json(docAckTask);
+    return HttpResponse.json(approveTask);
+  }),
   http.get("/api/v1/workflow-instances/:id", () => HttpResponse.json(approvalFixture)),
-  http.post("/api/v1/tasks/:id/decision", () =>
-    HttpResponse.json({
-      task_id: approveTask.id,
-      instance_id: approvalFixture.id,
-      stage_key: "quality_approval",
-      outcome: "approve",
-      decided_at: "2026-06-08T10:00:00+00:00",
-      decided_by: "bbbb1111-1111-1111-1111-111111111111",
-      signature_event: null,
-      comment: null,
-    }),
-  ),
+  http.post("/api/v1/tasks/:id/decision", async ({ request }) => {
+    const body = (await request.json()) as { outcome?: string };
+    if (body.outcome === "acknowledge") return HttpResponse.json(ackDecisionResultFixture);
+    return HttpResponse.json({
+      task_id: approveTask.id, instance_id: approvalFixture.id, stage_key: "quality_approval",
+      outcome: "approve", decided_at: "2026-06-08T10:00:00+00:00",
+      decided_by: "bbbb1111-1111-1111-1111-111111111111", signature_event: null, comment: null,
+    });
+  }),
   http.post("/api/v1/documents/:id/release", ({ params }) =>
     HttpResponse.json({ ...docFixture[0], id: String(params.id), current_state: "Effective" }),
   ),

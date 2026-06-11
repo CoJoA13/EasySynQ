@@ -310,6 +310,7 @@ export type TaskType =
   | "APPROVE"
   | "REVIEW"
   | "PERIODIC_REVIEW"
+  | "DOC_ACK"
   | "AUDIT_TASK"
   | "FINDING_ACK"
   | "CAPA_STAGE"
@@ -998,4 +999,80 @@ export interface SupersededCopyRow {
 export interface SupersededCopies {
   total: { versions: number; copies: number }; // FULL-set totals, not the page
   items: SupersededCopyRow[];
+}
+
+// ---- S-ack-2 (Acknowledgements UI) ------------------------------------------------------
+// All shapes pinned to S-ack-1: api/documents.py (_distribution_payload, DistributionUpdate),
+// services/ack/queries.py (coverage_counts/coverage_matrix), services/ack/decide.py.
+
+export type DistributionTargetType = "user" | "org_role" | "process" | "folder";
+
+export interface DistributionEntry {
+  id: string;
+  target_type: DistributionTargetType;
+  target_id: string;
+  ack_required: boolean;
+  created_at: string;
+}
+
+// coverage is null when the doc has no Effective version (queries.coverage_counts).
+export interface Coverage {
+  required: number;
+  acknowledged: number;
+  pending: number;
+  overdue: number;
+}
+
+export interface DistributionPayload {
+  acknowledgement_required: boolean;
+  entries: DistributionEntry[];
+  coverage: Coverage | null;
+}
+
+export type AckStatus = "acknowledged" | "pending" | "overdue";
+
+export interface AckMatrixRow {
+  user_id: string;
+  display_name: string | null;
+  status: AckStatus;
+  acknowledged_at: string | null;
+  acknowledged_revision_label: string | null;
+  due_at: string | null;
+}
+
+// POST /documents/{id}/distribution body. add_entries items: ack_required defaults true server-side.
+export interface DistributionEntryCreate {
+  target_type: "user" | "org_role"; // process/folder are 422 (target_kind_deferred) — never sent
+  target_id: string;
+  ack_required?: boolean;
+}
+export interface DistributionUpdateBody {
+  acknowledgement_required?: boolean | null;
+  add_entries?: DistributionEntryCreate[];
+}
+
+// POST /tasks/{id}/decision (DOC_ACK) → the engine result + the three ack fields (services/ack/decide.py).
+export interface AckDecisionResult {
+  task_id: string;
+  instance_id: string;
+  stage_key: string;
+  outcome: string | null;
+  decided_at: string | null;
+  decided_by: string;
+  stage_state: string;
+  current_state: string;
+  signature_spec: Record<string, unknown> | null;
+  comment: string | null;
+  replayed: boolean;
+  document_id: string;
+  document_version_id: string | null;
+  acknowledgement_id: string | null;
+}
+
+// GET /roles (authz.py; role.read — QMS Owner + admin hold it). The editor's org_role picker source.
+export interface RoleSummary {
+  id: string;
+  name: string;
+  description: string | null;
+  is_reserved: boolean;
 }
