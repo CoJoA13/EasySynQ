@@ -930,7 +930,11 @@ as-built form.
   every-release re-ack org config flag (v1.x); the delegation carve-out — **DOC_ACK is never
   delegable** (a personal awareness attestation; recorded here for the delegation family to
   inherit); ack retention/GDPR posture (`client_ip` is PII-adjacent and the table holds no
-  retention class — the next R27 pass).
+  retention class — the next R27 pass); the seeded Employee role's PROCESS-scoped
+  `document.acknowledge` grant cannot yet ALLOW through the decide leg's ResourceContext (no
+  `process_ids` — the sibling `_document_scope_by_id` shape); v1 rides SYSTEM overrides (the
+  standing pattern) — the owner-assignment track binds it together with the deferred
+  `process`/`folder` targets.
 
 **Implemented in slice S-ack-1 (migration `0048`):** `distribution_entry` + `acknowledgement` +
 `documented_information.acknowledgement_required` + the additive `DOC_ACK` /

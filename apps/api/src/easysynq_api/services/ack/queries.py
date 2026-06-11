@@ -17,7 +17,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...db.models._ack_enums import DistributionTargetType
-from ...db.models._vault_enums import ChangeSignificance
+from ...db.models._vault_enums import ChangeSignificance, VersionState
 from ...db.models._workflow_enums import TaskState, WorkflowSubjectType
 from ...db.models.acknowledgement import Acknowledgement
 from ...db.models.app_user import AppUser, UserStatus
@@ -84,7 +84,9 @@ async def resolve_audience(
 
 async def boundary_seq(session: AsyncSession, doc: DocumentedInformation) -> int | None:
     """The R43 last-MAJOR boundary for the doc's current Effective version (None when no
-    Effective version exists)."""
+    Effective version exists). The pair query pre-filters to ever-governed versions, so
+    ``last_major_seq``'s no-MAJOR min-fallback means "the lowest version that ever took
+    effect" — never an abandoned draft's seq."""
     if doc.current_effective_version_id is None:
         return None
     current = await session.get(DocumentVersion, doc.current_effective_version_id)
@@ -95,7 +97,17 @@ async def boundary_seq(session: AsyncSession, doc: DocumentedInformation) -> int
             select(
                 DocumentVersion.version_seq,
                 DocumentVersion.change_significance == ChangeSignificance.MAJOR,
-            ).where(DocumentVersion.document_id == doc.id)
+            ).where(
+                DocumentVersion.document_id == doc.id,
+                # R43: the boundary walks versions that EVER GOVERNED (Effective now, Superseded,
+                # or Obsolete via T11/T12 — all previously in force). A never-Effective draft
+                # (abandoned / changes_requested) must not move the boundary: a phantom MAJOR at
+                # a seq below a later MINOR release would otherwise collapse coverage and
+                # mass-re-mint the audience (the diff-critic MAJOR).
+                DocumentVersion.version_state.in_(
+                    (VersionState.Effective, VersionState.Superseded, VersionState.Obsolete)
+                ),
+            )
         )
     ).all()
     return last_major_seq(

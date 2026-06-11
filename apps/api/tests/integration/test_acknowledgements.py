@@ -16,6 +16,7 @@ from sqlalchemy.exc import ProgrammingError
 
 from easysynq_api.db.models._ack_enums import AckCreatedReason
 from easysynq_api.db.models._audit_enums import AuditObjectType, EventType
+from easysynq_api.db.models._vault_enums import ChangeSignificance, VersionState
 from easysynq_api.db.models._workflow_enums import TaskState, WorkflowSubjectType
 from easysynq_api.db.models.acknowledgement import Acknowledgement
 from easysynq_api.db.models.audit_event import AuditEvent
@@ -1064,3 +1065,105 @@ async def test_snapshot_carries_ack_keys(
     assert ms2["distribution"] == [
         {"target_type": "user", "target_id": str(sam_id), "ack_required": True}
     ]
+
+
+# ---------------------------------------------------------------------------
+# 12. A never-Effective MAJOR draft must not move the R43 boundary
+# ---------------------------------------------------------------------------
+
+
+async def test_abandoned_major_draft_does_not_move_boundary(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    subj: SimpleNamespace,
+    app_under_test: object,
+) -> None:
+    """diff-critic MAJOR: a never-Effective MAJOR draft below a later MINOR release must not
+    re-arm the audience (R43 carry-forward holds over the ever-governed chain only)."""
+    sam_id = await _setup_actors(subj)
+    ha = _auth(token_factory, subj.a)
+    hb = _auth(token_factory, subj.b)
+    hs = _auth(token_factory, subj.sam)
+    type_id = await s5.type_id("SOP")
+
+    # v1 (seq 1, MAJOR) releases; Sam acknowledges it — satisfied at the seq-1 boundary.
+    did, doc_uuid = await _release_ack_doc(
+        app_client,
+        ha,
+        hb,
+        type_id,
+        f"ack-phantom-v1-{subj.a}".encode(),
+        entries=[{"target_type": "user", "target_id": str(sam_id)}],
+    )
+    await _run_sweep(document_id=doc_uuid, trigger="release")
+    task_id = await _ack_task_for(doc_uuid, sam_id)
+    dr = await app_client.post(
+        f"/api/v1/tasks/{task_id}/decision", headers=hs, json={"outcome": "acknowledge"}
+    )
+    assert dr.status_code == 200, dr.text
+
+    # The abandoned MAJOR draft (seq 2). Flow choice: T8 discard-draft is deferred to v1 (absent
+    # from the FSM table, domain/vault/lifecycle.py — no delete-draft route exists), and a
+    # check-in ALWAYS creates a NEW DocumentVersion row (services/vault/service.py::checkin),
+    # so the SIMPLEST legal flow that strands a MAJOR row in a never-Effective state is:
+    # start-revision → check in a MAJOR draft → never submit it. The check-in releases the edit
+    # lock and the checkout endpoint guards only the lock (no doc-state gate), so a fresh
+    # checkout → MINOR check-in mints seq 3; T9 submit acts on the LATEST version
+    # (repository.latest_version), so seq 3 reviews/releases while seq 2 sits at
+    # version_state=Draft forever — exactly the phantom the boundary must ignore.
+    sr = await app_client.post(f"/api/v1/documents/{did}/start-revision", headers=ha)
+    assert sr.status_code == 200, sr.text
+    sha2 = await _upload(app_client, ha, did, f"ack-phantom-abandoned-{subj.a}".encode())
+    ci2 = await _checkin(
+        app_client, ha, did, sha2, change_reason="abandoned cut", change_significance="MAJOR"
+    )
+    assert ci2.status_code == 201, ci2.text
+
+    # The replacement MINOR cut (seq 3) goes through review and releases.
+    co = await app_client.post(f"/api/v1/documents/{did}/checkout", headers=ha)
+    assert co.status_code == 200, co.text
+    sha3 = await _upload(app_client, ha, did, f"ack-phantom-v3-{subj.a}".encode())
+    ci3 = await _checkin(
+        app_client, ha, did, sha3, change_reason="minor rev", change_significance="MINOR"
+    )
+    assert ci3.status_code == 201, ci3.text
+    sub = await app_client.post(f"/api/v1/documents/{did}/submit-review", headers=ha)
+    assert sub.status_code == 200, sub.text
+    wf_task = await s5.task_for_doc(did)
+    dec = await app_client.post(
+        f"/api/v1/tasks/{wf_task}/decision", headers=hb, json={"outcome": "approve"}
+    )
+    assert dec.status_code == 200, dec.text
+    rel = await app_client.post(f"/api/v1/documents/{did}/release", headers=hb, json={})
+    assert rel.status_code == 200, rel.text
+
+    # Pin the defect's precondition: seq 2 IS a MAJOR row stuck at Draft (never governed) BELOW
+    # the released MINOR seq 3 — without the ever-governed filter it becomes the boundary.
+    async with get_sessionmaker()() as s:
+        states = {
+            seq: (sig, state)
+            for seq, sig, state in (
+                await s.execute(
+                    select(
+                        DocumentVersion.version_seq,
+                        DocumentVersion.change_significance,
+                        DocumentVersion.version_state,
+                    ).where(DocumentVersion.document_id == doc_uuid)
+                )
+            ).all()
+        }
+    assert states[2] == (ChangeSignificance.MAJOR, VersionState.Draft), states
+    assert states[3] == (ChangeSignificance.MINOR, VersionState.Effective), states
+
+    # R43: the phantom must not move the boundary — the post-release sweep mints nothing,
+    # Sam's v1 ack carries forward, and no open obligation exists on this doc.
+    result = await _run_sweep(document_id=doc_uuid, trigger="release")
+    assert result["tasks_created"] == 0, result
+
+    cov = (await app_client.get(f"/api/v1/documents/{did}/distribution", headers=ha)).json()[
+        "coverage"
+    ]
+    assert cov == {"required": 1, "acknowledged": 1, "pending": 0, "overdue": 0}
+    assert await _open_ack_rows(doc_uuid) == [], (
+        "an abandoned MAJOR draft must leave no fresh obligation on this doc"
+    )

@@ -32,6 +32,14 @@ def test_no_major_falls_back_to_lowest_seq() -> None:
     assert last_major_seq(versions, current_seq=2) == 1
 
 
+def test_phantom_interleaved_major_would_move_boundary_without_state_filter() -> None:
+    # The pure function is state-blind by design — the QUERY layer must pre-filter to
+    # ever-governed versions (queries.boundary_seq); this pins the division of responsibility.
+    versions = [(1, True), (2, True), (3, False)]  # seq 2 = a phantom MAJOR if not filtered out
+    assert last_major_seq(versions, current_seq=3) == 2  # blind: includes it
+    assert last_major_seq([(1, True), (3, False)], current_seq=3) == 1  # filtered: correct
+
+
 def test_satisfaction_is_seq_at_or_above_boundary() -> None:
     boundary = last_major_seq([(1, True), (2, False), (3, True)], current_seq=3)
     assert boundary == 3
