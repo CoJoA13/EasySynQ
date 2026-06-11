@@ -1,5 +1,5 @@
-"""The ack-sweep enqueue seam (slice S-ack-1) — the mirror_sink Protocol/Celery/Logging/Capturing
-trio so tests assert fired-exactly-once-post-commit."""
+"""The ack-sweep enqueue seam (slice S-ack-1) — a Protocol/Celery/Logging/Capturing quad
+(mirroring the mirror_sink pattern) so tests assert fired-exactly-once-post-commit."""
 
 from __future__ import annotations
 
@@ -59,7 +59,8 @@ def get_ack_enqueue_sink() -> AckEnqueueSink:
 
 
 def set_ack_enqueue_sink(sink: AckEnqueueSink) -> AckEnqueueSink:
-    """Swap the process-wide sink (tests inject a Capturing sink). Returns the previous sink."""
+    """Swap the process-wide sink (tests inject a Capturing sink). Returns the previous sink so
+    the caller can restore it."""
     global _default_sink
     previous = _default_sink
     _default_sink = sink
