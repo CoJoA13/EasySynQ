@@ -19,16 +19,20 @@ from easysynq_api.db.models._audit_enums import AuditObjectType, EventType
 from easysynq_api.db.models._vault_enums import ChangeSignificance, VersionState
 from easysynq_api.db.models._workflow_enums import TaskState, WorkflowSubjectType
 from easysynq_api.db.models.acknowledgement import Acknowledgement
+from easysynq_api.db.models.app_user import AppUser
 from easysynq_api.db.models.audit_event import AuditEvent
 from easysynq_api.db.models.authz_grant import PermissionOverride
 from easysynq_api.db.models.document_version import DocumentVersion
 from easysynq_api.db.models.permission import Permission
 from easysynq_api.db.models.role import Role
 from easysynq_api.db.models.scope import Scope
-from easysynq_api.db.models.workflow import Task, WorkflowInstance
+from easysynq_api.db.models.workflow import Task, TaskOutcome, WorkflowInstance
 from easysynq_api.db.session import get_sessionmaker
 from easysynq_api.domain.authz.types import Effect, ScopeLevel
-from easysynq_api.services.ack.sweep import sweep_acks
+from easysynq_api.problems import ProblemException
+from easysynq_api.services.ack.sweep import _cancel_instance, sweep_acks
+from easysynq_api.services.workflow import engine as wf_engine
+from easysynq_api.services.workflow import repository as wf_repo
 
 from . import s5_helpers as s5
 from .test_vault import _auth, _checkin, _create, _ensure_user, _map_clause, _upload
@@ -1167,3 +1171,78 @@ async def test_abandoned_major_draft_does_not_move_boundary(
     assert await _open_ack_rows(doc_uuid) == [], (
         "an abandoned MAJOR draft must leave no fresh obligation on this doc"
     )
+
+
+# ---------------------------------------------------------------------------
+# 13. Engine lock freshness — the S-drift-1 identity-map trap, engine edition
+# ---------------------------------------------------------------------------
+
+
+async def test_decide_sees_sweep_cancel_committed_mid_wait(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    subj: SimpleNamespace,
+    app_under_test: object,
+) -> None:
+    """The S-drift-1 trap, engine edition: a decide that waited on the instance lock while a
+    sweep-cancel committed must see the FRESH (SKIPPED/CANCELLED) state — 409, never a clobber
+    of CANCELLED→COMPLETED (engineering-patterns: prime via session.get, commit via B, locked
+    load on S, assert B's value)."""
+    sam_id = await _setup_actors(subj)
+    ha = _auth(token_factory, subj.a)
+    hb = _auth(token_factory, subj.b)
+    type_id = await s5.type_id("SOP")
+
+    _did, doc_uuid = await _release_ack_doc(
+        app_client,
+        ha,
+        hb,
+        type_id,
+        f"ack-lockfresh-{subj.a}".encode(),
+        entries=[{"target_type": "user", "target_id": str(sam_id)}],
+    )
+    await _run_sweep(document_id=doc_uuid, trigger="release")
+    task_uuid = uuid.UUID(await _ack_task_for(doc_uuid, sam_id))
+
+    sm = get_sessionmaker()
+    async with sm() as s_a, sm() as s_b:
+        # Session A — the route-shaped pre-load (decide_endpoint's get_task + get_instance for
+        # dispatch): both rows enter A's identity map in their OPEN state (the trap's
+        # precondition).
+        task_a = await wf_repo.get_task(s_a, task_uuid)
+        assert task_a is not None and task_a.state is TaskState.PENDING
+        instance_a = await wf_repo.get_instance(s_a, task_a.instance_id)
+        assert instance_a is not None
+        instance_id = instance_a.id
+        assert instance_a.current_state != "CANCELLED"
+        actor = await s_a.get(AppUser, sam_id)
+        assert actor is not None
+
+        # Session B — the sweep's OWN cancel write (PENDING task → SKIPPED, instance →
+        # CANCELLED) commits while A still holds the stale snapshots. No real lock-wait is
+        # needed: the staleness lives in A's identity map regardless of whether A blocked.
+        assert await _cancel_instance(s_b, instance_id) is True
+        await s_b.commit()
+
+        # Session A decides. The engine's locked loads carry populate_existing, so they see
+        # B's committed SKIPPED/CANCELLED — the bare-SKIPPED "Task not decidable" 409. Without
+        # the fix the pre-lock PENDING snapshot survives the lock and decide writes the
+        # clobber (SKIPPED→DONE, CANCELLED→COMPLETED, plus a TaskOutcome row).
+        with pytest.raises(ProblemException) as excinfo:
+            await wf_engine.decide(
+                s_a, task_a, actor, outcome="acknowledge", comment=None, idempotency_key=None
+            )
+        assert excinfo.value.status == 409
+        assert excinfo.value.title == "Task not decidable"
+        await s_a.rollback()
+
+    # Fresh session: B's committed cancel stands untouched — no clobber, no outcome row.
+    async with sm() as s:
+        task_row = await s.get(Task, task_uuid)
+        assert task_row is not None and task_row.state is TaskState.SKIPPED
+        inst_row = await s.get(WorkflowInstance, instance_id)
+        assert inst_row is not None and inst_row.current_state == "CANCELLED"
+        outcome_row = (
+            await s.execute(select(TaskOutcome).where(TaskOutcome.task_id == task_uuid))
+        ).scalar_one_or_none()
+        assert outcome_row is None, "a 409'd decide must leave no TaskOutcome row"

@@ -385,8 +385,15 @@ async def decide(
     instance = await wf_repo.lock_instance_for_update(session, task.instance_id)
     if instance is None:
         raise ProblemException(status=404, code="not_found", title="Workflow instance not found")
+    # populate_existing: the route's get_task pre-loaded this row into the identity map — without
+    # it this locked SELECT returns the PRE-LOCK snapshot (the S-drift-1 trap).
     locked = (
-        await session.execute(select(Task).where(Task.id == task.id).with_for_update())
+        await session.execute(
+            select(Task)
+            .where(Task.id == task.id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
     ).scalar_one()
 
     # --- replay / decidability guard --------------------------------------------------------
