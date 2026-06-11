@@ -198,6 +198,7 @@ async def test_map_unmap_roundtrip_is_audited(
     app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
 ) -> None:
     await s5.grant_lifecycle(subj.a)
+    await _grant(subj.a, ("system.audit_log.read",))
     ha = _auth(token_factory, subj.a)
     did = await _to_checked_in_draft(app_client, ha)
     clause_id = await _first_clause_id()
@@ -218,6 +219,12 @@ async def test_map_unmap_roundtrip_is_audited(
         "is_requirement_level": True,
     }
     assert mapped.before is None
+
+    # The per-document trail endpoint must surface the CLAUSE_MAPPED event (scope_ref pin).
+    trail = await app_client.get(f"/api/v1/documents/{did}/audit-events", headers=ha)
+    assert trail.status_code == 200, trail.text
+    trail_types = [e["event_type"] for e in trail.json()["events"]]
+    assert "CLAUSE_MAPPED" in trail_types, f"CLAUSE_MAPPED missing from trail: {trail_types}"
 
     listed = await app_client.get(f"/api/v1/documents/{did}/clause-mappings", headers=ha)
     assert listed.status_code == 200, listed.text

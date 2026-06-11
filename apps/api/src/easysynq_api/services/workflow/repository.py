@@ -84,10 +84,16 @@ async def lock_instance_for_update(
     """SELECT … FOR UPDATE the instance row — the multi-stage engine's serialization point (sibling
     quorum approvers serialize here so quorum-count + advance + sibling-skip + next-stage
     materialization is atomic). Distinct from ``get_instance`` (an unlocked ``session.get`` the
-    byte-identical DOCUMENT path keeps using)."""
+    byte-identical DOCUMENT path keeps using). Carries populate_existing — callers' routes pre-load
+    the instance for dispatch (api/workflow.py), and without it this lock returns the PRE-LOCK
+    identity-map snapshot (the S-drift-1 trap; engineering-patterns "the lock without the
+    freshness")."""
     return (
         await session.execute(
-            select(WorkflowInstance).where(WorkflowInstance.id == instance_id).with_for_update()
+            select(WorkflowInstance)
+            .where(WorkflowInstance.id == instance_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
         )
     ).scalar_one_or_none()
 

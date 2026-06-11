@@ -347,7 +347,7 @@ The wizard pre-creates bundles mirroring the canonical personas so the org start
 | **Author** | Priya | `document.checkout`, `document.edit`, `document.submit` within assigned folders/processes | Folder/process |
 | **Approver** | Ken | `document.review`, `document.approve|reject` (the signature hook) within scope | Folder/process |
 | **Internal Auditor** | Ingrid | broad `document.read` + `record.read`, `audit.conduct`, `finding.create`, `capa.link` — **explicitly NO** `{document.create, document.edit, document.submit}`/`document.approve` (independence) | Org-wide read |
-| **Read-only Employee** | Sam | `document.read` (Released only) within area; optional `acknowledge.read` | Area/process |
+| **Read-only Employee** | Sam | `document.read` (Released only) within area; optional `document.acknowledge` (normalized per R5; the catalog key — R42/R43 context) | Area/process |
 | **External Auditor (Guest)** | Olsen | `evidencepack.read` only, **time-boxed**, scope-limited; every view logged | Bound to one evidence pack |
 
 ### 10.2 What the screen captures per role

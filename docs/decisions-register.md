@@ -1,6 +1,6 @@
 # EasySynQ Decisions Register
 
-This document is the **single authoritative source of truth** for the EasySynQ self-hosted ISO 9001:2015 QMS specification. It records the locked foundational decisions, the locked stakeholder decisions, and the normative resolutions (R1–R41) to every finding raised in the gap audit (`17-gaps-and-open-questions.md`); R38 (slice S-rec-4) is the first post-v1 *additive* decision (additive catalog extensibility + SoD-6), R39 (slice family S-aud/S-capa) locks the Audits/Findings/CAPA model + workflow posture, R40 (slice family S-dcr) locks the Revision & change-depth (DCR) family model + the InApproval reject-loop target, and R41 (slice S-drift-3) adds the `drift.read` SYSTEM-domain permission key.
+This document is the **single authoritative source of truth** for the EasySynQ self-hosted ISO 9001:2015 QMS specification. It records the locked foundational decisions, the locked stakeholder decisions, and the normative resolutions (R1–R43) to every finding raised in the gap audit (`17-gaps-and-open-questions.md`); R38 (slice S-rec-4) is the first post-v1 *additive* decision (additive catalog extensibility + SoD-6), R39 (slice family S-aud/S-capa) locks the Audits/Findings/CAPA model + workflow posture, R40 (slice family S-dcr) locks the Revision & change-depth (DCR) family model + the InApproval reject-loop target, and R41 (slice S-drift-3) adds the `drift.read` SYSTEM-domain permission key; R42 (slice S-ack-1) adds the `document.distribute` CONTENT-domain key, and R43 locks the Acknowledgements-family model.
 
 **Precedence:** Where this register conflicts with any text in sections `01`–`15`, **this register supersedes that text.** Section editors MUST back-propagate the changes listed under each resolution's *Back-propagation* note. The exact tokens, enum values, state names, and field names quoted here are **canonical and verbatim** — they must be reproduced character-for-character (case, snake_case, dot-namespacing, and all) wherever the underlying concept appears. Do not soften, rename, abbreviate, or omit any token.
 
@@ -52,7 +52,7 @@ Proceed with the **full reconcile-and-harden pass** — i.e., adopt R1–R37 bel
 
 ---
 
-## Part 3 — Resolutions R1–R40
+## Part 3 — Resolutions R1–R43
 
 Each resolution states the decision, the exact canonical tokens/enums/states/field-names verbatim, and a Back-propagation note listing the section files that change.
 
@@ -831,6 +831,126 @@ count moves 98 → 99. The trailing S-web-8 UI gates on the same key. Related S-
 (spec §0): ONE `BLOB_INTEGRITY_FAILED` event type (classification in the payload); D1 cadence =
 one daily rolling task (rotation = the periodic full set; `--full` CLI on demand); D4 is a live
 read (no persisted scan).
+
+---
+
+### R42 — `document.distribute` (S-ack-1): the third R38-additive catalog key
+
+**Decision (owner, 2026-06-10).** Distribution management (`POST /documents/{id}/distribution`,
+`DELETE /documents/{id}/distribution/{entry_id}`) and the named per-user acknowledgement matrix
+(`GET /documents/{id}/acknowledgements`) are gated on a NEW CONTENT-domain key
+**`document.distribute`** (`is_system_domain=false`, `sod_sensitive=false`, `sig_hook=false`,
+`finest_scope=ARTIFACT`), seeded in migration 0048 and granted to **QMS Owner**. Riding
+`document.manage_metadata` was rejected for exactly the failure mode R41's reasoning names: an
+ill-fitting ride silently widens every existing holder's reach — every metadata editor would gain
+audience/issuance control, and deciding **who must read what** is a QM governance act, not a
+metadata edit. Per R38: additive only — no rename/removal; the catalog count moves 99 → 100. This
+resolves doc 15 §8.5's pre-existing dangling `document.distribute` reference (the key now exists;
+the §8.5 row splits per the R43 back-propagation). The trailing S-ack-2 UI gates on the same key
+(the distribution editor + the named matrix; Remind, when the notifications family delivers it,
+rides it too).
+
+---
+
+### R43 — Acknowledgements family: MAJOR-only re-ack, the carry-forward boundary + the engine-task model (slice S-ack-1)
+
+**Context.** Doc 04 §8 + R15 define the distribution / read-and-understood obligation surface, but
+doc 04 §8.2's blanket "Re-release (new rev) creates NEW ack tasks" conflicts with doc 05
+§2.2/§2.4/§5.3's MAJOR/MINOR significance posture and with the shipped, test-pinned DCR impact
+contract (`reacknowledge_required = is_major`, `services/dcr/where_used.py`). The owner locked the
+trigger model and the family's data + mechanism shape (design spec
+`docs/superpowers/specs/2026-06-10-s-ack-acknowledgements-design.md` §0); this entry records the
+as-built form.
+
+**Decision:**
+- **Re-acknowledgement is MAJOR-only with carry-forward satisfaction — superseding doc 04 §8.2's
+  blanket re-trigger.** A user's obligation on a document is **satisfied** iff they hold an
+  `acknowledgement` row on a version with `version_seq >= last_major_seq`, where `last_major_seq`
+  = the newest `change_significance = MAJOR` seq ≤ the current Effective version's seq, **falling
+  back to the LOWEST seq when the chain holds no MAJOR version** (a chain may legally start MINOR
+  — the design premise "every chain starts MAJOR" was false in the built system;
+  `domain/ack/rules.py`). A MAJOR release re-arms the whole audience; a MINOR release mints
+  nothing and coverage carries forward. Ack rows stay strictly **version-pinned evidence** — only
+  the satisfaction computation walks MINOR chains. This honors the engine the DCR contract
+  promised, and completes R15: release and target-entry trigger families flow through ONE mint. This REFINES R15's "exclude already-acknowledged versions": "already acknowledged" now means satisfied under the carry-forward boundary — a target-entrant holding any acknowledgement at or above `last_major_seq` receives no task, even if they never acknowledged the current Effective version itself.
+- **What an ack IS: its own append-only evidence row — never a `signature_event`** (R2 untouched;
+  `document.acknowledge` stays `sig_hook=false`; doc 07 §6.3's non-sig-hook pipeline writes the
+  audit event only). The `acknowledgement` table as built deliberately diverges from doc 14 §5.6:
+  **+ `org_id`** (the §1.1 convention), **+ `document_id`** (coverage queries), **+
+  `created_reason` enum(`release`,`target_entry`)** (doc 17's promised discriminator); **NO FK to
+  `distribution_entry`** (entries are deletable config; the evidence must survive them);
+  `client_ip` is **Text, not INET** (the value is attacker-controllable `X-Forwarded-For` input —
+  an INET column would fail the evidence write on a malformed header); append-only via **DB
+  `REVOKE UPDATE, DELETE`** (the `capa_stage`/`dcr_stage_event` house style — harder than doc 14
+  §1.2's "App" enforcement). `UNIQUE(user_id, document_version_id)` is the idempotency backstop.
+  `distribution_entry` is editable issuance config: `UNIQUE(document_id, target_type, target_id)`,
+  grants `SELECT, INSERT, DELETE` only (change = delete + re-add); `distribution_target_type`
+  carries all four doc-14 members (`user`,`org_role`,`process`,`folder`) but the API **422s
+  `target_kind_deferred`** for `process`/`folder` until owner-assignment binding lands (an honest
+  refusal, never a silently-empty audience).
+- **Mechanism = workflow-engine tasks; ONE idempotent sweep is the universal mint**
+  (`services/ack/sweep.py`, under `LOCK_ACK_SWEEP`): additive `DOC_ACK` task_type + subject_type;
+  per-user instances off the seeded single-stage `doc_acknowledgement` definition (mode PARALLEL,
+  quorum ANY, NO signature block). **Cancel-before-mint in ONE pass**: cancel = instance → the
+  `CANCELLED` sentinel + PENDING tasks → `SKIPPED` (the S-dcr-4 inline force-terminate, with a
+  fresh `populate_existing` locked load — the S-drift-1 identity-map trap); every cancel is
+  audited (`STAGE_FAILED`, object_type=document, scope_ref=identifier, payload-discriminated
+  `{"event": "ack_obligation_cancelled", "why": lapsed|ineligible}`). Triggers are threaded
+  explicitly (`ack_sweep.delay(document_id, trigger)`): `release`/`release_due` →
+  `created_reason=release`; everything else (distribution writes, the daily Beat catch-up) →
+  `target_entry` (doc 17's discriminator, honestly stamped). Three post-commit lifecycle enqueues
+  (release / per-doc `release_due` / obsolete) ride the `AckEnqueueSink` seam
+  (Celery/Logging/Capturing trio); the daily Beat sweep (`easysynq.ack.sweep`) is the self-heal.
+  **The sweep fail-closes on a missing `doc_acknowledgement` definition** — a logged no-op
+  INCLUDING the cancel pass (an empty eligible-set would otherwise classify every obligation as
+  lapsed → an org-wide mass-cancel on broken config).
+- **The in-force predicate is `current_effective_version_id IS NOT NULL` — NOT
+  `current_state == Effective`**: an UnderRevision/InReview/Approved document still governs (R1/T7
+  — the prior Effective keeps governing), and keying on doc-state would mass-cancel obligations
+  the moment a revision opens. Both the sweep's eligibility and the decide leg's lapse check use
+  the pointer.
+- **The decide leg** (the fourth `POST /tasks/{id}/decision` dispatch): membership
+  **404-collapse** → outcome whitelist **`{acknowledge}`** (422 anything else) → engine
+  `decide(_commit=False)` **with replay-parity** — an Idempotency-Key replay re-derives ids and
+  returns 200 **bypassing the mutable key check** (a replay is not an act: the decision already
+  committed, and membership — a 1-member pool — proves the caller IS its decider, so a
+  since-lapsed grant must not 403 a legitimate retry) → fresh-path **`document.acknowledge`
+  enforced at the document's scope** (the key's FIRST consumer; a missing key is a calm 403; the
+  ResourceContext carries the document's `process_ids` so the seeded PROCESS-scoped Employee
+  grant is PDP-reachable) + the obligation re-checks → **409 `ack_obligation_lapsed`** | **409
+  `ack_superseded`** (pinned seq < the boundary; a 403/409 raise rolls the engine's uncommitted
+  rows back, the task stays PENDING) → the `acknowledgement` INSERT + `DOCUMENT_ACKNOWLEDGED`
+  (object_type=document, scope_ref=identifier) in ONE transaction. **No `signature_event`.**
+  Bulk-ack (doc 10 §8.2) = the client loops this endpoint.
+- **Coverage truth = distribution × acknowledgements** — never the tasks (the to-do surface only).
+  The live audience = `user` targets ∪ `org_role` members (via `RoleAssignment.role_id`, ACTIVE
+  non-guest only); `ACK_DUE_DAYS` (env, default 14) sets informational-only due dates (no
+  escalation in v1). Snapshot fold: `acknowledgement_required` + the serialized entry list are
+  frozen into `document_version.metadata_snapshot` at check-in (doc 04 §6.1), deliberately
+  EXCLUDED from the redline's SNAPSHOT_FIELDS in v1 (S-ack-2's call).
+- **Deferred (named, not faked):** Remind + reminder history (the notifications family); the doc
+  13 §6.3 report (v1.x); `process`/`folder` target resolution (owner-assignment track); the
+  org-wide PDCA rollup endpoint (the dashboard slice); a compliance-checklist ack leg
+  (deliberately NOT added — doc 13 §3.1's leg list omits acks); bulk re-acknowledge (v1.2); the
+  every-release re-ack org config flag (v1.x); the delegation carve-out — **DOC_ACK is never
+  delegable** (a personal awareness attestation; recorded here for the delegation family to
+  inherit); ack retention/GDPR posture (`client_ip` is PII-adjacent and the table holds no
+  retention class — the next R27 pass); the seeded Employee role's PROCESS-scoped
+  `document.acknowledge` grant: the decide leg's ResourceContext now populates `process_ids` from
+  the document's process-links (the PDP reach is wired — Codex P1); what stays deferred is only
+  the owner-assignment *binding* default (the seeded `:assignment_process` placeholder
+  resolution) — until it lands, v1 rides SYSTEM overrides (the standing pattern), bound by the
+  owner-assignment track together with the deferred `process`/`folder` targets.
+
+**Implemented in slice S-ack-1 (migration `0048`):** `distribution_entry` + `acknowledgement` +
+`documented_information.acknowledgement_required` + the additive `DOC_ACK` /
+`DOCUMENT_ACKNOWLEDGED` / `DISTRIBUTION_UPDATED` enum values + the R42 key seed + the
+`doc_acknowledgement` workflow seed. The contract gained the DOC_ACK enums, the `acknowledge`
+outcome, 3 paths (4 operations) + 5 schemas (and closed a pre-existing `DecisionResult` additionalProperties gap).
+
+**Back-propagation:** 04 (§8.2 reconciliation note; §12 key parenthetical), 08 (§10.1 spelling),
+10 (§8.4 MAJOR-only note), 13 (§6.3 status note), 14 (§5.6 as-built note; §7 enum members), 15
+(§8.5 split; §8.8 non-sig-hook carve-out), 16 (v1 row).
 
 ---
 

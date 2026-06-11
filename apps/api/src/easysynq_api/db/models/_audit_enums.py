@@ -356,6 +356,14 @@ class EventType(enum.Enum):
     # Added via ALTER TYPE event_type ADD VALUE in 0047 (the additive pattern; a from-scratch
     # ``upgrade head`` rebuilds from EVENT_TYPE_VALUES).
     BLOB_INTEGRITY_FAILED = "BLOB_INTEGRITY_FAILED"
+    # S-ack-1 (doc 04 §8.2, R43): the acknowledgements family. DOCUMENT_ACKNOWLEDGED = a user's
+    # read-&-understood act (the immutable acknowledgement row's audit shadow — never a
+    # signature_event, R2); DISTRIBUTION_UPDATED = distribution-list/flag management
+    # (document.distribute, R42). Both key on object_type=document with scope_ref=identifier so
+    # GET /documents/{id}/audit-events surfaces them. Added via ALTER TYPE event_type ADD VALUE in
+    # 0048 (the additive pattern; a from-scratch ``upgrade head`` rebuilds from EVENT_TYPE_VALUES).
+    DOCUMENT_ACKNOWLEDGED = "DOCUMENT_ACKNOWLEDGED"
+    DISTRIBUTION_UPDATED = "DISTRIBUTION_UPDATED"
 
 
 class CheckpointSinkKind(enum.Enum):

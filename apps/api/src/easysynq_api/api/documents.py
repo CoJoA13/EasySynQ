@@ -9,6 +9,7 @@ from the body in-handler; the list is row-filtered to what the caller may ``docu
 
 from __future__ import annotations
 
+import dataclasses
 import datetime
 import re
 import uuid
@@ -21,6 +22,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..auth.dependencies import get_current_user
+from ..db.models._ack_enums import DistributionTargetType
 from ..db.models._audit_enums import ActorType, AuditObjectType, EventType
 from ..db.models._dcr_enums import VisualDiffStatus
 from ..db.models._vault_enums import (
@@ -33,18 +35,22 @@ from ..db.models.app_user import AppUser
 from ..db.models.audit_event import AuditEvent
 from ..db.models.clause import Clause
 from ..db.models.clause_mapping import ClauseMapping
+from ..db.models.distribution_entry import DistributionEntry
 from ..db.models.document_link import DocumentLink
 from ..db.models.document_type import DocumentType
 from ..db.models.document_version import DocumentVersion
 from ..db.models.documented_information import DocumentedInformation
 from ..db.models.process import Process
 from ..db.models.process_link import ProcessLink
+from ..db.models.role import Role
 from ..db.models.visual_diff import VisualDiff
 from ..db.models.working_draft import WorkingDraft
 from ..db.session import get_session
 from ..domain.authz import RequestContext, ResourceContext, authorize
 from ..logging import request_id_var
 from ..problems import ProblemException
+from ..services.ack import queries as ack_queries
+from ..services.ack.sink import get_ack_enqueue_sink
 from ..services.authz import AuthzAuditSink, enforce, gather_grants, get_authz_audit_sink, require
 from ..services.authz.repository import gather_sod_constraints, get_allow_approver_release
 from ..services.dcr import build_where_used
@@ -98,6 +104,17 @@ class MetadataUpdate(BaseModel):
     folder_path: str | None = None
     classification: str | None = None
     review_period_months: int | None = Field(default=None, ge=1, le=120)
+
+
+class DistributionEntryCreate(BaseModel):
+    target_type: str
+    target_id: uuid.UUID
+    ack_required: bool = True
+
+
+class DistributionUpdate(BaseModel):
+    acknowledgement_required: bool | None = None
+    add_entries: list[DistributionEntryCreate] = Field(default_factory=list)
 
 
 class InitUpload(BaseModel):
@@ -280,14 +297,17 @@ def _emit_clause_event(
     session: AsyncSession,
     actor: AppUser,
     event_type: EventType,
-    doc_id: uuid.UUID,
+    doc: DocumentedInformation,
     *,
     before: dict[str, Any] | None = None,
     after: dict[str, Any] | None = None,
 ) -> None:
     """Append a clause-mapping ``audit_event`` (object_type=document, keyed to the mapped artifact)
     BEFORE commit, so the link change + its audit row commit atomically (mirrors
-    ``users._emit_user_event``). Hashes stay NULL — the S6 linker stamps them off the hot path."""
+    ``users._emit_user_event``). Hashes stay NULL — the S6 linker stamps them off the hot path.
+    ``scope_ref=doc.identifier`` is required so these events surface on the per-document trail
+    (``GET /documents/{id}/audit-events`` filters on ``scope_ref == doc.identifier`` — mirrors
+    ``_emit_distribution_event``). Historical rows stay NULL — no backfill (append-only audit)."""
     session.add(
         AuditEvent(
             org_id=actor.org_id,
@@ -296,7 +316,8 @@ def _emit_clause_event(
             actor_type=ActorType.user,
             event_type=event_type,
             object_type=AuditObjectType.document,
-            object_id=doc_id,
+            object_id=doc.id,
+            scope_ref=doc.identifier,
             before=before,
             after=after,
             request_id=_rid(),
@@ -338,6 +359,26 @@ async def _document_scope_by_id(session: AsyncSession, doc_id: uuid.UUID) -> Res
         document_level=level,
         lifecycle_state=doc.current_state.value,
     )
+
+
+async def _document_scope_with_processes(
+    request: Request, session: AsyncSession
+) -> ResourceContext:
+    """``_document_scope`` + the doc's ProcessLink ids — R28: a PROCESS-scoped grant can only
+    match when ``resource.process_ids`` is populated (the S-ack-1 decide-leg precedent). Used by
+    the distribution/acknowledgement gates; the repo-wide ``_document_scope`` migration is the
+    owner-assignment track's call."""
+    base = await _document_scope(request, session)
+    if base.artifact_id is None:
+        return base
+    process_ids = (
+        await session.execute(
+            select(ProcessLink.process_id).where(
+                ProcessLink.documented_information_id == uuid.UUID(base.artifact_id)
+            )
+        )
+    ).scalars()
+    return dataclasses.replace(base, process_ids=frozenset(str(p) for p in process_ids))
 
 
 async def _release_scope(
@@ -426,6 +467,10 @@ _read_draft = require("document.read_draft", async_scope_resolver=_document_scop
 _checkout = require("document.checkout", async_scope_resolver=_document_scope)
 _edit = require("document.edit", async_scope_resolver=_document_scope)
 _manage_metadata = require("document.manage_metadata", async_scope_resolver=_document_scope)
+# S-ack-1 (R42): distribution-list management + the named coverage matrix (doc 04 §8.1/§8.2).
+# The scope carries process_ids so a PROCESS-scoped grant (legal via the R35 content-tier
+# permission.grant) can match (Codex P2).
+_distribute = require("document.distribute", async_scope_resolver=_document_scope_with_processes)
 # Lifecycle actions. submit-review (S4) instantiates the approval workflow; approve/request-changes
 # route through POST /tasks/{id}/decision now (S5, removed from here). release is a flat sig-hook
 # action but enforces imperatively in-handler (its SoD-2 scope needs the body's version_id, which a
@@ -853,7 +898,7 @@ async def map_clause_endpoint(
         session,
         caller,
         EventType.CLAUSE_MAPPED,
-        doc.id,
+        doc,
         after={
             "clause_id": str(clause.id),
             "clause_number": clause.number,
@@ -887,7 +932,7 @@ async def unmap_clause_endpoint(
         session,
         caller,
         EventType.CLAUSE_UNMAPPED,
-        doc.id,
+        doc,
         before={
             "clause_id": str(clause_id),
             "clause_number": clause.number if clause else None,
@@ -949,7 +994,7 @@ async def link_process_endpoint(
         session,
         caller,
         EventType.PROCESS_LINKED,
-        doc.id,
+        doc,
         after={"process_id": str(process.id), "process_name": process.name},
     )
     await session.commit()
@@ -978,7 +1023,7 @@ async def unlink_process_endpoint(
         session,
         caller,
         EventType.PROCESS_UNLINKED,
-        doc.id,
+        doc,
         before={
             "process_id": str(process_id),
             "process_name": process.name if process else None,
@@ -1076,7 +1121,7 @@ async def create_document_link_endpoint(
         session,
         caller,
         EventType.DOCUMENT_LINKED,
-        doc.id,
+        doc,
         after={"to_document_id": str(body.to_document_id), "link_type": body.link_type.value},
     )
     await session.commit()
@@ -1105,7 +1150,7 @@ async def delete_document_link_endpoint(
         "link_type": link.link_type.value,
     }
     await session.delete(link)
-    _emit_clause_event(session, caller, EventType.DOCUMENT_UNLINKED, doc.id, before=before)
+    _emit_clause_event(session, caller, EventType.DOCUMENT_UNLINKED, doc, before=before)
     await session.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
@@ -1121,6 +1166,206 @@ async def where_used_endpoint(
     the §7.3 ``obsoletion_safety`` advisory. Needs ``document.read``."""
     doc = await _load_document(session, caller, document_id)
     return await build_where_used(session, caller.org_id, doc.id)
+
+
+# --- distribution & acknowledgements (S-ack-1, doc 04 §8.1/§8.2, R42/R43) -----------------
+
+
+_V1_TARGET_KINDS = {DistributionTargetType.user, DistributionTargetType.org_role}
+
+
+def _emit_distribution_event(
+    session: AsyncSession,
+    actor: AppUser,
+    doc: DocumentedInformation,
+    *,
+    before: dict[str, Any] | None = None,
+    after: dict[str, Any] | None = None,
+) -> None:
+    """Append a ``DISTRIBUTION_UPDATED`` audit_event BEFORE commit (the ``_emit_clause_event``
+    shape) — but WITH ``scope_ref=identifier``: the per-document trail filters on
+    ``scope_ref == doc.identifier`` (audit.py::document_audit_events), so the clause helper's
+    NULL scope_ref would hide distribution changes from GET /documents/{id}/audit-events
+    (the decide.py DOCUMENT_ACKNOWLEDGED / sweep.py STAGE_FAILED precedent)."""
+    session.add(
+        AuditEvent(
+            org_id=actor.org_id,
+            occurred_at=datetime.datetime.now(datetime.UTC),
+            actor_id=actor.id,
+            actor_type=ActorType.user,
+            event_type=EventType.DISTRIBUTION_UPDATED,
+            object_type=AuditObjectType.document,
+            object_id=doc.id,
+            scope_ref=doc.identifier,
+            before=before,
+            after=after,
+            request_id=_rid(),
+        )
+    )
+
+
+def _distribution_entry(e: DistributionEntry) -> dict[str, Any]:
+    return {
+        "id": str(e.id),
+        "target_type": e.target_type.value,
+        "target_id": str(e.target_id),
+        "ack_required": e.ack_required,
+        "created_at": e.created_at.isoformat(),
+    }
+
+
+async def _distribution_payload(
+    session: AsyncSession, doc: DocumentedInformation
+) -> dict[str, Any]:
+    entries = await ack_queries.list_entries(session, doc.id)
+    coverage = await ack_queries.coverage_counts(session, doc)
+    return {
+        "acknowledgement_required": doc.acknowledgement_required,
+        "entries": [_distribution_entry(e) for e in entries],
+        "coverage": coverage,
+    }
+
+
+@router.get("/documents/{document_id}/distribution")
+async def get_distribution_endpoint(
+    document_id: uuid.UUID,
+    caller: AppUser = Depends(_read),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """The distribution list + the doc flag + a counts-only coverage rollup (doc 15 §8.5; gated
+    ``document.read`` — Sam-safe, no names)."""
+    doc = await _load_document(session, caller, document_id)
+    return await _distribution_payload(session, doc)
+
+
+@router.post("/documents/{document_id}/distribution")
+async def update_distribution_endpoint(
+    document_id: uuid.UUID,
+    body: DistributionUpdate,
+    caller: AppUser = Depends(_distribute),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """Add entries and/or set the doc-level ack flag (R42 ``document.distribute``). 422
+    ``target_kind_deferred`` for the deferred ``process``/``folder`` kinds (R43); targets are
+    validated in-org. Post-commit the doc-scoped ack sweep reconciles obligations."""
+    # A no-op body writes no audit row and enqueues no sweep.
+    if not body.add_entries and body.acknowledgement_required is None:
+        doc_ro = await _load_document(session, caller, document_id)
+        return await _distribution_payload(session, doc_ro)
+    # FOR UPDATE (the update_metadata_endpoint precedent): the flag flip must not race a
+    # concurrent cutover/sweep recompute reading acknowledgement_required mid-flight.
+    doc = await _load_document(session, caller, document_id, for_update=True)
+    before = {"acknowledgement_required": doc.acknowledgement_required}
+    # Two-pass: validate everything BEFORE adding — an autoflush during a later item's
+    # session.get would otherwise surface a pre-existing-duplicate IntegrityError outside
+    # the guarded flush (500, not 409).
+    validated: list[tuple[DistributionTargetType, Any]] = []
+    for item in body.add_entries:
+        try:
+            kind = DistributionTargetType(item.target_type)
+        except ValueError as exc:
+            raise ProblemException(
+                status=422, code="validation_error", title="Unknown target_type"
+            ) from exc
+        if kind not in _V1_TARGET_KINDS:
+            raise ProblemException(
+                status=422,
+                code="target_kind_deferred",
+                title="process/folder targets are deferred until owner-assignment lands (R43)",
+            )
+        if kind is DistributionTargetType.user:
+            target_user = await session.get(AppUser, item.target_id)
+            if target_user is None or target_user.org_id != caller.org_id:
+                raise ProblemException(status=404, code="not_found", title="Target user not found")
+        else:
+            role = await session.get(Role, item.target_id)
+            if role is None or role.org_id != caller.org_id:
+                raise ProblemException(status=404, code="not_found", title="Target role not found")
+        validated.append((kind, item))
+    added: list[dict[str, Any]] = []
+    for kind, item in validated:
+        session.add(
+            DistributionEntry(
+                org_id=doc.org_id,
+                document_id=doc.id,
+                target_type=kind,
+                target_id=item.target_id,
+                ack_required=item.ack_required,
+                created_by=caller.id,
+            )
+        )
+        added.append(
+            {
+                "target_type": kind.value,
+                "target_id": str(item.target_id),
+                "ack_required": item.ack_required,
+            }
+        )
+    if body.acknowledgement_required is not None:
+        doc.acknowledgement_required = body.acknowledgement_required
+        doc.updated_by = caller.id
+    try:
+        await session.flush()  # the UNIQUE(document_id, target_type, target_id) backstop
+    except IntegrityError:
+        await session.rollback()
+        raise ProblemException(
+            status=409, code="conflict", title="Distribution entry already exists"
+        ) from None
+    _emit_distribution_event(
+        session,
+        caller,
+        doc,
+        before=before,
+        after={
+            "acknowledgement_required": doc.acknowledgement_required,
+            "added_entries": added,
+        },
+    )
+    await session.commit()
+    # Post-commit: the doc-scoped sweep mints/cancels against the new audience (best-effort; the
+    # daily Beat run is the self-heal). Session stays usable (expire_on_commit=False).
+    get_ack_enqueue_sink().enqueue(str(doc.id), trigger="distribution_updated")
+    return await _distribution_payload(session, doc)
+
+
+@router.delete(
+    "/documents/{document_id}/distribution/{entry_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def delete_distribution_entry_endpoint(
+    document_id: uuid.UUID,
+    entry_id: uuid.UUID,
+    caller: AppUser = Depends(_distribute),
+    session: AsyncSession = Depends(get_session),
+) -> Response:
+    """Remove one entry (R42). The doc-scoped sweep cancels lapsed obligations post-commit."""
+    # FOR UPDATE: the doc row is the serialization point decide_doc_ack's live obligation check
+    # locks — without it a removal can commit between an in-flight ack's audience read and its
+    # INSERT, minting an acknowledgement for a just-removed recipient (the POST path already
+    # serializes the same way).
+    doc = await _load_document(session, caller, document_id, for_update=True)
+    entry = await session.get(DistributionEntry, entry_id)
+    if entry is None or entry.org_id != caller.org_id or entry.document_id != doc.id:
+        raise ProblemException(status=404, code="not_found", title="Distribution entry not found")
+    before = _distribution_entry(entry)
+    await session.delete(entry)
+    _emit_distribution_event(session, caller, doc, before=before)
+    await session.commit()
+    get_ack_enqueue_sink().enqueue(str(doc.id), trigger="distribution_updated")
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get("/documents/{document_id}/acknowledgements")
+async def get_acknowledgements_endpoint(
+    document_id: uuid.UUID,
+    caller: AppUser = Depends(_distribute),
+    session: AsyncSession = Depends(get_session),
+) -> list[dict[str, Any]]:
+    """The NAMED per-user status matrix for the current Effective version (doc 13 §6.3: Mara sees
+    the full matrix; Sam's own status rides his tasks + the counts rollup). Gated R42
+    ``document.distribute``."""
+    doc = await _load_document(session, caller, document_id)
+    return await ack_queries.coverage_matrix(session, doc)
 
 
 # --- check-out / upload / check-in ------------------------------------------------------

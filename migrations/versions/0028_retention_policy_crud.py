@@ -26,8 +26,8 @@ No new GRANT: ``retention_policy`` already carries the app role's table grant (0
 ALTER DEFAULT PRIVILEGES), and new columns inherit it.
 
 Migration notes: the ADD VALUEs are never used by a row in THIS migration (the PG16 in-txn rule is
-satisfied). The downgrade drops the two columns groups, then deletes the role_grant rows for the new
-keys BEFORE the permission rows (role_grant.permission_id RESTRICT-FKs permission), so a POPULATED-DB
+satisfied). The downgrade drops the two columns groups, then deletes the permission_override + role_grant rows
+for the new keys BEFORE the permission rows (both RESTRICT-FK permission), so a POPULATED-DB
 downgrade does not abort; the ADD VALUEs are irreversible in PostgreSQL → no-op (0001 DROPs the types
 wholesale, so the up↔down round-trip still passes; a re-upgrade rebuilds them from the ORM values).
 Round-trips up↔down↔check on PG16 incl. a populated-DB downgrade (a custom policy + a pinned record +
@@ -205,8 +205,13 @@ def upgrade() -> None:
 def downgrade() -> None:
     bind = op.get_bind()
 
-    # Delete the role_grant rows for the new keys BEFORE the permission rows (role_grant.permission_id
-    # RESTRICT-FKs permission) so a populated-DB downgrade does not abort.
+    # permission_override + role_grant BEFORE permission (both RESTRICT FKs) — a populated-DB
+    # downgrade must not abort on a live-smoke per-user override (the 0023 class; the 0048 shape).
+    del_overrides = sa.text(
+        "DELETE FROM permission_override WHERE permission_id IN "
+        "(SELECT id FROM permission WHERE key IN :keys)"
+    ).bindparams(sa.bindparam("keys", expanding=True))
+    bind.execute(del_overrides, {"keys": list(_NEW_KEYS)})
     del_grants = sa.text(
         "DELETE FROM role_grant WHERE permission_id IN "
         "(SELECT id FROM permission WHERE key IN :keys)"

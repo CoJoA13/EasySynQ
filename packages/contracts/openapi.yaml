@@ -1483,6 +1483,79 @@ paths:
         "403": { $ref: "#/components/responses/ProblemResponse" }
         "404": { $ref: "#/components/responses/ProblemResponse" }
 
+  /documents/{document_id}/distribution:
+    get:
+      tags: [documents]
+      operationId: getDocumentDistribution
+      summary: "Distribution list + doc flag + counts-only ack coverage. Gated document.read."
+      description: "S-ack-1 (doc 15 §8.5, R42/R43). Coverage is computed for the current Effective version and is null when none exists; counts only — the named matrix lives on /acknowledgements behind document.distribute."
+      parameters:
+        - { name: document_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: "Entries, the acknowledgement_required flag, and the coverage rollup (null when no Effective version)."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DocumentDistribution" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+    post:
+      tags: [documents]
+      operationId: updateDocumentDistribution
+      summary: "Add entries and/or set the doc-level ack flag. Gated document.distribute (R42)."
+      description: "422 target_kind_deferred for the deferred process/folder kinds (R43); targets validated in-org (404). A no-op body returns the current payload without an audit row. Post-commit the doc-scoped ack sweep reconciles obligations."
+      parameters:
+        - { name: document_id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DistributionUpdate" }
+      responses:
+        "200":
+          description: "The updated distribution representation."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DocumentDistribution" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409":
+          description: "Duplicate entry (the UNIQUE document/target backstop)."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "422": { $ref: "#/components/responses/ProblemResponse" }
+  /documents/{document_id}/distribution/{entry_id}:
+    delete:
+      tags: [documents]
+      operationId: deleteDocumentDistributionEntry
+      summary: "Remove a distribution entry. Gated document.distribute (R42); the doc-scoped sweep cancels lapsed obligations."
+      parameters:
+        - { name: document_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: entry_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "204": { description: "Removed." }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+  /documents/{document_id}/acknowledgements:
+    get:
+      tags: [documents]
+      operationId: getDocumentAcknowledgements
+      summary: "The named per-user ack status matrix for the current Effective version. Gated document.distribute (R42)."
+      description: "doc 13 §6.3: the QM sees the full matrix; an employee's own status rides their /tasks inbox + the counts rollup on /distribution."
+      parameters:
+        - { name: document_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: "One row per current audience member (empty when acknowledgement is not required, no Effective version, or no audience)."
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/AckStatusRow" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+
   /documents/{document_id}/start-revision:
     post:
       tags: [documents]
@@ -3414,7 +3487,11 @@ paths:
         409 if the actor already decided an earlier stage of the same approval. Idempotent via the
         Idempotency-Key header (replay on match, else 409). For PERIODIC_REVIEW subjects the accepted
         outcomes are complete ("no change needed" — emits the review_confirmed signature and resets
-        next_review_due) and changes_requested.
+        next_review_due) and changes_requested. For DOC_ACK subjects the only accepted outcome is
+        acknowledge — membership 404-collapses, document.acknowledge is enforced at the document's
+        scope (403), and the decision writes the immutable acknowledgement row + a DOCUMENT_ACKNOWLEDGED
+        audit event (never a signature_event; 409 ack_superseded when a newer MAJOR replaced the task,
+        409 ack_obligation_lapsed when the obligation no longer stands).
       parameters:
         - { name: task_id, in: path, required: true, schema: { type: string, format: uuid } }
         - name: Idempotency-Key
@@ -4637,6 +4714,27 @@ components:
           type: boolean
           description: Off-host audit-anchor soft gate (R13) — never blocks finalize.
 
+    AckCoverage:
+      type: object
+      additionalProperties: false
+      required: [required, acknowledged, pending, overdue]
+      properties:
+        required: { type: integer }
+        acknowledged: { type: integer }
+        pending: { type: integer }
+        overdue: { type: integer }
+    AckStatusRow:
+      type: object
+      additionalProperties: false
+      required: [user_id, display_name, status]
+      properties:
+        user_id: { type: string, format: uuid }
+        display_name: { type: [string, "null"] }
+        status: { type: string, enum: [acknowledged, pending, overdue] }
+        acknowledged_at: { type: [string, "null"], format: date-time }
+        acknowledged_revision_label: { type: [string, "null"] }
+        due_at: { type: [string, "null"], format: date-time }
+
     AppUser:
       type: object
       additionalProperties: false
@@ -4822,6 +4920,45 @@ components:
         permissions:
           type: array
           items: { $ref: "#/components/schemas/EffectivePermissionEntry" }
+
+    DistributionEntry:
+      type: object
+      additionalProperties: false
+      required: [id, target_type, target_id, ack_required, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        target_type: { type: string, enum: [user, org_role, process, folder] }
+        target_id: { type: string, format: uuid }
+        ack_required: { type: boolean }
+        created_at: { type: string, format: date-time }
+    DistributionUpdate:
+      type: object
+      additionalProperties: false
+      properties:
+        acknowledgement_required: { type: [boolean, "null"] }
+        add_entries:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [target_type, target_id]
+            properties:
+              target_type: { type: string, enum: [user, org_role, process, folder], description: "v1 accepts user/org_role; process/folder → 422 target_kind_deferred (R43)." }
+              target_id: { type: string, format: uuid }
+              ack_required: { type: boolean, default: true }
+    DocumentDistribution:
+      type: object
+      additionalProperties: false
+      required: [acknowledgement_required, entries, coverage]
+      properties:
+        acknowledgement_required: { type: boolean }
+        entries:
+          type: array
+          items: { $ref: "#/components/schemas/DistributionEntry" }
+        coverage:
+          oneOf:
+            - { $ref: "#/components/schemas/AckCoverage" }
+            - { type: "null" }
 
     Document:
       type: object
@@ -5353,6 +5490,7 @@ components:
             - MR_INPUT
             - MR_ACTION
             - DCR_TRIAGE
+            - DOC_ACK
         state:
           type: string
           enum: [PENDING, CLAIMED, DONE, SKIPPED, ESCALATED, EXPIRED]
@@ -5376,7 +5514,7 @@ components:
         definition_version: { type: integer, description: "Pinned at instantiation." }
         subject_type:
           type: string
-          enum: [DOCUMENT, DCR, CAPA, AUDIT, MGMT_REVIEW, PERIODIC_REVIEW]
+          enum: [DOCUMENT, DCR, CAPA, AUDIT, MGMT_REVIEW, PERIODIC_REVIEW, DOC_ACK]
         subject_id: { type: string, format: uuid }
         current_state:
           type: string
@@ -5395,7 +5533,7 @@ components:
       properties:
         outcome:
           type: string
-          enum: [approve, changes_requested, reject, complete]
+          enum: [approve, changes_requested, reject, complete, acknowledge]
           description: "approve signs (document.approve); changes_requested/reject returns to Draft (document.review)."
         comment:
           type: [string, "null"]
@@ -5428,7 +5566,7 @@ components:
         task_id: { type: string, format: uuid }
         instance_id: { type: string, format: uuid }
         stage_key: { type: string }
-        outcome: { type: string, enum: [approve, changes_requested, reject, complete] }
+        outcome: { type: string, enum: [approve, changes_requested, reject, complete, acknowledge] }
         decided_at: { type: [string, "null"], format: date-time }
         decided_by: { type: string, format: uuid }
         signature_event:
@@ -5440,6 +5578,14 @@ components:
         document_id: { type: [string, "null"], format: uuid }
         next_review_due: { type: [string, "null"], format: date }
         signature_event_id: { type: [string, "null"], format: uuid }
+        document_version_id: { type: [string, "null"], format: uuid }
+        acknowledgement_id: { type: [string, "null"], format: uuid }
+        # The engine's _response() always emits these four; additionalProperties:false made the
+        # contract reject every real response (a pre-existing gap closed with S-ack-1).
+        stage_state: { type: [string, "null"] }
+        current_state: { type: [string, "null"] }
+        signature_spec: { type: [object, "null"] }
+        replayed: { type: [boolean, "null"] }
 
     AuditEvent:
       type: object

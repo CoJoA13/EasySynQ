@@ -113,6 +113,9 @@ class DocumentedInformation(Base):
     last_reviewed_at: Mapped[datetime.datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # S-ack-1 (doc 04 §8.2, R43): the per-document master switch — obligations exist iff this AND
+    # the entry's ack_required. Mutable working-row state; frozen into metadata_snapshot at checkin.
+    acknowledgement_required: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

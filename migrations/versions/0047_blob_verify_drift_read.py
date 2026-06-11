@@ -23,8 +23,9 @@ Slice S-drift-3 (doc 03 §8.2, doc 05 §9.1 rows D1/D4, doc 07 §3.9, R38/R41) �
    load-bearing workflow seed (0045), where skipping would be wrong.
 
 Neither new enum value is used by a row in THIS migration (the PG16 in-txn rule is satisfied).
-Downgrade: role_grant rows BEFORE the permission row (the RESTRICT FK); the ADD VALUEs are
-irreversible in PostgreSQL → no-op (0001/0046 drop the types wholesale, so up↔down still passes).
+Downgrade: permission_override + role_grant rows BEFORE the permission row (both RESTRICT FKs);
+the ADD VALUEs are irreversible in PostgreSQL → no-op (0001/0046 drop the types wholesale, so
+up↔down still passes).
 
 Revision ID: 0047_blob_verify_drift_read
 Revises: 0046_mirror_drift_scan
@@ -57,9 +58,7 @@ def upgrade() -> None:
 
     # 2. The D1 alarm latch (nullable, no default — NULL = never failed; the app role already
     # holds UPDATE on blob, the verified_at precedent).
-    op.add_column(
-        "blob", sa.Column("verify_failed_at", sa.DateTime(timezone=True), nullable=True)
-    )
+    op.add_column("blob", sa.Column("verify_failed_at", sa.DateTime(timezone=True), nullable=True))
 
     # 3. R38/R41: seed the drift.read SYSTEM key (idempotent).
     permission_t = sa.table(
@@ -137,7 +136,15 @@ def upgrade() -> None:
 def downgrade() -> None:
     bind = op.get_bind()
     op.drop_column("blob", "verify_failed_at")
-    # role_grant BEFORE permission (the RESTRICT FK) so a populated-DB downgrade does not abort.
+    # permission_override + role_grant BEFORE permission (both RESTRICT FKs) — a populated-DB
+    # downgrade must not abort on a live-smoke per-user override (the 0023 class; the 0048 shape).
+    bind.execute(
+        sa.text(
+            "DELETE FROM permission_override WHERE permission_id IN "
+            "(SELECT id FROM permission WHERE key = :k)"
+        ),
+        {"k": _NEW_KEY},
+    )
     bind.execute(
         sa.text(
             "DELETE FROM role_grant WHERE permission_id IN "

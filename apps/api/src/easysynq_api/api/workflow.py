@@ -26,6 +26,7 @@ from ..db.models.workflow import Task, WorkflowInstance
 from ..db.session import get_session
 from ..domain.authz import ResourceContext
 from ..problems import ProblemException
+from ..services.ack.decide import decide_doc_ack
 from ..services.authz import AuthzAuditSink, enforce, get_authz_audit_sink
 from ..services.capa import decide_capa_action_plan
 from ..services.dcr import decide_dcr_approval
@@ -233,6 +234,21 @@ async def decide_endpoint(
             comment=body.comment,
             idempotency_key=idempotency_key,
             sig_sink=sig_sink,
+        )
+    # A DOC_ACK obligation routes to the ack service: candidate-membership 404-collapses, then
+    # document.acknowledge is enforced at the document's scope (the key's first consumer); the
+    # decision writes the immutable acknowledgement row + DOCUMENT_ACKNOWLEDGED — no signature
+    # (R2/R43; sig_hook=false).
+    if instance is not None and instance.subject_type is WorkflowSubjectType.DOC_ACK:
+        return await decide_doc_ack(
+            session,
+            task,
+            caller,
+            outcome=body.outcome,
+            comment=body.comment,
+            idempotency_key=idempotency_key,
+            request=request,
+            authz_sink=authz_sink,
         )
     derived = _OUTCOME_PERMISSION.get(body.outcome)
     if derived is None:

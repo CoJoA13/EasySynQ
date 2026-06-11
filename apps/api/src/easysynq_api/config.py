@@ -96,6 +96,9 @@ class Settings(BaseSettings):
     # Rolling sample size per Beat run (NULLS-FIRST rotation). A ``full`` pass (CLI
     # ``mirror scan --full``) ignores this and walks all blobs unconditionally.
     blob_verify_sample_size: int = 500
+    # S-ack-1 (R43): the informational acknowledgement due window — due_at = mint + N days. RAG
+    # display only; no escalation in v1 (the notifications family owns delivery/escalation).
+    ack_due_days: int = 14
 
     # S8b2 backup: the default filesystem destination for durable archives + the restore-test drill
     # (the per-org backup_policy.destination overrides). A mounted volume / NFS path in MVP

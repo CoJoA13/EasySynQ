@@ -446,7 +446,7 @@ Filtered by phase (PLAN/DO/CHECK/ACT), type, process, clause, severity, and "del
 
 ### 8.4 New-joiner & distribution-target acknowledgements
 
-When a user **enters any distribution target** — a **role**, a **process**, or a **folder** — the system creates **`DOC_ACK` acknowledgement tasks for the CURRENT `Effective` version** of every document in that target that **requires acknowledgement**, and surfaces them as **onboarding tasks in My Tasks** (reconciled per Decisions Register R15). Already-acknowledged versions are **excluded**, so a transferring employee is not re-prompted for documents they have already signed off; only genuinely new reading obligations appear. This same mechanism covers role-changers (new target entry) as well as brand-new joiners, and is driven off the Effective version so a person never acknowledges a Draft or a superseded copy.
+When a user **enters any distribution target** — a **role**, a **process**, or a **folder** — the system creates **`DOC_ACK` acknowledgement tasks for the CURRENT `Effective` version** of every document in that target that **requires acknowledgement**, and surfaces them as **onboarding tasks in My Tasks** (reconciled per Decisions Register R15). Already-acknowledged versions are **excluded** (re-ack on re-release is MAJOR-only — R43), so a transferring employee is not re-prompted for documents they have already signed off; only genuinely new reading obligations appear. This same mechanism covers role-changers (new target entry) as well as brand-new joiners, and is driven off the Effective version so a person never acknowledges a Draft or a superseded copy.
 
 ---
 
