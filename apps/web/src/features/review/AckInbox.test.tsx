@@ -4,6 +4,7 @@ import { http, HttpResponse } from "msw";
 import { describe, expect, test } from "vitest";
 import { renderWithProviders } from "../../test/render";
 import { server } from "../../test/msw/server";
+import { ackDecisionResultFixture } from "../../test/msw/handlers";
 import { AckInbox } from "./AckInbox";
 
 describe("AckInbox", () => {
@@ -19,7 +20,7 @@ describe("AckInbox", () => {
     server.use(
       http.post("/api/v1/tasks/:id/decision", () => {
         posts += 1;
-        return HttpResponse.json({ document_id: "d", acknowledgement_id: "a", replayed: false });
+        return HttpResponse.json(ackDecisionResultFixture);
       }),
     );
     renderWithProviders(<AckInbox />);
