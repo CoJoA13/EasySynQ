@@ -141,6 +141,14 @@ tags:
       (PATCH) + cancel; assess (S-dcr-2), route + approval (S-dcr-4), implement/close (S-dcr-5) are
       later slices. Keys are the seeded changeRequest.* catalog family (R5 normalizes doc 15's
       dcr.*): create/read are granted by 0004, assess/close backfilled by 0040 — no new keys.
+  - name: objectives
+    description: >-
+      Quality Objectives (S-obj-1, doc 02 Cl 6.2 / doc 14 §8) — clause-6.2 objectives as
+      kind=DOCUMENT subtypes (type OBJ), each with a direction-aware RAG status computed from
+      append-only KPI_READING measurements. Rides the seeded objective.*/kpi.* permission keys
+      (PROCESS scope, SYSTEM fallback). objective.manage = create + plans; kpi.record =
+      record a measurement; objective.read/kpi.read = list/get. Plans are mutable; measurements
+      are append-only evidence-grade KPI_READING records (WORM/retention governed). R44.
 
 paths:
   /healthz:
@@ -4541,6 +4549,159 @@ paths:
         "409": { $ref: "#/components/responses/ProblemResponse" }
         "422": { $ref: "#/components/responses/ProblemResponse" }
 
+  /objectives:
+    post:
+      tags: [objectives]
+      operationId: createObjective
+      summary: "Create a Quality Objective (S-obj-1, clause 6.2). Gated objective.manage (PROCESS scope from body.process_id, SYSTEM fallback)."
+      description: "Creates a kind=DOCUMENT subtype (type OBJ) through the vault lifecycle. RAG/pct/attainment are computed at read from append-only KPI_READING measurements. Returns the full Objective representation."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ObjectiveCreate" }
+      responses:
+        "201":
+          description: The newly created Objective.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Objective" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "422": { $ref: "#/components/responses/ProblemResponse" }
+    get:
+      tags: [objectives]
+      operationId: listObjectives
+      summary: "List Quality Objectives for the caller's org. Gated objective.read."
+      description: "Returns all objectives the caller can see. Optionally filter by process_id. RAG/pct/attainment computed at read."
+      parameters:
+        - { name: process_id, in: query, required: false, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: The objectives list.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/Objective" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+
+  /objectives/scorecard:
+    get:
+      tags: [objectives]
+      operationId: getObjectiveScorecard
+      summary: "RAG scorecard rollup across all objectives. Gated objective.read."
+      description: "Returns totals + by_rag breakdown + the full objectives list. Declared BEFORE /objectives/{objective_id} so the literal path is not shadowed by the str path-convertor (S-pack-2)."
+      parameters:
+        - { name: process_id, in: query, required: false, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: The scorecard rollup.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ObjectiveScorecard" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+
+  /objectives/{objective_id}:
+    get:
+      tags: [objectives]
+      operationId: getObjective
+      summary: "Get a single Objective with its plans. Gated objective.read."
+      parameters:
+        - { name: objective_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: The Objective with plans.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Objective" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+
+  /objectives/{objective_id}/measurements:
+    post:
+      tags: [objectives]
+      operationId: recordMeasurement
+      summary: "Record a KPI measurement for an objective. Gated kpi.record (PROCESS scope from objective)."
+      description: "Creates an append-only KPI_READING evidence record and rolls current_value up on the objective satellite. 404 if the objective does not exist."
+      parameters:
+        - { name: objective_id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MeasurementCreate" }
+      responses:
+        "201":
+          description: The recorded Measurement.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Measurement" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "422": { $ref: "#/components/responses/ProblemResponse" }
+    get:
+      tags: [objectives]
+      operationId: listMeasurements
+      summary: "List KPI measurements for an objective. Gated kpi.read (PROCESS scope from objective)."
+      parameters:
+        - { name: objective_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: The measurements list.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/Measurement" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+
+  /objectives/{objective_id}/plans:
+    post:
+      tags: [objectives]
+      operationId: addObjectivePlan
+      summary: "Add a planning action to an objective. Gated objective.manage (PROCESS scope from objective)."
+      description: "Plans are mutable (may be deleted). 404 if the objective does not exist."
+      parameters:
+        - { name: objective_id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PlanCreate" }
+      responses:
+        "201":
+          description: The created ObjectivePlan.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ObjectivePlan" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "422": { $ref: "#/components/responses/ProblemResponse" }
+
+  /objectives/{objective_id}/plans/{plan_id}:
+    delete:
+      tags: [objectives]
+      operationId: removeObjectivePlan
+      summary: "Delete a planning action from an objective. Gated objective.manage (PROCESS scope from objective)."
+      parameters:
+        - { name: objective_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: plan_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "204": { description: "Removed." }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+
 components:
   securitySchemes:
     keycloak:
@@ -7041,6 +7202,127 @@ components:
           properties:
             token: { type: string, description: "The signed bearer token (shown once)." }
             share_url: { type: string, format: uri }
+
+    ObjectivePlan:
+      type: object
+      additionalProperties: false
+      required: [id, objective_id, action]
+      description: A planning action attached to a Quality Objective (mutable, may be deleted).
+      properties:
+        id: { type: string, format: uuid }
+        objective_id: { type: string, format: uuid }
+        action: { type: string, description: "The planned action description (1–2000 chars)." }
+        resource: { type: [string, "null"] }
+        responsible_user_id: { type: [string, "null"], format: uuid }
+        due_date: { type: [string, "null"], format: date }
+
+    PlanCreate:
+      type: object
+      additionalProperties: false
+      required: [action]
+      properties:
+        action: { type: string, minLength: 1, maxLength: 2000 }
+        resource: { type: [string, "null"], maxLength: 500 }
+        responsible_user_id: { type: [string, "null"], format: uuid }
+        due_date: { type: [string, "null"], format: date }
+
+    Measurement:
+      type: object
+      additionalProperties: false
+      required: [id, record_id, period, value, target_at_capture, unit, created_at]
+      description: A single KPI reading — append-only, WORM/retention-governed evidence record.
+      properties:
+        id: { type: string, format: uuid }
+        objective_id: { type: [string, "null"], format: uuid }
+        record_id: { type: string, format: uuid, description: "The underlying KPI_READING evidence record id." }
+        period: { type: string, format: date }
+        value: { type: string, description: "Decimal string." }
+        target_at_capture: { type: string, description: "Snapshot of target_value at measurement time (Decimal string)." }
+        unit: { type: string }
+        source: { type: [string, "null"] }
+        created_at: { type: string, format: date-time }
+
+    MeasurementCreate:
+      type: object
+      additionalProperties: false
+      required: [period, value, unit]
+      properties:
+        period: { type: string, format: date }
+        value: { type: string, description: "Decimal string." }
+        unit: { type: string, minLength: 1, maxLength: 50 }
+        source: { type: [string, "null"], maxLength: 300 }
+
+    Objective:
+      type: object
+      additionalProperties: false
+      required: [id, identifier, title, current_state, target_value, unit, direction, due_date, rag, plans]
+      description: >-
+        A clause-6.2 Quality Objective — kind=DOCUMENT subtype (type OBJ). RAG, pct_toward_target, and
+        attainment are computed at read from current_value vs target_value (R44). Plans are included on
+        single-object reads.
+      properties:
+        id: { type: string, format: uuid }
+        identifier: { type: string, description: "The document identifier (e.g. OBJ-001)." }
+        title: { type: string }
+        current_state:
+          type: string
+          enum: [Draft, InReview, Approved, Effective, UnderRevision, Superseded, Obsolete]
+        target_value: { type: string, description: "Decimal string." }
+        unit: { type: string }
+        baseline_value: { type: [string, "null"], description: "Decimal string." }
+        current_value: { type: [string, "null"], description: "Decimal string — rolled from the latest KPI_READING." }
+        direction:
+          type: string
+          enum: [HIGHER_IS_BETTER, LOWER_IS_BETTER]
+        at_risk_threshold: { type: [string, "null"], description: "Decimal string — amber zone boundary." }
+        due_date: { type: string, format: date }
+        process_id: { type: [string, "null"], format: uuid }
+        policy_id: { type: [string, "null"], format: uuid, description: "Linked Quality Policy document id." }
+        rag:
+          type: [string, "null"]
+          enum: [green, amber, red, unmeasured, "null"]
+          description: "Direction-aware RAG: null when no current_value."
+        pct_toward_target: { type: [number, "null"], description: "0–100 percentage toward target; null when unmeasured." }
+        attainment: { type: [string, "null"], enum: [on_target, at_risk, off_target, "null"], description: "Attainment band; null when unmeasured." }
+        plans:
+          type: array
+          items: { $ref: "#/components/schemas/ObjectivePlan" }
+
+    ObjectiveCreate:
+      type: object
+      additionalProperties: false
+      required: [title, target_value, unit, direction, due_date]
+      properties:
+        title: { type: string, minLength: 1, maxLength: 300 }
+        target_value: { type: string, description: "Decimal string." }
+        unit: { type: string, minLength: 1, maxLength: 50 }
+        direction: { type: string, enum: [HIGHER_IS_BETTER, LOWER_IS_BETTER] }
+        due_date: { type: string, format: date }
+        baseline_value: { type: [string, "null"], description: "Decimal string." }
+        at_risk_threshold: { type: [string, "null"], description: "Decimal string." }
+        process_id: { type: [string, "null"], format: uuid }
+        policy_id: { type: [string, "null"], format: uuid }
+
+    ObjectiveScorecard:
+      type: object
+      additionalProperties: false
+      required: [total, on_target, by_rag, objectives]
+      description: "RAG rollup across all visible objectives. on_target = count with rag=green."
+      properties:
+        total: { type: integer }
+        on_target: { type: integer }
+        by_rag:
+          type: object
+          additionalProperties: false
+          required: [green, amber, red, unmeasured]
+          properties:
+            green: { type: integer }
+            amber: { type: integer }
+            red: { type: integer }
+            unmeasured: { type: integer }
+        objectives:
+          type: array
+          items: { $ref: "#/components/schemas/Objective" }
 
 security:
   - keycloak: []
