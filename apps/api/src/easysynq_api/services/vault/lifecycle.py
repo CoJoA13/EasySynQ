@@ -37,6 +37,7 @@ from ...db.session import get_sessionmaker
 from ...domain.vault import Action, IllegalTransition, allowed_actions, apply_transition
 from ...logging import request_id_var
 from ...problems import ProblemException
+from ..ack.sink import get_ack_enqueue_sink
 from . import locks, repository
 from .audit import VaultAuditEvent, VaultAuditSink, get_vault_audit_sink
 from .mirror_sink import get_mirror_enqueue_sink
@@ -426,6 +427,8 @@ async def obsolete(
     # S7: T11 pulled the Effective version from the mirror — rebuild post-commit. (The T12 path
     # above obsoletes an already-Superseded version, never in the mirror, so it does not enqueue.)
     get_mirror_enqueue_sink().enqueue("obsolete")
+    # S-ack-1: an Obsoleted doc's open obligations lapse — the doc-scoped sweep cancels them.
+    get_ack_enqueue_sink().enqueue(str(doc.id), trigger="obsolete")
     return doc
 
 
@@ -577,6 +580,8 @@ async def release(
     # S7: enqueue the mirror rewrite AFTER the cutover commits — never inside the SERIALIZABLE txn,
     # so a concurrent-release loser (rolled back above) does not enqueue (doc 15 §8.5).
     get_mirror_enqueue_sink().enqueue("release")
+    # S-ack-1: a fresh Effective version may re-arm acknowledgements (MAJOR) — doc-scoped sweep.
+    get_ack_enqueue_sink().enqueue(str(doc_id), trigger="release")
     return doc
 
 
@@ -593,6 +598,7 @@ async def release_due(now: datetime.datetime | None = None) -> list[uuid.UUID]:
         engine, expire_on_commit=False
     )
     released: list[uuid.UUID] = []
+    released_docs: list[uuid.UUID] = []
     try:
         async with sessionmaker() as session:
             rows = (
@@ -610,6 +616,7 @@ async def release_due(now: datetime.datetime | None = None) -> list[uuid.UUID]:
                 try:
                     await _cutover(session, sink, sig_sink, doc_id, version_id, None, now)
                     released.append(version_id)
+                    released_docs.append(doc_id)
                 except DBAPIError as exc:
                     await session.rollback()
                     if not _is_race_loss(exc):
@@ -621,6 +628,9 @@ async def release_due(now: datetime.datetime | None = None) -> list[uuid.UUID]:
         # S7: one idempotent full-rebuild enqueue covers every version this sweep activated.
         if released:
             get_mirror_enqueue_sink().enqueue("release_due")
+            # S-ack-1: per released doc — the scoped sweep re-arms/mints against the fresh version.
+            for sweep_doc_id in released_docs:
+                get_ack_enqueue_sink().enqueue(str(sweep_doc_id), trigger="release_due")
     finally:
         await engine.dispose()
     return released
