@@ -8,6 +8,8 @@ import { useCapaApproval } from "../capa/hooks";
 import { CapaApprovalContext } from "./CapaApprovalContext";
 import { DecisionCard } from "./DecisionCard";
 import { PeriodicReviewContext } from "./PeriodicReviewContext";
+import { AttestationCard } from "./AttestationCard";
+import { DocAckContext } from "./DocAckContext";
 import { useTask, useWorkflowInstance } from "./hooks";
 
 // S-web-5 + S-web-7b: the per-task focus page. Branches on the task's subject type:
@@ -19,11 +21,12 @@ export function ReviewApprovePage() {
   const { data: task, isLoading, isError, error } = useTask(taskId);
   const isCapa = task?.subject_type === "CAPA";
   const isPeriodic = task?.subject_type === "PERIODIC_REVIEW";
-  // Document branch (unchanged): resolve the subject doc via the instance. Disabled for CAPA AND
-  // periodic tasks — the subject id is on the task itself; the deciding owner may hold no workflow
+  const isDocAck = task?.subject_type === "DOC_ACK";
+  // Document branch (unchanged): resolve the subject doc via the instance. Disabled for CAPA, periodic
+  // AND DOC_ACK tasks — the subject id is on the task itself; the deciding owner may hold no workflow
   // read at all.
-  const { data: instance } = useWorkflowInstance(!isCapa && !isPeriodic && task ? task.instance_id : null);
-  const docId = !isCapa && !isPeriodic ? (instance?.subject_id ?? null) : null;
+  const { data: instance } = useWorkflowInstance(!isCapa && !isPeriodic && !isDocAck && task ? task.instance_id : null);
+  const docId = !isCapa && !isPeriodic && !isDocAck ? (instance?.subject_id ?? null) : null;
   const { data: doc } = useDocument(docId, { enabled: docId !== null });
   const { data: versions } = useDocumentVersions(docId, docId !== null);
   // For a CAPA task, the approver signs the PROPOSED action plan — load it (gated capa.read) and gate the
@@ -99,6 +102,29 @@ export function ReviewApprovePage() {
                 subjectType="PERIODIC_REVIEW"
                 subjectId={task.subject_id!}
               />
+            ) : (
+              decidedAlert
+            )}
+          </Grid.Col>
+        </Grid>
+      </Stack>
+    );
+  }
+
+  if (isDocAck) {
+    // R43: an acknowledgement is append-only evidence, NOT a signature — so this is a dedicated
+    // AttestationCard, never the DecisionCard. The subject id is on the task (detail enrichment) →
+    // always present here; the doc context is best-effort (a document.read 403 never blocks the ack).
+    return (
+      <Stack gap="lg">
+        <Title order={2}>Document acknowledgement</Title>
+        <Grid gutter="lg" align="flex-start">
+          <Grid.Col span={{ base: 12, md: 7 }}>
+            <DocAckContext documentId={task.subject_id!} />
+          </Grid.Col>
+          <Grid.Col span={{ base: 12, md: 5 }}>
+            {decidable ? (
+              <AttestationCard taskId={task.id} documentId={task.subject_id!} />
             ) : (
               decidedAlert
             )}

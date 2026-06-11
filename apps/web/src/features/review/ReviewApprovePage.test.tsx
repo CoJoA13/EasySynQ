@@ -130,3 +130,16 @@ describe("ReviewApprovePage — PERIODIC_REVIEW", () => {
     expect(screen.queryByLabelText("Confirm — no change needed")).not.toBeInTheDocument();
   });
 });
+
+describe("ReviewApprovePage DOC_ACK branch", () => {
+  test("a DOC_ACK task renders the attestation card + the doc context, no signature", async () => {
+    renderAtTask("tkak1111-1111-1111-1111-111111111111");
+    expect(await screen.findByText("Document acknowledgement")).toBeInTheDocument();
+    expect(
+      await screen.findByRole("button", { name: /i have read & understood/i }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("radio")).not.toBeInTheDocument(); // not a DecisionCard
+    // doc context (best-effort) shows the identifier (the attestation copy echoes it too → ≥1 match)
+    expect((await screen.findAllByText("SOP-PUR-014")).length).toBeGreaterThan(0);
+  });
+});
