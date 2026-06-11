@@ -20,6 +20,7 @@ from easysynq_api.db.models._workflow_enums import TaskState, WorkflowSubjectTyp
 from easysynq_api.db.models.acknowledgement import Acknowledgement
 from easysynq_api.db.models.audit_event import AuditEvent
 from easysynq_api.db.models.authz_grant import PermissionOverride
+from easysynq_api.db.models.document_version import DocumentVersion
 from easysynq_api.db.models.permission import Permission
 from easysynq_api.db.models.role import Role
 from easysynq_api.db.models.scope import Scope
@@ -988,3 +989,78 @@ async def test_obsolete_cancels_obligations(
         "coverage"
     ]
     assert cov is None
+
+
+# ---------------------------------------------------------------------------
+# 11. The snapshot freeze (Task 10)
+# ---------------------------------------------------------------------------
+
+
+async def test_snapshot_carries_ack_keys(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    subj: SimpleNamespace,
+    app_under_test: object,
+) -> None:
+    """doc 04 §6.1: a check-in freezes the flag + entry list into the new version's
+    metadata_snapshot (the version self-describes its audience/ack policy)."""
+    await s5.grant_lifecycle(subj.a)
+    await grant_keys(subj.a, ("document.distribute",))
+    sam_id = await grant_keys(subj.sam, ())  # row only — the entry's target principal
+    ha = _auth(token_factory, subj.a)
+    type_id = await s5.type_id("SOP")
+
+    doc = await _create(app_client, ha, type_id)
+    did = doc["id"]
+    doc_uuid = uuid.UUID(did)
+
+    # v1: checked in BEFORE any distribution exists → its snapshot must freeze False/[].
+    co1 = await app_client.post(f"/api/v1/documents/{did}/checkout", headers=ha)
+    assert co1.status_code == 200, co1.text
+    sha1 = await _upload(app_client, ha, did, f"ack-snapshot-v1-{subj.a}".encode())
+    ci1 = await _checkin(app_client, ha, did, sha1, change_reason="v1", change_significance="MAJOR")
+    assert ci1.status_code == 201, ci1.text
+
+    # The distribution lands AFTER v1's check-in (flag on + Sam as a user target).
+    dist = await app_client.post(
+        f"/api/v1/documents/{did}/distribution",
+        headers=ha,
+        json={
+            "acknowledgement_required": True,
+            "add_entries": [{"target_type": "user", "target_id": str(sam_id)}],
+        },
+    )
+    assert dist.status_code == 200, dist.text
+
+    # v2: the next check-in freezes the NOW-current flag + entries.
+    co2 = await app_client.post(f"/api/v1/documents/{did}/checkout", headers=ha)
+    assert co2.status_code == 200, co2.text
+    sha2 = await _upload(app_client, ha, did, f"ack-snapshot-v2-{subj.a}".encode())
+    ci2 = await _checkin(app_client, ha, did, sha2, change_reason="v2", change_significance="MINOR")
+    assert ci2.status_code == 201, ci2.text
+
+    async with get_sessionmaker()() as s:
+        versions = (
+            (
+                await s.execute(
+                    select(DocumentVersion)
+                    .where(DocumentVersion.document_id == doc_uuid)
+                    .order_by(DocumentVersion.version_seq)
+                )
+            )
+            .scalars()
+            .all()
+        )
+    assert len(versions) == 2, f"expected exactly 2 versions, got {len(versions)}"
+
+    # v1's snapshot is point-in-time: the distribution did not exist at its check-in.
+    ms1 = versions[0].metadata_snapshot
+    assert ms1["acknowledgement_required"] is False
+    assert ms1["distribution"] == []
+
+    # v2 (the newest) carries the flag + the serialized entry list.
+    ms2 = versions[-1].metadata_snapshot
+    assert ms2["acknowledgement_required"] is True
+    assert ms2["distribution"] == [
+        {"target_type": "user", "target_id": str(sam_id), "ack_required": True}
+    ]

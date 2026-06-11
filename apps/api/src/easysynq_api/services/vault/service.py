@@ -18,6 +18,7 @@ import uuid
 from typing import Any, Literal
 
 import rfc8785
+from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -31,6 +32,7 @@ from ...db.models._vault_enums import (
 )
 from ...db.models.app_user import AppUser
 from ...db.models.blob import Blob
+from ...db.models.distribution_entry import DistributionEntry
 from ...db.models.document_version import DocumentVersion as DocumentVersionModel
 from ...db.models.documented_information import DocumentedInformation
 from ...db.models.form_template import FormTemplate
@@ -89,12 +91,18 @@ def _emit(
 
 
 def _snapshot(
-    doc: DocumentedInformation, *, field_schema: dict[str, Any] | None = None
+    doc: DocumentedInformation,
+    *,
+    field_schema: dict[str, Any] | None = None,
+    distribution: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Metadata as it was at check-in (doc 14 §5.3) — frozen onto the immutable version. Ordinary
     documents call this with no ``field_schema`` (the snapshot shape is unchanged). A Form/Template
     check-in (S-rec-3) passes the working ``field_schema`` so the version pins it (the Mode-B
-    capture validator reads it from here, never the mutable ``form_template`` row)."""
+    capture validator reads it from here, never the mutable ``form_template`` row). S-ack-1 (doc 04
+    §6.1): the version self-describes its audience/ack policy — ``acknowledgement_required`` + the
+    serialized distribution entries are frozen here (the metadata diff's SNAPSHOT_FIELDS allowlist
+    deliberately excludes them in v1; revisiting is S-ack-2's call)."""
     snap: dict[str, Any] = {
         "identifier": doc.identifier,
         "title": doc.title,
@@ -104,10 +112,38 @@ def _snapshot(
         "classification": doc.classification.value,
         "framework_id": str(doc.framework_id),
         "review_period_months": doc.review_period_months,
+        # S-ack-1 (doc 04 §6.1): the version self-describes its audience/ack policy.
+        "acknowledgement_required": doc.acknowledgement_required,
+        "distribution": distribution or [],
     }
     if field_schema is not None:
         snap["field_schema"] = field_schema
     return snap
+
+
+async def _distribution_snapshot(
+    session: AsyncSession, document_id: uuid.UUID
+) -> list[dict[str, Any]]:
+    """The doc 04 §6.1 'Recipients + ack requirement' fold — serialized for metadata_snapshot."""
+    rows = (
+        (
+            await session.execute(
+                select(DistributionEntry)
+                .where(DistributionEntry.document_id == document_id)
+                .order_by(DistributionEntry.created_at)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return [
+        {
+            "target_type": e.target_type.value,
+            "target_id": str(e.target_id),
+            "ack_required": e.ack_required,
+        }
+        for e in rows
+    ]
 
 
 async def create_document(
@@ -305,6 +341,7 @@ async def checkin(
     # UNIQUE(document_id, version_seq) is the hard backstop if a lapsed-and-retaken lock ever
     # lets two check-ins race (a rare, retriable conflict — the atomic per-doc counter is S4).
     seq = await repository.next_version_seq(session, doc.id)
+    dist_snap = await _distribution_snapshot(session, doc.id)
     version = DocumentVersionModel(
         org_id=actor.org_id,
         document_id=doc.id,
@@ -314,7 +351,7 @@ async def checkin(
         change_reason=change_reason.strip(),
         version_state=VersionState.Draft,
         source_blob_sha256=sha256,
-        metadata_snapshot=_snapshot(doc),
+        metadata_snapshot=_snapshot(doc, distribution=dist_snap),
         author_user_id=actor.id,
         created_by=actor.id,
     )
@@ -546,6 +583,7 @@ async def checkin_form_schema(
         await session.flush()
 
     seq = await repository.next_version_seq(session, doc.id)
+    dist_snap = await _distribution_snapshot(session, doc.id)
     version = DocumentVersionModel(
         org_id=actor.org_id,
         document_id=doc.id,
@@ -555,7 +593,8 @@ async def checkin_form_schema(
         change_reason=change_reason.strip(),
         version_state=VersionState.Draft,
         source_blob_sha256=sha,
-        metadata_snapshot=_snapshot(doc, field_schema=schema),  # SAME object → bytes ≡ snapshot
+        # SAME schema object → bytes ≡ snapshot
+        metadata_snapshot=_snapshot(doc, field_schema=schema, distribution=dist_snap),
         author_user_id=actor.id,
         created_by=actor.id,
     )
