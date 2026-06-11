@@ -1,6 +1,10 @@
-import { Card, Group, Stack, Text, Title } from "@mantine/core";
+import { ActionIcon, Button, Card, Group, Stack, Text, Title } from "@mantine/core";
+import { useState } from "react";
 import type { ObjectivePlan } from "../../lib/types";
+import { usePermissions } from "../../app/shell/usePermissions";
 import { useUserDirectory } from "../../app/shell/useUserDirectory";
+import { useRemovePlan } from "./mutations";
+import { AddPlanModal } from "./AddPlanModal";
 
 function nameOf(userId: string | null, dir: { id: string; display_name: string | null }[]): string {
   if (!userId) return "no owner";
@@ -9,10 +13,17 @@ function nameOf(userId: string | null, dir: { id: string; display_name: string |
 
 export function PlansSection({ objectiveId, plans }: { objectiveId: string; plans: ObjectivePlan[] }) {
   const { data: directory } = useUserDirectory();
-  void objectiveId; // used by the manage affordances in Task 14
+  const { can } = usePermissions();
+  const manage = can("objective.manage");
+  const remove = useRemovePlan(objectiveId);
+  const [addOpen, setAddOpen] = useState(false);
+
   return (
     <Stack gap="sm">
-      <Title order={3}>Plans</Title>
+      <Group justify="space-between">
+        <Title order={3}>Plans</Title>
+        {manage && <Button size="xs" onClick={() => setAddOpen(true)}>Add plan</Button>}
+      </Group>
       {plans.length === 0 ? (
         <Text c="dimmed" size="sm">No plans yet.</Text>
       ) : (
@@ -26,10 +37,20 @@ export function PlansSection({ objectiveId, plans }: { objectiveId: string; plan
                   {p.due_date ? ` · due ${p.due_date}` : " · no due date"}
                 </Text>
               </div>
+              {manage && (
+                <ActionIcon
+                  variant="subtle" color="gray" aria-label="Remove plan"
+                  loading={remove.isPending && remove.variables === p.id}
+                  onClick={() => remove.mutate(p.id)}
+                >
+                  ✕
+                </ActionIcon>
+              )}
             </Group>
           </Card>
         ))
       )}
+      <AddPlanModal opened={addOpen} objectiveId={objectiveId} onClose={() => setAddOpen(false)} />
     </Stack>
   );
 }
