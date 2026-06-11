@@ -1,6 +1,7 @@
-import { Alert, Anchor, Badge, Container, Group, Loader, SegmentedControl, Table, Text, Title } from "@mantine/core";
+import { Alert, Anchor, Badge, Button, Container, Group, Loader, SegmentedControl, Table, Text, Title } from "@mantine/core";
 import { useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
+import { NewObjectiveModal } from "./NewObjectiveModal";
 import type { Objective, ObjectiveRag } from "../../lib/types";
 import { usePermissions } from "../../app/shell/usePermissions";
 import { useObjectiveScorecard } from "./hooks";
@@ -14,7 +15,9 @@ function currentOverTarget(o: Objective): string {
 export function ObjectivesRegisterPage() {
   const { data, isLoading, forbidden } = useObjectiveScorecard();
   const { can } = usePermissions();
+  const navigate = useNavigate();
   const [rag, setRag] = useState<ObjectiveRag | "">("");
+  const [createOpen, setCreateOpen] = useState(false);
 
   const rows = useMemo(
     () => (data?.objectives ?? []).filter((o) => rag === "" || o.rag === rag),
@@ -45,7 +48,9 @@ export function ObjectivesRegisterPage() {
     <Container size="lg" py="md">
       <Group justify="space-between" mb="md">
         <Title order={2}>Quality objectives</Title>
-        {/* The New-objective button (gated objective.manage) is wired in Task 12. */}
+        {can("objective.manage") && (
+          <Button onClick={() => setCreateOpen(true)}>New objective</Button>
+        )}
       </Group>
 
       <ObjectiveScorecardBand total={data.total} onTarget={data.on_target} byRag={data.by_rag} />
@@ -104,6 +109,14 @@ export function ObjectivesRegisterPage() {
           </Table.Tbody>
         </Table>
       )}
+      <NewObjectiveModal
+        opened={createOpen}
+        onClose={() => setCreateOpen(false)}
+        onCreated={(id) => {
+          setCreateOpen(false);
+          navigate(`/objectives/${id}`);
+        }}
+      />
     </Container>
   );
 }
