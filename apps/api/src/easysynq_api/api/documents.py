@@ -1221,11 +1221,18 @@ async def update_distribution_endpoint(
     """Add entries and/or set the doc-level ack flag (R42 ``document.distribute``). 422
     ``target_kind_deferred`` for the deferred ``process``/``folder`` kinds (R43); targets are
     validated in-org. Post-commit the doc-scoped ack sweep reconciles obligations."""
+    # A no-op body writes no audit row and enqueues no sweep.
+    if not body.add_entries and body.acknowledgement_required is None:
+        doc_ro = await _load_document(session, caller, document_id)
+        return await _distribution_payload(session, doc_ro)
     # FOR UPDATE (the update_metadata_endpoint precedent): the flag flip must not race a
     # concurrent cutover/sweep recompute reading acknowledgement_required mid-flight.
     doc = await _load_document(session, caller, document_id, for_update=True)
     before = {"acknowledgement_required": doc.acknowledgement_required}
-    added: list[dict[str, Any]] = []
+    # Two-pass: validate everything BEFORE adding — an autoflush during a later item's
+    # session.get would otherwise surface a pre-existing-duplicate IntegrityError outside
+    # the guarded flush (500, not 409).
+    validated: list[tuple[DistributionTargetType, Any]] = []
     for item in body.add_entries:
         try:
             kind = DistributionTargetType(item.target_type)
@@ -1247,6 +1254,9 @@ async def update_distribution_endpoint(
             role = await session.get(Role, item.target_id)
             if role is None or role.org_id != caller.org_id:
                 raise ProblemException(status=404, code="not_found", title="Target role not found")
+        validated.append((kind, item))
+    added: list[dict[str, Any]] = []
+    for kind, item in validated:
         session.add(
             DistributionEntry(
                 org_id=doc.org_id,
