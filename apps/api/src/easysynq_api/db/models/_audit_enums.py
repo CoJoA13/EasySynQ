@@ -364,6 +364,10 @@ class EventType(enum.Enum):
     # 0048 (the additive pattern; a from-scratch ``upgrade head`` rebuilds from EVENT_TYPE_VALUES).
     DOCUMENT_ACKNOWLEDGED = "DOCUMENT_ACKNOWLEDGED"
     DISTRIBUTION_UPDATED = "DISTRIBUTION_UPDATED"
+    # S-obj-1 — clause 6.2 objective acts (object_type='document', R39 reuse).
+    OBJECTIVE_MEASUREMENT_RECORDED = "OBJECTIVE_MEASUREMENT_RECORDED"
+    OBJECTIVE_PLAN_ADDED = "OBJECTIVE_PLAN_ADDED"
+    OBJECTIVE_PLAN_REMOVED = "OBJECTIVE_PLAN_REMOVED"
 
 
 class CheckpointSinkKind(enum.Enum):
