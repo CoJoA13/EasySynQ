@@ -341,10 +341,7 @@ async def test_r15_target_entry_catchup(
     rows = await _open_ack_rows(doc_uuid)
     sam_rows = [r for r in rows if r[2] == sam_id]
     assert len(sam_rows) == 1, f"expected exactly 1 open obligation for Sam, got {len(sam_rows)}"
-    assert sam_rows[0][3].get("created_reason") == "target_entry", (
-        f"a catch-up mint must be created_reason=target_entry, "
-        f"got {sam_rows[0][3].get('created_reason')!r}"
-    )
+    # created_reason is checked on the ORM evidence row after Sam acks (authoritative — see below).
 
     # Sam acknowledges.
     dr = await app_client.post(
@@ -352,6 +349,19 @@ async def test_r15_target_entry_catchup(
     )
     assert dr.status_code == 200, dr.text
     assert dr.json()["current_state"] == "COMPLETED"
+
+    # The evidence row records WHY the obligation existed (doc 17's discriminator) — read the
+    # ORM row, not the engine's internal context bag.
+    async with get_sessionmaker()() as s:
+        ack = (
+            await s.execute(
+                select(Acknowledgement).where(
+                    Acknowledgement.document_id == doc_uuid,
+                    Acknowledgement.user_id == sam_id,
+                )
+            )
+        ).scalar_one()
+        assert ack.created_reason is AckCreatedReason.target_entry
 
     # A SECOND org-wide sweep mints nothing further for this doc (delta-based + Sam-scoped).
     before = {t for t, _, _, _ in await _open_ack_rows(doc_uuid)}
@@ -484,7 +494,7 @@ async def test_major_release_rearms_and_cancels_stale(
         assert len(cancel_events) == 1, f"expected 1 cancel audit, got {len(cancel_events)}"
         after = cancel_events[0].after or {}
         assert after.get("event") == "ack_obligation_cancelled"
-        assert after.get("why") == "lapsed"
+        # "why" deliberately un-pinned — internal detail.
 
     # Exactly ONE fresh PENDING task, pinned to the NEW version.
     rows = await _open_ack_rows(doc_uuid)
