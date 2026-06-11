@@ -179,11 +179,13 @@ async def coverage_counts(
 ) -> dict[str, Any] | None:
     """{required, acknowledged, pending, overdue} for the current Effective version; None when
     the doc has no Effective version (an honest absence, not a 0/0)."""
+    if not doc.acknowledgement_required:
+        if doc.current_effective_version_id is None:
+            return None
+        return {"required": 0, "acknowledged": 0, "pending": 0, "overdue": 0}
     boundary = await boundary_seq(session, doc)
     if boundary is None:
         return None
-    if not doc.acknowledgement_required:
-        return {"required": 0, "acknowledged": 0, "pending": 0, "overdue": 0}
     entries = await list_entries(session, doc.id)
     audience = await resolve_audience(session, doc.org_id, entries)
     satisfied = await satisfied_users(session, doc.id, boundary)
@@ -208,13 +210,17 @@ async def coverage_matrix(
 ) -> list[dict[str, Any]]:
     """The named per-user status list (the QM chase view, gate document.distribute)."""
     boundary = await boundary_seq(session, doc)
+    if boundary is None:
+        return []
     entries = await list_entries(session, doc.id)
     audience = await resolve_audience(session, doc.org_id, entries)
-    if boundary is None or not audience:
+    if not audience:
         return []
     satisfied = await satisfied_users(session, doc.id, boundary)
     open_pairs = await open_ack_tasks(session, doc.id)
     due_by_user = {t.assignee_user_id: t.due_at for t, _ in open_pairs}
+    # Ascending so the dict's last-wins pick is the NEWEST qualifying ack (a user may hold
+    # several ≥-boundary acks; the displayed label/timestamp must be deterministic and freshest).
     acks = (
         await session.execute(
             select(Acknowledgement, DocumentVersion.revision_label)
@@ -224,6 +230,7 @@ async def coverage_matrix(
                 Acknowledgement.user_id.in_(audience),
                 DocumentVersion.version_seq >= boundary,
             )
+            .order_by(DocumentVersion.version_seq)
         )
     ).all()
     ack_by_user = {a.user_id: (a, label) for a, label in acks}
