@@ -446,6 +446,8 @@ Sourced from the **append-only audit trail + version chain in PostgreSQL** (auth
 
 ### 6.3 Distribution-and-Acknowledgement report
 
+> **Status (2026-06-10):** implemented backend: S-ack-1 R43 — the matrix endpoint (`GET /documents/{id}/acknowledgements`, gate `document.distribute`); the report itself (provenance header, exports, reminder history) stays v1.x.
+
 **Who is required to read which controlled document, and who has acknowledged** (Clause 7.5.3 distribution/availability + 7.3 awareness).
 
 | Column | Source |

@@ -455,6 +455,8 @@ Rules:
 - An acknowledgement is effectively a **Record (retained, immutable)** — it is evidence of awareness (Clause 7.3) and competence (7.2 adjacency). It is never editable.
 - Distribution + acknowledgement status surface on the Document header and feed the **Do** quadrant of the PDCA dashboard.
 
+> **Reconciled per Decisions Register R43.** The blanket "Re-release (new rev) creates NEW ack tasks" is superseded: re-acknowledgement is **MAJOR-only** (doc 05 §2.2's posture) with carry-forward satisfaction — a user is covered while their acked version_seq ≥ the last MAJOR boundary. Implemented in slice S-ack-1 (mig 0048).
+
 ### 8.3 New-joiner acknowledgements (reconciled per Decisions Register R15)
 
 Distribution targets are dynamic (§8.1), so a user can become a recipient simply by **entering a distribution target** — joining a role, being linked to a process, or gaining view on a folder/scope. When that happens, the vault automatically brings the new entrant up to date:
@@ -642,7 +644,7 @@ The mirror (§10) includes the source blob for such documents in place of a PDF 
 
 Per the hybrid RBAC+ABAC model, the following **atomic permissions** are introduced by this section (the catalog/precedence lives in the Permissions doc). All are deny-by-default, scopable (system/process/folder/document), and overridable per-user:
 
-`document.create`, `document.read`, `document.read_obsolete`, `document.read_draft`, `document.checkout`, `document.edit`, `document.submit`, `document.review`, `document.approve`, `document.release`, `document.obsolete`, `document.delete_draft`, `document.manage_metadata`, `document.acknowledge`, `document.print_controlled`, `document.export` (the canonical doc 07 §3.10 / seed-`0004` set). Two doc-control concepts have **no seeded key** in v1: rescind-approval (transition T5, deferred from MVP) and distribution-list management (the distribution/acknowledgement feature is deferred — doc 16).
+`document.create`, `document.read`, `document.read_obsolete`, `document.read_draft`, `document.checkout`, `document.edit`, `document.submit`, `document.review`, `document.approve`, `document.release`, `document.obsolete`, `document.delete_draft`, `document.manage_metadata`, `document.acknowledge`, `document.print_controlled`, `document.export` (the canonical doc 07 §3.10 / seed-`0004` set). Two doc-control concepts shipped v1 with **no seeded key**: rescind-approval (transition T5, deferred from MVP) and distribution-list management (seeded as `document.distribute` in 0048 — R42).
 
 > **Permission-key normalization (reconciled per Decisions Register R5).** These are the doc 07 canonical catalog forms. Earlier variant spellings used in this section normalize as: `document.view`/`document.read_effective` → `document.read`; `document.view_drafts` → `document.read_draft`; `document.submit_for_review` → `document.submit`; `document.make_obsolete` → `document.obsolete`; `document.export_controlled` → `document.export`; **`document.checkin`/`document.revise` → `document.edit`; `document.discard_draft` → `document.delete_draft`; `document.force_checkin` → `document.checkout`; `document.release_now` → `document.release`; `document.edit_metadata` → `document.manage_metadata`; `document.print` → `document.print_controlled`; `mirror.scan` is a worker/system op, not a permission**. The record-disposition permission elsewhere is `record.dispose` (**NOT** `record.retire`).
 

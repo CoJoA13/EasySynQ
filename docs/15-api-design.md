@@ -348,7 +348,10 @@ The logical maintained item (`documented_information` + `document`, `14 §5.2`).
 | POST | `/documents/{id}/form-schema:checkin` | `document.edit` | — | Freeze the working schema into an immutable Draft version (its WORM source blob IS the canonical-serialized schema; the schema is pinned into `metadata_snapshot`). Then submit-review → approve → release drives it Effective. |
 | GET | `/documents/{id}/where-used` | `document.read` | — | The `document_link` impact graph (parent/child/references). |
 | GET | `/documents/{id}/audit-events` | `document.read` + `audit.read` | — | Per-document slice of the immutable trail (§8.13). |
-| GET / POST | `/documents/{id}/distribution` | `document.read` / `document.distribute` | — | Distribution list + read-and-understood acknowledgements (immutable `acknowledgement` records pinned to a version). |
+| GET | `/documents/{id}/distribution` | `document.read` | — | **(S-ack-1, R42/R43)** Entries + the doc-level `acknowledgement_required` flag + a **counts-only** coverage rollup for the current Effective version (`required`/`acknowledged`/`pending`/`overdue`; null when no Effective version) — Sam-safe, feeds the tile/ring. |
+| POST | `/documents/{id}/distribution` | `document.distribute` | — | Add entries and/or set the doc-level flag (one body). `422 target_kind_deferred` for `process`/`folder` targets (owner-assignment track). Writes `DISTRIBUTION_UPDATED`; enqueues the doc-scoped ack sweep post-commit. |
+| DELETE | `/documents/{id}/distribution/{entry_id}` | `document.distribute` | — | Remove an entry (change = delete + re-add; no UPDATE). Audit + scoped sweep enqueue (cancels lapsed obligations). |
+| GET | `/documents/{id}/acknowledgements` | `document.distribute` | — | The **named** per-user status matrix for the current Effective version (who acked which version when; outstanding/overdue) — the QM chase view (doc 13 §6.3). A user's own status rides `/tasks` + the counts rollup above. |
 
 **Document/version lifecycle** (server-enforced; illegal transition → `409 invalid_state_transition`; reconciliation R1 — document `current_state` is derived, version state is authoritative):
 
@@ -445,7 +448,7 @@ Per reconciliation **R6**, "approvals" are **not** standalone tables: an approva
 | POST | `/tasks/{id}/reassign` | `task.reassign` | ✓ | `{ to_user_id, reason }` (delegation-aware). |
 | POST | `/tasks/{id}/escalate` | `task.escalate` | ✓ | Manual escalation; SLA breach auto-escalates via Beat (`task` state `ESCALATED`). |
 
-> **Implemented-gate note (S5/S-web-5):** the closed v1 catalog has **no `task.*`/`workflow.*` keys**, so the implementation gates differ from the aspirational columns above: `GET /tasks` and `/tasks/{id}` are **self-scoped** (caller is assignee or in the candidate pool — no permission key), and `GET /workflow-instances/{id}` and `GET /documents/{id}/approval` gate on **`document.read` on the subject document** (not `workflow.read`). `POST /tasks/{id}/decision` derives the key from the (subject, outcome) as shown (`document.approve`/`document.review`).
+> **Implemented-gate note (S5/S-web-5):** the closed v1 catalog has **no `task.*`/`workflow.*` keys**, so the implementation gates differ from the aspirational columns above: `GET /tasks` and `/tasks/{id}` are **self-scoped** (caller is assignee or in the candidate pool — no permission key), and `GET /workflow-instances/{id}` and `GET /documents/{id}/approval` gate on **`document.read` on the subject document** (not `workflow.read`). `POST /tasks/{id}/decision` derives the key from the (subject, outcome) as shown (`document.approve`/`document.review`). **(S-ack-1, R43)** A `DOC_ACK` decision is the non-sig-hook carve-out to "writes a `signature_event`": it writes **NO `signature_event`** (doc 07 §6.3's pipeline — `document.acknowledge` is `sig_hook=false`); outcome `acknowledge`, recorded as the append-only `acknowledgement` row + `DOCUMENT_ACKNOWLEDGED` in one transaction.
 
 **`POST /tasks/{id}/decision` 200 (note the e-signature-ready shape — the Part 11 hook):**
 ```json
