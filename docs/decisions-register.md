@@ -872,7 +872,7 @@ as-built form.
   `domain/ack/rules.py`). A MAJOR release re-arms the whole audience; a MINOR release mints
   nothing and coverage carries forward. Ack rows stay strictly **version-pinned evidence** — only
   the satisfaction computation walks MINOR chains. This honors the engine the DCR contract
-  promised, and completes R15: release and target-entry trigger families flow through ONE mint.
+  promised, and completes R15: release and target-entry trigger families flow through ONE mint. This REFINES R15's "exclude already-acknowledged versions": "already acknowledged" now means satisfied under the carry-forward boundary — a target-entrant holding any acknowledgement at or above `last_major_seq` receives no task, even if they never acknowledged the current Effective version itself.
 - **What an ack IS: its own append-only evidence row — never a `signature_event`** (R2 untouched;
   `document.acknowledge` stays `sig_hook=false`; doc 07 §6.3's non-sig-hook pipeline writes the
   audit event only). The `acknowledgement` table as built deliberately diverges from doc 14 §5.6:
@@ -936,7 +936,7 @@ as-built form.
 `documented_information.acknowledgement_required` + the additive `DOC_ACK` /
 `DOCUMENT_ACKNOWLEDGED` / `DISTRIBUTION_UPDATED` enum values + the R42 key seed + the
 `doc_acknowledgement` workflow seed. The contract gained the DOC_ACK enums, the `acknowledge`
-outcome, 4 paths + 5 schemas (and closed a pre-existing `DecisionResult` additionalProperties gap).
+outcome, 3 paths (4 operations) + 5 schemas (and closed a pre-existing `DecisionResult` additionalProperties gap).
 
 **Back-propagation:** 04 (§8.2 reconciliation note; §12 key parenthetical), 08 (§10.1 spelling),
 10 (§8.4 MAJOR-only note), 13 (§6.3 status note), 14 (§5.6 as-built note; §7 enum members), 15

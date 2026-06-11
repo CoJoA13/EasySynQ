@@ -455,7 +455,7 @@ Rules:
 - An acknowledgement is effectively a **Record (retained, immutable)** — it is evidence of awareness (Clause 7.3) and competence (7.2 adjacency). It is never editable.
 - Distribution + acknowledgement status surface on the Document header and feed the **Do** quadrant of the PDCA dashboard.
 
-> **Reconciled per Decisions Register R43.** The blanket "Re-release (new rev) creates NEW ack tasks" is superseded: re-acknowledgement is **MAJOR-only** (doc 05 §2.2's posture) with carry-forward satisfaction — a user is covered while their acked version_seq ≥ the last MAJOR boundary. Implemented in slice S-ack-1 (mig 0048).
+> **Reconciled per Decisions Register R43.** The blanket "Re-release (new rev) creates NEW ack tasks" is superseded: re-acknowledgement is **MAJOR-only** (doc 05 §2.2's posture) with carry-forward satisfaction — a user is covered while their acked version_seq ≥ the last MAJOR boundary. Implemented in slice S-ack-1 (mig 0048). The same supersession applies to the Rules bullet above ("acknowledging Rev C does not satisfy Rev D"): under R43 an ack of Rev C DOES satisfy a MINOR Rev D; only a MAJOR successor re-triggers.
 
 ### 8.3 New-joiner acknowledgements (reconciled per Decisions Register R15)
 
@@ -464,6 +464,8 @@ Distribution targets are dynamic (§8.1), so a user can become a recipient simpl
 - On a user **entering any distribution target (role / process / folder)**, create **acknowledgement tasks for the CURRENT `Effective` version** of every Document issued to that target that **requires acknowledgement** (`acknowledgement_required = true`).
 - These surface as **onboarding tasks in My Tasks** (alongside the recipient's other outstanding acknowledgements) and on the QM's distribution dashboard.
 - **Already-acknowledged versions are excluded** — if the user previously acknowledged the current Effective version of a document (e.g. via a different target they already belonged to), no duplicate task is created. Acknowledgements remain pinned to `document_version_id`, so only the current Effective version's unacknowledged docs generate tasks.
+
+> **Reconciled per Decisions Register R43.** "Previously acknowledged the current Effective version" is refined to the carry-forward boundary: a new entrant holding any acknowledgement at or above the last-MAJOR boundary receives no task. Implemented in slice S-ack-1 (mig 0048).
 
 This mirrors the release-time flow of §8.2 but is keyed off **target entry** rather than release, closing the gap where a new joiner would otherwise never be asked to acknowledge documents that went Effective before they joined.
 
