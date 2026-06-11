@@ -1,6 +1,8 @@
 import { screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
-import { describe, expect, test } from "vitest";
+import { useNavigate } from "react-router-dom";
+import { describe, expect, test, vi } from "vitest";
 import { server } from "../../test/msw/server";
 import { renderWithProviders } from "../../test/render";
 import { TasksInbox } from "./TasksInbox";
@@ -36,5 +38,32 @@ describe("TasksInbox routing", () => {
   test("no type param renders the default review queue", async () => {
     renderWithProviders(<TasksInbox />, { route: "/tasks" });
     expect(await screen.findByText("Review & Approve")).toBeInTheDocument();
+  });
+
+  // Regression: `/tasks` and `/tasks?type=DOC_ACK` are the SAME route element, so the bell→inbox
+  // navigation transitions the param on an ALREADY-MOUNTED TasksInbox. The dispatcher must keep an
+  // invariant hook count across that transition (the earlier conditional-return-before-useTasks shape
+  // threw "Rendered fewer hooks than expected"). Render TasksInbox directly (not via a Route) so the
+  // single instance survives both navigations.
+  test("a live ?type transition on a mounted inbox does not violate Rules-of-Hooks", async () => {
+    function TransitionHarness() {
+      const nav = useNavigate();
+      return (
+        <>
+          <button onClick={() => nav("/tasks?type=DOC_ACK")}>to-ack</button>
+          <button onClick={() => nav("/tasks")}>to-general</button>
+          <TasksInbox />
+        </>
+      );
+    }
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    renderWithProviders(<TransitionHarness />, { route: "/tasks" });
+    expect(await screen.findByText("Review & Approve")).toBeInTheDocument();
+    await userEvent.click(screen.getByText("to-ack"));
+    expect(await screen.findByRole("heading", { name: "Acknowledgements" })).toBeInTheDocument();
+    await userEvent.click(screen.getByText("to-general"));
+    expect(await screen.findByText("Review & Approve")).toBeInTheDocument();
+    expect(errSpy.mock.calls.flat().join(" ")).not.toMatch(/Rendered (fewer|more) hooks/);
+    errSpy.mockRestore();
   });
 });
