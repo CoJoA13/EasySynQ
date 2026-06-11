@@ -88,14 +88,14 @@ New enum module `db/models/_objective_enums.py`: `ObjectiveDirection {HIGHER_IS_
 
 ## s3 · The RAG / attainment rule (`domain/objectives/rules.py`, pure, no I/O)
 
-Inputs: `current_value`, `target_value`, `baseline_value`, `direction`, `at_risk_threshold`, `due_date`.
+`rag_status` / `pct_toward_target` inputs: `current_value`, `target_value`, `baseline_value`, `direction`, `at_risk_threshold`. `attainment` inputs: `current_value`, `target_value`, `direction`, `due_date`, `today`.
 
 - **`pct_toward_target`** = `(current − baseline) / (target − baseline)` (direction-normalized; `None` when current is NULL or denominator is 0).
 - **RAG (`green`/`amber`/`red`):**
   - `HIGHER_IS_BETTER`: green `current ≥ target` · amber `at_risk_threshold ≤ current < target` · red `current < at_risk_threshold` (no threshold → amber collapses; non-green is red).
   - `LOWER_IS_BETTER`: green `current ≤ target` · amber `target < current ≤ at_risk_threshold` · red `current > at_risk_threshold`.
   - `current_value IS NULL` → **`unmeasured`** (no reading yet) — distinct from red.
-- **`met` / `missed`** (attainment) = at/after `due_date`, was the target reached? Computed, not stored.
+- **`attainment`** (`in_progress` / `met` / `missed`) = `in_progress` before `due_date`; at/after, `met` iff the target is reached, else `missed` (a never-measured objective is `missed` at due). Computed, not stored.
 - No SPC/trend/forecast (N6). The rule is total and deterministic; unit-tested at every boundary.
 
 ---
@@ -105,7 +105,7 @@ Inputs: `current_value`, `target_value`, `baseline_value`, `direction`, `at_risk
 1. **Author a Quality Policy** (if none Effective) — existing document flow, `document_type='Quality Policy'`, `is_singleton=True`; R25 index rejects a second Effective.
 2. **Create an objective** (`objective.manage`) — **measurable-by-construction gate**: `target_value`, `unit`, `direction`, `due_date` required on the satellite + `owner` (the base `documented_information.owner_user_id`, always set by `create_document`) (422 otherwise — an un-measurable objective would break the gauge and the 9.3.2 input). Validate `policy_id` is the current Effective Quality Policy (or null). Create the `documented_information` (`kind=DOCUMENT`, type `OBJ`) + the `quality_objective` satellite in one txn via the existing document machinery; **auto-create a `clause_mapping` to the 6.2 leaf** so the ★ checklist resolves on release.
 3. **Version / release** — the standard lifecycle (Draft→InReview→Approved→Effective…); the commitment freezes into `metadata_snapshot` at check-in; release emits `meaning=release`. Revising the *commitment* (new target) is a new version; updating the *metric* is not.
-4. **Record a measurement** (`kpi.record`) — create a `KPI_READING` record (via `services/records`) + the `kpi_measurement` projection (`target_at_capture` = the objective's current Effective target); roll `current_value` up *latest-period-wins* under `SELECT … FOR UPDATE` + `.execution_options(populate_existing=True)` (the S-drift-1 stale-identity-map trap — the authz resolver already `session.get`-loaded the row); audit `OBJECTIVE_MEASUREMENT_RECORDED`; one transaction.
+4. **Record a measurement** (`kpi.record`) — create an **ad-hoc** `KPI_READING` record (via `capture_record`, **no `source_document_id`** — the `capture_complaint` precedent; this avoids the R21 version-pin trap, since a Draft objective has no version to pin, while keeping the reading WORM/retention-governed evidence) + the `kpi_measurement` projection (`target_at_capture` = the objective's **current `target_value`**, frozen at capture); roll `current_value` up *latest-period-wins* under `SELECT … FOR UPDATE` + `.execution_options(populate_existing=True)` (the S-drift-1 stale-identity-map trap — the authz resolver already `session.get`-loaded the row); audit `OBJECTIVE_MEASUREMENT_RECORDED`; one transaction. Measuring does **not** require the objective to be Effective in v1.
 5. **Read** — `GET /objectives` and `/scorecard` compute RAG/attainment per objective from one serializer; the future PDCA PLAN gauge and CHECK "objectives scorecard" reuse it.
 
 ---
@@ -146,7 +146,7 @@ Quality Policy rides the **existing** document-authoring endpoints (it *is* a do
 ## s8 · Testing (Linux-CI is the real run on the owner's Windows box)
 
 - **Unit** (`tests/unit/`, `pytest.mark.unit`): the RAG rule (both directions, amber boundaries, NULL→unmeasured, % toward target, 0-denominator), the rollup (latest-period-wins, target_at_capture freeze), the measurable-by-construction gate, policy-consistency validation, and (if a Beat sweep lands) `test_objectives_task_registration.py`.
-- **Integration** (`tests/integration/test_quality_objectives.py`, testcontainers): the full loop — author policy → create objective (gate 422 on missing target) → release → record measurements → `current_value` rolls up → RAG green→amber→red transitions → `/scorecard` rollup; the **R25 singleton** (second Effective policy rejected); the **authz matrix** (`objective.read/manage`, `kpi.record` at PROCESS vs SYSTEM, the `_objective_scope` resolver, 403/filtered); a measurement on a not-yet-Effective objective; **`alembic check` clean**; the catalog count **stays 100** (no key added — assert unchanged). Assertions delta-based / run-scoped; self-provide every precondition; include `app_under_test` even for service-level tests.
+- **Integration** (`tests/integration/test_quality_objectives.py`, testcontainers): the full loop — author policy → create objective (gate 422 on missing target) → release → record measurements → `current_value` rolls up → RAG green→amber→red transitions → `/scorecard` rollup; the **R25 singleton** (second Effective policy rejected); the **authz matrix** (`objective.read/manage`, `kpi.record` at PROCESS vs SYSTEM, the `_objective_scope` resolver, 403/filtered); a measurement recorded on a Draft objective (succeeds — no Effective requirement in v1); **`alembic check` clean**; the catalog count **stays 100** (no key added — assert unchanged). Assertions delta-based / run-scoped; self-provide every precondition; include `app_under_test` even for service-level tests.
 
 ---
 
@@ -160,6 +160,7 @@ No migration/key/endpoint/contract change. A `/objectives` register surface (PLA
 
 - **The PDCA Home dashboard** → its own later slice (objectives unblock it; tiles read real objectives + acks + audit/CAPA/checklist — never faked).
 - **Objective/KPI trend views & sparklines** → v1.x (docs/16:192); N6 keeps v1 descriptive (no SPC/forecast).
+- **KPI readings pinned to an objective document-version** (require the objective Effective + an R21 version pin so a reading records "measured against v2.0") → v1.x. v1 captures ad-hoc `KPI_READING` evidence with `target_at_capture` frozen on the projection; the per-version pin is the tightening.
 - **Management Review (9.3) inbound loop** (`review_output` → objective changes; mgmtReview.* keys seeded) → the deferred Mgmt-Review family. We build **no producer** and no consumer seam beyond the objective existing.
 - **Process-Owner `objective.manage`** → an additive role grant when owner-assignment binding lands (read already works for Process Owners). Recorded so that track inherits it.
 - **R35 content-domain-list extension** (so a QMS Owner can *self-grant* `objective.manage` via `permission.grant`) → optional later register tweak; **not blocking** (role assignment already grants it). objective.* is absent from R35's enumerated content-domain list today.
