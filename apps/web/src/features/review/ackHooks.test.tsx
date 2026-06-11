@@ -22,20 +22,21 @@ function wrapper({ children }: { children: ReactNode }) {
 }
 
 describe("review ack hooks", () => {
-  test("useAcknowledgeTask POSTs outcome=acknowledge with an Idempotency-Key", async () => {
+  test("useAcknowledgeTask POSTs outcome=acknowledge with the CALLER's Idempotency-Key", async () => {
     let outcome: string | null = null;
-    let hadKey = false;
+    let sentKey: string | null = null;
     server.use(
       http.post("/api/v1/tasks/:id/decision", async ({ request }) => {
         outcome = ((await request.json()) as { outcome: string }).outcome;
-        hadKey = request.headers.has("Idempotency-Key");
+        sentKey = request.headers.get("Idempotency-Key");
         return HttpResponse.json({ document_id: "d", document_version_id: null, acknowledgement_id: "a", replayed: false });
       }),
     );
     const { result } = renderHook(() => useAcknowledgeTask(), { wrapper });
-    await result.current.mutateAsync({ taskId: "tkak1111-1111-1111-1111-111111111111", documentId: "11111111-1111-1111-1111-111111111111" });
+    // The caller owns the key (stable across retries) — the hook must send it verbatim, not mint its own.
+    await result.current.mutateAsync({ taskId: "tkak1111-1111-1111-1111-111111111111", documentId: "11111111-1111-1111-1111-111111111111", idempotencyKey: "stable-key-abc" });
     expect(outcome).toBe("acknowledge");
-    expect(hadKey).toBe(true);
+    expect(sentKey).toBe("stable-key-abc");
   });
 
   test("useBulkAcknowledge reports per-task success/failure (allSettled)", async () => {

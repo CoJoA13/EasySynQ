@@ -11,6 +11,10 @@ function newKey(): string {
 
 export interface AckInput {
   taskId: string;
+  // A STABLE per-attempt key (the caller holds it across retries — the DecisionCard pattern). If a
+  // lost/timed-out response left the ack committed server-side, retrying with the same key replays
+  // (200) instead of minting a fresh client_token that the engine can't match → 409 conflict.
+  idempotencyKey: string;
   documentId?: string; // for the per-doc cache invalidation (known on the single-task page)
 }
 
@@ -18,8 +22,8 @@ export function useAcknowledgeTask() {
   const api = useApi();
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ taskId }: AckInput) =>
-      api.send<AckDecisionResult>("POST", `/api/v1/tasks/${taskId}/decision`, { outcome: "acknowledge" }, { "Idempotency-Key": newKey() }),
+    mutationFn: ({ taskId, idempotencyKey }: AckInput) =>
+      api.send<AckDecisionResult>("POST", `/api/v1/tasks/${taskId}/decision`, { outcome: "acknowledge" }, { "Idempotency-Key": idempotencyKey }),
     onSuccess: (_d, { taskId, documentId }) => {
       void qc.invalidateQueries({ queryKey: ["task", taskId] });
       void qc.invalidateQueries({ queryKey: ["tasks"] });

@@ -56,4 +56,24 @@ describe("AttestationCard", () => {
     expect(screen.queryByRole("radio")).not.toBeInTheDocument();
     expect(screen.queryByText(/signing as/i)).not.toBeInTheDocument();
   });
+
+  // Regression: a retry of the SAME mounted attempt must reuse one Idempotency-Key, so a
+  // committed-but-lost-response ack replays (200) on retry instead of 409-ing as a fresh decision.
+  test("a retry reuses the same Idempotency-Key (stable per mount)", async () => {
+    const keys: string[] = [];
+    server.use(
+      http.post("/api/v1/tasks/:id/decision", ({ request }) => {
+        keys.push(request.headers.get("Idempotency-Key") ?? "");
+        return HttpResponse.json({ code: "conflict", title: "x" }, { status: 409 });
+      }),
+    );
+    renderWithProviders(<AttestationCard taskId={TASK} documentId={DOC} />);
+    const btn = screen.getByRole("button", { name: /i have read & understood/i });
+    await userEvent.click(btn);
+    await screen.findByText(/you've already acknowledged this/i);
+    await userEvent.click(btn);
+    await waitFor(() => expect(keys).toHaveLength(2));
+    expect(keys[0]).toBeTruthy();
+    expect(keys[0]).toBe(keys[1]);
+  });
 });

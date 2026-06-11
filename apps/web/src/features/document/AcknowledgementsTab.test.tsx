@@ -11,7 +11,7 @@ function grantDistribute() {
   server.use(
     http.get("/api/v1/me/permissions", () =>
       HttpResponse.json({
-        scope: { level: "DOC", selector: { id: DOC } },
+        scope: { level: "ARTIFACT", selector: { id: DOC } },
         permissions: [{ key: "document.distribute", effect: "ALLOW", source: "system_override" }],
       }),
     ),

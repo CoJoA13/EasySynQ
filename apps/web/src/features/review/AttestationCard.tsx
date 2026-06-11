@@ -17,6 +17,9 @@ export function AttestationCard({ taskId, documentId }: { taskId: string; docume
   const ack = useAcknowledgeTask();
   const navigate = useNavigate();
   const [error, setError] = useState<string | null>(null);
+  // One stable key for this mounted attempt (the DecisionCard pattern): a lost-response retry replays
+  // (200) instead of minting a fresh client_token the engine can't match → a spurious 409 conflict.
+  const [idemKey] = useState(() => crypto.randomUUID());
   // best-effort label for the copy (the obligation stands regardless of read).
   const { data: doc } = useDocument(documentId, { enabled: true, retry: false });
   const label = doc ? doc.identifier : "this document";
@@ -24,7 +27,7 @@ export function AttestationCard({ taskId, documentId }: { taskId: string; docume
   async function submit() {
     setError(null);
     try {
-      await ack.mutateAsync({ taskId, documentId });
+      await ack.mutateAsync({ taskId, documentId, idempotencyKey: idemKey });
       navigate("/tasks");
     } catch (e) {
       if (e instanceof ApiError) setError(CODE_COPY[e.code] ?? e.message);

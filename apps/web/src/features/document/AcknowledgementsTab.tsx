@@ -17,7 +17,11 @@ function initials(name: string | null): string {
 }
 
 export function AcknowledgementsTab({ documentId, active }: { documentId: string; active: boolean }) {
-  const perms = usePermissions({ level: "DOC", id: documentId });
+  // ARTIFACT is the valid scope level for a document (resource_for_scope handles
+  // SYSTEM/FRAMEWORK/PROCESS/FOLDER/DOC_CLASS/ARTIFACT; an unknown level silently falls back to
+  // SYSTEM). "DOC" would only ever match a SYSTEM-scoped grant, hiding the editor from a holder whose
+  // document.distribute is artifact-scoped — stricter than the API's _distribute (ARTIFACT) enforcement.
+  const perms = usePermissions({ level: "ARTIFACT", id: documentId });
   const canManage = perms.can("document.distribute");
   const dist = useDistribution(documentId);
   const flagOn = dist.data?.acknowledgement_required ?? false;
