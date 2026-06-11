@@ -296,14 +296,17 @@ def _emit_clause_event(
     session: AsyncSession,
     actor: AppUser,
     event_type: EventType,
-    doc_id: uuid.UUID,
+    doc: DocumentedInformation,
     *,
     before: dict[str, Any] | None = None,
     after: dict[str, Any] | None = None,
 ) -> None:
     """Append a clause-mapping ``audit_event`` (object_type=document, keyed to the mapped artifact)
     BEFORE commit, so the link change + its audit row commit atomically (mirrors
-    ``users._emit_user_event``). Hashes stay NULL — the S6 linker stamps them off the hot path."""
+    ``users._emit_user_event``). Hashes stay NULL — the S6 linker stamps them off the hot path.
+    ``scope_ref=doc.identifier`` is required so these events surface on the per-document trail
+    (``GET /documents/{id}/audit-events`` filters on ``scope_ref == doc.identifier`` — mirrors
+    ``_emit_distribution_event``). Historical rows stay NULL — no backfill (append-only audit)."""
     session.add(
         AuditEvent(
             org_id=actor.org_id,
@@ -312,7 +315,8 @@ def _emit_clause_event(
             actor_type=ActorType.user,
             event_type=event_type,
             object_type=AuditObjectType.document,
-            object_id=doc_id,
+            object_id=doc.id,
+            scope_ref=doc.identifier,
             before=before,
             after=after,
             request_id=_rid(),
@@ -871,7 +875,7 @@ async def map_clause_endpoint(
         session,
         caller,
         EventType.CLAUSE_MAPPED,
-        doc.id,
+        doc,
         after={
             "clause_id": str(clause.id),
             "clause_number": clause.number,
@@ -905,7 +909,7 @@ async def unmap_clause_endpoint(
         session,
         caller,
         EventType.CLAUSE_UNMAPPED,
-        doc.id,
+        doc,
         before={
             "clause_id": str(clause_id),
             "clause_number": clause.number if clause else None,
@@ -967,7 +971,7 @@ async def link_process_endpoint(
         session,
         caller,
         EventType.PROCESS_LINKED,
-        doc.id,
+        doc,
         after={"process_id": str(process.id), "process_name": process.name},
     )
     await session.commit()
@@ -996,7 +1000,7 @@ async def unlink_process_endpoint(
         session,
         caller,
         EventType.PROCESS_UNLINKED,
-        doc.id,
+        doc,
         before={
             "process_id": str(process_id),
             "process_name": process.name if process else None,
@@ -1094,7 +1098,7 @@ async def create_document_link_endpoint(
         session,
         caller,
         EventType.DOCUMENT_LINKED,
-        doc.id,
+        doc,
         after={"to_document_id": str(body.to_document_id), "link_type": body.link_type.value},
     )
     await session.commit()
@@ -1123,7 +1127,7 @@ async def delete_document_link_endpoint(
         "link_type": link.link_type.value,
     }
     await session.delete(link)
-    _emit_clause_event(session, caller, EventType.DOCUMENT_UNLINKED, doc.id, before=before)
+    _emit_clause_event(session, caller, EventType.DOCUMENT_UNLINKED, doc, before=before)
     await session.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
