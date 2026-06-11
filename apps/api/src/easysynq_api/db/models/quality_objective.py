@@ -10,7 +10,7 @@ import datetime
 import uuid
 from decimal import Decimal
 
-from sqlalchemy import Date, DateTime, ForeignKey, Numeric, Text, func
+from sqlalchemy import Date, DateTime, ForeignKey, Index, Numeric, Text, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -20,6 +20,7 @@ from ._objective_enums import ObjectiveDirection, objective_direction_enum
 
 class QualityObjective(Base):
     __tablename__ = "quality_objective"
+    __table_args__ = (Index("ix_quality_objective_process_id", "process_id"),)
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),

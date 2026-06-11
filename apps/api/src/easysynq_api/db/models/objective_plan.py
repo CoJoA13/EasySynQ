@@ -6,7 +6,7 @@ from __future__ import annotations
 import datetime
 import uuid
 
-from sqlalchemy import Date, DateTime, ForeignKey, Text, func
+from sqlalchemy import Date, DateTime, ForeignKey, Index, Text, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -15,6 +15,7 @@ from ..base import Base
 
 class ObjectivePlan(Base):
     __tablename__ = "objective_plan"
+    __table_args__ = (Index("ix_objective_plan_objective_id", "objective_id"),)
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     org_id: Mapped[uuid.UUID] = mapped_column(

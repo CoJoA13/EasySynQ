@@ -9,7 +9,7 @@ import datetime
 import uuid
 from decimal import Decimal
 
-from sqlalchemy import Date, DateTime, ForeignKey, Numeric, Text, func
+from sqlalchemy import Date, DateTime, ForeignKey, Index, Numeric, Text, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -18,6 +18,7 @@ from ..base import Base
 
 class KpiMeasurement(Base):
     __tablename__ = "kpi_measurement"
+    __table_args__ = (Index("ix_kpi_measurement_objective_id", "objective_id"),)
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     org_id: Mapped[uuid.UUID] = mapped_column(
