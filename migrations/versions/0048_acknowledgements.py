@@ -341,7 +341,15 @@ def downgrade() -> None:
             {"k": _DEF_KEY},
         )
         bind.execute(sa.text("DELETE FROM workflow_definition WHERE key = :k"), {"k": _DEF_KEY})
-    # role_grant BEFORE permission (RESTRICT FK).
+    # permission_override + role_grant BEFORE permission (both RESTRICT FKs) — a populated-DB
+    # downgrade must not abort on a live-smoke per-user override (the 0023 class).
+    bind.execute(
+        sa.text(
+            "DELETE FROM permission_override WHERE permission_id IN "
+            "(SELECT id FROM permission WHERE key = :k)"
+        ),
+        {"k": _NEW_KEY},
+    )
     bind.execute(
         sa.text(
             "DELETE FROM role_grant WHERE permission_id IN "
