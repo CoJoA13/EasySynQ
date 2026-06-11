@@ -42,6 +42,15 @@ describe("AttestationCard", () => {
     expect(await screen.findByText(/no longer requires your acknowledgement/i)).toBeInTheDocument();
   });
 
+  test("a 409 conflict shows the conflict copy", async () => {
+    server.use(
+      http.post("/api/v1/tasks/:id/decision", () => HttpResponse.json({ code: "conflict", title: "x" }, { status: 409 })),
+    );
+    renderWithProviders(<AttestationCard taskId={TASK} documentId={DOC} />);
+    await userEvent.click(screen.getByRole("button", { name: /i have read & understood/i }));
+    expect(await screen.findByText(/you've already acknowledged this/i)).toBeInTheDocument();
+  });
+
   test("no signature checkbox and no outcome radio (acknowledge-only, R43)", () => {
     renderWithProviders(<AttestationCard taskId={TASK} documentId={DOC} />);
     expect(screen.queryByRole("radio")).not.toBeInTheDocument();
