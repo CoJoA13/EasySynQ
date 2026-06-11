@@ -33,7 +33,10 @@ describe("AcknowledgementsTab", () => {
     expect(await screen.findByText("Sam Patel")).toBeInTheDocument();
     const row = screen.getByText("Sam Patel").closest("tr")!;
     expect(within(row).getByText("overdue")).toBeInTheDocument();
-    expect(screen.getByText("Mara Quality")).toBeInTheDocument();
+    // "Mara Quality" now also appears as a distribution entry (the real DistributionEditor renders it),
+    // so scope the matrix assertion to the matrix table.
+    const matrix = screen.getByRole("table", { name: "Acknowledgement matrix" });
+    expect(within(matrix).getByText("Mara Quality")).toBeInTheDocument();
   });
 
   test("no Remind button anywhere (R43 omitted-not-faked)", async () => {

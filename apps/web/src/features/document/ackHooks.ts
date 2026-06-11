@@ -1,6 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ApiError, useApi } from "../../lib/api";
-import type { AckMatrixRow, DistributionPayload, DistributionUpdateBody } from "../../lib/types";
+import type {
+  AckMatrixRow,
+  DistributionPayload,
+  DistributionUpdateBody,
+  RoleSummary,
+} from "../../lib/types";
 
 // S-ack-2: the doc-page ack reads + writes. The distribution GET is document.read (counts for any
 // reader); the named matrix + the writes are document.distribute (the Acks tab gates them per-key).
@@ -42,6 +47,19 @@ export function useUpdateDistribution(documentId: string) {
       void qc.invalidateQueries({ queryKey: ["document", documentId] });
     },
   });
+}
+
+// The org-role picker source for DistributionEditor. role.read-gated (QMS Owner + admin hold it);
+// a document.distribute holder can read it. retry:false + forbidden so a missing grant degrades calmly.
+export function useRoles() {
+  const api = useApi();
+  const query = useQuery({
+    queryKey: ["roles"],
+    queryFn: () => api.get<RoleSummary[]>("/api/v1/roles"),
+    retry: false,
+  });
+  const forbidden = query.error instanceof ApiError && query.error.status === 403;
+  return { ...query, forbidden };
 }
 
 export function useDeleteDistributionEntry(documentId: string) {
