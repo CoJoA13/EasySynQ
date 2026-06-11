@@ -7,6 +7,7 @@ backup + the restore-test drill / gate G-C).
 """
 
 from . import (  # noqa: F401  (registers the Celery tasks)
+    ack,
     audit,
     backup,
     blob_verify,

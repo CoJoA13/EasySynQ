@@ -67,6 +67,12 @@ app.conf.update(
             "task": "easysynq.documents.review_sweep",
             "schedule": 86400.0,  # daily
         },
+        # S-ack-1: daily acknowledgement sweep (doc 04 §8.3 / R15 target-entry catch-up + the
+        # self-heal for lost doc-scoped enqueues).
+        "ack-sweep": {
+            "task": "easysynq.ack.sweep",
+            "schedule": 86400.0,  # daily
+        },
         # S-drift-2: the D2+D3 mirror integrity scan (doc 05 §9.2.1 / R11 — the accepted drift
         # window equals this interval; default hourly, configurable via
         # MIRROR_SCAN_INTERVAL_SECONDS). The nightly mirror-sync also scans (scan-first pipeline).
