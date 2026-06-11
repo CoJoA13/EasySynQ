@@ -29,6 +29,7 @@ from .api.documents import router as documents_router
 from .api.drift import router as drift_router
 from .api.health import router as health_router
 from .api.ingestion import router as ingestion_router
+from .api.objectives import router as objectives_router
 from .api.pack_share import router as pack_share_router
 from .api.packs import router as packs_router
 from .api.processes import router as processes_router
@@ -151,6 +152,7 @@ def create_app() -> FastAPI:
     app.include_router(records_router)  # S-rec-1: records capture + evidence-linking + correction
     app.include_router(audits_router)  # S-aud-1: internal-audit programmes/plans/audits + FSM
     app.include_router(capa_router)  # S-capa-1: CAPA core + intake (capas/complaints/ncrs)
+    app.include_router(objectives_router)  # S-obj-1: clause-6.2 Quality Objectives (obj.*/kpi.*)
     app.include_router(dcr_router)  # S-dcr-1: Document Change Request core + intake (/dcrs)
     app.include_router(retention_policies_router)  # S-rec-4: retention-policy CRUD + soft-archive
     app.include_router(ingestion_router)  # S-ing-1: import run + scan/inventory (NOT latch-exempt)

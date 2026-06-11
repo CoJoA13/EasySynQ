@@ -190,6 +190,24 @@ async def test_objective_plan_add_and_remove(
     assert detail2["plans"] == []
 
 
+async def test_objective_read_requires_key(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    subject = f"obj-{uuid.uuid4()}"
+    h = _auth(token_factory, subject)
+    # NO grant → calm 403 on the read
+    r = await app_client.get("/api/v1/objectives", headers=h)
+    assert r.status_code == 403
+
+
+async def test_catalog_count_unchanged_no_new_key(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    async with get_sessionmaker()() as s:
+        n = len((await s.execute(select(Permission))).scalars().all())
+    assert n == 100  # S-obj-1 adds NO permission key
+
+
 async def test_scorecard_rollup_counts_by_rag(
     app_client: AsyncClient, token_factory: Callable[..., str]
 ) -> None:
