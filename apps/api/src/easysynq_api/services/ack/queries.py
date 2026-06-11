@@ -203,10 +203,19 @@ async def coverage_counts(
     satisfied = await satisfied_users(session, doc.id, boundary)
     now = datetime.datetime.now(datetime.UTC)
     open_pairs = await open_ack_tasks(session, doc.id)
+    # A task pinned below the boundary is a superseded obligation awaiting the sweep's cancel —
+    # its due_at must not mark the FRESH (re-armed) obligation overdue (Codex P2).
+    seqs = await version_seqs(
+        session, {str((i.context or {}).get("document_version_id", "")) for _, i in open_pairs}
+    )
+    pinned = pinned_seq_map(open_pairs, seqs)
     overdue = {
         t.assignee_user_id
         for t, _ in open_pairs
-        if t.due_at is not None and t.due_at < now and t.assignee_user_id in audience
+        if t.due_at is not None
+        and t.due_at < now
+        and t.assignee_user_id in audience
+        and pinned.get(t.assignee_user_id, 0) >= boundary
     }
     done = len(audience & satisfied)
     return {
@@ -234,7 +243,17 @@ async def coverage_matrix(
         return []
     satisfied = await satisfied_users(session, doc.id, boundary)
     open_pairs = await open_ack_tasks(session, doc.id)
-    due_by_user = {t.assignee_user_id: t.due_at for t, _ in open_pairs}
+    # The same stale-pin filter as coverage_counts: a below-boundary task contributes NO due_at,
+    # so its user renders "pending" with due_at None until the sweep re-mints (Codex P2).
+    seqs = await version_seqs(
+        session, {str((i.context or {}).get("document_version_id", "")) for _, i in open_pairs}
+    )
+    pinned = pinned_seq_map(open_pairs, seqs)
+    due_by_user = {
+        t.assignee_user_id: t.due_at
+        for t, _ in open_pairs
+        if t.assignee_user_id is not None and pinned.get(t.assignee_user_id, 0) >= boundary
+    }
     # Ascending so the dict's last-wins pick is the NEWEST qualifying ack (a user may hold
     # several ≥-boundary acks; the displayed label/timestamp must be deterministic and freshest).
     acks = (

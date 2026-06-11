@@ -16,6 +16,7 @@ from sqlalchemy.exc import ProgrammingError
 
 from easysynq_api.db.models._ack_enums import AckCreatedReason
 from easysynq_api.db.models._audit_enums import AuditObjectType, EventType
+from easysynq_api.db.models._clause_enums import PdcaPhase
 from easysynq_api.db.models._vault_enums import ChangeSignificance, VersionState
 from easysynq_api.db.models._workflow_enums import TaskState, WorkflowSubjectType
 from easysynq_api.db.models.acknowledgement import Acknowledgement
@@ -24,6 +25,8 @@ from easysynq_api.db.models.audit_event import AuditEvent
 from easysynq_api.db.models.authz_grant import PermissionOverride
 from easysynq_api.db.models.document_version import DocumentVersion
 from easysynq_api.db.models.permission import Permission
+from easysynq_api.db.models.process import Process
+from easysynq_api.db.models.process_link import ProcessLink
 from easysynq_api.db.models.role import Role
 from easysynq_api.db.models.scope import Scope
 from easysynq_api.db.models.workflow import Task, TaskOutcome, WorkflowInstance
@@ -470,6 +473,20 @@ async def test_major_release_rearms_and_cancels_stale(
         app_client, ha, hb, did, f"ack-major-v2-{subj.a}".encode(), "MAJOR"
     )
     assert new_ver_id != old_pinned
+
+    # The pre-sweep window: the stale v1-pinned task, even OVERDUE, must not drive the coverage
+    # overdue count — it is a superseded obligation awaiting the sweep's cancel, while the
+    # re-armed obligation is brand new (Codex P2).
+    async with get_sessionmaker()() as s:
+        await s.execute(
+            text("UPDATE task SET due_at = now() - interval '1 day' WHERE id = :id"),
+            {"id": uuid.UUID(old_task_id)},
+        )
+        await s.commit()
+    cov = (await app_client.get(f"/api/v1/documents/{did}/distribution", headers=ha)).json()[
+        "coverage"
+    ]
+    assert cov == {"required": 1, "acknowledged": 0, "pending": 1, "overdue": 0}, cov
 
     # Deciding the stale task BEFORE the sweep catches up (still PENDING, boundary moved) hits
     # the fresh-path re-check: 409 ack_superseded — and the raise rolls the engine's uncommitted
@@ -1364,3 +1381,74 @@ async def test_decide_sees_sweep_cancel_committed_mid_wait(
             await s.execute(select(TaskOutcome).where(TaskOutcome.task_id == task_uuid))
         ).scalar_one_or_none()
         assert outcome_row is None, "a 409'd decide must leave no TaskOutcome row"
+
+
+# ---------------------------------------------------------------------------
+# 14. PROCESS-scoped document.distribute (the _distribute gate carries process_ids)
+# ---------------------------------------------------------------------------
+
+
+async def test_process_scoped_distribute_grant_allows(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    subj: SimpleNamespace,
+    app_under_test: object,
+) -> None:
+    """R28 end-to-end on the _distribute gate: a user whose ONLY document.distribute grant is a
+    PROCESS-scoped override on process P reaches the named matrix of a doc LINKED to P (200) and
+    is denied on a doc NOT linked to P (403) — provable only because the gate's scope resolver
+    populates ``process_ids`` (Codex P2; the decide-leg precedent)."""
+    await s5.grant_lifecycle(subj.a)
+    ha = _auth(token_factory, subj.a)
+    type_id = await s5.type_id("SOP")
+    doc_linked = await _create(app_client, ha, type_id)
+    doc_other = await _create(app_client, ha, type_id)
+
+    # u2: an app_user row with NO keys, then ONE PROCESS-scoped document.distribute override.
+    u2_id = await grant_keys(subj.u2, ())
+    async with get_sessionmaker()() as s:
+        u2 = await s.get(AppUser, u2_id)
+        assert u2 is not None
+        proc = Process(
+            org_id=u2.org_id,
+            name=f"ack-proc-{uuid.uuid4().hex[:8]}",
+            pdca_phase=PdcaPhase.DO,
+            created_by=u2_id,
+        )
+        s.add(proc)
+        await s.flush()
+        s.add(
+            ProcessLink(
+                org_id=u2.org_id,
+                process_id=proc.id,
+                documented_information_id=uuid.UUID(doc_linked["id"]),
+                created_by=u2_id,
+            )
+        )
+        perm = (
+            await s.execute(select(Permission).where(Permission.key == "document.distribute"))
+        ).scalar_one()
+        scope = Scope(
+            org_id=u2.org_id,
+            level=ScopeLevel.PROCESS,
+            selector={"process_id": str(proc.id)},
+        )
+        s.add(scope)
+        await s.flush()
+        s.add(
+            PermissionOverride(
+                org_id=u2.org_id,
+                user_id=u2_id,
+                permission_id=perm.id,
+                effect=Effect.ALLOW,
+                scope_id=scope.id,
+            )
+        )
+        await s.commit()
+
+    h2 = _auth(token_factory, subj.u2)
+    ok = await app_client.get(f"/api/v1/documents/{doc_linked['id']}/acknowledgements", headers=h2)
+    assert ok.status_code == 200, ok.text
+    deny = await app_client.get(f"/api/v1/documents/{doc_other['id']}/acknowledgements", headers=h2)
+    assert deny.status_code == 403, deny.text
+    assert deny.json()["code"] == "permission_denied"

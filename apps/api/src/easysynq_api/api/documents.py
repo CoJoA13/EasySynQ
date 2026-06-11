@@ -9,6 +9,7 @@ from the body in-handler; the list is row-filtered to what the caller may ``docu
 
 from __future__ import annotations
 
+import dataclasses
 import datetime
 import re
 import uuid
@@ -360,6 +361,26 @@ async def _document_scope_by_id(session: AsyncSession, doc_id: uuid.UUID) -> Res
     )
 
 
+async def _document_scope_with_processes(
+    request: Request, session: AsyncSession
+) -> ResourceContext:
+    """``_document_scope`` + the doc's ProcessLink ids — R28: a PROCESS-scoped grant can only
+    match when ``resource.process_ids`` is populated (the S-ack-1 decide-leg precedent). Used by
+    the distribution/acknowledgement gates; the repo-wide ``_document_scope`` migration is the
+    owner-assignment track's call."""
+    base = await _document_scope(request, session)
+    if base.artifact_id is None:
+        return base
+    process_ids = (
+        await session.execute(
+            select(ProcessLink.process_id).where(
+                ProcessLink.documented_information_id == uuid.UUID(base.artifact_id)
+            )
+        )
+    ).scalars()
+    return dataclasses.replace(base, process_ids=frozenset(str(p) for p in process_ids))
+
+
 async def _release_scope(
     session: AsyncSession, doc_id: uuid.UUID, version_id: uuid.UUID | None
 ) -> ResourceContext:
@@ -447,7 +468,9 @@ _checkout = require("document.checkout", async_scope_resolver=_document_scope)
 _edit = require("document.edit", async_scope_resolver=_document_scope)
 _manage_metadata = require("document.manage_metadata", async_scope_resolver=_document_scope)
 # S-ack-1 (R42): distribution-list management + the named coverage matrix (doc 04 §8.1/§8.2).
-_distribute = require("document.distribute", async_scope_resolver=_document_scope)
+# The scope carries process_ids so a PROCESS-scoped grant (legal via the R35 content-tier
+# permission.grant) can match (Codex P2).
+_distribute = require("document.distribute", async_scope_resolver=_document_scope_with_processes)
 # Lifecycle actions. submit-review (S4) instantiates the approval workflow; approve/request-changes
 # route through POST /tasks/{id}/decision now (S5, removed from here). release is a flat sig-hook
 # action but enforces imperatively in-handler (its SoD-2 scope needs the body's version_id, which a
