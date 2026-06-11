@@ -7279,11 +7279,11 @@ components:
         process_id: { type: [string, "null"], format: uuid }
         policy_id: { type: [string, "null"], format: uuid, description: "Linked Quality Policy document id." }
         rag:
-          type: [string, "null"]
-          enum: [green, amber, red, unmeasured, "null"]
-          description: "Direction-aware RAG: null when no current_value."
-        pct_toward_target: { type: [number, "null"], description: "0–100 percentage toward target; null when unmeasured." }
-        attainment: { type: [string, "null"], enum: [on_target, at_risk, off_target, "null"], description: "Attainment band; null when unmeasured." }
+          type: string
+          enum: [green, amber, red, unmeasured]
+          description: "Direction-aware RAG; 'unmeasured' when there is no current_value yet."
+        pct_toward_target: { type: [number, "null"], description: "Fraction toward target from baseline (0.0–1.0; may exceed 1.0 or be negative); null when unmeasured or zero span." }
+        attainment: { type: string, enum: [in_progress, met, missed], description: "Attainment band (computed at read)." }
         plans:
           type: array
           items: { $ref: "#/components/schemas/ObjectivePlan" }

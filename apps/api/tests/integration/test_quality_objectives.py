@@ -76,6 +76,8 @@ async def test_create_objective_is_a_document_subtype_mapped_to_6_2(
     body = r.json()
     assert body["unit"] == "%"
     assert body["rag"] == "unmeasured"  # no reading yet
+    # attainment is always one of the three computed bands (guards the contract enum from drifting)
+    assert body["attainment"] in {"in_progress", "met", "missed"}
     assert body["identifier"].startswith("OBJ-")
     # the satellite row exists + the base is kind=DOCUMENT type OBJ
     async with get_sessionmaker()() as s:

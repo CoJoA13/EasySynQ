@@ -225,7 +225,18 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     bind = op.get_bind()
-    bind.execute(sa.text("DELETE FROM document_type WHERE code = :c"), {"c": _OBJ_TYPE[0]})
+    # Guard the seed-delete against the RESTRICT FK documented_information.document_type_id ->
+    # document_type.id: a populated DB that ever created an objective has base doc rows referencing
+    # the OBJ type, so an unguarded DELETE aborts the whole rollback (the 0023 lesson). Leaving the
+    # type in place when children exist is the correct, lossless downgrade.
+    bind.execute(
+        sa.text(
+            "DELETE FROM document_type dt WHERE dt.code = :c "
+            "AND NOT EXISTS (SELECT 1 FROM documented_information di "
+            "WHERE di.document_type_id = dt.id)"
+        ),
+        {"c": _OBJ_TYPE[0]},
+    )
     op.drop_index("ix_kpi_measurement_objective_id", table_name="kpi_measurement")
     op.drop_table("kpi_measurement")
     op.drop_index("ix_objective_plan_objective_id", table_name="objective_plan")
