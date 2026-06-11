@@ -106,3 +106,51 @@ async def test_create_rejects_unknown_policy_id(
         },
     )
     assert r.status_code == 422, r.text
+
+
+async def test_record_measurements_roll_up_latest_period_wins(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    subject = f"obj-{uuid.uuid4()}"
+    h = _auth(token_factory, subject)
+    await _grant(subject, _OBJ_KEYS)
+    obj = (
+        await app_client.post(
+            "/api/v1/objectives",
+            headers=h,
+            json={
+                "title": "Cut complaints to 5/mo",
+                "target_value": "5",
+                "unit": "count",
+                "direction": "LOWER_IS_BETTER",
+                "due_date": "2026-12-31",
+                "at_risk_threshold": "10",
+            },
+        )
+    ).json()
+    oid = obj["id"]
+    # two readings, out of order — current_value must reflect the LATEST period
+    r1 = await app_client.post(
+        f"/api/v1/objectives/{oid}/measurements",
+        headers=h,
+        json={"period": "2026-03-31", "value": "12", "unit": "count"},
+    )
+    assert r1.status_code == 201, r1.text
+    r2 = await app_client.post(
+        f"/api/v1/objectives/{oid}/measurements",
+        headers=h,
+        json={"period": "2026-06-30", "value": "8", "unit": "count"},
+    )
+    assert r2.status_code == 201, r2.text
+    # insert an older period AFTER — must NOT clobber current_value
+    await app_client.post(
+        f"/api/v1/objectives/{oid}/measurements",
+        headers=h,
+        json={"period": "2026-01-31", "value": "20", "unit": "count"},
+    )
+    detail = (await app_client.get(f"/api/v1/objectives/{oid}", headers=h)).json()
+    assert detail["current_value"] == "8"  # the 2026-06-30 reading
+    assert detail["rag"] == "amber"  # 8 is between target 5 and threshold 10
+    hist = (await app_client.get(f"/api/v1/objectives/{oid}/measurements", headers=h)).json()
+    assert len(hist["data"]) == 3
+    assert all(m["target_at_capture"] == "5" for m in hist["data"])  # frozen at capture

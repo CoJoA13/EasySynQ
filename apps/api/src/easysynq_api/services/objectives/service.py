@@ -9,18 +9,22 @@ import datetime
 import uuid
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ...db.models._audit_enums import ActorType, AuditObjectType, EventType
 from ...db.models._objective_enums import ObjectiveDirection
 from ...db.models._vault_enums import DocumentCurrentState
 from ...db.models.app_user import AppUser
+from ...db.models.audit_event import AuditEvent
 from ...db.models.clause import Clause
 from ...db.models.clause_mapping import ClauseMapping
 from ...db.models.document_type import DocumentType
 from ...db.models.documented_information import DocumentedInformation
+from ...db.models.kpi_measurement import KpiMeasurement
 from ...db.models.quality_objective import QualityObjective
 from ...problems import ProblemException
+from ..records import capture_record
 from ..vault import VaultAuditSink, create_document
 
 
@@ -116,7 +120,12 @@ async def create_objective(
     session.add(qo)
     # Auto-map to clause 6.2 so the ★ checklist resolves on release.
     clause_6_2 = (
-        await session.execute(select(Clause).where(Clause.number == "6.2"))
+        await session.execute(
+            select(Clause).where(
+                Clause.number == "6.2",
+                Clause.framework_id == doc.framework_id,
+            )
+        )
     ).scalar_one_or_none()
     if clause_6_2 is not None:
         session.add(
@@ -132,3 +141,111 @@ async def create_objective(
     await session.commit()
     await session.refresh(qo)
     return qo
+
+
+async def record_measurement(
+    session: AsyncSession,
+    actor: AppUser,
+    *,
+    objective_id: uuid.UUID,
+    period: datetime.date,
+    value: Decimal,
+    unit: str,
+    source: str | None = None,
+) -> KpiMeasurement:
+    """Capture a KPI_READING record + kpi_measurement projection, then roll up current_value.
+
+    One transaction: capture_record(_commit=False) → insert KpiMeasurement → flush → rollup
+    → AuditEvent → session.commit().
+
+    The KPI reading is an AD-HOC record (no source_document_id — the R21 trap: a non-FRM source
+    triggers a 422 version-pin requirement, and a Draft objective has no version to pin). The
+    objective linkage lives on kpi_measurement.objective_id + form_field_values.
+
+    current_value = the value of the MAX-period reading (ORDER BY period DESC, created_at DESC
+    LIMIT 1) so out-of-order inserts never clobber a later period (the S-drift-1 populate_existing
+    pattern guards the identity-map staleness trap on the authz-pre-loaded objective row).
+    """
+    # Lock + freshen the objective (the authz resolver already session.get-loaded it;
+    # without populate_existing the FOR UPDATE returns stale identity-map attributes —
+    # the S-drift-1 trap).
+    qo = (
+        await session.execute(
+            select(QualityObjective)
+            .where(QualityObjective.id == objective_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one_or_none()
+    if qo is None:
+        raise ProblemException(status=404, code="not_found", title="Objective not found")
+
+    target_at_capture = qo.target_value
+
+    # Evidence-grade reading: an AD-HOC KPI_READING record (the capture_complaint precedent —
+    # NO source_document_id so no R21 version-pin; a Draft objective has no version to pin).
+    # _commit=False composes the record + projection + rollup in ONE transaction.
+    record = await capture_record(
+        session,
+        actor,
+        record_type="KPI_READING",
+        title=f"KPI reading {period.isoformat()} ({qo.id})",
+        form_field_values={
+            "objective_id": str(objective_id),
+            "period": period.isoformat(),
+            "value": str(value),
+            "target_at_capture": str(target_at_capture),
+            "unit": unit,
+            "source": source,
+        },
+        _commit=False,
+    )
+
+    measurement = KpiMeasurement(
+        org_id=actor.org_id,
+        record_id=record.id,
+        objective_id=objective_id,
+        process_id=qo.process_id,
+        period=period,
+        value=value,
+        target_at_capture=target_at_capture,
+        unit=unit,
+        source=source,
+    )
+    session.add(measurement)
+    await session.flush()
+
+    # Roll up current_value = the value of the MAX-period reading (out-of-order safe).
+    latest_value = (
+        await session.execute(
+            select(KpiMeasurement.value)
+            .where(KpiMeasurement.objective_id == objective_id)
+            .order_by(desc(KpiMeasurement.period), desc(KpiMeasurement.created_at))
+            .limit(1)
+        )
+    ).scalar_one()
+    qo.current_value = latest_value
+
+    # Audit (object_type=document, scope_ref=identifier — R39). Mirror services/ack/sweep.py:67-82
+    # field-for-field: occurred_at + actor_type are NOT NULL with no server default.
+    base = await session.get(DocumentedInformation, objective_id)
+    session.add(
+        AuditEvent(
+            org_id=actor.org_id,
+            occurred_at=datetime.datetime.now(datetime.UTC),
+            actor_id=actor.id,
+            actor_type=ActorType.user,
+            event_type=EventType.OBJECTIVE_MEASUREMENT_RECORDED,
+            object_type=AuditObjectType.document,
+            object_id=objective_id,
+            scope_ref=base.identifier if base else None,
+            after={
+                "period": period.isoformat(),
+                "value": str(value),
+                "current_value": str(latest_value),
+            },
+        )
+    )
+    await session.commit()
+    await session.refresh(measurement)
+    return measurement
