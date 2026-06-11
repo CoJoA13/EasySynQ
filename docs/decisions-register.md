@@ -910,16 +910,18 @@ as-built form.
   the moment a revision opens. Both the sweep's eligibility and the decide leg's lapse check use
   the pointer.
 - **The decide leg** (the fourth `POST /tasks/{id}/decision` dispatch): membership
-  **404-collapse**, then **`document.acknowledge` enforced at the document's scope** (the key's
-  FIRST consumer; a missing key is a calm 403; the ResourceContext carries the document's
-  `process_ids` so the seeded PROCESS-scoped Employee grant is PDP-reachable), outcome whitelist
-  **`{acknowledge}`** (422 anything else), then engine `decide(_commit=False)` **with
-  replay-parity** (an Idempotency-Key replay re-derives ids and returns 200 BEFORE any lapse
-  re-check — the decision already happened), then the FRESH-path obligation re-checks → **409
-  `ack_obligation_lapsed`** | **409 `ack_superseded`** (pinned seq < the boundary; a raise rolls
-  the engine's uncommitted rows back, the task stays PENDING), then the `acknowledgement` INSERT
-  + `DOCUMENT_ACKNOWLEDGED` (object_type=document, scope_ref=identifier) in ONE transaction.
-  **No `signature_event`.** Bulk-ack (doc 10 §8.2) = the client loops this endpoint.
+  **404-collapse** → outcome whitelist **`{acknowledge}`** (422 anything else) → engine
+  `decide(_commit=False)` **with replay-parity** — an Idempotency-Key replay re-derives ids and
+  returns 200 **bypassing the mutable key check** (a replay is not an act: the decision already
+  committed, and membership — a 1-member pool — proves the caller IS its decider, so a
+  since-lapsed grant must not 403 a legitimate retry) → fresh-path **`document.acknowledge`
+  enforced at the document's scope** (the key's FIRST consumer; a missing key is a calm 403; the
+  ResourceContext carries the document's `process_ids` so the seeded PROCESS-scoped Employee
+  grant is PDP-reachable) + the obligation re-checks → **409 `ack_obligation_lapsed`** | **409
+  `ack_superseded`** (pinned seq < the boundary; a 403/409 raise rolls the engine's uncommitted
+  rows back, the task stays PENDING) → the `acknowledgement` INSERT + `DOCUMENT_ACKNOWLEDGED`
+  (object_type=document, scope_ref=identifier) in ONE transaction. **No `signature_event`.**
+  Bulk-ack (doc 10 §8.2) = the client loops this endpoint.
 - **Coverage truth = distribution × acknowledgements** — never the tasks (the to-do surface only).
   The live audience = `user` targets ∪ `org_role` members (via `RoleAssignment.role_id`, ACTIVE
   non-guest only); `ACK_DUE_DAYS` (env, default 14) sets informational-only due dates (no

@@ -2,9 +2,11 @@
 
 The fourth ``POST /tasks/{id}/decision`` dispatch branch. Authz = candidate-membership
 (404-collapse, the sibling posture) AND ``document.acknowledge`` enforced at the document's scope
-(its first consumer; key failure is a calm 403 — the task is honestly yours, the capability is
-missing). One transaction: engine.decide(_commit=False) + the immutable acknowledgement INSERT +
-DOCUMENT_ACKNOWLEDGED — NEVER a signature_event (R2/R43)."""
+for FRESH decisions only — a replay bypasses the mutable key check, since membership (a 1-member
+pool) proves the caller IS the original decider (its first consumer; key failure is a calm 403 —
+the task is honestly yours, the capability is missing). One transaction: engine.decide
+(_commit=False) + the immutable acknowledgement INSERT + DOCUMENT_ACKNOWLEDGED — NEVER a
+signature_event (R2/R43)."""
 
 from __future__ import annotations
 
@@ -108,28 +110,6 @@ async def decide_doc_ack(
     if doc is None or doc.org_id != actor.org_id or doc.kind != DocumentKind.DOCUMENT:
         raise _not_found()
 
-    # The key's first consumer: enforce document.acknowledge at the document's scope. Membership
-    # failures 404-collapse above; a key failure is a calm 403 (doc 10 §8.3).
-    level: str | None = None
-    if doc.document_type_id:
-        dt = await session.get(DocumentType, doc.document_type_id)
-        level = dt.document_level.value if dt else None
-    process_ids = (
-        await session.execute(
-            select(ProcessLink.process_id).where(ProcessLink.documented_information_id == doc.id)
-        )
-    ).scalars()
-    # R28: the FULL context — the seeded Employee grant is PROCESS-scoped; without process_ids
-    # the PDP can never match it (Codex P1).
-    resource = ResourceContext(
-        artifact_id=str(doc.id),
-        folder_path=doc.folder_path,
-        document_level=level,
-        process_ids=frozenset(str(p) for p in process_ids),
-        lifecycle_state=doc.current_state.value,
-    )
-    await enforce(session, authz_sink, request, actor, "document.acknowledge", resource)
-
     if outcome not in _ALLOWED_OUTCOMES:
         raise ProblemException(
             status=422,
@@ -146,6 +126,9 @@ async def decide_doc_ack(
         idempotency_key=idempotency_key,
         _commit=False,
     )
+    # A replay is not an act: the decision already committed, and membership (a 1-member pool)
+    # proves the caller IS its decider — re-running the mutable key check would 403 a legitimate
+    # retry after a grant lapse (Codex P2). The fresh path enforces below.
     if result.get("replayed"):
         # Response-parity on replay: re-derive the ack row's id (no rows are added). The pinned
         # version parses LENIENTLY — an unreadable context just leaves the enrichment fields
@@ -171,10 +154,33 @@ async def decide_doc_ack(
         await session.commit()
         return result
 
-    # Fresh decisions only — a replay's decision already happened, so lapse re-checks would
-    # break replay-parity (Codex P2). Raising here rolls the engine's uncommitted rows back;
-    # the task stays PENDING (the decide_periodic_review trick).
-    # The obligation must still stand (the sweep may not have caught up).
+    # Fresh decisions only. The 403 raise rolls the engine's uncommitted rows back (the same
+    # _commit=False trick as the 409 ladder); the deny is still audited (the authz sink commits
+    # in its OWN session). The key's first consumer: document.acknowledge at the document's
+    # scope — membership failures 404-collapsed above; a key failure is a calm 403 (doc 10 §8.3).
+    level: str | None = None
+    if doc.document_type_id:
+        dt = await session.get(DocumentType, doc.document_type_id)
+        level = dt.document_level.value if dt else None
+    process_ids = (
+        await session.execute(
+            select(ProcessLink.process_id).where(ProcessLink.documented_information_id == doc.id)
+        )
+    ).scalars()
+    # R28: the FULL context — the seeded Employee grant is PROCESS-scoped; without process_ids
+    # the PDP can never match it (Codex P1).
+    resource = ResourceContext(
+        artifact_id=str(doc.id),
+        folder_path=doc.folder_path,
+        document_level=level,
+        process_ids=frozenset(str(p) for p in process_ids),
+        lifecycle_state=doc.current_state.value,
+    )
+    await enforce(session, authz_sink, request, actor, "document.acknowledge", resource)
+
+    # The obligation must still stand (the sweep may not have caught up) — raising a 409 rolls
+    # the engine's uncommitted rows back; the task stays PENDING (the decide_periodic_review
+    # trick).
     # NOTE the in-force predicate matches the sweep's: a governing Effective version exists —
     # NOT current_state == Effective (an UnderRevision doc still governs; R1/T7).
     ctx = instance.context or {}

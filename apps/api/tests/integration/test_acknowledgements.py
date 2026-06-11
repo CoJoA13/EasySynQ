@@ -11,7 +11,7 @@ from typing import Any
 
 import pytest
 from httpx import AsyncClient
-from sqlalchemy import select, text
+from sqlalchemy import delete, select, text
 from sqlalchemy.exc import ProgrammingError
 
 from easysynq_api.db.models._ack_enums import AckCreatedReason
@@ -614,7 +614,11 @@ async def test_decide_authz_matrix(
     200-parity (same acknowledgement_id, exactly ONE row); (e) the flag flipped off mid-flight
     409s a FRESH decide ack_obligation_lapsed and rolls the engine rows back (task stays PENDING,
     no TaskOutcome); (f) the SAME-key retry of the already-committed ack still replays 200 after
-    the lapse (replay-parity beats the lapse ladder — Codex P2)."""
+    the lapse (replay-parity beats the lapse ladder — Codex P2); (g) replay survives a GRANT
+    lapse too: with the actor's document.acknowledge override DELETED, the same-key retry still
+    replays 200 (a replay bypasses the mutable key check — membership proves the decider), while
+    a FRESH decide by that now-keyless actor on a second pending task is a 403 that rolls the
+    engine rows back (enforce gates fresh decisions only — Codex P2)."""
     sam_id = await _setup_actors(subj)
     await grant_keys(subj.outsider, ())  # row only — NO keys, NOT in any audience
     u2_id = await grant_keys(subj.u2, ())  # row only — joins the audience key-less below
@@ -635,6 +639,19 @@ async def test_decide_authz_matrix(
     )
     await _run_sweep(document_id=doc_uuid, trigger="release")
     sam_task = await _ack_task_for(doc_uuid, sam_id)
+
+    # A SECOND doc targeting sam — its task stays PENDING until leg (g), where it is the fresh
+    # decide the now-keyless sam must 403 on (the contrast leg to the grant-lapse replay).
+    _, doc2_uuid = await _release_ack_doc(
+        app_client,
+        ha,
+        hb,
+        type_id,
+        f"ack-authz-g-{subj.a}".encode(),
+        entries=[{"target_type": "user", "target_id": str(sam_id)}],
+    )
+    await _run_sweep(document_id=doc2_uuid, trigger="release")
+    sam_task2 = await _ack_task_for(doc2_uuid, sam_id)
 
     # (a) outsider — not the assignee, not a candidate → 404 (the sensitive collapse).
     ra = await app_client.post(
@@ -742,6 +759,47 @@ async def test_decide_authz_matrix(
         f"post-lapse replay acknowledgement_id {b3['acknowledgement_id']!r} "
         f"!= original {b1['acknowledgement_id']!r}"
     )
+
+    # (g) replay survives a GRANT lapse too: delete sam's document.acknowledge override row(s)
+    # — a replay is not an act, so the mutable key check must not run against it (Codex P2).
+    async with get_sessionmaker()() as s:
+        ack_perm = (
+            await s.execute(select(Permission).where(Permission.key == "document.acknowledge"))
+        ).scalar_one()
+        await s.execute(
+            delete(PermissionOverride).where(
+                PermissionOverride.user_id == sam_id,
+                PermissionOverride.permission_id == ack_perm.id,
+            )
+        )
+        await s.commit()
+    r4 = await app_client.post(
+        f"/api/v1/tasks/{sam_task}/decision",
+        headers={**hs, "Idempotency-Key": idem},
+        json={"outcome": "acknowledge"},
+    )
+    assert r4.status_code == 200, f"a grant lapse must not 403 a replay: {r4.text}"
+    b4 = r4.json()
+    assert b4["replayed"] is True
+    assert b4["acknowledgement_id"] == b1["acknowledgement_id"], (
+        f"post-grant-lapse replay acknowledgement_id {b4['acknowledgement_id']!r} "
+        f"!= original {b1['acknowledgement_id']!r}"
+    )
+    # The contrast: a FRESH decide by the same now-keyless actor (doc2's still-PENDING task)
+    # IS gated — a calm 403 whose raise rolls the engine's uncommitted rows back.
+    rg = await app_client.post(
+        f"/api/v1/tasks/{sam_task2}/decision", headers=hs, json={"outcome": "acknowledge"}
+    )
+    assert rg.status_code == 403, rg.text
+    assert rg.json()["code"] == "permission_denied"
+    async with get_sessionmaker()() as s:
+        task2_row = await s.get(Task, uuid.UUID(sam_task2))
+        assert task2_row is not None
+        assert task2_row.state is TaskState.PENDING, "a 403'd fresh decide must stay PENDING"
+        residue2 = (
+            await s.execute(select(TaskOutcome).where(TaskOutcome.task_id == uuid.UUID(sam_task2)))
+        ).scalar_one_or_none()
+        assert residue2 is None, "a 403'd fresh decide must leave no TaskOutcome row"
 
 
 # ---------------------------------------------------------------------------
