@@ -347,8 +347,8 @@ erDiagram
 | `interested_party` | `id` PK, `register_doc_id` FK, `party_name`, `needs_expectations`, `row_version` | Cl 4.2. |
 | `risk_opportunity` | `id` PK, `register_doc_id` FK, `type` enum(`risk`,`opportunity`), `description`, `process_id` null, `clause_id` null, `likelihood`, `severity`, `risk_rating` (derived/stored), `scoring_method`, `treatment`, `effectiveness`, `linked_capa_id` null, `row_version` | Cl 6.1; feeds mgmt-review input (e). Doc 10 workflow routing on `subject.risk_rating` and doc 13 high-risk dashboards resolve against these real fields (reconciled per Decisions Register R18). |
 | `quality_policy` | `id` PK/FK (singleton `document`) | Cl 5.2 ★, apex. |
-| `quality_objective` | `id` PK/FK (a `document`), `target_value`, `unit`, `current_value`, `due_date`, `owner_user_id`, `policy_id` FK | Cl 6.2 ★; measurable by construction; drives Check dashboard. |
-| `objective_plan` | `id` PK, `objective_id` FK, `action`, `resource`, `responsible_user_id`, `due_date` | Cl 6.2. |
+| `quality_objective` | `id` PK/FK (a `document`, kind=DOCUMENT subtype of `documented_information`, type `OBJ`), `org_id`, `target_value`, `unit`, `baseline_value` (nullable), `current_value` (mutable rollup — NOT versioned; rolled from append-only `KPI_READING` records under `FOR UPDATE`+`populate_existing`), `direction` (`objective_direction` enum: `HIGHER_IS_BETTER`/`LOWER_IS_BETTER`), `at_risk_threshold` (nullable), `due_date`, `process_id` (nullable), `policy_id` FK→`documented_information` (nullable — validated against the current Effective `POL` singleton) | Cl 6.2 ★; measurable by construction; drives Check dashboard. **Built in mig `0049` (S-obj-1, R44).** `owner_user_id` is the BASE `documented_information.owner_user_id` — NOT duplicated on this satellite. RAG (`green`/`amber`/`red`/`unmeasured`) is computed at read, never stored (N9/N6). |
+| `objective_plan` | `id` PK, `org_id`, `objective_id` FK→`quality_objective`, `action`, `resource` (nullable), `responsible_user_id` (nullable), `due_date` (nullable) | Cl 6.2. **Built in mig `0049`.**  |
 | `resource` | `id` PK, `org_id`, `resource_type` enum(`infrastructure`,`environment`,`knowledge`,`general`), `name`, `description` | Cl 7.1.x. |
 | `knowledge_item` | `id` PK, `org_id`, `title`, `body_ref` | Cl 7.1.6. |
 | `communication_plan` | `id` PK/FK (a `document`) | Cl 7.4. |
@@ -362,7 +362,7 @@ erDiagram
 
 | Satellite | Key attributes | Notes |
 |---|---|---|
-| `kpi_measurement` | `id` PK, `record_id` FK, `objective_id` null, `process_id` null, `period`, `value`, `target_at_capture`, `unit`, `source` | Cl 9.1.1 time-series (`06`, `13`). |
+| `kpi_measurement` | `id` PK, `org_id`, `record_id` FK→`record` (the WORM `KPI_READING` evidence row), `objective_id` FK→`quality_objective` (nullable), `process_id` (nullable), `period` date, `value`, `target_at_capture` (frozen at capture — a later target edit cannot rewrite a past verdict), `unit`, `source` (nullable) | Cl 9.1.1 time-series (`06`, `13`). Append-only (`REVOKE UPDATE,DELETE` — the `capa_stage`/`acknowledgement` house style). **Built in mig `0049` (S-obj-1, R44).** |
 | `satisfaction_survey` | `id` PK, `record_id` FK, `period`, `score`, `respondents` | Cl 9.1.2. |
 | `complaint` | `id` PK/FK (a `record`, COMPLAINT), `org_id`, `customer`, `received_at`, `channel`, `description`, `severity` null, `spawned_capa_id` FK→`capa` null UNIQUE | Cl 8.2.1 lightweight customer-complaint capture; can **one-click spawn a CAPA** with `source=complaint` (`spawned_capa_id` is the idempotency latch; reconciled per Decisions Register R16). **S-capa-1 (mig `0036`) implements `complaint` as a `kind=RECORD` shared-PK subtype** (`complaint.id` IS `record.id`) — a justified divergence from the literal `id PK + record_id FK` satellite phrasing for consistency with the `audit`/`capa` record-subtype family (per R39, the `audit_program` divergence precedent). |
 
