@@ -210,7 +210,24 @@ async def app_under_test(
     app = create_app()
     app.dependency_overrides[get_jwks_cache] = lambda: JWKSCache("", static_jwks=JWKS)
 
+    from easysynq_api.services.ack.sink import LoggingAckEnqueueSink, set_ack_enqueue_sink
+    from easysynq_api.services.vault.mirror_sink import (
+        LoggingMirrorEnqueueSink,
+        set_mirror_enqueue_sink,
+    )
+
+    # The Celery app singleton binds REDIS_URL at import (collection) time — unreachable in CI —
+    # so every .delay() costs a ~19.5s backend-subscribe retry storm that blocks the event loop
+    # (the S-ack-1 shard-1 forensics; the tax predates S-ack-1 via the mirror sink — see the
+    # 18-22s quantization in .test_durations). Tests assert enqueue effects via the Capturing
+    # doubles where needed (test_mirror.py swaps locally and restores).
+    prev_mirror = set_mirror_enqueue_sink(LoggingMirrorEnqueueSink())
+    prev_ack = set_ack_enqueue_sink(LoggingAckEnqueueSink())
+
     yield app
+
+    set_ack_enqueue_sink(prev_ack)
+    set_mirror_enqueue_sink(prev_mirror)
 
     await db_session.dispose_engine()
     get_settings.cache_clear()

@@ -971,8 +971,9 @@ async def scan_and_sync(
     unpersisted FINDINGS defer the rebuild (it would erase the on-disk evidence the next scan needs
     to re-detect and audit — and a broken PG fails the rebuild anyway). Mutual exclusion is the
     proven S7 posture: the caller acquires ``LOCK_MIRROR_SYNC`` at task entry (`if not held:
-    return`) and that session-level lock stays held on its backend in the pool for the whole
-    operation — globally exclusive, so no second worker can be inside here concurrently. (An
+    return`) and that session-level lock rides a DEDICATED connection ``pg_advisory_lock`` holds
+    open for the whole operation (the S-ack-1 pin — no longer the pooled-backend accident) —
+    globally exclusive, so no second worker can be inside here concurrently. (An
     earlier in-session ``holds_advisory_lock`` recheck before the rebuild was REMOVED: a Session
     releases its connection on ``commit()``, so the recheck after ``persist_scan_results`` lands on
     a recycled backend that doesn't hold the session lock and wrongly skips the rebuild — Codex's
