@@ -188,3 +188,35 @@ async def test_objective_plan_add_and_remove(
     assert rm.status_code == 204
     detail2 = (await app_client.get(f"/api/v1/objectives/{oid}", headers=h)).json()
     assert detail2["plans"] == []
+
+
+async def test_scorecard_rollup_counts_by_rag(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    subject = f"obj-{uuid.uuid4()}"
+    h = _auth(token_factory, subject)
+    await _grant(subject, _OBJ_KEYS)
+    oid = (
+        await app_client.post(
+            "/api/v1/objectives",
+            headers=h,
+            json={
+                "title": "Green one",
+                "target_value": "90",
+                "unit": "%",
+                "direction": "HIGHER_IS_BETTER",
+                "due_date": "2026-12-31",
+                "at_risk_threshold": "80",
+            },
+        )
+    ).json()["id"]
+    await app_client.post(
+        f"/api/v1/objectives/{oid}/measurements",
+        headers=h,
+        json={"period": "2026-06-30", "value": "95", "unit": "%"},
+    )
+    sc = (await app_client.get("/api/v1/objectives/scorecard", headers=h)).json()
+    assert sc["total"] >= 1
+    assert sc["on_target"] >= 1
+    assert sc["by_rag"]["green"] >= 1
+    assert any(row["id"] == oid and row["rag"] == "green" for row in sc["objectives"])
