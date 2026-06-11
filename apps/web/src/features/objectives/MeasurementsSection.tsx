@@ -1,14 +1,18 @@
-import { Alert, Group, Loader, Stack, Table, Text, Title } from "@mantine/core";
+import { Alert, Button, Group, Loader, Stack, Table, Text, Title } from "@mantine/core";
+import { useState } from "react";
+import { usePermissions } from "../../app/shell/usePermissions";
 import { useObjectiveMeasurements } from "./hooks";
+import { RecordMeasurementModal } from "./RecordMeasurementModal";
 
 export function MeasurementsSection({ objectiveId, unit }: { objectiveId: string; unit: string }) {
   const { data, isLoading, forbidden } = useObjectiveMeasurements(objectiveId);
-  void unit; // available for the Record modal in Task 13
+  const { can } = usePermissions();
+  const [open, setOpen] = useState(false);
   return (
     <Stack gap="sm">
       <Group justify="space-between">
         <Title order={3}>Measurement history</Title>
-        {/* The Record-measurement button (gated kpi.record) is wired in Task 13. */}
+        {can("kpi.record") && <Button size="xs" onClick={() => setOpen(true)}>Record measurement</Button>}
       </Group>
       {forbidden ? (
         <Alert color="gray" title="No access">
@@ -45,6 +49,13 @@ export function MeasurementsSection({ objectiveId, unit }: { objectiveId: string
           <Text c="dimmed" size="xs">Readings are append-only. Trend charts arrive in a later release.</Text>
         </>
       )}
+      <RecordMeasurementModal
+        opened={open}
+        objectiveId={objectiveId}
+        unit={unit}
+        onClose={() => setOpen(false)}
+        onRecorded={() => setOpen(false)}
+      />
     </Stack>
   );
 }
