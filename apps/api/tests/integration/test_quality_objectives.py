@@ -154,3 +154,37 @@ async def test_record_measurements_roll_up_latest_period_wins(
     hist = (await app_client.get(f"/api/v1/objectives/{oid}/measurements", headers=h)).json()
     assert len(hist["data"]) == 3
     assert all(m["target_at_capture"] == "5" for m in hist["data"])  # frozen at capture
+
+
+async def test_objective_plan_add_and_remove(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    subject = f"obj-{uuid.uuid4()}"
+    h = _auth(token_factory, subject)
+    await _grant(subject, _OBJ_KEYS)
+    oid = (
+        await app_client.post(
+            "/api/v1/objectives",
+            headers=h,
+            json={
+                "title": "Plan-bearing objective",
+                "target_value": "100",
+                "unit": "%",
+                "direction": "HIGHER_IS_BETTER",
+                "due_date": "2026-12-31",
+            },
+        )
+    ).json()["id"]
+    add = await app_client.post(
+        f"/api/v1/objectives/{oid}/plans",
+        headers=h,
+        json={"action": "Run weekly stand-ups", "resource": "QA team"},
+    )
+    assert add.status_code == 201, add.text
+    plan_id = add.json()["id"]
+    detail = (await app_client.get(f"/api/v1/objectives/{oid}", headers=h)).json()
+    assert len(detail["plans"]) == 1
+    rm = await app_client.delete(f"/api/v1/objectives/{oid}/plans/{plan_id}", headers=h)
+    assert rm.status_code == 204
+    detail2 = (await app_client.get(f"/api/v1/objectives/{oid}", headers=h)).json()
+    assert detail2["plans"] == []

@@ -22,6 +22,7 @@ from ...db.models.clause_mapping import ClauseMapping
 from ...db.models.document_type import DocumentType
 from ...db.models.documented_information import DocumentedInformation
 from ...db.models.kpi_measurement import KpiMeasurement
+from ...db.models.objective_plan import ObjectivePlan
 from ...db.models.quality_objective import QualityObjective
 from ...problems import ProblemException
 from ..records import capture_record
@@ -249,3 +250,75 @@ async def record_measurement(
     await session.commit()
     await session.refresh(measurement)
     return measurement
+
+
+async def add_objective_plan(
+    session: AsyncSession,
+    actor: AppUser,
+    *,
+    objective_id: uuid.UUID,
+    action: str,
+    resource: str | None = None,
+    responsible_user_id: uuid.UUID | None = None,
+    due_date: datetime.date | None = None,
+) -> ObjectivePlan:
+    """Add an action-plan row to a Quality Objective (ISO 6.2 'planning to achieve them')."""
+    qo = await session.get(QualityObjective, objective_id)
+    if qo is None:
+        raise ProblemException(status=404, code="not_found", title="Objective not found")
+    plan = ObjectivePlan(
+        org_id=actor.org_id,
+        objective_id=objective_id,
+        action=action,
+        resource=resource,
+        responsible_user_id=responsible_user_id,
+        due_date=due_date,
+    )
+    session.add(plan)
+    await session.flush()
+    base = await session.get(DocumentedInformation, objective_id)
+    session.add(
+        AuditEvent(
+            org_id=actor.org_id,
+            occurred_at=datetime.datetime.now(datetime.UTC),
+            actor_id=actor.id,
+            actor_type=ActorType.user,
+            event_type=EventType.OBJECTIVE_PLAN_ADDED,
+            object_type=AuditObjectType.document,
+            object_id=objective_id,
+            scope_ref=base.identifier if base else None,
+            after={"plan_id": str(plan.id), "action": action},
+        )
+    )
+    await session.commit()
+    await session.refresh(plan)
+    return plan
+
+
+async def remove_objective_plan(
+    session: AsyncSession,
+    actor: AppUser,
+    *,
+    objective_id: uuid.UUID,
+    plan_id: uuid.UUID,
+) -> None:
+    """Remove an action-plan row from a Quality Objective, emitting an audit event."""
+    plan = await session.get(ObjectivePlan, plan_id)
+    if plan is None or plan.objective_id != objective_id:
+        raise ProblemException(status=404, code="not_found", title="Plan not found")
+    await session.delete(plan)
+    base = await session.get(DocumentedInformation, objective_id)
+    session.add(
+        AuditEvent(
+            org_id=actor.org_id,
+            occurred_at=datetime.datetime.now(datetime.UTC),
+            actor_id=actor.id,
+            actor_type=ActorType.user,
+            event_type=EventType.OBJECTIVE_PLAN_REMOVED,
+            object_type=AuditObjectType.document,
+            object_id=objective_id,
+            scope_ref=base.identifier if base else None,
+            after={"plan_id": str(plan_id)},
+        )
+    )
+    await session.commit()
