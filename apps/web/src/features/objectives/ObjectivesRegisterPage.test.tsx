@@ -1,4 +1,5 @@
 import { screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { axe } from "jest-axe";
 import { renderWithProviders } from "../../test/render";
@@ -38,4 +39,20 @@ it("shows an empty state when there are no objectives", async () => {
   );
   renderWithProviders(<ObjectivesRegisterPage />, { route: "/objectives" });
   await waitFor(() => expect(screen.getByText(/no quality objectives yet/i)).toBeInTheDocument());
+});
+
+it("RAG filter narrows visible rows client-side", async () => {
+  const user = userEvent.setup();
+  renderWithProviders(<ObjectivesRegisterPage />, { route: "/objectives" });
+  // Default: all four objectives visible.
+  await waitFor(() => expect(screen.getByText("OBJ-001")).toBeInTheDocument());
+  expect(screen.getByText("OBJ-002")).toBeInTheDocument();
+  expect(screen.getByText("OBJ-003")).toBeInTheDocument();
+  expect(screen.getByText("OBJ-004")).toBeInTheDocument();
+  // Click the "Red" chip filter.
+  await user.click(screen.getByRole("radio", { name: "Red" }));
+  // Only the red row (OBJ-002, "Customer complaints per quarter") remains.
+  expect(screen.getByText("OBJ-002")).toBeInTheDocument();
+  expect(screen.queryByText("OBJ-003")).not.toBeInTheDocument(); // green row gone
+  expect(screen.queryByText("OBJ-001")).not.toBeInTheDocument(); // amber row gone
 });

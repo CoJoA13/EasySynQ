@@ -1,4 +1,4 @@
-import { Alert, Anchor, Badge, Container, Group, Loader, Table, Text, Title } from "@mantine/core";
+import { Alert, Anchor, Badge, Container, Group, Loader, SegmentedControl, Table, Text, Title } from "@mantine/core";
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import type { Objective, ObjectiveRag } from "../../lib/types";
@@ -20,8 +20,6 @@ export function ObjectivesRegisterPage() {
     () => (data?.objectives ?? []).filter((o) => rag === "" || o.rag === rag),
     [data, rag],
   );
-
-  void setRag; // filter chips wired in a future task
 
   if (forbidden) {
     return (
@@ -51,6 +49,20 @@ export function ObjectivesRegisterPage() {
       </Group>
 
       <ObjectiveScorecardBand total={data.total} onTarget={data.on_target} byRag={data.by_rag} />
+
+      <SegmentedControl
+        mt="md"
+        value={rag}
+        onChange={(v) => setRag(v as ObjectiveRag | "")}
+        aria-label="Filter by RAG status"
+        data={[
+          { value: "", label: "All" },
+          { value: "green", label: RAG_LABEL.green },
+          { value: "amber", label: RAG_LABEL.amber },
+          { value: "red", label: RAG_LABEL.red },
+          { value: "unmeasured", label: RAG_LABEL.unmeasured },
+        ]}
+      />
 
       {data.objectives.length === 0 ? (
         <Alert color="gray" title="No quality objectives yet" mt="md">
