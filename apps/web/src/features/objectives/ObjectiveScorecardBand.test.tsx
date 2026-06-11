@@ -1,5 +1,6 @@
 import { screen } from "@testing-library/react";
 import { axe } from "jest-axe";
+import { expect, it } from "vitest";
 import { renderWithProviders } from "../../test/render";
 import { ObjectiveScorecardBand } from "./ObjectiveScorecardBand";
 
