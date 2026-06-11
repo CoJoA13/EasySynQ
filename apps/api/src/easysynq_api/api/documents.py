@@ -1316,7 +1316,11 @@ async def delete_distribution_entry_endpoint(
     session: AsyncSession = Depends(get_session),
 ) -> Response:
     """Remove one entry (R42). The doc-scoped sweep cancels lapsed obligations post-commit."""
-    doc = await _load_document(session, caller, document_id)
+    # FOR UPDATE: the doc row is the serialization point decide_doc_ack's live obligation check
+    # locks — without it a removal can commit between an in-flight ack's audience read and its
+    # INSERT, minting an acknowledgement for a just-removed recipient (the POST path already
+    # serializes the same way).
+    doc = await _load_document(session, caller, document_id, for_update=True)
     entry = await session.get(DistributionEntry, entry_id)
     if entry is None or entry.org_id != caller.org_id or entry.document_id != doc.id:
         raise ProblemException(status=404, code="not_found", title="Distribution entry not found")
