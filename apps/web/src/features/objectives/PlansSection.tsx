@@ -12,7 +12,7 @@ export function PlansSection({ objectiveId, plans }: { objectiveId: string; plan
   void objectiveId; // used by the manage affordances in Task 14
   return (
     <Stack gap="sm">
-      <Title order={4}>Plans</Title>
+      <Title order={3}>Plans</Title>
       {plans.length === 0 ? (
         <Text c="dimmed" size="sm">No plans yet.</Text>
       ) : (

@@ -7,7 +7,7 @@ export function MeasurementsSection({ objectiveId, unit }: { objectiveId: string
   return (
     <Stack gap="sm">
       <Group justify="space-between">
-        <Title order={4}>Measurement history</Title>
+        <Title order={3}>Measurement history</Title>
         {/* The Record-measurement button (gated kpi.record) is wired in Task 13. */}
       </Group>
       {forbidden ? (
