@@ -27,6 +27,7 @@ class WorkflowSubjectType(enum.Enum):
     AUDIT = "AUDIT"
     MGMT_REVIEW = "MGMT_REVIEW"
     PERIODIC_REVIEW = "PERIODIC_REVIEW"
+    DOC_ACK = "DOC_ACK"  # S-ack-1: per-user read-&-understood obligations (doc 10 §8.1, R43)
 
 
 class WorkflowStageMode(enum.Enum):
@@ -47,6 +48,7 @@ class TaskType(enum.Enum):
     MR_INPUT = "MR_INPUT"
     MR_ACTION = "MR_ACTION"
     DCR_TRIAGE = "DCR_TRIAGE"
+    DOC_ACK = "DOC_ACK"  # S-ack-1: doc-10 §8.1 doc-ack task (FINDING_ACK stays audits')
 
 
 class TaskState(enum.Enum):

@@ -61,6 +61,7 @@ from ._workflow_enums import (
     WorkflowStageMode,
     WorkflowSubjectType,
 )
+from .acknowledgement import Acknowledgement
 from .app_user import AppUser, UserStatus
 from .audit import Audit
 from .audit_checkpoint import AuditCheckpoint
@@ -80,6 +81,7 @@ from .complaint import Complaint
 from .dcr import Dcr
 from .dcr_stage_event import DcrStageEvent
 from .disposition_event import DispositionEvent
+from .distribution_entry import DistributionEntry
 from .document_link import DocumentLink
 from .document_type import DocumentType
 from .document_version import DocumentVersion
@@ -132,6 +134,7 @@ from .working_draft import WorkingDraft
 from .worm_destroy_request import WormDestroyRequest
 
 __all__ = [
+    "Acknowledgement",
     "ActorType",
     "AppUser",
     "Audit",
@@ -163,6 +166,7 @@ __all__ = [
     "DcrState",
     "DispositionAction",
     "DispositionEvent",
+    "DistributionEntry",
     "DocumentCurrentState",
     "DocumentKind",
     "DocumentLevel",

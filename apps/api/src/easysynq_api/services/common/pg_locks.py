@@ -35,6 +35,9 @@ LOCK_REVIEW_SWEEP = 7710006
 # concurrent verify skips its tick). DISTINCT from LOCK_MIRROR_SYNC: blob verify never touches
 # the mirror, and sharing would couple unrelated cadences.
 LOCK_BLOB_VERIFY = 7710007
+# S-ack-1: serialize the acknowledgement sweep (daily Beat + the doc-scoped release/distribution
+# enqueues share one lock — overlapping fires must not double-mint per-user instances).
+LOCK_ACK_SWEEP = 7710008
 # (The S-ing-5 commit single-flight is the per-item ledger CLAIM — INSERT ON CONFLICT DO UPDATE
 # WHERE result='failed' — in ingestion.repository.claim_commit_result, NOT an advisory lock.)
 
