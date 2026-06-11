@@ -21,8 +21,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...config import get_settings
 from ...db.models._ack_enums import AckCreatedReason
-from ...db.models._vault_enums import DocumentCurrentState, DocumentKind
+from ...db.models._audit_enums import ActorType, AuditObjectType, EventType
+from ...db.models._vault_enums import DocumentKind
 from ...db.models._workflow_enums import TaskState, WorkflowSubjectType
+from ...db.models.audit_event import AuditEvent
 from ...db.models.documented_information import DocumentedInformation
 from ...db.models.workflow import Task, WorkflowInstance
 from ...domain.ack.rules import plan_obligations
@@ -47,10 +49,56 @@ def _now() -> datetime.datetime:
     return datetime.datetime.now(datetime.UTC)
 
 
+def _emit_cancelled(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    document_id: uuid.UUID,
+    instance_id: uuid.UUID,
+    identifier: str | None,
+    why: str,
+) -> None:
+    """The obligation's disappearance must leave a trace (spec §7): the engine audits mint
+    (STAGE_ADVANCED at instantiate) but a sweep-cancel bypasses the engine. STAGE_FAILED is the
+    engine's flow-terminated-without-completing event (early-fail/reject AND the fail-closed
+    unresolvable-stage path), payload-discriminated like instantiate's ``{"event": …}``; keyed
+    object_type=document + scope_ref=identifier (the REVIEW_OVERDUE shape) so
+    GET /documents/{id}/audit-events surfaces it. A Beat sweep has no request → request_id None."""
+    session.add(
+        AuditEvent(
+            org_id=org_id,
+            occurred_at=_now(),
+            actor_id=None,
+            actor_type=ActorType.system,
+            event_type=EventType.STAGE_FAILED,
+            object_type=AuditObjectType.document,
+            object_id=document_id,
+            scope_ref=identifier,
+            after={
+                "event": "ack_obligation_cancelled",
+                "instance_id": str(instance_id),
+                "why": why,
+            },
+            request_id=None,
+        )
+    )
+
+
 async def _cancel_instance(session: AsyncSession, instance_id: uuid.UUID) -> bool:
     """Force-terminate one obligation instance (the S-dcr-4 inline precedent): PENDING tasks →
-    SKIPPED under FOR UPDATE, instance → CANCELLED. Returns False if already terminal."""
-    instance = await wf_repo.lock_instance_for_update(session, instance_id)
+    SKIPPED under FOR UPDATE, instance → CANCELLED. Returns False if already terminal.
+
+    The locked load carries ``populate_existing`` — the sweep's own ``open_ack_tasks`` read has
+    already identity-mapped these instances, and without it the lock returns the PRE-LOCK
+    attribute snapshot (the S-drift-1 trap): a decide that committed COMPLETED while we waited
+    would be invisible and this helper would clobber it to CANCELLED."""
+    instance = (
+        await session.execute(
+            select(WorkflowInstance)
+            .where(WorkflowInstance.id == instance_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one_or_none()
     if instance is None or instance.current_state in _TERMINAL_INSTANCE_STATES:
         return False
     pending = (
@@ -71,7 +119,10 @@ async def _cancel_instance(session: AsyncSession, instance_id: uuid.UUID) -> boo
 
 
 async def sweep_acks(
-    session: AsyncSession, *, document_id: uuid.UUID | None = None
+    session: AsyncSession,
+    *,
+    document_id: uuid.UUID | None = None,
+    trigger: str | None = None,
 ) -> dict[str, int]:
     """Reconcile obligations for every ack-eligible Effective document (or ONE doc when scoped).
 
@@ -92,7 +143,12 @@ async def sweep_acks(
                 await session.execute(
                     select(DocumentedInformation).where(
                         DocumentedInformation.kind == DocumentKind.DOCUMENT,
-                        DocumentedInformation.current_state == DocumentCurrentState.Effective,
+                        # "In force" = a governing Effective version exists (the pointer is
+                        # cleared on obsolete). current_state is deliberately NOT used: an
+                        # UnderRevision/InReview/Approved doc still governs (R1/T7 — the prior
+                        # Effective keeps governing), and keying on state would mass-cancel
+                        # obligations the moment a revision opens.
+                        DocumentedInformation.current_effective_version_id.is_not(None),
                         DocumentedInformation.acknowledgement_required.is_(True),
                         *doc_filter,
                     )
@@ -101,8 +157,10 @@ async def sweep_acks(
             .scalars()
             .all()
         )
-        # Resolve the definition ONCE; a mis-seeded org degrades to a logged no-op (the
-        # sweep_reviews posture), never a 500-shaped Beat failure.
+        # Resolve the definition ONCE; a mis-seeded org degrades to a logged no-op — INCLUDING
+        # Pass B: with the definition missing we cannot distinguish "lapsed" from "config-broken",
+        # and cancelling on broken config would be fail-open (the blast radius is every open
+        # obligation). Fail closed: touch nothing this tick.
         if eligible and (
             await wf_repo.effective_definition(
                 session, eligible[0].org_id, _DEF_KEY, WorkflowSubjectType.DOC_ACK
@@ -110,12 +168,16 @@ async def sweep_acks(
             is None
         ):
             logger.error("ack_sweep: no effective doc_acknowledgement definition — seed missing")
-            eligible = []
+            return {"tasks_created": 0, "tasks_cancelled": 0, "skipped_lock_held": 0}
 
         eligible_ids = {d.id for d in eligible}
         due_at = _now() + datetime.timedelta(days=get_settings().ack_due_days)
+        # R43/doc 17: 'release' marks version-triggered re-arms; everything else (entry adds,
+        # flag flips, the daily catch-up) is a target_entry obligation.
         reason = (
-            AckCreatedReason.release if document_id is not None else AckCreatedReason.target_entry
+            AckCreatedReason.release
+            if trigger in ("release", "release_due")
+            else AckCreatedReason.target_entry
         )
 
         for doc in eligible:
@@ -140,6 +202,7 @@ async def sweep_acks(
             for user_id in to_cancel:
                 iid = instance_by_user.get(user_id)
                 if iid is not None and await _cancel_instance(session, iid):
+                    _emit_cancelled(session, doc.org_id, doc.id, iid, doc.identifier, "lapsed")
                     cancelled += 1
             for user_id in to_mint:
                 instance = await wf_engine.instantiate(
@@ -165,7 +228,12 @@ async def sweep_acks(
 
         # Pass B: open DOC_ACK obligations on docs that are no longer eligible.
         stale_q = (
-            select(Task.instance_id, WorkflowInstance.subject_id)
+            select(
+                Task.instance_id,
+                WorkflowInstance.subject_id,
+                WorkflowInstance.org_id,
+                WorkflowInstance.context,
+            )
             .join(WorkflowInstance, Task.instance_id == WorkflowInstance.id)
             .where(
                 WorkflowInstance.subject_type == WorkflowSubjectType.DOC_ACK,
@@ -174,8 +242,16 @@ async def sweep_acks(
         )
         if document_id is not None:
             stale_q = stale_q.where(WorkflowInstance.subject_id == document_id)
-        for instance_id, subject_id in (await session.execute(stale_q)).all():
+        for instance_id, subject_id, org_id, context in (await session.execute(stale_q)).all():
             if subject_id not in eligible_ids and await _cancel_instance(session, instance_id):
+                _emit_cancelled(
+                    session,
+                    org_id,
+                    subject_id,
+                    instance_id,
+                    (context or {}).get("identifier"),
+                    "ineligible",
+                )
                 cancelled += 1
 
         await session.commit()

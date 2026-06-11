@@ -15,7 +15,7 @@ from .app import app
 logger = logging.getLogger("easysynq.ack.tasks")
 
 
-async def _run_ack_sweep(document_id: str | None) -> dict[str, int]:
+async def _run_ack_sweep(document_id: str | None, trigger: str | None) -> dict[str, int]:
     engine = create_async_engine(get_settings().database_url)
     sessionmaker: async_sessionmaker[AsyncSession] = async_sessionmaker(
         engine, expire_on_commit=False
@@ -23,7 +23,9 @@ async def _run_ack_sweep(document_id: str | None) -> dict[str, int]:
     try:
         async with sessionmaker() as session:
             summary = await sweep_acks(
-                session, document_id=uuid.UUID(document_id) if document_id else None
+                session,
+                document_id=uuid.UUID(document_id) if document_id else None,
+                trigger=trigger,
             )
             logger.info("ack.sweep", extra={"extra_fields": summary})
             return summary
@@ -32,6 +34,6 @@ async def _run_ack_sweep(document_id: str | None) -> dict[str, int]:
 
 
 @app.task(name="easysynq.ack.sweep")  # type: ignore[untyped-decorator]
-def ack_sweep(document_id: str | None = None) -> dict[str, int]:
+def ack_sweep(document_id: str | None = None, trigger: str | None = None) -> dict[str, int]:
     """The daily (or doc-scoped, post-release/post-distribution) acknowledgement sweep."""
-    return asyncio.run(_run_ack_sweep(document_id))
+    return asyncio.run(_run_ack_sweep(document_id, trigger))
