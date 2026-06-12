@@ -1,5 +1,6 @@
-"""review_output — the 9.3.3 decisions/actions of a Management Review. Decision content (type/description/
-owner/due) freezes into the version snapshot at submit; spawned_* + tracking columns mutate post-release."""
+"""review_output — the 9.3.3 decisions/actions of a Management Review. Decision content (type/
+description/owner/due) freezes into the version snapshot at submit; spawned_* + tracking columns
+mutate post-release."""
 
 from __future__ import annotations
 
@@ -21,7 +22,11 @@ class ReviewOutput(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     org_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("organization.id", ondelete="RESTRICT", name="fk_review_output_org_id_organization"),
+        ForeignKey(
+            "organization.id",
+            ondelete="RESTRICT",
+            name="fk_review_output_org_id_organization",
+        ),
         nullable=False,
     )
     management_review_id: Mapped[uuid.UUID] = mapped_column(
@@ -37,7 +42,11 @@ class ReviewOutput(Base):
     description: Mapped[str] = mapped_column(Text, nullable=False)
     owner_user_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("app_user.id", ondelete="RESTRICT", name="fk_review_output_owner_user_id_app_user"),
+        ForeignKey(
+            "app_user.id",
+            ondelete="RESTRICT",
+            name="fk_review_output_owner_user_id_app_user",
+        ),
         nullable=True,
     )
     due_date: Mapped[datetime.date | None] = mapped_column(Date, nullable=True)
@@ -46,8 +55,12 @@ class ReviewOutput(Base):
         ForeignKey("task.id", ondelete="RESTRICT", name="fk_review_output_spawned_task_id_task"),
         nullable=True,
     )
-    spawned_capa_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)  # reserved-null, no FK
-    spawned_initiative_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)  # reserved-null
+    # spawned_capa_id / spawned_initiative_id are reserved-null operational columns — NO FK (the
+    # capa.origin_finding_id pattern; the deferred initiative family has no table yet).
+    spawned_capa_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    spawned_initiative_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), nullable=True
+    )
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

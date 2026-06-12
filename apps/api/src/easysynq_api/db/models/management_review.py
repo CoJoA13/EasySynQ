@@ -1,13 +1,14 @@
 """management_review — a kind=DOCUMENT shared-PK subtype of documented_information (type 'MR').
 
-management_review.id IS the documented_information.id (the quality_objective/form_template precedent).
-The minutes (compiled inputs + decisions) are frozen into document_version.metadata_snapshot at submit
-(NOT a column here); review_date/attendees/period_label/close_state are mutable operational state."""
+management_review.id IS the documented_information.id (the quality_objective/form_template
+precedent). The minutes (compiled inputs + decisions) freeze into document_version.metadata_snapshot
+at submit (NOT a column here); review_date/attendees/period_label/close_state are mutable state."""
 
 from __future__ import annotations
 
 import datetime
 import uuid
+from typing import Any
 
 from sqlalchemy import Date, DateTime, ForeignKey, Text, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
@@ -40,7 +41,8 @@ class ManagementReview(Base):
     )
     period_label: Mapped[str | None] = mapped_column(Text, nullable=True)
     review_date: Mapped[datetime.date | None] = mapped_column(Date, nullable=True)
-    attendees: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # JSONB list-of-objects: the informational roster [{name, role?, user_id?}].
+    attendees: Mapped[list[Any] | None] = mapped_column(JSONB, nullable=True)
     close_state: Mapped[ManagementReviewCloseState | None] = mapped_column(
         management_review_close_state_enum, nullable=True
     )
