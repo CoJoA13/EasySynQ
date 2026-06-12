@@ -607,6 +607,8 @@ async def submit_objective_endpoint(
     # trap; submit_objective_for_review freezes when the commitment changed (T2 AND T9 — S-obj-4),
     # instantiates approval, and commits atomically. Approval routes through POST
     # /tasks/{id}/decision (DOCUMENT leg).
+    # A change_reason on a NO-freeze re-submit (unchanged commitment) is deliberately unused — the
+    # reason documents the frozen version, and no version is minted.
     doc, qo = await _load_objective_doc(session, caller, objective_id, for_update=True)
     await submit_objective_for_review(
         session,
@@ -643,10 +645,32 @@ async def release_objective_endpoint(
     doc, _ = await _load_objective_doc(session, caller, objective_id)
     resource = await _objective_release_scope(session, doc)
     await enforce(session, authz_sink, request, caller, "document.release", resource, sig_hook=True)
+    # Micro-call B: capture the CURRENTLY-governing unit before the cutover demotes it (None
+    # pre-first-release). The doc row was loaded pre-release, so its pointer is the prior one.
+    prior_unit: str | None = None
+    if doc.current_effective_version_id is not None:
+        pv = await session.get(DocumentVersion, doc.current_effective_version_id)
+        pc = (pv.metadata_snapshot or {}).get("objective_commitment") if pv is not None else None
+        prior_unit = pc.get("unit") if isinstance(pc, dict) else None
     await release(caller, objective_id, vault_sink, sig_sink)
     # release() committed in its own SERIALIZABLE session; this request session's identity map
-    # still holds the pre-release state — expire it so the re-read refreshes from the DB.
+    # still holds the pre-release state — expire it so the re-reads refresh from the DB.
     session.expire_all()
+    # Micro-call B: a unit-changing revision makes current_value (old-unit readings) garbage
+    # against the new target — reset to NULL (rag honestly reads unmeasured until a reading in
+    # the new unit lands; a crash in this gap self-heals at the next measurement, which validates
+    # against the NEW governing unit).
+    doc_after = await session.get(DocumentedInformation, objective_id)
+    new_unit: str | None = None
+    if doc_after is not None and doc_after.current_effective_version_id is not None:
+        nv = await session.get(DocumentVersion, doc_after.current_effective_version_id)
+        nc = (nv.metadata_snapshot or {}).get("objective_commitment") if nv is not None else None
+        new_unit = nc.get("unit") if isinstance(nc, dict) else None
+    if prior_unit is not None and new_unit is not None and prior_unit != new_unit:
+        qo_after = await session.get(QualityObjective, objective_id)
+        if qo_after is not None and qo_after.current_value is not None:
+            qo_after.current_value = None
+            await session.commit()
     row = await get_objective(session, objective_id)
     if row is None:  # pragma: no cover — the doc was just released, it cannot be absent
         raise ProblemException(

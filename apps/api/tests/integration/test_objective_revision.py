@@ -344,15 +344,56 @@ async def test_resubmit_after_changes_requested(
     assert (frozen.metadata_snapshot or {})["objective_commitment"]["at_risk_threshold"] == "96"
 
 
-async def test_submit_409_on_in_review(
+async def _record(
+    app_client: AsyncClient, h: dict[str, str], oid: str, *, value: str, unit: str, period: str
+) -> int:
+    r = await app_client.post(
+        f"/api/v1/objectives/{oid}/measurements",
+        headers=h,
+        json={"period": period, "value": value, "unit": unit},
+    )
+    return r.status_code
+
+
+async def test_unit_change_revision_resets_current_value(
     app_client: AsyncClient, token_factory: Callable[..., str]
 ) -> None:
-    subject = f"obj4-s409-{uuid.uuid4()}"
-    h = _auth(token_factory, subject)
-    await _grant(subject, _OBJ_KEYS)
-    oid = await _create_objective(app_client, h, "Double submit")
+    oid, ho, hap, hrl = await _drive_to_effective(
+        app_client, token_factory, "Unit-change objective"
+    )
+    assert await _record(app_client, ho, oid, value="92", unit="%", period="2026-05-31") == 201
+    detail = (await app_client.get(f"/api/v1/objectives/{oid}", headers=ho)).json()
+    assert detail["current_value"] == "92"
+    # revise % → count
     assert (
-        await app_client.post(f"/api/v1/objectives/{oid}/submit-review", headers=h)
+        await app_client.post(f"/api/v1/objectives/{oid}/start-revision", headers=ho)
     ).status_code == 200
-    r = await app_client.post(f"/api/v1/objectives/{oid}/submit-review", headers=h)
-    assert r.status_code == 409, r.text
+    assert (
+        await app_client.patch(
+            f"/api/v1/objectives/{oid}",
+            headers=ho,
+            json={
+                "unit": "count",
+                "target_value": "10",
+                "at_risk_threshold": None,
+                "baseline_value": None,
+            },
+        )
+    ).status_code == 200
+    assert (
+        await app_client.post(f"/api/v1/objectives/{oid}/submit-review", headers=ho)
+    ).status_code == 200
+    task_id = await s5.task_for_doc(oid)
+    assert (
+        await app_client.post(
+            f"/api/v1/tasks/{task_id}/decision", headers=hap, json={"outcome": "approve"}
+        )
+    ).status_code == 200
+    rel = await app_client.post(f"/api/v1/objectives/{oid}/release", headers=hrl)
+    assert rel.status_code == 200, rel.text
+    # micro-call B: the old %-readings can't grade a count-target — honest unmeasured
+    assert rel.json()["current_value"] is None
+    assert rel.json()["rag"] == "unmeasured"
+    # the next reading validates against the NEW governing unit and re-rolls
+    assert await _record(app_client, ho, oid, value="8", unit="count", period="2026-06-30") == 201
+    assert await _record(app_client, ho, oid, value="8", unit="%", period="2026-07-31") == 422
