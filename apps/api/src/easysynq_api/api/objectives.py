@@ -61,6 +61,7 @@ from ..services.vault import (
     get_vault_audit_sink,
     get_vault_signature_sink,
     release,
+    start_revision,
 )
 from ..services.vault.release_scope import enrich_release_sod_scope
 from ..services.workflow import repository as wf_repo
@@ -538,6 +539,30 @@ async def update_objective_endpoint(
     if row is None:  # pragma: no cover — just mutated it, cannot be absent
         raise ProblemException(
             status=500, code="internal_error", title="Objective row not found after update"
+        )
+    qo2, ident, title, state = row
+    return _objective(qo2, identifier=ident, title=title, current_state=state, today=_today())
+
+
+@router.post("/objectives/{objective_id}/start-revision")
+async def start_objective_revision_endpoint(
+    objective_id: uuid.UUID,
+    caller: AppUser = Depends(_objective_manage_path),
+    session: AsyncSession = Depends(get_session),
+    vault_sink: VaultAuditSink = Depends(get_vault_audit_sink),
+) -> dict[str, Any]:
+    """T7 (Effective → UnderRevision) for an objective (S-obj-4, O-4) — a thin wrapper over the
+    SAME vault start_revision (FSM guard, Redis edit lock, WorkingDraft seeded from Effective,
+    REVISION_STARTED audit, commits), gated objective.manage: the F-1 asymmetry — the QMS Owner
+    holds no document.edit, so the generic route is unreachable (and guarded on OBJ rows anyway).
+    The Effective version keeps governing (R43: in-force is the pointer, which only the v2
+    cutover moves — the 6.2 ★ stays COVERED through the whole revision window)."""
+    doc, _qo = await _load_objective_doc(session, caller, objective_id, for_update=True)
+    await start_revision(session, vault_sink, caller, doc)
+    row = await get_objective(session, objective_id)
+    if row is None:  # pragma: no cover — just transitioned it, cannot be absent
+        raise ProblemException(
+            status=500, code="internal_error", title="Objective row not found after start-revision"
         )
     qo2, ident, title, state = row
     return _objective(qo2, identifier=ident, title=title, current_state=state, today=_today())

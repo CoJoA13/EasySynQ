@@ -10,6 +10,12 @@ from collections.abc import Callable
 import pytest
 from httpx import AsyncClient
 
+from easysynq_api.db.models._vault_enums import VersionState
+from easysynq_api.db.models.document_version import DocumentVersion
+from easysynq_api.db.models.documented_information import DocumentedInformation
+from easysynq_api.db.session import get_sessionmaker
+
+from . import s5_helpers as s5
 from .test_objective_lifecycle import _OBJ_KEYS, _create_objective
 from .test_quality_objectives import _grant
 from .test_vault import _auth, _checkin
@@ -110,3 +116,70 @@ async def test_patch_requires_objective_manage(
     await _grant(reader, ("objective.read",))
     r = await app_client.patch(f"/api/v1/objectives/{oid}", headers=hr, json={"target_value": "1"})
     assert r.status_code == 403, r.text
+
+
+async def _drive_to_effective(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    title: str,
+) -> tuple[str, dict[str, str], dict[str, str], dict[str, str]]:
+    """Create → submit (owner) → approve (Approver role) → release (third party).
+
+    Returns (objective_id, h_owner, h_approver, h_releaser). Self-provided personas per call
+    (run-scoped)."""
+    salt = uuid.uuid4().hex[:8]
+    owner, approver, releaser = f"obj4-ow-{salt}", f"obj4-ap-{salt}", f"obj4-rl-{salt}"
+    ho, hap, hrl = (
+        _auth(token_factory, owner),
+        _auth(token_factory, approver),
+        _auth(token_factory, releaser),
+    )
+    await _grant(owner, _OBJ_KEYS)
+    await s5.grant_role(approver, "Approver")
+    await _grant(approver, ("document.review",))  # changes_requested needs document.review
+    await _grant(releaser, ("document.release", "document.read", "document.read_draft"))
+    oid = await _create_objective(app_client, ho, title)
+    assert (
+        await app_client.post(f"/api/v1/objectives/{oid}/submit-review", headers=ho)
+    ).status_code == 200
+    task_id = await s5.task_for_doc(oid)
+    dec = await app_client.post(
+        f"/api/v1/tasks/{task_id}/decision", headers=hap, json={"outcome": "approve"}
+    )
+    assert dec.status_code == 200, dec.text
+    rel = await app_client.post(f"/api/v1/objectives/{oid}/release", headers=hrl)
+    assert rel.status_code == 200, rel.text
+    return oid, ho, hap, hrl
+
+
+async def test_start_revision_flips_under_revision_and_keeps_governing(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    oid, ho, _hap, _hrl = await _drive_to_effective(
+        app_client, token_factory, "Revisable objective"
+    )
+    r = await app_client.post(f"/api/v1/objectives/{oid}/start-revision", headers=ho)
+    assert r.status_code == 200, r.text
+    assert r.json()["current_state"] == "UnderRevision"
+    async with get_sessionmaker()() as s:
+        doc = await s.get(DocumentedInformation, uuid.UUID(oid))
+        assert doc is not None
+        assert doc.current_effective_version_id is not None  # R43: the pointer never moved
+        v = await s.get(DocumentVersion, doc.current_effective_version_id)
+        assert v is not None and v.version_state is VersionState.Effective  # v1 keeps governing
+
+
+async def test_start_revision_409_on_draft_and_403_for_reader(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    subject = f"obj4-sr409-{uuid.uuid4()}"
+    h = _auth(token_factory, subject)
+    await _grant(subject, _OBJ_KEYS)
+    oid = await _create_objective(app_client, h, "Draft cannot revise")
+    r = await app_client.post(f"/api/v1/objectives/{oid}/start-revision", headers=h)
+    assert r.status_code == 409, r.text
+    reader = f"obj4-srrdr-{uuid.uuid4()}"
+    hr = _auth(token_factory, reader)
+    await _grant(reader, ("objective.read",))
+    r2 = await app_client.post(f"/api/v1/objectives/{oid}/start-revision", headers=hr)
+    assert r2.status_code == 403, r2.text
