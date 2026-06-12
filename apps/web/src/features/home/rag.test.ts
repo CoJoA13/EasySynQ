@@ -39,6 +39,7 @@ describe("rag rules", () => {
     expect(driftRag(drift({ scans: { MIRROR: { status: "DIVERGENT", ...cleanScan }, BLOB_REHASH: null } }))).toBe("red");
     expect(driftRag(drift({ scans: { MIRROR: { status: "FAILED", ...cleanScan }, BLOB_REHASH: null } }))).toBe("amber");
     expect(driftRag(drift({ scans: { MIRROR: { status: "CLEAN", ...cleanScan }, BLOB_REHASH: { status: "CLEAN", ...cleanScan } } }))).toBe("green");
+    expect(driftRag(drift({ scans: { MIRROR: { status: "CLEAN", ...cleanScan }, BLOB_REHASH: null } }))).toBe("neutral");
     expect(driftRag(drift())).toBe("neutral");
   });
 
