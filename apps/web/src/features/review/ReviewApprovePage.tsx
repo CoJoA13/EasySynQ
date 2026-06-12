@@ -7,6 +7,7 @@ import { VersionCompare } from "../document/VersionCompare";
 import { useCapaApproval } from "../capa/hooks";
 import { CapaApprovalContext } from "./CapaApprovalContext";
 import { DecisionCard } from "./DecisionCard";
+import { ObjectiveCommitmentContext, type ObjectiveCommitment } from "./ObjectiveCommitmentContext";
 import { PeriodicReviewContext } from "./PeriodicReviewContext";
 import { AttestationCard } from "./AttestationCard";
 import { DocAckContext } from "./DocAckContext";
@@ -58,6 +59,18 @@ export function ReviewApprovePage() {
       This task has already been decided.
     </Alert>
   );
+
+  // S-obj-3: an objective subject freezes its commitment into the version metadata_snapshot — render
+  // that instead of a page redline. Detection keys on the snapshot field, never the document type
+  // (the FE may not see the type): forms have field_schema, ordinary docs have neither.
+  const objectiveCommitment =
+    (versions ?? [])
+      .map(
+        (v) =>
+          (v.metadata_snapshot as { objective_commitment?: ObjectiveCommitment } | null)
+            ?.objective_commitment,
+      )
+      .find(Boolean) ?? null;
 
   if (isCapa) {
     // The CAPA subject id is on the task (no document.read-gated instance read) → always present here.
@@ -140,8 +153,16 @@ export function ReviewApprovePage() {
       <Grid gutter="lg" align="flex-start">
         <Grid.Col span={{ base: 12, md: 7 }}>
           <Stack gap="md">
-            {doc && <Text fw={600}>{doc.title}</Text>}
-            {docId && <VersionCompare documentId={docId} versions={versions ?? []} />}
+            {doc && !objectiveCommitment && <Text fw={600}>{doc.title}</Text>}
+            {objectiveCommitment ? (
+              <ObjectiveCommitmentContext
+                commitment={objectiveCommitment}
+                title={doc?.title}
+                identifier={doc?.identifier}
+              />
+            ) : (
+              docId && <VersionCompare documentId={docId} versions={versions ?? []} />
+            )}
           </Stack>
         </Grid.Col>
         <Grid.Col span={{ base: 12, md: 5 }}>
