@@ -7,6 +7,7 @@ import { usePermissions } from "../../app/shell/usePermissions";
 import { useObjectiveScorecard } from "./hooks";
 import { fmtValueUnit, RAG_COLOR, RAG_LABEL } from "./labels";
 import { ObjectiveScorecardBand } from "./ObjectiveScorecardBand";
+import { StateBadge } from "../document/StateBadge";
 
 function currentOverTarget(o: Objective): string {
   return `${fmtValueUnit(o.current_value, "").trim() || "—"} / ${o.target_value} ${o.unit}`.trim();
@@ -101,9 +102,16 @@ export function ObjectivesRegisterPage() {
             {rows.map((o) => (
               <Table.Tr key={o.id}>
                 <Table.Td>
-                  <Anchor component={Link} to={`/objectives/${o.id}`}>
-                    {o.identifier}
-                  </Anchor>
+                  <Group gap="xs" wrap="nowrap">
+                    <Anchor component={Link} to={`/objectives/${o.id}`}>
+                      {o.identifier}
+                    </Anchor>
+                    {/* O-6c: exception-marking — the steady state (Effective) stays unmarked;
+                        Draft/InReview/UnderRevision/... get the shared StateBadge. */}
+                    {o.current_state !== "Effective" && (
+                      <StateBadge state={o.current_state} size="xs" />
+                    )}
+                  </Group>
                 </Table.Td>
                 <Table.Td>
                   <Text lineClamp={1}>{o.title}</Text>

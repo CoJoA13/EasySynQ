@@ -927,7 +927,7 @@ export const rolesFixture = [
 
 const OBJ_DETAIL_ID = "ob000001-0001-0001-0001-000000000001";
 
-const objectiveFixtures: Objective[] = [
+export const objectiveFixtures: Objective[] = [
   {
     id: OBJ_DETAIL_ID,
     identifier: "OBJ-001",
