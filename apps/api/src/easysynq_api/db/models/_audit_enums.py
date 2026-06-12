@@ -368,6 +368,13 @@ class EventType(enum.Enum):
     OBJECTIVE_MEASUREMENT_RECORDED = "OBJECTIVE_MEASUREMENT_RECORDED"
     OBJECTIVE_PLAN_ADDED = "OBJECTIVE_PLAN_ADDED"
     OBJECTIVE_PLAN_REMOVED = "OBJECTIVE_PLAN_REMOVED"
+    # S-mr-1 — clause 9.3 Management Review acts (object_type='document', R39 reuse).
+    # Added via ALTER TYPE event_type ADD VALUE in 0050 (the additive pattern; a from-scratch
+    # ``upgrade head`` rebuilds the type from EVENT_TYPE_VALUES, so the members live here too).
+    MGMT_REVIEW_INPUTS_COMPILED = "MGMT_REVIEW_INPUTS_COMPILED"
+    MGMT_REVIEW_OUTPUT_RECORDED = "MGMT_REVIEW_OUTPUT_RECORDED"
+    MGMT_REVIEW_ACTION_SPAWNED = "MGMT_REVIEW_ACTION_SPAWNED"
+    MGMT_REVIEW_CLOSED = "MGMT_REVIEW_CLOSED"
 
 
 class CheckpointSinkKind(enum.Enum):
