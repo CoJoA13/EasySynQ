@@ -397,3 +397,94 @@ async def test_unit_change_revision_resets_current_value(
     # the next reading validates against the NEW governing unit and re-rolls
     assert await _record(app_client, ho, oid, value="8", unit="count", period="2026-06-30") == 201
     assert await _record(app_client, ho, oid, value="8", unit="%", period="2026-07-31") == 422
+
+
+async def test_reads_serve_governing_during_revision(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """O-3/F-2 closed: during an UnderRevision edit, register/scorecard/detail keep grading
+    against the GOVERNING frozen commitment; the edit shows only as pending_commitment."""
+    oid, ho, _hap, _hrl = await _drive_to_effective(app_client, token_factory, "Governing reads")
+    assert (
+        await app_client.post(f"/api/v1/objectives/{oid}/start-revision", headers=ho)
+    ).status_code == 200
+    assert (
+        await app_client.patch(f"/api/v1/objectives/{oid}", headers=ho, json={"target_value": "50"})
+    ).status_code == 200
+    detail = (await app_client.get(f"/api/v1/objectives/{oid}", headers=ho)).json()
+    assert detail["target_value"] == "98"  # the governing v1 target, NOT the in-edit 50
+    assert detail["pending_commitment"]["target_value"] == "50"  # the edit, detail-only
+    assert detail["capabilities"]["edit"] is True
+    assert detail["capabilities"]["start_revision"] is True
+    row = next(
+        o
+        for o in (await app_client.get("/api/v1/objectives", headers=ho)).json()["data"]
+        if o["id"] == oid
+    )
+    assert row["target_value"] == "98"
+    assert "pending_commitment" not in row  # detail-only
+    sc = next(
+        o
+        for o in (await app_client.get("/api/v1/objectives/scorecard", headers=ho)).json()[
+            "objectives"
+        ]
+        if o["id"] == oid
+    )
+    assert sc["target_value"] == "98"
+
+
+async def test_pending_commitment_null_without_divergence(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    oid, ho, _hap, _hrl = await _drive_to_effective(app_client, token_factory, "No divergence")
+    detail = (await app_client.get(f"/api/v1/objectives/{oid}", headers=ho)).json()
+    assert detail["pending_commitment"] is None  # working == governing after release
+
+
+async def test_measurement_mid_revision_captures_governing(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """O-2: the unit gate + target_at_capture read the governing commitment — an unapproved edit
+    can never leak into evidence-grade KPI_READING records."""
+    oid, ho, _hap, _hrl = await _drive_to_effective(app_client, token_factory, "Mid-rev capture")
+    assert (
+        await app_client.post(f"/api/v1/objectives/{oid}/start-revision", headers=ho)
+    ).status_code == 200
+    assert (
+        await app_client.patch(
+            f"/api/v1/objectives/{oid}", headers=ho, json={"unit": "count", "target_value": "10"}
+        )
+    ).status_code == 200
+    # governing unit is still "%" — a "count" reading is rejected, a "%" one accepted
+    assert await _record(app_client, ho, oid, value="9", unit="count", period="2026-05-31") == 422
+    assert await _record(app_client, ho, oid, value="97", unit="%", period="2026-05-31") == 201
+    ms = (await app_client.get(f"/api/v1/objectives/{oid}/measurements", headers=ho)).json()["data"]
+    assert ms[0]["target_at_capture"] == "98"  # the governing v1 target, never the in-edit 10
+
+
+async def test_same_unit_revision_preserves_current_value(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """Micro-call B's conditional is load-bearing: a target-only (same-unit) revision must NOT
+    wipe the operational rollup (the reset fires ONLY on a unit change)."""
+    oid, ho, hap, hrl = await _drive_to_effective(app_client, token_factory, "Same-unit revision")
+    assert await _record(app_client, ho, oid, value="92", unit="%", period="2026-05-31") == 201
+    assert (
+        await app_client.post(f"/api/v1/objectives/{oid}/start-revision", headers=ho)
+    ).status_code == 200
+    assert (
+        await app_client.patch(f"/api/v1/objectives/{oid}", headers=ho, json={"target_value": "99"})
+    ).status_code == 200
+    assert (
+        await app_client.post(f"/api/v1/objectives/{oid}/submit-review", headers=ho)
+    ).status_code == 200
+    task_id = await s5.task_for_doc(oid)
+    assert (
+        await app_client.post(
+            f"/api/v1/tasks/{task_id}/decision", headers=hap, json={"outcome": "approve"}
+        )
+    ).status_code == 200
+    rel = await app_client.post(f"/api/v1/objectives/{oid}/release", headers=hrl)
+    assert rel.status_code == 200, rel.text
+    assert rel.json()["current_value"] == "92"  # preserved — and now graded vs the NEW target
+    assert rel.json()["target_value"] == "99"

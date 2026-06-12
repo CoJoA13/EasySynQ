@@ -227,6 +227,9 @@ async def test_detail_exposes_capabilities_for_the_manager(
     assert detail["capabilities"]["submit"] is True  # holds objective.manage
     assert detail["capabilities"]["release"] is False  # no document.release
     assert detail["effective_from"] is None  # Draft — present-but-null until Effective
+    assert detail["capabilities"]["edit"] is True  # S-obj-4: same objective.manage answer
+    assert detail["capabilities"]["start_revision"] is True
+    assert detail["pending_commitment"] is None  # Draft, no governing version yet
 
 
 async def test_list_omits_capabilities(

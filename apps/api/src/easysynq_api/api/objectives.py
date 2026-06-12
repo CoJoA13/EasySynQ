@@ -32,6 +32,7 @@ from ..db.models.quality_objective import QualityObjective
 from ..db.models.workflow import Task, WorkflowInstance
 from ..db.session import get_session
 from ..domain.authz import RequestContext, ResourceContext, authorize
+from ..domain.objectives.commitment import build_commitment, resolve_commitment
 from ..domain.objectives.rules import attainment, pct_toward_target, rag_status
 from ..problems import ProblemException
 from ..services.authz import (
@@ -152,12 +153,29 @@ def _objective(
     plans: list[ObjectivePlan] | None = None,
     capabilities: dict[str, bool] | None = None,
     effective_from: str | None = None,
+    governing: dict[str, Any] | None = None,
+    pending_commitment: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    # S-obj-4 (O-3, F-2 closed): every commitment-shaped field + the RAG/pct/attainment grade
+    # resolve through the GOVERNING frozen commitment when one exists (the version snapshot,
+    # never the mutable working row) — an in-flight revision edit can never re-grade the live
+    # register/scorecard. Pre-first-release (governing None) the working row IS the commitment
+    # (bit-identical to the S-obj-3 output). current_value stays operational (satellite-side).
+    c = resolve_commitment(
+        governing,
+        target_value=qo.target_value,
+        unit=qo.unit,
+        direction=qo.direction,
+        due_date=qo.due_date,
+        at_risk_threshold=qo.at_risk_threshold,
+        baseline_value=qo.baseline_value,
+        policy_id=qo.policy_id,
+    )
     rag = rag_status(
         current=qo.current_value,
-        target=qo.target_value,
-        direction=qo.direction,
-        at_risk_threshold=qo.at_risk_threshold,
+        target=c.target_value,
+        direction=c.direction,
+        at_risk_threshold=c.at_risk_threshold,
     )
     out: dict[str, Any] = {
         "id": str(qo.id),
@@ -166,29 +184,29 @@ def _objective(
         "current_state": (
             current_state.value if hasattr(current_state, "value") else str(current_state)
         ),
-        "target_value": str(qo.target_value),
-        "unit": qo.unit,
-        "baseline_value": str(qo.baseline_value) if qo.baseline_value is not None else None,
+        "target_value": str(c.target_value),
+        "unit": c.unit,
+        "baseline_value": str(c.baseline_value) if c.baseline_value is not None else None,
         "current_value": str(qo.current_value) if qo.current_value is not None else None,
-        "direction": qo.direction.value,
+        "direction": c.direction.value,
         "at_risk_threshold": (
-            str(qo.at_risk_threshold) if qo.at_risk_threshold is not None else None
+            str(c.at_risk_threshold) if c.at_risk_threshold is not None else None
         ),
-        "due_date": qo.due_date.isoformat(),
+        "due_date": c.due_date.isoformat(),
         "process_id": str(qo.process_id) if qo.process_id else None,
-        "policy_id": str(qo.policy_id) if qo.policy_id else None,
+        "policy_id": str(c.policy_id) if c.policy_id is not None else None,
         "rag": rag,
         "pct_toward_target": pct_toward_target(
             current=qo.current_value,
-            target=qo.target_value,
-            baseline=qo.baseline_value,
-            direction=qo.direction,
+            target=c.target_value,
+            baseline=c.baseline_value,
+            direction=c.direction,
         ),
         "attainment": attainment(
             current=qo.current_value,
-            target=qo.target_value,
-            direction=qo.direction,
-            due_date=qo.due_date,
+            target=c.target_value,
+            direction=c.direction,
+            due_date=c.due_date,
             today=today,
         ),
         "plans": [_plan(p) for p in (plans or [])],
@@ -196,10 +214,13 @@ def _objective(
     # S-obj-3 (detail-only): the caller's lifecycle affordances + the effective date for the
     # stepper. LIST/scorecard/create/submit/release call-sites pass neither → unchanged output.
     # A detail response ALWAYS carries effective_from (null until Effective — the _document
-    # precedent); capabilities doubles as the detail marker.
+    # precedent); capabilities doubles as the detail marker AND, since S-obj-4,
+    # pending_commitment (the in-edit working commitment when it diverges from governing, else
+    # null — the edit modal's seed + the "proposed revision" card).
     if capabilities is not None:
         out["capabilities"] = capabilities
         out["effective_from"] = effective_from
+        out["pending_commitment"] = pending_commitment
     return out
 
 
@@ -339,7 +360,15 @@ async def _objective_capabilities(
     release_cap = authorize(
         rel_grants, "document.release", release_scope, rel_ctx, sig_hook=True, sod=sod
     ).allow
-    return {"submit": submit_cap, "release": release_cap}
+    # S-obj-4 (micro-call C): edit/start_revision ride the SAME objective.manage answer as submit
+    # (permission-only, state-blind — the FE combines with current_state); split keys so the
+    # contract self-describes and an Edit button never gates on a flag named "submit".
+    return {
+        "submit": submit_cap,
+        "edit": submit_cap,
+        "start_revision": submit_cap,
+        "release": release_cap,
+    }
 
 
 async def _objective_effective_from(
@@ -398,8 +427,10 @@ async def create_objective_endpoint(
         raise ProblemException(
             status=500, code="internal_error", title="Objective row not found after create"
         )
-    _, ident, title, state = row
-    return _objective(qo, identifier=ident, title=title, current_state=state, today=_today())
+    _, ident, title, state, gov = row
+    return _objective(
+        qo, identifier=ident, title=title, current_state=state, today=_today(), governing=gov
+    )
 
 
 @router.get("/objectives")
@@ -412,8 +443,8 @@ async def list_objectives_endpoint(
     today = _today()
     return {
         "data": [
-            _objective(qo, identifier=i, title=t, current_state=s, today=today)
-            for qo, i, t, s in rows
+            _objective(qo, identifier=i, title=t, current_state=s, today=today, governing=g)
+            for qo, i, t, s, g in rows
         ]
     }
 
@@ -427,7 +458,8 @@ async def scorecard_endpoint(
     rows = await list_objectives(session, caller.org_id, process_id=process_id)
     today = _today()
     serialized = [
-        _objective(qo, identifier=i, title=t, current_state=s, today=today) for qo, i, t, s in rows
+        _objective(qo, identifier=i, title=t, current_state=s, today=today, governing=g)
+        for qo, i, t, s, g in rows
     ]
     by_rag: dict[str, int] = {"green": 0, "amber": 0, "red": 0, "unmeasured": 0}
     for o in serialized:
@@ -464,7 +496,7 @@ async def get_objective_endpoint(
     row = await get_objective(session, objective_id)
     if row is None:
         raise ProblemException(status=404, code="not_found", title="Objective not found")
-    qo, ident, title, state = row
+    qo, ident, title, state, gov = row
     plans = await list_plans(session, objective_id)
     doc = await session.get(DocumentedInformation, objective_id)
     if doc is None:  # pragma: no cover — the satellite row exists, so the base must too
@@ -473,6 +505,17 @@ async def get_objective_endpoint(
         )
     caps = await _objective_capabilities(session, caller, doc, qo)
     eff = await _objective_effective_from(session, doc)
+    # S-obj-4: the in-edit working commitment, exposed only while it diverges from governing.
+    working = build_commitment(
+        target_value=qo.target_value,
+        unit=qo.unit,
+        direction=qo.direction,
+        due_date=qo.due_date,
+        at_risk_threshold=qo.at_risk_threshold,
+        baseline_value=qo.baseline_value,
+        policy_id=qo.policy_id,
+    )
+    pending = working if (gov is not None and working != gov) else None
     return _objective(
         qo,
         identifier=ident,
@@ -482,6 +525,8 @@ async def get_objective_endpoint(
         plans=plans,
         capabilities=caps,
         effective_from=eff,
+        governing=gov,
+        pending_commitment=pending,
     )
 
 
@@ -546,8 +591,10 @@ async def update_objective_endpoint(
         raise ProblemException(
             status=500, code="internal_error", title="Objective row not found after update"
         )
-    qo2, ident, title, state = row
-    return _objective(qo2, identifier=ident, title=title, current_state=state, today=_today())
+    qo2, ident, title, state, gov = row
+    return _objective(
+        qo2, identifier=ident, title=title, current_state=state, today=_today(), governing=gov
+    )
 
 
 @router.post("/objectives/{objective_id}/start-revision")
@@ -570,8 +617,10 @@ async def start_objective_revision_endpoint(
         raise ProblemException(
             status=500, code="internal_error", title="Objective row not found after start-revision"
         )
-    qo2, ident, title, state = row
-    return _objective(qo2, identifier=ident, title=title, current_state=state, today=_today())
+    qo2, ident, title, state, gov = row
+    return _objective(
+        qo2, identifier=ident, title=title, current_state=state, today=_today(), governing=gov
+    )
 
 
 @router.get("/objectives/{objective_id}/approval")
@@ -623,8 +672,10 @@ async def submit_objective_endpoint(
         raise ProblemException(
             status=500, code="internal_error", title="Objective row not found after submit"
         )
-    qo2, ident, title, state = row
-    return _objective(qo2, identifier=ident, title=title, current_state=state, today=_today())
+    qo2, ident, title, state, gov = row
+    return _objective(
+        qo2, identifier=ident, title=title, current_state=state, today=_today(), governing=gov
+    )
 
 
 @router.post("/objectives/{objective_id}/release")
@@ -659,7 +710,7 @@ async def release_objective_endpoint(
     # Micro-call B: a unit-changing revision makes current_value (old-unit readings) garbage
     # against the new target — reset to NULL (rag honestly reads unmeasured until a reading in
     # the new unit lands; a crash in this gap self-heals at the next measurement, which validates
-    # against the NEW governing unit).
+    # against the NEW governing unit and rolls up only same-unit readings).
     doc_after = await session.get(DocumentedInformation, objective_id)
     new_unit: str | None = None
     if doc_after is not None and doc_after.current_effective_version_id is not None:
@@ -676,8 +727,10 @@ async def release_objective_endpoint(
         raise ProblemException(
             status=500, code="internal_error", title="Objective row not found after release"
         )
-    qo, ident, title, state = row
-    return _objective(qo, identifier=ident, title=title, current_state=state, today=_today())
+    qo, ident, title, state, gov = row
+    return _objective(
+        qo, identifier=ident, title=title, current_state=state, today=_today(), governing=gov
+    )
 
 
 @router.post("/objectives/{objective_id}/measurements", status_code=status.HTTP_201_CREATED)
