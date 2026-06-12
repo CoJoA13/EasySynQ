@@ -45,6 +45,7 @@ describe("rag rules", () => {
   it("driftStatusText", () => {
     expect(driftStatusText(drift({ scans: { MIRROR: { status: "CLEAN", ...cleanScan }, BLOB_REHASH: { status: "CLEAN", ...cleanScan } } }))).toBe("clean");
     expect(driftStatusText(drift({ blob_coverage: { total: 1, never_verified: 0, failing: 1, oldest_verified_at: null } }))).toBe("1 integrity issue");
+    expect(driftStatusText(drift({ scans: { MIRROR: { status: "FAILED", ...cleanScan }, BLOB_REHASH: null } }))).toBe("scan needs attention");
   });
 
   it("worstRag picks the worst; empty → neutral", () => {
