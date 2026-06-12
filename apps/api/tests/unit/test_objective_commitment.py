@@ -65,7 +65,12 @@ def test_build_commitment_is_rfc8785_serializable_and_deterministic() -> None:
         baseline_value=None,
         policy_id=None,
     )
-    assert rfc8785.dumps(c) == rfc8785.dumps(c)
+    # Pin the exact JCS bytes (the test_audit_canonical encoder-pin pattern): key order + the
+    # decimals-as-strings encoding both break loudly on an rfc8785/encoding change.
+    assert rfc8785.dumps(c) == (
+        b'{"at_risk_threshold":null,"baseline_value":null,"direction":"HIGHER_IS_BETTER",'
+        b'"due_date":"2026-12-31","policy_id":null,"target_value":"98","unit":"%"}'
+    )
     # decimals are strings, never floats (exact, reproducible bytes)
     assert b"98.0" not in rfc8785.dumps(c)
 
