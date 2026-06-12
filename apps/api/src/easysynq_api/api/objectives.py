@@ -15,11 +15,13 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Request, Response, status
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..auth.dependencies import get_current_user
 from ..db.models._objective_enums import ObjectiveDirection
 from ..db.models.app_user import AppUser
+from ..db.models.documented_information import DocumentedInformation
 from ..db.models.kpi_measurement import KpiMeasurement
 from ..db.models.objective_plan import ObjectivePlan
 from ..db.models.quality_objective import QualityObjective
@@ -37,6 +39,7 @@ from ..services.objectives import (
     list_plans,
     record_measurement,
     remove_objective_plan,
+    submit_objective_for_review,
 )
 from ..services.objectives import queries as obj_queries  # noqa: F401 — available for future use
 from ..services.vault import VaultAuditSink, get_vault_audit_sink
@@ -171,6 +174,29 @@ async def _objective_scope(
     return ResourceContext(process_ids=frozenset({str(qo.process_id)}))
 
 
+async def _load_objective_doc(
+    session: AsyncSession, caller: AppUser, objective_id: uuid.UUID, *, for_update: bool = False
+) -> tuple[DocumentedInformation, QualityObjective]:
+    """Load the objective's base document + satellite, 404 if it isn't an OBJ in the caller's org.
+    ``for_update`` takes the row lock + ``populate_existing`` (the authz resolver already
+    session.get-loaded the satellite — the S-drift-1 identity-map staleness trap)."""
+    if for_update:
+        doc = (
+            await session.execute(
+                select(DocumentedInformation)
+                .where(DocumentedInformation.id == objective_id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+        ).scalar_one_or_none()
+    else:
+        doc = await session.get(DocumentedInformation, objective_id)
+    qo = await session.get(QualityObjective, objective_id)
+    if doc is None or qo is None or doc.org_id != caller.org_id:
+        raise ProblemException(status=404, code="not_found", title="Objective not found")
+    return doc, qo
+
+
 _objective_read = require("objective.read")
 _kpi_read = require("kpi.read", async_scope_resolver=_objective_scope)
 _objective_manage_path = require("objective.manage", async_scope_resolver=_objective_scope)
@@ -275,6 +301,27 @@ async def get_objective_endpoint(
     return _objective(
         qo, identifier=ident, title=title, current_state=state, today=_today(), plans=plans
     )
+
+
+@router.post("/objectives/{objective_id}/submit-review")
+async def submit_objective_endpoint(
+    objective_id: uuid.UUID,
+    caller: AppUser = Depends(_objective_manage_path),
+    session: AsyncSession = Depends(get_session),
+    vault_sink: VaultAuditSink = Depends(get_vault_audit_sink),
+) -> dict[str, Any]:
+    # FOR UPDATE + populate_existing serializes concurrent submits and dodges the stale-identity-map
+    # trap; submit_objective_for_review freezes the commitment, runs T2, instantiates approval, and
+    # commits atomically. Approval then routes through POST /tasks/{id}/decision (DOCUMENT leg).
+    doc, qo = await _load_objective_doc(session, caller, objective_id, for_update=True)
+    await submit_objective_for_review(session, vault_sink, caller, doc, qo)
+    row = await get_objective(session, objective_id)
+    if row is None:  # pragma: no cover — just mutated it, cannot be absent
+        raise ProblemException(
+            status=500, code="internal_error", title="Objective row not found after submit"
+        )
+    qo2, ident, title, state = row
+    return _objective(qo2, identifier=ident, title=title, current_state=state, today=_today())
 
 
 @router.post("/objectives/{objective_id}/measurements", status_code=status.HTTP_201_CREATED)
