@@ -167,6 +167,33 @@ describe("ReviewApprovePage — objective (DOCUMENT) subject", () => {
       screen.queryByText("The objective commitment you are approving."),
     ).not.toBeInTheDocument();
   });
+
+  test("a decided objective task shows the Decided alert beside the commitment card", async () => {
+    server.use(
+      http.get("/api/v1/documents/:id/versions", () =>
+        HttpResponse.json([objectiveVersionWithCommitment]),
+      ),
+      http.get("/api/v1/tasks/:id", () =>
+        HttpResponse.json({
+          id: "task1111-1111-1111-1111-111111111111",
+          instance_id: "wf111111-1111-1111-1111-111111111111",
+          stage_key: "quality_approval",
+          type: "APPROVE",
+          state: "DONE",
+          assignee_user_id: "bbbb1111-1111-1111-1111-111111111111",
+          candidate_pool: ["bbbb1111-1111-1111-1111-111111111111"],
+          action_expected: "approve",
+          due_at: null,
+        }),
+      ),
+    );
+    renderAtTask("task1111-1111-1111-1111-111111111111");
+    expect(
+      await screen.findByText("The objective commitment you are approving."),
+    ).toBeInTheDocument();
+    expect(screen.getByText("This task has already been decided.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Submit decision" })).not.toBeInTheDocument();
+  });
 });
 
 describe("ReviewApprovePage DOC_ACK branch", () => {

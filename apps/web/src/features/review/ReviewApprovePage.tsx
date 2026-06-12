@@ -63,6 +63,8 @@ export function ReviewApprovePage() {
   // S-obj-3: an objective subject freezes its commitment into the version metadata_snapshot — render
   // that instead of a page redline. Detection keys on the snapshot field, never the document type
   // (the FE may not see the type): forms have field_schema, ordinary docs have neither.
+  // versions is newest-first (the endpoint orders by version_seq DESC), so the first version with a
+  // commitment is the InReview one the approver is signing — load-bearing for the revision era.
   const objectiveCommitment =
     (versions ?? [])
       .map(

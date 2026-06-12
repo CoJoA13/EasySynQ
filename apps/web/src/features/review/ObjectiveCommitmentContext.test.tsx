@@ -29,8 +29,8 @@ describe("ObjectiveCommitmentContext", () => {
     expect(screen.getByText("95 %")).toBeInTheDocument();
     expect(screen.getByText("Higher is better")).toBeInTheDocument();
     expect(screen.getByText("2026-12-31")).toBeInTheDocument();
-    expect(screen.getByText("90")).toBeInTheDocument();
-    expect(screen.getByText("80")).toBeInTheDocument();
+    expect(screen.getByText("90 %")).toBeInTheDocument();
+    expect(screen.getByText("80 %")).toBeInTheDocument();
   });
 
   test("renders em-dashes for absent optionals", () => {

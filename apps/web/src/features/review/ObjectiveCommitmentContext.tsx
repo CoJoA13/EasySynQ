@@ -57,8 +57,18 @@ export function ObjectiveCommitmentContext({
           <Table.Tbody>
             {row("Target", `${commitment.target_value} ${commitment.unit}`)}
             {row("Direction", DIRECTION_LABEL[commitment.direction])}
-            {row("At-risk threshold", commitment.at_risk_threshold ?? "—")}
-            {row("Baseline", commitment.baseline_value ?? "—")}
+            {row(
+              "At-risk threshold",
+              commitment.at_risk_threshold !== null
+                ? `${commitment.at_risk_threshold} ${commitment.unit}`
+                : "—",
+            )}
+            {row(
+              "Baseline",
+              commitment.baseline_value !== null
+                ? `${commitment.baseline_value} ${commitment.unit}`
+                : "—",
+            )}
             {row("Due date", commitment.due_date)}
           </Table.Tbody>
         </Table>
