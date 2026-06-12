@@ -70,6 +70,12 @@ export function ObjectiveCommitmentContext({
                 : "—",
             )}
             {row("Due date", commitment.due_date)}
+            {/* R25: the Quality Policy is a singleton, so presence is unambiguous (Codex P2 —
+                the signer must see the frozen policy link, not have it silently hidden). */}
+            {row(
+              "Quality Policy",
+              commitment.policy_id !== null ? "Linked to the Quality Policy" : "—",
+            )}
           </Table.Tbody>
         </Table>
       </Stack>

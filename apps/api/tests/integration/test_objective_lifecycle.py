@@ -20,7 +20,7 @@ from easysynq_api.db.session import get_sessionmaker
 
 from . import s5_helpers as s5
 from .test_quality_objectives import _grant
-from .test_vault import _auth
+from .test_vault import _auth, _checkin, _upload
 
 pytestmark = pytest.mark.integration
 
@@ -263,3 +263,42 @@ async def test_policy_endpoint_requires_objective_read(
     r = await app_client.get("/api/v1/objectives/policy", headers=h)
     assert r.status_code == 403, r.text
     assert r.json()["code"] == "permission_denied"
+
+
+async def test_submit_freezes_even_after_a_generic_byte_checkin(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """The generic /documents checkout/checkin byte-path accepts an OBJ id; a commitment-less
+    byte-version must NOT suppress the freeze (Codex P2) — submit still freezes a new commitment
+    version and advances THAT one, leaving the byte-version behind as an orphan Draft."""
+    subject = f"obj-byte-{uuid.uuid4()}"
+    h = _auth(token_factory, subject)
+    await _grant(subject, _OBJ_KEYS)
+    await _grant(subject, ("document.checkout", "document.edit"))
+    oid = await _create_objective(app_client, h, "Byte-path objective")
+
+    co = await app_client.post(f"/api/v1/documents/{oid}/checkout", headers=h)
+    assert co.status_code == 200, co.text
+    sha = await _upload(app_client, h, oid, f"obj-byte-{subject}".encode())
+    ci = await _checkin(app_client, h, oid, sha, change_reason="byte", change_significance="MAJOR")
+    assert ci.status_code == 201, ci.text
+
+    r = await app_client.post(f"/api/v1/objectives/{oid}/submit-review", headers=h)
+    assert r.status_code == 200, r.text
+    async with get_sessionmaker()() as s:
+        versions = (
+            (
+                await s.execute(
+                    select(DocumentVersion)
+                    .where(DocumentVersion.document_id == uuid.UUID(oid))
+                    .order_by(DocumentVersion.version_seq)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert len(versions) == 2
+        frozen = versions[-1]
+        assert (frozen.metadata_snapshot or {}).get("objective_commitment") is not None
+        assert frozen.version_state is VersionState.InReview  # the commitment version advanced
+        assert versions[0].version_state is VersionState.Draft  # the byte-version left behind

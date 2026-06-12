@@ -35,10 +35,14 @@ async def submit_objective_for_review(
             title="Objective is not in Draft",
             detail=f"current_state is {doc.current_state.value}",
         )
-    # Freeze a new version IFF none exists yet (first submit). A re-submit after request_changes
-    # advances the existing latest Draft version unchanged — there is no commitment-edit path in v1,
-    # so re-freezing identical bytes would be a pointless duplicate version.
-    if await vault_repo.latest_version(session, doc.id) is None:
+    # Freeze a new version IFF the latest version doesn't already carry the frozen commitment —
+    # keyed on the SNAPSHOT FIELD, never bare version existence (Codex P2): the generic
+    # /documents checkout/checkin byte-path accepts an OBJ id, and a commitment-less byte-version
+    # must not suppress the freeze (submit would then advance an unfrozen version to release).
+    # A re-submit after request_changes still skips (the latest version IS the frozen one) — there
+    # is no commitment-edit path in v1, so re-freezing identical bytes would be a duplicate.
+    latest = await vault_repo.latest_version(session, doc.id)
+    if latest is None or (latest.metadata_snapshot or {}).get("objective_commitment") is None:
         commitment = build_commitment(
             target_value=qo.target_value,
             unit=qo.unit,

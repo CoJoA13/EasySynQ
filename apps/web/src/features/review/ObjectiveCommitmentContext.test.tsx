@@ -31,6 +31,19 @@ describe("ObjectiveCommitmentContext", () => {
     expect(screen.getByText("2026-12-31")).toBeInTheDocument();
     expect(screen.getByText("90 %")).toBeInTheDocument();
     expect(screen.getByText("80 %")).toBeInTheDocument();
+    // policy_id null → the Quality Policy row reads an em-dash, never silently hidden
+    expect(screen.getByText("Quality Policy")).toBeInTheDocument();
+    expect(screen.getByText("—")).toBeInTheDocument();
+  });
+
+  test("renders the policy link when the frozen commitment carries policy_id", () => {
+    renderWithProviders(
+      <ObjectiveCommitmentContext
+        commitment={{ ...commitment, policy_id: "po000001-0001-0001-0001-000000000001" }}
+      />,
+    );
+    expect(screen.getByText("Linked to the Quality Policy")).toBeInTheDocument();
+    expect(screen.queryByText("—")).not.toBeInTheDocument();
   });
 
   test("renders em-dashes for absent optionals", () => {
@@ -39,6 +52,6 @@ describe("ObjectiveCommitmentContext", () => {
         commitment={{ ...commitment, at_risk_threshold: null, baseline_value: null }}
       />,
     );
-    expect(screen.getAllByText("—")).toHaveLength(2);
+    expect(screen.getAllByText("—")).toHaveLength(3); // threshold + baseline + policy
   });
 });
