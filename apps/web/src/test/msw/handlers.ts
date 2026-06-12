@@ -1196,6 +1196,8 @@ export const handlers = [
   ),
   http.delete("/api/v1/objectives/:id/plans/:planId", () => new HttpResponse(null, { status: 204 })),
   // S-obj-4: PATCH merges over the bare row (the api returns the LIST shape — no detail keys).
+  // Merge-over is faithful only pre-first-release (governing None); an UnderRevision test must
+  // override (the real response shows GOVERNING values, never the just-PATCHed ones — O-3).
   http.patch("/api/v1/objectives/:id", async ({ request }) => {
     const body = (await request.json()) as Partial<Objective>;
     return HttpResponse.json({ ...objectiveFixtures[0]!, ...body } as Objective);

@@ -80,7 +80,9 @@ it("shows Release (and not Submit) on an Approved objective with release capabil
       HttpResponse.json({
         ...objectiveDetailFixture,
         current_state: "Approved",
-        capabilities: { submit: false, release: true, edit: true, start_revision: true },
+        // submit/edit/start_revision are the SAME objective.manage answer server-side — an
+        // API-faithful fixture can never split them (the #1 false-PASS class).
+        capabilities: { submit: false, release: true, edit: false, start_revision: false },
         pending_commitment: null,
       } satisfies Objective),
     ),
