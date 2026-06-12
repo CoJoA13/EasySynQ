@@ -58,7 +58,15 @@ export function EditCommitmentModal({ opened, objective, onClose }: Props) {
       due_date: dueDate,
       at_risk_threshold: threshold.trim() === "" ? null : threshold.trim(),
       baseline_value: baseline.trim() === "" ? null : baseline.trim(),
-      policy_id: linkPolicy && policy ? policy.id : null,
+      // An errored/loading policy read must never DECIDE the link — preserve the seeded value
+      // (the S-home-1 lesson applied to writes, not just copy): only a trustworthy read may
+      // change policy_id via the checkbox.
+      policy_id:
+        policyError || policyLoading
+          ? seed.policy_id
+          : linkPolicy && policy
+            ? policy.id
+            : null,
     };
     try {
       await update.mutateAsync(body);

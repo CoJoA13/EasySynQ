@@ -103,6 +103,45 @@ describe("EditCommitmentModal", () => {
     expect(saveBtn).not.toBeDisabled();
   });
 
+  it("preserves a seeded policy link when the policy read errored", async () => {
+    // Render with an objective whose policy_id is non-null so the seed carries a link.
+    const objectiveWithPolicy: Objective = {
+      ...objectiveDetailFixture,
+      policy_id: "po000001-0001-0001-0001-000000000001",
+      pending_commitment: null,
+    };
+    // Override the policy endpoint to 500 — the read errors out.
+    server.use(
+      http.get("/api/v1/objectives/policy", () =>
+        HttpResponse.json({ code: "internal_error" }, { status: 500 }),
+      ),
+    );
+    let capturedBody: ObjectiveUpdateBody | null = null;
+    server.use(
+      http.patch("/api/v1/objectives/:id", async ({ request }) => {
+        capturedBody = (await request.json()) as ObjectiveUpdateBody;
+        return HttpResponse.json({ ...objectiveWithPolicy } as Objective);
+      }),
+    );
+
+    renderWithProviders(
+      <EditCommitmentModal opened objective={objectiveWithPolicy} onClose={() => {}} />,
+    );
+    const dialog = await screen.findByRole("dialog");
+
+    // The neutral error copy must appear (not the positive "no policy yet")
+    await waitFor(() =>
+      expect(
+        within(dialog).getByText(/couldn't load the quality policy/i),
+      ).toBeInTheDocument(),
+    );
+
+    // Save — the body must NOT silently drop the seeded policy link to null
+    fireEvent.click(within(dialog).getByRole("button", { name: /save changes/i }));
+    await waitFor(() => expect(capturedBody).not.toBeNull());
+    expect(capturedBody!.policy_id).toBe("po000001-0001-0001-0001-000000000001");
+  });
+
   it("reopen resets: close unmounts; reopen seeds the original value", async () => {
     // A stateful Host component to test the conditional render (open && <Modal>) posture.
     function Host() {

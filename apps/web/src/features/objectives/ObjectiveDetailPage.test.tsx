@@ -216,7 +216,9 @@ it("hides Edit commitment on an Effective objective (state gate)", async () => {
         ...objectiveDetailFixture,
         current_state: "Effective",
         effective_from: "2026-06-01T09:00:00+00:00",
-        capabilities: { submit: false, release: false, edit: true, start_revision: false },
+        // submit/edit/start_revision are the SAME objective.manage answer server-side — an
+        // API-faithful fixture can never split them (the #1 false-PASS class).
+        capabilities: { submit: true, release: false, edit: true, start_revision: true },
         pending_commitment: null,
       } satisfies Objective),
     ),
