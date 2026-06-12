@@ -6,7 +6,7 @@ import { axe } from "jest-axe";
 import { Route, Routes } from "react-router-dom";
 import type { Objective } from "../../lib/types";
 import { renderWithProviders } from "../../test/render";
-import { objectiveDetailFixture } from "../../test/msw/handlers";
+import { objectiveDetailFixture, objectiveUnderRevisionDetailFixture } from "../../test/msw/handlers";
 import { server } from "../../test/msw/server";
 import { ObjectiveDetailPage } from "./ObjectiveDetailPage";
 
@@ -125,4 +125,67 @@ it("surfaces a calm error when submit fails", async () => {
   await waitFor(() => expect(screen.getByText("Commitment incomplete")).toBeInTheDocument());
   // The page stays usable — the affordance is still there for a retry.
   expect(screen.getByRole("button", { name: "Submit for review" })).toBeInTheDocument();
+});
+
+// ---- S-obj-4 revision affordances ----
+
+it("shows Start revision on an Effective objective with the capability", async () => {
+  server.use(
+    http.get("/api/v1/objectives/:id", () =>
+      HttpResponse.json({
+        ...objectiveDetailFixture,
+        current_state: "Effective",
+        effective_from: "2026-06-01T09:00:00+00:00",
+      } satisfies Objective),
+    ),
+  );
+  renderAt(ID);
+  await screen.findByRole("button", { name: "Start revision" });
+  expect(screen.queryByRole("button", { name: "Submit for review" })).not.toBeInTheDocument();
+});
+
+it("UnderRevision: the calm revision panel replaces the stepper; Submit is offered", async () => {
+  server.use(
+    http.get("/api/v1/objectives/:id", () =>
+      HttpResponse.json(objectiveUnderRevisionDetailFixture),
+    ),
+    // Leave the approval handler at its default — it returns a COMPLETED-looking instance.
+    // The calm panel must appear INSTEAD of the stepper.
+  );
+  renderAt(ID);
+  await screen.findByText(/revision in progress/i);
+  // The Alert body — there may also be a ProposedRevisionCard with similar text, so use getAllByText.
+  expect(screen.getAllByText(/keeps governing/i).length).toBeGreaterThan(0);
+  expect(screen.queryByText("Released to effective")).toBeNull();
+  expect(screen.getByRole("button", { name: "Submit for review" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Start revision" })).not.toBeInTheDocument();
+});
+
+it("renders the proposed-revision card with was→now rows when pending_commitment diverges", async () => {
+  server.use(
+    http.get("/api/v1/objectives/:id", () =>
+      HttpResponse.json(objectiveUnderRevisionDetailFixture),
+    ),
+  );
+  renderAt(ID);
+  // objectiveUnderRevisionDetailFixture: governing target "95 %", pending "97 %"
+  await screen.findByText(/proposed revision/i);
+  expect(screen.getByText("95 % → 97 %")).toBeInTheDocument();
+});
+
+it("hides Start revision without the capability", async () => {
+  server.use(
+    http.get("/api/v1/objectives/:id", () =>
+      HttpResponse.json({
+        ...objectiveDetailFixture,
+        current_state: "Effective",
+        effective_from: "2026-06-01T09:00:00+00:00",
+        capabilities: { submit: false, release: false, edit: false, start_revision: false },
+        pending_commitment: null,
+      } satisfies Objective),
+    ),
+  );
+  renderAt(ID);
+  await screen.findByRole("heading", { name: "On-time delivery rate" });
+  expect(screen.queryByRole("button", { name: "Start revision" })).not.toBeInTheDocument();
 });
