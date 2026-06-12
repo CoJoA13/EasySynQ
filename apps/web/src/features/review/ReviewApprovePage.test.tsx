@@ -4,7 +4,13 @@ import { describe, expect, test } from "vitest";
 import { screen } from "@testing-library/react";
 import { server } from "../../test/msw/server";
 import { renderWithProviders } from "../../test/render";
-import { approvalFixture, capaApprovalFixture, capaApprovalTask, periodicReviewTask } from "../../test/msw/handlers";
+import {
+  approvalFixture,
+  capaApprovalFixture,
+  capaApprovalTask,
+  objectiveVersionWithCommitment,
+  periodicReviewTask,
+} from "../../test/msw/handlers";
 import { ReviewApprovePage } from "./ReviewApprovePage";
 
 function mount(route: string) {
@@ -128,6 +134,65 @@ describe("ReviewApprovePage — PERIODIC_REVIEW", () => {
     renderAtTask(periodicReviewTask.id);
     expect(await screen.findByText("This task has already been decided.")).toBeInTheDocument();
     expect(screen.queryByLabelText("Confirm — no change needed")).not.toBeInTheDocument();
+  });
+});
+
+describe("ReviewApprovePage — objective (DOCUMENT) subject", () => {
+  test("an objective approval renders the frozen commitment card, not the redline", async () => {
+    // The subject version carries metadata_snapshot.objective_commitment — detection keys on the
+    // SNAPSHOT FIELD, never the document type.
+    server.use(
+      http.get("/api/v1/documents/:id/versions", () =>
+        HttpResponse.json([objectiveVersionWithCommitment]),
+      ),
+    );
+    renderAtTask("task1111-1111-1111-1111-111111111111");
+    expect(
+      await screen.findByText("The objective commitment you are approving."),
+    ).toBeInTheDocument();
+    // decimals stay STRINGS rendered verbatim ("95 %", never a reformatted number)
+    expect(screen.getByText("95 %")).toBeInTheDocument();
+    expect(screen.getByText("Higher is better")).toBeInTheDocument();
+    // the DecisionCard is byte-identical — an objective decision IS a document decision
+    expect(await screen.findByRole("button", { name: "Submit decision" })).toBeInTheDocument();
+    // no redline picker
+    expect(screen.queryByText("Compare from")).not.toBeInTheDocument();
+  });
+
+  test("an ordinary document (no objective_commitment) keeps the redline path unchanged", async () => {
+    // default handlers: versionFixture (2 versions, metadata_snapshot null) → VersionCompare renders
+    renderAtTask("task1111-1111-1111-1111-111111111111");
+    expect(await screen.findByText("Compare from")).toBeInTheDocument();
+    expect(
+      screen.queryByText("The objective commitment you are approving."),
+    ).not.toBeInTheDocument();
+  });
+
+  test("a decided objective task shows the Decided alert beside the commitment card", async () => {
+    server.use(
+      http.get("/api/v1/documents/:id/versions", () =>
+        HttpResponse.json([objectiveVersionWithCommitment]),
+      ),
+      http.get("/api/v1/tasks/:id", () =>
+        HttpResponse.json({
+          id: "task1111-1111-1111-1111-111111111111",
+          instance_id: "wf111111-1111-1111-1111-111111111111",
+          stage_key: "quality_approval",
+          type: "APPROVE",
+          state: "DONE",
+          assignee_user_id: "bbbb1111-1111-1111-1111-111111111111",
+          candidate_pool: ["bbbb1111-1111-1111-1111-111111111111"],
+          action_expected: "approve",
+          due_at: null,
+        }),
+      ),
+    );
+    renderAtTask("task1111-1111-1111-1111-111111111111");
+    expect(
+      await screen.findByText("The objective commitment you are approving."),
+    ).toBeInTheDocument();
+    expect(screen.getByText("This task has already been decided.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Submit decision" })).not.toBeInTheDocument();
   });
 });
 

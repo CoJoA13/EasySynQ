@@ -95,6 +95,7 @@ def _snapshot(
     *,
     field_schema: dict[str, Any] | None = None,
     distribution: list[dict[str, Any]] | None = None,
+    objective_commitment: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Metadata as it was at check-in (doc 14 §5.3) — frozen onto the immutable version. Ordinary
     documents call this with no ``field_schema`` (the snapshot shape is unchanged). A Form/Template
@@ -102,7 +103,8 @@ def _snapshot(
     capture validator reads it from here, never the mutable ``form_template`` row). S-ack-1 (doc 04
     §6.1): the version self-describes its audience/ack policy — ``acknowledgement_required`` + the
     serialized distribution entries are frozen here (the metadata diff's SNAPSHOT_FIELDS allowlist
-    deliberately excludes them in v1; revisiting is S-ack-2's call)."""
+    deliberately excludes them in v1; revisiting is S-ack-2's call). S-obj-3 (clause 6.2): an OBJ
+    check-in passes ``objective_commitment`` so the version pins the commitment dict."""
     snap: dict[str, Any] = {
         "identifier": doc.identifier,
         "title": doc.title,
@@ -118,6 +120,10 @@ def _snapshot(
     }
     if field_schema is not None:
         snap["field_schema"] = field_schema
+    # S-obj-3 (clause 6.2): the OBJ's versioned commitment is frozen here, the form_template
+    # field_schema precedent — one optional kwarg, the shared body never branches on doc kind.
+    if objective_commitment is not None:
+        snap["objective_commitment"] = objective_commitment
     return snap
 
 
@@ -357,6 +363,10 @@ async def checkin(
     )
     session.add(version)
     await session.delete(wd)
+    # Flush BEFORE _emit: the uuid PK is a FLUSH-time default — a pending instance reads
+    # version.id as None, which would persist the CHECKIN audit row with object_id=NULL
+    # (the create_document precedent; doc 12 §4.4 wants the real version linkage).
+    await session.flush()
     _emit(
         session,
         sink,
@@ -599,6 +609,9 @@ async def checkin_form_schema(
         created_by=actor.id,
     )
     session.add(version)
+    # Flush BEFORE _emit — the uuid PK is a FLUSH-time default (see checkin); without it the
+    # CHECKIN audit row persists object_id=NULL.
+    await session.flush()
     _emit(
         session,
         sink,
@@ -611,6 +624,105 @@ async def checkin_form_schema(
     )
     await session.commit()
     await session.refresh(version)
+    return version
+
+
+async def checkin_objective_commitment(
+    session: AsyncSession,
+    sink: VaultAuditSink,
+    actor: AppUser,
+    doc: DocumentedInformation,
+    *,
+    commitment: dict[str, Any],
+    change_reason: str,
+    change_significance: str,
+) -> DocumentVersionModel:
+    """Freeze a Quality Objective's ``commitment`` (a pre-built JSON-safe dict) into an immutable
+    ``DocumentVersion`` (S-obj-3 — the ``checkin_form_schema`` precedent). The canonical-serialized
+    commitment is the version's WORM source blob (server-side write — no client upload,
+    ``application/json`` → ``no_controlled_rendition`` R26), and the SAME dict is pinned into
+    ``metadata_snapshot`` in one transaction. Unlike ``checkin_form_schema`` this FLUSHES (does not
+    commit): the freeze is a sub-step of ``submit_objective_for_review``, which owns the
+    submit/approval txn boundary."""
+    if not change_reason or not change_reason.strip():
+        raise ProblemException(
+            status=422,
+            code="validation_error",
+            title="Check-in requires a change reason (INV-3)",
+            errors=[{"field": "change_reason", "code": "required", "message": "must be non-empty"}],
+        )
+    try:
+        significance = ChangeSignificance(change_significance)
+    except ValueError as exc:
+        raise ProblemException(
+            status=422,
+            code="validation_error",
+            title="Check-in requires change_significance MAJOR or MINOR (INV-3)",
+            errors=[{"field": "change_significance", "code": "invalid", "message": "MAJOR|MINOR"}],
+        ) from exc
+
+    payload = rfc8785.dumps(commitment)  # JCS — identical commitment → identical source blob
+    sha = hashlib.sha256(payload).hexdigest()
+    if await repository.get_blob(session, sha) is None:
+        await storage.put_staging_bytes(payload, sha, content_type="application/json")
+        promoted = await storage.finalize_worm(sha)
+        if not promoted.exists:  # pragma: no cover - defensive (we just wrote it)
+            raise ProblemException(
+                status=500, code="internal_error", title="Commitment object upload failed"
+            )
+        if promoted.retain_until is None:
+            raise ProblemException(
+                status=423, code="worm_required", title="Commitment object is not WORM-locked"
+            )
+        await session.execute(
+            pg_insert(Blob)
+            .values(
+                sha256=sha,
+                org_id=actor.org_id,
+                size_bytes=promoted.size or len(payload),
+                mime_type="application/json",
+                bucket=get_settings().s3_bucket_documents,
+                object_key=sha,
+                worm_locked=True,
+                worm_retain_until=promoted.retain_until,
+            )
+            .on_conflict_do_nothing(index_elements=["sha256"])
+        )
+        await session.flush()
+
+    seq = await repository.next_version_seq(session, doc.id)
+    dist_snap = await _distribution_snapshot(session, doc.id)
+    version = DocumentVersionModel(
+        org_id=actor.org_id,
+        document_id=doc.id,
+        version_seq=seq,
+        revision_label=revision_label(seq),
+        change_significance=significance,
+        change_reason=change_reason.strip(),
+        version_state=VersionState.Draft,
+        source_blob_sha256=sha,
+        # SAME commitment dict → bytes ≡ snapshot.
+        metadata_snapshot=_snapshot(doc, objective_commitment=commitment, distribution=dist_snap),
+        author_user_id=actor.id,
+        created_by=actor.id,
+    )
+    session.add(version)
+    # Flush BEFORE _emit — NOT commit (submit_objective_for_review owns the txn boundary). The
+    # ``default=uuid.uuid4`` id is a FLUSH-time default (a pending instance reads ``id`` as None),
+    # so the flush populates version.id for the audit row's object_id (the create_document
+    # precedent; ``checkin``/``checkin_form_schema`` emit pre-flush, so their CHECKIN rows carry
+    # no real version id — a legacy quirk deliberately not mirrored here).
+    await session.flush()
+    _emit(
+        session,
+        sink,
+        "CHECKIN",
+        actor,
+        "document_version",
+        version.id,
+        identifier=doc.identifier,
+        reason=change_reason.strip(),
+    )
     return version
 
 

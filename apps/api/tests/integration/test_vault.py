@@ -375,3 +375,33 @@ async def test_checkout_heartbeat_refreshes_lock(
     miss = await app_client.post(f"/api/v1/documents/{other['id']}/heartbeat", headers=h)
     assert miss.status_code == 409
     assert miss.json()["code"] == "lock_conflict"
+
+
+async def test_checkin_audit_row_carries_the_version_object_id(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    """The CHECKIN audit row links the REAL version id (doc 12 §4.4). The uuid PK is a FLUSH-time
+    default, so an emit-before-flush persists object_id=NULL — the legacy bug fixed alongside
+    S-obj-3 (forward-only; historical NULL rows stay, the audit chain is append-only)."""
+    from easysynq_api.db.models._audit_enums import EventType
+    from easysynq_api.db.models.audit_event import AuditEvent
+
+    await _grant_doc_perms(subj.a)
+    h = _auth(token_factory, subj.a)
+    did = (await _create(app_client, h, await _sop_type_id()))["id"]
+    await app_client.post(f"/api/v1/documents/{did}/checkout", headers=h)
+    sha = await _upload(app_client, h, did, f"audit-objid-{subj.a}".encode())
+    ci = await _checkin(app_client, h, did, sha, change_reason="v1", change_significance="MAJOR")
+    assert ci.status_code == 201, ci.text
+    version_id = uuid.UUID(ci.json()["id"])
+
+    async with get_sessionmaker()() as s:
+        row = (
+            await s.execute(
+                select(AuditEvent).where(
+                    AuditEvent.event_type == EventType.CHECKIN,
+                    AuditEvent.object_id == version_id,  # run-scoped: this version's row only
+                )
+            )
+        ).scalar_one()
+        assert row.object_id == version_id

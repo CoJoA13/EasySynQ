@@ -1,5 +1,5 @@
 import { http, HttpResponse } from "msw";
-import type { AckDecisionResult, AckMatrixRow, AuditList, AuditPlanList, AuditProgramList, Capa, Complaint, DistributionPayload, DriftStatus, Finding, FindingList, Measurement, MeasurementListResponse, Ncr, Objective, ObjectiveListResponse, ObjectivePlan, ObjectiveScorecard, SupersededCopies } from "../../lib/types";
+import type { AckDecisionResult, AckMatrixRow, AuditList, AuditPlanList, AuditProgramList, Capa, Complaint, DistributionPayload, DocumentVersion, DriftStatus, EffectivePolicy, Finding, FindingList, Measurement, MeasurementListResponse, Ncr, Objective, ObjectiveListResponse, ObjectivePlan, ObjectiveScorecard, SupersededCopies, WorkflowInstance } from "../../lib/types";
 
 export const docFixture = [
   {
@@ -1017,10 +1017,80 @@ const objectivePlanFixtures: ObjectivePlan[] = [
   },
 ] satisfies ObjectivePlan[];
 
-const objectiveDetailFixture: Objective = {
+export const objectiveDetailFixture: Objective = {
   ...objectiveFixtures[0]!,
   plans: objectivePlanFixtures,
+  // S-obj-3 detail-only keys (api/objectives.py _objective with capabilities= — the detail GET
+  // ALWAYS carries both; LIST/scorecard/submit/release responses carry neither).
+  capabilities: { submit: true, release: false },
+  effective_from: null,
 } satisfies Objective;
+
+// domain/objectives/commitment.py build_commitment — decimal STRINGS, direction .value, ISO date.
+// Mirrors objectiveFixtures[0] (the commitment the submit would freeze for OBJ-001).
+const objectiveCommitment = {
+  target_value: "95",
+  unit: "%",
+  direction: "HIGHER_IS_BETTER",
+  due_date: "2026-12-31",
+  at_risk_threshold: "90",
+  baseline_value: "80",
+  policy_id: null,
+};
+
+// A version row carrying the frozen commitment (api/documents.py _version, with
+// metadata_snapshot trimmed to the objective_commitment fold the FE reads) — consumed by the
+// ReviewApprovePage objective-context leg (Task 14).
+export const objectiveVersionWithCommitment = {
+  id: "veob1111-1111-1111-1111-111111111111",
+  document_id: OBJ_DETAIL_ID,
+  version_seq: 1,
+  revision_label: "Rev A",
+  version_state: "InReview",
+  change_significance: "MAJOR",
+  change_reason: "Objective commitment submitted for review",
+  source_blob_sha256: "6f1ed002ab5595859014ebf0951522d9a8b65a42c2e9a47b6b1f5d7e9c3a1b42",
+  metadata_snapshot: { objective_commitment: objectiveCommitment },
+  author_user_id: "aaaa1111-1111-1111-1111-111111111111",
+  effective_from: null,
+  effective_to: null,
+  superseded_by_version_id: null,
+  created_at: "2026-06-11T09:00:00+00:00",
+} satisfies DocumentVersion;
+
+// api/objectives.py _approval_instance/_approval_task (field-equivalent to workflow.py's
+// _instance/_task — no subject_type/subject_id on the tasks; subject_type=DOCUMENT on the
+// instance, instantiate_approval hardcodes it).
+export const objectiveApprovalInstance = {
+  id: "wfob1111-1111-1111-1111-111111111111",
+  definition_id: "df000001-0001-0001-0001-000000000001",
+  definition_version: 1,
+  subject_type: "DOCUMENT",
+  subject_id: OBJ_DETAIL_ID,
+  current_state: "IN_APPROVAL",
+  started_at: "2026-06-11T09:00:00+00:00",
+  revision: 0,
+  tasks: [
+    {
+      id: "tkob1111-1111-1111-1111-111111111111",
+      instance_id: "wfob1111-1111-1111-1111-111111111111",
+      stage_key: "quality_approval",
+      type: "APPROVE",
+      state: "PENDING",
+      assignee_user_id: null,
+      candidate_pool: ["bbbb1111-1111-1111-1111-111111111111"],
+      action_expected: "approve",
+      due_at: null,
+    },
+  ],
+} satisfies WorkflowInstance;
+
+// GET /objectives/policy (api/objectives.py get_objective_policy_endpoint — {id,identifier,title}).
+export const effectivePolicyFixture = {
+  id: "po000001-0001-0001-0001-000000000001",
+  identifier: "POL-001",
+  title: "Quality Policy",
+} satisfies EffectivePolicy;
 
 const measurementFixtures: Measurement[] = [
   {
@@ -1066,11 +1136,26 @@ export const handlers = [
     const rows = pid ? objectiveFixtures.filter((o) => o.process_id === pid) : objectiveFixtures;
     return HttpResponse.json({ data: rows } satisfies ObjectiveListResponse);
   }),
+  // The bare `policy` literal MUST register BEFORE the `:id` route or it resolves as :id
+  // (the scorecard precedent above; routes with a literal tail like /:id/approval are safe).
+  http.get("/api/v1/objectives/policy", () => HttpResponse.json(effectivePolicyFixture)),
   http.get("/api/v1/objectives/:id", () => HttpResponse.json(objectiveDetailFixture)),
+  http.get("/api/v1/objectives/:id/approval", () => HttpResponse.json(objectiveApprovalInstance)),
   http.get("/api/v1/objectives/:id/measurements", () =>
     HttpResponse.json({ data: measurementFixtures } satisfies MeasurementListResponse),
   ),
-  http.post("/api/v1/objectives", () => HttpResponse.json(objectiveDetailFixture, { status: 201 })),
+  // submit/release return the bare objective (no capabilities/effective_from, plans []) — the
+  // api/objectives.py call-sites pass neither to _objective.
+  http.post("/api/v1/objectives/:id/submit-review", () =>
+    HttpResponse.json({ ...objectiveFixtures[0]!, current_state: "InReview" } satisfies Objective),
+  ),
+  http.post("/api/v1/objectives/:id/release", () =>
+    HttpResponse.json({ ...objectiveFixtures[0]!, current_state: "Effective" } satisfies Objective),
+  ),
+  // create returns the bare objective too — the create call-site passes no detail-only kwargs.
+  http.post("/api/v1/objectives", () =>
+    HttpResponse.json({ ...objectiveFixtures[0]! } satisfies Objective, { status: 201 }),
+  ),
   http.post("/api/v1/objectives/:id/measurements", () =>
     HttpResponse.json(measurementFixtures[0]!, { status: 201 }),
   ),
