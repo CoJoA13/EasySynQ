@@ -1,5 +1,5 @@
 import {
-  Alert, Button, Collapse, Group, Modal, SegmentedControl, Select, Stack, TextInput, UnstyledButton,
+  Alert, Button, Collapse, Group, Input, Modal, SegmentedControl, Select, Stack, TextInput, UnstyledButton,
 } from "@mantine/core";
 import { useDisclosure } from "@mantine/hooks";
 import { useState } from "react";
@@ -62,8 +62,7 @@ export function NewObjectiveModal({ opened, onClose, onCreated }: Props) {
           <TextInput label="Target" required value={target} onChange={(e) => setTarget(e.currentTarget.value)} />
           <TextInput label="Unit" required value={unit} onChange={(e) => setUnit(e.currentTarget.value)} />
         </Group>
-        <div>
-          <label style={{ fontSize: 13, color: "var(--mantine-color-dimmed)" }}>Direction</label>
+        <Input.Wrapper label="Direction">
           <SegmentedControl
             fullWidth
             value={direction}
@@ -73,7 +72,7 @@ export function NewObjectiveModal({ opened, onClose, onCreated }: Props) {
               { value: "LOWER_IS_BETTER", label: "Lower is better" },
             ]}
           />
-        </div>
+        </Input.Wrapper>
         <TextInput
           type="date" label="Due date" required value={dueDate}
           onChange={(e) => setDueDate(e.currentTarget.value)}
