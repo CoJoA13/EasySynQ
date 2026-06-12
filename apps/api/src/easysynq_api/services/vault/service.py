@@ -733,9 +733,8 @@ async def checkin_objective_commitment(
     session.add(version)
     # Flush BEFORE _emit — NOT commit (submit_objective_for_review owns the txn boundary). The
     # ``default=uuid.uuid4`` id is a FLUSH-time default (a pending instance reads ``id`` as None),
-    # so the flush populates version.id for the audit row's object_id (the create_document
-    # precedent; ``checkin``/``checkin_form_schema`` emit pre-flush, so their CHECKIN rows carry
-    # no real version id — a legacy quirk deliberately not mirrored here).
+    # so the flush populates version.id for the audit row's object_id — the same flush-before-emit
+    # contract as ``checkin`` and ``checkin_form_schema``.
     await session.flush()
     _emit(
         session,

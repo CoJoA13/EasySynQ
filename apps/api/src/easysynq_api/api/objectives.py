@@ -110,6 +110,12 @@ class ObjectiveUpdate(BaseModel):
     policy_id: uuid.UUID | None = None
 
 
+class ObjectiveSubmitBody(BaseModel):
+    """Optional INV-3 change reason for the freeze (defaults: first submit vs revision)."""
+
+    change_reason: str | None = Field(default=None, max_length=500)
+
+
 # --- serializers ---
 def _measurement(m: KpiMeasurement) -> dict[str, Any]:
     return {
@@ -489,10 +495,10 @@ async def update_objective_endpoint(
     """Edit the working-copy commitment (S-obj-4, O-1) — legal only in Draft/UnderRevision (the
     FRM form-schema posture). The satellite is the editable working copy (its model docstring);
     the edit is deliberately UNAUDITED (the documents metadata-PATCH precedent, micro-call A): the
-    auditable act is the freeze at submit, and consecutive frozen snapshots reconstruct every
-    before/after. No version is minted here; the read-back switch (O-3) keeps an Effective
-    objective's register/scorecard/detail reads on the GOVERNING frozen commitment, so an
-    in-flight edit is visible only via pending_commitment."""
+    auditable act is the freeze at submit, and every commitment that reaches review is
+    reconstructable from consecutive frozen snapshots. No version is minted here; the read-back
+    switch (O-3) keeps an Effective objective's register/scorecard/detail reads on the GOVERNING
+    frozen commitment, so an in-flight edit is visible only via pending_commitment."""
     doc, qo = await _load_objective_doc(session, caller, objective_id, for_update=True)
     if doc.current_state not in (DocumentCurrentState.Draft, DocumentCurrentState.UnderRevision):
         raise ProblemException(
@@ -592,15 +598,24 @@ async def get_objective_approval_endpoint(
 @router.post("/objectives/{objective_id}/submit-review")
 async def submit_objective_endpoint(
     objective_id: uuid.UUID,
+    body: ObjectiveSubmitBody | None = None,
     caller: AppUser = Depends(_objective_manage_path),
     session: AsyncSession = Depends(get_session),
     vault_sink: VaultAuditSink = Depends(get_vault_audit_sink),
 ) -> dict[str, Any]:
     # FOR UPDATE + populate_existing serializes concurrent submits and dodges the stale-identity-map
-    # trap; submit_objective_for_review freezes the commitment, runs T2, instantiates approval, and
-    # commits atomically. Approval then routes through POST /tasks/{id}/decision (DOCUMENT leg).
+    # trap; submit_objective_for_review freezes when the commitment changed (T2 AND T9 — S-obj-4),
+    # instantiates approval, and commits atomically. Approval routes through POST
+    # /tasks/{id}/decision (DOCUMENT leg).
     doc, qo = await _load_objective_doc(session, caller, objective_id, for_update=True)
-    await submit_objective_for_review(session, vault_sink, caller, doc, qo)
+    await submit_objective_for_review(
+        session,
+        vault_sink,
+        caller,
+        doc,
+        qo,
+        change_reason=body.change_reason if body is not None else None,
+    )
     row = await get_objective(session, objective_id)
     if row is None:  # pragma: no cover — just mutated it, cannot be absent
         raise ProblemException(
