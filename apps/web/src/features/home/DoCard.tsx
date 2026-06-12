@@ -46,7 +46,7 @@ export function DoCard() {
       ) : loading ? (
         <TileSkeleton />
       ) : (
-        <StatLine label="You're all caught up." tone="green" />
+        <StatLine label="Couldn't load this section." tone="neutral" />
       )}
     </QuadrantCard>
   );

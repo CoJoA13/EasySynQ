@@ -36,3 +36,15 @@ it("stays visible via the self-scoped ack count even when drift is forbidden", a
   await waitFor(() => expect(within(card).getByLabelText("1 acknowledgements awaiting you")).toBeInTheDocument());
   expect(within(card).queryByText(/no access to this section/i)).not.toBeInTheDocument();
 });
+
+it("shows a neutral couldn't-load (not green) when drift errors with no acks", async () => {
+  server.use(
+    http.get("/api/v1/admin/drift/status", () => HttpResponse.json({ code: "error" }, { status: 500 })),
+    http.get("/api/v1/tasks", () => HttpResponse.json([])),
+  );
+  renderWithProviders(<DoCard />);
+  const card = await screen.findByRole("group", { name: /do quadrant/i });
+  await waitFor(() => expect(within(card).getByText(/couldn't load this section/i)).toBeInTheDocument());
+  expect(within(card).queryByText(/all caught up/i)).not.toBeInTheDocument();
+  expect(within(card).queryByLabelText(/status: green/i)).not.toBeInTheDocument();
+});
