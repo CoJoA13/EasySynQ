@@ -26,7 +26,7 @@ export function AddPlanModal({ opened, objectiveId, onClose }: Props) {
     };
     try {
       await add.mutateAsync(body);
-      setAction(""); setResource(""); setDueDate("");
+      setAction(""); setResource(""); setDueDate(""); setError(null);
       onClose();
     } catch (e) {
       setError(e instanceof ApiError ? e.message : "Something went wrong adding the plan.");

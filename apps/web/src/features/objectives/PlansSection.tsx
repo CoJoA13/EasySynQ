@@ -50,7 +50,9 @@ export function PlansSection({ objectiveId, plans }: { objectiveId: string; plan
           </Card>
         ))
       )}
-      <AddPlanModal opened={addOpen} objectiveId={objectiveId} onClose={() => setAddOpen(false)} />
+      {addOpen && (
+        <AddPlanModal opened objectiveId={objectiveId} onClose={() => setAddOpen(false)} />
+      )}
     </Stack>
   );
 }

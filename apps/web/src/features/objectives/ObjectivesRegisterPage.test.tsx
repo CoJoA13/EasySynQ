@@ -57,3 +57,32 @@ it("RAG filter narrows visible rows client-side", async () => {
   expect(screen.queryByText("OBJ-003")).not.toBeInTheDocument(); // green row gone
   expect(screen.queryByText("OBJ-001")).not.toBeInTheDocument(); // amber row gone
 });
+
+it("create modal resets on close and reopen", async () => {
+  server.use(
+    http.get("/api/v1/me/permissions", () =>
+      HttpResponse.json({
+        scope: { level: "SYSTEM", selector: null },
+        permissions: [{ key: "objective.manage", effect: "ALLOW", source: "test" }],
+      }),
+    ),
+  );
+  const user = userEvent.setup();
+  renderWithProviders(<ObjectivesRegisterPage />, { route: "/objectives" });
+  // Wait for the band (scorecard) to render so the page is fully loaded.
+  await waitFor(() => expect(screen.getByText("OBJ-001")).toBeInTheDocument());
+  // Open the create modal.
+  await user.click(screen.getByRole("button", { name: /new objective/i }));
+  const dialog = await screen.findByRole("dialog");
+  // Type something into the Objective field inside the dialog.
+  const objectiveField = within(dialog).getByLabelText(/^objective/i);
+  await user.type(objectiveField, "Some draft text");
+  expect(objectiveField).toHaveValue("Some draft text");
+  // Close via Cancel.
+  await user.click(within(dialog).getByRole("button", { name: /cancel/i }));
+  // Reopen the modal.
+  await user.click(screen.getByRole("button", { name: /new objective/i }));
+  const reopenedDialog = await screen.findByRole("dialog");
+  // The Objective field in the fresh modal must be empty — state was reset on unmount.
+  expect(within(reopenedDialog).getByLabelText(/^objective/i)).toHaveValue("");
+});

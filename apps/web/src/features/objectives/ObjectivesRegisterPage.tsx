@@ -109,14 +109,16 @@ export function ObjectivesRegisterPage() {
           </Table.Tbody>
         </Table>
       )}
-      <NewObjectiveModal
-        opened={createOpen}
-        onClose={() => setCreateOpen(false)}
-        onCreated={(id) => {
-          setCreateOpen(false);
-          navigate(`/objectives/${id}`);
-        }}
-      />
+      {createOpen && (
+        <NewObjectiveModal
+          opened
+          onClose={() => setCreateOpen(false)}
+          onCreated={(id) => {
+            setCreateOpen(false);
+            navigate(`/objectives/${id}`);
+          }}
+        />
+      )}
     </Container>
   );
 }

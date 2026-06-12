@@ -49,13 +49,15 @@ export function MeasurementsSection({ objectiveId, unit }: { objectiveId: string
           <Text c="dimmed" size="xs">Readings are append-only. Trend charts arrive in a later release.</Text>
         </>
       )}
-      <RecordMeasurementModal
-        opened={open}
-        objectiveId={objectiveId}
-        unit={unit}
-        onClose={() => setOpen(false)}
-        onRecorded={() => setOpen(false)}
-      />
+      {open && (
+        <RecordMeasurementModal
+          opened
+          objectiveId={objectiveId}
+          unit={unit}
+          onClose={() => setOpen(false)}
+          onRecorded={() => setOpen(false)}
+        />
+      )}
     </Stack>
   );
 }

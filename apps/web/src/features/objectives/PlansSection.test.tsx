@@ -1,13 +1,10 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { fireEvent, screen, waitFor } from "@testing-library/react";
 import { http, HttpResponse } from "msw";
 import { renderWithProviders } from "../../test/render";
 import { server } from "../../test/msw/server";
 import type { ObjectivePlan } from "../../lib/types";
 import { PlansSection } from "./PlansSection";
-
-// suppress unused import warning — vi is used in the appended tests
-void vi;
 
 const PLANS: ObjectivePlan[] = [
   { id: "p1", objective_id: "o1", action: "Add a second carrier", resource: "Logistics budget",
