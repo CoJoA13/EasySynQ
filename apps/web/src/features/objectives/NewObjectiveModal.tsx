@@ -1,12 +1,13 @@
 import {
-  Alert, Button, Collapse, Group, Input, Modal, SegmentedControl, Select, Stack, TextInput, UnstyledButton,
+  Alert, Button, Checkbox, Collapse, Group, Input, Modal, SegmentedControl, Select, Stack, Text,
+  TextInput, UnstyledButton,
 } from "@mantine/core";
 import { useDisclosure } from "@mantine/hooks";
 import { useState } from "react";
 import { ApiError } from "../../lib/api";
 import type { ObjectiveCreateBody, ObjectiveDirection } from "../../lib/types";
 import { useCreateObjective } from "./mutations";
-import { useProcesses } from "./hooks";
+import { useEffectivePolicy, useProcesses } from "./hooks";
 import { BandPreview } from "./BandPreview";
 
 interface Props {
@@ -18,6 +19,7 @@ interface Props {
 export function NewObjectiveModal({ opened, onClose, onCreated }: Props) {
   const create = useCreateObjective();
   const { data: processes } = useProcesses();
+  const { data: policy } = useEffectivePolicy();
   const [advanced, advancedC] = useDisclosure(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -29,6 +31,7 @@ export function NewObjectiveModal({ opened, onClose, onCreated }: Props) {
   const [baseline, setBaseline] = useState("");
   const [threshold, setThreshold] = useState("");
   const [processId, setProcessId] = useState<string | null>(null);
+  const [linkPolicy, setLinkPolicy] = useState(false);
 
   const targetIsNumber = target.trim() !== "" && !Number.isNaN(Number(target));
   const canSubmit = title.trim() !== "" && targetIsNumber && unit.trim() !== "" && dueDate !== "";
@@ -44,6 +47,7 @@ export function NewObjectiveModal({ opened, onClose, onCreated }: Props) {
       baseline_value: baseline.trim() === "" ? null : baseline.trim(),
       at_risk_threshold: threshold.trim() === "" ? null : threshold.trim(),
       process_id: processId,
+      policy_id: linkPolicy && policy ? policy.id : null,
     };
     try {
       const created = await create.mutateAsync(body);
@@ -96,6 +100,17 @@ export function NewObjectiveModal({ opened, onClose, onCreated }: Props) {
                 data={processes.map((p) => ({ value: p.id, label: p.name }))}
                 comboboxProps={{ keepMounted: false }}
               />
+            )}
+            {policy ? (
+              <Checkbox
+                label={`Consistent with ${policy.identifier} — ${policy.title}`}
+                checked={linkPolicy}
+                onChange={(e) => setLinkPolicy(e.currentTarget.checked)}
+              />
+            ) : (
+              <Text size="xs" c="dimmed">
+                No effective Quality Policy yet — you can link one later.
+              </Text>
             )}
           </Stack>
         </Collapse>

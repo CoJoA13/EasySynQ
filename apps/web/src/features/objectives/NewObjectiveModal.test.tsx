@@ -54,4 +54,57 @@ describe("NewObjectiveModal", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: /create objective/i }));
     await waitFor(() => expect(screen.getByText(/unknown process_id/i)).toBeInTheDocument());
   });
+
+  it("offers the Effective Quality Policy checkbox and sends its id when checked", async () => {
+    let body: Record<string, unknown> | null = null;
+    server.use(
+      http.post("/api/v1/objectives", async ({ request }) => {
+        body = (await request.json()) as Record<string, unknown>;
+        return HttpResponse.json({ id: "new" }, { status: 201 });
+      }),
+    );
+    const onCreated = vi.fn();
+    renderWithProviders(<NewObjectiveModal opened onClose={() => {}} onCreated={onCreated} />);
+
+    const dialog = getDialog();
+    fireEvent.click(within(dialog).getByRole("button", { name: /band & baseline/i }));
+    const checkbox = await within(dialog).findByLabelText(/consistent with POL-001/i);
+    fireEvent.click(checkbox);
+
+    fill(dialog, /^objective/i, "On-time delivery rate");
+    fill(dialog, /^target/i, "95");
+    fill(dialog, /^unit/i, "%");
+    fill(dialog, /due date/i, "2026-12-31");
+    fireEvent.click(within(dialog).getByRole("button", { name: /create objective/i }));
+
+    await waitFor(() => expect(onCreated).toHaveBeenCalledWith("new"));
+    expect(body).toMatchObject({ policy_id: "po000001-0001-0001-0001-000000000001" });
+  });
+
+  it("degrades calmly when there is no Effective policy — no checkbox, creation unblocked", async () => {
+    server.use(http.get("/api/v1/objectives/policy", () => HttpResponse.json(null)));
+    let body: Record<string, unknown> | null = null;
+    server.use(
+      http.post("/api/v1/objectives", async ({ request }) => {
+        body = (await request.json()) as Record<string, unknown>;
+        return HttpResponse.json({ id: "new" }, { status: 201 });
+      }),
+    );
+    const onCreated = vi.fn();
+    renderWithProviders(<NewObjectiveModal opened onClose={() => {}} onCreated={onCreated} />);
+
+    const dialog = getDialog();
+    fireEvent.click(within(dialog).getByRole("button", { name: /band & baseline/i }));
+    expect(await within(dialog).findByText(/no effective quality policy yet/i)).toBeInTheDocument();
+
+    fill(dialog, /^objective/i, "On-time delivery rate");
+    fill(dialog, /^target/i, "95");
+    fill(dialog, /^unit/i, "%");
+    fill(dialog, /due date/i, "2026-12-31");
+    fireEvent.click(within(dialog).getByRole("button", { name: /create objective/i }));
+
+    await waitFor(() => expect(onCreated).toHaveBeenCalledWith("new"));
+    expect(body).toMatchObject({ policy_id: null });
+    expect(within(dialog).queryByLabelText(/consistent with/i)).not.toBeInTheDocument();
+  });
 });
