@@ -3,8 +3,8 @@
 Each ``summarize_*`` takes the EXACT shape of its source read (verified against the live service
 signatures — the 4-tuple list_audits/list_capas, the 2-tuple list_complaints, the bare-row
 list_ncrs, the no-org_id drift_status, the scorecard-dict objectives loop) and returns a plain
-JSON-safe dict. ``gap_row(reason)`` is the not-available marker. Pure, no I/O — every leaf must be a
-JSON primitive (rfc8785 freezes them at submit, so a Decimal/UUID leaf would TypeError there)."""
+JSON-safe dict. Pure, no I/O — every leaf must be a JSON primitive (rfc8785 freezes them at submit,
+so a Decimal/UUID leaf would TypeError there)."""
 
 from __future__ import annotations
 
@@ -13,7 +13,6 @@ import datetime
 import rfc8785
 
 from easysynq_api.domain.mgmt_review.inputs import (
-    gap_row,
     summarize_audits,
     summarize_capas_ncrs,
     summarize_kpis,
@@ -133,13 +132,3 @@ def test_summarize_prior_actions_counts_outputs_and_done() -> None:
     assert out["action_outputs"] == 2
     assert out["actions_done"] == 1
     _json_safe(out)
-
-
-def test_gap_row_is_a_reason_only_dict() -> None:
-    out = gap_row("not available (no structured source)")
-    assert out == {"reason": "not available (no structured source)"}
-    _json_safe(out)
-
-
-def test_gap_row_serializes() -> None:
-    _json_safe(gap_row("not available (insufficient access)"))

@@ -131,9 +131,3 @@ def summarize_prior_actions(
         "action_outputs": action_outputs,
         "actions_done": actions_done,
     }
-
-
-def gap_row(reason: str) -> dict[str, Any]:
-    """The not-available marker summary — a reason-only dict (the ``source_ref`` carries
-    ``available=False`` + this reason; ``compile.py`` owns the wrapping)."""
-    return {"reason": reason}

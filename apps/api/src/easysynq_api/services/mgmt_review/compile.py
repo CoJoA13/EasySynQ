@@ -211,6 +211,7 @@ async def _build_row(
     if input_type is ReviewInputType.PRIOR_ACTIONS:
         # Gap row until a second review exists (v1 — the prior-MR outputs read lands with the 2nd
         # review; the spec accepts this for the first cycle).
+        # Future wiring target: inputs.summarize_prior_actions (the 2nd-review slice).
         return _source_ref(available=False, summary=None, reason=_REASON_NO_PRIOR, now=now)
 
     # Defensive — every sourced type is handled above; an unrecognised one fails closed.
@@ -271,6 +272,7 @@ async def compile_inputs(
     session.add(
         AuditEvent(
             org_id=owner.org_id,
+            # Intentionally a fresh read — the audit wall-clock, NOT the frozen `now`/generated_at.
             occurred_at=datetime.datetime.now(datetime.UTC),
             actor_id=owner.id,
             actor_type=ActorType.user,
