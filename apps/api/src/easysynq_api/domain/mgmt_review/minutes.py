@@ -1,8 +1,9 @@
 """build_minutes — the JSON-safe minutes dict for a Management Review's WORM source blob + snapshot.
 
-Mirrors domain/objectives/commitment.build_commitment: every date/datetime → .isoformat(), every Decimal/
-UUID inside inputs/outputs/attendees → str (the CALLER coerces nested leaves before passing them in), so
-rfc8785.dumps produces exact, reproducible bytes (JCS sorts keys; non-JSON-safe leaves raise)."""
+Mirrors domain/objectives/commitment.build_commitment: every date/datetime → .isoformat(), every
+Decimal/UUID inside inputs/outputs/attendees → str (the CALLER coerces nested leaves before passing
+them in), so rfc8785.dumps gives exact, reproducible bytes (JCS sorts keys; non-safe leaves raise).
+"""
 
 from __future__ import annotations
 
