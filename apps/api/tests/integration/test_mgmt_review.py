@@ -143,6 +143,42 @@ async def test_submit_freezes_minutes_and_enters_review(
         assert "Approve the objectives for 2026" in descriptions
 
 
+async def test_update_output_to_action_requires_owner(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    subject = f"mr-upd-{uuid.uuid4()}"
+    h = _auth(token_factory, subject)
+    owner_id = await _grant(subject, _MR_KEYS)
+    rid = await _create_review(app_client, h, "Update-output review")
+
+    # author a DECISION output (no owner required)
+    created = await app_client.post(
+        f"/api/v1/management-reviews/{rid}/outputs",
+        headers=h,
+        json={"output_type": "DECISION", "description": "QMS remains effective"},
+    )
+    assert created.status_code == 201, created.text
+    output_id = created.json()["id"]
+
+    # PATCH it to ACTION without an owner → 422 (an ACTION must keep an owner)
+    bad = await app_client.patch(
+        f"/api/v1/management-reviews/{rid}/outputs/{output_id}",
+        headers=h,
+        json={"output_type": "ACTION"},
+    )
+    assert bad.status_code == 422, bad.text
+
+    # PATCH it to ACTION WITH an owner → 200
+    ok = await app_client.patch(
+        f"/api/v1/management-reviews/{rid}/outputs/{output_id}",
+        headers=h,
+        json={"output_type": "ACTION", "owner_user_id": str(owner_id)},
+    )
+    assert ok.status_code == 200, ok.text
+    assert ok.json()["output_type"] == "ACTION"
+    assert ok.json()["owner_user_id"] == str(owner_id)
+
+
 async def test_submit_twice_is_a_conflict(
     app_client: AsyncClient, token_factory: Callable[..., str]
 ) -> None:

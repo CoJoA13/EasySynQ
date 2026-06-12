@@ -42,8 +42,6 @@ from . import repository as repo
 
 logger = logging.getLogger(__name__)
 
-_EDITABLE = (DocumentCurrentState.Draft, DocumentCurrentState.UnderRevision)
-
 
 # --- conflict helpers (copied from services/audits/service.py:93-107) ---
 def _not_found(what: str) -> ProblemException:
@@ -174,17 +172,23 @@ async def submit_review_for_review(
     *,
     change_reason: str | None = None,
 ) -> DocumentedInformation:
-    """Freeze the compiled minutes → T2/T9 (Draft/UnderRevision → InReview) → instantiate the
-    approval workflow → audit, all in one transaction (mirrors ``submit_objective_for_review``).
+    """Freeze the compiled minutes → T2 (Draft → InReview) → instantiate the approval workflow →
+    audit, all in one transaction (mirrors the first-release path of
+    ``submit_objective_for_review``).
 
     ``doc`` and ``mr`` MUST be loaded ``with_for_update`` + ``populate_existing`` (the authz
     resolver already identity-mapped both rows — the S-drift-1 trap; a stale satellite would freeze
-    yesterday's minutes)."""
-    if doc.current_state not in _EDITABLE:
+    yesterday's minutes).
+
+    S-mr-1 is first-release-only (Draft → InReview). Deferred to a future MR-revision slice (the
+    S-obj-3 → S-obj-4 progression): the UnderRevision/T9 transition, the ``minutes_need_freeze``
+    content-dedup (so an unchanged re-submit doesn't re-freeze), and guarding the generic vault
+    checkout/checkin byte-path on an MR row."""
+    if doc.current_state is not DocumentCurrentState.Draft:
         raise ProblemException(
             status=409,
             code="conflict",
-            title="Management Review is not in Draft or UnderRevision",
+            title="Management Review is not in Draft",
             detail=f"current_state is {doc.current_state.value}",
         )
     inputs = await repo.list_inputs(session, mr.id)
@@ -192,16 +196,14 @@ async def submit_review_for_review(
     minutes = build_minutes(
         period_label=mr.period_label,
         review_date=mr.review_date,
-        attendees=mr.attendees if isinstance(mr.attendees, list) else None,
+        attendees=mr.attendees,
         inputs=[_minutes_input(ri) for ri in inputs],
         outputs=[_minutes_output(ro) for ro in outputs],
         compiled_at=datetime.datetime.now(datetime.UTC),
     )
-    default_reason = (
-        "Management Review minutes revised"
-        if doc.current_state is DocumentCurrentState.UnderRevision
-        else "Management Review minutes submitted for review"
-    )
+    # First-release freeze: unconditional on this Draft → InReview path (no prior frozen minutes to
+    # dedup against). The content-aware ``minutes_need_freeze`` dedup lands with the revision slice.
+    default_reason = "Management Review minutes submitted for review"
     await checkin_mgmt_review_minutes(
         session,
         vault_sink,
@@ -232,6 +234,10 @@ async def release_review(
 
 
 # --- output CRUD (Draft-only) ------------------------------------------------------------------
+# By system posture, working-copy edits (``update_output``/``delete_output``/``update_review_meta``)
+# emit NO audit event — only the initial ``add_output`` records MGMT_REVIEW_OUTPUT_RECORDED. The
+# trail of what was reviewed is the freeze's CHECKIN snapshot (the S-obj-4 unaudited-edits
+# decision); this is intentional, not an omission.
 async def _require_draft(
     session: AsyncSession, review_id: uuid.UUID
 ) -> tuple[ManagementReview, DocumentedInformation]:
