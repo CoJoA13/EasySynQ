@@ -15,7 +15,6 @@ from alembic import op
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
-from easysynq_api.db.models._audit_enums import EVENT_TYPE_VALUES  # noqa: F401  (proves the members exist)
 from easysynq_api.db.models._mgmt_review_enums import (
     MANAGEMENT_REVIEW_CLOSE_STATE_VALUES,
     REVIEW_INPUT_TYPE_VALUES,
