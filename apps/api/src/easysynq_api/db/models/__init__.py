@@ -35,6 +35,11 @@ from ._ingestion_enums import (
     ImportRunStatus,
 )
 from ._iso_audit_enums import AuditState, FindingType
+from ._mgmt_review_enums import (
+    ManagementReviewCloseState,
+    ReviewInputType,
+    ReviewOutputType,
+)
 from ._pack_enums import (
     PackInclusionStatus,
     PackItemType,
@@ -103,6 +108,7 @@ from .import_proposal_node import ImportProposalNode
 from .import_run import ImportRun
 from .import_version_family import ImportVersionFamily
 from .kpi_measurement import KpiMeasurement
+from .management_review import ManagementReview
 from .mirror_build import MirrorBuild
 from .ncr import Ncr
 from .numbering_counter import NumberingCounter
@@ -118,6 +124,8 @@ from .process_link import ProcessLink
 from .quality_objective import QualityObjective
 from .record import Record
 from .retention_policy import RetentionPolicy
+from .review_input import ReviewInput
+from .review_output import ReviewOutput
 from .role import Role, RoleAssignment, RoleGrant
 from .scope import Scope
 from .signature_event import SignatureEvent
@@ -208,6 +216,8 @@ __all__ = [
     "ImportRunStatus",
     "ImportVersionFamily",
     "KpiMeasurement",
+    "ManagementReview",
+    "ManagementReviewCloseState",
     "MirrorBuild",
     "NcSeverity",
     "Ncr",
@@ -236,6 +246,10 @@ __all__ = [
     "RecordType",
     "RetentionBasis",
     "RetentionPolicy",
+    "ReviewInput",
+    "ReviewInputType",
+    "ReviewOutput",
+    "ReviewOutputType",
     "Role",
     "RoleAssignment",
     "RoleGrant",
