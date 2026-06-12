@@ -59,7 +59,7 @@ function useInvalidateObjective(): (id: string) => void {
   };
 }
 
-// S-obj-3: freeze the commitment + instantiate approval (objective.manage; Draft/UnderRevision only).
+// S-obj-3: freeze the commitment + instantiate approval (objective.manage; Draft only — 409 otherwise).
 export function useSubmitObjectiveForReview() {
   const api = useApi();
   const invalidate = useInvalidateObjective();

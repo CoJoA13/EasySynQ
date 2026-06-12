@@ -1152,7 +1152,10 @@ export const handlers = [
   http.post("/api/v1/objectives/:id/release", () =>
     HttpResponse.json({ ...objectiveFixtures[0]!, current_state: "Effective" } satisfies Objective),
   ),
-  http.post("/api/v1/objectives", () => HttpResponse.json(objectiveDetailFixture, { status: 201 })),
+  // create returns the bare objective too — the create call-site passes no detail-only kwargs.
+  http.post("/api/v1/objectives", () =>
+    HttpResponse.json({ ...objectiveFixtures[0]! } satisfies Objective, { status: 201 }),
+  ),
   http.post("/api/v1/objectives/:id/measurements", () =>
     HttpResponse.json(measurementFixtures[0]!, { status: 201 }),
   ),

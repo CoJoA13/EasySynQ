@@ -81,6 +81,23 @@ describe("NewObjectiveModal", () => {
     expect(body).toMatchObject({ policy_id: "po000001-0001-0001-0001-000000000001" });
   });
 
+  it("renders neutral copy on an errored policy read — never the positive no-policy claim", async () => {
+    server.use(
+      http.get("/api/v1/objectives/policy", () =>
+        HttpResponse.json({ code: "forbidden", title: "Forbidden" }, { status: 403 }),
+      ),
+    );
+    renderWithProviders(<NewObjectiveModal opened onClose={() => {}} onCreated={() => {}} />);
+    const dialog = getDialog();
+    fireEvent.click(within(dialog).getByRole("button", { name: /band & baseline/i }));
+    expect(
+      await within(dialog).findByText(/couldn't load the quality policy/i),
+    ).toBeInTheDocument();
+    expect(
+      within(dialog).queryByText(/no effective quality policy yet/i),
+    ).not.toBeInTheDocument();
+  });
+
   it("surfaces a stale-policy 422 when the policy was superseded before submit", async () => {
     server.use(
       http.post("/api/v1/objectives", () =>

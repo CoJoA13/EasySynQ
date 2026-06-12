@@ -19,7 +19,7 @@ interface Props {
 export function NewObjectiveModal({ opened, onClose, onCreated }: Props) {
   const create = useCreateObjective();
   const { data: processes } = useProcesses();
-  const { data: policy } = useEffectivePolicy();
+  const { data: policy, isError: policyError, isLoading: policyLoading } = useEffectivePolicy();
   const [advanced, advancedC] = useDisclosure(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -107,9 +107,15 @@ export function NewObjectiveModal({ opened, onClose, onCreated }: Props) {
                 checked={linkPolicy}
                 onChange={(e) => setLinkPolicy(e.currentTarget.checked)}
               />
-            ) : (
+            ) : policyError ? (
+              // An errored/forbidden read must never claim the positive "no policy yet" fact
+              // (the S-home-1 green-on-error lesson) — neutral copy, creation never blocked.
               <Text size="xs" c="dimmed">
-                No effective Quality Policy yet — you can link one later.
+                Couldn&apos;t load the Quality Policy — you can still create the objective.
+              </Text>
+            ) : policyLoading ? null : (
+              <Text size="xs" c="dimmed">
+                No effective Quality Policy yet — the link is optional.
               </Text>
             )}
           </Stack>
