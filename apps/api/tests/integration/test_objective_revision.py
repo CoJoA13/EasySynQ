@@ -48,3 +48,65 @@ async def test_generic_byte_path_rejected_on_objective(
     # reads stay open
     vs = await app_client.get(f"/api/v1/documents/{oid}/versions", headers=h)
     assert vs.status_code == 200, vs.text
+
+
+async def test_patch_edits_working_commitment_in_draft(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    subject = f"obj4-patch-{uuid.uuid4()}"
+    h = _auth(token_factory, subject)
+    await _grant(subject, _OBJ_KEYS)
+    oid = await _create_objective(app_client, h, "Patchable objective")
+    r = await app_client.patch(
+        f"/api/v1/objectives/{oid}",
+        headers=h,
+        json={"target_value": "97", "at_risk_threshold": None},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["target_value"] == "97"
+    assert body["at_risk_threshold"] is None  # explicit null CLEARS
+    # omitted fields inherit: baseline untouched by the partial PATCH
+    assert body["baseline_value"] == "90"
+
+
+async def test_patch_409_outside_draft_or_under_revision(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    subject = f"obj4-p409-{uuid.uuid4()}"
+    h = _auth(token_factory, subject)
+    await _grant(subject, _OBJ_KEYS)
+    oid = await _create_objective(app_client, h, "InReview is read-only")
+    submit_r = await app_client.post(f"/api/v1/objectives/{oid}/submit-review", headers=h)
+    assert submit_r.status_code == 200
+    r = await app_client.patch(f"/api/v1/objectives/{oid}", headers=h, json={"target_value": "1"})
+    assert r.status_code == 409, r.text
+
+
+async def test_patch_explicit_null_on_required_field_422_and_bad_policy_422(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    subject = f"obj4-p422-{uuid.uuid4()}"
+    h = _auth(token_factory, subject)
+    await _grant(subject, _OBJ_KEYS)
+    oid = await _create_objective(app_client, h, "Validation objective")
+    r1 = await app_client.patch(f"/api/v1/objectives/{oid}", headers=h, json={"target_value": None})
+    assert r1.status_code == 422, r1.text
+    r2 = await app_client.patch(
+        f"/api/v1/objectives/{oid}", headers=h, json={"policy_id": str(uuid.uuid4())}
+    )
+    assert r2.status_code == 422, r2.text  # not the current Effective POL (mirrors create)
+
+
+async def test_patch_requires_objective_manage(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    owner = f"obj4-pown-{uuid.uuid4()}"
+    ho = _auth(token_factory, owner)
+    await _grant(owner, _OBJ_KEYS)
+    oid = await _create_objective(app_client, ho, "Manage-gated patch")
+    reader = f"obj4-prdr-{uuid.uuid4()}"
+    hr = _auth(token_factory, reader)
+    await _grant(reader, ("objective.read",))
+    r = await app_client.patch(f"/api/v1/objectives/{oid}", headers=hr, json={"target_value": "1"})
+    assert r.status_code == 403, r.text

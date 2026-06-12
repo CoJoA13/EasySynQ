@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..auth.dependencies import get_current_user
 from ..db.models._objective_enums import ObjectiveDirection
+from ..db.models._vault_enums import DocumentCurrentState
 from ..db.models._workflow_enums import WorkflowSubjectType
 from ..db.models.app_user import AppUser
 from ..db.models.document_type import DocumentType
@@ -92,6 +93,20 @@ class PlanCreate(BaseModel):
     resource: str | None = Field(default=None, max_length=500)
     responsible_user_id: uuid.UUID | None = None
     due_date: datetime.date | None = None
+
+
+class ObjectiveUpdate(BaseModel):
+    """S-obj-4 (O-1): a partial commitment edit. Omitted ≠ null — ``model_fields_set``
+    distinguishes them (the documents metadata-PATCH precedent); explicit null CLEARS the three
+    nullable fields and 422s on the four NOT-NULL ones."""
+
+    target_value: Decimal | None = None
+    unit: str | None = Field(default=None, min_length=1, max_length=50)
+    direction: ObjectiveDirection | None = None
+    due_date: datetime.date | None = None
+    at_risk_threshold: Decimal | None = None
+    baseline_value: Decimal | None = None
+    policy_id: uuid.UUID | None = None
 
 
 # --- serializers ---
@@ -461,6 +476,71 @@ async def get_objective_endpoint(
         capabilities=caps,
         effective_from=eff,
     )
+
+
+@router.patch("/objectives/{objective_id}")
+async def update_objective_endpoint(
+    objective_id: uuid.UUID,
+    body: ObjectiveUpdate,
+    caller: AppUser = Depends(_objective_manage_path),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """Edit the working-copy commitment (S-obj-4, O-1) — legal only in Draft/UnderRevision (the
+    FRM form-schema posture). The satellite is the editable working copy (its model docstring);
+    the edit is deliberately UNAUDITED (the documents metadata-PATCH precedent, micro-call A): the
+    auditable act is the freeze at submit, and consecutive frozen snapshots reconstruct every
+    before/after. No version is minted here; the read-back switch (O-3) keeps an Effective
+    objective's register/scorecard/detail reads on the GOVERNING frozen commitment, so an
+    in-flight edit is visible only via pending_commitment."""
+    doc, qo = await _load_objective_doc(session, caller, objective_id, for_update=True)
+    if doc.current_state not in (DocumentCurrentState.Draft, DocumentCurrentState.UnderRevision):
+        raise ProblemException(
+            status=409,
+            code="conflict",
+            title="Objective commitment is only editable in Draft or UnderRevision",
+            detail=f"current_state is {doc.current_state.value}",
+        )
+    fields = body.model_fields_set
+    for f in ("target_value", "unit", "direction", "due_date"):
+        if f in fields and getattr(body, f) is None:
+            raise ProblemException(
+                status=422,
+                code="validation_error",
+                title=f"{f} cannot be null",
+                errors=[{"field": f, "code": "not_nullable", "message": "provide a value"}],
+            )
+    if "policy_id" in fields and body.policy_id is not None:
+        # Mirrors create_objective: the only legal link is the current Effective POL (R25).
+        eff = await current_effective_policy(session, caller.org_id)
+        if eff is None or eff.id != body.policy_id:
+            raise ProblemException(
+                status=422,
+                code="validation_error",
+                title="policy_id must be the current Effective Quality Policy",
+            )
+    if "target_value" in fields and body.target_value is not None:
+        qo.target_value = body.target_value
+    if "unit" in fields and body.unit is not None:
+        qo.unit = body.unit
+    if "direction" in fields and body.direction is not None:
+        qo.direction = body.direction
+    if "due_date" in fields and body.due_date is not None:
+        qo.due_date = body.due_date
+    if "at_risk_threshold" in fields:
+        qo.at_risk_threshold = body.at_risk_threshold
+    if "baseline_value" in fields:
+        qo.baseline_value = body.baseline_value
+    if "policy_id" in fields:
+        qo.policy_id = body.policy_id
+    doc.updated_by = caller.id
+    await session.commit()
+    row = await get_objective(session, objective_id)
+    if row is None:  # pragma: no cover — just mutated it, cannot be absent
+        raise ProblemException(
+            status=500, code="internal_error", title="Objective row not found after update"
+        )
+    qo2, ident, title, state = row
+    return _objective(qo2, identifier=ident, title=title, current_state=state, today=_today())
 
 
 @router.get("/objectives/{objective_id}/approval")
