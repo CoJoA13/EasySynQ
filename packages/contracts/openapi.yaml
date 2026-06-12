@@ -4606,11 +4606,35 @@ paths:
               schema: { $ref: "#/components/schemas/ObjectiveScorecard" }
         "403": { $ref: "#/components/responses/ProblemResponse" }
 
+  /objectives/policy:
+    get:
+      tags: [objectives]
+      operationId: getObjectivePolicy
+      summary: "The current Effective Quality Policy (POL singleton, R25), or null when none is Effective. Gated objective.read."
+      description: "S-obj-3: feeds the objective-create policy link (ObjectiveCreate.policy_id must be this id). Declared BEFORE /objectives/{objective_id} so the literal path is not shadowed by the str path-convertor (S-pack-2)."
+      responses:
+        "200":
+          description: "The Effective Quality Policy reference, or null when none is Effective yet."
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - type: object
+                    additionalProperties: false
+                    required: [id, identifier, title]
+                    properties:
+                      id: { type: string, format: uuid }
+                      identifier: { type: string, example: POL-001 }
+                      title: { type: string }
+                  - { type: "null" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+
   /objectives/{objective_id}:
     get:
       tags: [objectives]
       operationId: getObjective
       summary: "Get a single Objective with its plans. Gated objective.read."
+      description: "The detail read additionally carries capabilities (the caller's lifecycle affordances) and effective_from (null until Effective) — both omitted on list/scorecard rows."
       parameters:
         - { name: objective_id, in: path, required: true, schema: { type: string, format: uuid } }
       responses:
@@ -4619,6 +4643,93 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Objective" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+
+  /objectives/{objective_id}/submit-review:
+    post:
+      tags: [objectives]
+      operationId: submitObjectiveReview
+      summary: "Draft→InReview (T2) — freezes the commitment + instantiates the approval workflow. Gated objective.manage (PROCESS scope from objective)."
+      description: >-
+        S-obj-3, one transaction: the FIRST submit freezes the 6.2 commitment
+        (target/unit/direction/due_date/threshold/baseline/policy) into a Draft WORM version
+        (source blob + metadata_snapshot, server-built — no client upload); a re-submit after
+        changes_requested advances the existing Draft version unchanged. Approval then routes
+        through POST /tasks/{id}/decision (the generic DOCUMENT leg, C7) — there is intentionally
+        no /objectives/{id}/approve. The 422 is defensive (INV-3 — the commitment freeze is built
+        server-side, so it is unreachable in normal use).
+      parameters:
+        - { name: objective_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: The Objective (now InReview).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Objective" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409":
+          description: "Not in Draft (conflict; detail names the current state)."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "422": { $ref: "#/components/responses/ProblemResponse" }
+
+  /objectives/{objective_id}/release:
+    post:
+      tags: [objectives]
+      operationId: releaseObjective
+      summary: "Approved→Effective (T6) — atomic single-Effective cutover (SERIALIZABLE + INV-1) + the release signature. Gated document.release (sig_hook + SoD-2)."
+      description: >-
+        S-obj-3 mirror of POST /documents/{document_id}/release, minus the request body — a v1
+        objective has exactly one version stream, so the latest Approved version is the only
+        cutover candidate. SoD-2 overlays the gate (the author/approver of that version cannot
+        release it → 403 sod_violation). Release flips the clause-6.2 ★ checklist node COVERED;
+        a future-dated effective_from (scheduled at approve) stays Approved until the Beat sweep.
+      parameters:
+        - { name: objective_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: The Objective (now Effective).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Objective" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409":
+          description: Illegal transition (invalid_state_transition), or a concurrent release won (conflict).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "422":
+          description: effective_from is in the future (validation_error) — the version stays Approved.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  /objectives/{objective_id}/approval:
+    get:
+      tags: [objectives]
+      operationId: getObjectiveApproval
+      summary: "The objective's current approval cycle (latest workflow instance + tasks), or null if none. Gated objective.read."
+      description: >-
+        S-obj-3 mirror of GET /documents/{document_id}/approval for the objective detail's
+        stepper — but gated objective.read (an objective manager may hold no document.read). The
+        OBJ approval instance carries subject_type=DOCUMENT (the generic approval engine). Returns
+        the LATEST workflow_instance for the objective (tasks expanded), or null when it was never
+        submitted (calm, not 404).
+      parameters:
+        - { name: objective_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: "The latest workflow instance for the objective (tasks expanded), or null."
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/WorkflowInstance" }
+                  - { type: "null" }
         "403": { $ref: "#/components/responses/ProblemResponse" }
         "404": { $ref: "#/components/responses/ProblemResponse" }
 
@@ -7287,6 +7398,28 @@ components:
         plans:
           type: array
           items: { $ref: "#/components/schemas/ObjectivePlan" }
+        capabilities:
+          $ref: "#/components/schemas/ObjectiveCapabilities"
+        effective_from:
+          type: [string, "null"]
+          format: date-time
+          description: >-
+            The governing Effective version's effective_from (S-obj-3). Always present on detail
+            reads (GET /objectives/{id}; null until Effective); omitted on list/scorecard rows and
+            create/submit/release responses.
+
+    ObjectiveCapabilities:
+      type: object
+      additionalProperties: false
+      description: >-
+        The caller's lifecycle affordances on this objective (S-obj-3) — the authz answer ONLY
+        (the SPA combines it with current_state). Present on detail reads (GET /objectives/{id});
+        omitted on list/scorecard rows and create/submit/release responses. release reflects the
+        version-relative SoD-2 (the author/approver of the latest Approved version cannot release
+        it).
+      properties:
+        submit: { type: boolean, description: "objective.manage at the objective's scope (PROCESS, SYSTEM fallback)." }
+        release: { type: boolean, description: "document.release (sig_hook) + the SoD-2 overlay." }
 
     ObjectiveCreate:
       type: object
