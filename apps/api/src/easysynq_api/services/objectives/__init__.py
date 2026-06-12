@@ -1,3 +1,4 @@
+from .lifecycle import submit_objective_for_review
 from .queries import (
     get_objective,
     list_measurements,
@@ -22,4 +23,5 @@ __all__ = [
     "list_plans",
     "record_measurement",
     "remove_objective_plan",
+    "submit_objective_for_review",
 ]
