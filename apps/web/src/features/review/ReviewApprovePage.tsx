@@ -60,19 +60,20 @@ export function ReviewApprovePage() {
     </Alert>
   );
 
-  // S-obj-3: an objective subject freezes its commitment into the version metadata_snapshot — render
-  // that instead of a page redline. Detection keys on the snapshot field, never the document type
-  // (the FE may not see the type): forms have field_schema, ordinary docs have neither.
-  // versions is newest-first (the endpoint orders by version_seq DESC), so the first version with a
-  // commitment is the InReview one the approver is signing — load-bearing for the revision era.
-  const objectiveCommitment =
-    (versions ?? [])
-      .map(
-        (v) =>
-          (v.metadata_snapshot as { objective_commitment?: ObjectiveCommitment } | null)
-            ?.objective_commitment,
-      )
-      .find(Boolean) ?? null;
+  // S-obj-3/4: an objective subject freezes its commitment into the version metadata_snapshot —
+  // render that instead of a page redline. Detection keys on the snapshot field, never the
+  // document type. versions is newest-first (version_seq DESC), so [0] is the InReview commitment
+  // the approver is signing and [1] is the governing one it supersedes (the was→now source) —
+  // pinned by the two-version revision test.
+  const frozenCommitments = (versions ?? [])
+    .map(
+      (v) =>
+        (v.metadata_snapshot as { objective_commitment?: ObjectiveCommitment } | null)
+          ?.objective_commitment,
+    )
+    .filter((c): c is ObjectiveCommitment => Boolean(c));
+  const objectiveCommitment = frozenCommitments[0] ?? null;
+  const previousCommitment = frozenCommitments[1] ?? null;
 
   if (isCapa) {
     // The CAPA subject id is on the task (no document.read-gated instance read) → always present here.
@@ -159,6 +160,7 @@ export function ReviewApprovePage() {
             {objectiveCommitment ? (
               <ObjectiveCommitmentContext
                 commitment={objectiveCommitment}
+                previous={previousCommitment}
                 title={doc?.title}
                 identifier={doc?.identifier}
               />

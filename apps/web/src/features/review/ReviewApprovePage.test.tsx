@@ -9,6 +9,8 @@ import {
   capaApprovalFixture,
   capaApprovalTask,
   objectiveVersionWithCommitment,
+  objectiveVersionV1Effective,
+  objectiveVersionV2WithCommitment,
   periodicReviewTask,
 } from "../../test/msw/handlers";
 import { ReviewApprovePage } from "./ReviewApprovePage";
@@ -193,6 +195,21 @@ describe("ReviewApprovePage — objective (DOCUMENT) subject", () => {
     ).toBeInTheDocument();
     expect(screen.getByText("This task has already been decided.")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Submit decision" })).not.toBeInTheDocument();
+  });
+});
+
+describe("ReviewApprovePage — objective revision two-version pin", () => {
+  test("a revision approval shows the NEWEST frozen commitment with was→now against the governing one", async () => {
+    // versions returned NEWEST-FIRST (version_seq DESC) — exactly what GET /documents/{id}/versions
+    // returns. [0] = v2 InReview (target 97, the commitment being signed), [1] = v1 Effective (target 95,
+    // the governing one being superseded). Proves the comment-only newest-first pin is a real regression pin.
+    server.use(
+      http.get("/api/v1/documents/:id/versions", () =>
+        HttpResponse.json([objectiveVersionV2WithCommitment, objectiveVersionV1Effective]),
+      ),
+    );
+    renderAtTask("task1111-1111-1111-1111-111111111111");
+    expect(await screen.findByText("95 % → 97 %")).toBeInTheDocument();
   });
 });
 
