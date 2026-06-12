@@ -80,7 +80,8 @@ it("shows Release (and not Submit) on an Approved objective with release capabil
       HttpResponse.json({
         ...objectiveDetailFixture,
         current_state: "Approved",
-        capabilities: { submit: false, release: true },
+        capabilities: { submit: false, release: true, edit: true, start_revision: true },
+        pending_commitment: null,
       } satisfies Objective),
     ),
   );
@@ -94,7 +95,8 @@ it("shows no Lifecycle card for a bare reader with no cycle", async () => {
     http.get("/api/v1/objectives/:id", () =>
       HttpResponse.json({
         ...objectiveDetailFixture,
-        capabilities: { submit: false, release: false },
+        capabilities: { submit: false, release: false, edit: false, start_revision: false },
+        pending_commitment: null,
       } satisfies Objective),
     ),
     http.get("/api/v1/objectives/:id/approval", () => HttpResponse.json(null)),

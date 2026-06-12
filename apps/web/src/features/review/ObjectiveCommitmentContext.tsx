@@ -1,16 +1,8 @@
 import { Card, Stack, Table, Text } from "@mantine/core";
+import type { ObjectiveCommitment } from "../../lib/types";
 
-// Pinned to the api build_commitment serializer (domain/objectives/commitment.py) — all decimals
-// are STRINGS, direction is the enum .value, dates are ISO strings.
-export interface ObjectiveCommitment {
-  target_value: string;
-  unit: string;
-  direction: "HIGHER_IS_BETTER" | "LOWER_IS_BETTER";
-  due_date: string;
-  at_risk_threshold: string | null;
-  baseline_value: string | null;
-  policy_id: string | null;
-}
+// Re-export so existing importers (ReviewApprovePage) keep their path.
+export type { ObjectiveCommitment };
 
 const DIRECTION_LABEL: Record<ObjectiveCommitment["direction"], string> = {
   HIGHER_IS_BETTER: "Higher is better",
