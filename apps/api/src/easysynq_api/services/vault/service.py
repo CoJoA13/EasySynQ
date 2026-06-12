@@ -36,6 +36,7 @@ from ...db.models.distribution_entry import DistributionEntry
 from ...db.models.document_version import DocumentVersion as DocumentVersionModel
 from ...db.models.documented_information import DocumentedInformation
 from ...db.models.form_template import FormTemplate
+from ...db.models.quality_objective import QualityObjective
 from ...db.models.working_draft import WorkingDraft
 from ...domain.records.form_schema import FieldError, validate_schema
 from ...domain.vault import format_identifier, revision_label
@@ -205,9 +206,31 @@ async def create_document(
     return doc
 
 
+async def reject_objective_byte_path(session: AsyncSession, doc: DocumentedInformation) -> None:
+    """S-obj-4 (O-5): a Quality Objective's content IS its frozen commitment — the generic byte
+    path (checkout/checkin) and the generic lifecycle writers (start-revision/submit-review, see
+    api/documents.py) must not touch an OBJ: a byte-version would show the approver a stale
+    commitment, and a generic submit would advance a version around the content-aware freeze.
+    Kind guard = satellite existence (the S-rec-1 posture); a PK probe. Reads stay open."""
+    if await session.get(QualityObjective, doc.id) is not None:
+        raise ProblemException(
+            status=422,
+            code="validation_error",
+            title="Quality Objectives are managed via /objectives",
+            errors=[
+                {
+                    "field": "document_id",
+                    "code": "objective_managed_via_objectives",
+                    "message": "use the /objectives lifecycle (edit/start-revision/submit-review)",
+                }
+            ],
+        )
+
+
 async def checkout(
     session: AsyncSession, sink: VaultAuditSink, actor: AppUser, doc: DocumentedInformation
 ) -> WorkingDraft:
+    await reject_objective_byte_path(session, doc)  # S-obj-4 O-5 — before the lock, deterministic
     token = await locks.acquire(doc.id)
     if token is None:
         existing = await repository.get_working_draft(session, doc.id)
@@ -271,6 +294,7 @@ async def checkin(
     change_significance: str,
     mime_type: str = "application/octet-stream",
 ) -> tuple[DocumentVersionModel, bool]:
+    await reject_objective_byte_path(session, doc)  # S-obj-4 O-5 — before WD check, deterministic
     wd = await repository.get_working_draft(session, doc.id)
     if wd is None or wd.checked_out_by != actor.id:
         raise ProblemException(
