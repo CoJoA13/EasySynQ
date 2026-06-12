@@ -121,6 +121,7 @@ describe("rag rules", () => {
     expect(driftRag(drift({ scans: { MIRROR: { status: "DIVERGENT", ...cleanScan }, BLOB_REHASH: null } }))).toBe("red");
     expect(driftRag(drift({ scans: { MIRROR: { status: "FAILED", ...cleanScan }, BLOB_REHASH: null } }))).toBe("amber");
     expect(driftRag(drift({ scans: { MIRROR: { status: "CLEAN", ...cleanScan }, BLOB_REHASH: { status: "CLEAN", ...cleanScan } } }))).toBe("green");
+    expect(driftRag(drift({ scans: { MIRROR: { status: "CLEAN", ...cleanScan }, BLOB_REHASH: null } }))).toBe("neutral");
     expect(driftRag(drift())).toBe("neutral");
   });
 
@@ -205,11 +206,13 @@ export const overdueRag = (n: number): Rag => (n > 0 ? "amber" : "green");
 export const countRag = (n: number, positive: Rag): Rag => (n > 0 ? positive : "green");
 
 export function driftRag(s: DriftStatus): Rag {
-  const statuses = [s.scans.MIRROR?.status, s.scans.BLOB_REHASH?.status];
-  if (s.blob_coverage.failing > 0 || statuses.includes("DIVERGENT")) return "red";
-  if (statuses.includes("FAILED")) return "amber";
-  const present = statuses.filter((x): x is NonNullable<typeof x> => x != null);
-  if (present.length > 0 && present.every((x) => x === "CLEAN")) return "green";
+  const mirror = s.scans.MIRROR?.status;
+  const blob = s.scans.BLOB_REHASH?.status;
+  if (s.blob_coverage.failing > 0 || mirror === "DIVERGENT" || blob === "DIVERGENT") return "red";
+  if (mirror === "FAILED" || blob === "FAILED") return "amber";
+  // Green only when BOTH integrity legs have run and are clean — a null scan is "not yet scanned",
+  // so a fresh/partially-configured deploy with one leg pending shows neutral, never a premature green.
+  if (mirror === "CLEAN" && blob === "CLEAN") return "green";
   return "neutral";
 }
 
