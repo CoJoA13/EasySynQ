@@ -20,20 +20,31 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..auth.dependencies import get_current_user
 from ..db.models._objective_enums import ObjectiveDirection
+from ..db.models._workflow_enums import WorkflowSubjectType
 from ..db.models.app_user import AppUser
 from ..db.models.document_type import DocumentType
+from ..db.models.document_version import DocumentVersion
 from ..db.models.documented_information import DocumentedInformation
 from ..db.models.kpi_measurement import KpiMeasurement
 from ..db.models.objective_plan import ObjectivePlan
 from ..db.models.quality_objective import QualityObjective
+from ..db.models.workflow import Task, WorkflowInstance
 from ..db.session import get_session
-from ..domain.authz import ResourceContext
+from ..domain.authz import RequestContext, ResourceContext, authorize
 from ..domain.objectives.rules import attainment, pct_toward_target, rag_status
 from ..problems import ProblemException
-from ..services.authz import AuthzAuditSink, enforce, get_authz_audit_sink, require
+from ..services.authz import (
+    AuthzAuditSink,
+    enforce,
+    gather_grants,
+    get_authz_audit_sink,
+    require,
+)
+from ..services.authz.repository import gather_sod_constraints, get_allow_approver_release
 from ..services.objectives import (
     add_objective_plan,
     create_objective,
+    current_effective_policy,
     get_objective,
     list_measurements,
     list_objectives,
@@ -51,6 +62,7 @@ from ..services.vault import (
     release,
 )
 from ..services.vault.release_scope import enrich_release_sod_scope
+from ..services.workflow import repository as wf_repo
 
 router = APIRouter(prefix="/api/v1", tags=["objectives"])
 
@@ -116,6 +128,8 @@ def _objective(
     current_state: Any,
     today: datetime.date,
     plans: list[ObjectivePlan] | None = None,
+    capabilities: dict[str, bool] | None = None,
+    effective_from: str | None = None,
 ) -> dict[str, Any]:
     rag = rag_status(
         current=qo.current_value,
@@ -123,7 +137,7 @@ def _objective(
         direction=qo.direction,
         at_risk_threshold=qo.at_risk_threshold,
     )
-    return {
+    out: dict[str, Any] = {
         "id": str(qo.id),
         "identifier": identifier,
         "title": title,
@@ -156,6 +170,46 @@ def _objective(
             today=today,
         ),
         "plans": [_plan(p) for p in (plans or [])],
+    }
+    # S-obj-3 (detail-only): the caller's lifecycle affordances + the effective date for the
+    # stepper. LIST/scorecard/create/submit/release call-sites pass neither → unchanged output.
+    if capabilities is not None:
+        out["capabilities"] = capabilities
+    if effective_from is not None:
+        out["effective_from"] = effective_from
+    return out
+
+
+def _approval_task(t: Task) -> dict[str, Any]:
+    """Field-equivalent to api/workflow.py's ``_task`` as the document-approval endpoint emits it
+    (no ``subject_type``/``subject_id`` — those are the My-Tasks-inbox extras). Kept local: no
+    cross-router private import; the FE's Task type was pinned to this shape (S-web-5)."""
+    return {
+        "id": str(t.id),
+        "instance_id": str(t.instance_id),
+        "stage_key": t.stage_key,
+        "type": t.type.value,
+        "state": t.state.value,
+        "assignee_user_id": str(t.assignee_user_id) if t.assignee_user_id else None,
+        "candidate_pool": t.candidate_pool,
+        "action_expected": t.action_expected,
+        "due_at": t.due_at.isoformat() if t.due_at else None,
+    }
+
+
+def _approval_instance(i: WorkflowInstance, tasks: list[Task]) -> dict[str, Any]:
+    """Field-equivalent to api/workflow.py's ``_instance`` with tasks expanded (the
+    ``GET /documents/{id}/approval`` shape the FE's WorkflowInstance type is pinned to)."""
+    return {
+        "id": str(i.id),
+        "definition_id": str(i.definition_id),
+        "definition_version": i.definition_version,
+        "subject_type": i.subject_type.value,
+        "subject_id": str(i.subject_id),
+        "current_state": i.current_state,
+        "started_at": i.started_at.isoformat() if i.started_at else None,
+        "revision": i.revision,
+        "tasks": [_approval_task(t) for t in tasks],
     }
 
 
@@ -236,6 +290,44 @@ async def _objective_release_scope(
     return await enrich_release_sod_scope(session, base, doc.id, None)
 
 
+async def _objective_capabilities(
+    session: AsyncSession, caller: AppUser, doc: DocumentedInformation, qo: QualityObjective
+) -> dict[str, bool]:
+    """The caller's lifecycle affordances on this objective (detail-only). submit = objective.manage
+    at the objective's scope (the _objective_scope rule); release = document.release + the SoD-2
+    overlay over the version the cutover would promote. Mirrors documents._document_capabilities."""
+    now = datetime.datetime.now(datetime.UTC)
+    ctx = RequestContext(now=now, actor_user_id=str(caller.id))
+    submit_scope = (
+        ResourceContext(process_ids=frozenset({str(qo.process_id)}))
+        if qo.process_id is not None
+        else ResourceContext.system()
+    )
+    mgr_grants = await gather_grants(session, caller.id, caller.org_id, "objective.manage")
+    submit_cap = authorize(mgr_grants, "objective.manage", submit_scope, ctx).allow
+
+    release_scope = await _objective_release_scope(session, doc)
+    sod = await gather_sod_constraints(session, caller.org_id)
+    allow_approver_release = await get_allow_approver_release(session, caller.org_id)
+    rel_ctx = RequestContext(
+        now=now, actor_user_id=str(caller.id), allow_approver_release=allow_approver_release
+    )
+    rel_grants = await gather_grants(session, caller.id, caller.org_id, "document.release")
+    release_cap = authorize(
+        rel_grants, "document.release", release_scope, rel_ctx, sig_hook=True, sod=sod
+    ).allow
+    return {"submit": submit_cap, "release": release_cap}
+
+
+async def _objective_effective_from(
+    session: AsyncSession, doc: DocumentedInformation
+) -> str | None:
+    if doc.current_effective_version_id is None:
+        return None
+    v = await session.get(DocumentVersion, doc.current_effective_version_id)
+    return v.effective_from.isoformat() if v is not None and v.effective_from else None
+
+
 _objective_read = require("objective.read")
 _kpi_read = require("kpi.read", async_scope_resolver=_objective_scope)
 _objective_manage_path = require("objective.manage", async_scope_resolver=_objective_scope)
@@ -247,8 +339,9 @@ def _today() -> datetime.date:
 
 
 # --- endpoints ---
-# NOTE: /objectives/scorecard is declared BEFORE /objectives/{objective_id} so the
-# literal path isn't shadowed by the {objective_id} str-convertor (S-pack-2 lesson).
+# NOTE: /objectives/scorecard AND /objectives/policy are declared BEFORE
+# /objectives/{objective_id} so the literal paths aren't shadowed by the {objective_id}
+# str-convertor (S-pack-2 lesson).
 
 
 @router.post("/objectives", status_code=status.HTTP_201_CREATED)
@@ -326,6 +419,19 @@ async def scorecard_endpoint(
     }
 
 
+@router.get("/objectives/policy")
+async def get_objective_policy_endpoint(
+    caller: AppUser = Depends(_objective_read),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any] | None:
+    """The current Effective Quality Policy (POL singleton, R25) for the create modal's policy link,
+    or ``null`` when none is effective yet. Gated ``objective.read``."""
+    pol = await current_effective_policy(session, caller.org_id)
+    if pol is None:
+        return None
+    return {"id": str(pol.id), "identifier": pol.identifier, "title": pol.title}
+
+
 @router.get("/objectives/{objective_id}")
 async def get_objective_endpoint(
     objective_id: uuid.UUID,
@@ -337,9 +443,44 @@ async def get_objective_endpoint(
         raise ProblemException(status=404, code="not_found", title="Objective not found")
     qo, ident, title, state = row
     plans = await list_plans(session, objective_id)
+    doc = await session.get(DocumentedInformation, objective_id)
+    if doc is None:  # pragma: no cover — the satellite row exists, so the base must too
+        raise ProblemException(
+            status=500, code="internal_error", title="Objective base row missing"
+        )
+    caps = await _objective_capabilities(session, caller, doc, qo)
+    eff = await _objective_effective_from(session, doc)
     return _objective(
-        qo, identifier=ident, title=title, current_state=state, today=_today(), plans=plans
+        qo,
+        identifier=ident,
+        title=title,
+        current_state=state,
+        today=_today(),
+        plans=plans,
+        capabilities=caps,
+        effective_from=eff,
     )
+
+
+@router.get("/objectives/{objective_id}/approval")
+async def get_objective_approval_endpoint(
+    objective_id: uuid.UUID,
+    caller: AppUser = Depends(_objective_read),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any] | None:
+    """The objective's current approval cycle — the latest workflow instance + tasks, or ``null``
+    before submit. Gated ``objective.read`` (the objective owner may hold no ``document.read``); the
+    OBJ approval instance carries ``subject_type=DOCUMENT`` (instantiate_approval hardcodes it)."""
+    qo = await session.get(QualityObjective, objective_id)
+    if qo is None or qo.org_id != caller.org_id:
+        raise ProblemException(status=404, code="not_found", title="Objective not found")
+    instance = await wf_repo.latest_instance_for_subject(
+        session, caller.org_id, WorkflowSubjectType.DOCUMENT, objective_id
+    )
+    if instance is None:
+        return None
+    tasks = await wf_repo.list_instance_tasks(session, instance.id)
+    return _approval_instance(instance, tasks)
 
 
 @router.post("/objectives/{objective_id}/submit-review")

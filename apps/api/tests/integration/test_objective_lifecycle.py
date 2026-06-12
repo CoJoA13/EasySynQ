@@ -191,3 +191,75 @@ async def test_author_cannot_release_their_own_objective(
     rel = await app_client.post(f"/api/v1/objectives/{oid}/release", headers=hs)
     assert rel.status_code == 403, rel.text
     assert rel.json()["code"] == "sod_violation"
+
+
+async def test_approval_read_is_null_before_submit_then_present(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    subject = f"obj-apr-{uuid.uuid4()}"
+    h = _auth(token_factory, subject)
+    await _grant(subject, _OBJ_KEYS)
+    oid = await _create_objective(app_client, h, "Approval read")
+
+    # null before submit (no cycle)
+    pre = await app_client.get(f"/api/v1/objectives/{oid}/approval", headers=h)
+    assert pre.status_code == 200, pre.text
+    assert pre.json() is None
+
+    submitted = await app_client.post(f"/api/v1/objectives/{oid}/submit-review", headers=h)
+    assert submitted.status_code == 200, submitted.text
+    post = await app_client.get(f"/api/v1/objectives/{oid}/approval", headers=h)
+    assert post.status_code == 200, post.text
+    inst = post.json()
+    assert inst["subject_type"] == "DOCUMENT"
+    assert inst["subject_id"] == oid
+    assert any(t["type"] == "APPROVE" for t in inst["tasks"])
+
+
+async def test_detail_exposes_capabilities_for_the_manager(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    subject = f"obj-cap-{uuid.uuid4()}"
+    h = _auth(token_factory, subject)
+    await _grant(subject, _OBJ_KEYS)
+    oid = await _create_objective(app_client, h, "Caps objective")
+    detail = (await app_client.get(f"/api/v1/objectives/{oid}", headers=h)).json()
+    assert detail["capabilities"]["submit"] is True  # holds objective.manage
+    assert detail["capabilities"]["release"] is False  # no document.release
+    assert "effective_from" not in detail  # Draft — the key is omitted until Effective
+
+
+async def test_list_omits_capabilities(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    subject = f"obj-lst-{uuid.uuid4()}"
+    h = _auth(token_factory, subject)
+    await _grant(subject, _OBJ_KEYS)
+    await _create_objective(app_client, h, "List objective")
+    rows = (await app_client.get("/api/v1/objectives", headers=h)).json()["data"]
+    assert rows  # at least our row
+    assert all("capabilities" not in r for r in rows)  # detail-only, no per-row authz cost
+
+
+async def test_policy_endpoint_null_or_effective_pol(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    # A fresh install has the POL document_type but no Effective POL document → null. Tolerate a
+    # sibling test having released one into the shared DB: then the shape contract is pinned.
+    subject = f"obj-pol-{uuid.uuid4()}"
+    h = _auth(token_factory, subject)
+    await _grant(subject, ("objective.read",))
+    r = await app_client.get("/api/v1/objectives/policy", headers=h)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body is None or set(body) == {"id", "identifier", "title"}
+
+
+async def test_policy_endpoint_requires_objective_read(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    subject = f"obj-pol2-{uuid.uuid4()}"
+    h = _auth(token_factory, subject)  # no grant
+    r = await app_client.get("/api/v1/objectives/policy", headers=h)
+    assert r.status_code == 403, r.text
+    assert r.json()["code"] == "permission_denied"
