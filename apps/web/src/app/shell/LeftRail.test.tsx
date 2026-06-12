@@ -1,6 +1,6 @@
 import { screen, waitFor } from "@testing-library/react";
 import { http, HttpResponse } from "msw";
-import { expect, test } from "vitest";
+import { expect, it, test } from "vitest";
 import { server } from "../../test/msw/server";
 import { renderWithProviders } from "../../test/render";
 import { LeftRail } from "./LeftRail";
@@ -71,4 +71,22 @@ test("Internal Audit entry is unconditional (the CAPA precedent — calm-403 liv
     "href",
     "/audits",
   );
+});
+
+it("shows the Objectives entry only with objective.read", async () => {
+  renderWithProviders(<LeftRail />);
+  // default permissions handler grants nothing → no entry
+  await waitFor(() => expect(screen.getByText("Home")).toBeInTheDocument());
+  expect(screen.queryByText("Objectives")).not.toBeInTheDocument();
+
+  server.use(
+    http.get("/api/v1/me/permissions", () =>
+      HttpResponse.json({
+        scope: { level: "SYSTEM", selector: null },
+        permissions: [{ key: "objective.read", effect: "ALLOW", source: "test" }],
+      }),
+    ),
+  );
+  renderWithProviders(<LeftRail />);
+  await waitFor(() => expect(screen.getByText("Objectives")).toBeInTheDocument());
 });
