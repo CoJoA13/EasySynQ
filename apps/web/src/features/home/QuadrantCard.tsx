@@ -61,7 +61,7 @@ export function QuadrantCard({ phase, clauseLabel, rag, openTo, openLabel, child
           {children}
         </Stack>
         <Anchor component={Link} to={openTo} size="sm">
-          {openLabel} →
+          {openLabel} <span aria-hidden="true">→</span>
         </Anchor>
       </Stack>
     </Paper>
