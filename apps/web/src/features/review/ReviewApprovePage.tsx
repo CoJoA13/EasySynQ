@@ -63,17 +63,25 @@ export function ReviewApprovePage() {
   // S-obj-3/4: an objective subject freezes its commitment into the version metadata_snapshot —
   // render that instead of a page redline. Detection keys on the snapshot field, never the
   // document type. versions is newest-first (version_seq DESC), so [0] is the InReview commitment
-  // the approver is signing and [1] is the governing one it supersedes (the was→now source) —
-  // pinned by the two-version revision test.
-  const frozenCommitments = (versions ?? [])
-    .map(
-      (v) =>
-        (v.metadata_snapshot as { objective_commitment?: ObjectiveCommitment } | null)
-          ?.objective_commitment,
-    )
-    .filter((c): c is ObjectiveCommitment => Boolean(c));
-  const objectiveCommitment = frozenCommitments[0] ?? null;
-  const previousCommitment = frozenCommitments[1] ?? null;
+  // the approver is signing. The was→now "previous" is the newest commitment-bearing version that
+  // is version_state Effective — the governing one being superseded (NEVER [1] blindly: a
+  // changes_requested re-freeze leaves a commitment-bearing orphan Draft behind, and on a
+  // first-release cycle there is no governing version at all → plain render). Pinned by the
+  // two-version revision test + the orphan-Draft regression test.
+  const commitmentVersions = (versions ?? [])
+    .map((v) => ({
+      version: v,
+      commitment: (v.metadata_snapshot as { objective_commitment?: ObjectiveCommitment } | null)
+        ?.objective_commitment,
+    }))
+    .filter(
+      (x): x is { version: (typeof x)["version"]; commitment: ObjectiveCommitment } =>
+        Boolean(x.commitment),
+    );
+  const objectiveCommitment = commitmentVersions[0]?.commitment ?? null;
+  const previousCommitment =
+    commitmentVersions.slice(1).find((x) => x.version.version_state === "Effective")?.commitment ??
+    null;
 
   if (isCapa) {
     // The CAPA subject id is on the task (no document.read-gated instance read) → always present here.

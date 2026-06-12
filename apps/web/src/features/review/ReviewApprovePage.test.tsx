@@ -211,6 +211,24 @@ describe("ReviewApprovePage — objective revision two-version pin", () => {
     renderAtTask("task1111-1111-1111-1111-111111111111");
     expect(await screen.findByText("95 % → 97 %")).toBeInTheDocument();
   });
+
+  test("a changes_requested orphan draft never feeds the was→now (first-release cycle renders plain)", async () => {
+    // [0] = v2 InReview (target 97, the commitment being signed)
+    // [1] = v1 Draft orphan (target 95) — a changes_requested re-freeze left it behind, version_state Draft
+    // There is NO Effective version → previousCommitment must be null → plain render (no was→now).
+    server.use(
+      http.get("/api/v1/documents/:id/versions", () =>
+        HttpResponse.json([
+          objectiveVersionV2WithCommitment,
+          { ...objectiveVersionWithCommitment, version_state: "Draft" },
+        ]),
+      ),
+    );
+    renderAtTask("task1111-1111-1111-1111-111111111111");
+    expect(await screen.findByText("97 %")).toBeInTheDocument();
+    expect(screen.queryByText("95 % → 97 %")).toBeNull();
+    expect(screen.queryByText(/changes shown as was → now/i)).toBeNull();
+  });
 });
 
 describe("ReviewApprovePage DOC_ACK branch", () => {
