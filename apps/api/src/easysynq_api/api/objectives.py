@@ -15,7 +15,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Request, Response, status
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..auth.dependencies import get_current_user
@@ -736,9 +736,24 @@ async def release_objective_endpoint(
                 .execution_options(populate_existing=True)
             )
         ).scalar_one_or_none()
-        if qo_after is not None and qo_after.current_value is not None:
-            qo_after.current_value = None
-            await session.commit()
+        if qo_after is not None:
+            # RE-ROLL from the latest NEW-unit reading instead of wiping (Codex P2): a new-unit
+            # measurement can legally commit between the cutover and this reset — its valid
+            # rollup must survive. With none, current_value honestly reads NULL/unmeasured.
+            latest_new_unit = (
+                await session.execute(
+                    select(KpiMeasurement.value)
+                    .where(
+                        KpiMeasurement.objective_id == objective_id,
+                        KpiMeasurement.unit == new_unit,
+                    )
+                    .order_by(desc(KpiMeasurement.period), desc(KpiMeasurement.created_at))
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            if qo_after.current_value != latest_new_unit:
+                qo_after.current_value = latest_new_unit
+                await session.commit()
     row = await get_objective(session, objective_id)
     if row is None:  # pragma: no cover — the doc was just released, it cannot be absent
         raise ProblemException(

@@ -103,7 +103,7 @@ describe("EditCommitmentModal", () => {
     expect(saveBtn).not.toBeDisabled();
   });
 
-  it("preserves a seeded policy link when the policy read errored", async () => {
+  it("omits policy_id when the policy read errored (server inherits the seeded link)", async () => {
     // Render with an objective whose policy_id is non-null so the seed carries a link.
     const objectiveWithPolicy: Objective = {
       ...objectiveDetailFixture,
@@ -136,10 +136,49 @@ describe("EditCommitmentModal", () => {
       ).toBeInTheDocument(),
     );
 
-    // Save — the body must NOT silently drop the seeded policy link to null
+    // Save — policy_id must be OMITTED (server inherits the working value; sending the lapsed
+    // seed back would 422 against the must-be-current-Effective-POL check, null would unlink).
     fireEvent.click(within(dialog).getByRole("button", { name: /save changes/i }));
     await waitFor(() => expect(capturedBody).not.toBeNull());
-    expect(capturedBody!.policy_id).toBe("po000001-0001-0001-0001-000000000001");
+    expect("policy_id" in capturedBody!).toBe(false);
+  });
+
+  it("omits policy_id when no current Effective Policy exists (a seeded link survives)", async () => {
+    // Render with an objective whose policy_id is non-null so the seed carries a link.
+    const objectiveWithPolicy: Objective = {
+      ...objectiveDetailFixture,
+      policy_id: "po000001-0001-0001-0001-000000000001",
+      pending_commitment: null,
+    };
+    // The policy read SUCCEEDS but returns null — no current Effective POL (the seed lapsed).
+    server.use(
+      http.get("/api/v1/objectives/policy", () => HttpResponse.json(null)),
+    );
+    let capturedBody: ObjectiveUpdateBody | null = null;
+    server.use(
+      http.patch("/api/v1/objectives/:id", async ({ request }) => {
+        capturedBody = (await request.json()) as ObjectiveUpdateBody;
+        return HttpResponse.json({ ...objectiveWithPolicy } as Objective);
+      }),
+    );
+
+    renderWithProviders(
+      <EditCommitmentModal opened objective={objectiveWithPolicy} onClose={() => {}} />,
+    );
+    const dialog = await screen.findByRole("dialog");
+
+    // The no-policy copy appears (a successful null read, not an error)
+    await waitFor(() =>
+      expect(
+        within(dialog).getByText(/no effective quality policy yet/i),
+      ).toBeInTheDocument(),
+    );
+
+    // Save — policy_id must be OMITTED so the seeded link survives (sending null would
+    // silently unlink it; the link is only manageable when a current POL actually loaded).
+    fireEvent.click(within(dialog).getByRole("button", { name: /save changes/i }));
+    await waitFor(() => expect(capturedBody).not.toBeNull());
+    expect("policy_id" in capturedBody!).toBe(false);
   });
 
   it("reopen resets: close unmounts; reopen seeds the original value", async () => {

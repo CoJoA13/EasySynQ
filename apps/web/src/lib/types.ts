@@ -1171,8 +1171,10 @@ export interface ObjectiveCreateBody {
   process_id?: string | null;
   policy_id?: string | null;
 }
-// PATCH /objectives/{id} (S-obj-4) — the SPA always sends the FULL commitment (explicit null
-// clears the nullable fields; no omitted-field ambiguity). The API also accepts partials.
+// PATCH /objectives/{id} (S-obj-4) — the SPA sends the full commitment (explicit null clears
+// the nullable fields), EXCEPT policy_id which is omitted (server-inherits) whenever no current
+// Effective Policy loaded — sending null would silently unlink, sending a lapsed seed would 422.
+// The API also accepts partials.
 export interface ObjectiveUpdateBody {
   target_value: string;
   unit: string;
@@ -1180,7 +1182,7 @@ export interface ObjectiveUpdateBody {
   due_date: string;
   at_risk_threshold: string | null;
   baseline_value: string | null;
-  policy_id: string | null;
+  policy_id?: string | null;
 }
 export interface MeasurementCreateBody {
   period: string;

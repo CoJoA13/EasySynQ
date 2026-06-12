@@ -16,8 +16,9 @@ interface Props {
 
 // S-obj-4 (O-1): edit the working-copy commitment. Seeds from pending_commitment when a revision
 // edit is already in flight (the detail's MAIN fields are the GOVERNING values — seeding from
-// them would silently revert a prior edit), else from the objective fields. Always sends the
-// FULL body (explicit null clears). Parent renders {open && <EditCommitmentModal/>} so close
+// them would silently revert a prior edit), else from the objective fields. Sends the full body
+// (explicit null clears); policy_id only when a current POL loaded (omit-inherits otherwise).
+// Parent renders {open && <EditCommitmentModal/>} so close
 // unmounts + resets (the S-web-7d persistently-mounted-modal trap).
 export function EditCommitmentModal({ opened, objective, onClose }: Props) {
   const update = useUpdateObjective(objective.id);
@@ -58,16 +59,14 @@ export function EditCommitmentModal({ opened, objective, onClose }: Props) {
       due_date: dueDate,
       at_risk_threshold: threshold.trim() === "" ? null : threshold.trim(),
       baseline_value: baseline.trim() === "" ? null : baseline.trim(),
-      // An errored/loading policy read must never DECIDE the link — preserve the seeded value
-      // (the S-home-1 lesson applied to writes, not just copy): only a trustworthy read may
-      // change policy_id via the checkbox.
-      policy_id:
-        policyError || policyLoading
-          ? seed.policy_id
-          : linkPolicy && policy
-            ? policy.id
-            : null,
     };
+    // The policy link is managed ONLY when a current Effective Policy loaded (the checkbox is
+    // the sole affordance). On an errored/loading read OR a successfully-null one, OMIT the key
+    // — the API inherits the working value (sending null would silently unlink a seeded policy;
+    // sending a lapsed seed back would 422 against the Effective-POL check) — Codex P2.
+    if (!policyError && !policyLoading && policy) {
+      body.policy_id = linkPolicy ? policy.id : null;
+    }
     try {
       await update.mutateAsync(body);
       onClose();
