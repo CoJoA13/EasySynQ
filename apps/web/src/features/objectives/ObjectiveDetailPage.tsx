@@ -8,6 +8,7 @@ import { StateBadge } from "../document/StateBadge";
 import { useObjective, useObjectiveApproval } from "./hooks";
 import { useReleaseObjective, useStartObjectiveRevision, useSubmitObjectiveForReview } from "./mutations";
 import { CommitmentHero } from "./CommitmentHero";
+import { EditCommitmentModal } from "./EditCommitmentModal";
 import { PlansSection } from "./PlansSection";
 import { MeasurementsSection } from "./MeasurementsSection";
 import { ProposedRevisionCard } from "./ProposedRevisionCard";
@@ -25,6 +26,7 @@ export function ObjectiveDetailPage() {
   const release = useReleaseObjective();
   const startRevision = useStartObjectiveRevision();
   const [actionError, setActionError] = useState<string | null>(null);
+  const [editOpen, setEditOpen] = useState(false);
 
   if (isLoading) {
     return (
@@ -58,6 +60,7 @@ export function ObjectiveDetailPage() {
   const canSubmit = o.capabilities?.submit === true && draftLike;
   const canRelease = o.capabilities?.release === true && o.current_state === "Approved";
   const canStartRevision = o.capabilities?.start_revision === true && o.current_state === "Effective";
+  const canEdit = o.capabilities?.edit === true && draftLike;
 
   async function doSubmit() {
     if (!id) return;
@@ -101,7 +104,7 @@ export function ObjectiveDetailPage() {
         </div>
         <CommitmentHero objective={o} />
         <ProposedRevisionCard objective={o} />
-        {(canSubmit || canRelease || canStartRevision || instance) && (
+        {(canSubmit || canRelease || canStartRevision || canEdit || instance) && (
           <Card withBorder>
             <Stack gap="sm">
               <Text fw={600}>Lifecycle</Text>
@@ -142,7 +145,13 @@ export function ObjectiveDetailPage() {
                   </Text>
                 </Group>
               )}
-              {/* Task 12 inserts the canEdit "Edit commitment" button here. */}
+              {canEdit && (
+                <Group>
+                  <Button variant="default" onClick={() => setEditOpen(true)}>
+                    Edit commitment
+                  </Button>
+                </Group>
+              )}
               {canSubmit && (
                 <Group>
                   <Button color="teal" loading={submit.isPending} onClick={() => void doSubmit()}>
@@ -161,6 +170,9 @@ export function ObjectiveDetailPage() {
               )}
             </Stack>
           </Card>
+        )}
+        {editOpen && (
+          <EditCommitmentModal opened objective={o} onClose={() => setEditOpen(false)} />
         )}
         <PlansSection objectiveId={o.id} plans={o.plans} />
         <MeasurementsSection objectiveId={o.id} unit={o.unit} />

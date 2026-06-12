@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { axe } from "jest-axe";
@@ -188,4 +188,40 @@ it("hides Start revision without the capability", async () => {
   renderAt(ID);
   await screen.findByRole("heading", { name: "On-time delivery rate" });
   expect(screen.queryByRole("button", { name: "Start revision" })).not.toBeInTheDocument();
+});
+
+// ---- S-obj-4 EditCommitmentModal affordance ----
+
+it("offers Edit commitment on UnderRevision and opens the modal seeded with the pending target", async () => {
+  server.use(
+    http.get("/api/v1/objectives/:id", () =>
+      HttpResponse.json(objectiveUnderRevisionDetailFixture),
+    ),
+  );
+  renderAt(ID);
+  // Wait for the page to render the Edit button
+  const editBtn = await screen.findByRole("button", { name: "Edit commitment" });
+  fireEvent.click(editBtn);
+
+  // The modal opens
+  const dialog = await screen.findByRole("dialog");
+  // Seeds from pending_commitment (target "97"), NOT the governing "95"
+  expect(within(dialog).getByLabelText(/^target/i)).toHaveValue("97");
+});
+
+it("hides Edit commitment on an Effective objective (state gate)", async () => {
+  server.use(
+    http.get("/api/v1/objectives/:id", () =>
+      HttpResponse.json({
+        ...objectiveDetailFixture,
+        current_state: "Effective",
+        effective_from: "2026-06-01T09:00:00+00:00",
+        capabilities: { submit: false, release: false, edit: true, start_revision: false },
+        pending_commitment: null,
+      } satisfies Objective),
+    ),
+  );
+  renderAt(ID);
+  await screen.findByRole("heading", { name: "On-time delivery rate" });
+  expect(screen.queryByRole("button", { name: "Edit commitment" })).not.toBeInTheDocument();
 });
