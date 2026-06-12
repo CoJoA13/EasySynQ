@@ -1,5 +1,5 @@
 import { http, HttpResponse } from "msw";
-import type { AckDecisionResult, AckMatrixRow, AuditList, AuditPlanList, AuditProgramList, Capa, Complaint, DistributionPayload, DriftStatus, Finding, FindingList, Ncr, SupersededCopies } from "../../lib/types";
+import type { AckDecisionResult, AckMatrixRow, AuditList, AuditPlanList, AuditProgramList, Capa, Complaint, DistributionPayload, DriftStatus, Finding, FindingList, Measurement, MeasurementListResponse, Ncr, Objective, ObjectiveListResponse, ObjectivePlan, ObjectiveScorecard, SupersededCopies } from "../../lib/types";
 
 export const docFixture = [
   {
@@ -925,7 +925,159 @@ export const rolesFixture = [
   { id: "ro000002-0002-0002-0002-000000000002", name: "Process Owner", description: null, is_reserved: true },
 ];
 
+const OBJ_DETAIL_ID = "ob000001-0001-0001-0001-000000000001";
+
+const objectiveFixtures: Objective[] = [
+  {
+    id: OBJ_DETAIL_ID,
+    identifier: "OBJ-001",
+    title: "On-time delivery rate",
+    current_state: "Draft",
+    target_value: "95",
+    unit: "%",
+    baseline_value: "80",
+    current_value: "92",
+    direction: "HIGHER_IS_BETTER",
+    at_risk_threshold: "90",
+    due_date: "2026-12-31",
+    process_id: "70000000-0000-0000-0000-000000000001",
+    policy_id: null,
+    rag: "amber",
+    pct_toward_target: 0.8,
+    attainment: "in_progress",
+    plans: [],
+  },
+  {
+    id: "ob000002-0002-0002-0002-000000000002",
+    identifier: "OBJ-002",
+    title: "Customer complaints per quarter",
+    current_state: "Draft",
+    target_value: "5",
+    unit: "complaints",
+    baseline_value: null,
+    current_value: "7",
+    direction: "LOWER_IS_BETTER",
+    at_risk_threshold: null,
+    due_date: "2026-12-31",
+    process_id: null,
+    policy_id: null,
+    rag: "red",
+    pct_toward_target: null,
+    attainment: "in_progress",
+    plans: [],
+  },
+  {
+    id: "ob000003-0003-0003-0003-000000000003",
+    identifier: "OBJ-003",
+    title: "First-pass yield",
+    current_state: "Draft",
+    target_value: "98",
+    unit: "%",
+    baseline_value: "90",
+    current_value: "99",
+    direction: "HIGHER_IS_BETTER",
+    at_risk_threshold: "95",
+    due_date: "2026-12-31",
+    process_id: null,
+    policy_id: null,
+    rag: "green",
+    pct_toward_target: 1.125,
+    attainment: "in_progress",
+    plans: [],
+  },
+  {
+    id: "ob000004-0004-0004-0004-000000000004",
+    identifier: "OBJ-004",
+    title: "Supplier defect rate",
+    current_state: "Draft",
+    target_value: "2",
+    unit: "%",
+    baseline_value: null,
+    current_value: null,
+    direction: "LOWER_IS_BETTER",
+    at_risk_threshold: null,
+    due_date: "2026-12-31",
+    process_id: null,
+    policy_id: null,
+    rag: "unmeasured",
+    pct_toward_target: null,
+    attainment: "in_progress",
+    plans: [],
+  },
+] satisfies Objective[];
+
+const objectivePlanFixtures: ObjectivePlan[] = [
+  {
+    id: "pl000001-0001-0001-0001-000000000001",
+    objective_id: OBJ_DETAIL_ID,
+    action: "Add a second carrier to the south region",
+    resource: "Logistics budget",
+    responsible_user_id: "bbbb1111-1111-1111-1111-111111111111",
+    due_date: "2026-09-30",
+  },
+] satisfies ObjectivePlan[];
+
+const objectiveDetailFixture: Objective = {
+  ...objectiveFixtures[0]!,
+  plans: objectivePlanFixtures,
+} satisfies Objective;
+
+const measurementFixtures: Measurement[] = [
+  {
+    id: "me000002-0002-0002-0002-000000000002",
+    objective_id: OBJ_DETAIL_ID,
+    record_id: "re000002-0002-0002-0002-000000000002",
+    period: "2026-04-01",
+    value: "92",
+    target_at_capture: "95",
+    unit: "%",
+    source: "Logistics MIS",
+    created_at: "2026-06-02T09:00:00+00:00",
+  },
+  {
+    id: "me000001-0001-0001-0001-000000000001",
+    objective_id: OBJ_DETAIL_ID,
+    record_id: "re000001-0001-0001-0001-000000000001",
+    period: "2026-01-01",
+    value: "88",
+    target_at_capture: "95",
+    unit: "%",
+    source: "Logistics MIS",
+    created_at: "2026-04-04T09:00:00+00:00",
+  },
+] satisfies Measurement[];
+
 export const handlers = [
+  // ---- S-obj-2 Quality Objectives (default happy-path; per-test overrides for 403/empty/error) ----
+  http.get("/api/v1/objectives/scorecard", ({ request }) => {
+    const pid = new URL(request.url).searchParams.get("process_id");
+    const rows = pid ? objectiveFixtures.filter((o) => o.process_id === pid) : objectiveFixtures;
+    const by_rag = { green: 0, amber: 0, red: 0, unmeasured: 0 };
+    for (const o of rows) by_rag[o.rag] += 1;
+    return HttpResponse.json({
+      total: rows.length,
+      on_target: by_rag.green,
+      by_rag,
+      objectives: rows,
+    } satisfies ObjectiveScorecard);
+  }),
+  http.get("/api/v1/objectives", ({ request }) => {
+    const pid = new URL(request.url).searchParams.get("process_id");
+    const rows = pid ? objectiveFixtures.filter((o) => o.process_id === pid) : objectiveFixtures;
+    return HttpResponse.json({ data: rows } satisfies ObjectiveListResponse);
+  }),
+  http.get("/api/v1/objectives/:id", () => HttpResponse.json(objectiveDetailFixture)),
+  http.get("/api/v1/objectives/:id/measurements", () =>
+    HttpResponse.json({ data: measurementFixtures } satisfies MeasurementListResponse),
+  ),
+  http.post("/api/v1/objectives", () => HttpResponse.json(objectiveDetailFixture, { status: 201 })),
+  http.post("/api/v1/objectives/:id/measurements", () =>
+    HttpResponse.json(measurementFixtures[0]!, { status: 201 }),
+  ),
+  http.post("/api/v1/objectives/:id/plans", () =>
+    HttpResponse.json(objectivePlanFixtures[0]!, { status: 201 }),
+  ),
+  http.delete("/api/v1/objectives/:id/plans/:planId", () => new HttpResponse(null, { status: 204 })),
   // ---- S-ing-4b ingestion (default happy-path; per-test override for 403/empty/error) ----
   http.get("/api/v1/admin/imports", () => HttpResponse.json([ingestionRunFixture])),
   http.get("/api/v1/admin/imports/:id", () => HttpResponse.json(ingestionRunFixture)),

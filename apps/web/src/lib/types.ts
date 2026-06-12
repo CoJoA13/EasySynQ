@@ -1076,3 +1076,86 @@ export interface RoleSummary {
   description: string | null;
   is_reserved: boolean;
 }
+
+// ---- S-obj-2 Quality Objectives (clause 6.2) — pinned to api/objectives.py serializers ----
+export type ObjectiveDirection = "HIGHER_IS_BETTER" | "LOWER_IS_BETTER";
+export type ObjectiveRag = "green" | "amber" | "red" | "unmeasured";
+export type ObjectiveAttainment = "in_progress" | "met" | "missed";
+export type ObjectiveState =
+  | "Draft" | "InReview" | "Approved" | "Effective"
+  | "UnderRevision" | "Superseded" | "Obsolete";
+
+export interface ObjectivePlan {
+  id: string;
+  objective_id: string;
+  action: string;
+  resource: string | null;
+  responsible_user_id: string | null;
+  due_date: string | null;
+}
+
+export interface Objective {
+  id: string;
+  identifier: string;
+  title: string;
+  current_state: ObjectiveState;
+  target_value: string; // decimal string
+  unit: string;
+  baseline_value: string | null;
+  current_value: string | null;
+  direction: ObjectiveDirection;
+  at_risk_threshold: string | null;
+  due_date: string; // ISO date
+  process_id: string | null;
+  policy_id: string | null;
+  rag: ObjectiveRag;
+  pct_toward_target: number | null; // JSON number | null — NOT a string
+  attainment: ObjectiveAttainment;
+  plans: ObjectivePlan[]; // [] in list/scorecard rows; populated on detail GET
+}
+
+export interface Measurement {
+  id: string;
+  objective_id: string | null;
+  record_id: string;
+  period: string; // ISO date
+  value: string; // decimal string
+  target_at_capture: string; // decimal string
+  unit: string;
+  source: string | null;
+  created_at: string; // ISO date-time
+}
+
+export interface ObjectiveScorecard {
+  total: number;
+  on_target: number;
+  by_rag: { green: number; amber: number; red: number; unmeasured: number };
+  objectives: Objective[];
+}
+
+export interface ObjectiveListResponse { data: Objective[] }
+export interface MeasurementListResponse { data: Measurement[] }
+
+export interface ObjectiveCreateBody {
+  title: string;
+  target_value: string;
+  unit: string;
+  direction: ObjectiveDirection;
+  due_date: string;
+  baseline_value?: string | null;
+  at_risk_threshold?: string | null;
+  process_id?: string | null;
+  policy_id?: string | null;
+}
+export interface MeasurementCreateBody {
+  period: string;
+  value: string;
+  unit: string;
+  source?: string | null;
+}
+export interface PlanCreateBody {
+  action: string;
+  resource?: string | null;
+  responsible_user_id?: string | null;
+  due_date?: string | null;
+}

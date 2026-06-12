@@ -28,6 +28,8 @@ import { IngestionRunPage } from "./features/ingestion/IngestionRunPage";
 import { DriftLayout } from "./features/drift/DriftLayout";
 import { DriftStatusPage } from "./features/drift/DriftStatusPage";
 import { SupersededCopiesPage } from "./features/drift/SupersededCopiesPage";
+import { ObjectivesRegisterPage } from "./features/objectives/ObjectivesRegisterPage";
+import { ObjectiveDetailPage } from "./features/objectives/ObjectiveDetailPage";
 import { apiGet } from "./lib/api";
 import { useAuth } from "./lib/auth";
 
@@ -137,6 +139,8 @@ export function App() {
           <Route index element={<DriftStatusPage />} />
           <Route path="superseded-copies" element={<SupersededCopiesPage />} />
         </Route>
+        <Route path="objectives" element={<ObjectivesRegisterPage />} />
+        <Route path="objectives/:id" element={<ObjectiveDetailPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

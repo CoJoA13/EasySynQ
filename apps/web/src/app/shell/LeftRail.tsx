@@ -65,6 +65,16 @@ export function LeftRail() {
           active={pathname.startsWith("/drift")}
         />
       )}
+      {can("objective.read") && (
+        // S-obj-2: gated — objective.read (PROCESS finest-scope, SYSTEM fallback in v1); the PLAN-phase
+        // register (clause 6.2). Mirrors the drift.read entry.
+        <NavLink
+          component={Link}
+          to="/objectives"
+          label="Objectives"
+          active={pathname.startsWith("/objectives")}
+        />
+      )}
       {PHASES.map((phase) => {
         const top = (clauses ?? []).filter((c) => c.pdca_phase === phase && c.parent_id === null);
         if (top.length === 0) return null;
