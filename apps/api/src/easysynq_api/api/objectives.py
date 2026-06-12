@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..auth.dependencies import get_current_user
 from ..db.models._objective_enums import ObjectiveDirection
 from ..db.models.app_user import AppUser
+from ..db.models.document_type import DocumentType
 from ..db.models.documented_information import DocumentedInformation
 from ..db.models.kpi_measurement import KpiMeasurement
 from ..db.models.objective_plan import ObjectivePlan
@@ -42,7 +43,14 @@ from ..services.objectives import (
     submit_objective_for_review,
 )
 from ..services.objectives import queries as obj_queries  # noqa: F401 — available for future use
-from ..services.vault import VaultAuditSink, get_vault_audit_sink
+from ..services.vault import (
+    SignatureEventSink,
+    VaultAuditSink,
+    get_vault_audit_sink,
+    get_vault_signature_sink,
+    release,
+)
+from ..services.vault.release_scope import enrich_release_sod_scope
 
 router = APIRouter(prefix="/api/v1", tags=["objectives"])
 
@@ -206,6 +214,26 @@ async def _load_objective_doc(
     return doc, qo
 
 
+async def _objective_release_scope(
+    session: AsyncSession, doc: DocumentedInformation
+) -> ResourceContext:
+    """Release scope = the objective's document scope + the SoD-2 inputs for the version the
+    cutover will promote (the latest Approved): its author + approval signers. Mirrors the
+    document ``_release_scope`` (documents.py) — same base fields as ``_document_scope_by_id``
+    (artifact + folder + doc-class + lifecycle), then the shared SoD-2 enrichment."""
+    level: str | None = None
+    if doc.document_type_id:
+        dt = await session.get(DocumentType, doc.document_type_id)
+        level = dt.document_level.value if dt else None
+    base = ResourceContext(
+        artifact_id=str(doc.id),
+        folder_path=doc.folder_path,
+        document_level=level,
+        lifecycle_state=doc.current_state.value,
+    )
+    return await enrich_release_sod_scope(session, base, doc.id, None)
+
+
 _objective_read = require("objective.read")
 _kpi_read = require("kpi.read", async_scope_resolver=_objective_scope)
 _objective_manage_path = require("objective.manage", async_scope_resolver=_objective_scope)
@@ -331,6 +359,37 @@ async def submit_objective_endpoint(
         )
     qo2, ident, title, state = row
     return _objective(qo2, identifier=ident, title=title, current_state=state, today=_today())
+
+
+@router.post("/objectives/{objective_id}/release")
+async def release_objective_endpoint(
+    objective_id: uuid.UUID,
+    request: Request,
+    caller: AppUser = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+    authz_sink: AuthzAuditSink = Depends(get_authz_audit_sink),
+    vault_sink: VaultAuditSink = Depends(get_vault_audit_sink),
+    sig_sink: SignatureEventSink = Depends(get_vault_signature_sink),
+) -> dict[str, Any]:
+    # Enforce document.release imperatively over the SoD-2-enriched scope (author/approver ≠
+    # releaser), then the shared release() runs the INV-1 SERIALIZABLE cutover in its own session.
+    # An OBJ shares the documented_information id, so the kind-agnostic cutover drives it Effective
+    # + signs release (the documents.py release_endpoint posture, minus the version_id body — v1
+    # objectives have exactly one version stream, the latest Approved is the only candidate).
+    doc, _ = await _load_objective_doc(session, caller, objective_id)
+    resource = await _objective_release_scope(session, doc)
+    await enforce(session, authz_sink, request, caller, "document.release", resource, sig_hook=True)
+    await release(caller, objective_id, vault_sink, sig_sink)
+    # release() committed in its own SERIALIZABLE session; this request session's identity map
+    # still holds the pre-release state — expire it so the re-read refreshes from the DB.
+    session.expire_all()
+    row = await get_objective(session, objective_id)
+    if row is None:  # pragma: no cover — the doc was just released, it cannot be absent
+        raise ProblemException(
+            status=500, code="internal_error", title="Objective row not found after release"
+        )
+    qo, ident, title, state = row
+    return _objective(qo, identifier=ident, title=title, current_state=state, today=_today())
 
 
 @router.post("/objectives/{objective_id}/measurements", status_code=status.HTTP_201_CREATED)
