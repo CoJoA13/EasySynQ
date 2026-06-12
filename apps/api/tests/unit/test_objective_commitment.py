@@ -3,6 +3,7 @@ import datetime
 import uuid
 from decimal import Decimal
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 import rfc8785
@@ -110,7 +111,7 @@ def test_snapshot_adds_objective_commitment_only_when_passed() -> None:
 _POL = uuid.uuid4()
 
 
-def _full_kwargs() -> dict:  # type: ignore[type-arg]
+def _full_kwargs() -> dict[str, Any]:
     return {
         "target_value": Decimal("98.5"),
         "unit": "%",
@@ -144,7 +145,7 @@ def test_parse_commitment_none_legs() -> None:
 
 
 def test_resolve_commitment_prefers_governing_else_working_row() -> None:
-    governing = build_commitment(**{**_full_kwargs(), "target_value": Decimal("98.5")})
+    governing = build_commitment(**_full_kwargs())
     working = {**_full_kwargs(), "target_value": Decimal("50")}  # an in-edit working row
     resolved = resolve_commitment(governing, **working)
     assert resolved.target_value == Decimal("98.5")  # the governing frozen value wins
@@ -175,3 +176,13 @@ def test_needs_freeze_matrix() -> None:
     assert commitment_needs_freeze(
         latest_version_state=VersionState.Draft, latest_commitment=None, working=working
     )
+
+
+def test_parse_commitment_raises_on_malformed_snapshots() -> None:
+    built = build_commitment(**_full_kwargs())
+    # a missing key (even a nullable one) is a drift-class event — raise, never default
+    truncated = {k: v for k, v in built.items() if k != "at_risk_threshold"}
+    with pytest.raises(KeyError):
+        parse_commitment(truncated)
+    with pytest.raises(ValueError):
+        parse_commitment({**built, "direction": "SIDEWAYS_IS_BETTER"})

@@ -66,17 +66,13 @@ def parse_commitment(snapshot: dict[str, Any]) -> Commitment:
         due_date=datetime.date.fromisoformat(snapshot["due_date"]),
         at_risk_threshold=(
             Decimal(snapshot["at_risk_threshold"])
-            if snapshot.get("at_risk_threshold") is not None
+            if snapshot["at_risk_threshold"] is not None
             else None
         ),
         baseline_value=(
-            Decimal(snapshot["baseline_value"])
-            if snapshot.get("baseline_value") is not None
-            else None
+            Decimal(snapshot["baseline_value"]) if snapshot["baseline_value"] is not None else None
         ),
-        policy_id=(
-            uuid.UUID(snapshot["policy_id"]) if snapshot.get("policy_id") is not None else None
-        ),
+        policy_id=(uuid.UUID(snapshot["policy_id"]) if snapshot["policy_id"] is not None else None),
     )
 
 
@@ -118,7 +114,8 @@ def commitment_needs_freeze(
 
     - no version at all → first submit (the S-obj-3 path)
     - latest is not a Draft → a revision (the latest version is the governing Effective one,
-      whose snapshot CARRIES a commitment — the S-obj-3 ``is None`` guard would invert here)
+      whose snapshot CARRIES a commitment — the S-obj-3 ``is None`` guard would invert here;
+      typically Effective; the FSM, not this predicate, guards the other states)
     - the latest Draft's commitment ≠ the working commitment → a PATCH happened since the last
       freeze (or the latest Draft is a commitment-less legacy byte-version) → re-freeze so the
       approver always signs the CURRENT commitment.
