@@ -32,6 +32,18 @@ it("shows a calm no-access panel on a 403", async () => {
   );
 });
 
+it("shows a calm error (not an infinite loader) on a non-403 failure", async () => {
+  server.use(
+    http.get("/api/v1/objectives/scorecard", () =>
+      HttpResponse.json({ code: "internal_error", title: "boom" }, { status: 500 }),
+    ),
+  );
+  renderWithProviders(<ObjectivesRegisterPage />, { route: "/objectives" });
+  await waitFor(() =>
+    expect(screen.getByText(/couldn't load quality objectives/i)).toBeInTheDocument(),
+  );
+});
+
 it("shows an empty state when there are no objectives", async () => {
   server.use(
     http.get("/api/v1/objectives/scorecard", () =>

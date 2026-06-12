@@ -5,7 +5,7 @@ import { useObjectiveMeasurements } from "./hooks";
 import { RecordMeasurementModal } from "./RecordMeasurementModal";
 
 export function MeasurementsSection({ objectiveId, unit }: { objectiveId: string; unit: string }) {
-  const { data, isLoading, forbidden } = useObjectiveMeasurements(objectiveId);
+  const { data, isLoading, isError, forbidden } = useObjectiveMeasurements(objectiveId);
   const { can } = usePermissions();
   const [open, setOpen] = useState(false);
   return (
@@ -17,6 +17,10 @@ export function MeasurementsSection({ objectiveId, unit }: { objectiveId: string
       {forbidden ? (
         <Alert color="gray" title="No access">
           You don't have access to the measurement history for this objective.
+        </Alert>
+      ) : isError ? (
+        <Alert color="red" title="Couldn't load measurements">
+          Something went wrong loading the measurement history. Please try again.
         </Alert>
       ) : isLoading ? (
         <Loader />

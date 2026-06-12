@@ -34,3 +34,16 @@ it("shows an empty hint when there are no readings", async () => {
   renderWithProviders(<MeasurementsSection objectiveId={ID} unit="%" />);
   await waitFor(() => expect(screen.getByText(/no measurements recorded yet/i)).toBeInTheDocument());
 });
+
+it("shows a calm error (not the empty hint) on a non-403 failure", async () => {
+  server.use(
+    http.get("/api/v1/objectives/:id/measurements", () =>
+      HttpResponse.json({ code: "internal_error", title: "boom" }, { status: 500 }),
+    ),
+  );
+  renderWithProviders(<MeasurementsSection objectiveId={ID} unit="%" />);
+  await waitFor(() =>
+    expect(screen.getByText(/couldn't load measurements/i)).toBeInTheDocument(),
+  );
+  expect(screen.queryByText(/no measurements recorded yet/i)).not.toBeInTheDocument();
+});
