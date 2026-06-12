@@ -4685,7 +4685,6 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Objective" }
-        "401": { $ref: "#/components/responses/ProblemResponse" }
         "403": { $ref: "#/components/responses/ProblemResponse" }
         "404": { $ref: "#/components/responses/ProblemResponse" }
         "409":
@@ -4702,7 +4701,7 @@ paths:
       summary: "Draft→InReview (T2) / UnderRevision→InReview (T9) — freezes the commitment when it changed + instantiates the approval workflow. Gated objective.manage (PROCESS scope from objective)."
       description: >-
         One transaction (S-obj-3/S-obj-4): the commitment is frozen into a new Draft WORM version
-        whenever the working commitment differs from the latest version's frozen one — the first submit,
+        whenever the latest version is not a Draft carrying the current working commitment — the first submit,
         every revision re-submit (the latest version is then the governing Effective one), and a
         re-submit after an edit in the changes_requested window; an UNCHANGED re-submit re-advances the
         existing Draft version (no duplicate version). The optional change_reason lands on the frozen
@@ -4754,7 +4753,6 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Objective" }
-        "401": { $ref: "#/components/responses/ProblemResponse" }
         "403": { $ref: "#/components/responses/ProblemResponse" }
         "404": { $ref: "#/components/responses/ProblemResponse" }
         "409":
@@ -7548,7 +7546,7 @@ components:
       properties:
         target_value: { type: [string, "null"], description: "Decimal string." }
         unit: { type: [string, "null"], minLength: 1, maxLength: 50 }
-        direction: { type: [string, "null"], enum: [HIGHER_IS_BETTER, LOWER_IS_BETTER] }
+        direction: { type: [string, "null"], enum: [HIGHER_IS_BETTER, LOWER_IS_BETTER, null] }
         due_date: { type: [string, "null"], format: date }
         at_risk_threshold: { type: [string, "null"], description: "Decimal string." }
         baseline_value: { type: [string, "null"], description: "Decimal string." }
