@@ -46,3 +46,37 @@ export function useRemovePlan(objectiveId: string) {
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["objective", objectiveId] }),
   });
 }
+
+// Invalidate every read a lifecycle mutation can change (detail, approval cycle, the scorecard —
+// the scorecard prefix also catches the per-process ["objectives-scorecard", pid] keys; no plain
+// ["objectives"] list key exists in hooks.ts).
+function useInvalidateObjective(): (id: string) => void {
+  const qc = useQueryClient();
+  return (id: string) => {
+    void qc.invalidateQueries({ queryKey: ["objective", id] });
+    void qc.invalidateQueries({ queryKey: ["objective-approval", id] });
+    void qc.invalidateQueries({ queryKey: ["objectives-scorecard"] });
+  };
+}
+
+// S-obj-3: freeze the commitment + instantiate approval (objective.manage; Draft/UnderRevision only).
+export function useSubmitObjectiveForReview() {
+  const api = useApi();
+  const invalidate = useInvalidateObjective();
+  return useMutation({
+    mutationFn: (id: string) =>
+      api.send<Objective>("POST", `/api/v1/objectives/${id}/submit-review`),
+    onSuccess: (_d, id) => invalidate(id),
+  });
+}
+
+// S-obj-3: release the latest Approved version → Effective (document.release + SoD-2 server-side;
+// the UI only shows the button when capabilities.release is true — the useReleaseDocument posture).
+export function useReleaseObjective() {
+  const api = useApi();
+  const invalidate = useInvalidateObjective();
+  return useMutation({
+    mutationFn: (id: string) => api.send<Objective>("POST", `/api/v1/objectives/${id}/release`, {}),
+    onSuccess: (_d, id) => invalidate(id),
+  });
+}

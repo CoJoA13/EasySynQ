@@ -1112,6 +1112,16 @@ export interface Objective {
   pct_toward_target: number | null; // JSON number | null — NOT a string
   attainment: ObjectiveAttainment;
   plans: ObjectivePlan[]; // [] in list/scorecard rows; populated on detail GET
+  // S-obj-3 (detail-only; absent on list/scorecard rows; effective_from null until Effective):
+  capabilities?: { submit: boolean; release: boolean };
+  effective_from?: string | null;
+}
+
+// GET /objectives/policy — the Effective Quality Policy singleton, or null.
+export interface EffectivePolicy {
+  id: string;
+  identifier: string;
+  title: string;
 }
 
 export interface Measurement {
