@@ -1,5 +1,6 @@
-"""Management Review family (clause 9.3): management_review + review_input + review_output, new enums,
-the MR document_type + workflow_definition seeds, and the system_config cadence columns. (S-mr-1)
+"""Management Review family (clause 9.3): management_review + review_input + review_output, new
+enums, the MR document_type + workflow_definition seeds, and the system_config cadence columns.
+(S-mr-1)
 
 Revision ID: 0050_management_review
 Revises: 0049_quality_objectives
@@ -32,10 +33,11 @@ _NEW_EVENT_TYPES = (
     "MGMT_REVIEW_ACTION_SPAWNED",
     "MGMT_REVIEW_CLOSED",
 )
-_MR_TYPE = ("MR", "Management Review", "L1_POLICY", False)  # (code, name, document_level, is_singleton)
+# (code, name, document_level, is_singleton)
+_MR_TYPE = ("MR", "Management Review", "L1_POLICY", False)
 _DEF_KEY = "management_review"
-# The container instance the MR_INPUT/MR_ACTION tasks hang off (added via the S5 direct-insert pattern,
-# not the engine). Single stage; no sign-off signature on the container.
+# The container instance the MR_INPUT/MR_ACTION tasks hang off (added via the S5 direct-insert
+# pattern, not the engine). Single stage; no sign-off signature on the container.
 _STAGES: tuple[dict[str, Any], ...] = (
     {
         "key": "prepare",
@@ -53,9 +55,9 @@ _STAGES: tuple[dict[str, Any], ...] = (
 
 
 def _org_id(bind: Any) -> Any:
-    # Resilient org lookup — an OPERATIONAL install renames short_code away from 'DEFAULT' at setup
-    # G-E (the 0018/0021 trap; this live install's org is 'AHT'). D1 = single-org, so fall back to
-    # the only row. NEVER bare scalar_one on 'DEFAULT'.
+    # Resilient org lookup — an OPERATIONAL install renames short_code away from 'DEFAULT' at
+    # setup G-E (the 0018/0021 trap; this live install's org is 'AHT'). D1 = single-org, so fall
+    # back to the only row. NEVER bare scalar_one on 'DEFAULT'.
     org_id = bind.execute(
         sa.text("SELECT id FROM organization WHERE short_code = 'DEFAULT'")
     ).scalar_one_or_none()
@@ -65,7 +67,8 @@ def _org_id(bind: Any) -> Any:
 
 
 def upgrade() -> None:
-    # 1. Additive event-type values (IF NOT EXISTS → idempotent; in an autocommit_block — the 0049 shape).
+    # 1. Additive event-type values (IF NOT EXISTS → idempotent; in an autocommit_block — the
+    # 0049 shape).
     with op.get_context().autocommit_block():
         for value in _NEW_EVENT_TYPES:
             op.execute(f"ALTER TYPE event_type ADD VALUE IF NOT EXISTS '{value}'")
@@ -73,16 +76,21 @@ def upgrade() -> None:
     bind = op.get_bind()
 
     # 2. The fresh enums (tuples from the ORM *_VALUES — the 0010 rule).
-    postgresql.ENUM(*REVIEW_INPUT_TYPE_VALUES, name="review_input_type").create(bind, checkfirst=True)
-    postgresql.ENUM(*REVIEW_OUTPUT_TYPE_VALUES, name="review_output_type").create(bind, checkfirst=True)
-    postgresql.ENUM(*MANAGEMENT_REVIEW_CLOSE_STATE_VALUES, name="management_review_close_state").create(
+    postgresql.ENUM(*REVIEW_INPUT_TYPE_VALUES, name="review_input_type").create(
         bind, checkfirst=True
     )
+    postgresql.ENUM(*REVIEW_OUTPUT_TYPE_VALUES, name="review_output_type").create(
+        bind, checkfirst=True
+    )
+    postgresql.ENUM(
+        *MANAGEMENT_REVIEW_CLOSE_STATE_VALUES, name="management_review_close_state"
+    ).create(bind, checkfirst=True)
     review_input_type = postgresql.ENUM(name="review_input_type", create_type=False)
     review_output_type = postgresql.ENUM(name="review_output_type", create_type=False)
     close_state = postgresql.ENUM(name="management_review_close_state", create_type=False)
 
-    # 3. management_review — the kind=DOCUMENT shared-PK subtype (id IS documented_information.id).
+    # 3. management_review — the kind=DOCUMENT shared-PK subtype (id IS
+    # documented_information.id).
     op.create_table(
         "management_review",
         sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False),
@@ -92,13 +100,26 @@ def upgrade() -> None:
         sa.Column("attendees", postgresql.JSONB(), nullable=True),
         sa.Column("close_state", close_state, nullable=True),
         sa.Column("closed_at", sa.DateTime(timezone=True), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            nullable=False,
+        ),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=True),
         sa.PrimaryKeyConstraint("id", name="pk_management_review"),
-        sa.ForeignKeyConstraint(["id"], ["documented_information.id"],
-                                name="fk_management_review_id_documented_information", ondelete="RESTRICT"),
-        sa.ForeignKeyConstraint(["org_id"], ["organization.id"],
-                                name="fk_management_review_org_id_organization", ondelete="RESTRICT"),
+        sa.ForeignKeyConstraint(
+            ["id"],
+            ["documented_information.id"],
+            name="fk_management_review_id_documented_information",
+            ondelete="RESTRICT",
+        ),
+        sa.ForeignKeyConstraint(
+            ["org_id"],
+            ["organization.id"],
+            name="fk_management_review_org_id_organization",
+            ondelete="RESTRICT",
+        ),
     )
 
     # 4. review_input — the compiled 9.3.2 input rows (mutable working projection).
@@ -111,16 +132,32 @@ def upgrade() -> None:
         sa.Column("available", sa.Boolean(), nullable=False),
         sa.Column("source_ref", postgresql.JSONB(), nullable=False),
         sa.Column("position", sa.Integer(), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            nullable=False,
+        ),
         sa.PrimaryKeyConstraint("id", name="pk_review_input"),
-        sa.ForeignKeyConstraint(["org_id"], ["organization.id"],
-                                name="fk_review_input_org_id_organization", ondelete="RESTRICT"),
-        sa.ForeignKeyConstraint(["management_review_id"], ["management_review.id"],
-                                name="fk_review_input_management_review_id_management_review", ondelete="RESTRICT"),
+        sa.ForeignKeyConstraint(
+            ["org_id"],
+            ["organization.id"],
+            name="fk_review_input_org_id_organization",
+            ondelete="RESTRICT",
+        ),
+        sa.ForeignKeyConstraint(
+            ["management_review_id"],
+            ["management_review.id"],
+            name="fk_review_input_management_review_id_management_review",
+            ondelete="RESTRICT",
+        ),
     )
-    op.create_index("ix_review_input_management_review_id", "review_input", ["management_review_id"])
+    op.create_index(
+        "ix_review_input_management_review_id", "review_input", ["management_review_id"]
+    )
 
-    # 5. review_output — the 9.3.3 decisions/actions (spawned_* reserved-null, no FK on capa/initiative).
+    # 5. review_output — the 9.3.3 decisions/actions (spawned_* reserved-null, no FK on
+    # capa/initiative).
     op.create_table(
         "review_output",
         sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False),
@@ -133,26 +170,65 @@ def upgrade() -> None:
         sa.Column("spawned_task_id", postgresql.UUID(as_uuid=True), nullable=True),
         sa.Column("spawned_capa_id", postgresql.UUID(as_uuid=True), nullable=True),
         sa.Column("spawned_initiative_id", postgresql.UUID(as_uuid=True), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            nullable=False,
+        ),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=True),
         sa.PrimaryKeyConstraint("id", name="pk_review_output"),
-        sa.ForeignKeyConstraint(["org_id"], ["organization.id"],
-                                name="fk_review_output_org_id_organization", ondelete="RESTRICT"),
-        sa.ForeignKeyConstraint(["management_review_id"], ["management_review.id"],
-                                name="fk_review_output_management_review_id_management_review", ondelete="RESTRICT"),
-        sa.ForeignKeyConstraint(["owner_user_id"], ["app_user.id"],
-                                name="fk_review_output_owner_user_id_app_user", ondelete="RESTRICT"),
-        sa.ForeignKeyConstraint(["spawned_task_id"], ["task.id"],
-                                name="fk_review_output_spawned_task_id_task", ondelete="RESTRICT"),
+        sa.ForeignKeyConstraint(
+            ["org_id"],
+            ["organization.id"],
+            name="fk_review_output_org_id_organization",
+            ondelete="RESTRICT",
+        ),
+        sa.ForeignKeyConstraint(
+            ["management_review_id"],
+            ["management_review.id"],
+            name="fk_review_output_management_review_id_management_review",
+            ondelete="RESTRICT",
+        ),
+        sa.ForeignKeyConstraint(
+            ["owner_user_id"],
+            ["app_user.id"],
+            name="fk_review_output_owner_user_id_app_user",
+            ondelete="RESTRICT",
+        ),
+        sa.ForeignKeyConstraint(
+            ["spawned_task_id"],
+            ["task.id"],
+            name="fk_review_output_spawned_task_id_task",
+            ondelete="RESTRICT",
+        ),
     )
-    op.create_index("ix_review_output_management_review_id", "review_output", ["management_review_id"])
+    op.create_index(
+        "ix_review_output_management_review_id", "review_output", ["management_review_id"]
+    )
 
     # 6. system_config cadence columns.
-    op.add_column("system_config", sa.Column("mgmt_review_cadence_months", sa.Integer(),
-                                             server_default=sa.text("12"), nullable=False))
-    op.add_column("system_config", sa.Column("mgmt_review_owner_user_id", postgresql.UUID(as_uuid=True), nullable=True))
-    op.create_foreign_key("fk_system_config_mgmt_review_owner_user_id_app_user", "system_config",
-                          "app_user", ["mgmt_review_owner_user_id"], ["id"], ondelete="RESTRICT")
+    op.add_column(
+        "system_config",
+        sa.Column(
+            "mgmt_review_cadence_months",
+            sa.Integer(),
+            server_default=sa.text("12"),
+            nullable=False,
+        ),
+    )
+    op.add_column(
+        "system_config",
+        sa.Column("mgmt_review_owner_user_id", postgresql.UUID(as_uuid=True), nullable=True),
+    )
+    op.create_foreign_key(
+        "fk_system_config_mgmt_review_owner_user_id_app_user",
+        "system_config",
+        "app_user",
+        ["mgmt_review_owner_user_id"],
+        ["id"],
+        ondelete="RESTRICT",
+    )
 
     # 7. Seed the MR document_type for the org (resilient lookup — the 0045/0048/0049 trap).
     org_id = _org_id(bind)
@@ -234,22 +310,30 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     bind = op.get_bind()
-    # workflow seed (guarded by live instances), then document_type (guarded by live docs), then tables.
+    # workflow seed (guarded by live instances), then document_type (guarded by live docs), then
+    # tables.
     has_instances = bind.execute(
         sa.text("SELECT EXISTS(SELECT 1 FROM workflow_instance wi JOIN workflow_definition wd "
                 "ON wi.definition_id = wd.id WHERE wd.key = :k)"),
         {"k": _DEF_KEY},
     ).scalar()
     if not has_instances:
-        bind.execute(sa.text("DELETE FROM workflow_stage WHERE definition_id IN "
-                             "(SELECT id FROM workflow_definition WHERE key = :k)"), {"k": _DEF_KEY})
+        bind.execute(
+            sa.text(
+                "DELETE FROM workflow_stage WHERE definition_id IN "
+                "(SELECT id FROM workflow_definition WHERE key = :k)"
+            ),
+            {"k": _DEF_KEY},
+        )
         bind.execute(sa.text("DELETE FROM workflow_definition WHERE key = :k"), {"k": _DEF_KEY})
     bind.execute(
         sa.text("DELETE FROM document_type dt WHERE dt.code = :c AND NOT EXISTS "
                 "(SELECT 1 FROM documented_information di WHERE di.document_type_id = dt.id)"),
         {"c": _MR_TYPE[0]},
     )
-    op.drop_constraint("fk_system_config_mgmt_review_owner_user_id_app_user", "system_config", type_="foreignkey")
+    op.drop_constraint(
+        "fk_system_config_mgmt_review_owner_user_id_app_user", "system_config", type_="foreignkey"
+    )
     op.drop_column("system_config", "mgmt_review_owner_user_id")
     op.drop_column("system_config", "mgmt_review_cadence_months")
     op.drop_index("ix_review_output_management_review_id", table_name="review_output")
