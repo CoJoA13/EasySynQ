@@ -1017,7 +1017,7 @@ const objectivePlanFixtures: ObjectivePlan[] = [
   },
 ] satisfies ObjectivePlan[];
 
-const objectiveDetailFixture: Objective = {
+export const objectiveDetailFixture: Objective = {
   ...objectiveFixtures[0]!,
   plans: objectivePlanFixtures,
   // S-obj-3 detail-only keys (api/objectives.py _objective with capabilities= — the detail GET
