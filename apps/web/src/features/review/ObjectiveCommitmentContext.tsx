@@ -1,16 +1,8 @@
 import { Card, Stack, Table, Text } from "@mantine/core";
+import type { ObjectiveCommitment } from "../../lib/types";
 
-// Pinned to the api build_commitment serializer (domain/objectives/commitment.py) — all decimals
-// are STRINGS, direction is the enum .value, dates are ISO strings.
-export interface ObjectiveCommitment {
-  target_value: string;
-  unit: string;
-  direction: "HIGHER_IS_BETTER" | "LOWER_IS_BETTER";
-  due_date: string;
-  at_risk_threshold: string | null;
-  baseline_value: string | null;
-  policy_id: string | null;
-}
+// Re-export so existing importers (ReviewApprovePage) keep their path.
+export type { ObjectiveCommitment };
 
 const DIRECTION_LABEL: Record<ObjectiveCommitment["direction"], string> = {
   HIGHER_IS_BETTER: "Higher is better",
@@ -20,15 +12,32 @@ const DIRECTION_LABEL: Record<ObjectiveCommitment["direction"], string> = {
 // S-obj-3: the approver's left column for an objective approval — the FROZEN commitment from the
 // version's metadata_snapshot (read off useDocumentVersions, which the approver holds document.read
 // for). Replaces the page redline (meaningless for a first-release JSON-source objective).
+// S-obj-4 (O-6b): on a revision, each CHANGED field renders "was → now" against the previous
+// frozen commitment (the governing one being superseded); unchanged fields render plain.
 export function ObjectiveCommitmentContext({
   commitment,
+  previous = null,
   title,
   identifier,
 }: {
   commitment: ObjectiveCommitment;
+  previous?: ObjectiveCommitment | null;
   title?: string;
   identifier?: string;
 }) {
+  const val = (f: (c: ObjectiveCommitment) => string) =>
+    previous !== null && f(previous) !== f(commitment)
+      ? `${f(previous)} → ${f(commitment)}`
+      : f(commitment);
+  const fmtTarget = (c: ObjectiveCommitment) => `${c.target_value} ${c.unit}`;
+  const fmtDirection = (c: ObjectiveCommitment) => DIRECTION_LABEL[c.direction];
+  const fmtThreshold = (c: ObjectiveCommitment) =>
+    c.at_risk_threshold !== null ? `${c.at_risk_threshold} ${c.unit}` : "—";
+  const fmtBaseline = (c: ObjectiveCommitment) =>
+    c.baseline_value !== null ? `${c.baseline_value} ${c.unit}` : "—";
+  const fmtDue = (c: ObjectiveCommitment) => c.due_date;
+  const fmtPolicy = (c: ObjectiveCommitment) =>
+    c.policy_id !== null ? "Linked to the Quality Policy" : "—";
   const row = (label: string, value: string) => (
     <Table.Tr key={label}>
       <Table.Td>
@@ -50,32 +59,21 @@ export function ObjectiveCommitmentContext({
           )}
           {title && <Text fw={600}>{title}</Text>}
           <Text size="xs" c="dimmed">
-            The objective commitment you are approving.
+            {previous
+              ? "The revised objective commitment you are approving — changes shown as was → now."
+              : "The objective commitment you are approving."}
           </Text>
         </div>
         <Table withRowBorders={false} aria-label="Objective commitment">
           <Table.Tbody>
-            {row("Target", `${commitment.target_value} ${commitment.unit}`)}
-            {row("Direction", DIRECTION_LABEL[commitment.direction])}
-            {row(
-              "At-risk threshold",
-              commitment.at_risk_threshold !== null
-                ? `${commitment.at_risk_threshold} ${commitment.unit}`
-                : "—",
-            )}
-            {row(
-              "Baseline",
-              commitment.baseline_value !== null
-                ? `${commitment.baseline_value} ${commitment.unit}`
-                : "—",
-            )}
-            {row("Due date", commitment.due_date)}
+            {row("Target", val(fmtTarget))}
+            {row("Direction", val(fmtDirection))}
+            {row("At-risk threshold", val(fmtThreshold))}
+            {row("Baseline", val(fmtBaseline))}
+            {row("Due date", val(fmtDue))}
             {/* R25: the Quality Policy is a singleton, so presence is unambiguous (Codex P2 —
                 the signer must see the frozen policy link, not have it silently hidden). */}
-            {row(
-              "Quality Policy",
-              commitment.policy_id !== null ? "Linked to the Quality Policy" : "—",
-            )}
+            {row("Quality Policy", val(fmtPolicy))}
           </Table.Tbody>
         </Table>
       </Stack>

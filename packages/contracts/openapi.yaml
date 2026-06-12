@@ -1311,6 +1311,11 @@ paths:
           content:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
+        "422":
+          description: "on a Quality Objective id: objective_managed_via_objectives (S-obj-4 — OBJ rows are managed via the /objectives lifecycle)."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
 
   /documents/{document_id}/versions:init-upload:
     post:
@@ -1359,7 +1364,7 @@ paths:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
         "422":
-          description: INV-3 — missing change_reason or change_significance.
+          description: "INV-3 — missing change_reason or change_significance. On a Quality Objective id: objective_managed_via_objectives (S-obj-4 — OBJ rows are managed via the /objectives lifecycle)."
           content:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
@@ -1432,6 +1437,11 @@ paths:
         "404": { $ref: "#/components/responses/ProblemResponse" }
         "409":
           description: Illegal transition (invalid_state_transition; body includes allowed_transitions).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "422":
+          description: "Zero clause mappings (validation_error) — map at least one clause first. On a Quality Objective id: objective_managed_via_objectives (S-obj-4 — OBJ rows are managed via the /objectives lifecycle)."
           content:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
@@ -1581,6 +1591,11 @@ paths:
         "404": { $ref: "#/components/responses/ProblemResponse" }
         "409":
           description: Illegal transition (invalid_state_transition), or already checked out (lock_conflict).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "422":
+          description: "on a Quality Objective id: objective_managed_via_objectives (S-obj-4 — OBJ rows are managed via the /objectives lifecycle)."
           content:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
@@ -4634,7 +4649,7 @@ paths:
       tags: [objectives]
       operationId: getObjective
       summary: "Get a single Objective with its plans. Gated objective.read."
-      description: "The detail read additionally carries capabilities (the caller's lifecycle affordances) and effective_from (null until Effective) — both omitted on list/scorecard rows."
+      description: "The detail read additionally carries capabilities (the caller's lifecycle affordances), effective_from (null until Effective), and pending_commitment (the in-edit working commitment when diverging from the governing frozen one) — all omitted on list/scorecard rows."
       parameters:
         - { name: objective_id, in: path, required: true, schema: { type: string, format: uuid } }
       responses:
@@ -4645,22 +4660,65 @@ paths:
               schema: { $ref: "#/components/schemas/Objective" }
         "403": { $ref: "#/components/responses/ProblemResponse" }
         "404": { $ref: "#/components/responses/ProblemResponse" }
+    patch:
+      tags: [objectives]
+      operationId: updateObjective
+      summary: "Edit the working-copy commitment (S-obj-4). Gated objective.manage; Draft/UnderRevision only (409 otherwise)."
+      description: >-
+        A partial commitment edit on the MUTABLE quality_objective working row — no version is minted
+        and the edit is deliberately unaudited (the documents metadata-PATCH posture: the auditable act
+        is the freeze at submit, and every commitment that reaches review is reconstructable from
+        consecutive frozen snapshots). Omitted fields inherit; an explicit null CLEARS at_risk_threshold
+        / baseline_value / policy_id and 422s on the four required fields. While a governing Effective
+        version exists, reads keep serving IT — the edit surfaces only as the detail's
+        pending_commitment until re-release.
+      parameters:
+        - { name: objective_id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ObjectiveUpdate" }
+      responses:
+        "200":
+          description: "The updated objective (the bare list shape — no capabilities/pending_commitment)."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Objective" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409":
+          description: "Not in Draft or UnderRevision (conflict; detail names the current state)."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "422": { $ref: "#/components/responses/ProblemResponse" }
 
   /objectives/{objective_id}/submit-review:
     post:
       tags: [objectives]
       operationId: submitObjectiveReview
-      summary: "Draft→InReview (T2) — freezes the commitment + instantiates the approval workflow. Gated objective.manage (PROCESS scope from objective)."
+      summary: "Draft→InReview (T2) / UnderRevision→InReview (T9) — freezes the commitment when it changed + instantiates the approval workflow. Gated objective.manage (PROCESS scope from objective)."
       description: >-
-        S-obj-3, one transaction: the FIRST submit freezes the 6.2 commitment
-        (target/unit/direction/due_date/threshold/baseline/policy) into a Draft WORM version
-        (source blob + metadata_snapshot, server-built — no client upload); a re-submit after
-        changes_requested advances the existing Draft version unchanged. Approval then routes
-        through POST /tasks/{id}/decision (the generic DOCUMENT leg, C7) — there is intentionally
-        no /objectives/{id}/approve. The 422 is defensive (INV-3 — the commitment freeze is built
-        server-side, so it is unreachable in normal use).
+        One transaction (S-obj-3/S-obj-4): the commitment is frozen into a new Draft WORM version
+        whenever the latest version is not a Draft carrying the current working commitment — the first submit,
+        every revision re-submit (the latest version is then the governing Effective one), and a
+        re-submit after an edit in the changes_requested window; an UNCHANGED re-submit re-advances the
+        existing Draft version (no duplicate version). The optional change_reason lands on the frozen
+        version (INV-3); significance is always MAJOR. From UnderRevision the start-revision edit lock
+        is released. Approval then routes through POST /tasks/{id}/decision (the generic DOCUMENT leg,
+        C7) — there is intentionally no /objectives/{id}/approve.
       parameters:
         - { name: objective_id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                change_reason: { type: [string, "null"], maxLength: 500 }
       responses:
         "200":
           description: The Objective (now InReview).
@@ -4670,11 +4728,38 @@ paths:
         "403": { $ref: "#/components/responses/ProblemResponse" }
         "404": { $ref: "#/components/responses/ProblemResponse" }
         "409":
-          description: "Not in Draft (conflict; detail names the current state)."
+          description: "Not in Draft or UnderRevision (conflict; detail names the current state)."
           content:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
         "422": { $ref: "#/components/responses/ProblemResponse" }
+
+  /objectives/{objective_id}/start-revision:
+    post:
+      tags: [objectives]
+      operationId: startObjectiveRevision
+      summary: "Effective→UnderRevision (T7) for an objective — gated objective.manage (S-obj-4)."
+      description: >-
+        A thin wrapper over the SAME vault start_revision the documents surface uses (edit lock +
+        working draft + REVISION_STARTED audit) — namespaced because the QMS Owner (the only
+        objective.manage holder in v1) holds no document.edit. The Effective version KEEPS governing
+        (R43: in-force is the current_effective_version_id pointer, which only the v2 release cutover
+        moves) — the 6.2 ★ stays COVERED through the revision window.
+      parameters:
+        - { name: objective_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: "The objective, now UnderRevision."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Objective" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409":
+          description: "Not Effective (T7), or a revision/edit lock is already held (lock_conflict)."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
 
   /objectives/{objective_id}/release:
     post:
@@ -4682,11 +4767,14 @@ paths:
       operationId: releaseObjective
       summary: "Approved→Effective (T6) — atomic single-Effective cutover (SERIALIZABLE + INV-1) + the release signature. Gated document.release (sig_hook + SoD-2)."
       description: >-
-        S-obj-3 mirror of POST /documents/{document_id}/release, minus the request body — a v1
-        objective has exactly one version stream, so the latest Approved version is the only
-        cutover candidate. SoD-2 overlays the gate (the author/approver of that version cannot
-        release it → 403 sod_violation). Release flips the clause-6.2 ★ checklist node COVERED;
-        a future-dated effective_from (scheduled at approve) stays Approved until the Beat sweep.
+        S-obj-3 mirror of POST /documents/{document_id}/release, minus the request body — the latest
+        Approved version is the only cutover candidate. On a revision re-release the SERIALIZABLE
+        cutover supersedes the prior Effective version (INV-1: demote-before-promote) and, when the
+        new governing unit differs from the old, resets current_value to null (the old-unit readings
+        cannot grade the new target — rag reads unmeasured until a new reading lands). SoD-2 overlays
+        the gate (the author/approver of that version cannot release it → 403 sod_violation). Release
+        flips the clause-6.2 ★ checklist node COVERED; a future-dated effective_from (scheduled at
+        approve) stays Approved until the Beat sweep.
       parameters:
         - { name: objective_id, in: path, required: true, schema: { type: string, format: uuid } }
       responses:
@@ -7407,6 +7495,15 @@ components:
             The governing Effective version's effective_from (S-obj-3). Always present on detail
             reads (GET /objectives/{id}; null until Effective); omitted on list/scorecard rows and
             create/submit/release responses.
+        pending_commitment:
+          oneOf:
+            - { $ref: "#/components/schemas/ObjectiveCommitment" }
+            - { type: "null" }
+          description: >-
+            S-obj-4 (detail-only, like capabilities/effective_from): the in-edit WORKING
+            commitment when it diverges from the governing frozen one (a revision/edit in
+            flight), else null. The main commitment fields always read the GOVERNING frozen
+            commitment once one exists.
 
     ObjectiveCapabilities:
       type: object
@@ -7420,6 +7517,40 @@ components:
       properties:
         submit: { type: boolean, description: "objective.manage at the objective's scope (PROCESS, SYSTEM fallback)." }
         release: { type: boolean, description: "document.release (sig_hook) + the SoD-2 overlay." }
+        edit: { type: boolean, description: "objective.manage at the objective's scope (S-obj-4; identical computation to submit — state-blind, the SPA gates Draft/UnderRevision)." }
+        start_revision: { type: boolean, description: "objective.manage at the objective's scope (S-obj-4; the SPA gates Effective)." }
+
+    ObjectiveCommitment:
+      type: object
+      additionalProperties: false
+      required: [target_value, unit, direction, due_date, at_risk_threshold, baseline_value, policy_id]
+      description: >-
+        The canonical 7-field commitment dict (domain/objectives/commitment.py build_commitment) —
+        decimals as STRINGS, direction the enum value, due_date ISO. The SAME dict is the frozen
+        version's WORM source bytes and its metadata_snapshot.objective_commitment fold.
+      properties:
+        target_value: { type: string, description: "Decimal string." }
+        unit: { type: string }
+        direction: { type: string, enum: [HIGHER_IS_BETTER, LOWER_IS_BETTER] }
+        due_date: { type: string, format: date }
+        at_risk_threshold: { type: [string, "null"], description: "Decimal string." }
+        baseline_value: { type: [string, "null"], description: "Decimal string." }
+        policy_id: { type: [string, "null"], format: uuid }
+
+    ObjectiveUpdate:
+      type: object
+      additionalProperties: false
+      description: >-
+        S-obj-4 partial commitment edit. Omitted ≠ null: explicit null clears the three nullable
+        fields; null on target_value/unit/direction/due_date is a 422.
+      properties:
+        target_value: { type: [string, "null"], description: "Decimal string." }
+        unit: { type: [string, "null"], minLength: 1, maxLength: 50 }
+        direction: { type: [string, "null"], enum: [HIGHER_IS_BETTER, LOWER_IS_BETTER, null] }
+        due_date: { type: [string, "null"], format: date }
+        at_risk_threshold: { type: [string, "null"], description: "Decimal string." }
+        baseline_value: { type: [string, "null"], description: "Decimal string." }
+        policy_id: { type: [string, "null"], format: uuid, description: "Must be the current Effective Quality Policy when non-null." }
 
     ObjectiveCreate:
       type: object

@@ -8,6 +8,7 @@ from __future__ import annotations
 import datetime
 import uuid
 from decimal import Decimal
+from typing import Any
 
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,11 +21,13 @@ from ...db.models.audit_event import AuditEvent
 from ...db.models.clause import Clause
 from ...db.models.clause_mapping import ClauseMapping
 from ...db.models.document_type import DocumentType
+from ...db.models.document_version import DocumentVersion
 from ...db.models.documented_information import DocumentedInformation
 from ...db.models.kpi_measurement import KpiMeasurement
 from ...db.models.objective_plan import ObjectivePlan
 from ...db.models.process import Process
 from ...db.models.quality_objective import QualityObjective
+from ...domain.objectives.commitment import parse_commitment
 from ...problems import ProblemException
 from ..records import capture_record
 from ..vault import VaultAuditSink, create_document
@@ -192,16 +195,51 @@ async def record_measurement(
     ).scalar_one_or_none()
     if qo is None:
         raise ProblemException(status=404, code="not_found", title="Objective not found")
-    # The reading must be in the objective's own unit — current_value/RAG compare the raw value
-    # against target_value with no conversion, so a mismatched unit would corrupt the scorecard.
-    if unit != qo.unit:
+    # S-obj-4 (O-2): the unit gate + target_at_capture read the GOVERNING frozen commitment when
+    # one exists — a mid-revision working-row edit must never leak an unapproved unit/target into
+    # evidence-grade KPI_READING records (R44: target_at_capture is frozen at capture, never
+    # rewritten). Working-row fallback pre-first-release (today's behavior). Fresh reads
+    # (populate_existing — a cutover may have committed while we waited on the qo lock); NO
+    # doc-row lock: it would invert _load_objective_doc's doc→satellite lock order against a
+    # concurrent submit.
+    doc_row = (
+        await session.execute(
+            select(DocumentedInformation)
+            .where(DocumentedInformation.id == objective_id)
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one_or_none()
+    governing: dict[str, Any] | None = None
+    if doc_row is not None and doc_row.current_effective_version_id is not None:
+        ver = (
+            await session.execute(
+                select(DocumentVersion)
+                .where(DocumentVersion.id == doc_row.current_effective_version_id)
+                .execution_options(populate_existing=True)
+            )
+        ).scalar_one_or_none()
+        raw = (ver.metadata_snapshot or {}).get("objective_commitment") if ver is not None else None
+        # A non-dict fold is treated as absent (the working-row fallback) — deliberately softer
+        # than the read path's strict parse_commitment: unconstructible at this HEAD (the O-5
+        # guard + build_commitment are the only mints), and a capture pipeline must not 500 on a
+        # drift-class snapshot the drift scanners, not KPI intake, are responsible for surfacing.
+        governing = raw if isinstance(raw, dict) else None
+    if governing is not None:
+        gc = parse_commitment(governing)
+        effective_unit, effective_target = gc.unit, gc.target_value
+    else:
+        effective_unit, effective_target = qo.unit, qo.target_value
+    # The reading must be in the objective's GOVERNING unit — current_value/RAG compare the
+    # raw value against the governing target with no conversion (a mismatch would corrupt the
+    # scorecard).
+    if unit != effective_unit:
         raise ProblemException(
             status=422,
             code="validation_error",
-            title=f"Measurement unit '{unit}' must match the objective unit '{qo.unit}'",
+            title=f"Measurement unit '{unit}' must match the objective unit '{effective_unit}'",
         )
 
-    target_at_capture = qo.target_value
+    target_at_capture = effective_target
 
     # Evidence-grade reading: an AD-HOC KPI_READING record (the capture_complaint precedent —
     # NO source_document_id so no R21 version-pin; a Draft objective has no version to pin).
@@ -236,11 +274,16 @@ async def record_measurement(
     session.add(measurement)
     await session.flush()
 
-    # Roll up current_value = the value of the MAX-period reading (out-of-order safe).
+    # Roll up current_value = the value of the MAX-period SAME-UNIT reading (out-of-order safe; an
+    # old-unit backfill can never re-grade a new-unit target — the micro-call B conditional's
+    # other half). scalar_one() stays safe: the just-inserted reading always matches effective_unit.
     latest_value = (
         await session.execute(
             select(KpiMeasurement.value)
-            .where(KpiMeasurement.objective_id == objective_id)
+            .where(
+                KpiMeasurement.objective_id == objective_id,
+                KpiMeasurement.unit == effective_unit,
+            )
             .order_by(desc(KpiMeasurement.period), desc(KpiMeasurement.created_at))
             .limit(1)
         )
@@ -249,7 +292,7 @@ async def record_measurement(
 
     # Audit (object_type=document, scope_ref=identifier — R39). Mirror services/ack/sweep.py:67-82
     # field-for-field: occurred_at + actor_type are NOT NULL with no server default.
-    base = await session.get(DocumentedInformation, objective_id)
+    base = doc_row
     session.add(
         AuditEvent(
             org_id=actor.org_id,

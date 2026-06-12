@@ -71,6 +71,7 @@ from ..services.vault import (
     heartbeat,
     init_upload,
     obsolete,
+    reject_objective_byte_path,
     release,
     render_dynamic_copy,
     set_working_schema,
@@ -1454,6 +1455,10 @@ async def submit_review_endpoint(
     # FOR UPDATE serializes concurrent submit-review on the same document, so two callers cannot
     # both pass the Draft→InReview FSM check and create duplicate workflow instances/tasks.
     doc = await _load_document(session, caller, document_id, for_update=True)
+    # S-obj-4 (O-5): a generic submit on an OBJ would advance a version AROUND the content-aware
+    # commitment freeze (objective submit re-freezes when the working commitment changed) — the
+    # guard lives HERE, not in submit_review, which the objective endpoint also calls.
+    await reject_objective_byte_path(session, doc)
     result = await submit_review(session, caller, doc)
     await instantiate_approval(session, result.doc, caller)
     audit_transition(session, vault_sink, result, caller)
@@ -1490,6 +1495,9 @@ async def start_revision_endpoint(
     vault_sink: VaultAuditSink = Depends(get_vault_audit_sink),
 ) -> dict[str, Any]:
     doc = await _load_document(session, caller, document_id)
+    # S-obj-4 (O-5): objective revisions ride POST /objectives/{id}/start-revision
+    # (objective.manage — the QMS Owner holds no document.edit); same guard placement rationale.
+    await reject_objective_byte_path(session, doc)
     return _document(await start_revision(session, vault_sink, caller, doc))
 
 

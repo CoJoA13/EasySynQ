@@ -5,6 +5,8 @@ import { axe } from "jest-axe";
 import { expect, it } from "vitest";
 import { renderWithProviders } from "../../test/render";
 import { server } from "../../test/msw/server";
+import { objectiveFixtures } from "../../test/msw/handlers";
+import type { Objective, ObjectiveScorecard } from "../../lib/types";
 import { ObjectivesRegisterPage } from "./ObjectivesRegisterPage";
 
 it("renders the band and a row per objective with a RAG status badge", async () => {
@@ -68,6 +70,53 @@ it("RAG filter narrows visible rows client-side", async () => {
   expect(screen.getByText("OBJ-002")).toBeInTheDocument();
   expect(screen.queryByText("OBJ-003")).not.toBeInTheDocument(); // green row gone
   expect(screen.queryByText("OBJ-001")).not.toBeInTheDocument(); // amber row gone
+});
+
+it("default fixtures (all Draft) each show a 'Draft' state chip", async () => {
+  renderWithProviders(<ObjectivesRegisterPage />, { route: "/objectives" });
+  await waitFor(() => expect(screen.getByText("OBJ-001")).toBeInTheDocument());
+  // Every default row is Draft — there should be at least one "State: Draft" chip.
+  const chips = screen.getAllByLabelText("State: Draft");
+  expect(chips.length).toBeGreaterThanOrEqual(1);
+});
+
+it("marks non-Effective rows with a state chip and leaves Effective rows clean", async () => {
+  // Build two rows: one Effective (OBJ-001 re-labeled as OBJ-101) and one UnderRevision (OBJ-102).
+  const effectiveRow: Objective = {
+    ...objectiveFixtures[0]!,
+    id: "ob000101-0101-0101-0101-000000000101",
+    identifier: "OBJ-101",
+    current_state: "Effective",
+  };
+  const underRevisionRow: Objective = {
+    ...objectiveFixtures[1]!,
+    id: "ob000102-0102-0102-0102-000000000102",
+    identifier: "OBJ-102",
+    title: "Under-revision objective",
+    current_state: "UnderRevision",
+  };
+
+  server.use(
+    http.get("/api/v1/objectives/scorecard", () =>
+      HttpResponse.json({
+        total: 2,
+        on_target: 1,
+        by_rag: { green: 0, amber: 1, red: 1, unmeasured: 0 },
+        objectives: [effectiveRow, underRevisionRow],
+      } satisfies ObjectiveScorecard),
+    ),
+  );
+
+  renderWithProviders(<ObjectivesRegisterPage />, { route: "/objectives" });
+  await waitFor(() => expect(screen.getByText("OBJ-101")).toBeInTheDocument());
+
+  // Effective row: NO state chip.
+  const effRow = screen.getByText("OBJ-101").closest("tr")!;
+  expect(within(effRow).queryByLabelText(/^State:/)).toBeNull();
+
+  // UnderRevision row: chip present with correct aria-label.
+  const urRow = screen.getByText("OBJ-102").closest("tr")!;
+  expect(within(urRow).getByLabelText("State: Under revision")).toBeInTheDocument();
 });
 
 it("create modal resets on close and reopen", async () => {

@@ -7,6 +7,7 @@ import { AuthContext } from "../../lib/auth";
 import { TEST_AUTH } from "../../test/render";
 import { server } from "../../test/msw/server";
 import { useEffectivePolicy, useObjectiveApproval } from "./hooks";
+import { useStartObjectiveRevision, useUpdateObjective } from "./mutations";
 
 function wrapper({ children }: { children: ReactNode }) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -52,4 +53,29 @@ it("useEffectivePolicy surfaces null calmly when no policy is effective", async 
   const { result } = renderHook(() => useEffectivePolicy(), { wrapper });
   await waitFor(() => expect(result.current.isSuccess).toBe(true));
   expect(result.current.data).toBeNull();
+});
+
+it("useUpdateObjective PATCHes the commitment and invalidates the objective reads", async () => {
+  const { result } = renderHook(
+    () => useUpdateObjective("ob000001-0001-0001-0001-000000000001"),
+    { wrapper },
+  );
+  const updated = await result.current.mutateAsync({
+    target_value: "97",
+    unit: "%",
+    direction: "HIGHER_IS_BETTER",
+    due_date: "2026-12-31",
+    at_risk_threshold: null,
+    baseline_value: "80",
+    policy_id: null,
+  });
+  expect(updated.target_value).toBe("97");
+});
+
+it("useStartObjectiveRevision POSTs start-revision and lands UnderRevision", async () => {
+  const { result } = renderHook(() => useStartObjectiveRevision(), { wrapper });
+  const updated = await result.current.mutateAsync(
+    "ob000001-0001-0001-0001-000000000001",
+  );
+  expect(updated.current_state).toBe("UnderRevision");
 });

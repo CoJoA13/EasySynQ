@@ -1081,9 +1081,21 @@ export interface RoleSummary {
 export type ObjectiveDirection = "HIGHER_IS_BETTER" | "LOWER_IS_BETTER";
 export type ObjectiveRag = "green" | "amber" | "red" | "unmeasured";
 export type ObjectiveAttainment = "in_progress" | "met" | "missed";
-export type ObjectiveState =
-  | "Draft" | "InReview" | "Approved" | "Effective"
-  | "UnderRevision" | "Superseded" | "Obsolete";
+// The 7-state document lifecycle — an objective IS a kind=DOCUMENT subtype (R44), so its state
+// union is the document one (S-obj-4 unified the alias so StateBadge renders both).
+export type ObjectiveState = DocumentCurrentState;
+
+// Pinned to the api build_commitment serializer (domain/objectives/commitment.py) — all decimals
+// are STRINGS, direction is the enum .value, dates are ISO strings.
+export interface ObjectiveCommitment {
+  target_value: string;
+  unit: string;
+  direction: ObjectiveDirection;
+  due_date: string;
+  at_risk_threshold: string | null;
+  baseline_value: string | null;
+  policy_id: string | null;
+}
 
 export interface ObjectivePlan {
   id: string;
@@ -1112,9 +1124,11 @@ export interface Objective {
   pct_toward_target: number | null; // JSON number | null — NOT a string
   attainment: ObjectiveAttainment;
   plans: ObjectivePlan[]; // [] in list/scorecard rows; populated on detail GET
-  // S-obj-3 (detail-only; absent on list/scorecard rows; effective_from null until Effective):
-  capabilities?: { submit: boolean; release: boolean };
+  // S-obj-3/4 (detail-only; absent on list/scorecard rows; effective_from null until Effective;
+  // pending_commitment = the in-edit working commitment when it diverges from governing, else null):
+  capabilities?: { submit: boolean; release: boolean; edit: boolean; start_revision: boolean };
   effective_from?: string | null;
+  pending_commitment?: ObjectiveCommitment | null;
 }
 
 // GET /objectives/policy — the Effective Quality Policy singleton, or null.
@@ -1155,6 +1169,19 @@ export interface ObjectiveCreateBody {
   baseline_value?: string | null;
   at_risk_threshold?: string | null;
   process_id?: string | null;
+  policy_id?: string | null;
+}
+// PATCH /objectives/{id} (S-obj-4) — the SPA sends the full commitment (explicit null clears
+// the nullable fields), EXCEPT policy_id which is omitted (server-inherits) whenever no current
+// Effective Policy loaded — sending null would silently unlink, sending a lapsed seed would 422.
+// The API also accepts partials.
+export interface ObjectiveUpdateBody {
+  target_value: string;
+  unit: string;
+  direction: ObjectiveDirection;
+  due_date: string;
+  at_risk_threshold: string | null;
+  baseline_value: string | null;
   policy_id?: string | null;
 }
 export interface MeasurementCreateBody {

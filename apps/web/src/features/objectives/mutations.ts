@@ -1,7 +1,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useApi } from "../../lib/api";
 import type {
-  Measurement, MeasurementCreateBody, Objective, ObjectiveCreateBody, ObjectivePlan, PlanCreateBody,
+  Measurement, MeasurementCreateBody, Objective, ObjectiveCreateBody, ObjectivePlan, ObjectiveUpdateBody, PlanCreateBody,
 } from "../../lib/types";
 
 export function useCreateObjective() {
@@ -77,6 +77,31 @@ export function useReleaseObjective() {
   const invalidate = useInvalidateObjective();
   return useMutation({
     mutationFn: (id: string) => api.send<Objective>("POST", `/api/v1/objectives/${id}/release`, {}),
+    onSuccess: (_d, id) => invalidate(id),
+  });
+}
+
+// S-obj-4: edit the working-copy commitment (objective.manage; Draft/UnderRevision — 409 otherwise).
+// The SPA always sends the FULL body (explicit null clears); reads keep serving the GOVERNING
+// commitment, so the edit shows up only via the detail's pending_commitment.
+export function useUpdateObjective(objectiveId: string) {
+  const api = useApi();
+  const invalidate = useInvalidateObjective();
+  return useMutation({
+    mutationFn: (body: ObjectiveUpdateBody) =>
+      api.send<Objective>("PATCH", `/api/v1/objectives/${objectiveId}`, body),
+    onSuccess: () => invalidate(objectiveId),
+  });
+}
+
+// S-obj-4: Effective→UnderRevision (T7) via the namespaced objective route (objective.manage —
+// the QMS Owner holds no document.edit; the generic documents route is guarded on OBJ rows).
+export function useStartObjectiveRevision() {
+  const api = useApi();
+  const invalidate = useInvalidateObjective();
+  return useMutation({
+    mutationFn: (id: string) =>
+      api.send<Objective>("POST", `/api/v1/objectives/${id}/start-revision`),
     onSuccess: (_d, id) => invalidate(id),
   });
 }

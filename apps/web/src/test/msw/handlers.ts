@@ -1,5 +1,5 @@
 import { http, HttpResponse } from "msw";
-import type { AckDecisionResult, AckMatrixRow, AuditList, AuditPlanList, AuditProgramList, Capa, Complaint, DistributionPayload, DocumentVersion, DriftStatus, EffectivePolicy, Finding, FindingList, Measurement, MeasurementListResponse, Ncr, Objective, ObjectiveListResponse, ObjectivePlan, ObjectiveScorecard, SupersededCopies, WorkflowInstance } from "../../lib/types";
+import type { AckDecisionResult, AckMatrixRow, AuditList, AuditPlanList, AuditProgramList, Capa, Complaint, DistributionPayload, DocumentVersion, DriftStatus, EffectivePolicy, Finding, FindingList, Measurement, MeasurementListResponse, Ncr, Objective, ObjectiveCommitment, ObjectiveListResponse, ObjectivePlan, ObjectiveScorecard, SupersededCopies, WorkflowInstance } from "../../lib/types";
 
 export const docFixture = [
   {
@@ -927,7 +927,7 @@ export const rolesFixture = [
 
 const OBJ_DETAIL_ID = "ob000001-0001-0001-0001-000000000001";
 
-const objectiveFixtures: Objective[] = [
+export const objectiveFixtures: Objective[] = [
   {
     id: OBJ_DETAIL_ID,
     identifier: "OBJ-001",
@@ -1020,15 +1020,16 @@ const objectivePlanFixtures: ObjectivePlan[] = [
 export const objectiveDetailFixture: Objective = {
   ...objectiveFixtures[0]!,
   plans: objectivePlanFixtures,
-  // S-obj-3 detail-only keys (api/objectives.py _objective with capabilities= — the detail GET
+  // S-obj-3/4 detail-only keys (api/objectives.py _objective with capabilities= — the detail GET
   // ALWAYS carries both; LIST/scorecard/submit/release responses carry neither).
-  capabilities: { submit: true, release: false },
+  capabilities: { submit: true, release: false, edit: true, start_revision: true },
   effective_from: null,
+  pending_commitment: null,
 } satisfies Objective;
 
 // domain/objectives/commitment.py build_commitment — decimal STRINGS, direction .value, ISO date.
 // Mirrors objectiveFixtures[0] (the commitment the submit would freeze for OBJ-001).
-const objectiveCommitment = {
+const objectiveCommitment: ObjectiveCommitment = {
   target_value: "95",
   unit: "%",
   direction: "HIGHER_IS_BETTER",
@@ -1057,6 +1058,37 @@ export const objectiveVersionWithCommitment = {
   superseded_by_version_id: null,
   created_at: "2026-06-11T09:00:00+00:00",
 } satisfies DocumentVersion;
+
+// S-obj-4: the v2 revision commitment (target 95 → 97) + the still-governing v1 Effective version.
+const objectiveCommitmentV2 = { ...objectiveCommitment, target_value: "97" };
+
+export const objectiveVersionV2WithCommitment = {
+  ...objectiveVersionWithCommitment,
+  id: "veob2222-2222-2222-2222-222222222222",
+  version_seq: 2,
+  revision_label: "Rev B",
+  change_reason: "Objective commitment revised",
+  metadata_snapshot: { objective_commitment: objectiveCommitmentV2 },
+  created_at: "2026-06-12T09:00:00+00:00",
+} satisfies DocumentVersion;
+
+export const objectiveVersionV1Effective = {
+  ...objectiveVersionWithCommitment,
+  version_state: "Effective",
+  effective_from: "2026-06-01T09:00:00+00:00",
+} satisfies DocumentVersion;
+
+// An Effective objective with a revision in flight: the MAIN fields are the GOVERNING values
+// (api/objectives.py _objective resolves the version snapshot); the edit lives ONLY in
+// pending_commitment (detail-only). Pinned to the as-built serializer.
+export const objectiveUnderRevisionDetailFixture: Objective = {
+  ...objectiveFixtures[0]!,
+  current_state: "UnderRevision",
+  plans: objectivePlanFixtures,
+  capabilities: { submit: true, release: false, edit: true, start_revision: true },
+  effective_from: "2026-06-01T09:00:00+00:00",
+  pending_commitment: { ...objectiveCommitmentV2 },
+} satisfies Objective;
 
 // api/objectives.py _approval_instance/_approval_task (field-equivalent to workflow.py's
 // _instance/_task — no subject_type/subject_id on the tasks; subject_type=DOCUMENT on the
@@ -1163,6 +1195,16 @@ export const handlers = [
     HttpResponse.json(objectivePlanFixtures[0]!, { status: 201 }),
   ),
   http.delete("/api/v1/objectives/:id/plans/:planId", () => new HttpResponse(null, { status: 204 })),
+  // S-obj-4: PATCH merges over the bare row (the api returns the LIST shape — no detail keys).
+  // Merge-over is faithful only pre-first-release (governing None); an UnderRevision test must
+  // override (the real response shows GOVERNING values, never the just-PATCHed ones — O-3).
+  http.patch("/api/v1/objectives/:id", async ({ request }) => {
+    const body = (await request.json()) as Partial<Objective>;
+    return HttpResponse.json({ ...objectiveFixtures[0]!, ...body } as Objective);
+  }),
+  http.post("/api/v1/objectives/:id/start-revision", () =>
+    HttpResponse.json({ ...objectiveFixtures[0]!, current_state: "UnderRevision" } satisfies Objective),
+  ),
   // ---- S-ing-4b ingestion (default happy-path; per-test override for 403/empty/error) ----
   http.get("/api/v1/admin/imports", () => HttpResponse.json([ingestionRunFixture])),
   http.get("/api/v1/admin/imports/:id", () => HttpResponse.json(ingestionRunFixture)),
