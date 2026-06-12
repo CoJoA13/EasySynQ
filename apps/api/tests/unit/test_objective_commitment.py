@@ -8,8 +8,14 @@ import pytest
 import rfc8785
 
 from easysynq_api.db.models._objective_enums import ObjectiveDirection
-from easysynq_api.db.models._vault_enums import Classification
-from easysynq_api.domain.objectives.commitment import build_commitment
+from easysynq_api.db.models._vault_enums import Classification, VersionState
+from easysynq_api.domain.objectives.commitment import (
+    Commitment,
+    build_commitment,
+    commitment_needs_freeze,
+    parse_commitment,
+    resolve_commitment,
+)
 from easysynq_api.services.vault.service import _snapshot
 
 pytestmark = pytest.mark.unit
@@ -99,3 +105,73 @@ def test_snapshot_adds_objective_commitment_only_when_passed() -> None:
     assert withc["objective_commitment"] == commitment
     # the base shape is otherwise identical
     assert {k: withc[k] for k in plain} == plain
+
+
+_POL = uuid.uuid4()
+
+
+def _full_kwargs() -> dict:  # type: ignore[type-arg]
+    return {
+        "target_value": Decimal("98.5"),
+        "unit": "%",
+        "direction": ObjectiveDirection.HIGHER_IS_BETTER,
+        "due_date": datetime.date(2026, 12, 31),
+        "at_risk_threshold": Decimal("95"),
+        "baseline_value": Decimal("90"),
+        "policy_id": _POL,
+    }
+
+
+def test_parse_commitment_round_trips_build_commitment() -> None:
+    built = build_commitment(**_full_kwargs())
+    parsed = parse_commitment(built)
+    assert parsed == Commitment(**_full_kwargs())
+    # exact decimal strings survive (never float-lossy)
+    assert str(parsed.target_value) == "98.5"
+
+
+def test_parse_commitment_none_legs() -> None:
+    kwargs = {
+        **_full_kwargs(),
+        "at_risk_threshold": None,
+        "baseline_value": None,
+        "policy_id": None,
+    }
+    parsed = parse_commitment(build_commitment(**kwargs))
+    assert parsed.at_risk_threshold is None
+    assert parsed.baseline_value is None
+    assert parsed.policy_id is None
+
+
+def test_resolve_commitment_prefers_governing_else_working_row() -> None:
+    governing = build_commitment(**{**_full_kwargs(), "target_value": Decimal("98.5")})
+    working = {**_full_kwargs(), "target_value": Decimal("50")}  # an in-edit working row
+    resolved = resolve_commitment(governing, **working)
+    assert resolved.target_value == Decimal("98.5")  # the governing frozen value wins
+    assert resolve_commitment(None, **working).target_value == Decimal("50")  # pre-first-release
+
+
+def test_needs_freeze_matrix() -> None:
+    working = build_commitment(**_full_kwargs())
+    other = build_commitment(**{**_full_kwargs(), "target_value": Decimal("99")})
+    # no version at all → first submit freezes
+    assert commitment_needs_freeze(
+        latest_version_state=None, latest_commitment=None, working=working
+    )
+    # latest is the governing Effective version (a revision) → freeze even though it HAS a
+    # commitment
+    assert commitment_needs_freeze(
+        latest_version_state=VersionState.Effective, latest_commitment=working, working=working
+    )
+    # latest Draft with the SAME commitment (re-submit after request_changes, no edit) → skip
+    assert not commitment_needs_freeze(
+        latest_version_state=VersionState.Draft, latest_commitment=working, working=working
+    )
+    # latest Draft with a DIFFERENT commitment (a PATCH since the last freeze) → re-freeze
+    assert commitment_needs_freeze(
+        latest_version_state=VersionState.Draft, latest_commitment=other, working=working
+    )
+    # latest Draft with NO commitment (a legacy byte-version) → freeze (Codex-P2 belt-and-braces)
+    assert commitment_needs_freeze(
+        latest_version_state=VersionState.Draft, latest_commitment=None, working=working
+    )
