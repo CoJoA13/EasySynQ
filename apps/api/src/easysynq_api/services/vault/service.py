@@ -363,6 +363,10 @@ async def checkin(
     )
     session.add(version)
     await session.delete(wd)
+    # Flush BEFORE _emit: the uuid PK is a FLUSH-time default — a pending instance reads
+    # version.id as None, which would persist the CHECKIN audit row with object_id=NULL
+    # (the create_document precedent; doc 12 §4.4 wants the real version linkage).
+    await session.flush()
     _emit(
         session,
         sink,
@@ -605,6 +609,9 @@ async def checkin_form_schema(
         created_by=actor.id,
     )
     session.add(version)
+    # Flush BEFORE _emit — the uuid PK is a FLUSH-time default (see checkin); without it the
+    # CHECKIN audit row persists object_id=NULL.
+    await session.flush()
     _emit(
         session,
         sink,
