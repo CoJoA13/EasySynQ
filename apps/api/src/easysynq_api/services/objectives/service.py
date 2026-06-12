@@ -219,6 +219,10 @@ async def record_measurement(
             )
         ).scalar_one_or_none()
         raw = (ver.metadata_snapshot or {}).get("objective_commitment") if ver is not None else None
+        # A non-dict fold is treated as absent (the working-row fallback) — deliberately softer
+        # than the read path's strict parse_commitment: unconstructible at this HEAD (the O-5
+        # guard + build_commitment are the only mints), and a capture pipeline must not 500 on a
+        # drift-class snapshot the drift scanners, not KPI intake, are responsible for surfacing.
         governing = raw if isinstance(raw, dict) else None
     if governing is not None:
         gc = parse_commitment(governing)
