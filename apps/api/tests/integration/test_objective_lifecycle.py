@@ -81,6 +81,7 @@ async def test_submit_requires_objective_manage(
     await _grant(reader, ("objective.read",))
     r = await app_client.post(f"/api/v1/objectives/{oid}/submit-review", headers=hr)
     assert r.status_code == 403, r.text
+    assert r.json()["code"] == "permission_denied"  # the PEP deny, not a stray 403
 
 
 async def test_submit_twice_is_a_conflict(

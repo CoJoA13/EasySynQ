@@ -189,9 +189,18 @@ async def _load_objective_doc(
                 .execution_options(populate_existing=True)
             )
         ).scalar_one_or_none()
+        # The satellite gets the same freshness treatment — its commitment fields feed the freeze,
+        # and the authz resolver already identity-mapped the row.
+        qo = (
+            await session.execute(
+                select(QualityObjective)
+                .where(QualityObjective.id == objective_id)
+                .execution_options(populate_existing=True)
+            )
+        ).scalar_one_or_none()
     else:
         doc = await session.get(DocumentedInformation, objective_id)
-    qo = await session.get(QualityObjective, objective_id)
+        qo = await session.get(QualityObjective, objective_id)
     if doc is None or qo is None or doc.org_id != caller.org_id:
         raise ProblemException(status=404, code="not_found", title="Objective not found")
     return doc, qo
