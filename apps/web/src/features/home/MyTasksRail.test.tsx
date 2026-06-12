@@ -31,3 +31,9 @@ it("shows a calm caught-up state when there are no tasks", async () => {
   renderWithProviders(<MyTasksRail />);
   await waitFor(() => expect(screen.getByText(/you're all caught up/i)).toBeInTheDocument());
 });
+
+it("shows a calm error state when the read fails", async () => {
+  server.use(http.get("/api/v1/tasks", () => HttpResponse.json({ code: "error" }, { status: 500 })));
+  renderWithProviders(<MyTasksRail />);
+  await waitFor(() => expect(screen.getByText(/couldn't load your tasks/i)).toBeInTheDocument());
+});

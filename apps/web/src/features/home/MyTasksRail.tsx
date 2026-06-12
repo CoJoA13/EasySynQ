@@ -3,8 +3,8 @@ import { Link } from "react-router-dom";
 import type { Task, TaskType } from "../../lib/types";
 import { useMyTasks } from "./hooks";
 
-// Friendly labels for the task types that reach a personal inbox (doc 10 §8). Unmapped types fall back
-// to the raw token.
+// Friendly labels for every task type that can reach a personal inbox (doc 10 §8). The Record is
+// exhaustive over TaskType, so every row resolves to a label (tsc enforces it).
 const TASK_LABEL: Record<TaskType, string> = {
   APPROVE: "Approval", REVIEW: "Document review", PERIODIC_REVIEW: "Periodic review",
   DOC_ACK: "Acknowledgement", AUDIT_TASK: "Audit task", FINDING_ACK: "Finding acknowledgement",

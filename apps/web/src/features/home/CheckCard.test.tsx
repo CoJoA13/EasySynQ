@@ -28,3 +28,14 @@ it("shows open audits + coverage, RAG red on a gap", async () => {
   expect(within(card).getByLabelText("18 / 20 mandatory clauses covered")).toBeInTheDocument();
   await waitFor(() => expect(within(card).getByLabelText(/status: red/i)).toBeInTheDocument());
 });
+
+it("renders no-access when both reads are forbidden", async () => {
+  const forbid = () => HttpResponse.json({ code: "forbidden" }, { status: 403 });
+  server.use(
+    http.get("/api/v1/audits", forbid),
+    http.get("/api/v1/reports/compliance-checklist", forbid),
+  );
+  renderWithProviders(<CheckCard />);
+  const card = await screen.findByRole("group", { name: /check quadrant/i });
+  await waitFor(() => expect(within(card).getByText(/no access to this section/i)).toBeInTheDocument());
+});
