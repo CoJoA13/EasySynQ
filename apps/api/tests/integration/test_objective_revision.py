@@ -488,3 +488,29 @@ async def test_same_unit_revision_preserves_current_value(
     assert rel.status_code == 200, rel.text
     assert rel.json()["current_value"] == "92"  # preserved — and now graded vs the NEW target
     assert rel.json()["target_value"] == "99"
+
+
+async def test_draft_unit_patch_resets_stale_rollup(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """diff-critic MAJOR: a Draft objective can carry old-unit measurements; a pre-first-release
+    unit PATCH must reset current_value (the release reset can't — there is no prior governing
+    unit), or the stale cross-unit rollup grades the new target through first release."""
+    subject = f"obj4-dunit-{uuid.uuid4()}"
+    h = _auth(token_factory, subject)
+    await _grant(subject, _OBJ_KEYS)
+    oid = await _create_objective(app_client, h, "Draft unit-change objective")
+    assert await _record(app_client, h, oid, value="92", unit="%", period="2026-05-31") == 201
+    detail = (await app_client.get(f"/api/v1/objectives/{oid}", headers=h)).json()
+    assert detail["current_value"] == "92"
+    r = await app_client.patch(
+        f"/api/v1/objectives/{oid}", headers=h, json={"unit": "count", "target_value": "10"}
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["current_value"] is None  # the stale %-rollup cannot grade a count target
+    assert r.json()["rag"] == "unmeasured"
+    # a same-unit PATCH never wipes the rollup
+    assert await _record(app_client, h, oid, value="8", unit="count", period="2026-06-30") == 201
+    r2 = await app_client.patch(f"/api/v1/objectives/{oid}", headers=h, json={"target_value": "9"})
+    assert r2.status_code == 200, r2.text
+    assert r2.json()["current_value"] == "8"

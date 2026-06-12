@@ -573,6 +573,13 @@ async def update_objective_endpoint(
     if "target_value" in fields and body.target_value is not None:
         qo.target_value = body.target_value
     if "unit" in fields and body.unit is not None:
+        # Micro-call B's pre-first-release leg (diff-critic MAJOR): a Draft objective can already
+        # carry measurements in the OLD unit — a unit change must reset the rollup or the stale
+        # cross-unit current_value grades the new target on every read AND survives first release
+        # (the release reset requires a PRIOR governing unit). Governed objectives are untouched:
+        # their reads/rollup key on the GOVERNING unit and the re-release reset covers the switch.
+        if body.unit != qo.unit and doc.current_effective_version_id is None:
+            qo.current_value = None
         qo.unit = body.unit
     if "direction" in fields and body.direction is not None:
         qo.direction = body.direction
@@ -718,7 +725,17 @@ async def release_objective_endpoint(
         nc = (nv.metadata_snapshot or {}).get("objective_commitment") if nv is not None else None
         new_unit = nc.get("unit") if isinstance(nc, dict) else None
     if prior_unit is not None and new_unit is not None and prior_unit != new_unit:
-        qo_after = await session.get(QualityObjective, objective_id)
+        # The qo row lock serializes against a straddling record_measurement (its rollup holds
+        # FOR UPDATE) — the lock-free get could wipe a valid new-unit rollup or be re-poisoned
+        # by an old-unit one (diff-critic MINOR; the S-drift-1 populate_existing discipline).
+        qo_after = (
+            await session.execute(
+                select(QualityObjective)
+                .where(QualityObjective.id == objective_id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+        ).scalar_one_or_none()
         if qo_after is not None and qo_after.current_value is not None:
             qo_after.current_value = None
             await session.commit()
