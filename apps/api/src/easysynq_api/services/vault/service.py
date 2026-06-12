@@ -95,6 +95,7 @@ def _snapshot(
     *,
     field_schema: dict[str, Any] | None = None,
     distribution: list[dict[str, Any]] | None = None,
+    objective_commitment: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Metadata as it was at check-in (doc 14 §5.3) — frozen onto the immutable version. Ordinary
     documents call this with no ``field_schema`` (the snapshot shape is unchanged). A Form/Template
@@ -102,7 +103,8 @@ def _snapshot(
     capture validator reads it from here, never the mutable ``form_template`` row). S-ack-1 (doc 04
     §6.1): the version self-describes its audience/ack policy — ``acknowledgement_required`` + the
     serialized distribution entries are frozen here (the metadata diff's SNAPSHOT_FIELDS allowlist
-    deliberately excludes them in v1; revisiting is S-ack-2's call)."""
+    deliberately excludes them in v1; revisiting is S-ack-2's call). S-obj-3 (clause 6.2): an OBJ
+    check-in passes ``objective_commitment`` so the version pins the commitment dict."""
     snap: dict[str, Any] = {
         "identifier": doc.identifier,
         "title": doc.title,
@@ -118,6 +120,10 @@ def _snapshot(
     }
     if field_schema is not None:
         snap["field_schema"] = field_schema
+    # S-obj-3 (clause 6.2): the OBJ's versioned commitment is frozen here, the form_template
+    # field_schema precedent — one optional kwarg, the shared body never branches on doc kind.
+    if objective_commitment is not None:
+        snap["objective_commitment"] = objective_commitment
     return snap
 
 

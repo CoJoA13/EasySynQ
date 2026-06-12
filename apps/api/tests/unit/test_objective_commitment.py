@@ -2,12 +2,15 @@
 import datetime
 import uuid
 from decimal import Decimal
+from types import SimpleNamespace
 
 import pytest
 import rfc8785
 
 from easysynq_api.db.models._objective_enums import ObjectiveDirection
+from easysynq_api.db.models._vault_enums import Classification
 from easysynq_api.domain.objectives.commitment import build_commitment
+from easysynq_api.services.vault.service import _snapshot
 
 pytestmark = pytest.mark.unit
 
@@ -65,3 +68,29 @@ def test_build_commitment_is_rfc8785_serializable_and_deterministic() -> None:
     assert rfc8785.dumps(c) == rfc8785.dumps(c)
     # decimals are strings, never floats (exact, reproducible bytes)
     assert b"98.0" not in rfc8785.dumps(c)
+
+
+def _fake_doc() -> SimpleNamespace:
+    return SimpleNamespace(
+        identifier="OBJ-001",
+        title="On-time delivery",
+        document_type_id=uuid.uuid4(),
+        owner_user_id=uuid.uuid4(),
+        folder_path=None,
+        classification=Classification.Internal,
+        framework_id=uuid.uuid4(),
+        review_period_months=24,
+        acknowledgement_required=False,
+    )
+
+
+def test_snapshot_adds_objective_commitment_only_when_passed() -> None:
+    doc = _fake_doc()
+    plain = _snapshot(doc)
+    assert "objective_commitment" not in plain  # ordinary docs are byte-untouched
+    assert "field_schema" not in plain
+    commitment = {"target_value": "98", "unit": "%", "direction": "HIGHER_IS_BETTER"}
+    withc = _snapshot(doc, objective_commitment=commitment)
+    assert withc["objective_commitment"] == commitment
+    # the base shape is otherwise identical
+    assert {k: withc[k] for k in plain} == plain
