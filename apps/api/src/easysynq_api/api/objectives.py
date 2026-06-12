@@ -173,9 +173,10 @@ def _objective(
     }
     # S-obj-3 (detail-only): the caller's lifecycle affordances + the effective date for the
     # stepper. LIST/scorecard/create/submit/release call-sites pass neither → unchanged output.
+    # A detail response ALWAYS carries effective_from (null until Effective — the _document
+    # precedent); capabilities doubles as the detail marker.
     if capabilities is not None:
         out["capabilities"] = capabilities
-    if effective_from is not None:
         out["effective_from"] = effective_from
     return out
 

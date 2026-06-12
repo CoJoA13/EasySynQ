@@ -226,7 +226,7 @@ async def test_detail_exposes_capabilities_for_the_manager(
     detail = (await app_client.get(f"/api/v1/objectives/{oid}", headers=h)).json()
     assert detail["capabilities"]["submit"] is True  # holds objective.manage
     assert detail["capabilities"]["release"] is False  # no document.release
-    assert "effective_from" not in detail  # Draft — the key is omitted until Effective
+    assert detail["effective_from"] is None  # Draft — present-but-null until Effective
 
 
 async def test_list_omits_capabilities(
