@@ -81,6 +81,35 @@ describe("NewObjectiveModal", () => {
     expect(body).toMatchObject({ policy_id: "po000001-0001-0001-0001-000000000001" });
   });
 
+  it("surfaces a stale-policy 422 when the policy was superseded before submit", async () => {
+    server.use(
+      http.post("/api/v1/objectives", () =>
+        HttpResponse.json(
+          {
+            code: "validation_error",
+            title: "policy_id must be the current Effective Quality Policy",
+          },
+          { status: 422 },
+        ),
+      ),
+    );
+    renderWithProviders(<NewObjectiveModal opened onClose={() => {}} onCreated={() => {}} />);
+    const dialog = getDialog();
+    fireEvent.click(within(dialog).getByRole("button", { name: /band & baseline/i }));
+    const checkbox = await within(dialog).findByLabelText(/consistent with POL-001/i);
+    fireEvent.click(checkbox);
+    fill(dialog, /^objective/i, "X");
+    fill(dialog, /^target/i, "95");
+    fill(dialog, /^unit/i, "%");
+    fill(dialog, /due date/i, "2026-12-31");
+    fireEvent.click(within(dialog).getByRole("button", { name: /create objective/i }));
+    await waitFor(() =>
+      expect(
+        screen.getByText(/policy_id must be the current effective quality policy/i),
+      ).toBeInTheDocument(),
+    );
+  });
+
   it("degrades calmly when there is no Effective policy — no checkbox, creation unblocked", async () => {
     server.use(http.get("/api/v1/objectives/policy", () => HttpResponse.json(null)));
     let body: Record<string, unknown> | null = null;
