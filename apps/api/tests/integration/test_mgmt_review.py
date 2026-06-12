@@ -16,6 +16,7 @@ from sqlalchemy import select
 from easysynq_api.db.models.document_version import DocumentVersion
 from easysynq_api.db.session import get_sessionmaker
 
+from . import s5_helpers as s5
 from .test_quality_objectives import _grant
 from .test_vault import _auth
 
@@ -337,3 +338,159 @@ async def test_compile_inputs_blocked_after_submit(
 
     r = await app_client.post(f"/api/v1/management-reviews/{rid}/compile-inputs", headers=h)
     assert r.status_code == 409, r.text
+
+
+# --- Phase 5: outputs → work (spawn MR_ACTION at release + the decide leg) ----------------------
+
+
+async def _drive_review_to_release(
+    client: AsyncClient,
+    token_factory: Callable[..., str],
+    salt: str,
+    *,
+    action_owner_subject: str,
+    action_owner_id: uuid.UUID,
+) -> str:
+    """Create a review, author an ACTION owned by ``action_owner_id``, submit → approve → release.
+    The submitter owns/submits (holds the MR keys); a role-assigned approver clears the DOCUMENT
+    approval task; a THIRD-party releaser holds document.release (SoD-2: author/approver ≠
+    releaser). Returns the review id (now Effective)."""
+    submitter, approver, releaser = f"mr-sm-{salt}", f"mr-ap-{salt}", f"mr-rl-{salt}"
+    hs = _auth(token_factory, submitter)
+    hap = _auth(token_factory, approver)
+    hrl = _auth(token_factory, releaser)
+    await _grant(submitter, _MR_KEYS)
+    await s5.grant_role(approver, "Approver")
+    await _grant(releaser, ("document.release", "document.read", "document.read_draft"))
+
+    rid = await _create_review(client, hs, f"Lifecycle review {salt}")
+    # author an ACTION output owned by the action owner → spawns an MR_ACTION at release
+    out = await client.post(
+        f"/api/v1/management-reviews/{rid}/outputs",
+        headers=hs,
+        json={
+            "output_type": "ACTION",
+            "description": "Tighten supplier controls",
+            "owner_user_id": str(action_owner_id),
+            "due_date": "2026-12-31",
+        },
+    )
+    assert out.status_code == 201, out.text
+
+    submitted = await client.post(f"/api/v1/management-reviews/{rid}/submit-review", headers=hs)
+    assert submitted.status_code == 200, submitted.text
+    task_id = await s5.task_for_doc(rid)
+    dec = await client.post(
+        f"/api/v1/tasks/{task_id}/decision", headers=hap, json={"outcome": "approve"}
+    )
+    assert dec.status_code == 200, dec.text
+    rel = await client.post(f"/api/v1/management-reviews/{rid}/release", headers=hrl)
+    assert rel.status_code == 200, rel.text
+    assert rel.json()["current_state"] == "Effective"
+    assert rel.json()["close_state"] == "ActionsTracked"
+    return rid
+
+
+async def test_release_spawns_mr_action_and_owner_can_complete_it(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """The thesis of Phase 5: release of a review with an ACTION output spawns an MR_ACTION task for
+    the owner (close_state → ActionsTracked), and the owner can decide it complete → DONE."""
+    salt = uuid.uuid4().hex[:8]
+    # the action OWNER is a distinct subject who holds only self-scoped task discovery (no MR keys)
+    owner_subject = f"mr-own-{salt}"
+    ho = _auth(token_factory, owner_subject)
+    owner_id = await _grant(
+        owner_subject, ()
+    )  # JIT the app_user; no permission keys needed to decide
+
+    rid = await _drive_review_to_release(
+        app_client,
+        token_factory,
+        salt,
+        action_owner_subject=owner_subject,
+        action_owner_id=owner_id,
+    )
+
+    # the owner sees an MR_ACTION task in their self-scoped inbox (assignee OR candidate pool)
+    tasks = (await app_client.get("/api/v1/tasks?type=MR_ACTION", headers=ho)).json()
+    mine = [t for t in tasks if t["assignee_user_id"] == str(owner_id)]
+    assert len(mine) == 1, tasks
+    action_task = mine[0]
+    assert action_task["state"] == "PENDING"
+    assert action_task["action_expected"] == "complete"
+    assert action_task["candidate_pool"] == [str(owner_id)]
+    # due_at = org-midnight of the action's due_date (2026-12-31), not now+hours
+    assert action_task["due_at"] is not None
+    assert action_task["due_at"].startswith("2026-12-31T00:00")
+
+    # the output is stamped with its spawned task id (read with the submitter's MR keys)
+    hs = _auth(token_factory, f"mr-sm-{salt}")
+    det = (await app_client.get(f"/api/v1/management-reviews/{rid}", headers=hs)).json()
+    assert det["close_state"] == "ActionsTracked"
+    action_out = next(o for o in det["outputs"] if o["output_type"] == "ACTION")
+    assert action_out["spawned_task_id"] == action_task["id"]
+
+    # the owner decides the action complete → DONE
+    done = await app_client.post(
+        f"/api/v1/tasks/{action_task['id']}/decision", headers=ho, json={"outcome": "complete"}
+    )
+    assert done.status_code == 200, done.text
+    assert done.json()["outcome"] == "complete"
+
+    refreshed = (await app_client.get("/api/v1/tasks?type=MR_ACTION", headers=ho)).json()
+    done_task = next(t for t in refreshed if t["id"] == action_task["id"])
+    assert done_task["state"] == "DONE"
+
+
+async def test_mr_action_decide_404_collapses_for_non_member(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """A user who is neither the assignee nor in the candidate pool gets 404 (sensitive collapse),
+    never a 403 that would leak the task's existence."""
+    salt = uuid.uuid4().hex[:8]
+    owner_subject = f"mr-own2-{salt}"
+    owner_id = await _grant(owner_subject, ())
+
+    await _drive_review_to_release(
+        app_client,
+        token_factory,
+        salt,
+        action_owner_subject=owner_subject,
+        action_owner_id=owner_id,
+    )
+    ho = _auth(token_factory, owner_subject)
+    tasks = (await app_client.get("/api/v1/tasks?type=MR_ACTION", headers=ho)).json()
+    action_task = next(t for t in tasks if t["assignee_user_id"] == str(owner_id))
+
+    # a stranger (JIT app_user, no membership) is 404'd on the decide
+    stranger = f"mr-str-{salt}"
+    hx = _auth(token_factory, stranger)
+    await _grant(stranger, ())  # JIT the row so it's a real, org-matched, non-member user
+    r = await app_client.post(
+        f"/api/v1/tasks/{action_task['id']}/decision", headers=hx, json={"outcome": "complete"}
+    )
+    assert r.status_code == 404, r.text
+
+
+async def test_mr_action_decide_rejects_bad_outcome(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """MR_ACTION only accepts ``complete`` — any other outcome is a 422 (not a silent DONE)."""
+    salt = uuid.uuid4().hex[:8]
+    owner_subject = f"mr-own3-{salt}"
+    owner_id = await _grant(owner_subject, ())
+    await _drive_review_to_release(
+        app_client,
+        token_factory,
+        salt,
+        action_owner_subject=owner_subject,
+        action_owner_id=owner_id,
+    )
+    ho = _auth(token_factory, owner_subject)
+    tasks = (await app_client.get("/api/v1/tasks?type=MR_ACTION", headers=ho)).json()
+    action_task = next(t for t in tasks if t["assignee_user_id"] == str(owner_id))
+    r = await app_client.post(
+        f"/api/v1/tasks/{action_task['id']}/decision", headers=ho, json={"outcome": "approve"}
+    )
+    assert r.status_code == 422, r.text

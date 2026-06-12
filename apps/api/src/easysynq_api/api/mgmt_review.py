@@ -48,6 +48,7 @@ from ..services.mgmt_review import (
     list_outputs,
     list_reviews,
     release_review,
+    spawn_mr_actions,
     submit_review_for_review,
     update_output,
     update_review_meta,
@@ -464,12 +465,22 @@ async def release_review_endpoint(
     _mr, doc = await _load_review(session, caller, review_id)
     resource = await _release_scope(session, doc)
     await enforce(session, authz_sink, request, caller, "document.release", resource, sig_hook=True)
+    caller_id = caller.id  # capture BEFORE expire_all (the expired `caller` would lazy-refresh)
     await release_review(caller, review_id, vault_sink, sig_sink)
     # release() committed in its own SERIALIZABLE session; expire this session's identity map so the
     # re-reads refresh from the DB.
     session.expire_all()
-    # Phase 5: spawn_mr_actions(session, review, ...) — mint an MR_ACTION task per ACTION output +
-    # set close_state=ActionsTracked. Wired in Task 17.
+    # Phase 5: spawn one MR_ACTION task per ACTION output (tracked to closure) on a MGMT_REVIEW
+    # container instance + flip close_state=ActionsTracked. Re-load the satellite + base doc +
+    # outputs + the actor FRESH (the release commit + expire_all invalidated the pre-release rows;
+    # accessing an expired instance's attrs would lazy-refresh off-greenlet → MissingGreenlet).
+    pair = await get_review_doc(session, review_id)
+    outputs = await list_outputs(session, review_id)
+    actor = await session.get(AppUser, caller_id)
+    if pair is not None and actor is not None:
+        mr_after, doc_after = pair
+        await spawn_mr_actions(session, actor, doc_after, mr_after, outputs)
+        await session.commit()
     row = await mr_repo.get_review_row(session, review_id)
     if row is None:  # pragma: no cover — the doc was just released, it cannot be absent
         raise ProblemException(status=404, code="not_found", title="Management Review not found")

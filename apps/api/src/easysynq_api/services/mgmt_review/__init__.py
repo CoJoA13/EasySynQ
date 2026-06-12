@@ -4,6 +4,7 @@
 release cutover. Reads live in ``repository``; serializers in ``api/mgmt_review``."""
 
 from .compile import compile_inputs
+from .decide import decide_mr_task
 from .repository import (
     get_review,
     get_review_doc,
@@ -21,11 +22,13 @@ from .service import (
     update_output,
     update_review_meta,
 )
+from .spawn import spawn_mr_actions
 
 __all__ = [
     "add_output",
     "compile_inputs",
     "create_review",
+    "decide_mr_task",
     "delete_output",
     "get_review",
     "get_review_doc",
@@ -34,6 +37,7 @@ __all__ = [
     "list_reviews",
     "open_review_exists",
     "release_review",
+    "spawn_mr_actions",
     "submit_review_for_review",
     "update_output",
     "update_review_meta",

@@ -30,6 +30,7 @@ from ..services.ack.decide import decide_doc_ack
 from ..services.authz import AuthzAuditSink, enforce, get_authz_audit_sink
 from ..services.capa import decide_capa_action_plan
 from ..services.dcr import decide_dcr_approval
+from ..services.mgmt_review import decide_mr_task
 from ..services.vault import (
     SignatureEventSink,
     VaultAuditSink,
@@ -234,6 +235,19 @@ async def decide_endpoint(
             comment=body.comment,
             idempotency_key=idempotency_key,
             sig_sink=sig_sink,
+        )
+    # An MR_ACTION (a clause-9.3 review output tracked to closure) routes to the mgmt-review
+    # service, which OWNS its authorization (decide_mr_task: candidate-membership 404-collapses; no
+    # document key gates it — the owner pinned at spawn IS the authority, self-scoped tasks doc 07).
+    # No signature (an owner completing their own tracked action is not a sign-off).
+    if instance is not None and instance.subject_type is WorkflowSubjectType.MGMT_REVIEW:
+        return await decide_mr_task(
+            session,
+            task,
+            caller,
+            outcome=body.outcome,
+            comment=body.comment,
+            idempotency_key=idempotency_key,
         )
     # A DOC_ACK obligation routes to the ack service: candidate-membership 404-collapses, then
     # document.acknowledge is enforced at the document's scope (the key's first consumer); the
