@@ -699,7 +699,9 @@ it("shows objectives on target + overdue reviews, RAG red when an objective is r
   );
   renderWithProviders(<PlanCard />);
   const card = await screen.findByRole("group", { name: /plan quadrant/i });
-  expect(within(card).getByLabelText("6 / 8 objectives on target")).toBeInTheDocument();
+  // findByRole resolves on the immediately-rendered card frame while the data line is still a skeleton —
+  // so the first content assertion must wait for the query to settle.
+  await waitFor(() => expect(within(card).getByLabelText("6 / 8 objectives on target")).toBeInTheDocument());
   expect(within(card).getByLabelText("2 document reviews overdue")).toBeInTheDocument();
   await waitFor(() => expect(within(card).getByLabelText(/status: red/i)).toBeInTheDocument());
 });
@@ -958,7 +960,8 @@ it("shows open audits + coverage, RAG red on a gap", async () => {
   );
   renderWithProviders(<CheckCard />);
   const card = await screen.findByRole("group", { name: /check quadrant/i });
-  expect(within(card).getByLabelText("1 open audits")).toBeInTheDocument();
+  // The first content assertion must wait for the query to settle (the card frame renders immediately).
+  await waitFor(() => expect(within(card).getByLabelText("1 open audits")).toBeInTheDocument());
   expect(within(card).getByLabelText("18 / 20 mandatory clauses covered")).toBeInTheDocument();
   await waitFor(() => expect(within(card).getByLabelText(/status: red/i)).toBeInTheDocument());
 });
@@ -1078,7 +1081,8 @@ it("shows open CAPAs, awaiting NCRs and complaints, RAG red on an awaiting NCR",
   );
   renderWithProviders(<ActCard />);
   const card = await screen.findByRole("group", { name: /act quadrant/i });
-  expect(within(card).getByLabelText("1 CAPAs open")).toBeInTheDocument();
+  // The first content assertion must wait for the query to settle (the card frame renders immediately).
+  await waitFor(() => expect(within(card).getByLabelText("1 CAPAs open")).toBeInTheDocument());
   expect(within(card).getByLabelText("1 NCRs awaiting disposition")).toBeInTheDocument();
   expect(within(card).getByLabelText("1 complaints awaiting triage")).toBeInTheDocument();
   await waitFor(() => expect(within(card).getByLabelText(/status: red/i)).toBeInTheDocument());
