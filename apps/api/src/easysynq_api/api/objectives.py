@@ -209,6 +209,8 @@ async def _load_objective_doc(
     else:
         doc = await session.get(DocumentedInformation, objective_id)
         qo = await session.get(QualityObjective, objective_id)
+    # qo is None ↔ no quality_objective row → a non-OBJ document or a Record id; the kind-scoping
+    # guard (S-rec-1) rides the satellite's existence invariant rather than an explicit doc.kind check.
     if doc is None or qo is None or doc.org_id != caller.org_id:
         raise ProblemException(status=404, code="not_found", title="Objective not found")
     return doc, qo
