@@ -1,0 +1,288 @@
+"""compile_inputs (S-mr-1, clause 9.3.2) — the owner-grant-gated input compiler.
+
+``compile_inputs(session, review, owner)`` (Draft only) attempts each of the six sourced 9.3.2
+reads **gated on the review OWNER's grants** (the MR document's ``owner_user_id``), not the
+caller's — so the frozen 9.3 evidence is deterministic regardless of which authorized preparer
+triggered the compile. A source the owner can't read becomes a named ``available=False`` gap row
+(fail-closed per source, F3) — NEVER a 403 of the whole compile. The remaining six 9.3.2 inputs
+have no backend source yet and ship as fixed-reason gap rows.
+
+⚠ F3 traps (load-bearing):
+1. Gate on the OWNER's grants via the NON-auditing PDP path (``gather_grants`` + ``authorize`` at
+   ``ResourceContext.system()`` — NOT ``pep.evaluate``/``enforce``/``require``, which emit an authz
+   audit row per probe + raise 403). A typo'd key string returns empty grants → deny → a silent
+   gap row, so the six key strings are copied EXACTLY from the live endpoint ``require(...)`` calls.
+2. The summaries are AS-OF snapshots (counts/RAG), not live queries retained for read-time.
+3. Re-compile REPLACES the working ``review_input`` set (delete-then-insert) in one txn; Draft-only.
+"""
+
+from __future__ import annotations
+
+import datetime
+import uuid
+from typing import Any
+
+from sqlalchemy import delete, distinct, func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from ...db.models._audit_enums import ActorType, AuditObjectType, EventType
+from ...db.models._mgmt_review_enums import ReviewInputType
+from ...db.models._vault_enums import DocumentCurrentState
+from ...db.models.app_user import AppUser
+from ...db.models.audit_event import AuditEvent
+from ...db.models.documented_information import DocumentedInformation
+from ...db.models.kpi_measurement import KpiMeasurement
+from ...db.models.management_review import ManagementReview
+from ...db.models.review_input import ReviewInput
+from ...domain.authz import RequestContext, ResourceContext, authorize
+from ...domain.mgmt_review.inputs import (
+    summarize_audits,
+    summarize_capas_ncrs,
+    summarize_kpis,
+    summarize_process_perf,
+    summarize_scorecard,
+)
+from ...domain.objectives.commitment import resolve_commitment
+from ...domain.objectives.rules import rag_status
+from ...problems import ProblemException
+from ..audits import repository as audits_repo
+from ..authz import gather_grants
+from ..capa import repository as capa_repo
+from ..objectives import list_objectives
+from ..reports import compute_checklist
+from ..vault import drift_report
+
+# The six sourced reads' permission keys — copied VERBATIM from the live endpoint require(...)
+# calls (a typo silently gap-rows everything; F3 trap 2). Complaints ride record.read (they are
+# ad-hoc records — capa.py:294 _complaint_read = require("record.read"); there is no complaint.read
+# key in the catalog).
+_KEY_OBJECTIVES = "objective.read"
+_KEY_AUDITS = "audit.read"
+_KEY_CAPA = "capa.read"
+_KEY_NCR = "ncr.read"
+_KEY_COMPLAINT = "record.read"
+_KEY_KPI = "kpi.read"
+_KEY_CHECKLIST = "report.compliance_checklist.read"
+_KEY_DRIFT = "drift.read"
+
+_REASON_NO_ACCESS = "not available (insufficient access)"
+_REASON_NO_SOURCE = "not available (no structured source)"
+_REASON_NO_PRIOR = "not available (no prior released review)"
+
+# The six sourceless 9.3.2 inputs (b/c1/c7/d/e/f) — honest fixed-reason gap rows (s3/F4).
+_SOURCELESS_GAPS = (
+    ReviewInputType.CONTEXT_CHANGES,
+    ReviewInputType.CUSTOMER_SATISFACTION,
+    ReviewInputType.SUPPLIER_PERFORMANCE,
+    ReviewInputType.RESOURCE_ADEQUACY,
+    ReviewInputType.RISK_OPPORTUNITY_ACTIONS,
+    ReviewInputType.IMPROVEMENT_OPPORTUNITIES,
+)
+
+
+async def _owner_holds(session: AsyncSession, owner: AppUser, key: str) -> bool:
+    """PDP-check the OWNER's grant for ``key`` at SYSTEM scope via the NON-auditing path
+    (``gather_grants`` + ``authorize`` — the compute_effective_permissions recipe). NOT the PEP's
+    ``evaluate`` (an authz audit row per probe + a 403)."""
+    grants = await gather_grants(session, owner.id, owner.org_id, key)
+    decision = authorize(
+        grants,
+        key,
+        ResourceContext.system(),
+        RequestContext(now=datetime.datetime.now(datetime.UTC)),
+    )
+    return decision.allow
+
+
+def _source_ref(
+    *, available: bool, summary: dict[str, Any] | None, reason: str | None, now: str
+) -> dict[str, Any]:
+    """The ``review_input.source_ref`` envelope: ``{available, summary?, reason?, generated_at}``
+    (F3 trap 4). An available row carries ``summary``; a gap row carries ``reason``."""
+    ref: dict[str, Any] = {"available": available, "generated_at": now}
+    if summary is not None:
+        ref["summary"] = summary
+    if reason is not None:
+        ref["reason"] = reason
+    return ref
+
+
+async def _objectives_scorecard(session: AsyncSession, org_id: uuid.UUID) -> dict[str, Any]:
+    """Reproduce ``api/objectives.py::scorecard_endpoint`` (no service-layer scorecard fn): grade
+    each objective off its GOVERNING frozen commitment (the 5th tuple element — never the mutable
+    qo row) → tally by RAG. by_rag keys EXACTLY {green,amber,red,unmeasured}; on_target = green."""
+    rows = await list_objectives(session, org_id)
+    by_rag: dict[str, int] = {"green": 0, "amber": 0, "red": 0, "unmeasured": 0}
+    for qo, _ident, _title, _state, governing in rows:
+        commitment = resolve_commitment(
+            governing,
+            target_value=qo.target_value,
+            unit=qo.unit,
+            direction=qo.direction,
+            due_date=qo.due_date,
+            at_risk_threshold=qo.at_risk_threshold,
+            baseline_value=qo.baseline_value,
+            policy_id=qo.policy_id,
+        )
+        rag = rag_status(
+            current=qo.current_value,
+            target=commitment.target_value,
+            direction=commitment.direction,
+            at_risk_threshold=commitment.at_risk_threshold,
+        )
+        if rag in by_rag:
+            by_rag[rag] += 1
+    total = sum(by_rag.values())
+    return {"total": total, "on_target": by_rag["green"], "by_rag": by_rag}
+
+
+async def _kpi_counts(session: AsyncSession, org_id: uuid.UUID) -> tuple[int, int]:
+    """(readings, objectives_measured) — org-wide KPI-measurement count + distinct measured
+    objectives (there is no org-wide KPI count helper; a fresh COUNT per s4/the brief)."""
+    readings = (
+        await session.execute(
+            select(func.count()).select_from(KpiMeasurement).where(KpiMeasurement.org_id == org_id)
+        )
+    ).scalar_one()
+    measured = (
+        await session.execute(
+            select(func.count(distinct(KpiMeasurement.objective_id))).where(
+                KpiMeasurement.org_id == org_id,
+                KpiMeasurement.objective_id.is_not(None),
+            )
+        )
+    ).scalar_one()
+    return int(readings), int(measured)
+
+
+async def _build_row(
+    session: AsyncSession, owner: AppUser, input_type: ReviewInputType, now: str
+) -> dict[str, Any]:
+    """Compute one sourced input row's ``source_ref`` — owner-grant-gated, fail-closed to a gap
+    row. PRIOR_ACTIONS is a gap row until a second released review exists (v1)."""
+    org_id = owner.org_id
+
+    if input_type is ReviewInputType.OBJECTIVES_STATUS:
+        if not await _owner_holds(session, owner, _KEY_OBJECTIVES):
+            return _source_ref(available=False, summary=None, reason=_REASON_NO_ACCESS, now=now)
+        summary = summarize_scorecard(await _objectives_scorecard(session, org_id))
+        return _source_ref(available=True, summary=summary, reason=None, now=now)
+
+    if input_type is ReviewInputType.AUDIT_RESULTS:
+        if not await _owner_holds(session, owner, _KEY_AUDITS):
+            return _source_ref(available=False, summary=None, reason=_REASON_NO_ACCESS, now=now)
+        summary = summarize_audits(await audits_repo.list_audits(session, org_id))
+        return _source_ref(available=True, summary=summary, reason=None, now=now)
+
+    if input_type is ReviewInputType.NONCONFORMITIES_CAPA:
+        # Needs the union (capa.read + ncr.read + record.read) — any missing key fails the source
+        # closed (a partial summary would be misleading evidence).
+        for key in (_KEY_CAPA, _KEY_NCR, _KEY_COMPLAINT):
+            if not await _owner_holds(session, owner, key):
+                return _source_ref(available=False, summary=None, reason=_REASON_NO_ACCESS, now=now)
+        summary = summarize_capas_ncrs(
+            await capa_repo.list_capas(session, org_id),
+            await capa_repo.list_ncrs(session, org_id),
+            await capa_repo.list_complaints(session, org_id),
+        )
+        return _source_ref(available=True, summary=summary, reason=None, now=now)
+
+    if input_type is ReviewInputType.MONITORING_RESULTS:
+        if not await _owner_holds(session, owner, _KEY_KPI):
+            return _source_ref(available=False, summary=None, reason=_REASON_NO_ACCESS, now=now)
+        readings, measured = await _kpi_counts(session, org_id)
+        summary = summarize_kpis(readings=readings, objectives_measured=measured)
+        return _source_ref(available=True, summary=summary, reason=None, now=now)
+
+    if input_type is ReviewInputType.PROCESS_PERFORMANCE:
+        if not await _owner_holds(session, owner, _KEY_CHECKLIST):
+            return _source_ref(available=False, summary=None, reason=_REASON_NO_ACCESS, now=now)
+        checklist = await compute_checklist(session, org_id)
+        # drift.read is a SEPARATE key — its absence drops only the integrity block (drift_status
+        # takes NO org_id; single-org vault). The checklist itself is the source's gate.
+        drift = (
+            await drift_report.drift_status(session)
+            if await _owner_holds(session, owner, _KEY_DRIFT)
+            else None
+        )
+        summary = summarize_process_perf(checklist, drift)
+        return _source_ref(available=True, summary=summary, reason=None, now=now)
+
+    if input_type is ReviewInputType.PRIOR_ACTIONS:
+        # Gap row until a second review exists (v1 — the prior-MR outputs read lands with the 2nd
+        # review; the spec accepts this for the first cycle).
+        return _source_ref(available=False, summary=None, reason=_REASON_NO_PRIOR, now=now)
+
+    # Defensive — every sourced type is handled above; an unrecognised one fails closed.
+    return _source_ref(available=False, summary=None, reason=_REASON_NO_SOURCE, now=now)
+
+
+# The ordered, positioned 9.3.2 set (the canonical 9.3.2(a)…(f) order — the enum's declaration
+# order). Sourced types resolve through _build_row; the six sourceless ones are fixed gap rows.
+_INPUT_ORDER: tuple[ReviewInputType, ...] = tuple(ReviewInputType)
+
+
+async def compile_inputs(
+    session: AsyncSession,
+    review: ManagementReview,
+    owner: AppUser,
+) -> list[ReviewInput]:
+    """Re-compile the working ``review_input`` set (Draft-only) under the OWNER's grants. Replaces
+    the existing rows (delete-then-insert) in one txn, then emits MGMT_REVIEW_INPUTS_COMPILED. The
+    caller (the route) owns loading ``review``/``owner`` + the trigger-gate enforce."""
+    doc = await session.get(DocumentedInformation, review.id)
+    if doc is None:  # pragma: no cover — the satellite exists, so the base must too
+        raise ProblemException(status=404, code="not_found", title="Management Review not found")
+    if doc.current_state is not DocumentCurrentState.Draft:
+        raise ProblemException(
+            status=409,
+            code="conflict",
+            title="Management Review inputs are only compilable in Draft",
+            detail=f"current_state is {doc.current_state.value}",
+        )
+
+    now = datetime.datetime.now(datetime.UTC).isoformat()
+
+    # Replace the working set (delete-then-insert; a re-compile is the as-of refresh, s2/s3).
+    await session.execute(delete(ReviewInput).where(ReviewInput.management_review_id == review.id))
+
+    created: list[ReviewInput] = []
+    for position, input_type in enumerate(_INPUT_ORDER):
+        if input_type in _SOURCELESS_GAPS:
+            source_ref = _source_ref(
+                available=False, summary=None, reason=_REASON_NO_SOURCE, now=now
+            )
+            available = False
+        else:
+            source_ref = await _build_row(session, owner, input_type, now)
+            available = bool(source_ref["available"])
+        ri = ReviewInput(
+            org_id=review.org_id,
+            management_review_id=review.id,
+            input_type=input_type,
+            available=available,
+            source_ref=source_ref,
+            position=position,
+        )
+        session.add(ri)
+        created.append(ri)
+
+    await session.flush()
+    session.add(
+        AuditEvent(
+            org_id=owner.org_id,
+            occurred_at=datetime.datetime.now(datetime.UTC),
+            actor_id=owner.id,
+            actor_type=ActorType.user,
+            event_type=EventType.MGMT_REVIEW_INPUTS_COMPILED,
+            object_type=AuditObjectType.document,
+            object_id=review.id,
+            scope_ref=doc.identifier,
+            after={
+                "inputs": len(created),
+                "available": sum(1 for ri in created if ri.available),
+            },
+        )
+    )
+    await session.commit()
+    return created

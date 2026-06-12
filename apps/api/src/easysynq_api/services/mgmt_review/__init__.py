@@ -3,6 +3,7 @@
 ``submit_review_for_review`` freezes the minutes + submits; ``release_review`` rides the generic
 release cutover. Reads live in ``repository``; serializers in ``api/mgmt_review``."""
 
+from .compile import compile_inputs
 from .repository import (
     get_review,
     get_review_doc,
@@ -23,6 +24,7 @@ from .service import (
 
 __all__ = [
     "add_output",
+    "compile_inputs",
     "create_review",
     "delete_output",
     "get_review",

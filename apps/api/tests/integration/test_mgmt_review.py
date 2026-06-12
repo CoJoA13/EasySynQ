@@ -24,6 +24,38 @@ pytestmark = pytest.mark.integration
 # mgmtReview.create to create, .read to list/detail, .record_outputs to author/submit.
 _MR_KEYS = ("mgmtReview.create", "mgmtReview.read", "mgmtReview.record_outputs")
 
+# The six sourced-read keys the compiler PDP-checks against the review OWNER (verbatim from the live
+# endpoints; complaints ride record.read — there is no complaint.read key). With the union held, all
+# six sourced rows compile available=True.
+_SOURCE_KEYS = (
+    "objective.read",
+    "audit.read",
+    "capa.read",
+    "ncr.read",
+    "record.read",
+    "kpi.read",
+    "report.compliance_checklist.read",
+    "drift.read",
+)
+
+# The 12 canonical 9.3.2 input types (enum-declaration order). 6 sourced + 6 sourceless gap.
+_SOURCED_TYPES = {
+    "OBJECTIVES_STATUS",
+    "PROCESS_PERFORMANCE",
+    "NONCONFORMITIES_CAPA",
+    "MONITORING_RESULTS",
+    "AUDIT_RESULTS",
+    "PRIOR_ACTIONS",  # sourced-but-gap until a 2nd review exists (v1)
+}
+_SOURCELESS_TYPES = {
+    "CONTEXT_CHANGES",
+    "CUSTOMER_SATISFACTION",
+    "SUPPLIER_PERFORMANCE",
+    "RESOURCE_ADEQUACY",
+    "RISK_OPPORTUNITY_ACTIONS",
+    "IMPROVEMENT_OPPORTUNITIES",
+}
+
 
 async def _create_review(client: AsyncClient, h: dict[str, str], title: str) -> str:
     r = await client.post(
@@ -190,3 +222,118 @@ async def test_submit_twice_is_a_conflict(
     assert first.status_code == 200, first.text
     again = await app_client.post(f"/api/v1/management-reviews/{rid}/submit-review", headers=h)
     assert again.status_code == 409, again.text
+
+
+async def test_compile_inputs_writes_all_twelve_rows(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """A fully-granted owner compiles all 12 rows: the 6 sourced rows available=True with a summary,
+    the 6 sourceless gap rows available=False with a reason (F4). PRIOR_ACTIONS is a sourced-but-gap
+    row (no 2nd review yet)."""
+    subject = f"mr-comp-{uuid.uuid4()}"
+    h = _auth(token_factory, subject)
+    # The creator IS the review owner (create_document sets owner_user_id=actor.id); grant the union
+    # so every sourced read PDP-passes for the owner.
+    await _grant(subject, _MR_KEYS + _SOURCE_KEYS)
+    rid = await _create_review(app_client, h, "Fully-granted compile")
+
+    r = await app_client.post(f"/api/v1/management-reviews/{rid}/compile-inputs", headers=h)
+    assert r.status_code == 200, r.text
+    inputs = r.json()["inputs"]
+
+    by_type = {ri["input_type"]: ri for ri in inputs}
+    assert set(by_type) == _SOURCED_TYPES | _SOURCELESS_TYPES
+    assert len(inputs) == 12
+
+    # Every row's source_ref carries the envelope (available + generated_at).
+    for ri in inputs:
+        ref = ri["source_ref"]
+        assert "available" in ref and "generated_at" in ref
+        assert ref["available"] is ri["available"]
+
+    # The five live sourced reads are available with a summary.
+    for t in (
+        "OBJECTIVES_STATUS",
+        "PROCESS_PERFORMANCE",
+        "NONCONFORMITIES_CAPA",
+        "MONITORING_RESULTS",
+        "AUDIT_RESULTS",
+    ):
+        assert by_type[t]["available"] is True, by_type[t]
+        assert "summary" in by_type[t]["source_ref"], by_type[t]
+
+    # The objectives scorecard summary has the EXACT by_rag key set.
+    obj = by_type["OBJECTIVES_STATUS"]["source_ref"]["summary"]
+    assert set(obj["by_rag"]) == {"green", "amber", "red", "unmeasured"}
+    assert obj["on_target"] == obj["by_rag"]["green"]
+
+    # PRIOR_ACTIONS + the six sourceless inputs are gap rows (available=False with a reason).
+    for t in {"PRIOR_ACTIONS"} | _SOURCELESS_TYPES:
+        assert by_type[t]["available"] is False, by_type[t]
+        assert by_type[t]["source_ref"].get("reason"), by_type[t]
+
+
+async def test_compile_inputs_owner_without_audit_read_yields_gap_row_not_403(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """F3: an owner LACKING audit.read yields an available=False AUDIT_RESULTS gap row — NOT a 403
+    of the whole compile. The gate on the TRIGGER is the caller's record_outputs; per-source access
+    is the owner's, fail-closed to a gap row."""
+    subject = f"mr-noaud-{uuid.uuid4()}"
+    h = _auth(token_factory, subject)
+    # The union MINUS audit.read — every other sourced read stays available.
+    keys = _MR_KEYS + tuple(k for k in _SOURCE_KEYS if k != "audit.read")
+    await _grant(subject, keys)
+    rid = await _create_review(app_client, h, "Owner missing audit.read")
+
+    r = await app_client.post(f"/api/v1/management-reviews/{rid}/compile-inputs", headers=h)
+    assert r.status_code == 200, r.text  # NOT a 403 — the whole compile succeeds
+    by_type = {ri["input_type"]: ri for ri in r.json()["inputs"]}
+
+    aud = by_type["AUDIT_RESULTS"]
+    assert aud["available"] is False, aud
+    assert aud["source_ref"].get("reason") == "not available (insufficient access)", aud
+    assert "summary" not in aud["source_ref"], aud
+
+    # The other live sourced reads stay available (only the audit source gap-rowed).
+    assert by_type["OBJECTIVES_STATUS"]["available"] is True
+    assert by_type["AUDIT_RESULTS"]["available"] is False
+
+
+async def test_recompile_replaces_the_working_input_set(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """Re-compile (Draft) REPLACES the working review_input set (delete-then-insert) — the row count
+    stays 12, never doubles."""
+    subject = f"mr-recomp-{uuid.uuid4()}"
+    h = _auth(token_factory, subject)
+    await _grant(subject, _MR_KEYS + _SOURCE_KEYS)
+    rid = await _create_review(app_client, h, "Re-compile review")
+
+    first = await app_client.post(f"/api/v1/management-reviews/{rid}/compile-inputs", headers=h)
+    assert first.status_code == 200, first.text
+    assert len(first.json()["inputs"]) == 12
+
+    second = await app_client.post(f"/api/v1/management-reviews/{rid}/compile-inputs", headers=h)
+    assert second.status_code == 200, second.text
+    assert len(second.json()["inputs"]) == 12  # replaced, not appended
+
+    # The detail read also shows exactly 12 (no orphaned prior-compile rows).
+    det = (await app_client.get(f"/api/v1/management-reviews/{rid}", headers=h)).json()
+    assert len(det["inputs"]) == 12
+
+
+async def test_compile_inputs_blocked_after_submit(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """compile-inputs is Draft-only — a 409 once the review leaves Draft (the snapshot is then the
+    WORM authority)."""
+    subject = f"mr-comp-late-{uuid.uuid4()}"
+    h = _auth(token_factory, subject)
+    await _grant(subject, _MR_KEYS + _SOURCE_KEYS)
+    rid = await _create_review(app_client, h, "Compile-after-submit review")
+    submitted = await app_client.post(f"/api/v1/management-reviews/{rid}/submit-review", headers=h)
+    assert submitted.status_code == 200, submitted.text
+
+    r = await app_client.post(f"/api/v1/management-reviews/{rid}/compile-inputs", headers=h)
+    assert r.status_code == 409, r.text

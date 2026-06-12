@@ -40,6 +40,7 @@ from ..services.authz import (
 )
 from ..services.mgmt_review import (
     add_output,
+    compile_inputs,
     create_review,
     delete_output,
     get_review_doc,
@@ -273,9 +274,35 @@ async def get_review_endpoint(
     return out
 
 
-# Phase 4: POST /management-reviews/{review_id}/compile-inputs (mgmtReview.record_outputs) — the
-# owner-grant-gated 9.3.2 read compiler lands here (services/mgmt_review/compile.py). Omitted now
-# rather than half-implemented.
+@router.post("/management-reviews/{review_id}/compile-inputs")
+async def compile_inputs_endpoint(
+    review_id: uuid.UUID,
+    caller: AppUser = Depends(_mr_outputs),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """(Re)compile the six 9.3.2 sourced reads → ``review_input`` rows (Draft-only). TRIGGERED by a
+    ``mgmtReview.record_outputs`` holder (the dependency gate), but each sourced read is evaluated
+    under the review OWNER's grants (the MR document's ``owner_user_id``, PDP-checked per key,
+    fail-closed → a gap row, never a 403 — F3). Returns the refreshed detail."""
+    mr, doc = await _load_review(session, caller, review_id)
+    # The owner is the MR document's owner (the convening QM, set at create_document) — load it as
+    # an AppUser; the compiler gates each read on its grants (F3 trap 1), NOT the caller's.
+    owner = await session.get(AppUser, doc.owner_user_id)
+    if owner is None:  # pragma: no cover — owner_user_id is a RESTRICT FK to a live app_user
+        raise ProblemException(
+            status=409, code="conflict", title="Management Review has no resolvable owner"
+        )
+    await compile_inputs(session, mr, owner)
+    row = await mr_repo.get_review_row(session, review_id)
+    if row is None:  # pragma: no cover — just mutated it, cannot be absent
+        raise ProblemException(status=404, code="not_found", title="Management Review not found")
+    mr2, ident, title, state = row
+    out = _mgmt_review(mr2, identifier=ident, title=title, current_state=state)
+    out["inputs"] = [_review_input(ri) for ri in await list_inputs(session, review_id)]
+    out["outputs"] = [_review_output(ro) for ro in await list_outputs(session, review_id)]
+    return out
+
+
 # Phase 6: POST /management-reviews/{review_id}/close (mgmtReview.record_outputs) — the close gate
 # (spawned MR_ACTION tasks must be DONE) lands here. Omitted now (Phase 5 spawns the tasks first).
 
