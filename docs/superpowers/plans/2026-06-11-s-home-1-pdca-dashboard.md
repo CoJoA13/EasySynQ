@@ -40,7 +40,7 @@ apps/web/src/features/home/
   rag.ts                # T1: Rag type, RAG_META, pure rules + count helpers (no React)
   rag.test.ts           # T1
   hooks.ts              # T2: useMyTasks()
-  hooks.test.ts         # T2
+  hooks.test.tsx         # T2
   StatLine.tsx          # T3: glyph + optional value + label (DP-7)
   StatLine.test.tsx     # T3
   QuadrantCard.tsx      # T4: PDCA chip + RAG badge + body + one Open action; + TileNoAccess/TileSkeleton
@@ -246,7 +246,7 @@ git commit -m "feat(s-home-1): pure RAG/count rules for the PDCA dashboard"
 
 **Files:**
 - Create: `apps/web/src/features/home/hooks.ts`
-- Test: `apps/web/src/features/home/hooks.test.ts`
+- Test: `apps/web/src/features/home/hooks.test.tsx`
 
 - [ ] **Step 1: Write the failing test**
 
@@ -295,7 +295,7 @@ it("useMyTasks surfaces a forbidden flag on 403 without retrying", async () => {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd apps/web && npx vitest run src/features/home/hooks.test.ts`
+Run: `cd apps/web && npx vitest run src/features/home/hooks.test.tsx`
 Expected: FAIL (`Failed to resolve import "./hooks"`).
 
 - [ ] **Step 3: Write `hooks.ts`**
@@ -322,13 +322,13 @@ export function useMyTasks() {
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd apps/web && npx vitest run src/features/home/hooks.test.ts`
+Run: `cd apps/web && npx vitest run src/features/home/hooks.test.tsx`
 Expected: PASS (2 tests).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add apps/web/src/features/home/hooks.ts apps/web/src/features/home/hooks.test.ts
+git add apps/web/src/features/home/hooks.ts apps/web/src/features/home/hooks.test.tsx
 git commit -m "feat(s-home-1): useMyTasks hook for the My-Tasks rail"
 ```
 
@@ -528,7 +528,7 @@ export function QuadrantCard({ phase, clauseLabel, rag, openTo, openLabel, child
           {children}
         </Stack>
         <Anchor component={Link} to={openTo} size="sm">
-          {openLabel} →
+          {openLabel} <span aria-hidden="true">→</span>
         </Anchor>
       </Stack>
     </Paper>
@@ -1264,7 +1264,7 @@ export function MyTasksRail() {
     <Paper withBorder radius="md" p="md">
       <Group justify="space-between" align="center" mb="sm">
         <Text fw={500}>My tasks{tasks.length ? ` (${tasks.length})` : ""}</Text>
-        <Anchor component={Link} to="/tasks" size="sm">See all my tasks →</Anchor>
+        <Anchor component={Link} to="/tasks" size="sm">See all my tasks <span aria-hidden="true">→</span></Anchor>
       </Group>
       {isLoading ? (
         <Skeleton height={16} width="70%" />
