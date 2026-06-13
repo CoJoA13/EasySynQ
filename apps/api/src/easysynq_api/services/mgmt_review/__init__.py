@@ -3,6 +3,7 @@
 ``submit_review_for_review`` freezes the minutes + submits; ``release_review`` rides the generic
 release cutover. Reads live in ``repository``; serializers in ``api/mgmt_review``."""
 
+from .actions import spawn_capa_for_output, spawn_dcr_for_output
 from .compile import compile_inputs
 from .decide import decide_mr_task
 from .repository import (
@@ -39,6 +40,8 @@ __all__ = [
     "list_reviews",
     "open_review_exists",
     "release_review",
+    "spawn_capa_for_output",
+    "spawn_dcr_for_output",
     "spawn_mr_actions",
     "submit_review_for_review",
     "update_output",
