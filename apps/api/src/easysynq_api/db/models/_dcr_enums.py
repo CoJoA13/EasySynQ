@@ -65,6 +65,7 @@ class DcrReasonClass(enum.Enum):
     error_correction = "error_correction"
     periodic_review = "periodic_review"
     customer_requirement = "customer_requirement"
+    mgmt_review = "mgmt_review"
     other = "other"
 
 

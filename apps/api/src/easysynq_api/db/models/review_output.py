@@ -55,9 +55,13 @@ class ReviewOutput(Base):
         ForeignKey("task.id", ondelete="RESTRICT", name="fk_review_output_spawned_task_id_task"),
         nullable=True,
     )
-    # spawned_capa_id / spawned_initiative_id are reserved-null operational columns — NO FK (the
-    # capa.origin_finding_id pattern; the deferred initiative family has no table yet).
-    spawned_capa_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    # spawned_capa_id is now a real FK (S-mr-3 un-reserve).
+    # spawned_initiative_id stays reserved-null — NO FK (initiative family has no table yet).
+    spawned_capa_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("capa.id", ondelete="RESTRICT", name="fk_review_output_spawned_capa_id_capa"),
+        nullable=True,
+    )
     spawned_initiative_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), nullable=True
     )
