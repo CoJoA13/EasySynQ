@@ -16,6 +16,7 @@ from easysynq_api.db.models.capa import Capa
 from easysynq_api.db.models.signature_event import SignatureEvent
 from easysynq_api.db.session import get_sessionmaker
 
+from . import s5_helpers as s5
 from .test_mgmt_review import _auth, _drive_review_to_release, _grant
 
 pytestmark = pytest.mark.integration
@@ -207,3 +208,40 @@ async def test_raise_dcr_idempotency_key_replays(
     )
     assert other.status_code == 201, other.text
     assert other.json()["id"] != first.json()["id"]
+
+
+async def test_capabilities_release_reflects_sod2(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """Codex #1: capabilities.release is false for the frozen-minutes author (SoD-2) and true for a
+    distinct document.release holder — computed at detail-read time."""
+    salt = uuid.uuid4().hex[:8]
+    submitter, approver, releaser = f"mr-sm-{salt}", f"mr-ap-{salt}", f"mr-rl-{salt}"
+    hs = _auth(token_factory, submitter)
+    hap = _auth(token_factory, approver)
+    hrl = _auth(token_factory, releaser)
+    await _grant(submitter, ("mgmtReview.create", "mgmtReview.read", "mgmtReview.record_outputs",
+                             "document.release", "document.read"))
+    await s5.grant_role(approver, "Approver")
+    await _grant(releaser, ("document.release", "document.read", "mgmtReview.read"))
+
+    r = await app_client.post(
+        "/api/v1/management-reviews", headers=hs,
+        json={"title": f"Caps review {salt}", "period_label": "2026"},
+    )
+    rid = r.json()["id"]
+    sub = await app_client.post(f"/api/v1/management-reviews/{rid}/submit-review", headers=hs)
+    assert sub.status_code == 200, sub.text
+    task_id = await s5.task_for_doc(rid)
+    dec = await app_client.post(
+        f"/api/v1/tasks/{task_id}/decision", headers=hap, json={"outcome": "approve"}
+    )
+    assert dec.status_code == 200, dec.text
+
+    as_author = (await app_client.get(f"/api/v1/management-reviews/{rid}", headers=hs)).json()
+    assert as_author["capabilities"]["release"] is False
+    as_releaser = (await app_client.get(f"/api/v1/management-reviews/{rid}", headers=hrl)).json()
+    assert as_releaser["capabilities"]["release"] is True
+
+    lst = (await app_client.get("/api/v1/management-reviews", headers=hs)).json()
+    assert all("capabilities" not in row for row in lst["data"])

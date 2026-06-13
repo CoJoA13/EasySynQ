@@ -34,14 +34,16 @@ from ..db.models.review_input import ReviewInput
 from ..db.models.review_output import ReviewOutput
 from ..db.models.workflow import Task, WorkflowInstance
 from ..db.session import get_session
-from ..domain.authz import ResourceContext
+from ..domain.authz import RequestContext, ResourceContext, authorize
 from ..problems import ProblemException
 from ..services.authz import (
     AuthzAuditSink,
     enforce,
+    gather_grants,
     get_authz_audit_sink,
     require,
 )
+from ..services.authz.repository import gather_sod_constraints, get_allow_approver_release
 from ..services.mgmt_review import (
     add_output,
     close_review,
@@ -125,9 +127,14 @@ class OutputDcrCreate(BaseModel):
 
 # --- serializers ---
 def _mgmt_review(
-    mr: ManagementReview, *, identifier: str, title: str, current_state: Any
+    mr: ManagementReview,
+    *,
+    identifier: str,
+    title: str,
+    current_state: Any,
+    capabilities: dict[str, bool] | None = None,
 ) -> dict[str, Any]:
-    return {
+    out: dict[str, Any] = {
         "id": str(mr.id),
         "identifier": identifier,
         "title": title,
@@ -141,6 +148,9 @@ def _mgmt_review(
         "closed_at": mr.closed_at.isoformat() if mr.closed_at is not None else None,
         "created_at": mr.created_at.isoformat(),
     }
+    if capabilities is not None:
+        out["capabilities"] = capabilities
+    return out
 
 
 def _review_input(ri: ReviewInput) -> dict[str, Any]:
@@ -214,6 +224,28 @@ async def _release_scope(session: AsyncSession, doc: DocumentedInformation) -> R
         lifecycle_state=doc.current_state.value,
     )
     return await enrich_release_sod_scope(session, base, doc.id, None)
+
+
+async def _mr_capabilities(
+    session: AsyncSession, caller: AppUser, doc: DocumentedInformation
+) -> dict[str, bool]:
+    """The caller's SoD-sensitive lifecycle affordance on this MR (detail-only). Only ``release``
+    needs the SoD-2 overlay (author/approver ≠ releaser over the version the cutover would promote);
+    submit/close gate on ``mgmtReview.record_outputs`` (no author≠releaser rule), so the FE keeps
+    those on ``usePermissions().can(...)``. Mirrors api/objectives.py:_objective_capabilities
+    (release branch)."""
+    now = datetime.datetime.now(datetime.UTC)
+    release_scope = await _release_scope(session, doc)
+    sod = await gather_sod_constraints(session, caller.org_id)
+    allow_approver_release = await get_allow_approver_release(session, caller.org_id)
+    rel_ctx = RequestContext(
+        now=now, actor_user_id=str(caller.id), allow_approver_release=allow_approver_release
+    )
+    rel_grants = await gather_grants(session, caller.id, caller.org_id, "document.release")
+    release_cap = authorize(
+        rel_grants, "document.release", release_scope, rel_ctx, sig_hook=True, sod=sod
+    ).allow
+    return {"release": release_cap}
 
 
 # create + release enforce IMPERATIVELY (enforce(...)) inside the handler, so they need no
@@ -319,7 +351,8 @@ async def get_review_endpoint(
     if row is None:  # pragma: no cover — the satellite exists, so the base must too
         raise ProblemException(status=404, code="not_found", title="Management Review not found")
     _mr, ident, title, state = row
-    out = _mgmt_review(mr, identifier=ident, title=title, current_state=state)
+    caps = await _mr_capabilities(session, caller, _doc)
+    out = _mgmt_review(mr, identifier=ident, title=title, current_state=state, capabilities=caps)
     out["inputs"] = [_review_input(ri) for ri in await list_inputs(session, review_id)]
     out["outputs"] = [_review_output(ro) for ro in await list_outputs(session, review_id)]
     return out
