@@ -341,7 +341,7 @@ These definitions are **authoritative** for all EasySynQ specification sections.
 | **Root-Cause Analysis (RCA)** | ISO/App | The investigation step within a CAPA identifying the underlying cause(s) of a nonconformity. |
 | **Effectiveness Evidence** | App | The record(s) proving a CAPA's actions actually resolved the cause; required to close a CAPA. |
 | **Evidence Pack** | App | A clause-mapped, scope-limited bundle of current documents, records, and findings/CAPAs generated for an audit (the output of UJ-7). |
-| **Management Review** | ISO | The periodic top-management review of QMS performance (ISO 9001 §9.3); its inputs/minutes are records managed in EasySynQ. |
+| **Management Review** | ISO | The periodic top-management review of QMS performance (ISO 9001 §9.3); an authored review is a controlled `MR` document (its minutes the released evidence — S-mr-1/R45), imported legacy minutes are records. |
 | **Retention (Rule/Period)** | ISO/App | The policy governing how long a record must be kept before disposition; enforced by EasySynQ. |
 | **Permission** | App | A fine-grained, assignable right (e.g., *approve documents*, *view records*) — the atomic unit of access control. |
 | **Role** | App | An org-defined, convenient **bundle of permissions**. Convenient, not binding — see permission philosophy. |
