@@ -3,9 +3,15 @@ import { axe } from "jest-axe";
 import { expect, it } from "vitest";
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useLocation } from "react-router-dom";
 import { renderWithProviders } from "../../test/render";
 import { server } from "../../test/msw/server";
 import { DcrsRegisterPage } from "./DcrsRegisterPage";
+
+function LocationProbe() {
+  const loc = useLocation();
+  return <div data-testid="loc">{loc.pathname + loc.search}</div>;
+}
 
 it("lists change requests and opens the drawer when an identifier is clicked", async () => {
   renderWithProviders(<DcrsRegisterPage />);
@@ -18,6 +24,23 @@ it("lists change requests and opens the drawer when an identifier is clicked", a
 it("opens the drawer on a ?dcr=<id> deep-link", async () => {
   renderWithProviders(<DcrsRegisterPage />, { route: "/dcrs?dcr=dcr00001-0001-0001-0001-000000000001" });
   expect(await screen.findByText(/Corrective action requires/)).toBeInTheDocument();
+});
+
+it("closing the deep-linked drawer clears the ?dcr param", async () => {
+  const u = userEvent.setup();
+  renderWithProviders(
+    <>
+      <DcrsRegisterPage />
+      <LocationProbe />
+    </>,
+    { route: "/dcrs?dcr=dcr00001-0001-0001-0001-000000000001" },
+  );
+  await screen.findByText(/Corrective action requires/);
+  expect(screen.getByTestId("loc")).toHaveTextContent("dcr=dcr00001");
+  // Mantine Drawer dismisses on Escape; closeDrawer clears the param with replace:true.
+  await u.keyboard("{Escape}");
+  await waitFor(() => expect(screen.queryByText(/Corrective action requires/)).toBeNull());
+  expect(screen.getByTestId("loc")).not.toHaveTextContent("dcr=");
 });
 
 it("filters by state", async () => {

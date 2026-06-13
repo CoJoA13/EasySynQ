@@ -4,6 +4,7 @@ import { useSearchParams } from "react-router-dom";
 import type { DcrChangeType, DcrReasonClass, DcrState } from "../../lib/types";
 import { DcrDrawer } from "./DcrDrawer";
 import { DcrStateBadge } from "./DcrStateBadge";
+import { CHANGE_TYPE_LABEL, REASON_LABEL } from "./labels";
 import { useDcrs } from "./hooks";
 
 const STATES: DcrState[] = [
@@ -16,18 +17,6 @@ const STATES: DcrState[] = [
   "Closed",
   "Cancelled",
   "Rejected",
-];
-const CHANGE_TYPES: DcrChangeType[] = ["REVISE", "CREATE", "RETIRE"];
-const REASON_CLASSES: DcrReasonClass[] = [
-  "regulatory",
-  "audit_finding",
-  "capa",
-  "process_improvement",
-  "error_correction",
-  "periodic_review",
-  "customer_requirement",
-  "mgmt_review",
-  "other",
 ];
 
 function formatDate(iso: string): string {
@@ -129,7 +118,9 @@ export function DcrsRegisterPage() {
           clearable
           value={changeType || null}
           onChange={(v) => setChangeType((v as DcrChangeType) ?? "")}
-          data={CHANGE_TYPES.map((s) => ({ value: s, label: s }))}
+          data={(Object.entries(CHANGE_TYPE_LABEL) as [DcrChangeType, string][]).map(
+            ([value, label]) => ({ value, label }),
+          )}
         />
         <Select
           aria-label="Reason"
@@ -137,7 +128,9 @@ export function DcrsRegisterPage() {
           clearable
           value={reason || null}
           onChange={(v) => setReason((v as DcrReasonClass) ?? "")}
-          data={REASON_CLASSES.map((s) => ({ value: s, label: s }))}
+          data={(Object.entries(REASON_LABEL) as [DcrReasonClass, string][]).map(
+            ([value, label]) => ({ value, label }),
+          )}
         />
       </Group>
 
@@ -164,9 +157,9 @@ export function DcrsRegisterPage() {
                     {d.identifier}
                   </Anchor>
                 </Table.Td>
-                <Table.Td>{d.change_type}</Table.Td>
+                <Table.Td>{CHANGE_TYPE_LABEL[d.change_type]}</Table.Td>
                 <Table.Td>{d.change_significance}</Table.Td>
-                <Table.Td>{d.reason_class}</Table.Td>
+                <Table.Td>{REASON_LABEL[d.reason_class]}</Table.Td>
                 <Table.Td>{d.target_document_id ? "Document" : "—"}</Table.Td>
                 <Table.Td>
                   <DcrStateBadge state={d.state} />

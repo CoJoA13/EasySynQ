@@ -3,32 +3,13 @@ import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { DetailDrawer } from "../../app/shell/DetailDrawer";
 import { useUserDirectory } from "../../app/shell/useUserDirectory";
-import type { DcrChangeType, DcrReasonClass, DcrSourceLinkType, DirectoryUser } from "../../lib/types";
+import type { DirectoryUser } from "../../lib/types";
 import { useDocument } from "../document/useDocument";
 import { DcrImpactTable } from "./DcrImpactTable";
 import { DcrStageTimeline } from "./DcrStageTimeline";
 import { DcrStateBadge } from "./DcrStateBadge";
+import { CHANGE_TYPE_LABEL, REASON_LABEL, SOURCE_LABEL } from "./labels";
 import { useDcr, useDcrImpact } from "./hooks";
-
-// Total over DcrChangeType (like the sibling maps below) so a new change-type breaks the build.
-const CHANGE_TYPE_LABEL: Record<DcrChangeType, string> = { REVISE: "Revise", CREATE: "Create", RETIRE: "Retire" };
-const REASON_LABEL: Record<DcrReasonClass, string> = {
-  regulatory: "Regulatory",
-  audit_finding: "Audit finding",
-  capa: "CAPA",
-  process_improvement: "Process improvement",
-  error_correction: "Error correction",
-  periodic_review: "Periodic review",
-  customer_requirement: "Customer requirement",
-  mgmt_review: "Management review",
-  other: "Other",
-};
-const SOURCE_LABEL: Record<DcrSourceLinkType, string> = {
-  capa: "CAPA",
-  finding: "Audit finding",
-  mgmt_review: "Management-review output",
-  risk: "Risk",
-};
 
 function nameOf(userId: string, directory: DirectoryUser[]): string {
   return directory.find((u) => u.id === userId)?.display_name ?? `${userId.slice(0, 8)}…`;
