@@ -8,7 +8,7 @@ import type { DcrDetail } from "../../lib/types";
 import { EditDcrModal } from "./EditDcrModal";
 import { CancelDcrModal } from "./CancelDcrModal";
 
-const DCR: DcrDetail = {
+const DCR = {
   id: "dcr00001-0001-0001-0001-000000000001",
   identifier: "DCR-2026-0001",
   target_document_id: "doc00001-0001-0001-0001-000000000001",
@@ -25,7 +25,7 @@ const DCR: DcrDetail = {
   created_by: "bbbb1111-1111-1111-1111-111111111111",
   created_at: "2026-06-10T09:00:00+00:00",
   stage_events: [],
-};
+} satisfies DcrDetail;
 
 it("edits a DCR's reason and closes on success", async () => {
   const onClose = vi.fn();
@@ -59,4 +59,20 @@ it("cancels a DCR with an optional comment", async () => {
   await userEvent.type(screen.getByLabelText("Comment (optional)"), "Withdrawn.");
   await userEvent.click(screen.getByRole("button", { name: "Cancel change request" }));
   await vi.waitFor(() => expect(onClose).toHaveBeenCalled());
+});
+
+it("surfaces a 409 dcr_not_cancellable calmly", async () => {
+  server.use(
+    http.post("/api/v1/dcrs/:id/cancel", () =>
+      HttpResponse.json(
+        { code: "dcr_not_cancellable", title: "Conflict", detail: "A DCR in Approved cannot be cancelled" },
+        { status: 409 },
+      ),
+    ),
+  );
+  const onClose = vi.fn();
+  renderWithProviders(<CancelDcrModal dcr={DCR} onClose={onClose} />);
+  await userEvent.click(screen.getByRole("button", { name: "Cancel change request" }));
+  expect(await screen.findByText("A DCR in Approved cannot be cancelled")).toBeInTheDocument();
+  expect(onClose).not.toHaveBeenCalled();
 });

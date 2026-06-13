@@ -79,8 +79,10 @@ export function EditDcrModal({ dcr, onClose }: { dcr: DcrDetail; onClose: () => 
           onChange={(e) => setEffectiveFrom(e.currentTarget.value)}
         />
         <Group justify="flex-end">
+          {/* "Discard" not "Cancel" — the DCR's own Cancel (withdraw) action is a sibling button in the
+              drawer's DcrAdvancePanel, so a "Cancel" here would read as withdrawing the change request. */}
           <Button variant="subtle" onClick={onClose}>
-            Cancel
+            Discard
           </Button>
           <Button onClick={() => void submit()} loading={m.isPending} disabled={reasonText.trim().length === 0}>
             Save
