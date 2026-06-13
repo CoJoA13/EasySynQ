@@ -5083,7 +5083,7 @@ paths:
     post:
       tags: [management-reviews]
       operationId: raiseCapaFromMrOutput
-      summary: "Spawn a CAPA from an ACTION output (one-shot latch). Gated mgmtReview.record_outputs."
+      summary: "Spawn a CAPA from an ACTION output (one-shot latch). Gated capa.create (SYSTEM)."
       parameters:
         - { name: review_id, in: path, required: true, schema: { type: string, format: uuid } }
         - { name: output_id, in: path, required: true, schema: { type: string, format: uuid } }
@@ -5117,7 +5117,7 @@ paths:
     post:
       tags: [management-reviews]
       operationId: raiseDcrFromMrOutput
-      summary: "Spawn a DCR from an ACTION output (1:N, idempotent via Idempotency-Key). Gated mgmtReview.record_outputs."
+      summary: "Spawn a DCR from an ACTION output (1:N, idempotent via Idempotency-Key). Gated changeRequest.create (target-document scope)."
       parameters:
         - { name: review_id, in: path, required: true, schema: { type: string, format: uuid } }
         - { name: output_id, in: path, required: true, schema: { type: string, format: uuid } }
