@@ -26,14 +26,20 @@ it("shows open audits + coverage, RAG red on a gap", async () => {
   // The first content assertion must wait for the query to settle (the card frame renders immediately).
   await waitFor(() => expect(within(card).getByLabelText("1 open audits")).toBeInTheDocument());
   expect(within(card).getByLabelText("18 / 20 mandatory clauses covered")).toBeInTheDocument();
+  // The next-review line rides the global next-due handler (due_soon / 2026-06-01).
+  await waitFor(() =>
+    expect(within(card).getByText("Next management review due 2026-06-01")).toBeInTheDocument(),
+  );
+  // The gap RAG (red) still wins worst-of, with due_soon (amber) folded in.
   await waitFor(() => expect(within(card).getByLabelText(/status: red/i)).toBeInTheDocument());
 });
 
-it("renders no-access when both reads are forbidden", async () => {
+it("renders no-access when all reads are forbidden", async () => {
   const forbid = () => HttpResponse.json({ code: "forbidden" }, { status: 403 });
   server.use(
     http.get("/api/v1/audits", forbid),
     http.get("/api/v1/reports/compliance-checklist", forbid),
+    http.get("/api/v1/management-reviews/next-due", forbid),
   );
   renderWithProviders(<CheckCard />);
   const card = await screen.findByRole("group", { name: /check quadrant/i });
