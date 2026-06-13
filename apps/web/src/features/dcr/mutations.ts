@@ -51,6 +51,7 @@ export function useCancelDcr(id: string) {
 }
 
 // CAPA → DCR spawn (1:N idempotent — 201 new / 200 replay both resolve to a Dcr here, NO status branching).
+// onSuccess (not onSettled like edit/cancel): a 200 replay IS a success — there is no 409 race to self-heal.
 // The modal generates a per-mount Idempotency-Key. reason_class defaults to "capa" server-side.
 export function useRaiseDcrFromCapa(capaId: string) {
   const api = useApi();

@@ -1,5 +1,5 @@
 import { http, HttpResponse } from "msw";
-import type { AckDecisionResult, AckMatrixRow, AuditList, AuditPlanList, AuditProgramList, Capa, Complaint, Dcr, DcrDetail, DcrImpactList, DcrList, DistributionPayload, DocumentVersion, DriftStatus, EffectivePolicy, Finding, FindingList, Measurement, MeasurementListResponse, MgmtReview, MgmtReviewDetail, MgmtReviewListResponse, MgmtReviewNextDue, Ncr, Objective, ObjectiveCommitment, ObjectiveListResponse, ObjectivePlan, ObjectiveScorecard, ReviewInput, ReviewOutput, SupersededCopies, WorkflowInstance } from "../../lib/types";
+import type { AckDecisionResult, AckMatrixRow, AuditList, AuditPlanList, AuditProgramList, Capa, Complaint, Dcr, DcrDetail, DcrImpactList, DcrList, DcrPatchBody, DistributionPayload, DocumentVersion, DriftStatus, EffectivePolicy, Finding, FindingList, Measurement, MeasurementListResponse, MgmtReview, MgmtReviewDetail, MgmtReviewListResponse, MgmtReviewNextDue, Ncr, Objective, ObjectiveCommitment, ObjectiveListResponse, ObjectivePlan, ObjectiveScorecard, ReviewInput, ReviewOutput, SupersededCopies, WorkflowInstance } from "../../lib/types";
 
 export const docFixture = [
   {
@@ -1354,7 +1354,7 @@ export const handlers = [
   // ---- S-dcr-ui-2a DCR write handlers (defaults; per-test overrides for 409/422) ----
   http.post("/api/v1/dcrs", () => HttpResponse.json(dcrCreatedFixture, { status: 201 })),
   http.patch("/api/v1/dcrs/:id", async ({ request }) => {
-    const body = (await request.json()) as Partial<Dcr>;
+    const body = (await request.json()) as DcrPatchBody;
     return HttpResponse.json({ ...dcrDetailFixture, ...body });
   }),
   http.post("/api/v1/dcrs/:id/cancel", () =>
