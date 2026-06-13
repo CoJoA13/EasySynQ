@@ -45,6 +45,7 @@ from ..services.authz import (
 from ..services.authz.repository import gather_sod_constraints, get_allow_approver_release
 from ..services.objectives import (
     add_objective_plan,
+    compute_scorecard,
     create_objective,
     current_effective_policy,
     get_objective,
@@ -455,21 +456,16 @@ async def scorecard_endpoint(
     caller: AppUser = Depends(_objective_read),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
-    rows = await list_objectives(session, caller.org_id, process_id=process_id)
+    band = await compute_scorecard(session, caller.org_id, process_id=process_id)
     today = _today()
     serialized = [
         _objective(qo, identifier=i, title=t, current_state=s, today=today, governing=g)
-        for qo, i, t, s, g in rows
+        for qo, i, t, s, g in band["rows"]
     ]
-    by_rag: dict[str, int] = {"green": 0, "amber": 0, "red": 0, "unmeasured": 0}
-    for o in serialized:
-        rag_val = o["rag"]
-        if isinstance(rag_val, str) and rag_val in by_rag:
-            by_rag[rag_val] += 1
     return {
-        "total": len(serialized),
-        "on_target": by_rag["green"],
-        "by_rag": by_rag,
+        "total": band["total"],
+        "on_target": band["on_target"],
+        "by_rag": band["by_rag"],
         "objectives": serialized,
     }
 

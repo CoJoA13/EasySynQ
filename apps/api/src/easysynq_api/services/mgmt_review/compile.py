@@ -42,13 +42,11 @@ from ...domain.mgmt_review.inputs import (
     summarize_process_perf,
     summarize_scorecard,
 )
-from ...domain.objectives.commitment import resolve_commitment
-from ...domain.objectives.rules import rag_status
 from ...problems import ProblemException
 from ..audits import repository as audits_repo
 from ..authz import gather_grants
 from ..capa import repository as capa_repo
-from ..objectives import list_objectives
+from ..objectives import compute_scorecard
 from ..reports import compute_checklist
 from ..vault import drift_report
 
@@ -107,35 +105,6 @@ def _source_ref(
     return ref
 
 
-async def _objectives_scorecard(session: AsyncSession, org_id: uuid.UUID) -> dict[str, Any]:
-    """Reproduce ``api/objectives.py::scorecard_endpoint`` (no service-layer scorecard fn): grade
-    each objective off its GOVERNING frozen commitment (the 5th tuple element — never the mutable
-    qo row) → tally by RAG. by_rag keys EXACTLY {green,amber,red,unmeasured}; on_target = green."""
-    rows = await list_objectives(session, org_id)
-    by_rag: dict[str, int] = {"green": 0, "amber": 0, "red": 0, "unmeasured": 0}
-    for qo, _ident, _title, _state, governing in rows:
-        commitment = resolve_commitment(
-            governing,
-            target_value=qo.target_value,
-            unit=qo.unit,
-            direction=qo.direction,
-            due_date=qo.due_date,
-            at_risk_threshold=qo.at_risk_threshold,
-            baseline_value=qo.baseline_value,
-            policy_id=qo.policy_id,
-        )
-        rag = rag_status(
-            current=qo.current_value,
-            target=commitment.target_value,
-            direction=commitment.direction,
-            at_risk_threshold=commitment.at_risk_threshold,
-        )
-        if rag in by_rag:
-            by_rag[rag] += 1
-    total = sum(by_rag.values())
-    return {"total": total, "on_target": by_rag["green"], "by_rag": by_rag}
-
-
 async def _kpi_counts(session: AsyncSession, org_id: uuid.UUID) -> tuple[int, int]:
     """(readings, objectives_measured) — org-wide KPI-measurement count + distinct measured
     objectives (there is no org-wide KPI count helper; a fresh COUNT per s4/the brief)."""
@@ -165,7 +134,7 @@ async def _build_row(
     if input_type is ReviewInputType.OBJECTIVES_STATUS:
         if not await _owner_holds(session, owner, _KEY_OBJECTIVES):
             return _source_ref(available=False, summary=None, reason=_REASON_NO_ACCESS, now=now)
-        summary = summarize_scorecard(await _objectives_scorecard(session, org_id))
+        summary = summarize_scorecard(await compute_scorecard(session, org_id))
         return _source_ref(available=True, summary=summary, reason=None, now=now)
 
     if input_type is ReviewInputType.AUDIT_RESULTS:

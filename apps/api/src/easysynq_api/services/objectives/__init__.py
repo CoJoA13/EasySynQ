@@ -1,5 +1,6 @@
 from .lifecycle import submit_objective_for_review
 from .queries import (
+    compute_scorecard,
     get_objective,
     list_measurements,
     list_objectives,
@@ -15,6 +16,7 @@ from .service import (
 
 __all__ = [
     "add_objective_plan",
+    "compute_scorecard",
     "create_objective",
     "current_effective_policy",
     "get_objective",
