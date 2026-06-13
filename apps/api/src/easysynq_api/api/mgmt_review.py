@@ -40,6 +40,7 @@ from ..services.authz import (
 )
 from ..services.mgmt_review import (
     add_output,
+    close_review,
     compile_inputs,
     create_review,
     delete_output,
@@ -304,8 +305,22 @@ async def compile_inputs_endpoint(
     return out
 
 
-# Phase 6: POST /management-reviews/{review_id}/close (mgmtReview.record_outputs) — the close gate
-# (spawned MR_ACTION tasks must be DONE) lands here. Omitted now (Phase 5 spawns the tasks first).
+@router.post("/management-reviews/{review_id}/close")
+async def close_review_endpoint(
+    review_id: uuid.UUID,
+    caller: AppUser = Depends(_mr_outputs),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """Close a released Management Review (mgmtReview.record_outputs). The close gate blocks (409
+    ``review_close_blocked``) while any ACTION output's spawned MR_ACTION task is not DONE; on pass,
+    flips ``close_state=Closed`` + stamps ``closed_at`` + emits MGMT_REVIEW_CLOSED."""
+    mr, doc = await _load_review(session, caller, review_id)
+    await close_review(session, caller, mr, doc)
+    row = await mr_repo.get_review_row(session, review_id)
+    if row is None:  # pragma: no cover — the review exists (we just loaded + mutated it)
+        raise ProblemException(status=404, code="not_found", title="Management Review not found")
+    mr2, ident, title, state = row
+    return _mgmt_review(mr2, identifier=ident, title=title, current_state=state)
 
 
 @router.post("/management-reviews/{review_id}/outputs", status_code=status.HTTP_201_CREATED)

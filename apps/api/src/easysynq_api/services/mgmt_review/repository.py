@@ -11,14 +11,21 @@ from typing import Any
 from sqlalchemy import Select, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ...db.models._mgmt_review_enums import ReviewOutputType
 from ...db.models._vault_enums import DocumentCurrentState
+from ...db.models._workflow_enums import TaskState
 from ...db.models.documented_information import DocumentedInformation
 from ...db.models.management_review import ManagementReview
 from ...db.models.review_input import ReviewInput
 from ...db.models.review_output import ReviewOutput
+from ...db.models.workflow import Task
 
 # (mr, identifier, title, current_state)
 ReviewRow = tuple[ManagementReview, str, str, DocumentCurrentState]
+
+# A close-gate row: (output_type, spawned MR_ACTION task state | None). The pure
+# domain.mgmt_review.output_blocks_close predicate is applied to each.
+ReviewCloseGateRow = tuple[ReviewOutputType, TaskState | None]
 
 # The pre-release "open" cycle: a Management Review document that has not yet reached a terminal /
 # filed state (Effective/Superseded/Obsolete). The cadence sweep skips minting a new one while any
@@ -116,3 +123,20 @@ async def open_review_exists(session: AsyncSession, org_id: uuid.UUID) -> bool:
         )
     ).first()
     return exists is not None
+
+
+async def outputs_for_close_gate(
+    session: AsyncSession, review_id: uuid.UUID
+) -> Sequence[ReviewCloseGateRow]:
+    """Every output of the review with the facts the close gate needs: its type and its spawned
+    ``MR_ACTION`` task's state (LEFT JOIN on ``spawned_task_id``; ``None`` when unlinked/unspawned).
+
+    The **OUTERJOIN is load-bearing**: an ``ACTION`` output with no spawned task must still appear
+    in the row set with ``state == None`` so ``output_blocks_close``'s fail-closed leg fires. An
+    INNER join would silently DROP unlinked actions from the blocker set — a fail-OPEN bug."""
+    rows = await session.execute(
+        select(ReviewOutput.output_type, Task.state)
+        .outerjoin(Task, Task.id == ReviewOutput.spawned_task_id)
+        .where(ReviewOutput.management_review_id == review_id)
+    )
+    return [(ot, ts) for ot, ts in rows.all()]

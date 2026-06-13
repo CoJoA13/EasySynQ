@@ -15,6 +15,7 @@ from .repository import (
 )
 from .service import (
     add_output,
+    close_review,
     create_review,
     delete_output,
     release_review,
@@ -26,6 +27,7 @@ from .spawn import spawn_mr_actions
 
 __all__ = [
     "add_output",
+    "close_review",
     "compile_inputs",
     "create_review",
     "decide_mr_task",

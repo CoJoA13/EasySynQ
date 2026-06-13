@@ -494,3 +494,112 @@ async def test_mr_action_decide_rejects_bad_outcome(
         f"/api/v1/tasks/{action_task['id']}/decision", headers=ho, json={"outcome": "approve"}
     )
     assert r.status_code == 422, r.text
+
+
+# --- Phase 6: the close gate (spawned MR_ACTION tasks must be DONE) ------------------------------
+
+
+async def test_close_blocked_while_action_open_then_closes_when_done(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """The thesis of Phase 6: a released review with an open ACTION task cannot close (409
+    ``review_close_blocked``); after the owner decides the action DONE, the close passes
+    (``close_state == "Closed"``)."""
+    salt = uuid.uuid4().hex[:8]
+    owner_subject = f"mr-cl-own-{salt}"
+    ho = _auth(token_factory, owner_subject)
+    owner_id = await _grant(owner_subject, ())  # JIT the owner; no keys needed to decide
+
+    rid = await _drive_review_to_release(
+        app_client,
+        token_factory,
+        salt,
+        action_owner_subject=owner_subject,
+        action_owner_id=owner_id,
+    )
+
+    # the submitter holds the MR keys (mgmtReview.record_outputs gates /close)
+    hs = _auth(token_factory, f"mr-sm-{salt}")
+
+    # while the spawned MR_ACTION is PENDING, the close is blocked (409, fail-closed gate)
+    blocked = await app_client.post(f"/api/v1/management-reviews/{rid}/close", headers=hs)
+    assert blocked.status_code == 409, blocked.text
+    assert blocked.json()["code"] == "review_close_blocked", blocked.text
+
+    # the owner completes the action → DONE
+    tasks = (await app_client.get("/api/v1/tasks?type=MR_ACTION", headers=ho)).json()
+    action_task = next(t for t in tasks if t["assignee_user_id"] == str(owner_id))
+    done = await app_client.post(
+        f"/api/v1/tasks/{action_task['id']}/decision", headers=ho, json={"outcome": "complete"}
+    )
+    assert done.status_code == 200, done.text
+
+    # now the close passes — close_state flips to Closed
+    closed = await app_client.post(f"/api/v1/management-reviews/{rid}/close", headers=hs)
+    assert closed.status_code == 200, closed.text
+    assert closed.json()["close_state"] == "Closed", closed.text
+    assert closed.json()["closed_at"] is not None, closed.text
+
+    # the detail read reflects the closed state
+    det = (await app_client.get(f"/api/v1/management-reviews/{rid}", headers=hs)).json()
+    assert det["close_state"] == "Closed"
+
+
+async def test_close_requires_record_outputs_key(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """The /close route is gated mgmtReview.record_outputs — a read-only caller gets 403."""
+    salt = uuid.uuid4().hex[:8]
+    owner_subject = f"mr-cl-key-{salt}"
+    owner_id = await _grant(owner_subject, ())
+    rid = await _drive_review_to_release(
+        app_client,
+        token_factory,
+        salt,
+        action_owner_subject=owner_subject,
+        action_owner_id=owner_id,
+    )
+    reader = f"mr-cl-rdr-{salt}"
+    hr = _auth(token_factory, reader)
+    await _grant(reader, ("mgmtReview.read",))
+    r = await app_client.post(f"/api/v1/management-reviews/{rid}/close", headers=hr)
+    assert r.status_code == 403, r.text
+
+
+async def test_decision_only_review_closes_immediately(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """A review whose outputs are all DECISION/IMPROVEMENT (no ACTION) has an empty close gate — it
+    closes immediately after release (nothing to track)."""
+    salt = uuid.uuid4().hex[:8]
+    submitter, approver, releaser = f"mr-d-sm-{salt}", f"mr-d-ap-{salt}", f"mr-d-rl-{salt}"
+    hs = _auth(token_factory, submitter)
+    hap = _auth(token_factory, approver)
+    hrl = _auth(token_factory, releaser)
+    await _grant(submitter, _MR_KEYS)
+    await s5.grant_role(approver, "Approver")
+    await _grant(releaser, ("document.release", "document.read", "document.read_draft"))
+
+    rid = await _create_review(app_client, hs, f"Decision-only review {salt}")
+    out = await app_client.post(
+        f"/api/v1/management-reviews/{rid}/outputs",
+        headers=hs,
+        json={"output_type": "DECISION", "description": "QMS remains suitable and effective"},
+    )
+    assert out.status_code == 201, out.text
+
+    submitted = await app_client.post(f"/api/v1/management-reviews/{rid}/submit-review", headers=hs)
+    assert submitted.status_code == 200, submitted.text
+    task_id = await s5.task_for_doc(rid)
+    dec = await app_client.post(
+        f"/api/v1/tasks/{task_id}/decision", headers=hap, json={"outcome": "approve"}
+    )
+    assert dec.status_code == 200, dec.text
+    rel = await app_client.post(f"/api/v1/management-reviews/{rid}/release", headers=hrl)
+    assert rel.status_code == 200, rel.text
+    assert rel.json()["close_state"] == "ActionsTracked"
+
+    # no ACTION outputs → the gate is empty → close passes immediately
+    closed = await app_client.post(f"/api/v1/management-reviews/{rid}/close", headers=hs)
+    assert closed.status_code == 200, closed.text
+    assert closed.json()["close_state"] == "Closed", closed.text

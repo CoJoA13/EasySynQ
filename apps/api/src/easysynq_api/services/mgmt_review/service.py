@@ -16,7 +16,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...db.models._audit_enums import ActorType, AuditObjectType, EventType
-from ...db.models._mgmt_review_enums import ReviewOutputType
+from ...db.models._mgmt_review_enums import ManagementReviewCloseState, ReviewOutputType
 from ...db.models._vault_enums import DocumentCurrentState
 from ...db.models.app_user import AppUser
 from ...db.models.audit_event import AuditEvent
@@ -26,6 +26,7 @@ from ...db.models.document_type import DocumentType
 from ...db.models.documented_information import DocumentedInformation
 from ...db.models.management_review import ManagementReview
 from ...db.models.review_output import ReviewOutput
+from ...domain.mgmt_review.close_gate import output_blocks_close
 from ...domain.mgmt_review.minutes import build_minutes
 from ...problems import ProblemException
 from ..vault import (
@@ -231,6 +232,50 @@ async def release_review(
     endpoint owns the ``document.release`` enforce + the SoD-2 scope + ``session.expire_all()`` +
     the Phase-5 ``spawn_mr_actions`` call."""
     return await release(actor, review_id, vault_sink, sig_sink)
+
+
+# --- the close gate (ActionsTracked → Closed) --------------------------------------------------
+async def close_review(
+    session: AsyncSession,
+    actor: AppUser,
+    review: ManagementReview,
+    doc: DocumentedInformation,
+) -> ManagementReview:
+    """Close a released Management Review — the honest ``_audit_close_gate`` pattern (R39 parity).
+
+    The gate is **block-until-done**: every ``ACTION`` output's spawned ``MR_ACTION`` task must be
+    ``DONE`` (an unlinked/unspawned ACTION yields ``None`` via the OUTERJOIN, so
+    ``output_blocks_close`` BLOCKS fail-closed). A review with only ``DECISION``/``IMPROVEMENT``
+    outputs (no actions) closes immediately — the gate is empty. Runs the gate BEFORE flipping
+    ``close_state``; 409 with the blocker count (no separate refusal event — parity with the audit
+    close gate's 409)."""
+    rows = await repo.outputs_for_close_gate(session, review.id)
+    blocking = sum(
+        1 for output_type, task_state in rows if output_blocks_close(output_type, task_state)
+    )
+    if blocking:
+        raise _conflict(
+            "review_close_blocked",
+            f"Cannot close: {blocking} open action(s) whose MR_ACTION task is not done",
+        )
+    review.close_state = ManagementReviewCloseState.Closed
+    review.closed_at = datetime.datetime.now(datetime.UTC)
+    session.add(
+        AuditEvent(
+            org_id=actor.org_id,
+            occurred_at=datetime.datetime.now(datetime.UTC),
+            actor_id=actor.id,
+            actor_type=ActorType.user,
+            event_type=EventType.MGMT_REVIEW_CLOSED,
+            object_type=AuditObjectType.document,
+            object_id=doc.id,
+            scope_ref=doc.identifier,
+            after={"close_state": review.close_state.value},
+        )
+    )
+    await session.commit()
+    await session.refresh(review)
+    return review
 
 
 # --- output CRUD (Draft-only) ------------------------------------------------------------------
