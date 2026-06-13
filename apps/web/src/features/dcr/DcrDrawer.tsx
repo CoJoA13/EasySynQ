@@ -3,14 +3,15 @@ import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { DetailDrawer } from "../../app/shell/DetailDrawer";
 import { useUserDirectory } from "../../app/shell/useUserDirectory";
-import type { DcrReasonClass, DcrSourceLinkType, DirectoryUser } from "../../lib/types";
+import type { DcrChangeType, DcrReasonClass, DcrSourceLinkType, DirectoryUser } from "../../lib/types";
 import { useDocument } from "../document/useDocument";
 import { DcrImpactTable } from "./DcrImpactTable";
 import { DcrStageTimeline } from "./DcrStageTimeline";
 import { DcrStateBadge } from "./DcrStateBadge";
 import { useDcr, useDcrImpact } from "./hooks";
 
-const CHANGE_TYPE_LABEL: Record<string, string> = { REVISE: "Revise", CREATE: "Create", RETIRE: "Retire" };
+// Total over DcrChangeType (like the sibling maps below) so a new change-type breaks the build.
+const CHANGE_TYPE_LABEL: Record<DcrChangeType, string> = { REVISE: "Revise", CREATE: "Create", RETIRE: "Retire" };
 const REASON_LABEL: Record<DcrReasonClass, string> = {
   regulatory: "Regulatory",
   audit_finding: "Audit finding",
@@ -126,6 +127,9 @@ export function DcrDrawer({ dcrId, onClose }: { dcrId: string | null; onClose: (
 
           {dcr.resulting_version_id ? (
             <Field label="Resulting version">
+              {/* Links to the document, not the version: there is no SPA version route and a bare
+                  version_id can't be resolved to its document_id client-side (verified). For CREATE
+                  (no target_document_id) the new doc's id isn't exposed by _dcr → show the id, no link. */}
               {dcr.target_document_id ? (
                 <Anchor component={Link} to={`/documents/${dcr.target_document_id}`}>
                   View document
