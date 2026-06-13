@@ -668,9 +668,9 @@ async def test_released_review_flips_9_3_covered(
 async def test_two_actions_same_owner_both_decidable_then_close(
     app_client: AsyncClient, token_factory: Callable[..., str]
 ) -> None:
-    """Regression (diff-critic MAJOR): a review with TWO ACTION outputs owned by the SAME user — the
-    owner must complete BOTH MR_ACTION tasks (the second decision is 200, not a 409 from the engine's
-    distinct-approver guard over a shared stage_key), then the review closes."""
+    """Regression (diff-critic MAJOR): a review with TWO ACTION outputs owned by the SAME user.
+    The owner must complete BOTH MR_ACTION tasks (the second decision is 200, not a 409 from the
+    engine's distinct-approver guard over a shared stage_key), then the review closes."""
     salt = uuid.uuid4().hex[:8]
     submitter, approver, releaser = f"mr2-sm-{salt}", f"mr2-ap-{salt}", f"mr2-rl-{salt}"
     hs = _auth(token_factory, submitter)
