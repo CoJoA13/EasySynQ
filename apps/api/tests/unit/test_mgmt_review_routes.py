@@ -52,3 +52,23 @@ def test_raise_capa_route_resolves() -> None:
     )
     assert winner is not None
     assert winner.endpoint.__name__ == "raise_output_capa_endpoint"
+
+
+def test_raise_dcr_route_resolves() -> None:
+    """POST /management-reviews/{id}/outputs/{oid}/raise-dcr resolves to the DCR spawn endpoint."""
+    from starlette.routing import Match
+
+    from easysynq_api.main import create_app
+
+    app = create_app()
+    path = "/api/v1/management-reviews/r/outputs/o/raise-dcr"
+    winner = next(
+        (
+            r
+            for r in app.router.routes
+            if r.matches({"type": "http", "path": path, "method": "POST"})[0] != Match.NONE
+        ),
+        None,
+    )
+    assert winner is not None
+    assert winner.endpoint.__name__ == "raise_output_dcr_endpoint"

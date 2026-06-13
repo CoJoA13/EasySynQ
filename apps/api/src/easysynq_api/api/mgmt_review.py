@@ -14,14 +14,17 @@ import datetime
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, Depends, Request, Response, status
+from fastapi import APIRouter, Depends, Header, Request, Response, status
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..auth.dependencies import get_current_user
 from ..db.models._capa_enums import NcSeverity
+from ..db.models._dcr_enums import DcrChangeType
 from ..db.models._mgmt_review_enums import ReviewOutputType
+from ..db.models._vault_enums import ChangeSignificance
 from ..db.models._workflow_enums import WorkflowSubjectType
 from ..db.models.app_user import AppUser
 from ..db.models.document_type import DocumentType
@@ -51,6 +54,7 @@ from ..services.mgmt_review import (
     list_reviews,
     release_review,
     spawn_capa_for_output,
+    spawn_dcr_for_output,
     spawn_mr_actions,
     submit_review_for_review,
     update_output,
@@ -67,6 +71,7 @@ from ..services.vault import (
 from ..services.vault.release_scope import enrich_release_sod_scope
 from ..services.vault.review import today_org
 from ..services.workflow import repository as wf_repo
+from .dcr import _dcr, _dcr_doc_scope
 
 router = APIRouter(prefix="/api/v1", tags=["management-reviews"])
 
@@ -108,6 +113,14 @@ class ReviewSubmitBody(BaseModel):
 
 class OutputCapaCreate(BaseModel):
     severity: NcSeverity
+
+
+class OutputDcrCreate(BaseModel):
+    change_type: DcrChangeType
+    change_significance: ChangeSignificance
+    reason_text: str = Field(min_length=1, max_length=4000)
+    target_document_id: uuid.UUID | None = None
+    proposed_effective_from: datetime.datetime | None = None
 
 
 # --- serializers ---
@@ -437,6 +450,42 @@ async def raise_output_capa_endpoint(
         session, caller, review_id=review_id, output_id=output_id, severity=body.severity
     )
     return _review_output(ro)
+
+
+@router.post("/management-reviews/{review_id}/outputs/{output_id}/raise-dcr")
+async def raise_output_dcr_endpoint(
+    review_id: uuid.UUID,
+    output_id: uuid.UUID,
+    body: OutputDcrCreate,
+    request: Request,
+    caller: AppUser = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+    authz_sink: AuthzAuditSink = Depends(get_authz_audit_sink),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+) -> JSONResponse:
+    """Spawn a DCR from an ACTION output (F3, backend-only). Gate ``changeRequest.create`` at the
+    target document's scope (a CREATE DCR has no target → SYSTEM — the ``POST /dcrs`` precedent).
+    1:N + Idempotency-Key (201 new / 200 replay). The link lives one-way on the DCR
+    (``source_link_type=mgmt_review``)."""
+    await _load_review(session, caller, review_id)  # 404 cross-org
+    scope = await _dcr_doc_scope(session, body.target_document_id)
+    await enforce(session, authz_sink, request, caller, "changeRequest.create", scope)
+    dcr, created = await spawn_dcr_for_output(
+        session,
+        caller,
+        review_id=review_id,
+        output_id=output_id,
+        change_type=body.change_type,
+        change_significance=body.change_significance,
+        reason_text=body.reason_text,
+        target_document_id=body.target_document_id,
+        proposed_effective_from=body.proposed_effective_from,
+        idempotency_key=idempotency_key,
+    )
+    return JSONResponse(
+        status_code=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+        content=_dcr(dcr),
+    )
 
 
 @router.patch("/management-reviews/{review_id}")

@@ -138,3 +138,72 @@ async def test_spawned_capa_does_not_block_close(
     closed = await app_client.post(f"/api/v1/management-reviews/{rid}/close", headers=hs)
     assert closed.status_code == 200, closed.text
     assert closed.json()["close_state"] == "Closed"
+
+
+async def test_raise_dcr_from_action_output_links_mgmt_review(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    salt = uuid.uuid4().hex[:8]
+    owner_sub = f"mr-own-{salt}"
+    owner_id = await _grant(owner_sub, ())
+    rid = await _drive_review_to_release(
+        app_client, token_factory, salt, action_owner_subject=owner_sub, action_owner_id=owner_id
+    )
+    hs = _auth(token_factory, f"mr-sm-{salt}")
+    await _grant(f"mr-sm-{salt}", ("changeRequest.create", "changeRequest.read"))
+    oid = await _action_output_id(app_client, hs, rid)
+
+    r = await app_client.post(
+        f"/api/v1/management-reviews/{rid}/outputs/{oid}/raise-dcr",
+        headers=hs,
+        json={
+            "change_type": "CREATE",
+            "change_significance": "MINOR",
+            "reason_text": "Draft a supplier-evaluation SOP per the review decision",
+        },
+    )
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["source_link_type"] == "mgmt_review"
+    assert body["source_link_id"] == oid
+    assert body["reason_class"] == "mgmt_review"
+
+
+async def test_raise_dcr_idempotency_key_replays(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    salt = uuid.uuid4().hex[:8]
+    owner_sub = f"mr-own-{salt}"
+    owner_id = await _grant(owner_sub, ())
+    rid = await _drive_review_to_release(
+        app_client, token_factory, salt, action_owner_subject=owner_sub, action_owner_id=owner_id
+    )
+    hs = _auth(token_factory, f"mr-sm-{salt}")
+    await _grant(f"mr-sm-{salt}", ("changeRequest.create", "changeRequest.read"))
+    oid = await _action_output_id(app_client, hs, rid)
+    key = uuid.uuid4().hex
+    payload = {
+        "change_type": "CREATE",
+        "change_significance": "MINOR",
+        "reason_text": "idempotent draft",
+    }
+    first = await app_client.post(
+        f"/api/v1/management-reviews/{rid}/outputs/{oid}/raise-dcr",
+        headers={**hs, "Idempotency-Key": key},
+        json=payload,
+    )
+    assert first.status_code == 201, first.text
+    replay = await app_client.post(
+        f"/api/v1/management-reviews/{rid}/outputs/{oid}/raise-dcr",
+        headers={**hs, "Idempotency-Key": key},
+        json=payload,
+    )
+    assert replay.status_code == 200, replay.text  # 200 == replay, not a new DCR
+    assert replay.json()["id"] == first.json()["id"]
+    other = await app_client.post(
+        f"/api/v1/management-reviews/{rid}/outputs/{oid}/raise-dcr",
+        headers={**hs, "Idempotency-Key": uuid.uuid4().hex},
+        json=payload,
+    )
+    assert other.status_code == 201, other.text
+    assert other.json()["id"] != first.json()["id"]
