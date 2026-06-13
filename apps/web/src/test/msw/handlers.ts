@@ -1319,7 +1319,7 @@ const dcrImpactFixture = {
   data: [
     {
       id: "imp-1",
-      dimension: "processes",
+      dimension: "affected_processes",
       auto_populated: { applicable: true, processes: ["p1", "p2"] },
       requester_annotation: "Affects the calibration process.",
       created_at: "2026-06-10T10:00:00+00:00",
@@ -1327,7 +1327,7 @@ const dcrImpactFixture = {
     },
     {
       id: "imp-2",
-      dimension: "training",
+      dimension: "training_awareness",
       auto_populated: { applicable: false },
       requester_annotation: null,
       created_at: "2026-06-10T10:00:00+00:00",
