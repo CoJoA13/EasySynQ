@@ -49,6 +49,7 @@ export function SpawnDcrModal({
   }
 
   return (
+    // `opened` is hardcoded true — the parent conditionally mounts this modal, so close = unmount + reset.
     <Modal opened onClose={onClose} title={title} size="lg">
       <Stack gap="sm">
         {error && <Alert color="red">{error}</Alert>}

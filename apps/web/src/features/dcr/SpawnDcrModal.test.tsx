@@ -1,8 +1,10 @@
+import { http, HttpResponse } from "msw";
 import { expect, it } from "vitest";
 import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useLocation } from "react-router-dom";
 import { renderWithProviders } from "../../test/render";
+import { server } from "../../test/msw/server";
 import { SpawnDcrModal } from "./SpawnDcrModal";
 import { useRaiseDcrFromCapa } from "./mutations";
 
@@ -28,4 +30,21 @@ it("spawns a CREATE DCR from a CAPA and deep-links to the new DCR", async () => 
   await userEvent.type(screen.getByLabelText(/Reason for change/), "Spawned from a CAPA.");
   await userEvent.click(screen.getByRole("button", { name: "Raise change request" }));
   expect(await screen.findByTestId("loc")).toHaveTextContent("/dcrs?dcr=dcrNEW01-0001-0001-0001-000000000099");
+});
+
+it("shows a calm error when the spawn fails and does not navigate", async () => {
+  server.use(
+    http.post("/api/v1/capas/:id/raise-dcr", () =>
+      HttpResponse.json(
+        { code: "capa_terminal", title: "Conflict", detail: "A closed CAPA cannot spawn a change request." },
+        { status: 409 },
+      ),
+    ),
+  );
+  renderWithProviders(<Host />);
+  await userEvent.click(screen.getByRole("radio", { name: "Create" }));
+  await userEvent.type(screen.getByLabelText(/Reason for change/), "x");
+  await userEvent.click(screen.getByRole("button", { name: "Raise change request" }));
+  expect(await screen.findByText("A closed CAPA cannot spawn a change request.")).toBeInTheDocument();
+  expect(screen.getByTestId("loc")).toHaveTextContent("/"); // never navigated to /dcrs
 });
