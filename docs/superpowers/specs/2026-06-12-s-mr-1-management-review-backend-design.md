@@ -145,6 +145,11 @@ The pre-release "cycle" the UI shows is **derived** (`Draft→Preparing`, `InRev
 
 ## s7 · API surface (`api/mgmt_review.py`, new router; documented in `openapi.yaml` in-PR)
 
+> ⚠ **As-built reconciliation (added in S-mr-2):** the shipped route prefix is **`/management-reviews`**,
+> not `/mgmt-reviews` as drafted in this section; and the close-gate 409 code is **`review_close_blocked`**
+> (plus **`review_not_open_to_close`**), not `mgmt_review_close_blocked` (s5 / the table below). The
+> decisions-register **R45** + `docs/15-api-design.md` are authoritative and already use the as-built names.
+
 | Method · path | Gate | Notes |
 |---|---|---|
 | `POST /mgmt-reviews` | `mgmtReview.create` | create Draft `MR`; auto-maps to 9.3 |

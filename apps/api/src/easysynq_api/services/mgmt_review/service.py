@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ...db.models._audit_enums import ActorType, AuditObjectType, EventType
 from ...db.models._mgmt_review_enums import ManagementReviewCloseState, ReviewOutputType
 from ...db.models._vault_enums import DocumentCurrentState
+from ...db.models._workflow_enums import TaskState, TaskType, WorkflowSubjectType
 from ...db.models.app_user import AppUser
 from ...db.models.audit_event import AuditEvent
 from ...db.models.clause import Clause
@@ -39,6 +40,7 @@ from ..vault import (
 )
 from ..vault.service import checkin_mgmt_review_minutes
 from ..workflow import instantiate_approval
+from ..workflow import repository as wf_repo
 from . import repository as repo
 
 logger = logging.getLogger(__name__)
@@ -164,6 +166,23 @@ def _minutes_output(ro: ReviewOutput) -> dict[str, Any]:
     }
 
 
+async def _resolve_prepare_tasks(
+    session: AsyncSession, org_id: uuid.UUID, review_id: uuid.UUID
+) -> None:
+    """Flip the cadence-minted MR_INPUT prepare-task(s) PENDING→DONE at submit (the prep is done
+    once the minutes freeze). Targets the MGMT_REVIEW container instance (NOT the DOCUMENT approval
+    instance). A manually-created MR has no container → no-op. No TaskOutcome, no signature
+    (R43)."""
+    instance = await wf_repo.find_nonterminal_instance(
+        session, org_id, WorkflowSubjectType.MGMT_REVIEW, review_id, terminal_states=()
+    )
+    if instance is None:
+        return
+    for task in await wf_repo.list_instance_tasks(session, instance.id):
+        if task.type is TaskType.MR_INPUT and task.state is TaskState.PENDING:
+            task.state = TaskState.DONE
+
+
 async def submit_review_for_review(
     session: AsyncSession,
     vault_sink: VaultAuditSink,
@@ -217,6 +236,7 @@ async def submit_review_for_review(
     result = await submit_review(session, actor, doc)
     await instantiate_approval(session, result.doc, actor)
     audit_transition(session, vault_sink, result, actor)
+    await _resolve_prepare_tasks(session, actor.org_id, mr.id)
     await session.commit()
     return result.doc
 

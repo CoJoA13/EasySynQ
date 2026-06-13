@@ -18,6 +18,8 @@ from ...db.models.documented_information import DocumentedInformation
 from ...db.models.kpi_measurement import KpiMeasurement
 from ...db.models.objective_plan import ObjectivePlan
 from ...db.models.quality_objective import QualityObjective
+from ...domain.objectives.commitment import resolve_commitment
+from ...domain.objectives.rules import rag_status
 
 # (qo, identifier, title, current_state, governing_commitment | None)
 ObjectiveRow = tuple[QualityObjective, str, str, DocumentCurrentState, Any]
@@ -80,3 +82,40 @@ async def list_measurements(session: AsyncSession, objective_id: uuid.UUID) -> l
             )
         ).scalars()
     )
+
+
+async def compute_scorecard(
+    session: AsyncSession, org_id: uuid.UUID, *, process_id: uuid.UUID | None = None
+) -> dict[str, Any]:
+    """Grade every objective off its GOVERNING frozen commitment (resolve_commitment) → tally by
+    RAG. Returns {total, on_target, by_rag:{green,amber,red,unmeasured}, rows:[ObjectiveRow]}.
+
+    AUTHZ-AGNOSTIC: the caller MUST gate the read (the endpoint via require('objective.read'); the
+    MR compiler via _owner_holds). This fn performs NO authz — keep require/enforce/gather_grants
+    out of it (the S-mr-2 #1 risk)."""
+    rows = await list_objectives(session, org_id, process_id=process_id)
+    by_rag: dict[str, int] = {"green": 0, "amber": 0, "red": 0, "unmeasured": 0}
+    for qo, _ident, _title, _state, governing in rows:
+        commitment = resolve_commitment(
+            governing,
+            target_value=qo.target_value,
+            unit=qo.unit,
+            direction=qo.direction,
+            due_date=qo.due_date,
+            at_risk_threshold=qo.at_risk_threshold,
+            baseline_value=qo.baseline_value,
+            policy_id=qo.policy_id,
+        )
+        rag = rag_status(
+            current=qo.current_value,
+            target=commitment.target_value,
+            direction=commitment.direction,
+            at_risk_threshold=commitment.at_risk_threshold,
+        )
+        by_rag[rag] += 1  # rag is always one of the 4 keys (rules.py); KeyError loudly if it drifts
+    return {
+        "total": sum(by_rag.values()),
+        "on_target": by_rag["green"],
+        "by_rag": by_rag,
+        "rows": rows,
+    }

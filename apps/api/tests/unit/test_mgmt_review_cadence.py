@@ -10,7 +10,21 @@ from __future__ import annotations
 
 import datetime
 
-from easysynq_api.services.mgmt_review.cadence import next_mr_due
+from easysynq_api.services.mgmt_review.cadence import (
+    MR_REVIEW_LEAD_DAYS,
+    mr_review_state,
+    next_mr_due,
+)
+
+
+def test_mr_review_state_buckets() -> None:
+    due = datetime.date(2026, 9, 1)
+    assert mr_review_state(None, datetime.date(2026, 6, 1)) is None  # not scheduled
+    assert mr_review_state(due, datetime.date(2026, 9, 1)) == "overdue"  # today == due
+    assert mr_review_state(due, datetime.date(2026, 9, 2)) == "overdue"  # past due
+    lead = due - datetime.timedelta(days=MR_REVIEW_LEAD_DAYS)
+    assert mr_review_state(due, lead) == "due_soon"  # exactly on the lead boundary
+    assert mr_review_state(due, lead - datetime.timedelta(days=1)) == "current"  # before the lead
 
 
 def test_next_mr_due_adds_cadence_to_last_effective() -> None:

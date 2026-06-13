@@ -14,7 +14,15 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
 
+from easysynq_api.db.models._workflow_enums import (
+    TaskState,
+    TaskType,
+    WorkflowSubjectType,
+)
 from easysynq_api.db.models.document_version import DocumentVersion
+from easysynq_api.db.models.documented_information import DocumentedInformation
+from easysynq_api.db.models.management_review import ManagementReview
+from easysynq_api.db.models.workflow import Task, WorkflowInstance
 from easysynq_api.db.session import get_sessionmaker
 
 from . import s5_helpers as s5
@@ -90,6 +98,27 @@ async def test_create_list_detail_management_review(
     assert det["close_state"] is None
     assert det["inputs"] == []
     assert det["outputs"] == []
+
+
+async def test_next_due_endpoint_shape(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    subject = f"mr-nd-{uuid.uuid4()}"
+    h = _auth(token_factory, subject)
+    await _grant(subject, _MR_KEYS)
+    r = await app_client.get("/api/v1/management-reviews/next-due", headers=h)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert set(body) == {
+        "cadence_months",
+        "last_review_effective_from",
+        "next_review_due",
+        "review_state",
+        "owner_configured",
+    }
+    assert isinstance(body["cadence_months"], int)
+    assert isinstance(body["owner_configured"], bool)
+    assert body["review_state"] in (None, "current", "due_soon", "overdue")
 
 
 async def test_create_requires_mgmt_review_create(
@@ -796,3 +825,60 @@ async def test_two_actions_same_owner_both_decidable_then_close(
     closed = await app_client.post(f"/api/v1/management-reviews/{rid}/close", headers=hs)
     assert closed.status_code == 200, closed.text
     assert closed.json()["close_state"] == "Closed"
+
+
+async def test_submit_resolves_pending_mr_input_task(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """A cadence-minted MR carries a PENDING MR_INPUT prepare-task. Submitting the review flips it
+    to DONE in the submit txn (so it stops lingering in My-Tasks)."""
+    from .test_mgmt_review_cadence import _open_mr_doc_count, _run_sweep, _set_owner
+
+    owner_subject = f"mr-air-{uuid.uuid4()}"
+    owner_id = await _grant(owner_subject, _MR_KEYS)  # the owner needs the submit keys here
+    org_id = await _set_owner(owner_id)
+    if await _open_mr_doc_count(org_id) > 0:
+        pytest.skip("an MR is already open in the shared DB — covered elsewhere")
+
+    summary = await _run_sweep()
+    assert summary["mgmt_reviews_opened"] == 1, summary
+
+    h = _auth(token_factory, owner_subject)
+    async with get_sessionmaker()() as s:
+        mr_doc = (
+            await s.execute(
+                select(DocumentedInformation)
+                .join(ManagementReview, ManagementReview.id == DocumentedInformation.id)
+                .where(ManagementReview.org_id == org_id)
+                .order_by(DocumentedInformation.created_at.desc())
+                .limit(1)
+            )
+        ).scalar_one()
+        rid = str(mr_doc.id)
+        instance = (
+            await s.execute(
+                select(WorkflowInstance).where(
+                    WorkflowInstance.subject_type == WorkflowSubjectType.MGMT_REVIEW,
+                    WorkflowInstance.subject_id == mr_doc.id,
+                )
+            )
+        ).scalar_one()
+        pre = (await s.execute(select(Task).where(Task.instance_id == instance.id))).scalars().all()
+        assert all(t.state is TaskState.PENDING for t in pre if t.type is TaskType.MR_INPUT)
+
+    r = await app_client.post(f"/api/v1/management-reviews/{rid}/submit-review", headers=h)
+    assert r.status_code == 200, r.text
+
+    async with get_sessionmaker()() as s:
+        post = (
+            (
+                await s.execute(
+                    select(Task).where(
+                        Task.instance_id == instance.id, Task.type == TaskType.MR_INPUT
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert post and all(t.state is TaskState.DONE for t in post)

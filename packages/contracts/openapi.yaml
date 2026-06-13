@@ -4940,6 +4940,19 @@ paths:
                     items: { $ref: "#/components/schemas/ManagementReview" }
         "403": { $ref: "#/components/responses/ProblemResponse" }
 
+  /management-reviews/next-due:
+    get:
+      tags: [management-reviews]
+      operationId: getManagementReviewNextDue
+      summary: "The next Management Review cadence status (clause 9.3) — cadence, anchor, next-due date, derived currency. Gated mgmtReview.read. Declared BEFORE /management-reviews/{review_id} (S-pack-2)."
+      responses:
+        "200":
+          description: "The cadence status for the Home next-review widget."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ManagementReviewNextDue" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+
   # NOTE: every literal/sub-path below is declared BEFORE /management-reviews/{review_id} so the
   # literals are not shadowed by the {review_id} str path-convertor (the S-pack-2 lesson; mirrors
   # the objectives block's scorecard/policy ordering).
@@ -7922,6 +7935,21 @@ components:
             outputs:
               type: array
               items: { $ref: "#/components/schemas/ReviewOutput" }
+
+    ManagementReviewNextDue:
+      type: object
+      additionalProperties: false
+      required: [cadence_months, last_review_effective_from, next_review_due, review_state, owner_configured]
+      description: >-
+        The Management Review cadence status (S-mr-2). Gated mgmtReview.read.
+      properties:
+        cadence_months: { type: integer }
+        last_review_effective_from: { type: [string, "null"], format: date }
+        next_review_due: { type: [string, "null"], format: date }
+        review_state:
+          type: [string, "null"]
+          enum: [current, due_soon, overdue, null]
+        owner_configured: { type: boolean }
 
     ManagementReviewCreate:
       type: object

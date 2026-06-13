@@ -18,12 +18,16 @@ export function useTasks(filters: { state?: TaskState; type?: string } = {}) {
   });
 }
 
-export function useTask(taskId: string | null) {
+// `opts.retry` lets a best-effort caller (e.g. the MR outputs section reading a spawned action task
+// it may not own) opt out of retries — a 404 is the EXPECTED outcome there, not a transient.
+// ⚠ Spread `retry` CONDITIONALLY: a bare `retry: undefined` clobbers the QueryClient default (S-web-8).
+export function useTask(taskId: string | null, opts?: { retry?: boolean }) {
   const api = useApi();
   return useQuery({
     queryKey: ["task", taskId],
     queryFn: () => api.get<Task>(`/api/v1/tasks/${taskId}`),
     enabled: taskId !== null,
+    ...(opts?.retry !== undefined ? { retry: opts.retry } : {}),
   });
 }
 

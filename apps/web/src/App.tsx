@@ -30,6 +30,8 @@ import { DriftStatusPage } from "./features/drift/DriftStatusPage";
 import { SupersededCopiesPage } from "./features/drift/SupersededCopiesPage";
 import { ObjectivesRegisterPage } from "./features/objectives/ObjectivesRegisterPage";
 import { ObjectiveDetailPage } from "./features/objectives/ObjectiveDetailPage";
+import { ManagementReviewsRegisterPage } from "./features/management-review/ManagementReviewsRegisterPage";
+import { ManagementReviewDetailPage } from "./features/management-review/ManagementReviewDetailPage";
 import { apiGet } from "./lib/api";
 import { useAuth } from "./lib/auth";
 
@@ -141,6 +143,8 @@ export function App() {
         </Route>
         <Route path="objectives" element={<ObjectivesRegisterPage />} />
         <Route path="objectives/:id" element={<ObjectiveDetailPage />} />
+        <Route path="management-reviews" element={<ManagementReviewsRegisterPage />} />
+        <Route path="management-reviews/:id" element={<ManagementReviewDetailPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

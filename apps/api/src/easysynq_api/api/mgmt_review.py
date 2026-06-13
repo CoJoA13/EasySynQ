@@ -55,6 +55,7 @@ from ..services.mgmt_review import (
     update_review_meta,
 )
 from ..services.mgmt_review import repository as mr_repo
+from ..services.mgmt_review.cadence import mr_review_state, read_cadence
 from ..services.vault import (
     SignatureEventSink,
     VaultAuditSink,
@@ -62,6 +63,7 @@ from ..services.vault import (
     get_vault_signature_sink,
 )
 from ..services.vault.release_scope import enrich_release_sod_scope
+from ..services.vault.review import today_org
 from ..services.workflow import repository as wf_repo
 
 router = APIRouter(prefix="/api/v1", tags=["management-reviews"])
@@ -256,6 +258,33 @@ async def list_reviews_endpoint(
     rows = await list_reviews(session, caller.org_id)
     return {
         "data": [_mgmt_review(mr, identifier=i, title=t, current_state=s) for mr, i, t, s in rows]
+    }
+
+
+@router.get("/management-reviews/next-due")
+async def next_due_endpoint(
+    caller: AppUser = Depends(_mr_read),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    # The cadence read backing the Home "next review in N days" widget. mgmtReview.read-gated.
+    # Declared BEFORE /{review_id} so the literal isn't shadowed by the str-convertor (S-pack-2).
+    cad = await read_cadence(session, caller.org_id)
+    if cad is None:  # pragma: no cover — system_config is seeded at setup; never 500 a dashboard
+        return {
+            "cadence_months": 12,
+            "last_review_effective_from": None,
+            "next_review_due": None,
+            "review_state": None,
+            "owner_configured": False,
+        }
+    return {
+        "cadence_months": cad.cadence_months,
+        "last_review_effective_from": (
+            cad.last_review_effective_from.isoformat() if cad.last_review_effective_from else None
+        ),
+        "next_review_due": cad.next_review_due.isoformat() if cad.next_review_due else None,
+        "review_state": mr_review_state(cad.next_review_due, today_org()),
+        "owner_configured": cad.owner_user_id is not None,
     }
 
 

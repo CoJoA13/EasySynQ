@@ -25,6 +25,7 @@ A sweep MINTS + AUDITS but never ESCALATES (``decide()`` accepts only PENDING) �
 
 from __future__ import annotations
 
+import dataclasses
 import datetime
 import logging
 import uuid
@@ -69,6 +70,48 @@ def next_mr_due(
     if last_effective_from_date is None:
         return None
     return add_months(last_effective_from_date, cadence_months)
+
+
+MR_REVIEW_LEAD_DAYS = 30  # the MR-specific due_soon window; org-config is a v1.x deferral.
+# NOT review.REVIEW_LEAD_DAYS — an annual cadence is independently tuned.
+
+
+@dataclasses.dataclass(frozen=True)
+class CadenceStatus:
+    cadence_months: int
+    owner_user_id: uuid.UUID | None
+    last_review_effective_from: datetime.date | None
+    next_review_due: datetime.date | None
+
+
+async def read_cadence(session: AsyncSession, org_id: uuid.UUID) -> CadenceStatus | None:
+    """The one cadence rule shared by the daily sweep AND the GET /management-reviews/next-due read
+    (so the widget and the sweep can't desync). None when no system_config row exists for the org
+    (seeded at setup → unreachable operationally; the caller degrades, never 500s)."""
+    config = (
+        await session.execute(select(SystemConfig).where(SystemConfig.org_id == org_id))
+    ).scalar_one_or_none()
+    if config is None:
+        return None
+    anchor = await _last_released_effective_from(session, org_id)
+    return CadenceStatus(
+        cadence_months=config.mgmt_review_cadence_months,
+        owner_user_id=config.mgmt_review_owner_user_id,
+        last_review_effective_from=anchor,
+        next_review_due=next_mr_due(anchor, config.mgmt_review_cadence_months),
+    )
+
+
+def mr_review_state(next_due: datetime.date | None, today: datetime.date) -> str | None:
+    """current | due_soon | overdue (None = not scheduled). Mirrors vault.review.review_state with
+    an MR-specific lead window (MR_REVIEW_LEAD_DAYS)."""
+    if next_due is None:
+        return None
+    if today >= next_due:
+        return "overdue"
+    if today >= next_due - datetime.timedelta(days=MR_REVIEW_LEAD_DAYS):
+        return "due_soon"
+    return "current"
 
 
 async def _resolve_org_id(session: AsyncSession) -> uuid.UUID | None:
@@ -132,14 +175,12 @@ async def sweep_mgmt_reviews(session: AsyncSession) -> dict[str, int]:
             logger.error("mgmt_review_sweep: no organization row — cannot sweep")
             return {**_ZERO_SUMMARY, "skipped_lock_held": 0}
 
-        config = (
-            await session.execute(select(SystemConfig).where(SystemConfig.org_id == org_id))
-        ).scalar_one_or_none()
-        if config is None:  # pragma: no cover — system_config is seeded at setup
+        cad = await read_cadence(session, org_id)
+        if cad is None:  # pragma: no cover — system_config is seeded at setup
             logger.error("mgmt_review_sweep: no system_config row — cannot sweep")
             return {**_ZERO_SUMMARY, "skipped_lock_held": 0}
 
-        owner_id = config.mgmt_review_owner_user_id
+        owner_id = cad.owner_user_id
         if owner_id is None:
             # The honest degrade: you cannot create an ownerless document. Logged, not a daily 500.
             logger.info(
@@ -167,8 +208,7 @@ async def sweep_mgmt_reviews(session: AsyncSession) -> dict[str, int]:
             logger.info("mgmt_review_sweep: a Management Review is already open — skipping")
             return {**_ZERO_SUMMARY, "skipped_open": 1}
 
-        anchor = await _last_released_effective_from(session, org_id)
-        due = next_mr_due(anchor, config.mgmt_review_cadence_months)
+        due = cad.next_review_due
         # No prior released MR (anchor None → due None) → mint the first one NOW. Else mint iff the
         # cadence horizon has arrived (<= today, org-tz; a small lead window is optional — v1 keeps
         # it simple).

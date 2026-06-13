@@ -10,8 +10,8 @@ The input row shapes are pinned to the LIVE service signatures (verified against
 - ``summarize_audits`` — ``list_audits`` 4-tuples ``(Audit, identifier, title, created_at)``.
 - ``summarize_capas_ncrs`` — ``list_capas`` 4-tuples, ``list_ncrs`` BARE ``Ncr`` rows, and
   ``list_complaints`` 2-tuples ``(Complaint, identifier)``.
-- ``summarize_scorecard`` — the inline scorecard dict ``compile.py`` builds from
-  ``list_objectives`` + the ``resolve_commitment``/``rag_status`` RAG loop.
+- ``summarize_scorecard`` — the scorecard dict from
+  ``services/objectives/queries.py::compute_scorecard`` (the shared RAG-tally seam, S-mr-2).
 - ``summarize_process_perf`` — ``compute_checklist`` + ``drift_status`` (no org_id) outputs.
 """
 
@@ -22,9 +22,10 @@ from typing import Any
 
 
 def summarize_scorecard(scorecard: dict[str, Any]) -> dict[str, Any]:
-    """Project the objectives scorecard dict (the ``api/objectives.py`` shape ``compile.py``
-    reproduces) → ``{total, on_target, by_rag}``. The ``by_rag`` keys are EXACTLY
-    ``{green, amber, red, unmeasured}``; ``on_target`` is the green count."""
+    """Project the objectives scorecard dict (from the shared
+    ``services/objectives/queries.py::compute_scorecard``) → ``{total, on_target, by_rag}``. The
+    ``by_rag`` keys are EXACTLY ``{green, amber, red, unmeasured}``; ``on_target`` is the green
+    count."""
     by_rag = scorecard.get("by_rag", {})
     return {
         "total": int(scorecard.get("total", 0)),
