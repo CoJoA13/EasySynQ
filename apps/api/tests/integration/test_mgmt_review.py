@@ -603,3 +603,24 @@ async def test_decision_only_review_closes_immediately(
     closed = await app_client.post(f"/api/v1/management-reviews/{rid}/close", headers=hs)
     assert closed.status_code == 200, closed.text
     assert closed.json()["close_state"] == "Closed", closed.text
+
+
+async def test_close_blocked_on_never_released_draft(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """A never-released Draft review (``close_state is None``) cannot be closed — the precondition
+    guard 409s ``review_not_open_to_close`` BEFORE the (empty) close gate would otherwise flip a
+    still-Draft review to Closed (an incoherent terminal state). ``close_state`` stays null."""
+    subject = f"mr-clstate-{uuid.uuid4()}"
+    h = _auth(token_factory, subject)
+    await _grant(subject, _MR_KEYS)  # mgmtReview.record_outputs → the /close route is reachable
+    rid = await _create_review(app_client, h, "Never-released review")
+
+    r = await app_client.post(f"/api/v1/management-reviews/{rid}/close", headers=h)
+    assert r.status_code == 409, r.text
+    assert r.json()["code"] == "review_not_open_to_close", r.text
+
+    # the review is untouched: still Draft, close_state still null (no flip, no closed_at)
+    det = (await app_client.get(f"/api/v1/management-reviews/{rid}", headers=h)).json()
+    assert det["current_state"] == "Draft"
+    assert det["close_state"] is None

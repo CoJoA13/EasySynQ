@@ -248,7 +248,20 @@ async def close_review(
     ``output_blocks_close`` BLOCKS fail-closed). A review with only ``DECISION``/``IMPROVEMENT``
     outputs (no actions) closes immediately — the gate is empty. Runs the gate BEFORE flipping
     ``close_state``; 409 with the blocker count (no separate refusal event — parity with the audit
-    close gate's 409)."""
+    close gate's 409).
+
+    Precondition (the ``advance_audit`` ``transition_allowed`` parity): a review may only be closed
+    while its actions are being tracked — i.e. ``close_state is ActionsTracked``, which release's
+    ``spawn_mr_actions`` sets unconditionally for EVERY released review (even a DECISION-only one).
+    This both blocks closing a never-released review (``close_state is None`` → still Draft, never
+    reached Effective — an incoherent terminal state) AND makes re-closing an already-``Closed``
+    review a clean 409 (idempotent-safe: no re-stamp of ``closed_at``, no duplicate audit row)."""
+    if review.close_state is not ManagementReviewCloseState.ActionsTracked:
+        raise _conflict(
+            "review_not_open_to_close",
+            "A Management Review can only be closed while its actions are being tracked "
+            "(it must be released, and not already closed).",
+        )
     rows = await repo.outputs_for_close_gate(session, review.id)
     blocking = sum(
         1 for output_type, task_state in rows if output_blocks_close(output_type, task_state)
