@@ -477,10 +477,15 @@ async def release_review_endpoint(
     pair = await get_review_doc(session, review_id)
     outputs = await list_outputs(session, review_id)
     actor = await session.get(AppUser, caller_id)
-    if pair is not None and actor is not None:
-        mr_after, doc_after = pair
-        await spawn_mr_actions(session, actor, doc_after, mr_after, outputs)
-        await session.commit()
+    if pair is None or actor is None:  # pragma: no cover — just-released doc + just-authed caller
+        raise ProblemException(
+            status=500,
+            code="internal_error",
+            title="Management review not found after release",
+        )
+    mr_after, doc_after = pair
+    await spawn_mr_actions(session, actor, doc_after, mr_after, outputs)
+    await session.commit()
     row = await mr_repo.get_review_row(session, review_id)
     if row is None:  # pragma: no cover — the doc was just released, it cannot be absent
         raise ProblemException(status=404, code="not_found", title="Management Review not found")

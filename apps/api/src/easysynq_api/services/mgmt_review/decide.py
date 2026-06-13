@@ -46,7 +46,6 @@ async def decide_mr_task(
     instance = await wf_repo.lock_instance_for_update(session, task.instance_id)
     if instance is None or instance.org_id != actor.org_id:
         raise ProblemException(status=404, code="not_found", title="Task not found")
-    # pragma: no cover — dispatch-gated to MGMT_REVIEW
     if instance.subject_type is not WorkflowSubjectType.MGMT_REVIEW:  # pragma: no cover
         raise ProblemException(status=404, code="not_found", title="Task not found")
     pool = [str(u) for u in (task.candidate_pool or [])]
