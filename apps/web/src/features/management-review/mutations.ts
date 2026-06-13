@@ -5,6 +5,7 @@ import type {
   MgmtReviewCreateBody,
   MgmtReviewDetail,
   MgmtReviewMetaBody,
+  NcSeverity,
   ReviewOutput,
   ReviewOutputCreateBody,
   ReviewOutputUpdateBody,
@@ -119,5 +120,23 @@ export function useCloseReview() {
     mutationFn: (id: string) =>
       api.send<MgmtReview>("POST", `/api/v1/management-reviews/${id}/close`, {}),
     onSuccess: (_d, id) => invalidate(id),
+  });
+}
+
+export function useRaiseMrCapa() {
+  const api = useApi();
+  const invalidate = useInvalidateReview();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, oid, severity }: { id: string; oid: string; severity: NcSeverity }) =>
+      api.send<ReviewOutput>(
+        "POST",
+        `/api/v1/management-reviews/${id}/outputs/${oid}/raise-capa`,
+        { severity },
+      ),
+    onSuccess: (_d, { id }) => {
+      invalidate(id);
+      void qc.invalidateQueries({ queryKey: ["capas"] });
+    },
   });
 }

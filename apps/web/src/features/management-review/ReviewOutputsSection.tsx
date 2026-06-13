@@ -1,5 +1,6 @@
-import { Badge, Button, Card, Group, Stack, Text, Title } from "@mantine/core";
+import { Anchor, Badge, Button, Card, Group, Stack, Text, Title } from "@mantine/core";
 import { useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
 import { useUserDirectory } from "../../app/shell/useUserDirectory";
 import { usePermissions } from "../../app/shell/usePermissions";
 import { useTask } from "../review/hooks";
@@ -8,6 +9,7 @@ import type { ReviewOutput } from "../../lib/types";
 import { OUTPUT_LABEL } from "./labels";
 import { useDeleteOutput } from "./mutations";
 import { AddOutputModal } from "./AddOutputModal";
+import { RaiseMrCapaModal } from "./RaiseMrCapaModal";
 
 function ActionRow({ output, nameOf }: { output: ReviewOutput; nameOf: (id: string | null) => string }) {
   // best-effort: the spawned task 404s unless the caller is the action owner → the badge simply
@@ -26,17 +28,20 @@ function ActionRow({ output, nameOf }: { output: ReviewOutput; nameOf: (id: stri
   );
 }
 
-export function ReviewOutputsSection({ reviewId, outputs, editable }: {
-  reviewId: string; outputs: ReviewOutput[]; editable: boolean;
+export function ReviewOutputsSection({ reviewId, outputs, editable, tracking = false }: {
+  reviewId: string; outputs: ReviewOutput[]; editable: boolean; tracking?: boolean;
 }) {
   const { can } = usePermissions();
   const { data: directory } = useUserDirectory();
+  const navigate = useNavigate();
   const del = useDeleteOutput();
   const [addOpen, setAddOpen] = useState(false);
+  const [raiseFor, setRaiseFor] = useState<string | null>(null);
   const nameOf = (id: string | null) =>
     id ? (directory?.find((u) => u.id === id)?.display_name ?? "a user") : "—";
   const byType = (t: ReviewOutput["output_type"]) => outputs.filter((o) => o.output_type === t);
   const canEdit = editable && can("mgmtReview.record_outputs");
+  const canRaiseCapa = tracking && can("capa.create");
 
   return (
     <Stack gap="sm">
@@ -58,10 +63,26 @@ export function ReviewOutputsSection({ reviewId, outputs, editable }: {
                 <Group key={o.id} justify="space-between" wrap="nowrap">
                   {t === "ACTION" ? <ActionRow output={o} nameOf={nameOf} />
                     : <Text size="sm">{o.description}</Text>}
-                  {canEdit && (
-                    <Button size="compact-xs" variant="subtle" color="red"
-                      onClick={() => void del.mutateAsync({ id: reviewId, oid: o.id })}>Remove</Button>
-                  )}
+                  <Group gap="xs" wrap="nowrap">
+                    {/* View link shows whenever a CAPA was spawned (even on a Closed review — the
+                        CAPA is still viewable); only Raise is gated on the tracking window via
+                        canRaiseCapa (= tracking && capa.create). */}
+                    {t === "ACTION" && (
+                      o.spawned_capa_id ? (
+                        <Anchor component={Link} size="xs" to={`/capa?capa=${o.spawned_capa_id}`}>
+                          View CAPA →
+                        </Anchor>
+                      ) : canRaiseCapa ? (
+                        <Button size="compact-xs" variant="light" onClick={() => setRaiseFor(o.id)}>
+                          Raise CAPA
+                        </Button>
+                      ) : null
+                    )}
+                    {canEdit && (
+                      <Button size="compact-xs" variant="subtle" color="red"
+                        onClick={() => void del.mutateAsync({ id: reviewId, oid: o.id })}>Remove</Button>
+                    )}
+                  </Group>
                 </Group>
               ))}
             </Stack>
@@ -70,6 +91,15 @@ export function ReviewOutputsSection({ reviewId, outputs, editable }: {
       })}
       {outputs.length === 0 && <Text size="sm" c="dimmed">No outputs recorded yet.</Text>}
       {addOpen && <AddOutputModal opened reviewId={reviewId} onClose={() => setAddOpen(false)} />}
+      {raiseFor && (
+        <RaiseMrCapaModal
+          opened
+          reviewId={reviewId}
+          outputId={raiseFor}
+          onClose={() => setRaiseFor(null)}
+          onCreated={(capaId) => navigate(`/capa?capa=${capaId}`)}
+        />
+      )}
     </Stack>
   );
 }

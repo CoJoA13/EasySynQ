@@ -1199,14 +1199,15 @@ const mgmtReviewDetailFixture = {
     {
       id: "ro-1", management_review_id: "mr-0001-0001-0001-000000000001",
       output_type: "DECISION", description: "Approve the objectives for 2026",
-      owner_user_id: null, due_date: null, spawned_task_id: null,
+      owner_user_id: null, due_date: null, spawned_task_id: null, spawned_capa_id: null,
     },
     {
       id: "ro-2", management_review_id: "mr-0001-0001-0001-000000000001",
       output_type: "ACTION", description: "Refresh the supplier evaluation register",
-      owner_user_id: "user-mara", due_date: "2026-09-01", spawned_task_id: null,
+      owner_user_id: "user-mara", due_date: "2026-09-01", spawned_task_id: null, spawned_capa_id: null,
     },
   ] satisfies ReviewOutput[],
+  capabilities: { release: true },
 } satisfies MgmtReviewDetail;
 
 const mgmtReviewApprovalFixture = null; // pre-submit; per-test override injects an instance
@@ -1290,6 +1291,11 @@ export const handlers = [
   http.post("/api/v1/management-reviews/:id/outputs", () => HttpResponse.json(mgmtReviewDetailFixture.outputs[1], { status: 201 })),
   http.patch("/api/v1/management-reviews/:id/outputs/:oid", () => HttpResponse.json(mgmtReviewDetailFixture.outputs[1])),
   http.delete("/api/v1/management-reviews/:id/outputs/:oid", () => new HttpResponse(null, { status: 204 })),
+  http.post("/api/v1/management-reviews/:id/outputs/:oid/raise-capa", () =>
+    HttpResponse.json(
+      { ...mgmtReviewDetailFixture.outputs[1], spawned_capa_id: "capa-spawned-0001" },
+      { status: 201 },
+    )),
   http.patch("/api/v1/management-reviews/:id", () => HttpResponse.json(mgmtReviewDetailFixture)),
   http.post("/api/v1/management-reviews/:id/submit-review", () =>
     HttpResponse.json({ ...mgmtReviewListFixture.data[0], current_state: "InReview" })),

@@ -14,13 +14,17 @@ import datetime
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, Depends, Request, Response, status
+from fastapi import APIRouter, Depends, Header, Request, Response, status
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..auth.dependencies import get_current_user
+from ..db.models._capa_enums import NcSeverity
+from ..db.models._dcr_enums import DcrChangeType
 from ..db.models._mgmt_review_enums import ReviewOutputType
+from ..db.models._vault_enums import ChangeSignificance
 from ..db.models._workflow_enums import WorkflowSubjectType
 from ..db.models.app_user import AppUser
 from ..db.models.document_type import DocumentType
@@ -30,14 +34,16 @@ from ..db.models.review_input import ReviewInput
 from ..db.models.review_output import ReviewOutput
 from ..db.models.workflow import Task, WorkflowInstance
 from ..db.session import get_session
-from ..domain.authz import ResourceContext
+from ..domain.authz import RequestContext, ResourceContext, authorize
 from ..problems import ProblemException
 from ..services.authz import (
     AuthzAuditSink,
     enforce,
+    gather_grants,
     get_authz_audit_sink,
     require,
 )
+from ..services.authz.repository import gather_sod_constraints, get_allow_approver_release
 from ..services.mgmt_review import (
     add_output,
     close_review,
@@ -49,6 +55,8 @@ from ..services.mgmt_review import (
     list_outputs,
     list_reviews,
     release_review,
+    spawn_capa_for_output,
+    spawn_dcr_for_output,
     spawn_mr_actions,
     submit_review_for_review,
     update_output,
@@ -65,6 +73,7 @@ from ..services.vault import (
 from ..services.vault.release_scope import enrich_release_sod_scope
 from ..services.vault.review import today_org
 from ..services.workflow import repository as wf_repo
+from .dcr import _dcr, _dcr_doc_scope
 
 router = APIRouter(prefix="/api/v1", tags=["management-reviews"])
 
@@ -104,11 +113,28 @@ class ReviewSubmitBody(BaseModel):
     change_reason: str | None = Field(default=None, max_length=500)
 
 
+class OutputCapaCreate(BaseModel):
+    severity: NcSeverity
+
+
+class OutputDcrCreate(BaseModel):
+    change_type: DcrChangeType
+    change_significance: ChangeSignificance
+    reason_text: str = Field(min_length=1, max_length=4000)
+    target_document_id: uuid.UUID | None = None
+    proposed_effective_from: datetime.datetime | None = None
+
+
 # --- serializers ---
 def _mgmt_review(
-    mr: ManagementReview, *, identifier: str, title: str, current_state: Any
+    mr: ManagementReview,
+    *,
+    identifier: str,
+    title: str,
+    current_state: Any,
+    capabilities: dict[str, bool] | None = None,
 ) -> dict[str, Any]:
-    return {
+    out: dict[str, Any] = {
         "id": str(mr.id),
         "identifier": identifier,
         "title": title,
@@ -122,6 +148,9 @@ def _mgmt_review(
         "closed_at": mr.closed_at.isoformat() if mr.closed_at is not None else None,
         "created_at": mr.created_at.isoformat(),
     }
+    if capabilities is not None:
+        out["capabilities"] = capabilities
+    return out
 
 
 def _review_input(ri: ReviewInput) -> dict[str, Any]:
@@ -144,6 +173,7 @@ def _review_output(ro: ReviewOutput) -> dict[str, Any]:
         "owner_user_id": str(ro.owner_user_id) if ro.owner_user_id is not None else None,
         "due_date": ro.due_date.isoformat() if ro.due_date is not None else None,
         "spawned_task_id": str(ro.spawned_task_id) if ro.spawned_task_id is not None else None,
+        "spawned_capa_id": str(ro.spawned_capa_id) if ro.spawned_capa_id is not None else None,
     }
 
 
@@ -194,6 +224,28 @@ async def _release_scope(session: AsyncSession, doc: DocumentedInformation) -> R
         lifecycle_state=doc.current_state.value,
     )
     return await enrich_release_sod_scope(session, base, doc.id, None)
+
+
+async def _mr_capabilities(
+    session: AsyncSession, caller: AppUser, doc: DocumentedInformation
+) -> dict[str, bool]:
+    """The caller's SoD-sensitive lifecycle affordance on this MR (detail-only). Only ``release``
+    needs the SoD-2 overlay (author/approver ≠ releaser over the version the cutover would promote);
+    submit/close gate on ``mgmtReview.record_outputs`` (no author≠releaser rule), so the FE keeps
+    those on ``usePermissions().can(...)``. Mirrors api/objectives.py:_objective_capabilities
+    (release branch)."""
+    now = datetime.datetime.now(datetime.UTC)
+    release_scope = await _release_scope(session, doc)
+    sod = await gather_sod_constraints(session, caller.org_id)
+    allow_approver_release = await get_allow_approver_release(session, caller.org_id)
+    rel_ctx = RequestContext(
+        now=now, actor_user_id=str(caller.id), allow_approver_release=allow_approver_release
+    )
+    rel_grants = await gather_grants(session, caller.id, caller.org_id, "document.release")
+    release_cap = authorize(
+        rel_grants, "document.release", release_scope, rel_ctx, sig_hook=True, sod=sod
+    ).allow
+    return {"release": release_cap}
 
 
 # create + release enforce IMPERATIVELY (enforce(...)) inside the handler, so they need no
@@ -299,7 +351,8 @@ async def get_review_endpoint(
     if row is None:  # pragma: no cover — the satellite exists, so the base must too
         raise ProblemException(status=404, code="not_found", title="Management Review not found")
     _mr, ident, title, state = row
-    out = _mgmt_review(mr, identifier=ident, title=title, current_state=state)
+    caps = await _mr_capabilities(session, caller, _doc)
+    out = _mgmt_review(mr, identifier=ident, title=title, current_state=state, capabilities=caps)
     out["inputs"] = [_review_input(ri) for ri in await list_inputs(session, review_id)]
     out["outputs"] = [_review_output(ro) for ro in await list_outputs(session, review_id)]
     return out
@@ -405,6 +458,67 @@ async def delete_output_endpoint(
 ) -> Response:
     await delete_output(session, caller, review_id=review_id, output_id=output_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post(
+    "/management-reviews/{review_id}/outputs/{output_id}/raise-capa",
+    status_code=status.HTTP_201_CREATED,
+)
+async def raise_output_capa_endpoint(
+    review_id: uuid.UUID,
+    output_id: uuid.UUID,
+    body: OutputCapaCreate,
+    request: Request,
+    caller: AppUser = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+    authz_sink: AuthzAuditSink = Depends(get_authz_audit_sink),
+) -> dict[str, Any]:
+    """Spawn a CAPA from an ACTION output (F2 on-demand). Gate ``capa.create`` at SYSTEM (the MR has
+    no process); the spawn sets ``source=review_output`` + the one-shot ``spawned_capa_id`` latch.
+    Returns the refreshed output (carrying ``spawned_capa_id`` so the FE can deep-link to the CAPA
+    board)."""
+    await _load_review(session, caller, review_id)  # 404 cross-org
+    await enforce(session, authz_sink, request, caller, "capa.create", ResourceContext.system())
+    ro = await spawn_capa_for_output(
+        session, caller, review_id=review_id, output_id=output_id, severity=body.severity
+    )
+    return _review_output(ro)
+
+
+@router.post("/management-reviews/{review_id}/outputs/{output_id}/raise-dcr")
+async def raise_output_dcr_endpoint(
+    review_id: uuid.UUID,
+    output_id: uuid.UUID,
+    body: OutputDcrCreate,
+    request: Request,
+    caller: AppUser = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+    authz_sink: AuthzAuditSink = Depends(get_authz_audit_sink),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+) -> JSONResponse:
+    """Spawn a DCR from an ACTION output (F3, backend-only). Gate ``changeRequest.create`` at the
+    target document's scope (a CREATE DCR has no target → SYSTEM — the ``POST /dcrs`` precedent).
+    1:N + Idempotency-Key (201 new / 200 replay). The link lives one-way on the DCR
+    (``source_link_type=mgmt_review``)."""
+    await _load_review(session, caller, review_id)  # 404 cross-org
+    scope = await _dcr_doc_scope(session, body.target_document_id)
+    await enforce(session, authz_sink, request, caller, "changeRequest.create", scope)
+    dcr, created = await spawn_dcr_for_output(
+        session,
+        caller,
+        review_id=review_id,
+        output_id=output_id,
+        change_type=body.change_type,
+        change_significance=body.change_significance,
+        reason_text=body.reason_text,
+        target_document_id=body.target_document_id,
+        proposed_effective_from=body.proposed_effective_from,
+        idempotency_key=idempotency_key,
+    )
+    return JSONResponse(
+        status_code=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+        content=_dcr(dcr),
+    )
 
 
 @router.patch("/management-reviews/{review_id}")
