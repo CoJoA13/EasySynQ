@@ -144,6 +144,7 @@ Intent: monitoring/measurement/analysis, **internal audit**, and **management re
 Notes:
 - 9.2 is dual: the **audit program/schedule** is a *maintained* plan; each executed **audit, its findings, and reports** are *retained* records. EasySynQ models them as `AuditProgram (M) → AuditPlan → Audit → AuditFinding (R)`.
 - `AuditFinding` of type "nonconformity" **auto-creates a linked `CAPA`**, closing the Check→Act loop.
+- **As-built (S-mr-1):** 9.3 is now implemented. An *authored* Management Review is a **kind=DOCUMENT shared-PK subtype** of `documented_information` (document_type `MR`), auto-mapped to clause 9.3 at create — a **deliberate, register-sanctioned deviation from the RECORD classification above (R45):** only a released *document* earns the `current_effective_version_id` the compliance checklist reads, so DOCUMENT is the only shape that flips the **9.3 ★** node COVERED. **One released MR flips 9.3 COVERED — the ISO 9001:2015 ★ spine is now feature-complete.** (Imported legacy minutes remain kind=RECORD type `MGMT_REVIEW`; see doc 06.)
 
 ### Clause 10 — Improvement (ACT)
 

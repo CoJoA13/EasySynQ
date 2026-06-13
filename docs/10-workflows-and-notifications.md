@@ -378,6 +378,8 @@ A lightweight **Complaint** capture (`record_type=COMPLAINT`, with fields `custo
 
 Maps to Mara's ownership. A **Management Review** is a *retained record* (inputs + outputs/decisions). The workflow is cyclical and gathers evidence the system already holds.
 
+> **As-built (S-mr-1, R45):** the convened review is held as an **`MR` document** (kind=DOCUMENT subtype — see doc 02 / doc 14 §9), so the as-built lifecycle is the **standard authoring FSM** (`Draft → InReview → Approved → Effective`) plus a **mutable `close_state` tail** on the satellite (`ActionsTracked → Closed`, outside the version). The `Scheduled → … → Closed` cycle above maps onto that. The minutes (auto-compiled 9.3.2 inputs + the 9.3.3 outputs) **freeze into the version snapshot at submit** (`metadata_snapshot.mgmt_review_minutes`, an `application/json` WORM source, `no_controlled_rendition`); release files them as the 9.3.3 retained record and flips the 9.3 ★. Sign-off rides signed `document.approve` / `document.release` (SoD-2). The 9.3.2 input pack is compiled by `compile-inputs` (Draft-only) running six live org-wide reads **under the review owner's grants, fail-closed → `available=false` gap rows, never a 403**; the four sourceless 9.3.2 inputs + risk/opportunity (e) + improvement (f) ship as honest gap rows (deferred). **Cadence** is a coded default (`system_config.mgmt_review_cadence_months`=12) driving a daily Beat sweep that mints the next Scheduled Draft MR + an `MR_INPUT` task.
+
 ### 7.1 Lifecycle & inputs
 
 ```mermaid
@@ -409,6 +411,8 @@ EasySynQ **auto-compiles the Clause 9.3.2 input pack** by querying the live QMS 
 ### 7.2 Outputs → closed loop
 
 Each **9.3.3 output** (decisions on improvement, resource needs, changes) is recorded and, where it implies work, **spawns a tracked action or a CAPA**, appearing in the owners' My Tasks. The review reaches `Closed` only when its output actions are closed — making management review a live driver of ACT, not a filed PDF. Outputs that change context/objectives **feed back to Clause 4/6** (the loop the domain model describes).
+
+> **As-built (S-mr-1, R45):** outputs are append-only `review_output` rows; an `ACTION` output (owner + due) spawns **one `MR_ACTION` task at release** on a `MGMT_REVIEW` workflow_instance, each with a **per-action `stage_key` `"action:<output_id>"`** (the diff-critic MAJOR — so the engine's distinct-approver guard never spans two actions of one owner). The **review-close gate mirrors `_audit_close_gate`** (pure `output_blocks_close`, fail-closed: an ACTION whose task is None/not-DONE blocks; a DECISION never blocks) — `close` returns 409 `review_close_blocked` until every action is DONE, flipping the satellite to `Closed`. (Slice-2: CAPA `review_output` un-reserve + the DCR `mgmt_review` link — the `spawned_capa_id`/`spawned_initiative_id` columns ship reserved-null.)
 
 ---
 

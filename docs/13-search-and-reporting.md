@@ -316,6 +316,8 @@ The widget set is **deliberately aligned to the ISO 9001:2015 §9.3.2 required m
 
 > The dashboard's **"Generate Management Review Pack"** action produces a PDF (and Excel companion) snapshotting every input widget as-of the meeting date, and offers to **file it as a `ManagementReview` Record** (immutable, retained) — making the dashboard the literal tool that produces the 9.3 evidence. Captured outputs become trackable actions surfaced on the next review's input (a).
 
+> **As-built (S-mr-1, R45):** the 9.3.2 input set is now backed by **real data** — `compile-inputs` runs the six live org-wide reads (objectives scorecard, audits, CAPAs/NCRs/complaints, KPI readings, compliance-checklist+overdue, drift) under the review owner's grants, fail-closed → gap rows. ⚠ **The chart vocabulary above (gauges / sparklines / donuts) is superseded by the shipped product posture (N6 no-charts, N9 no-verdict): restate every widget as a calm table + RAG band** (server RAG read verbatim — no auto-compliance verdict). The filed minutes are the `MR` document's frozen version snapshot, not a separately-filed Record. The **rendered Management-Review-Pack PDF (and the Excel companion) is deferred to v1.1**; the four sourceless 9.3.2 inputs + risk (e) + improvement (f) ship as honest gap rows. The trailing **S-mr-2** delivers the dashboard UI + the Home "next review in N days" widget.
+
 ### 5.3 Document-Control dashboard (Clause 7.5 engine view)
 
 **Persona:** **Mara / Document Controller**; **Ken (Approver)** secondary; **Avery (System Admin)** sees the *operational health* view only (lock states, mirror sync) — Avery does **not** approve/own QMS content. **Goal:** keep the maintained-document estate current and drift-free.

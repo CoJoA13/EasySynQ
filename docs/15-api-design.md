@@ -565,6 +565,23 @@ PDCA "Check" (`14 §9`). The program is a **maintained document**; an `audit` an
 | POST | `/audits/{id}/transition` | `audit.conduct` | ✓ | `{ to:"InProgress"\|"FindingsDraft"\|"Reported"\|"Closing"\|"Closed" }`. **`Closed` blocked** while any NC-sourced CAPA is unverified (`14 §9`). |
 | GET / POST | `/audits/{id}/findings` | `audit.read` / `audit.record_finding` | ✓ | `{ finding_type:"NC"\|"OBSERVATION"\|"OFI", severity?, clause_ref, process_ref?, description }`. An `NC` **auto-creates** a `capa` and sets `auto_capa_id` (bidirectional link) in the same transaction. |
 
+### 8.12a Management Review — as built (slice S-mr-1, clause 9.3, R45)
+
+> The authored Management Review is an **`MR` document** (kind=DOCUMENT subtype, `14 §9` / `02`), so the convene→approve→release legs ride the unchanged document machinery; these endpoints add the MR-specific compile/outputs/close surface. **All contracted in `packages/contracts/openapi.yaml`.** Path is **`/management-reviews`** (not `/mgmt-reviews`). Rides the already-seeded `mgmtReview.*` keys — no new permission key (catalog stays 100).
+
+| Method | Path | Perm | Sig | Notes |
+|---|---|---|---|---|
+| POST | `/management-reviews` | `mgmtReview.create` | — | Mint a Scheduled Draft MR (a kind=DOCUMENT `MR`, auto-mapped to clause 9.3). |
+| GET | `/management-reviews` | `mgmtReview.read` | — | List; filter by state / `close_state`. |
+| GET | `/management-reviews/{id}` | `mgmtReview.read` | — | Detail incl. compiled `review_input[]` (+ gap rows), `review_output[]`, `close_state`, `attendees`. |
+| POST | `/management-reviews/{id}/compile-inputs` | `mgmtReview.create` | — | **Draft-only.** Runs the six live org-wide reads under the **review owner's** grants (fail-closed → `available=false` gap rows, never a 403). |
+| POST | `/management-reviews/{id}/outputs` | `mgmtReview.record_outputs` | — | Append a `review_output` (DECISION or ACTION+owner+due). **Non-signing** (`sig_hook=False`, R43). |
+| POST | `/management-reviews/{id}/submit-review` | `mgmtReview.create` | — | Freezes the minutes (compiled 9.3.2 inputs + 9.3.3 outputs) into the version snapshot, opens approval. |
+| GET | `/management-reviews/{id}/approval` | `mgmtReview.read` | — | The latest approval cycle (the `GET /documents/{id}/approval` mirror). |
+| POST | `/management-reviews/{id}/release` | `document.release` | ✓ | Signed release — files the minutes as the 9.3.3 retained record, spawns `MR_ACTION` tasks, **flips 9.3 ★ COVERED**. SoD-2 binds. (Approve rides signed `document.approve`.) |
+| POST | `/management-reviews/{id}/close` | `mgmtReview.record_outputs` | — | The close gate (mirrors `_audit_close_gate`): `409 review_close_blocked` until every ACTION task is DONE; flips `close_state` `ActionsTracked→Closed`. |
+| PATCH | `/management-reviews/{id}` | `mgmtReview.create` | — | Metadata PATCH (e.g. `attendees`, `review_date`) while Draft. |
+
 ### 8.13 Audit Trail — immutable, hash-chained journal (`/audit-events`)
 
 Read-only projection of `audit_event` (`14 §12`). The auditor's primary evidence surface. **No POST/PATCH/DELETE ever** — append-only and hash-chained is a *system invariant*, not an API capability; the app DB role lacks UPDATE/DELETE on this table.
