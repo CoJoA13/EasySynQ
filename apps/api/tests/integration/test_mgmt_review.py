@@ -92,6 +92,27 @@ async def test_create_list_detail_management_review(
     assert det["outputs"] == []
 
 
+async def test_next_due_endpoint_shape(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    subject = f"mr-nd-{uuid.uuid4()}"
+    h = _auth(token_factory, subject)
+    await _grant(subject, _MR_KEYS)
+    r = await app_client.get("/api/v1/management-reviews/next-due", headers=h)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert set(body) == {
+        "cadence_months",
+        "last_review_effective_from",
+        "next_review_due",
+        "review_state",
+        "owner_configured",
+    }
+    assert isinstance(body["cadence_months"], int)
+    assert isinstance(body["owner_configured"], bool)
+    assert body["review_state"] in (None, "current", "due_soon", "overdue")
+
+
 async def test_create_requires_mgmt_review_create(
     app_client: AsyncClient, token_factory: Callable[..., str]
 ) -> None:
