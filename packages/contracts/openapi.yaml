@@ -5079,6 +5079,84 @@ paths:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
 
+  /management-reviews/{review_id}/outputs/{output_id}/raise-capa:
+    post:
+      tags: [management-reviews]
+      operationId: raiseCapaFromMrOutput
+      summary: "Spawn a CAPA from an ACTION output (one-shot latch). Gated mgmtReview.record_outputs."
+      parameters:
+        - { name: review_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: output_id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [severity]
+              properties:
+                severity:
+                  type: string
+                  enum: [Critical, Major, Minor]
+      responses:
+        "201":
+          description: "The refreshed output, now carrying spawned_capa_id."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ReviewOutput" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409":
+          description: "Not an ACTION output, review not in a tracking state, or a CAPA already spawned (one-shot latch)."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  /management-reviews/{review_id}/outputs/{output_id}/raise-dcr:
+    post:
+      tags: [management-reviews]
+      operationId: raiseDcrFromMrOutput
+      summary: "Spawn a DCR from an ACTION output (1:N, idempotent via Idempotency-Key). Gated mgmtReview.record_outputs."
+      parameters:
+        - { name: review_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: output_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: Idempotency-Key, in: header, required: false, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [change_type, change_significance, reason_text]
+              properties:
+                change_type: { $ref: "#/components/schemas/DcrChangeType" }
+                change_significance:
+                  type: string
+                  enum: [MAJOR, MINOR]
+                reason_text: { type: string, minLength: 1, maxLength: 4000 }
+                target_document_id: { type: [string, "null"], format: uuid }
+                proposed_effective_from: { type: [string, "null"], format: date-time }
+      responses:
+        "201":
+          description: "A new DCR (source_link_type=mgmt_review)."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Dcr" }
+        "200":
+          description: "An idempotent replay of an already-spawned DCR (Idempotency-Key matched)."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Dcr" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409":
+          description: "Not an ACTION output or review not in a tracking state."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
   /management-reviews/{review_id}/approval:
     get:
       tags: [management-reviews]
@@ -7935,6 +8013,14 @@ components:
             outputs:
               type: array
               items: { $ref: "#/components/schemas/ReviewOutput" }
+            capabilities:
+              type: object
+              description: "Detail-only. The caller's SoD-sensitive lifecycle affordances."
+              properties:
+                release:
+                  type: boolean
+                  description: "Whether the caller may release this MR (SoD-2 author/approver ≠ releaser)."
+              required: [release]
 
     ManagementReviewNextDue:
       type: object
@@ -8029,6 +8115,10 @@ components:
           type: [string, "null"]
           format: uuid
           description: "The MR_ACTION task spawned for an ACTION output at release (null otherwise / pre-release)."
+        spawned_capa_id:
+          type: [string, "null"]
+          format: uuid
+          description: "The CAPA this ACTION output spawned (S-mr-3 one-shot latch), or null."
 
     ReviewOutputCreate:
       type: object
