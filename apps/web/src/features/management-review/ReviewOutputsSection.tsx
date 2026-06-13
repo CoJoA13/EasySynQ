@@ -41,7 +41,7 @@ export function ReviewOutputsSection({ reviewId, outputs, editable }: {
   return (
     <Stack gap="sm">
       <Group justify="space-between">
-        <Title order={4}>Review outputs (9.3.3)</Title>
+        <Title order={3}>Review outputs (9.3.3)</Title>
         {canEdit && <Button size="xs" variant="light" onClick={() => setAddOpen(true)}>Add output</Button>}
       </Group>
       {(["DECISION", "ACTION", "IMPROVEMENT"] as const).map((t) => {
