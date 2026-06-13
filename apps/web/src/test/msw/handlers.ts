@@ -1290,6 +1290,11 @@ export const handlers = [
   http.post("/api/v1/management-reviews/:id/outputs", () => HttpResponse.json(mgmtReviewDetailFixture.outputs[1], { status: 201 })),
   http.patch("/api/v1/management-reviews/:id/outputs/:oid", () => HttpResponse.json(mgmtReviewDetailFixture.outputs[1])),
   http.delete("/api/v1/management-reviews/:id/outputs/:oid", () => new HttpResponse(null, { status: 204 })),
+  http.post("/api/v1/management-reviews/:id/outputs/:oid/raise-capa", () =>
+    HttpResponse.json(
+      { ...mgmtReviewDetailFixture.outputs[1], spawned_capa_id: "capa-spawned-0001" },
+      { status: 201 },
+    )),
   http.patch("/api/v1/management-reviews/:id", () => HttpResponse.json(mgmtReviewDetailFixture)),
   http.post("/api/v1/management-reviews/:id/submit-review", () =>
     HttpResponse.json({ ...mgmtReviewListFixture.data[0], current_state: "InReview" })),
