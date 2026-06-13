@@ -30,7 +30,7 @@ The F-numbers are the brainstorm's decision frame; each was preceded by a source
 6. **F4 — create flow:** a small modal (title + period_label) → the Draft detail with an inline re-runnable "Compile inputs" + a Draft-only outputs editor.
 7. **F6 — gating/smoke:** per-key calm-403; the demo System Administrator holds none of the `mgmtReview.*`/`document.release` content keys → SYSTEM overrides on the **live** demo `app_user` row (org AHT) for the smoke.
 
-**Accepted reconciliations (in-PR doc fixes, code is authoritative):** build against `/management-reviews` (the S-mr-1 spec §s7 says the stale `/mgmt-reviews`); the FE surfaces the as-built close-gate codes `review_close_blocked` / `review_not_open_to_close` (R45/spec say `mgmt_review_close_blocked`).
+**Accepted reconciliations (in-PR doc fix, code is authoritative):** build against `/management-reviews` and surface the as-built close-gate codes `review_close_blocked` / `review_not_open_to_close`. The only stale references are in the **archived S-mr-1 design spec** (it drafted `/mgmt-reviews` + `mgmt_review_close_blocked`); the decisions-register **R45** + `docs/15-api-design.md` already use the as-built names — so the fix is a one-line as-built banner on the S-mr-1 spec, not a register change.
 
 ---
 
@@ -206,8 +206,7 @@ The widget contributes RAG to the CHECK tile only when it carries a RAG-bearing 
 
 ## s9 · Reconciliations (in-PR)
 
-- **Route name:** S-mr-2 uses `/management-reviews` everywhere; fix the stale `/mgmt-reviews` reference in the S-mr-1 spec §s7 note.
-- **Close-gate codes:** the FE surfaces `review_close_blocked` / `review_not_open_to_close`; correct R45 + the S-mr-1 spec text (which say `mgmt_review_close_blocked`) — the code is authoritative.
+- **Route name + close codes:** S-mr-2 uses `/management-reviews` + `review_close_blocked` / `review_not_open_to_close` everywhere. Verified at wrap-time: R45 (decisions-register) + `docs/15-api-design.md` already use the as-built names — only the **archived S-mr-1 design spec** drafted `/mgmt-reviews` + `mgmt_review_close_blocked`, so the reconciliation is a one-line as-built banner on that spec (no register change needed).
 
 ---
 
