@@ -1199,12 +1199,12 @@ const mgmtReviewDetailFixture = {
     {
       id: "ro-1", management_review_id: "mr-0001-0001-0001-000000000001",
       output_type: "DECISION", description: "Approve the objectives for 2026",
-      owner_user_id: null, due_date: null, spawned_task_id: null,
+      owner_user_id: null, due_date: null, spawned_task_id: null, spawned_capa_id: null,
     },
     {
       id: "ro-2", management_review_id: "mr-0001-0001-0001-000000000001",
       output_type: "ACTION", description: "Refresh the supplier evaluation register",
-      owner_user_id: "user-mara", due_date: "2026-09-01", spawned_task_id: null,
+      owner_user_id: "user-mara", due_date: "2026-09-01", spawned_task_id: null, spawned_capa_id: null,
     },
   ] satisfies ReviewOutput[],
 } satisfies MgmtReviewDetail;

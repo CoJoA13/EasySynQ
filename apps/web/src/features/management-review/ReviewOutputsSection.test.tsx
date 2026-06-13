@@ -19,6 +19,7 @@ const DECISION: ReviewOutput = {
   owner_user_id: null,
   due_date: null,
   spawned_task_id: null,
+  spawned_capa_id: null,
 };
 const ACTION: ReviewOutput = {
   id: "ro-2",
@@ -28,6 +29,7 @@ const ACTION: ReviewOutput = {
   owner_user_id: "bbbb2222-2222-2222-2222-222222222222",
   due_date: "2026-09-01",
   spawned_task_id: null,
+  spawned_capa_id: null,
 };
 const IMPROVEMENT: ReviewOutput = {
   id: "ro-3",
@@ -37,6 +39,7 @@ const IMPROVEMENT: ReviewOutput = {
   owner_user_id: null,
   due_date: null,
   spawned_task_id: null,
+  spawned_capa_id: null,
 };
 
 const ALL = [DECISION, ACTION, IMPROVEMENT];

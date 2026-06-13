@@ -1231,6 +1231,7 @@ export interface ReviewOutput {
   owner_user_id: string | null;
   due_date: string | null;
   spawned_task_id: string | null;
+  spawned_capa_id: string | null;
 }
 export interface MgmtReview {
   id: string;
@@ -1247,6 +1248,7 @@ export interface MgmtReview {
 export interface MgmtReviewDetail extends MgmtReview {
   inputs: ReviewInput[];
   outputs: ReviewOutput[];
+  capabilities?: { release: boolean };
 }
 export interface MgmtReviewListResponse { data: MgmtReview[]; }
 export interface MgmtReviewNextDue {
