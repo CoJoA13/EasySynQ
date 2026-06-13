@@ -29,11 +29,20 @@ it("surfaces a 422 from the server calmly", async () => {
       ),
     ),
   );
-  renderWithProviders(<RaiseDcrModal onClose={vi.fn()} onCreated={vi.fn()} />);
+  const onCreated = vi.fn();
+  renderWithProviders(<RaiseDcrModal onClose={vi.fn()} onCreated={onCreated} />);
   await userEvent.click(screen.getByRole("radio", { name: "Create" }));
   await userEvent.type(screen.getByLabelText(/Reason for change/), "x");
   await userEvent.click(screen.getByLabelText(/Reason class/));
   await userEvent.click(await screen.findByRole("option", { name: "Other" }));
   await userEvent.click(screen.getByRole("button", { name: "Raise" }));
   expect(await screen.findByText("A CREATE DCR must not target a document")).toBeInTheDocument();
+  expect(onCreated).not.toHaveBeenCalled();
+});
+
+it("does not offer the MR-reserved 'Management review' reason class", async () => {
+  renderWithProviders(<RaiseDcrModal onClose={vi.fn()} onCreated={vi.fn()} />);
+  await userEvent.click(screen.getByLabelText(/Reason class/));
+  expect(await screen.findByRole("option", { name: "Other" })).toBeInTheDocument();
+  expect(screen.queryByRole("option", { name: "Management review" })).toBeNull();
 });

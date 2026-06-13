@@ -56,10 +56,11 @@ export function RaiseDcrModal({
           placeholder="Pick a reason"
           value={reasonClass}
           onChange={(v) => setReasonClass(v as DcrReasonClass)}
-          data={(Object.entries(REASON_LABEL) as [DcrReasonClass, string][]).map(([value, label]) => ({
-            value,
-            label,
-          }))}
+          // mgmt_review is reserved for the MR-output spawn path (forced server-side + carries a
+          // source_link a standalone DCR has none of) — omit it here (the RaiseCapaModal SOURCES precedent).
+          data={(Object.entries(REASON_LABEL) as [DcrReasonClass, string][])
+            .filter(([value]) => value !== "mgmt_review")
+            .map(([value, label]) => ({ value, label }))}
           comboboxProps={{ keepMounted: false }}
         />
         <Group justify="flex-end">
