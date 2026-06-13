@@ -220,13 +220,22 @@ async def test_capabilities_release_reflects_sod2(
     hs = _auth(token_factory, submitter)
     hap = _auth(token_factory, approver)
     hrl = _auth(token_factory, releaser)
-    await _grant(submitter, ("mgmtReview.create", "mgmtReview.read", "mgmtReview.record_outputs",
-                             "document.release", "document.read"))
+    await _grant(
+        submitter,
+        (
+            "mgmtReview.create",
+            "mgmtReview.read",
+            "mgmtReview.record_outputs",
+            "document.release",
+            "document.read",
+        ),
+    )
     await s5.grant_role(approver, "Approver")
     await _grant(releaser, ("document.release", "document.read", "mgmtReview.read"))
 
     r = await app_client.post(
-        "/api/v1/management-reviews", headers=hs,
+        "/api/v1/management-reviews",
+        headers=hs,
         json={"title": f"Caps review {salt}", "period_label": "2026"},
     )
     rid = r.json()["id"]
