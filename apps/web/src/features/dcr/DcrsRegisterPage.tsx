@@ -1,11 +1,13 @@
-import { Alert, Anchor, Container, Group, Loader, Select, Table, Text, Title } from "@mantine/core";
+import { Alert, Anchor, Button, Container, Group, Loader, Select, Table, Text, Title } from "@mantine/core";
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import type { DcrChangeType, DcrReasonClass, DcrState } from "../../lib/types";
+import { usePermissions } from "../../app/shell/usePermissions";
 import { DcrDrawer } from "./DcrDrawer";
 import { DcrStateBadge } from "./DcrStateBadge";
 import { CHANGE_TYPE_LABEL, REASON_LABEL } from "./labels";
 import { useDcrs } from "./hooks";
+import { RaiseDcrModal } from "./RaiseDcrModal";
 
 const STATES: DcrState[] = [
   "Open",
@@ -30,6 +32,8 @@ export function DcrsRegisterPage() {
   const [state, setState] = useState<DcrState | "">("");
   const [changeType, setChangeType] = useState<DcrChangeType | "">("");
   const [reason, setReason] = useState<DcrReasonClass | "">("");
+  const { can } = usePermissions();
+  const [raising, setRaising] = useState(false);
 
   // Open the drawer for ?dcr=<id> on mount + whenever the param changes (a deep-link while mounted).
   // Guarded on a non-null id so clearing the param on close never re-opens the drawer.
@@ -100,9 +104,12 @@ export function DcrsRegisterPage() {
 
   return (
     <Container size="xl" py="md">
-      <Title order={2} mb="md">
-        Change requests
-      </Title>
+      <Group justify="space-between" mb="md">
+        <Title order={2}>Change requests</Title>
+        {can("changeRequest.create") && (
+          <Button onClick={() => setRaising(true)}>Raise DCR</Button>
+        )}
+      </Group>
       <Group mb="md" gap="sm">
         <Select
           aria-label="State"
@@ -172,6 +179,12 @@ export function DcrsRegisterPage() {
       )}
 
       <DcrDrawer dcrId={selected} onClose={closeDrawer} />
+      {raising && (
+        <RaiseDcrModal
+          onClose={() => setRaising(false)}
+          onCreated={(id) => setSelected(id)}
+        />
+      )}
     </Container>
   );
 }

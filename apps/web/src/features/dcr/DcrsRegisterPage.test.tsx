@@ -73,3 +73,34 @@ it("has no accessibility violations", async () => {
   await screen.findByText("DCR-2026-0001");
   expect(await axe(container)).toHaveNoViolations();
 });
+
+function grant(...keys: string[]) {
+  server.use(
+    http.get("/api/v1/me/permissions", () =>
+      HttpResponse.json({
+        scope: { level: "SYSTEM", selector: null },
+        permissions: keys.map((key) => ({ key, effect: "ALLOW" })),
+      }),
+    ),
+  );
+}
+
+it("hides the Raise DCR button without changeRequest.create", async () => {
+  renderWithProviders(<DcrsRegisterPage />);
+  await screen.findByText("DCR-2026-0001");
+  expect(screen.queryByRole("button", { name: "Raise DCR" })).toBeNull();
+});
+
+it("raises a DCR and opens the new request's drawer", async () => {
+  grant("changeRequest.create");
+  renderWithProviders(<DcrsRegisterPage />);
+  await screen.findByText("DCR-2026-0001");
+  await userEvent.click(screen.getByRole("button", { name: "Raise DCR" }));
+  await userEvent.click(await screen.findByRole("radio", { name: "Create" }));
+  await userEvent.type(screen.getByLabelText(/Reason for change/), "New WI.");
+  await userEvent.click(screen.getByLabelText(/Reason class/));
+  await userEvent.click(await screen.findByRole("option", { name: "Other" }));
+  await userEvent.click(screen.getByRole("button", { name: "Raise" }));
+  // the new DCR's drawer opens (the default detail handler resolves dcrDetailFixture)
+  expect(await screen.findByText(/Corrective action requires/)).toBeInTheDocument();
+});
