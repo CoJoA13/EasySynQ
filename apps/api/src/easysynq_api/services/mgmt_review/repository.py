@@ -52,18 +52,20 @@ async def get_review(session: AsyncSession, review_id: uuid.UUID) -> ManagementR
 
 
 async def get_review_doc(
-    session: AsyncSession, review_id: uuid.UUID
+    session: AsyncSession, review_id: uuid.UUID, *, for_update: bool = False
 ) -> tuple[ManagementReview, DocumentedInformation] | None:
     """Load the base document + the satellite with ``populate_existing=True`` — the freeze caller
     locks them and the authz resolver may already have identity-mapped the satellite (the S-drift-1
-    trap; a stale satellite would freeze yesterday's minutes)."""
-    doc = (
-        await session.execute(
-            select(DocumentedInformation)
-            .where(DocumentedInformation.id == review_id)
-            .execution_options(populate_existing=True)
-        )
-    ).scalar_one_or_none()
+    trap; a stale satellite would freeze yesterday's minutes). ``for_update`` takes a ``FOR UPDATE``
+    lock on the DOC row so a Draft edit serializes against a concurrent submit-freeze (Codex #3)."""
+    doc_q = (
+        select(DocumentedInformation)
+        .where(DocumentedInformation.id == review_id)
+        .execution_options(populate_existing=True)
+    )
+    if for_update:
+        doc_q = doc_q.with_for_update()
+    doc = (await session.execute(doc_q)).scalar_one_or_none()
     mr = (
         await session.execute(
             select(ManagementReview)

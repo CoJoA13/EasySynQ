@@ -256,6 +256,18 @@ async def close_review(
     This both blocks closing a never-released review (``close_state is None`` → still Draft, never
     reached Effective — an incoherent terminal state) AND makes re-closing an already-``Closed``
     review a clean 409 (idempotent-safe: no re-stamp of ``closed_at``, no duplicate audit row)."""
+    # FOR UPDATE re-load (Codex #5): two concurrent closes both read close_state=ActionsTracked
+    # unlocked and both pass the gate → a double closed_at + a duplicate MGMT_REVIEW_CLOSED row.
+    # Lock the row and re-check the state under the lock so the second close serializes to the
+    # clean 409 (the idempotency guarantee only held sequentially before).
+    review = (
+        await session.execute(
+            select(ManagementReview)
+            .where(ManagementReview.id == review.id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one()
     if review.close_state is not ManagementReviewCloseState.ActionsTracked:
         raise _conflict(
             "review_not_open_to_close",
@@ -297,12 +309,19 @@ async def close_review(
 # trail of what was reviewed is the freeze's CHECKIN snapshot (the S-obj-4 unaudited-edits
 # decision); this is intentional, not an omission.
 async def _require_draft(
-    session: AsyncSession, review_id: uuid.UUID
+    session: AsyncSession, actor: AppUser, review_id: uuid.UUID
 ) -> tuple[ManagementReview, DocumentedInformation]:
-    pair = await repo.get_review_doc(session, review_id)
+    # FOR UPDATE on the doc row (Codex #3): a Draft edit must serialize against a concurrent
+    # submit-freeze (which locks the doc) — otherwise an edit that reads Draft pre-commit can land
+    # after the snapshot is frozen, leaving the InReview review's mutable rows out of the minutes.
+    pair = await repo.get_review_doc(session, review_id, for_update=True)
     if pair is None:
         raise _not_found("Management Review")
     mr, doc = pair
+    # Org check (Codex #1; moot under D1 single-org but consistent with _load_review's read-path
+    # guard) — 404-collapse a cross-org id, never leak its existence.
+    if doc.org_id != actor.org_id:
+        raise _not_found("Management Review")
     if doc.current_state is not DocumentCurrentState.Draft:
         raise _conflict(
             "conflict",
@@ -346,7 +365,7 @@ async def add_output(
 ) -> ReviewOutput:
     """Author a 9.3.3 decision/action (Draft-only). An ``ACTION`` requires ``owner_user_id`` — it
     spawns an ``MR_ACTION`` task at release (Phase 5)."""
-    mr, doc = await _require_draft(session, review_id)
+    mr, doc = await _require_draft(session, actor, review_id)
     if output_type is ReviewOutputType.ACTION and owner_user_id is None:
         raise _validation_error(
             "owner_user_id", "required", "An ACTION output requires an owner_user_id"
@@ -381,7 +400,7 @@ async def update_output(
 ) -> ReviewOutput:
     """Edit an output (Draft-only). ``fields`` is the request's ``model_fields_set`` (omitted ≠
     null — the objectives PATCH precedent). An ``ACTION`` (resulting type) must keep an owner."""
-    _mr, _doc = await _require_draft(session, review_id)
+    _mr, _doc = await _require_draft(session, actor, review_id)
     ro = await session.get(ReviewOutput, output_id)
     if ro is None or ro.management_review_id != review_id:
         raise _not_found("Output")
@@ -410,7 +429,7 @@ async def delete_output(
     output_id: uuid.UUID,
 ) -> None:
     """Delete an output (Draft-only)."""
-    _mr, _doc = await _require_draft(session, review_id)
+    _mr, _doc = await _require_draft(session, actor, review_id)
     ro = await session.get(ReviewOutput, output_id)
     if ro is None or ro.management_review_id != review_id:
         raise _not_found("Output")
@@ -431,7 +450,7 @@ async def update_review_meta(
     """Edit the review meta the freeze reads into the minutes (period_label/review_date/attendees),
     Draft-only. ``fields`` is the request's ``model_fields_set`` (omitted ≠ null — the objectives
     PATCH precedent)."""
-    mr, _doc = await _require_draft(session, review_id)
+    mr, _doc = await _require_draft(session, actor, review_id)
     if "period_label" in fields:
         mr.period_label = period_label
     if "review_date" in fields:

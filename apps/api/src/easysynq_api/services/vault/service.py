@@ -36,6 +36,7 @@ from ...db.models.distribution_entry import DistributionEntry
 from ...db.models.document_version import DocumentVersion as DocumentVersionModel
 from ...db.models.documented_information import DocumentedInformation
 from ...db.models.form_template import FormTemplate
+from ...db.models.management_review import ManagementReview
 from ...db.models.quality_objective import QualityObjective
 from ...db.models.working_draft import WorkingDraft
 from ...domain.records.form_schema import FieldError, validate_schema
@@ -213,11 +214,14 @@ async def create_document(
 
 
 async def reject_objective_byte_path(session: AsyncSession, doc: DocumentedInformation) -> None:
-    """S-obj-4 (O-5): a Quality Objective's content IS its frozen commitment — the generic byte
-    path (checkout/checkin) and the generic lifecycle writers (start-revision/submit-review, see
-    api/documents.py) must not touch an OBJ: a byte-version would show the approver a stale
-    commitment, and a generic submit would advance a version around the content-aware freeze.
-    Kind guard = satellite existence (the S-rec-1 posture); a PK probe. Reads stay open."""
+    """S-obj-4 (O-5) / S-mr-1: a content-managed DOCUMENT subtype's content IS its frozen snapshot —
+    a Quality Objective's commitment OR a Management Review's minutes — so the generic byte path
+    (checkout/checkin) and the generic lifecycle writers (start-revision/submit-review, see
+    api/documents.py) must not touch one: a byte-version would show the approver a stale snapshot,
+    and a generic submit/release would advance a version around the content-aware freeze (and, for a
+    review, skip the MR_ACTION spawn + ``close_state`` hook, leaving an Effective review that cannot
+    be closed). Kind guard = satellite existence (the S-rec-1 posture); a PK probe. Reads stay open.
+    (Name kept for the OBJ call sites; it now guards both subtypes — Codex #4.)"""
     if await session.get(QualityObjective, doc.id) is not None:
         raise ProblemException(
             status=422,
@@ -228,6 +232,20 @@ async def reject_objective_byte_path(session: AsyncSession, doc: DocumentedInfor
                     "field": "document_id",
                     "code": "objective_managed_via_objectives",
                     "message": "use the /objectives lifecycle (edit/start-revision/submit-review)",
+                }
+            ],
+        )
+    if await session.get(ManagementReview, doc.id) is not None:
+        raise ProblemException(
+            status=422,
+            code="validation_error",
+            title="Management Reviews are managed via /management-reviews",
+            errors=[
+                {
+                    "field": "document_id",
+                    "code": "management_review_managed_via_reviews",
+                    "message": "use the /management-reviews lifecycle "
+                    "(outputs/submit-review/release/close)",
                 }
             ],
         )

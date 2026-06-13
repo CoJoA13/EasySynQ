@@ -6,6 +6,7 @@ The full submit → approve → release → 9.3-star-COVERED lifecycle (the head
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from collections.abc import Callable
 
@@ -663,6 +664,79 @@ async def test_released_review_flips_9_3_covered(
     after = await _clause_9_3_row(app_client, hr)
     assert after["effective_count"] == eff0 + 1, (eff0, after)
     assert after["status"] == "COVERED", after
+
+
+# --- Codex review fixes: byte-path guard (#4) + concurrent-close race (#5) ----------------------
+
+
+async def test_generic_byte_path_rejects_management_review(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """Codex #4: an MR document must NOT be reachable through the generic /documents byte path —
+    ``reject_objective_byte_path`` (which guards OBJ at checkout/checkin/start-revision/submit)
+    now also rejects a ``ManagementReview``, so a generic check-in can't bypass the freeze + the
+    release hook (an Effective review that cannot be closed)."""
+    from easysynq_api.db.models.documented_information import DocumentedInformation
+    from easysynq_api.db.session import get_sessionmaker
+    from easysynq_api.problems import ProblemException
+    from easysynq_api.services.vault.service import reject_objective_byte_path
+
+    salt = uuid.uuid4().hex[:8]
+    subject = f"mr-bp-{salt}"
+    hs = _auth(token_factory, subject)
+    await _grant(subject, _MR_KEYS)
+    rid = await _create_review(app_client, hs, f"Byte-path review {salt}")
+
+    async with get_sessionmaker()() as s:
+        doc = await s.get(DocumentedInformation, uuid.UUID(rid))
+        assert doc is not None
+        with pytest.raises(ProblemException) as ei:
+            await reject_objective_byte_path(s, doc)
+    assert ei.value.status == 422
+    assert ei.value.errors is not None
+    assert ei.value.errors[0]["code"] == "management_review_managed_via_reviews"
+
+
+async def test_concurrent_close_serializes_to_one_winner(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """Codex #5: two concurrent close requests on a released review must NOT both succeed — the
+    ``FOR UPDATE`` re-check under lock serializes them to exactly one 200 (Closed) + one 409."""
+    salt = uuid.uuid4().hex[:8]
+    submitter, approver, releaser = f"mr-rc-sm-{salt}", f"mr-rc-ap-{salt}", f"mr-rc-rl-{salt}"
+    hs = _auth(token_factory, submitter)
+    hap = _auth(token_factory, approver)
+    hrl = _auth(token_factory, releaser)
+    await _grant(submitter, _MR_KEYS)
+    await s5.grant_role(approver, "Approver")
+    await _grant(releaser, ("document.release", "document.read", "document.read_draft"))
+
+    rid = await _create_review(app_client, hs, f"Race-close review {salt}")
+    await app_client.post(
+        f"/api/v1/management-reviews/{rid}/outputs",
+        headers=hs,
+        json={"output_type": "DECISION", "description": "QMS remains effective"},
+    )
+    await app_client.post(f"/api/v1/management-reviews/{rid}/submit-review", headers=hs)
+    task_id = await s5.task_for_doc(rid)
+    await app_client.post(
+        f"/api/v1/tasks/{task_id}/decision", headers=hap, json={"outcome": "approve"}
+    )
+    rel = await app_client.post(f"/api/v1/management-reviews/{rid}/release", headers=hrl)
+    assert rel.status_code == 200, rel.text
+
+    r1, r2 = await asyncio.gather(
+        app_client.post(f"/api/v1/management-reviews/{rid}/close", headers=hs),
+        app_client.post(f"/api/v1/management-reviews/{rid}/close", headers=hs),
+    )
+    assert sorted([r1.status_code, r2.status_code]) == [200, 409], (
+        r1.status_code,
+        r1.text,
+        r2.status_code,
+        r2.text,
+    )
+    winner = r1 if r1.status_code == 200 else r2
+    assert winner.json()["close_state"] == "Closed"
 
 
 async def test_two_actions_same_owner_both_decidable_then_close(
