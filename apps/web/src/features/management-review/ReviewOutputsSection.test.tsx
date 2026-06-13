@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { axe } from "jest-axe";
 import { http, HttpResponse } from "msw";
 import type { ReviewOutput } from "../../lib/types";
 import { renderWithProviders } from "../../test/render";
@@ -129,4 +130,33 @@ it("opens AddOutputModal and requires an owner before save is enabled for an ACT
   await userEvent.click(within(dialog).getByRole("radio", { name: /Action/i }));
   const save = within(dialog).getByRole("button", { name: /^Add$|Save|Add output/i });
   expect(save).toBeDisabled();
+});
+
+it("shows Raise CAPA on an ACTION row when tracking + capa.create, and View CAPA when spawned", async () => {
+  grant("capa.create");
+  const spawned: ReviewOutput = { ...ACTION, id: "ro-9", spawned_capa_id: "capa-77" };
+  renderWithProviders(
+    <ReviewOutputsSection reviewId={REVIEW_ID} outputs={[ACTION, spawned]} editable={false} tracking />,
+  );
+  await waitFor(() => expect(screen.getByRole("button", { name: "Raise CAPA" })).toBeInTheDocument());
+  const view = screen.getByRole("link", { name: /View CAPA/ });
+  expect(view).toHaveAttribute("href", "/capa?capa=capa-77");
+});
+
+it("hides Raise CAPA without capa.create", async () => {
+  grant("mgmtReview.read");
+  renderWithProviders(
+    <ReviewOutputsSection reviewId={REVIEW_ID} outputs={[ACTION]} editable={false} tracking />,
+  );
+  await waitFor(() => expect(screen.getByText("Action")).toBeInTheDocument());
+  expect(screen.queryByRole("button", { name: "Raise CAPA" })).not.toBeInTheDocument();
+});
+
+it("has no accessibility violations with the Raise affordance", async () => {
+  grant("capa.create");
+  const { container } = renderWithProviders(
+    <ReviewOutputsSection reviewId={REVIEW_ID} outputs={[ACTION]} editable={false} tracking />,
+  );
+  await waitFor(() => expect(screen.getByText("Action")).toBeInTheDocument());
+  expect(await axe(container)).toHaveNoViolations();
 });
