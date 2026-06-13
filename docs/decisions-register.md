@@ -998,6 +998,77 @@ PROCESS-level authz resolver. 24 unit + integration tests.
 
 ---
 
+### R45 — Management Review family (clause 9.3) — slice family S-mr
+
+**Decision (owner, 2026-06-12).** A Management Review is a maintained **Document** (kind=DOCUMENT
+shared-PK subtype of `documented_information`, document_type `MR`) — the S-obj-1/R44 Quality-Objective
+precedent. **This is a deliberate, register-sanctioned deviation from doc-14 §9's RECORD
+classification:** only a released *document* earns the `current_effective_version_id` the compliance
+checklist counts (`services/reports/checklist.py:84`), so the DOCUMENT path is the only one that flips
+the **9.3 ★** node COVERED with zero checklist code. The convened review's **minutes** (the
+auto-compiled 9.3.2 inputs *as-of* + the 9.3.3 decisions/outputs) **freeze into the version snapshot at
+submit** — the S-obj-3 recipe verbatim: `rfc8785.dumps` the JSON-safe dict (hashed **bare, no
+preamble**) → `finalize_worm` an `application/json` source blob (lands `no_controlled_rendition`, R26)
+→ the SAME dict into `metadata_snapshot.mgmt_review_minutes` via a one-kwarg `_snapshot` fold. The
+document then rides the unchanged submit→approve→release machinery; **release** files the minutes as
+the 9.3.3 retained record and flips 9.3 COVERED. The operational lifecycle (the doc-10 §7
+Scheduled→…→Closed cycle) maps onto the authoring FSM + a mutable `close_state` (`ActionsTracked` →
+`Closed`) on the satellite, outside the version.
+
+**Sign-off** rides the standard `document.approve` / `document.release` (signed `meaning=approval` /
+`release` — **no new `SignatureMeaning`**, R2; SoD-2 submitter≠approver≠releaser binds because the
+submitter authored the frozen version); `attendees` jsonb is the informational roster only (a dedicated
+Top-Management approval routing is deferred). **Outputs** are append-only `review_output` rows; an
+`ACTION` output (owner + due) spawns one `MR_ACTION` task at release on a `MGMT_REVIEW`
+workflow_instance (the S5 direct-insert; **a per-action `stage_key` "action:&lt;output_id&gt;"** so the
+engine's distinct-approver guard never spans two actions of one owner). The new `MGMT_REVIEW`
+`/tasks/{id}/decision` dispatch leg (`decide_mr_task`, the `decide_periodic_review` mirror;
+404-collapse non-membership) flips the task DONE. The **review-close gate mirrors `_audit_close_gate`**
+(pure `output_blocks_close`, fail-closed: an ACTION whose task is None/not-DONE blocks; a DECISION never
+blocks; the loader OUTERJOINs the spawned task) — 409 `review_close_blocked` until every action is DONE.
+
+**Input compilation** (`compile-inputs`, Draft-only) runs each of the six live org-wide reads
+(objectives scorecard, audits, CAPAs/NCRs/complaints, KPI readings, compliance-checklist+overdue, drift)
+gated on the review **owner's** grants (the deterministic-pack F3 choice — `gather_grants`+`authorize`
+direct, the non-auditing PDP path), fail-closed per source → a `available=false` gap row, **never a
+403**; the four sourceless 9.3.2 inputs + risk + improvement are honest gap rows. **Cadence** is a coded
+default (`system_config.mgmt_review_cadence_months`=12; org-config later) driving a daily Beat sweep
+(`sweep_mgmt_reviews`, mirroring `sweep_reviews` — advisory-lock single-flight, org-scoped
+`open_review_exists` idempotency, NULL-owner + mis-seed honest degrades) that mints the next Scheduled
+Draft MR + an `MR_INPUT` task.
+
+The family **rides the already-seeded `mgmtReview.read`/`create`/`record_outputs` keys** (SYSTEM
+finest-scope; seeded + granted to QMS Owner in `0004_seed_authz.py`) — **no new permission key, catalog
+stays 100, no R38 change**; `record_outputs` is `sig_hook=False` (recording outputs mints no signature —
+R43) with its `sod_sensitive=True` flag documentary-only (no engine path). Audit: lifecycle reuses
+`DOCUMENT_*`; new acts emit additive `MGMT_REVIEW_INPUTS_COMPILED` / `_OUTPUT_RECORDED` /
+`_ACTION_SPAWNED` / `_CLOSED` with `object_type='document'` + `scope_ref=<identifier>` (R39 reuse — no
+new `audit_object_type`). Imported legacy minutes remain kind=RECORD type `MGMT_REVIEW` (evidence; do
+not flip the ★) and coexist. **Migration `0050`.**
+
+**Implemented in slice S-mr-1 (migration `0050`):** `management_review` subtype + append-only-by-posture
+`review_input` / `review_output` child tables + the `review_input_type` (12) / `review_output_type` /
+`management_review_close_state` enums + the four `MGMT_REVIEW_*` event types + the `MR` document_type
+seed + the `management_review` workflow_definition seed + the `system_config` cadence/owner columns.
+`/management-reviews` router (create/list/detail/compile-inputs/outputs CRUD/submit-review/approval/
+release/close/meta-PATCH). The 9.3-★-COVERED-on-release headline proven in integration. diff-critic
+MAJOR fixed (the per-action stage_key). **Deferred (named, not faked):** the four sourceless inputs +
+risk/opportunity (e) + `improvement_initiative` (f) as gap rows; the CAPA `review_output` un-reserve +
+the DCR `mgmt_review` link → slice-2 (the `spawned_capa_id`/`spawned_initiative_id` columns ship
+reserved-null); the rendered Management-Review-Pack PDF → v1.1; a dedicated Top-Management approval
+routing; MR commitment **revision** (first-release-only in v1, the S-obj-3 posture); the trailing
+**S-mr-2** UI + the Home "next review in N days" widget.
+
+**Back-propagation:** 02 (9.3 as-built — DOCUMENT subtype + the RECORD-deviation note), 06 (the
+MGMT_REVIEW record type is now the imported-minutes path; authored review = an `MR` document), 07 §3.7
+(`mgmtReview.*` now reach a resource), 10 §7 (the as-built lifecycle = authoring FSM + a `close_state`
+tail; the input compiler; the close gate), 13 §5.2 (the MR dashboard backed by real data — **chart
+vocabulary restated to calm tables/RAG**; the pack is v1.1), 14 §9 (as-built tables + the DOCUMENT-head
+deviation + the reserved `spawned_*` seams), 15 (the `/management-reviews*` endpoints), 16 (the ★ spine
+feature-complete).
+
+---
+
 ## Part 4 — Gap-audit finding → resolution map
 
 This table maps **every** gap-audit finding id from `17-gaps-and-open-questions.md` — Section A (Gaps: A1–A14), Section B (Contradictions/Inconsistencies: B1–B15), Section C (Risks & Hard Problems: C1–C12, including C6b), and Section D (Open Questions: D1–D14) — to the R-number(s) that resolve it. Several findings share a resolution (the audit raised the same concern as a gap, a contradiction, and an open question); those rows point to the same R-number.
