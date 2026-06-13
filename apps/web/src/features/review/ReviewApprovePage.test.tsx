@@ -243,3 +243,73 @@ describe("ReviewApprovePage DOC_ACK branch", () => {
     expect((await screen.findAllByText("SOP-PUR-014")).length).toBeGreaterThan(0);
   });
 });
+
+describe("ReviewApprovePage MGMT_REVIEW branch", () => {
+  const MR_ID = "mr-0001-0001-0001-000000000001"; // = mgmtReviewDetailFixture.id
+  const mrTask = (over: Record<string, unknown>) => ({
+    id: "tkmr1111-1111-1111-1111-111111111111",
+    instance_id: "wfmr1111-1111-1111-1111-111111111111",
+    stage_key: "prepare",
+    type: "MR_INPUT",
+    state: "PENDING",
+    assignee_user_id: "bbbb1111-1111-1111-1111-111111111111",
+    candidate_pool: ["bbbb1111-1111-1111-1111-111111111111"],
+    action_expected: "prepare_review",
+    due_at: null,
+    subject_type: "MGMT_REVIEW",
+    subject_id: MR_ID,
+    ...over,
+  });
+
+  test("an MR_INPUT task renders nav-only (review context + open-the-review link, NO decide affordance)", async () => {
+    server.use(http.get("/api/v1/tasks/:id", () => HttpResponse.json(mrTask({ type: "MR_INPUT" }))));
+    renderAtTask("tkmr1111-1111-1111-1111-111111111111");
+    expect(await screen.findByText("Prepare management review")).toBeInTheDocument();
+    // the MR context (best-effort mgmtReview.read) shows the identifier
+    expect((await screen.findAllByText("MR-001")).length).toBeGreaterThan(0);
+    // the nav link is present (≥1 — the context card + the prepare card both link to the review)
+    expect(screen.getAllByRole("link", { name: /open the review/i }).length).toBeGreaterThan(0);
+    // …and there is NO complete/decision affordance (the FE-enforced non-decidability)
+    expect(screen.queryByRole("button", { name: /mark action complete/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /submit decision/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("radio")).not.toBeInTheDocument();
+  });
+
+  test("an MR_ACTION pending task renders the one-click complete card (no signature)", async () => {
+    server.use(http.get("/api/v1/tasks/:id", () => HttpResponse.json(mrTask({ type: "MR_ACTION" }))));
+    renderAtTask("tkmr1111-1111-1111-1111-111111111111");
+    expect(await screen.findByText("Management review action")).toBeInTheDocument();
+    expect(
+      await screen.findByRole("button", { name: /mark action complete/i }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("radio")).not.toBeInTheDocument(); // not a DecisionCard
+    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
+  });
+
+  test("a decided MR_ACTION task shows the Decided alert instead of the complete card", async () => {
+    server.use(
+      http.get("/api/v1/tasks/:id", () =>
+        HttpResponse.json(mrTask({ type: "MR_ACTION", state: "DONE" })),
+      ),
+    );
+    renderAtTask("tkmr1111-1111-1111-1111-111111111111");
+    expect(await screen.findByText("This task has already been decided.")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /mark action complete/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  test("never resolves a subject document — no workflow-instance read for an MR task", async () => {
+    let instanceHit = false;
+    server.use(
+      http.get("/api/v1/tasks/:id", () => HttpResponse.json(mrTask({ type: "MR_ACTION" }))),
+      http.get("/api/v1/workflow-instances/:id", () => {
+        instanceHit = true;
+        return HttpResponse.json(approvalFixture);
+      }),
+    );
+    renderAtTask("tkmr1111-1111-1111-1111-111111111111");
+    expect(await screen.findByText("Management review action")).toBeInTheDocument();
+    expect(instanceHit).toBe(false);
+  });
+});

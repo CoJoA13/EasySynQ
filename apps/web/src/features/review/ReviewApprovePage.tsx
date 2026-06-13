@@ -1,4 +1,4 @@
-import { Alert, Anchor, Grid, Loader, Stack, Text, Title } from "@mantine/core";
+import { Alert, Anchor, Button, Card, Grid, Loader, Stack, Text, Title } from "@mantine/core";
 import { Link, useParams } from "react-router-dom";
 import { ApiError } from "../../lib/api";
 import { useDocument } from "../document/useDocument";
@@ -11,6 +11,8 @@ import { ObjectiveCommitmentContext, type ObjectiveCommitment } from "./Objectiv
 import { PeriodicReviewContext } from "./PeriodicReviewContext";
 import { AttestationCard } from "./AttestationCard";
 import { DocAckContext } from "./DocAckContext";
+import { MgmtReviewContext } from "./MgmtReviewContext";
+import { MrActionCard } from "./MrActionCard";
 import { useTask, useWorkflowInstance } from "./hooks";
 
 // S-web-5 + S-web-7b: the per-task focus page. Branches on the task's subject type:
@@ -23,11 +25,15 @@ export function ReviewApprovePage() {
   const isCapa = task?.subject_type === "CAPA";
   const isPeriodic = task?.subject_type === "PERIODIC_REVIEW";
   const isDocAck = task?.subject_type === "DOC_ACK";
-  // Document branch (unchanged): resolve the subject doc via the instance. Disabled for CAPA, periodic
-  // AND DOC_ACK tasks — the subject id is on the task itself; the deciding owner may hold no workflow
-  // read at all.
-  const { data: instance } = useWorkflowInstance(!isCapa && !isPeriodic && !isDocAck && task ? task.instance_id : null);
-  const docId = !isCapa && !isPeriodic && !isDocAck ? (instance?.subject_id ?? null) : null;
+  const isMgmtReview = task?.subject_type === "MGMT_REVIEW";
+  // Only a DOCUMENT-subject task resolves its subject doc via the instance; every other subject (CAPA /
+  // periodic / DOC_ACK / MGMT_REVIEW) carries its subject id on the task itself and the decider may hold
+  // no workflow read at all. ⚠ One named invariant in ONE place so a future arm can't forget a negation:
+  // an MR task must NOT resolve a subject document (its subject is the MR container, not a kind=DOCUMENT
+  // version) — that would apply the wrong document.read gate + a meaningless redline.
+  const isDocumentSubject = !isCapa && !isPeriodic && !isDocAck && !isMgmtReview;
+  const { data: instance } = useWorkflowInstance(isDocumentSubject && task ? task.instance_id : null);
+  const docId = isDocumentSubject ? (instance?.subject_id ?? null) : null;
   const { data: doc } = useDocument(docId, { enabled: docId !== null });
   const { data: versions } = useDocumentVersions(docId, docId !== null);
   // For a CAPA task, the approver signs the PROPOSED action plan — load it (gated capa.read) and gate the
@@ -149,6 +155,45 @@ export function ReviewApprovePage() {
           <Grid.Col span={{ base: 12, md: 5 }}>
             {decidable ? (
               <AttestationCard taskId={task.id} documentId={task.subject_id!} />
+            ) : (
+              decidedAlert
+            )}
+          </Grid.Col>
+        </Grid>
+      </Stack>
+    );
+  }
+
+  if (isMgmtReview) {
+    // S-mr-2: an MR task's subject is the management-review container (NOT a kind=DOCUMENT version) →
+    // best-effort context (mgmtReview.read, calm-403 degrade), no redline. Branch on task.type:
+    //  - MR_INPUT → nav-only (prepare-the-review): NO decide affordance. The FE enforces this — the
+    //    backend decide_mr_task does NOT gate on task.type, so the only thing keeping a "prepare" task
+    //    out of the decision path is the absence of a complete button here.
+    //  - MR_ACTION → the one-click complete card (no signature — R43). The subject id is on the task.
+    const title = task.type === "MR_INPUT" ? "Prepare management review" : "Management review action";
+    return (
+      <Stack gap="lg">
+        <Title order={2}>{title}</Title>
+        <Grid gutter="lg" align="flex-start">
+          <Grid.Col span={{ base: 12, md: 7 }}>
+            <MgmtReviewContext reviewId={task.subject_id!} />
+          </Grid.Col>
+          <Grid.Col span={{ base: 12, md: 5 }}>
+            {task.type === "MR_INPUT" ? (
+              <Card withBorder>
+                <Stack gap="sm">
+                  <Text fw={600}>Prepare this review</Text>
+                  <Text size="sm">
+                    Compile the inputs and record the outputs, then submit it for review.
+                  </Text>
+                  <Button component={Link} to={`/management-reviews/${task.subject_id!}`}>
+                    Open the review →
+                  </Button>
+                </Stack>
+              </Card>
+            ) : decidable ? (
+              <MrActionCard taskId={task.id} reviewId={task.subject_id!} />
             ) : (
               decidedAlert
             )}
