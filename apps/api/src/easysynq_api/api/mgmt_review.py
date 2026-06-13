@@ -20,6 +20,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..auth.dependencies import get_current_user
+from ..db.models._capa_enums import NcSeverity
 from ..db.models._mgmt_review_enums import ReviewOutputType
 from ..db.models._workflow_enums import WorkflowSubjectType
 from ..db.models.app_user import AppUser
@@ -49,6 +50,7 @@ from ..services.mgmt_review import (
     list_outputs,
     list_reviews,
     release_review,
+    spawn_capa_for_output,
     spawn_mr_actions,
     submit_review_for_review,
     update_output,
@@ -104,6 +106,10 @@ class ReviewSubmitBody(BaseModel):
     change_reason: str | None = Field(default=None, max_length=500)
 
 
+class OutputCapaCreate(BaseModel):
+    severity: NcSeverity
+
+
 # --- serializers ---
 def _mgmt_review(
     mr: ManagementReview, *, identifier: str, title: str, current_state: Any
@@ -144,6 +150,7 @@ def _review_output(ro: ReviewOutput) -> dict[str, Any]:
         "owner_user_id": str(ro.owner_user_id) if ro.owner_user_id is not None else None,
         "due_date": ro.due_date.isoformat() if ro.due_date is not None else None,
         "spawned_task_id": str(ro.spawned_task_id) if ro.spawned_task_id is not None else None,
+        "spawned_capa_id": str(ro.spawned_capa_id) if ro.spawned_capa_id is not None else None,
     }
 
 
@@ -405,6 +412,31 @@ async def delete_output_endpoint(
 ) -> Response:
     await delete_output(session, caller, review_id=review_id, output_id=output_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post(
+    "/management-reviews/{review_id}/outputs/{output_id}/raise-capa",
+    status_code=status.HTTP_201_CREATED,
+)
+async def raise_output_capa_endpoint(
+    review_id: uuid.UUID,
+    output_id: uuid.UUID,
+    body: OutputCapaCreate,
+    request: Request,
+    caller: AppUser = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+    authz_sink: AuthzAuditSink = Depends(get_authz_audit_sink),
+) -> dict[str, Any]:
+    """Spawn a CAPA from an ACTION output (F2 on-demand). Gate ``capa.create`` at SYSTEM (the MR has
+    no process); the spawn sets ``source=review_output`` + the one-shot ``spawned_capa_id`` latch.
+    Returns the refreshed output (carrying ``spawned_capa_id`` so the FE can deep-link to the CAPA
+    board)."""
+    await _load_review(session, caller, review_id)  # 404 cross-org
+    await enforce(session, authz_sink, request, caller, "capa.create", ResourceContext.system())
+    ro = await spawn_capa_for_output(
+        session, caller, review_id=review_id, output_id=output_id, severity=body.severity
+    )
+    return _review_output(ro)
 
 
 @router.patch("/management-reviews/{review_id}")
