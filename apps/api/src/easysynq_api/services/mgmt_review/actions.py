@@ -45,6 +45,10 @@ async def spawn_capa_for_output(
     if pair is None:
         raise _not_found("Management Review")
     review, doc = pair
+    # Org check (Codex #1; moot under D1 single-org but consistent with _require_draft's read-path
+    # guard) — 404-collapse a cross-org id, never leak its existence.
+    if doc.org_id != actor.org_id:
+        raise _not_found("Management Review")
     output = (
         await session.execute(
             select(ReviewOutput)
@@ -57,6 +61,10 @@ async def spawn_capa_for_output(
         raise _not_found("Review output")
     if output.output_type is not ReviewOutputType.ACTION:
         raise _conflict("output_not_actionable", "Only an ACTION output can spawn a CAPA")
+    # Best-effort tracking-window guard: close_state is read unlocked, so a concurrent close_review
+    # (which locks the MR satellite row, not this one) is not serialized against. Benign by design —
+    # the close gate reads only the spawned MR_ACTION task state, never the spawned CAPA/DCR, so a
+    # spawn in the tiny just-after-close window is still coherent.
     if review.close_state is not ManagementReviewCloseState.ActionsTracked:
         raise _conflict(
             "review_not_tracking",
@@ -142,11 +150,19 @@ async def spawn_dcr_for_output(
     if pair is None:
         raise _not_found("Management Review")
     review, doc = pair
+    # Org check (Codex #1; moot under D1 single-org but consistent with _require_draft's read-path
+    # guard) — 404-collapse a cross-org id, never leak its existence.
+    if doc.org_id != actor.org_id:
+        raise _not_found("Management Review")
     output = await session.get(ReviewOutput, output_id)
     if output is None or output.management_review_id != review_id:
         raise _not_found("Review output")
     if output.output_type is not ReviewOutputType.ACTION:
         raise _conflict("output_not_actionable", "Only an ACTION output can spawn a DCR")
+    # Best-effort tracking-window guard: close_state is read unlocked, so a concurrent close_review
+    # (which locks the MR satellite row, not this one) is not serialized against. Benign by design —
+    # the close gate reads only the spawned MR_ACTION task state, never the spawned CAPA/DCR, so a
+    # spawn in the tiny just-after-close window is still coherent.
     if review.close_state is not ManagementReviewCloseState.ActionsTracked:
         raise _conflict(
             "review_not_tracking",

@@ -71,8 +71,8 @@ class DcrReasonClass(enum.Enum):
 
 class DcrSourceLinkType(enum.Enum):
     # The originating-object kind for source_link (doc 14 §7). capa/finding exist in v1;
-    # mgmt_review/ risk are reserved forward seams (those families are not built — never written
-    # until they ship).
+    # mgmt_review is written by S-mr-3 (MR output → DCR); risk is still a reserved forward seam
+    # (that family is not built).
     capa = "capa"
     finding = "finding"
     mgmt_review = "mgmt_review"
