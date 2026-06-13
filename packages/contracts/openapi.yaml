@@ -4901,6 +4901,297 @@ paths:
         "403": { $ref: "#/components/responses/ProblemResponse" }
         "404": { $ref: "#/components/responses/ProblemResponse" }
 
+  /management-reviews:
+    post:
+      tags: [management-reviews]
+      operationId: createManagementReview
+      summary: "Convene a Management Review (S-mr-1, clause 9.3). Gated mgmtReview.create (enforced imperatively at SYSTEM scope — no path id at create)."
+      description: "Creates a kind=DOCUMENT subtype (type MR) through the vault lifecycle (Draft). The convening QM becomes the MR document's owner. Returns the bare ManagementReview representation (no inputs/outputs)."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ManagementReviewCreate" }
+      responses:
+        "201":
+          description: The newly created Management Review (Draft).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ManagementReview" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "422": { $ref: "#/components/responses/ProblemResponse" }
+    get:
+      tags: [management-reviews]
+      operationId: listManagementReviews
+      summary: "List Management Reviews for the caller's org. Gated mgmtReview.read."
+      description: "Returns all Management Reviews in the caller's org as bare rows (no inputs/outputs)."
+      responses:
+        "200":
+          description: The Management Reviews list.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/ManagementReview" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+
+  # NOTE: every literal/sub-path below is declared BEFORE /management-reviews/{review_id} so the
+  # literals are not shadowed by the {review_id} str path-convertor (the S-pack-2 lesson; mirrors
+  # the objectives block's scorecard/policy ordering).
+  /management-reviews/{review_id}/compile-inputs:
+    post:
+      tags: [management-reviews]
+      operationId: compileManagementReviewInputs
+      summary: "(Re)compile the 9.3.2 sourced input reads → review_input rows (Draft-only). Gated mgmtReview.record_outputs."
+      description: >-
+        Triggered by a mgmtReview.record_outputs holder, but each sourced read is evaluated under the
+        review OWNER's grants (the MR document's owner_user_id), fail-closed → a gap row (available=false),
+        never a 403. Returns the refreshed detail (with inputs + outputs).
+      parameters:
+        - { name: review_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: The refreshed Management Review detail (inputs + outputs).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ManagementReviewDetail" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409":
+          description: "Not Draft, or the review has no resolvable owner (conflict)."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  /management-reviews/{review_id}/close:
+    post:
+      tags: [management-reviews]
+      operationId: closeManagementReview
+      summary: "Close a released Management Review. Gated mgmtReview.record_outputs."
+      description: >-
+        The close gate blocks (409 review_close_blocked) while any ACTION output's spawned MR_ACTION
+        task is not DONE; on pass, flips close_state=Closed + stamps closed_at + emits MGMT_REVIEW_CLOSED.
+        Requires the review to have been released (close_state=ActionsTracked); re-close is idempotent.
+      parameters:
+        - { name: review_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: The Management Review (now Closed).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ManagementReview" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409":
+          description: "Not released, or an ACTION output's MR_ACTION task is not DONE (review_close_blocked)."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  /management-reviews/{review_id}/outputs:
+    post:
+      tags: [management-reviews]
+      operationId: addManagementReviewOutput
+      summary: "Add a 9.3.3 decision/action output to a Management Review. Gated mgmtReview.record_outputs."
+      description: "Creates a review_output row (DECISION recorded; ACTION spawns an MR_ACTION task at release; IMPROVEMENT reserved). Returns the created output."
+      parameters:
+        - { name: review_id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ReviewOutputCreate" }
+      responses:
+        "201":
+          description: The created review output.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ReviewOutput" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409":
+          description: "The review is not editable (e.g. not Draft) (conflict)."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "422": { $ref: "#/components/responses/ProblemResponse" }
+
+  /management-reviews/{review_id}/outputs/{output_id}:
+    patch:
+      tags: [management-reviews]
+      operationId: updateManagementReviewOutput
+      summary: "Partial edit of a review output (Draft-only). Gated mgmtReview.record_outputs."
+      description: "Omitted fields inherit (model_fields_set; the objectives PATCH rule); an explicit null clears the nullable fields (owner_user_id / due_date). Returns the updated output."
+      parameters:
+        - { name: review_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: output_id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ReviewOutputUpdate" }
+      responses:
+        "200":
+          description: The updated review output.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ReviewOutput" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409":
+          description: "The review is not editable (e.g. not Draft) (conflict)."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "422": { $ref: "#/components/responses/ProblemResponse" }
+    delete:
+      tags: [management-reviews]
+      operationId: deleteManagementReviewOutput
+      summary: "Delete a review output (Draft-only). Gated mgmtReview.record_outputs."
+      parameters:
+        - { name: review_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: output_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "204": { description: "Removed." }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409":
+          description: "The review is not editable (e.g. not Draft) (conflict)."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  /management-reviews/{review_id}/approval:
+    get:
+      tags: [management-reviews]
+      operationId: getManagementReviewApproval
+      summary: "The MR's current approval cycle (latest workflow instance + tasks), or null pre-submit. Gated mgmtReview.read."
+      description: >-
+        The MR approval instance carries subject_type=DOCUMENT (instantiate_approval hardcodes it, the
+        OBJ approval precedent). Returns the LATEST workflow_instance for the review (tasks expanded),
+        or null when it was never submitted (calm, not 404).
+      parameters:
+        - { name: review_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: "The latest workflow instance for the review (tasks expanded), or null."
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/WorkflowInstance" }
+                  - { type: "null" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+
+  /management-reviews/{review_id}/submit-review:
+    post:
+      tags: [management-reviews]
+      operationId: submitManagementReview
+      summary: "Draft→InReview — freezes the minutes into the version snapshot + instantiates the approval workflow. Gated mgmtReview.record_outputs."
+      description: >-
+        One transaction: the compiled inputs + decisions + meta freeze into a new Draft WORM version's
+        metadata_snapshot, then the MR rides the generic approval engine (a FOR UPDATE + populate_existing
+        load serializes concurrent submits and dodges the stale-identity-map trap). Approval then routes
+        through POST /tasks/{id}/decision (the generic DOCUMENT leg). The optional change_reason lands on
+        the frozen version. Returns the bare Management Review (now InReview).
+      parameters:
+        - { name: review_id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ReviewSubmit" }
+      responses:
+        "200":
+          description: The Management Review (now InReview).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ManagementReview" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409":
+          description: "Illegal transition (e.g. not Draft) (conflict)."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "422": { $ref: "#/components/responses/ProblemResponse" }
+
+  /management-reviews/{review_id}/release:
+    post:
+      tags: [management-reviews]
+      operationId: releaseManagementReview
+      summary: "Approved→Effective — atomic single-Effective cutover (SERIALIZABLE + INV-1) + the release signature, then spawns one MR_ACTION task per ACTION output. Gated document.release (sig_hook + SoD-2)."
+      description: >-
+        document.release is enforced imperatively over the SoD-2-enriched scope (author/approver ≠
+        releaser), then the shared release() runs the INV-1 SERIALIZABLE cutover → Effective → the 9.3 ★
+        flips. On release, close_state is set to ActionsTracked and one MR_ACTION task is spawned per
+        ACTION output on a MGMT_REVIEW container instance (tracked to closure). Returns the Management
+        Review (now Effective).
+      parameters:
+        - { name: review_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: The Management Review (now Effective, close_state=ActionsTracked).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ManagementReview" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409":
+          description: Illegal transition (invalid_state_transition), or a concurrent release won (conflict).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "422": { $ref: "#/components/responses/ProblemResponse" }
+
+  /management-reviews/{review_id}:
+    get:
+      tags: [management-reviews]
+      operationId: getManagementReview
+      summary: "Get a single Management Review with its inputs + outputs. Gated mgmtReview.read."
+      parameters:
+        - { name: review_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: The Management Review with inputs + outputs.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ManagementReviewDetail" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+    patch:
+      tags: [management-reviews]
+      operationId: updateManagementReviewMeta
+      summary: "Edit the meta the freeze reads into the minutes (period_label / review_date / attendees; Draft-only). Gated mgmtReview.record_outputs."
+      description: "Omitted ≠ null (model_fields_set); an explicit null clears the nullable fields. Returns the bare Management Review."
+      parameters:
+        - { name: review_id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ReviewMetaUpdate" }
+      responses:
+        "200":
+          description: The updated Management Review.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ManagementReview" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409":
+          description: "The review is not editable (e.g. not Draft) (conflict)."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "422": { $ref: "#/components/responses/ProblemResponse" }
+
 components:
   securitySchemes:
     keycloak:
@@ -7587,6 +7878,153 @@ components:
         objectives:
           type: array
           items: { $ref: "#/components/schemas/Objective" }
+
+    ManagementReview:
+      type: object
+      additionalProperties: false
+      required:
+        [id, identifier, title, current_state, period_label, review_date, attendees, close_state, closed_at, created_at]
+      description: >-
+        A Management Review (S-mr-1, clause 9.3) — a kind=DOCUMENT subtype (type MR). The bare row
+        shape from _mgmt_review (list/create/close/submit/release/meta-update responses; the detail
+        read adds inputs + outputs — see ManagementReviewDetail).
+      properties:
+        id: { type: string, format: uuid }
+        identifier: { type: string, description: "The document identifier (e.g. MR-001)." }
+        title: { type: string }
+        current_state:
+          type: string
+          enum: [Draft, InReview, Approved, Effective, UnderRevision, Superseded, Obsolete]
+        period_label: { type: [string, "null"] }
+        review_date: { type: [string, "null"], format: date }
+        attendees:
+          type: [array, "null"]
+          items: { type: object, description: "Informational roster entry, e.g. {name, role?, user_id?}." }
+          description: "JSONB list-of-objects roster (free-form; not validated)."
+        close_state:
+          type: [string, "null"]
+          enum: [ActionsTracked, Closed, null]
+          description: "ActionsTracked at release; Closed once the close gate passes. Null before release."
+        closed_at: { type: [string, "null"], format: date-time }
+        created_at: { type: string, format: date-time }
+
+    ManagementReviewDetail:
+      allOf:
+        - { $ref: "#/components/schemas/ManagementReview" }
+        - type: object
+          additionalProperties: false
+          required: [inputs, outputs]
+          description: "The single-review / compile-inputs response — the bare row plus its compiled inputs and outputs."
+          properties:
+            inputs:
+              type: array
+              items: { $ref: "#/components/schemas/ReviewInput" }
+            outputs:
+              type: array
+              items: { $ref: "#/components/schemas/ReviewOutput" }
+
+    ManagementReviewCreate:
+      type: object
+      additionalProperties: false
+      required: [title]
+      properties:
+        title: { type: string, minLength: 1, maxLength: 300 }
+        period_label: { type: [string, "null"], maxLength: 200 }
+        review_date: { type: [string, "null"], format: date }
+
+    ReviewMetaUpdate:
+      type: object
+      additionalProperties: false
+      description: >-
+        Edit the meta the freeze reads into the minutes (Draft-only). Omitted ≠ null
+        (model_fields_set); an explicit null clears the field.
+      properties:
+        period_label: { type: [string, "null"], maxLength: 200 }
+        review_date: { type: [string, "null"], format: date }
+        attendees:
+          type: [array, "null"]
+          items: { type: object, description: "Informational roster entry, e.g. {name, role?, user_id?}." }
+
+    ReviewSubmit:
+      type: object
+      additionalProperties: false
+      description: "Optional submit body — the change_reason lands on the frozen version (INV-3)."
+      properties:
+        change_reason: { type: [string, "null"], maxLength: 500 }
+
+    ReviewInput:
+      type: object
+      additionalProperties: false
+      required: [id, management_review_id, input_type, available, source_ref, position]
+      description: >-
+        A compiled 9.3.2 input row (_review_input). The mutable working projection in Draft, frozen by
+        the version snapshot at submit. available=false marks a 9.3.2 gap (no source wired in v1).
+      properties:
+        id: { type: string, format: uuid }
+        management_review_id: { type: string, format: uuid }
+        input_type:
+          type: string
+          enum:
+            - PRIOR_ACTIONS
+            - CONTEXT_CHANGES
+            - CUSTOMER_SATISFACTION
+            - OBJECTIVES_STATUS
+            - PROCESS_PERFORMANCE
+            - NONCONFORMITIES_CAPA
+            - MONITORING_RESULTS
+            - AUDIT_RESULTS
+            - SUPPLIER_PERFORMANCE
+            - RESOURCE_ADEQUACY
+            - RISK_OPPORTUNITY_ACTIONS
+            - IMPROVEMENT_OPPORTUNITIES
+        available: { type: boolean }
+        source_ref:
+          type: object
+          description: "The sourced read's reference payload (JSONB object; shape varies per input_type)."
+        position: { type: integer }
+
+    ReviewOutput:
+      type: object
+      additionalProperties: false
+      required: [id, management_review_id, output_type, description, owner_user_id, due_date, spawned_task_id]
+      description: "A 9.3.3 decision/action output (_review_output)."
+      properties:
+        id: { type: string, format: uuid }
+        management_review_id: { type: string, format: uuid }
+        output_type:
+          type: string
+          enum: [DECISION, ACTION, IMPROVEMENT]
+        description: { type: string }
+        owner_user_id: { type: [string, "null"], format: uuid }
+        due_date: { type: [string, "null"], format: date }
+        spawned_task_id:
+          type: [string, "null"]
+          format: uuid
+          description: "The MR_ACTION task spawned for an ACTION output at release (null otherwise / pre-release)."
+
+    ReviewOutputCreate:
+      type: object
+      additionalProperties: false
+      required: [output_type, description]
+      properties:
+        output_type:
+          type: string
+          enum: [DECISION, ACTION, IMPROVEMENT]
+        description: { type: string, minLength: 1, maxLength: 4000 }
+        owner_user_id: { type: [string, "null"], format: uuid }
+        due_date: { type: [string, "null"], format: date }
+
+    ReviewOutputUpdate:
+      type: object
+      additionalProperties: false
+      description: "Partial output edit — omitted ≠ null (model_fields_set; the objectives PATCH rule)."
+      properties:
+        output_type:
+          type: [string, "null"]
+          enum: [DECISION, ACTION, IMPROVEMENT, null]
+        description: { type: [string, "null"], minLength: 1, maxLength: 4000 }
+        owner_user_id: { type: [string, "null"], format: uuid }
+        due_date: { type: [string, "null"], format: date }
 
 security:
   - keycloak: []
