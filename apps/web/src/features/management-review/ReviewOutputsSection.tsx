@@ -64,7 +64,10 @@ export function ReviewOutputsSection({ reviewId, outputs, editable, tracking = f
                   {t === "ACTION" ? <ActionRow output={o} nameOf={nameOf} />
                     : <Text size="sm">{o.description}</Text>}
                   <Group gap="xs" wrap="nowrap">
-                    {t === "ACTION" && tracking && (
+                    {/* View link shows whenever a CAPA was spawned (even on a Closed review — the
+                        CAPA is still viewable); only Raise is gated on the tracking window via
+                        canRaiseCapa (= tracking && capa.create). */}
+                    {t === "ACTION" && (
                       o.spawned_capa_id ? (
                         <Anchor component={Link} size="xs" to={`/capa?capa=${o.spawned_capa_id}`}>
                           View CAPA →

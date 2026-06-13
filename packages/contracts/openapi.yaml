@@ -6771,7 +6771,7 @@ components:
       type: string
       enum:
         [regulatory, audit_finding, capa, process_improvement, error_correction, periodic_review,
-         customer_requirement, other]
+         customer_requirement, mgmt_review, other]
     DcrSourceLinkType:
       type: string
       description: mgmt_review / risk are reserved forward seams (those families are not built in v1).

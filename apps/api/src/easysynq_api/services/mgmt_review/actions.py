@@ -159,6 +159,13 @@ async def spawn_dcr_for_output(
         raise _not_found("Review output")
     if output.output_type is not ReviewOutputType.ACTION:
         raise _conflict("output_not_actionable", "Only an ACTION output can spawn a DCR")
+    # Idempotent replay FIRST — BEFORE the mutable close-state gate (the raise_dcr_from_capa
+    # precedent; Codex). If the original raise succeeded but the response was lost and the review
+    # was then closed, a retry with the same Idempotency-Key must still replay the already-created
+    # DCR, not 409 ``review_not_tracking``.
+    existing = await _find_spawned_dcr_for_output(session, actor.org_id, output_id, idempotency_key)
+    if existing is not None:
+        return existing, False
     # Best-effort tracking-window guard: close_state is read unlocked, so a concurrent close_review
     # (which locks the MR satellite row, not this one) is not serialized against. Benign by design —
     # the close gate reads only the spawned MR_ACTION task state, never the spawned CAPA/DCR, so a
@@ -169,9 +176,6 @@ async def spawn_dcr_for_output(
             "A DCR can only be spawned while the review's actions are being tracked "
             "(it must be released, and not already closed).",
         )
-    existing = await _find_spawned_dcr_for_output(session, actor.org_id, output_id, idempotency_key)
-    if existing is not None:
-        return existing, False
     try:
         dcr = await raise_dcr(
             session,

@@ -254,3 +254,48 @@ async def test_capabilities_release_reflects_sod2(
 
     lst = (await app_client.get("/api/v1/management-reviews", headers=hs)).json()
     assert all("capabilities" not in row for row in lst["data"])
+
+
+async def test_raise_dcr_idempotency_replays_after_close(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """Codex P2: a retry with the same Idempotency-Key AFTER the review is Closed still replays the
+    already-created DCR (200, same id) — the idempotency lookup runs BEFORE the tracking gate."""
+    salt = uuid.uuid4().hex[:8]
+    owner_sub = f"mr-own-{salt}"
+    owner_id = await _grant(owner_sub, ())
+    ho = _auth(token_factory, owner_sub)
+    rid = await _drive_review_to_release(
+        app_client, token_factory, salt, action_owner_subject=owner_sub, action_owner_id=owner_id
+    )
+    hs = _auth(token_factory, f"mr-sm-{salt}")  # holds the MR keys (so it can close) + DCR create
+    await _grant(f"mr-sm-{salt}", ("changeRequest.create", "changeRequest.read"))
+    oid = await _action_output_id(app_client, hs, rid)
+    key = uuid.uuid4().hex
+    payload = {"change_type": "CREATE", "change_significance": "MINOR", "reason_text": "pre-close"}
+    first = await app_client.post(
+        f"/api/v1/management-reviews/{rid}/outputs/{oid}/raise-dcr",
+        headers={**hs, "Idempotency-Key": key},
+        json=payload,
+    )
+    assert first.status_code == 201, first.text
+
+    # close the review: complete the lone MR_ACTION task, then close as the MR-keys holder
+    tasks = (await app_client.get("/api/v1/tasks?type=MR_ACTION", headers=ho)).json()
+    action_task = next(t for t in tasks if t["assignee_user_id"] == str(owner_id))
+    done = await app_client.post(
+        f"/api/v1/tasks/{action_task['id']}/decision", headers=ho, json={"outcome": "complete"}
+    )
+    assert done.status_code == 200, done.text
+    closed = await app_client.post(f"/api/v1/management-reviews/{rid}/close", headers=hs)
+    assert closed.status_code == 200, closed.text
+    assert closed.json()["close_state"] == "Closed"
+
+    # retry the SAME key AFTER close → replays (200, same DCR), NOT 409 review_not_tracking
+    replay = await app_client.post(
+        f"/api/v1/management-reviews/{rid}/outputs/{oid}/raise-dcr",
+        headers={**hs, "Idempotency-Key": key},
+        json=payload,
+    )
+    assert replay.status_code == 200, replay.text
+    assert replay.json()["id"] == first.json()["id"]

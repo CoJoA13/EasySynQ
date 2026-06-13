@@ -160,3 +160,16 @@ it("has no accessibility violations with the Raise affordance", async () => {
   await waitFor(() => expect(screen.getByText("Action")).toBeInTheDocument());
   expect(await axe(container)).toHaveNoViolations();
 });
+
+it("keeps the View CAPA link on a closed (non-tracking) review (Codex P2)", async () => {
+  grant("capa.create");
+  const spawned: ReviewOutput = { ...ACTION, id: "ro-9", spawned_capa_id: "capa-77" };
+  renderWithProviders(
+    <ReviewOutputsSection reviewId={REVIEW_ID} outputs={[spawned]} editable={false} tracking={false} />,
+  );
+  // even with tracking=false (a Closed review) the deep-link to the already-spawned CAPA survives
+  const view = await screen.findByRole("link", { name: /View CAPA/ });
+  expect(view).toHaveAttribute("href", "/capa?capa=capa-77");
+  // ...but Raise is NOT offered outside the tracking window
+  expect(screen.queryByRole("button", { name: "Raise CAPA" })).not.toBeInTheDocument();
+});
