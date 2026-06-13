@@ -1196,3 +1196,81 @@ export interface PlanCreateBody {
   responsible_user_id?: string | null;
   due_date?: string | null;
 }
+
+// ---- S-mr-2 Management Reviews (clause 9.3) — pinned to api/mgmt_review.py serializers ----
+export type MgmtReviewCloseState = "ActionsTracked" | "Closed";
+export type ReviewInputType =
+  | "PRIOR_ACTIONS" | "CONTEXT_CHANGES" | "CUSTOMER_SATISFACTION" | "OBJECTIVES_STATUS"
+  | "PROCESS_PERFORMANCE" | "NONCONFORMITIES_CAPA" | "MONITORING_RESULTS" | "AUDIT_RESULTS"
+  | "SUPPLIER_PERFORMANCE" | "RESOURCE_ADEQUACY" | "RISK_OPPORTUNITY_ACTIONS" | "IMPROVEMENT_OPPORTUNITIES";
+export type ReviewOutputType = "DECISION" | "ACTION" | "IMPROVEMENT";
+export type MgmtReviewState = "current" | "due_soon" | "overdue";
+
+export interface AttendeeRow { name: string; role?: string; user_id?: string; }
+
+// source_ref is free-form per input_type: an available row carries `summary`, a gap row `reason`.
+export interface ReviewInputSourceRef {
+  available: boolean;
+  generated_at: string;
+  summary?: Record<string, unknown>;
+  reason?: string;
+}
+export interface ReviewInput {
+  id: string;
+  management_review_id: string;
+  input_type: ReviewInputType;
+  available: boolean;
+  source_ref: ReviewInputSourceRef;
+  position: number;
+}
+export interface ReviewOutput {
+  id: string;
+  management_review_id: string;
+  output_type: ReviewOutputType;
+  description: string;
+  owner_user_id: string | null;
+  due_date: string | null;
+  spawned_task_id: string | null;
+}
+export interface MgmtReview {
+  id: string;
+  identifier: string;
+  title: string;
+  current_state: DocumentCurrentState;
+  period_label: string | null;
+  review_date: string | null;
+  attendees: AttendeeRow[] | null;
+  close_state: MgmtReviewCloseState | null;
+  closed_at: string | null;
+  created_at: string;
+}
+export interface MgmtReviewDetail extends MgmtReview {
+  inputs: ReviewInput[];
+  outputs: ReviewOutput[];
+}
+export interface MgmtReviewListResponse { data: MgmtReview[]; }
+export interface MgmtReviewNextDue {
+  cadence_months: number;
+  last_review_effective_from: string | null;
+  next_review_due: string | null;
+  review_state: MgmtReviewState | null;
+  owner_configured: boolean;
+}
+export interface MgmtReviewCreateBody { title: string; period_label?: string; review_date?: string; }
+export interface MgmtReviewMetaBody {
+  period_label?: string | null;
+  review_date?: string | null;
+  attendees?: AttendeeRow[] | null;
+}
+export interface ReviewOutputCreateBody {
+  output_type: ReviewOutputType;
+  description: string;
+  owner_user_id?: string | null;
+  due_date?: string | null;
+}
+export interface ReviewOutputUpdateBody {
+  output_type?: ReviewOutputType;
+  description?: string;
+  owner_user_id?: string | null;
+  due_date?: string | null;
+}
