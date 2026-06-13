@@ -46,6 +46,15 @@ export function LeftRail() {
         label="Internal Audit"
         active={pathname.startsWith("/audits")}
       />
+      {can("changeRequest.read") && (
+        // S-dcr-ui-1: gated — changeRequest.read; the change-control (DCR) register.
+        <NavLink
+          component={Link}
+          to="/dcrs"
+          label="Change requests"
+          active={pathname.startsWith("/dcrs")}
+        />
+      )}
       {can("import.review") && (
         // S-ing-4b: gated — import review is an admin-only SYSTEM key (no ABAC scope).
         <NavLink
