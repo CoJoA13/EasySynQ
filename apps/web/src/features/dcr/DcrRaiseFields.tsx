@@ -25,7 +25,8 @@ export function isDcrFieldsValid(v: DcrFieldsValue): boolean {
   return v.reason_text.trim().length > 0 && (v.change_type === "CREATE" || v.target_document_id !== null);
 }
 
-// A native date (YYYY-MM-DD) → a local-midnight ISO timestamp (R8); null when unset.
+// A native date (YYYY-MM-DD) → the UTC-midnight ISO-8601 instant of that calendar date (R8:
+// proposed_effective_from is a timestamptz the release sweep schedules off); null when unset.
 export function proposedEffectiveIso(date: string | null): string | null {
   return date ? `${date}T00:00:00+00:00` : null;
 }
