@@ -1,5 +1,5 @@
 import { http, HttpResponse } from "msw";
-import type { AckDecisionResult, AckMatrixRow, AuditList, AuditPlanList, AuditProgramList, Capa, Complaint, DistributionPayload, DocumentVersion, DriftStatus, EffectivePolicy, Finding, FindingList, Measurement, MeasurementListResponse, Ncr, Objective, ObjectiveCommitment, ObjectiveListResponse, ObjectivePlan, ObjectiveScorecard, SupersededCopies, WorkflowInstance } from "../../lib/types";
+import type { AckDecisionResult, AckMatrixRow, AuditList, AuditPlanList, AuditProgramList, Capa, Complaint, DistributionPayload, DocumentVersion, DriftStatus, EffectivePolicy, Finding, FindingList, Measurement, MeasurementListResponse, MgmtReview, MgmtReviewDetail, MgmtReviewListResponse, MgmtReviewNextDue, Ncr, Objective, ObjectiveCommitment, ObjectiveListResponse, ObjectivePlan, ObjectiveScorecard, ReviewInput, ReviewOutput, SupersededCopies, WorkflowInstance } from "../../lib/types";
 
 export const docFixture = [
   {
@@ -1149,6 +1149,76 @@ const measurementFixtures: Measurement[] = [
   },
 ] satisfies Measurement[];
 
+// ---- S-mr-2 management review fixtures ----
+const mgmtReviewListFixture = {
+  data: [
+    {
+      id: "mr-0001-0001-0001-000000000001",
+      identifier: "MR-001",
+      title: "2026 Annual Management Review",
+      current_state: "Draft",
+      period_label: "2026 Annual",
+      review_date: "2026-06-12",
+      attendees: [{ name: "Mara", role: "QM" }],
+      close_state: null,
+      closed_at: null,
+      created_at: "2026-06-01T09:00:00+00:00",
+    } satisfies MgmtReview,
+  ],
+} satisfies MgmtReviewListResponse;
+
+const mgmtReviewDetailFixture = {
+  ...mgmtReviewListFixture.data[0]!,
+  inputs: [
+    {
+      id: "ri-3", management_review_id: "mr-0001-0001-0001-000000000001",
+      input_type: "OBJECTIVES_STATUS", available: true, position: 3,
+      source_ref: { available: true, generated_at: "2026-06-01T09:00:00+00:00",
+        summary: { total: 5, on_target: 3, by_rag: { green: 3, amber: 1, red: 1, unmeasured: 0 } } },
+    },
+    {
+      id: "ri-7", management_review_id: "mr-0001-0001-0001-000000000001",
+      input_type: "AUDIT_RESULTS", available: true, position: 7,
+      source_ref: { available: true, generated_at: "2026-06-01T09:00:00+00:00",
+        summary: { total: 4, open: 1, closed: 3 } },
+    },
+    {
+      id: "ri-0", management_review_id: "mr-0001-0001-0001-000000000001",
+      input_type: "PRIOR_ACTIONS", available: false, position: 0,
+      source_ref: { available: false, generated_at: "2026-06-01T09:00:00+00:00",
+        reason: "not available (no prior released review)" },
+    },
+    {
+      id: "ri-1", management_review_id: "mr-0001-0001-0001-000000000001",
+      input_type: "CONTEXT_CHANGES", available: false, position: 1,
+      source_ref: { available: false, generated_at: "2026-06-01T09:00:00+00:00",
+        reason: "not available (no structured source)" },
+    },
+  ] satisfies ReviewInput[],
+  outputs: [
+    {
+      id: "ro-1", management_review_id: "mr-0001-0001-0001-000000000001",
+      output_type: "DECISION", description: "Approve the objectives for 2026",
+      owner_user_id: null, due_date: null, spawned_task_id: null,
+    },
+    {
+      id: "ro-2", management_review_id: "mr-0001-0001-0001-000000000001",
+      output_type: "ACTION", description: "Refresh the supplier evaluation register",
+      owner_user_id: "user-mara", due_date: "2026-09-01", spawned_task_id: null,
+    },
+  ] satisfies ReviewOutput[],
+} satisfies MgmtReviewDetail;
+
+const mgmtReviewApprovalFixture = null; // pre-submit; per-test override injects an instance
+
+const mgmtReviewNextDueFixture = {
+  cadence_months: 12,
+  last_review_effective_from: "2025-06-01",
+  next_review_due: "2026-06-01",
+  review_state: "due_soon",
+  owner_configured: true,
+} satisfies MgmtReviewNextDue;
+
 export const handlers = [
   // ---- S-obj-2 Quality Objectives (default happy-path; per-test overrides for 403/empty/error) ----
   http.get("/api/v1/objectives/scorecard", ({ request }) => {
@@ -1205,6 +1275,28 @@ export const handlers = [
   http.post("/api/v1/objectives/:id/start-revision", () =>
     HttpResponse.json({ ...objectiveFixtures[0]!, current_state: "UnderRevision" } satisfies Objective),
   ),
+  // ---- S-mr-2 management reviews ----
+  // IMPORTANT: the literal `next-due` MUST register BEFORE `/:id` or MSW matches "next-due" as :id.
+  http.get("/api/v1/management-reviews/next-due", () => HttpResponse.json(mgmtReviewNextDueFixture)),
+  http.get("/api/v1/management-reviews", () => HttpResponse.json(mgmtReviewListFixture)),
+  http.get("/api/v1/management-reviews/:id", ({ params }) =>
+    params.id === mgmtReviewDetailFixture.id
+      ? HttpResponse.json(mgmtReviewDetailFixture)
+      : HttpResponse.json({ code: "not_found", title: "Management Review not found" }, { status: 404 }),
+  ),
+  http.get("/api/v1/management-reviews/:id/approval", () => HttpResponse.json(mgmtReviewApprovalFixture)),
+  http.post("/api/v1/management-reviews", () => HttpResponse.json(mgmtReviewListFixture.data[0], { status: 201 })),
+  http.post("/api/v1/management-reviews/:id/compile-inputs", () => HttpResponse.json(mgmtReviewDetailFixture)),
+  http.post("/api/v1/management-reviews/:id/outputs", () => HttpResponse.json(mgmtReviewDetailFixture.outputs[1], { status: 201 })),
+  http.patch("/api/v1/management-reviews/:id/outputs/:oid", () => HttpResponse.json(mgmtReviewDetailFixture.outputs[1])),
+  http.delete("/api/v1/management-reviews/:id/outputs/:oid", () => new HttpResponse(null, { status: 204 })),
+  http.patch("/api/v1/management-reviews/:id", () => HttpResponse.json(mgmtReviewDetailFixture)),
+  http.post("/api/v1/management-reviews/:id/submit-review", () =>
+    HttpResponse.json({ ...mgmtReviewListFixture.data[0], current_state: "InReview" })),
+  http.post("/api/v1/management-reviews/:id/release", () =>
+    HttpResponse.json({ ...mgmtReviewListFixture.data[0], current_state: "Effective", close_state: "ActionsTracked" })),
+  http.post("/api/v1/management-reviews/:id/close", () =>
+    HttpResponse.json({ ...mgmtReviewListFixture.data[0], current_state: "Effective", close_state: "Closed", closed_at: "2026-09-02T09:00:00+00:00" })),
   // ---- S-ing-4b ingestion (default happy-path; per-test override for 403/empty/error) ----
   http.get("/api/v1/admin/imports", () => HttpResponse.json([ingestionRunFixture])),
   http.get("/api/v1/admin/imports/:id", () => HttpResponse.json(ingestionRunFixture)),
