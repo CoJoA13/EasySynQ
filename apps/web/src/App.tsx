@@ -32,6 +32,7 @@ import { ObjectivesRegisterPage } from "./features/objectives/ObjectivesRegister
 import { ObjectiveDetailPage } from "./features/objectives/ObjectiveDetailPage";
 import { ManagementReviewsRegisterPage } from "./features/management-review/ManagementReviewsRegisterPage";
 import { ManagementReviewDetailPage } from "./features/management-review/ManagementReviewDetailPage";
+import { DcrsRegisterPage } from "./features/dcr/DcrsRegisterPage";
 import { apiGet } from "./lib/api";
 import { useAuth } from "./lib/auth";
 
@@ -145,6 +146,7 @@ export function App() {
         <Route path="objectives/:id" element={<ObjectiveDetailPage />} />
         <Route path="management-reviews" element={<ManagementReviewsRegisterPage />} />
         <Route path="management-reviews/:id" element={<ManagementReviewDetailPage />} />
+        <Route path="dcrs" element={<DcrsRegisterPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
