@@ -1352,3 +1352,33 @@ export interface DcrImpact {
 export interface DcrImpactList {
   data: DcrImpact[];
 }
+
+// ---- S-dcr-ui-2a write bodies (pinned to api/dcr.py DcrCreate/DcrPatch/DcrCancel + the two spawn bodies) ----
+export interface DcrCreateBody {
+  change_type: DcrChangeType;
+  change_significance: ChangeSignificance;
+  reason_class: DcrReasonClass;
+  reason_text: string;
+  target_document_id?: string | null;
+  source_link_type?: DcrSourceLinkType | null;
+  source_link_id?: string | null;
+  proposed_effective_from?: string | null;
+}
+// PATCH while Open — every field optional; null/absent = unchanged (cannot clear a field, mirrors the backend).
+export interface DcrPatchBody {
+  reason_text?: string;
+  reason_class?: DcrReasonClass;
+  change_significance?: ChangeSignificance;
+  proposed_effective_from?: string | null;
+}
+export interface DcrCancelBody {
+  comment?: string;
+}
+// Shared by both spawn endpoints (CAPA defaults reason_class=capa, MR forces mgmt_review — neither carries it).
+export interface DcrSpawnBody {
+  change_type: DcrChangeType;
+  change_significance: ChangeSignificance;
+  reason_text: string;
+  target_document_id?: string | null;
+  proposed_effective_from?: string | null;
+}
