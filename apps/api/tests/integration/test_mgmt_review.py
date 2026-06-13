@@ -663,3 +663,62 @@ async def test_released_review_flips_9_3_covered(
     after = await _clause_9_3_row(app_client, hr)
     assert after["effective_count"] == eff0 + 1, (eff0, after)
     assert after["status"] == "COVERED", after
+
+
+async def test_two_actions_same_owner_both_decidable_then_close(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """Regression (diff-critic MAJOR): a review with TWO ACTION outputs owned by the SAME user — the
+    owner must complete BOTH MR_ACTION tasks (the second decision is 200, not a 409 from the engine's
+    distinct-approver guard over a shared stage_key), then the review closes."""
+    salt = uuid.uuid4().hex[:8]
+    submitter, approver, releaser = f"mr2-sm-{salt}", f"mr2-ap-{salt}", f"mr2-rl-{salt}"
+    hs = _auth(token_factory, submitter)
+    hap = _auth(token_factory, approver)
+    hrl = _auth(token_factory, releaser)
+    await _grant(submitter, _MR_KEYS)
+    await s5.grant_role(approver, "Approver")
+    await _grant(releaser, ("document.release", "document.read", "document.read_draft"))
+
+    owner_subject = f"mr2-own-{salt}"
+    ho = _auth(token_factory, owner_subject)
+    owner_id = await _grant(owner_subject, ())
+
+    rid = await _create_review(app_client, hs, f"Two-action review {salt}")
+    for desc, due in (("Action one", "2026-11-30"), ("Action two", "2026-12-31")):
+        out = await app_client.post(
+            f"/api/v1/management-reviews/{rid}/outputs",
+            headers=hs,
+            json={
+                "output_type": "ACTION",
+                "description": desc,
+                "owner_user_id": str(owner_id),
+                "due_date": due,
+            },
+        )
+        assert out.status_code == 201, out.text
+
+    submitted = await app_client.post(f"/api/v1/management-reviews/{rid}/submit-review", headers=hs)
+    assert submitted.status_code == 200, submitted.text
+    task_id = await s5.task_for_doc(rid)
+    dec = await app_client.post(
+        f"/api/v1/tasks/{task_id}/decision", headers=hap, json={"outcome": "approve"}
+    )
+    assert dec.status_code == 200, dec.text
+    rel = await app_client.post(f"/api/v1/management-reviews/{rid}/release", headers=hrl)
+    assert rel.status_code == 200, rel.text
+
+    # the owner holds TWO MR_ACTION tasks; completing BOTH must succeed (the 2nd is NOT a 409)
+    tasks = (await app_client.get("/api/v1/tasks?type=MR_ACTION", headers=ho)).json()
+    mine = [t for t in tasks if t["assignee_user_id"] == str(owner_id)]
+    assert len(mine) == 2, mine
+    for t in mine:
+        done = await app_client.post(
+            f"/api/v1/tasks/{t['id']}/decision", headers=ho, json={"outcome": "complete"}
+        )
+        assert done.status_code == 200, done.text
+
+    # both actions DONE → the review closes
+    closed = await app_client.post(f"/api/v1/management-reviews/{rid}/close", headers=hs)
+    assert closed.status_code == 200, closed.text
+    assert closed.json()["close_state"] == "Closed"

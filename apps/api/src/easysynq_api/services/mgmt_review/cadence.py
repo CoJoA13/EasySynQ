@@ -56,7 +56,8 @@ logger = logging.getLogger("easysynq.mgmt_review")
 
 _DEF_KEY = "management_review"
 _PREPARE_STAGE_KEY = "prepare"
-_ZERO_SUMMARY = {"mgmt_reviews_opened": 0, "skipped_open": 0}
+# All three keys on every exit path (a consumer/assertion must never KeyError on a missing key).
+_ZERO_SUMMARY = {"mgmt_reviews_opened": 0, "skipped_open": 0, "skipped_lock_held": 0}
 
 
 def next_mr_due(

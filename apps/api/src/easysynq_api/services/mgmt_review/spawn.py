@@ -93,7 +93,12 @@ async def spawn_mr_actions(
         task = Task(
             org_id=review.org_id,
             instance_id=instance.id,
-            stage_key=_ACTION_STAGE_KEY,
+            # A UNIQUE stage_key per action — NOT a shared "action" stage. The engine's
+            # distinct-approver guard (engine.py:442) 409s an actor who already has a positive
+            # outcome on the same (instance, stage_key); with a shared key an owner of TWO actions
+            # could never complete the second → the review could never close. Each action is an
+            # independent owner-pinned task, not a quorum, so it gets its own stage.
+            stage_key=f"{_ACTION_STAGE_KEY}:{output.id}",
             type=TaskType.MR_ACTION,
             assignee_user_id=output.owner_user_id,
             candidate_pool=[str(output.owner_user_id)],

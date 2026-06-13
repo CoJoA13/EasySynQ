@@ -227,10 +227,14 @@ async def compile_inputs(
     session: AsyncSession,
     review: ManagementReview,
     owner: AppUser,
+    caller: AppUser,
 ) -> list[ReviewInput]:
     """Re-compile the working ``review_input`` set (Draft-only) under the OWNER's grants. Replaces
     the existing rows (delete-then-insert) in one txn, then emits MGMT_REVIEW_INPUTS_COMPILED. The
-    caller (the route) owns loading ``review``/``owner`` + the trigger-gate enforce."""
+    caller (the route) owns loading ``review``/``owner`` + the trigger-gate enforce.
+
+    ``owner`` gates the sourced READS (F3 determinism); ``caller`` is the person who TRIGGERED the
+    compile and is the audit actor — they differ when a delegate preparer recompiles."""
     doc = await session.get(DocumentedInformation, review.id)
     if doc is None:  # pragma: no cover — the satellite exists, so the base must too
         raise ProblemException(status=404, code="not_found", title="Management Review not found")
@@ -274,7 +278,9 @@ async def compile_inputs(
             org_id=owner.org_id,
             # Intentionally a fresh read — the audit wall-clock, NOT the frozen `now`/generated_at.
             occurred_at=datetime.datetime.now(datetime.UTC),
-            actor_id=owner.id,
+            # The audit actor is the CALLER who triggered the compile, not the owner whose grants
+            # gated the reads (a delegate preparer ≠ the MR owner).
+            actor_id=caller.id,
             actor_type=ActorType.user,
             event_type=EventType.MGMT_REVIEW_INPUTS_COMPILED,
             object_type=AuditObjectType.document,

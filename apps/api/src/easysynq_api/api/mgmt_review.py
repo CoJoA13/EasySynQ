@@ -294,7 +294,7 @@ async def compile_inputs_endpoint(
         raise ProblemException(
             status=409, code="conflict", title="Management Review has no resolvable owner"
         )
-    await compile_inputs(session, mr, owner)
+    await compile_inputs(session, mr, owner, caller)
     row = await mr_repo.get_review_row(session, review_id)
     if row is None:  # pragma: no cover — just mutated it, cannot be absent
         raise ProblemException(status=404, code="not_found", title="Management Review not found")

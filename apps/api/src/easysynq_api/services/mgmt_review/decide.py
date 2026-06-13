@@ -8,11 +8,13 @@ The only outcome is ``complete`` (``action_expected="complete"``): an MR action 
 there is no reviewer-rejection of an owner's own tracked action. The close gate (Phase 6) only cares
 the task reaches ``TaskState.DONE``; ``complete`` is in the engine's ``_POSITIVE`` set, so it does.
 
-⚠ The spawned task's ``stage_key="action"`` is NOT a stage of the seeded ``management_review``
-definition (which has only the ``prepare`` container stage). ``wf_engine.decide`` therefore finds no
-stage for it, flips the task to DONE (that mutation runs BEFORE the quorum block), and sets the
-CONTAINER instance to NEEDS_ATTENTION — harmless here: the instance is a pure task container, never
-read for a state, and the close gate keys off the task's DONE state, not the instance."""
+⚠ The spawned task's ``stage_key`` is a per-action ``"action:<output_id>"`` (NOT a shared "action"
+stage, and NOT a stage of the seeded ``management_review`` definition, which has only ``prepare``).
+The per-action key keeps the engine's distinct-approver guard (engine.py:442) from
+spanning two actions owned by the same user. ``wf_engine.decide`` finds no stage for it, flips the
+task to DONE (that mutation runs BEFORE the quorum block), and sets the CONTAINER instance to
+NEEDS_ATTENTION — harmless here: the instance is a pure task container, never read for a state, and
+the close gate keys off the task's DONE state, not the instance."""
 
 from __future__ import annotations
 
