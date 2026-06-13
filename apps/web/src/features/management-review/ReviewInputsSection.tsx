@@ -92,8 +92,9 @@ function InputCard({ input }: { input: ReviewInput }) {
           )
         ) : (
           <Alert color="gray" variant="light">
-            {"Not available"}
-            {ref.reason ? ` — ${ref.reason}` : ""}
+            {/* The backend reason already reads "not available (…)"; render it (capitalized) rather
+                than prefixing a second "Not available" — avoids the doubled copy (S-mr-2 smoke catch). */}
+            {ref.reason ? ref.reason.charAt(0).toUpperCase() + ref.reason.slice(1) : "Not available"}
           </Alert>
         )}
       </Stack>
