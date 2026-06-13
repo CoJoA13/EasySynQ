@@ -2,7 +2,7 @@
 freeze (Draft → InReview + a ``mgmt_review_minutes`` snapshot). Grants are SYSTEM-scope
 PermissionOverrides on JIT users (the test_quality_objectives / test_objective_lifecycle harness).
 
-The full submit → approve → release → 9.3-★-COVERED lifecycle is Phase 8 (not built here)."""
+The full submit → approve → release → 9.3-star-COVERED lifecycle (the headline) is at the foot."""
 
 from __future__ import annotations
 
@@ -624,3 +624,42 @@ async def test_close_blocked_on_never_released_draft(
     det = (await app_client.get(f"/api/v1/management-reviews/{rid}", headers=h)).json()
     assert det["current_state"] == "Draft"
     assert det["close_state"] is None
+
+
+# --- Phase 8: the headline — a released Management Review flips the 9.3 ★ checklist node ----------
+
+
+async def _clause_9_3_row(client: AsyncClient, h: dict[str, str]) -> dict:
+    body = (await client.get("/api/v1/reports/compliance-checklist", headers=h)).json()
+    return next(r for r in body["rows"] if r["number"] == "9.3")
+
+
+async def test_released_review_flips_9_3_covered(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """THE thesis: a released Management Review (a kind=DOCUMENT subtype auto-mapped to clause 9.3)
+    flips the 9.3 star compliance node PARTIAL->COVERED with ZERO checklist code — the S-obj-3
+    mechanism (release sets ``current_effective_version_id``, the only thing the checklist counts).
+    Delta-asserted: the ``-m integration`` suite shares one DB, so capture the count before."""
+    salt = uuid.uuid4().hex[:8]
+    # an org-wide checklist reader holding the SYSTEM report key (not the MR keys)
+    reader = f"mr-chk-{salt}"
+    hr = _auth(token_factory, reader)
+    await _grant(reader, ("report.compliance_checklist.read",))
+
+    before = await _clause_9_3_row(app_client, hr)
+    eff0 = before["effective_count"]
+
+    owner_subject = f"mr-cov-own-{salt}"
+    owner_id = await _grant(owner_subject, ())
+    await _drive_review_to_release(
+        app_client,
+        token_factory,
+        salt,
+        action_owner_subject=owner_subject,
+        action_owner_id=owner_id,
+    )
+
+    after = await _clause_9_3_row(app_client, hr)
+    assert after["effective_count"] == eff0 + 1, (eff0, after)
+    assert after["status"] == "COVERED", after
