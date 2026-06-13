@@ -67,6 +67,12 @@ app.conf.update(
             "task": "easysynq.documents.review_sweep",
             "schedule": 86400.0,  # daily
         },
+        # S-mr-1: daily clause-9.3 management-review cadence sweep — mints the next Scheduled
+        # review when the org's cadence horizon (mgmt_review_cadence_months) is reached.
+        "documents-mgmt-review-sweep": {
+            "task": "easysynq.documents.mgmt_review_sweep",
+            "schedule": 86400.0,  # daily
+        },
         # S-ack-1: daily acknowledgement sweep (doc 04 §8.3 / R15 target-entry catch-up + the
         # self-heal for lost doc-scoped enqueues).
         "ack-sweep": {
