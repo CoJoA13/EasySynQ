@@ -5,6 +5,7 @@ import { DetailDrawer } from "../../app/shell/DetailDrawer";
 import { useUserDirectory } from "../../app/shell/useUserDirectory";
 import type { DirectoryUser } from "../../lib/types";
 import { useDocument } from "../document/useDocument";
+import { DcrAdvancePanel } from "./DcrAdvancePanel";
 import { DcrImpactTable } from "./DcrImpactTable";
 import { DcrStageTimeline } from "./DcrStageTimeline";
 import { DcrStateBadge } from "./DcrStateBadge";
@@ -78,6 +79,8 @@ export function DcrDrawer({ dcrId, onClose }: { dcrId: string | null; onClose: (
               {REASON_LABEL[dcr.reason_class] ?? dcr.reason_class}
             </Badge>
           </Group>
+
+          <DcrAdvancePanel dcr={dcr} />
 
           <Field label="Reason">{dcr.reason_text}</Field>
 
