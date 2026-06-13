@@ -11,7 +11,7 @@ import datetime
 import enum
 import uuid
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Text, false, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Text, false, func, text
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -100,6 +100,21 @@ class SystemConfig(Base):
         server_default=false(),
         default=False,
         nullable=False,
+    )
+    # S-mr-1: clause-9.3 management-review cadence (coded default; org-tunable later, additive).
+    # ``mgmt_review_owner_user_id`` is the owner the cadence sweep assigns the minted Draft MR to;
+    # NULL → the sweep degrades to a logged no-op (it can't create an ownerless document).
+    mgmt_review_cadence_months: Mapped[int] = mapped_column(
+        Integer, server_default=text("12"), nullable=False
+    )
+    mgmt_review_owner_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "app_user.id",
+            ondelete="RESTRICT",
+            name="fk_system_config_mgmt_review_owner_user_id_app_user",
+        ),
+        nullable=True,
     )
     finalized_at: Mapped[datetime.datetime | None] = mapped_column(
         DateTime(timezone=True),

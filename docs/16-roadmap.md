@@ -161,6 +161,14 @@ Records/evidence capture, retention/disposition, Evidence Packs, audits/findings
 > board + lifecycle writes + Complaint & NCR intake). **Next:** S-web-7d (audits & findings) · then the PDCA dashboard
 > (deferred until acks/objectives land). Per-slice detail in `docs/slice-history.md`; design specs/plans in
 > `docs/superpowers/{specs,plans}/` (read the one matching your slice, not eagerly).
+>
+> **Management Review family (clause 9.3) — SHIPPED (S-mr-1, migration `0050`, R45).** The Management Review is a
+> kind=DOCUMENT `MR` subtype (the S-obj-1 precedent — the register-sanctioned deviation from the doc-14 §9 RECORD
+> prescription) whose minutes freeze into the version snapshot at submit; **one released MR flips the 9.3 ★ node COVERED**,
+> so **the ISO 9001:2015 ★ spine is now feature-complete.** It rides the already-seeded `mgmtReview.*` keys (no new key,
+> catalog stays 100), with the owner-gated input compiler, the `MR_ACTION` spawn + the `_audit_close_gate`-style close
+> gate, and a daily cadence Beat sweep. **Remaining: S-mr-2** (the MR dashboard UI + the Home "next review in N days"
+> widget); deferrals (named, not faked) in R45.
 
 **Goal:** everything an organization needs to *run and certify* an ISO 9001:2015 QMS, end to end, and to face an external audit with a one-click evidence pack.
 

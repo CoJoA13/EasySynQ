@@ -188,6 +188,8 @@ Permissions are named `resource.action`. The catalog below is **complete for v1*
 |---|---|---|---|
 | `mgmtReview.read` / `mgmtReview.create` / `mgmtReview.record_outputs` | View / hold / record outputs of a Management Review (9.3) | SYSTEM | yes (record_outputs) |
 | `objective.read` / `objective.manage` | View / maintain Quality Objectives (6.2) | PROCESS / SYSTEM | – |
+
+> **As-built (S-mr-1, R45):** `mgmtReview.read` / `create` / `record_outputs` now reach a concrete resource (the `MR` document + its `/management-reviews*` endpoints) — no new key, catalog stays 100. `record_outputs` is **non-signing** (`sig_hook=False` — recording an output mints no signature, R43); its `sod_sensitive` flag is documentary-only. Sign-off of the review itself rides the standard signed `document.approve` / `document.release` (SoD-2).
 | `register.read` / `register.manage` | View / maintain Context, Interested-Party, Risk registers (4.x/6.1) | SYSTEM / PROCESS | – |
 | `kpi.read` / `kpi.record` | View / capture KPI readings (9.1.1 — a Record) | PROCESS | – |
 

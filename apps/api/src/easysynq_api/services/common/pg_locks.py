@@ -43,6 +43,11 @@ LOCK_BLOB_VERIFY = 7710007
 # S-ack-1: serialize the acknowledgement sweep (daily Beat + the doc-scoped release/distribution
 # enqueues share one lock — overlapping fires must not double-mint per-user instances).
 LOCK_ACK_SWEEP = 7710008
+# S-mr-1: serialize the daily management-review cadence sweep (one mint-the-next-scheduled-MR pass)
+# so two overlapping Beat fires cannot double-open the next review (acks-late re-delivery makes
+# concurrent runs real — the sweep_reviews posture; the org-scoped open_review_exists check is the
+# idempotency guard the lock complements).
+LOCK_MGMT_REVIEW_SWEEP = 7710009
 # (The S-ing-5 commit single-flight is the per-item ledger CLAIM — INSERT ON CONFLICT DO UPDATE
 # WHERE result='failed' — in ingestion.repository.claim_commit_result, NOT an advisory lock.)
 
