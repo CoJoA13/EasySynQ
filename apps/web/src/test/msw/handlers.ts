@@ -1,5 +1,5 @@
 import { http, HttpResponse } from "msw";
-import type { AckDecisionResult, AckMatrixRow, AuditList, AuditPlanList, AuditProgramList, Capa, Complaint, DistributionPayload, DocumentVersion, DriftStatus, EffectivePolicy, Finding, FindingList, Measurement, MeasurementListResponse, MgmtReview, MgmtReviewDetail, MgmtReviewListResponse, MgmtReviewNextDue, Ncr, Objective, ObjectiveCommitment, ObjectiveListResponse, ObjectivePlan, ObjectiveScorecard, ReviewInput, ReviewOutput, SupersededCopies, WorkflowInstance } from "../../lib/types";
+import type { AckDecisionResult, AckMatrixRow, AuditList, AuditPlanList, AuditProgramList, Capa, Complaint, DcrDetail, DcrImpactList, DcrList, DistributionPayload, DocumentVersion, DriftStatus, EffectivePolicy, Finding, FindingList, Measurement, MeasurementListResponse, MgmtReview, MgmtReviewDetail, MgmtReviewListResponse, MgmtReviewNextDue, Ncr, Objective, ObjectiveCommitment, ObjectiveListResponse, ObjectivePlan, ObjectiveScorecard, ReviewInput, ReviewOutput, SupersededCopies, WorkflowInstance } from "../../lib/types";
 
 export const docFixture = [
   {
@@ -1220,7 +1220,128 @@ const mgmtReviewNextDueFixture = {
   owner_configured: true,
 } satisfies MgmtReviewNextDue;
 
+// ---- S-dcr-ui-1 fixtures (pinned to api/dcr.py _dcr/_stage_event/_impact) ----
+export const DCR_REVISE_ID = "dcr00001-0001-0001-0001-000000000001";
+export const DCR_CREATE_ID = "dcr00002-0002-0002-0002-000000000002";
+export const DCR_IMPL_ID = "dcr00003-0003-0003-0003-000000000003";
+export const DCR_CANCELLED_ID = "dcr00004-0004-0004-0004-000000000004";
+const TARGET_DOC_ID = "doc00001-0001-0001-0001-000000000001";
+
+const dcrListFixture = {
+  data: [
+    {
+      id: DCR_REVISE_ID,
+      identifier: "DCR-2026-0001",
+      target_document_id: TARGET_DOC_ID,
+      change_type: "REVISE",
+      change_significance: "MAJOR",
+      reason_class: "capa",
+      reason_text: "Corrective action requires a procedure revision.",
+      source_link_type: "capa",
+      source_link_id: "capa0001-0001-0001-0001-000000000001",
+      proposed_effective_from: null,
+      resulting_version_id: null,
+      state: "Open",
+      decision: null,
+      created_by: "bbbb1111-1111-1111-1111-111111111111",
+      created_at: "2026-06-10T09:00:00+00:00",
+    },
+    {
+      id: DCR_CREATE_ID,
+      identifier: "DCR-2026-0002",
+      target_document_id: null,
+      change_type: "CREATE",
+      change_significance: "MINOR",
+      reason_class: "process_improvement",
+      reason_text: "A new work instruction is needed.",
+      source_link_type: null,
+      source_link_id: null,
+      proposed_effective_from: null,
+      resulting_version_id: null,
+      state: "Assessed",
+      decision: null,
+      created_by: "bbbb1111-1111-1111-1111-111111111111",
+      created_at: "2026-06-09T09:00:00+00:00",
+    },
+    {
+      id: DCR_IMPL_ID,
+      identifier: "DCR-2026-0003",
+      target_document_id: TARGET_DOC_ID,
+      change_type: "REVISE",
+      change_significance: "MAJOR",
+      reason_class: "audit_finding",
+      reason_text: "Audit finding closed via revision.",
+      source_link_type: "finding",
+      source_link_id: "find0001-0001-0001-0001-000000000001",
+      proposed_effective_from: "2026-07-01T00:00:00+00:00",
+      resulting_version_id: "ver00001-0001-0001-0001-000000000001",
+      state: "Implemented",
+      decision: "Approved by the change board.",
+      created_by: "bbbb1111-1111-1111-1111-111111111111",
+      created_at: "2026-05-01T09:00:00+00:00",
+    },
+    {
+      id: DCR_CANCELLED_ID,
+      identifier: "DCR-2026-0004",
+      target_document_id: TARGET_DOC_ID,
+      change_type: "RETIRE",
+      change_significance: "MINOR",
+      reason_class: "other",
+      reason_text: "Superseded request, withdrawn.",
+      source_link_type: null,
+      source_link_id: null,
+      proposed_effective_from: null,
+      resulting_version_id: null,
+      state: "Cancelled",
+      decision: null,
+      created_by: "bbbb1111-1111-1111-1111-111111111111",
+      created_at: "2026-04-01T09:00:00+00:00",
+    },
+  ],
+} satisfies DcrList;
+
+const dcrDetailFixture = {
+  ...dcrListFixture.data[0]!,
+  stage_events: [
+    {
+      id: "se-1",
+      from_state: null,
+      to_state: "Open",
+      actor_id: "bbbb1111-1111-1111-1111-111111111111",
+      comment: "Change request raised.",
+      payload: null,
+      occurred_at: "2026-06-10T09:00:00+00:00",
+    },
+  ],
+} satisfies DcrDetail;
+
+const dcrImpactFixture = {
+  data: [
+    {
+      id: "imp-1",
+      dimension: "processes",
+      auto_populated: { applicable: true, processes: ["p1", "p2"] },
+      requester_annotation: "Affects the calibration process.",
+      created_at: "2026-06-10T10:00:00+00:00",
+      updated_at: null,
+    },
+    {
+      id: "imp-2",
+      dimension: "training",
+      auto_populated: { applicable: false },
+      requester_annotation: null,
+      created_at: "2026-06-10T10:00:00+00:00",
+      updated_at: null,
+    },
+  ],
+} satisfies DcrImpactList;
+
 export const handlers = [
+  // ---- S-dcr-ui-1 DCR (default happy-path; per-test overrides for 403/empty/error) ----
+  // IMPORTANT: /dcrs/:id/impact MUST register BEFORE /dcrs/:id or MSW matches "impact" as :id.
+  http.get("/api/v1/dcrs/:id/impact", () => HttpResponse.json(dcrImpactFixture)),
+  http.get("/api/v1/dcrs/:id", () => HttpResponse.json(dcrDetailFixture)),
+  http.get("/api/v1/dcrs", () => HttpResponse.json(dcrListFixture)),
   // ---- S-obj-2 Quality Objectives (default happy-path; per-test overrides for 403/empty/error) ----
   http.get("/api/v1/objectives/scorecard", ({ request }) => {
     const pid = new URL(request.url).searchParams.get("process_id");

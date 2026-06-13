@@ -1276,3 +1276,79 @@ export interface ReviewOutputUpdateBody {
   owner_user_id?: string | null;
   due_date?: string | null;
 }
+
+// ---- S-dcr-ui-1 (Document Change Request — read spine) — pinned to api/dcr.py serializers ----
+// _dcr (api/dcr.py:118-137), _stage_event (:151-160), _impact (:140-148).
+// ⚠ The plan's header said "16 fields" but the live _dcr serializer (lines 120-136) has exactly 15.
+// ChangeSignificance ("MAJOR"|"MINOR") is already declared above — reused here, not re-declared.
+export type DcrChangeType = "REVISE" | "CREATE" | "RETIRE";
+export type DcrReasonClass =
+  | "regulatory"
+  | "audit_finding"
+  | "capa"
+  | "process_improvement"
+  | "error_correction"
+  | "periodic_review"
+  | "customer_requirement"
+  | "mgmt_review"
+  | "other";
+export type DcrSourceLinkType = "capa" | "finding" | "mgmt_review" | "risk";
+export type DcrState =
+  | "Open"
+  | "Assessed"
+  | "Routed"
+  | "InApproval"
+  | "Approved"
+  | "Implemented"
+  | "Closed"
+  | "Cancelled"
+  | "Rejected";
+
+export interface Dcr {
+  id: string;
+  identifier: string; // DCR-{YYYY}-{NNNN}
+  target_document_id: string | null; // null for CREATE
+  change_type: DcrChangeType;
+  change_significance: ChangeSignificance; // reuses the existing "MAJOR"|"MINOR" type
+  reason_class: DcrReasonClass;
+  reason_text: string;
+  source_link_type: DcrSourceLinkType | null;
+  source_link_id: string | null; // polymorphic, no FK
+  proposed_effective_from: string | null; // ISO datetime
+  resulting_version_id: string | null; // set at implement (REVISE/CREATE); null for RETIRE / pre-implement
+  state: DcrState;
+  decision: string | null; // null until approval/rejection
+  created_by: string; // an app_user.id
+  created_at: string; // ISO datetime
+}
+
+export interface DcrStageEvent {
+  id: string;
+  from_state: DcrState | null; // null on genesis
+  to_state: DcrState;
+  actor_id: string | null; // null for system/Beat
+  comment: string | null;
+  payload: Record<string, unknown> | null; // free JSONB — not rendered in the read spine
+  occurred_at: string;
+}
+
+export interface DcrDetail extends Dcr {
+  stage_events: DcrStageEvent[]; // GET /dcrs/{id} augments _dcr with this
+}
+
+export interface DcrList {
+  data: Dcr[];
+}
+
+export interface DcrImpact {
+  id: string;
+  dimension: string; // one of 7
+  auto_populated: Record<string, unknown> | null;
+  requester_annotation: string | null;
+  created_at: string;
+  updated_at: string | null;
+}
+
+export interface DcrImpactList {
+  data: DcrImpact[];
+}
