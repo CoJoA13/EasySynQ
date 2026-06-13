@@ -129,6 +129,7 @@ export function ManagementReviewDetailPage() {
                   <Button
                     color="teal"
                     loading={submit.isPending}
+                    disabled={compile.isPending}
                     onClick={() => void run(() => submit.mutateAsync(mr.id))}
                   >
                     Submit for review

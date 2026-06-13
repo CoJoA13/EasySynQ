@@ -172,6 +172,11 @@ export function ReviewApprovePage() {
     //    out of the decision path is the absence of a complete button here.
     //  - MR_ACTION → the one-click complete card (no signature — R43). The subject id is on the task.
     const title = task.type === "MR_INPUT" ? "Prepare management review" : "Management review action";
+    // The MR_ACTION task's stage_key is `action:<output_id>` (spawn.py) — surface WHICH output this
+    // completes so an owner with several same-owner actions can't confuse them (Codex P2).
+    const actionOutputId = task.stage_key.startsWith("action:")
+      ? task.stage_key.slice("action:".length)
+      : null;
     return (
       <Stack gap="lg">
         <Title order={2}>{title}</Title>
@@ -193,7 +198,7 @@ export function ReviewApprovePage() {
                 </Stack>
               </Card>
             ) : decidable ? (
-              <MrActionCard taskId={task.id} reviewId={task.subject_id!} />
+              <MrActionCard taskId={task.id} reviewId={task.subject_id!} outputId={actionOutputId} />
             ) : (
               decidedAlert
             )}

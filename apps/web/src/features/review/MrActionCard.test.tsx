@@ -71,4 +71,12 @@ describe("MrActionCard", () => {
     await userEvent.click(screen.getByRole("button", { name: /mark action complete/i }));
     expect(await screen.findByText(/no longer assigned to you/i)).toBeInTheDocument();
   });
+
+  it("shows the specific output's description when outputId resolves (Codex P2)", async () => {
+    // REVIEW is the mgmtReviewDetailFixture id; ro-2 is its ACTION output.
+    renderWithProviders(<MrActionCard taskId={TASK} reviewId={REVIEW} outputId="ro-2" />);
+    expect(
+      await screen.findByText(/Refresh the supplier evaluation register/i),
+    ).toBeInTheDocument();
+  });
 });

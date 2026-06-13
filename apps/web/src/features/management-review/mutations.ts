@@ -11,7 +11,8 @@ import type {
 } from "../../lib/types";
 
 // Invalidate every read a lifecycle mutation can change: the detail, the approval cycle, the list,
-// AND the my-tasks rail on the Home page (so it refreshes after a lifecycle write).
+// the my-tasks rail on the Home page, AND the Home next-due tile (release moves the cadence anchor —
+// `_last_released_effective_from` — so the derived due/overdue status changes; Codex P2).
 function useInvalidateReview(): (id: string) => void {
   const qc = useQueryClient();
   return (id: string) => {
@@ -19,6 +20,7 @@ function useInvalidateReview(): (id: string) => void {
     void qc.invalidateQueries({ queryKey: ["management-review-approval", id] });
     void qc.invalidateQueries({ queryKey: ["management-reviews"] });
     void qc.invalidateQueries({ queryKey: ["my-tasks"] });
+    void qc.invalidateQueries({ queryKey: ["management-review-next-due"] });
   };
 }
 
