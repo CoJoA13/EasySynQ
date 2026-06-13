@@ -75,6 +75,15 @@ export function LeftRail() {
           active={pathname.startsWith("/objectives")}
         />
       )}
+      {can("mgmtReview.read") && (
+        // S-mr-2: gated — mgmtReview.read (SYSTEM finest-scope); the CHECK-phase clause-9.3 register.
+        <NavLink
+          component={Link}
+          to="/management-reviews"
+          label="Management reviews"
+          active={pathname.startsWith("/management-reviews")}
+        />
+      )}
       {PHASES.map((phase) => {
         const top = (clauses ?? []).filter((c) => c.pdca_phase === phase && c.parent_id === null);
         if (top.length === 0) return null;
