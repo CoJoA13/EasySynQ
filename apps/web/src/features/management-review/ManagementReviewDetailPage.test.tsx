@@ -129,3 +129,38 @@ function mgmtReviewClosable() {
     outputs: [],
   };
 }
+
+function mgmtReviewApproved(release: boolean) {
+  return {
+    id: ID,
+    identifier: "MR-002",
+    title: "Approved review",
+    current_state: "Approved" as const,
+    period_label: "2026 Annual",
+    review_date: "2026-06-12",
+    attendees: null,
+    close_state: null,
+    closed_at: null,
+    created_at: "2026-06-01T09:00:00+00:00",
+    inputs: [],
+    outputs: [],
+    capabilities: { release },
+  };
+}
+
+it("shows Release when capabilities.release is true and state is Approved", async () => {
+  grantRecordOutputs();
+  server.use(http.get("/api/v1/management-reviews/:id", () => HttpResponse.json(mgmtReviewApproved(true))));
+  renderAt(ID);
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: "Release" })).toBeInTheDocument(),
+  );
+});
+
+it("hides Release when capabilities.release is false (SoD-2), even at Approved", async () => {
+  grantRecordOutputs();
+  server.use(http.get("/api/v1/management-reviews/:id", () => HttpResponse.json(mgmtReviewApproved(false))));
+  renderAt(ID);
+  await waitFor(() => expect(screen.getByText("Approved review")).toBeInTheDocument());
+  expect(screen.queryByRole("button", { name: "Release" })).not.toBeInTheDocument();
+});

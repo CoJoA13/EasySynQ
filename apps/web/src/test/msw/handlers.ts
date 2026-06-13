@@ -1207,6 +1207,7 @@ const mgmtReviewDetailFixture = {
       owner_user_id: "user-mara", due_date: "2026-09-01", spawned_task_id: null, spawned_capa_id: null,
     },
   ] satisfies ReviewOutput[],
+  capabilities: { release: true },
 } satisfies MgmtReviewDetail;
 
 const mgmtReviewApprovalFixture = null; // pre-submit; per-test override injects an instance

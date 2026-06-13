@@ -56,11 +56,12 @@ export function ManagementReviewDetailPage() {
   const nameOf = (uid: string | null) =>
     uid ? (directory?.find((u) => u.id === uid)?.display_name ?? "a user") : "—";
   const isDraft = mr.current_state === "Draft";
-  // The MR serializer carries NO `capabilities` block — affordances derive from state + permission key.
+  // Affordances derive from state + permission key — EXCEPT release, which the serializer computes
+  // with the SoD-2 overlay (author/approver ≠ releaser) so the button never show-then-403s (Codex #1).
   const canRecord = can("mgmtReview.record_outputs");
   const canCompile = canRecord && isDraft;
   const canSubmit = canRecord && isDraft;
-  const canRelease = can("document.release") && mr.current_state === "Approved";
+  const canRelease = mr.capabilities?.release === true && mr.current_state === "Approved";
   const canClose = canRecord && mr.close_state === "ActionsTracked";
 
   async function run(fn: () => Promise<unknown>) {
@@ -91,7 +92,7 @@ export function ManagementReviewDetailPage() {
         </div>
 
         <ReviewInputsSection inputs={mr.inputs} />
-        <ReviewOutputsSection reviewId={mr.id} outputs={mr.outputs} editable={isDraft} />
+        <ReviewOutputsSection reviewId={mr.id} outputs={mr.outputs} editable={isDraft} tracking={mr.close_state === "ActionsTracked"} />
 
         {(canCompile || canSubmit || canRelease || canClose || instance) && (
           <Card withBorder>
