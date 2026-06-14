@@ -74,6 +74,11 @@ async def test_pack_streams_pdf_for_released_review(
     identifier = await _identifier(rid)
     assert f"{identifier}-minutes.pdf" in r.headers["content-disposition"], r.headers
 
+    text = _pdf_text(r.content)
+    assert "Sign-off" in text
+    assert "approval" in text  # the MR's document.approve signature on the released version
+    assert "release" in text  # the release signature (system or human) on the released version
+
 
 async def test_pack_409_before_release(
     app_client: AsyncClient, token_factory: Callable[..., str]
