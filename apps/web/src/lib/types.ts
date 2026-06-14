@@ -462,9 +462,21 @@ export interface ComplianceChecklist {
 // contract change. The UI must tolerate `status` strings beyond ImportRunStatus (additive stages).
 
 export type ImportRunStatus =
-  | "Created" | "Scanning" | "Scanned" | "Extracting" | "Classifying" | "Classified"
-  | "Deduping" | "Proposing" | "Proposed" | "Reviewing"
-  | "Committing" | "Completed" | "PartiallyCommitted" | "Failed" | "Cancelled";
+  | "Created"
+  | "Scanning"
+  | "Scanned"
+  | "Extracting"
+  | "Classifying"
+  | "Classified"
+  | "Deduping"
+  | "Proposing"
+  | "Proposed"
+  | "Reviewing"
+  | "Committing"
+  | "Completed"
+  | "PartiallyCommitted"
+  | "Failed"
+  | "Cancelled";
 
 export type ImportKind = "DOCUMENT" | "RECORD" | "UNKNOWN";
 export type ConfirmedKind = "DOCUMENT" | "RECORD"; // R10: confirmable kind, never UNKNOWN
@@ -739,8 +751,14 @@ export type ImportMutationResult = Record<string, unknown>;
 export type NcSeverity = "Critical" | "Major" | "Minor";
 export type CapaSource = "audit" | "process" | "complaint" | "review_output";
 export type CapaCloseState =
-  | "Raised" | "Containment" | "RootCause" | "ActionPlan" | "Implement" | "Verify"
-  | "Closed" | "Rejected";
+  | "Raised"
+  | "Containment"
+  | "RootCause"
+  | "ActionPlan"
+  | "Implement"
+  | "Verify"
+  | "Closed"
+  | "Rejected";
 
 export interface Capa {
   id: string;
@@ -828,8 +846,7 @@ export interface EvidenceLinkBody {
 
 // ---- S-web-7c (Complaint + NCR intake) ----
 export type NcrSource = "audit" | "process" | "complaint" | "internal";
-export type NcrDisposition =
-  | "use_as_is" | "rework" | "scrap" | "return" | "concession" | "regrade";
+export type NcrDisposition = "use_as_is" | "rework" | "scrap" | "return" | "concession" | "regrade";
 
 // Pinned to the _complaint serializer (api/capa.py:217). identifier may be null (get_identifier).
 export interface Complaint {
@@ -842,7 +859,9 @@ export interface Complaint {
   severity: NcSeverity | null;
   spawned_capa_id: string | null; // set once a CAPA has been spawned (idempotency latch)
 }
-export interface ComplaintList { data: Complaint[]; }
+export interface ComplaintList {
+  data: Complaint[];
+}
 
 // Pinned to the _ncr serializer (api/capa.py:230). identifier is NCR-NNN, non-null (ncr.identifier nullable=False).
 export interface Ncr {
@@ -858,7 +877,9 @@ export interface Ncr {
   disposed_at: string | null;
   created_at: string;
 }
-export interface NcrList { data: Ncr[]; }
+export interface NcrList {
+  data: Ncr[];
+}
 
 export interface ComplaintCreateBody {
   description: string;
@@ -867,24 +888,35 @@ export interface ComplaintCreateBody {
   channel?: string;
   severity?: NcSeverity;
 }
-export interface SpawnCapaBody { severity?: NcSeverity; process_id?: string; }
+export interface SpawnCapaBody {
+  severity?: NcSeverity;
+  process_id?: string;
+}
 export interface NcrCreateBody {
   source: NcrSource;
   description: string;
   severity: NcSeverity;
   process_id?: string;
 }
-export interface NcrDispositionBody { disposition: NcrDisposition; notes?: string; }
+export interface NcrDispositionBody {
+  disposition: NcrDisposition;
+  notes?: string;
+}
 
 // ---- S-web-7d audits & findings (pinned to api/audits.py _program/_plan/_audit/_finding) ----
 export type AuditState =
-  | "Scheduled" | "Planned" | "InProgress" | "FindingsDraft"
-  | "Reported" | "Closing" | "Closed";
+  | "Scheduled"
+  | "Planned"
+  | "InProgress"
+  | "FindingsDraft"
+  | "Reported"
+  | "Closing"
+  | "Closed";
 export type FindingType = "NC" | "OBSERVATION" | "OFI";
 
 export interface AuditProgram {
   id: string;
-  identifier: string;            // AUDPROG-NNN
+  identifier: string; // AUDPROG-NNN
   title: string;
   period: string | null;
   coverage: Record<string, unknown> | null;
@@ -896,26 +928,26 @@ export interface AuditPlan {
   program_id: string;
   auditee_process_id: string | null;
   lead_auditor_user_id: string | null;
-  scheduled_date: string | null;  // date (YYYY-MM-DD)
+  scheduled_date: string | null; // date (YYYY-MM-DD)
   checklist_ref: string | null;
   created_at: string;
 }
 export interface Audit {
   id: string;
-  identifier: string | null;      // S-web-7d enrichment (REC-…)
-  title: string | null;           // S-web-7d enrichment
+  identifier: string | null; // S-web-7d enrichment (REC-…)
+  title: string | null; // S-web-7d enrichment
   plan_id: string;
   lead_auditor_user_id: string | null;
   state: AuditState;
-  started_at: string | null;      // date
-  completed_at: string | null;    // date
-  result_summary: string | null;  // never written in v1 — not rendered
-  created_at: string | null;      // S-web-7d enrichment
+  started_at: string | null; // date
+  completed_at: string | null; // date
+  result_summary: string | null; // never written in v1 — not rendered
+  created_at: string | null; // S-web-7d enrichment
 }
 export interface Finding {
   id: string;
   identifier: string | null;
-  title: string | null;           // S-web-7d enrichment (the logged summary / correction reason)
+  title: string | null; // S-web-7d enrichment (the logged summary / correction reason)
   audit_id: string;
   finding_type: FindingType;
   severity: NcSeverity | null;
@@ -925,21 +957,40 @@ export interface Finding {
   correction_of: string | null;
   superseded_by_correction: string | null;
 }
-export interface AuditProgramList { data: AuditProgram[]; }
-export interface AuditPlanList { data: AuditPlan[]; }
-export interface AuditList { data: Audit[]; }
-export interface FindingList { data: Finding[]; }
+export interface AuditProgramList {
+  data: AuditProgram[];
+}
+export interface AuditPlanList {
+  data: AuditPlan[];
+}
+export interface AuditList {
+  data: Audit[];
+}
+export interface FindingList {
+  data: Finding[];
+}
 
 // request bodies
-export interface AuditProgramCreateBody { title: string; period?: string; }
-export interface AuditProgramUpdateBody { title?: string; period?: string; archived?: boolean; }
+export interface AuditProgramCreateBody {
+  title: string;
+  period?: string;
+}
+export interface AuditProgramUpdateBody {
+  title?: string;
+  period?: string;
+  archived?: boolean;
+}
 export interface AuditPlanCreateBody {
   auditee_process_id?: string;
   lead_auditor_user_id?: string;
   scheduled_date?: string;
   checklist_ref?: string;
 }
-export interface AuditCreateBody { plan_id: string; title?: string; lead_auditor_user_id?: string; }
+export interface AuditCreateBody {
+  plan_id: string;
+  title?: string;
+  lead_auditor_user_id?: string;
+}
 export interface FindingCreateBody {
   finding_type: FindingType;
   severity?: NcSeverity;
@@ -957,7 +1008,10 @@ export interface FindingCorrectionBody {
 
 // GET /processes (bare array; _process in api/processes.py) — the SPA reads id + name only,
 // but extra fields arrive (structural subset typing).
-export interface ProcessRow { id: string; name: string; }
+export interface ProcessRow {
+  id: string;
+  name: string;
+}
 
 // ---- S-web-8 drift surface ----
 
@@ -1157,8 +1211,12 @@ export interface ObjectiveScorecard {
   objectives: Objective[];
 }
 
-export interface ObjectiveListResponse { data: Objective[] }
-export interface MeasurementListResponse { data: Measurement[] }
+export interface ObjectiveListResponse {
+  data: Objective[];
+}
+export interface MeasurementListResponse {
+  data: Measurement[];
+}
 
 export interface ObjectiveCreateBody {
   title: string;
@@ -1200,13 +1258,26 @@ export interface PlanCreateBody {
 // ---- S-mr-2 Management Reviews (clause 9.3) — pinned to api/mgmt_review.py serializers ----
 export type MgmtReviewCloseState = "ActionsTracked" | "Closed";
 export type ReviewInputType =
-  | "PRIOR_ACTIONS" | "CONTEXT_CHANGES" | "CUSTOMER_SATISFACTION" | "OBJECTIVES_STATUS"
-  | "PROCESS_PERFORMANCE" | "NONCONFORMITIES_CAPA" | "MONITORING_RESULTS" | "AUDIT_RESULTS"
-  | "SUPPLIER_PERFORMANCE" | "RESOURCE_ADEQUACY" | "RISK_OPPORTUNITY_ACTIONS" | "IMPROVEMENT_OPPORTUNITIES";
+  | "PRIOR_ACTIONS"
+  | "CONTEXT_CHANGES"
+  | "CUSTOMER_SATISFACTION"
+  | "OBJECTIVES_STATUS"
+  | "PROCESS_PERFORMANCE"
+  | "NONCONFORMITIES_CAPA"
+  | "MONITORING_RESULTS"
+  | "AUDIT_RESULTS"
+  | "SUPPLIER_PERFORMANCE"
+  | "RESOURCE_ADEQUACY"
+  | "RISK_OPPORTUNITY_ACTIONS"
+  | "IMPROVEMENT_OPPORTUNITIES";
 export type ReviewOutputType = "DECISION" | "ACTION" | "IMPROVEMENT";
 export type MgmtReviewState = "current" | "due_soon" | "overdue";
 
-export interface AttendeeRow { name: string; role?: string; user_id?: string; }
+export interface AttendeeRow {
+  name: string;
+  role?: string;
+  user_id?: string;
+}
 
 // source_ref is free-form per input_type: an available row carries `summary`, a gap row `reason`.
 export interface ReviewInputSourceRef {
@@ -1250,7 +1321,9 @@ export interface MgmtReviewDetail extends MgmtReview {
   outputs: ReviewOutput[];
   capabilities?: { release: boolean };
 }
-export interface MgmtReviewListResponse { data: MgmtReview[]; }
+export interface MgmtReviewListResponse {
+  data: MgmtReview[];
+}
 export interface MgmtReviewNextDue {
   cadence_months: number;
   last_review_effective_from: string | null;
@@ -1258,7 +1331,11 @@ export interface MgmtReviewNextDue {
   review_state: MgmtReviewState | null;
   owner_configured: boolean;
 }
-export interface MgmtReviewCreateBody { title: string; period_label?: string; review_date?: string; }
+export interface MgmtReviewCreateBody {
+  title: string;
+  period_label?: string;
+  review_date?: string;
+}
 export interface MgmtReviewMetaBody {
   period_label?: string | null;
   review_date?: string | null;
@@ -1332,8 +1409,16 @@ export interface DcrStageEvent {
   occurred_at: string;
 }
 
+export interface DcrCapabilities {
+  assess: boolean;
+  route: boolean;
+  implement: boolean;
+  close: boolean;
+}
+
 export interface DcrDetail extends Dcr {
   stage_events: DcrStageEvent[]; // GET /dcrs/{id} augments _dcr with this
+  capabilities?: DcrCapabilities; // detail-only; the FE derives Edit←assess, Cancel←close
 }
 
 export interface DcrList {
