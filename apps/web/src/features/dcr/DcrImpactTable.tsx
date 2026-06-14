@@ -1,5 +1,7 @@
-import { Table, Text } from "@mantine/core";
+import { Button, Stack, Table, Text, Textarea } from "@mantine/core";
+import { useEffect, useMemo, useState } from "react";
 import type { DcrImpact } from "../../lib/types";
+import { useAnnotateImpact } from "./mutations";
 
 function summarizeAuto(auto: Record<string, unknown> | null): string {
   if (!auto) return "—";
@@ -9,13 +11,25 @@ function summarizeAuto(auto: Record<string, unknown> | null): string {
   return "Applicable";
 }
 
-export function DcrImpactTable({ impact }: { impact: DcrImpact[] }) {
+// Read-only: the auto-populated facts + the (frozen) requester annotation. Editing is EditableImpactTable.
+export function DcrImpactTable({
+  impact,
+  editable = false,
+  dcrId,
+}: {
+  impact: DcrImpact[];
+  editable?: boolean;
+  dcrId?: string;
+}) {
   if (impact.length === 0) {
     return (
       <Text size="sm" c="dimmed">
         Not yet assessed.
       </Text>
     );
+  }
+  if (editable && dcrId) {
+    return <EditableImpactTable impact={impact} dcrId={dcrId} />;
   }
   return (
     <Table>
@@ -36,5 +50,70 @@ export function DcrImpactTable({ impact }: { impact: DcrImpact[] }) {
         ))}
       </Table.Tbody>
     </Table>
+  );
+}
+
+// Inline-editable Annotation column + one batch Save (gate is the caller's — changeRequest.assess +
+// rows-exist + non-terminal). Sends ONLY the changed dimensions (the backend partial merge). The
+// draft re-seeds from the rows on every refetch, so a successful save resets it to the saved values.
+function EditableImpactTable({ impact, dcrId }: { impact: DcrImpact[]; dcrId: string }) {
+  const annotate = useAnnotateImpact(dcrId);
+  const original = useMemo(
+    () => Object.fromEntries(impact.map((i) => [i.dimension, i.requester_annotation ?? ""])),
+    [impact],
+  );
+  const [draft, setDraft] = useState<Record<string, string>>(original);
+  useEffect(() => setDraft(original), [original]);
+
+  const changed = Object.fromEntries(
+    Object.entries(draft).filter(([dim, v]) => v !== (original[dim] ?? "")),
+  );
+  const hasChanges = Object.keys(changed).length > 0;
+
+  return (
+    <Stack gap="sm">
+      <Table>
+        <Table.Thead>
+          <Table.Tr>
+            <Table.Th>Dimension</Table.Th>
+            <Table.Th>System facts</Table.Th>
+            <Table.Th>Annotation</Table.Th>
+          </Table.Tr>
+        </Table.Thead>
+        <Table.Tbody>
+          {impact.map((i) => (
+            <Table.Tr key={i.id}>
+              <Table.Td>{i.dimension}</Table.Td>
+              <Table.Td>{summarizeAuto(i.auto_populated)}</Table.Td>
+              <Table.Td>
+                <Textarea
+                  aria-label={`Annotation for ${i.dimension}`}
+                  value={draft[i.dimension] ?? ""}
+                  onChange={(e) => {
+                    const val = e.currentTarget.value;
+                    setDraft((d) => ({ ...d, [i.dimension]: val }));
+                  }}
+                  autosize
+                  minRows={1}
+                />
+              </Table.Td>
+            </Table.Tr>
+          ))}
+        </Table.Tbody>
+      </Table>
+      {annotate.isError && (
+        <Text size="sm" c="red">
+          Couldn't save the annotations. Please try again.
+        </Text>
+      )}
+      <Button
+        w="fit-content"
+        loading={annotate.isPending}
+        disabled={!hasChanges}
+        onClick={() => annotate.mutate(changed)}
+      >
+        Save annotations
+      </Button>
+    </Stack>
   );
 }
