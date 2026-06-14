@@ -1,4 +1,4 @@
-import { http, HttpResponse } from "msw";
+import { http, HttpResponse, delay } from "msw";
 import { expect, test } from "vitest";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { MantineProvider } from "@mantine/core";
@@ -55,30 +55,36 @@ test("useVisualDiff POSTs to request, then GET-polls a Pending row to Ready", as
   expect(result.current.status?.page_count).toBe(3);
 });
 
-test("useVisualDiff surfaces a terminal POST result without a redundant GET (Failed)", async () => {
-  let gets = 0;
+test("useVisualDiff surfaces a terminal Failed status via the poll's first GET", async () => {
+  // The poll owns its own fetch: once the POST settles success, the first GET (against an empty
+  // cache) populates the status. The row is terminally Failed, so the GET returns Failed too — and
+  // refetchInterval halts at that terminal status (no further polling).
+  const failed = {
+    status: "Failed",
+    page_count: null,
+    reason: "a version row is missing",
+    pages: null,
+  };
   server.use(
-    http.post(VD, () =>
-      HttpResponse.json({ status: "Failed", page_count: null, reason: "a version row is missing", pages: null }),
-    ),
-    http.get(VD, () => ((gets += 1), HttpResponse.json(visualDiffFixture))),
+    http.post(VD, () => HttpResponse.json(failed)),
+    http.get(VD, () => HttpResponse.json(failed)),
   );
   const { result } = renderHook(() => useVisualDiff(DOC, TO, FROM, true), { wrapper });
   await waitFor(() => expect(result.current.status?.status).toBe("Failed"));
   expect(result.current.status?.reason).toBe("a version row is missing");
-  expect(gets).toBe(0); // a terminal POST must not trigger a poll
 });
 
 test("useVisualDiff treats Unavailable (non-renderable version) as a terminal status, not an error", async () => {
+  // The row IS Unavailable, so the POST and the poll's GET both return it (the poll owns the fetch).
+  const unavailable = {
+    status: "Unavailable",
+    page_count: null,
+    reason: "a version is not renderable to PDF (no page images available)",
+    pages: null,
+  };
   server.use(
-    http.post(VD, () =>
-      HttpResponse.json({
-        status: "Unavailable",
-        page_count: null,
-        reason: "a version is not renderable to PDF (no page images available)",
-        pages: null,
-      }),
-    ),
+    http.post(VD, () => HttpResponse.json(unavailable)),
+    http.get(VD, () => HttpResponse.json(unavailable)),
   );
   const { result } = renderHook(() => useVisualDiff(DOC, TO, FROM, true), { wrapper });
   await waitFor(() => expect(result.current.status?.status).toBe("Unavailable"));
@@ -87,7 +93,9 @@ test("useVisualDiff treats Unavailable (non-renderable version) as a terminal st
 
 test("useVisualDiff surfaces a 403 as an ApiError (document.read_draft)", async () => {
   server.use(
-    http.post(VD, () => HttpResponse.json({ code: "forbidden", title: "Forbidden" }, { status: 403 })),
+    http.post(VD, () =>
+      HttpResponse.json({ code: "forbidden", title: "Forbidden" }, { status: 403 }),
+    ),
   );
   const { result } = renderHook(() => useVisualDiff(DOC, TO, FROM, true), { wrapper });
   await waitFor(() => expect(result.current.isError).toBe(true));
@@ -96,13 +104,13 @@ test("useVisualDiff surfaces a 403 as an ApiError (document.read_draft)", async 
 });
 
 test("useVisualDiff retry() re-requests a stalled (Pending) render", async () => {
+  // The poll owns the status read. Before the re-request the row is Pending (the dev renderer was
+  // off when it was created); retry() re-enqueues, and by the next poll the worker has finished, so
+  // the GET flips to Ready. We key the GET on the POST count to model "Pending until re-requested".
   let posts = 0;
   server.use(
-    http.post(VD, () => {
-      posts += 1;
-      return HttpResponse.json(posts === 1 ? pending : visualDiffFixture);
-    }),
-    http.get(VD, () => HttpResponse.json(pending)), // the row stays Pending until the re-request
+    http.post(VD, () => ((posts += 1), HttpResponse.json(pending))),
+    http.get(VD, () => HttpResponse.json(posts >= 2 ? visualDiffFixture : pending)),
   );
   const { result } = renderHook(() => useVisualDiff(DOC, TO, FROM, true), { wrapper });
   await waitFor(() => expect(result.current.status?.status).toBe("Pending"));
@@ -114,16 +122,16 @@ test("useVisualDiff retry() re-requests a stalled (Pending) render", async () =>
 
 test("useVisualDiff reads the keyed poll cache — a pair change never shows the prior pair's result", async () => {
   const TO2 = "dddd2222-2222-2222-2222-222222222222";
-  server.use(
-    http.post(VD, ({ params }) =>
-      HttpResponse.json(
-        params.vid === TO
-          ? visualDiffFixture // pair #1 → Ready
-          : { status: "Pending", page_count: null, reason: null, pages: null }, // pair #2 → still rendering
-      ),
-    ),
-    http.get(VD, () => HttpResponse.json({ status: "Pending", page_count: null, reason: null, pages: null })),
-  );
+  // The poll is keyed by (documentId, toVid, fromVid): each pair reads its OWN cache via its own
+  // GET. Pair #1 (TO) is Ready; pair #2 (TO2) is still Pending — switching pairs must show pair #2's
+  // Pending, never fall back to pair #1's Ready. The GET is keyed by vid to mirror that per-pair row.
+  const perPairGet = ({ params }: { params: Record<string, string | readonly string[]> }) =>
+    HttpResponse.json(
+      params.vid === TO
+        ? visualDiffFixture
+        : { status: "Pending", page_count: null, reason: null, pages: null },
+    );
+  server.use(http.post(VD, perPairGet), http.get(VD, perPairGet));
   const { result, rerender } = renderHook(({ to }) => useVisualDiff(DOC, to, FROM, true), {
     wrapper,
     initialProps: { to: TO },
@@ -132,4 +140,50 @@ test("useVisualDiff reads the keyed poll cache — a pair change never shows the
   // switch to a different pair whose diff is still Pending — must NOT keep showing pair #1's Ready
   rerender({ to: TO2 });
   await waitFor(() => expect(result.current.status?.status).toBe("Pending"));
+});
+
+test("a pair change never polls (GET) before that pair's POST has settled (no 404-before-request)", async () => {
+  // Regression for the Codex P2 (404-before-request). While this hook stays mounted and the pair
+  // CHANGES, the previous pair's POST left request.isSuccess === true. A bare `isSuccess` enable gate
+  // would enable the poll for the NEW (empty) queryKey on the first render — BEFORE the useEffect has
+  // POSTed the new pair — so the GET hits the backend poll route for a row that doesn't exist yet →
+  // 404 (documents.py:1737-1739 returns 404 until the POST creates the row). We model that backend
+  // honestly: a GET returns 404 until THIS pair's POST has SETTLED (created the row); the POST takes
+  // a beat to "create" it. The pair-scoped gate (request.variables === url) holds the GET until then,
+  // so pair #2 must never produce a 404-GET before its POST settles. (This is deterministic in jsdom:
+  // render commits enable the poll, the effect's POST runs after, and the GET races a still-404 row.)
+  const TO2 = "dddd2222-2222-2222-2222-222222222222";
+  const created = new Set<string>();
+  const got404 = new Set<string>();
+  const vidOf = (u: string) => new URL(u).pathname.split("/versions/")[1]?.split("/")[0] ?? "";
+  server.use(
+    http.post(VD, async ({ request }) => {
+      await delay(20); // the POST takes a beat to UPSERT the cache row
+      created.add(vidOf(request.url));
+      return HttpResponse.json(pending);
+    }),
+    http.get(VD, ({ request }) => {
+      const v = vidOf(request.url);
+      if (!created.has(v)) {
+        got404.add(v); // a poll GET for a row whose POST hasn't settled → the 404-before-request bug
+        return HttpResponse.json({ code: "not_found", title: "nf" }, { status: 404 });
+      }
+      return HttpResponse.json(pending);
+    }),
+  );
+  const { result, rerender } = renderHook(({ to }) => useVisualDiff(DOC, to, FROM, true), {
+    wrapper,
+    initialProps: { to: TO },
+  });
+  // pair #1 settles to Pending via POST→GET; its own POST also took a beat, so guard pair #1 too
+  await waitFor(() => expect(result.current.status?.status).toBe("Pending"));
+  got404.clear();
+
+  // switch the pair while mounted — the stale isSuccess must NOT let pair #2's GET fire early
+  rerender({ to: TO2 });
+  await waitFor(() => expect(result.current.status?.status).toBe("Pending"));
+
+  // pair #2 reached Pending WITHOUT any 404-before-request GET (and never errored)
+  expect(got404.has(TO2)).toBe(false);
+  expect(result.current.isError).toBe(false);
 });
