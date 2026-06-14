@@ -99,6 +99,16 @@ test("a decided CAPA task shows the read-only summary, not the decision form", a
   expect(queryByRole("button", { name: "Submit decision" })).toBeNull();
 });
 
+test("CAPA review page has no axe violations (heading order)", async () => {
+  server.use(
+    http.get("/api/v1/tasks/:id", () => HttpResponse.json(capaApprovalTask)),
+    http.get("/api/v1/capas/:id/approval", () => HttpResponse.json(capaApprovalFixture)),
+  );
+  const { container } = mount("/tasks/tkca1111-1111-1111-1111-111111111111");
+  await screen.findByText(/Schedule supplier re-evaluations/);
+  expect(await axe(container)).toHaveNoViolations();
+});
+
 describe("ReviewApprovePage — PERIODIC_REVIEW", () => {
   test("renders the doc context + the periodic decision card, and never reads the workflow instance", async () => {
     let instanceHit = false;
