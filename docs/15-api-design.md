@@ -403,8 +403,8 @@ The **Document Change Request** (`14 §7`) is the sanctioned, audited path to re
 
 | Method | Path | Perm | Idem | Notes |
 |---|---|---|---|---|
-| GET | `/dcrs` | `changeRequest.read` | — | Filter `state`, `change_type`, `target_document_id`, `created_by`, `reason_for_change`. |
-| POST | `/dcrs` | `changeRequest.create` | ✓ | `{ change_type:"REVISE"\|"CREATE"\|"RETIRE", target_document_id?, change_significance, reason_for_change, source_link?:{type,id} }`. `target_document_id` null for `CREATE`. Starts `Open`. |
+| GET | `/dcrs` | `changeRequest.read` | — | Filter `state`, `change_type`, `target_document_id`, `created_by`, `reason_class`. |
+| POST | `/dcrs` | `changeRequest.create` | ✓ | `{ change_type:"REVISE"\|"CREATE"\|"RETIRE", target_document_id?, change_significance, reason_class, reason_text, source_link_type?, source_link_id? }`. `target_document_id` null for `CREATE`. Starts `Open`. |
 | GET | `/dcrs/{id}` | `changeRequest.read` | — | `expand=target_document,impact_assessment,resulting_version`. |
 | PATCH | `/dcrs/{id}` | `changeRequest.assess` | — | Edit reason/annotations while `Open`. |
 | GET / PUT | `/dcrs/{id}/impact` | `changeRequest.read` / `changeRequest.assess` | — | `impact_assessment` rows, auto-populated from `where-used`. |
@@ -413,7 +413,7 @@ The **Document Change Request** (`14 §7`) is the sanctioned, audited path to re
 | POST | `/dcrs/{id}/cancel` | `changeRequest.close` | ✓ | →`Cancelled` (while not implemented). |
 | POST | `/dcrs/{id}/implement` | `changeRequest.implement` | ✓ | **(S-dcr-5)** `Approved→Implemented`. DCR-as-orchestrator: drives the vault action for the change_type (REVISE/CREATE schedule the resulting version's go-live + the cross-FK link, the `release_due` sweep does the cutover; RETIRE obsoletes behind the §7.3 gate, `{force_retire?, override_justification?}`). **Also enforces the underlying `document.release`/`document.obsolete` (SoD-2) in addition to `changeRequest.implement`** — no DCR side-door past document control; an author cannot self-implement (403 `sod_violation`). 409 `no_approved_draft`/`obsoletion_blocked`/`version_already_linked`. |
 | POST | `/dcrs/{id}/close` | `changeRequest.close` | ✓ | **(S-dcr-5)** `Implemented→Closed`; 409 `dcr_effectivity_pending` until the change has actually taken effect (the resulting version Effective / the target Obsolete). |
-| POST | `/capas/{id}/raise-dcr` | `changeRequest.create` | ✓ | **(S-dcr-5)** Spawn a DCR from a CAPA corrective action (`source_link={type:capa,id}`; the §10→§7.5 loop). 1:N (a CAPA may spawn child DCRs); an `Idempotency-Key` makes a retry return the same DCR (201 new / 200 replay); 409 `capa_terminal` (a Closed/Rejected CAPA cannot spawn). |
+| POST | `/capas/{id}/raise-dcr` | `changeRequest.create` | ✓ | **(S-dcr-5)** Spawn a DCR from a CAPA corrective action (`source_link_type=capa, source_link_id={id}`; the §10→§7.5 loop). 1:N (a CAPA may spawn child DCRs); an `Idempotency-Key` makes a retry return the same DCR (201 new / 200 replay); 409 `capa_terminal` (a Closed/Rejected CAPA cannot spawn). |
 
 > **Approve / reject of a DCR is not a DCR endpoint** — it is performed via the `task` decision (§8.8), because the spec models the decision as `workflow_stage` + `task` + `signature_event`, not a standalone approval table (reconciliation R6). The engine drives only `InApproval→Approved` (on the completing approval task, per-approver `signature_event`s, doc 05 §5.4). **`Implemented` and `Closed` are explicit gated endpoints** `POST /dcrs/{id}/implement` + `/close` (S-dcr-5, DCR-as-orchestrator — this supersedes the earlier "the engine auto-drives `InApproval→Approved→Implemented→Closed`" note; the seeded `changeRequest.implement`/`.close` keys gate human-paced closeout). `implement` produces/links `resulting_version_id`.
 
