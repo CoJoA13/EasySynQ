@@ -1,6 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useApi } from "../../lib/api";
-import type { DecisionBody, DecisionResult, DecisionSubjectType, PeriodicReviewDecisionResult, Task, TaskState, WorkflowInstance } from "../../lib/types";
+import type {
+  DecisionBody,
+  DecisionResult,
+  DecisionSubjectType,
+  PeriodicReviewDecisionResult,
+  Task,
+  TaskState,
+  WorkflowInstance,
+} from "../../lib/types";
 
 // S-web-5 review/approve reads + the decision mutation. All on useApi (token implicit). The inbox is
 // self-scoped server-side (GET /tasks returns the caller's own/candidate tasks — no permission key).
@@ -55,9 +63,14 @@ export function useDecideTask() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ taskId, body, idempotencyKey }: DecideInput) =>
-      api.send<DecisionResult | PeriodicReviewDecisionResult>("POST", `/api/v1/tasks/${taskId}/decision`, body, {
-        "Idempotency-Key": idempotencyKey,
-      }),
+      api.send<DecisionResult | PeriodicReviewDecisionResult>(
+        "POST",
+        `/api/v1/tasks/${taskId}/decision`,
+        body,
+        {
+          "Idempotency-Key": idempotencyKey,
+        },
+      ),
     onSuccess: (_d, { taskId, subjectType, subjectId }) => {
       void qc.invalidateQueries({ queryKey: ["task", taskId] });
       void qc.invalidateQueries({ queryKey: ["tasks"] });
@@ -69,6 +82,12 @@ export function useDecideTask() {
         // subjectId IS the document id — the clock reset must show on the doc page + library.
         void qc.invalidateQueries({ queryKey: ["document", subjectId] });
         void qc.invalidateQueries({ queryKey: ["documents"] });
+      } else if (subjectType === "DCR") {
+        // subjectId IS the dcr id — refresh the drawer/register + the impact + the Home rail.
+        void qc.invalidateQueries({ queryKey: ["dcr", subjectId] });
+        void qc.invalidateQueries({ queryKey: ["dcrs"] });
+        void qc.invalidateQueries({ queryKey: ["dcr-impact", subjectId] });
+        void qc.invalidateQueries({ queryKey: ["my-tasks"] });
       } else {
         void qc.invalidateQueries({ queryKey: ["capa", subjectId] });
         void qc.invalidateQueries({ queryKey: ["capas"] });
