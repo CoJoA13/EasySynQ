@@ -114,15 +114,15 @@ export function DcrDrawer({ dcrId, onClose }: { dcrId: string | null; onClose: (
           {dcr.resulting_version_id ? (
             <Field label="Resulting version">
               {/* Links to the document, not the version: there is no SPA version route and a bare
-                  version_id can't be resolved to its document_id client-side (verified). For CREATE
-                  (no target_document_id) the new doc's id isn't exposed by _dcr → show the id, no link. */}
+                  version_id can't be resolved to its document_id client-side, so the document id is
+                  read from target_document_id (REVISE/RETIRE) or the ui-4 resulting_document_id (CREATE). */}
               {dcr.target_document_id ? (
                 <Group gap="md">
                   <Anchor component={Link} to={`/documents/${dcr.target_document_id}`}>
                     View document
                   </Anchor>
                   {/* S-dcr-ui-3: the page-image visual diff + redline of the resulting version vs its
-                      predecessor — REVISE only (CREATE has no client version→doc resolution; RETIRE
+                      predecessor — REVISE only (a CREATE doc's first version has no predecessor; RETIRE
                       has no resulting version). Gated document.read_draft on the target → calm-degrades. */}
                   {dcr.change_type === "REVISE" ? (
                     <Anchor component={Link} to={`/dcrs/${dcr.id}/diff`}>
