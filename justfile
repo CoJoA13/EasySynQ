@@ -66,6 +66,10 @@ migrate-roundtrip:
 up profile="s":
     docker compose --env-file .env -f infra/compose/compose.yml -f infra/compose/compose.{{profile}}.yml up -d
 
+# `up` + a loopback Postgres publish (compose.mcp.yml) for the read-only PG MCP — opt-in; plain `up` keeps Postgres unexposed (D1). Restart Claude Code after first run; pgdata persists.
+up-mcp profile="s":
+    docker compose --env-file .env -f infra/compose/compose.yml -f infra/compose/compose.{{profile}}.yml -f infra/compose/compose.mcp.yml up -d
+
 down:
     docker compose --env-file .env -f infra/compose/compose.yml down
 
