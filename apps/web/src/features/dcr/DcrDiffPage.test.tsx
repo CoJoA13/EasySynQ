@@ -1,5 +1,6 @@
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { axe } from "jest-axe";
 import { http, HttpResponse } from "msw";
 import { expect, it } from "vitest";
 import { Route, Routes } from "react-router-dom";
@@ -48,13 +49,15 @@ function renderAt(id: string) {
 
 it("renders the header and the text redline by default for a REVISE Implemented DCR", async () => {
   serveDcr(reviseImplemented);
-  renderAt(DCR_DIFF_ID);
+  const { container } = renderAt(DCR_DIFF_ID);
 
   await waitFor(() => expect(screen.getByText("DCR-2026-0010")).toBeInTheDocument());
   expect(screen.getByLabelText("State: Implemented")).toBeInTheDocument();
 
   await waitFor(() => expect(screen.getByText("Control-metadata changes")).toBeInTheDocument());
   expect(screen.getByText("Text redline")).toBeInTheDocument();
+
+  expect(await axe(container)).toHaveNoViolations();
 });
 
 it("toggles to the visual page-image diff", async () => {

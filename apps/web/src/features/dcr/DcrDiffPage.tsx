@@ -27,7 +27,9 @@ export function DcrDiffPage() {
     dcr.resulting_version_id !== null &&
     dcr.target_document_id !== null;
 
-  const versionsQ = useDocumentVersions(dcr?.target_document_id ?? null, eligible);
+  const versionsQ = useDocumentVersions(dcr?.target_document_id ?? null, eligible, {
+    retry: false,
+  });
   const pair = useMemo(
     () =>
       eligible && versionsQ.data
