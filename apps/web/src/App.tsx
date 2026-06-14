@@ -33,6 +33,7 @@ import { ObjectiveDetailPage } from "./features/objectives/ObjectiveDetailPage";
 import { ManagementReviewsRegisterPage } from "./features/management-review/ManagementReviewsRegisterPage";
 import { ManagementReviewDetailPage } from "./features/management-review/ManagementReviewDetailPage";
 import { DcrsRegisterPage } from "./features/dcr/DcrsRegisterPage";
+import { DcrDiffPage } from "./features/dcr/DcrDiffPage";
 import { apiGet } from "./lib/api";
 import { useAuth } from "./lib/auth";
 
@@ -147,6 +148,7 @@ export function App() {
         <Route path="management-reviews" element={<ManagementReviewsRegisterPage />} />
         <Route path="management-reviews/:id" element={<ManagementReviewDetailPage />} />
         <Route path="dcrs" element={<DcrsRegisterPage />} />
+        <Route path="dcrs/:id/diff" element={<DcrDiffPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
