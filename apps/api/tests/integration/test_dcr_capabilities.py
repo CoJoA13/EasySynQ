@@ -23,8 +23,9 @@ from .test_dcr_implement import _DCR_DRIVER_PERMS, _assign_seeded_role, _drive_d
 
 pytestmark = pytest.mark.integration
 
-# changeRequest.* keys the capability block probes.
+# changeRequest.* keys the capability block probes (+ create, since the first test raises a DCR).
 _CR_KEYS = (
+    "changeRequest.create",
     "changeRequest.read",
     "changeRequest.assess",
     "changeRequest.route",
