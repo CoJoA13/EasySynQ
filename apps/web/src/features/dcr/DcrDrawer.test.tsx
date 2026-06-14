@@ -136,3 +136,77 @@ it("hides the visual-diff link for a RETIRE change request (no resulting version
   await screen.findByText("DCR-2026-0009");
   expect(screen.queryByRole("link", { name: /View visual diff/ })).not.toBeInTheDocument();
 });
+
+// ---- impact-annotation editable gating ----
+const ANNO_ID = "dcr00077-0077-0077-0077-000000000077";
+function annoDcr(state: string): DcrDetail {
+  return {
+    id: ANNO_ID,
+    identifier: "DCR-2026-0077",
+    target_document_id: "11111111-1111-1111-1111-111111111111",
+    change_type: "REVISE",
+    change_significance: "MAJOR",
+    reason_class: "audit_finding",
+    reason_text: "Revision.",
+    source_link_type: null,
+    source_link_id: null,
+    proposed_effective_from: null,
+    resulting_version_id: null,
+    state,
+    decision: null,
+    created_by: "bbbb1111-1111-1111-1111-111111111111",
+    created_at: "2026-05-01T09:00:00+00:00",
+    stage_events: [],
+    capabilities: { assess: true, route: false, implement: false, close: false },
+  } as DcrDetail;
+}
+const annoImpact = {
+  data: [
+    {
+      id: "ai1",
+      dimension: "affected_processes",
+      auto_populated: { applicable: true, processes: ["p1"] },
+      requester_annotation: "x",
+      created_at: "2026-06-10T10:00:00+00:00",
+      updated_at: null,
+    },
+  ],
+};
+function grantAssess() {
+  server.use(
+    http.get("/api/v1/me/permissions", () =>
+      HttpResponse.json({
+        scope: { level: "SYSTEM", selector: null },
+        permissions: [{ key: "changeRequest.assess", effect: "ALLOW", source: "SYSTEM" }],
+      }),
+    ),
+  );
+}
+function serveAnno(state: string) {
+  server.use(
+    http.get("/api/v1/dcrs/:id", () => HttpResponse.json(annoDcr(state))),
+    http.get("/api/v1/dcrs/:id/impact", () => HttpResponse.json(annoImpact)),
+  );
+}
+
+it("shows the editable annotation column for an Assessed DCR with changeRequest.assess", async () => {
+  serveAnno("Assessed");
+  grantAssess();
+  const screen = renderWithProviders(<DcrDrawer dcrId={ANNO_ID} onClose={() => {}} />);
+  expect(await screen.findByLabelText("Annotation for affected_processes")).toBeInTheDocument();
+});
+
+it("keeps the annotation column read-only without changeRequest.assess", async () => {
+  serveAnno("Assessed"); // default /me/permissions = empty grant set
+  const screen = renderWithProviders(<DcrDrawer dcrId={ANNO_ID} onClose={() => {}} />);
+  await screen.findByText("DCR-2026-0077");
+  expect(screen.queryByLabelText("Annotation for affected_processes")).not.toBeInTheDocument();
+});
+
+it("keeps the annotation column read-only in a terminal state even with the permission", async () => {
+  serveAnno("Closed");
+  grantAssess();
+  const screen = renderWithProviders(<DcrDrawer dcrId={ANNO_ID} onClose={() => {}} />);
+  await screen.findByText("DCR-2026-0077");
+  expect(screen.queryByLabelText("Annotation for affected_processes")).not.toBeInTheDocument();
+});
