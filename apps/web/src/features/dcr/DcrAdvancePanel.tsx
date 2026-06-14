@@ -5,6 +5,7 @@ import type { DcrDetail } from "../../lib/types";
 import { CancelDcrModal } from "./CancelDcrModal";
 import { CloseDcrAction } from "./CloseDcrAction";
 import { EditDcrModal } from "./EditDcrModal";
+import { ImplementCreateDcrModal } from "./ImplementCreateDcrModal";
 import { ImplementDcrModal } from "./ImplementDcrModal";
 import { RouteDcrModal } from "./RouteDcrModal";
 import { useAssessDcr } from "./mutations";
@@ -14,7 +15,8 @@ const CANCELLABLE = ["Open", "Assessed", "Routed"];
 // The DCR lifecycle cockpit (ui-2b). Affordances gate on the detail-only dcr.capabilities (server-
 // computed, PROCESS-scoped) AND the FSM state — replacing ui-2a's SYSTEM-scoped can() so a PROCESS/
 // DOC_CLASS grant-holder isn't hidden. Approval is decided in /tasks (the candidate-pool leg), so
-// InApproval shows only a banner. CREATE-implement is deferred (no SPA version_id→document_id).
+// InApproval shows only a banner. Approved+Implement opens the change-type-specific modal — the
+// CREATE branch (ui-4) picks the approved new document; REVISE/RETIRE release/obsolete the target.
 export function DcrAdvancePanel({ dcr }: { dcr: DcrDetail }) {
   const caps = dcr.capabilities;
   const [editing, setEditing] = useState(false);
@@ -28,8 +30,7 @@ export function DcrAdvancePanel({ dcr }: { dcr: DcrDetail }) {
   const canEdit = caps?.assess === true && dcr.state === "Open";
   const canCancel = caps?.close === true && CANCELLABLE.includes(dcr.state);
   const canRoute = caps?.route === true && dcr.state === "Assessed";
-  const canImplement =
-    caps?.implement === true && dcr.state === "Approved" && dcr.change_type !== "CREATE";
+  const canImplement = caps?.implement === true && dcr.state === "Approved";
   const canClose = caps?.close === true && dcr.state === "Implemented";
 
   async function runAssess() {
@@ -51,12 +52,6 @@ export function DcrAdvancePanel({ dcr }: { dcr: DcrDetail }) {
             Decided in <b>My Tasks</b> by the assigned approver(s).
           </Text>
         </Alert>
-      )}
-
-      {caps?.implement === true && dcr.state === "Approved" && dcr.change_type === "CREATE" && (
-        <Text size="sm" c="dimmed">
-          New-document change requests are implemented from the document workspace.
-        </Text>
       )}
 
       {canClose && <CloseDcrAction dcrId={dcr.id} />}
@@ -100,13 +95,16 @@ export function DcrAdvancePanel({ dcr }: { dcr: DcrDetail }) {
           onClose={() => setRouting(false)}
         />
       )}
-      {implementing && (
-        <ImplementDcrModal
-          dcrId={dcr.id}
-          changeType={dcr.change_type}
-          onClose={() => setImplementing(false)}
-        />
-      )}
+      {implementing &&
+        (dcr.change_type === "CREATE" ? (
+          <ImplementCreateDcrModal dcrId={dcr.id} onClose={() => setImplementing(false)} />
+        ) : (
+          <ImplementDcrModal
+            dcrId={dcr.id}
+            changeType={dcr.change_type}
+            onClose={() => setImplementing(false)}
+          />
+        ))}
     </Stack>
   );
 }

@@ -1,11 +1,19 @@
 import { expect, it } from "vitest";
 import { screen, waitFor } from "@testing-library/react";
+import { http, HttpResponse } from "msw";
+import userEvent from "@testing-library/user-event";
 import { renderWithProviders } from "../../test/render";
-import type { DcrCapabilities, DcrDetail } from "../../lib/types";
+import { server } from "../../test/msw/server";
+import type { DcrCapabilities, DcrDetail, DocumentsPage } from "../../lib/types";
 
 import { DcrAdvancePanel } from "./DcrAdvancePanel";
 
 const ALL_CAPS: DcrCapabilities = { assess: true, route: true, implement: true, close: true };
+
+const EMPTY_DOCS_PAGE: DocumentsPage = {
+  data: [],
+  page: { limit: 200, offset: 0, returned: 0, has_more: false },
+};
 
 function dcr(over: Partial<DcrDetail> = {}): DcrDetail {
   return {
@@ -57,14 +65,18 @@ it("Approved REVISE: shows Implement", () => {
   expect(screen.getByRole("button", { name: "Implement change" })).toBeInTheDocument();
 });
 
-it("Approved CREATE: no Implement button — a workspace note instead", () => {
+it("Approved CREATE: shows Implement change + opens the new-document picker (no workspace dead-end)", async () => {
+  server.use(http.get("/api/v1/documents", () => HttpResponse.json(EMPTY_DOCS_PAGE)));
   renderWithProviders(
     <DcrAdvancePanel
       dcr={dcr({ state: "Approved", change_type: "CREATE", target_document_id: null })}
     />,
   );
-  expect(screen.queryByRole("button", { name: "Implement change" })).toBeNull();
-  expect(screen.getByText(/document workspace/)).toBeInTheDocument();
+  // The old dead-end note is gone.
+  expect(screen.queryByText(/document workspace/)).toBeNull();
+  // The affordance now opens the CREATE picker modal.
+  await userEvent.click(await screen.findByRole("button", { name: "Implement change" }));
+  expect(await screen.findByText("Implement new-document change request")).toBeInTheDocument();
 });
 
 it("Implemented: shows Close change request", () => {
