@@ -2,7 +2,7 @@ import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { http, HttpResponse } from "msw";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Route, Routes } from "react-router-dom";
 import { renderWithProviders } from "../../test/render";
 import { server } from "../../test/msw/server";
@@ -126,7 +126,7 @@ function mgmtReviewClosable() {
     created_at: "2026-06-01T09:00:00+00:00",
     inputs: [],
     outputs: [],
-  };
+  } satisfies MgmtReviewDetail;
 }
 
 function mgmtReviewApproved(release: boolean) {
@@ -144,7 +144,7 @@ function mgmtReviewApproved(release: boolean) {
     inputs: [],
     outputs: [],
     capabilities: { release },
-  };
+  } satisfies MgmtReviewDetail;
 }
 
 it("shows Release when capabilities.release is true and state is Approved", async () => {
@@ -204,6 +204,16 @@ describe("Download minutes pack (PDF) button", () => {
     // wrap them in spies so individual tests can assert calls (mirrors VisualDiffViewer.test.tsx).
     vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:mock");
     vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  it("has no accessibility violations in the released state", async () => {
+    server.use(
+      http.get("/api/v1/management-reviews/:id", () => HttpResponse.json(effectiveDetail)),
+    );
+    const { container } = renderAt(ID);
+    await screen.findByRole("button", { name: "Download minutes pack (PDF)" });
+    expect(await axe(container)).toHaveNoViolations();
   });
 
   it("shows the button when current_state is Effective", async () => {
