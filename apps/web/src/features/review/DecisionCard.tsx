@@ -25,16 +25,23 @@ const OUTCOMES: Record<DecisionSubjectType, { value: DecisionOutcome; label: str
     { value: "complete", label: "Confirm — no change needed" },
     { value: "changes_requested", label: "Changes needed — a revision is required" },
   ],
+  DCR: [
+    { value: "approve", label: "Approve" },
+    { value: "changes_requested", label: "Request changes" },
+    { value: "reject", label: "Reject" },
+  ],
 };
 const SIGN_OUTCOME: Record<DecisionSubjectType, DecisionOutcome> = {
   DOCUMENT: "approve",
   CAPA: "approve",
   PERIODIC_REVIEW: "complete",
+  DCR: "approve",
 };
 const SIGN_MEANING: Record<DecisionSubjectType, string> = {
   DOCUMENT: "approval",
   CAPA: "approval",
   PERIODIC_REVIEW: "review confirmed",
+  DCR: "approval",
 };
 
 // S-web-5: the approver's decision form. Approve signs (a v1 logged confirmation, the signature_event
@@ -43,7 +50,15 @@ const SIGN_MEANING: Record<DecisionSubjectType, string> = {
 // decidable task, but the branch backstops an override-only edge case).
 // S-web-8: PERIODIC_REVIEW variant — complete/changes_requested only; complete writes a
 // review_confirmed signature server-side; 409 means the doc lost its Effective version mid-review.
-export function DecisionCard({ taskId, subjectType, subjectId }: { taskId: string; subjectType: DecisionSubjectType; subjectId: string }) {
+export function DecisionCard({
+  taskId,
+  subjectType,
+  subjectId,
+}: {
+  taskId: string;
+  subjectType: DecisionSubjectType;
+  subjectId: string;
+}) {
   const { user } = useAuth();
   const decide = useDecideTask();
   const navigate = useNavigate();
@@ -76,13 +91,16 @@ export function DecisionCard({ taskId, subjectType, subjectId }: { taskId: strin
         if (e.status === 403 && e.code === "sod_violation")
           setError("You can't approve this version (separation of duties).");
         else if (e.status === 409)
-          // A periodic 409 is two distinct servers-side conflicts: no-Effective-version
-          // (review.py) vs a stale double-decide ("Task already decided", engine.py) — a second
-          // tab has its own per-mount idempotency key, so the replay path never masks it.
+          // A periodic 409 = no-Effective-version vs a stale double-decide; a DCR 409 =
+          // dcr_not_in_approval / dcr_approver_conflict (show the server's word verbatim);
+          // else "already decided" (a second tab has its own per-mount idempotency key, so the
+          // replay path never masks it).
           setError(
             subjectType === "PERIODIC_REVIEW" && e.message.includes("Effective version")
               ? "The document no longer has an Effective version to confirm — it may have been obsoleted or be under revision."
-              : "This task was already decided.",
+              : subjectType === "DCR"
+                ? e.message
+                : "This task was already decided.",
           );
         else if (e.status === 403 && e.code === "step_up_required")
           setError("Re-authentication is required to sign.");

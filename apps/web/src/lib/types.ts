@@ -358,7 +358,7 @@ export interface WorkflowInstance {
 
 export type DecisionOutcome = "approve" | "changes_requested" | "reject" | "complete";
 
-export type DecisionSubjectType = "DOCUMENT" | "CAPA" | "PERIODIC_REVIEW";
+export type DecisionSubjectType = "DOCUMENT" | "CAPA" | "PERIODIC_REVIEW" | "DCR";
 
 // POST /tasks/{id}/decision for a PERIODIC_REVIEW subject returns the wf-engine dict, NOT
 // DecisionResult (services/vault/review.py:245-380). The UI ignores the body (invalidate+refetch).
