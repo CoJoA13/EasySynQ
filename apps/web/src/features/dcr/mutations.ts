@@ -1,6 +1,13 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useApi } from "../../lib/api";
-import type { Dcr, DcrCancelBody, DcrCreateBody, DcrPatchBody, DcrSpawnBody } from "../../lib/types";
+import type {
+  Dcr,
+  DcrCancelBody,
+  DcrCreateBody,
+  DcrImplementBody,
+  DcrPatchBody,
+  DcrSpawnBody,
+} from "../../lib/types";
 
 export interface SpawnDcrVars {
   body: DcrSpawnBody;
@@ -78,5 +85,46 @@ export function useRaiseDcrFromMrOutput(reviewId: string, outputId: string) {
         { "Idempotency-Key": idempotencyKey },
       ),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["dcrs"] }),
+  });
+}
+
+// Open → Assessed (no body). onSettled: a 409 dcr_not_assessable (concurrent advance) self-heals the drawer.
+export function useAssessDcr(id: string) {
+  const api = useApi();
+  const invalidate = useDcrInvalidator(id);
+  return useMutation({
+    mutationFn: () => api.send<Dcr>("POST", `/api/v1/dcrs/${id}/assess`, {}),
+    onSettled: invalidate,
+  });
+}
+
+// Assessed → Routed → InApproval (no body). 409 dcr_not_routable / dcr_approval_in_progress / dcr_no_approvers.
+export function useRouteDcr(id: string) {
+  const api = useApi();
+  const invalidate = useDcrInvalidator(id);
+  return useMutation({
+    mutationFn: () => api.send<Dcr>("POST", `/api/v1/dcrs/${id}/route`, {}),
+    onSettled: invalidate,
+  });
+}
+
+// Approved → Implemented. REVISE = {}; RETIRE = {force_retire, override_justification}. 409s surface calmly.
+export function useImplementDcr(id: string) {
+  const api = useApi();
+  const invalidate = useDcrInvalidator(id);
+  return useMutation({
+    mutationFn: (body: DcrImplementBody) =>
+      api.send<Dcr>("POST", `/api/v1/dcrs/${id}/implement`, body),
+    onSettled: invalidate,
+  });
+}
+
+// Implemented → Closed (no body). 409 dcr_effectivity_pending until the change has taken effect (submit-and-show).
+export function useCloseDcr(id: string) {
+  const api = useApi();
+  const invalidate = useDcrInvalidator(id);
+  return useMutation({
+    mutationFn: () => api.send<Dcr>("POST", `/api/v1/dcrs/${id}/close`, {}),
+    onSettled: invalidate,
   });
 }

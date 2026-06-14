@@ -1467,3 +1467,8 @@ export interface DcrSpawnBody {
   target_document_id?: string | null;
   proposed_effective_from?: string | null;
 }
+export interface DcrImplementBody {
+  resulting_version_id?: string | null; // CREATE only (deferred in the SPA)
+  force_retire?: boolean; // RETIRE only
+  override_justification?: string | null;
+}
