@@ -58,8 +58,10 @@ export function SpawnDcrModal({
           <Button variant="subtle" onClick={onClose}>
             Cancel
           </Button>
+          {/* "Raise" (matches RaiseDcrModal's submit) — distinct from the caller's trigger button
+              ("Raise change request" / "Raise DCR") so the two don't share an accessible name. */}
           <Button onClick={() => void submit()} loading={mutation.isPending} disabled={!isDcrFieldsValid(fields)}>
-            Raise change request
+            Raise
           </Button>
         </Group>
       </Stack>

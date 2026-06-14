@@ -28,7 +28,7 @@ it("spawns a CREATE DCR from a CAPA and deep-links to the new DCR", async () => 
   renderWithProviders(<Host />);
   await userEvent.click(screen.getByRole("radio", { name: "Create" }));
   await userEvent.type(screen.getByLabelText(/Reason for change/), "Spawned from a CAPA.");
-  await userEvent.click(screen.getByRole("button", { name: "Raise change request" }));
+  await userEvent.click(screen.getByRole("button", { name: "Raise" }));
   expect(await screen.findByTestId("loc")).toHaveTextContent("/dcrs?dcr=dcrNEW01-0001-0001-0001-000000000099");
 });
 
@@ -44,7 +44,7 @@ it("shows a calm error when the spawn fails and does not navigate", async () => 
   renderWithProviders(<Host />);
   await userEvent.click(screen.getByRole("radio", { name: "Create" }));
   await userEvent.type(screen.getByLabelText(/Reason for change/), "x");
-  await userEvent.click(screen.getByRole("button", { name: "Raise change request" }));
+  await userEvent.click(screen.getByRole("button", { name: "Raise" }));
   expect(await screen.findByText("A closed CAPA cannot spawn a change request.")).toBeInTheDocument();
   expect(screen.getByTestId("loc")).toHaveTextContent("/"); // never navigated to /dcrs
 });

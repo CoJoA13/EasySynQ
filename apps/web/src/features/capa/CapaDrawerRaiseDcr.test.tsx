@@ -42,6 +42,6 @@ it("raises a DCR from the CAPA and deep-links to it", async () => {
   const dialog = await screen.findByRole("dialog", { name: /Raise a change request from this CAPA/i });
   await userEvent.click(await within(dialog).findByRole("radio", { name: "Create" }));
   await userEvent.type(within(dialog).getByLabelText(/Reason for change/), "From this CAPA.");
-  await userEvent.click(within(dialog).getByRole("button", { name: /Raise change request/i }));
+  await userEvent.click(within(dialog).getByRole("button", { name: "Raise" }));
   expect(await screen.findByTestId("loc")).toHaveTextContent("/dcrs?dcr=dcrNEW01");
 });
