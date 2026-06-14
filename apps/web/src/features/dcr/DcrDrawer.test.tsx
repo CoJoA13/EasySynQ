@@ -203,3 +203,48 @@ it("keeps the annotation column read-only in a terminal state even with the capa
   await screen.findByText("DCR-2026-0077");
   expect(screen.queryByLabelText("Annotation for affected_processes")).not.toBeInTheDocument();
 });
+
+// ---- ui-4: the CREATE resulting-doc deep-link ----
+const CREATE_DCR_ID = "dcrcre01-0001-0001-0001-000000000001";
+const NEW_DOC_ID = "newdoc01-0001-0001-0001-000000000001";
+function createImplementedDcr(): DcrDetail {
+  return {
+    id: CREATE_DCR_ID,
+    identifier: "DCR-2026-0050",
+    target_document_id: null, // CREATE
+    change_type: "CREATE",
+    change_significance: "MINOR",
+    reason_class: "process_improvement",
+    reason_text: "New SOP.",
+    source_link_type: null,
+    source_link_id: null,
+    proposed_effective_from: null,
+    resulting_version_id: "ver00001-0001-0001-0001-000000000001",
+    resulting_document_id: NEW_DOC_ID,
+    state: "Implemented",
+    decision: null,
+    created_by: "bbbb1111-1111-1111-1111-111111111111",
+    created_at: "2026-05-01T09:00:00+00:00",
+    stage_events: [],
+    capabilities: { assess: false, route: false, implement: false, close: true },
+  } satisfies DcrDetail;
+}
+
+it("deep-links an implemented CREATE DCR to its new document (resulting_document_id)", async () => {
+  server.use(http.get("/api/v1/dcrs/:id", () => HttpResponse.json(createImplementedDcr())));
+  const screen = renderWithProviders(<DcrDrawer dcrId={CREATE_DCR_ID} onClose={() => {}} />);
+  const link = await screen.findByRole("link", { name: "View document" });
+  expect(link.getAttribute("href")).toContain(`/documents/${NEW_DOC_ID}`);
+  expect(screen.queryByRole("link", { name: /View visual diff/ })).not.toBeInTheDocument();
+});
+
+it("shows the bare resulting-version id for a CREATE DCR without resulting_document_id (defensive)", async () => {
+  server.use(
+    http.get("/api/v1/dcrs/:id", () =>
+      HttpResponse.json({ ...createImplementedDcr(), resulting_document_id: null }),
+    ),
+  );
+  const screen = renderWithProviders(<DcrDrawer dcrId={CREATE_DCR_ID} onClose={() => {}} />);
+  await screen.findByText("DCR-2026-0050");
+  expect(screen.queryByRole("link", { name: "View document" })).not.toBeInTheDocument();
+});

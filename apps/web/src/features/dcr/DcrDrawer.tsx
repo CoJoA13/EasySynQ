@@ -130,6 +130,13 @@ export function DcrDrawer({ dcrId, onClose }: { dcrId: string | null; onClose: (
                     </Anchor>
                   ) : null}
                 </Group>
+              ) : dcr.resulting_document_id ? (
+                // ui-4: CREATE — _dcr now exposes the new document's id (resulting_document_id,
+                // detail-only) → deep-link it. No visual diff (a new doc's first version has no
+                // predecessor). Calm-degrades on a document.read 403 via the existing doc page.
+                <Anchor component={Link} to={`/documents/${dcr.resulting_document_id}`}>
+                  View document
+                </Anchor>
               ) : (
                 <Text size="sm">{dcr.resulting_version_id.slice(0, 8)}… (new document)</Text>
               )}
