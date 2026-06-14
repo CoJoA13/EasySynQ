@@ -42,7 +42,11 @@ async function request<T>(
     } catch {
       /* non-JSON error body */
     }
-    throw new ApiError(resp.status, problem.code ?? "error", problem.detail ?? problem.title ?? `HTTP ${resp.status}`);
+    throw new ApiError(
+      resp.status,
+      problem.code ?? "error",
+      problem.detail ?? problem.title ?? `HTTP ${resp.status}`,
+    );
   }
   if (resp.status === 204 || resp.headers.get("content-length") === "0") {
     return undefined as T; // 204 No Content (e.g. DELETE) — no JSON body to parse
@@ -69,13 +73,17 @@ export async function apiGetBlob(path: string, token: string | null = null): Pro
     } catch {
       /* non-JSON error body */
     }
-    throw new ApiError(resp.status, problem.code ?? "error", problem.detail ?? problem.title ?? `HTTP ${resp.status}`);
+    throw new ApiError(
+      resp.status,
+      problem.code ?? "error",
+      problem.detail ?? problem.title ?? `HTTP ${resp.status}`,
+    );
   }
   return await resp.blob();
 }
 
 export const apiSend = <T>(
-  method: "POST" | "PATCH" | "DELETE",
+  method: "POST" | "PUT" | "PATCH" | "DELETE",
   path: string,
   token: string | null,
   body?: unknown,
@@ -90,7 +98,7 @@ export function useApi() {
       get: <T>(path: string): Promise<T> => apiGet<T>(path, token),
       getBlob: (path: string): Promise<Blob> => apiGetBlob(path, token),
       send: <T>(
-        method: "POST" | "PATCH" | "DELETE",
+        method: "POST" | "PUT" | "PATCH" | "DELETE",
         path: string,
         body?: unknown,
         headers?: Record<string, string>,
