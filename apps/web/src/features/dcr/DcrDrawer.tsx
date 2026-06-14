@@ -150,7 +150,15 @@ export function DcrDrawer({ dcrId, onClose }: { dcrId: string | null; onClose: (
             <Title order={5} mb="xs">
               Impact assessment
             </Title>
-            <DcrImpactTable impact={impact ?? []} />
+            <DcrImpactTable
+              impact={impact ?? []}
+              editable={
+                (impact?.length ?? 0) > 0 &&
+                dcr.capabilities?.assess === true &&
+                !["Closed", "Cancelled", "Rejected"].includes(dcr.state)
+              }
+              dcrId={dcr.id}
+            />
           </div>
 
           <div>

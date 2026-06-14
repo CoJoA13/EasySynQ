@@ -4,6 +4,7 @@ import type {
   Dcr,
   DcrCancelBody,
   DcrCreateBody,
+  DcrImpactList,
   DcrImplementBody,
   DcrPatchBody,
   DcrSpawnBody,
@@ -126,5 +127,23 @@ export function useCloseDcr(id: string) {
   return useMutation({
     mutationFn: () => api.send<Dcr>("POST", `/api/v1/dcrs/${id}/close`, {}),
     onSettled: invalidate,
+  });
+}
+
+// Annotate impact dimensions (PUT /dcrs/{id}/impact, gate changeRequest.assess). Partial merge —
+// send ONLY the changed dimensions. onSuccess (not onSettled): the server returns the refreshed
+// rows and there's no FSM race to self-heal. Write the PUT RESPONSE straight into the impact cache
+// (the useDcrImpact key holds the unwrapped DcrImpact[]) so the editor sees the saved values with no
+// stale-refetch window; also refresh the detail (DCR_UPDATED).
+export function useAnnotateImpact(id: string) {
+  const api = useApi();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (annotations: Record<string, string>) =>
+      api.send<DcrImpactList>("PUT", `/api/v1/dcrs/${id}/impact`, { annotations }),
+    onSuccess: (resp) => {
+      qc.setQueryData(["dcr-impact", id], resp.data);
+      void qc.invalidateQueries({ queryKey: ["dcr", id] });
+    },
   });
 }
