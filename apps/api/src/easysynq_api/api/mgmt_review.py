@@ -11,6 +11,7 @@ release_endpoint posture). The MR is a kind=DOCUMENT subtype: its approval insta
 from __future__ import annotations
 
 import datetime
+import re
 import uuid
 from typing import Any
 
@@ -77,6 +78,10 @@ from ..services.workflow import repository as wf_repo
 from .dcr import _dcr, _dcr_doc_scope
 
 router = APIRouter(prefix="/api/v1", tags=["management-reviews"])
+
+# doc.identifier embeds an admin-set type code + an (optional) area_code, neither constrained
+# to be header-safe — sanitize before interpolating into Content-Disposition (vault/service.py).
+_FILENAME_UNSAFE = re.compile(r"[^A-Za-z0-9._-]+")
 
 
 # --- request bodies ---
@@ -359,7 +364,8 @@ async def get_review_pack_endpoint(
             status=409, code="pack_unavailable", title="This review has not been released yet"
         )
     pdf = await build_minutes_pdf(session, mr, doc)
-    filename = f"{doc.identifier}-minutes.pdf"
+    safe_stem = _FILENAME_UNSAFE.sub("_", doc.identifier).strip("_") or "mr"
+    filename = f"{safe_stem}-minutes.pdf"
     return Response(
         content=pdf,
         media_type="application/pdf",
