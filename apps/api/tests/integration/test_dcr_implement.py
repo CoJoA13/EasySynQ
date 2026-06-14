@@ -560,8 +560,8 @@ async def test_create_implement_rejects_revision_of_existing_doc(
     await s5.grant_lifecycle(author)
     ha = _auth(token_factory, author)
     approver = _subject("crn-approver")
-    # the approver also RELEASES v1 in drive_to_effective, so it needs document.release (grant_lifecycle),
-    # not just the Approver role; set_approver_release lets the approver==releaser through SoD-2.
+    # the approver also RELEASES v1 in drive_to_effective, so it needs document.release
+    # (grant_lifecycle), not just the Approver role; set_approver_release allows approver==releaser.
     await s5.grant_lifecycle(approver)
     hb = _auth(token_factory, approver)
     await s5.set_approver_release(await s5.default_org_id(), True)
