@@ -5241,6 +5241,32 @@ paths:
               schema: { $ref: "#/components/schemas/Problem" }
         "422": { $ref: "#/components/responses/ProblemResponse" }
 
+  /management-reviews/{review_id}/pack:
+    get:
+      tags: [management-reviews]
+      operationId: getManagementReviewPack
+      summary: "Download the filed minutes as a table-styled PDF (clause 9.3). Gated mgmtReview.read; released-only."
+      description: >-
+        Renders the released version's frozen minutes snapshot (attendees + 9.3.2 inputs + 9.3.3
+        outputs + an e-signature sign-off block) on demand to a single application/pdf. No cache, no
+        blob, no seal — a derived printable view of the canonical (already WORM-sealed) MR version.
+        409 pack_unavailable before the review is released.
+      parameters:
+        - { name: review_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: The minutes pack (application/pdf).
+          content:
+            application/pdf:
+              schema: { type: string, format: binary }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409":
+          description: "The review has not been released yet (pack_unavailable)."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
   /management-reviews/{review_id}:
     get:
       tags: [management-reviews]
