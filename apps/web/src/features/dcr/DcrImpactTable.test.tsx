@@ -105,3 +105,20 @@ it("adopts fresh server annotations on a refetch when the draft is pristine", ()
   rerender(<DcrImpactTable impact={updated} editable dcrId="dcr1" />);
   expect(getByLabelText("Annotation for affected_processes")).toHaveValue("Updated by Mara");
 });
+
+it("resets the draft when switching to a different DCR (no cross-DCR leak)", async () => {
+  const user = userEvent.setup();
+  const { getByLabelText, rerender } = renderWithProviders(
+    <DcrImpactTable impact={impact} editable dcrId="dcrA" />,
+  );
+  await user.type(getByLabelText("Annotation for affected_processes"), " EDIT");
+  expect(getByLabelText("Annotation for affected_processes")).toHaveValue("Calibration EDIT");
+  // Switch the drawer to a DIFFERENT DCR (new id + rows). The editor must remount and show the new
+  // DCR's values — never the previous DCR's dirty draft (which Save would PUT to the wrong DCR).
+  const other: DcrImpact[] = [
+    { ...impact[0]!, id: "b1", requester_annotation: "B note" },
+    { ...impact[1]!, id: "b2" },
+  ];
+  rerender(<DcrImpactTable impact={other} editable dcrId="dcrB" />);
+  expect(getByLabelText("Annotation for affected_processes")).toHaveValue("B note");
+});
