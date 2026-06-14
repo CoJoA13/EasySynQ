@@ -42,6 +42,7 @@ qms-mirror/
 backups/
 .claude/scheduled_tasks.lock
 .claude/settings.local.json
+.claude/workflows/
 
 # --- brainstorming visual-companion artifacts ---
 .superpowers/
