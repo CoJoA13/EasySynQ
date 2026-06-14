@@ -22,3 +22,9 @@ def test_minutes_from_snapshot_409_when_not_a_dict():
     with pytest.raises(ProblemException) as ei:
         minutes_from_snapshot({"mgmt_review_minutes": "oops"})
     assert ei.value.status == 409
+
+
+def test_minutes_from_snapshot_409_when_none_snapshot():
+    with pytest.raises(ProblemException) as ei:
+        minutes_from_snapshot(None)  # type: ignore[arg-type]
+    assert ei.value.status == 409

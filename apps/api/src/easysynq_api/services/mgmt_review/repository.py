@@ -4,6 +4,7 @@ identity (the ``list_objectives`` shape); ``get_review_doc`` loads the base doc 
 
 from __future__ import annotations
 
+import datetime
 import uuid
 from collections.abc import Sequence
 from typing import Any
@@ -12,7 +13,7 @@ from sqlalchemy import Select, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...db.models._mgmt_review_enums import ReviewOutputType
-from ...db.models._signature_enums import SignatureMeaning, SignedObjectType
+from ...db.models._signature_enums import SignatureMeaning, SignatureMethod, SignedObjectType
 from ...db.models._vault_enums import DocumentCurrentState
 from ...db.models._workflow_enums import TaskState
 from ...db.models.app_user import AppUser
@@ -148,7 +149,7 @@ async def outputs_for_close_gate(
 
 
 # (signer_display_name | None, meaning, created_at, method) — the MR pack sign-off rows.
-SignoffRow = tuple[Any, Any, Any, Any]
+SignoffRow = tuple[str | None, SignatureMeaning, datetime.datetime, SignatureMethod]
 
 
 async def list_signoffs_for_version(
@@ -167,6 +168,7 @@ async def list_signoffs_for_version(
         )
         .outerjoin(AppUser, AppUser.id == SignatureEvent.signer_user_id)
         .where(
+            SignatureEvent.voided_by.is_(None),
             SignatureEvent.signed_object_type == SignedObjectType.document_version,
             SignatureEvent.signed_object_id == version_id,
             SignatureEvent.meaning.in_([SignatureMeaning.approval, SignatureMeaning.release]),
