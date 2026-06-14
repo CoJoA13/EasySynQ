@@ -45,6 +45,9 @@ export function DcrRaiseFields({
     .filter((d) => d.kind === "DOCUMENT")
     .map((d) => ({ value: d.id, label: `${d.identifier} — ${d.title}` }));
   const showTarget = value.change_type !== "CREATE";
+  // RETIRE obsoletes immediately on implement — the backend ignores proposed_effective_from for it, so
+  // offering a date would mislead (Codex #8). Only REVISE/CREATE schedule a cutover off it.
+  const showEffectiveDate = value.change_type !== "RETIRE";
 
   return (
     <Stack gap="sm">
@@ -61,6 +64,8 @@ export function DcrRaiseFields({
               change_type: v as DcrChangeType,
               // switching to CREATE clears the target so the body never carries a CREATE-with-target
               target_document_id: v === "CREATE" ? null : value.target_document_id,
+              // RETIRE ignores the effective date — clear it on switch so a stale value isn't sent
+              proposed_effective_from: v === "RETIRE" ? null : value.proposed_effective_from,
             })
           }
           data={(Object.entries(CHANGE_TYPE_LABEL) as [DcrChangeType, string][]).map(([val, label]) => ({
@@ -107,12 +112,14 @@ export function DcrRaiseFields({
         onChange={(e) => onChange({ ...value, reason_text: e.currentTarget.value })}
       />
 
-      <TextInput
-        type="date"
-        label="Proposed effective from (optional)"
-        value={value.proposed_effective_from ?? ""}
-        onChange={(e) => onChange({ ...value, proposed_effective_from: e.currentTarget.value || null })}
-      />
+      {showEffectiveDate && (
+        <TextInput
+          type="date"
+          label="Proposed effective from (optional)"
+          value={value.proposed_effective_from ?? ""}
+          onChange={(e) => onChange({ ...value, proposed_effective_from: e.currentTarget.value || null })}
+        />
+      )}
     </Stack>
   );
 }

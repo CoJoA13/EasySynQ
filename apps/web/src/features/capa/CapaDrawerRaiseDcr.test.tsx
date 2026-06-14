@@ -5,6 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { useLocation } from "react-router-dom";
 import { renderWithProviders } from "../../test/render";
 import { server } from "../../test/msw/server";
+import { capaDetailFixture } from "../../test/msw/handlers";
 import { CapaDrawer } from "./CapaDrawer";
 
 function grant(...keys: string[]) {
@@ -27,6 +28,17 @@ const CAPA_ID = "capa0001-0001-0001-0001-000000000001";
 it("hides Raise change request without changeRequest.create", async () => {
   renderWithProviders(<CapaDrawer capaId={CAPA_ID} onClose={() => {}} />);
   await screen.findByText(/Close gate/i); // wait for the drawer body to load
+  expect(screen.queryByRole("button", { name: "Raise change request" })).toBeNull();
+});
+
+it("hides Raise change request for a terminal (Closed) CAPA even with the key", async () => {
+  grant("changeRequest.create");
+  server.use(
+    http.get("/api/v1/capas/:id", () =>
+      HttpResponse.json({ ...capaDetailFixture, close_state: "Closed" })),
+  );
+  renderWithProviders(<CapaDrawer capaId={CAPA_ID} onClose={() => {}} />);
+  await screen.findByText(/Close gate/i);
   expect(screen.queryByRole("button", { name: "Raise change request" })).toBeNull();
 });
 

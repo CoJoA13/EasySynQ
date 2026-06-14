@@ -76,3 +76,27 @@ it("surfaces a 409 dcr_not_cancellable calmly", async () => {
   expect(await screen.findByText("A DCR in Approved cannot be cancelled")).toBeInTheDocument();
   expect(onClose).not.toHaveBeenCalled();
 });
+
+it("does not offer the MR-reserved reason class when editing a non-MR DCR", async () => {
+  renderWithProviders(<EditDcrModal dcr={DCR} onClose={vi.fn()} />);
+  await userEvent.click(screen.getByLabelText(/Reason class/));
+  expect(await screen.findByRole("option", { name: "CAPA" })).toBeInTheDocument();
+  expect(screen.queryByRole("option", { name: "Management review" })).toBeNull();
+});
+
+it("keeps the MR reason class selectable when editing an MR-sourced DCR", async () => {
+  const mrDcr = { ...DCR, reason_class: "mgmt_review", source_link_type: "mgmt_review" } satisfies DcrDetail;
+  renderWithProviders(<EditDcrModal dcr={mrDcr} onClose={vi.fn()} />);
+  await userEvent.click(screen.getByLabelText(/Reason class/));
+  expect(await screen.findByRole("option", { name: "Management review" })).toBeInTheDocument();
+});
+
+it("refuses to silently clear a set effective date", async () => {
+  const dated = { ...DCR, proposed_effective_from: "2026-07-01T00:00:00+00:00" } satisfies DcrDetail;
+  const onClose = vi.fn();
+  renderWithProviders(<EditDcrModal dcr={dated} onClose={onClose} />);
+  await userEvent.clear(screen.getByLabelText(/Proposed effective from/));
+  await userEvent.click(screen.getByRole("button", { name: "Save" }));
+  expect(await screen.findByText(/Clearing a set effective date isn't supported/)).toBeInTheDocument();
+  expect(onClose).not.toHaveBeenCalled();
+});

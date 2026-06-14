@@ -89,7 +89,9 @@ export function CapaDrawer({ capaId, onClose }: { capaId: string | null; onClose
             <AdvancePanel capa={capa} />
           </div>
 
-          {can("changeRequest.create") && (
+          {/* Hide on a terminal CAPA: the backend raise_dcr_from_capa deterministically 409s `capa_terminal`
+              for a Closed/Rejected CAPA, so showing the button would be a show-then-409 (Codex #6). */}
+          {can("changeRequest.create") && !["Closed", "Rejected"].includes(capa.close_state) && (
             <Button
               size="xs"
               variant="light"

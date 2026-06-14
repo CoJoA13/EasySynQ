@@ -20,6 +20,12 @@ export function EditDcrModal({ dcr, onClose }: { dcr: DcrDetail; onClose: () => 
   async function submit() {
     setError(null);
     if (reasonText.trim().length === 0) return;
+    // The PATCH contract treats a null proposed_effective_from as "unchanged" — it cannot CLEAR a set
+    // date — so silently "succeeding" on a clear would mislead. Refuse it honestly (Codex #5).
+    if (dcr.proposed_effective_from && effectiveFrom.trim() === "") {
+      setError("Clearing a set effective date isn't supported yet — leave it or pick a new date.");
+      return;
+    }
     const body: DcrPatchBody = {
       reason_text: reasonText.trim(),
       reason_class: reasonClass,
@@ -53,10 +59,12 @@ export function EditDcrModal({ dcr, onClose }: { dcr: DcrDetail; onClose: () => 
           required
           value={reasonClass}
           onChange={(v) => v && setReasonClass(v as DcrReasonClass)}
-          data={(Object.entries(REASON_LABEL) as [DcrReasonClass, string][]).map(([value, label]) => ({
-            value,
-            label,
-          }))}
+          // Reserve mgmt_review for the MR-output spawn path (Codex #2, the standalone-Raise precedent) —
+          // but keep it selectable when the DCR is ALREADY mgmt_review-classed (an MR-sourced DCR) so its
+          // own Select doesn't render an unmatched value.
+          data={(Object.entries(REASON_LABEL) as [DcrReasonClass, string][])
+            .filter(([value]) => value !== "mgmt_review" || dcr.reason_class === "mgmt_review")
+            .map(([value, label]) => ({ value, label }))}
           comboboxProps={{ keepMounted: false }}
         />
         <div>

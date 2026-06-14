@@ -54,3 +54,11 @@ it("shows the target picker for REVISE and hides it for CREATE, clearing the tar
   await waitFor(() => expect(screen.queryByLabelText(/Target document/)).toBeNull());
   expect(screen.getByTestId("target")).toHaveTextContent("none");
 });
+
+it("hides the effective-date input for RETIRE (the backend ignores it)", async () => {
+  renderWithProviders(<Harness />);
+  // REVISE (default) shows the date input
+  expect(screen.getByLabelText(/Proposed effective from/)).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("radio", { name: "Retire" }));
+  await waitFor(() => expect(screen.queryByLabelText(/Proposed effective from/)).toBeNull());
+});
