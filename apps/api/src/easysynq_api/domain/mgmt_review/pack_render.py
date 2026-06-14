@@ -161,7 +161,7 @@ def render_minutes_pdf(
             ]
             for ro in outputs
         ]
-        flow.append(grid(rows, [1.3, 3.1, 1.4, 0.6]))
+        flow.append(grid(rows, [1.3, 2.8, 1.4, 0.9]))
     else:
         flow.append(none_row())
 
@@ -188,7 +188,7 @@ def render_minutes_pdf(
             _MARGIN,
             36,
             f"Derived printable view of the filed minutes — canonical record: Management Review "
-            f"version {version_id} (Rev {revision_label}).",
+            f"version {version_id} ({revision_label}).",
         )
         canvas.drawString(
             _MARGIN,
