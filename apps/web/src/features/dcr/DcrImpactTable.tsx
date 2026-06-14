@@ -11,12 +11,11 @@ function summarizeAuto(auto: Record<string, unknown> | null): string {
   return "Applicable";
 }
 
-// Annotation maps are equal iff every dimension's text matches (missing ≡ ""). Drives "is the draft
-// pristine?" — whether the user has unsaved edits relative to the baseline it was seeded from.
-function sameAnnotations(a: Record<string, string>, b: Record<string, string>): boolean {
-  const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
-  for (const k of keys) if ((a[k] ?? "") !== (b[k] ?? "")) return false;
-  return true;
+// Signature of the SERVER annotations — drives the EditableImpactTable `key` so it remounts (re-seeds)
+// whenever the server values genuinely change (a different DCR, a content refetch that changed them,
+// or our own post-save cache write), but NOT on an identical background refetch (same string).
+function annotationSignature(impact: DcrImpact[]): string {
+  return impact.map((i) => `${i.id}=${i.requester_annotation ?? ""}`).join("|");
 }
 
 // Read-only: the auto-populated facts + the (frozen) requester annotation. Editing is EditableImpactTable.
@@ -37,7 +36,16 @@ export function DcrImpactTable({
     );
   }
   if (editable && dcrId) {
-    return <EditableImpactTable impact={impact} dcrId={dcrId} />;
+    // Remount (re-seed) on a different DCR or a genuine server-annotation change — never on an
+    // identical background refetch (the signature is unchanged). This is the single reset rule; the
+    // editor itself holds a plain local draft with no server reconciliation.
+    return (
+      <EditableImpactTable
+        key={`${dcrId}::${annotationSignature(impact)}`}
+        impact={impact}
+        dcrId={dcrId}
+      />
+    );
   }
   return (
     <Table>
@@ -62,30 +70,21 @@ export function DcrImpactTable({
 }
 
 // Inline-editable Annotation column + one batch Save (gate is the caller's — changeRequest.assess +
-// rows-exist + non-terminal). Sends ONLY the changed dimensions (the backend partial merge).
+// rows-exist + non-terminal). Sends ONLY the changed dimensions (the backend partial merge). The
+// parent KEYS this component on the DCR + the server-annotation signature, so it remounts (re-seeds
+// the draft from the latest rows) on any genuine server change — a different DCR, a content refetch
+// that changed the annotations, or the post-save cache write — and never on an identical background
+// refetch. So the draft is just a plain local copy of the rows it mounted with; no reconciliation.
 function EditableImpactTable({ impact, dcrId }: { impact: DcrImpact[]; dcrId: string }) {
   const annotate = useAnnotateImpact(dcrId);
   const seed = useMemo(
     () => Object.fromEntries(impact.map((i) => [i.dimension, i.requester_annotation ?? ""])),
     [impact],
   );
-  // `baseline` = the server values the draft is measured against; `draft` = the user's working copy.
-  // Adopt fresh server values whenever the draft is PRISTINE (no unsaved edits) and the seed changed
-  // — a different DCR, or a content refetch that updated the annotations underneath (Codex P2: a
-  // pristine draft must take the refetched values, not re-PUT stale ones). A DIRTY draft is left
-  // untouched so a background refetch can't discard typed edits. `changed` is measured against the
-  // baseline (not the live seed), so an untouched dimension a concurrent refetch changed is never
-  // re-PUT. After a save we reset the baseline to the saved values (the Save onClick), so Save
-  // disables. React's render-time "sync state during render" pattern (no effect).
-  const [baseline, setBaseline] = useState<Record<string, string>>(seed);
   const [draft, setDraft] = useState<Record<string, string>>(seed);
-  if (seed !== baseline && sameAnnotations(draft, baseline)) {
-    setBaseline(seed);
-    setDraft(seed);
-  }
 
   const changed = Object.fromEntries(
-    Object.entries(draft).filter(([dim, v]) => v !== (baseline[dim] ?? "")),
+    Object.entries(draft).filter(([dim, v]) => v !== (seed[dim] ?? "")),
   );
   const hasChanges = Object.keys(changed).length > 0;
 
@@ -129,10 +128,7 @@ function EditableImpactTable({ impact, dcrId }: { impact: DcrImpact[]; dcrId: st
         w="fit-content"
         loading={annotate.isPending}
         disabled={!hasChanges}
-        onClick={() => {
-          const saved = { ...draft };
-          annotate.mutate(changed, { onSuccess: () => setBaseline(saved) });
-        }}
+        onClick={() => annotate.mutate(changed)}
       >
         Save annotations
       </Button>
