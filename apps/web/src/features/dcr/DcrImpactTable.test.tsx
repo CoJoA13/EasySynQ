@@ -89,3 +89,19 @@ it("preserves an unsaved edit across a background refetch of the same rows", asy
   rerender(<DcrImpactTable impact={impact.map((i) => ({ ...i }))} editable dcrId="dcr1" />);
   expect(getByLabelText("Annotation for training_awareness")).toHaveValue("Unsaved text");
 });
+
+it("adopts fresh server annotations on a refetch when the draft is pristine", () => {
+  const { getByLabelText, rerender } = renderWithProviders(
+    <DcrImpactTable impact={impact} editable dcrId="dcr1" />,
+  );
+  expect(getByLabelText("Annotation for affected_processes")).toHaveValue("Calibration");
+  // A content refetch (same rows) updated an annotation underneath; the pristine draft adopts it
+  // rather than holding (and later re-PUTting) the stale value (Codex P2).
+  const updated = impact.map((i) =>
+    i.dimension === "affected_processes"
+      ? { ...i, requester_annotation: "Updated by Mara" }
+      : { ...i },
+  );
+  rerender(<DcrImpactTable impact={updated} editable dcrId="dcr1" />);
+  expect(getByLabelText("Annotation for affected_processes")).toHaveValue("Updated by Mara");
+});
