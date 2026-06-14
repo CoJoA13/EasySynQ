@@ -2,12 +2,14 @@ import { http, HttpResponse } from "msw";
 import { Route, Routes } from "react-router-dom";
 import { describe, expect, test } from "vitest";
 import { screen } from "@testing-library/react";
+import { axe } from "jest-axe";
 import { server } from "../../test/msw/server";
 import { renderWithProviders } from "../../test/render";
 import {
   approvalFixture,
   capaApprovalFixture,
   capaApprovalTask,
+  dcrApprovalTask,
   objectiveVersionWithCommitment,
   objectiveVersionV1Effective,
   objectiveVersionV2WithCommitment,
@@ -262,7 +264,9 @@ describe("ReviewApprovePage MGMT_REVIEW branch", () => {
   });
 
   test("an MR_INPUT task renders nav-only (review context + open-the-review link, NO decide affordance)", async () => {
-    server.use(http.get("/api/v1/tasks/:id", () => HttpResponse.json(mrTask({ type: "MR_INPUT" }))));
+    server.use(
+      http.get("/api/v1/tasks/:id", () => HttpResponse.json(mrTask({ type: "MR_INPUT" }))),
+    );
     renderAtTask("tkmr1111-1111-1111-1111-111111111111");
     expect(await screen.findByText("Prepare management review")).toBeInTheDocument();
     // the MR context (best-effort mgmtReview.read) shows the identifier
@@ -276,7 +280,9 @@ describe("ReviewApprovePage MGMT_REVIEW branch", () => {
   });
 
   test("an MR_ACTION pending task renders the one-click complete card (no signature)", async () => {
-    server.use(http.get("/api/v1/tasks/:id", () => HttpResponse.json(mrTask({ type: "MR_ACTION" }))));
+    server.use(
+      http.get("/api/v1/tasks/:id", () => HttpResponse.json(mrTask({ type: "MR_ACTION" }))),
+    );
     renderAtTask("tkmr1111-1111-1111-1111-111111111111");
     expect(await screen.findByText("Management review action")).toBeInTheDocument();
     expect(
@@ -294,9 +300,7 @@ describe("ReviewApprovePage MGMT_REVIEW branch", () => {
     );
     renderAtTask("tkmr1111-1111-1111-1111-111111111111");
     expect(await screen.findByText("This task has already been decided.")).toBeInTheDocument();
-    expect(
-      screen.queryByRole("button", { name: /mark action complete/i }),
-    ).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /mark action complete/i })).not.toBeInTheDocument();
   });
 
   test("never resolves a subject document — no workflow-instance read for an MR task", async () => {
@@ -311,5 +315,46 @@ describe("ReviewApprovePage MGMT_REVIEW branch", () => {
     renderAtTask("tkmr1111-1111-1111-1111-111111111111");
     expect(await screen.findByText("Management review action")).toBeInTheDocument();
     expect(instanceHit).toBe(false);
+  });
+});
+
+describe("ReviewApprovePage DCR branch", () => {
+  test("a DCR task renders the DCR context + a DCR decision card, no document redline", async () => {
+    // dcrApprovalTask (subject_type "DCR", id task-dcr-1) is wired into GET /tasks/:id (Task 3);
+    // GET /dcrs/:id defaults to dcrDetailFixture (identifier DCR-2026-0001).
+    renderAtTask("task-dcr-1");
+    // The DCR context (identifier) + the decision radios appear…
+    expect(await screen.findByText("DCR-2026-0001")).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "Approve" })).toBeInTheDocument();
+    // …and NO document redline (VersionCompare) is rendered.
+    expect(screen.queryByText(/redline|version compare|compare from/i)).toBeNull();
+  });
+
+  test("never resolves a subject document — no workflow-instance read for a DCR task", async () => {
+    let instanceHit = false;
+    server.use(
+      http.get("/api/v1/workflow-instances/:id", () => {
+        instanceHit = true;
+        return HttpResponse.json(approvalFixture);
+      }),
+    );
+    renderAtTask("task-dcr-1");
+    expect(await screen.findByText("DCR-2026-0001")).toBeInTheDocument();
+    expect(instanceHit).toBe(false);
+  });
+
+  test("a decided DCR task shows the Decided alert instead of the decision card", async () => {
+    server.use(
+      http.get("/api/v1/tasks/:id", () => HttpResponse.json({ ...dcrApprovalTask, state: "DONE" })),
+    );
+    renderAtTask("task-dcr-1");
+    expect(await screen.findByText("This task has already been decided.")).toBeInTheDocument();
+    expect(screen.queryByRole("radio", { name: "Approve" })).toBeNull();
+  });
+
+  test("DCR review page has no axe violations", async () => {
+    const { container } = mount("/tasks/task-dcr-1");
+    await screen.findByText("DCR-2026-0001");
+    expect(await axe(container)).toHaveNoViolations();
   });
 });

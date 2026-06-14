@@ -6774,7 +6774,7 @@ components:
          customer_requirement, mgmt_review, other]
     DcrSourceLinkType:
       type: string
-      description: mgmt_review / risk are reserved forward seams (those families are not built in v1).
+      description: risk is a reserved forward seam (the risk family is not built in v1); mgmt_review is live (S-mr-3).
       enum: [capa, finding, mgmt_review, risk]
     ChangeSignificance:
       type: string
@@ -6829,6 +6829,21 @@ components:
           type: array
           items: { $ref: "#/components/schemas/DcrStageEvent" }
           description: The append-only transition trail (present on a single read, omitted on list).
+        capabilities:
+          type: object
+          additionalProperties: false
+          required: [assess, route, implement, close]
+          description: >-
+            Detail-only (GET /dcrs/{id}; omitted on list/create/raise). The caller's PROCESS-scoped
+            lifecycle affordances — the authz answer ONLY (the SPA combines with FSM state; it derives
+            Edit from assess and Cancel from close). implement ANDs changeRequest.implement with the
+            underlying document.release/document.obsolete SoD-2 (author ≠ releaser), so the button
+            never show-then-403s.
+          properties:
+            assess: { type: boolean, description: "changeRequest.assess (also gates Edit while Open)." }
+            route: { type: boolean, description: "changeRequest.route (Route while Assessed)." }
+            implement: { type: boolean, description: "changeRequest.implement AND the underlying document.release/obsolete (SoD-2)." }
+            close: { type: boolean, description: "changeRequest.close (also gates Cancel)." }
     DcrCreate:
       type: object
       additionalProperties: false

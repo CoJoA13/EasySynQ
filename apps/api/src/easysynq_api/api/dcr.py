@@ -37,9 +37,10 @@ from ..db.models.document_version import DocumentVersion
 from ..db.models.documented_information import DocumentedInformation
 from ..db.models.impact_assessment import ImpactAssessment
 from ..db.session import get_session
-from ..domain.authz import ResourceContext
+from ..domain.authz import RequestContext, ResourceContext, authorize
 from ..problems import ProblemException
-from ..services.authz import AuthzAuditSink, enforce, get_authz_audit_sink, require
+from ..services.authz import AuthzAuditSink, enforce, gather_grants, get_authz_audit_sink, require
+from ..services.authz.repository import gather_sod_constraints, get_allow_approver_release
 from ..services.capa import raise_dcr_from_capa
 from ..services.dcr import (
     annotate_impact,
@@ -215,6 +216,72 @@ _dcr_route = require("changeRequest.route", async_scope_resolver=_dcr_scope)
 _dcr_implement = require("changeRequest.implement", async_scope_resolver=_dcr_scope)
 
 
+async def _underlying_control_allowed(
+    session: AsyncSession, caller: AppUser, dcr: Dcr, now: datetime.datetime
+) -> bool:
+    """The caller's PDP answer for the underlying document control the implement DRIVES (RETIRE →
+    document.obsolete; REVISE → document.release + SoD-2). True for CREATE (no SPA implement
+    affordance → not AND-ed). The audit-free PDP twin of ``_enforce_underlying_document_control``;
+    both read ``_underlying_control_target`` so the capability cannot drift from the enforcement."""
+    target = await _underlying_control_target(session, dcr)
+    if target is None:
+        return True  # CREATE / defensive — no underlying probe to AND
+    key, scope = target
+    sod = await gather_sod_constraints(session, caller.org_id)
+    allow_approver_release = await get_allow_approver_release(session, caller.org_id)
+    ctx = RequestContext(
+        now=now, actor_user_id=str(caller.id), allow_approver_release=allow_approver_release
+    )
+    grants = await gather_grants(session, caller.id, caller.org_id, key)
+    return authorize(grants, key, scope, ctx, sig_hook=True, sod=sod).allow
+
+
+async def _dcr_capabilities(session: AsyncSession, caller: AppUser, dcr: Dcr) -> dict[str, bool]:
+    """The caller's PROCESS-scoped lifecycle affordances on this DCR (detail-only; the
+    _mr_capabilities / _objective_capabilities precedent). One scope resolved from the target doc
+    (SYSTEM fallback for a CREATE/unknown target), four changeRequest.* probes, and the honest
+    ``implement`` = changeRequest.implement AND the underlying document.release/obsolete SoD-2
+    answer so the SPA Implement button never show-then-403s. FE derives Edit/Cancel from these."""
+    now = datetime.datetime.now(datetime.UTC)
+    scope = await _dcr_doc_scope(session, dcr.target_document_id)
+    ctx = RequestContext(now=now, actor_user_id=str(caller.id))
+
+    async def _probe(key: str) -> bool:
+        grants = await gather_grants(session, caller.id, caller.org_id, key)
+        return authorize(grants, key, scope, ctx).allow
+
+    implement_cr = await _probe("changeRequest.implement")
+    return {
+        "assess": await _probe("changeRequest.assess"),
+        "route": await _probe("changeRequest.route"),
+        "implement": implement_cr and await _underlying_control_allowed(session, caller, dcr, now),
+        "close": await _probe("changeRequest.close"),
+    }
+
+
+async def _underlying_control_target(
+    session: AsyncSession, dcr: Dcr
+) -> tuple[str, ResourceContext] | None:
+    """The vault-control (permission_key, scope) a DCR implement DRIVES, for RETIRE and REVISE — the
+    SINGLE source of truth shared by the implement enforcement AND the detail-only ``implement``
+    capability so they cannot drift. RETIRE → ``document.obsolete`` on the target; REVISE →
+    ``document.release`` with the SoD-2 overlay over the target's latest Approved version. CREATE
+    returns None: its release scope depends on the body's ``resulting_version_id`` (resolved only
+    at implement time) and CREATE-implement has no SPA affordance, so the capability does not AND
+    it."""
+    if dcr.change_type is DcrChangeType.RETIRE:
+        return "document.obsolete", await _dcr_doc_scope(session, dcr.target_document_id)
+    if dcr.change_type is DcrChangeType.CREATE:
+        return None
+    if (
+        dcr.target_document_id is None
+    ):  # defensive — the create-iff-no-target CHECK guarantees a target
+        return None
+    base = await _dcr_doc_scope(session, dcr.target_document_id)
+    scope = await enrich_release_sod_scope(session, base, dcr.target_document_id, None)
+    return "document.release", scope
+
+
 async def _enforce_underlying_document_control(
     session: AsyncSession,
     authz_sink: AuthzAuditSink,
@@ -225,16 +292,10 @@ async def _enforce_underlying_document_control(
 ) -> None:
     """Enforce the vault-control permission the DCR implement DRIVES, IN ADDITION to the
     ``changeRequest.implement`` dependency gate (R40 S-dcr-5 addendum — no DCR side-door past
-    document control). RETIRE → ``document.obsolete`` on the target; REVISE/CREATE →
-    ``document.release`` with the SoD-2 overlay over the promoted version. This is the only path
-    that fires the seeded SoD-2 (author≠releaser) — the PDP keys SoD on ``document.release``, so
-    gating on ``changeRequest.implement`` alone would silently skip it."""
-    if dcr.change_type is DcrChangeType.RETIRE:
-        scope = await _dcr_doc_scope(session, dcr.target_document_id)
-        await enforce(
-            session, authz_sink, request, caller, "document.obsolete", scope, sig_hook=True
-        )
-        return
+    document control). RETIRE → ``document.obsolete``; REVISE/CREATE → ``document.release`` with the
+    SoD-2 overlay over the promoted version. This is the only path that fires the seeded SoD-2
+    (author≠releaser). RETIRE/REVISE share ``_underlying_control_target`` with the capability probe;
+    CREATE is special-cased here because its scope needs the request body's resulting_version_id."""
     if dcr.change_type is DcrChangeType.CREATE:
         if body.resulting_version_id is None:
             raise ProblemException(
@@ -245,18 +306,19 @@ async def _enforce_underlying_document_control(
         version = await session.get(DocumentVersion, body.resulting_version_id)
         if version is None or version.org_id != caller.org_id:
             raise ProblemException(status=404, code="not_found", title="Version not found")
-        doc_id: uuid.UUID = version.document_id
-        version_id: uuid.UUID | None = body.resulting_version_id
-    else:  # REVISE — enrich_release_sod_scope resolves the target's latest Approved version
-        if (
-            dcr.target_document_id is None
-        ):  # defensive (the create-iff-no-target CHECK guarantees it)
-            raise ProblemException(status=404, code="not_found", title="Document not found")
-        doc_id = dcr.target_document_id
-        version_id = None
-    base = await _dcr_doc_scope(session, doc_id)
-    scope = await enrich_release_sod_scope(session, base, doc_id, version_id)
-    await enforce(session, authz_sink, request, caller, "document.release", scope, sig_hook=True)
+        base = await _dcr_doc_scope(session, version.document_id)
+        scope = await enrich_release_sod_scope(
+            session, base, version.document_id, body.resulting_version_id
+        )
+        await enforce(
+            session, authz_sink, request, caller, "document.release", scope, sig_hook=True
+        )
+        return
+    target = await _underlying_control_target(session, dcr)
+    if target is None:  # defensive — a REVISE/RETIRE with no target (the CHECK guarantees one)
+        raise ProblemException(status=404, code="not_found", title="Document not found")
+    key, scope = target
+    await enforce(session, authz_sink, request, caller, key, scope, sig_hook=True)
 
 
 # --- endpoints --------------------------------------------------------------------------------
@@ -327,6 +389,7 @@ async def get_dcr_endpoint(
     out["stage_events"] = [
         _stage_event(e) for e in await dcr_repo.list_dcr_stage_events(session, dcr_id)
     ]
+    out["capabilities"] = await _dcr_capabilities(session, caller, dcr)
     return out
 
 

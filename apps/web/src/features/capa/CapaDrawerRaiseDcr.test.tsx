@@ -1,6 +1,6 @@
 import { http, HttpResponse } from "msw";
 import { expect, it } from "vitest";
-import { screen, within } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useLocation } from "react-router-dom";
 import { renderWithProviders } from "../../test/render";
@@ -35,7 +35,8 @@ it("hides Raise change request for a terminal (Closed) CAPA even with the key", 
   grant("changeRequest.create");
   server.use(
     http.get("/api/v1/capas/:id", () =>
-      HttpResponse.json({ ...capaDetailFixture, close_state: "Closed" })),
+      HttpResponse.json({ ...capaDetailFixture, close_state: "Closed" }),
+    ),
   );
   renderWithProviders(<CapaDrawer capaId={CAPA_ID} onClose={() => {}} />);
   await screen.findByText(/Close gate/i);
@@ -51,9 +52,12 @@ it("raises a DCR from the CAPA and deep-links to it", async () => {
     </>,
   );
   await userEvent.click(await screen.findByRole("button", { name: "Raise change request" }));
-  const dialog = await screen.findByRole("dialog", { name: /Raise a change request from this CAPA/i });
+  const dialog = await screen.findByRole("dialog", {
+    name: /Raise a change request from this CAPA/i,
+  });
   await userEvent.click(await within(dialog).findByRole("radio", { name: "Create" }));
   await userEvent.type(within(dialog).getByLabelText(/Reason for change/), "From this CAPA.");
   await userEvent.click(within(dialog).getByRole("button", { name: "Raise" }));
-  expect(await screen.findByTestId("loc")).toHaveTextContent("/dcrs?dcr=dcrNEW01");
+  // waitFor the navigate to land (findByTestId resolves on the probe existing, racing the navigate).
+  await waitFor(() => expect(screen.getByTestId("loc")).toHaveTextContent("/dcrs?dcr=dcrNEW01"));
 });

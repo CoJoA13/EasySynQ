@@ -1,6 +1,6 @@
 import { http, HttpResponse } from "msw";
 import { expect, it } from "vitest";
-import { screen } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useLocation } from "react-router-dom";
 import { renderWithProviders } from "../../test/render";
@@ -48,13 +48,20 @@ it("raises a DCR from a tracked ACTION output and deep-links to it", async () =>
   await userEvent.click(await screen.findByRole("radio", { name: "Create" }));
   await userEvent.type(screen.getByLabelText(/Reason for change/), "From this MR action.");
   await userEvent.click(screen.getByRole("button", { name: "Raise" }));
-  expect(await screen.findByTestId("loc")).toHaveTextContent("/dcrs?dcr=dcrNEW01");
+  // waitFor the navigate to land — findByTestId resolves on the probe existing (text "/"), so
+  // asserting toHaveTextContent immediately races the post-mutation navigate (flakes under CI load).
+  await waitFor(() => expect(screen.getByTestId("loc")).toHaveTextContent("/dcrs?dcr=dcrNEW01"));
 });
 
 it("does not show Raise DCR when the review is not tracking", async () => {
   grant("changeRequest.create");
   renderWithProviders(
-    <ReviewOutputsSection reviewId={REVIEW_ID} outputs={[action]} editable={false} tracking={false} />,
+    <ReviewOutputsSection
+      reviewId={REVIEW_ID}
+      outputs={[action]}
+      editable={false}
+      tracking={false}
+    />,
   );
   await screen.findByText("Revise the calibration SOP.");
   expect(screen.queryByRole("button", { name: "Raise DCR" })).toBeNull();

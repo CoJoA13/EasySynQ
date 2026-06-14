@@ -6,6 +6,7 @@ import { useDocumentVersions } from "../document/useDocumentVersions";
 import { VersionCompare } from "../document/VersionCompare";
 import { useCapaApproval } from "../capa/hooks";
 import { CapaApprovalContext } from "./CapaApprovalContext";
+import { DcrApprovalContext } from "./DcrApprovalContext";
 import { DecisionCard } from "./DecisionCard";
 import { ObjectiveCommitmentContext, type ObjectiveCommitment } from "./ObjectiveCommitmentContext";
 import { PeriodicReviewContext } from "./PeriodicReviewContext";
@@ -26,13 +27,17 @@ export function ReviewApprovePage() {
   const isPeriodic = task?.subject_type === "PERIODIC_REVIEW";
   const isDocAck = task?.subject_type === "DOC_ACK";
   const isMgmtReview = task?.subject_type === "MGMT_REVIEW";
+  const isDcr = task?.subject_type === "DCR";
   // Only a DOCUMENT-subject task resolves its subject doc via the instance; every other subject (CAPA /
-  // periodic / DOC_ACK / MGMT_REVIEW) carries its subject id on the task itself and the decider may hold
-  // no workflow read at all. ⚠ One named invariant in ONE place so a future arm can't forget a negation:
-  // an MR task must NOT resolve a subject document (its subject is the MR container, not a kind=DOCUMENT
-  // version) — that would apply the wrong document.read gate + a meaningless redline.
-  const isDocumentSubject = !isCapa && !isPeriodic && !isDocAck && !isMgmtReview;
-  const { data: instance } = useWorkflowInstance(isDocumentSubject && task ? task.instance_id : null);
+  // periodic / DOC_ACK / MGMT_REVIEW / DCR) carries its subject id on the task itself and the decider may
+  // hold no workflow read at all. ⚠ One named invariant in ONE place so a future arm can't forget a
+  // negation: a DCR (or MR) task must NOT resolve a subject document (its subject is the change request /
+  // MR container, not a kind=DOCUMENT version) — that would apply the wrong document.read gate + a
+  // meaningless redline.
+  const isDocumentSubject = !isCapa && !isPeriodic && !isDocAck && !isMgmtReview && !isDcr;
+  const { data: instance } = useWorkflowInstance(
+    isDocumentSubject && task ? task.instance_id : null,
+  );
   const docId = isDocumentSubject ? (instance?.subject_id ?? null) : null;
   const { data: doc } = useDocument(docId, { enabled: docId !== null });
   const { data: versions } = useDocumentVersions(docId, docId !== null);
@@ -80,9 +85,8 @@ export function ReviewApprovePage() {
       commitment: (v.metadata_snapshot as { objective_commitment?: ObjectiveCommitment } | null)
         ?.objective_commitment,
     }))
-    .filter(
-      (x): x is { version: (typeof x)["version"]; commitment: ObjectiveCommitment } =>
-        Boolean(x.commitment),
+    .filter((x): x is { version: (typeof x)["version"]; commitment: ObjectiveCommitment } =>
+      Boolean(x.commitment),
     );
   const objectiveCommitment = commitmentVersions[0]?.commitment ?? null;
   const previousCommitment =
@@ -171,7 +175,8 @@ export function ReviewApprovePage() {
     //    backend decide_mr_task does NOT gate on task.type, so the only thing keeping a "prepare" task
     //    out of the decision path is the absence of a complete button here.
     //  - MR_ACTION → the one-click complete card (no signature — R43). The subject id is on the task.
-    const title = task.type === "MR_INPUT" ? "Prepare management review" : "Management review action";
+    const title =
+      task.type === "MR_INPUT" ? "Prepare management review" : "Management review action";
     // The MR_ACTION task's stage_key is `action:<output_id>` (spawn.py) — surface WHICH output this
     // completes so an owner with several same-owner actions can't confuse them (Codex P2).
     const actionOutputId = task.stage_key.startsWith("action:")
@@ -198,7 +203,36 @@ export function ReviewApprovePage() {
                 </Stack>
               </Card>
             ) : decidable ? (
-              <MrActionCard taskId={task.id} reviewId={task.subject_id!} outputId={actionOutputId} />
+              <MrActionCard
+                taskId={task.id}
+                reviewId={task.subject_id!}
+                outputId={actionOutputId}
+              />
+            ) : (
+              decidedAlert
+            )}
+          </Grid.Col>
+        </Grid>
+      </Stack>
+    );
+  }
+
+  if (isDcr) {
+    // S-dcr-ui-2b: a DCR task's subject is the change request (NOT a kind=DOCUMENT version) →
+    // best-effort context (changeRequest.read, calm-403 degrade), no redline. The subject id is on
+    // the task (detail enrichment) → always present here. It SIGNS (meaning=approval); authority is
+    // candidate-pool membership (server-side 404-collapse), NOT a changeRequest.approve can() check,
+    // so the card shows whenever the task is PENDING.
+    return (
+      <Stack gap="lg">
+        <Title order={2}>Review &amp; Approve — Change request</Title>
+        <Grid gutter="lg" align="flex-start">
+          <Grid.Col span={{ base: 12, md: 7 }}>
+            <DcrApprovalContext dcrId={task.subject_id!} />
+          </Grid.Col>
+          <Grid.Col span={{ base: 12, md: 5 }}>
+            {decidable ? (
+              <DecisionCard taskId={task.id} subjectType="DCR" subjectId={task.subject_id!} />
             ) : (
               decidedAlert
             )}

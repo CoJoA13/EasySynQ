@@ -63,10 +63,31 @@ test("surfaces a 403 sod_violation calmly", async () => {
 });
 
 test("has no a11y violations", async () => {
-  const { container } = renderWithProviders(<DecisionCard taskId={TASK} subjectType="DOCUMENT" subjectId={DOC} />, {
-    route: `/tasks/${TASK}`,
-  });
+  const { container } = renderWithProviders(
+    <DecisionCard taskId={TASK} subjectType="DOCUMENT" subjectId={DOC} />,
+    {
+      route: `/tasks/${TASK}`,
+    },
+  );
   expect(await axe(container)).toHaveNoViolations();
+});
+
+describe("DecisionCard — DCR", () => {
+  test("renders 3 outcomes and the signing checkbox on approve", async () => {
+    renderWithProviders(
+      <DecisionCard
+        taskId="task-dcr-1"
+        subjectType="DCR"
+        subjectId="dcr00001-0001-0001-0001-000000000001"
+      />,
+      { route: "/tasks/task-dcr-1" },
+    );
+    expect(screen.getByRole("radio", { name: "Approve" })).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "Request changes" })).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "Reject" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("radio", { name: "Approve" }));
+    expect(screen.getByLabelText(/Signing as .* meaning: approval/)).toBeInTheDocument();
+  });
 });
 
 describe("DecisionCard — PERIODIC_REVIEW", () => {

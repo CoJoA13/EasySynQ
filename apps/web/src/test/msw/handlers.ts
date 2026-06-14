@@ -1,5 +1,41 @@
 import { http, HttpResponse } from "msw";
-import type { AckDecisionResult, AckMatrixRow, AuditList, AuditPlanList, AuditProgramList, Capa, Complaint, Dcr, DcrDetail, DcrImpactList, DcrList, DcrPatchBody, DistributionPayload, DocumentVersion, DriftStatus, EffectivePolicy, Finding, FindingList, Measurement, MeasurementListResponse, MgmtReview, MgmtReviewDetail, MgmtReviewListResponse, MgmtReviewNextDue, Ncr, Objective, ObjectiveCommitment, ObjectiveListResponse, ObjectivePlan, ObjectiveScorecard, ReviewInput, ReviewOutput, SupersededCopies, WorkflowInstance } from "../../lib/types";
+import type {
+  AckDecisionResult,
+  AckMatrixRow,
+  AuditList,
+  AuditPlanList,
+  AuditProgramList,
+  Capa,
+  Complaint,
+  Dcr,
+  DcrDetail,
+  DcrImpactList,
+  DcrList,
+  DcrPatchBody,
+  DistributionPayload,
+  DocumentVersion,
+  DriftStatus,
+  EffectivePolicy,
+  Finding,
+  FindingList,
+  Measurement,
+  MeasurementListResponse,
+  MgmtReview,
+  MgmtReviewDetail,
+  MgmtReviewListResponse,
+  MgmtReviewNextDue,
+  Ncr,
+  Objective,
+  ObjectiveCommitment,
+  ObjectiveListResponse,
+  ObjectivePlan,
+  ObjectiveScorecard,
+  ReviewInput,
+  ReviewOutput,
+  SupersededCopies,
+  Task,
+  WorkflowInstance,
+} from "../../lib/types";
 
 export const docFixture = [
   {
@@ -429,22 +465,133 @@ export const complianceFixture = {
   framework: "iso9001:2015",
   rollup: { total: 3, covered: 1, partial: 1, gap: 1, overdue_review: 1 },
   rows: [
-    { clause_id: "c43", number: "4.3", title: "Scope of the QMS", pdca_phase: "PLAN", mapped_count: 1, effective_count: 1, status: "COVERED", overdue_review: true },
-    { clause_id: "c62", number: "6.2", title: "Quality objectives", pdca_phase: "PLAN", mapped_count: 1, effective_count: 0, status: "PARTIAL", overdue_review: false },
-    { clause_id: "c84", number: "8.4", title: "External providers", pdca_phase: "DO", mapped_count: 0, effective_count: 0, status: "GAP", overdue_review: false },
+    {
+      clause_id: "c43",
+      number: "4.3",
+      title: "Scope of the QMS",
+      pdca_phase: "PLAN",
+      mapped_count: 1,
+      effective_count: 1,
+      status: "COVERED",
+      overdue_review: true,
+    },
+    {
+      clause_id: "c62",
+      number: "6.2",
+      title: "Quality objectives",
+      pdca_phase: "PLAN",
+      mapped_count: 1,
+      effective_count: 0,
+      status: "PARTIAL",
+      overdue_review: false,
+    },
+    {
+      clause_id: "c84",
+      number: "8.4",
+      title: "External providers",
+      pdca_phase: "DO",
+      mapped_count: 0,
+      effective_count: 0,
+      status: "GAP",
+      overdue_review: false,
+    },
   ],
 };
 
 // ---- S-web-7 CAPA fixtures -------------------------------------------------------
 export const capaListFixture = {
   data: [
-    { id: "ca000001-0001-0001-0001-000000000001", identifier: "REC-000031", title: "Supplier re-evaluation overdue for 2 vendors", source: "audit", severity: "Major", process_id: "pr000001-0001-0001-0001-000000000001", close_state: "RootCause", cycle_marker: 0, origin_finding_id: null, raised_by: null, created_at: "2026-05-20T09:00:00+00:00" },
-    { id: "ca000002-0002-0002-0002-000000000002", identifier: "REC-000034", title: "Delivered batch missing CoA documents", source: "complaint", severity: "Critical", process_id: null, close_state: "Containment", cycle_marker: 0, origin_finding_id: null, raised_by: null, created_at: "2026-05-28T09:00:00+00:00" },
-    { id: "ca000003-0003-0003-0003-000000000003", identifier: "REC-000035", title: "Calibration label missing on torque wrench", source: "process", severity: "Minor", process_id: null, close_state: "Raised", cycle_marker: 0, origin_finding_id: null, raised_by: null, created_at: "2026-06-01T09:00:00+00:00" },
-    { id: "ca000004-0004-0004-0004-000000000004", identifier: "REC-000028", title: "Scrap-rate spike on Line 2", source: "process", severity: "Major", process_id: null, close_state: "Implement", cycle_marker: 0, origin_finding_id: null, raised_by: null, created_at: "2026-05-15T09:00:00+00:00" },
-    { id: "ca000005-0005-0005-0005-000000000005", identifier: "REC-000025", title: "Recurring late deliveries", source: "audit", severity: "Major", process_id: null, close_state: "Verify", cycle_marker: 1, origin_finding_id: null, raised_by: null, created_at: "2026-05-10T09:00:00+00:00" },
-    { id: "ca000006-0006-0006-0006-000000000006", identifier: "REC-000019", title: "Document control numbering gap", source: "audit", severity: "Minor", process_id: null, close_state: "Closed", cycle_marker: 0, origin_finding_id: null, raised_by: null, created_at: "2026-04-30T09:00:00+00:00" },
-    { id: "ca000007-0007-0007-0007-000000000007", identifier: "REC-000012", title: "Duplicate complaint — withdrawn", source: "complaint", severity: "Minor", process_id: null, close_state: "Rejected", cycle_marker: 0, origin_finding_id: null, raised_by: null, created_at: "2026-04-20T09:00:00+00:00" },
+    {
+      id: "ca000001-0001-0001-0001-000000000001",
+      identifier: "REC-000031",
+      title: "Supplier re-evaluation overdue for 2 vendors",
+      source: "audit",
+      severity: "Major",
+      process_id: "pr000001-0001-0001-0001-000000000001",
+      close_state: "RootCause",
+      cycle_marker: 0,
+      origin_finding_id: null,
+      raised_by: null,
+      created_at: "2026-05-20T09:00:00+00:00",
+    },
+    {
+      id: "ca000002-0002-0002-0002-000000000002",
+      identifier: "REC-000034",
+      title: "Delivered batch missing CoA documents",
+      source: "complaint",
+      severity: "Critical",
+      process_id: null,
+      close_state: "Containment",
+      cycle_marker: 0,
+      origin_finding_id: null,
+      raised_by: null,
+      created_at: "2026-05-28T09:00:00+00:00",
+    },
+    {
+      id: "ca000003-0003-0003-0003-000000000003",
+      identifier: "REC-000035",
+      title: "Calibration label missing on torque wrench",
+      source: "process",
+      severity: "Minor",
+      process_id: null,
+      close_state: "Raised",
+      cycle_marker: 0,
+      origin_finding_id: null,
+      raised_by: null,
+      created_at: "2026-06-01T09:00:00+00:00",
+    },
+    {
+      id: "ca000004-0004-0004-0004-000000000004",
+      identifier: "REC-000028",
+      title: "Scrap-rate spike on Line 2",
+      source: "process",
+      severity: "Major",
+      process_id: null,
+      close_state: "Implement",
+      cycle_marker: 0,
+      origin_finding_id: null,
+      raised_by: null,
+      created_at: "2026-05-15T09:00:00+00:00",
+    },
+    {
+      id: "ca000005-0005-0005-0005-000000000005",
+      identifier: "REC-000025",
+      title: "Recurring late deliveries",
+      source: "audit",
+      severity: "Major",
+      process_id: null,
+      close_state: "Verify",
+      cycle_marker: 1,
+      origin_finding_id: null,
+      raised_by: null,
+      created_at: "2026-05-10T09:00:00+00:00",
+    },
+    {
+      id: "ca000006-0006-0006-0006-000000000006",
+      identifier: "REC-000019",
+      title: "Document control numbering gap",
+      source: "audit",
+      severity: "Minor",
+      process_id: null,
+      close_state: "Closed",
+      cycle_marker: 0,
+      origin_finding_id: null,
+      raised_by: null,
+      created_at: "2026-04-30T09:00:00+00:00",
+    },
+    {
+      id: "ca000007-0007-0007-0007-000000000007",
+      identifier: "REC-000012",
+      title: "Duplicate complaint — withdrawn",
+      source: "complaint",
+      severity: "Minor",
+      process_id: null,
+      close_state: "Rejected",
+      cycle_marker: 0,
+      origin_finding_id: null,
+      raised_by: null,
+      created_at: "2026-04-20T09:00:00+00:00",
+    },
   ],
 } satisfies { data: Capa[] };
 
@@ -452,9 +599,37 @@ export const capaDetailFixture = {
   ...capaListFixture.data[0]!,
   raised_by: "bbbb1111-1111-1111-1111-111111111111",
   stages: [
-    { id: "st000001-0001-0001-0001-000000000001", stage: "Raised", content_block: { problem: "Two approved vendors past their re-evaluation date.", source: "audit", severity: "Major" }, cycle_marker: 0, created_by: "bbbb1111-1111-1111-1111-111111111111", created_at: "2026-05-20T09:00:00+00:00", evidence_links: [] },
-    { id: "st000002-0002-0002-0002-000000000002", stage: "Containment", content_block: { correction: "Froze new POs to both vendors pending review." }, cycle_marker: 0, created_by: "bbbb9999-9999-9999-9999-999999999999", created_at: "2026-05-21T09:00:00+00:00", evidence_links: [] },
-    { id: "st000003-0003-0003-0003-000000000003", stage: "RootCause", content_block: { root_cause: "Re-eval reminders never scheduled.", method: "5-whys" }, cycle_marker: 0, created_by: "bbbb1111-1111-1111-1111-111111111111", created_at: "2026-05-22T09:00:00+00:00", evidence_links: [] },
+    {
+      id: "st000001-0001-0001-0001-000000000001",
+      stage: "Raised",
+      content_block: {
+        problem: "Two approved vendors past their re-evaluation date.",
+        source: "audit",
+        severity: "Major",
+      },
+      cycle_marker: 0,
+      created_by: "bbbb1111-1111-1111-1111-111111111111",
+      created_at: "2026-05-20T09:00:00+00:00",
+      evidence_links: [],
+    },
+    {
+      id: "st000002-0002-0002-0002-000000000002",
+      stage: "Containment",
+      content_block: { correction: "Froze new POs to both vendors pending review." },
+      cycle_marker: 0,
+      created_by: "bbbb9999-9999-9999-9999-999999999999",
+      created_at: "2026-05-21T09:00:00+00:00",
+      evidence_links: [],
+    },
+    {
+      id: "st000003-0003-0003-0003-000000000003",
+      stage: "RootCause",
+      content_block: { root_cause: "Re-eval reminders never scheduled.", method: "5-whys" },
+      cycle_marker: 0,
+      created_by: "bbbb1111-1111-1111-1111-111111111111",
+      created_at: "2026-05-22T09:00:00+00:00",
+      evidence_links: [],
+    },
   ],
 } satisfies Capa;
 
@@ -465,11 +640,51 @@ export const capaLoopDetailFixture = {
   ...capaListFixture.data[4]!,
   raised_by: "bbbb1111-1111-1111-1111-111111111111",
   stages: [
-    { id: "lp000001-0001-0001-0001-000000000001", stage: "RootCause", content_block: { root_cause: "Planning hand-off undefined." }, cycle_marker: 0, created_by: "bbbb1111-1111-1111-1111-111111111111", created_at: "2026-05-11T09:00:00+00:00", evidence_links: [] },
-    { id: "lp000002-0002-0002-0002-000000000002", stage: "ActionPlan", content_block: { action_items: ["Add a planning hand-off checklist"] }, cycle_marker: 0, created_by: "bbbb1111-1111-1111-1111-111111111111", created_at: "2026-05-13T09:00:00+00:00", evidence_links: [] },
-    { id: "lp000003-0003-0003-0003-000000000003", stage: "Verify", content_block: { decision: "not_effective", narrative: "Late deliveries recurred." }, cycle_marker: 0, created_by: "bbbb1111-1111-1111-1111-111111111111", created_at: "2026-05-18T09:00:00+00:00", evidence_links: [] },
-    { id: "lp000004-0004-0004-0004-000000000004", stage: "ActionPlan", content_block: { action_items: ["Re-baseline the capacity model"] }, cycle_marker: 1, created_by: "bbbb1111-1111-1111-1111-111111111111", created_at: "2026-05-19T09:00:00+00:00", evidence_links: [] },
-    { id: "lp000005-0005-0005-0005-000000000005", stage: "Verify", content_block: { decision: "effective", narrative: "On-time rate recovered." }, cycle_marker: 1, created_by: "bbbb1111-1111-1111-1111-111111111111", created_at: "2026-05-21T09:00:00+00:00", evidence_links: [] },
+    {
+      id: "lp000001-0001-0001-0001-000000000001",
+      stage: "RootCause",
+      content_block: { root_cause: "Planning hand-off undefined." },
+      cycle_marker: 0,
+      created_by: "bbbb1111-1111-1111-1111-111111111111",
+      created_at: "2026-05-11T09:00:00+00:00",
+      evidence_links: [],
+    },
+    {
+      id: "lp000002-0002-0002-0002-000000000002",
+      stage: "ActionPlan",
+      content_block: { action_items: ["Add a planning hand-off checklist"] },
+      cycle_marker: 0,
+      created_by: "bbbb1111-1111-1111-1111-111111111111",
+      created_at: "2026-05-13T09:00:00+00:00",
+      evidence_links: [],
+    },
+    {
+      id: "lp000003-0003-0003-0003-000000000003",
+      stage: "Verify",
+      content_block: { decision: "not_effective", narrative: "Late deliveries recurred." },
+      cycle_marker: 0,
+      created_by: "bbbb1111-1111-1111-1111-111111111111",
+      created_at: "2026-05-18T09:00:00+00:00",
+      evidence_links: [],
+    },
+    {
+      id: "lp000004-0004-0004-0004-000000000004",
+      stage: "ActionPlan",
+      content_block: { action_items: ["Re-baseline the capacity model"] },
+      cycle_marker: 1,
+      created_by: "bbbb1111-1111-1111-1111-111111111111",
+      created_at: "2026-05-19T09:00:00+00:00",
+      evidence_links: [],
+    },
+    {
+      id: "lp000005-0005-0005-0005-000000000005",
+      stage: "Verify",
+      content_block: { decision: "effective", narrative: "On-time rate recovered." },
+      cycle_marker: 1,
+      created_by: "bbbb1111-1111-1111-1111-111111111111",
+      created_at: "2026-05-21T09:00:00+00:00",
+      evidence_links: [],
+    },
   ],
 } satisfies Capa;
 
@@ -488,10 +703,58 @@ export const capaCloseReadyFixture = {
   raised_by: "bbbb1111-1111-1111-1111-111111111111",
   created_at: "2026-05-25T09:00:00+00:00",
   stages: [
-    { id: "cr000001-0001-0001-0001-000000000001", stage: "RootCause", content_block: { root_cause: "Interlock unmaintained." }, cycle_marker: 0, created_by: "bbbb1111-1111-1111-1111-111111111111", created_at: "2026-05-26T09:00:00+00:00", evidence_links: [] },
-    { id: "cr000002-0002-0002-0002-000000000002", stage: "ActionPlan", content_block: { action_items: ["Replace the interlock", "Add a PM task"] }, cycle_marker: 0, created_by: "bbbb1111-1111-1111-1111-111111111111", created_at: "2026-05-26T12:00:00+00:00", evidence_links: [] },
-    { id: "cr000003-0003-0003-0003-000000000003", stage: "Implement", content_block: { actions_done: "Replaced + scheduled PM." }, cycle_marker: 0, created_by: "bbbb1111-1111-1111-1111-111111111111", created_at: "2026-05-27T09:00:00+00:00", evidence_links: [{ id: "el1", record_id: "re000001-0001-0001-0001-000000000001", record_identifier: "REC-000041", link_reason: "PM schedule", created_at: "2026-05-27T09:10:00+00:00" }] },
-    { id: "cr000004-0004-0004-0004-000000000004", stage: "Verify", content_block: { decision: "effective", narrative: "No recurrence in 30 days." }, cycle_marker: 0, created_by: "bbbb1111-1111-1111-1111-111111111111", created_at: "2026-05-28T09:00:00+00:00", evidence_links: [{ id: "el2", record_id: "re000002-0002-0002-0002-000000000002", record_identifier: "REC-000042", link_reason: "audit re-check", created_at: "2026-05-28T09:10:00+00:00" }] },
+    {
+      id: "cr000001-0001-0001-0001-000000000001",
+      stage: "RootCause",
+      content_block: { root_cause: "Interlock unmaintained." },
+      cycle_marker: 0,
+      created_by: "bbbb1111-1111-1111-1111-111111111111",
+      created_at: "2026-05-26T09:00:00+00:00",
+      evidence_links: [],
+    },
+    {
+      id: "cr000002-0002-0002-0002-000000000002",
+      stage: "ActionPlan",
+      content_block: { action_items: ["Replace the interlock", "Add a PM task"] },
+      cycle_marker: 0,
+      created_by: "bbbb1111-1111-1111-1111-111111111111",
+      created_at: "2026-05-26T12:00:00+00:00",
+      evidence_links: [],
+    },
+    {
+      id: "cr000003-0003-0003-0003-000000000003",
+      stage: "Implement",
+      content_block: { actions_done: "Replaced + scheduled PM." },
+      cycle_marker: 0,
+      created_by: "bbbb1111-1111-1111-1111-111111111111",
+      created_at: "2026-05-27T09:00:00+00:00",
+      evidence_links: [
+        {
+          id: "el1",
+          record_id: "re000001-0001-0001-0001-000000000001",
+          record_identifier: "REC-000041",
+          link_reason: "PM schedule",
+          created_at: "2026-05-27T09:10:00+00:00",
+        },
+      ],
+    },
+    {
+      id: "cr000004-0004-0004-0004-000000000004",
+      stage: "Verify",
+      content_block: { decision: "effective", narrative: "No recurrence in 30 days." },
+      cycle_marker: 0,
+      created_by: "bbbb1111-1111-1111-1111-111111111111",
+      created_at: "2026-05-28T09:00:00+00:00",
+      evidence_links: [
+        {
+          id: "el2",
+          record_id: "re000002-0002-0002-0002-000000000002",
+          record_identifier: "REC-000042",
+          link_reason: "audit re-check",
+          created_at: "2026-05-28T09:10:00+00:00",
+        },
+      ],
+    },
   ],
 } satisfies Capa;
 
@@ -506,10 +769,21 @@ export const capaApprovalFixture = {
     subject_type: "CAPA",
     subject_id: "ca000001-0001-0001-0001-000000000001",
     tasks: [
-      { id: "tkca1111-1111-1111-1111-111111111111", stage_key: "qm_approval", type: "APPROVE", state: "PENDING", assignee_user_id: null, candidate_pool: ["bbbb1111-1111-1111-1111-111111111111"], action_expected: "approve_capa_action_plan", due_at: null },
+      {
+        id: "tkca1111-1111-1111-1111-111111111111",
+        stage_key: "qm_approval",
+        type: "APPROVE",
+        state: "PENDING",
+        assignee_user_id: null,
+        candidate_pool: ["bbbb1111-1111-1111-1111-111111111111"],
+        action_expected: "approve_capa_action_plan",
+        due_at: null,
+      },
     ],
   },
-  proposed_action_plan: { action_items: ["Schedule supplier re-evaluations", "Add a calendar reminder"] },
+  proposed_action_plan: {
+    action_items: ["Schedule supplier re-evaluations", "Add a calendar reminder"],
+  },
 };
 
 // A CAPA-subject task detail (GET /tasks/{id}) — the approver routes through ReviewApprovePage's CAPA branch.
@@ -559,40 +833,127 @@ export const driftStatusFixture = {
       status: "DIVERGENT",
       started_at: "2026-06-10T04:00:00+00:00",
       finished_at: "2026-06-10T04:01:10+00:00",
-      counts: { scanned: 500, ok: 498, mismatched: 1, missing: 1, read_errors: 0, stamped: 498, full: false, sample_limit: 500, total_blobs: 1240 },
+      counts: {
+        scanned: 500,
+        ok: 498,
+        mismatched: 1,
+        missing: 1,
+        read_errors: 0,
+        stamped: 498,
+        full: false,
+        sample_limit: 500,
+        total_blobs: 1240,
+      },
       triggered_by: "beat",
     },
   },
-  blob_coverage: { total: 1240, never_verified: 612, failing: 2, oldest_verified_at: "2026-06-01T04:00:00+00:00" },
+  blob_coverage: {
+    total: 1240,
+    never_verified: 612,
+    failing: 2,
+    oldest_verified_at: "2026-06-01T04:00:00+00:00",
+  },
   superseded_copies: { versions: 2, copies: 5 },
 } satisfies DriftStatus;
 
 export const supersededCopiesFixture = {
   total: { versions: 2, copies: 5 },
   items: [
-    { document_id: "11111111-1111-1111-1111-111111111111", identifier: "SOP-PUR-014", version_id: "eeee1111-1111-1111-1111-111111111111", revision_label: "Rev A", version_state: "Superseded", current_revision_label: "Rev B", exported: 2, printed: 1, last_copy_at: "2026-05-30T14:22:00+00:00" },
-    { document_id: "99999999-9999-9999-9999-999999999999", identifier: "SOP-OBS-001", version_id: "ffff1111-1111-1111-1111-111111111111", revision_label: "Rev C", version_state: "Obsolete", current_revision_label: null, exported: 0, printed: 2, last_copy_at: "2026-05-12T08:00:00+00:00" },
+    {
+      document_id: "11111111-1111-1111-1111-111111111111",
+      identifier: "SOP-PUR-014",
+      version_id: "eeee1111-1111-1111-1111-111111111111",
+      revision_label: "Rev A",
+      version_state: "Superseded",
+      current_revision_label: "Rev B",
+      exported: 2,
+      printed: 1,
+      last_copy_at: "2026-05-30T14:22:00+00:00",
+    },
+    {
+      document_id: "99999999-9999-9999-9999-999999999999",
+      identifier: "SOP-OBS-001",
+      version_id: "ffff1111-1111-1111-1111-111111111111",
+      revision_label: "Rev C",
+      version_state: "Obsolete",
+      current_revision_label: null,
+      exported: 0,
+      printed: 2,
+      last_copy_at: "2026-05-12T08:00:00+00:00",
+    },
   ],
 } satisfies SupersededCopies;
 
 // GET /records — the evidence picker source (a bare array).
 export const recordsFixture = [
-  { id: "re000001-0001-0001-0001-000000000001", identifier: "REC-000041", title: "Preventive-maintenance schedule", record_type: "EVIDENCE" },
-  { id: "re000002-0002-0002-0002-000000000002", identifier: "REC-000042", title: "Audit re-check checklist", record_type: "EVIDENCE" },
+  {
+    id: "re000001-0001-0001-0001-000000000001",
+    identifier: "REC-000041",
+    title: "Preventive-maintenance schedule",
+    record_type: "EVIDENCE",
+  },
+  {
+    id: "re000002-0002-0002-0002-000000000002",
+    identifier: "REC-000042",
+    title: "Audit re-check checklist",
+    record_type: "EVIDENCE",
+  },
 ];
 
 // ---- S-web-7c complaint + NCR fixtures (pinned to the _complaint / _ncr serializers) ----
 export const complaintListFixture = {
   data: [
-    { id: "cm000001-0001-0001-0001-000000000001", identifier: "CMP-000007", customer: "Northwind Foods Ltd.", received_at: "2026-06-02T09:00:00+00:00", channel: "email", description: "Delivered batch missing CoA documents.", severity: "Critical", spawned_capa_id: null },
-    { id: "cm000002-0002-0002-0002-000000000002", identifier: "CMP-000006", customer: "Acme Pharma", received_at: "2026-05-30T09:00:00+00:00", channel: "phone", description: "Late delivery on PO-44821.", severity: "Minor", spawned_capa_id: "ca000002-0002-0002-0002-000000000002" },
+    {
+      id: "cm000001-0001-0001-0001-000000000001",
+      identifier: "CMP-000007",
+      customer: "Northwind Foods Ltd.",
+      received_at: "2026-06-02T09:00:00+00:00",
+      channel: "email",
+      description: "Delivered batch missing CoA documents.",
+      severity: "Critical",
+      spawned_capa_id: null,
+    },
+    {
+      id: "cm000002-0002-0002-0002-000000000002",
+      identifier: "CMP-000006",
+      customer: "Acme Pharma",
+      received_at: "2026-05-30T09:00:00+00:00",
+      channel: "phone",
+      description: "Late delivery on PO-44821.",
+      severity: "Minor",
+      spawned_capa_id: "ca000002-0002-0002-0002-000000000002",
+    },
   ],
 } satisfies { data: Complaint[] };
 
 export const ncrListFixture = {
   data: [
-    { id: "nc000001-0001-0001-0001-000000000001", identifier: "NCR-000052", source: "process", description: "Nonconforming output: torque out of spec on Line 2.", severity: "Major", process_id: null, disposition: null, disposition_authorized_by: null, disposition_notes: null, disposed_at: null, created_at: "2026-06-03T09:00:00+00:00" },
-    { id: "nc000002-0002-0002-0002-000000000002", identifier: "NCR-000049", source: "audit", description: "Mislabelled retain samples.", severity: "Minor", process_id: null, disposition: "rework", disposition_authorized_by: "bbbb1111-1111-1111-1111-111111111111", disposition_notes: "Re-labelled + re-inspected.", disposed_at: "2026-06-04T09:00:00+00:00", created_at: "2026-06-01T09:00:00+00:00" },
+    {
+      id: "nc000001-0001-0001-0001-000000000001",
+      identifier: "NCR-000052",
+      source: "process",
+      description: "Nonconforming output: torque out of spec on Line 2.",
+      severity: "Major",
+      process_id: null,
+      disposition: null,
+      disposition_authorized_by: null,
+      disposition_notes: null,
+      disposed_at: null,
+      created_at: "2026-06-03T09:00:00+00:00",
+    },
+    {
+      id: "nc000002-0002-0002-0002-000000000002",
+      identifier: "NCR-000049",
+      source: "audit",
+      description: "Mislabelled retain samples.",
+      severity: "Minor",
+      process_id: null,
+      disposition: "rework",
+      disposition_authorized_by: "bbbb1111-1111-1111-1111-111111111111",
+      disposition_notes: "Re-labelled + re-inspected.",
+      disposed_at: "2026-06-04T09:00:00+00:00",
+      created_at: "2026-06-01T09:00:00+00:00",
+    },
   ],
 } satisfies { data: Ncr[] };
 
@@ -658,15 +1019,33 @@ const HIGH_DOC = ingFile({
   rel_path: "SOP-PUR-014 Purchasing.docx",
   filename: "SOP-PUR-014 Purchasing.docx",
   classification: {
-    kind: "DOCUMENT", kind_conf: 92, type_code: "SOP", type_conf: 90,
-    clause_numbers: ["8.4"], clause_conf: 88, process_names: ["Purchasing"], process_conf: 80,
-    pdca_phase: "DO", band: "HIGH", ambiguous: false, top2_margin: 30, classifier_version: "v1.4",
+    kind: "DOCUMENT",
+    kind_conf: 92,
+    type_code: "SOP",
+    type_conf: 90,
+    clause_numbers: ["8.4"],
+    clause_conf: 88,
+    process_names: ["Purchasing"],
+    process_conf: 80,
+    pdca_phase: "DO",
+    band: "HIGH",
+    ambiguous: false,
+    top2_margin: 30,
+    classifier_version: "v1.4",
   },
   review: {
-    disposition: "undecided", kind: "UNCONFIRMED", identifier: "SOP-PUR-014",
-    identifier_source: "preserved_doc_code", type_code: "SOP", clause_numbers: ["8.4"],
-    process_names: ["Purchasing"], owner: null, decided: false, last_action: null,
-    commit_ready: false, identifier_collidable: true,
+    disposition: "undecided",
+    kind: "UNCONFIRMED",
+    identifier: "SOP-PUR-014",
+    identifier_source: "preserved_doc_code",
+    type_code: "SOP",
+    clause_numbers: ["8.4"],
+    process_names: ["Purchasing"],
+    owner: null,
+    decided: false,
+    last_action: null,
+    commit_ready: false,
+    identifier_collidable: true,
   },
 });
 const MED_DOC = ingFile({
@@ -674,15 +1053,33 @@ const MED_DOC = ingFile({
   rel_path: "Final Inspection WI rev1.docx",
   filename: "Final Inspection WI rev1.docx",
   classification: {
-    kind: "DOCUMENT", kind_conf: 73, type_code: "WI", type_conf: 70,
-    clause_numbers: ["8.6"], clause_conf: 65, process_names: ["Production"], process_conf: 60,
-    pdca_phase: "DO", band: "MEDIUM", ambiguous: false, top2_margin: 15, classifier_version: "v1.4",
+    kind: "DOCUMENT",
+    kind_conf: 73,
+    type_code: "WI",
+    type_conf: 70,
+    clause_numbers: ["8.6"],
+    clause_conf: 65,
+    process_names: ["Production"],
+    process_conf: 60,
+    pdca_phase: "DO",
+    band: "MEDIUM",
+    ambiguous: false,
+    top2_margin: 15,
+    classifier_version: "v1.4",
   },
   review: {
-    disposition: "undecided", kind: "UNCONFIRMED", identifier: "WI-PRD-022",
-    identifier_source: "preserved_doc_code", type_code: "WI", clause_numbers: ["8.6"],
-    process_names: ["Production"], owner: null, decided: false, last_action: null,
-    commit_ready: false, identifier_collidable: true,
+    disposition: "undecided",
+    kind: "UNCONFIRMED",
+    identifier: "WI-PRD-022",
+    identifier_source: "preserved_doc_code",
+    type_code: "WI",
+    clause_numbers: ["8.6"],
+    process_names: ["Production"],
+    owner: null,
+    decided: false,
+    last_action: null,
+    commit_ready: false,
+    identifier_collidable: true,
   },
 });
 const LOW_UNKNOWN = ingFile({
@@ -690,14 +1087,33 @@ const LOW_UNKNOWN = ingFile({
   rel_path: "scan0421.pdf",
   filename: "scan0421.pdf",
   classification: {
-    kind: "UNKNOWN", kind_conf: 22, type_code: null, type_conf: 0,
-    clause_numbers: [], clause_conf: 0, process_names: null, process_conf: 0,
-    pdca_phase: null, band: "LOW", ambiguous: false, top2_margin: 5, classifier_version: "v1.4",
+    kind: "UNKNOWN",
+    kind_conf: 22,
+    type_code: null,
+    type_conf: 0,
+    clause_numbers: [],
+    clause_conf: 0,
+    process_names: null,
+    process_conf: 0,
+    pdca_phase: null,
+    band: "LOW",
+    ambiguous: false,
+    top2_margin: 5,
+    classifier_version: "v1.4",
   },
   review: {
-    disposition: "undecided", kind: "UNCONFIRMED", identifier: null, identifier_source: null,
-    type_code: null, clause_numbers: [], process_names: [], owner: null, decided: false,
-    last_action: null, commit_ready: false, identifier_collidable: false,
+    disposition: "undecided",
+    kind: "UNCONFIRMED",
+    identifier: null,
+    identifier_source: null,
+    type_code: null,
+    clause_numbers: [],
+    process_names: [],
+    owner: null,
+    decided: false,
+    last_action: null,
+    commit_ready: false,
+    identifier_collidable: false,
   },
 });
 const DUP_FILE = ingFile({
@@ -705,15 +1121,33 @@ const DUP_FILE = ingFile({
   rel_path: "SOP-PUR v2 FINAL.docx",
   filename: "SOP-PUR v2 FINAL.docx",
   classification: {
-    kind: "DOCUMENT", kind_conf: 90, type_code: "SOP", type_conf: 88,
-    clause_numbers: ["8.4"], clause_conf: 85, process_names: ["Purchasing"], process_conf: 78,
-    pdca_phase: "DO", band: "HIGH", ambiguous: false, top2_margin: 25, classifier_version: "v1.4",
+    kind: "DOCUMENT",
+    kind_conf: 90,
+    type_code: "SOP",
+    type_conf: 88,
+    clause_numbers: ["8.4"],
+    clause_conf: 85,
+    process_names: ["Purchasing"],
+    process_conf: 78,
+    pdca_phase: "DO",
+    band: "HIGH",
+    ambiguous: false,
+    top2_margin: 25,
+    classifier_version: "v1.4",
   },
   review: {
-    disposition: "undecided", kind: "UNCONFIRMED", identifier: "SOP-PUR-014",
-    identifier_source: "preserved_doc_code", type_code: "SOP", clause_numbers: ["8.4"],
-    process_names: ["Purchasing"], owner: null, decided: false, last_action: null,
-    commit_ready: false, identifier_collidable: true,
+    disposition: "undecided",
+    kind: "UNCONFIRMED",
+    identifier: "SOP-PUR-014",
+    identifier_source: "preserved_doc_code",
+    type_code: "SOP",
+    clause_numbers: ["8.4"],
+    process_names: ["Purchasing"],
+    owner: null,
+    decided: false,
+    last_action: null,
+    commit_ready: false,
+    identifier_collidable: true,
   },
 });
 const QUARANTINE_FILE = ingFile({
@@ -735,18 +1169,36 @@ export const ingestionFileDetailFixture = {
   // row, whose `review` is the flat ImportFileReview. HIGH_DOC's flat review becomes `effective` here.
   review: { effective: HIGH_DOC.review, decision_history: [] },
   extract: {
-    status: "extracted", full_text: "Purchasing procedure…", text_truncated: false,
-    header_block: "SOP-PUR-014", language: "en", ocr_used: false, ocr_confidence: null,
-    char_count: 4200, page_count: 3, error: null, extractor_version: "tika-2",
+    status: "extracted",
+    full_text: "Purchasing procedure…",
+    text_truncated: false,
+    header_block: "SOP-PUR-014",
+    language: "en",
+    ocr_used: false,
+    ocr_confidence: null,
+    char_count: 4200,
+    page_count: 3,
+    error: null,
+    extractor_version: "tika-2",
   },
   dedup: {
-    in_exact_cluster: false, in_near_cluster: true, is_canonical: true, redundant_of_file_id: null,
-    in_version_family: true, is_effective: true, superseded_by_file_id: null,
+    in_exact_cluster: false,
+    in_near_cluster: true,
+    is_canonical: true,
+    redundant_of_file_id: null,
+    in_version_family: true,
+    is_effective: true,
+    superseded_by_file_id: null,
   },
   proposal: {
-    proposed_identifier: "SOP-PUR-014", identifier_source: "preserved_doc_code",
-    target_ia_path: "DO/08-Operation", proposed_owner: null, owner_source: null,
-    conflict_flags: { duplicate_identifier_within_import: ["f0000000-0000-0000-0000-0000000000a4"] },
+    proposed_identifier: "SOP-PUR-014",
+    identifier_source: "preserved_doc_code",
+    target_ia_path: "DO/08-Operation",
+    proposed_owner: null,
+    owner_source: null,
+    conflict_flags: {
+      duplicate_identifier_within_import: ["f0000000-0000-0000-0000-0000000000a4"],
+    },
   },
 };
 
@@ -754,9 +1206,12 @@ export const ingestionDupeClustersFixture = {
   run_id: ingestionRunFixture.id,
   clusters: [
     {
-      id: "c0000000-0000-0000-0000-0000000000c1", method: "near",
-      member_file_ids: [HIGH_DOC.id, DUP_FILE.id], canonical_file_id: HIGH_DOC.id,
-      jaccard: 0.91, evidence: {},
+      id: "c0000000-0000-0000-0000-0000000000c1",
+      method: "near",
+      member_file_ids: [HIGH_DOC.id, DUP_FILE.id],
+      canonical_file_id: HIGH_DOC.id,
+      jaccard: 0.91,
+      evidence: {},
     },
   ],
 };
@@ -765,10 +1220,14 @@ export const ingestionVersionFamiliesFixture = {
   run_id: ingestionRunFixture.id,
   families: [
     {
-      id: "v0000000-0000-0000-0000-0000000000v1", family_key: "SOP-PUR-014",
-      base_name: "SOP-PUR-014 Purchasing", doc_code: "SOP-PUR-014",
-      ordered_member_file_ids: [HIGH_DOC.id, DUP_FILE.id], effective_file_id: HIGH_DOC.id,
-      reconstruct_revision_chain: false, evidence: {},
+      id: "v0000000-0000-0000-0000-0000000000v1",
+      family_key: "SOP-PUR-014",
+      base_name: "SOP-PUR-014 Purchasing",
+      doc_code: "SOP-PUR-014",
+      ordered_member_file_ids: [HIGH_DOC.id, DUP_FILE.id],
+      effective_file_id: HIGH_DOC.id,
+      reconstruct_revision_chain: false,
+      evidence: {},
     },
   ],
 };
@@ -778,8 +1237,11 @@ export const ingestionChecklistFixture = {
   status: "Proposed",
   ready: false,
   blocking: [
-    { type: "duplicate_identifier_within_import", identifier: "SOP-PUR-014",
-      file_ids: [HIGH_DOC.id, DUP_FILE.id] },
+    {
+      type: "duplicate_identifier_within_import",
+      identifier: "SOP-PUR-014",
+      file_ids: [HIGH_DOC.id, DUP_FILE.id],
+    },
   ],
   advisory: {
     star_coverage: { total: 20, satisfied: 17 },
@@ -787,8 +1249,15 @@ export const ingestionChecklistFixture = {
     kind_unconfirmed: 4,
   },
   review: {
-    keep_items: 4, decided: 0, accepted: 0, corrected: 0, excluded: 0, deferred: 0,
-    undecided: 4, kind_confirmed: 1, commit_ready: 1,
+    keep_items: 4,
+    decided: 0,
+    accepted: 0,
+    corrected: 0,
+    excluded: 0,
+    deferred: 0,
+    undecided: 4,
+    kind_confirmed: 1,
+    commit_ready: 1,
   },
 };
 
@@ -798,23 +1267,88 @@ export const ingestionDecisionsFixture = { run_id: ingestionRunFixture.id, decis
 // S-web-7d read-enrichment: _audit carries identifier/title/created_at, _finding carries title) ----
 export const auditProgramsFixture = {
   data: [
-    { id: "ap000001-0001-0001-0001-000000000001", identifier: "AUDPROG-000001", title: "2026 Internal Audit Programme", period: "2026", coverage: null, archived: false, created_at: "2026-01-05T09:00:00+00:00" },
-    { id: "ap000002-0002-0002-0002-000000000002", identifier: "AUDPROG-000002", title: "2025 Programme", period: "2025", coverage: null, archived: true, created_at: "2025-01-06T09:00:00+00:00" },
+    {
+      id: "ap000001-0001-0001-0001-000000000001",
+      identifier: "AUDPROG-000001",
+      title: "2026 Internal Audit Programme",
+      period: "2026",
+      coverage: null,
+      archived: false,
+      created_at: "2026-01-05T09:00:00+00:00",
+    },
+    {
+      id: "ap000002-0002-0002-0002-000000000002",
+      identifier: "AUDPROG-000002",
+      title: "2025 Programme",
+      period: "2025",
+      coverage: null,
+      archived: true,
+      created_at: "2025-01-06T09:00:00+00:00",
+    },
   ],
 } satisfies AuditProgramList;
 
 export const auditPlansFixture = {
   data: [
-    { id: "pl000001-0001-0001-0001-000000000001", program_id: "ap000001-0001-0001-0001-000000000001", auditee_process_id: "pr000001-0001-0001-0001-000000000001", lead_auditor_user_id: "bbbb1111-1111-1111-1111-111111111111", scheduled_date: "2026-05-28", checklist_ref: "FRM-AUD-002", created_at: "2026-01-10T09:00:00+00:00" },
-    { id: "pl000002-0002-0002-0002-000000000002", program_id: "ap000001-0001-0001-0001-000000000001", auditee_process_id: null, lead_auditor_user_id: null, scheduled_date: "2026-09-01", checklist_ref: null, created_at: "2026-01-11T09:00:00+00:00" },
+    {
+      id: "pl000001-0001-0001-0001-000000000001",
+      program_id: "ap000001-0001-0001-0001-000000000001",
+      auditee_process_id: "pr000001-0001-0001-0001-000000000001",
+      lead_auditor_user_id: "bbbb1111-1111-1111-1111-111111111111",
+      scheduled_date: "2026-05-28",
+      checklist_ref: "FRM-AUD-002",
+      created_at: "2026-01-10T09:00:00+00:00",
+    },
+    {
+      id: "pl000002-0002-0002-0002-000000000002",
+      program_id: "ap000001-0001-0001-0001-000000000001",
+      auditee_process_id: null,
+      lead_auditor_user_id: null,
+      scheduled_date: "2026-09-01",
+      checklist_ref: null,
+      created_at: "2026-01-11T09:00:00+00:00",
+    },
   ],
 } satisfies AuditPlanList;
 
 export const auditListFixture = {
   data: [
-    { id: "au000001-0001-0001-0001-000000000001", identifier: "REC-000061", title: "Purchasing & Suppliers audit", plan_id: "pl000001-0001-0001-0001-000000000001", lead_auditor_user_id: "bbbb1111-1111-1111-1111-111111111111", state: "InProgress", started_at: "2026-05-28", completed_at: null, result_summary: null, created_at: "2026-05-20T09:00:00+00:00" },
-    { id: "au000002-0002-0002-0002-000000000002", identifier: "REC-000055", title: "Document Control audit", plan_id: "pl000002-0002-0002-0002-000000000002", lead_auditor_user_id: null, state: "Closed", started_at: "2026-04-01", completed_at: "2026-04-30", result_summary: null, created_at: "2026-03-25T09:00:00+00:00" },
-    { id: "au000003-0003-0003-0003-000000000003", identifier: "REC-000066", title: "Competence & Training audit", plan_id: "pl000001-0001-0001-0001-000000000001", lead_auditor_user_id: "bbbb1111-1111-1111-1111-111111111111", state: "Closing", started_at: "2026-05-01", completed_at: null, result_summary: null, created_at: "2026-04-25T09:00:00+00:00" },
+    {
+      id: "au000001-0001-0001-0001-000000000001",
+      identifier: "REC-000061",
+      title: "Purchasing & Suppliers audit",
+      plan_id: "pl000001-0001-0001-0001-000000000001",
+      lead_auditor_user_id: "bbbb1111-1111-1111-1111-111111111111",
+      state: "InProgress",
+      started_at: "2026-05-28",
+      completed_at: null,
+      result_summary: null,
+      created_at: "2026-05-20T09:00:00+00:00",
+    },
+    {
+      id: "au000002-0002-0002-0002-000000000002",
+      identifier: "REC-000055",
+      title: "Document Control audit",
+      plan_id: "pl000002-0002-0002-0002-000000000002",
+      lead_auditor_user_id: null,
+      state: "Closed",
+      started_at: "2026-04-01",
+      completed_at: "2026-04-30",
+      result_summary: null,
+      created_at: "2026-03-25T09:00:00+00:00",
+    },
+    {
+      id: "au000003-0003-0003-0003-000000000003",
+      identifier: "REC-000066",
+      title: "Competence & Training audit",
+      plan_id: "pl000001-0001-0001-0001-000000000001",
+      lead_auditor_user_id: "bbbb1111-1111-1111-1111-111111111111",
+      state: "Closing",
+      started_at: "2026-05-01",
+      completed_at: null,
+      result_summary: null,
+      created_at: "2026-04-25T09:00:00+00:00",
+    },
   ],
 } satisfies AuditList;
 
@@ -822,10 +1356,58 @@ export const auditListFixture = {
 // and a corrected pair (fd000003 NC superseded by fd000004 OBSERVATION → does NOT block).
 export const findingsFixture = {
   data: [
-    { id: "fd000001-0001-0001-0001-000000000001", identifier: "REC-000062", title: "Supplier re-evaluation overdue for 2 vendors", audit_id: "au000001-0001-0001-0001-000000000001", finding_type: "NC", severity: "Major", clause_ref: "8.4", process_ref: "Purchasing", auto_capa_id: "ca000001-0001-0001-0001-000000000001", correction_of: null, superseded_by_correction: null },
-    { id: "fd000002-0002-0002-0002-000000000002", identifier: "REC-000063", title: "Consider automating the supplier scorecard", audit_id: "au000001-0001-0001-0001-000000000001", finding_type: "OFI", severity: null, clause_ref: "8.4", process_ref: null, auto_capa_id: null, correction_of: null, superseded_by_correction: null },
-    { id: "fd000003-0003-0003-0003-000000000003", identifier: "REC-000064", title: "Mis-typed as an NC at first triage", audit_id: "au000001-0001-0001-0001-000000000001", finding_type: "NC", severity: "Minor", clause_ref: null, process_ref: null, auto_capa_id: "ca000006-0006-0006-0006-000000000006", correction_of: null, superseded_by_correction: "fd000004-0004-0004-0004-000000000004" },
-    { id: "fd000004-0004-0004-0004-000000000004", identifier: "REC-000065", title: "Vendor file index stored outside the library", audit_id: "au000001-0001-0001-0001-000000000001", finding_type: "OBSERVATION", severity: null, clause_ref: null, process_ref: null, auto_capa_id: null, correction_of: "fd000003-0003-0003-0003-000000000003", superseded_by_correction: null },
+    {
+      id: "fd000001-0001-0001-0001-000000000001",
+      identifier: "REC-000062",
+      title: "Supplier re-evaluation overdue for 2 vendors",
+      audit_id: "au000001-0001-0001-0001-000000000001",
+      finding_type: "NC",
+      severity: "Major",
+      clause_ref: "8.4",
+      process_ref: "Purchasing",
+      auto_capa_id: "ca000001-0001-0001-0001-000000000001",
+      correction_of: null,
+      superseded_by_correction: null,
+    },
+    {
+      id: "fd000002-0002-0002-0002-000000000002",
+      identifier: "REC-000063",
+      title: "Consider automating the supplier scorecard",
+      audit_id: "au000001-0001-0001-0001-000000000001",
+      finding_type: "OFI",
+      severity: null,
+      clause_ref: "8.4",
+      process_ref: null,
+      auto_capa_id: null,
+      correction_of: null,
+      superseded_by_correction: null,
+    },
+    {
+      id: "fd000003-0003-0003-0003-000000000003",
+      identifier: "REC-000064",
+      title: "Mis-typed as an NC at first triage",
+      audit_id: "au000001-0001-0001-0001-000000000001",
+      finding_type: "NC",
+      severity: "Minor",
+      clause_ref: null,
+      process_ref: null,
+      auto_capa_id: "ca000006-0006-0006-0006-000000000006",
+      correction_of: null,
+      superseded_by_correction: "fd000004-0004-0004-0004-000000000004",
+    },
+    {
+      id: "fd000004-0004-0004-0004-000000000004",
+      identifier: "REC-000065",
+      title: "Vendor file index stored outside the library",
+      audit_id: "au000001-0001-0001-0001-000000000001",
+      finding_type: "OBSERVATION",
+      severity: null,
+      clause_ref: null,
+      process_ref: null,
+      auto_capa_id: null,
+      correction_of: "fd000003-0003-0003-0003-000000000003",
+      superseded_by_correction: null,
+    },
   ],
 } satisfies FindingList;
 
@@ -847,8 +1429,34 @@ export const createdNcFindingFixture = {
 // GET /processes returns a BARE ARRAY (api/processes.py list_processes_endpoint) — pin the full
 // _process row shape (the SPA reads id+name only, but the fixture mirrors the serializer).
 export const processesFixture = [
-  { id: "pr000001-0001-0001-0001-000000000001", org_id: "or000001-0001-0001-0001-000000000001", name: "Purchasing", parent_id: null, owner_org_role_id: null, pdca_phase: "DO", criteria: null, state: "ACTIVE", excluded: false, is_outsourced: false, outsourced_supplier_id: null, created_at: "2026-01-01T09:00:00+00:00" },
-  { id: "pr000002-0002-0002-0002-000000000002", org_id: "or000001-0001-0001-0001-000000000001", name: "Production", parent_id: null, owner_org_role_id: null, pdca_phase: "DO", criteria: null, state: "ACTIVE", excluded: false, is_outsourced: false, outsourced_supplier_id: null, created_at: "2026-01-01T09:00:00+00:00" },
+  {
+    id: "pr000001-0001-0001-0001-000000000001",
+    org_id: "or000001-0001-0001-0001-000000000001",
+    name: "Purchasing",
+    parent_id: null,
+    owner_org_role_id: null,
+    pdca_phase: "DO",
+    criteria: null,
+    state: "ACTIVE",
+    excluded: false,
+    is_outsourced: false,
+    outsourced_supplier_id: null,
+    created_at: "2026-01-01T09:00:00+00:00",
+  },
+  {
+    id: "pr000002-0002-0002-0002-000000000002",
+    org_id: "or000001-0001-0001-0001-000000000001",
+    name: "Production",
+    parent_id: null,
+    owner_org_role_id: null,
+    pdca_phase: "DO",
+    criteria: null,
+    state: "ACTIVE",
+    excluded: false,
+    is_outsourced: false,
+    outsourced_supplier_id: null,
+    created_at: "2026-01-01T09:00:00+00:00",
+  },
 ];
 
 // ---- S-ack-2 acknowledgements fixtures (pinned to the S-ack-1 serializers) ----
@@ -856,8 +1464,20 @@ export const processesFixture = [
 export const distributionFixture = {
   acknowledgement_required: true,
   entries: [
-    { id: "de000001-0001-0001-0001-000000000001", target_type: "user", target_id: "bbbb1111-1111-1111-1111-111111111111", ack_required: true, created_at: "2026-03-15T09:00:00+00:00" },
-    { id: "de000002-0002-0002-0002-000000000002", target_type: "org_role", target_id: "ro000001-0001-0001-0001-000000000001", ack_required: true, created_at: "2026-03-15T09:05:00+00:00" },
+    {
+      id: "de000001-0001-0001-0001-000000000001",
+      target_type: "user",
+      target_id: "bbbb1111-1111-1111-1111-111111111111",
+      ack_required: true,
+      created_at: "2026-03-15T09:00:00+00:00",
+    },
+    {
+      id: "de000002-0002-0002-0002-000000000002",
+      target_type: "org_role",
+      target_id: "ro000001-0001-0001-0001-000000000001",
+      ack_required: true,
+      created_at: "2026-03-15T09:05:00+00:00",
+    },
   ],
   coverage: { required: 47, acknowledged: 41, pending: 6, overdue: 2 },
 } satisfies DistributionPayload;
@@ -877,9 +1497,30 @@ export const distributionFlagOffFixture = {
 } satisfies DistributionPayload;
 
 export const ackMatrixFixture = [
-  { user_id: "bbbb1111-1111-1111-1111-111111111111", display_name: "Mara Quality", status: "acknowledged", acknowledged_at: "2026-03-16T10:00:00+00:00", acknowledged_revision_label: "Rev B", due_at: null },
-  { user_id: "bbbb2222-2222-2222-2222-222222222222", display_name: "Diego Owner", status: "pending", acknowledged_at: null, acknowledged_revision_label: null, due_at: "2026-03-30T00:00:00+00:00" },
-  { user_id: "bbbb3333-3333-3333-3333-333333333333", display_name: "Sam Patel", status: "overdue", acknowledged_at: null, acknowledged_revision_label: null, due_at: "2026-03-20T00:00:00+00:00" },
+  {
+    user_id: "bbbb1111-1111-1111-1111-111111111111",
+    display_name: "Mara Quality",
+    status: "acknowledged",
+    acknowledged_at: "2026-03-16T10:00:00+00:00",
+    acknowledged_revision_label: "Rev B",
+    due_at: null,
+  },
+  {
+    user_id: "bbbb2222-2222-2222-2222-222222222222",
+    display_name: "Diego Owner",
+    status: "pending",
+    acknowledged_at: null,
+    acknowledged_revision_label: null,
+    due_at: "2026-03-30T00:00:00+00:00",
+  },
+  {
+    user_id: "bbbb3333-3333-3333-3333-333333333333",
+    display_name: "Sam Patel",
+    status: "overdue",
+    acknowledged_at: null,
+    acknowledged_revision_label: null,
+    due_at: "2026-03-20T00:00:00+00:00",
+  },
 ] satisfies AckMatrixRow[];
 
 // A DOC_ACK task detail (GET /tasks/{id}) — subject_type/subject_id are DETAIL-ONLY (the list omits them).
@@ -898,9 +1539,15 @@ export const docAckTask = {
 };
 // The list row (GET /tasks?type=DOC_ACK) — subject_type/subject_id STRIPPED (matches _task without them).
 export const docAckListRow = {
-  id: docAckTask.id, instance_id: docAckTask.instance_id, stage_key: docAckTask.stage_key,
-  type: "DOC_ACK", state: "PENDING", assignee_user_id: docAckTask.assignee_user_id,
-  candidate_pool: docAckTask.candidate_pool, action_expected: "acknowledge", due_at: docAckTask.due_at,
+  id: docAckTask.id,
+  instance_id: docAckTask.instance_id,
+  stage_key: docAckTask.stage_key,
+  type: "DOC_ACK",
+  state: "PENDING",
+  assignee_user_id: docAckTask.assignee_user_id,
+  candidate_pool: docAckTask.candidate_pool,
+  action_expected: "acknowledge",
+  due_at: docAckTask.due_at,
 };
 
 export const ackDecisionResultFixture = {
@@ -921,8 +1568,18 @@ export const ackDecisionResultFixture = {
 } satisfies AckDecisionResult;
 
 export const rolesFixture = [
-  { id: "ro000001-0001-0001-0001-000000000001", name: "Employee", description: "All staff", is_reserved: true },
-  { id: "ro000002-0002-0002-0002-000000000002", name: "Process Owner", description: null, is_reserved: true },
+  {
+    id: "ro000001-0001-0001-0001-000000000001",
+    name: "Employee",
+    description: "All staff",
+    is_reserved: true,
+  },
+  {
+    id: "ro000002-0002-0002-0002-000000000002",
+    name: "Process Owner",
+    description: null,
+    is_reserved: true,
+  },
 ];
 
 const OBJ_DETAIL_ID = "ob000001-0001-0001-0001-000000000001";
@@ -1171,40 +1828,74 @@ const mgmtReviewDetailFixture = {
   ...mgmtReviewListFixture.data[0]!,
   inputs: [
     {
-      id: "ri-3", management_review_id: "mr-0001-0001-0001-000000000001",
-      input_type: "OBJECTIVES_STATUS", available: true, position: 3,
-      source_ref: { available: true, generated_at: "2026-06-01T09:00:00+00:00",
-        summary: { total: 5, on_target: 3, by_rag: { green: 3, amber: 1, red: 1, unmeasured: 0 } } },
+      id: "ri-3",
+      management_review_id: "mr-0001-0001-0001-000000000001",
+      input_type: "OBJECTIVES_STATUS",
+      available: true,
+      position: 3,
+      source_ref: {
+        available: true,
+        generated_at: "2026-06-01T09:00:00+00:00",
+        summary: { total: 5, on_target: 3, by_rag: { green: 3, amber: 1, red: 1, unmeasured: 0 } },
+      },
     },
     {
-      id: "ri-7", management_review_id: "mr-0001-0001-0001-000000000001",
-      input_type: "AUDIT_RESULTS", available: true, position: 7,
-      source_ref: { available: true, generated_at: "2026-06-01T09:00:00+00:00",
-        summary: { total: 4, open: 1, closed: 3 } },
+      id: "ri-7",
+      management_review_id: "mr-0001-0001-0001-000000000001",
+      input_type: "AUDIT_RESULTS",
+      available: true,
+      position: 7,
+      source_ref: {
+        available: true,
+        generated_at: "2026-06-01T09:00:00+00:00",
+        summary: { total: 4, open: 1, closed: 3 },
+      },
     },
     {
-      id: "ri-0", management_review_id: "mr-0001-0001-0001-000000000001",
-      input_type: "PRIOR_ACTIONS", available: false, position: 0,
-      source_ref: { available: false, generated_at: "2026-06-01T09:00:00+00:00",
-        reason: "not available (no prior released review)" },
+      id: "ri-0",
+      management_review_id: "mr-0001-0001-0001-000000000001",
+      input_type: "PRIOR_ACTIONS",
+      available: false,
+      position: 0,
+      source_ref: {
+        available: false,
+        generated_at: "2026-06-01T09:00:00+00:00",
+        reason: "not available (no prior released review)",
+      },
     },
     {
-      id: "ri-1", management_review_id: "mr-0001-0001-0001-000000000001",
-      input_type: "CONTEXT_CHANGES", available: false, position: 1,
-      source_ref: { available: false, generated_at: "2026-06-01T09:00:00+00:00",
-        reason: "not available (no structured source)" },
+      id: "ri-1",
+      management_review_id: "mr-0001-0001-0001-000000000001",
+      input_type: "CONTEXT_CHANGES",
+      available: false,
+      position: 1,
+      source_ref: {
+        available: false,
+        generated_at: "2026-06-01T09:00:00+00:00",
+        reason: "not available (no structured source)",
+      },
     },
   ] satisfies ReviewInput[],
   outputs: [
     {
-      id: "ro-1", management_review_id: "mr-0001-0001-0001-000000000001",
-      output_type: "DECISION", description: "Approve the objectives for 2026",
-      owner_user_id: null, due_date: null, spawned_task_id: null, spawned_capa_id: null,
+      id: "ro-1",
+      management_review_id: "mr-0001-0001-0001-000000000001",
+      output_type: "DECISION",
+      description: "Approve the objectives for 2026",
+      owner_user_id: null,
+      due_date: null,
+      spawned_task_id: null,
+      spawned_capa_id: null,
     },
     {
-      id: "ro-2", management_review_id: "mr-0001-0001-0001-000000000001",
-      output_type: "ACTION", description: "Refresh the supplier evaluation register",
-      owner_user_id: "user-mara", due_date: "2026-09-01", spawned_task_id: null, spawned_capa_id: null,
+      id: "ro-2",
+      management_review_id: "mr-0001-0001-0001-000000000001",
+      output_type: "ACTION",
+      description: "Refresh the supplier evaluation register",
+      owner_user_id: "user-mara",
+      due_date: "2026-09-01",
+      spawned_task_id: null,
+      spawned_capa_id: null,
     },
   ] satisfies ReviewOutput[],
   capabilities: { release: true },
@@ -1313,6 +2004,7 @@ const dcrDetailFixture = {
       occurred_at: "2026-06-10T09:00:00+00:00",
     },
   ],
+  capabilities: { assess: true, route: true, implement: true, close: true },
 } satisfies DcrDetail;
 
 const dcrImpactFixture = {
@@ -1345,6 +2037,22 @@ const dcrCreatedFixture = {
   resulting_version_id: null,
 } satisfies Dcr;
 
+// A DCR_TRIAGE / APPROVE task detail (GET /tasks/{id}) — S-dcr-ui-2b routes it via the DCR approval leg.
+// subject_type "DCR" + subject_id = the dcrDetailFixture id (DCR_REVISE_ID).
+export const dcrApprovalTask = {
+  id: "task-dcr-1",
+  instance_id: "inst-dcr-1",
+  stage_key: "minor_qms",
+  type: "APPROVE",
+  state: "PENDING",
+  assignee_user_id: "bbbb1111-1111-1111-1111-111111111111",
+  candidate_pool: ["bbbb1111-1111-1111-1111-111111111111"],
+  action_expected: "approve_dcr",
+  due_at: null,
+  subject_type: "DCR",
+  subject_id: DCR_REVISE_ID,
+} satisfies Task;
+
 export const handlers = [
   // ---- S-dcr-ui-1 DCR (default happy-path; per-test overrides for 403/empty/error) ----
   // IMPORTANT: /dcrs/:id/impact MUST register BEFORE /dcrs/:id or MSW matches "impact" as :id.
@@ -1368,6 +2076,23 @@ export const handlers = [
       { ...dcrCreatedFixture, source_link_type: "mgmt_review", reason_class: "mgmt_review" },
       { status: 201 },
     ),
+  ),
+  // ---- S-dcr-ui-2b lifecycle (default happy-path; per-test overrides for 409/error cases) ----
+  http.post("/api/v1/dcrs/:id/assess", () =>
+    HttpResponse.json({ ...dcrDetailFixture, state: "Assessed", impact_assessment: [] }),
+  ),
+  http.post("/api/v1/dcrs/:id/route", () =>
+    HttpResponse.json({
+      ...dcrDetailFixture,
+      state: "InApproval",
+      approval_instance: { id: "inst-1", current_state: "IN_PROGRESS" },
+    }),
+  ),
+  http.post("/api/v1/dcrs/:id/implement", () =>
+    HttpResponse.json({ ...dcrDetailFixture, state: "Implemented" }),
+  ),
+  http.post("/api/v1/dcrs/:id/close", () =>
+    HttpResponse.json({ ...dcrDetailFixture, state: "Closed" }),
   ),
   // ---- S-obj-2 Quality Objectives (default happy-path; per-test overrides for 403/empty/error) ----
   http.get("/api/v1/objectives/scorecard", ({ request }) => {
@@ -1413,7 +2138,10 @@ export const handlers = [
   http.post("/api/v1/objectives/:id/plans", () =>
     HttpResponse.json(objectivePlanFixtures[0]!, { status: 201 }),
   ),
-  http.delete("/api/v1/objectives/:id/plans/:planId", () => new HttpResponse(null, { status: 204 })),
+  http.delete(
+    "/api/v1/objectives/:id/plans/:planId",
+    () => new HttpResponse(null, { status: 204 }),
+  ),
   // S-obj-4: PATCH merges over the bare row (the api returns the LIST shape — no detail keys).
   // Merge-over is faithful only pre-first-release (governing None); an UnderRevision test must
   // override (the real response shows GOVERNING values, never the just-PATCHed ones — O-3).
@@ -1422,35 +2150,69 @@ export const handlers = [
     return HttpResponse.json({ ...objectiveFixtures[0]!, ...body } as Objective);
   }),
   http.post("/api/v1/objectives/:id/start-revision", () =>
-    HttpResponse.json({ ...objectiveFixtures[0]!, current_state: "UnderRevision" } satisfies Objective),
+    HttpResponse.json({
+      ...objectiveFixtures[0]!,
+      current_state: "UnderRevision",
+    } satisfies Objective),
   ),
   // ---- S-mr-2 management reviews ----
   // IMPORTANT: the literal `next-due` MUST register BEFORE `/:id` or MSW matches "next-due" as :id.
-  http.get("/api/v1/management-reviews/next-due", () => HttpResponse.json(mgmtReviewNextDueFixture)),
+  http.get("/api/v1/management-reviews/next-due", () =>
+    HttpResponse.json(mgmtReviewNextDueFixture),
+  ),
   http.get("/api/v1/management-reviews", () => HttpResponse.json(mgmtReviewListFixture)),
   http.get("/api/v1/management-reviews/:id", ({ params }) =>
     params.id === mgmtReviewDetailFixture.id
       ? HttpResponse.json(mgmtReviewDetailFixture)
-      : HttpResponse.json({ code: "not_found", title: "Management Review not found" }, { status: 404 }),
+      : HttpResponse.json(
+          { code: "not_found", title: "Management Review not found" },
+          { status: 404 },
+        ),
   ),
-  http.get("/api/v1/management-reviews/:id/approval", () => HttpResponse.json(mgmtReviewApprovalFixture)),
-  http.post("/api/v1/management-reviews", () => HttpResponse.json(mgmtReviewListFixture.data[0], { status: 201 })),
-  http.post("/api/v1/management-reviews/:id/compile-inputs", () => HttpResponse.json(mgmtReviewDetailFixture)),
-  http.post("/api/v1/management-reviews/:id/outputs", () => HttpResponse.json(mgmtReviewDetailFixture.outputs[1], { status: 201 })),
-  http.patch("/api/v1/management-reviews/:id/outputs/:oid", () => HttpResponse.json(mgmtReviewDetailFixture.outputs[1])),
-  http.delete("/api/v1/management-reviews/:id/outputs/:oid", () => new HttpResponse(null, { status: 204 })),
+  http.get("/api/v1/management-reviews/:id/approval", () =>
+    HttpResponse.json(mgmtReviewApprovalFixture),
+  ),
+  http.post("/api/v1/management-reviews", () =>
+    HttpResponse.json(mgmtReviewListFixture.data[0], { status: 201 }),
+  ),
+  http.post("/api/v1/management-reviews/:id/compile-inputs", () =>
+    HttpResponse.json(mgmtReviewDetailFixture),
+  ),
+  http.post("/api/v1/management-reviews/:id/outputs", () =>
+    HttpResponse.json(mgmtReviewDetailFixture.outputs[1], { status: 201 }),
+  ),
+  http.patch("/api/v1/management-reviews/:id/outputs/:oid", () =>
+    HttpResponse.json(mgmtReviewDetailFixture.outputs[1]),
+  ),
+  http.delete(
+    "/api/v1/management-reviews/:id/outputs/:oid",
+    () => new HttpResponse(null, { status: 204 }),
+  ),
   http.post("/api/v1/management-reviews/:id/outputs/:oid/raise-capa", () =>
     HttpResponse.json(
       { ...mgmtReviewDetailFixture.outputs[1], spawned_capa_id: "capa-spawned-0001" },
       { status: 201 },
-    )),
+    ),
+  ),
   http.patch("/api/v1/management-reviews/:id", () => HttpResponse.json(mgmtReviewDetailFixture)),
   http.post("/api/v1/management-reviews/:id/submit-review", () =>
-    HttpResponse.json({ ...mgmtReviewListFixture.data[0], current_state: "InReview" })),
+    HttpResponse.json({ ...mgmtReviewListFixture.data[0], current_state: "InReview" }),
+  ),
   http.post("/api/v1/management-reviews/:id/release", () =>
-    HttpResponse.json({ ...mgmtReviewListFixture.data[0], current_state: "Effective", close_state: "ActionsTracked" })),
+    HttpResponse.json({
+      ...mgmtReviewListFixture.data[0],
+      current_state: "Effective",
+      close_state: "ActionsTracked",
+    }),
+  ),
   http.post("/api/v1/management-reviews/:id/close", () =>
-    HttpResponse.json({ ...mgmtReviewListFixture.data[0], current_state: "Effective", close_state: "Closed", closed_at: "2026-09-02T09:00:00+00:00" })),
+    HttpResponse.json({
+      ...mgmtReviewListFixture.data[0],
+      current_state: "Effective",
+      close_state: "Closed",
+      closed_at: "2026-09-02T09:00:00+00:00",
+    }),
+  ),
   // ---- S-ing-4b ingestion (default happy-path; per-test override for 403/empty/error) ----
   http.get("/api/v1/admin/imports", () => HttpResponse.json([ingestionRunFixture])),
   http.get("/api/v1/admin/imports/:id", () => HttpResponse.json(ingestionRunFixture)),
@@ -1461,7 +2223,11 @@ export const handlers = [
     const reviewStatus = url.searchParams.get("review_status");
     const kind = url.searchParams.get("kind");
     // Cast to a common shape so strict tsc can filter the mixed-literal tuple.
-    type FileRow = { classification: { band: string; kind: string } | null; scan_flags: { disposition: string }; review: { disposition: string } | null };
+    type FileRow = {
+      classification: { band: string; kind: string } | null;
+      scan_flags: { disposition: string };
+      review: { disposition: string } | null;
+    };
     let files: FileRow[] = ingestionFilesFixture as unknown as FileRow[];
     if (band) files = files.filter((f) => f.classification?.band === band);
     if (disposition) files = files.filter((f) => f.scan_flags.disposition === disposition);
@@ -1533,35 +2299,81 @@ export const handlers = [
   // ---- S-web-7 CAPA (default happy-path; per-test overrides for 403/empty/error) ----
   http.get("/api/v1/capas", () => HttpResponse.json(capaListFixture)),
   http.get("/api/v1/capas/:id", ({ params }) => {
-    if (params.id === "ca000005-0005-0005-0005-000000000005") return HttpResponse.json(capaLoopDetailFixture);
-    if (params.id === "ca000008-0008-0008-0008-000000000008") return HttpResponse.json(capaCloseReadyFixture);
+    if (params.id === "ca000005-0005-0005-0005-000000000005")
+      return HttpResponse.json(capaLoopDetailFixture);
+    if (params.id === "ca000008-0008-0008-0008-000000000008")
+      return HttpResponse.json(capaCloseReadyFixture);
     return HttpResponse.json({ ...capaDetailFixture, id: String(params.id) });
   }),
   // S-web-7b writes (default happy-path; per-test overrides for the 409s). Each returns a CAPA-ish body
   // the UI ignores (it invalidates + refetches).
-  http.post("/api/v1/capas", () => HttpResponse.json({ ...capaDetailFixture, id: "ca-new-0000-0000-0000-000000000000" }, { status: 201 })),
-  http.post("/api/v1/capas/:id/containment", ({ params }) => HttpResponse.json({ ...capaDetailFixture, id: String(params.id) })),
-  http.post("/api/v1/capas/:id/root-cause", ({ params }) => HttpResponse.json({ ...capaDetailFixture, id: String(params.id) })),
-  http.post("/api/v1/capas/:id/action-plan", ({ params }) => HttpResponse.json({ ...capaDetailFixture, id: String(params.id), approval_instance: { id: "wfca1111-1111-1111-1111-111111111111", current_state: "qm_approval", definition_version: 1 } })),
-  http.post("/api/v1/capas/:id/implement", ({ params }) => HttpResponse.json({ ...capaDetailFixture, id: String(params.id) })),
-  http.post("/api/v1/capas/:id/verify", ({ params }) => HttpResponse.json({ ...capaDetailFixture, id: String(params.id) })),
-  http.post("/api/v1/capas/:id/close", ({ params }) => HttpResponse.json({ ...capaDetailFixture, id: String(params.id), close_state: "Closed" })),
+  http.post("/api/v1/capas", () =>
+    HttpResponse.json(
+      { ...capaDetailFixture, id: "ca-new-0000-0000-0000-000000000000" },
+      { status: 201 },
+    ),
+  ),
+  http.post("/api/v1/capas/:id/containment", ({ params }) =>
+    HttpResponse.json({ ...capaDetailFixture, id: String(params.id) }),
+  ),
+  http.post("/api/v1/capas/:id/root-cause", ({ params }) =>
+    HttpResponse.json({ ...capaDetailFixture, id: String(params.id) }),
+  ),
+  http.post("/api/v1/capas/:id/action-plan", ({ params }) =>
+    HttpResponse.json({
+      ...capaDetailFixture,
+      id: String(params.id),
+      approval_instance: {
+        id: "wfca1111-1111-1111-1111-111111111111",
+        current_state: "qm_approval",
+        definition_version: 1,
+      },
+    }),
+  ),
+  http.post("/api/v1/capas/:id/implement", ({ params }) =>
+    HttpResponse.json({ ...capaDetailFixture, id: String(params.id) }),
+  ),
+  http.post("/api/v1/capas/:id/verify", ({ params }) =>
+    HttpResponse.json({ ...capaDetailFixture, id: String(params.id) }),
+  ),
+  http.post("/api/v1/capas/:id/close", ({ params }) =>
+    HttpResponse.json({ ...capaDetailFixture, id: String(params.id), close_state: "Closed" }),
+  ),
   http.get("/api/v1/capas/:id/approval", () => HttpResponse.json(null)),
   http.get("/api/v1/records", () => HttpResponse.json(recordsFixture)),
   // ---- S-web-7c complaints + NCRs (default happy-path; per-test overrides for 403/empty/error) ----
   http.get("/api/v1/complaints", () => HttpResponse.json(complaintListFixture)),
   http.post("/api/v1/complaints", () =>
-    HttpResponse.json({ ...complaintListFixture.data[0]!, id: "cm-new-0000-0000-0000-000000000000", spawned_capa_id: null }, { status: 201 }),
+    HttpResponse.json(
+      {
+        ...complaintListFixture.data[0]!,
+        id: "cm-new-0000-0000-0000-000000000000",
+        spawned_capa_id: null,
+      },
+      { status: 201 },
+    ),
   ),
   http.post("/api/v1/complaints/:id/spawn-capa", () =>
-    HttpResponse.json({ ...capaDetailFixture, id: "ca-spawn-0000-0000-0000-000000000000", source: "complaint" }, { status: 201 }),
+    HttpResponse.json(
+      { ...capaDetailFixture, id: "ca-spawn-0000-0000-0000-000000000000", source: "complaint" },
+      { status: 201 },
+    ),
   ),
   http.get("/api/v1/ncrs", () => HttpResponse.json(ncrListFixture)),
   http.post("/api/v1/ncrs", () =>
-    HttpResponse.json({ ...ncrListFixture.data[0]!, id: "nc-new-0000-0000-0000-000000000000" }, { status: 201 }),
+    HttpResponse.json(
+      { ...ncrListFixture.data[0]!, id: "nc-new-0000-0000-0000-000000000000" },
+      { status: 201 },
+    ),
   ),
   http.patch("/api/v1/ncrs/:id/disposition", ({ params }) =>
-    HttpResponse.json({ ...ncrListFixture.data[0]!, id: String(params.id), disposition: "rework", disposition_authorized_by: "bbbb1111-1111-1111-1111-111111111111", disposed_at: "2026-06-09T09:00:00+00:00" }),
+    HttpResponse.json({
+      ...ncrListFixture.data[0]!,
+      id: String(params.id),
+      disposition: "rework",
+      disposition_authorized_by: "bbbb1111-1111-1111-1111-111111111111",
+      disposed_at: "2026-06-09T09:00:00+00:00",
+    }),
   ),
   // ---- S-web-7d audits & findings (default happy-path; per-test overrides for 403/409/422) ----
   http.get("/api/v1/audit-programs", () => HttpResponse.json(auditProgramsFixture)),
@@ -1573,7 +2385,11 @@ export const handlers = [
   ),
   http.post("/api/v1/audit-programs", () =>
     HttpResponse.json(
-      { ...auditProgramsFixture.data[0]!, id: "ap-new-00-0000-0000-0000-000000000000", identifier: "AUDPROG-000003" },
+      {
+        ...auditProgramsFixture.data[0]!,
+        id: "ap-new-00-0000-0000-0000-000000000000",
+        identifier: "AUDPROG-000003",
+      },
       { status: 201 },
     ),
   ),
@@ -1595,23 +2411,57 @@ export const handlers = [
   }),
   http.post("/api/v1/audits", () =>
     HttpResponse.json(
-      { ...auditListFixture.data[0]!, id: "au-new-00-0000-0000-0000-000000000000", identifier: "REC-000069", state: "Scheduled", started_at: null },
+      {
+        ...auditListFixture.data[0]!,
+        id: "au-new-00-0000-0000-0000-000000000000",
+        identifier: "REC-000069",
+        state: "Scheduled",
+        started_at: null,
+      },
       { status: 201 },
     ),
   ),
   // The 6 FSM transitions — each returns the audit advanced to its target state.
-  http.post("/api/v1/audits/:id/plan", ({ params }) => HttpResponse.json({ ...auditListFixture.data[0]!, id: String(params.id), state: "Planned" })),
-  http.post("/api/v1/audits/:id/conduct", ({ params }) => HttpResponse.json({ ...auditListFixture.data[0]!, id: String(params.id), state: "InProgress" })),
-  http.post("/api/v1/audits/:id/draft-findings", ({ params }) => HttpResponse.json({ ...auditListFixture.data[0]!, id: String(params.id), state: "FindingsDraft" })),
-  http.post("/api/v1/audits/:id/report", ({ params }) => HttpResponse.json({ ...auditListFixture.data[0]!, id: String(params.id), state: "Reported" })),
-  http.post("/api/v1/audits/:id/begin-closing", ({ params }) => HttpResponse.json({ ...auditListFixture.data[0]!, id: String(params.id), state: "Closing" })),
-  http.post("/api/v1/audits/:id/close", ({ params }) => HttpResponse.json({ ...auditListFixture.data[0]!, id: String(params.id), state: "Closed", completed_at: "2026-06-09" })),
+  http.post("/api/v1/audits/:id/plan", ({ params }) =>
+    HttpResponse.json({ ...auditListFixture.data[0]!, id: String(params.id), state: "Planned" }),
+  ),
+  http.post("/api/v1/audits/:id/conduct", ({ params }) =>
+    HttpResponse.json({ ...auditListFixture.data[0]!, id: String(params.id), state: "InProgress" }),
+  ),
+  http.post("/api/v1/audits/:id/draft-findings", ({ params }) =>
+    HttpResponse.json({
+      ...auditListFixture.data[0]!,
+      id: String(params.id),
+      state: "FindingsDraft",
+    }),
+  ),
+  http.post("/api/v1/audits/:id/report", ({ params }) =>
+    HttpResponse.json({ ...auditListFixture.data[0]!, id: String(params.id), state: "Reported" }),
+  ),
+  http.post("/api/v1/audits/:id/begin-closing", ({ params }) =>
+    HttpResponse.json({ ...auditListFixture.data[0]!, id: String(params.id), state: "Closing" }),
+  ),
+  http.post("/api/v1/audits/:id/close", ({ params }) =>
+    HttpResponse.json({
+      ...auditListFixture.data[0]!,
+      id: String(params.id),
+      state: "Closed",
+      completed_at: "2026-06-09",
+    }),
+  ),
   http.get("/api/v1/audits/:id/findings", () => HttpResponse.json(findingsFixture)),
-  http.post("/api/v1/audits/:id/findings", () => HttpResponse.json(createdNcFindingFixture, { status: 201 })),
+  http.post("/api/v1/audits/:id/findings", () =>
+    HttpResponse.json(createdNcFindingFixture, { status: 201 }),
+  ),
   // The successor's title is the correction REASON (the record title), not the original's text.
   http.post("/api/v1/findings/:id/correction", ({ params }) =>
     HttpResponse.json(
-      { ...findingsFixture.data[1]!, id: "fd-corr-0-0000-0000-0000-000000000000", title: "Reclassified as an improvement", correction_of: String(params.id) },
+      {
+        ...findingsFixture.data[1]!,
+        id: "fd-corr-0-0000-0000-0000-000000000000",
+        title: "Reclassified as an improvement",
+        correction_of: String(params.id),
+      },
       { status: 201 },
     ),
   ),
@@ -1619,7 +2469,19 @@ export const handlers = [
   // Pinned to the real _evidence_link serializer (api/records.py): {id, record_id, target_type, target_id,
   // link_reason, created_at} — NOT a record_identifier (that field only exists on the per-stage projection).
   // The UI ignores this body (it invalidates + refetches), but the fixture must match the real shape.
-  http.post("/api/v1/records/:id/evidence-links", () => HttpResponse.json({ id: "el-new", record_id: "re000001-0001-0001-0001-000000000001", target_type: "capa_stage", target_id: "cr000003-0003-0003-0003-000000000003", link_reason: null, created_at: "2026-06-09T09:00:00+00:00" }, { status: 201 })),
+  http.post("/api/v1/records/:id/evidence-links", () =>
+    HttpResponse.json(
+      {
+        id: "el-new",
+        record_id: "re000001-0001-0001-0001-000000000001",
+        target_type: "capa_stage",
+        target_id: "cr000003-0003-0003-0003-000000000003",
+        link_reason: null,
+        created_at: "2026-06-09T09:00:00+00:00",
+      },
+      { status: 201 },
+    ),
+  ),
   // ---- S-web-8 drift surface (default happy-path; per-test overrides for 403/null-scans) ----
   http.get("/api/v1/admin/drift/status", () => HttpResponse.json(driftStatusFixture)),
   http.get("/api/v1/admin/drift/superseded-copies", ({ request }) => {
@@ -1654,6 +2516,7 @@ export const handlers = [
   http.get("/api/v1/tasks/:id", ({ params }) => {
     if (params.id === periodicReviewTask.id) return HttpResponse.json(periodicReviewTask);
     if (params.id === docAckTask.id) return HttpResponse.json(docAckTask);
+    if (params.id === dcrApprovalTask.id) return HttpResponse.json(dcrApprovalTask);
     return HttpResponse.json(approveTask);
   }),
   http.get("/api/v1/workflow-instances/:id", () => HttpResponse.json(approvalFixture)),
@@ -1661,9 +2524,14 @@ export const handlers = [
     const body = (await request.json()) as { outcome?: string };
     if (body.outcome === "acknowledge") return HttpResponse.json(ackDecisionResultFixture);
     return HttpResponse.json({
-      task_id: approveTask.id, instance_id: approvalFixture.id, stage_key: "quality_approval",
-      outcome: "approve", decided_at: "2026-06-08T10:00:00+00:00",
-      decided_by: "bbbb1111-1111-1111-1111-111111111111", signature_event: null, comment: null,
+      task_id: approveTask.id,
+      instance_id: approvalFixture.id,
+      stage_key: "quality_approval",
+      outcome: "approve",
+      decided_at: "2026-06-08T10:00:00+00:00",
+      decided_by: "bbbb1111-1111-1111-1111-111111111111",
+      signature_event: null,
+      comment: null,
     });
   }),
   http.post("/api/v1/documents/:id/release", ({ params }) =>
