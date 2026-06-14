@@ -46,6 +46,7 @@ from ..services.authz import (
 from ..services.authz.repository import gather_sod_constraints, get_allow_approver_release
 from ..services.mgmt_review import (
     add_output,
+    build_minutes_pdf,
     close_review,
     compile_inputs,
     create_review,
@@ -338,6 +339,32 @@ async def next_due_endpoint(
         "review_state": mr_review_state(cad.next_review_due, today_org()),
         "owner_configured": cad.owner_user_id is not None,
     }
+
+
+@router.get("/management-reviews/{review_id}/pack")
+async def get_review_pack_endpoint(
+    review_id: uuid.UUID,
+    caller: AppUser = Depends(_mr_read),
+    session: AsyncSession = Depends(get_session),
+) -> Response:
+    """Stream the released MR's filed-minutes pack as application/pdf.
+
+    Gate: ``mgmtReview.read`` — the PDF shows only data the reader already sees.
+    409 ``pack_unavailable`` before release; 404 cross-org.
+    Rendered on demand from the released version's frozen snapshot — no cache, no blob, no seal.
+    """
+    mr, doc = await _load_review(session, caller, review_id)
+    if doc.current_effective_version_id is None:
+        raise ProblemException(
+            status=409, code="pack_unavailable", title="This review has not been released yet"
+        )
+    pdf = await build_minutes_pdf(session, mr, doc)
+    filename = f"{doc.identifier}-minutes.pdf"
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.get("/management-reviews/{review_id}")
