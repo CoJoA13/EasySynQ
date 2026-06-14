@@ -1,6 +1,7 @@
 import { Alert, Button, Group, Loader, Modal, Select, Stack, Text } from "@mantine/core";
 import { useMemo, useState } from "react";
 import { ApiError } from "../../lib/api";
+import { useDocumentTypes } from "../../app/shell/useDocumentTypes";
 import { useDocumentVersions } from "../document/useDocumentVersions";
 import { useDocuments } from "../library/useDocuments";
 import { useImplementDcr } from "./mutations";
@@ -25,18 +26,37 @@ export function ImplementCreateDcrModal({
     { current_state: "Approved" },
     { limit: 200, offset: 0 },
   );
+  // Managed subtypes (Quality Objectives, Management Reviews) have their own create/release
+  // workspaces and are rejected by the CREATE-implement guard server-side — keep them out of the
+  // picker so an invalid candidate never appears (Codex). Form templates etc. stay valid.
+  const { data: docTypes } = useDocumentTypes();
+  const managedTypeIds = useMemo(
+    () =>
+      new Set((docTypes ?? []).filter((t) => t.code === "OBJ" || t.code === "MR").map((t) => t.id)),
+    [docTypes],
+  );
   const options = useMemo(
     () =>
       (docsPage?.data ?? [])
-        .filter((d) => d.kind === "DOCUMENT")
+        // A CREATE DCR releases the INITIAL version of a NEW document: exclude approved REVISIONS of
+        // existing docs (current_effective_version_id set) and managed subtypes (server-guarded too).
+        .filter(
+          (d) =>
+            d.kind === "DOCUMENT" &&
+            d.current_effective_version_id === null &&
+            !(d.document_type_id !== null && managedTypeIds.has(d.document_type_id)),
+        )
         .map((d) => ({ value: d.id, label: `${d.identifier} — ${d.title}` })),
-    [docsPage],
+    [docsPage, managedTypeIds],
   );
 
   const versions = useDocumentVersions(docId, docId !== null, { retry: false });
   const approvedVersion = (versions.data ?? []).find((v) => v.version_state === "Approved");
   const noApproved =
     docId !== null && !versions.isLoading && !versions.isError && approvedVersion === undefined;
+  // A release-capable user who lacks document.read_draft gets a 403 resolving the version; surface it
+  // (don't leave a silently-disabled button — Codex).
+  const versionsError = docId !== null && versions.isError;
 
   async function submit() {
     if (approvedVersion === undefined) return;
@@ -81,6 +101,12 @@ export function ImplementCreateDcrModal({
         {noApproved && (
           <Text size="sm" c="red">
             That document has no approved version to release. Approve it first.
+          </Text>
+        )}
+        {versionsError && (
+          <Text size="sm" c="red">
+            Couldn&apos;t load this document&apos;s versions — this step needs draft-read access to
+            resolve the version to release. Ask someone with document access to implement.
           </Text>
         )}
         <Group justify="flex-end">

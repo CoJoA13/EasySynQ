@@ -131,3 +131,69 @@ it("has no axe violations", async () => {
   await screen.findByLabelText(/New document/);
   expect(await axe(container)).toHaveNoViolations();
 });
+
+it("excludes an approved REVISION of an existing document (current_effective_version_id set)", async () => {
+  // Codex P1: an approved revision sits at current_state Approved but carries an effective version —
+  // a CREATE DCR must only release the INITIAL version of a NEW document.
+  server.use(
+    http.get("/api/v1/documents", () =>
+      HttpResponse.json({
+        ...docsPage,
+        data: [
+          {
+            ...docsPage.data[0]!,
+            current_effective_version_id: "eff00001-0001-0001-0001-000000000001",
+          },
+        ],
+      } satisfies DocumentsPage),
+    ),
+  );
+  renderWithProviders(<ImplementCreateDcrModal dcrId={DCR_ID} onClose={() => {}} />);
+  expect(
+    await screen.findByText(/Author the new document in the workspace first/),
+  ).toBeInTheDocument();
+  expect(screen.queryByText("SOP-NEW-001 — New procedure")).not.toBeInTheDocument();
+});
+
+it("excludes managed subtypes (Quality Objective / Management Review) from the picker", async () => {
+  // Codex P2: OBJ/MR are managed subtypes with their own create flows — never CREATE-DCR targets.
+  const OBJ_TYPE = "objtype1-0001-0001-0001-000000000001";
+  server.use(
+    http.get("/api/v1/document-types", () =>
+      HttpResponse.json([
+        {
+          id: OBJ_TYPE,
+          code: "OBJ",
+          name: "Quality Objective",
+          document_level: "L3",
+          is_singleton: false,
+        },
+      ]),
+    ),
+    http.get("/api/v1/documents", () =>
+      HttpResponse.json({
+        ...docsPage,
+        data: [{ ...docsPage.data[0]!, document_type_id: OBJ_TYPE }],
+      } satisfies DocumentsPage),
+    ),
+  );
+  renderWithProviders(<ImplementCreateDcrModal dcrId={DCR_ID} onClose={() => {}} />);
+  expect(
+    await screen.findByText(/Author the new document in the workspace first/),
+  ).toBeInTheDocument();
+  expect(screen.queryByText("SOP-NEW-001 — New procedure")).not.toBeInTheDocument();
+});
+
+it("surfaces a calm error when the version fetch is forbidden (releaser lacks draft access)", async () => {
+  // Codex P2: a release-capable user without document.read_draft 403s on the version fetch; surface it
+  // instead of leaving a silently-disabled button.
+  server.use(
+    http.get("/api/v1/documents", () => HttpResponse.json(docsPage)),
+    http.get(`/api/v1/documents/${DOC_ID}/versions`, () => new HttpResponse(null, { status: 403 })),
+  );
+  renderWithProviders(<ImplementCreateDcrModal dcrId={DCR_ID} onClose={() => {}} />);
+  await userEvent.click(await screen.findByLabelText(/New document/));
+  await userEvent.click(await screen.findByText("SOP-NEW-001 — New procedure"));
+  expect(await screen.findByText(/needs draft-read access/)).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Implement" })).toBeDisabled();
+});
