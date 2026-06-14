@@ -119,3 +119,6 @@ def test_render_tolerates_odd_source_ref_shapes():
     }
     pdf = render_minutes_pdf(**args)
     assert pdf[:4] == b"%PDF"
+    text = _text(pdf)
+    assert "a bare string" in text  # bare-string source_ref renders verbatim
+    assert "list" in text  # list source_ref renders via str()

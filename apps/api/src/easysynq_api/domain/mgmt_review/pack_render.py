@@ -35,7 +35,7 @@ def _invariant_canvas(*args: Any, **kw: Any) -> Canvas:
 def _summary(source_ref: Any) -> str:
     """A generic, never-raising one-cell summary of the free-form 9.3.2 source_ref."""
     if isinstance(source_ref, dict):
-        return "; ".join(f"{k}: {source_ref[k]}" for k in sorted(source_ref)) or "—"
+        return "; ".join(f"{k}: {source_ref[k]}" for k in sorted(source_ref, key=str)) or "—"
     if source_ref in (None, "", [], {}):
         return "—"
     return str(source_ref)
