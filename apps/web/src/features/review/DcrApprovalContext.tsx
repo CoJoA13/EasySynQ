@@ -29,7 +29,7 @@ export function DcrApprovalContext({ dcrId }: { dcrId: string }) {
         <Text size="xs" c="dimmed">
           {dcr.identifier}
         </Text>
-        <Title order={4}>{CHANGE_TYPE_LABEL[dcr.change_type] ?? dcr.change_type}</Title>
+        <Title order={3}>{CHANGE_TYPE_LABEL[dcr.change_type] ?? dcr.change_type}</Title>
       </div>
       <Group gap="xs">
         <DcrStateBadge state={dcr.state} />
@@ -47,7 +47,7 @@ export function DcrApprovalContext({ dcrId }: { dcrId: string }) {
         <Text size="sm">{dcr.reason_text}</Text>
       </div>
       <div>
-        <Title order={5} mb="xs">
+        <Title order={4} mb="xs">
           Impact assessment
         </Title>
         <DcrImpactTable impact={impact ?? []} />
