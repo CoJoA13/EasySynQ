@@ -3,7 +3,7 @@ import { useState } from "react";
 import { useParams } from "react-router-dom";
 import { useUserDirectory } from "../../app/shell/useUserDirectory";
 import { usePermissions } from "../../app/shell/usePermissions";
-import { ApiError } from "../../lib/api";
+import { ApiError, useApi } from "../../lib/api";
 import { ApprovalStepper } from "../document/ApprovalStepper";
 import { StateBadge } from "../document/StateBadge";
 import { useMgmtReview, useMgmtReviewApproval } from "./hooks";
@@ -29,6 +29,9 @@ export function ManagementReviewDetailPage() {
   const { data: instance } = useMgmtReviewApproval(id);
   const { data: directory } = useUserDirectory();
   const { can } = usePermissions();
+  const api = useApi();
+  const [packLoading, setPackLoading] = useState(false);
+  const [packError, setPackError] = useState<string | null>(null);
   const compile = useCompileInputs();
   const submit = useSubmitReview();
   const release = useReleaseReview();
@@ -73,26 +76,76 @@ export function ManagementReviewDetailPage() {
     }
   }
 
+  const mrId = mr.id;
+  const mrIdentifier = mr.identifier;
+
+  async function downloadPack() {
+    setPackError(null);
+    setPackLoading(true);
+    try {
+      const blob = await api.getBlob(`/api/v1/management-reviews/${mrId}/pack`);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${mrIdentifier}-minutes.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setPackError(
+        e instanceof ApiError && e.status === 409
+          ? "Available once the review is released."
+          : "Couldn't generate the pack. Please retry.",
+      );
+    } finally {
+      setPackLoading(false);
+    }
+  }
+  const isReleased = mr.current_state === "Effective";
+
   return (
     <Container size="lg" py="md">
       <Stack gap="lg">
-        <div>
-          <Group gap="xs" mb={4}>
-            <Text c="dimmed" size="sm" fw={500}>
-              {mr.identifier}
+        <Group justify="space-between" align="flex-start">
+          <div>
+            <Group gap="xs" mb={4}>
+              <Text c="dimmed" size="sm" fw={500}>
+                {mr.identifier}
+              </Text>
+              <StateBadge state={mr.current_state} />
+            </Group>
+            <Title order={2}>{mr.title}</Title>
+            <Text size="sm" c="dimmed">
+              {mr.period_label ?? "—"}
+              {mr.review_date ? ` · ${mr.review_date}` : ""}
+              {mr.attendees?.length ? ` · ${mr.attendees.map((a) => a.name).join(", ")}` : ""}
             </Text>
-            <StateBadge state={mr.current_state} />
-          </Group>
-          <Title order={2}>{mr.title}</Title>
-          <Text size="sm" c="dimmed">
-            {mr.period_label ?? "—"}
-            {mr.review_date ? ` · ${mr.review_date}` : ""}
-            {mr.attendees?.length ? ` · ${mr.attendees.map((a) => a.name).join(", ")}` : ""}
-          </Text>
-        </div>
+          </div>
+          {isReleased && (
+            <Button
+              variant="default"
+              size="xs"
+              loading={packLoading}
+              onClick={() => void downloadPack()}
+            >
+              Download minutes pack (PDF)
+            </Button>
+          )}
+        </Group>
+        {packError && (
+          <Alert color="red" withCloseButton onClose={() => setPackError(null)}>
+            {packError}
+          </Alert>
+        )}
 
         <ReviewInputsSection inputs={mr.inputs} />
-        <ReviewOutputsSection reviewId={mr.id} outputs={mr.outputs} editable={isDraft} tracking={mr.close_state === "ActionsTracked"} />
+        <ReviewOutputsSection
+          reviewId={mr.id}
+          outputs={mr.outputs}
+          editable={isDraft}
+          tracking={mr.close_state === "ActionsTracked"}
+        />
 
         {(canCompile || canSubmit || canRelease || canClose || instance) && (
           <Card withBorder>

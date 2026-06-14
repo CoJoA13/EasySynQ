@@ -2,10 +2,11 @@ import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { http, HttpResponse } from "msw";
-import { expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Route, Routes } from "react-router-dom";
 import { renderWithProviders } from "../../test/render";
 import { server } from "../../test/msw/server";
+import type { MgmtReviewDetail } from "../../lib/types";
 import { ManagementReviewDetailPage } from "./ManagementReviewDetailPage";
 
 const ID = "mr-0001-0001-0001-000000000001";
@@ -86,9 +87,7 @@ it("shows a calm not-found alert on a 404", async () => {
     ),
   );
   renderAt(ID);
-  await waitFor(() =>
-    expect(screen.getByText(/couldn't load this review/i)).toBeInTheDocument(),
-  );
+  await waitFor(() => expect(screen.getByText(/couldn't load this review/i)).toBeInTheDocument());
 });
 
 it("maps the review_close_blocked code to calm copy when an action's task isn't done", async () => {
@@ -150,17 +149,121 @@ function mgmtReviewApproved(release: boolean) {
 
 it("shows Release when capabilities.release is true and state is Approved", async () => {
   grantRecordOutputs();
-  server.use(http.get("/api/v1/management-reviews/:id", () => HttpResponse.json(mgmtReviewApproved(true))));
-  renderAt(ID);
-  await waitFor(() =>
-    expect(screen.getByRole("button", { name: "Release" })).toBeInTheDocument(),
+  server.use(
+    http.get("/api/v1/management-reviews/:id", () => HttpResponse.json(mgmtReviewApproved(true))),
   );
+  renderAt(ID);
+  await waitFor(() => expect(screen.getByRole("button", { name: "Release" })).toBeInTheDocument());
 });
 
 it("hides Release when capabilities.release is false (SoD-2), even at Approved", async () => {
   grantRecordOutputs();
-  server.use(http.get("/api/v1/management-reviews/:id", () => HttpResponse.json(mgmtReviewApproved(false))));
+  server.use(
+    http.get("/api/v1/management-reviews/:id", () => HttpResponse.json(mgmtReviewApproved(false))),
+  );
   renderAt(ID);
   await waitFor(() => expect(screen.getByText("Approved review")).toBeInTheDocument());
   expect(screen.queryByRole("button", { name: "Release" })).not.toBeInTheDocument();
+});
+
+// ---- Download minutes pack (PDF) button ----
+
+const effectiveDetail = {
+  id: ID,
+  identifier: "MR-001",
+  title: "2026 Annual Management Review",
+  current_state: "Effective" as const,
+  period_label: "2026 Annual",
+  review_date: "2026-06-12",
+  attendees: [{ name: "Mara", role: "QM" }],
+  close_state: "ActionsTracked" as const,
+  closed_at: null,
+  created_at: "2026-06-01T09:00:00+00:00",
+  inputs: [],
+  outputs: [],
+} satisfies MgmtReviewDetail;
+
+const draftDetail = {
+  id: ID,
+  identifier: "MR-001",
+  title: "2026 Annual Management Review",
+  current_state: "Draft" as const,
+  period_label: "2026 Annual",
+  review_date: null,
+  attendees: null,
+  close_state: null,
+  closed_at: null,
+  created_at: "2026-06-01T09:00:00+00:00",
+  inputs: [],
+  outputs: [],
+} satisfies MgmtReviewDetail;
+
+describe("Download minutes pack (PDF) button", () => {
+  beforeEach(() => {
+    // jsdom lacks URL.createObjectURL / revokeObjectURL — the global setup stubs them as plain fns;
+    // wrap them in spies so individual tests can assert calls (mirrors VisualDiffViewer.test.tsx).
+    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:mock");
+    vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
+  });
+
+  it("shows the button when current_state is Effective", async () => {
+    server.use(
+      http.get("/api/v1/management-reviews/:id", () => HttpResponse.json(effectiveDetail)),
+    );
+    renderAt(ID);
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Download minutes pack (PDF)" }),
+      ).toBeInTheDocument(),
+    );
+  });
+
+  it("hides the button when current_state is Draft", async () => {
+    server.use(http.get("/api/v1/management-reviews/:id", () => HttpResponse.json(draftDetail)));
+    renderAt(ID);
+    await waitFor(() => expect(screen.getByText("MR-001")).toBeInTheDocument());
+    expect(
+      screen.queryByRole("button", { name: "Download minutes pack (PDF)" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("clicking the button fetches the pack and triggers a download anchor click", async () => {
+    server.use(
+      http.get("/api/v1/management-reviews/:id", () => HttpResponse.json(effectiveDetail)),
+      http.get(
+        "/api/v1/management-reviews/:id/pack",
+        () =>
+          new HttpResponse(new Blob(["PDF"], { type: "application/pdf" }), {
+            headers: { "Content-Type": "application/pdf" },
+          }),
+      ),
+    );
+    const anchorClick = vi
+      .spyOn(HTMLAnchorElement.prototype, "click")
+      .mockImplementation(() => undefined);
+    renderAt(ID);
+    const btn = await screen.findByRole("button", { name: "Download minutes pack (PDF)" });
+    await userEvent.click(btn);
+    await waitFor(() => expect(URL.createObjectURL).toHaveBeenCalled());
+    expect(anchorClick).toHaveBeenCalled();
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:mock");
+  });
+
+  it("shows the calm 409 message when the pack endpoint returns 409", async () => {
+    server.use(
+      http.get("/api/v1/management-reviews/:id", () => HttpResponse.json(effectiveDetail)),
+      http.get("/api/v1/management-reviews/:id/pack", () =>
+        HttpResponse.json(
+          { code: "pack_unavailable", title: "Pack unavailable", detail: "Not yet released." },
+          { status: 409 },
+        ),
+      ),
+    );
+    renderAt(ID);
+    const btn = await screen.findByRole("button", { name: "Download minutes pack (PDF)" });
+    await userEvent.click(btn);
+    await waitFor(() =>
+      expect(screen.getByText("Available once the review is released.")).toBeInTheDocument(),
+    );
+  });
 });
