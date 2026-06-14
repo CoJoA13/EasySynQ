@@ -15,7 +15,7 @@ export function CapaApprovalContext({ capaId }: { capaId: string }) {
         <Text size="xs" c="dimmed">
           {capa.identifier ?? "CAPA"}
         </Text>
-        <Title order={4}>{capa.title ?? "(untitled)"}</Title>
+        <Title order={3}>{capa.title ?? "(untitled)"}</Title>
       </div>
       <Group gap="xs">
         <Badge color={SEVERITY_COLOR[capa.severity]} variant="light">
@@ -26,7 +26,7 @@ export function CapaApprovalContext({ capaId }: { capaId: string }) {
         </Badge>
       </Group>
       <div>
-        <Title order={5} mb="xs">
+        <Title order={4} mb="xs">
           Proposed action plan
         </Title>
         {approval?.proposed_action_plan ? (
