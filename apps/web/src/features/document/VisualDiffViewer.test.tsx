@@ -5,7 +5,7 @@ import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderWithProviders } from "../../test/render";
 import { server } from "../../test/msw/server";
-import { PNG_1x1 } from "../../test/msw/handlers";
+import { PNG_1x1, visualDiffFixture } from "../../test/msw/handlers";
 import { VisualDiffViewer } from "./VisualDiffViewer";
 
 const DOC = "11111111-1111-1111-1111-111111111111";
@@ -21,7 +21,9 @@ afterEach(() => vi.restoreAllMocks());
 
 test("VisualDiffViewer (Ready) renders the changed-page rail + the page image via an AUTHED fetch", async () => {
   let authHeader: string | null = null;
-  server.use(http.get(PAGE, ({ request }) => ((authHeader = request.headers.get("authorization")), png())));
+  server.use(
+    http.get(PAGE, ({ request }) => ((authHeader = request.headers.get("authorization")), png())),
+  );
 
   renderWithProviders(<VisualDiffViewer documentId={DOC} fromVid={FROM} toVid={TO} />);
 
@@ -39,7 +41,10 @@ test("VisualDiffViewer (Ready) renders the changed-page rail + the page image vi
 test("VisualDiffViewer layer toggle re-fetches the page with ?layer=to", async () => {
   const layers: string[] = [];
   server.use(
-    http.get(PAGE, ({ request }) => (layers.push(new URL(request.url).searchParams.get("layer") ?? ""), png())),
+    http.get(
+      PAGE,
+      ({ request }) => (layers.push(new URL(request.url).searchParams.get("layer") ?? ""), png()),
+    ),
   );
   const user = userEvent.setup();
   renderWithProviders(<VisualDiffViewer documentId={DOC} fromVid={FROM} toVid={TO} />);
@@ -50,7 +55,9 @@ test("VisualDiffViewer layer toggle re-fetches the page with ?layer=to", async (
 
 test("VisualDiffViewer shows a calm note when a layer has no image for the page (404)", async () => {
   server.use(
-    http.get(PAGE, () => HttpResponse.json({ code: "not_found", title: "No image" }, { status: 404 })),
+    http.get(PAGE, () =>
+      HttpResponse.json({ code: "not_found", title: "No image" }, { status: 404 }),
+    ),
   );
   renderWithProviders(<VisualDiffViewer documentId={DOC} fromVid={FROM} toVid={TO} />);
   await waitFor(() =>
@@ -83,9 +90,23 @@ test("VisualDiffViewer (Pending) shows the phased long-op affordance, not a froz
 
 test("VisualDiffViewer (Failed) is a calm terminal with a source-download fallback (no dead Retry)", async () => {
   const openSpy = vi.spyOn(window, "open").mockReturnValue(null);
+  // The poll now GETs the real status; the row IS Failed, so POST and GET both return it.
   server.use(
     http.post(VD, () =>
-      HttpResponse.json({ status: "Failed", page_count: null, reason: "render crashed", pages: null }),
+      HttpResponse.json({
+        status: "Failed",
+        page_count: null,
+        reason: "render crashed",
+        pages: null,
+      }),
+    ),
+    http.get(VD, () =>
+      HttpResponse.json({
+        status: "Failed",
+        page_count: null,
+        reason: "render crashed",
+        pages: null,
+      }),
     ),
   );
   const user = userEvent.setup();
@@ -114,8 +135,17 @@ test("VisualDiffViewer resets the selected page when the compared pair changes",
 
 test("VisualDiffViewer (Unavailable) offers the source-download fallback, not an error", async () => {
   const openSpy = vi.spyOn(window, "open").mockReturnValue(null);
+  // The poll now GETs the real status; the row IS Unavailable, so POST and GET both return it.
   server.use(
     http.post(VD, () =>
+      HttpResponse.json({
+        status: "Unavailable",
+        page_count: null,
+        reason: "a version is not renderable to PDF",
+        pages: null,
+      }),
+    ),
+    http.get(VD, () =>
       HttpResponse.json({
         status: "Unavailable",
         page_count: null,
@@ -133,7 +163,9 @@ test("VisualDiffViewer (Unavailable) offers the source-download fallback, not an
 
 test("VisualDiffViewer shows quiet no-access on a 403 (document.read_draft)", async () => {
   server.use(
-    http.post(VD, () => HttpResponse.json({ code: "forbidden", title: "Forbidden" }, { status: 403 })),
+    http.post(VD, () =>
+      HttpResponse.json({ code: "forbidden", title: "Forbidden" }, { status: 403 }),
+    ),
   );
   renderWithProviders(<VisualDiffViewer documentId={DOC} fromVid={FROM} toVid={TO} />);
   await waitFor(() =>
@@ -154,7 +186,9 @@ test("VisualDiffViewer revokes the prior page objectURL when the layer changes (
 
 test("VisualDiffViewer shows a page-load error on a non-404 failure", async () => {
   server.use(
-    http.get(PAGE, () => HttpResponse.json({ code: "server_error", title: "boom" }, { status: 500 })),
+    http.get(PAGE, () =>
+      HttpResponse.json({ code: "server_error", title: "boom" }, { status: 500 }),
+    ),
   );
   renderWithProviders(<VisualDiffViewer documentId={DOC} fromVid={FROM} toVid={TO} />);
   await waitFor(() =>
@@ -169,4 +203,19 @@ test("VisualDiffViewer (Ready) has no a11y violations", async () => {
   );
   await screen.findByAltText(/Diff layer/);
   expect(await axe(container)).toHaveNoViolations();
+});
+
+test("VisualDiffViewer fires the GET poll and reaches Ready after a Pending POST (no manual retry)", async () => {
+  let getCalls = 0;
+  server.use(
+    http.post(VD, () => HttpResponse.json(pending)), // POST → Pending (row created)
+    http.get(VD, () => {
+      getCalls++;
+      return HttpResponse.json(visualDiffFixture);
+    }), // GET poll → Ready
+    http.get(PAGE, () => png()),
+  );
+  renderWithProviders(<VisualDiffViewer documentId={DOC} fromVid={FROM} toVid={TO} />);
+  await screen.findByAltText("Page 2 of 3 — Diff layer (changed)"); // reached Ready WITHOUT a retry click
+  expect(getCalls).toBeGreaterThan(0); // the poll actually fetched
 });

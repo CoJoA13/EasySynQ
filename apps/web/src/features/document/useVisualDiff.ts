@@ -6,17 +6,23 @@ import type { VisualDiffStatus } from "../../lib/types";
 // S-web-4b: the worker-async visual page-image diff of `fromVid` → `toVid`. Honours the S-dcr-3b
 // contract: POST to REQUEST (idempotent — UPSERTs the cache row + enqueues only while Pending),
 // then GET to POLL (a pure read — never enqueues, and never runs before the POST, so it can't hit
-// the 404-before-request). The POST seeds the poll cache so the GET never races that 404. The poll
-// runs ONLY while status==="Pending" and stops at any terminal status (Ready/Failed/Unavailable) —
-// the SetupWizard refetchInterval precedent. Gated document.read_draft server-side: a 403 surfaces
-// as an ApiError, which the viewer renders quietly (DP-6). `enabled` lets the caller withhold the
-// request until the visual mode is actually active (a Text-mode view never triggers a render).
+// the 404-before-request). The POLL owns its own fetch: it is enabled once the POST has SETTLED
+// (request.isSuccess — a reactive flag), and its first GET runs against an EMPTY cache (data ===
+// undefined), so it always fetches and populates the cache itself. We deliberately do NOT seed the
+// cache from the POST's onSuccess: a `{status:"Pending"}` seed stamps dataUpdatedAt=now at the same
+// instant `enabled` flips true, which React Query v5 reads as "fresh" (default staleTime:0) and
+// SKIPS the enable-triggered initial GET — the viewer then hangs on "Rendering…" with zero GET
+// traffic (the first-mount stall). Letting the poll fetch off an empty cache avoids that race.
+// refetchInterval then sustains the poll while Pending and halts at any terminal status
+// (Ready/Failed/Unavailable) — the SetupWizard refetchInterval precedent. Gated document.read_draft
+// server-side: a 403 surfaces as an ApiError, which the viewer renders quietly (DP-6). `enabled`
+// lets the caller withhold the request until the visual mode is actually active (a Text-mode view
+// never triggers a render).
 //
 // Everything the caller renders is read from the POLL CACHE, which is KEYED by (documentId, toVid,
 // fromVid). So when the version pair changes while this hook stays mounted, it never falls back to
 // the previous pair's result (no stale Ready/Failed pages, no page-image requests for a diff that
-// hasn't been requested yet) and the poll is enabled only once THIS pair's row exists and is
-// Pending.
+// hasn't been requested yet) and the poll is enabled only once THIS pair's POST has settled.
 export function useVisualDiff(
   documentId: string | null,
   toVid: string | null,
@@ -33,7 +39,6 @@ export function useVisualDiff(
 
   const request = useMutation({
     mutationFn: () => api.send<VisualDiffStatus>("POST", url),
-    onSuccess: (data) => qc.setQueryData(key, data),
   });
 
   // Fire the POST once per active, distinct version pair (it re-fires when the pair changes — the
@@ -43,18 +48,16 @@ export function useVisualDiff(
     if (active) request.mutate();
   }, [active, documentId, toVid, fromVid]);
 
-  // The cache entry for THIS pair (seeded by the POST's onSuccess). Reading it here is keyed by the
-  // pair and reactive via the useQuery subscription below, so `enabled` flips correctly when the
-  // POST resolves — and a different pair reads its own (initially empty) cache, never this one's.
-  const seeded = qc.getQueryData<VisualDiffStatus>(key);
-
   const poll = useQuery({
     queryKey: key,
     queryFn: () => api.get<VisualDiffStatus>(url),
-    // Enabled ONLY once THIS pair's row is seeded AND Pending — never before the POST (no
-    // 404-before-request) and never on a terminal row (no redundant GET). refetchInterval then
-    // polls until a poll returns a terminal status, and halts.
-    enabled: active && seeded?.status === "Pending",
+    // Enabled ONLY once THIS pair's POST has settled (request.isSuccess) — the settled POST proves
+    // the cache row exists, so the first GET can't hit the 404-before-request, and the POST is
+    // idempotent server-side (S-dcr-3b) so the GET never double-enqueues. The poll's first fetch
+    // runs against an empty cache (no seed), so it always fetches and populates the status itself —
+    // never skipped by an enable-time staleness read. refetchInterval then polls until a poll
+    // returns a terminal status, and halts.
+    enabled: active && request.isSuccess,
     refetchInterval: (q) => (q.state.data?.status === "Pending" ? 2500 : false),
   });
 

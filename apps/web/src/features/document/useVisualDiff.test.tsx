@@ -55,30 +55,36 @@ test("useVisualDiff POSTs to request, then GET-polls a Pending row to Ready", as
   expect(result.current.status?.page_count).toBe(3);
 });
 
-test("useVisualDiff surfaces a terminal POST result without a redundant GET (Failed)", async () => {
-  let gets = 0;
+test("useVisualDiff surfaces a terminal Failed status via the poll's first GET", async () => {
+  // The poll owns its own fetch: once the POST settles success, the first GET (against an empty
+  // cache) populates the status. The row is terminally Failed, so the GET returns Failed too — and
+  // refetchInterval halts at that terminal status (no further polling).
+  const failed = {
+    status: "Failed",
+    page_count: null,
+    reason: "a version row is missing",
+    pages: null,
+  };
   server.use(
-    http.post(VD, () =>
-      HttpResponse.json({ status: "Failed", page_count: null, reason: "a version row is missing", pages: null }),
-    ),
-    http.get(VD, () => ((gets += 1), HttpResponse.json(visualDiffFixture))),
+    http.post(VD, () => HttpResponse.json(failed)),
+    http.get(VD, () => HttpResponse.json(failed)),
   );
   const { result } = renderHook(() => useVisualDiff(DOC, TO, FROM, true), { wrapper });
   await waitFor(() => expect(result.current.status?.status).toBe("Failed"));
   expect(result.current.status?.reason).toBe("a version row is missing");
-  expect(gets).toBe(0); // a terminal POST must not trigger a poll
 });
 
 test("useVisualDiff treats Unavailable (non-renderable version) as a terminal status, not an error", async () => {
+  // The row IS Unavailable, so the POST and the poll's GET both return it (the poll owns the fetch).
+  const unavailable = {
+    status: "Unavailable",
+    page_count: null,
+    reason: "a version is not renderable to PDF (no page images available)",
+    pages: null,
+  };
   server.use(
-    http.post(VD, () =>
-      HttpResponse.json({
-        status: "Unavailable",
-        page_count: null,
-        reason: "a version is not renderable to PDF (no page images available)",
-        pages: null,
-      }),
-    ),
+    http.post(VD, () => HttpResponse.json(unavailable)),
+    http.get(VD, () => HttpResponse.json(unavailable)),
   );
   const { result } = renderHook(() => useVisualDiff(DOC, TO, FROM, true), { wrapper });
   await waitFor(() => expect(result.current.status?.status).toBe("Unavailable"));
@@ -87,7 +93,9 @@ test("useVisualDiff treats Unavailable (non-renderable version) as a terminal st
 
 test("useVisualDiff surfaces a 403 as an ApiError (document.read_draft)", async () => {
   server.use(
-    http.post(VD, () => HttpResponse.json({ code: "forbidden", title: "Forbidden" }, { status: 403 })),
+    http.post(VD, () =>
+      HttpResponse.json({ code: "forbidden", title: "Forbidden" }, { status: 403 }),
+    ),
   );
   const { result } = renderHook(() => useVisualDiff(DOC, TO, FROM, true), { wrapper });
   await waitFor(() => expect(result.current.isError).toBe(true));
@@ -96,13 +104,13 @@ test("useVisualDiff surfaces a 403 as an ApiError (document.read_draft)", async 
 });
 
 test("useVisualDiff retry() re-requests a stalled (Pending) render", async () => {
+  // The poll owns the status read. Before the re-request the row is Pending (the dev renderer was
+  // off when it was created); retry() re-enqueues, and by the next poll the worker has finished, so
+  // the GET flips to Ready. We key the GET on the POST count to model "Pending until re-requested".
   let posts = 0;
   server.use(
-    http.post(VD, () => {
-      posts += 1;
-      return HttpResponse.json(posts === 1 ? pending : visualDiffFixture);
-    }),
-    http.get(VD, () => HttpResponse.json(pending)), // the row stays Pending until the re-request
+    http.post(VD, () => ((posts += 1), HttpResponse.json(pending))),
+    http.get(VD, () => HttpResponse.json(posts >= 2 ? visualDiffFixture : pending)),
   );
   const { result } = renderHook(() => useVisualDiff(DOC, TO, FROM, true), { wrapper });
   await waitFor(() => expect(result.current.status?.status).toBe("Pending"));
@@ -114,16 +122,16 @@ test("useVisualDiff retry() re-requests a stalled (Pending) render", async () =>
 
 test("useVisualDiff reads the keyed poll cache — a pair change never shows the prior pair's result", async () => {
   const TO2 = "dddd2222-2222-2222-2222-222222222222";
-  server.use(
-    http.post(VD, ({ params }) =>
-      HttpResponse.json(
-        params.vid === TO
-          ? visualDiffFixture // pair #1 → Ready
-          : { status: "Pending", page_count: null, reason: null, pages: null }, // pair #2 → still rendering
-      ),
-    ),
-    http.get(VD, () => HttpResponse.json({ status: "Pending", page_count: null, reason: null, pages: null })),
-  );
+  // The poll is keyed by (documentId, toVid, fromVid): each pair reads its OWN cache via its own
+  // GET. Pair #1 (TO) is Ready; pair #2 (TO2) is still Pending — switching pairs must show pair #2's
+  // Pending, never fall back to pair #1's Ready. The GET is keyed by vid to mirror that per-pair row.
+  const perPairGet = ({ params }: { params: Record<string, string | readonly string[]> }) =>
+    HttpResponse.json(
+      params.vid === TO
+        ? visualDiffFixture
+        : { status: "Pending", page_count: null, reason: null, pages: null },
+    );
+  server.use(http.post(VD, perPairGet), http.get(VD, perPairGet));
   const { result, rerender } = renderHook(({ to }) => useVisualDiff(DOC, to, FROM, true), {
     wrapper,
     initialProps: { to: TO },
