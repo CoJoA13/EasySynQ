@@ -104,3 +104,11 @@ it("raises a DCR and opens the new request's drawer", async () => {
   // the new DCR's drawer opens (the default detail handler resolves dcrDetailFixture)
   expect(await screen.findByText(/Corrective action requires/)).toBeInTheDocument();
 });
+
+it("has no a11y violations with the Raise button visible", async () => {
+  grant("changeRequest.create");
+  const { container } = renderWithProviders(<DcrsRegisterPage />);
+  await screen.findByText("DCR-2026-0001");
+  expect(screen.getByRole("button", { name: "Raise DCR" })).toBeInTheDocument();
+  expect(await axe(container)).toHaveNoViolations();
+});
