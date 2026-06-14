@@ -10,6 +10,8 @@ import { OUTPUT_LABEL } from "./labels";
 import { useDeleteOutput } from "./mutations";
 import { AddOutputModal } from "./AddOutputModal";
 import { RaiseMrCapaModal } from "./RaiseMrCapaModal";
+import { SpawnDcrModal } from "../dcr/SpawnDcrModal";
+import { useRaiseDcrFromMrOutput } from "../dcr/mutations";
 
 function ActionRow({ output, nameOf }: { output: ReviewOutput; nameOf: (id: string | null) => string }) {
   // best-effort: the spawned task 404s unless the caller is the action owner → the badge simply
@@ -37,11 +39,14 @@ export function ReviewOutputsSection({ reviewId, outputs, editable, tracking = f
   const del = useDeleteOutput();
   const [addOpen, setAddOpen] = useState(false);
   const [raiseFor, setRaiseFor] = useState<string | null>(null);
+  const [raiseDcrFor, setRaiseDcrFor] = useState<string | null>(null);
+  const raiseDcr = useRaiseDcrFromMrOutput(reviewId, raiseDcrFor ?? "");
   const nameOf = (id: string | null) =>
     id ? (directory?.find((u) => u.id === id)?.display_name ?? "a user") : "—";
   const byType = (t: ReviewOutput["output_type"]) => outputs.filter((o) => o.output_type === t);
   const canEdit = editable && can("mgmtReview.record_outputs");
   const canRaiseCapa = tracking && can("capa.create");
+  const canRaiseDcr = tracking && can("changeRequest.create");
 
   return (
     <Stack gap="sm">
@@ -78,6 +83,12 @@ export function ReviewOutputsSection({ reviewId, outputs, editable, tracking = f
                         </Button>
                       ) : null
                     )}
+                    {/* DCR spawn is 1:N idempotent (no spawned_dcr_id latch on the output) — Raise-only, no View link. */}
+                    {t === "ACTION" && canRaiseDcr && (
+                      <Button size="compact-xs" variant="light" onClick={() => setRaiseDcrFor(o.id)}>
+                        Raise DCR
+                      </Button>
+                    )}
                     {canEdit && (
                       <Button size="compact-xs" variant="subtle" color="red"
                         onClick={() => void del.mutateAsync({ id: reviewId, oid: o.id })}>Remove</Button>
@@ -98,6 +109,13 @@ export function ReviewOutputsSection({ reviewId, outputs, editable, tracking = f
           outputId={raiseFor}
           onClose={() => setRaiseFor(null)}
           onCreated={(capaId) => navigate(`/capa?capa=${capaId}`)}
+        />
+      )}
+      {raiseDcrFor && (
+        <SpawnDcrModal
+          title="Raise a change request from this action"
+          mutation={raiseDcr}
+          onClose={() => setRaiseDcrFor(null)}
         />
       )}
     </Stack>

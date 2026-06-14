@@ -1,5 +1,5 @@
 import { http, HttpResponse } from "msw";
-import type { AckDecisionResult, AckMatrixRow, AuditList, AuditPlanList, AuditProgramList, Capa, Complaint, DcrDetail, DcrImpactList, DcrList, DistributionPayload, DocumentVersion, DriftStatus, EffectivePolicy, Finding, FindingList, Measurement, MeasurementListResponse, MgmtReview, MgmtReviewDetail, MgmtReviewListResponse, MgmtReviewNextDue, Ncr, Objective, ObjectiveCommitment, ObjectiveListResponse, ObjectivePlan, ObjectiveScorecard, ReviewInput, ReviewOutput, SupersededCopies, WorkflowInstance } from "../../lib/types";
+import type { AckDecisionResult, AckMatrixRow, AuditList, AuditPlanList, AuditProgramList, Capa, Complaint, Dcr, DcrDetail, DcrImpactList, DcrList, DcrPatchBody, DistributionPayload, DocumentVersion, DriftStatus, EffectivePolicy, Finding, FindingList, Measurement, MeasurementListResponse, MgmtReview, MgmtReviewDetail, MgmtReviewListResponse, MgmtReviewNextDue, Ncr, Objective, ObjectiveCommitment, ObjectiveListResponse, ObjectivePlan, ObjectiveScorecard, ReviewInput, ReviewOutput, SupersededCopies, WorkflowInstance } from "../../lib/types";
 
 export const docFixture = [
   {
@@ -1336,12 +1336,39 @@ const dcrImpactFixture = {
   ],
 } satisfies DcrImpactList;
 
+const dcrCreatedFixture = {
+  ...dcrListFixture.data[0]!,
+  id: "dcrNEW01-0001-0001-0001-000000000099",
+  identifier: "DCR-2026-0099",
+  state: "Open",
+  decision: null,
+  resulting_version_id: null,
+} satisfies Dcr;
+
 export const handlers = [
   // ---- S-dcr-ui-1 DCR (default happy-path; per-test overrides for 403/empty/error) ----
   // IMPORTANT: /dcrs/:id/impact MUST register BEFORE /dcrs/:id or MSW matches "impact" as :id.
   http.get("/api/v1/dcrs/:id/impact", () => HttpResponse.json(dcrImpactFixture)),
   http.get("/api/v1/dcrs/:id", () => HttpResponse.json(dcrDetailFixture)),
   http.get("/api/v1/dcrs", () => HttpResponse.json(dcrListFixture)),
+  // ---- S-dcr-ui-2a DCR write handlers (defaults; per-test overrides for 409/422) ----
+  http.post("/api/v1/dcrs", () => HttpResponse.json(dcrCreatedFixture, { status: 201 })),
+  http.patch("/api/v1/dcrs/:id", async ({ request }) => {
+    const body = (await request.json()) as DcrPatchBody;
+    return HttpResponse.json({ ...dcrDetailFixture, ...body });
+  }),
+  http.post("/api/v1/dcrs/:id/cancel", () =>
+    HttpResponse.json({ ...dcrDetailFixture, state: "Cancelled" }),
+  ),
+  http.post("/api/v1/capas/:id/raise-dcr", () =>
+    HttpResponse.json({ ...dcrCreatedFixture, source_link_type: "capa" }, { status: 201 }),
+  ),
+  http.post("/api/v1/management-reviews/:rid/outputs/:oid/raise-dcr", () =>
+    HttpResponse.json(
+      { ...dcrCreatedFixture, source_link_type: "mgmt_review", reason_class: "mgmt_review" },
+      { status: 201 },
+    ),
+  ),
   // ---- S-obj-2 Quality Objectives (default happy-path; per-test overrides for 403/empty/error) ----
   http.get("/api/v1/objectives/scorecard", ({ request }) => {
     const pid = new URL(request.url).searchParams.get("process_id");

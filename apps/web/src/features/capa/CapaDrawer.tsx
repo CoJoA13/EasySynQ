@@ -1,6 +1,10 @@
-import { Alert, Badge, Group, Loader, Stack, Text, Title } from "@mantine/core";
+import { Alert, Badge, Button, Group, Loader, Stack, Text, Title } from "@mantine/core";
+import { useState } from "react";
 import { DetailDrawer } from "../../app/shell/DetailDrawer";
+import { usePermissions } from "../../app/shell/usePermissions";
 import { useUserDirectory } from "../../app/shell/useUserDirectory";
+import { SpawnDcrModal } from "../dcr/SpawnDcrModal";
+import { useRaiseDcrFromCapa } from "../dcr/mutations";
 import { AdvancePanel } from "./AdvancePanel";
 import { SEVERITY_COLOR, SEVERITY_LABEL, SOURCE_LABEL } from "./columns";
 import { CapaTimeline } from "./CapaTimeline";
@@ -10,6 +14,9 @@ import { useCapa } from "./hooks";
 export function CapaDrawer({ capaId, onClose }: { capaId: string | null; onClose: () => void }) {
   const { data: capa, isLoading, isError } = useCapa(capaId);
   const { data: directory } = useUserDirectory();
+  const { can } = usePermissions();
+  const raiseDcr = useRaiseDcrFromCapa(capaId ?? "");
+  const [raisingDcr, setRaisingDcr] = useState(false);
 
   return (
     <DetailDrawer
@@ -81,6 +88,27 @@ export function CapaDrawer({ capaId, onClose }: { capaId: string | null; onClose
             </Title>
             <AdvancePanel capa={capa} />
           </div>
+
+          {/* Hide on a terminal CAPA: the backend raise_dcr_from_capa deterministically 409s `capa_terminal`
+              for a Closed/Rejected CAPA, so showing the button would be a show-then-409 (Codex #6). */}
+          {can("changeRequest.create") && !["Closed", "Rejected"].includes(capa.close_state) && (
+            <Button
+              size="xs"
+              variant="light"
+              style={{ alignSelf: "flex-start" }}
+              onClick={() => setRaisingDcr(true)}
+            >
+              Raise change request
+            </Button>
+          )}
+
+          {raisingDcr && (
+            <SpawnDcrModal
+              title="Raise a change request from this CAPA"
+              mutation={raiseDcr}
+              onClose={() => setRaisingDcr(false)}
+            />
+          )}
         </Stack>
       )}
     </DetailDrawer>
