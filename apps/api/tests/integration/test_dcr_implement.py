@@ -367,6 +367,11 @@ async def test_create_dcr_implement_then_sweep_then_close(
     hq = _auth(token_factory, qms)
     dcr_id = await _drive_dcr_to_approved(app_client, hreq, hq, change_type="CREATE")
 
+    # ui-4: pre-implement the DCR has no resulting version → no resulting document.
+    pre = await app_client.get(f"/api/v1/dcrs/{dcr_id}", headers=hreq)
+    assert pre.status_code == 200, pre.text
+    assert pre.json()["resulting_document_id"] is None
+
     impl = _subject("cre-impl")
     await s5.grant_lifecycle(impl)
     await _grant(impl, ("changeRequest.implement",))
@@ -377,6 +382,10 @@ async def test_create_dcr_implement_then_sweep_then_close(
     assert r.status_code == 200, r.text
     assert r.json()["state"] == "Implemented"
     assert r.json()["resulting_version_id"] == rvid
+    # ui-4: after implement, GET /dcrs/{id} surfaces the NEW document's id (detail-only enrichment).
+    detail = await app_client.get(f"/api/v1/dcrs/{dcr_id}", headers=hreq)
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["resulting_document_id"] == did
     async with get_sessionmaker()() as s:
         v = await s.get(DocumentVersion, uuid.UUID(rvid))
         assert v is not None and v.dcr_id is not None and str(v.dcr_id) == dcr_id

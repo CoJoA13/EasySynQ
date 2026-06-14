@@ -390,6 +390,16 @@ async def get_dcr_endpoint(
         _stage_event(e) for e in await dcr_repo.list_dcr_stage_events(session, dcr_id)
     ]
     out["capabilities"] = await _dcr_capabilities(session, caller, dcr)
+    # ui-4: surface the resulting version's parent document so the SPA can deep-link a CREATE DCR's
+    # new document (there is no top-level version→document route, and _dcr can't expose it).
+    # Detail-only; derived from the existing document_version.document_id FK (no migration).
+    # CREATE → the new doc; REVISE → == target_document_id; RETIRE / pre-implement → None.
+    resulting_document_id: str | None = None
+    if dcr.resulting_version_id is not None:
+        rv = await session.get(DocumentVersion, dcr.resulting_version_id)
+        if rv is not None:
+            resulting_document_id = str(rv.document_id)
+    out["resulting_document_id"] = resulting_document_id
     return out
 
 
