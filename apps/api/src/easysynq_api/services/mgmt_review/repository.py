@@ -12,12 +12,15 @@ from sqlalchemy import Select, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...db.models._mgmt_review_enums import ReviewOutputType
+from ...db.models._signature_enums import SignatureMeaning, SignedObjectType
 from ...db.models._vault_enums import DocumentCurrentState
 from ...db.models._workflow_enums import TaskState
+from ...db.models.app_user import AppUser
 from ...db.models.documented_information import DocumentedInformation
 from ...db.models.management_review import ManagementReview
 from ...db.models.review_input import ReviewInput
 from ...db.models.review_output import ReviewOutput
+from ...db.models.signature_event import SignatureEvent
 from ...db.models.workflow import Task
 
 # (mr, identifier, title, current_state)
@@ -142,3 +145,32 @@ async def outputs_for_close_gate(
         .where(ReviewOutput.management_review_id == review_id)
     )
     return [(ot, ts) for ot, ts in rows.all()]
+
+
+# (signer_display_name | None, meaning, created_at, method) — the MR pack sign-off rows.
+SignoffRow = tuple[Any, Any, Any, Any]
+
+
+async def list_signoffs_for_version(
+    session: AsyncSession, version_id: uuid.UUID
+) -> list[SignoffRow]:
+    """The approval + release signatures on an MR's released version, oldest first, with the
+    signer's display name (OUTER JOIN — a null signer is a Beat-activated future-dated release →
+    name None). The MR rides document.approve/release, so the signatures carry
+    signed_object_type=document_version + signed_object_id = the version id."""
+    rows = await session.execute(
+        select(
+            AppUser.display_name,
+            SignatureEvent.meaning,
+            SignatureEvent.created_at,
+            SignatureEvent.method,
+        )
+        .outerjoin(AppUser, AppUser.id == SignatureEvent.signer_user_id)
+        .where(
+            SignatureEvent.signed_object_type == SignedObjectType.document_version,
+            SignatureEvent.signed_object_id == version_id,
+            SignatureEvent.meaning.in_([SignatureMeaning.approval, SignatureMeaning.release]),
+        )
+        .order_by(SignatureEvent.created_at)
+    )
+    return [tuple(r) for r in rows.all()]

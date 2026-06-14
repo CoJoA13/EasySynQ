@@ -1,0 +1,101 @@
+"""Gather the data for an MR minutes pack from the released version + directory + signatures,
+then render it (S-mr-pack). Read-only: no DB writes, no blob writes. The endpoint has already
+409'd if the review is unreleased; this layer also fail-closes (409 pack_unavailable) on a
+missing minutes key."""
+
+from __future__ import annotations
+
+import datetime
+import uuid
+from typing import Any
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from ...db.models.app_user import AppUser
+from ...db.models.document_version import DocumentVersion
+from ...db.models.documented_information import DocumentedInformation
+from ...db.models.management_review import ManagementReview
+from ...domain.mgmt_review.pack_render import render_minutes_pdf
+from ...problems import ProblemException
+from . import repository as repo
+
+_MINUTES_KEY = "mgmt_review_minutes"
+
+
+def minutes_from_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
+    """The frozen minutes dict, or 409 pack_unavailable (a non-MR / legacy version on this path)."""
+    minutes = (snapshot or {}).get(_MINUTES_KEY)
+    if not isinstance(minutes, dict):
+        raise ProblemException(
+            status=409, code="pack_unavailable", title="No minutes are available for this review"
+        )
+    return minutes
+
+
+def _collect_user_ids(minutes: dict[str, Any]) -> set[str]:
+    ids: set[str] = set()
+    for ro in minutes.get("outputs") or []:
+        if ro.get("owner_user_id"):
+            ids.add(str(ro["owner_user_id"]))
+    for a in minutes.get("attendees") or []:
+        if a.get("user_id"):
+            ids.add(str(a["user_id"]))
+    return ids
+
+
+async def _resolve_names(session: AsyncSession, ids: set[str]) -> dict[str, str]:
+    if not ids:
+        return {}
+    uuids = []
+    for i in ids:
+        try:
+            uuids.append(uuid.UUID(i))
+        except ValueError:  # a non-uuid leaked into the snapshot — skip, render shows "—"
+            continue
+    if not uuids:
+        return {}
+    rows = await session.execute(
+        select(AppUser.id, AppUser.display_name, AppUser.email).where(AppUser.id.in_(uuids))
+    )
+    return {str(uid): (dn or em or str(uid)) for uid, dn, em in rows.all()}
+
+
+async def build_minutes_pdf(
+    session: AsyncSession, mr: ManagementReview, doc: DocumentedInformation
+) -> bytes:
+    """Render the released MR's filed minutes to a PDF (bytes). Assumes
+    doc.current_effective_version_id is set (the endpoint 409s otherwise)."""
+    version = await session.get(DocumentVersion, doc.current_effective_version_id)
+    if (
+        version is None
+    ):  # pragma: no cover — the pointer is a live FK; endpoint guards the None case
+        raise ProblemException(
+            status=409, code="pack_unavailable", title="This review has not been released yet"
+        )
+    minutes = minutes_from_snapshot(version.metadata_snapshot)
+    name_of = await _resolve_names(session, _collect_user_ids(minutes))
+    signatures = [
+        {
+            "signer": signer,
+            "meaning": meaning.value if hasattr(meaning, "value") else str(meaning),
+            "when": when.astimezone(datetime.UTC).isoformat() if when is not None else None,
+            "method": method.value if hasattr(method, "value") else str(method),
+        }
+        for (signer, meaning, when, method) in await repo.list_signoffs_for_version(
+            session, version.id
+        )
+    ]
+    return render_minutes_pdf(
+        identifier=doc.identifier,
+        title=doc.title,
+        current_state=doc.current_state.value,
+        close_state=mr.close_state.value if mr.close_state is not None else None,
+        revision_label=version.revision_label,
+        effective_from=version.effective_from.isoformat() if version.effective_from else None,
+        version_id=str(version.id),
+        source_digest=version.source_blob_sha256,
+        minutes=minutes,
+        name_of=name_of,
+        signatures=signatures,
+    )

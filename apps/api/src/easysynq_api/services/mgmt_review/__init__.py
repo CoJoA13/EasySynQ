@@ -6,6 +6,7 @@ release cutover. Reads live in ``repository``; serializers in ``api/mgmt_review`
 from .actions import spawn_capa_for_output, spawn_dcr_for_output
 from .compile import compile_inputs
 from .decide import decide_mr_task
+from .pack import build_minutes_pdf
 from .repository import (
     get_review,
     get_review_doc,
@@ -28,6 +29,7 @@ from .spawn import spawn_mr_actions
 
 __all__ = [
     "add_output",
+    "build_minutes_pdf",
     "close_review",
     "compile_inputs",
     "create_review",
