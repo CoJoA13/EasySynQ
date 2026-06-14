@@ -2,7 +2,6 @@ import { Alert, Anchor, Badge, Group, Loader, Stack, Text, Title } from "@mantin
 import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { DetailDrawer } from "../../app/shell/DetailDrawer";
-import { usePermissions } from "../../app/shell/usePermissions";
 import { useUserDirectory } from "../../app/shell/useUserDirectory";
 import type { DirectoryUser } from "../../lib/types";
 import { useDocument } from "../document/useDocument";
@@ -34,7 +33,6 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
 export function DcrDrawer({ dcrId, onClose }: { dcrId: string | null; onClose: () => void }) {
   const { data: dcr, isLoading, isError } = useDcr(dcrId);
   const { data: impact } = useDcrImpact(dcrId);
-  const { can } = usePermissions();
   const { data: directoryData } = useUserDirectory();
   const directory = directoryData ?? [];
   const targetId = dcr?.target_document_id ?? null;
@@ -156,7 +154,7 @@ export function DcrDrawer({ dcrId, onClose }: { dcrId: string | null; onClose: (
               impact={impact ?? []}
               editable={
                 (impact?.length ?? 0) > 0 &&
-                can("changeRequest.assess") &&
+                dcr.capabilities?.assess === true &&
                 !["Closed", "Cancelled", "Rejected"].includes(dcr.state)
               }
               dcrId={dcr.id}

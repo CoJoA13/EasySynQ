@@ -1,6 +1,6 @@
 import { http, HttpResponse } from "msw";
 import { expect, it } from "vitest";
-import type { DcrDetail, DocumentSummary } from "../../lib/types";
+import type { DcrDetail, DcrImpactList, DcrState, DocumentSummary } from "../../lib/types";
 import { DCR_REVISE_ID } from "../../test/msw/handlers";
 import { server } from "../../test/msw/server";
 import { renderWithProviders } from "../../test/render";
@@ -138,8 +138,11 @@ it("hides the visual-diff link for a RETIRE change request (no resulting version
 });
 
 // ---- impact-annotation editable gating ----
+// Gated on the server-computed, PROCESS-scoped `capabilities.assess` (the ui-2b cockpit precedent —
+// DcrAdvancePanel gates on the same flag), NOT a SYSTEM-scoped can(). So the fixture's capability
+// flag — not /me/permissions — drives the editable affordance.
 const ANNO_ID = "dcr00077-0077-0077-0077-000000000077";
-function annoDcr(state: string): DcrDetail {
+function annoDcr(state: DcrState, assess = true): DcrDetail {
   return {
     id: ANNO_ID,
     identifier: "DCR-2026-0077",
@@ -157,8 +160,8 @@ function annoDcr(state: string): DcrDetail {
     created_by: "bbbb1111-1111-1111-1111-111111111111",
     created_at: "2026-05-01T09:00:00+00:00",
     stage_events: [],
-    capabilities: { assess: true, route: false, implement: false, close: false },
-  } as DcrDetail;
+    capabilities: { assess, route: false, implement: false, close: false },
+  } satisfies DcrDetail;
 }
 const annoImpact = {
   data: [
@@ -171,41 +174,29 @@ const annoImpact = {
       updated_at: null,
     },
   ],
-};
-function grantAssess() {
+} satisfies DcrImpactList;
+function serveAnno(state: DcrState, assess = true) {
   server.use(
-    http.get("/api/v1/me/permissions", () =>
-      HttpResponse.json({
-        scope: { level: "SYSTEM", selector: null },
-        permissions: [{ key: "changeRequest.assess", effect: "ALLOW", source: "SYSTEM" }],
-      }),
-    ),
-  );
-}
-function serveAnno(state: string) {
-  server.use(
-    http.get("/api/v1/dcrs/:id", () => HttpResponse.json(annoDcr(state))),
+    http.get("/api/v1/dcrs/:id", () => HttpResponse.json(annoDcr(state, assess))),
     http.get("/api/v1/dcrs/:id/impact", () => HttpResponse.json(annoImpact)),
   );
 }
 
-it("shows the editable annotation column for an Assessed DCR with changeRequest.assess", async () => {
+it("shows the editable annotation column for an Assessed DCR with the assess capability", async () => {
   serveAnno("Assessed");
-  grantAssess();
   const screen = renderWithProviders(<DcrDrawer dcrId={ANNO_ID} onClose={() => {}} />);
   expect(await screen.findByLabelText("Annotation for affected_processes")).toBeInTheDocument();
 });
 
-it("keeps the annotation column read-only without changeRequest.assess", async () => {
-  serveAnno("Assessed"); // default /me/permissions = empty grant set
+it("keeps the annotation column read-only without the assess capability", async () => {
+  serveAnno("Assessed", false);
   const screen = renderWithProviders(<DcrDrawer dcrId={ANNO_ID} onClose={() => {}} />);
   await screen.findByText("DCR-2026-0077");
   expect(screen.queryByLabelText("Annotation for affected_processes")).not.toBeInTheDocument();
 });
 
-it("keeps the annotation column read-only in a terminal state even with the permission", async () => {
+it("keeps the annotation column read-only in a terminal state even with the capability", async () => {
   serveAnno("Closed");
-  grantAssess();
   const screen = renderWithProviders(<DcrDrawer dcrId={ANNO_ID} onClose={() => {}} />);
   await screen.findByText("DCR-2026-0077");
   expect(screen.queryByLabelText("Annotation for affected_processes")).not.toBeInTheDocument();
