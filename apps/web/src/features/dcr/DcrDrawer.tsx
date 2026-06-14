@@ -87,7 +87,9 @@ export function DcrDrawer({ dcrId, onClose }: { dcrId: string | null; onClose: (
           <Field label="Target document">
             {dcr.target_document_id ? (
               <Anchor component={Link} to={`/documents/${dcr.target_document_id}`}>
-                {targetDoc ? `${targetDoc.identifier} — ${targetDoc.title}` : dcr.target_document_id}
+                {targetDoc
+                  ? `${targetDoc.identifier} — ${targetDoc.title}`
+                  : dcr.target_document_id}
               </Anchor>
             ) : (
               <Text size="sm">New document (no target)</Text>
@@ -115,9 +117,19 @@ export function DcrDrawer({ dcrId, onClose }: { dcrId: string | null; onClose: (
                   version_id can't be resolved to its document_id client-side (verified). For CREATE
                   (no target_document_id) the new doc's id isn't exposed by _dcr → show the id, no link. */}
               {dcr.target_document_id ? (
-                <Anchor component={Link} to={`/documents/${dcr.target_document_id}`}>
-                  View document
-                </Anchor>
+                <Group gap="md">
+                  <Anchor component={Link} to={`/documents/${dcr.target_document_id}`}>
+                    View document
+                  </Anchor>
+                  {/* S-dcr-ui-3: the page-image visual diff + redline of the resulting version vs its
+                      predecessor — REVISE only (CREATE has no client version→doc resolution; RETIRE
+                      has no resulting version). Gated document.read_draft on the target → calm-degrades. */}
+                  {dcr.change_type === "REVISE" ? (
+                    <Anchor component={Link} to={`/dcrs/${dcr.id}/diff`}>
+                      View visual diff <span aria-hidden="true">→</span>
+                    </Anchor>
+                  ) : null}
+                </Group>
               ) : (
                 <Text size="sm">{dcr.resulting_version_id.slice(0, 8)}… (new document)</Text>
               )}

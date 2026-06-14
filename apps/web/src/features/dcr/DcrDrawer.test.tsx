@@ -1,6 +1,6 @@
 import { http, HttpResponse } from "msw";
 import { expect, it } from "vitest";
-import type { DocumentSummary } from "../../lib/types";
+import type { DcrDetail, DocumentSummary } from "../../lib/types";
 import { DCR_REVISE_ID } from "../../test/msw/handlers";
 import { server } from "../../test/msw/server";
 import { renderWithProviders } from "../../test/render";
@@ -63,9 +63,7 @@ it("renders the DCR header, badges, deep-links, impact and timeline (happy path)
 });
 
 it("degrades calmly when the target document can't be resolved (403)", async () => {
-  server.use(
-    http.get("/api/v1/documents/:id", () => new HttpResponse(null, { status: 403 })),
-  );
+  server.use(http.get("/api/v1/documents/:id", () => new HttpResponse(null, { status: 403 })));
 
   const screen = renderWithProviders(<DcrDrawer dcrId={DCR_REVISE_ID} onClose={() => {}} />);
 
@@ -89,4 +87,52 @@ it("shows the error body when the DCR fails to load (404)", async () => {
   const screen = renderWithProviders(<DcrDrawer dcrId={DCR_REVISE_ID} onClose={() => {}} />);
 
   expect(await screen.findByText("Couldn't load this change request")).toBeInTheDocument();
+});
+
+// ---- S-dcr-ui-3: the "View visual diff" link in the Resulting-version field ----
+const DIFF_DCR_ID = "dcrdraw1-0001-0001-0001-000000000009";
+function diffBase(): DcrDetail {
+  return {
+    id: DIFF_DCR_ID,
+    identifier: "DCR-2026-0009",
+    target_document_id: "11111111-1111-1111-1111-111111111111",
+    change_type: "REVISE",
+    change_significance: "MAJOR",
+    reason_class: "audit_finding",
+    reason_text: "Revision needed.",
+    source_link_type: null,
+    source_link_id: null,
+    proposed_effective_from: null,
+    resulting_version_id: "dddd1111-1111-1111-1111-111111111111",
+    state: "Implemented",
+    decision: null,
+    created_by: "bbbb1111-1111-1111-1111-111111111111",
+    created_at: "2026-05-01T09:00:00+00:00",
+    stage_events: [],
+    capabilities: { assess: false, route: false, implement: false, close: true },
+  };
+}
+function serveDiffDcr(dcr: DcrDetail) {
+  server.use(http.get("/api/v1/dcrs/:id", () => HttpResponse.json(dcr)));
+}
+
+it("shows a 'View visual diff' link for an implemented REVISE", async () => {
+  serveDiffDcr(diffBase());
+  const screen = renderWithProviders(<DcrDrawer dcrId={DIFF_DCR_ID} onClose={() => {}} />);
+  const link = await screen.findByRole("link", { name: /View visual diff/ });
+  expect(link.getAttribute("href")).toContain(`/dcrs/${DIFF_DCR_ID}/diff`);
+});
+
+it("hides the visual-diff link for a CREATE change request (no target document)", async () => {
+  serveDiffDcr({ ...diffBase(), change_type: "CREATE", target_document_id: null });
+  const screen = renderWithProviders(<DcrDrawer dcrId={DIFF_DCR_ID} onClose={() => {}} />);
+  await screen.findByText("DCR-2026-0009"); // drawer loaded
+  expect(screen.queryByRole("link", { name: /View visual diff/ })).not.toBeInTheDocument();
+});
+
+it("hides the visual-diff link for a RETIRE change request (no resulting version)", async () => {
+  serveDiffDcr({ ...diffBase(), change_type: "RETIRE", resulting_version_id: null });
+  const screen = renderWithProviders(<DcrDrawer dcrId={DIFF_DCR_ID} onClose={() => {}} />);
+  await screen.findByText("DCR-2026-0009");
+  expect(screen.queryByRole("link", { name: /View visual diff/ })).not.toBeInTheDocument();
 });
