@@ -10,18 +10,22 @@ own ids (the integration suite shares one session DB).
 
 from __future__ import annotations
 
+import datetime
 import uuid
 from collections.abc import Callable
+from decimal import Decimal
 
 import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
 
 from easysynq_api.db.models._capa_enums import CapaCloseState
+from easysynq_api.db.models._objective_enums import ObjectiveDirection
 from easysynq_api.db.models._vault_enums import DocumentCurrentState, VersionState
 from easysynq_api.db.models.capa import Capa
 from easysynq_api.db.models.document_version import DocumentVersion
 from easysynq_api.db.models.documented_information import DocumentedInformation
+from easysynq_api.db.models.quality_objective import QualityObjective
 from easysynq_api.db.session import get_sessionmaker
 from easysynq_api.tasks.lifecycle import release_due_versions
 
@@ -367,6 +371,11 @@ async def test_create_dcr_implement_then_sweep_then_close(
     hq = _auth(token_factory, qms)
     dcr_id = await _drive_dcr_to_approved(app_client, hreq, hq, change_type="CREATE")
 
+    # ui-4: pre-implement the DCR has no resulting version → no resulting document.
+    pre = await app_client.get(f"/api/v1/dcrs/{dcr_id}", headers=hreq)
+    assert pre.status_code == 200, pre.text
+    assert pre.json()["resulting_document_id"] is None
+
     impl = _subject("cre-impl")
     await s5.grant_lifecycle(impl)
     await _grant(impl, ("changeRequest.implement",))
@@ -377,6 +386,10 @@ async def test_create_dcr_implement_then_sweep_then_close(
     assert r.status_code == 200, r.text
     assert r.json()["state"] == "Implemented"
     assert r.json()["resulting_version_id"] == rvid
+    # ui-4: after implement, GET /dcrs/{id} surfaces the NEW document's id (detail-only enrichment).
+    detail = await app_client.get(f"/api/v1/dcrs/{dcr_id}", headers=hreq)
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["resulting_document_id"] == did
     async with get_sessionmaker()() as s:
         v = await s.get(DocumentVersion, uuid.UUID(rvid))
         assert v is not None and v.dcr_id is not None and str(v.dcr_id) == dcr_id
@@ -533,3 +546,123 @@ async def test_spawn_from_terminal_capa_is_409(
     )
     assert r.status_code == 409, r.text
     assert r.json()["code"] == "capa_terminal"
+
+
+async def test_create_implement_rejects_revision_of_existing_doc(
+    app_client: AsyncClient, token_factory: Callable[..., str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ui-4 (Codex P1): a CREATE DCR releases only the INITIAL version of a NEW document. An
+    approved REVISION of an existing Effective doc sits at current_state Approved yet keeps its
+    effective version (the cutover is at release); implementing it under a CREATE DCR must be
+    refused — it would bypass the REVISE flow + impact assessment."""
+    monkeypatch.setattr(release_due_versions, "delay", lambda *a, **k: None)
+    author = _subject("crn-author")
+    await s5.grant_lifecycle(author)
+    ha = _auth(token_factory, author)
+    approver = _subject("crn-approver")
+    # the approver also RELEASES v1 in drive_to_effective, so it needs document.release
+    # (grant_lifecycle), not just the Approver role; set_approver_release allows approver==releaser.
+    await s5.grant_lifecycle(approver)
+    hb = _auth(token_factory, approver)
+    await s5.set_approver_release(await s5.default_org_id(), True)
+    # new SOP → Effective, then a revision → Approved (the doc keeps its effective version).
+    doc = await s5.drive_to_effective(app_client, ha, hb, hb, await s5.type_id("SOP"), b"crn-v1")
+    did = doc["id"]
+    assert (
+        await app_client.post(f"/api/v1/documents/{did}/start-revision", headers=ha)
+    ).status_code == 200
+    sha = await s5._upload(app_client, ha, did, b"crn-v2")
+    ci = await s5._checkin(
+        app_client, ha, did, sha, change_reason="rev", change_significance="MINOR"
+    )
+    assert ci.status_code == 201, ci.text
+    sub = await app_client.post(f"/api/v1/documents/{did}/submit-review", headers=ha)
+    assert sub.status_code == 200, sub.text
+    task_id = await s5.task_for_doc(did)
+    dec = await app_client.post(
+        f"/api/v1/tasks/{task_id}/decision", headers=hb, json={"outcome": "approve"}
+    )
+    assert dec.status_code == 200, dec.text
+    async with get_sessionmaker()() as s:
+        rev_vid = str(
+            (
+                await s.execute(
+                    select(DocumentVersion.id)
+                    .where(DocumentVersion.document_id == uuid.UUID(did))
+                    .order_by(DocumentVersion.version_seq.desc())
+                    .limit(1)
+                )
+            ).scalar_one()
+        )
+    req = _subject("crn-req")
+    await _grant(req, _DCR_DRIVER_PERMS)
+    hreq = _auth(token_factory, req)
+    qms = _subject("crn-qms")
+    await _assign_seeded_role(qms, "QMS Owner")
+    hq = _auth(token_factory, qms)
+    dcr_id = await _drive_dcr_to_approved(app_client, hreq, hq, change_type="CREATE")
+    impl = _subject("crn-impl")
+    await s5.grant_lifecycle(impl)
+    await _grant(impl, ("changeRequest.implement",))
+    himpl = _auth(token_factory, impl)
+    r = await app_client.post(
+        f"/api/v1/dcrs/{dcr_id}/implement", headers=himpl, json={"resulting_version_id": rev_vid}
+    )
+    assert r.status_code == 409, r.text
+    assert r.json()["code"] == "create_target_not_new"
+
+
+async def test_create_implement_rejects_managed_subtype(
+    app_client: AsyncClient, token_factory: Callable[..., str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ui-4 (Codex P2): managed subtypes (Quality Objectives, Management Reviews) have their own
+    create/release workspaces — a generic CREATE DCR must not mint one."""
+    monkeypatch.setattr(release_due_versions, "delay", lambda *a, **k: None)
+    author = _subject("crm-author")
+    await s5.grant_lifecycle(author)
+    ha = _auth(token_factory, author)
+    approver = _subject("crm-approver")
+    await s5.grant_role(approver, "Approver")
+    hb = _auth(token_factory, approver)
+    did = await s5.drive_to_approved(app_client, ha, hb, await s5.type_id("SOP"), b"crm")
+    async with get_sessionmaker()() as s:
+        rvid = str(
+            (
+                await s.execute(
+                    select(DocumentVersion.id)
+                    .where(DocumentVersion.document_id == uuid.UUID(did))
+                    .order_by(DocumentVersion.version_seq.desc())
+                    .limit(1)
+                )
+            ).scalar_one()
+        )
+        # Bolt a quality_objective row onto the doc id (shared PK) → it is now a managed subtype.
+        doc_row = await s.get(DocumentedInformation, uuid.UUID(did))
+        assert doc_row is not None
+        s.add(
+            QualityObjective(
+                id=uuid.UUID(did),
+                org_id=doc_row.org_id,
+                target_value=Decimal("100"),
+                unit="percent",
+                direction=ObjectiveDirection.HIGHER_IS_BETTER,
+                due_date=datetime.date(2027, 1, 1),
+            )
+        )
+        await s.commit()
+    req = _subject("crm-req")
+    await _grant(req, _DCR_DRIVER_PERMS)
+    hreq = _auth(token_factory, req)
+    qms = _subject("crm-qms")
+    await _assign_seeded_role(qms, "QMS Owner")
+    hq = _auth(token_factory, qms)
+    dcr_id = await _drive_dcr_to_approved(app_client, hreq, hq, change_type="CREATE")
+    impl = _subject("crm-impl")
+    await s5.grant_lifecycle(impl)
+    await _grant(impl, ("changeRequest.implement",))
+    himpl = _auth(token_factory, impl)
+    r = await app_client.post(
+        f"/api/v1/dcrs/{dcr_id}/implement", headers=himpl, json={"resulting_version_id": rvid}
+    )
+    assert r.status_code == 409, r.text
+    assert r.json()["code"] == "create_target_managed_subtype"

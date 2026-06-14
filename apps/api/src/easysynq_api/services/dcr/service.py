@@ -51,6 +51,8 @@ from ...db.models.dcr_stage_event import DcrStageEvent
 from ...db.models.document_version import DocumentVersion
 from ...db.models.documented_information import DocumentedInformation
 from ...db.models.impact_assessment import ImpactAssessment
+from ...db.models.management_review import ManagementReview
+from ...db.models.quality_objective import QualityObjective
 from ...db.models.signature_event import SignatureEvent as SignatureEventRow
 from ...db.models.workflow import Task, WorkflowInstance
 from ...domain.dcr import transition_allowed
@@ -821,6 +823,28 @@ async def _resolve_implement_version(
     doc = await session.get(DocumentedInformation, version.document_id)
     if doc is None or doc.org_id != actor.org_id or doc.kind is not DocumentKind.DOCUMENT:
         raise _not_found("Document")
+    # A CREATE DCR creates a NEW document, so its resulting version must be that document's INITIAL
+    # version. An approved REVISION of an existing Effective document also sits at version_state
+    # Approved (its document is current_state Approved until the release cutover, T6) yet carries a
+    # current_effective_version_id — releasing it here would skip the REVISE flow + impact
+    # assessment (Codex P1). Require an as-yet-unreleased new document.
+    if doc.current_effective_version_id is not None:
+        raise _conflict(
+            "create_target_not_new",
+            "the resulting version's document already has an effective version; a CREATE change "
+            "request can only release the initial version of a new document",
+        )
+    # Managed subtypes (Quality Objectives, Management Reviews) have their own create/release
+    # workspaces; a generic change request must not mint one (Codex P2). Form templates (FRM) and
+    # other ordinary controlled documents release via this same cutover and remain valid targets.
+    if (await session.get(QualityObjective, doc.id)) is not None or (
+        await session.get(ManagementReview, doc.id)
+    ) is not None:
+        raise _conflict(
+            "create_target_managed_subtype",
+            "this document is a managed subtype (objective / management review); create it from "
+            "its own workspace, not via a change request",
+        )
     if version.version_state is not VersionState.Approved:
         raise _conflict(
             "version_not_approved",

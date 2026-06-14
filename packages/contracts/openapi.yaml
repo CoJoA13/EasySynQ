@@ -6821,6 +6821,10 @@ components:
           type: [string, "null"]
           format: uuid
           description: NULL in v1 — set when the DCR-driven version is released (S-dcr-5).
+        resulting_document_id:
+          type: [string, "null"]
+          format: uuid
+          description: "The Document the resulting version belongs to (null until implement / for RETIRE). For CREATE this is the new Document; for REVISE it equals target_document_id. Detail-only (GET /dcrs/{id})."
         state: { $ref: "#/components/schemas/DcrState" }
         decision: { type: [string, "null"] }
         created_by: { type: string, format: uuid }

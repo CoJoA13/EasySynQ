@@ -1393,6 +1393,7 @@ export interface Dcr {
   source_link_id: string | null; // polymorphic, no FK
   proposed_effective_from: string | null; // ISO datetime
   resulting_version_id: string | null; // set at implement (REVISE/CREATE); null for RETIRE / pre-implement
+  resulting_document_id?: string | null; // ui-4: detail-only (GET /dcrs/{id}); the document the resulting version belongs to
   state: DcrState;
   decision: string | null; // null until approval/rejection
   created_by: string; // an app_user.id
