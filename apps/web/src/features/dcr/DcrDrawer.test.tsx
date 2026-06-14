@@ -176,9 +176,11 @@ const annoImpact = {
   ],
 } satisfies DcrImpactList;
 function serveAnno(state: DcrState, assess = true) {
+  // ⚠ /dcrs/:id/impact MUST be registered before /dcrs/:id (the shared-handlers convention — else MSW
+  // can match "impact" as the :id and the impact query gets a DCR-detail response instead of {data}).
   server.use(
-    http.get("/api/v1/dcrs/:id", () => HttpResponse.json(annoDcr(state, assess))),
     http.get("/api/v1/dcrs/:id/impact", () => HttpResponse.json(annoImpact)),
+    http.get("/api/v1/dcrs/:id", () => HttpResponse.json(annoDcr(state, assess))),
   );
 }
 

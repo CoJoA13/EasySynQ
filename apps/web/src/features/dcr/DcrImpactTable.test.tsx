@@ -78,3 +78,14 @@ it("editable mode has no axe violations", async () => {
   );
   expect(await axe(container)).toHaveNoViolations();
 });
+
+it("preserves an unsaved edit across a background refetch of the same rows", async () => {
+  const user = userEvent.setup();
+  const { getByLabelText, rerender } = renderWithProviders(
+    <DcrImpactTable impact={impact} editable dcrId="dcr1" />,
+  );
+  await user.type(getByLabelText("Annotation for training_awareness"), "Unsaved text");
+  // A refetch hands a NEW array with the SAME rows (same ids) — must NOT clobber the unsaved edit.
+  rerender(<DcrImpactTable impact={impact.map((i) => ({ ...i }))} editable dcrId="dcr1" />);
+  expect(getByLabelText("Annotation for training_awareness")).toHaveValue("Unsaved text");
+});

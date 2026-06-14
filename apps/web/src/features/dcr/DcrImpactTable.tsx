@@ -1,5 +1,5 @@
 import { Button, Stack, Table, Text, Textarea } from "@mantine/core";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import type { DcrImpact } from "../../lib/types";
 import { useAnnotateImpact } from "./mutations";
 
@@ -54,19 +54,27 @@ export function DcrImpactTable({
 }
 
 // Inline-editable Annotation column + one batch Save (gate is the caller's — changeRequest.assess +
-// rows-exist + non-terminal). Sends ONLY the changed dimensions (the backend partial merge). The
-// draft re-seeds from the rows on every refetch, so a successful save resets it to the saved values.
+// rows-exist + non-terminal). Sends ONLY the changed dimensions (the backend partial merge).
 function EditableImpactTable({ impact, dcrId }: { impact: DcrImpact[]; dcrId: string }) {
   const annotate = useAnnotateImpact(dcrId);
-  const original = useMemo(
+  const seed = useMemo(
     () => Object.fromEntries(impact.map((i) => [i.dimension, i.requester_annotation ?? ""])),
     [impact],
   );
-  const [draft, setDraft] = useState<Record<string, string>>(original);
-  useEffect(() => setDraft(original), [original]);
+  // Re-seed the draft ONLY when the row SET changes (a different DCR's impact), never on a content
+  // refetch of the same rows — a background window-focus refetch must not discard the user's unsaved
+  // edits (Codex P2). After a save the refetch brings the server values, so `changed` (vs the live
+  // seed) empties and Save disables without a reset. React's "reset state when a key prop changes".
+  const rowKey = impact.map((i) => i.id).join("|");
+  const [seededKey, setSeededKey] = useState(rowKey);
+  const [draft, setDraft] = useState<Record<string, string>>(seed);
+  if (rowKey !== seededKey) {
+    setSeededKey(rowKey);
+    setDraft(seed);
+  }
 
   const changed = Object.fromEntries(
-    Object.entries(draft).filter(([dim, v]) => v !== (original[dim] ?? "")),
+    Object.entries(draft).filter(([dim, v]) => v !== (seed[dim] ?? "")),
   );
   const hasChanges = Object.keys(changed).length > 0;
 
