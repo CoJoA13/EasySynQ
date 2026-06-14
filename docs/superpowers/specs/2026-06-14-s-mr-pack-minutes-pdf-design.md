@@ -19,9 +19,10 @@ reaper, no cache, no new evidence record, no WORM re-seal — the MR's released 
 the canonical WORM record; the pack is a derived rendering of it, like a controlled-copy.
 
 **Non-Gotenberg, so sync is legal.** The "API can't render" rule is about `GotenbergRenderSink`
-(HTML→PDF via an external service). A reportlab text-PDF over a few-KB JSON dict is pure Python,
-deterministic (`invariant=1`), and runs in milliseconds — fine in a request handler. This is *why*
-the pack exists: Gotenberg can't render JSON, so we render the minutes ourselves.
+(HTML→PDF via an external service). A reportlab **Platypus** table-PDF over a few-KB JSON dict is
+pure Python, byte-deterministic (invariant canvasmaker — see §4.1), and runs in milliseconds — fine
+in a request handler. This is *why* the pack exists: Gotenberg can't render JSON, so we render the
+minutes ourselves.
 
 ## 2. Locked decisions (the brainstorm F-forks)
 
@@ -74,15 +75,21 @@ Responsibilities (read-only — **no DB writes, no blob writes**):
    AND signed_object_id = version.id AND meaning IN ('approval','release')`, ordered by `created_at`,
    left-joined to `app_user` for the signer name (signer may be NULL → "system"). The MR rides
    `document.approve`/`document.release` so both sign the same (now-Effective) version id.
-5. **Render** the line-based PDF (reportlab `canvas`, `invariant=1` for byte-determinism). Reuse the
-   evidence-pack `_text_pdf`/`_wrap` line idiom ([portfolio.py:63-100](apps/api/src/easysynq_api/services/packs/portfolio.py))
-   — either factor a shared `pdf_text` primitive or inline a small self-contained copy (keep the
-   MR pack decoupled from evidence-pack internals; prefer a tiny shared helper if it's clean).
+5. **Render** the table-styled PDF with reportlab **Platypus** (`SimpleDocTemplate` + `Table`/
+   `TableStyle`; long-text cells are `Paragraph` flowables so they wrap cleanly). A calm house style
+   — a thin grey grid, a bold header row, generous padding, letter pagesize, `_MARGIN`-aligned with
+   the evidence-pack. Section headings between tables are `Paragraph` flowables. **Self-contained** in
+   this module (do NOT reuse the evidence-pack `_text_pdf` line helper — different rendering model;
+   keep the two decoupled).
 6. Return the bytes.
 
-**Determinism note:** the body carries **no live "generated at" timestamp** — it shows the frozen
-`compiled_at` + the version's `effective_from`/`revision_label`, all stored. So a given released MR
-always renders byte-identical (no `Date.now()`; safe under the no-clock workflow/test rules).
+**Determinism mechanism:** build via `SimpleDocTemplate(...).build(flowables, onFirstPage=_footer,
+onLaterPages=_footer, canvasmaker=partial(Canvas, invariant=1))`. The invariant canvasmaker fixes
+the PDF `/ID` + strips wall-clock metadata (the same effect as the evidence-pack canvas's
+`invariant=1`), localized to this build — **no process-wide `rl_config.invariant` mutation**. The
+body carries **no live "generated at" timestamp** — only the frozen `compiled_at` + the version's
+`effective_from`/`revision_label`, all stored. So a given released MR renders byte-identical (no
+`Date.now()`; safe under the no-clock workflow/test rules).
 
 ### 4.2 Backend — the endpoint
 
@@ -119,23 +126,31 @@ Add `GET /management-reviews/{review_id}/pack` to `packages/contracts/openapi.ya
 - The MR detail page is a **full route** (not a drawer) → drivable by Chrome-MCP live smoke, unlike
   the `/dcrs` drawer wall.
 
-## 5. The PDF layout (line-rendered, ordered)
+## 5. The PDF layout (table-styled, ordered)
 
-1. **Header / cover:** "MANAGEMENT REVIEW — minutes (controlled record)"; identifier; title;
-   `period_label`; `review_date`; `current_state`/`close_state`; the version `revision_label` +
-   `effective_from`.
-2. **Attendees:** the roster (`name` — `role`), resolving `user_id` → name where present.
-3. **9.3.2 Review inputs:** one block per `inputs[]` row — `input_type`, `available` (Y/N), and a
-   generic key/value render of `source_ref` (the compiled RAG/summary dict; render generically since
-   the shape varies by input type — never crash on an unexpected shape). Order by `position`.
-4. **9.3.3 Review outputs / decisions:** one block per `outputs[]` row — `output_type`, `description`,
-   owner (resolved name), `due_date`.
-5. **Sign-off:** the approval + release signatures — signer name, `meaning`, `created_at` (UTC ISO),
-   `method`. "system" for a null signer (a Beat-activated future-dated release).
-6. **Footer (every page):** "Derived printable view of the filed minutes — the canonical record is
-   Management Review version `{version.id}` (Rev `{revision_label}`). Minutes source digest:
-   `{version.source_blob_sha256}` — re-hash the `application/json` source blob (RFC 8785 JCS) to
-   verify." (No QR; `source_blob_sha256` *is* the JCS-bytes SHA-256, so it's directly verifiable.)
+A title `Paragraph` at top, then each section is a **heading `Paragraph` + a `Table`**:
+
+1. **Header / metadata table** (2-col key/value): "MANAGEMENT REVIEW — minutes (controlled record)"
+   title; rows for identifier, title, `period_label`, `review_date`, `current_state`/`close_state`,
+   the version `revision_label` + `effective_from`.
+2. **Attendees table** (Name | Role): resolving `user_id` → name where present.
+3. **9.3.2 Review inputs table** (Input type | Available | Summary): one row per `inputs[]` row,
+   ordered by `position`; `available` → "Yes"/"No"; the **Summary** cell is a `Paragraph` rendering
+   `source_ref` generically (the compiled RAG/summary dict — shape varies by input type, so render
+   key/value generically and **never crash** on an unexpected shape).
+4. **9.3.3 Review outputs / decisions table** (Type | Decision / action | Owner | Due): the
+   Decision cell is a `Paragraph` (wraps `description`); Owner is the resolved name; Due is `due_date`
+   or "—".
+5. **Sign-off table** (Signer | Meaning | When | Method): the approval + release signatures, ordered
+   by `created_at` (UTC ISO); "system" for a null signer (a Beat-activated future-dated release).
+6. **Footer (every page, via the `onPage` callback):** "Derived printable view of the filed minutes —
+   the canonical record is Management Review version `{version.id}` (Rev `{revision_label}`). Minutes
+   source digest: `{version.source_blob_sha256}` — re-hash the `application/json` source blob
+   (RFC 8785 JCS) to verify." (No QR; `source_blob_sha256` *is* the JCS-bytes SHA-256, so it's
+   directly verifiable.)
+
+Empty sections (no attendees / no inputs / no outputs) render a single calm "— none recorded —"
+row rather than an empty table.
 
 ## 6. Error handling, gating & invariants
 
@@ -207,4 +222,6 @@ Then `diff-critic` (no `migration-reviewer` — no migration). Live smoke via Ch
 - **`source_blob_sha256` == the JCS digest** — the minutes blob is the bare rfc8785 bytes (no
   preamble), content-addressed, so its `sha256` is directly re-verifiable; the footer's verify
   instruction matches.
-- **Determinism vs. a live timestamp** — no `Date.now()`/`generated_at` in the body.
+- **Determinism vs. a live timestamp** — no `Date.now()`/`generated_at` in the body; the invariant
+  canvasmaker (`partial(Canvas, invariant=1)`) fixes the PDF `/ID` + metadata, so the determinism
+  test holds without a process-wide `rl_config` mutation.
