@@ -1,0 +1,15 @@
+# OPT-IN dev override — publish Postgres on the host LOOPBACK so a host-run, read-only
+# Postgres MCP (live-smoke / debug inspection) can reach the dev DB. The default stack does
+# NOT expose Postgres (D1: the org's data stays on its own infra), so this is deliberately a
+# separate file you add ONLY when you want the MCP locally:
+#
+#   docker compose --env-file .env \
+#     -f infra/compose/compose.yml -f infra/compose/compose.s.yml -f infra/compose/compose.mcp.yml \
+#     up -d postgres
+#
+# Bound to 127.0.0.1 → never reachable off this host. Pairs with the `easysynq-pg-ro` entry
+# in the repo-root .mcp.json (restart Claude Code after first enabling it).
+services:
+  postgres:
+    ports:
+      - "127.0.0.1:${POSTGRES_HOST_PORT:-5432}:5432"

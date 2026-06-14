@@ -1,25 +1,25 @@
 #!/usr/bin/env bash
-# PostToolUse hook: auto-format edited web files under apps/web with prettier
-# (+ a best-effort eslint --fix), mirroring ruff-format.sh for the Python path.
-# Reads the Claude Code hook JSON on stdin, extracts the edited file path, and
-# formats it so every edit lands CI-clean (the `web` job runs eslint/tsc/build).
-# Non-fatal: any problem (incl. web deps not installed) exits 0 so editing is
-# never blocked.
+# PostToolUse hook: auto-format edited web files under apps/web with prettier (+ a
+# best-effort eslint --fix), mirroring ruff-format.sh for the Python path, so every edit
+# lands CI-clean (the `web` job runs eslint/tsc/build).
+# Non-fatal: any problem (incl. web deps not installed) exits 0 so editing is never blocked.
+#
+# NB: the file path is parsed via _lib.sh (sed), NOT jq — jq isn't installed on this box,
+# which silently no-op'd the earlier jq-based version of this hook.
 set -uo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(cd "$DIR/../.." && pwd)"
 WEB="$ROOT/apps/web"
+# shellcheck source=/dev/null
+source "$DIR/_lib.sh"
 
-# The hook payload is JSON on stdin; the edited path is .tool_input.file_path.
-input="$(cat)"
-file="$(printf '%s' "$input" | jq -r '.tool_input.file_path // empty' 2>/dev/null)"
+file="$(hook_file_path)"
 [ -z "$file" ] && exit 0
 
 # Only format web source files under apps/web (ts/tsx/css/js/jsx).
 case "$file" in
-  "$ROOT"/apps/web/*.ts|"$ROOT"/apps/web/*.tsx|"$ROOT"/apps/web/*.css \
-  |"$ROOT"/apps/web/*.js|"$ROOT"/apps/web/*.jsx \
-  |apps/web/*.ts|apps/web/*.tsx|apps/web/*.css|apps/web/*.js|apps/web/*.jsx) ;;
+  */apps/web/*.ts|*/apps/web/*.tsx|*/apps/web/*.css|*/apps/web/*.js|*/apps/web/*.jsx) ;;
   *) exit 0 ;;
 esac
 [ -f "$file" ] || exit 0
