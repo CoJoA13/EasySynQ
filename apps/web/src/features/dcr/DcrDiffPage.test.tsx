@@ -4,7 +4,7 @@ import { axe } from "jest-axe";
 import { http, HttpResponse } from "msw";
 import { expect, it } from "vitest";
 import { Route, Routes, useLocation } from "react-router-dom";
-import type { DcrDetail } from "../../lib/types";
+import type { DcrDetail, DocumentVersion } from "../../lib/types";
 import { renderWithProviders } from "../../test/render";
 import { server } from "../../test/msw/server";
 import { DcrDiffPage } from "./DcrDiffPage";
@@ -139,7 +139,7 @@ it("shows 'no prior version' when the resulting version has no predecessor", asy
           effective_to: null,
           superseded_by_version_id: null,
           created_at: null,
-        },
+        } satisfies DocumentVersion,
       ]),
     ),
   );
