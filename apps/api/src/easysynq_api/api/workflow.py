@@ -54,8 +54,25 @@ class Decision(BaseModel):
 # --- representations --------------------------------------------------------------------
 
 
+# A DCR subject's "title" is its ``reason_text`` (up to 4000 chars) — cap it to a list-row label so
+# a triage row stays legible and the payload stays lean. Real document/CAPA/MR titles are short.
+_SUBJECT_TITLE_CAP = 160
+
+
+def _short(s: str | None) -> str | None:
+    if s is None:
+        return None
+    s = s.strip()
+    return s if len(s) <= _SUBJECT_TITLE_CAP else s[: _SUBJECT_TITLE_CAP - 1].rstrip() + "…"
+
+
 def _task(
-    t: Task, *, subject_type: str | None = None, subject_id: str | None = None
+    t: Task,
+    *,
+    subject_type: str | None = None,
+    subject_id: str | None = None,
+    subject_identifier: str | None = None,
+    subject_title: str | None = None,
 ) -> dict[str, Any]:
     out: dict[str, Any] = {
         "id": str(t.id),
@@ -68,9 +85,14 @@ def _task(
         "action_expected": t.action_expected,
         "due_at": t.due_at.isoformat() if t.due_at else None,
     }
+    # Subject identity (critique #5): now on BOTH the list + detail so the inbox/rail are triageable
+    # in place. self-scoped — the caller is the task's assignee/candidate, so the id+title are the
+    # minimum context needed to triage one's own queue (not document content).
     if subject_type is not None:
         out["subject_type"] = subject_type
         out["subject_id"] = subject_id
+        out["subject_identifier"] = subject_identifier
+        out["subject_title"] = _short(subject_title)
     return out
 
 
@@ -156,7 +178,7 @@ async def list_tasks_endpoint(
         raise ProblemException(
             status=422, code="validation_error", title="Invalid task filter"
         ) from exc
-    tasks = await wf_repo.list_user_tasks(
+    rows = await wf_repo.list_user_tasks_with_subject(
         session,
         caller.id,
         caller.org_id,
@@ -164,7 +186,16 @@ async def list_tasks_endpoint(
         task_type=type_enum,
         instance_id=instance_id,
     )
-    return [_task(t) for t in tasks]
+    return [
+        _task(
+            t,
+            subject_type=subject_type.value if subject_type is not None else None,
+            subject_id=str(subject_id) if subject_id is not None else None,
+            subject_identifier=identifier,
+            subject_title=title,
+        )
+        for t, subject_type, subject_id, identifier, title in rows
+    ]
 
 
 @router.get("/tasks/{task_id}")
@@ -175,10 +206,18 @@ async def get_task_endpoint(
 ) -> dict[str, Any]:
     task = await _own_task(session, caller, task_id)
     instance = await wf_repo.get_instance(session, task.instance_id)
+    identifier: str | None = None
+    title: str | None = None
+    if instance is not None:
+        identifier, title = await wf_repo.subject_label(
+            session, instance.subject_type, instance.subject_id
+        )
     return _task(
         task,
         subject_type=instance.subject_type.value if instance else None,
         subject_id=str(instance.subject_id) if instance else None,
+        subject_identifier=identifier,
+        subject_title=title,
     )
 
 

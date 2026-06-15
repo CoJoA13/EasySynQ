@@ -12,8 +12,8 @@ which fits an owner-pinned, due-date-anchored action task).
 
 The task carries BOTH ``assignee_user_id=owner`` AND ``candidate_pool=[str(owner)]`` —
 ``wf_engine.decide`` overwrites ``assignee_user_id`` with the actor on decide, so the pool is what
-keeps the task owner-discoverable in ``list_user_tasks`` (which ORs assignee with candidate-pool
-containment)."""
+keeps the task owner-discoverable in ``list_user_tasks_with_subject`` (which ORs assignee with
+candidate-pool containment)."""
 
 from __future__ import annotations
 

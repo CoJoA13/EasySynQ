@@ -14,29 +14,70 @@ import {
 import { useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { NewObjectiveModal } from "./NewObjectiveModal";
-import type { Objective, ObjectiveRag } from "../../lib/types";
+import type { Objective } from "../../lib/types";
 import { AsOf } from "../../lib/AsOf";
 import { usePermissions } from "../../app/shell/usePermissions";
 import { useObjectiveScorecard } from "./hooks";
 import { fmtValueUnit, RAG_COLOR, RAG_LABEL } from "./labels";
 import { ObjectiveScorecardBand } from "./ObjectiveScorecardBand";
 import { StateBadge } from "../document/StateBadge";
+import { RegisterToolbar, SortableTh } from "../../lib/RegisterToolbar";
+import {
+  sortRows,
+  useDebouncedSearch,
+  useTableSort,
+  useUrlParam,
+} from "../../lib/registerControls";
+import { useRowKeyboardNav } from "../../lib/useRowKeyboardNav";
 
 function currentOverTarget(o: Objective): string {
   return `${fmtValueUnit(o.current_value, "").trim() || "—"} / ${o.target_value} ${o.unit}`.trim();
+}
+
+// Critique #5 (power-user triage): debounced search + sortable columns + ↑/↓ row-nav, reusing the
+// shared lib/registerControls primitives (the TasksInbox wiring shape). Default sort is by `identifier`
+// asc — the human ref is the row anchor and the natural, stable register ordering. The `status` sort
+// value is the RAW `o.rag` string (green/amber/red/unmeasured), and `current` sorts on the numeric
+// current_value (nulls — unmeasured rows — sort last via sortRows).
+const SORT_KEYS = ["identifier", "title", "current", "status", "due"] as const;
+type SortKey = (typeof SORT_KEYS)[number];
+
+function sortValue(o: Objective, key: SortKey): string | number | null | undefined {
+  switch (key) {
+    case "identifier":
+      return o.identifier;
+    case "title":
+      return o.title;
+    case "current":
+      return o.current_value == null ? null : Number(o.current_value);
+    case "status":
+      return o.rag;
+    case "due":
+      return o.due_date;
+  }
 }
 
 export function ObjectivesRegisterPage() {
   const { data, isLoading, isError, forbidden, dataUpdatedAt } = useObjectiveScorecard();
   const { can } = usePermissions();
   const navigate = useNavigate();
-  const [rag, setRag] = useState<ObjectiveRag | "">("");
+  const [rag, setRag] = useUrlParam("rag", "");
+  const { q, setQ, query } = useDebouncedSearch();
+  const { sort, dir, toggleSort } = useTableSort<SortKey>({
+    keys: SORT_KEYS,
+    defaultSort: "identifier",
+    defaultDir: "asc",
+  });
+  const nav = useRowKeyboardNav<HTMLTableSectionElement>();
   const [createOpen, setCreateOpen] = useState(false);
 
-  const rows = useMemo(
-    () => (data?.objectives ?? []).filter((o) => rag === "" || o.rag === rag),
-    [data, rag],
-  );
+  const rows = useMemo(() => {
+    const all = (data?.objectives ?? []).filter((o) => rag === "" || o.rag === rag);
+    const matched = query
+      ? all.filter((o) => [o.identifier, o.title].some((v) => v.toLowerCase().includes(query)))
+      : all;
+    return sortRows(matched, sort, dir, sortValue);
+  }, [data, rag, query, sort, dir]);
 
   if (forbidden) {
     return (
@@ -85,20 +126,6 @@ export function ObjectivesRegisterPage() {
       <AsOf at={dataUpdatedAt} />
       <ObjectiveScorecardBand total={data.total} onTarget={data.on_target} byRag={data.by_rag} />
 
-      <SegmentedControl
-        mt="md"
-        value={rag}
-        onChange={(v) => setRag(v as ObjectiveRag | "")}
-        aria-label="Filter by RAG status"
-        data={[
-          { value: "", label: "All" },
-          { value: "green", label: RAG_LABEL.green },
-          { value: "amber", label: RAG_LABEL.amber },
-          { value: "red", label: RAG_LABEL.red },
-          { value: "unmeasured", label: RAG_LABEL.unmeasured },
-        ]}
-      />
-
       {data.objectives.length === 0 ? (
         <Alert color="gray" title="No quality objectives yet" mt="md">
           {can("objective.manage")
@@ -106,45 +133,109 @@ export function ObjectivesRegisterPage() {
             : "No objectives have been set up yet."}
         </Alert>
       ) : (
-        <Table striped highlightOnHover mt="md">
-          <Table.Thead>
-            <Table.Tr>
-              <Table.Th>Ref</Table.Th>
-              <Table.Th>Objective</Table.Th>
-              <Table.Th>Current / target</Table.Th>
-              <Table.Th>Status</Table.Th>
-              <Table.Th>Due</Table.Th>
-            </Table.Tr>
-          </Table.Thead>
-          <Table.Tbody>
-            {rows.map((o) => (
-              <Table.Tr key={o.id}>
-                <Table.Td>
-                  <Group gap="xs" wrap="nowrap">
-                    <Anchor component={Link} to={`/objectives/${o.id}`}>
-                      {o.identifier}
-                    </Anchor>
-                    {/* O-6c: exception-marking — the steady state (Effective) stays unmarked;
-                        Draft/InReview/UnderRevision/... get the shared StateBadge. */}
-                    {o.current_state !== "Effective" && (
-                      <StateBadge state={o.current_state} size="xs" />
-                    )}
-                  </Group>
-                </Table.Td>
-                <Table.Td>
-                  <Text lineClamp={1}>{o.title}</Text>
-                </Table.Td>
-                <Table.Td>{currentOverTarget(o)}</Table.Td>
-                <Table.Td>
-                  <Badge color={RAG_COLOR[o.rag]} variant="light">
-                    {RAG_LABEL[o.rag]}
-                  </Badge>
-                </Table.Td>
-                <Table.Td>{o.due_date}</Table.Td>
-              </Table.Tr>
-            ))}
-          </Table.Tbody>
-        </Table>
+        <>
+          <RegisterToolbar
+            q={q}
+            onQ={setQ}
+            placeholder="Search objectives…"
+            count={rows.length}
+            countNoun="objectives"
+          >
+            <SegmentedControl
+              value={rag}
+              onChange={setRag}
+              aria-label="Filter by RAG status"
+              data={[
+                { value: "", label: "All" },
+                { value: "green", label: RAG_LABEL.green },
+                { value: "amber", label: RAG_LABEL.amber },
+                { value: "red", label: RAG_LABEL.red },
+                { value: "unmeasured", label: RAG_LABEL.unmeasured },
+              ]}
+            />
+          </RegisterToolbar>
+
+          {rows.length === 0 ? (
+            <Alert color="gray" title="No objectives match your filters." mt="md">
+              Try clearing the search or RAG filter.
+            </Alert>
+          ) : (
+            <Table striped highlightOnHover mt="md">
+              <Table.Thead>
+                <Table.Tr>
+                  <SortableTh
+                    label="Ref"
+                    sortKey="identifier"
+                    sort={sort}
+                    dir={dir}
+                    onSort={toggleSort}
+                    scope="col"
+                  />
+                  <SortableTh
+                    label="Objective"
+                    sortKey="title"
+                    sort={sort}
+                    dir={dir}
+                    onSort={toggleSort}
+                    scope="col"
+                  />
+                  <SortableTh
+                    label="Current / target"
+                    sortKey="current"
+                    sort={sort}
+                    dir={dir}
+                    onSort={toggleSort}
+                    scope="col"
+                  />
+                  <SortableTh
+                    label="Status"
+                    sortKey="status"
+                    sort={sort}
+                    dir={dir}
+                    onSort={toggleSort}
+                    scope="col"
+                  />
+                  <SortableTh
+                    label="Due"
+                    sortKey="due"
+                    sort={sort}
+                    dir={dir}
+                    onSort={toggleSort}
+                    scope="col"
+                  />
+                </Table.Tr>
+              </Table.Thead>
+              <Table.Tbody ref={nav.ref} onKeyDown={nav.onKeyDown}>
+                {rows.map((o) => (
+                  <Table.Tr key={o.id}>
+                    <Table.Td>
+                      <Group gap="xs" wrap="nowrap">
+                        <Anchor component={Link} to={`/objectives/${o.id}`} data-rownav>
+                          {o.identifier}
+                        </Anchor>
+                        {/* O-6c: exception-marking — the steady state (Effective) stays unmarked;
+                            Draft/InReview/UnderRevision/... get the shared StateBadge. */}
+                        {o.current_state !== "Effective" && (
+                          <StateBadge state={o.current_state} size="xs" />
+                        )}
+                      </Group>
+                    </Table.Td>
+                    <Table.Td>
+                      <Text lineClamp={1}>{o.title}</Text>
+                    </Table.Td>
+                    <Table.Td>{currentOverTarget(o)}</Table.Td>
+                    <Table.Td>
+                      <Badge color={RAG_COLOR[o.rag]} variant="light">
+                        {RAG_LABEL[o.rag]}
+                      </Badge>
+                    </Table.Td>
+                    <Table.Td>{o.due_date}</Table.Td>
+                  </Table.Tr>
+                ))}
+              </Table.Tbody>
+            </Table>
+          )}
+        </>
       )}
       {createOpen && (
         <NewObjectiveModal

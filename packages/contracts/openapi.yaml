@@ -6285,6 +6285,16 @@ components:
         due_at: { type: [string, "null"], format: date-time }
         subject_type: { type: [string, "null"] }
         subject_id: { type: [string, "null"], format: uuid }
+        subject_identifier:
+          type: [string, "null"]
+          description: >-
+            (S-optimize-1) The subject's human identifier (document/CAPA/MR/OBJ identifier, or the DCR
+            id) so the inbox/rail triage in place. On BOTH the list and the detail. Null if unresolved.
+        subject_title:
+          type: [string, "null"]
+          description: >-
+            (S-optimize-1) A short title of the subject (document/CAPA/MR title; for a DCR the
+            reason_text, truncated to ~160 chars). On the list + detail. Null if the subject has none.
 
     WorkflowInstance:
       type: object
@@ -6847,6 +6857,15 @@ components:
           type: [string, "null"]
           format: uuid
           description: NULL for a CREATE DCR; the target Document for REVISE/RETIRE.
+        target_identifier:
+          type: [string, "null"]
+          description: >-
+            (S-optimize-1) The target Document's human identifier (REVISE/RETIRE) so the register
+            names the target instead of a bare "Document". On the list + detail; null for CREATE or
+            an unresolved target.
+        target_title:
+          type: [string, "null"]
+          description: "(S-optimize-1) The target Document's title; null for CREATE / unresolved."
         change_type: { $ref: "#/components/schemas/DcrChangeType" }
         change_significance: { $ref: "#/components/schemas/ChangeSignificance" }
         reason_class: { $ref: "#/components/schemas/DcrReasonClass" }

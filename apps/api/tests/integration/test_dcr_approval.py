@@ -65,6 +65,37 @@ async def _approval_sig_count(dcr_id: str) -> int:
         ).scalar_one()
 
 
+async def test_dcr_subject_task_carries_dcr_identity(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """S-optimize-1: a DCR-subject approval task surfaces in /tasks with the DCR's identity — the
+    coalesce(...,Dcr.identifier)/coalesce(...,Dcr.reason_text) branch (no documented_information).
+    Proves the list resolves a NON-document subject and agrees with the detail."""
+    req = _subject("dcr-subj-req")
+    await _grant(req, _ROUTE_PERMS)
+    hr = _auth(token_factory, req)
+    qm = _subject("dcr-subj-qm")
+    await _assign_seeded_role(qm, "QMS Owner")
+    hq = _auth(token_factory, qm)
+
+    dcr_id = await _open_assessed_dcr(app_client, hr, "MINOR")
+    dcr = (await app_client.get(f"/api/v1/dcrs/{dcr_id}", headers=hr)).json()
+    routed = await app_client.post(f"/api/v1/dcrs/{dcr_id}/route", headers=hr)
+    iid = routed.json()["approval_instance"]["id"]
+    task_id = await _my_pending_task(app_client, hq, iid)
+
+    listing = (await app_client.get("/api/v1/tasks?assignee=me&state=PENDING", headers=hq)).json()
+    row = next(t for t in listing if t["id"] == task_id)
+    assert row["subject_type"] == "DCR"
+    assert row["subject_id"] == dcr_id
+    assert row["subject_identifier"] == dcr["identifier"]  # DCR-{YYYY}-{SEQ}
+    assert row["subject_title"] == dcr["reason_text"]  # short reason_text, untruncated
+
+    detail = (await app_client.get(f"/api/v1/tasks/{task_id}", headers=hq)).json()
+    assert detail["subject_identifier"] == row["subject_identifier"]
+    assert detail["subject_title"] == row["subject_title"]
+
+
 async def test_minor_dcr_single_qms_approval(
     app_client: AsyncClient, token_factory: Callable[..., str]
 ) -> None:

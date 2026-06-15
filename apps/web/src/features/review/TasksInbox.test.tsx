@@ -7,10 +7,27 @@ import { server } from "../../test/msw/server";
 import { renderWithProviders } from "../../test/render";
 import { TasksInbox } from "./TasksInbox";
 
-test("lists pending tasks with a link to the review page", async () => {
+test("names the subject and links each row to the review page", async () => {
+  // S-optimize-1: the row's primary link is now the subject identifier (not the action verb).
   const { findByRole } = renderWithProviders(<TasksInbox />, { route: "/tasks" });
-  const link = await findByRole("link", { name: /approve/i });
+  const link = await findByRole("link", { name: /SOP-PUR-014/ });
   expect(link).toHaveAttribute("href", "/tasks/task1111-1111-1111-1111-111111111111");
+});
+
+test("filters rows by the debounced search and shows a calm no-match state", async () => {
+  const { findByRole, findByLabelText, findByText, queryByText } = renderWithProviders(
+    <TasksInbox />,
+    { route: "/tasks" },
+  );
+  await findByRole("link", { name: /SOP-PUR-014/ });
+  const search = await findByLabelText("Search");
+  await userEvent.type(search, "supplier");
+  // The matching row survives (matched on the subject title).
+  expect(await findByText("Supplier Selection & Evaluation")).toBeInTheDocument();
+  await userEvent.clear(search);
+  await userEvent.type(search, "zzz-no-match");
+  expect(await findByText("No tasks match your search.")).toBeInTheDocument();
+  expect(queryByText(/SOP-PUR-014/)).not.toBeInTheDocument();
 });
 
 test("shows a calm empty state", async () => {

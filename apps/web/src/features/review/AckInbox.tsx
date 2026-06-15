@@ -2,35 +2,34 @@ import { Alert, Button, Checkbox, Group, Loader, Stack, Table, Text, Title } fro
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { ApiError } from "../../lib/api";
-import { useDocument } from "../document/useDocument";
 import type { Task } from "../../lib/types";
+import { useBulkSelection } from "../../lib/useBulkSelection";
 import { useBulkAcknowledge } from "./ackHooks";
-import { useTask, useTasks } from "./hooks";
+import { useTasks } from "./hooks";
 
-// One inbox row — resolves the doc name best-effort (the list row has no subject_id, so fetch the
-// task detail → its document). Selection is controlled by the parent via taskId.
-function AckInboxRow({ task, selected, onToggle }: { task: Task; selected: boolean; onToggle: (id: string) => void }) {
-  const detail = useTask(task.id); // gives subject_id (detail-only)
-  const docId = detail.data?.subject_id ?? null;
-  const doc = useDocument(docId, { enabled: docId !== null, retry: false });
-  const name = doc.data ? `${doc.data.identifier} — ${doc.data.title}` : docId ? "Document" : "…";
-  return (
-    <Table.Tr>
-      <Table.Td>
-        <Checkbox aria-label={`Select ${name}`} checked={selected} onChange={() => onToggle(task.id)} />
-      </Table.Td>
-      <Table.Td>{docId ? <Link to={`/tasks/${task.id}`}>{name}</Link> : name}</Table.Td>
-      <Table.Td>{task.due_at ? task.due_at.slice(0, 10) : "—"}</Table.Td>
-    </Table.Tr>
-  );
+// S-optimize-1: the document name now comes straight off the enriched list row (subject_identifier +
+// subject_title) — no more per-row task-detail → useDocument N+1.
+function ackName(t: Task): string {
+  if (t.subject_identifier && t.subject_title)
+    return `${t.subject_identifier} — ${t.subject_title}`;
+  return t.subject_identifier ?? t.subject_title ?? "Document";
 }
 
-// S-ack-2: the dedicated DOC_ACK bulk-ack view (the bell's destination, /tasks?type=DOC_ACK). Multi-select
-// loops the per-task decision POST (doc 10 §8.2). Partial failures are reported, never thrown.
+// S-ack-2: the dedicated DOC_ACK bulk-ack view (the bell's destination, /tasks?type=DOC_ACK). Multi-
+// select loops the per-task decision POST (doc 10 §8.2); partial failures are reported, never thrown.
+// Selection uses the shared useBulkSelection primitive. Bulk stays acknowledge-only (no signature) —
+// there is deliberately NO bulk-approve (each approval is a signed, SoD-gated decision).
 export function AckInbox() {
-  const { data: tasks, isLoading, isError, error } = useTasks({ state: "PENDING", type: "DOC_ACK" });
+  const {
+    data: tasks,
+    isLoading,
+    isError,
+    error,
+  } = useTasks({ state: "PENDING", type: "DOC_ACK" });
   const bulk = useBulkAcknowledge();
-  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const rows = tasks ?? [];
+  const { selected, toggle, toggleAll, clear, allSelected, count, selectedIds } =
+    useBulkSelection(rows);
   const [summary, setSummary] = useState<string | null>(null);
 
   if (isLoading) return <Loader aria-label="Loading acknowledgements" />;
@@ -39,53 +38,67 @@ export function AckInbox() {
       return <Text c="dimmed">You don't have access to the acknowledgement queue.</Text>;
     return <Text c="red">Could not load your acknowledgements.</Text>;
   }
-  const rows = tasks ?? [];
-  const allSelected = rows.length > 0 && rows.every((t) => selected.has(t.id));
 
-  function toggle(id: string) {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id); else next.add(id);
-      return next;
-    });
-  }
-  function toggleAll() {
-    setSelected(allSelected ? new Set() : new Set(rows.map((t) => t.id)));
-  }
   async function acknowledgeSelected() {
     setSummary(null);
-    const ids = rows.map((t) => t.id).filter((id) => selected.has(id));
-    const out = await bulk.run(ids);
-    setSelected(new Set());
-    const failedNote = out.failed.length ? ` · ${out.failed.length} could not be acknowledged (refresh)` : "";
+    const out = await bulk.run(selectedIds);
+    clear();
+    const failedNote = out.failed.length
+      ? ` · ${out.failed.length} could not be acknowledged (refresh)`
+      : "";
     setSummary(`${out.ok.length} acknowledged${failedNote}`);
   }
 
   return (
     <Stack gap="md">
       <Title order={2}>Acknowledgements</Title>
-      {summary && <Alert color={summary.includes("could not") ? "yellow" : "green"} withCloseButton onClose={() => setSummary(null)}>{summary}</Alert>}
+      {summary && (
+        <Alert
+          color={summary.includes("could not") ? "yellow" : "green"}
+          withCloseButton
+          onClose={() => setSummary(null)}
+        >
+          {summary}
+        </Alert>
+      )}
       {rows.length === 0 ? (
         <Text c="dimmed">No documents awaiting your acknowledgement.</Text>
       ) : (
         <>
           <Group>
-            <Button onClick={() => void acknowledgeSelected()} disabled={selected.size === 0}>
-              Acknowledge {selected.size} selected
+            <Button onClick={() => void acknowledgeSelected()} disabled={count === 0}>
+              Acknowledge {count} selected
             </Button>
           </Group>
           <Table aria-label="Documents to acknowledge" striped highlightOnHover>
             <Table.Thead>
               <Table.Tr>
-                <Table.Th scope="col"><Checkbox aria-label="Select all" checked={allSelected} onChange={toggleAll} /></Table.Th>
+                <Table.Th scope="col">
+                  <Checkbox aria-label="Select all" checked={allSelected} onChange={toggleAll} />
+                </Table.Th>
                 <Table.Th scope="col">Document</Table.Th>
                 <Table.Th scope="col">Due</Table.Th>
               </Table.Tr>
             </Table.Thead>
             <Table.Tbody>
-              {rows.map((t) => (
-                <AckInboxRow key={t.id} task={t} selected={selected.has(t.id)} onToggle={toggle} />
-              ))}
+              {rows.map((t) => {
+                const name = ackName(t);
+                return (
+                  <Table.Tr key={t.id}>
+                    <Table.Td>
+                      <Checkbox
+                        aria-label={`Select ${name}`}
+                        checked={selected.has(t.id)}
+                        onChange={() => toggle(t.id)}
+                      />
+                    </Table.Td>
+                    <Table.Td>
+                      <Link to={`/tasks/${t.id}`}>{name}</Link>
+                    </Table.Td>
+                    <Table.Td>{t.due_at ? t.due_at.slice(0, 10) : "—"}</Table.Td>
+                  </Table.Tr>
+                );
+              })}
             </Table.Tbody>
           </Table>
         </>

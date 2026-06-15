@@ -49,7 +49,12 @@ it("shows a calm error (not an infinite loader) on a non-403 failure", async () 
 it("shows an empty state when there are no objectives", async () => {
   server.use(
     http.get("/api/v1/objectives/scorecard", () =>
-      HttpResponse.json({ total: 0, on_target: 0, by_rag: { green: 0, amber: 0, red: 0, unmeasured: 0 }, objectives: [] }),
+      HttpResponse.json({
+        total: 0,
+        on_target: 0,
+        by_rag: { green: 0, amber: 0, red: 0, unmeasured: 0 },
+        objectives: [],
+      }),
     ),
   );
   renderWithProviders(<ObjectivesRegisterPage />, { route: "/objectives" });
@@ -70,6 +75,23 @@ it("RAG filter narrows visible rows client-side", async () => {
   expect(screen.getByText("OBJ-002")).toBeInTheDocument();
   expect(screen.queryByText("OBJ-003")).not.toBeInTheDocument(); // green row gone
   expect(screen.queryByText("OBJ-001")).not.toBeInTheDocument(); // amber row gone
+});
+
+it("debounced search filters rows by identifier and title", async () => {
+  const user = userEvent.setup();
+  renderWithProviders(<ObjectivesRegisterPage />, { route: "/objectives" });
+  // Default: all four objectives visible.
+  await waitFor(() => expect(screen.getByText("OBJ-001")).toBeInTheDocument());
+  expect(screen.getByText("OBJ-002")).toBeInTheDocument();
+  expect(screen.getByText("OBJ-003")).toBeInTheDocument();
+  expect(screen.getByText("OBJ-004")).toBeInTheDocument();
+  // Type a term matching only OBJ-002's title ("Customer complaints per quarter").
+  await user.type(screen.getByLabelText("Search"), "complaints");
+  // The debounced filter (150ms) settles → only the matching row survives.
+  await waitFor(() => expect(screen.queryByText("OBJ-001")).not.toBeInTheDocument());
+  expect(screen.getByText("OBJ-002")).toBeInTheDocument();
+  expect(screen.queryByText("OBJ-003")).not.toBeInTheDocument();
+  expect(screen.queryByText("OBJ-004")).not.toBeInTheDocument();
 });
 
 it("default fixtures (all Draft) each show a 'Draft' state chip", async () => {

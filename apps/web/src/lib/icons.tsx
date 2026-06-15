@@ -96,3 +96,31 @@ export function IconShield(props: IconProps) {
     </Svg>
   );
 }
+
+// Sort affordances for a sortable column header (critique #5). A single chevron for the active
+// direction; the stacked double-chevron for an inactive-but-sortable column. Direction-only — these
+// are NOT status glyphs (the retired ▲), so they don't collide with the StatusBadge tone set.
+export function IconChevronUp(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <polyline points="6 15 12 9 18 15" />
+    </Svg>
+  );
+}
+
+export function IconChevronDown(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <polyline points="6 9 12 15 18 9" />
+    </Svg>
+  );
+}
+
+export function IconChevronSort(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <polyline points="8 9 12 5 16 9" />
+      <polyline points="8 15 12 19 16 15" />
+    </Svg>
+  );
+}

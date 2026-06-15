@@ -414,6 +414,9 @@ const approveTask = {
   due_at: null,
   subject_type: "DOCUMENT",
   subject_id: "11111111-1111-1111-1111-111111111111",
+  // S-optimize-1: the subject identity now rides the LIST too (no N+1) — mirrors the enriched _task.
+  subject_identifier: "SOP-PUR-014",
+  subject_title: "Supplier Selection & Evaluation",
 };
 export const approvalFixture = {
   id: "wf111111-1111-1111-1111-111111111111",
@@ -1537,7 +1540,8 @@ export const docAckTask = {
   subject_type: "DOC_ACK",
   subject_id: "11111111-1111-1111-1111-111111111111",
 };
-// The list row (GET /tasks?type=DOC_ACK) — subject_type/subject_id STRIPPED (matches _task without them).
+// The list row (GET /tasks?type=DOC_ACK). S-optimize-1: the list now carries the subject identity
+// too (the enriched _task) so the AckInbox names the document WITHOUT a per-row detail→doc N+1.
 export const docAckListRow = {
   id: docAckTask.id,
   instance_id: docAckTask.instance_id,
@@ -1548,6 +1552,10 @@ export const docAckListRow = {
   candidate_pool: docAckTask.candidate_pool,
   action_expected: "acknowledge",
   due_at: docAckTask.due_at,
+  subject_type: "DOC_ACK",
+  subject_id: docAckTask.subject_id,
+  subject_identifier: "SOP-PUR-014",
+  subject_title: "Purchasing",
 };
 
 export const ackDecisionResultFixture = {
@@ -1926,6 +1934,8 @@ const dcrListFixture = {
       id: DCR_REVISE_ID,
       identifier: "DCR-2026-0001",
       target_document_id: TARGET_DOC_ID,
+      target_identifier: "SOP-QMS-001",
+      target_title: "Document Control Procedure",
       change_type: "REVISE",
       change_significance: "MAJOR",
       reason_class: "capa",
@@ -1959,7 +1969,11 @@ const dcrListFixture = {
     {
       id: DCR_IMPL_ID,
       identifier: "DCR-2026-0003",
-      target_document_id: TARGET_DOC_ID,
+      // A DIFFERENT target document — the outerjoin resolves each DCR's own target identity, so two
+      // DCRs targeting different docs must carry different target_identifier/title (web-test-trap).
+      target_document_id: "doc00002-0002-0002-0002-000000000002",
+      target_identifier: "SOP-AUD-002",
+      target_title: "Internal Audit Procedure",
       change_type: "REVISE",
       change_significance: "MAJOR",
       reason_class: "audit_finding",
@@ -1976,7 +1990,9 @@ const dcrListFixture = {
     {
       id: DCR_CANCELLED_ID,
       identifier: "DCR-2026-0004",
-      target_document_id: TARGET_DOC_ID,
+      target_document_id: "doc00003-0003-0003-0003-000000000003",
+      target_identifier: "WI-PRD-007",
+      target_title: "Line Changeover Work Instruction",
       change_type: "RETIRE",
       change_significance: "MINOR",
       reason_class: "other",

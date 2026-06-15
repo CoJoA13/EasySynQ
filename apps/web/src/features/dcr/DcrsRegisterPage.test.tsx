@@ -1,7 +1,7 @@
 import { http, HttpResponse } from "msw";
 import { axe } from "jest-axe";
 import { expect, it } from "vitest";
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useLocation } from "react-router-dom";
 import { renderWithProviders } from "../../test/render";
@@ -22,7 +22,9 @@ it("lists change requests and opens the drawer when an identifier is clicked", a
 });
 
 it("opens the drawer on a ?dcr=<id> deep-link", async () => {
-  renderWithProviders(<DcrsRegisterPage />, { route: "/dcrs?dcr=dcr00001-0001-0001-0001-000000000001" });
+  renderWithProviders(<DcrsRegisterPage />, {
+    route: "/dcrs?dcr=dcr00001-0001-0001-0001-000000000001",
+  });
   expect(await screen.findByText(/Corrective action requires/)).toBeInTheDocument();
 });
 
@@ -56,8 +58,47 @@ it("filters by state", async () => {
   expect(screen.getByText("DCR-2026-0004")).toBeInTheDocument();
 });
 
+it("shows the target document's identifier in the Target column when resolved", async () => {
+  renderWithProviders(<DcrsRegisterPage />);
+  const idCell = await screen.findByText("DCR-2026-0001");
+  const row = idCell.closest("tr")!;
+  // DCR-2026-0001's target resolves to SOP-QMS-001 / Document Control Procedure (the fixture).
+  expect(within(row).getByText("SOP-QMS-001")).toBeInTheDocument();
+  expect(within(row).getByText("Document Control Procedure")).toBeInTheDocument();
+});
+
+it("filters rows by the debounced search (each row isolates on its own target identity)", async () => {
+  const u = userEvent.setup();
+  renderWithProviders(<DcrsRegisterPage />);
+  expect(await screen.findByText("DCR-2026-0001")).toBeInTheDocument();
+  expect(screen.getByText("DCR-2026-0003")).toBeInTheDocument();
+  const search = screen.getByLabelText("Search");
+  // "SOP-QMS-001" is the target identifier of DCR-2026-0001 only → the others drop out.
+  await u.type(search, "SOP-QMS-001");
+  await waitFor(() => expect(screen.queryByText("DCR-2026-0003")).not.toBeInTheDocument());
+  expect(screen.getByText("DCR-2026-0001")).toBeInTheDocument();
+  expect(screen.queryByText("DCR-2026-0002")).not.toBeInTheDocument();
+  // The reverse: a term unique to DCR-2026-0003's target isolates IT (proves per-row matching, not
+  // a fixture artifact where only one row carried a target identity).
+  await u.clear(search);
+  await u.type(search, "Internal Audit");
+  await waitFor(() => expect(screen.queryByText("DCR-2026-0001")).not.toBeInTheDocument());
+  expect(screen.getByText("DCR-2026-0003")).toBeInTheDocument();
+});
+
+it("shows a no-match state when the search excludes every row", async () => {
+  renderWithProviders(<DcrsRegisterPage />);
+  expect(await screen.findByText("DCR-2026-0001")).toBeInTheDocument();
+  await userEvent.type(screen.getByLabelText("Search"), "zzz-no-such-dcr");
+  expect(await screen.findByText("No change requests match your filters.")).toBeInTheDocument();
+});
+
 it("shows a calm no-access panel on a 403", async () => {
-  server.use(http.get("/api/v1/dcrs", () => HttpResponse.json({ code: "forbidden", title: "Forbidden" }, { status: 403 })));
+  server.use(
+    http.get("/api/v1/dcrs", () =>
+      HttpResponse.json({ code: "forbidden", title: "Forbidden" }, { status: 403 }),
+    ),
+  );
   renderWithProviders(<DcrsRegisterPage />);
   expect(await screen.findByText("No access")).toBeInTheDocument();
 });

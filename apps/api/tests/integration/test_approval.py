@@ -104,6 +104,42 @@ async def test_submit_review_instantiates_workflow_and_task_in_my_tasks(
     assert str(task.id) in ids
 
 
+async def test_tasks_list_carries_subject_identity_and_agrees_with_detail(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    """S-optimize-1: GET /tasks (the LIST) now carries the subject type/id/identifier/title so the
+    inbox triages in place — no N+1 — and the values agree with GET /tasks/{id} (the detail)."""
+    await s5.grant_lifecycle(subj.a)
+    await s5.grant_role(subj.b, "Approver")
+    ha, hb = _auth(token_factory, subj.a), _auth(token_factory, subj.b)
+
+    did = await _to_in_review(app_client, ha, await s5.type_id("SOP"))
+    async with get_sessionmaker()() as s:
+        di = await s.get(DocumentedInformation, uuid.UUID(did))
+        assert di is not None
+        expected_identifier, expected_title = di.identifier, di.title
+        task = (
+            await s.execute(
+                select(Task)
+                .join(WorkflowInstance, Task.instance_id == WorkflowInstance.id)
+                .where(WorkflowInstance.subject_id == uuid.UUID(did))
+            )
+        ).scalar_one()
+
+    listing = (await app_client.get("/api/v1/tasks?assignee=me&state=PENDING", headers=hb)).json()
+    row = next(t for t in listing if t["id"] == str(task.id))
+    assert row["subject_type"] == "DOCUMENT"
+    assert row["subject_id"] == did
+    assert row["subject_identifier"] == expected_identifier
+    assert row["subject_title"] == expected_title
+
+    detail = (await app_client.get(f"/api/v1/tasks/{task.id}", headers=hb)).json()
+    assert detail["subject_type"] == row["subject_type"]
+    assert detail["subject_id"] == row["subject_id"]
+    assert detail["subject_identifier"] == row["subject_identifier"]
+    assert detail["subject_title"] == row["subject_title"]
+
+
 async def test_decision_approve_one_transaction(
     app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
 ) -> None:
