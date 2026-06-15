@@ -104,6 +104,38 @@ const MIXED_UNIT: Measurement[] = [
   },
 ] satisfies Measurement[];
 
+// Every reading is in a previous unit (a unit-changing revision left no current-unit readings).
+const ALL_OFF_UNIT: Measurement[] = [
+  {
+    id: "o1",
+    objective_id: "obj1",
+    record_id: "r1",
+    period: "2026-01-01",
+    value: "500",
+    target_at_capture: "400",
+    unit: "ppm",
+    source: null,
+    created_at: "2026-01-02T00:00:00Z",
+    rag: "red",
+  },
+] satisfies Measurement[];
+
+// A small-magnitude / boundary reading whose rounded form would contradict its RAG colour.
+const PRECISE: Measurement[] = [
+  {
+    id: "p1",
+    objective_id: "obj1",
+    record_id: "r1",
+    period: "2026-01-01",
+    value: "94.999",
+    target_at_capture: "95",
+    unit: "%",
+    source: null,
+    created_at: "2026-01-02T00:00:00Z",
+    rag: "amber",
+  },
+] satisfies Measurement[];
+
 it("renders N points oldest-left (reversing the newest-first input)", () => {
   const { container } = renderChart(<ObjectiveTrendChart measurements={NEWEST_FIRST} unit="%" />);
   const svg = chartSvg(container);
@@ -172,6 +204,23 @@ it("charts only readings in the current unit and notes the rest", () => {
   expect(svg.querySelectorAll("circle").length).toBe(1);
   expect(svg.querySelector("circle title")?.textContent).toContain("%");
   expect(getByText(/in a different unit/i)).toBeInTheDocument();
+});
+
+it("explains (no chart) when every reading is in a previous unit", () => {
+  const { container, getByText } = renderChart(
+    <ObjectiveTrendChart measurements={ALL_OFF_UNIT} unit="%" />,
+  );
+  // no chart is drawn (nothing comparable), but the reason is shown — not a silent disappearance.
+  expect(container.querySelector("svg[role='img']")).toBeNull();
+  expect(getByText(/in a previous unit/i)).toBeInTheDocument();
+});
+
+it("renders the raw decimal value, never a rounded one that could contradict the RAG", () => {
+  const { container } = renderChart(<ObjectiveTrendChart measurements={PRECISE} unit="%" />);
+  const title = chartSvg(container).querySelector("circle title")?.textContent ?? "";
+  expect(title).toContain("94.999");
+  // must NOT round to "95 %" — that would read as on-target while the point is amber.
+  expect(title).not.toContain("95 %");
 });
 
 it("has no accessibility violations", async () => {

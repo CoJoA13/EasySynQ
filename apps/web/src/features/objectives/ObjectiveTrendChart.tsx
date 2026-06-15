@@ -31,12 +31,16 @@ interface Point {
   value: number;
   target: number;
   rag: ObjectiveRag;
+  valueStr: string;
   targetStr: string;
 }
 
-// Round to a tidy 2-dp string with no trailing-zero noise.
-function fmt(n: number): string {
-  return Number(n.toFixed(2)).toString();
+// Format a computed axis-tick value. `decimals` adapts to the domain span so small-magnitude KPIs
+// (e.g. a 0.001 defect rate) aren't all flattened to "0.00"; trailing-zero noise is stripped.
+// Readings themselves render their RAW decimal string (never rounded — a rounded value could
+// contradict its server RAG colour, e.g. 94.999 vs target 95), so this is only for gridline labels.
+function fmtTick(value: number, decimals: number): string {
+  return Number(value.toFixed(decimals)).toString();
 }
 
 export function ObjectiveTrendChart({
@@ -60,11 +64,24 @@ export function ObjectiveTrendChart({
     value: Number(m.value),
     target: Number(m.target_at_capture),
     rag: m.rag,
+    valueStr: m.value,
     targetStr: m.target_at_capture,
   }));
 
   const n = series.length;
-  if (n === 0) return null; // MeasurementsSection guards the empty list; null when all off-unit.
+  if (n === 0) {
+    // MeasurementsSection only mounts us with ≥1 reading, so an empty series means EVERY reading
+    // is in a previous unit (a unit-changing revision) — nothing comparable to chart. Explain it
+    // rather than vanishing silently (Codex P3); the readings are still in the table below.
+    if (measurements.length === 0) return null;
+    return (
+      <Text size="xs" c="dimmed">
+        The {measurements.length} reading{measurements.length === 1 ? "" : "s"} below{" "}
+        {measurements.length === 1 ? "is" : "are"} in a previous unit — no comparable trend to chart
+        in {unit}.
+      </Text>
+    );
+  }
 
   // y-domain over values ∪ targets, padded ~8%; NEVER forced to 0; degenerate domain → ±1/±|v|·0.1.
   const ys = series.flatMap((p) => [p.value, p.target]).filter((v) => Number.isFinite(v));
@@ -83,6 +100,11 @@ export function ObjectiveTrendChart({
     lo -= pad;
     hi += pad;
   }
+
+  // Axis-tick decimals from the domain span: enough to distinguish small-magnitude gridlines
+  // without trailing noise on large ones (a span of ~100 → 0dp; ~2 → 1dp; ~0.01 → 3dp).
+  const span = hi - lo;
+  const tickDecimals = span > 0 ? Math.min(6, Math.max(0, 1 - Math.floor(Math.log10(span)))) : 2;
 
   // categorical x: evenly spaced; a single point sits centred.
   const xAt = (i: number) => (n === 1 ? M.left + PLOT_W / 2 : M.left + (PLOT_W * i) / (n - 1));
@@ -115,7 +137,7 @@ export function ObjectiveTrendChart({
   const last = series[n - 1]!;
   const summary =
     `KPI trend, ${unit}: ${n} reading${n === 1 ? "" : "s"} from ${first.period} to ${last.period}; ` +
-    `latest ${fmt(last.value)} ${unit}, status ${RAG_LABEL[last.rag]}.`;
+    `latest ${last.valueStr} ${unit}, status ${RAG_LABEL[last.rag]}.`;
 
   return (
     <Stack gap={6}>
@@ -138,7 +160,7 @@ export function ObjectiveTrendChart({
                 textAnchor="end"
                 fontSize={10}
                 fill={AXIS_TEXT}
-              >{`${fmt(t)} ${unit}`}</text>
+              >{`${fmtTick(t, tickDecimals)} ${unit}`}</text>
             </g>
           );
         })}
@@ -182,7 +204,7 @@ export function ObjectiveTrendChart({
         {/* per-reading points, filled by the server RAG verbatim (N9 — never recomputed) */}
         {series.map((p, i) => (
           <circle key={`p${i}`} cx={xAt(i)} cy={yAt(p.value)} r={4} fill={RAG_FILL[p.rag]}>
-            <title>{`${p.period}: ${fmt(p.value)} ${unit} (target ${p.targetStr}) — ${RAG_LABEL[p.rag]}`}</title>
+            <title>{`${p.period}: ${p.valueStr} ${unit} (target ${p.targetStr}) — ${RAG_LABEL[p.rag]}`}</title>
           </circle>
         ))}
       </svg>
