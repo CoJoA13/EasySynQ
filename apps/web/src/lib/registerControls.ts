@@ -44,20 +44,26 @@ export function useDebouncedSearch(
   // Refs let the write effect read the latest urlQ + setter WITHOUT subscribing to them. This is
   // load-bearing: react-router's setSearchParams is NOT referentially stable (it changes on every
   // location change), so keying the write effect on it would re-fire on an EXTERNAL url change with
-  // the now-stale local value and clobber it (Codex #146).
+  // the now-stale local value and clobber it (Codex #146). `lastWrittenRef` records the value WE last
+  // wrote so the sync effect can tell our own debounce write apart from a genuine external change.
   const urlQRef = useRef(urlQ);
   urlQRef.current = urlQ;
   const setUrlQRef = useRef(setUrlQ);
   setUrlQRef.current = setUrlQ;
-  // Adopt an EXTERNAL url change (back/forward, a same-route `?q=` link, ⌘K nav) into the input —
-  // otherwise the input stays on its mount-time value while the url moves on.
+  const lastWrittenRef = useRef(urlQ);
+  // Adopt an EXTERNAL url change (back/forward, a same-route `?q=` link, ⌘K nav) into the input — but
+  // NOT our own debounce write (urlQ === lastWritten), which would feed back and reset the input
+  // mid-typing (the clear→retype clobber that only bit under CI parallel load).
   useEffect(() => {
-    setQ((cur) => (cur === urlQ ? cur : urlQ));
+    if (urlQ !== lastWrittenRef.current) setQ(urlQ);
   }, [urlQ]);
   // Mirror a SETTLED user edit to the url. Keyed on `debounced` ONLY — it changes only when the
   // user's input settles, so an external url change (debounced unchanged) never triggers a write.
   useEffect(() => {
-    if (debounced !== urlQRef.current) setUrlQRef.current(debounced);
+    if (debounced !== urlQRef.current) {
+      lastWrittenRef.current = debounced;
+      setUrlQRef.current(debounced);
+    }
   }, [debounced]);
   return { q, setQ, query: debounced.trim().toLowerCase() };
 }
