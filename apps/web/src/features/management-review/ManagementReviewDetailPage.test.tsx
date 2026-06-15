@@ -242,8 +242,10 @@ describe("Download minutes pack (PDF) button", () => {
       http.get("/api/v1/management-reviews/:id", () => HttpResponse.json(effectiveDetail)),
       http.get(
         "/api/v1/management-reviews/:id/pack",
+        // A Uint8Array body (not a Blob) — MSW's interceptor streams it directly, dodging the CI
+        // node's missing Blob.stream(); the consumer's resp.blob() still works on the received bytes.
         () =>
-          new HttpResponse(new Blob(["PDF"], { type: "application/pdf" }), {
+          new HttpResponse(new Uint8Array([0x25, 0x50, 0x44, 0x46]), {
             headers: { "Content-Type": "application/pdf" },
           }),
       ),
