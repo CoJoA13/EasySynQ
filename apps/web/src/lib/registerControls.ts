@@ -5,7 +5,7 @@
 // the bulk-select primitive in ./useBulkSelection, and the presentational bits in ./RegisterToolbar.
 
 import { useDebouncedValue } from "@mantine/hooks";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 
 export type SortDir = "asc" | "desc";
@@ -41,9 +41,30 @@ export function useDebouncedSearch(
   const [urlQ, setUrlQ] = useUrlParam(key);
   const [q, setQ] = useState(urlQ);
   const [debounced] = useDebouncedValue(q, delay);
+  // Refs let the write effect read the latest urlQ + setter WITHOUT subscribing to them. This is
+  // load-bearing: react-router's setSearchParams is NOT referentially stable (it changes on every
+  // location change), so keying the write effect on it would re-fire on an EXTERNAL url change with
+  // the now-stale local value and clobber it (Codex #146). `lastWrittenRef` records the value WE last
+  // wrote so the sync effect can tell our own debounce write apart from a genuine external change.
+  const urlQRef = useRef(urlQ);
+  urlQRef.current = urlQ;
+  const setUrlQRef = useRef(setUrlQ);
+  setUrlQRef.current = setUrlQ;
+  const lastWrittenRef = useRef(urlQ);
+  // Adopt an EXTERNAL url change (back/forward, a same-route `?q=` link, ⌘K nav) into the input — but
+  // NOT our own debounce write (urlQ === lastWritten), which would feed back and reset the input
+  // mid-typing (the clear→retype clobber that only bit under CI parallel load).
   useEffect(() => {
-    if (debounced !== urlQ) setUrlQ(debounced);
-  }, [debounced, urlQ, setUrlQ]);
+    if (urlQ !== lastWrittenRef.current) setQ(urlQ);
+  }, [urlQ]);
+  // Mirror a SETTLED user edit to the url. Keyed on `debounced` ONLY — it changes only when the
+  // user's input settles, so an external url change (debounced unchanged) never triggers a write.
+  useEffect(() => {
+    if (debounced !== urlQRef.current) {
+      lastWrittenRef.current = debounced;
+      setUrlQRef.current(debounced);
+    }
+  }, [debounced]);
   return { q, setQ, query: debounced.trim().toLowerCase() };
 }
 
@@ -56,20 +77,27 @@ export function useTableSort<K extends string>(opts: {
   defaultDir?: SortDir;
 }): { sort: K | null; dir: SortDir; toggleSort: (k: K) => void } {
   const [params, setParams] = useSearchParams();
+  const keys = opts.keys;
+  const defaultSort: K | null = opts.defaultSort ?? null;
   const defaultDir: SortDir = opts.defaultDir ?? "asc";
   const rawSort = params.get("sort");
   const sort: K | null =
-    rawSort && (opts.keys as readonly string[]).includes(rawSort)
-      ? (rawSort as K)
-      : (opts.defaultSort ?? null);
+    rawSort && (keys as readonly string[]).includes(rawSort) ? (rawSort as K) : defaultSort;
   const rawDir = params.get("dir");
   const dir: SortDir = rawDir === "asc" || rawDir === "desc" ? rawDir : defaultDir;
   const toggleSort = useCallback(
     (k: K) => {
       setParams(
         (p) => {
-          if (p.get("sort") === k) {
-            p.set("dir", p.get("dir") === "asc" ? "desc" : "asc");
+          // Compare against the EFFECTIVE active sort/dir (incl. the defaults) so the FIRST click on
+          // the default-active column toggles its direction rather than re-writing the same default
+          // (Codex #146 — an absent `sort` param still renders that column as active/highlighted).
+          const cs = p.get("sort");
+          const curSort = cs && (keys as readonly string[]).includes(cs) ? cs : defaultSort;
+          const cd = p.get("dir");
+          const curDir: SortDir = cd === "asc" || cd === "desc" ? cd : defaultDir;
+          if (curSort === k) {
+            p.set("dir", curDir === "asc" ? "desc" : "asc");
           } else {
             p.set("sort", k);
             p.set("dir", defaultDir);
@@ -79,7 +107,7 @@ export function useTableSort<K extends string>(opts: {
         { replace: true },
       );
     },
-    [setParams, defaultDir],
+    [setParams, keys, defaultSort, defaultDir],
   );
   return { sort, dir, toggleSort };
 }

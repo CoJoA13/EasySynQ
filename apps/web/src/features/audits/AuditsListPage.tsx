@@ -34,7 +34,7 @@ function leadLabel(userId: string | null, directory: DirectoryUser[]): string {
   return directory.find((u) => u.id === userId)?.display_name ?? `${userId.slice(0, 8)}…`;
 }
 
-const SORT_KEYS = ["identifier", "title", "lead", "state", "created"] as const;
+const SORT_KEYS = ["identifier", "title", "lead", "state", "started", "created"] as const;
 type SortKey = (typeof SORT_KEYS)[number];
 
 function Tile({ label, value }: { label: string; value: number }) {
@@ -80,8 +80,10 @@ export function AuditsListPage() {
           return leadLabel(a.lead_auditor_user_id, dir0);
         case "state":
           return a.state;
+        case "started":
+          return a.started_at; // the "Started" column sorts by what it shows (nulls sort last)
         case "created":
-          return a.created_at;
+          return a.created_at; // the hidden default order (newest-created-first)
       }
     };
     const matched = query
@@ -214,7 +216,7 @@ export function AuditsListPage() {
               />
               <SortableTh
                 label="Started"
-                sortKey="created"
+                sortKey="started"
                 sort={sort}
                 dir={dir}
                 onSort={toggleSort}
