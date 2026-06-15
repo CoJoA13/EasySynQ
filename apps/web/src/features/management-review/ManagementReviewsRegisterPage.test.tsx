@@ -75,9 +75,7 @@ describe("ManagementReviewsRegisterPage", () => {
   });
 
   it("empty state copy branches on the create capability", async () => {
-    server.use(
-      http.get("/api/v1/management-reviews", () => HttpResponse.json({ data: [] })),
-    );
+    server.use(http.get("/api/v1/management-reviews", () => HttpResponse.json({ data: [] })));
     // Without create: the read-only copy.
     renderWithProviders(<ManagementReviewsRegisterPage />, { route: "/management-reviews" });
     await waitFor(() =>
@@ -87,13 +85,57 @@ describe("ManagementReviewsRegisterPage", () => {
 
   it("empty state invites convening the first review when create is granted", async () => {
     grantCreate();
-    server.use(
-      http.get("/api/v1/management-reviews", () => HttpResponse.json({ data: [] })),
-    );
+    server.use(http.get("/api/v1/management-reviews", () => HttpResponse.json({ data: [] })));
     renderWithProviders(<ManagementReviewsRegisterPage />, { route: "/management-reviews" });
     await waitFor(() =>
       expect(screen.getByText(/convene the first management review/i)).toBeInTheDocument(),
     );
+  });
+
+  // Power-user triage (critique #5): the debounced search box filters rows by identifier/title/period.
+  it("filters rows by the debounced search box", async () => {
+    server.use(
+      http.get("/api/v1/management-reviews", () =>
+        HttpResponse.json({
+          data: [
+            {
+              id: "mr-0001-0001-0001-000000000001",
+              identifier: "MR-001",
+              title: "2026 Annual Management Review",
+              current_state: "Draft",
+              period_label: "2026 Annual",
+              review_date: "2026-06-12",
+              attendees: null,
+              close_state: null,
+              closed_at: null,
+              created_at: "2026-06-01T09:00:00+00:00",
+            },
+            {
+              id: "mr-0002-0002-0002-000000000002",
+              identifier: "MR-002",
+              title: "Q1 Interim Review",
+              current_state: "Effective",
+              period_label: "2026 Q1",
+              review_date: "2026-03-15",
+              attendees: null,
+              close_state: "Closed",
+              closed_at: "2026-03-20T09:00:00+00:00",
+              created_at: "2026-03-01T09:00:00+00:00",
+            },
+          ],
+        }),
+      ),
+    );
+    const user = userEvent.setup();
+    renderWithProviders(<ManagementReviewsRegisterPage />, { route: "/management-reviews" });
+    // Both rows present before any search.
+    await waitFor(() => expect(screen.getByText("MR-001")).toBeInTheDocument());
+    expect(screen.getByText("MR-002")).toBeInTheDocument();
+
+    // Typing "interim" narrows to the Q1 row (matches its title); MR-001 drops out.
+    await user.type(screen.getByLabelText("Search"), "interim");
+    await waitFor(() => expect(screen.queryByText("MR-001")).toBeNull());
+    expect(screen.getByText("MR-002")).toBeInTheDocument();
   });
 
   // Drives NewManagementReviewModal end-to-end: open → type a title → submit → POST fires →
@@ -143,9 +185,7 @@ describe("ManagementReviewsRegisterPage", () => {
     await user.click(within(dialog).getByRole("button", { name: /create/i }));
 
     await waitFor(() =>
-      expect(
-        screen.getByText("detail route: mr-0001-0001-0001-000000000001"),
-      ).toBeInTheDocument(),
+      expect(screen.getByText("detail route: mr-0001-0001-0001-000000000001")).toBeInTheDocument(),
     );
     expect(posted).toBe(true);
   });

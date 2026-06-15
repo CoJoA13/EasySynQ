@@ -1,4 +1,4 @@
-import { screen, within } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { http, HttpResponse } from "msw";
@@ -60,6 +60,32 @@ test("the Active/Closed segmented filter slices client-side", async () => {
   expect(screen.queryByText("REC-000055")).toBeNull();
 });
 
+test("the debounced search filters rows by identifier, title, and lead-auditor name", async () => {
+  const u = userEvent.setup();
+  renderWithProviders(<AuditsListPage />, { route: "/audits" });
+  await screen.findByText("REC-000061");
+
+  const search = screen.getByRole("textbox", { name: "Search" });
+  // title match: "Purchasing & Suppliers audit" → only REC-000061 survives.
+  await u.type(search, "purchasing");
+  await screen.findByText("REC-000061");
+  await waitFor(() => expect(screen.queryByText("REC-000066")).toBeNull());
+  expect(screen.queryByText("REC-000055")).toBeNull();
+
+  // lead-auditor display-name match: "Mara Quality" (resolved via the directory). REC-000061 and
+  // REC-000066 share Mara as lead; REC-000055 (null lead) drops out.
+  await u.clear(search);
+  await u.type(search, "mara");
+  await screen.findByText("REC-000066");
+  await waitFor(() => expect(screen.queryByText("REC-000055")).toBeNull());
+  expect(screen.getByText("REC-000061")).toBeInTheDocument();
+
+  // a non-matching term yields the empty state, not a crash.
+  await u.clear(search);
+  await u.type(search, "zzzznotanaudit");
+  expect(await screen.findByText("No audits match your filters.")).toBeInTheDocument();
+});
+
 test("renders a calm no-access panel on a 403 (audit.read)", async () => {
   server.use(
     http.get("/api/v1/audits", () =>
@@ -74,7 +100,20 @@ test("an audit title containing markup renders as literal text (XSS-safe)", asyn
   server.use(
     http.get("/api/v1/audits", () =>
       HttpResponse.json({
-        data: [{ id: "au-xss-00-0000-0000-0000-000000000000", identifier: "REC-000099", title: "<script>alert(1)</script>", plan_id: "pl000001-0001-0001-0001-000000000001", lead_auditor_user_id: null, state: "Scheduled", started_at: null, completed_at: null, result_summary: null, created_at: "2026-06-01T09:00:00+00:00" }],
+        data: [
+          {
+            id: "au-xss-00-0000-0000-0000-000000000000",
+            identifier: "REC-000099",
+            title: "<script>alert(1)</script>",
+            plan_id: "pl000001-0001-0001-0001-000000000001",
+            lead_auditor_user_id: null,
+            state: "Scheduled",
+            started_at: null,
+            completed_at: null,
+            result_summary: null,
+            created_at: "2026-06-01T09:00:00+00:00",
+          },
+        ],
       }),
     ),
   );

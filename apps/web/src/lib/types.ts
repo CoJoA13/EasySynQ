@@ -335,8 +335,11 @@ export interface Task {
   candidate_pool: string[] | null;
   action_expected: string | null;
   due_at: string | null;
-  subject_type?: string; // detail-only (GET /tasks/{id}); "DOCUMENT" | "CAPA" | "DCR" | "PERIODIC_REVIEW"
+  // S-optimize-1: subject identity now on the LIST + detail (no N+1) so the inbox/rail triage in place.
+  subject_type?: string; // "DOCUMENT" | "CAPA" | "DCR" | "MGMT_REVIEW" | "PERIODIC_REVIEW" | "DOC_ACK"
   subject_id?: string;
+  subject_identifier?: string | null; // the subject's human id (doc/CAPA/MR/OBJ identifier, or the DCR id)
+  subject_title?: string | null; // short subject title (DCR = reason_text, truncated); null if none
 }
 
 // current_state is free-form Text server-side — keep it an open string, do NOT enum-validate.
@@ -1390,6 +1393,8 @@ export interface Dcr {
   id: string;
   identifier: string; // DCR-{YYYY}-{NNNN}
   target_document_id: string | null; // null for CREATE
+  target_identifier?: string | null; // S-optimize-1: the target document's identifier (list + detail); null for CREATE
+  target_title?: string | null; // S-optimize-1: the target document's title; null for CREATE / unresolved
   change_type: DcrChangeType;
   change_significance: ChangeSignificance; // reuses the existing "MAJOR"|"MINOR" type
   reason_class: DcrReasonClass;

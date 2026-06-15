@@ -46,8 +46,18 @@ async def list_dcrs(
     target_document_id: uuid.UUID | None = None,
     created_by: uuid.UUID | None = None,
     reason_class: DcrReasonClass | None = None,
-) -> Sequence[Dcr]:
-    stmt = select(Dcr).where(Dcr.org_id == org_id)
+) -> Sequence[tuple[Dcr, str | None, str | None]]:
+    """List DCRs, each paired with its target document's ``(identifier, title)`` (critique #5 — so
+    the register names the target instead of a bare ``"Document"``). OUTER join: a CREATE DCR has a
+    NULL ``target_document_id`` → ``(None, None)``. ``ix_dcr_target_document_id`` backs the join."""
+    stmt = (
+        select(Dcr, DocumentedInformation.identifier, DocumentedInformation.title)
+        .outerjoin(
+            DocumentedInformation,
+            DocumentedInformation.id == Dcr.target_document_id,
+        )
+        .where(Dcr.org_id == org_id)
+    )
     if state is not None:
         stmt = stmt.where(Dcr.state == state)
     if change_type is not None:
@@ -59,7 +69,9 @@ async def list_dcrs(
     if reason_class is not None:
         stmt = stmt.where(Dcr.reason_class == reason_class)
     stmt = stmt.order_by(Dcr.created_at.desc())
-    return (await session.execute(stmt)).scalars().all()
+    return [
+        (dcr, identifier, title) for dcr, identifier, title in (await session.execute(stmt)).all()
+    ]
 
 
 async def list_dcr_stage_events(

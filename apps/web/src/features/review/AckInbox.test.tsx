@@ -8,10 +8,10 @@ import { ackDecisionResultFixture } from "../../test/msw/handlers";
 import { AckInbox } from "./AckInbox";
 
 describe("AckInbox", () => {
-  test("lists my pending DOC_ACK tasks with the document name (via detail → doc)", async () => {
+  test("lists my pending DOC_ACK tasks with the document name (off the enriched list row)", async () => {
     renderWithProviders(<AckInbox />);
-    // the row resolves the doc name best-effort (task detail → useDocument). The rendered cell is the
-    // combined `${identifier} — ${title}`, so match the identifier as a substring (exact: false).
+    // S-optimize-1: the name now comes straight off the list row (subject_identifier + subject_title),
+    // no per-row detail→doc N+1. The cell renders `${identifier} — ${title}`, so match the identifier.
     expect(await screen.findByText(/SOP-PUR-014/)).toBeInTheDocument();
   });
 
@@ -34,6 +34,8 @@ describe("AckInbox", () => {
   test("empty queue shows the calm empty state", async () => {
     server.use(http.get("/api/v1/tasks", () => HttpResponse.json([])));
     renderWithProviders(<AckInbox />);
-    expect(await screen.findByText(/No documents awaiting your acknowledgement/i)).toBeInTheDocument();
+    expect(
+      await screen.findByText(/No documents awaiting your acknowledgement/i),
+    ).toBeInTheDocument();
   });
 });

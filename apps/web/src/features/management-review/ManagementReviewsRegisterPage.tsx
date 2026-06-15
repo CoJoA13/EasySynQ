@@ -1,21 +1,77 @@
-import { Alert, Anchor, Badge, Button, Container, Group, Loader, Table, Text, Title } from "@mantine/core";
-import { useState } from "react";
+import {
+  Alert,
+  Anchor,
+  Badge,
+  Button,
+  Container,
+  Group,
+  Loader,
+  Table,
+  Text,
+  Title,
+} from "@mantine/core";
+import { useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { usePermissions } from "../../app/shell/usePermissions";
+import { RegisterToolbar, SortableTh } from "../../lib/RegisterToolbar";
+import { sortRows, useDebouncedSearch, useTableSort } from "../../lib/registerControls";
+import type { MgmtReview } from "../../lib/types";
+import { useRowKeyboardNav } from "../../lib/useRowKeyboardNav";
 import { StateBadge } from "../document/StateBadge";
 import { useMgmtReviews } from "./hooks";
 import { NewManagementReviewModal } from "./NewManagementReviewModal";
+
+const SORT_KEYS = ["identifier", "title", "period", "review_date", "status"] as const;
+type SortKey = (typeof SORT_KEYS)[number];
+
+// The Status column shows the close_state ("Closed"/"Actions tracked") once a review is released; sort
+// on that token so the two open-action reviews cluster apart from the closed ones.
+function sortValue(mr: MgmtReview, key: SortKey): string | null | undefined {
+  switch (key) {
+    case "identifier":
+      return mr.identifier;
+    case "title":
+      return mr.title;
+    case "period":
+      return mr.period_label;
+    case "review_date":
+      return mr.review_date;
+    case "status":
+      return mr.close_state;
+  }
+}
 
 export function ManagementReviewsRegisterPage() {
   const { data, isLoading, isError, forbidden } = useMgmtReviews();
   const { can } = usePermissions();
   const navigate = useNavigate();
   const [createOpen, setCreateOpen] = useState(false);
+  const { q, setQ, query } = useDebouncedSearch();
+  // Default sort = identifier asc, matching the current server order (so the default view is unchanged).
+  const { sort, dir, toggleSort } = useTableSort<SortKey>({
+    keys: SORT_KEYS,
+    defaultSort: "identifier",
+    defaultDir: "asc",
+  });
+  const nav = useRowKeyboardNav<HTMLTableSectionElement>();
+
+  const rows = data?.data;
+  const visible = useMemo(() => {
+    const all = rows ?? [];
+    const matched = query
+      ? all.filter((mr) =>
+          [mr.identifier, mr.title, mr.period_label].some((v) => v?.toLowerCase().includes(query)),
+        )
+      : all;
+    return sortRows(matched, sort, dir, sortValue);
+  }, [rows, query, sort, dir]);
 
   if (forbidden) {
     return (
       <Container size="lg" py="md">
-        <Title order={2} mb="md">Management reviews</Title>
+        <Title order={2} mb="md">
+          Management reviews
+        </Title>
         <Alert color="gray" title="No access">
           You don't have access to Management Reviews. It's available to the Quality Manager.
         </Alert>
@@ -25,13 +81,21 @@ export function ManagementReviewsRegisterPage() {
   if (isError) {
     return (
       <Container size="lg" py="md">
-        <Title order={2} mb="md">Management reviews</Title>
-        <Alert color="red" title="Couldn't load management reviews">Please try again.</Alert>
+        <Title order={2} mb="md">
+          Management reviews
+        </Title>
+        <Alert color="red" title="Couldn't load management reviews">
+          Please try again.
+        </Alert>
       </Container>
     );
   }
   if (isLoading || !data) {
-    return <Container size="lg" py="md"><Loader /></Container>;
+    return (
+      <Container size="lg" py="md">
+        <Loader />
+      </Container>
+    );
   }
   return (
     <Container size="lg" py="md">
@@ -48,43 +112,110 @@ export function ManagementReviewsRegisterPage() {
             : "No management reviews have been convened yet."}
         </Alert>
       ) : (
-        <Table striped highlightOnHover mt="md">
-          <Table.Thead>
-            <Table.Tr>
-              <Table.Th>Ref</Table.Th><Table.Th>Review</Table.Th><Table.Th>Period</Table.Th>
-              <Table.Th>Review date</Table.Th><Table.Th>Status</Table.Th>
-            </Table.Tr>
-          </Table.Thead>
-          <Table.Tbody>
-            {data.data.map((mr) => (
-              <Table.Tr key={mr.id}>
-                <Table.Td>
-                  <Group gap="xs" wrap="nowrap">
-                    <Anchor component={Link} to={`/management-reviews/${mr.id}`}>{mr.identifier}</Anchor>
-                    {/* The steady state (Effective) stays unmarked; every other state gets the chip. */}
-                    {mr.current_state !== "Effective" && <StateBadge state={mr.current_state} size="xs" />}
-                  </Group>
-                </Table.Td>
-                <Table.Td><Text lineClamp={1}>{mr.title}</Text></Table.Td>
-                <Table.Td>{mr.period_label ?? "—"}</Table.Td>
-                <Table.Td>{mr.review_date ?? "—"}</Table.Td>
-                <Table.Td>
-                  {mr.close_state ? (
-                    <Badge variant="light" color={mr.close_state === "Closed" ? "gray" : "blue"}>
-                      {mr.close_state === "Closed" ? "Closed" : "Actions tracked"}
-                    </Badge>
-                  ) : "—"}
-                </Table.Td>
-              </Table.Tr>
-            ))}
-          </Table.Tbody>
-        </Table>
+        <>
+          <RegisterToolbar
+            q={q}
+            onQ={setQ}
+            placeholder="Search reviews…"
+            count={visible.length}
+            countNoun="reviews"
+          />
+          {visible.length === 0 ? (
+            <Text c="dimmed" mt="md">
+              No management reviews match your search.
+            </Text>
+          ) : (
+            <Table striped highlightOnHover mt="md">
+              <Table.Thead>
+                <Table.Tr>
+                  <SortableTh
+                    label="Ref"
+                    sortKey="identifier"
+                    sort={sort}
+                    dir={dir}
+                    onSort={toggleSort}
+                    scope="col"
+                  />
+                  <SortableTh
+                    label="Review"
+                    sortKey="title"
+                    sort={sort}
+                    dir={dir}
+                    onSort={toggleSort}
+                    scope="col"
+                  />
+                  <SortableTh
+                    label="Period"
+                    sortKey="period"
+                    sort={sort}
+                    dir={dir}
+                    onSort={toggleSort}
+                    scope="col"
+                  />
+                  <SortableTh
+                    label="Review date"
+                    sortKey="review_date"
+                    sort={sort}
+                    dir={dir}
+                    onSort={toggleSort}
+                    scope="col"
+                  />
+                  <SortableTh
+                    label="Status"
+                    sortKey="status"
+                    sort={sort}
+                    dir={dir}
+                    onSort={toggleSort}
+                    scope="col"
+                  />
+                </Table.Tr>
+              </Table.Thead>
+              <Table.Tbody ref={nav.ref} onKeyDown={nav.onKeyDown}>
+                {visible.map((mr) => (
+                  <Table.Tr key={mr.id}>
+                    <Table.Td>
+                      <Group gap="xs" wrap="nowrap">
+                        <Anchor component={Link} to={`/management-reviews/${mr.id}`} data-rownav>
+                          {mr.identifier}
+                        </Anchor>
+                        {/* The steady state (Effective) stays unmarked; every other state gets the chip. */}
+                        {mr.current_state !== "Effective" && (
+                          <StateBadge state={mr.current_state} size="xs" />
+                        )}
+                      </Group>
+                    </Table.Td>
+                    <Table.Td>
+                      <Text lineClamp={1}>{mr.title}</Text>
+                    </Table.Td>
+                    <Table.Td>{mr.period_label ?? "—"}</Table.Td>
+                    <Table.Td>{mr.review_date ?? "—"}</Table.Td>
+                    <Table.Td>
+                      {mr.close_state ? (
+                        <Badge
+                          variant="light"
+                          color={mr.close_state === "Closed" ? "gray" : "blue"}
+                        >
+                          {mr.close_state === "Closed" ? "Closed" : "Actions tracked"}
+                        </Badge>
+                      ) : (
+                        "—"
+                      )}
+                    </Table.Td>
+                  </Table.Tr>
+                ))}
+              </Table.Tbody>
+            </Table>
+          )}
+        </>
       )}
       {createOpen && (
         <NewManagementReviewModal
           opened
           onClose={() => setCreateOpen(false)}
-          onCreated={(id) => { setCreateOpen(false); navigate(`/management-reviews/${id}`); }}
+          onCreated={(id) => {
+            setCreateOpen(false);
+            navigate(`/management-reviews/${id}`);
+          }}
         />
       )}
     </Container>

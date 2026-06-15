@@ -1,11 +1,30 @@
 import {
-  Alert, Anchor, Button, Container, Group, Loader, Paper, SegmentedControl, SimpleGrid, Table, Text, Title,
+  Alert,
+  Anchor,
+  Button,
+  Container,
+  Group,
+  Loader,
+  Paper,
+  SegmentedControl,
+  SimpleGrid,
+  Table,
+  Text,
+  Title,
 } from "@mantine/core";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { usePermissions } from "../../app/shell/usePermissions";
 import { useUserDirectory } from "../../app/shell/useUserDirectory";
+import { RegisterToolbar, SortableTh } from "../../lib/RegisterToolbar";
+import {
+  sortRows,
+  useDebouncedSearch,
+  useTableSort,
+  useUrlParam,
+} from "../../lib/registerControls";
 import type { Audit, DirectoryUser } from "../../lib/types";
+import { useRowKeyboardNav } from "../../lib/useRowKeyboardNav";
 import { AuditStateBadge } from "./badges";
 import { useAudits } from "./hooks";
 import { NewAuditModal } from "./NewAuditModal";
@@ -14,6 +33,9 @@ function leadLabel(userId: string | null, directory: DirectoryUser[]): string {
   if (!userId) return "—";
   return directory.find((u) => u.id === userId)?.display_name ?? `${userId.slice(0, 8)}…`;
 }
+
+const SORT_KEYS = ["identifier", "title", "lead", "state", "created"] as const;
+type SortKey = (typeof SORT_KEYS)[number];
 
 function Tile({ label, value }: { label: string; value: number }) {
   return (
@@ -31,9 +53,46 @@ function Tile({ label, value }: { label: string; value: number }) {
 export function AuditsListPage() {
   const { data, isLoading, isError, forbidden } = useAudits();
   const { data: directory } = useUserDirectory();
-  const [filter, setFilter] = useState<"all" | "active" | "closed">("all");
+  // status filter is URL-backed ("" = All) so it survives navigation + is shareable.
+  const [filter, setFilter] = useUrlParam("status", "");
   const { can } = usePermissions();
   const [newOpen, setNewOpen] = useState(false);
+  const { q, setQ, query } = useDebouncedSearch();
+  const { sort, dir, toggleSort } = useTableSort<SortKey>({
+    keys: SORT_KEYS,
+    defaultSort: "created",
+    defaultDir: "desc",
+  });
+  const nav = useRowKeyboardNav<HTMLTableSectionElement>();
+  const dir0 = directory ?? [];
+
+  // The lead-auditor label resolves the directory display name — reused for BOTH the search filter
+  // and the sort value so a sort/search on "lead" matches what the column shows, not the raw id.
+  const visible = useMemo(() => {
+    const all = data ?? [];
+    const sortValue = (a: Audit, key: SortKey): string | null | undefined => {
+      switch (key) {
+        case "identifier":
+          return a.identifier;
+        case "title":
+          return a.title;
+        case "lead":
+          return leadLabel(a.lead_auditor_user_id, dir0);
+        case "state":
+          return a.state;
+        case "created":
+          return a.created_at;
+      }
+    };
+    const matched = query
+      ? all.filter((a) =>
+          [a.identifier, a.title, leadLabel(a.lead_auditor_user_id, dir0)].some((v) =>
+            v?.toLowerCase().includes(query),
+          ),
+        )
+      : all;
+    return sortRows(matched, sort, dir, sortValue);
+  }, [data, directory, query, sort, dir]);
 
   if (forbidden) {
     return (
@@ -69,13 +128,15 @@ export function AuditsListPage() {
   }
 
   const all = data ?? [];
-  // Active = state ≠ Closed (the spec definition). Sort newest-first by created_at (no server order).
+  // Active = state ≠ Closed (the spec definition).
   const isActive = (a: Audit) => a.state !== "Closed";
-  const sorted = [...all].sort((a, b) => (b.created_at ?? "").localeCompare(a.created_at ?? ""));
+  // `visible` is already searched + sorted (default created desc); apply the status slice client-side.
   const rows =
-    filter === "active" ? sorted.filter(isActive)
-    : filter === "closed" ? sorted.filter((a) => !isActive(a))
-    : sorted;
+    filter === "active"
+      ? visible.filter(isActive)
+      : filter === "closed"
+        ? visible.filter((a) => !isActive(a))
+        : visible;
 
   return (
     <Container size="xl" py="md">
@@ -89,41 +150,90 @@ export function AuditsListPage() {
         <Tile label="Active audits" value={all.filter(isActive).length} />
         <Tile label="Closed audits" value={all.filter((a) => !isActive(a)).length} />
       </SimpleGrid>
-      <SegmentedControl
-        mb="md"
-        value={filter}
-        onChange={(v) => setFilter(v as typeof filter)}
-        data={[
-          { value: "all", label: "All" },
-          { value: "active", label: "Active" },
-          { value: "closed", label: "Closed" },
-        ]}
-      />
-      {rows.length === 0 ? (
-        <Text c="dimmed">No audits yet.</Text>
+      <RegisterToolbar
+        q={q}
+        onQ={setQ}
+        placeholder="Search audits…"
+        count={rows.length}
+        countNoun="audits"
+      >
+        {/* "… audits" tile labels keep these radio names collision-free. */}
+        <SegmentedControl
+          value={filter || "all"}
+          onChange={(v) => setFilter(v === "all" ? "" : v)}
+          data={[
+            { value: "all", label: "All" },
+            { value: "active", label: "Active" },
+            { value: "closed", label: "Closed" },
+          ]}
+        />
+      </RegisterToolbar>
+      {all.length === 0 ? (
+        <Text c="dimmed" mt="md">
+          No audits yet.
+        </Text>
+      ) : rows.length === 0 ? (
+        <Text c="dimmed" mt="md">
+          No audits match your filters.
+        </Text>
       ) : (
-        <Table striped highlightOnHover>
+        <Table striped highlightOnHover mt="md">
           <Table.Thead>
             <Table.Tr>
-              <Table.Th>Audit</Table.Th>
-              <Table.Th>Title</Table.Th>
-              <Table.Th>Lead auditor</Table.Th>
-              <Table.Th>State</Table.Th>
-              <Table.Th>Started</Table.Th>
+              <SortableTh
+                label="Audit"
+                sortKey="identifier"
+                sort={sort}
+                dir={dir}
+                onSort={toggleSort}
+                scope="col"
+              />
+              <SortableTh
+                label="Title"
+                sortKey="title"
+                sort={sort}
+                dir={dir}
+                onSort={toggleSort}
+                scope="col"
+              />
+              <SortableTh
+                label="Lead auditor"
+                sortKey="lead"
+                sort={sort}
+                dir={dir}
+                onSort={toggleSort}
+                scope="col"
+              />
+              <SortableTh
+                label="State"
+                sortKey="state"
+                sort={sort}
+                dir={dir}
+                onSort={toggleSort}
+                scope="col"
+              />
+              <SortableTh
+                label="Started"
+                sortKey="created"
+                sort={sort}
+                dir={dir}
+                onSort={toggleSort}
+                scope="col"
+              />
             </Table.Tr>
           </Table.Thead>
-          <Table.Tbody>
+          <Table.Tbody ref={nav.ref} onKeyDown={nav.onKeyDown}>
             {rows.map((a) => (
               <Table.Tr key={a.id}>
                 <Table.Td>
-                  <Anchor component={Link} to={`/audits/${a.id}`}>
+                  <Anchor component={Link} to={`/audits/${a.id}`} data-rownav>
                     {a.identifier ?? a.id.slice(0, 8)}
                   </Anchor>
                 </Table.Td>
                 <Table.Td>
                   <Text lineClamp={1}>{a.title ?? "—"}</Text>
                 </Table.Td>
-                <Table.Td>{leadLabel(a.lead_auditor_user_id, directory ?? [])}</Table.Td>
+                <Table.Td>{leadLabel(a.lead_auditor_user_id, dir0)}</Table.Td>
                 <Table.Td>
                   <AuditStateBadge state={a.state} />
                 </Table.Td>

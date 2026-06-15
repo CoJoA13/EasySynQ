@@ -116,11 +116,22 @@ class DcrFromCapa(BaseModel):
 # --- serializers ------------------------------------------------------------------------------
 
 
-def _dcr(d: Dcr) -> dict[str, Any]:
+def _dcr(
+    d: Dcr,
+    *,
+    target_identifier: str | None = None,
+    target_title: str | None = None,
+) -> dict[str, Any]:
+    # target_identifier/target_title (critique #5): the target Document's human identity so the
+    # register names the target instead of a bare "Document". Resolved on list + detail; null for a
+    # CREATE DCR (no target) or an unresolvable id. Other _dcr callers (raise/create) pass neither →
+    # both surface as null, which is correct (the target identity isn't yet meaningful there).
     return {
         "id": str(d.id),
         "identifier": d.identifier,
         "target_document_id": str(d.target_document_id) if d.target_document_id else None,
+        "target_identifier": target_identifier,
+        "target_title": target_title,
         "change_type": d.change_type.value,
         "change_significance": d.change_significance.value,
         "reason_class": d.reason_class.value,
@@ -373,7 +384,12 @@ async def list_dcrs_endpoint(
         created_by=created_by,
         reason_class=reason_class,
     )
-    return {"data": [_dcr(d) for d in rows]}
+    return {
+        "data": [
+            _dcr(d, target_identifier=target_ident, target_title=target_t)
+            for d, target_ident, target_t in rows
+        ]
+    }
 
 
 @router.get("/dcrs/{dcr_id}")
@@ -385,7 +401,14 @@ async def get_dcr_endpoint(
     dcr = await dcr_repo.get_dcr(session, dcr_id)
     if dcr is None or dcr.org_id != caller.org_id:
         raise ProblemException(status=404, code="not_found", title="DCR not found")
-    out = _dcr(dcr)
+    target_identifier: str | None = None
+    target_title: str | None = None
+    if dcr.target_document_id is not None:
+        target_di = await session.get(DocumentedInformation, dcr.target_document_id)
+        if target_di is not None:
+            target_identifier = target_di.identifier
+            target_title = target_di.title
+    out = _dcr(dcr, target_identifier=target_identifier, target_title=target_title)
     out["stage_events"] = [
         _stage_event(e) for e in await dcr_repo.list_dcr_stage_events(session, dcr_id)
     ]

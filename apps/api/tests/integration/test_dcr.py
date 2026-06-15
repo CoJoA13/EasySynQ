@@ -460,3 +460,58 @@ async def test_grant_backfill_present(app_under_test: object) -> None:
                 )
             ).scalar_one()
             assert cnt >= 1, f"{role_name} missing {perm_key}"
+
+
+async def test_dcr_list_and_detail_name_the_target(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """S-optimize-1: the /dcrs list + detail name the target document (identifier + title) so the
+    register triages in place; a CREATE DCR (no target) surfaces null for both (list + detail)."""
+    subject = _subject("dcr-target-id")
+    await _grant(subject, _DCR_KEYS)
+    h = _auth(token_factory, subject)
+    doc_id = await _seed_di(subject, DocumentKind.DOCUMENT)
+
+    revise_id = (
+        await app_client.post(
+            "/api/v1/dcrs",
+            headers=h,
+            json={
+                "change_type": "REVISE",
+                "change_significance": "MAJOR",
+                "reason_class": "process_improvement",
+                "reason_text": "name the target",
+                "target_document_id": doc_id,
+            },
+        )
+    ).json()["id"]
+    create_id = (
+        await app_client.post(
+            "/api/v1/dcrs",
+            headers=h,
+            json={
+                "change_type": "CREATE",
+                "change_significance": "MINOR",
+                "reason_class": "other",
+                "reason_text": "no target here",
+            },
+        )
+    ).json()["id"]
+
+    listing = {d["id"]: d for d in (await app_client.get("/api/v1/dcrs", headers=h)).json()["data"]}
+    rev = listing[revise_id]
+    assert rev["target_document_id"] == doc_id
+    assert rev["target_identifier"].startswith("DCRTGT-")
+    assert rev["target_title"] == "target"
+    cre = listing[create_id]
+    assert cre["target_document_id"] is None
+    assert cre["target_identifier"] is None
+    assert cre["target_title"] is None
+
+    # Detail agrees with the list (single resolution semantics).
+    rev_detail = (await app_client.get(f"/api/v1/dcrs/{revise_id}", headers=h)).json()
+    assert rev_detail["target_identifier"] == rev["target_identifier"]
+    assert rev_detail["target_title"] == "target"
+    cre_detail = (await app_client.get(f"/api/v1/dcrs/{create_id}", headers=h)).json()
+    assert cre_detail["target_identifier"] is None
+    assert cre_detail["target_title"] is None

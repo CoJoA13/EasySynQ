@@ -9,10 +9,12 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...db.models._workflow_enums import TaskState, TaskType, WorkflowSubjectType
+from ...db.models.dcr import Dcr
+from ...db.models.documented_information import DocumentedInformation
 from ...db.models.role import Role, RoleAssignment
 from ...db.models.workflow import (
     Task,
@@ -237,7 +239,11 @@ async def list_instance_tasks(session: AsyncSession, instance_id: uuid.UUID) -> 
     )
 
 
-async def list_user_tasks(
+# subject_type → backing table for the human label (critique #5, power-user triage). Every live
+# subject either IS a documented_information row (DOCUMENT) or a shared-PK subtype of one
+# (CAPA/MGMT_REVIEW) or acts on one (PERIODIC_REVIEW/DOC_ACK) → identifier+title resolve on
+# documented_information; only DCR lives in its own table (identifier + reason_text, no title col).
+async def list_user_tasks_with_subject(
     session: AsyncSession,
     user_id: uuid.UUID,
     org_id: uuid.UUID,
@@ -245,10 +251,23 @@ async def list_user_tasks(
     state: TaskState | None = None,
     task_type: TaskType | None = None,
     instance_id: uuid.UUID | None = None,
-) -> list[Task]:
-    """My Tasks: tasks assigned to the caller OR where the caller is in the candidate pool."""
+) -> list[tuple[Task, WorkflowSubjectType | None, uuid.UUID | None, str | None, str | None]]:
+    """My Tasks enriched with the resolved subject (type, id, human identifier, source title) in ONE
+    query — no N+1. Joins the (NOT-NULL) instance, then LEFT JOINs the two disjoint backing tables:
+    ``documented_information`` covers DOCUMENT/CAPA/MGMT_REVIEW/PERIODIC_REVIEW/DOC_ACK; ``dcr``
+    covers DCR. ``subject_id`` is a polymorphic UUID across non-overlapping id spaces, so at most
+    one LEFT JOIN matches a row and ``coalesce`` picks the live label."""
     stmt = (
-        select(Task)
+        select(
+            Task,
+            WorkflowInstance.subject_type,
+            WorkflowInstance.subject_id,
+            func.coalesce(DocumentedInformation.identifier, Dcr.identifier),
+            func.coalesce(DocumentedInformation.title, Dcr.reason_text),
+        )
+        .join(WorkflowInstance, Task.instance_id == WorkflowInstance.id)
+        .outerjoin(DocumentedInformation, DocumentedInformation.id == WorkflowInstance.subject_id)
+        .outerjoin(Dcr, Dcr.id == WorkflowInstance.subject_id)
         .where(Task.org_id == org_id)
         .where(
             or_(
@@ -264,4 +283,21 @@ async def list_user_tasks(
     if instance_id is not None:
         stmt = stmt.where(Task.instance_id == instance_id)
     stmt = stmt.order_by(Task.id)
-    return list((await session.execute(stmt)).scalars().all())
+    return [
+        (task, subject_type, subject_id, identifier, title)
+        for task, subject_type, subject_id, identifier, title in (await session.execute(stmt)).all()
+    ]
+
+
+async def subject_label(
+    session: AsyncSession,
+    subject_type: WorkflowSubjectType,
+    subject_id: uuid.UUID,
+) -> tuple[str | None, str | None]:
+    """Resolve ONE task subject's ``(identifier, source-title)`` — the single-row mirror of
+    :func:`list_user_tasks_with_subject`'s coalesce (used by the task detail; pinned to agree)."""
+    if subject_type == WorkflowSubjectType.DCR:
+        dcr = await session.get(Dcr, subject_id)
+        return (dcr.identifier, dcr.reason_text) if dcr is not None else (None, None)
+    di = await session.get(DocumentedInformation, subject_id)
+    return (di.identifier, di.title) if di is not None else (None, None)
