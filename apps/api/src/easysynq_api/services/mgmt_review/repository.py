@@ -148,20 +148,28 @@ async def outputs_for_close_gate(
     return [(ot, ts) for ot, ts in rows.all()]
 
 
-# (signer_display_name | None, meaning, created_at, method) — the MR pack sign-off rows.
-SignoffRow = tuple[str | None, SignatureMeaning, datetime.datetime, SignatureMethod]
+# (display_name | None, email | None, signer_user_id | None, meaning, created_at, method).
+# signer_user_id distinguishes a true system signature (null) from a human whose display_name +
+# email are both null (still a human — the pack must not render them as "system").
+SignoffRow = tuple[
+    str | None, str | None, uuid.UUID | None, SignatureMeaning, datetime.datetime, SignatureMethod
+]
 
 
 async def list_signoffs_for_version(
     session: AsyncSession, version_id: uuid.UUID
 ) -> list[SignoffRow]:
-    """The approval + release signatures on an MR's released version, oldest first, with the
-    signer's display name (OUTER JOIN — a null signer is a Beat-activated future-dated release →
-    name None). The MR rides document.approve/release, so the signatures carry
-    signed_object_type=document_version + signed_object_id = the version id."""
+    """The approval + release signatures on an MR's released version, oldest first (OUTER JOIN to
+    app_user — a null signer is a Beat-activated future-dated release). Returns the signer's
+    display_name, email, and signer_user_id so the caller can preserve human identity (a human with
+    no display_name falls back to email/id; only a null signer_user_id is a system signature). The
+    MR rides document.approve/release, so the signatures carry signed_object_type=document_version
+    + signed_object_id = the version id."""
     rows = await session.execute(
         select(
             AppUser.display_name,
+            AppUser.email,
+            SignatureEvent.signer_user_id,
             SignatureEvent.meaning,
             SignatureEvent.created_at,
             SignatureEvent.method,

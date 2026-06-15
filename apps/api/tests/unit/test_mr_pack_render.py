@@ -12,7 +12,6 @@ def _args(**over):
         identifier="MR-GEN-003",
         title="Annual Management Review 2026",
         current_state="Effective",
-        close_state="ActionsTracked",
         revision_label="1.0",
         effective_from="2026-06-14T00:00:00+00:00",
         version_id="11111111-1111-1111-1111-111111111111",
@@ -105,6 +104,26 @@ def test_render_handles_empty_sections():
     pdf = render_minutes_pdf(**args)
     assert pdf[:4] == b"%PDF"
     assert "none recorded" in _text(pdf).lower()
+
+
+def test_render_splits_a_max_length_decision_without_layout_error():
+    # A 4000-char description (the OutputCreate max) in one table cell must NOT raise a LayoutError
+    # (an oversized unsplittable row → a 500). splitInRow lets the row flow across pages.
+    args = _args()
+    args["minutes"] = {
+        **args["minutes"],
+        "outputs": [
+            {
+                "output_type": "ACTION",
+                "description": "X" * 4000,
+                "owner_user_id": None,
+                "due_date": None,
+            }
+        ],
+    }
+    pdf = render_minutes_pdf(**args)  # must not raise
+    assert pdf[:4] == b"%PDF"
+    assert len(PdfReader(io.BytesIO(pdf)).pages) >= 2  # the long row flowed onto a second page
 
 
 def test_render_tolerates_odd_source_ref_shapes():

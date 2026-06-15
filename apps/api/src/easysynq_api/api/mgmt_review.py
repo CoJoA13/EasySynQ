@@ -358,12 +358,12 @@ async def get_review_pack_endpoint(
     409 ``pack_unavailable`` before release; 404 cross-org.
     Rendered on demand from the released version's frozen snapshot — no cache, no blob, no seal.
     """
-    mr, doc = await _load_review(session, caller, review_id)
+    _mr, doc = await _load_review(session, caller, review_id)
     if doc.current_effective_version_id is None:
         raise ProblemException(
             status=409, code="pack_unavailable", title="This review has not been released yet"
         )
-    pdf = await build_minutes_pdf(session, mr, doc)
+    pdf = await build_minutes_pdf(session, doc)
     safe_stem = _FILENAME_UNSAFE.sub("_", doc.identifier).strip("_") or "mr"
     filename = f"{safe_stem}-minutes.pdf"
     return Response(

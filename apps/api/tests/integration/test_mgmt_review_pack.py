@@ -21,6 +21,7 @@ from httpx import AsyncClient
 from pypdf import PdfReader
 from sqlalchemy import update
 
+from easysynq_api.db.models._mgmt_review_enums import ManagementReviewCloseState
 from easysynq_api.db.models.document_version import DocumentVersion
 from easysynq_api.db.models.documented_information import DocumentedInformation
 from easysynq_api.db.models.management_review import ManagementReview
@@ -203,25 +204,36 @@ async def test_pack_reflects_frozen_snapshot_not_live_rows(
     before = before_resp.content
     assert before[:4] == b"%PDF"
 
-    # TAMPER the live output row directly (bypassing the FSM) — the snapshot is the WORM authority
+    # TAMPER the live output row AND flip the mutable close_state (bypassing the FSM) — neither is
+    # part of the frozen render: the output is read from the snapshot, and close_state (post-filing
+    # action-tracking state) must NOT appear in the pack (else before/after close would differ).
     async with get_sessionmaker()() as s:
         await s.execute(
             update(ReviewOutput)
             .where(ReviewOutput.id == uuid.UUID(output_id))
             .values(description="TAMPERED")
         )
+        await s.execute(
+            update(ManagementReview)
+            .where(ManagementReview.id == uuid.UUID(rid))
+            .values(close_state=ManagementReviewCloseState.Closed)
+        )
         await s.commit()
-        # sanity: the live row really did change
+        # sanity: the live rows really did change
         tampered = await s.get(ReviewOutput, uuid.UUID(output_id))
         assert tampered is not None and tampered.description == "TAMPERED"
+        mr = await s.get(ManagementReview, uuid.UUID(rid))
+        assert mr is not None and mr.close_state is ManagementReviewCloseState.Closed
 
     after_resp = await app_client.get(f"/api/v1/management-reviews/{rid}/pack", headers=hr)
     assert after_resp.status_code == 200, after_resp.text
     after = after_resp.content
 
-    # deterministic + frozen-sourced: the bytes are identical despite the live-row tamper
+    # deterministic + frozen-sourced: the bytes are identical despite the live-row tamper AND the
+    # close_state flip — the pack renders only frozen/immutable facts.
     assert before == after, (
-        "pack bytes changed after a live-row tamper — it is NOT reading the frozen snapshot"
+        "pack bytes changed after a live-row/close_state mutation — it is NOT reading only the "
+        "frozen snapshot"
     )
 
     text = _pdf_text(after)

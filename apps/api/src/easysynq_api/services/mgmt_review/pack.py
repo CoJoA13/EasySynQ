@@ -15,7 +15,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ...db.models.app_user import AppUser
 from ...db.models.document_version import DocumentVersion
 from ...db.models.documented_information import DocumentedInformation
-from ...db.models.management_review import ManagementReview
 from ...domain.mgmt_review.pack_render import render_minutes_pdf
 from ...problems import ProblemException
 from . import repository as repo
@@ -44,7 +43,9 @@ def _collect_user_ids(minutes: dict[str, Any]) -> set[str]:
     return ids
 
 
-async def _resolve_names(session: AsyncSession, ids: set[str]) -> dict[str, str]:
+async def _resolve_names(session: AsyncSession, ids: set[str], org_id: uuid.UUID) -> dict[str, str]:
+    # org_id-scoped: a name only resolves for a user in the review's own org (D1 is single-org, so
+    # this is defence-in-depth + the every-table tenancy posture — never render a foreign name).
     if not ids:
         return {}
     uuids = []
@@ -56,16 +57,31 @@ async def _resolve_names(session: AsyncSession, ids: set[str]) -> dict[str, str]
     if not uuids:
         return {}
     rows = await session.execute(
-        select(AppUser.id, AppUser.display_name, AppUser.email).where(AppUser.id.in_(uuids))
+        select(AppUser.id, AppUser.display_name, AppUser.email).where(
+            AppUser.id.in_(uuids), AppUser.org_id == org_id
+        )
     )
     return {str(uid): (dn or em or str(uid)) for uid, dn, em in rows.all()}
 
 
-async def build_minutes_pdf(
-    session: AsyncSession, mr: ManagementReview, doc: DocumentedInformation
-) -> bytes:
+def _signer_label(
+    display_name: str | None, email: str | None, signer_user_id: uuid.UUID | None
+) -> str | None:
+    """The sign-off label for one signature. A human signer (signer_user_id set) always gets a
+    non-null label — display_name, else email, else the id — so a human with no display_name is
+    NOT misrendered as "system". Only a true system signature (null signer_user_id) returns None
+    (the render maps that to "system")."""
+    if signer_user_id is None:
+        return None
+    return display_name or email or str(signer_user_id)
+
+
+async def build_minutes_pdf(session: AsyncSession, doc: DocumentedInformation) -> bytes:
     """Render the released MR's filed minutes to a PDF (bytes). Assumes
-    doc.current_effective_version_id is set (the endpoint 409s otherwise)."""
+    doc.current_effective_version_id is set (the endpoint 409s otherwise). Renders ONLY frozen /
+    immutable facts (the version snapshot + the version's revision/effective fields + its
+    append-only signatures + the doc's stable lifecycle state) — never mutable post-filing state
+    like close_state, so the pack is a faithful, byte-stable rendering of the filed minutes."""
     version = await session.get(DocumentVersion, doc.current_effective_version_id)
     if (
         version is None
@@ -74,23 +90,27 @@ async def build_minutes_pdf(
             status=409, code="pack_unavailable", title="This review has not been released yet"
         )
     minutes = minutes_from_snapshot(version.metadata_snapshot)
-    name_of = await _resolve_names(session, _collect_user_ids(minutes))
+    name_of = await _resolve_names(session, _collect_user_ids(minutes), doc.org_id)
     signatures = [
         {
-            "signer": signer,
+            "signer": _signer_label(display_name, email, signer_user_id),
             "meaning": meaning.value if hasattr(meaning, "value") else str(meaning),
             "when": when.astimezone(datetime.UTC).isoformat() if when is not None else None,
             "method": method.value if hasattr(method, "value") else str(method),
         }
-        for (signer, meaning, when, method) in await repo.list_signoffs_for_version(
-            session, version.id
-        )
+        for (
+            display_name,
+            email,
+            signer_user_id,
+            meaning,
+            when,
+            method,
+        ) in await repo.list_signoffs_for_version(session, version.id)
     ]
     return render_minutes_pdf(
         identifier=doc.identifier,
         title=doc.title,
         current_state=doc.current_state.value,
-        close_state=mr.close_state.value if mr.close_state is not None else None,
         revision_label=version.revision_label,
         effective_from=version.effective_from.isoformat() if version.effective_from else None,
         version_id=str(version.id),

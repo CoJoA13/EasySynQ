@@ -54,7 +54,6 @@ def render_minutes_pdf(
     identifier: str,
     title: str,
     current_state: str,
-    close_state: str | None,
     revision_label: str,
     effective_from: str | None,
     version_id: str,
@@ -74,7 +73,15 @@ def render_minutes_pdf(
         return Paragraph(escape(str(text)), body)
 
     def grid(rows: list[list[Any]], widths_in: list[float]) -> Table:
-        t = Table(rows, colWidths=[w * inch for w in widths_in], hAlign="LEFT")
+        # repeatRows + splitInRow: a long (≤4000-char) decision cell can make a row taller than the
+        # page frame; allow the row to split across pages so it never raises a LayoutError (→ 500).
+        t = Table(
+            rows,
+            colWidths=[w * inch for w in widths_in],
+            hAlign="LEFT",
+            repeatRows=1,
+            splitInRow=1,
+        )
         t.setStyle(
             TableStyle(
                 [
@@ -107,7 +114,7 @@ def render_minutes_pdf(
                 ["Title", p(title)],
                 ["Period", p(minutes.get("period_label") or "—")],
                 ["Review date", p(minutes.get("review_date") or "—")],
-                ["State", p(current_state + (f" · {close_state}" if close_state else ""))],
+                ["State", p(current_state)],
                 [
                     "Revision",
                     p(
