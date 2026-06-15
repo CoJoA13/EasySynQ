@@ -9,6 +9,7 @@ from __future__ import annotations
 import datetime
 import uuid
 from collections.abc import Callable
+from decimal import Decimal
 from types import SimpleNamespace
 from urllib.parse import quote
 
@@ -16,10 +17,13 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
 
+from easysynq_api.db.models._objective_enums import ObjectiveDirection
 from easysynq_api.db.models.authz_grant import PermissionOverride
 from easysynq_api.db.models.clause import Clause
+from easysynq_api.db.models.documented_information import DocumentedInformation
 from easysynq_api.db.models.framework import Framework
 from easysynq_api.db.models.permission import Permission
+from easysynq_api.db.models.quality_objective import QualityObjective
 from easysynq_api.db.models.scope import Scope
 from easysynq_api.db.session import get_sessionmaker
 from easysynq_api.domain.authz.types import Effect, ScopeLevel
@@ -287,3 +291,133 @@ async def test_pagination_slices_the_post_authz_set(
     paged = p1["data"] + p2["data"]
     assert {d["id"] for d in paged} == set(pur_ids)  # exactly the 3 readable docs, gap-free
     assert all(d["folder_path"] == pur for d in paged)  # no denied (prd) doc leaked across pages
+
+
+async def test_filter_has_effective_version_and_managed_subtype(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    """S-doc-filters: the two CREATE-implement-picker filters narrow the candidate set server-side.
+
+    Seeds FOUR doc shapes (all owned by subj.a, so assertions scope via the owner_user_id filter to
+    THIS run's rows — the integration suite shares one session DB):
+      - eff:          an Effective initial doc (current_effective_version_id IS NOT NULL)
+      - approved_new: an Approved brand-new plain doc (no effective version) — the valid candidate
+      - approved_rev: an Approved REVISION of an Effective doc (effective-bearing until release)
+      - obj:          an Approved-new doc bolted with a quality_objective row (a managed subtype)
+
+    Asserts: has_effective_version=false → only the never-released docs (approved_new + obj, NOT eff
+    nor approved_rev); managed_subtype=false → excludes obj; both combined → exactly approved_new.
+    """
+    await s5.grant_lifecycle(subj.a)
+    await s5.grant_lifecycle(subj.b)
+    await s5.set_approver_release(await s5.default_org_id(), True)  # approver may also release
+    ha, hb = _auth(token_factory, subj.a), _auth(token_factory, subj.b)
+    type_id = await s5.type_id("SOP")
+
+    # 1) Effective initial doc — has an effective version.
+    eff = await s5.drive_to_effective(app_client, ha, hb, hb, type_id, f"hev-eff-{subj.a}".encode())
+    eff_id = eff["id"]
+
+    # 2) Approved brand-new plain doc — Approved, NO effective version.
+    approved_new_id = await s5.drive_to_approved(
+        app_client, ha, hb, type_id, f"hev-new-{subj.a}".encode()
+    )
+
+    # 3) Approved REVISION of an Effective doc — start-revision → checkin → submit → approve (NOT
+    #    released), so current_state=Approved but current_effective_version_id is still set.
+    rev_id = (
+        await s5.drive_to_effective(app_client, ha, hb, hb, type_id, f"hev-rev1-{subj.a}".encode())
+    )["id"]
+    assert (
+        await app_client.post(f"/api/v1/documents/{rev_id}/start-revision", headers=ha)
+    ).status_code == 200
+    sha = await s5._upload(app_client, ha, rev_id, f"hev-rev2-{subj.a}".encode())
+    ci = await s5._checkin(
+        app_client, ha, rev_id, sha, change_reason="rev", change_significance="MINOR"
+    )
+    assert ci.status_code == 201, ci.text
+    sub = await app_client.post(f"/api/v1/documents/{rev_id}/submit-review", headers=ha)
+    assert sub.status_code == 200, sub.text
+    rev_task = await s5.task_for_doc(rev_id)
+    dec = await app_client.post(
+        f"/api/v1/tasks/{rev_task}/decision", headers=hb, json={"outcome": "approve"}
+    )
+    assert dec.status_code == 200, dec.text  # Approved, effective version still set (cutover at T6)
+
+    # 4) Approved-new doc bolted with a quality_objective row → a managed subtype (shared PK).
+    obj_id = await s5.drive_to_approved(app_client, ha, hb, type_id, f"hev-obj-{subj.a}".encode())
+    async with get_sessionmaker()() as s:
+        doc_row = await s.get(DocumentedInformation, uuid.UUID(obj_id))
+        assert doc_row is not None
+        s.add(
+            QualityObjective(
+                id=uuid.UUID(obj_id),
+                org_id=doc_row.org_id,
+                target_value=Decimal("100"),
+                unit="percent",
+                direction=ObjectiveDirection.HIGHER_IS_BETTER,
+                due_date=datetime.date(2027, 1, 1),
+            )
+        )
+        await s.commit()
+
+    owner = (await app_client.get(f"/api/v1/documents/{eff_id}", headers=ha)).json()[
+        "owner_user_id"
+    ]
+    base = f"/api/v1/documents?limit=100&filter[owner_user_id][eq]={owner}"
+
+    # has_effective_version=false → never-released only (approved_new + obj); excludes eff + rev.
+    nev = await app_client.get(f"{base}&filter[has_effective_version][eq]=false", headers=ha)
+    assert nev.status_code == 200, nev.text
+    nev_ids = {d["id"] for d in nev.json()["data"]}
+    assert approved_new_id in nev_ids
+    assert obj_id in nev_ids
+    assert eff_id not in nev_ids
+    assert rev_id not in nev_ids  # an Approved revision still carries its effective version
+
+    # has_effective_version=true → only the effective-bearing docs (eff + rev); excludes new/obj.
+    has = await app_client.get(f"{base}&filter[has_effective_version][eq]=true", headers=ha)
+    assert has.status_code == 200, has.text
+    has_ids = {d["id"] for d in has.json()["data"]}
+    assert eff_id in has_ids
+    assert rev_id in has_ids
+    assert approved_new_id not in has_ids
+    assert obj_id not in has_ids
+
+    # managed_subtype=false → excludes the OBJ (every other shape remains visible).
+    nms = await app_client.get(f"{base}&filter[managed_subtype][eq]=false", headers=ha)
+    assert nms.status_code == 200, nms.text
+    nms_ids = {d["id"] for d in nms.json()["data"]}
+    assert obj_id not in nms_ids
+    assert approved_new_id in nms_ids
+    assert eff_id in nms_ids
+
+    # managed_subtype=true → only the OBJ.
+    yms = await app_client.get(f"{base}&filter[managed_subtype][eq]=true", headers=ha)
+    assert yms.status_code == 200, yms.text
+    yms_ids = {d["id"] for d in yms.json()["data"]}
+    assert obj_id in yms_ids
+    assert approved_new_id not in yms_ids
+
+    # Both combined → EXACTLY the Approved brand-new plain doc (of this run's four shapes).
+    both = await app_client.get(
+        f"{base}&filter[has_effective_version][eq]=false&filter[managed_subtype][eq]=false",
+        headers=ha,
+    )
+    assert both.status_code == 200, both.text
+    both_ids = {d["id"] for d in both.json()["data"]}
+    assert approved_new_id in both_ids
+    for other in (eff_id, rev_id, obj_id):
+        assert other not in both_ids
+
+
+async def test_filter_has_effective_version_bad_value_422(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    await s5.grant_lifecycle(subj.a)
+    ha = _auth(token_factory, subj.a)
+    r = await app_client.get(
+        "/api/v1/documents?filter[has_effective_version][eq]=banana", headers=ha
+    )
+    assert r.status_code == 422, r.text
+    assert r.json()["code"] == "validation_error"
