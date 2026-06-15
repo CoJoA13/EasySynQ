@@ -1,3 +1,4 @@
+import { TONE_GLYPH, type Tone } from "../../lib/status";
 import type { Audit, Capa, Complaint, DriftStatus, Ncr } from "../../lib/types";
 
 // The dashboard's RAG vocabulary. `neutral` = an informational/unscored signal (NOT objectives'
@@ -5,12 +6,14 @@ import type { Audit, Capa, Complaint, DriftStatus, Ncr } from "../../lib/types";
 // render — never an asserted compliance verdict, never stored.
 export type Rag = "green" | "amber" | "red" | "neutral";
 
-// DP-7: status is never colour-only — each RAG carries a distinct glyph + label + Mantine colour.
-export const RAG_META: Record<Rag, { color: string; glyph: string; label: string }> = {
-  green: { color: "green", glyph: "✓", label: "Green" },
-  amber: { color: "yellow", glyph: "▲", label: "Amber" },
-  red: { color: "red", glyph: "✕", label: "Red" },
-  neutral: { color: "gray", glyph: "•", label: "—" },
+// Each RAG maps to a canonical status `tone` (lib/status.ts — the one colour + glyph source of truth):
+// `tone` drives the StatusBadge colour pair + the non-colour glyph (DP-7); `hue` is the raw functional
+// hue for inline (non-badge) glyph marks like StatLine; `label` is the dashboard's RAG word.
+export const RAG_META: Record<Rag, { tone: Tone; glyph: string; label: string; hue: string }> = {
+  green: { tone: "success", glyph: TONE_GLYPH.success, label: "Green", hue: "var(--es-success)" },
+  amber: { tone: "warning", glyph: TONE_GLYPH.warning, label: "Amber", hue: "var(--es-warning)" },
+  red: { tone: "danger", glyph: TONE_GLYPH.danger, label: "Red", hue: "var(--es-danger)" },
+  neutral: { tone: "neutral", glyph: TONE_GLYPH.neutral, label: "—", hue: "var(--es-text-muted)" },
 };
 
 const ORDER: Record<Rag, number> = { neutral: 0, green: 1, amber: 2, red: 3 };
@@ -21,7 +24,12 @@ export function worstRag(rags: Rag[]): Rag {
 }
 
 // Objectives: read the SERVER-computed by_rag verbatim, roll up worst-wins. Never recompute a row's rag.
-export function planObjectivesRag(b: { green: number; amber: number; red: number; unmeasured: number }): Rag {
+export function planObjectivesRag(b: {
+  green: number;
+  amber: number;
+  red: number;
+  unmeasured: number;
+}): Rag {
   if (b.red > 0) return "red";
   if (b.amber > 0) return "amber";
   if (b.green > 0) return "green";
@@ -62,6 +70,7 @@ export function driftStatusText(s: DriftStatus): string {
 export const openAuditsCount = (a: Audit[]): number => a.filter((x) => x.state !== "Closed").length;
 export const capasOpenCount = (c: Capa[]): number =>
   c.filter((x) => x.close_state !== "Closed" && x.close_state !== "Rejected").length;
-export const ncrsAwaitingCount = (n: Ncr[]): number => n.filter((x) => x.disposition === null).length;
+export const ncrsAwaitingCount = (n: Ncr[]): number =>
+  n.filter((x) => x.disposition === null).length;
 export const complaintsAwaitingCount = (c: Complaint[]): number =>
   c.filter((x) => x.spawned_capa_id === null).length;

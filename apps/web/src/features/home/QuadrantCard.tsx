@@ -1,15 +1,23 @@
-import { Anchor, Badge, Group, Paper, Skeleton, Stack, Text } from "@mantine/core";
+import { Anchor, Group, Paper, Skeleton, Stack, Text } from "@mantine/core";
 import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
+import { StatusBadge } from "../../lib/StatusBadge";
 import type { PdcaPhase } from "../../lib/types";
 import type { Rag } from "./rag";
 import { RAG_META } from "./rag";
 
-const PHASE_TOKEN: Record<PdcaPhase, string> = { PLAN: "plan", DO: "do", CHECK: "check", ACT: "act" };
+const PHASE_TOKEN: Record<PdcaPhase, string> = {
+  PLAN: "plan",
+  DO: "do",
+  CHECK: "check",
+  ACT: "act",
+};
 
 // A calm no-access body (the whole tile's reads were forbidden) and a two-line skeleton (still loading).
 export const TileNoAccess = () => (
-  <Text size="sm" c="dimmed">No access to this section&apos;s data.</Text>
+  <Text size="sm" c="dimmed">
+    No access to this section&apos;s data.
+  </Text>
 );
 export const TileSkeleton = () => (
   <Stack gap={6}>
@@ -20,7 +28,14 @@ export const TileSkeleton = () => (
 
 // One PDCA region (doc-11 §5.1 "nav of four labeled regions"): an accent label chip + the headline RAG
 // badge (omitted when rag is null) + the signal body + exactly one accent Open action (DP-2).
-export function QuadrantCard({ phase, clauseLabel, rag, openTo, openLabel, children }: {
+export function QuadrantCard({
+  phase,
+  clauseLabel,
+  rag,
+  openTo,
+  openLabel,
+  children,
+}: {
   phase: PdcaPhase;
   clauseLabel: string;
   rag: Rag | null;
@@ -47,14 +62,7 @@ export function QuadrantCard({ phase, clauseLabel, rag, openTo, openLabel, child
             {phase} · {clauseLabel}
           </Text>
           {rag && (
-            <Badge
-              variant="light"
-              color={RAG_META[rag].color}
-              leftSection={<span aria-hidden>{RAG_META[rag].glyph}</span>}
-              aria-label={`Status: ${RAG_META[rag].label}`}
-            >
-              {RAG_META[rag].label}
-            </Badge>
+            <StatusBadge tone={RAG_META[rag].tone} label={RAG_META[rag].label} kind="Status" />
           )}
         </Group>
         <Stack gap={6} style={{ flex: 1 }}>
