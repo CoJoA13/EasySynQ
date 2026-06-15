@@ -1,6 +1,7 @@
 import { Loader, Stack, Table, Text, Title } from "@mantine/core";
 import { Link, useSearchParams } from "react-router-dom";
 import { ApiError } from "../../lib/api";
+import { humanizeStageKey } from "../../lib/labels";
 import { TaskStateBadge } from "../document/TaskStateBadge";
 import { AckInbox } from "./AckInbox";
 import { useTasks } from "./hooks";
@@ -52,7 +53,7 @@ function GeneralTasksInbox() {
                 <Table.Td>
                   <Link to={`/tasks/${t.id}`}>{t.action_expected ?? t.type}</Link>
                 </Table.Td>
-                <Table.Td>{t.stage_key}</Table.Td>
+                <Table.Td>{humanizeStageKey(t.stage_key)}</Table.Td>
                 <Table.Td>
                   <TaskStateBadge state={t.state} />
                 </Table.Td>

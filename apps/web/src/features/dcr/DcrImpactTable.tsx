@@ -1,6 +1,7 @@
 import { Button, Stack, Table, Text, Textarea } from "@mantine/core";
 import { useMemo, useState } from "react";
 import type { DcrImpact } from "../../lib/types";
+import { dimensionLabel } from "./labels";
 import { useAnnotateImpact } from "./mutations";
 
 function summarizeAuto(auto: Record<string, unknown> | null): string {
@@ -59,7 +60,7 @@ export function DcrImpactTable({
       <Table.Tbody>
         {impact.map((i) => (
           <Table.Tr key={i.id}>
-            <Table.Td>{i.dimension}</Table.Td>
+            <Table.Td>{dimensionLabel(i.dimension)}</Table.Td>
             <Table.Td>{summarizeAuto(i.auto_populated)}</Table.Td>
             <Table.Td>{i.requester_annotation ?? "—"}</Table.Td>
           </Table.Tr>
@@ -101,11 +102,11 @@ function EditableImpactTable({ impact, dcrId }: { impact: DcrImpact[]; dcrId: st
         <Table.Tbody>
           {impact.map((i) => (
             <Table.Tr key={i.id}>
-              <Table.Td>{i.dimension}</Table.Td>
+              <Table.Td>{dimensionLabel(i.dimension)}</Table.Td>
               <Table.Td>{summarizeAuto(i.auto_populated)}</Table.Td>
               <Table.Td>
                 <Textarea
-                  aria-label={`Annotation for ${i.dimension}`}
+                  aria-label={`Annotation for ${dimensionLabel(i.dimension)}`}
                   value={draft[i.dimension] ?? ""}
                   onChange={(e) => {
                     const val = e.currentTarget.value;

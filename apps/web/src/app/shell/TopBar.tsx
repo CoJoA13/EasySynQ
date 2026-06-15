@@ -1,5 +1,6 @@
 import { ActionIcon, Burger, Button, Group, Indicator, Menu, Text } from "@mantine/core";
 import { Link } from "react-router-dom";
+import { IconBell, IconSearch, IconTasks, IconUser } from "../../lib/icons";
 import { useAuth } from "../../lib/auth";
 import { useAckCount } from "./useAckCount";
 
@@ -39,26 +40,29 @@ export function TopBar({
         onClick={onOpenSearch}
         aria-label="Search (⌘K)"
       >
-        <span aria-hidden="true">&#128269;</span>
+        <IconSearch size={16} />
         <Text component="span" c="dimmed" ml={6} visibleFrom="sm">
           Search (⌘K)
         </Text>
       </Button>
       <Group gap="xs" wrap="nowrap">
-        <Indicator disabled>
-          <ActionIcon variant="subtle" aria-label="Tasks">
-            &#9684;
-          </ActionIcon>
-        </Indicator>
+        <ActionIcon component={Link} to="/tasks" variant="subtle" aria-label="Tasks">
+          <IconTasks />
+        </ActionIcon>
         <Indicator label={ackCount} size={16} disabled={ackCount === 0}>
-          <ActionIcon component={Link} to="/tasks?type=DOC_ACK&state=PENDING" variant="subtle" aria-label="Acknowledgements">
-            &#128276;
+          <ActionIcon
+            component={Link}
+            to="/tasks?type=DOC_ACK&state=PENDING"
+            variant="subtle"
+            aria-label="Acknowledgements"
+          >
+            <IconBell />
           </ActionIcon>
         </Indicator>
         <Menu position="bottom-end">
           <Menu.Target>
             <ActionIcon variant="subtle" aria-label="Account">
-              &#128100;
+              <IconUser />
             </ActionIcon>
           </Menu.Target>
           <Menu.Dropdown>

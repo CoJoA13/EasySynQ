@@ -14,9 +14,9 @@ describe("DriftStatusPage", () => {
     expect(screen.getByText("Blob integrity")).toBeInTheDocument();
     expect(screen.getByLabelText("Mirror scan status: CLEAN")).toBeInTheDocument();
     expect(screen.getByLabelText("Blob integrity status: DIVERGENT")).toBeInTheDocument();
-    // counts render generically — a MIRROR key and a BLOB_REHASH key both appear
-    expect(screen.getByText("rebuild_triggered")).toBeInTheDocument();
-    expect(screen.getByText("sample_limit")).toBeInTheDocument();
+    // counts render generically + humanised (#2b) — a MIRROR key and a BLOB_REHASH key both appear
+    expect(screen.getByText("Rebuild triggered")).toBeInTheDocument();
+    expect(screen.getByText("Sample limit")).toBeInTheDocument();
   });
 
   test("treats counts as an OPEN bag — an unknown key still renders", async () => {
@@ -35,7 +35,7 @@ describe("DriftStatusPage", () => {
       ),
     );
     renderWithProviders(<DriftStatusPage />);
-    expect(await screen.findByText("brand_new_key")).toBeInTheDocument();
+    expect(await screen.findByText("Brand new key")).toBeInTheDocument();
     expect(screen.getByText("7")).toBeInTheDocument();
   });
 

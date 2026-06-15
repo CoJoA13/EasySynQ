@@ -187,21 +187,21 @@ function serveAnno(state: DcrState, assess = true) {
 it("shows the editable annotation column for an Assessed DCR with the assess capability", async () => {
   serveAnno("Assessed");
   const screen = renderWithProviders(<DcrDrawer dcrId={ANNO_ID} onClose={() => {}} />);
-  expect(await screen.findByLabelText("Annotation for affected_processes")).toBeInTheDocument();
+  expect(await screen.findByLabelText("Annotation for Affected processes")).toBeInTheDocument();
 });
 
 it("keeps the annotation column read-only without the assess capability", async () => {
   serveAnno("Assessed", false);
   const screen = renderWithProviders(<DcrDrawer dcrId={ANNO_ID} onClose={() => {}} />);
   await screen.findByText("DCR-2026-0077");
-  expect(screen.queryByLabelText("Annotation for affected_processes")).not.toBeInTheDocument();
+  expect(screen.queryByLabelText("Annotation for Affected processes")).not.toBeInTheDocument();
 });
 
 it("keeps the annotation column read-only in a terminal state even with the capability", async () => {
   serveAnno("Closed");
   const screen = renderWithProviders(<DcrDrawer dcrId={ANNO_ID} onClose={() => {}} />);
   await screen.findByText("DCR-2026-0077");
-  expect(screen.queryByLabelText("Annotation for affected_processes")).not.toBeInTheDocument();
+  expect(screen.queryByLabelText("Annotation for Affected processes")).not.toBeInTheDocument();
 });
 
 // ---- ui-4: the CREATE resulting-doc deep-link ----

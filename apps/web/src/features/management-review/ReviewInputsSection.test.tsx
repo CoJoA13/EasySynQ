@@ -68,10 +68,10 @@ it("renders the OBJECTIVES_STATUS card with the RAG band and on-target count", (
   renderWithProviders(<ReviewInputsSection inputs={[OBJECTIVES_INPUT]} />);
   // The on-target / total line — "3 / 5 objectives on target" renders in a <p>
   expect(screen.getByText(/5 objectives on target/i)).toBeInTheDocument();
-  // RAG chips — each key appears as a badge
-  expect(screen.getByText(/3 green/i)).toBeInTheDocument();
-  expect(screen.getByText(/1 amber/i)).toBeInTheDocument();
-  expect(screen.getByText(/1 red/i)).toBeInTheDocument();
+  // RAG chips — #2b: the MEANING, not the colour word (so a greyscale export still carries status).
+  expect(screen.getByText(/3 on target/i)).toBeInTheDocument();
+  expect(screen.getByText(/1 at risk/i)).toBeInTheDocument();
+  expect(screen.getByText(/1 off target/i)).toBeInTheDocument();
   expect(screen.getByText(/0 unmeasured/i)).toBeInTheDocument();
   // The input label
   expect(screen.getByText(/Quality objectives status/i)).toBeInTheDocument();
@@ -83,6 +83,28 @@ it("renders the AUDIT_RESULTS card as a generic key/value table", () => {
   // generic summary keys rendered as text (underscores replaced with spaces)
   expect(screen.getByText(/open/i)).toBeInTheDocument();
   expect(screen.getByText(/closed/i)).toBeInTheDocument();
+});
+
+it("#2b: humanises a snake_case key and formats an ISO-timestamp value (no raw 'verify_failed_at <ts>')", () => {
+  const rawIso = "2026-06-01T09:00:00+00:00";
+  const input: ReviewInput = {
+    id: "ri-9",
+    management_review_id: "mr-0001-0001-0001-000000000001",
+    input_type: "MONITORING_RESULTS",
+    available: true,
+    position: 9,
+    source_ref: {
+      available: true,
+      generated_at: "2026-06-01T09:00:00+00:00",
+      summary: { checks: 12, verify_failed_at: rawIso },
+    },
+  };
+  renderWithProviders(<ReviewInputsSection inputs={[input]} />);
+  // the key is humanised (sentence case, no underscores) ...
+  expect(screen.getByText("Verify failed at")).toBeInTheDocument();
+  // ... and the value is rendered as a localised timestamp, never the raw machine ISO string.
+  expect(screen.queryByText(rawIso)).not.toBeInTheDocument();
+  expect(screen.getByText(/2026/)).toBeInTheDocument();
 });
 
 it("renders a gap row with 'Not available' and the reason", () => {

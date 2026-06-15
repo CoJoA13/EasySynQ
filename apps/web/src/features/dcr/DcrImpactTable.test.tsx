@@ -29,7 +29,7 @@ const impact: DcrImpact[] = [
 
 it("renders each dimension with a generic system-facts summary and the annotation or a dash", () => {
   const { getByText } = renderWithProviders(<DcrImpactTable impact={impact} />);
-  expect(getByText("affected_processes")).toBeInTheDocument();
+  expect(getByText("Affected processes")).toBeInTheDocument();
   expect(getByText("Applicable · 2 processes")).toBeInTheDocument();
   expect(getByText("Calibration")).toBeInTheDocument();
   expect(getByText("Not applicable")).toBeInTheDocument();
@@ -45,8 +45,8 @@ it("editable mode renders a textarea per dimension seeded from the annotation", 
   const { getByLabelText } = renderWithProviders(
     <DcrImpactTable impact={impact} editable dcrId="dcr1" />,
   );
-  expect(getByLabelText("Annotation for affected_processes")).toHaveValue("Calibration");
-  expect(getByLabelText("Annotation for training_awareness")).toHaveValue("");
+  expect(getByLabelText("Annotation for Affected processes")).toHaveValue("Calibration");
+  expect(getByLabelText("Annotation for Training & awareness")).toHaveValue("");
 });
 
 it("Save is disabled until an annotation changes, then PUTs only the changed dimension", async () => {
@@ -64,7 +64,7 @@ it("Save is disabled until an annotation changes, then PUTs only the changed dim
   );
   const save = getByRole("button", { name: "Save annotations" });
   expect(save).toBeDisabled();
-  await user.type(getByLabelText("Annotation for training_awareness"), "Brief the line leads");
+  await user.type(getByLabelText("Annotation for Training & awareness"), "Brief the line leads");
   expect(save).toBeEnabled();
   await user.click(save);
   await waitFor(() =>
@@ -84,17 +84,17 @@ it("preserves an unsaved edit across a background refetch of the same rows", asy
   const { getByLabelText, rerender } = renderWithProviders(
     <DcrImpactTable impact={impact} editable dcrId="dcr1" />,
   );
-  await user.type(getByLabelText("Annotation for training_awareness"), "Unsaved text");
+  await user.type(getByLabelText("Annotation for Training & awareness"), "Unsaved text");
   // A refetch hands a NEW array with the SAME rows (same ids) — must NOT clobber the unsaved edit.
   rerender(<DcrImpactTable impact={impact.map((i) => ({ ...i }))} editable dcrId="dcr1" />);
-  expect(getByLabelText("Annotation for training_awareness")).toHaveValue("Unsaved text");
+  expect(getByLabelText("Annotation for Training & awareness")).toHaveValue("Unsaved text");
 });
 
 it("adopts fresh server annotations on a refetch when the draft is pristine", () => {
   const { getByLabelText, rerender } = renderWithProviders(
     <DcrImpactTable impact={impact} editable dcrId="dcr1" />,
   );
-  expect(getByLabelText("Annotation for affected_processes")).toHaveValue("Calibration");
+  expect(getByLabelText("Annotation for Affected processes")).toHaveValue("Calibration");
   // A content refetch (same rows) updated an annotation underneath; the pristine draft adopts it
   // rather than holding (and later re-PUTting) the stale value (Codex P2).
   const updated = impact.map((i) =>
@@ -103,7 +103,7 @@ it("adopts fresh server annotations on a refetch when the draft is pristine", ()
       : { ...i },
   );
   rerender(<DcrImpactTable impact={updated} editable dcrId="dcr1" />);
-  expect(getByLabelText("Annotation for affected_processes")).toHaveValue("Updated by Mara");
+  expect(getByLabelText("Annotation for Affected processes")).toHaveValue("Updated by Mara");
 });
 
 it("resets the draft when switching to a different DCR (no cross-DCR leak)", async () => {
@@ -111,8 +111,8 @@ it("resets the draft when switching to a different DCR (no cross-DCR leak)", asy
   const { getByLabelText, rerender } = renderWithProviders(
     <DcrImpactTable impact={impact} editable dcrId="dcrA" />,
   );
-  await user.type(getByLabelText("Annotation for affected_processes"), " EDIT");
-  expect(getByLabelText("Annotation for affected_processes")).toHaveValue("Calibration EDIT");
+  await user.type(getByLabelText("Annotation for Affected processes"), " EDIT");
+  expect(getByLabelText("Annotation for Affected processes")).toHaveValue("Calibration EDIT");
   // Switch the drawer to a DIFFERENT DCR (new id + rows). The editor must remount and show the new
   // DCR's values — never the previous DCR's dirty draft (which Save would PUT to the wrong DCR).
   const other: DcrImpact[] = [
@@ -120,5 +120,5 @@ it("resets the draft when switching to a different DCR (no cross-DCR leak)", asy
     { ...impact[1]!, id: "b2" },
   ];
   rerender(<DcrImpactTable impact={other} editable dcrId="dcrB" />);
-  expect(getByLabelText("Annotation for affected_processes")).toHaveValue("B note");
+  expect(getByLabelText("Annotation for Affected processes")).toHaveValue("B note");
 });

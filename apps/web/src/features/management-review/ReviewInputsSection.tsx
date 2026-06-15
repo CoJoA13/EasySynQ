@@ -1,5 +1,7 @@
 import { Alert, Badge, Card, Group, Stack, Table, Text, Title } from "@mantine/core";
 import type { ReviewInput } from "../../lib/types";
+import { humanizeToken } from "../../lib/labels";
+import { formatTimestamp } from "../../lib/time";
 import { INPUT_LABEL } from "./labels";
 
 const RAG_COLOR: Record<string, string> = {
@@ -9,6 +11,23 @@ const RAG_COLOR: Record<string, string> = {
   unmeasured: "gray",
 };
 
+// #2b: the RAG MEANING, not the colour word — so the auditor reads the status on a greyscale export.
+const RAG_MEANING: Record<string, string> = {
+  green: "on target",
+  amber: "at risk",
+  red: "off target",
+  unmeasured: "unmeasured",
+};
+
+// A summary VALUE renderer: an ISO timestamp ("verify_failed_at": "2026-…") is formatted human +
+// timezone-explicit so it never reads as a raw machine string; everything else stringifies plainly.
+function formatSummaryValue(v: unknown): string {
+  if (typeof v === "string" && /^\d{4}-\d{2}-\d{2}T/.test(v) && !Number.isNaN(Date.parse(v))) {
+    return formatTimestamp(v);
+  }
+  return String(v);
+}
+
 // OBJECTIVES_STATUS is the only input type that carries backend RAG — render the RAG band (N9:
 // server RAG verbatim, no fabricated status for other inputs). N6: no charts.
 function ObjectivesBand({ summary }: { summary: Record<string, unknown> }) {
@@ -16,14 +35,16 @@ function ObjectivesBand({ summary }: { summary: Record<string, unknown> }) {
   return (
     <Stack gap="xs">
       <Text size="sm">
-        <Text span fw={600}>{String(summary.on_target ?? 0)}</Text>
+        <Text span fw={600}>
+          {String(summary.on_target ?? 0)}
+        </Text>
         {" / "}
         {String(summary.total ?? 0)} objectives on target
       </Text>
       <Group gap="xs">
         {(["green", "amber", "red", "unmeasured"] as const).map((k) => (
           <Badge key={k} variant="light" color={RAG_COLOR[k]}>
-            {`${byRag[k] ?? 0} ${k}`}
+            {`${byRag[k] ?? 0} ${RAG_MEANING[k]}`}
           </Badge>
         ))}
       </Group>
@@ -39,9 +60,7 @@ function SummaryTable({ summary }: { summary: Record<string, unknown> }) {
   const entries = Object.entries(summary).filter(
     ([, v]) => typeof v === "number" || typeof v === "string",
   );
-  const nested = Object.entries(summary).filter(
-    ([, v]) => v !== null && typeof v === "object",
-  );
+  const nested = Object.entries(summary).filter(([, v]) => v !== null && typeof v === "object");
   return (
     <Stack gap="xs">
       <Table withRowBorders={false}>
@@ -50,12 +69,12 @@ function SummaryTable({ summary }: { summary: Record<string, unknown> }) {
             <Table.Tr key={k}>
               <Table.Td>
                 <Text size="sm" c="dimmed">
-                  {k.replace(/_/g, " ")}
+                  {humanizeToken(k)}
                 </Text>
               </Table.Td>
               <Table.Td>
                 <Text size="sm" fw={500}>
-                  {String(v)}
+                  {formatSummaryValue(v)}
                 </Text>
               </Table.Td>
             </Table.Tr>
@@ -65,11 +84,11 @@ function SummaryTable({ summary }: { summary: Record<string, unknown> }) {
       {nested.map(([k, v]) => (
         <Group key={k} gap="xs">
           <Text size="xs" c="dimmed">
-            {k.replace(/_/g, " ")}:
+            {humanizeToken(k)}:
           </Text>
           {Object.entries(v as Record<string, unknown>).map(([nk, nv]) => (
             <Badge key={nk} variant="light" color="gray">
-              {`${nk.replace(/_/g, " ")} ${String(nv)}`}
+              {`${humanizeToken(nk)} ${formatSummaryValue(nv)}`}
             </Badge>
           ))}
         </Group>
@@ -94,7 +113,9 @@ function InputCard({ input }: { input: ReviewInput }) {
           <Alert color="gray" variant="light">
             {/* The backend reason already reads "not available (…)"; render it (capitalized) rather
                 than prefixing a second "Not available" — avoids the doubled copy (S-mr-2 smoke catch). */}
-            {ref.reason ? ref.reason.charAt(0).toUpperCase() + ref.reason.slice(1) : "Not available"}
+            {ref.reason
+              ? ref.reason.charAt(0).toUpperCase() + ref.reason.slice(1)
+              : "Not available"}
           </Alert>
         )}
       </Stack>

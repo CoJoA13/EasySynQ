@@ -13,6 +13,9 @@ import {
   Title,
 } from "@mantine/core";
 import { Link } from "react-router-dom";
+import { AsOf } from "../../lib/AsOf";
+import { humanizeToken } from "../../lib/labels";
+import { formatTimestamp } from "../../lib/time";
 import type { DriftScanStatusValue, DriftScanSummary } from "../../lib/types";
 import { useDriftStatus } from "./hooks";
 
@@ -25,9 +28,9 @@ const META: Record<DriftScanStatusValue, { mark: string; color: string }> = {
   FAILED: { mark: "✕", color: "var(--es-warning)" },
 };
 
-function fmt(iso: string): string {
-  return iso.slice(0, 16).replace("T", " ");
-}
+// #2b: a localised, timezone-explicit absolute timestamp (replaces the ambiguous iso.slice(0,16) UTC
+// wall-clock). The "as of" relative freshness is the AsOf chip in each scan card header.
+const fmt = formatTimestamp;
 
 // counts is an OPEN bag (S-drift-3 §10a): render every key generically, sorted — unknown keys are
 // additive by contract, so the UI must never destructure a closed set.
@@ -58,6 +61,7 @@ function ScanCard({ title, scan }: { title: string; scan: DriftScanSummary | nul
             {scan.status}
           </Badge>
         </Group>
+        <AsOf at={scan.finished_at ? Date.parse(scan.finished_at) : null} prefix="Scanned" />
         <Text size="xs" c="dimmed">
           Started {fmt(scan.started_at)} ·{" "}
           {scan.finished_at
@@ -74,8 +78,8 @@ function ScanCard({ title, scan }: { title: string; scan: DriftScanSummary | nul
               .map(([k, v]) => (
                 <Table.Tr key={k}>
                   <Table.Td>
-                    <Text size="xs" c="dimmed" ff="monospace">
-                      {k}
+                    <Text size="xs" c="dimmed">
+                      {humanizeToken(k)}
                     </Text>
                   </Table.Td>
                   <Table.Td>
@@ -157,8 +161,7 @@ export function DriftStatusPage() {
               <Text size="sm">Never verified: {cov.never_verified}</Text>
               <Text size="sm">Failing: {cov.failing}</Text>
               <Text size="sm" c="dimmed">
-                Oldest stamp:{" "}
-                {cov.oldest_verified_at ? fmt(cov.oldest_verified_at) : "—"}
+                Oldest stamp: {cov.oldest_verified_at ? fmt(cov.oldest_verified_at) : "—"}
               </Text>
             </Group>
           </Stack>

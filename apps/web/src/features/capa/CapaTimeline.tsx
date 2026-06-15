@@ -1,5 +1,6 @@
 import { Badge, Group, Text, Timeline } from "@mantine/core";
 import type { CapaCloseState, CapaStage, DirectoryUser } from "../../lib/types";
+import { CLOSE_STATE_LABEL } from "./columns";
 import { ContentBlock } from "./ContentBlock";
 import { EvidenceLinker } from "./EvidenceLinker";
 
@@ -45,7 +46,7 @@ export function CapaTimeline({
           key={s.id}
           title={
             <Text span fw={600}>
-              {s.stage}
+              {CLOSE_STATE_LABEL[s.stage]}
               {s.cycle_marker > 0 ? (
                 <Text span size="xs" c="dimmed">
                   {" "}

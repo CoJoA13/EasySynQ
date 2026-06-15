@@ -3,11 +3,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { expect, test, vi } from "vitest";
-import type {
-  ConfirmedKind,
-  ImportClassification,
-  ImportFileReview,
-} from "../../lib/types";
+import type { ConfirmedKind, ImportClassification, ImportFileReview } from "../../lib/types";
 import { KindCell } from "./KindCell";
 
 const DOC_CLASS: ImportClassification = {
@@ -69,13 +65,15 @@ test("UNCONFIRMED renders the engine guess dimmed with a '?' + a Confirm afforda
   expect(screen.getByRole("button", { name: "Confirm kind" })).toBeInTheDocument();
 });
 
-test("UNCONFIRMED RECORD guess shows the lock glyph; UNKNOWN shows 'Unknown'", () => {
+test("UNCONFIRMED RECORD guess shows the lock icon + 'Record?'; UNKNOWN shows 'Unknown'", () => {
   const rec = renderCell({
     review: UNCONFIRMED_REVIEW,
     classification: RECORD_CLASS,
     onConfirm: vi.fn(),
   });
-  expect(rec.getByText("🔒 Record?")).toBeInTheDocument();
+  // #4: the guess text is now plain "Record?" with the lock rendered as an inline SVG (no emoji).
+  expect(rec.getByText("Record?")).toBeInTheDocument();
+  expect(rec.container.querySelector("svg")).not.toBeNull();
   rec.unmount();
   renderCell({ review: UNCONFIRMED_REVIEW, classification: UNKNOWN_CLASS, onConfirm: vi.fn() });
   expect(screen.getByText("Unknown")).toBeInTheDocument();
@@ -131,6 +129,8 @@ test("has no axe violations", async () => {
     classification: DOC_CLASS,
     onConfirm: vi.fn(),
   });
-  await waitFor(() => expect(screen.getByRole("button", { name: "Confirm kind" })).toBeInTheDocument());
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: "Confirm kind" })).toBeInTheDocument(),
+  );
   expect(await axe(container)).toHaveNoViolations();
 });

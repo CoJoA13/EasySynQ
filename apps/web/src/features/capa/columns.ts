@@ -1,7 +1,6 @@
 import type { CapaCloseState, CapaSource, NcSeverity } from "../../lib/types";
 
-export type CapaColumnKey =
-  | "open" | "correction" | "rootcause" | "action" | "verify" | "closed";
+export type CapaColumnKey = "open" | "correction" | "rootcause" | "action" | "verify" | "closed";
 
 export const CAPA_COLUMNS: { key: CapaColumnKey; label: string }[] = [
   { key: "open", label: "Open / NC" },
@@ -45,4 +44,18 @@ export const SOURCE_LABEL: Record<CapaSource, string> = {
   process: "Process",
   complaint: "Complaint",
   review_output: "Mgmt review",
+};
+
+// #2b: humanise the CAPA close_state so the raw backend casing ('RootCause'/'ActionPlan') never reaches
+// the Quality Manager or auditor. Total over CapaCloseState — a new state breaks the build (the
+// SEVERITY_LABEL exhaustiveness precedent).
+export const CLOSE_STATE_LABEL: Record<CapaCloseState, string> = {
+  Raised: "Raised",
+  Containment: "Containment",
+  RootCause: "Root cause",
+  ActionPlan: "Action plan",
+  Implement: "Implementation",
+  Verify: "Verification",
+  Closed: "Closed",
+  Rejected: "Rejected",
 };

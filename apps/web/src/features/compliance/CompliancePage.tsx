@@ -1,10 +1,11 @@
 import { Alert, Anchor, Badge, Container, Group, Loader, Table, Text, Title } from "@mantine/core";
 import { Link } from "react-router-dom";
+import { AsOf } from "../../lib/AsOf";
 import { CoverageBadge } from "./CoverageBadge";
 import { useComplianceChecklist } from "./useComplianceChecklist";
 
 export function CompliancePage() {
-  const { data, isLoading, isError, forbidden } = useComplianceChecklist();
+  const { data, isLoading, isError, forbidden, dataUpdatedAt } = useComplianceChecklist();
 
   if (forbidden) {
     return (
@@ -13,8 +14,8 @@ export function CompliancePage() {
           Compliance Checklist
         </Title>
         <Alert color="gray" title="No access">
-          You don&rsquo;t have access to the Compliance Checklist. It&rsquo;s available to the Quality
-          Manager and Internal Auditor roles.
+          You don&rsquo;t have access to the Compliance Checklist. It&rsquo;s available to the
+          Quality Manager and Internal Auditor roles.
         </Alert>
       </Container>
     );
@@ -46,9 +47,11 @@ export function CompliancePage() {
         Compliance Checklist
       </Title>
       <Text c="dimmed" size="sm" mb="md">
-        ★ mandatory-clause coverage ({data.framework}). Status against a rule — not a compliance verdict.
+        ★ mandatory-clause coverage ({data.framework}). Status against a rule — not a compliance
+        verdict.
       </Text>
-      <Group gap="sm" mb="md" aria-label="Coverage rollup">
+      <AsOf at={dataUpdatedAt} />
+      <Group gap="sm" mb="md" mt={4} aria-label="Coverage rollup">
         <Text fw={600}>{rollup.total} mandatory items:</Text>
         <Text>✓ Covered: {rollup.covered}</Text>
         <Text>◔ Partial: {rollup.partial}</Text>

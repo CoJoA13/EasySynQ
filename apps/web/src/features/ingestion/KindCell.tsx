@@ -1,4 +1,6 @@
 import { Badge, Button, Group, Menu, Text } from "@mantine/core";
+import type { ReactNode } from "react";
+import { IconDocument, IconRecord } from "../../lib/icons";
 import type {
   ConfirmedKind,
   ImportClassification,
@@ -13,16 +15,19 @@ import type {
 // DOCUMENT|RECORD we render a solid badge with no "?" and no Confirm. Bulk-accept does NOT route here —
 // kind-confirm is a separate act (D-5). `busy` disables the affordance during an in-flight confirm.
 
-const CONFIRMED_META: Record<ConfirmedKind, { label: string; mark: string; color: string }> = {
-  DOCUMENT: { label: "Document", mark: "📄", color: "var(--es-info)" },
-  RECORD: { label: "Record", mark: "🔒", color: "var(--es-success)" },
+// #4: inline-SVG glyphs (a page for Document, a padlock for the WORM-locked Record) — geometric, not
+// emoji, so they render identically air-gapped and inherit the badge's colour via currentColor.
+const CONFIRMED_META: Record<ConfirmedKind, { label: string; icon: ReactNode; color: string }> = {
+  DOCUMENT: { label: "Document", icon: <IconDocument size={14} />, color: "var(--es-info)" },
+  RECORD: { label: "Record", icon: <IconRecord size={14} />, color: "var(--es-success)" },
 };
 
-// The dimmed engine guess text for the UNCONFIRMED state. Records carry the WORM lock glyph; an UNKNOWN
-// or absent classification reads "Unknown" (no "?", since there is no guess to confirm against).
-function guessLabel(kind: ImportKind | undefined): string {
+// The dimmed engine-guess TEXT for the UNCONFIRMED state — kept plain (no glyph) so it reads the same
+// in the aria-label; the RECORD guess prepends the lock icon visually. UNKNOWN/absent → "Unknown" (no
+// "?", since there is no guess to confirm against).
+function guessText(kind: ImportKind | undefined): string {
   if (kind === "DOCUMENT") return "Document?";
-  if (kind === "RECORD") return "🔒 Record?";
+  if (kind === "RECORD") return "Record?";
   return "Unknown";
 }
 
@@ -47,7 +52,7 @@ export function KindCell({
         variant="filled"
         color={meta.color}
         size="sm"
-        leftSection={<span aria-hidden="true">{meta.mark}</span>}
+        leftSection={meta.icon}
         aria-label={`Kind: ${meta.label}`}
       >
         {meta.label}
@@ -58,8 +63,16 @@ export function KindCell({
   // UNCONFIRMED (or a null review) → the dimmed engine guess + a Confirm menu (Document / Record).
   return (
     <Group gap="xs" wrap="nowrap">
-      <Text size="sm" c="dimmed" span aria-label={`Engine guess: ${guessLabel(classification?.kind)}`}>
-        {guessLabel(classification?.kind)}
+      <Text
+        size="sm"
+        c="dimmed"
+        span
+        aria-label={`Engine guess: ${guessText(classification?.kind)}`}
+      >
+        {classification?.kind === "RECORD" ? (
+          <IconRecord size={13} style={{ verticalAlign: "-2px", marginRight: 3 }} />
+        ) : null}
+        {guessText(classification?.kind)}
       </Text>
       <Menu position="bottom-start" withinPortal>
         <Menu.Target>
