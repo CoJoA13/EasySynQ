@@ -1,7 +1,6 @@
 import { Alert, Button, Group, Loader, Modal, Select, Stack, Text } from "@mantine/core";
 import { useMemo, useState } from "react";
 import { ApiError } from "../../lib/api";
-import { useDocumentTypes } from "../../app/shell/useDocumentTypes";
 import { useDocumentVersions } from "../document/useDocumentVersions";
 import { useDocuments } from "../library/useDocuments";
 import { useImplementDcr } from "./mutations";
@@ -22,32 +21,18 @@ export function ImplementCreateDcrModal({
   const [docId, setDocId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  // S-doc-filters: the server narrows the candidate set — only never-released (no effective version),
+  // non-managed-subtype (not OBJ/MR) Approved documents come back, so every returned row is a valid
+  // CREATE-implement target and the page never wastes slots on invalid rows. The
+  // _resolve_implement_version guard stays the submit-time backstop.
   const { data: docsPage, isError: docsError } = useDocuments(
-    { current_state: "Approved" },
-    { limit: 200, offset: 0 },
-  );
-  // Managed subtypes (Quality Objectives, Management Reviews) have their own create/release
-  // workspaces and are rejected by the CREATE-implement guard server-side — keep them out of the
-  // picker so an invalid candidate never appears (Codex). Form templates etc. stay valid.
-  const { data: docTypes } = useDocumentTypes();
-  const managedTypeIds = useMemo(
-    () =>
-      new Set((docTypes ?? []).filter((t) => t.code === "OBJ" || t.code === "MR").map((t) => t.id)),
-    [docTypes],
+    { current_state: "Approved", has_effective_version: false, managed_subtype: false },
+    { limit: 100, offset: 0 },
   );
   const options = useMemo(
     () =>
-      (docsPage?.data ?? [])
-        // A CREATE DCR releases the INITIAL version of a NEW document: exclude approved REVISIONS of
-        // existing docs (current_effective_version_id set) and managed subtypes (server-guarded too).
-        .filter(
-          (d) =>
-            d.kind === "DOCUMENT" &&
-            d.current_effective_version_id === null &&
-            !(d.document_type_id !== null && managedTypeIds.has(d.document_type_id)),
-        )
-        .map((d) => ({ value: d.id, label: `${d.identifier} — ${d.title}` })),
-    [docsPage, managedTypeIds],
+      (docsPage?.data ?? []).map((d) => ({ value: d.id, label: `${d.identifier} — ${d.title}` })),
+    [docsPage],
   );
 
   const versions = useDocumentVersions(docId, docId !== null, { retry: false });

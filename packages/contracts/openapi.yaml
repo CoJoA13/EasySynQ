@@ -909,6 +909,20 @@ paths:
           required: false
           schema: { type: string, format: date-time }
           description: As effective_from][gte] but an upper bound (≤).
+        - name: "filter[has_effective_version][eq]"
+          in: query
+          required: false
+          schema: { type: string, enum: ["true", "false"] }
+          description: >-
+            Narrows to documents that have (true) / do not have (false) a current effective version
+            (never-released).
+        - name: "filter[managed_subtype][eq]"
+          in: query
+          required: false
+          schema: { type: string, enum: ["true", "false"] }
+          description: >-
+            Includes only (true) / excludes (false) managed document subtypes (Quality Objectives,
+            Management Reviews).
       responses:
         "200":
           description: A page of documents (each row with clause_refs) plus pagination metadata.

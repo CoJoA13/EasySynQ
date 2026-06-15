@@ -143,6 +143,10 @@ export interface DocumentFilters {
   owner_user_id?: string;
   clause?: string; // a clause number, e.g. "8.4"
   effective_from_gte?: string; // ISO timestamp (the relative date bucket's lower bound)
+  // S-doc-filters (CREATE-picker): two opt-in server-side narrowing filters. false → never-released /
+  // non-managed-subtype. Omitted (undefined) by default — only the CREATE picker sets them.
+  has_effective_version?: boolean;
+  managed_subtype?: boolean;
 }
 
 export type PdcaPhase = "PLAN" | "DO" | "CHECK" | "ACT";

@@ -50,3 +50,36 @@ test("buildDocumentsQuery omits absent facets", () => {
   const qs = buildDocumentsQuery({}, { limit: 50, offset: 0 });
   expect(qs).toBe("limit=50&offset=0");
 });
+
+// S-doc-filters: the CREATE-picker narrowing filters. ⚠ false-emit trap — `false` must serialize, not
+// be dropped (the picker sends false).
+test("buildDocumentsQuery emits the CREATE-picker narrowing filters when false", () => {
+  const qs = buildDocumentsQuery(
+    { current_state: "Approved", has_effective_version: false, managed_subtype: false },
+    { limit: 100, offset: 0 },
+  );
+  const p = new URLSearchParams(qs);
+  expect(p.get("filter[has_effective_version][eq]")).toBe("false");
+  expect(p.get("filter[managed_subtype][eq]")).toBe("false");
+});
+
+test("buildDocumentsQuery emits the CREATE-picker narrowing filters when true", () => {
+  const qs = buildDocumentsQuery(
+    { has_effective_version: true, managed_subtype: true },
+    { limit: 100, offset: 0 },
+  );
+  const p = new URLSearchParams(qs);
+  expect(p.get("filter[has_effective_version][eq]")).toBe("true");
+  expect(p.get("filter[managed_subtype][eq]")).toBe("true");
+});
+
+test("buildDocumentsQuery omits the narrowing filters when undefined (LibraryPage byte-identical)", () => {
+  // A representative LibraryPage-shape filter set never sets the two new keys → undefined → not
+  // emitted → the query string is byte-identical to before this slice.
+  const before = "limit=25&offset=25&filter%5Bcurrent_state%5D%5Beq%5D=Effective";
+  const qs = buildDocumentsQuery({ current_state: "Effective" }, { limit: 25, offset: 25 });
+  expect(qs).toBe(before);
+  const p = new URLSearchParams(qs);
+  expect(p.has("filter[has_effective_version][eq]")).toBe(false);
+  expect(p.has("filter[managed_subtype][eq]")).toBe(false);
+});

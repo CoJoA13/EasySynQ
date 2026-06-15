@@ -17,7 +17,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Query, Request, Response, status
 from pydantic import BaseModel, Field
-from sqlalchemy import ColumnElement, desc, select
+from sqlalchemy import ColumnElement, desc, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -40,8 +40,10 @@ from ..db.models.document_link import DocumentLink
 from ..db.models.document_type import DocumentType
 from ..db.models.document_version import DocumentVersion
 from ..db.models.documented_information import DocumentedInformation
+from ..db.models.management_review import ManagementReview
 from ..db.models.process import Process
 from ..db.models.process_link import ProcessLink
+from ..db.models.quality_objective import QualityObjective
 from ..db.models.role import Role
 from ..db.models.visual_diff import VisualDiff
 from ..db.models.working_draft import WorkingDraft
@@ -502,6 +504,9 @@ _FILTER_ALLOW: frozenset[tuple[str, str]] = frozenset(
         ("document_type", "eq"),
         ("owner_user_id", "eq"),
         ("classification", "eq"),
+        # S-doc-filters: the CREATE-implement picker narrows server-side (default-off).
+        ("has_effective_version", "eq"),
+        ("managed_subtype", "eq"),
         # S-web-2: the library "Effective date" facet — bounds on the CURRENT effective version's
         # effective_from (via the current_effective_version join). The client maps relative buckets
         # (Last 30 days / This quarter / …) to a gte ISO timestamp.
@@ -518,8 +523,34 @@ _FILTER_ALLOW: frozenset[tuple[str, str]] = frozenset(
 _LIST_SCAN_CAP = 2000
 
 
+def _parse_filter_bool(field: str, value: str) -> bool:
+    """Parse a boolean filter value ("true"/"false"); anything else → 422."""
+    if value == "true":
+        return True
+    if value == "false":
+        return False
+    raise ProblemException(
+        status=422, code="validation_error", title=f"Invalid {field} filter value"
+    )
+
+
 def _filter_condition(field: str, op: str, value: str) -> ColumnElement[bool]:
     """Build one SQL WHERE condition for an allow-listed (field, op); bad value → 422."""
+    # filter[has_effective_version][eq]=true|false — narrow to (never-)released docs (S-doc-filters,
+    # the CREATE-implement picker). false → never released; true → has an effective version.
+    if field == "has_effective_version":
+        flag = _parse_filter_bool(field, value)
+        col = DocumentedInformation.current_effective_version_id
+        return col.is_not(None) if flag else col.is_(None)
+    # filter[managed_subtype][eq]=true|false — include/exclude OBJ/MR shared-PK subtypes via NOT
+    # EXISTS (immune to document-type-code renames; S-doc-filters F2). false → exclude managed.
+    if field == "managed_subtype":
+        flag = _parse_filter_bool(field, value)
+        is_managed = or_(
+            select(1).where(QualityObjective.id == DocumentedInformation.id).exists(),
+            select(1).where(ManagementReview.id == DocumentedInformation.id).exists(),
+        )
+        return is_managed if flag else ~is_managed
     # filter[effective_from][gte|lte]=<ISO> — bound on the current effective version
     if field == "effective_from":
         try:

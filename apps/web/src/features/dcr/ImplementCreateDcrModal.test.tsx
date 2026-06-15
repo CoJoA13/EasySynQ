@@ -5,38 +5,40 @@ import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { renderWithProviders } from "../../test/render";
 import { server } from "../../test/msw/server";
-import type { DocumentsPage, DocumentVersion } from "../../lib/types";
+import type { DocumentsPage, DocumentSummary, DocumentVersion } from "../../lib/types";
 import { ImplementCreateDcrModal } from "./ImplementCreateDcrModal";
 
 const DCR_ID = "dcr00001-0001-0001-0001-000000000001";
 const DOC_ID = "doc00001-0001-0001-0001-000000000001";
 const VER_ID = "ver00001-0001-0001-0001-000000000001";
 
+// Pinned to the real _document serializer (apps/api/.../api/documents.py::_document) via
+// `satisfies DocumentSummary` so strict tsc enforces the shape.
+const candidate = {
+  id: DOC_ID,
+  identifier: "SOP-NEW-001",
+  kind: "DOCUMENT",
+  title: "New procedure",
+  document_type_id: null,
+  area_code: null,
+  folder_path: null,
+  current_state: "Approved",
+  classification: "Internal",
+  is_singleton: false,
+  owner_user_id: "u1",
+  framework_id: "f1",
+  current_effective_version_id: null,
+  effective_from: null,
+  created_at: null,
+  review_period_months: null,
+  next_review_due: null,
+  last_reviewed_at: null,
+  review_state: null,
+} satisfies DocumentSummary;
+
 const docsPage: DocumentsPage = {
-  data: [
-    {
-      id: DOC_ID,
-      identifier: "SOP-NEW-001",
-      kind: "DOCUMENT",
-      title: "New procedure",
-      document_type_id: null,
-      area_code: null,
-      folder_path: null,
-      current_state: "Approved",
-      classification: "Internal",
-      is_singleton: false,
-      owner_user_id: "u1",
-      framework_id: "f1",
-      current_effective_version_id: null,
-      effective_from: null,
-      created_at: null,
-      review_period_months: null,
-      next_review_due: null,
-      last_reviewed_at: null,
-      review_state: null,
-    },
-  ],
-  page: { limit: 200, offset: 0, returned: 1, has_more: false },
+  data: [candidate],
+  page: { limit: 100, offset: 0, returned: 1, has_more: false },
 };
 
 const versions: DocumentVersion[] = [
@@ -132,56 +134,52 @@ it("has no axe violations", async () => {
   expect(await axe(container)).toHaveNoViolations();
 });
 
-it("excludes an approved REVISION of an existing document (current_effective_version_id set)", async () => {
-  // Codex P1: an approved revision sits at current_state Approved but carries an effective version —
-  // a CREATE DCR must only release the INITIAL version of a NEW document.
+it("sends the two narrowing filters to GET /documents", async () => {
+  // S-doc-filters: the candidate narrowing is server-side now — the modal must ASK for it. ⚠ the
+  // false-emit case (filter[...][eq]=false) is the load-bearing one (the picker sends false).
+  let url: URL | undefined;
   server.use(
-    http.get("/api/v1/documents", () =>
-      HttpResponse.json({
-        ...docsPage,
-        data: [
-          {
-            ...docsPage.data[0]!,
-            current_effective_version_id: "eff00001-0001-0001-0001-000000000001",
-          },
-        ],
-      } satisfies DocumentsPage),
-    ),
+    http.get("/api/v1/documents", ({ request }) => {
+      url = new URL(request.url);
+      return HttpResponse.json(docsPage);
+    }),
+    http.get(`/api/v1/documents/${DOC_ID}/versions`, () => HttpResponse.json(versions)),
   );
   renderWithProviders(<ImplementCreateDcrModal dcrId={DCR_ID} onClose={() => {}} />);
-  expect(
-    await screen.findByText(/Author the new document in the workspace first/),
-  ).toBeInTheDocument();
-  expect(screen.queryByText("SOP-NEW-001 — New procedure")).not.toBeInTheDocument();
+  await screen.findByLabelText(/New document/);
+  expect(url).toBeDefined();
+  expect(url!.searchParams.get("filter[current_state][eq]")).toBe("Approved");
+  expect(url!.searchParams.get("filter[has_effective_version][eq]")).toBe("false");
+  expect(url!.searchParams.get("filter[managed_subtype][eq]")).toBe("false");
 });
 
-it("excludes managed subtypes (Quality Objective / Management Review) from the picker", async () => {
-  // Codex P2: OBJ/MR are managed subtypes with their own create flows — never CREATE-DCR targets.
-  const OBJ_TYPE = "objtype1-0001-0001-0001-000000000001";
+it("renders every server-returned candidate with NO client filtering", async () => {
+  // S-doc-filters: the client-side .filter (current_effective_version_id===null + OBJ/MR exclusion)
+  // is GONE — the server is trusted to have narrowed. Include a doc that the OLD client filter would
+  // have dropped (current_effective_version_id non-null) and assert it APPEARS now, proving the
+  // client no longer filters. (In production the server would not return such a row; here it stands
+  // in for "the server decides, the client trusts".)
+  const wouldHaveBeenFiltered = {
+    ...candidate,
+    id: "doc00002-0002-0002-0002-000000000002",
+    identifier: "SOP-OLD-002",
+    title: "Previously filtered",
+    current_effective_version_id: "eff00001-0001-0001-0001-000000000001",
+  } satisfies DocumentSummary;
   server.use(
-    http.get("/api/v1/document-types", () =>
-      HttpResponse.json([
-        {
-          id: OBJ_TYPE,
-          code: "OBJ",
-          name: "Quality Objective",
-          document_level: "L3",
-          is_singleton: false,
-        },
-      ]),
-    ),
     http.get("/api/v1/documents", () =>
       HttpResponse.json({
         ...docsPage,
-        data: [{ ...docsPage.data[0]!, document_type_id: OBJ_TYPE }],
+        data: [candidate, wouldHaveBeenFiltered],
+        page: { limit: 100, offset: 0, returned: 2, has_more: false },
       } satisfies DocumentsPage),
     ),
+    http.get(`/api/v1/documents/${DOC_ID}/versions`, () => HttpResponse.json(versions)),
   );
   renderWithProviders(<ImplementCreateDcrModal dcrId={DCR_ID} onClose={() => {}} />);
-  expect(
-    await screen.findByText(/Author the new document in the workspace first/),
-  ).toBeInTheDocument();
-  expect(screen.queryByText("SOP-NEW-001 — New procedure")).not.toBeInTheDocument();
+  await userEvent.click(await screen.findByLabelText(/New document/));
+  expect(await screen.findByText("SOP-NEW-001 — New procedure")).toBeInTheDocument();
+  expect(screen.getByText("SOP-OLD-002 — Previously filtered")).toBeInTheDocument();
 });
 
 it("surfaces a calm error when the version fetch is forbidden (releaser lacks draft access)", async () => {
