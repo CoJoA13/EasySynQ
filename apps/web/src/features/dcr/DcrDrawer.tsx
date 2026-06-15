@@ -9,7 +9,7 @@ import { DcrAdvancePanel } from "./DcrAdvancePanel";
 import { DcrImpactTable } from "./DcrImpactTable";
 import { DcrStageTimeline } from "./DcrStageTimeline";
 import { DcrStateBadge } from "./DcrStateBadge";
-import { CHANGE_TYPE_LABEL, REASON_LABEL, SOURCE_LABEL } from "./labels";
+import { CHANGE_TYPE_LABEL, REASON_LABEL, SIGNIFICANCE_LABEL, SOURCE_LABEL } from "./labels";
 import { useDcr, useDcrImpact } from "./hooks";
 
 function nameOf(userId: string, directory: DirectoryUser[]): string {
@@ -73,7 +73,7 @@ export function DcrDrawer({ dcrId, onClose }: { dcrId: string | null; onClose: (
               {CHANGE_TYPE_LABEL[dcr.change_type] ?? dcr.change_type}
             </Badge>
             <Badge variant="light" color="gray">
-              {dcr.change_significance}
+              {SIGNIFICANCE_LABEL[dcr.change_significance]}
             </Badge>
             <Badge variant="light" color="gray">
               {REASON_LABEL[dcr.reason_class] ?? dcr.reason_class}

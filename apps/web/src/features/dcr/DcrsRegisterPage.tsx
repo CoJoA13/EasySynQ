@@ -1,11 +1,22 @@
-import { Alert, Anchor, Button, Container, Group, Loader, Select, Table, Text, Title } from "@mantine/core";
+import {
+  Alert,
+  Anchor,
+  Button,
+  Container,
+  Group,
+  Loader,
+  Select,
+  Table,
+  Text,
+  Title,
+} from "@mantine/core";
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import type { DcrChangeType, DcrReasonClass, DcrState } from "../../lib/types";
 import { usePermissions } from "../../app/shell/usePermissions";
 import { DcrDrawer } from "./DcrDrawer";
 import { DcrStateBadge } from "./DcrStateBadge";
-import { CHANGE_TYPE_LABEL, REASON_LABEL } from "./labels";
+import { CHANGE_TYPE_LABEL, REASON_LABEL, SIGNIFICANCE_LABEL } from "./labels";
 import { useDcrs } from "./hooks";
 import { RaiseDcrModal } from "./RaiseDcrModal";
 
@@ -106,9 +117,7 @@ export function DcrsRegisterPage() {
     <Container size="xl" py="md">
       <Group justify="space-between" mb="md">
         <Title order={2}>Change requests</Title>
-        {can("changeRequest.create") && (
-          <Button onClick={() => setRaising(true)}>Raise DCR</Button>
-        )}
+        {can("changeRequest.create") && <Button onClick={() => setRaising(true)}>Raise DCR</Button>}
       </Group>
       <Group mb="md" gap="sm">
         <Select
@@ -165,7 +174,7 @@ export function DcrsRegisterPage() {
                   </Anchor>
                 </Table.Td>
                 <Table.Td>{CHANGE_TYPE_LABEL[d.change_type]}</Table.Td>
-                <Table.Td>{d.change_significance}</Table.Td>
+                <Table.Td>{SIGNIFICANCE_LABEL[d.change_significance]}</Table.Td>
                 <Table.Td>{REASON_LABEL[d.reason_class]}</Table.Td>
                 <Table.Td>{d.target_document_id ? "Document" : "—"}</Table.Td>
                 <Table.Td>
@@ -180,10 +189,7 @@ export function DcrsRegisterPage() {
 
       <DcrDrawer dcrId={selected} onClose={closeDrawer} />
       {raising && (
-        <RaiseDcrModal
-          onClose={() => setRaising(false)}
-          onCreated={(id) => setSelected(id)}
-        />
+        <RaiseDcrModal onClose={() => setRaising(false)} onCreated={(id) => setSelected(id)} />
       )}
     </Container>
   );

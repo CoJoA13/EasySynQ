@@ -12,6 +12,7 @@ import {
 } from "@mantine/core";
 import { useState } from "react";
 import { Link } from "react-router-dom";
+import { formatTimestamp } from "../../lib/time";
 import { SUPERSEDED_PAGE_SIZE, useSupersededCopies } from "./hooks";
 
 // S-web-8: the D4 recall list (doc 05 §9.1 / R11) — outstanding EXPORTED/PRINTED copies of
@@ -65,8 +66,8 @@ export function SupersededCopiesPage() {
           <Title order={2}>Superseded copies</Title>
           <Text c="dimmed" size="sm">
             Exported/printed copies of versions that have since been superseded or obsoleted —{" "}
-            {data.total.versions} versions · {data.total.copies} copies outstanding. Use this as
-            the recall list; each paper copy resolves via its verify QR.
+            {data.total.versions} versions · {data.total.copies} copies outstanding. Use this as the
+            recall list; each paper copy resolves via its verify QR.
           </Text>
         </div>
         {data.items.length === 0 ? (
@@ -102,7 +103,7 @@ export function SupersededCopiesPage() {
                   <Table.Td>{r.current_revision_label ?? "—"}</Table.Td>
                   <Table.Td>{r.exported}</Table.Td>
                   <Table.Td>{r.printed}</Table.Td>
-                  <Table.Td>{r.last_copy_at.slice(0, 16).replace("T", " ")}</Table.Td>
+                  <Table.Td>{formatTimestamp(r.last_copy_at)}</Table.Td>
                 </Table.Tr>
               ))}
             </Table.Tbody>

@@ -22,7 +22,13 @@ import { usePermissions } from "../../app/shell/usePermissions";
 import type { Capa, CapaCloseState, CapaSource, NcSeverity } from "../../lib/types";
 import { CapaCard } from "./CapaCard";
 import { CapaDrawer } from "./CapaDrawer";
-import { CAPA_COLUMNS, columnKeyFor, SEVERITY_LABEL, SOURCE_LABEL } from "./columns";
+import {
+  CAPA_COLUMNS,
+  CLOSE_STATE_LABEL,
+  columnKeyFor,
+  SEVERITY_LABEL,
+  SOURCE_LABEL,
+} from "./columns";
 import { useCapas } from "./hooks";
 import { RaiseCapaModal } from "./RaiseCapaModal";
 
@@ -190,7 +196,7 @@ export function CapaBoardPage() {
               "Closed",
               "Rejected",
             ] as CapaCloseState[]
-          ).map((s) => ({ value: s, label: s }))}
+          ).map((s) => ({ value: s, label: CLOSE_STATE_LABEL[s] }))}
         />
       </Group>
 
@@ -252,7 +258,7 @@ export function CapaBoardPage() {
                 <Table.Td>{c.title ?? "(untitled)"}</Table.Td>
                 <Table.Td>{SEVERITY_LABEL[c.severity]}</Table.Td>
                 <Table.Td>{SOURCE_LABEL[c.source]}</Table.Td>
-                <Table.Td>{c.close_state}</Table.Td>
+                <Table.Td>{CLOSE_STATE_LABEL[c.close_state]}</Table.Td>
               </Table.Tr>
             ))}
           </Table.Tbody>

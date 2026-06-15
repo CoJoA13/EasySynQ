@@ -6,7 +6,7 @@ import { useUserDirectory } from "../../app/shell/useUserDirectory";
 import { SpawnDcrModal } from "../dcr/SpawnDcrModal";
 import { useRaiseDcrFromCapa } from "../dcr/mutations";
 import { AdvancePanel } from "./AdvancePanel";
-import { SEVERITY_COLOR, SEVERITY_LABEL, SOURCE_LABEL } from "./columns";
+import { CLOSE_STATE_LABEL, SEVERITY_COLOR, SEVERITY_LABEL, SOURCE_LABEL } from "./columns";
 import { CapaTimeline } from "./CapaTimeline";
 import { CloseGateStepper } from "./CloseGateStepper";
 import { useCapa } from "./hooks";
@@ -53,7 +53,7 @@ export function CapaDrawer({ capaId, onClose }: { capaId: string | null; onClose
               {SOURCE_LABEL[capa.source]}
             </Badge>
             <Badge variant="light" color="blue">
-              {capa.close_state}
+              {CLOSE_STATE_LABEL[capa.close_state]}
             </Badge>
             {capa.cycle_marker > 0 ? (
               <Badge variant="light" color="grape">

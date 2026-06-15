@@ -1,5 +1,5 @@
 import { Alert, Badge, Group, Loader, Stack, Text, Title } from "@mantine/core";
-import { CHANGE_TYPE_LABEL, REASON_LABEL } from "../dcr/labels";
+import { CHANGE_TYPE_LABEL, REASON_LABEL, SIGNIFICANCE_LABEL } from "../dcr/labels";
 import { DcrImpactTable } from "../dcr/DcrImpactTable";
 import { DcrStateBadge } from "../dcr/DcrStateBadge";
 import { useDcr, useDcrImpact } from "../dcr/hooks";
@@ -34,7 +34,7 @@ export function DcrApprovalContext({ dcrId }: { dcrId: string }) {
       <Group gap="xs">
         <DcrStateBadge state={dcr.state} />
         <Badge variant="light" color="gray">
-          {dcr.change_significance}
+          {SIGNIFICANCE_LABEL[dcr.change_significance]}
         </Badge>
         <Badge variant="light" color="gray">
           {REASON_LABEL[dcr.reason_class] ?? dcr.reason_class}

@@ -1,8 +1,21 @@
-import { Alert, Anchor, Badge, Button, Container, Group, Loader, SegmentedControl, Table, Text, Title } from "@mantine/core";
+import {
+  Alert,
+  Anchor,
+  Badge,
+  Button,
+  Container,
+  Group,
+  Loader,
+  SegmentedControl,
+  Table,
+  Text,
+  Title,
+} from "@mantine/core";
 import { useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { NewObjectiveModal } from "./NewObjectiveModal";
 import type { Objective, ObjectiveRag } from "../../lib/types";
+import { AsOf } from "../../lib/AsOf";
 import { usePermissions } from "../../app/shell/usePermissions";
 import { useObjectiveScorecard } from "./hooks";
 import { fmtValueUnit, RAG_COLOR, RAG_LABEL } from "./labels";
@@ -14,7 +27,7 @@ function currentOverTarget(o: Objective): string {
 }
 
 export function ObjectivesRegisterPage() {
-  const { data, isLoading, isError, forbidden } = useObjectiveScorecard();
+  const { data, isLoading, isError, forbidden, dataUpdatedAt } = useObjectiveScorecard();
   const { can } = usePermissions();
   const navigate = useNavigate();
   const [rag, setRag] = useState<ObjectiveRag | "">("");
@@ -28,7 +41,9 @@ export function ObjectivesRegisterPage() {
   if (forbidden) {
     return (
       <Container size="lg" py="md">
-        <Title order={2} mb="md">Quality objectives</Title>
+        <Title order={2} mb="md">
+          Quality objectives
+        </Title>
         <Alert color="gray" title="No access">
           You don't have access to Quality Objectives. It's available to the Quality Manager and
           Process Owner roles.
@@ -40,7 +55,9 @@ export function ObjectivesRegisterPage() {
   if (isError) {
     return (
       <Container size="lg" py="md">
-        <Title order={2} mb="md">Quality objectives</Title>
+        <Title order={2} mb="md">
+          Quality objectives
+        </Title>
         <Alert color="red" title="Couldn't load quality objectives">
           Something went wrong loading the objectives. Please try again.
         </Alert>
@@ -65,6 +82,7 @@ export function ObjectivesRegisterPage() {
         )}
       </Group>
 
+      <AsOf at={dataUpdatedAt} />
       <ObjectiveScorecardBand total={data.total} onTarget={data.on_target} byRag={data.by_rag} />
 
       <SegmentedControl
