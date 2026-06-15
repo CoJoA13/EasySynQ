@@ -4,6 +4,7 @@ identity (the ``list_objectives`` shape); ``get_review_doc`` loads the base doc 
 
 from __future__ import annotations
 
+import datetime
 import uuid
 from collections.abc import Sequence
 from typing import Any
@@ -12,12 +13,15 @@ from sqlalchemy import Select, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...db.models._mgmt_review_enums import ReviewOutputType
+from ...db.models._signature_enums import SignatureMeaning, SignatureMethod, SignedObjectType
 from ...db.models._vault_enums import DocumentCurrentState
 from ...db.models._workflow_enums import TaskState
+from ...db.models.app_user import AppUser
 from ...db.models.documented_information import DocumentedInformation
 from ...db.models.management_review import ManagementReview
 from ...db.models.review_input import ReviewInput
 from ...db.models.review_output import ReviewOutput
+from ...db.models.signature_event import SignatureEvent
 from ...db.models.workflow import Task
 
 # (mr, identifier, title, current_state)
@@ -142,3 +146,40 @@ async def outputs_for_close_gate(
         .where(ReviewOutput.management_review_id == review_id)
     )
     return [(ot, ts) for ot, ts in rows.all()]
+
+
+# (display_name | None, signer_user_id | None, meaning, created_at, method).
+# signer_user_id distinguishes a true system signature (null) from a human whose display_name is
+# null (still a human — the pack must not render them as "system"); no email (PII) is selected.
+SignoffRow = tuple[
+    str | None, uuid.UUID | None, SignatureMeaning, datetime.datetime, SignatureMethod
+]
+
+
+async def list_signoffs_for_version(
+    session: AsyncSession, version_id: uuid.UUID
+) -> list[SignoffRow]:
+    """The approval + release signatures on an MR's released version, oldest first (OUTER JOIN to
+    app_user — a null signer is a Beat-activated future-dated release). Returns the signer's
+    display_name, email, and signer_user_id so the caller can preserve human identity (a human with
+    no display_name falls back to email/id; only a null signer_user_id is a system signature). The
+    MR rides document.approve/release, so the signatures carry signed_object_type=document_version
+    + signed_object_id = the version id."""
+    rows = await session.execute(
+        select(
+            AppUser.display_name,
+            SignatureEvent.signer_user_id,
+            SignatureEvent.meaning,
+            SignatureEvent.created_at,
+            SignatureEvent.method,
+        )
+        .outerjoin(AppUser, AppUser.id == SignatureEvent.signer_user_id)
+        .where(
+            SignatureEvent.voided_by.is_(None),
+            SignatureEvent.signed_object_type == SignedObjectType.document_version,
+            SignatureEvent.signed_object_id == version_id,
+            SignatureEvent.meaning.in_([SignatureMeaning.approval, SignatureMeaning.release]),
+        )
+        .order_by(SignatureEvent.created_at)
+    )
+    return [tuple(r) for r in rows.all()]
