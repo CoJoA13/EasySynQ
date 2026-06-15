@@ -1,7 +1,24 @@
+import { waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { http, HttpResponse } from "msw";
 import { expect, test } from "vitest";
 import type { DocumentSummary } from "../../lib/types";
 import { renderWithProviders, TEST_AUTH } from "../../test/render";
+import { server } from "../../test/msw/server";
 import { ApprovalsTab } from "./ApprovalsTab";
+
+const RELEASABLE = {
+  current_state: "Approved" as const,
+  capabilities: {
+    checkout: false,
+    edit: false,
+    manage_metadata: false,
+    submit: false,
+    release: true,
+    obsolete: false,
+    read_draft: true,
+  },
+};
 
 function doc(over: Partial<DocumentSummary> = {}): DocumentSummary {
   return {
@@ -76,4 +93,22 @@ test("quiet-absents Release when the capability is false (DP-6)", async () => {
   );
   await findByText("Quality approval"); // wait for the stepper to load
   expect(queryByRole("button", { name: "Release" })).toBeNull();
+});
+
+test("#3: Release confirms first — the bare click never releases; confirming POSTs the release", async () => {
+  let released = false;
+  server.use(
+    http.post("/api/v1/documents/:id/release", () => {
+      released = true;
+      return HttpResponse.json(doc({ current_state: "Effective" }));
+    }),
+  );
+  const u = userEvent.setup();
+  const { findByRole } = renderWithProviders(<ApprovalsTab doc={doc(RELEASABLE)} />);
+  // The bare trigger only OPENS the confirm — it must not release yet.
+  await u.click(await findByRole("button", { name: "Release" }));
+  expect(released).toBe(false);
+  // Confirming fires the release (proving the descriptor binds the release mutation, not another).
+  await u.click(await findByRole("button", { name: "Release document" }));
+  await waitFor(() => expect(released).toBe(true));
 });

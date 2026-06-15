@@ -104,6 +104,8 @@ it("maps the review_close_blocked code to calm copy when an action's task isn't 
   renderAt(ID);
   const closeBtn = await screen.findByRole("button", { name: "Close review" });
   await userEvent.click(closeBtn);
+  // #3: closing now confirms first; the mapped close-gate copy surfaces inside the dialog.
+  await userEvent.click(await screen.findByRole("button", { name: "Close the review" }));
   await waitFor(() =>
     expect(
       screen.getByText("Close is blocked — an action output's task isn't complete yet."),

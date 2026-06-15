@@ -12,6 +12,7 @@ import {
 } from "@mantine/core";
 import { useState } from "react";
 import { ApiError } from "../../lib/api";
+import { ConfirmDestructive } from "../../lib/ConfirmDestructive";
 import { useAuth } from "../../lib/auth";
 import type { Capa } from "../../lib/types";
 import {
@@ -76,9 +77,17 @@ export function ContainmentForm({ capa }: { capa: Capa }) {
         autosize
         minRows={2}
       />
-      <TextInput label="Evidence note (optional)" value={note} onChange={(e) => setNote(e.currentTarget.value)} />
+      <TextInput
+        label="Evidence note (optional)"
+        value={note}
+        onChange={(e) => setNote(e.currentTarget.value)}
+      />
       <Group justify="flex-end">
-        <Button onClick={() => void submit()} loading={m.isPending} disabled={correction.trim().length === 0}>
+        <Button
+          onClick={() => void submit()}
+          loading={m.isPending}
+          disabled={correction.trim().length === 0}
+        >
           Record correction
         </Button>
       </Group>
@@ -118,7 +127,11 @@ export function RootCauseForm({ capa }: { capa: Capa }) {
         </Group>
       </Radio.Group>
       <Group justify="flex-end">
-        <Button onClick={() => void submit()} loading={m.isPending} disabled={rootCause.trim().length === 0}>
+        <Button
+          onClick={() => void submit()}
+          loading={m.isPending}
+          disabled={rootCause.trim().length === 0}
+        >
           Record root cause
         </Button>
       </Group>
@@ -135,7 +148,9 @@ export function ActionPlanForm({ capa }: { capa: Capa }) {
   async function submit() {
     setError(null);
     try {
-      await m.mutateAsync({ content_block: { action_items: items.filter((i) => i.trim().length > 0) } });
+      await m.mutateAsync({
+        content_block: { action_items: items.filter((i) => i.trim().length > 0) },
+      });
       setDone(true);
     } catch (e) {
       setError(errText(e));
@@ -186,7 +201,11 @@ export function ImplementForm({ capa }: { capa: Capa }) {
     }
   }
   return (
-    <FormShell error={error} done={done} doneLabel="Recorded — link completion evidence on the stage below.">
+    <FormShell
+      error={error}
+      done={done}
+      doneLabel="Recorded — link completion evidence on the stage below."
+    >
       <Textarea
         label="Actions completed"
         value={actionsDone}
@@ -198,7 +217,11 @@ export function ImplementForm({ capa }: { capa: Capa }) {
         After recording, link completion evidence to the new Implement stage (required to close).
       </Text>
       <Group justify="flex-end">
-        <Button onClick={() => void submit()} loading={m.isPending} disabled={actionsDone.trim().length === 0}>
+        <Button
+          onClick={() => void submit()}
+          loading={m.isPending}
+          disabled={actionsDone.trim().length === 0}
+        >
           Record implementation
         </Button>
       </Group>
@@ -274,51 +297,64 @@ export function VerifyForm({ capa }: { capa: Capa }) {
 // deriveGate's shape/ordering.
 export function CloseAction({ capa }: { capa: Capa }) {
   const m = useCapaClose(capa.id);
-  const [error, setError] = useState<string | null>(null);
+  const [confirming, setConfirming] = useState(false);
   const stages = capa.stages ?? [];
   const currentVerify = stages
     .filter((s) => s.stage === "Verify" && s.cycle_marker === capa.cycle_marker)
     .slice(-1)[0];
   const notEffective = currentVerify?.content_block?.decision === "not_effective";
 
-  async function submit() {
-    setError(null);
-    try {
-      await m.mutateAsync();
-    } catch (e) {
-      // 409 capa_close_incomplete / capa_not_verified — the server's authoritative word (lists missing).
-      if (e instanceof ApiError && e.status === 409) setError(e.message);
-      else setError(errText(e));
-    }
-  }
+  // #3: both terminal acts confirm first; the close-gate 409 (capa_close_incomplete / capa_not_verified)
+  // surfaces inside the dialog, which stays open so the user can read what's missing and retry.
+  const confirm = (
+    <ConfirmDestructive
+      opened={confirming}
+      onCancel={() => setConfirming(false)}
+      onConfirm={async () => {
+        await m.mutateAsync();
+        setConfirming(false);
+      }}
+      title={notEffective ? "Return to root cause?" : "Close this CAPA?"}
+      consequence={
+        notEffective
+          ? "Returns this CAPA to root cause for a revised action plan (verification was not effective)."
+          : "Closes this CAPA. The server confirms the close gate first and reports anything missing."
+      }
+      confirmLabel={notEffective ? "Return to root" : "Close the CAPA"}
+      confirmColor={notEffective ? "orange" : "red"}
+      irreversible={!notEffective}
+      mapError={errText}
+    />
+  );
 
   if (notEffective) {
     return (
       <Stack gap="xs">
-        {error && <Alert color="red">{error}</Alert>}
         <Text size="sm" c="dimmed">
-          Verification was <b>not effective</b> — closing returns this CAPA to root cause for a revised plan.
+          Verification was <b>not effective</b> — closing returns this CAPA to root cause for a
+          revised plan.
         </Text>
         <Group justify="flex-end">
-          <Button color="orange" onClick={() => void submit()} loading={m.isPending}>
+          <Button color="orange" onClick={() => setConfirming(true)} loading={m.isPending}>
             Return to root cause
           </Button>
         </Group>
+        {confirm}
       </Stack>
     );
   }
   return (
     <Stack gap="xs">
-      {error && <Alert color="red">{error}</Alert>}
       <Text size="sm" c="dimmed">
-        Closing requires root cause + a current-cycle action and effectiveness evidence (see the close gate
-        above). The server confirms the gate and reports anything missing.
+        Closing requires root cause + a current-cycle action and effectiveness evidence (see the
+        close gate above). The server confirms the gate and reports anything missing.
       </Text>
       <Group justify="flex-end">
-        <Button onClick={() => void submit()} loading={m.isPending}>
+        <Button onClick={() => setConfirming(true)} loading={m.isPending}>
           Close CAPA
         </Button>
       </Group>
+      {confirm}
     </Stack>
   );
 }

@@ -1,9 +1,10 @@
-import { Alert, Anchor, Button, Group, Stack, Text } from "@mantine/core";
+import { Anchor, Button, Group, Stack, Text } from "@mantine/core";
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { useMe } from "../../app/shell/useMe";
 import { useUserDirectory } from "../../app/shell/useUserDirectory";
 import { ApiError } from "../../lib/api";
+import { ConfirmDestructive } from "../../lib/ConfirmDestructive";
 import type { DocumentSummary } from "../../lib/types";
 import { useReleaseDocument } from "../authoring/hooks";
 import { ApprovalStepper } from "./ApprovalStepper";
@@ -19,7 +20,7 @@ export function ApprovalsTab({ doc }: { doc: DocumentSummary }) {
   const { data: instance, isLoading, isError, error } = useDocumentApproval(doc.id);
   const { data: directory } = useUserDirectory();
   const release = useReleaseDocument();
-  const [relErr, setRelErr] = useState<string | null>(null);
+  const [confirming, setConfirming] = useState(false);
 
   const nameOf = (id: string | null) =>
     id ? (directory?.find((u) => u.id === id)?.display_name ?? "a user") : "—";
@@ -56,15 +57,6 @@ export function ApprovalsTab({ doc }: { doc: DocumentSummary }) {
   );
   const canRelease = doc.capabilities?.release === true && doc.current_state === "Approved";
 
-  async function doRelease() {
-    setRelErr(null);
-    try {
-      await release.mutateAsync(doc.id);
-    } catch (e) {
-      setRelErr(e instanceof ApiError ? e.message : "Release failed. Please retry.");
-    }
-  }
-
   return (
     <Stack gap="md">
       <ApprovalStepper
@@ -78,14 +70,9 @@ export function ApprovalsTab({ doc }: { doc: DocumentSummary }) {
           Review &amp; approve →
         </Anchor>
       )}
-      {relErr && (
-        <Alert color="red" withCloseButton onClose={() => setRelErr(null)}>
-          {relErr}
-        </Alert>
-      )}
       {canRelease && (
         <Group>
-          <Button color="teal" loading={release.isPending} onClick={() => void doRelease()}>
+          <Button color="teal" onClick={() => setConfirming(true)}>
             Release
           </Button>
           <Text size="xs" c="dimmed">
@@ -93,6 +80,19 @@ export function ApprovalsTab({ doc }: { doc: DocumentSummary }) {
           </Text>
         </Group>
       )}
+      <ConfirmDestructive
+        opened={confirming}
+        onCancel={() => setConfirming(false)}
+        onConfirm={async () => {
+          await release.mutateAsync(doc.id);
+          setConfirming(false);
+        }}
+        title="Release this document?"
+        consequence="Releases the Approved version to Effective and supersedes the current Effective version."
+        confirmLabel="Release document"
+        confirmColor="teal"
+        mapError={(e) => (e instanceof ApiError ? e.message : "Release failed. Please retry.")}
+      />
     </Stack>
   );
 }

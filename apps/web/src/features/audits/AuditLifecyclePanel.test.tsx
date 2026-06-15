@@ -19,10 +19,16 @@ function grant(keys: string[]) {
 }
 
 const base: Audit = {
-  id: "au000001-0001-0001-0001-000000000001", identifier: "REC-000061",
-  title: "Purchasing & Suppliers audit", plan_id: "pl000001-0001-0001-0001-000000000001",
-  lead_auditor_user_id: null, state: "InProgress", started_at: "2026-05-28",
-  completed_at: null, result_summary: null, created_at: "2026-05-20T09:00:00+00:00",
+  id: "au000001-0001-0001-0001-000000000001",
+  identifier: "REC-000061",
+  title: "Purchasing & Suppliers audit",
+  plan_id: "pl000001-0001-0001-0001-000000000001",
+  lead_auditor_user_id: null,
+  state: "InProgress",
+  started_at: "2026-05-28",
+  completed_at: null,
+  result_summary: null,
+  created_at: "2026-05-20T09:00:00+00:00",
 };
 const SYSTEM = { level: "SYSTEM" } as const;
 
@@ -54,16 +60,12 @@ test("without the gate key → a calm read-only line, no button", async () => {
 
 test("the close phase gates on audit.close, not audit.conduct", async () => {
   grant(["audit.conduct"]); // conduct alone must NOT show the close-phase action
-  renderWithProviders(
-    <AuditLifecyclePanel audit={{ ...base, state: "Closing" }} scope={SYSTEM} />,
-  );
+  renderWithProviders(<AuditLifecyclePanel audit={{ ...base, state: "Closing" }} scope={SYSTEM} />);
   expect(
     await screen.findByText(/don't hold the permission to advance this audit/),
   ).toBeInTheDocument();
   grant(["audit.close"]);
-  renderWithProviders(
-    <AuditLifecyclePanel audit={{ ...base, state: "Closing" }} scope={SYSTEM} />,
-  );
+  renderWithProviders(<AuditLifecyclePanel audit={{ ...base, state: "Closing" }} scope={SYSTEM} />);
   expect(await screen.findByRole("button", { name: "Close audit" })).toBeInTheDocument();
 });
 
@@ -72,16 +74,20 @@ test("409 audit_close_blocked surfaces the server message calmly", async () => {
   server.use(
     http.post("/api/v1/audits/:id/close", () =>
       HttpResponse.json(
-        { code: "audit_close_blocked", title: "Cannot close: 1 live NC finding(s) without a Closed CAPA (close the CAPA, or correct the finding NC→Observation/OFI)" },
+        {
+          code: "audit_close_blocked",
+          title:
+            "Cannot close: 1 live NC finding(s) without a Closed CAPA (close the CAPA, or correct the finding NC→Observation/OFI)",
+        },
         { status: 409 },
       ),
     ),
   );
   const u = userEvent.setup();
-  renderWithProviders(
-    <AuditLifecyclePanel audit={{ ...base, state: "Closing" }} scope={SYSTEM} />,
-  );
+  renderWithProviders(<AuditLifecyclePanel audit={{ ...base, state: "Closing" }} scope={SYSTEM} />);
   await u.click(await screen.findByRole("button", { name: "Close audit" }));
+  // #3: the irreversible close now confirms first.
+  await u.click(await screen.findByRole("button", { name: "Close the audit" }));
   expect(await screen.findByText(/Cannot close: 1 live NC finding/)).toBeInTheDocument();
 });
 

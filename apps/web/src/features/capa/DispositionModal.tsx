@@ -1,4 +1,4 @@
-import { Alert, Button, Group, Modal, Select, Stack, Textarea } from "@mantine/core";
+import { Alert, Button, Group, Modal, Select, Stack, Text, Textarea } from "@mantine/core";
 import { useState } from "react";
 import { ApiError } from "../../lib/api";
 import type { Ncr, NcrDisposition } from "../../lib/types";
@@ -36,6 +36,10 @@ export function DispositionModal({
     <Modal opened={opened} onClose={onClose} title={`Record disposition — ${ncr.identifier}`}>
       <Stack gap="sm">
         {error && <Alert color="orange">{error}</Alert>}
+        <Text size="sm" c="dimmed">
+          Recording a disposition is a one-shot ISO&nbsp;8.7 decision — it can&rsquo;t be changed
+          afterward.
+        </Text>
         <Select
           label="Disposition (ISO 9001 §8.7)"
           required

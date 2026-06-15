@@ -1,4 +1,6 @@
 import { Button, Group, Menu, Paper, Text } from "@mantine/core";
+import { useState } from "react";
+import { ConfirmDestructive } from "../../lib/ConfirmDestructive";
 import type { ImportDecisionAction, ImportDecisionAfter } from "../../lib/types";
 
 // The selection-active context bar (mockup #screen-ingestion §6). Presentational only: ReviewCockpit
@@ -22,6 +24,7 @@ export function BulkActionBar({
   onConfirmKind: (kind: "DOCUMENT" | "RECORD") => void;
   onAcceptAllHigh: () => void;
 }) {
+  const [confirming, setConfirming] = useState(false);
   if (count <= 0) return null;
 
   return (
@@ -103,10 +106,22 @@ export function BulkActionBar({
           size="xs"
           color="red"
           aria-label="Exclude selected"
-          onClick={() => onBulk("exclude")}
+          onClick={() => setConfirming(true)}
         >
           Exclude
         </Button>
+        <ConfirmDestructive
+          opened={confirming}
+          onCancel={() => setConfirming(false)}
+          onConfirm={async () => {
+            onBulk("exclude");
+            setConfirming(false);
+          }}
+          title={`Exclude ${count} item${count === 1 ? "" : "s"}?`}
+          consequence="Excludes the selected items from this import — they won't be committed. You can re-include them before commit."
+          confirmLabel="Exclude items"
+          irreversible={false}
+        />
 
         {/* Selector-based whole-bucket accept — distinct from Confirm kind; never confirms kind (D-5). */}
         <Button

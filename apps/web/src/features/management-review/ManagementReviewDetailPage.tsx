@@ -4,6 +4,7 @@ import { useParams } from "react-router-dom";
 import { useUserDirectory } from "../../app/shell/useUserDirectory";
 import { usePermissions } from "../../app/shell/usePermissions";
 import { ApiError, useApi } from "../../lib/api";
+import { ConfirmDestructive } from "../../lib/ConfirmDestructive";
 import { ApprovalStepper } from "../document/ApprovalStepper";
 import { StateBadge } from "../document/StateBadge";
 import { useMgmtReview, useMgmtReviewApproval } from "./hooks";
@@ -37,6 +38,15 @@ export function ManagementReviewDetailPage() {
   const release = useReleaseReview();
   const close = useCloseReview();
   const [actionError, setActionError] = useState<string | null>(null);
+  // #3: one pending-action descriptor drives the single shared confirm dialog for the irreversible
+  // lifecycle steps (Submit/Release/Close). Compile inputs stays ungated (Draft-only, re-runnable).
+  const [pending, setPending] = useState<{
+    title: string;
+    consequence: string;
+    confirmLabel: string;
+    confirmColor?: string;
+    run: () => Promise<unknown>;
+  } | null>(null);
 
   if (isError || !mr) {
     if (isLoading)
@@ -182,9 +192,16 @@ export function ManagementReviewDetailPage() {
                 <Group>
                   <Button
                     color="teal"
-                    loading={submit.isPending}
                     disabled={compile.isPending}
-                    onClick={() => void run(() => submit.mutateAsync(mr.id))}
+                    onClick={() =>
+                      setPending({
+                        title: "Submit for review?",
+                        consequence: "Freezes the minutes and starts the approval cycle.",
+                        confirmLabel: "Submit",
+                        confirmColor: "teal",
+                        run: () => submit.mutateAsync(mr.id),
+                      })
+                    }
                   >
                     Submit for review
                   </Button>
@@ -197,8 +214,16 @@ export function ManagementReviewDetailPage() {
                 <Group>
                   <Button
                     color="teal"
-                    loading={release.isPending}
-                    onClick={() => void run(() => release.mutateAsync(mr.id))}
+                    onClick={() =>
+                      setPending({
+                        title: "Release this review?",
+                        consequence:
+                          "Releases the review to Effective (flips the 9.3 ★) and spawns the action tasks.",
+                        confirmLabel: "Release review",
+                        confirmColor: "teal",
+                        run: () => release.mutateAsync(mr.id),
+                      })
+                    }
                   >
                     Release
                   </Button>
@@ -210,8 +235,14 @@ export function ManagementReviewDetailPage() {
               {canClose && (
                 <Group>
                   <Button
-                    loading={close.isPending}
-                    onClick={() => void run(() => close.mutateAsync(mr.id))}
+                    onClick={() =>
+                      setPending({
+                        title: "Close this review?",
+                        consequence: "Closes the management review.",
+                        confirmLabel: "Close the review",
+                        run: () => close.mutateAsync(mr.id),
+                      })
+                    }
                   >
                     Close review
                   </Button>
@@ -223,6 +254,20 @@ export function ManagementReviewDetailPage() {
             </Stack>
           </Card>
         )}
+        <ConfirmDestructive
+          opened={pending !== null}
+          onCancel={() => setPending(null)}
+          onConfirm={async () => {
+            if (!pending) return;
+            await pending.run();
+            setPending(null);
+          }}
+          title={pending?.title ?? ""}
+          consequence={pending?.consequence ?? ""}
+          confirmLabel={pending?.confirmLabel ?? ""}
+          confirmColor={pending?.confirmColor}
+          mapError={errMsg}
+        />
       </Stack>
     </Container>
   );
