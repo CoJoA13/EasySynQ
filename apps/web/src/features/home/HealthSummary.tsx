@@ -1,6 +1,7 @@
-import { Anchor, Badge, Group, Paper, Skeleton, Text } from "@mantine/core";
+import { Anchor, Group, Paper, Skeleton, Text } from "@mantine/core";
 import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
+import { StatusBadge } from "../../lib/StatusBadge";
 import { useComplianceChecklist } from "../compliance/useComplianceChecklist";
 import { coverageRag, RAG_META } from "./rag";
 
@@ -11,11 +12,19 @@ export function HealthSummary() {
 
   let body: ReactNode;
   if (forbidden) {
-    body = <Text size="sm" c="dimmed">Coverage scoped to your access.</Text>;
+    body = (
+      <Text size="sm" c="dimmed">
+        Coverage scoped to your access.
+      </Text>
+    );
   } else if (isLoading) {
     body = <Skeleton height={20} width={240} />;
   } else if (isError || !data) {
-    body = <Text size="sm" c="dimmed">Couldn&apos;t load coverage.</Text>;
+    body = (
+      <Text size="sm" c="dimmed">
+        Couldn&apos;t load coverage.
+      </Text>
+    );
   } else {
     const rag = coverageRag(data.rollup);
     body = (
@@ -23,14 +32,7 @@ export function HealthSummary() {
         <Text fw={500}>
           {data.rollup.covered} / {data.rollup.total} mandatory items current
         </Text>
-        <Badge
-          variant="light"
-          color={RAG_META[rag].color}
-          leftSection={<span aria-hidden>{RAG_META[rag].glyph}</span>}
-          aria-label={`Coverage status: ${RAG_META[rag].label}`}
-        >
-          {RAG_META[rag].label}
-        </Badge>
+        <StatusBadge tone={RAG_META[rag].tone} label={RAG_META[rag].label} kind="Coverage status" />
         <Text size="xs" c="dimmed">
           status against configured thresholds — not a compliance verdict
         </Text>

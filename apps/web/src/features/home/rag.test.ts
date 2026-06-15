@@ -1,8 +1,18 @@
 import { describe, expect, it } from "vitest";
 import type { Audit, Capa, Complaint, DriftStatus, Ncr } from "../../lib/types";
 import {
-  capasOpenCount, complaintsAwaitingCount, countRag, coverageRag, driftRag, driftStatusText,
-  ncrsAwaitingCount, openAuditsCount, overdueRag, planObjectivesRag, RAG_META, worstRag,
+  capasOpenCount,
+  complaintsAwaitingCount,
+  countRag,
+  coverageRag,
+  driftRag,
+  driftStatusText,
+  ncrsAwaitingCount,
+  openAuditsCount,
+  overdueRag,
+  planObjectivesRag,
+  RAG_META,
+  worstRag,
 } from "./rag";
 
 const drift = (over: Partial<DriftStatus> = {}): DriftStatus => ({
@@ -35,18 +45,60 @@ describe("rag rules", () => {
   });
 
   it("driftRag: failing pin → red; FAILED → amber; all CLEAN → green; unscanned → neutral", () => {
-    expect(driftRag(drift({ blob_coverage: { total: 1, never_verified: 0, failing: 2, oldest_verified_at: null } }))).toBe("red");
-    expect(driftRag(drift({ scans: { MIRROR: { status: "DIVERGENT", ...cleanScan }, BLOB_REHASH: null } }))).toBe("red");
-    expect(driftRag(drift({ scans: { MIRROR: { status: "FAILED", ...cleanScan }, BLOB_REHASH: null } }))).toBe("amber");
-    expect(driftRag(drift({ scans: { MIRROR: { status: "CLEAN", ...cleanScan }, BLOB_REHASH: { status: "CLEAN", ...cleanScan } } }))).toBe("green");
-    expect(driftRag(drift({ scans: { MIRROR: { status: "CLEAN", ...cleanScan }, BLOB_REHASH: null } }))).toBe("neutral");
+    expect(
+      driftRag(
+        drift({
+          blob_coverage: { total: 1, never_verified: 0, failing: 2, oldest_verified_at: null },
+        }),
+      ),
+    ).toBe("red");
+    expect(
+      driftRag(
+        drift({ scans: { MIRROR: { status: "DIVERGENT", ...cleanScan }, BLOB_REHASH: null } }),
+      ),
+    ).toBe("red");
+    expect(
+      driftRag(drift({ scans: { MIRROR: { status: "FAILED", ...cleanScan }, BLOB_REHASH: null } })),
+    ).toBe("amber");
+    expect(
+      driftRag(
+        drift({
+          scans: {
+            MIRROR: { status: "CLEAN", ...cleanScan },
+            BLOB_REHASH: { status: "CLEAN", ...cleanScan },
+          },
+        }),
+      ),
+    ).toBe("green");
+    expect(
+      driftRag(drift({ scans: { MIRROR: { status: "CLEAN", ...cleanScan }, BLOB_REHASH: null } })),
+    ).toBe("neutral");
     expect(driftRag(drift())).toBe("neutral");
   });
 
   it("driftStatusText", () => {
-    expect(driftStatusText(drift({ scans: { MIRROR: { status: "CLEAN", ...cleanScan }, BLOB_REHASH: { status: "CLEAN", ...cleanScan } } }))).toBe("clean");
-    expect(driftStatusText(drift({ blob_coverage: { total: 1, never_verified: 0, failing: 1, oldest_verified_at: null } }))).toBe("1 integrity issue");
-    expect(driftStatusText(drift({ scans: { MIRROR: { status: "FAILED", ...cleanScan }, BLOB_REHASH: null } }))).toBe("scan needs attention");
+    expect(
+      driftStatusText(
+        drift({
+          scans: {
+            MIRROR: { status: "CLEAN", ...cleanScan },
+            BLOB_REHASH: { status: "CLEAN", ...cleanScan },
+          },
+        }),
+      ),
+    ).toBe("clean");
+    expect(
+      driftStatusText(
+        drift({
+          blob_coverage: { total: 1, never_verified: 0, failing: 1, oldest_verified_at: null },
+        }),
+      ),
+    ).toBe("1 integrity issue");
+    expect(
+      driftStatusText(
+        drift({ scans: { MIRROR: { status: "FAILED", ...cleanScan }, BLOB_REHASH: null } }),
+      ),
+    ).toBe("scan needs attention");
   });
 
   it("worstRag picks the worst; empty → neutral", () => {
@@ -56,9 +108,17 @@ describe("rag rules", () => {
   });
 
   it("count helpers filter open/awaiting rows", () => {
-    const audits = [{ state: "Closed" }, { state: "InProgress" }, { state: "Scheduled" }] as Audit[];
+    const audits = [
+      { state: "Closed" },
+      { state: "InProgress" },
+      { state: "Scheduled" },
+    ] as Audit[];
     expect(openAuditsCount(audits)).toBe(2);
-    const capas = [{ close_state: "Closed" }, { close_state: "Rejected" }, { close_state: "Verify" }] as Capa[];
+    const capas = [
+      { close_state: "Closed" },
+      { close_state: "Rejected" },
+      { close_state: "Verify" },
+    ] as Capa[];
     expect(capasOpenCount(capas)).toBe(1);
     const ncrs = [{ disposition: null }, { disposition: "scrap" }] as Ncr[];
     expect(ncrsAwaitingCount(ncrs)).toBe(1);
@@ -66,10 +126,11 @@ describe("rag rules", () => {
     expect(complaintsAwaitingCount(complaints)).toBe(1);
   });
 
-  it("RAG_META carries a distinct glyph + Mantine colour per RAG (DP-7)", () => {
-    expect(RAG_META.green.color).toBe("green");
-    expect(RAG_META.amber.color).toBe("yellow");
-    expect(RAG_META.red.color).toBe("red");
+  it("RAG_META maps each RAG to a canonical tone + a distinct glyph (DP-7)", () => {
+    expect(RAG_META.green.tone).toBe("success");
+    expect(RAG_META.amber.tone).toBe("warning");
+    expect(RAG_META.red.tone).toBe("danger");
+    expect(RAG_META.neutral.tone).toBe("neutral");
     expect(new Set(Object.values(RAG_META).map((m) => m.glyph)).size).toBe(4);
   });
 });
