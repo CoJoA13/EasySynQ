@@ -7869,7 +7869,7 @@ components:
     Measurement:
       type: object
       additionalProperties: false
-      required: [id, record_id, period, value, target_at_capture, unit, created_at]
+      required: [id, record_id, period, value, target_at_capture, unit, created_at, rag]
       description: A single KPI reading — append-only, WORM/retention-governed evidence record.
       properties:
         id: { type: string, format: uuid }
@@ -7881,6 +7881,10 @@ components:
         unit: { type: string }
         source: { type: [string, "null"] }
         created_at: { type: string, format: date-time }
+        rag:
+          type: string
+          enum: [green, amber, red, unmeasured]
+          description: "Per-reading RAG: value vs target_at_capture, direction/threshold from the governing commitment. Never 'unmeasured' for a measurement (value always present)."
 
     MeasurementCreate:
       type: object

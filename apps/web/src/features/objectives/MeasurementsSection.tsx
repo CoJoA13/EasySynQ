@@ -1,10 +1,20 @@
 import { Alert, Button, Group, Loader, Stack, Table, Text, Title } from "@mantine/core";
 import { useState } from "react";
+import type { ObjectiveDirection } from "../../lib/types";
 import { usePermissions } from "../../app/shell/usePermissions";
 import { useObjectiveMeasurements } from "./hooks";
+import { ObjectiveTrendChart } from "./ObjectiveTrendChart";
 import { RecordMeasurementModal } from "./RecordMeasurementModal";
 
-export function MeasurementsSection({ objectiveId, unit }: { objectiveId: string; unit: string }) {
+export function MeasurementsSection({
+  objectiveId,
+  unit,
+  direction,
+}: {
+  objectiveId: string;
+  unit: string;
+  direction?: ObjectiveDirection;
+}) {
   const { data, isLoading, isError, forbidden } = useObjectiveMeasurements(objectiveId);
   const { can } = usePermissions();
   const [open, setOpen] = useState(false);
@@ -12,7 +22,11 @@ export function MeasurementsSection({ objectiveId, unit }: { objectiveId: string
     <Stack gap="sm">
       <Group justify="space-between">
         <Title order={3}>Measurement history</Title>
-        {can("kpi.record") && <Button size="xs" onClick={() => setOpen(true)}>Record measurement</Button>}
+        {can("kpi.record") && (
+          <Button size="xs" onClick={() => setOpen(true)}>
+            Record measurement
+          </Button>
+        )}
       </Group>
       {forbidden ? (
         <Alert color="gray" title="No access">
@@ -25,9 +39,12 @@ export function MeasurementsSection({ objectiveId, unit }: { objectiveId: string
       ) : isLoading ? (
         <Loader />
       ) : (data ?? []).length === 0 ? (
-        <Text c="dimmed" size="sm">No measurements recorded yet.</Text>
+        <Text c="dimmed" size="sm">
+          No measurements recorded yet.
+        </Text>
       ) : (
         <>
+          <ObjectiveTrendChart measurements={data ?? []} unit={unit} direction={direction} />
           <Table>
             <Table.Thead>
               <Table.Tr>
@@ -42,15 +59,21 @@ export function MeasurementsSection({ objectiveId, unit }: { objectiveId: string
               {(data ?? []).map((m) => (
                 <Table.Tr key={m.id}>
                   <Table.Td>{m.period}</Table.Td>
-                  <Table.Td>{m.value} {m.unit}</Table.Td>
-                  <Table.Td c="dimmed">{m.target_at_capture} {m.unit}</Table.Td>
+                  <Table.Td>
+                    {m.value} {m.unit}
+                  </Table.Td>
+                  <Table.Td c="dimmed">
+                    {m.target_at_capture} {m.unit}
+                  </Table.Td>
                   <Table.Td c="dimmed">{m.source ?? "—"}</Table.Td>
                   <Table.Td c="dimmed">{m.created_at.slice(0, 10)}</Table.Td>
                 </Table.Tr>
               ))}
             </Table.Tbody>
           </Table>
-          <Text c="dimmed" size="xs">Readings are append-only. Trend charts arrive in a later release.</Text>
+          <Text c="dimmed" size="xs">
+            Readings are append-only.
+          </Text>
         </>
       )}
       {open && (

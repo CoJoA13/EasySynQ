@@ -6,7 +6,10 @@ import { axe } from "jest-axe";
 import { Route, Routes } from "react-router-dom";
 import type { Objective } from "../../lib/types";
 import { renderWithProviders } from "../../test/render";
-import { objectiveDetailFixture, objectiveUnderRevisionDetailFixture } from "../../test/msw/handlers";
+import {
+  objectiveDetailFixture,
+  objectiveUnderRevisionDetailFixture,
+} from "../../test/msw/handlers";
 import { server } from "../../test/msw/server";
 import { ObjectiveDetailPage } from "./ObjectiveDetailPage";
 
@@ -27,7 +30,9 @@ it("renders the header, commitment, plans and measurements", async () => {
   expect(screen.getByRole("heading", { name: "On-time delivery rate" })).toBeInTheDocument();
   expect(screen.getByText("Draft")).toBeInTheDocument();
   expect(screen.getByText("Add a second carrier to the south region")).toBeInTheDocument();
-  await waitFor(() => expect(screen.getByText("2026-04-01")).toBeInTheDocument());
+  // the period appears in both the measurements table and the trend-chart x-axis → scope to the table.
+  await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
+  expect(within(screen.getByRole("table")).getByText("2026-04-01")).toBeInTheDocument();
   expect(await axe(container)).toHaveNoViolations();
 });
 
@@ -38,7 +43,9 @@ it("shows a not-found alert on a 404", async () => {
     ),
   );
   renderAt(ID);
-  await waitFor(() => expect(screen.getByText(/couldn't load this objective/i)).toBeInTheDocument());
+  await waitFor(() =>
+    expect(screen.getByText(/couldn't load this objective/i)).toBeInTheDocument(),
+  );
 });
 
 // ---- S-obj-3 lifecycle affordances ----
