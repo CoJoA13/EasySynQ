@@ -1792,6 +1792,7 @@ const measurementFixtures: Measurement[] = [
     unit: "%",
     source: "Logistics MIS",
     created_at: "2026-06-02T09:00:00+00:00",
+    rag: "amber",
   },
   {
     id: "me000001-0001-0001-0001-000000000001",
@@ -1803,6 +1804,7 @@ const measurementFixtures: Measurement[] = [
     unit: "%",
     source: "Logistics MIS",
     created_at: "2026-04-04T09:00:00+00:00",
+    rag: "red",
   },
 ] satisfies Measurement[];
 

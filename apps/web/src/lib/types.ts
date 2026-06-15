@@ -1206,6 +1206,7 @@ export interface Measurement {
   unit: string;
   source: string | null;
   created_at: string; // ISO date-time
+  rag: ObjectiveRag; // S-obj-charts — per-reading RAG (never "unmeasured" in practice)
 }
 
 export interface ObjectiveScorecard {

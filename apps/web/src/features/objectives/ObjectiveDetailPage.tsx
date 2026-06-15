@@ -6,7 +6,11 @@ import { ApiError } from "../../lib/api";
 import { ApprovalStepper } from "../document/ApprovalStepper";
 import { StateBadge } from "../document/StateBadge";
 import { useObjective, useObjectiveApproval } from "./hooks";
-import { useReleaseObjective, useStartObjectiveRevision, useSubmitObjectiveForReview } from "./mutations";
+import {
+  useReleaseObjective,
+  useStartObjectiveRevision,
+  useSubmitObjectiveForReview,
+} from "./mutations";
 import { CommitmentHero } from "./CommitmentHero";
 import { EditCommitmentModal } from "./EditCommitmentModal";
 import { PlansSection } from "./PlansSection";
@@ -59,7 +63,8 @@ export function ObjectiveDetailPage() {
   // AuthorActions posture: canRevise = Effective && caps; draftLike = Draft ∪ UnderRevision).
   const canSubmit = o.capabilities?.submit === true && draftLike;
   const canRelease = o.capabilities?.release === true && o.current_state === "Approved";
-  const canStartRevision = o.capabilities?.start_revision === true && o.current_state === "Effective";
+  const canStartRevision =
+    o.capabilities?.start_revision === true && o.current_state === "Effective";
   const canEdit = o.capabilities?.edit === true && draftLike;
 
   async function doSubmit() {
@@ -97,7 +102,9 @@ export function ObjectiveDetailPage() {
       <Stack gap="lg">
         <div>
           <Group gap="xs" mb={4} aria-label="Objective reference">
-            <Text c="dimmed" size="sm" fw={500}>{o.identifier}</Text>
+            <Text c="dimmed" size="sm" fw={500}>
+              {o.identifier}
+            </Text>
             <StateBadge state={o.current_state} />
           </Group>
           <Title order={2}>{o.title}</Title>
@@ -157,7 +164,9 @@ export function ObjectiveDetailPage() {
                   <Button color="teal" loading={submit.isPending} onClick={() => void doSubmit()}>
                     Submit for review
                   </Button>
-                  <Text size="xs" c="dimmed">Freezes the commitment and starts approval.</Text>
+                  <Text size="xs" c="dimmed">
+                    Freezes the commitment and starts approval.
+                  </Text>
                 </Group>
               )}
               {canRelease && (
@@ -165,7 +174,9 @@ export function ObjectiveDetailPage() {
                   <Button color="teal" loading={release.isPending} onClick={() => void doRelease()}>
                     Release
                   </Button>
-                  <Text size="xs" c="dimmed">Releases the Approved objective → Effective.</Text>
+                  <Text size="xs" c="dimmed">
+                    Releases the Approved objective → Effective.
+                  </Text>
                 </Group>
               )}
             </Stack>
@@ -175,7 +186,7 @@ export function ObjectiveDetailPage() {
           <EditCommitmentModal opened objective={o} onClose={() => setEditOpen(false)} />
         )}
         <PlansSection objectiveId={o.id} plans={o.plans} />
-        <MeasurementsSection objectiveId={o.id} unit={o.unit} />
+        <MeasurementsSection objectiveId={o.id} unit={o.unit} direction={o.direction} />
       </Stack>
     </Container>
   );
