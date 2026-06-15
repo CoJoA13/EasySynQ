@@ -1,6 +1,6 @@
-import { act, renderHook, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, useLocation, useSearchParams } from "react-router-dom";
 import { describe, expect, it } from "vitest";
 import {
   type SortDir,
@@ -54,6 +54,20 @@ describe("useTableSort", () => {
     expect(result.current.sort).toBe("due");
     expect(result.current.dir).toBe("asc");
   });
+
+  it("flips the default-active column's direction on the FIRST click (Codex #146 regression)", () => {
+    // Opened with the default sort active but NO `sort` url param — a click on that already-
+    // highlighted column must TOGGLE direction, not re-write the same default (a silent no-op).
+    const { result } = renderHook(
+      () => useTableSort({ keys: KEYS, defaultSort: "due", defaultDir: "asc" }),
+      { wrapper: router(["/"]) },
+    );
+    expect(result.current.sort).toBe("due");
+    expect(result.current.dir).toBe("asc");
+    act(() => result.current.toggleSort("due"));
+    expect(result.current.sort).toBe("due");
+    expect(result.current.dir).toBe("desc");
+  });
 });
 
 describe("useDebouncedSearch", () => {
@@ -70,6 +84,40 @@ describe("useDebouncedSearch", () => {
     act(() => result.current.setQ("  Mara  "));
     expect(result.current.q).toBe("  Mara  ");
     await waitFor(() => expect(result.current.query).toBe("mara"));
+  });
+
+  it("adopts an external url ?q change and does NOT clobber it (Codex #146 regression)", async () => {
+    // An external writer (back/forward, a same-route link, ⌘K) changes ?q while the register stays
+    // mounted — simulated here with a sibling that calls setSearchParams.
+    function ExternalSetter() {
+      const [, setParams] = useSearchParams();
+      return <button onClick={() => setParams({ q: "bar" }, { replace: true })}>ext</button>;
+    }
+    function Harness() {
+      const { q, setQ } = useDebouncedSearch("q", 10);
+      const loc = useLocation();
+      return (
+        <>
+          <input aria-label="s" value={q} onChange={(e) => setQ(e.currentTarget.value)} />
+          <span data-testid="loc">{loc.search}</span>
+        </>
+      );
+    }
+    render(
+      <MemoryRouter initialEntries={["/?q=foo"]}>
+        <Harness />
+        <ExternalSetter />
+      </MemoryRouter>,
+    );
+    const input = screen.getByLabelText("s") as HTMLInputElement;
+    expect(input.value).toBe("foo");
+    fireEvent.click(screen.getByText("ext"));
+    // the input adopts the new url value (the sync effect)...
+    await waitFor(() => expect(input.value).toBe("bar"));
+    // ...and the stale "foo" is never written back over ?q=bar (the debounced-keyed write guard).
+    await new Promise((r) => setTimeout(r, 40));
+    expect(screen.getByTestId("loc").textContent).toContain("q=bar");
+    expect(screen.getByTestId("loc").textContent).not.toContain("q=foo");
   });
 });
 
