@@ -1,5 +1,5 @@
 import { MantineProvider } from "@mantine/core";
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { AsOf } from "./AsOf";
 
@@ -34,4 +34,15 @@ it("renders the relative label and a timezone-explicit title", () => {
   const el = screen.getByText(/Updated 5 min ago/);
   expect(el).toBeInTheDocument();
   expect(el).toHaveAttribute("title", expect.stringMatching(/2026/));
+});
+
+it("refreshes the relative label on an interval as time passes (Codex #144 regression)", () => {
+  renderAsOf(NOW - 60_000); // 1 minute before "now"
+  expect(screen.getByText(/Updated 1 min ago/)).toBeInTheDocument();
+  // Advance the (fake) clock by 2 minutes — the 30s interval fires and the label re-computes; without
+  // the tick it would stay frozen at "1 min ago".
+  act(() => {
+    vi.advanceTimersByTime(120_000);
+  });
+  expect(screen.getByText(/Updated 3 min ago/)).toBeInTheDocument();
 });

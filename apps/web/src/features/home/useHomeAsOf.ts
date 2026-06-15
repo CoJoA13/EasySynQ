@@ -1,3 +1,4 @@
+import type { DriftStatus } from "../../lib/types";
 import { useAudits } from "../audits/hooks";
 import { useCapas, useComplaints, useNcrs } from "../capa/hooks";
 import { useComplianceChecklist } from "../compliance/useComplianceChecklist";
@@ -25,11 +26,26 @@ export function oldestStamp(
   return stamps.length ? Math.min(...stamps) : null;
 }
 
+// The drift/integrity tile's TRUE freshness is the last SCAN's `finished_at`, NOT when Home fetched
+// the status (Codex #144 P2) — using the fetch time would claim "just now" days after a scan ran,
+// overstating the currency of the one signal whose whole point is provable currency. The integrity
+// signal is only as fresh as its STALEST scan, so take the oldest finished MIRROR/BLOB_REHASH scan;
+// 0 (no finished scan yet) lets `oldestStamp` drop it (a never-run scan reports no freshness).
+export function driftScanFreshness(data: DriftStatus | undefined): number {
+  if (!data) return 0;
+  const times = [data.scans.MIRROR?.finished_at, data.scans.BLOB_REHASH?.finished_at]
+    .filter((t): t is string => !!t)
+    .map((t) => Date.parse(t));
+  return times.length ? Math.min(...times) : 0;
+}
+
 export function useHomeAsOf(): number | null {
+  const drift = useDriftStatus();
   const reads = [
     useObjectiveScorecard(),
     useComplianceChecklist(),
-    useDriftStatus(),
+    // Drift contributes its last-scan freshness, not the fetch time (see driftScanFreshness).
+    { isSuccess: drift.isSuccess, dataUpdatedAt: driftScanFreshness(drift.data) },
     useAudits(),
     useMgmtReviewNextDue(),
     useCapas(),
