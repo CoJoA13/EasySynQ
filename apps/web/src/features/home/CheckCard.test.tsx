@@ -8,12 +8,36 @@ import { CheckCard } from "./CheckCard";
 
 const audits: AuditList = {
   data: [
-    { id: "a1", identifier: "REC-1", title: "Q2 audit", plan_id: "p1", lead_auditor_user_id: null, state: "InProgress", started_at: null, completed_at: null, result_summary: null, created_at: null },
-    { id: "a2", identifier: "REC-2", title: "Q1 audit", plan_id: "p2", lead_auditor_user_id: null, state: "Closed", started_at: null, completed_at: null, result_summary: null, created_at: null },
+    {
+      id: "a1",
+      identifier: "REC-1",
+      title: "Q2 audit",
+      plan_id: "p1",
+      lead_auditor_user_id: null,
+      state: "InProgress",
+      started_at: null,
+      completed_at: null,
+      result_summary: null,
+      created_at: null,
+    },
+    {
+      id: "a2",
+      identifier: "REC-2",
+      title: "Q1 audit",
+      plan_id: "p2",
+      lead_auditor_user_id: null,
+      state: "Closed",
+      started_at: null,
+      completed_at: null,
+      result_summary: null,
+      created_at: null,
+    },
   ],
 };
 const checklist: ComplianceChecklist = {
-  framework: "iso9001:2015", rollup: { total: 20, covered: 18, partial: 1, gap: 1, overdue_review: 0 }, rows: [],
+  framework: "iso9001:2015",
+  rollup: { total: 20, covered: 18, partial: 1, gap: 1, overdue_review: 0 },
+  rows: [],
 };
 
 it("shows open audits + coverage, RAG red on a gap", async () => {
@@ -31,7 +55,9 @@ it("shows open audits + coverage, RAG red on a gap", async () => {
     expect(within(card).getByText("Next management review due 2026-06-01")).toBeInTheDocument(),
   );
   // The gap RAG (red) still wins worst-of, with due_soon (amber) folded in.
-  await waitFor(() => expect(within(card).getByLabelText(/status: red/i)).toBeInTheDocument());
+  await waitFor(() =>
+    expect(within(card).getByLabelText(/status: action required/i)).toBeInTheDocument(),
+  );
 });
 
 it("renders no-access when all reads are forbidden", async () => {
@@ -43,5 +69,7 @@ it("renders no-access when all reads are forbidden", async () => {
   );
   renderWithProviders(<CheckCard />);
   const card = await screen.findByRole("group", { name: /check quadrant/i });
-  await waitFor(() => expect(within(card).getByText(/no access to this section/i)).toBeInTheDocument());
+  await waitFor(() =>
+    expect(within(card).getByText(/no access to this section/i)).toBeInTheDocument(),
+  );
 });
