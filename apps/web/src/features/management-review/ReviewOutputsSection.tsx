@@ -3,6 +3,7 @@ import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useUserDirectory } from "../../app/shell/useUserDirectory";
 import { usePermissions } from "../../app/shell/usePermissions";
+import { ConfirmDestructive } from "../../lib/ConfirmDestructive";
 import { useTask } from "../review/hooks";
 import { TaskStateBadge } from "../document/TaskStateBadge";
 import type { ReviewOutput } from "../../lib/types";
@@ -13,7 +14,13 @@ import { RaiseMrCapaModal } from "./RaiseMrCapaModal";
 import { SpawnDcrModal } from "../dcr/SpawnDcrModal";
 import { useRaiseDcrFromMrOutput } from "../dcr/mutations";
 
-function ActionRow({ output, nameOf }: { output: ReviewOutput; nameOf: (id: string | null) => string }) {
+function ActionRow({
+  output,
+  nameOf,
+}: {
+  output: ReviewOutput;
+  nameOf: (id: string | null) => string;
+}) {
   // best-effort: the spawned task 404s unless the caller is the action owner → the badge simply
   // doesn't render (the query is gated on a non-null id; a 404 never crashes the row). retry:false —
   // the 404 is the EXPECTED non-owner outcome, not a transient to re-hammer 3× (engineering-patterns).
@@ -30,14 +37,23 @@ function ActionRow({ output, nameOf }: { output: ReviewOutput; nameOf: (id: stri
   );
 }
 
-export function ReviewOutputsSection({ reviewId, outputs, editable, tracking = false }: {
-  reviewId: string; outputs: ReviewOutput[]; editable: boolean; tracking?: boolean;
+export function ReviewOutputsSection({
+  reviewId,
+  outputs,
+  editable,
+  tracking = false,
+}: {
+  reviewId: string;
+  outputs: ReviewOutput[];
+  editable: boolean;
+  tracking?: boolean;
 }) {
   const { can } = usePermissions();
   const { data: directory } = useUserDirectory();
   const navigate = useNavigate();
   const del = useDeleteOutput();
   const [addOpen, setAddOpen] = useState(false);
+  const [removing, setRemoving] = useState<ReviewOutput | null>(null);
   const [raiseFor, setRaiseFor] = useState<string | null>(null);
   const [raiseDcrFor, setRaiseDcrFor] = useState<string | null>(null);
   const raiseDcr = useRaiseDcrFromMrOutput(reviewId, raiseDcrFor ?? "");
@@ -52,7 +68,11 @@ export function ReviewOutputsSection({ reviewId, outputs, editable, tracking = f
     <Stack gap="sm">
       <Group justify="space-between">
         <Title order={3}>Review outputs (9.3.3)</Title>
-        {canEdit && <Button size="xs" variant="light" onClick={() => setAddOpen(true)}>Add output</Button>}
+        {canEdit && (
+          <Button size="xs" variant="light" onClick={() => setAddOpen(true)}>
+            Add output
+          </Button>
+        )}
       </Group>
       {(["DECISION", "ACTION", "IMPROVEMENT"] as const).map((t) => {
         const rows = byType(t);
@@ -66,14 +86,17 @@ export function ReviewOutputsSection({ reviewId, outputs, editable, tracking = f
               </Group>
               {rows.map((o) => (
                 <Group key={o.id} justify="space-between" wrap="nowrap">
-                  {t === "ACTION" ? <ActionRow output={o} nameOf={nameOf} />
-                    : <Text size="sm">{o.description}</Text>}
+                  {t === "ACTION" ? (
+                    <ActionRow output={o} nameOf={nameOf} />
+                  ) : (
+                    <Text size="sm">{o.description}</Text>
+                  )}
                   <Group gap="xs" wrap="nowrap">
                     {/* View link shows whenever a CAPA was spawned (even on a Closed review — the
                         CAPA is still viewable); only Raise is gated on the tracking window via
                         canRaiseCapa (= tracking && capa.create). */}
-                    {t === "ACTION" && (
-                      o.spawned_capa_id ? (
+                    {t === "ACTION" &&
+                      (o.spawned_capa_id ? (
                         <Anchor component={Link} size="xs" to={`/capa?capa=${o.spawned_capa_id}`}>
                           View CAPA →
                         </Anchor>
@@ -81,17 +104,26 @@ export function ReviewOutputsSection({ reviewId, outputs, editable, tracking = f
                         <Button size="compact-xs" variant="light" onClick={() => setRaiseFor(o.id)}>
                           Raise CAPA
                         </Button>
-                      ) : null
-                    )}
+                      ) : null)}
                     {/* DCR spawn is 1:N idempotent (no spawned_dcr_id latch on the output) — Raise-only, no View link. */}
                     {t === "ACTION" && canRaiseDcr && (
-                      <Button size="compact-xs" variant="light" onClick={() => setRaiseDcrFor(o.id)}>
+                      <Button
+                        size="compact-xs"
+                        variant="light"
+                        onClick={() => setRaiseDcrFor(o.id)}
+                      >
                         Raise DCR
                       </Button>
                     )}
                     {canEdit && (
-                      <Button size="compact-xs" variant="subtle" color="red"
-                        onClick={() => void del.mutateAsync({ id: reviewId, oid: o.id })}>Remove</Button>
+                      <Button
+                        size="compact-xs"
+                        variant="subtle"
+                        color="red"
+                        onClick={() => setRemoving(o)}
+                      >
+                        Remove
+                      </Button>
                     )}
                   </Group>
                 </Group>
@@ -100,7 +132,11 @@ export function ReviewOutputsSection({ reviewId, outputs, editable, tracking = f
           </Card>
         );
       })}
-      {outputs.length === 0 && <Text size="sm" c="dimmed">No outputs recorded yet.</Text>}
+      {outputs.length === 0 && (
+        <Text size="sm" c="dimmed">
+          No outputs recorded yet.
+        </Text>
+      )}
       {addOpen && <AddOutputModal opened reviewId={reviewId} onClose={() => setAddOpen(false)} />}
       {raiseFor && (
         <RaiseMrCapaModal
@@ -118,6 +154,19 @@ export function ReviewOutputsSection({ reviewId, outputs, editable, tracking = f
           onClose={() => setRaiseDcrFor(null)}
         />
       )}
+      <ConfirmDestructive
+        opened={removing !== null}
+        onCancel={() => setRemoving(null)}
+        onConfirm={async () => {
+          if (!removing) return;
+          await del.mutateAsync({ id: reviewId, oid: removing.id });
+          setRemoving(null);
+        }}
+        title="Remove this output?"
+        consequence={`Removes the output “${removing?.description ?? ""}” from the review.`}
+        confirmLabel="Remove output"
+        irreversible={false}
+      />
     </Stack>
   );
 }

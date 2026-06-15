@@ -68,6 +68,8 @@ it("shows Submit for review on a Draft and hides it once the re-fetch lands InRe
     ),
   );
   await userEvent.click(screen.getByRole("button", { name: "Submit for review" }));
+  // #3: submitting now confirms first.
+  await userEvent.click(await screen.findByRole("button", { name: "Submit" }));
   await waitFor(() =>
     expect(screen.queryByRole("button", { name: "Submit for review" })).not.toBeInTheDocument(),
   );
@@ -97,6 +99,33 @@ it("shows Release (and not Submit) on an Approved objective with release capabil
   renderAt(ID);
   await waitFor(() => expect(screen.getByRole("button", { name: "Release" })).toBeInTheDocument());
   expect(screen.queryByRole("button", { name: "Submit for review" })).not.toBeInTheDocument();
+});
+
+it("#3: Release confirms first — confirming POSTs the objective release (not submit)", async () => {
+  let released = false;
+  server.use(
+    http.get("/api/v1/objectives/:id", () =>
+      HttpResponse.json({
+        ...objectiveDetailFixture,
+        current_state: "Approved",
+        capabilities: { submit: false, release: true, edit: false, start_revision: false },
+        pending_commitment: null,
+      } satisfies Objective),
+    ),
+    http.get("/api/v1/objectives/:id/approval", () => HttpResponse.json(null)),
+    http.post("/api/v1/objectives/:id/release", () => {
+      released = true;
+      return HttpResponse.json({
+        ...objectiveDetailFixture,
+        current_state: "Effective",
+      } satisfies Objective);
+    }),
+  );
+  renderAt(ID);
+  await userEvent.click(await screen.findByRole("button", { name: "Release" }));
+  expect(released).toBe(false); // the bare click only opens the confirm
+  await userEvent.click(await screen.findByRole("button", { name: "Release objective" }));
+  await waitFor(() => expect(released).toBe(true));
 });
 
 it("shows no Lifecycle card for a bare reader with no cycle", async () => {
@@ -129,6 +158,8 @@ it("surfaces a calm error when submit fails", async () => {
     expect(screen.getByRole("button", { name: "Submit for review" })).toBeInTheDocument(),
   );
   await userEvent.click(screen.getByRole("button", { name: "Submit for review" }));
+  // #3: submitting now confirms first; the error surfaces inside the dialog.
+  await userEvent.click(await screen.findByRole("button", { name: "Submit" }));
   await waitFor(() => expect(screen.getByText("Commitment incomplete")).toBeInTheDocument());
   // The page stays usable — the affordance is still there for a retry.
   expect(screen.getByRole("button", { name: "Submit for review" })).toBeInTheDocument();

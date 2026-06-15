@@ -74,7 +74,10 @@ test("VerifyForm sends decision + narrative and shows the signing confirmation",
 test("CloseAction surfaces a 409 capa_close_incomplete calmly", async () => {
   server.use(
     http.post("/api/v1/capas/:id/close", () =>
-      HttpResponse.json({ code: "capa_close_incomplete", title: "Missing evidence" }, { status: 409 }),
+      HttpResponse.json(
+        { code: "capa_close_incomplete", title: "Missing evidence" },
+        { status: 409 },
+      ),
     ),
   );
   const u = userEvent.setup();
@@ -83,11 +86,21 @@ test("CloseAction surfaces a 409 capa_close_incomplete calmly", async () => {
   const atVerify = capa({
     close_state: "Verify",
     stages: [
-      { id: "vf", stage: "Verify", content_block: { decision: "effective" }, cycle_marker: 0, created_by: "u", created_at: "x", evidence_links: [] },
+      {
+        id: "vf",
+        stage: "Verify",
+        content_block: { decision: "effective" },
+        cycle_marker: 0,
+        created_by: "u",
+        created_at: "x",
+        evidence_links: [],
+      },
     ],
   });
   wrap(<CloseAction capa={atVerify} />);
   await u.click(screen.getByRole("button", { name: /Close CAPA/ }));
+  // #3: closing now confirms first.
+  await u.click(await screen.findByRole("button", { name: "Close the CAPA" }));
   expect(await screen.findByText(/Missing evidence/)).toBeInTheDocument();
 });
 
@@ -95,7 +108,15 @@ test("CloseAction at a not_effective Verify offers 'Return to root cause'", () =
   const looped = capa({
     close_state: "Verify",
     stages: [
-      { id: "vf", stage: "Verify", content_block: { decision: "not_effective" }, cycle_marker: 0, created_by: "u", created_at: "x", evidence_links: [] },
+      {
+        id: "vf",
+        stage: "Verify",
+        content_block: { decision: "not_effective" },
+        cycle_marker: 0,
+        created_by: "u",
+        created_at: "x",
+        evidence_links: [],
+      },
     ],
   });
   wrap(<CloseAction capa={looped} />);

@@ -3,6 +3,7 @@ import { useState } from "react";
 import { useParams } from "react-router-dom";
 import { useUserDirectory } from "../../app/shell/useUserDirectory";
 import { ApiError } from "../../lib/api";
+import { ConfirmDestructive } from "../../lib/ConfirmDestructive";
 import { ApprovalStepper } from "../document/ApprovalStepper";
 import { StateBadge } from "../document/StateBadge";
 import { useObjective, useObjectiveApproval } from "./hooks";
@@ -31,6 +32,14 @@ export function ObjectiveDetailPage() {
   const startRevision = useStartObjectiveRevision();
   const [actionError, setActionError] = useState<string | null>(null);
   const [editOpen, setEditOpen] = useState(false);
+  // #3: one pending-action descriptor drives the shared confirm dialog for Submit/Release (the
+  // irreversible freezes/cutover). Start-revision + Edit stay ungated (they open editable drafts).
+  const [pending, setPending] = useState<{
+    title: string;
+    consequence: string;
+    confirmLabel: string;
+    run: () => Promise<unknown>;
+  } | null>(null);
 
   if (isLoading) {
     return (
@@ -66,26 +75,6 @@ export function ObjectiveDetailPage() {
   const canStartRevision =
     o.capabilities?.start_revision === true && o.current_state === "Effective";
   const canEdit = o.capabilities?.edit === true && draftLike;
-
-  async function doSubmit() {
-    if (!id) return;
-    setActionError(null);
-    try {
-      await submit.mutateAsync(id);
-    } catch (e) {
-      setActionError(errMsg(e));
-    }
-  }
-
-  async function doRelease() {
-    if (!id) return;
-    setActionError(null);
-    try {
-      await release.mutateAsync(id);
-    } catch (e) {
-      setActionError(errMsg(e));
-    }
-  }
 
   async function doStartRevision() {
     if (!id) return;
@@ -161,7 +150,17 @@ export function ObjectiveDetailPage() {
               )}
               {canSubmit && (
                 <Group>
-                  <Button color="teal" loading={submit.isPending} onClick={() => void doSubmit()}>
+                  <Button
+                    color="teal"
+                    onClick={() =>
+                      setPending({
+                        title: "Submit for review?",
+                        consequence: "Freezes the commitment and starts the approval cycle.",
+                        confirmLabel: "Submit",
+                        run: () => submit.mutateAsync(id!),
+                      })
+                    }
+                  >
                     Submit for review
                   </Button>
                   <Text size="xs" c="dimmed">
@@ -171,7 +170,18 @@ export function ObjectiveDetailPage() {
               )}
               {canRelease && (
                 <Group>
-                  <Button color="teal" loading={release.isPending} onClick={() => void doRelease()}>
+                  <Button
+                    color="teal"
+                    onClick={() =>
+                      setPending({
+                        title: "Release this objective?",
+                        consequence:
+                          "Releases the Approved objective to Effective (flips the 6.2 ★).",
+                        confirmLabel: "Release objective",
+                        run: () => release.mutateAsync(id!),
+                      })
+                    }
+                  >
                     Release
                   </Button>
                   <Text size="xs" c="dimmed">
@@ -187,6 +197,20 @@ export function ObjectiveDetailPage() {
         )}
         <PlansSection objectiveId={o.id} plans={o.plans} />
         <MeasurementsSection objectiveId={o.id} unit={o.unit} direction={o.direction} />
+        <ConfirmDestructive
+          opened={pending !== null}
+          onCancel={() => setPending(null)}
+          onConfirm={async () => {
+            if (!pending) return;
+            await pending.run();
+            setPending(null);
+          }}
+          title={pending?.title ?? ""}
+          consequence={pending?.consequence ?? ""}
+          confirmLabel={pending?.confirmLabel ?? ""}
+          confirmColor="teal"
+          mapError={errMsg}
+        />
       </Stack>
     </Container>
   );

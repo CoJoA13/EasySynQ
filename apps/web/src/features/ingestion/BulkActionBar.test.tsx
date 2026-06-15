@@ -43,7 +43,9 @@ test("Confirm kind → Document confirms DOCUMENT for the selection (R10 act)", 
 test("Exclude posts a bulk exclude over the selection", async () => {
   const u = userEvent.setup();
   const { getByRole, onBulk } = setup(3);
-  await u.click(getByRole("button", { name: /exclude/i }));
+  await u.click(getByRole("button", { name: "Exclude selected" }));
+  // #3: a bulk exclude now confirms first.
+  await u.click(await screen.findByRole("button", { name: "Exclude items" }));
   expect(onBulk).toHaveBeenCalledOnce();
   expect(onBulk).toHaveBeenCalledWith("exclude");
 });
