@@ -129,6 +129,10 @@ def _measurement(
     # target_at_capture (so a later target edit can't rewrite a past verdict), with
     # direction/threshold from the objective's GOVERNING commitment (passed in by the call
     # site). A measurement always has a value → rag is never "unmeasured" here (N9).
+    # ⚠ Only target_at_capture is frozen: a commitment revision that changes DIRECTION or the
+    # at_risk_threshold re-grades historical readings against the current commitment (a HIGHER→LOWER
+    # flip can turn an old green reading red). Accepted as descriptive (N9) — truly freezing the
+    # grading inputs per reading would need a migration (owner call, deferred v1.x).
     return {
         "id": str(m.id),
         "objective_id": str(m.objective_id) if m.objective_id else None,

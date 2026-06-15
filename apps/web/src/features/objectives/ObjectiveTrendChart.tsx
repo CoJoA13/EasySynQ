@@ -48,8 +48,14 @@ export function ObjectiveTrendChart({
   unit: string;
   direction?: ObjectiveDirection;
 }) {
+  // Chart only readings in the objective's current (governing) unit — a unit-changing revision
+  // (S-obj-4) leaves old-unit rows in the history that aren't comparable on one numeric axis
+  // (Codex P2). They stay in the table below; this mirrors the backend rollup, which likewise
+  // only counts same-unit readings into current_value.
+  const sameUnit = measurements.filter((m) => m.unit === unit);
+  const hiddenForUnit = measurements.length - sameUnit.length;
   // The API returns measurements NEWEST-FIRST; reverse → oldest-left, newest-right.
-  const series: Point[] = [...measurements].reverse().map((m) => ({
+  const series: Point[] = [...sameUnit].reverse().map((m) => ({
     period: m.period,
     value: Number(m.value),
     target: Number(m.target_at_capture),
@@ -58,7 +64,7 @@ export function ObjectiveTrendChart({
   }));
 
   const n = series.length;
-  if (n === 0) return null; // MeasurementsSection guards this; kept defensive.
+  if (n === 0) return null; // MeasurementsSection guards the empty list; null when all off-unit.
 
   // y-domain over values ∪ targets, padded ~8%; NEVER forced to 0; degenerate domain → ±1/±|v|·0.1.
   const ys = series.flatMap((p) => [p.value, p.target]).filter((v) => Number.isFinite(v));
@@ -91,12 +97,19 @@ export function ObjectiveTrendChart({
   const showXLabel = (i: number) => i === 0 || i === n - 1 || i % everyNth === 0;
 
   const valuePts = series.map((p, i) => `${xAt(i)},${yAt(p.value)}`).join(" ");
-  // stepped (step-after) target line: hold each target until the next reading's x.
+  // stepped (step-after) target line: hold each target until the next reading's x. For a single
+  // reading, draw a full-width horizontal reference instead — a one-coordinate polyline renders
+  // nothing, so the target would otherwise be invisible (Codex P2).
   const targetStepPts: string[] = [];
-  series.forEach((p, i) => {
-    targetStepPts.push(`${xAt(i)},${yAt(p.target)}`);
-    if (i < n - 1) targetStepPts.push(`${xAt(i + 1)},${yAt(p.target)}`);
-  });
+  if (n === 1) {
+    const ty = yAt(series[0]!.target);
+    targetStepPts.push(`${M.left},${ty}`, `${M.left + PLOT_W},${ty}`);
+  } else {
+    series.forEach((p, i) => {
+      targetStepPts.push(`${xAt(i)},${yAt(p.target)}`);
+      if (i < n - 1) targetStepPts.push(`${xAt(i + 1)},${yAt(p.target)}`);
+    });
+  }
 
   const first = series[0]!;
   const last = series[n - 1]!;
@@ -212,6 +225,12 @@ export function ObjectiveTrendChart({
         ))}
       </Group>
 
+      {hiddenForUnit > 0 && (
+        <Text size="xs" c="dimmed">
+          {hiddenForUnit} earlier reading{hiddenForUnit === 1 ? "" : "s"} in a different unit
+          {hiddenForUnit === 1 ? " is" : " are"} listed in the table below.
+        </Text>
+      )}
       {n === 1 && (
         <Text size="xs" c="dimmed">
           One reading so far.

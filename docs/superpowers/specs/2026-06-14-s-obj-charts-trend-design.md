@@ -52,12 +52,16 @@ The inputs:
   of the page grades, via `resolve_commitment(governing, …)` (`api/objectives.py:165`,
   `services/objectives/queries.py:99`).
 
-⚠ **Documented caveat (bless this):** the **amber boundary** uses the *current governing* threshold/direction
-against the *historical* `target_at_capture`. For an objective whose commitment was **never revised** (the
-overwhelming common case) this is exact. After an S-obj-4 commitment revision that **changed the threshold**,
-the historical amber/red split is approximate (green-vs-not stays exact). This is acceptable because (a) the
-chart is descriptive (N9), not a compliance verdict; (b) freezing a `threshold_at_capture` would require a
-**migration** — out of the owner-approved migration-free scope; it's named as a deferral below. This matches the
+⚠ **Documented caveat (owner-accepted; corrected post-Codex):** only `target_at_capture` is frozen — the
+`direction` and `at_risk_threshold` come from the *current governing* commitment. For an objective whose
+commitment is **never revised** (the overwhelming common case) the RAG is exact. But an S-obj-4 commitment
+revision that changes the **threshold** OR the **direction** re-grades historical readings against the current
+commitment — and a **direction** flip rewrites the green/red verdict, not just the amber boundary (e.g. a
+HIGHER-is-better reading of 99 vs target 98 was green; after a revision to LOWER-is-better it grades red). So
+the per-reading RAG is **descriptive, not an immutable stored verdict**. This is owner-accepted because (a) the
+chart is descriptive (N9), not a compliance verdict; (b) truly freezing the verdict would require capturing
+`direction`/`threshold` per reading — a **migration** out of the owner-approved migration-free scope, and one
+that couldn't retroactively freeze pre-existing readings anyway; it's named as a deferral below. This matches the
 page's existing "grade through the governing commitment" posture, just with the per-reading frozen target
 substituted in.
 
@@ -305,9 +309,13 @@ Pass the direction (additive, no other change):
 
 - **Register sparklines** (`/objectives` rows) — needs the per-objective series in the list response (a backend
   enrichment or N fetches). Deferred (Fork B = detail-only).
-- **`threshold_at_capture` freeze** — would make the historical amber/red split exact after a threshold-changing
-  commitment revision, but needs a migration (a new `kpi_measurement` column + `record_measurement` change).
-  Out of the migration-free scope; the green-vs-not verdict is already exact. Named v1.x.
+- **Freeze the grading inputs per reading (`direction_at_capture` + `threshold_at_capture`)** — would make the
+  historical RAG an immutable stored verdict, so a later direction/threshold revision can't rewrite a past
+  green/red (the Codex P2 ③). Needs a migration (new `kpi_measurement` columns + a `record_measurement` change)
+  and even then can't retroactively freeze pre-existing readings. Owner-accepted as out-of-scope (migration-free);
+  the chart is descriptive (N9). Named v1.x.
+- **Mixed-unit chart handling** — after a unit-changing revision the chart filters to the governing unit (the
+  off-unit readings stay in the table). A richer per-unit split is a possible refinement, not required.
 - **Time-proportional x-axis** — the chart uses categorical (per-reading) x; honest for the regular-cadence KPI
   case. A true time scale (honouring irregular gaps) is a possible refinement, not required.
 - **SPC / forecast / control limits / operational analytics** — **permanently out (N6).** This chart is

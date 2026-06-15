@@ -75,6 +75,35 @@ const SINGLE: Measurement[] = [
   },
 ] satisfies Measurement[];
 
+// A unit-changing revision (S-obj-4) leaves an old-unit reading in the history alongside
+// current-unit ones; the chart must plot only the current-unit readings (the rest stay in the table).
+const MIXED_UNIT: Measurement[] = [
+  {
+    id: "mu2",
+    objective_id: "obj1",
+    record_id: "r2",
+    period: "2026-02-01",
+    value: "97",
+    target_at_capture: "99",
+    unit: "%",
+    source: null,
+    created_at: "2026-02-02T00:00:00Z",
+    rag: "amber",
+  },
+  {
+    id: "mu1",
+    objective_id: "obj1",
+    record_id: "r1",
+    period: "2026-01-01",
+    value: "500",
+    target_at_capture: "400",
+    unit: "ppm",
+    source: null,
+    created_at: "2026-01-02T00:00:00Z",
+    rag: "red",
+  },
+] satisfies Measurement[];
+
 it("renders N points oldest-left (reversing the newest-first input)", () => {
   const { container } = renderChart(<ObjectiveTrendChart measurements={NEWEST_FIRST} unit="%" />);
   const svg = chartSvg(container);
@@ -115,7 +144,12 @@ it("renders the single-reading state: one point, no value polyline, the caption"
   expect(svg.querySelectorAll("circle").length).toBe(1);
   // no value polyline (a trend needs ≥2 points); the dashed target reference is still present.
   expect(svg.querySelectorAll("polyline").length).toBe(1);
-  expect(svg.querySelector("polyline[stroke-dasharray]")).not.toBeNull();
+  const target = svg.querySelector("polyline[stroke-dasharray]");
+  expect(target).not.toBeNull();
+  // ...and it must be a real full-width segment (≥2 coordinates) — a one-coordinate polyline is
+  // invisible, leaving the single-reading state with no visible target reference.
+  const coords = (target?.getAttribute("points") ?? "").trim().split(/\s+/).filter(Boolean);
+  expect(coords.length).toBeGreaterThanOrEqual(2);
   expect(getByText(/one reading so far/i)).toBeInTheDocument();
 });
 
@@ -127,6 +161,17 @@ it("exposes role=img with a meaningful aria-label", () => {
   expect(label).toMatch(/trend/i);
   expect(label).toContain("3");
   expect(label).toContain("%");
+});
+
+it("charts only readings in the current unit and notes the rest", () => {
+  const { container, getByText } = renderChart(
+    <ObjectiveTrendChart measurements={MIXED_UNIT} unit="%" />,
+  );
+  const svg = chartSvg(container);
+  // only the same-unit (%) reading is plotted; the ppm reading is excluded.
+  expect(svg.querySelectorAll("circle").length).toBe(1);
+  expect(svg.querySelector("circle title")?.textContent).toContain("%");
+  expect(getByText(/in a different unit/i)).toBeInTheDocument();
 });
 
 it("has no accessibility violations", async () => {
