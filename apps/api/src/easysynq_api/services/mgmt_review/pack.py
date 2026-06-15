@@ -56,24 +56,25 @@ async def _resolve_names(session: AsyncSession, ids: set[str], org_id: uuid.UUID
             continue
     if not uuids:
         return {}
+    # display_name only (NOT email) — the pack is mgmtReview.read-gated and the directory surface
+    # only exposes {id, display_name} to ordinary members; an email fallback would leak admin-roster
+    # PII into the PDF. A user with no display_name falls back to the (non-PII) id.
     rows = await session.execute(
-        select(AppUser.id, AppUser.display_name, AppUser.email).where(
+        select(AppUser.id, AppUser.display_name).where(
             AppUser.id.in_(uuids), AppUser.org_id == org_id
         )
     )
-    return {str(uid): (dn or em or str(uid)) for uid, dn, em in rows.all()}
+    return {str(uid): (dn or str(uid)) for uid, dn in rows.all()}
 
 
-def _signer_label(
-    display_name: str | None, email: str | None, signer_user_id: uuid.UUID | None
-) -> str | None:
+def _signer_label(display_name: str | None, signer_user_id: uuid.UUID | None) -> str | None:
     """The sign-off label for one signature. A human signer (signer_user_id set) always gets a
-    non-null label — display_name, else email, else the id — so a human with no display_name is
-    NOT misrendered as "system". Only a true system signature (null signer_user_id) returns None
-    (the render maps that to "system")."""
+    non-null label — display_name, else the (non-PII) id — so a human with no display_name is NOT
+    misrendered as "system" (and no email PII is exposed). Only a true system signature (null
+    signer_user_id) returns None (the render maps that to "system")."""
     if signer_user_id is None:
         return None
-    return display_name or email or str(signer_user_id)
+    return display_name or str(signer_user_id)
 
 
 async def build_minutes_pdf(session: AsyncSession, doc: DocumentedInformation) -> bytes:
@@ -89,18 +90,18 @@ async def build_minutes_pdf(session: AsyncSession, doc: DocumentedInformation) -
         raise ProblemException(
             status=409, code="pack_unavailable", title="This review has not been released yet"
         )
-    minutes = minutes_from_snapshot(version.metadata_snapshot)
+    snapshot = version.metadata_snapshot or {}
+    minutes = minutes_from_snapshot(snapshot)
     name_of = await _resolve_names(session, _collect_user_ids(minutes), doc.org_id)
     signatures = [
         {
-            "signer": _signer_label(display_name, email, signer_user_id),
+            "signer": _signer_label(display_name, signer_user_id),
             "meaning": meaning.value if hasattr(meaning, "value") else str(meaning),
             "when": when.astimezone(datetime.UTC).isoformat() if when is not None else None,
             "method": method.value if hasattr(method, "value") else str(method),
         }
         for (
             display_name,
-            email,
             signer_user_id,
             meaning,
             when,
@@ -109,7 +110,9 @@ async def build_minutes_pdf(session: AsyncSession, doc: DocumentedInformation) -
     ]
     return render_minutes_pdf(
         identifier=doc.identifier,
-        title=doc.title,
+        # the FROZEN title (snapshot), not the live doc.title — a metadata PATCH on the released MR
+        # must not change the filed pack's bytes (the same class as close_state).
+        title=snapshot.get("title") or doc.title,
         current_state=doc.current_state.value,
         revision_label=version.revision_label,
         effective_from=version.effective_from.isoformat() if version.effective_from else None,

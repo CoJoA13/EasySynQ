@@ -36,19 +36,15 @@ _UID = uuid.UUID("11111111-1111-1111-1111-111111111111")
 
 
 def test_signer_label_prefers_display_name():
-    assert _signer_label("Ken Approver", "ken@x.io", _UID) == "Ken Approver"
+    assert _signer_label("Ken Approver", _UID) == "Ken Approver"
 
 
-def test_signer_label_falls_back_to_email_for_a_human_without_a_name():
-    # A human signer with no display_name must NOT be rendered as "system".
-    assert _signer_label(None, "ken@x.io", _UID) == "ken@x.io"
-
-
-def test_signer_label_falls_back_to_id_for_a_human_without_name_or_email():
-    assert _signer_label(None, None, _UID) == str(_UID)
+def test_signer_label_falls_back_to_id_for_a_human_without_a_name():
+    # A human signer with no display_name → the (non-PII) id; never "system", never email.
+    assert _signer_label(None, _UID) == str(_UID)
 
 
 def test_signer_label_none_only_for_a_true_system_signature():
     # Null signer_user_id = a system/Beat release → None → the render shows "system".
-    assert _signer_label(None, None, None) is None
-    assert _signer_label("ignored", "ignored@x.io", None) is None
+    assert _signer_label(None, None) is None
+    assert _signer_label("ignored", None) is None

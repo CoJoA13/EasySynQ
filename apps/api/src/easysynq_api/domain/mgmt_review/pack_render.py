@@ -114,6 +114,8 @@ def render_minutes_pdf(
                 ["Title", p(title)],
                 ["Period", p(minutes.get("period_label") or "—")],
                 ["Review date", p(minutes.get("review_date") or "—")],
+                # the frozen as-of time the 9.3.2 inputs were compiled into the minutes.
+                ["Inputs compiled", p(minutes.get("compiled_at") or "—")],
                 ["State", p(current_state)],
                 [
                     "Revision",

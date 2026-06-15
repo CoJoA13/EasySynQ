@@ -148,11 +148,11 @@ async def outputs_for_close_gate(
     return [(ot, ts) for ot, ts in rows.all()]
 
 
-# (display_name | None, email | None, signer_user_id | None, meaning, created_at, method).
-# signer_user_id distinguishes a true system signature (null) from a human whose display_name +
-# email are both null (still a human — the pack must not render them as "system").
+# (display_name | None, signer_user_id | None, meaning, created_at, method).
+# signer_user_id distinguishes a true system signature (null) from a human whose display_name is
+# null (still a human — the pack must not render them as "system"); no email (PII) is selected.
 SignoffRow = tuple[
-    str | None, str | None, uuid.UUID | None, SignatureMeaning, datetime.datetime, SignatureMethod
+    str | None, uuid.UUID | None, SignatureMeaning, datetime.datetime, SignatureMethod
 ]
 
 
@@ -168,7 +168,6 @@ async def list_signoffs_for_version(
     rows = await session.execute(
         select(
             AppUser.display_name,
-            AppUser.email,
             SignatureEvent.signer_user_id,
             SignatureEvent.meaning,
             SignatureEvent.created_at,
