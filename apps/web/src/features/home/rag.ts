@@ -8,12 +8,33 @@ export type Rag = "green" | "amber" | "red" | "neutral";
 
 // Each RAG maps to a canonical status `tone` (lib/status.ts — the one colour + glyph source of truth):
 // `tone` drives the StatusBadge colour pair + the non-colour glyph (DP-7); `hue` is the raw functional
-// hue for inline (non-badge) glyph marks like StatLine; `label` is the dashboard's RAG word.
+// hue for inline (non-badge) glyph marks like StatLine; `label` is the RAG MEANING — not the colour
+// word, so a greyscale / colour-blind reader gets the meaning, not just "Green" (S-clarify-1).
 export const RAG_META: Record<Rag, { tone: Tone; glyph: string; label: string; hue: string }> = {
-  green: { tone: "success", glyph: TONE_GLYPH.success, label: "Green", hue: "var(--es-success)" },
-  amber: { tone: "warning", glyph: TONE_GLYPH.warning, label: "Amber", hue: "var(--es-warning)" },
-  red: { tone: "danger", glyph: TONE_GLYPH.danger, label: "Red", hue: "var(--es-danger)" },
-  neutral: { tone: "neutral", glyph: TONE_GLYPH.neutral, label: "—", hue: "var(--es-text-muted)" },
+  green: {
+    tone: "success",
+    glyph: TONE_GLYPH.success,
+    label: "On track",
+    hue: "var(--es-success)",
+  },
+  amber: {
+    tone: "warning",
+    glyph: TONE_GLYPH.warning,
+    label: "Needs attention",
+    hue: "var(--es-warning)",
+  },
+  red: {
+    tone: "danger",
+    glyph: TONE_GLYPH.danger,
+    label: "Action required",
+    hue: "var(--es-danger)",
+  },
+  neutral: {
+    tone: "neutral",
+    glyph: TONE_GLYPH.neutral,
+    label: "No data",
+    hue: "var(--es-text-muted)",
+  },
 };
 
 const ORDER: Record<Rag, number> = { neutral: 0, green: 1, amber: 2, red: 3 };

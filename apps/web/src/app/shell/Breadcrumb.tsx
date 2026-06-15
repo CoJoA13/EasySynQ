@@ -9,6 +9,20 @@ const LABELS: Record<string, string> = {
   new: "New document",
   documents: "Document",
   tasks: "Task",
+  compliance: "Compliance",
+  capa: "Nonconformity & CAPA",
+  complaints: "Complaints",
+  ncrs: "NCRs",
+  audits: "Internal audit",
+  programme: "Programme",
+  dcrs: "Change requests",
+  diff: "Visual diff",
+  ingestion: "Import",
+  drift: "Drift",
+  "superseded-copies": "Superseded copies",
+  objectives: "Objectives",
+  "management-reviews": "Management reviews",
+  search: "Search",
 };
 
 export function Breadcrumb() {
