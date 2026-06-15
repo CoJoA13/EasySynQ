@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bandZones, fmtValueUnit, RAG_COLOR, RAG_LABEL } from "./labels";
+import { bandZones, fmtValueUnit, RAG_COLOR, RAG_LABEL, RAG_TONE } from "./labels";
 
 describe("fmtValueUnit", () => {
   it("renders a value and unit, or an em dash when null", () => {
@@ -12,6 +12,15 @@ describe("RAG maps", () => {
   it("maps every rag to a Mantine colour and a label", () => {
     expect(RAG_COLOR.amber).toBe("yellow");
     expect(RAG_LABEL.unmeasured).toBe("Unmeasured");
+  });
+
+  it("maps every rag to its canonical status tone (badges → StatusBadge)", () => {
+    // green→success ✓ (on-target), amber→warning ◔ (at-risk), red→danger ✕ (off-target),
+    // unmeasured→neutral ○ (no data) — the owner design-call for the RAG → tone canon.
+    expect(RAG_TONE.green).toBe("success");
+    expect(RAG_TONE.amber).toBe("warning");
+    expect(RAG_TONE.red).toBe("danger");
+    expect(RAG_TONE.unmeasured).toBe("neutral");
   });
 });
 

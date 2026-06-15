@@ -1,32 +1,27 @@
-import { Badge, type MantineSize } from "@mantine/core";
+import type { MantineSize } from "@mantine/core";
+import { StatusBadge } from "../../lib/StatusBadge";
+import type { Tone } from "../../lib/status";
 import type { DcrState } from "../../lib/types";
 
-// Maps the 9-state DCR lifecycle to a label + a leading glyph + a token-driven color. Status is
-// NEVER color-only (DP-7): the text label always carries the meaning, and the glyph adds a second
-// non-color channel. Colors reference the mockup's --es-* feedback hues.
-const META: Record<DcrState, { label: string; mark: string; color: string }> = {
-  Open: { label: "Open", mark: "✎", color: "var(--es-info)" },
-  Assessed: { label: "Assessed", mark: "◔", color: "var(--es-info)" },
-  Routed: { label: "Routed", mark: "→", color: "var(--es-info)" },
-  InApproval: { label: "In approval", mark: "◔", color: "var(--es-warning)" },
-  Approved: { label: "Approved", mark: "✓", color: "var(--es-info)" },
-  Implemented: { label: "Implemented", mark: "★", color: "var(--es-success)" },
-  Closed: { label: "Closed", mark: "✓", color: "var(--es-success)" },
-  Cancelled: { label: "Cancelled", mark: "⊘", color: "var(--es-text-muted)" },
-  Rejected: { label: "Rejected", mark: "⊘", color: "var(--es-danger)" },
+// Maps the 9-state DCR change-control lifecycle to a label + a canonical status tone. The tone supplies
+// both the AA-tuned colour pair AND the non-colour glyph via StatusBadge (status is NEVER colour-only,
+// DP-7): the text label always carries the meaning, and the tone glyph adds a second non-colour channel.
+// Implemented is `emphasisSuccess` (★) so a change that has landed reads as a milestone over a plain ✓
+// (preserving the prior ★ read); Closed is the plain success done-ok ✓. Approved is `info` (approved but
+// not yet implemented). Cancelled is inert (neutral), Rejected is a hard ✕ (danger).
+const META: Record<DcrState, { label: string; tone: Tone }> = {
+  Open: { label: "Open", tone: "info" },
+  Assessed: { label: "Assessed", tone: "info" },
+  Routed: { label: "Routed", tone: "info" },
+  InApproval: { label: "In approval", tone: "warning" },
+  Approved: { label: "Approved", tone: "info" },
+  Implemented: { label: "Implemented", tone: "emphasisSuccess" },
+  Closed: { label: "Closed", tone: "success" },
+  Cancelled: { label: "Cancelled", tone: "neutral" },
+  Rejected: { label: "Rejected", tone: "danger" },
 };
 
 export function DcrStateBadge({ state, size = "sm" }: { state: DcrState; size?: MantineSize }) {
-  const { label, mark, color } = META[state];
-  return (
-    <Badge
-      variant="light"
-      color={color}
-      size={size}
-      leftSection={<span aria-hidden="true">{mark}</span>}
-      aria-label={`State: ${label}`}
-    >
-      {label}
-    </Badge>
-  );
+  const { label, tone } = META[state];
+  return <StatusBadge tone={tone} label={label} kind="State" size={size} />;
 }

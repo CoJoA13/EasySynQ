@@ -1,6 +1,7 @@
 import { screen } from "@testing-library/react";
 import { axe } from "jest-axe";
 import { expect, test } from "vitest";
+import { TONE_GLYPH } from "../../lib/status";
 import type { ImportClassification, ImportFileReview } from "../../lib/types";
 import { renderWithProviders } from "../../test/render";
 import { ConfidenceCell } from "./ConfidenceCell";
@@ -45,27 +46,40 @@ function review(over: Partial<ImportFileReview> = {}): ImportFileReview {
 }
 
 // ---- ConfidenceCell ----
-test("ConfidenceCell renders the band label with the kind_conf percentage", () => {
-  renderWithProviders(<ConfidenceCell classification={classification({ band: "HIGH", kind_conf: 92 })} />);
-  const badge = screen.getByLabelText("Confidence: High 92%");
+test("ConfidenceCell renders the band label + glyph with the kind_conf percentage", () => {
+  renderWithProviders(
+    <ConfidenceCell classification={classification({ band: "HIGH", kind_conf: 92 })} />,
+  );
+  const badge = screen.getByLabelText("Confidence: High · 92%");
   expect(badge).toHaveTextContent("High · 92%");
+  // HIGH → success: the glyph is the non-colour channel (status is never colour-only, DP-7).
+  expect(screen.getByText(TONE_GLYPH.success)).toBeInTheDocument();
 });
 
-test("ConfidenceCell labels MEDIUM and LOW bands", () => {
+test("ConfidenceCell labels MEDIUM (warning) and LOW (danger) bands with distinct glyphs", () => {
   const { unmount } = renderWithProviders(
     <ConfidenceCell classification={classification({ band: "MEDIUM", kind_conf: 73 })} />,
   );
-  expect(screen.getByLabelText("Confidence: Medium 73%")).toHaveTextContent("Medium · 73%");
+  expect(screen.getByLabelText("Confidence: Medium · 73%")).toHaveTextContent("Medium · 73%");
+  expect(screen.getByText(TONE_GLYPH.warning)).toBeInTheDocument(); // MEDIUM → warning
   unmount();
-  renderWithProviders(<ConfidenceCell classification={classification({ band: "LOW", kind_conf: 22 })} />);
-  expect(screen.getByLabelText("Confidence: Low 22%")).toHaveTextContent("Low · 22%");
+  renderWithProviders(
+    <ConfidenceCell classification={classification({ band: "LOW", kind_conf: 22 })} />,
+  );
+  expect(screen.getByLabelText("Confidence: Low · 22%")).toHaveTextContent("Low · 22%");
+  expect(screen.getByText(TONE_GLYPH.danger)).toBeInTheDocument(); // LOW → danger (owner design-call)
 });
 
-test("ConfidenceCell adds an ambiguous caption when classification.ambiguous", () => {
+test("ConfidenceCell shows the band on the badge + the ⚖ ambiguous caption when ambiguous", () => {
   renderWithProviders(
-    <ConfidenceCell classification={classification({ band: "LOW", kind_conf: 41, ambiguous: true })} />,
+    <ConfidenceCell
+      classification={classification({ band: "LOW", kind_conf: 41, ambiguous: true })}
+    />,
   );
-  expect(screen.getByLabelText("Confidence: Ambiguous 41%")).toBeInTheDocument();
+  // Faithful 1:1: the badge shows the BAND (Low, danger ✕) so the glyph never contradicts the label;
+  // ambiguity is the separate caption channel (the LOW-vs-AMBIGUOUS split is deferred to Phase 3).
+  expect(screen.getByLabelText("Confidence: Low · 41%")).toBeInTheDocument();
+  expect(screen.getByText(TONE_GLYPH.danger)).toBeInTheDocument();
   expect(screen.getByText("⚖ ambiguous")).toBeInTheDocument();
 });
 
@@ -82,7 +96,9 @@ test("IdentifierCell shows a danger 'Duplicate of' line when dupeOf is set", () 
 });
 
 test("IdentifierCell shows the mono identifier when present and no dupe", () => {
-  renderWithProviders(<IdentifierCell review={review({ identifier: "WI-PRD-022" })} dupeOf={null} />);
+  renderWithProviders(
+    <IdentifierCell review={review({ identifier: "WI-PRD-022" })} dupeOf={null} />,
+  );
   expect(screen.getByText("WI-PRD-022")).toBeInTheDocument();
 });
 
@@ -161,7 +177,9 @@ test("all three cells together have no axe violations", async () => {
             <TypeCell classification={classification({ ambiguous: true })} />
           </td>
           <td>
-            <ConfidenceCell classification={classification({ band: "LOW", kind_conf: 41, ambiguous: true })} />
+            <ConfidenceCell
+              classification={classification({ band: "LOW", kind_conf: 41, ambiguous: true })}
+            />
           </td>
         </tr>
       </tbody>

@@ -1,10 +1,22 @@
 import type { ObjectiveAttainment, ObjectiveDirection, ObjectiveRag } from "../../lib/types";
+import type { Tone } from "../../lib/status";
 
+// Raw Mantine colour names — still used by the NON-badge Progress bar in CommitmentHero (a plain
+// progress fill, not a status pill). RAG badges route through StatusBadge via RAG_TONE below.
 export const RAG_COLOR: Record<ObjectiveRag, string> = {
   green: "green",
   amber: "yellow",
   red: "red",
   unmeasured: "gray",
+};
+
+// RAG → canonical status tone (the feature-local map; only Tone + glyphs are shared — S-statusbadge-2).
+// green→success ✓ (on-target), amber→warning ◔ (at-risk), red→danger ✕ (off-target), unmeasured→neutral ○ (no data).
+export const RAG_TONE: Record<ObjectiveRag, Tone> = {
+  green: "success",
+  amber: "warning",
+  red: "danger",
+  unmeasured: "neutral",
 };
 
 export const RAG_LABEL: Record<ObjectiveRag, string> = {
@@ -55,12 +67,20 @@ export function bandZones(args: {
       threshold !== null && threshold >= target
         ? "The at-risk threshold should be below the target for a “higher is better” objective."
         : null;
-    return { zones: validAmber ? ["red", "amber", "green"] : ["red", "green"], hasAmber: validAmber, warn };
+    return {
+      zones: validAmber ? ["red", "amber", "green"] : ["red", "green"],
+      hasAmber: validAmber,
+      warn,
+    };
   }
   const validAmber = threshold !== null && threshold > target;
   const warn =
     threshold !== null && threshold <= target
       ? "The at-risk threshold should be above the target for a “lower is better” objective."
       : null;
-  return { zones: validAmber ? ["green", "amber", "red"] : ["green", "red"], hasAmber: validAmber, warn };
+  return {
+    zones: validAmber ? ["green", "amber", "red"] : ["green", "red"],
+    hasAmber: validAmber,
+    warn,
+  };
 }

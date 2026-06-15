@@ -6,6 +6,7 @@ import { expect, it } from "vitest";
 import { renderWithProviders } from "../../test/render";
 import { server } from "../../test/msw/server";
 import { objectiveFixtures } from "../../test/msw/handlers";
+import { TONE_GLYPH } from "../../lib/status";
 import type { Objective, ObjectiveScorecard } from "../../lib/types";
 import { ObjectivesRegisterPage } from "./ObjectivesRegisterPage";
 
@@ -14,7 +15,11 @@ it("renders the band and a row per objective with a RAG status badge", async () 
   await waitFor(() => expect(screen.getByText("OBJ-001")).toBeInTheDocument());
   expect(screen.getByText(/1\s*\/\s*4 on target/i)).toBeInTheDocument();
   const row = screen.getByText("On-time delivery rate").closest("tr")!;
+  // The amber row's RAG pill is the canonical StatusBadge: amber → warning → ◔ glyph + "Status: Amber"
+  // accessible name (status is never colour-only, DP-7). Scope to the row — other rows carry RAG pills too.
   expect(within(row).getByText("Amber")).toBeInTheDocument();
+  expect(within(row).getByLabelText("Status: Amber")).toBeInTheDocument();
+  expect(within(row).getByText(TONE_GLYPH.warning)).toBeInTheDocument();
   expect(within(row).getByText("92 / 95 %")).toBeInTheDocument();
   // unmeasured row shows an em dash for the current value
   const unmeasured = screen.getByText("Supplier defect rate").closest("tr")!;

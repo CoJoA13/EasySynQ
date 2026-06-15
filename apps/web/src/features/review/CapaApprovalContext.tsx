@@ -1,6 +1,7 @@
 import { Badge, Group, Loader, Stack, Text, Title } from "@mantine/core";
 import { ContentBlock } from "../capa/ContentBlock";
-import { SEVERITY_COLOR, SEVERITY_LABEL, SOURCE_LABEL } from "../capa/columns";
+import { SOURCE_LABEL } from "../capa/columns";
+import { SeverityBadge } from "../capa/SeverityBadge";
 import { useCapa, useCapaApproval } from "../capa/hooks";
 
 // The CAPA-subject context on the /tasks decision page: identity + the proposed action plan the approver
@@ -18,9 +19,7 @@ export function CapaApprovalContext({ capaId }: { capaId: string }) {
         <Title order={3}>{capa.title ?? "(untitled)"}</Title>
       </div>
       <Group gap="xs">
-        <Badge color={SEVERITY_COLOR[capa.severity]} variant="light">
-          {SEVERITY_LABEL[capa.severity]}
-        </Badge>
+        <SeverityBadge severity={capa.severity} />
         <Badge variant="outline" color="gray">
           {SOURCE_LABEL[capa.source]}
         </Badge>

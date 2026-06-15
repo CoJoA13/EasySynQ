@@ -1,43 +1,35 @@
-import { Badge, type MantineSize } from "@mantine/core";
+import type { MantineSize } from "@mantine/core";
+import { StatusBadge } from "../../lib/StatusBadge";
+import type { Tone } from "../../lib/status";
 import type { ImportRunStatus } from "../../lib/types";
 
-// Maps an import-run status to a label + a leading glyph + a token color. Status is NEVER color-only
-// (DP-7): the text label carries the meaning, the glyph adds a second non-color channel. Mirrors
-// TaskStateBadge. The `status` prop is a plain string (not the enum) so the badge tolerates additive
-// commit stages beyond ImportRunStatus — an unknown status degrades to a `?? fallback`, never crashes.
-const META: Record<ImportRunStatus, { label: string; mark: string; color: string }> = {
-  Created: { label: "Created", mark: "○", color: "var(--es-text-muted)" },
-  Scanning: { label: "Scanning", mark: "◔", color: "var(--es-info)" },
-  Scanned: { label: "Scanned", mark: "◑", color: "var(--es-info)" },
-  Extracting: { label: "Extracting", mark: "◔", color: "var(--es-info)" },
-  Classifying: { label: "Classifying", mark: "◑", color: "var(--es-info)" },
-  Classified: { label: "Classified", mark: "◕", color: "var(--es-info)" },
-  Deduping: { label: "Deduping", mark: "◑", color: "var(--es-info)" },
-  Proposing: { label: "Proposing", mark: "◕", color: "var(--es-info)" },
-  Proposed: { label: "Proposed", mark: "◆", color: "var(--es-warning)" },
-  Reviewing: { label: "Reviewing", mark: "✎", color: "var(--es-warning)" },
-  Committing: { label: "Committing", mark: "◔", color: "var(--es-info)" },
-  Completed: { label: "Completed", mark: "★", color: "var(--es-success)" },
-  PartiallyCommitted: { label: "Partially committed", mark: "◐", color: "var(--es-warning)" },
-  Failed: { label: "Failed", mark: "▲", color: "var(--es-danger)" },
-  Cancelled: { label: "Cancelled", mark: "⊘", color: "var(--es-text-muted)" },
+// Maps an import-run status to a label + a canonical status tone. The tone supplies both the AA-tuned
+// colour pair AND the non-colour glyph via StatusBadge (status is NEVER colour-only, DP-7): the text
+// label carries the meaning, the glyph adds a second channel. Mirrors StateBadge. The `status` prop is
+// a plain string (not the enum) so the badge tolerates additive commit stages beyond ImportRunStatus —
+// an unknown status degrades to a neutral `?? fallback`, never crashes. Machine-active stages read as
+// `info` (neutral-active), human-paced / needs-attention stages as `warning`, a completed run as
+// `success`, a failure as `danger`, and the inert (created/cancelled) states as `neutral` — a faithful
+// 1:1 carry-over of the prior token-colour map onto the shared tones.
+const META: Record<ImportRunStatus, { label: string; tone: Tone }> = {
+  Created: { label: "Created", tone: "neutral" },
+  Scanning: { label: "Scanning", tone: "info" },
+  Scanned: { label: "Scanned", tone: "info" },
+  Extracting: { label: "Extracting", tone: "info" },
+  Classifying: { label: "Classifying", tone: "info" },
+  Classified: { label: "Classified", tone: "info" },
+  Deduping: { label: "Deduping", tone: "info" },
+  Proposing: { label: "Proposing", tone: "info" },
+  Proposed: { label: "Proposed", tone: "warning" },
+  Reviewing: { label: "Reviewing", tone: "warning" },
+  Committing: { label: "Committing", tone: "info" },
+  Completed: { label: "Completed", tone: "success" },
+  PartiallyCommitted: { label: "Partially committed", tone: "warning" },
+  Failed: { label: "Failed", tone: "danger" },
+  Cancelled: { label: "Cancelled", tone: "neutral" },
 };
 
 export function ImportStatusBadge({ status, size = "sm" }: { status: string; size?: MantineSize }) {
-  const meta = META[status as ImportRunStatus] ?? {
-    label: status,
-    mark: "•",
-    color: "var(--es-text-muted)",
-  };
-  return (
-    <Badge
-      variant="light"
-      color={meta.color}
-      size={size}
-      leftSection={<span aria-hidden="true">{meta.mark}</span>}
-      aria-label={`Run status: ${meta.label}`}
-    >
-      {meta.label}
-    </Badge>
-  );
+  const meta = META[status as ImportRunStatus] ?? { label: status, tone: "neutral" as const };
+  return <StatusBadge tone={meta.tone} label={meta.label} kind="Run status" size={size} />;
 }

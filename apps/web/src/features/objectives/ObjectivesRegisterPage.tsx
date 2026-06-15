@@ -1,7 +1,6 @@
 import {
   Alert,
   Anchor,
-  Badge,
   Button,
   Container,
   Group,
@@ -18,9 +17,10 @@ import type { Objective } from "../../lib/types";
 import { AsOf } from "../../lib/AsOf";
 import { usePermissions } from "../../app/shell/usePermissions";
 import { useObjectiveScorecard } from "./hooks";
-import { fmtValueUnit, RAG_COLOR, RAG_LABEL } from "./labels";
+import { fmtValueUnit, RAG_LABEL, RAG_TONE } from "./labels";
 import { ObjectiveScorecardBand } from "./ObjectiveScorecardBand";
 import { StateBadge } from "../document/StateBadge";
+import { StatusBadge } from "../../lib/StatusBadge";
 import { RegisterToolbar, SortableTh } from "../../lib/RegisterToolbar";
 import {
   sortRows,
@@ -225,9 +225,7 @@ export function ObjectivesRegisterPage() {
                     </Table.Td>
                     <Table.Td>{currentOverTarget(o)}</Table.Td>
                     <Table.Td>
-                      <Badge color={RAG_COLOR[o.rag]} variant="light">
-                        {RAG_LABEL[o.rag]}
-                      </Badge>
+                      <StatusBadge tone={RAG_TONE[o.rag]} label={RAG_LABEL[o.rag]} kind="Status" />
                     </Table.Td>
                     <Table.Td>{o.due_date}</Table.Td>
                   </Table.Tr>

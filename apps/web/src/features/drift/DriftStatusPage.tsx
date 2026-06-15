@@ -1,7 +1,6 @@
 import {
   Alert,
   Anchor,
-  Badge,
   Card,
   Container,
   Group,
@@ -15,17 +14,26 @@ import {
 import { Link } from "react-router-dom";
 import { AsOf } from "../../lib/AsOf";
 import { humanizeToken } from "../../lib/labels";
+import { StatusBadge } from "../../lib/StatusBadge";
+import type { Tone } from "../../lib/status";
 import { formatTimestamp } from "../../lib/time";
 import type { DriftScanStatusValue, DriftScanSummary } from "../../lib/types";
 import { useDriftStatus } from "./hooks";
 
 // S-web-8: the admin drift-status read (S-drift-3 / doc 05 §9.1). Pure read — no scan trigger.
 
-// DP-7: status is never color-only — glyph + aria-label + es token. Matches CoverageBadge idiom.
-const META: Record<DriftScanStatusValue, { mark: string; color: string }> = {
-  CLEAN: { mark: "✓", color: "var(--es-success)" },
-  DIVERGENT: { mark: "▲", color: "var(--es-danger)" },
-  FAILED: { mark: "✕", color: "var(--es-warning)" },
+// S-statusbadge-2: the scan status maps onto the ONE canonical status system (Tone + glyph come from
+// lib/status via StatusBadge — status is NEVER colour-only, DP-5 / DP-7). The label stays the raw enum
+// value so the per-card aria-label ("Mirror scan status: CLEAN") is preserved verbatim.
+//   • CLEAN     → success ✓ (clean / passed scan).
+//   • DIVERGENT → danger  ✕ (mirror tamper/divergence — a red integrity condition; the ▲ glyph is RETIRED).
+//   • FAILED    → danger  ✕ (LOCKED owner design-call: a genuine integrity failure — failed blob-verify /
+//     mirror-tamper — is the strongest signal for an auditor on a greyscale export). The distinct label
+//     ("DIVERGENT" vs "FAILED") keeps them legible despite the shared danger tone.
+const META: Record<DriftScanStatusValue, { tone: Tone }> = {
+  CLEAN: { tone: "success" },
+  DIVERGENT: { tone: "danger" },
+  FAILED: { tone: "danger" },
 };
 
 // #2b: a localised, timezone-explicit absolute timestamp (replaces the ambiguous iso.slice(0,16) UTC
@@ -51,15 +59,8 @@ function ScanCard({ title, scan }: { title: string; scan: DriftScanSummary | nul
       <Stack gap="xs">
         <Group justify="space-between">
           <Text fw={600}>{title}</Text>
-          {/* DP-7 badge — glyph + per-card-unique aria-label + es token */}
-          <Badge
-            variant="light"
-            color={meta.color}
-            leftSection={<span aria-hidden="true">{meta.mark}</span>}
-            aria-label={`${title} status: ${scan.status}`}
-          >
-            {scan.status}
-          </Badge>
+          {/* Canonical status pill — glyph (non-colour channel) + per-card-unique aria-label */}
+          <StatusBadge tone={meta.tone} label={scan.status} kind={`${title} status`} />
         </Group>
         <AsOf at={scan.finished_at ? Date.parse(scan.finished_at) : null} prefix="Scanned" />
         <Text size="xs" c="dimmed">
