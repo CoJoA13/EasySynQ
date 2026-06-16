@@ -128,3 +128,81 @@ type_rules:
 """
     pack = load_rule_pack(_write(tmp_path, body))
     assert pack.type_rules[0].matchers[0].keywords == ("quality policy",)
+
+
+# --- scoring block (the externalized score→band cutoffs, C-3) ----------------------------------
+
+
+def test_scoring_defaults_when_absent(tmp_path: Path) -> None:
+    pack = load_rule_pack(_write(tmp_path, "version: t\ntype_rules: []\n"))
+    s = pack.scoring
+    assert (s.high_threshold, s.medium_threshold, s.ambiguous_margin) == (85, 60, 10)
+    assert (s.kind_unknown_floor, s.process_folder_weight, s.process_header_weight) == (30, 30, 15)
+    assert s.pdca_tie_margin == 5
+
+
+def test_default_pack_carries_calibrated_scoring() -> None:
+    s = default_rule_pack().scoring
+    assert s.high_threshold == 85 and s.medium_threshold == 60 and s.ambiguous_margin == 10
+
+
+def test_scoring_partial_override_keeps_other_defaults(tmp_path: Path) -> None:
+    body = "version: t\nscoring:\n  high_threshold: 95\n  ambiguous_margin: 4\n"
+    s = load_rule_pack(_write(tmp_path, body)).scoring
+    assert s.high_threshold == 95 and s.ambiguous_margin == 4
+    assert s.medium_threshold == 60  # an untouched key keeps its default
+
+
+def test_scoring_rejects_medium_not_below_high(tmp_path: Path) -> None:
+    # medium > high, and also medium == high (band_of checks high first → MEDIUM unreachable)
+    with pytest.raises(RulePackError, match="medium_threshold must be <"):
+        load_rule_pack(
+            _write(tmp_path, "version: t\nscoring:\n  high_threshold: 50\n  medium_threshold: 70\n")
+        )
+    with pytest.raises(RulePackError, match="medium_threshold must be <"):
+        load_rule_pack(
+            _write(tmp_path, "version: t\nscoring:\n  high_threshold: 80\n  medium_threshold: 80\n")
+        )
+
+
+def test_scoring_rejects_non_positive(tmp_path: Path) -> None:
+    with pytest.raises(RulePackError, match="positive int"):
+        load_rule_pack(_write(tmp_path, "version: t\nscoring:\n  high_threshold: 0\n"))
+
+
+def test_scoring_rejects_cutoff_above_score_cap(tmp_path: Path) -> None:
+    # candidate scores cap at 100, so a cutoff/floor/margin above 100 makes a band/kind unreachable
+    with pytest.raises(RulePackError, match="must be <= 100"):
+        load_rule_pack(_write(tmp_path, "version: t\nscoring:\n  high_threshold: 101\n"))
+    with pytest.raises(RulePackError, match="must be <= 100"):
+        load_rule_pack(_write(tmp_path, "version: t\nscoring:\n  kind_unknown_floor: 150\n"))
+    # the boundary value 100 is allowed
+    pack = load_rule_pack(_write(tmp_path, "version: t\nscoring:\n  high_threshold: 100\n"))
+    assert pack.scoring.high_threshold == 100
+
+
+def test_scoring_rejects_bool_and_float(tmp_path: Path) -> None:
+    # bool ⊂ int, so the bool guard must come first; a float is not an int either.
+    with pytest.raises(RulePackError, match="positive int"):
+        load_rule_pack(_write(tmp_path, "version: t\nscoring:\n  high_threshold: true\n"))
+    with pytest.raises(RulePackError, match="positive int"):
+        load_rule_pack(_write(tmp_path, "version: t\nscoring:\n  ambiguous_margin: 1.5\n"))
+
+
+def test_scoring_rejects_unknown_key(tmp_path: Path) -> None:
+    # a typo'd key must be refused, not silently defaulted (a quiet mis-calibration)
+    with pytest.raises(RulePackError, match="unknown scoring keys"):
+        load_rule_pack(_write(tmp_path, "version: t\nscoring:\n  high_treshold: 85\n"))
+
+
+def test_scoring_rejects_non_mapping(tmp_path: Path) -> None:
+    with pytest.raises(RulePackError, match="scoring must be a mapping"):
+        load_rule_pack(_write(tmp_path, "version: t\nscoring: 85\n"))
+
+
+def test_rejects_misspelled_top_level_key(tmp_path: Path) -> None:
+    # a misspelled section (scorng:) must NOT silently fall back to defaults — it bypasses the inner
+    # unknown-key guard, so the loader rejects any unexpected top-level key.
+    body = "version: t\nscorng:\n  high_threshold: 90\n"
+    with pytest.raises(RulePackError, match="unknown top-level keys"):
+        load_rule_pack(_write(tmp_path, body))
