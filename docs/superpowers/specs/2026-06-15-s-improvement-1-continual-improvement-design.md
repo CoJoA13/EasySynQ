@@ -397,6 +397,17 @@ R44/R45 `kind=DOCUMENT` rationale is **not** copied here (category error — the
 `objective_plan` precedent — v1.x uses the stage trail + comments); objective-miss / 9.1.3 auto-seed;
 list pagination beyond the standard page; a clause-10.3 informational line in the full clause-IA view.
 
+**Known limitation — authz/lock TOCTOU on a concurrent process reassignment (Codex P2, deferred to the
+owner-assignment-binding track):** the `_manage` scope resolver reads `process_id` *unlocked* during
+authz, then the service reloads under `FOR UPDATE`; a reassignment committed in that window could let an
+A-manager mutate a now-B-scoped initiative without holding manage on B. **Not exploitable in v1** — the
+seeded PROCESS grant rides the unbound `:assignment_process` placeholder (matches no process,
+`processes.py:6`), so every real `improvement.manage` holder is SYSTEM-scoped (QMS Owner / SYSTEM
+override) with authority over *all* processes, which a reassignment cannot escalate. It is the
+codebase-wide `require(resolver)` → locked-service pattern (CAPA/DCR/objectives share it); the correct
+fix (lock-during-authz or post-lock re-authorization) is a **cross-cutting hardening to land WITH the
+owner-assignment binding**, when concrete PROCESS-scoped grants first make the race exploitable.
+
 ---
 
 ## 12. Testing posture
