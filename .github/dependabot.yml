@@ -46,3 +46,12 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
+
+  # Deployed stack runtime images pinned in infra/compose/compose.yml (postgres, redis, minio,
+  # keycloak, gotenberg, tika, caddy, mailpit) — a SEPARATE Dependabot ecosystem from the Dockerfiles
+  # (`docker-compose`), else those service images never get the weekly update PRs (Codex #153).
+  - package-ecosystem: "docker-compose"
+    directory: "/infra/compose"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5

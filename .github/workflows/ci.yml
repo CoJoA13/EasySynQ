@@ -144,12 +144,13 @@ jobs:
       - working-directory: apps/web
         run: npm run lint && npm run typecheck && npm run build && npm test
 
-  # Dependency + filesystem vulnerability scan (Phase-1 tech-debt: I-1). WARN-ONLY for now: every step
-  # swallows its non-zero find-exit (`|| true` / trivy `--exit-code 0`), so the job surfaces the current
-  # vuln/secret/misconfig baseline on each PR WITHOUT blocking merges on pre-existing transitive CVEs.
-  # This job is intentionally NOT in branch protection's required checks. RATCHET to a hard gate once the
-  # baseline is clean: drop the `|| true` (pip/npm audit), set trivy `exit-code: "1"` + remove its
-  # `continue-on-error`, and add `security` to branch-protection's required checks.
+  # Dependency + filesystem + base-image vulnerability scan (Phase-1 tech-debt: I-1). WARN-ONLY on the
+  # FINDINGS: a scan that RUNS and finds CVEs/secrets is reported but does not fail the job (so the
+  # baseline surfaces without blocking merges on pre-existing transitive CVEs). But a scan that FAILS TO
+  # RUN (uvx/npm/registry error → no valid report) DOES fail its step, so a never-ran scan can't read
+  # green (Codex #153). NOT in branch protection's required checks. RATCHET to a hard gate once the
+  # baseline is clean: make pip-audit/npm-audit also fail on findings, set trivy `exit-code: "1"` + drop
+  # its `continue-on-error`, and add `security` to the required checks.
   security:
     runs-on: ubuntu-latest
     steps:
@@ -163,7 +164,17 @@ jobs:
         working-directory: apps/api
         run: |
           uv export --frozen --no-emit-project --format requirements-txt -o "$RUNNER_TEMP/py-requirements.txt"
-          uvx pip-audit -r "$RUNNER_TEMP/py-requirements.txt" --desc || true
+          # A valid JSON report proves pip-audit actually RAN. Warn-only on findings; FAIL the step if
+          # no report was produced (uvx couldn't fetch pip-audit, a resolver error, …) so a never-ran
+          # scan isn't silently green (Codex #153).
+          set +e
+          uvx pip-audit -r "$RUNNER_TEMP/py-requirements.txt" --format json -o "$RUNNER_TEMP/pip-audit.json"
+          set -e
+          if ! jq -e . "$RUNNER_TEMP/pip-audit.json" >/dev/null 2>&1; then
+            echo "::error::pip-audit produced no valid JSON report — the scan did not run"; exit 1
+          fi
+          echo "pip-audit ran. Vulnerable locked dependencies (if any):"
+          jq -r '(.dependencies // [])[] | select((.vulns // []) | length > 0) | "  \(.name) \(.version): \([.vulns[].id] | join(", "))"' "$RUNNER_TEMP/pip-audit.json"
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
@@ -171,7 +182,19 @@ jobs:
           cache-dependency-path: apps/web/package-lock.json
       - name: npm audit (web deps, from package-lock.json)
         working-directory: apps/web
-        run: npm audit --audit-level=high || true
+        run: |
+          # Same posture: a valid JSON report proves npm audit RAN. Warn-only on findings; FAIL on a
+          # transport/registry error that produced no report (Codex #153).
+          set +e
+          npm audit --audit-level=high --json > "$RUNNER_TEMP/npm-audit.json"
+          set -e
+          if ! jq -e '.metadata.vulnerabilities' "$RUNNER_TEMP/npm-audit.json" >/dev/null 2>&1; then
+            echo "::error::npm audit produced no valid report — the scan did not run"
+            cat "$RUNNER_TEMP/npm-audit.json" 2>/dev/null || true
+            exit 1
+          fi
+          echo "npm audit severity counts (high/critical are the warn signal):"
+          jq '.metadata.vulnerabilities' "$RUNNER_TEMP/npm-audit.json"
       - name: trivy filesystem scan (vuln + secret + IaC misconfig; HIGH/CRITICAL)
         uses: aquasecurity/trivy-action@v0.36.0
         continue-on-error: true # warn-only: a trivy/DB-fetch hiccup must not fail the (non-required) job
@@ -179,6 +202,28 @@ jobs:
           scan-type: fs
           scan-ref: .
           scanners: vuln,secret,misconfig
+          severity: HIGH,CRITICAL
+          exit-code: "0"
+          format: table
+      # The fs scan above does NOT detect base-image / apt OS-package CVEs (Trivy needs an image
+      # target). Scan the two Dockerfile FROM refs so a vulnerable base layer can't be baked into the
+      # air-gap bundle unnoticed (Codex #153). NOTE: this covers the BASE layer; a full built-image
+      # scan (our own apt installs) is the ratchet — kept off the per-PR path for build-time cost.
+      - name: trivy image scan — API base (python:3.12-slim-bookworm)
+        uses: aquasecurity/trivy-action@v0.36.0
+        continue-on-error: true # warn-only (the action's vuln-DB fetch can be flaky on a non-required job)
+        with:
+          scan-type: image
+          image-ref: python:3.12-slim-bookworm
+          severity: HIGH,CRITICAL
+          exit-code: "0"
+          format: table
+      - name: trivy image scan — web base (node:22-slim)
+        uses: aquasecurity/trivy-action@v0.36.0
+        continue-on-error: true # warn-only
+        with:
+          scan-type: image
+          image-ref: node:22-slim
           severity: HIGH,CRITICAL
           exit-code: "0"
           format: table
