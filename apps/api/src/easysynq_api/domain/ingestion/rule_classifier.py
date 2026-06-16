@@ -36,16 +36,18 @@ from .rule_pack import (
     Matcher,
     Rule,
     RulePack,
+    ScoringConfig,
 )
 
-HIGH_THRESHOLD = 85
-MEDIUM_THRESHOLD = 60
-AMBIGUOUS_MARGIN = 10
-KIND_UNKNOWN_FLOOR = 30  # max(DOCUMENT, RECORD) below this → kind is UNKNOWN
-
-_PROCESS_FOLDER_WEIGHT = 30  # an existing process name appearing as a folder token
-_PROCESS_HEADER_WEIGHT = 15  # …or in the header
-_PDCA_TIE_MARGIN = 5  # within this, the higher-numbered clause wins the PDCA derivation
+# The calibrated cutoffs now live on the pack (``ScoringConfig``) so an org override rides the
+# same ``version`` pin as the weights they calibrate against. ``_DEFAULT_SCORING`` is the fallback
+# used by the module helpers (``band_of`` / ``_is_ambiguous`` / ``_derive_pdca``) when no pack is
+# given; the published default constants below are single-sourced from it (back-compat / docs).
+_DEFAULT_SCORING = ScoringConfig()
+HIGH_THRESHOLD = _DEFAULT_SCORING.high_threshold
+MEDIUM_THRESHOLD = _DEFAULT_SCORING.medium_threshold
+AMBIGUOUS_MARGIN = _DEFAULT_SCORING.ambiguous_margin
+KIND_UNKNOWN_FLOOR = _DEFAULT_SCORING.kind_unknown_floor  # max(DOC, RECORD) below this → UNKNOWN
 _DATE_RE = re.compile(
     r"\b(19|20)\d{2}[-/.]\d{1,2}[-/.]\d{1,2}\b|\b\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4}\b"
 )
@@ -111,10 +113,10 @@ class ClassificationResult:
     classifier_version: str
 
 
-def band_of(score: int) -> str:
-    if score >= HIGH_THRESHOLD:
+def band_of(score: int, scoring: ScoringConfig = _DEFAULT_SCORING) -> str:
+    if score >= scoring.high_threshold:
         return "HIGH"
-    if score >= MEDIUM_THRESHOLD:
+    if score >= scoring.medium_threshold:
         return "MEDIUM"
     return "LOW"
 
@@ -197,16 +199,19 @@ def _margin(scored: list[_Scored]) -> int:
     return scored[0].score - scored[1].score
 
 
-def _is_ambiguous(scored: list[_Scored]) -> bool:
+def _is_ambiguous(scored: list[_Scored], scoring: ScoringConfig = _DEFAULT_SCORING) -> bool:
     return (
         len(scored) >= 2
         and scored[0].score > 0
-        and (scored[0].score - scored[1].score) < AMBIGUOUS_MARGIN
+        and (scored[0].score - scored[1].score) < scoring.ambiguous_margin
     )
 
 
 def _score_processes(
-    process_names: Sequence[str], f: FileFeatures, path_blob: str
+    process_names: Sequence[str],
+    f: FileFeatures,
+    path_blob: str,
+    scoring: ScoringConfig = _DEFAULT_SCORING,
 ) -> list[_Scored]:
     scored: list[_Scored] = []
     header = (f.header_block or "").lower()
@@ -215,24 +220,24 @@ def _score_processes(
         total = 0
         ev: list[Evidence] = []
         if low and low in path_blob:
-            total += _PROCESS_FOLDER_WEIGHT
+            total += scoring.process_folder_weight
             ev.append(
                 Evidence(
                     "process",
                     name,
                     "folder_path_token",
-                    _PROCESS_FOLDER_WEIGHT,
+                    scoring.process_folder_weight,
                     f"Folder path names the existing process {name!r}",
                 )
             )
         if low and low in header:
-            total += _PROCESS_HEADER_WEIGHT
+            total += scoring.process_header_weight
             ev.append(
                 Evidence(
                     "process",
                     name,
                     "header_keyword",
-                    _PROCESS_HEADER_WEIGHT,
+                    scoring.process_header_weight,
                     f"Header names the existing process {name!r}",
                 )
             )
@@ -242,13 +247,17 @@ def _score_processes(
     return scored
 
 
-def _derive_pdca(clause_scored: list[_Scored], clause_pdca: Mapping[str, str]) -> str | None:
+def _derive_pdca(
+    clause_scored: list[_Scored],
+    clause_pdca: Mapping[str, str],
+    scoring: ScoringConfig = _DEFAULT_SCORING,
+) -> str | None:
     """The highest-confidence matched REQUIREMENT-NODE clause's phase (ties → highest-numbered)."""
     eligible = [c for c in clause_scored if c.candidate in clause_pdca]
     if not eligible:
         return None
     top = eligible[0].score
-    contenders = [c for c in eligible if top - c.score <= _PDCA_TIE_MARGIN]
+    contenders = [c for c in eligible if top - c.score <= scoring.pdca_tie_margin]
     winner = max(contenders, key=lambda c: _clause_sort_key(c.candidate))
     return clause_pdca[winner.candidate]
 
@@ -271,14 +280,15 @@ class RuleHeuristicClassifier:
         process_names: Sequence[str] = (),
     ) -> ClassificationResult:
         path_blob = " ".join(_path_tokens(features.rel_path))
+        scoring = self._pack.scoring  # an org pack may override the §6.3 cutoffs/weights
 
         kind_scored = _score_rules(self._pack.kind_rules, "kind", features, path_blob)
         type_scored = _score_rules(self._pack.type_rules, "type", features, path_blob)
         clause_scored = _score_rules(self._pack.clause_rules, "clause", features, path_blob)
-        process_scored = _score_processes(process_names, features, path_blob)
+        process_scored = _score_processes(process_names, features, path_blob, scoring)
 
         # kind (scored only; UNKNOWN below the floor — R10)
-        if kind_scored and kind_scored[0].score >= KIND_UNKNOWN_FLOOR:
+        if kind_scored and kind_scored[0].score >= scoring.kind_unknown_floor:
             kind, kind_conf = kind_scored[0].candidate, kind_scored[0].score
         else:
             kind = "UNKNOWN"
@@ -291,16 +301,17 @@ class RuleHeuristicClassifier:
         proc_names = tuple(c.candidate for c in process_scored)
         process_conf = process_scored[0].score if process_scored else 0
 
-        pdca_phase = _derive_pdca(clause_scored, clause_pdca)
+        pdca_phase = _derive_pdca(clause_scored, clause_pdca, scoring)
 
         ambiguous = any(
-            _is_ambiguous(s) for s in (kind_scored, type_scored, clause_scored, process_scored)
+            _is_ambiguous(s, scoring)
+            for s in (kind_scored, type_scored, clause_scored, process_scored)
         )
         # The row band is the headline (type) confidence — the doc 09 §6.5 single-number model
         # (SOP 92 / POL 96 / AUDIT 90 …). kind is excluded (always human-confirmed, R10); clause +
         # process confidences ride per-dimension for the reviewer. ``ambiguous`` overrides to route
         # a near-tie to Needs-Decision regardless of band (§6.4).
-        band = "AMBIGUOUS" if ambiguous else band_of(type_conf)
+        band = "AMBIGUOUS" if ambiguous else band_of(type_conf, scoring)
 
         evidence: list[Evidence] = []
         for scored in (kind_scored, type_scored, clause_scored, process_scored):
