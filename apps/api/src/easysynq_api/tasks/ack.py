@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from ..config import get_settings
 from ..services.ack.sweep import sweep_acks
-from .app import app
+from .app import task
 
 logger = logging.getLogger("easysynq.ack.tasks")
 
@@ -33,7 +33,7 @@ async def _run_ack_sweep(document_id: str | None, trigger: str | None) -> dict[s
         await engine.dispose()
 
 
-@app.task(name="easysynq.ack.sweep")  # type: ignore[untyped-decorator]
+@task(name="easysynq.ack.sweep")
 def ack_sweep(document_id: str | None = None, trigger: str | None = None) -> dict[str, int]:
     """The daily (or doc-scoped, post-release/post-distribution) acknowledgement sweep."""
     return asyncio.run(_run_ack_sweep(document_id, trigger))
