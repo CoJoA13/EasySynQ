@@ -496,7 +496,7 @@ requires-dist = [
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2" },
     { name = "pydantic", specifier = ">=2.8" },
     { name = "pydantic-settings", specifier = ">=2.4" },
-    { name = "pyjwt", extras = ["crypto"], specifier = ">=2.9" },
+    { name = "pyjwt", extras = ["crypto"], specifier = ">=2.13.0" },
     { name = "pypdf", specifier = ">=5.0,<7" },
     { name = "pypdfium2", specifier = ">=5.9.0" },
     { name = "python-magic", specifier = ">=0.4" },
