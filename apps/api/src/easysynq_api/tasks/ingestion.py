@@ -32,7 +32,7 @@ from ..services.ingestion import (
     run_propose,
     run_scan,
 )
-from .app import app
+from .app import task
 
 logger = logging.getLogger("easysynq.ingestion.tasks")
 
@@ -66,37 +66,37 @@ async def _with_sessionmaker[T](
         await engine.dispose()
 
 
-@app.task(name="easysynq.ingestion.scan_source")  # type: ignore[untyped-decorator]
+@task(name="easysynq.ingestion.scan_source")
 def scan_source(run_id: str) -> None:
     """Walk + inventory one run's source tree, then chain to extract (idempotent; fail-closed)."""
     asyncio.run(_with_session(lambda s: run_scan(s, uuid.UUID(run_id))))
 
 
-@app.task(name="easysynq.ingestion.extract_source")  # type: ignore[untyped-decorator]
+@task(name="easysynq.ingestion.extract_source")
 def extract_source(run_id: str) -> None:
     """Extract text/metadata/OCR for one run's files, then chain to classify (idempotent)."""
     asyncio.run(_with_session(lambda s: run_extract(s, uuid.UUID(run_id))))
 
 
-@app.task(name="easysynq.ingestion.classify_source")  # type: ignore[untyped-decorator]
+@task(name="easysynq.ingestion.classify_source")
 def classify_source(run_id: str) -> None:
     """Score the four classification dimensions, then chain to dedup (idempotent)."""
     asyncio.run(_with_session(lambda s: run_classify(s, uuid.UUID(run_id))))
 
 
-@app.task(name="easysynq.ingestion.dedup_source")  # type: ignore[untyped-decorator]
+@task(name="easysynq.ingestion.dedup_source")
 def dedup_source(run_id: str) -> None:
     """Detect exact/near dups + version families, then chain to propose (idempotent)."""
     asyncio.run(_with_session(lambda s: run_dedup(s, uuid.UUID(run_id))))
 
 
-@app.task(name="easysynq.ingestion.propose_source")  # type: ignore[untyped-decorator]
+@task(name="easysynq.ingestion.propose_source")
 def propose_source(run_id: str) -> None:
     """Build the per-keep-item proposal, then rest at Proposed (idempotent; releases the lock)."""
     asyncio.run(_with_session(lambda s: run_propose(s, uuid.UUID(run_id))))
 
 
-@app.task(name="easysynq.ingestion.commit_source")  # type: ignore[untyped-decorator]
+@task(name="easysynq.ingestion.commit_source")
 def commit_source(run_id: str) -> None:
     """S-ing-5: commit a reviewed run's commit-ready keep-items into the vault (per-item,
     idempotent, single-flight via the per-item ledger claim). The ``*_source`` name inherits the
@@ -104,7 +104,7 @@ def commit_source(run_id: str) -> None:
     asyncio.run(_with_sessionmaker(lambda sm: run_commit(sm, uuid.UUID(run_id))))
 
 
-@app.task(name="easysynq.ingestion.reap_stalled_runs")  # type: ignore[untyped-decorator]
+@task(name="easysynq.ingestion.reap_stalled_runs")
 def reap_stalled_runs_task() -> dict[str, int]:
     """Flip runs wedged in any in-progress stage (dead lock / past the backstop) → FAILED + free the
     source-root lock; returns ``{reaped}``."""
@@ -117,7 +117,7 @@ def reap_stalled_runs_task() -> dict[str, int]:
     return asyncio.run(_with_session(_reap))
 
 
-@app.task(name="easysynq.ingestion.reap_stalled_commits")  # type: ignore[untyped-decorator]
+@task(name="easysynq.ingestion.reap_stalled_commits")
 def reap_stalled_commits_task() -> dict[str, int]:
     """S-ing-5: RE-ENQUEUE a Committing run that has made no commit-ledger progress within the stall
     window (a crashed commit worker) — resume via the idempotent ledger, never fail; returns

@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from ..config import get_settings
 from ..services.vault.review import sweep_reviews
-from .app import app
+from .app import task
 
 logger = logging.getLogger("easysynq.documents.tasks")
 
@@ -28,7 +28,7 @@ async def _run_review_sweep() -> dict[str, int]:
         await engine.dispose()
 
 
-@app.task(name="easysynq.documents.review_sweep")  # type: ignore[untyped-decorator]
+@task(name="easysynq.documents.review_sweep")
 def review_sweep() -> dict[str, int]:
     """Daily D5 sweep; returns ``{tasks_created, escalated}``."""
     return asyncio.run(_run_review_sweep())

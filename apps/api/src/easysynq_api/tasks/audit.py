@@ -25,7 +25,7 @@ from ..services.audit.linker import link_all
 from ..services.audit.partitions import ensure_partitions
 from ..services.audit.verify import verify_chain
 from ..services.common.pg_locks import LOCK_CHAIN_LINK, pg_advisory_lock
-from .app import app
+from .app import task
 
 logger = logging.getLogger("easysynq.audit.tasks")
 
@@ -104,25 +104,25 @@ async def _run_checkpoint_anchor() -> int:
     return anchored
 
 
-@app.task(name="easysynq.audit.chain_link")  # type: ignore[untyped-decorator]
+@task(name="easysynq.audit.chain_link")
 def chain_link() -> int:
     """Link unchained audit rows; returns the count linked this run."""
     return asyncio.run(_run_chain_link())
 
 
-@app.task(name="easysynq.audit.verify_chain")  # type: ignore[untyped-decorator]
+@task(name="easysynq.audit.verify_chain")
 def verify_chain_task() -> int:
     """Re-walk + verify the chain; returns the number of broken links (0 = intact)."""
     return asyncio.run(_run_verify_chain())
 
 
-@app.task(name="easysynq.audit.roll_partitions")  # type: ignore[untyped-decorator]
+@task(name="easysynq.audit.roll_partitions")
 def roll_partitions() -> list[str]:
     """Ensure the rolling monthly-partition runway; returns the month labels ensured."""
     return asyncio.run(_run_roll_partitions())
 
 
-@app.task(name="easysynq.audit.checkpoint_anchor")  # type: ignore[untyped-decorator]
+@task(name="easysynq.audit.checkpoint_anchor")
 def checkpoint_anchor() -> int:
     """Write + mirror a signed checkpoint per org; returns the count anchored."""
     return asyncio.run(_run_checkpoint_anchor())
