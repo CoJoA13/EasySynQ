@@ -166,6 +166,113 @@ async def run_restore_test(
         await engine.dispose()
 
 
+async def verify_latest_retained_backup(
+    org_id: uuid.UUID,
+    actor_id: uuid.UUID | None = None,
+    *,
+    after_restore: Callable[[ScratchHandle], None] | None = None,
+) -> dict[str, Any]:
+    """Verify the NEWEST RETAINED durable backup archive for ``org_id`` is restorable + intact, and
+    persist the result. This is the scheduled (Phase-1 I-7) check: unlike the on-demand G-C drill
+    (``run_restore_test``, which builds + restores a FRESH transient archive), it opens the actual
+    stored ``easysynq-backup-*.tar[.enc]`` an operator would restore from — so silent rot in the
+    real, encrypted backups is caught (Codex P2, #155).
+
+    Serialized on ``LOCK_RESTORE_DRILL`` (shared with the on-demand drill — they contend for the
+    same pg_restore/scratch resource family, so a concurrent drill or verify SKIPs). No policy →
+    FAIL (matches ``run_restore_test``). The verify itself runs off the event loop as the OWNER role
+    inside ``drill.verify_retained_archive``; this session only persists + audits.
+
+    Reuses ``last_restore_test_result`` + the RESTORE_TEST_PASSED/_FAILED audit (no new column),
+    distinguished by ``source: "scheduled_retained_verify"`` (+ the archive filename) in the audit
+    ``after`` so an auditor can tell a scheduled retained-verify from the on-demand G-C drill. A
+    SKIPPED result (no archive yet, or the lock is held) persists + audits NOTHING (just logs) — a
+    fresh install with no nightly run must not flap red. ``after_restore`` is a TEST-ONLY fault
+    injector forwarded to the verifier."""
+    settings = get_settings()
+    engine = create_async_engine(settings.database_url)
+    sessionmaker: async_sessionmaker[AsyncSession] = async_sessionmaker(
+        engine, expire_on_commit=False
+    )
+    try:
+        async with sessionmaker() as session, pg_advisory_lock(session, LOCK_RESTORE_DRILL) as held:
+            if not held:
+                logger.info("retained-verify: another drill holds the lock; skipping")
+                return {"result": "SKIPPED", "reason": "another restore-test is in progress"}
+            policy = await session.scalar(select(BackupPolicy).where(BackupPolicy.org_id == org_id))
+            if policy is None:
+                logger.warning("retained-verify: no backup policy for org %s", org_id)
+                return {"result": "FAIL", "reason": "no backup policy configured"}
+
+            result = await asyncio.to_thread(
+                drill.verify_retained_archive,
+                settings,
+                destination=policy.destination,
+                after_restore=after_restore,
+            )
+            if result.result == "SKIPPED":
+                logger.info(
+                    "retained-verify: skipped",
+                    extra={"extra_fields": {"reason": result.reason}},
+                )
+                return {"result": result.result, "reason": result.reason}
+
+            policy.last_restore_test_at = _now()
+            policy.last_restore_test_result = result.result
+            _emit(
+                session,
+                org_id=org_id,
+                actor_id=actor_id,
+                event_type=(
+                    "RESTORE_TEST_PASSED" if result.result == "PASS" else "RESTORE_TEST_FAILED"
+                ),
+                after={
+                    "reason": result.reason,
+                    "source": "scheduled_retained_verify",
+                    **result.details,
+                },
+            )
+            await session.commit()
+            logger.info("retained-verify.done", extra={"extra_fields": {"result": result.result}})
+            return {"result": result.result, "reason": result.reason, "details": result.details}
+    finally:
+        await engine.dispose()
+
+
+async def run_scheduled_restore_tests() -> dict[str, Any]:
+    """Verify the NEWEST RETAINED durable backup for every configured ``backup_policy`` (one per
+    org; single-org in MVP, D1) on the Beat cadence — so a silently-rotting REAL backup is caught
+    between the manual G-C drills (Phase-1 I-7; the nightly job only WRITES archives, this proves
+    the stored ones still restore). Delegates per org to ``verify_latest_retained_backup`` (its
+    ``LOCK_RESTORE_DRILL`` serialization + persisted ``last_restore_test_result`` +
+    RESTORE_TEST_PASSED/_FAILED audit + never-raise contract) with a SYSTEM actor. Best-effort: one
+    org's failure never aborts the others, and the verify itself never raises (an honest FAIL is
+    persisted + audited)."""
+    settings = get_settings()
+    engine = create_async_engine(settings.database_url)
+    sessionmaker: async_sessionmaker[AsyncSession] = async_sessionmaker(
+        engine, expire_on_commit=False
+    )
+    try:
+        async with sessionmaker() as session:
+            org_ids = list((await session.scalars(select(BackupPolicy.org_id))).all())
+    finally:
+        await engine.dispose()
+    # Each verify_latest_retained_backup opens + disposes its own engine/session (a fresh unit per
+    # org), so the org-id read above is closed first — never one session reused across the per-org
+    # verifies.
+    results: list[dict[str, Any]] = []
+    for org_id in org_ids:
+        try:
+            out = await verify_latest_retained_backup(org_id, actor_id=None)
+            results.append({"org_id": str(org_id), **out})
+        except Exception as exc:
+            logger.exception("scheduled backup-verify errored for org %s", org_id)
+            results.append({"org_id": str(org_id), "result": "FAIL", "error": str(exc)[:200]})
+    logger.info("backup-verify.scheduled.done", extra={"extra_fields": {"orgs": len(results)}})
+    return {"restore_tests": results}
+
+
 async def run_restore(
     org_id: uuid.UUID,
     actor_id: uuid.UUID | None = None,

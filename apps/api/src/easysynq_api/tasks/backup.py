@@ -16,7 +16,11 @@ import asyncio
 import uuid
 from typing import Any
 
-from ..services.backup import run_restore_test, run_scheduled_backups
+from ..services.backup import (
+    run_restore_test,
+    run_scheduled_backups,
+    run_scheduled_restore_tests,
+)
 from .app import app
 
 
@@ -32,3 +36,13 @@ def backup_restore_test(org_id: str, actor_id: str | None = None) -> dict[str, A
     return asyncio.run(
         run_restore_test(uuid.UUID(org_id), uuid.UUID(actor_id) if actor_id else None)
     )
+
+
+@app.task(name="easysynq.backup.scheduled_restore_test")  # type: ignore[untyped-decorator]
+def backup_scheduled_restore_test() -> dict[str, Any]:
+    """Scheduled (Beat) retained-backup verify for EVERY backup_policy — decrypts + restores the
+    NEWEST RETAINED durable archive into scratch + runs the integrity triad, catching a
+    silently-rotting REAL backup between the manual G-C drills (Phase-1 I-7). System-initiated,
+    best-effort + logged; each org's PASS/FAIL is persisted + RESTORE_TEST_* audited by
+    ``verify_latest_retained_backup`` (the task name stays stable for the registration pin)."""
+    return asyncio.run(run_scheduled_restore_tests())

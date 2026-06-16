@@ -26,6 +26,7 @@ import datetime
 import hashlib
 import json
 import logging
+import re
 import uuid
 from collections.abc import Callable
 from pathlib import Path
@@ -35,11 +36,16 @@ from typing import Any
 from ...config import Settings
 from . import archive, config_snapshot, crypto, realm_export
 from .archive import BackupError, BlobRef
+from .crypto import BackupCryptoError
 from .dsn import conn_kwargs
 
 logger = logging.getLogger("easysynq.backup.drill")
 
 _SCRATCH_PREFIX = "scratch_easysynq_"
+# The scheduled retained-backup verify (Phase-1 I-7) restores into its OWN namespace, DISTINCT from
+# the drill's ``scratch_easysynq_`` and the live restore's ``restore_easysynq_`` — so verifying a
+# retained archive never sweeps/clobbers a drill's scratch or an operator's standing target.
+_VERIFY_PREFIX = "verify_easysynq_"
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -139,6 +145,26 @@ def _sweep_stale_scratch(owner_dsn: str) -> None:
                 )
     except Exception:  # noqa: BLE001 — best-effort cleanup; a sweep failure must not fail the drill
         logger.warning("restore-drill: stale-scratch sweep skipped", exc_info=True)
+
+
+def _sweep_stale_verify(owner_dsn: str) -> None:
+    """Best-effort: drop leftover ``verify_easysynq_*`` DBs from a crashed prior retained-verify.
+    Distinct from the drill's ``scratch_easysynq_*`` sweep + the restore's ``restore_easysynq_*``
+    sweep, so a retained-backup verify never destroys a drill's scratch or a standing verified
+    target (and vice-versa). FORCE terminates any straggler connection."""
+    from psycopg import sql
+
+    try:
+        with _autocommit(owner_dsn) as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT datname FROM pg_database WHERE datname LIKE %s", (_VERIFY_PREFIX + "%",)
+            )
+            for (name,) in cur.fetchall():
+                cur.execute(
+                    sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(sql.Identifier(name))
+                )
+    except Exception:  # noqa: BLE001 — best-effort cleanup; a sweep failure must not fail the verify
+        logger.warning("retained-verify: stale-verify sweep skipped", exc_info=True)
 
 
 def _create_scratch_db(owner_dsn: str, scratch_db: str) -> None:
@@ -399,6 +425,23 @@ def build_durable_backup(settings: Settings, *, destination: str) -> dict[str, A
 # --- orchestration -----------------------------------------------------------------------------
 
 
+def _unlink_transient_archive(destination: str, stamp: str) -> None:
+    """Remove the drill's TRANSIENT ``easysynq-backup-{stamp}.tar`` (+ its ``.sha256`` sidecar) from
+    ``destination``. Driven by the DETERMINISTIC stamp — NOT the ``pack_archive`` return value — so
+    a ``pack_archive`` that fails partway (a disk-full / NFS error mid-tar or mid-sidecar) leaves a
+    partial PLAINTEXT ``.tar`` but never assigns the path, yet the residue is still cleaned (Codex
+    P2, #155). The drill never encrypts (only ``build_durable_backup`` writes a retained, encrypted
+    archive), so leaving a drill ``.tar`` behind would accumulate plaintext db dumps in the backup
+    directory, bypassing the encryption operators expect for stored backups. Best-effort: a stranded
+    artifact must not fail the drill."""
+    dest = Path(destination)
+    for p in (dest / f"easysynq-backup-{stamp}.tar", dest / f"easysynq-backup-{stamp}.tar.sha256"):
+        try:
+            p.unlink(missing_ok=True)
+        except OSError:  # best-effort cleanup; a stranded artifact must not fail the drill
+            logger.warning("restore-drill: archive cleanup failed for %s", p, exc_info=True)
+
+
 def run_drill(
     settings: Settings,
     *,
@@ -413,6 +456,7 @@ def run_drill(
     drill_id = uuid.uuid4().hex
     scratch_db = f"{_SCRATCH_PREFIX}{drill_id}"
     handle: ScratchHandle | None = None
+    archive_path: Path | None = None
     try:
         with TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -451,6 +495,10 @@ def run_drill(
         logger.exception("restore-drill crashed")
         return DrillResult("FAIL", f"drill error: {type(exc).__name__}: {exc}"[:300])
     finally:
+        # The drill's archive is a TRANSIENT verification artifact — restored FROM, then removed so
+        # a drill never accumulates PLAINTEXT db dumps in the backup directory. Clean by the
+        # deterministic stamp (covers a pack_archive that failed partway, archive_path still None).
+        _unlink_transient_archive(destination, drill_id)
         if handle is not None:
             try:
                 _drop_scratch_db(owner_dsn, scratch_db)
@@ -460,3 +508,162 @@ def run_drill(
                 _delete_scratch_objects(settings, handle.scratch_bucket, handle.object_prefix)
             except Exception:  # noqa: BLE001
                 logger.warning("restore-drill: scratch bucket teardown failed", exc_info=True)
+
+
+# --- retained-archive verify (the scheduled backup-verify; Phase-1 I-7) ------------------------
+
+# A DURABLE archive (``build_durable_backup``) is named ``easysynq-backup-{stamp}.tar[.enc]`` where
+# the stamp is ``YYYYMMDDTHHMMSSZ-<uuid8>`` — a year-prefixed timestamp + an 8-hex suffix. The match
+# is anchored to that EXACT shape so the on-demand drill's TRANSIENT artifact is never a candidate:
+# ``run_drill`` writes ``easysynq-backup-<32-hex-uuid>.tar`` (a BARE uuid4, NO timestamp) into the
+# SAME ``policy.destination`` and normally unlinks it in its ``finally``, but a HARD-KILLED drill
+# can leave one behind. A bare-uuid stamp begins with a hex char that lexically OUTSORTS the
+# '2'-prefixed durable stamp ~13/16 of the time, so a plain lexical-max over both families picks the
+# residue — and being plaintext it would ``verify`` PASS WITHOUT ever decrypting the real encrypted
+# backup (re-opening the Codex-P2 gap #155). Requiring the timestamp stamp excludes it structurally.
+_DURABLE_ARCHIVE_RE = re.compile(r"easysynq-backup-\d{8}T\d{6}Z-[0-9a-f]{8}\.tar(?:\.enc)?")
+
+
+def _newest_retained_archive(destination: str) -> Path | None:
+    """The NEWEST *complete* durable archive in ``destination`` (the one an operator would actually
+    restore from) — the encrypted ``…tar.enc`` or the plaintext-fallback ``…tar``, restricted to the
+    durable ``YYYYMMDDTHHMMSSZ-<uuid8>`` stamp (so ``.sha256`` sidecars AND a hard-crash drill
+    residue are excluded; see ``_DURABLE_ARCHIVE_RE``). The stamp sorts chronologically, so the
+    lexical-max matching name is the chronologically-newest archive.
+
+    An archive is a candidate ONLY once its ``.sha256`` sidecar exists: the weekly verifier can
+    overlap ``backup-nightly`` (both Beat-scheduled; the weekly interval is a multiple of the
+    nightly), and ``build_durable_backup`` writes the ``.tar``/``.tar.enc`` BEFORE its sidecar — so
+    selecting the newest in-progress archive would FAIL ``verify_archive`` (sidecar absent) and
+    persist a spurious ``RESTORE_TEST_FAILED`` for a backup merely still being written. Skipping
+    sidecar-less archives falls back to the newest COMPLETE one (Codex P2, #155). ``None`` if the
+    directory is absent or has no complete durable archive yet."""
+    dest_dir = Path(destination)
+    if not dest_dir.is_dir():
+        return None
+    candidates = sorted(
+        (
+            p
+            for p in dest_dir.glob("easysynq-backup-*.tar*")
+            if _DURABLE_ARCHIVE_RE.fullmatch(p.name) and p.with_name(p.name + ".sha256").exists()
+        ),
+        key=lambda p: p.name,
+    )
+    return candidates[-1] if candidates else None
+
+
+def verify_retained_archive(
+    settings: Settings,
+    *,
+    destination: str,
+    after_restore: Callable[[ScratchHandle], None] | None = None,
+) -> DrillResult:
+    """Verify the NEWEST RETAINED durable backup archive (``build_durable_backup``'s output) is
+    restorable + intact — the gap the fresh-drill ``run_drill`` cannot catch: it proves the actual
+    stored archive (encrypted, with ``BACKUP_ENCRYPTION_KEY`` set) decrypts and round-trips, so
+    silent rot in the real backups is caught (Phase-1 I-7 / Codex P2, #155).
+
+    Modelled on ``restore.run_restore`` steps 1-5 (decrypt → manifest → restore-into-scratch →
+    blob-copy → triad), but VERIFY-ONLY: it skips the live-restore checkpoint-not-ahead + chain
+    re-verify (those are tamper guards whose FLAGGED-on-unreachable semantics would muddy a clean
+    weekly PASS/FAIL — the integrity triad is the rot signal), and it ALWAYS tears the scratch
+    namespace down (never a standing cutover target). Restores into a dedicated ``verify_easysynq_``
+    namespace, DISTINCT from the drill's ``scratch_easysynq_`` and the restore's
+    ``restore_easysynq_``. Never raises — a crash / wrong key / missing binary is an honest FAIL.
+
+    ``None`` archive (fresh install, nightly hasn't run yet) → ``SKIPPED``, NOT a FAIL (it must not
+    flap red). ``after_restore`` is the TEST-ONLY fault injector (same contract as the drill), run
+    after the restore + blob copy, before the triad."""
+    owner_dsn = settings.sync_dsn
+    src = _newest_retained_archive(destination)
+    if src is None:
+        return DrillResult("SKIPPED", "no retained backup archive to verify yet")
+
+    verify_id = uuid.uuid4().hex
+    scratch_db = f"{_VERIFY_PREFIX}{verify_id}"
+    handle: ScratchHandle | None = None
+    try:
+        # 1. archive bytes match their committed .sha256 sidecar (works for .tar + .tar.enc)
+        if not archive.verify_archive(src):
+            return DrillResult(
+                "FAIL", "archive checksum verification failed", {"archive": src.name}
+            )
+
+        with TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            # 2. decrypt if encrypted → a plaintext tar the existing primitives can read. A wrong /
+            #    missing key (BackupCryptoError) is an honest FAIL — the stored backup is unusable.
+            if crypto.is_encrypted_archive(src):
+                plain = crypto.decrypt_archive(
+                    src, tmp_path / "archive.tar", secret=settings.backup_encryption_key
+                )
+            else:
+                plain = src
+
+            # 3. read the archive's OWN manifest (point-in-time blob set + per-table counts the
+            #    archive was built against — NOT a fresh capture; this verifies the stored archive).
+            manifest = archive.read_manifest(plain)
+            blobs = [
+                BlobRef(
+                    sha256=b["sha256"],
+                    size_bytes=int(b["size_bytes"]),
+                    bucket=b["bucket"],
+                    object_key=b["object_key"],
+                )
+                for b in manifest.get("blobs", [])
+            ]
+            counts = (manifest.get("config") or {}).get("table_counts") or {}
+
+            # 4. restore PG into a FRESH verify_ scratch DB
+            restore_dump = archive.unpack_dump(plain, tmp_path / "restore")
+            _sweep_stale_verify(owner_dsn)
+            _create_scratch_db(owner_dsn, scratch_db)
+            handle = ScratchHandle(
+                owner_dsn=owner_dsn,
+                scratch_db=scratch_db,
+                scratch_bucket=settings.s3_bucket_restore_scratch,
+                object_prefix=f"{verify_id}/",
+                expected_counts=counts,
+            )
+            archive.restore_database(owner_dsn, scratch_db, restore_dump)
+
+            # 5. copy the MANIFESTED blobs from the live vault into the non-WORM scratch bucket (a
+            #    READ of the content-addressed source; the locked vault is never written). A blob
+            #    disposed/corrupted since the backup → the re-hash leg FAILs (the real rot signal).
+            if handle.scratch_bucket == settings.s3_bucket_documents:  # pragma: no cover - guard
+                return DrillResult("FAIL", "refusing to verify into the WORM documents bucket")
+            _copy_blobs(settings, blobs, handle.scratch_bucket, handle.object_prefix)
+
+            if after_restore is not None:
+                after_restore(handle)
+
+            # 6. integrity triad on the restored copy. Row-count parity is vacuous (and noted) for a
+            #    legacy archive with no manifest counts — FK + blob re-hash still run (run_restore's
+            #    contract).
+            result = run_triad(settings, handle)
+            detail = {"archive": src.name, **result.details}
+            if not counts:
+                detail["row_count_parity"] = "skipped (legacy archive, no manifest counts)"
+            return DrillResult(result.result, result.reason, detail)
+    except BackupCryptoError as exc:
+        return DrillResult("FAIL", f"decrypt failed: {exc}", {"archive": src.name})
+    except BackupError as exc:
+        return DrillResult("FAIL", str(exc), {"archive": src.name})
+    except Exception as exc:
+        logger.exception("retained-backup verify crashed")
+        return DrillResult(
+            "FAIL", f"verify error: {type(exc).__name__}: {exc}"[:300], {"archive": src.name}
+        )
+    finally:
+        # ALWAYS tear down — a verify is never a standing cutover target (unlike
+        # restore.run_restore, which leaves a PASS target standing). The on-disk archive is
+        # untouched.
+        if handle is not None:
+            try:
+                _drop_scratch_db(owner_dsn, scratch_db)
+            except Exception:  # noqa: BLE001 — best-effort teardown
+                logger.warning("retained-verify: scratch DB teardown failed", exc_info=True)
+            try:
+                _delete_scratch_objects(settings, handle.scratch_bucket, handle.object_prefix)
+            except Exception:  # noqa: BLE001
+                logger.warning("retained-verify: scratch bucket teardown failed", exc_info=True)
