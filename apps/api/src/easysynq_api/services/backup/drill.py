@@ -425,6 +425,23 @@ def build_durable_backup(settings: Settings, *, destination: str) -> dict[str, A
 # --- orchestration -----------------------------------------------------------------------------
 
 
+def _unlink_transient_archive(destination: str, stamp: str) -> None:
+    """Remove the drill's TRANSIENT ``easysynq-backup-{stamp}.tar`` (+ its ``.sha256`` sidecar) from
+    ``destination``. Driven by the DETERMINISTIC stamp — NOT the ``pack_archive`` return value — so
+    a ``pack_archive`` that fails partway (a disk-full / NFS error mid-tar or mid-sidecar) leaves a
+    partial PLAINTEXT ``.tar`` but never assigns the path, yet the residue is still cleaned (Codex
+    P2, #155). The drill never encrypts (only ``build_durable_backup`` writes a retained, encrypted
+    archive), so leaving a drill ``.tar`` behind would accumulate plaintext db dumps in the backup
+    directory, bypassing the encryption operators expect for stored backups. Best-effort: a stranded
+    artifact must not fail the drill."""
+    dest = Path(destination)
+    for p in (dest / f"easysynq-backup-{stamp}.tar", dest / f"easysynq-backup-{stamp}.tar.sha256"):
+        try:
+            p.unlink(missing_ok=True)
+        except OSError:  # best-effort cleanup; a stranded artifact must not fail the drill
+            logger.warning("restore-drill: archive cleanup failed for %s", p, exc_info=True)
+
+
 def run_drill(
     settings: Settings,
     *,
@@ -478,20 +495,10 @@ def run_drill(
         logger.exception("restore-drill crashed")
         return DrillResult("FAIL", f"drill error: {type(exc).__name__}: {exc}"[:300])
     finally:
-        # The drill's archive is a TRANSIENT verification artifact — written to ``destination`` to
-        # prove it round-trips (then restored FROM), so once the triad has run it must NOT linger:
-        # a SCHEDULED drill would otherwise accumulate PLAINTEXT db dumps in the backup directory,
-        # bypassing the encryption operators expect for stored backups. Only the durable nightly
-        # backup (``build_durable_backup``) writes a RETAINED archive — AES-256-GCM-encrypted when a
-        # key is set; the drill never encrypts, so its ``.tar`` + ``.sha256`` are removed here.
-        if archive_path is not None:
-            for _p in (archive_path, archive_path.with_name(archive_path.name + ".sha256")):
-                try:
-                    _p.unlink(missing_ok=True)
-                except OSError:  # best-effort cleanup; a stranded artifact must not fail the drill
-                    logger.warning(
-                        "restore-drill: archive cleanup failed for %s", _p, exc_info=True
-                    )
+        # The drill's archive is a TRANSIENT verification artifact — restored FROM, then removed so
+        # a drill never accumulates PLAINTEXT db dumps in the backup directory. Clean by the
+        # deterministic stamp (covers a pack_archive that failed partway, archive_path still None).
+        _unlink_transient_archive(destination, drill_id)
         if handle is not None:
             try:
                 _drop_scratch_db(owner_dsn, scratch_db)
