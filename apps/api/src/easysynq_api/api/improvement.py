@@ -245,10 +245,19 @@ async def list_stage_events_endpoint(
 async def patch_initiative_endpoint(
     initiative_id: uuid.UUID,
     body: InitiativePatch,
+    request: Request,
     caller: AppUser = Depends(_manage),
     session: AsyncSession = Depends(get_session),
+    authz_sink: AuthzAuditSink = Depends(get_authz_audit_sink),
 ) -> dict[str, Any]:
-    """Edit an initiative's mutable metadata (gate ``improvement.manage``); never the ``stage``."""
+    """Edit an initiative's mutable metadata (gate ``improvement.manage``); never the ``stage``.
+    The ``_manage`` dep authorized the CURRENT process; a ``process_id`` reassignment ALSO requires
+    ``improvement.manage`` on the TARGET process (else a manager of A could move an initiative into
+    B they cannot manage — the Codex P2). Mirrors create's body-scope enforce."""
+    if body.process_id is not None:
+        await enforce(
+            session, authz_sink, request, caller, "improvement.manage", _scope_for(body.process_id)
+        )
     initiative = await update_initiative(
         session,
         caller,

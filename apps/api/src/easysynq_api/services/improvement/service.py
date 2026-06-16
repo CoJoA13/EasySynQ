@@ -139,6 +139,16 @@ async def create_initiative(
                 "unknown_process",
                 "Unknown process_id (must be a process in your organization)",
             )
+    # Validate owner like process_id (the Codex P2): an unknown UUID would otherwise fall through to
+    # a raw FK violation / 500, and an owner must belong to this org (FK only targets app_user.id).
+    if owner_user_id is not None:
+        owner = await session.get(AppUser, owner_user_id)
+        if owner is None or owner.org_id != actor.org_id:
+            raise _validation_error(
+                "owner_user_id",
+                "unknown_owner",
+                "Unknown owner_user_id (must be a user in your organization)",
+            )
     year = _now().year
     seq = await vault_repo.allocate_seq(session, actor.org_id, _IMP_PREFIX, str(year))
     initiative = ImprovementInitiative(
@@ -215,6 +225,13 @@ async def update_initiative(
         after["target_outcome"] = target_outcome
         initiative.target_outcome = target_outcome
     if owner_user_id is not None and owner_user_id != initiative.owner_user_id:
+        owner = await session.get(AppUser, owner_user_id)
+        if owner is None or owner.org_id != actor.org_id:
+            raise _validation_error(
+                "owner_user_id",
+                "unknown_owner",
+                "Unknown owner_user_id (must be a user in your organization)",
+            )
         before["owner_user_id"] = (
             str(initiative.owner_user_id) if initiative.owner_user_id else None
         )

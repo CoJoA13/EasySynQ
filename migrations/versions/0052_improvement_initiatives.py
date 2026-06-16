@@ -80,6 +80,12 @@ _PROCESS_SCOPE: dict[str, Any] = {
     "level": "PROCESS",
     "selector": {"process_id": ":assignment_process"},
 }
+# Org-wide SYSTEM scope (the 0004:144 / 0028:194 {"level": "SYSTEM"} shape) — a real working grant that
+# matches every initiative. ONLY Process Owner is PROCESS-scoped (the :assignment_process placeholder
+# rides SYSTEM overrides until owner-assignment binds); QMS Owner + Internal Auditor MUST be SYSTEM —
+# a PROCESS template with the unbound placeholder matches NOTHING, so they would silently get no access
+# (the Codex P2 catch; the docstring above already intended QMS Owner at org/QMS scope).
+_SYSTEM_SCOPE: dict[str, Any] = {"level": "SYSTEM"}
 # Grants per role name (DEFAULT org): QMS Owner gets both; Process Owner gets both (PROCESS-scoped);
 # Internal Auditor gets read (the checklist-read precedent — the auditor raises OFIs + reads the
 # improvement pipeline but does not drive initiatives).
@@ -87,6 +93,12 @@ _ROLE_GRANTS: dict[str, tuple[str, ...]] = {
     "QMS Owner": ("improvement.read", "improvement.manage"),
     "Process Owner": ("improvement.read", "improvement.manage"),
     "Internal Auditor": ("improvement.read",),
+}
+# Process Owner rides the PROCESS placeholder; the org-wide roles get a real SYSTEM grant.
+_SCOPE_BY_ROLE: dict[str, dict[str, Any]] = {
+    "QMS Owner": _SYSTEM_SCOPE,
+    "Process Owner": _PROCESS_SCOPE,
+    "Internal Auditor": _SYSTEM_SCOPE,
 }
 
 
@@ -332,7 +344,7 @@ def _seed_authz(bind: sa.engine.Connection) -> None:
                     "org_id": org_id,
                     "role_id": rid,
                     "permission_id": perm_ids[key],
-                    "scope_template": _PROCESS_SCOPE,
+                    "scope_template": _SCOPE_BY_ROLE[role_name],
                 }
             )
     if grant_rows:
