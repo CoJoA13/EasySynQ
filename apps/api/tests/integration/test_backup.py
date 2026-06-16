@@ -17,7 +17,7 @@ from types import SimpleNamespace
 
 import pytest
 from httpx import AsyncClient
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from easysynq_api.config import get_settings
 from easysynq_api.db.models._audit_enums import EventType
@@ -303,3 +303,186 @@ async def test_drill_fails_on_corrupted_restored_blob(
     result = await backup_service.run_restore_test(org_id, after_restore=_corrupt_one_blob)
     assert result["result"] == "FAIL", result
     assert "re-hash" in result["reason"] or "SHA-256" in result["reason"], result
+
+
+# --- Phase-1 I-7: the SCHEDULED retained-backup verify (verify_latest_retained_backup) ----------
+#
+# The redesign (Codex P2 on #155): the weekly job must verify the NEWEST RETAINED durable archive
+# (build_durable_backup's easysynq-backup-*.tar[.enc] — encrypted when BACKUP_ENCRYPTION_KEY is set,
+# which it IS in CI), NOT a fresh transient drill archive. So these drive a real durable backup to a
+# temp destination, then verify_latest_retained_backup over it. They share the OPERATIONAL DB + the
+# pg_dump/pg_restore runner requirement with the drill tests above.
+
+
+async def _count_retained_verify_audits(org_id: uuid.UUID, event_type: EventType) -> int:
+    """Count RESTORE_TEST_* audit rows for ``org_id`` carrying the scheduled-retained-verify source
+    tag — the discriminator from the on-demand G-C drill (which never sets ``source``). Delta-based
+    so the assertion is robust on the shared session DB."""
+    async with get_sessionmaker()() as s:
+        n = await s.scalar(
+            select(func.count())
+            .select_from(AuditEvent)
+            .where(
+                AuditEvent.org_id == org_id,
+                AuditEvent.event_type == event_type,
+                AuditEvent.after["source"].astext == "scheduled_retained_verify",
+            )
+        )
+    return int(n or 0)
+
+
+async def test_verify_retained_backup_passes(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """[I-7 PASS] Over a REAL retained durable archive (written by run_scheduled_backups), the
+    scheduled verify PASSES, persists last_restore_test_result=PASS, and emits a RESTORE_TEST_PASSED
+    audit tagged source=scheduled_retained_verify (so an auditor can tell a scheduled
+    retained-verify from the on-demand G-C drill, which never sets that tag)."""
+    org_id = await _org_id()
+    await _make_effective_doc(app_client, token_factory, b"effective-source-for-retained-verify-v1")
+    dest = tempfile.mkdtemp(prefix="easysynq-retained-pass-")
+    await _insert_backup_policy(org_id, dest)
+
+    # Write a durable archive to the policy destination (a .tar.enc in CI — the key is set).
+    out = await backup_service.run_scheduled_backups()
+    assert out["backups"] and "error" not in out["backups"][0], out
+
+    before = await _count_retained_verify_audits(org_id, EventType.RESTORE_TEST_PASSED)
+    result = await backup_service.verify_latest_retained_backup(org_id)
+    assert result["result"] == "PASS", result
+    assert result["details"]["archive"].startswith("easysynq-backup-"), result
+
+    async with get_sessionmaker()() as s:
+        policy = await s.scalar(select(BackupPolicy).where(BackupPolicy.org_id == org_id))
+        assert policy is not None and policy.last_restore_test_result == "PASS"
+        assert policy.last_restore_test_at is not None
+    after = await _count_retained_verify_audits(org_id, EventType.RESTORE_TEST_PASSED)
+    assert after == before + 1, (before, after)
+
+
+async def test_verify_retained_backup_fails_on_corrupted_blob(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """[I-7 negative] A manifested blob corrupted since the backup → the blob re-hash leg FAILs (the
+    genuine 'this retained backup is no longer fully restorable' signal). Driven via the
+    after_restore injector over the verify's scratch copy (mirrors
+    test_drill_fails_on_corrupted_restored_blob)."""
+    org_id = await _org_id()
+    await _make_effective_doc(app_client, token_factory, b"effective-source-for-retained-verify-v2")
+    dest = tempfile.mkdtemp(prefix="easysynq-retained-fail-")
+    await _insert_backup_policy(org_id, dest)
+    await backup_service.run_scheduled_backups()
+    client = _s3_client()
+
+    def _corrupt_one_blob(handle: backup_service.ScratchHandle) -> None:
+        listing = client.list_objects_v2(  # type: ignore[attr-defined]
+            Bucket=handle.scratch_bucket, Prefix=handle.object_prefix
+        )
+        objs = listing.get("Contents", [])
+        assert objs, "expected ≥1 restored scratch blob to corrupt"
+        client.put_object(  # type: ignore[attr-defined]
+            Bucket=handle.scratch_bucket, Key=objs[0]["Key"], Body=b"corrupted-not-the-real-bytes"
+        )
+
+    result = await backup_service.verify_latest_retained_backup(
+        org_id, after_restore=_corrupt_one_blob
+    )
+    assert result["result"] == "FAIL", result
+    assert "re-hash" in result["reason"] or "SHA-256" in result["reason"], result
+    async with get_sessionmaker()() as s:
+        policy = await s.scalar(select(BackupPolicy).where(BackupPolicy.org_id == org_id))
+        assert policy is not None and policy.last_restore_test_result == "FAIL"
+
+
+async def test_verify_retained_backup_skips_when_no_archive(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """[I-7 SKIP] A fresh install whose nightly hasn't run yet (an empty destination) → SKIPPED, NOT
+    a FAIL, and nothing is persisted/audited — it must not flap red."""
+    org_id = await _org_id()
+    empty_dest = tempfile.mkdtemp(prefix="easysynq-retained-empty-")
+    await _insert_backup_policy(org_id, empty_dest)
+
+    async with get_sessionmaker()() as s:
+        policy = await s.scalar(select(BackupPolicy).where(BackupPolicy.org_id == org_id))
+        assert policy is not None
+        before_at, before_result = policy.last_restore_test_at, policy.last_restore_test_result
+
+    result = await backup_service.verify_latest_retained_backup(org_id)
+    assert result["result"] == "SKIPPED", result
+    assert "no retained backup archive" in result["reason"], result
+
+    async with get_sessionmaker()() as s:
+        policy = await s.scalar(select(BackupPolicy).where(BackupPolicy.org_id == org_id))
+        assert policy is not None
+        assert policy.last_restore_test_at == before_at  # unchanged — SKIPPED persists nothing
+        assert policy.last_restore_test_result == before_result
+
+
+async def test_verify_retained_backup_decrypts_encrypted_archive(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """[I-7 encrypted round-trip] With BACKUP_ENCRYPTION_KEY set (the CI default), the retained
+    archive is a .tar.enc; the verify DECRYPTS it and PASSES — proving the encrypted STORED backups
+    (not just a plaintext drill archive) are restorable, the exact gap Codex P2 flagged. Robust to a
+    keyless run (then it asserts the plaintext .tar path instead)."""
+    org_id = await _org_id()
+    await _make_effective_doc(app_client, token_factory, b"effective-source-for-retained-verify-v3")
+    dest = tempfile.mkdtemp(prefix="easysynq-retained-enc-")
+    await _insert_backup_policy(org_id, dest)
+    out = await backup_service.run_scheduled_backups()
+    entry = out["backups"][0]
+    assert "error" not in entry, entry
+
+    result = await backup_service.verify_latest_retained_backup(org_id)
+    assert result["result"] == "PASS", result
+    verified_name = result["details"]["archive"]
+    if entry["encrypted"]:  # CI sets the key → the durable archive is AES-256-GCM .tar.enc
+        assert verified_name.endswith(".tar.enc"), (verified_name, entry)
+        assert any(f.endswith(".tar.enc") for f in os.listdir(dest)), os.listdir(dest)
+    else:  # keyless fallback (not the CI default) → plaintext .tar
+        assert verified_name.endswith(".tar"), (verified_name, entry)
+
+
+async def test_verify_retained_backup_tears_down_scratch(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """[I-7 teardown] A verify is never a standing target — after a PASS, its DEDICATED
+    verify_easysynq_* scratch DB is dropped and its scratch-bucket prefix is emptied (mirrors
+    test_drill_tears_down_scratch_namespace, scoped to the verify namespace it actually created
+    so it is immune to other tests' scratch on the shared bucket)."""
+    import psycopg
+
+    from easysynq_api.services.backup.dsn import conn_kwargs
+
+    org_id = await _org_id()
+    await _make_effective_doc(app_client, token_factory, b"effective-source-for-retained-verify-v4")
+    dest = tempfile.mkdtemp(prefix="easysynq-retained-teardown-")
+    await _insert_backup_policy(org_id, dest)
+    await backup_service.run_scheduled_backups()
+
+    captured: dict[str, str] = {}
+
+    def _capture(handle: backup_service.ScratchHandle) -> None:
+        captured["db"] = handle.scratch_db
+        captured["bucket"] = handle.scratch_bucket
+        captured["prefix"] = handle.object_prefix
+
+    result = await backup_service.verify_latest_retained_backup(org_id, after_restore=_capture)
+    assert result["result"] == "PASS", result
+    assert captured["db"].startswith("verify_easysynq_"), captured
+
+    settings = get_settings()
+    with (
+        psycopg.connect(**conn_kwargs(settings.sync_dsn), autocommit=True) as conn,
+        conn.cursor() as cur,
+    ):
+        cur.execute("SELECT count(*) FROM pg_database WHERE datname = %s", (captured["db"],))
+        row = cur.fetchone()
+        assert row is not None and row[0] == 0, captured["db"]  # the verify scratch DB is gone
+
+    client = _s3_client()
+    listing = client.list_objects_v2(  # type: ignore[attr-defined]
+        Bucket=captured["bucket"], Prefix=captured["prefix"]
+    )
+    assert listing.get("KeyCount", 0) == 0, listing.get("Contents")
