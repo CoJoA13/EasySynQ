@@ -47,20 +47,10 @@ _MAX_MEMBER_BYTES = 8 * 1024 * 1024
 _MAX_TEXT_SCAN_BYTES = 4 * 1024 * 1024
 
 # ── MIME groupings ────────────────────────────────────────────────────────────────────────
-_OOXML_MIMES = frozenset(
-    {
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-    }
-)
-_ODF_MIMES = frozenset(
-    {
-        "application/vnd.oasis.opendocument.text",
-        "application/vnd.oasis.opendocument.spreadsheet",
-        "application/vnd.oasis.opendocument.presentation",
-    }
-)
+# Only RTF and legacy-OLE are routed by mime; OOXML/ODF are detected by CONTAINER CONTENT (a zip
+# member fingerprint) so every present-and-future Office variant the render path sends to
+# LibreOffice (the .dotx/.xltx/.potx/.ppsx + .ott/.ots/.otp/.odg family — not in any fixed mime
+# allowlist) is inspected, never bypassed. See ``scan_linked_resources``.
 _RTF_MIMES = frozenset({"application/rtf", "text/rtf"})
 _LEGACY_OLE_MIMES = frozenset(
     {
@@ -83,11 +73,13 @@ _ODF_TEXT_NS = "urn:oasis:names:tc:opendocument:xmlns:text:1.0"
 _ODF_DRAW_NS = "urn:oasis:names:tc:opendocument:xmlns:drawing:1.0"
 _ODF_HYPERLINK_TAGS = frozenset({f"{{{_ODF_TEXT_NS}}}a", f"{{{_ODF_DRAW_NS}}}a"})
 
-# A scheme/path is "external" (LibreOffice 8.34 will NOT render it) when it is an absolute URL,
-# a file:// URL, a POSIX-absolute path, a Windows drive path (``X:\`` / ``X:/``), or a UNC path
-# (``\\host\share``). Everything else (``Pictures/img.png``, ``media/image1.png``, ``./x``,
-# ``../x``) is a relative / embedded reference → safe → ignored.
-_URL_SCHEME_RE = re.compile(r"^(?:https?|file)://", re.IGNORECASE)
+# A scheme/path is "external" (LibreOffice 8.34 will NOT render it) when it carries ANY URI scheme
+# (``http(s)://``, ``file://``, ``ftp://``, ``smb://``, ``webdav://``, …), a POSIX-absolute path, a
+# Windows drive path (``X:\`` / ``X:/``), or a UNC path (``\\host\share``). Everything else
+# (``Pictures/img.png``, ``media/image1.png``, ``./x``, ``../x``) is a relative / embedded
+# reference → safe → ignored. The scheme grammar is RFC-3986 (``ALPHA *( ALPHA / DIGIT / "+" /
+# "-" / "." )`` then ``://``) — anchored + bounded, ReDoS-safe.
+_URL_SCHEME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.\-]*://")
 _WIN_DRIVE_RE = re.compile(r"^[A-Za-z]:[\\/]")
 
 
@@ -128,17 +120,37 @@ def scan_linked_resources(mime_type: str, source_bytes: bytes) -> LinkScan:
     source-only), else ``LinkScan(False)``. Pure + fail-open: any parse error returns
     ``LinkScan(False)``.
 
-    A mime this scanner does not understand (txt, csv, html, pdf, already-non-renderable, unknown)
-    returns ``LinkScan(False)`` — only the formats LibreOffice rewrites are inspected."""
+    Routing is by mime for the two non-zip families (RTF, legacy OLE2) and by **container content**
+    for the zip families (OOXML, ODF). A fixed OOXML/ODF mime allowlist would miss the variants the
+    render path *does* convert (``.dotx/.xltx/.potx/.ppsx`` + ``.ott/.ots/.otp/.odg`` — routed via
+    :data:`render_gotenberg._OFFICE_EXT` + ``mimetypes.guess_extension``), so those zip bytes are
+    fingerprinted directly: ``[Content_Types].xml`` or any ``*.rels`` member → OOXML; else a
+    ``content.xml`` member → ODF. Non-zip / unrecognised bytes → ``LinkScan(False)``. (Truly
+    non-renderable mimes never reach the scanner — the render sink short-circuits them first — so a
+    *renderable* zip handed here is an Office package.)"""
     base = mime_type.split(";")[0].strip().lower() if mime_type else ""
-    if base in _OOXML_MIMES:
-        return _scan_ooxml(source_bytes)
-    if base in _ODF_MIMES:
-        return _scan_odf(source_bytes)
     if base in _RTF_MIMES:
         return _scan_rtf(source_bytes)
     if base in _LEGACY_OLE_MIMES:
         return _scan_legacy_ole(source_bytes)
+    if zipfile.is_zipfile(io.BytesIO(source_bytes)):
+        return _scan_zip_container(source_bytes)
+    return LinkScan(False)
+
+
+def _scan_zip_container(source_bytes: bytes) -> LinkScan:
+    """Fingerprint a renderable zip by member layout → OOXML or ODF scan (else fail-open False)."""
+    try:
+        with zipfile.ZipFile(io.BytesIO(source_bytes)) as zf:
+            names = zf.namelist()
+            lower = [n.lower() for n in names]
+            is_ooxml = "[content_types].xml" in lower or any(n.endswith(".rels") for n in lower)
+            if is_ooxml:
+                return _scan_ooxml(zf, names)
+            if "content.xml" in lower:
+                return _scan_odf(zf)
+    except Exception:  # noqa: BLE001 — not a real/usable zip → fail-open
+        return LinkScan(False)
     return LinkScan(False)
 
 
@@ -189,46 +201,108 @@ def _read_member(zf: zipfile.ZipFile, name: str) -> bytes | None:
     return data
 
 
-# ── OOXML (.docx / .xlsx / .pptx) ────────────────────────────────────────────────────────────
+# ── Shared field-code link detector (OOXML field instructions + RTF \fldinst) ─────────────────
+
+# A *linked* (not embedded, not hyperlink) field instruction. Both WordprocessingML
+# (``<w:instrText>INCLUDEPICTURE "…"</w:instrText>`` / ``<w:fldSimple w:instr="…">``) and RTF
+# (``{\*\fldinst INCLUDEPICTURE …}``) name the same field keywords:
+#   • INCLUDEPICTURE / INCLUDETEXT — inherently file-linking field instructions: their target may
+#     be a URL, a UNC path, ``C:\x.png`` or ``/x.png`` — ALL dropped by 8.34. Flag on the keyword,
+#     independent of the target form (closes the relative/local-absolute false-negative).
+#   • LINK — the DDE/OLE-link field. Matched only by callers that already know they are inside a
+#     field context (RTF anchors it to ``\fldinst``; OOXML members ARE field XML). The whole-word
+#     ``\bLINK\b`` deliberately does NOT match inside ``HYPERLINK``: ``R`` and ``L`` are both word
+#     chars, so there is no ``\b`` between them (verified by the ``HYPERLINK``-not-flagged tests).
+# Each keyword is bracketed by ``\b`` word boundaries — matches ``>INCLUDEPICTURE`` (tag-tight) and
+# `` INCLUDEPICTURE `` (space-delimited) alike; no quantifier → ReDoS-trivial.
+_FIELD_KEYWORD_RE = re.compile(r"\b(?:INCLUDEPICTURE|INCLUDETEXT|LINK)\b")
+# Linked-OLE-object control words (RTF) — a present marker is a linked (not embedded) object.
+_OLE_LINK_CW_RE = re.compile(r"\\obj(?:autlink|link)\b", re.IGNORECASE)
 
 
-def _scan_ooxml(source_bytes: bytes) -> LinkScan:
-    """Inspect every ``*.rels`` part for a ``<Relationship TargetMode="External" Target="...">``
-    whose target is an external scheme/path. Embedded media is ``TargetMode="Internal"`` (or absent)
-    with a relative target → ignored."""
-    try:
-        with zipfile.ZipFile(io.BytesIO(source_bytes)) as zf:
-            rels = [n for n in zf.namelist() if n.lower().endswith(".rels")]
-            count = 0
-            for name in rels:
-                data = _read_member(zf, name)
-                if data is None:
+def _has_linked_field(text: str) -> bool:
+    """True if ``text`` (a field-context string — an OOXML field member or an RTF \\fldinst window)
+    contains a linked field keyword. Pure regex, bounded input, ReDoS-safe."""
+    return _FIELD_KEYWORD_RE.search(text) is not None
+
+
+# Content members whose field instructions can carry a linked INCLUDE*/LINK (WordprocessingML body,
+# headers/footers; PresentationML slides; SpreadsheetML cells). Matched case-insensitively by suffix
+# /prefix so future part names in the same families are covered.
+def _is_ooxml_field_member(name_lower: str) -> bool:
+    if not name_lower.endswith(".xml"):
+        return False
+    if name_lower.endswith("/document.xml") or name_lower == "word/document.xml":
+        return True
+    # word/header1.xml, word/footer2.xml, …
+    base = name_lower.rsplit("/", 1)[-1]
+    if base.startswith("header") or base.startswith("footer"):
+        return True
+    # ppt/slides/slide1.xml, ppt/slideLayouts/…, ppt/notesSlides/…
+    if "/slides/" in name_lower or "/slidelayouts/" in name_lower or "/notesslides/" in name_lower:
+        return True
+    # xl/worksheets/sheet1.xml (cell field instructions are rare but possible)
+    if "/worksheets/" in name_lower:
+        return True
+    return False
+
+
+# ── OOXML (.docx / .xlsx / .pptx + .dotx/.xltx/.potx/.ppsx variants) ───────────────────────────
+
+
+def _scan_ooxml(zf: zipfile.ZipFile, names: list[str]) -> LinkScan:
+    """Inspect every ``*.rels`` part for a non-hyperlink ``<Relationship TargetMode="External">``
+    (External mode alone is the signal — the resource is OUTSIDE the package, even with a relative
+    ``Target``), AND scan the WordprocessingML/PresentationML/SpreadsheetML content members for a
+    linked field instruction (INCLUDEPICTURE/INCLUDETEXT/LINK) that has no ``.rels`` entry."""
+    rel_count = 0
+    field_hit = False
+    for name in names:
+        nl = name.lower()
+        if nl.endswith(".rels"):
+            data = _read_member(zf, name)
+            if data is None:
+                continue
+            root = _parse_xml(data)
+            if root is None:
+                continue
+            for rel in root.iter():  # type: ignore[attr-defined]
+                tag = rel.tag
+                if not (tag == "Relationship" or tag == f"{{{_OOXML_RELS_NS}}}Relationship"):
                     continue
-                root = _parse_xml(data)
-                if root is None:
+                # ``TargetMode="External"`` already means the target lives OUTSIDE the package — a
+                # linked image can have a RELATIVE ``Target`` (``../logos/logo.png``); 8.34 drops it
+                # all the same. So External mode is the signal; we do NOT additionally require an
+                # absolute/scheme target here.
+                if (rel.get("TargetMode") or "").strip().lower() != "external":
                     continue
-                for rel in root.iter():  # type: ignore[attr-defined]
-                    tag = rel.tag
-                    if not (tag == "Relationship" or tag == f"{{{_OOXML_RELS_NS}}}Relationship"):
-                        continue
-                    if (rel.get("TargetMode") or "").strip().lower() != "external":
-                        continue
-                    # A text hyperlink (Type ``.../hyperlink``) is a clickable annotation, NOT a
-                    # fetched-and-embedded resource — 8.34 still renders it fine, so it is not the
-                    # hazard. Hyperlinks are ubiquitous; flagging them would source-only nearly
-                    # every real document and defeat controlled-copy rendering. Exclude them; all
-                    # else External (image / oleObject / audio / video / data) is a genuine dropped
-                    # resource and IS flagged.
-                    if (rel.get("Type") or "").strip().lower().endswith("/hyperlink"):
-                        continue
-                    if _is_external_target(rel.get("Target") or ""):
-                        count += 1
-    except Exception:  # noqa: BLE001 — not a real zip / corrupt → fail-open
-        return LinkScan(False)
-    if count:
+                # A text hyperlink (Type ``.../hyperlink``) is a clickable annotation, NOT a
+                # fetched-and-embedded resource — 8.34 still renders it fine, so it is not the
+                # hazard. Hyperlinks are ubiquitous; flagging them would source-only nearly every
+                # real document and defeat controlled-copy rendering. Exclude them; all else
+                # External (image / oleObject / audio / video / data) is a genuine dropped resource
+                # and IS flagged.
+                if (rel.get("Type") or "").strip().lower().endswith("/hyperlink"):
+                    continue
+                rel_count += 1
+        elif not field_hit and _is_ooxml_field_member(nl):
+            data = _read_member(zf, name)
+            if data is None:
+                continue
+            # ``errors="ignore"`` never raises; field keywords are ASCII so a mojibake tail can't
+            # hide or fabricate one. Field XML is UTF-8 by the OOXML spec.
+            if _has_linked_field(data.decode("utf-8", errors="ignore")):
+                field_hit = True
+    if rel_count:
         return LinkScan(
             True,
-            f"{count} external relationship target(s) — LibreOffice 8.34 omits these",
+            f"{rel_count} external relationship target(s) — LibreOffice 8.34 omits these",
+        )
+    if field_hit:
+        return LinkScan(
+            True,
+            "linked field instruction (INCLUDEPICTURE/INCLUDETEXT/LINK) — "
+            "LibreOffice 8.34 omits these",
         )
     return LinkScan(False)
 
@@ -236,28 +310,24 @@ def _scan_ooxml(source_bytes: bytes) -> LinkScan:
 # ── ODF (.odt / .ods / .odp) ──────────────────────────────────────────────────────────────────
 
 
-def _scan_odf(source_bytes: bytes) -> LinkScan:
+def _scan_odf(zf: zipfile.ZipFile) -> LinkScan:
     """Inspect ``content.xml`` + ``styles.xml`` for any ``xlink:href`` whose value is an external
     scheme/path. A relative ``Pictures/...`` href is embedded → ignored."""
     href_attr = f"{{{_XLINK_NS}}}href"
-    try:
-        with zipfile.ZipFile(io.BytesIO(source_bytes)) as zf:
-            count = 0
-            for member in ("content.xml", "styles.xml"):
-                data = _read_member(zf, member)
-                if data is None:
-                    continue
-                root = _parse_xml(data)
-                if root is None:
-                    continue
-                for el in root.iter():  # type: ignore[attr-defined]
-                    if el.tag in _ODF_HYPERLINK_TAGS:  # a hyperlink anchor renders fine → skip
-                        continue
-                    href = el.get(href_attr)
-                    if href is not None and _is_external_target(href):
-                        count += 1
-    except Exception:  # noqa: BLE001 — not a real zip / corrupt → fail-open
-        return LinkScan(False)
+    count = 0
+    for member in ("content.xml", "styles.xml"):
+        data = _read_member(zf, member)
+        if data is None:
+            continue
+        root = _parse_xml(data)
+        if root is None:
+            continue
+        for el in root.iter():  # type: ignore[attr-defined]
+            if el.tag in _ODF_HYPERLINK_TAGS:  # a hyperlink anchor renders fine → skip
+                continue
+            href = el.get(href_attr)
+            if href is not None and _is_external_target(href):
+                count += 1
     if count:
         return LinkScan(
             True,
@@ -268,29 +338,26 @@ def _scan_odf(source_bytes: bytes) -> LinkScan:
 
 # ── RTF ────────────────────────────────────────────────────────────────────────────────────
 
-# Linked field instructions / link control words, each followed (within a bounded window) by an
-# external target. The gap is a SINGLE bounded lazy quantifier over any char (``[\s\S]{0,512}?``) —
-# not nested, so there is no catastrophic backtracking; bounded to 512 chars (an RTF field's target
-# sits right after the instruction). It must allow the quotes/braces an RTF field wraps its target
-# in (``INCLUDEPICTURE "http://..."``). INCLUDEPICTURE/INCLUDETEXT/LINK are field instructions;
-# ``\objautlink``/``\objlink`` are linked-OLE-object control words. The UNC alternative is four
-# regex-backslashes → matches the two literal backslashes of ``\\host``.
-_RTF_LINKED_RE = re.compile(
-    r"(?:INCLUDEPICTURE|INCLUDETEXT|\bLINK\b|\\objautlink|\\objlink)[\s\S]{0,512}?"
-    r"(?:https?://|file://|\\\\)",
+# A linked RTF field is detected by the field KEYWORD inside a field context, independent of the
+# target form (the target may be ``C:\x.png``, ``/x.png``, ``\\unc\x``, or ``http://…`` — ALL
+# dropped by 8.34). INCLUDEPICTURE/INCLUDETEXT are inherently file-linking instructions (flag on the
+# keyword). ``LINK`` matches ONLY when it follows a ``\fldinst`` field-instruction marker within a
+# bounded window — so body prose ("click this link http://…") never matches. The gap is a SINGLE
+# bounded lazy quantifier (``[\s\S]{0,256}?``) — non-nested, so no catastrophic backtracking. The
+# leading word boundary on each keyword means ``\fldinst`` then "HYPERLINK" does NOT match ``LINK``.
+_RTF_FLDINST_LINK_RE = re.compile(
+    r"\\fldinst[\s\S]{0,256}?\b(?:INCLUDEPICTURE|INCLUDETEXT|LINK)\b",
     re.IGNORECASE,
 )
 
 
 def _scan_rtf(source_bytes: bytes) -> LinkScan:
     """RTF is text; decode latin-1 (every byte maps, never raises) over a capped prefix and look for
-    a linked field instruction / control word followed by an external target. ReDoS-safe (bounded,
-    non-nested)."""
-    try:
-        text = source_bytes[:_MAX_TEXT_SCAN_BYTES].decode("latin-1", errors="ignore")
-    except Exception:  # noqa: BLE001 — defensive; latin-1 decode does not raise
-        return LinkScan(False)
-    if _RTF_LINKED_RE.search(text):
+    a linked field instruction or a linked-OLE control word. The keyword (not the target form) is
+    the signal, anchored to a ``\\fldinst`` field context so body prose with a URL never matches.
+    ReDoS-safe (bounded, non-nested)."""
+    text = source_bytes[:_MAX_TEXT_SCAN_BYTES].decode("latin-1", errors="ignore")
+    if _RTF_FLDINST_LINK_RE.search(text) or _OLE_LINK_CW_RE.search(text):
         return LinkScan(
             True,
             "linked RTF field/object target — LibreOffice 8.34 omits these",

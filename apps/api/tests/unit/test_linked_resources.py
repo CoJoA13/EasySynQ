@@ -20,6 +20,10 @@ _XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 _ODT = "application/vnd.oasis.opendocument.text"
 _RTF = "application/rtf"
 _DOC = "application/msword"
+# Variant mimes deliberately ABSENT from any fixed allowlist — routing is by container content, so
+# these must still be scanned (P1-c / P1-d).
+_DOTX = "application/vnd.openxmlformats-officedocument.wordprocessingml.template"
+_ODG = "application/vnd.oasis.opendocument.graphics"
 
 
 def _zip(members: dict[str, bytes]) -> bytes:
@@ -79,11 +83,13 @@ def test_ooxml_internal_relationship_is_not_flagged() -> None:
     assert scan_linked_resources(_DOCX, blob) == LinkScan(False)
 
 
-def test_ooxml_external_mode_but_relative_target_is_not_flagged() -> None:
-    """TargetMode=External with a RELATIVE target (no scheme/absolute) → False (not a real link)."""
-    rels = _rels('<Relationship Id="rId1" Target="media/image1.png" TargetMode="External"/>')
+def test_ooxml_external_mode_relative_target_is_flagged() -> None:
+    """TargetMode=External with a RELATIVE target (e.g. a linked image ``../logos/logo.png``) IS
+    flagged: External mode already means the resource lives OUTSIDE the package, so 8.34 drops it
+    regardless of target form (P1-a). Only the target form differs from a scheme/UNC link."""
+    rels = _rels('<Relationship Id="rId1" Target="../logos/logo.png" TargetMode="External"/>')
     blob = _zip({"word/_rels/document.xml.rels": rels})
-    assert scan_linked_resources(_DOCX, blob).has_external_links is False
+    assert scan_linked_resources(_DOCX, blob).has_external_links is True
 
 
 def test_xlsx_external_link_is_flagged() -> None:
@@ -91,6 +97,15 @@ def test_xlsx_external_link_is_flagged() -> None:
     rels = _rels('<Relationship Id="rId1" Target="https://x/y.xlsx" TargetMode="External"/>')
     blob = _zip({"xl/externalLinks/_rels/externalLink1.xml.rels": rels})
     assert scan_linked_resources(_XLSX, blob).has_external_links is True
+
+
+def test_ooxml_ftp_scheme_external_rel_is_flagged() -> None:
+    """An ftp:// (non-http/file) external rel is flagged — External mode is the signal, and the
+    generic URI-scheme rule (P2-c) means even the ODF xlink path treats ftp/smb/webdav as
+    external."""
+    rels = _rels('<Relationship Id="rId1" Target="ftp://server/logo.png" TargetMode="External"/>')
+    blob = _zip({"word/document.xml": b"<x/>", "word/_rels/document.xml.rels": rels})
+    assert scan_linked_resources(_DOCX, blob).has_external_links is True
 
 
 def test_ooxml_external_hyperlink_is_not_flagged() -> None:
@@ -104,6 +119,62 @@ def test_ooxml_external_hyperlink_is_not_flagged() -> None:
     )
     blob = _zip({"word/document.xml": b"<x/>", "word/_rels/document.xml.rels": rels})
     assert scan_linked_resources(_DOCX, blob) == LinkScan(False)
+
+
+def test_ooxml_includepicture_field_without_rels_is_flagged() -> None:
+    """A WordprocessingML INCLUDEPICTURE field instruction lives in the document part with NO
+    external .rels entry — it must still be flagged by scanning the content member (P1-b)."""
+    doc = (
+        b'<?xml version="1.0"?>'
+        b'<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        b'<w:body><w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r>'
+        b'<w:r><w:instrText>INCLUDEPICTURE "https://x/i.png" \\* MERGEFORMAT</w:instrText></w:r>'
+        b'<w:r><w:fldChar w:fldCharType="end"/></w:r></w:p></w:body></w:document>'
+    )
+    # A minimal .rels with NO external relationship (so the rels path contributes nothing).
+    rels = _rels(
+        '<Relationship Id="rId1" '
+        'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" '
+        'Target="styles.xml"/>'
+    )
+    blob = _zip({"word/document.xml": doc, "word/_rels/document.xml.rels": rels})
+    scan = scan_linked_resources(_DOCX, blob)
+    assert scan.has_external_links is True
+    assert scan.reason is not None and "field" in scan.reason
+
+
+def test_ooxml_fldsimple_includetext_field_is_flagged() -> None:
+    r"""A ``<w:fldSimple w:instr="INCLUDETEXT ...">`` (the compact field form) is flagged too."""
+    doc = (
+        b'<?xml version="1.0"?>'
+        b'<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        b"<w:body><w:p>"
+        b'<w:fldSimple w:instr=" INCLUDETEXT &quot;C:\\share\\boilerplate.docx&quot; ">'
+        b"</w:fldSimple></w:p></w:body></w:document>"
+    )
+    blob = _zip({"word/document.xml": doc, "[Content_Types].xml": b"<Types/>"})
+    assert scan_linked_resources(_DOCX, blob).has_external_links is True
+
+
+def test_ooxml_hyperlink_field_is_not_flagged() -> None:
+    """A HYPERLINK field instruction is a clickable link (8.34 renders it) — NOT flagged. ``LINK``
+    is a substring of ``HYPERLINK`` but the whole-word boundary prevents a false match (P1-b)."""
+    doc = (
+        b'<?xml version="1.0"?>'
+        b'<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        b'<w:body><w:p><w:r><w:instrText>HYPERLINK "https://example.com/page"</w:instrText></w:r>'
+        b"</w:p></w:body></w:document>"
+    )
+    blob = _zip({"word/document.xml": doc, "[Content_Types].xml": b"<Types/>"})
+    assert scan_linked_resources(_DOCX, blob) == LinkScan(False)
+
+
+def test_ooxml_variant_mime_external_rel_is_flagged_by_container() -> None:
+    """A .dotx template carries a variant mime ABSENT from any fixed allowlist; routing by container
+    content (a present ``.rels`` member) still scans it, so its external rel is flagged (P1-c)."""
+    rels = _rels('<Relationship Id="rId1" Target="https://x/logo.png" TargetMode="External"/>')
+    blob = _zip({"word/document.xml": b"<x/>", "word/_rels/document.xml.rels": rels})
+    assert scan_linked_resources(_DOTX, blob).has_external_links is True
 
 
 # --- ODF ----------------------------------------------------------------------------------
@@ -177,6 +248,30 @@ def test_odf_text_hyperlink_is_not_flagged() -> None:
     assert scan_linked_resources(_ODT, blob) == LinkScan(False)
 
 
+def test_odf_variant_mime_external_draw_image_is_flagged_by_container() -> None:
+    """An .odg drawing carries a variant ODF mime absent from any fixed allowlist; container
+    content routing (a present ``content.xml``, no .rels) still scans its external draw:image
+    href (P1-d)."""
+    blob = _zip(
+        {
+            "content.xml": _odf_content("http://example.com/diagram.png"),
+            "styles.xml": b"<x/>",
+        }
+    )
+    assert scan_linked_resources(_ODG, blob).has_external_links is True
+
+
+def test_odf_smb_scheme_href_is_flagged() -> None:
+    """A non-http(s)/file URI scheme (smb://) is external too (P2-c) → flagged."""
+    blob = _zip(
+        {
+            "content.xml": _odf_content("smb://server/share/x.png"),
+            "styles.xml": b"<x/>",
+        }
+    )
+    assert scan_linked_resources(_ODT, blob).has_external_links is True
+
+
 # --- RTF ----------------------------------------------------------------------------------
 
 
@@ -192,6 +287,26 @@ def test_rtf_objlink_unc_is_flagged() -> None:
     r"""A linked OLE object (\objlink) with a UNC target → True."""
     body = rb"{\rtf1{\object\objlink{\*\objclass Word.Document.12}\\\\server\\share\\x.doc}}"
     assert scan_linked_resources(_RTF, body).has_external_links is True
+
+
+def test_rtf_includepicture_windows_drive_target_is_flagged() -> None:
+    r"""INCLUDEPICTURE with a Windows-drive LOCAL target (C:\logos\x.png) is flagged — the keyword
+    (not the target form) is the signal; 8.34 drops a local-absolute linked picture too (P2-a)."""
+    body = rb'{\rtf1{\field{\*\fldinst INCLUDEPICTURE "C:\\logos\\x.png" \\d}}}'
+    assert scan_linked_resources(_RTF, body).has_external_links is True
+
+
+def test_rtf_includepicture_posix_target_is_flagged() -> None:
+    r"""INCLUDEPICTURE with a POSIX-absolute LOCAL target (/srv/x.png) is flagged too (P2-a)."""
+    body = rb'{\rtf1{\field{\*\fldinst INCLUDEPICTURE "/srv/x.png" \\d}}}'
+    assert scan_linked_resources(_RTF, body).has_external_links is True
+
+
+def test_rtf_body_prose_link_without_fldinst_is_not_flagged() -> None:
+    r"""Body prose containing the word "link" and a URL, with NO \fldinst field context, is NOT
+    flagged (P2-b) — LINK only matches inside an RTF field instruction."""
+    body = rb"{\rtf1\ansi\deff0 Please click this link http://example.com to continue.\par}"
+    assert scan_linked_resources(_RTF, body) == LinkScan(False)
 
 
 def test_rtf_plain_body_is_not_flagged() -> None:
