@@ -1,7 +1,7 @@
 import { StatusBadge } from "../../lib/StatusBadge";
 import type { Tone } from "../../lib/status";
 import type { AuditState, FindingType, NcSeverity } from "../../lib/types";
-import { SEVERITY_LABEL } from "../capa/columns";
+import { SEVERITY_LABEL, SEVERITY_TONE } from "../capa/columns";
 import { AUDIT_STATE_LABEL } from "./labels";
 
 // Audit lifecycle state → canonical tone (FSM: Scheduled → Planned → InProgress → FindingsDraft →
@@ -24,15 +24,10 @@ export function AuditStateBadge({ state }: { state: AuditState }) {
   );
 }
 
-// Finding severity → canonical tone. Faithful to the prior hues AND consistent with CAPA's
-// SeverityBadge (one severity convention app-wide): Critical → danger (red), Major → warning (amber),
-// Minor → neutral (gray). An NC with no recorded severity still reads as danger (the prior bare-NC red).
-const SEVERITY_TONE: Record<NcSeverity, Tone> = {
-  Critical: "danger",
-  Major: "warning",
-  Minor: "neutral",
-};
-
+// Finding severity → canonical tone is the ONE app-wide severity convention — reused from
+// capa/columns.SEVERITY_TONE (Critical → danger, Major → warning, Minor → neutral) rather than
+// re-declared here, so the two surfaces can never drift. An NC with no recorded severity still
+// reads as danger (the prior bare-NC red).
 export function FindingTypeBadge({
   type,
   severity,
