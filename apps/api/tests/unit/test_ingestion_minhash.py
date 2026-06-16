@@ -70,9 +70,11 @@ def test_connected_components_drops_singletons() -> None:
 
 
 def test_near_dup_threshold_mirrors_settings_default() -> None:
-    # The pure-domain §7.1 default and the runtime Settings knob must stay in sync. config.py cannot
+    # The pure-domain §7.1 default and the Settings field DEFAULT must stay in sync. config.py can't
     # import the domain module (wrong-direction dependency), so this guard pins them; if either the
-    # minhash constant or settings.import_near_dup_threshold is changed, the other must follow.
+    # minhash constant or the import_near_dup_threshold default is changed, the other must follow.
+    # Compare the DECLARED field default, NOT ``Settings()`` — an instance reads an env/.env
+    # override (IMPORT_NEAR_DUP_THRESHOLD) and would fail while the default still matches.
     from easysynq_api.config import Settings
 
-    assert Settings().import_near_dup_threshold == mh.NEAR_DUP_THRESHOLD
+    assert Settings.model_fields["import_near_dup_threshold"].default == mh.NEAR_DUP_THRESHOLD

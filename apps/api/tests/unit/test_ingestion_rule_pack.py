@@ -153,10 +153,16 @@ def test_scoring_partial_override_keeps_other_defaults(tmp_path: Path) -> None:
     assert s.medium_threshold == 60  # an untouched key keeps its default
 
 
-def test_scoring_rejects_medium_above_high(tmp_path: Path) -> None:
-    body = "version: t\nscoring:\n  high_threshold: 50\n  medium_threshold: 70\n"
-    with pytest.raises(RulePackError, match="medium_threshold"):
-        load_rule_pack(_write(tmp_path, body))
+def test_scoring_rejects_medium_not_below_high(tmp_path: Path) -> None:
+    # medium > high, and also medium == high (band_of checks high first → MEDIUM unreachable)
+    with pytest.raises(RulePackError, match="medium_threshold must be <"):
+        load_rule_pack(
+            _write(tmp_path, "version: t\nscoring:\n  high_threshold: 50\n  medium_threshold: 70\n")
+        )
+    with pytest.raises(RulePackError, match="medium_threshold must be <"):
+        load_rule_pack(
+            _write(tmp_path, "version: t\nscoring:\n  high_threshold: 80\n  medium_threshold: 80\n")
+        )
 
 
 def test_scoring_rejects_non_positive(tmp_path: Path) -> None:
@@ -192,3 +198,11 @@ def test_scoring_rejects_unknown_key(tmp_path: Path) -> None:
 def test_scoring_rejects_non_mapping(tmp_path: Path) -> None:
     with pytest.raises(RulePackError, match="scoring must be a mapping"):
         load_rule_pack(_write(tmp_path, "version: t\nscoring: 85\n"))
+
+
+def test_rejects_misspelled_top_level_key(tmp_path: Path) -> None:
+    # a misspelled section (scorng:) must NOT silently fall back to defaults — it bypasses the inner
+    # unknown-key guard, so the loader rejects any unexpected top-level key.
+    body = "version: t\nscorng:\n  high_threshold: 90\n"
+    with pytest.raises(RulePackError, match="unknown top-level keys"):
+        load_rule_pack(_write(tmp_path, body))

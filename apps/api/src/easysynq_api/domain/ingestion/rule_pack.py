@@ -199,8 +199,9 @@ def _scoring(raw: Any) -> ScoringConfig:
 
     Every supplied knob must be a positive int; an unknown key is refused (a typo silently taking
     the default would be a quiet mis-calibration); the score-domain fields are bounded to ≤ 100 (a
-    cutoff above the score cap makes a band/kind unreachable); and ``medium_threshold`` may not
-    exceed ``high_threshold`` (else the MEDIUM band would be empty / inverted)."""
+    cutoff above the score cap makes a band/kind unreachable); and ``medium_threshold`` must be
+    strictly below ``high_threshold`` (``band_of`` checks the high cutoff first, so an equal pair
+    would leave the MEDIUM band empty)."""
     if raw is None:
         return ScoringConfig()
     if not isinstance(raw, dict):
@@ -223,9 +224,17 @@ def _scoring(raw: Any) -> ScoringConfig:
             raise RulePackError(
                 f"scoring.{fld} must be <= 100 (candidate scores are capped at 100)"
             )
-    if cfg.medium_threshold > cfg.high_threshold:
-        raise RulePackError("scoring.medium_threshold must be <= high_threshold")
+    if cfg.medium_threshold >= cfg.high_threshold:
+        raise RulePackError(
+            "scoring.medium_threshold must be < high_threshold "
+            "(band_of checks the high cutoff first, so an equal/greater medium leaves MEDIUM empty)"
+        )
     return cfg
+
+
+_TOP_LEVEL_KEYS = frozenset(
+    {"version", "kind_rules", "type_rules", "clause_rules", "process_rules", "scoring"}
+)
 
 
 def load_rule_pack(path: str | Path) -> RulePack:
@@ -233,6 +242,12 @@ def load_rule_pack(path: str | Path) -> RulePack:
     data = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
     if not isinstance(data, dict) or not data.get("version"):
         raise RulePackError("rule pack needs a top-level 'version'")
+    # A misspelled section (e.g. ``scorng:``) must NOT silently fall back to defaults — otherwise a
+    # calibrated override could run with default bands/weights, unflagged (the inner ``_scoring`` /
+    # ``_rules`` guards never see a key that was misspelled at the top level).
+    unknown = set(data) - _TOP_LEVEL_KEYS
+    if unknown:
+        raise RulePackError(f"unknown top-level keys: {sorted(unknown)}")
     return RulePack(
         version=str(data["version"]),
         kind_rules=_rules(data.get("kind_rules"), dimension="kind_rules"),
