@@ -5,18 +5,18 @@ description = "EasySynQ API — controlled-vault QMS (FastAPI / Python 3.12)"
 requires-python = ">=3.12,<3.13"
 dependencies = [
   "fastapi>=0.137.1",
-  "uvicorn[standard]>=0.30",
+  "uvicorn[standard]>=0.49.0",
   "gunicorn>=22",
   "pydantic>=2.8",
   "pydantic-settings>=2.4",
   "sqlalchemy[asyncio]>=2.0.30",
   "alembic>=1.13",
-  "psycopg[binary]>=3.2",
+  "psycopg[binary]>=3.3.4",
   "redis>=5.0",
-  "celery[redis]>=5.4",     # async worker + Beat scheduler (tasks land in S6)
+  "celery[redis]>=5.6.3",   # async worker + Beat scheduler (tasks land in S6)
   "boto3>=1.43.30",            # S3 API (D2/D4 swap-clean); supports object-lock/WORM
   "httpx>=0.27",            # Keycloak JWKS / readiness probes
-  "pyjwt[crypto]>=2.9",     # RS256 JWT validation against JWKS (later slices)
+  "pyjwt[crypto]>=2.13.0",  # RS256 JWT validation against JWKS (later slices)
   "rfc8785>=0.1.4",
   # Upper-bounded: stamp_controlled_copy's byte-determinism depends on reportlab invariant mode +
   # pypdf's trailer /ID handling; a major bump could perturb the bytes (breaking content-addressing).
