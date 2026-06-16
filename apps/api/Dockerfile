@@ -7,7 +7,7 @@
 # reads `FROM` lines, not `COPY --from=<image>` (dependabot-core#5103). Only the /uv binary is copied.
 FROM ghcr.io/astral-sh/uv:0.4 AS uv
 
-FROM python:3.12-slim-bookworm AS base
+FROM python:3.14-slim-bookworm AS base
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     EASYSYNQ_MIGRATIONS_DIR=/migrations
