@@ -75,6 +75,13 @@ _LEGACY_OLE_MIMES = frozenset(
 _OOXML_RELS_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
 # The XLink namespace ODF uses for ``xlink:href`` (images, OLE objects, linked sections).
 _XLINK_NS = "http://www.w3.org/1999/xlink"
+# ODF hyperlink anchors (``text:a`` / ``draw:a``) carry an ``xlink:href`` too, but a hyperlink is a
+# clickable annotation rendered fine by 8.34 — NOT a dropped resource. Exclude those tags so a
+# hyperlinked doc isn't mis-flagged; only linked MEDIA/OBJECTS (draw:image, draw:object, linked
+# text:section, …) are the hazard.
+_ODF_TEXT_NS = "urn:oasis:names:tc:opendocument:xmlns:text:1.0"
+_ODF_DRAW_NS = "urn:oasis:names:tc:opendocument:xmlns:drawing:1.0"
+_ODF_HYPERLINK_TAGS = frozenset({f"{{{_ODF_TEXT_NS}}}a", f"{{{_ODF_DRAW_NS}}}a"})
 
 # A scheme/path is "external" (LibreOffice 8.34 will NOT render it) when it is an absolute URL,
 # a file:// URL, a POSIX-absolute path, a Windows drive path (``X:\`` / ``X:/``), or a UNC path
@@ -206,6 +213,14 @@ def _scan_ooxml(source_bytes: bytes) -> LinkScan:
                         continue
                     if (rel.get("TargetMode") or "").strip().lower() != "external":
                         continue
+                    # A text hyperlink (Type ``.../hyperlink``) is a clickable annotation, NOT a
+                    # fetched-and-embedded resource — 8.34 still renders it fine, so it is not the
+                    # hazard. Hyperlinks are ubiquitous; flagging them would source-only nearly
+                    # every real document and defeat controlled-copy rendering. Exclude them; all
+                    # else External (image / oleObject / audio / video / data) is a genuine dropped
+                    # resource and IS flagged.
+                    if (rel.get("Type") or "").strip().lower().endswith("/hyperlink"):
+                        continue
                     if _is_external_target(rel.get("Target") or ""):
                         count += 1
     except Exception:  # noqa: BLE001 — not a real zip / corrupt → fail-open
@@ -236,6 +251,8 @@ def _scan_odf(source_bytes: bytes) -> LinkScan:
                 if root is None:
                     continue
                 for el in root.iter():  # type: ignore[attr-defined]
+                    if el.tag in _ODF_HYPERLINK_TAGS:  # a hyperlink anchor renders fine → skip
+                        continue
                     href = el.get(href_attr)
                     if href is not None and _is_external_target(href):
                         count += 1

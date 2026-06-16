@@ -93,6 +93,19 @@ def test_xlsx_external_link_is_flagged() -> None:
     assert scan_linked_resources(_XLSX, blob).has_external_links is True
 
 
+def test_ooxml_external_hyperlink_is_not_flagged() -> None:
+    """A web HYPERLINK (Type .../hyperlink, External, http target) renders fine on 8.34 — it is a
+    clickable annotation, not a dropped resource — so it must NOT downgrade the doc. Hyperlinks are
+    ubiquitous; flagging them would source-only nearly every real document."""
+    rels = _rels(
+        '<Relationship Id="rId1" '
+        'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" '
+        'Target="https://example.com/page" TargetMode="External"/>'
+    )
+    blob = _zip({"word/document.xml": b"<x/>", "word/_rels/document.xml.rels": rels})
+    assert scan_linked_resources(_DOCX, blob) == LinkScan(False)
+
+
 # --- ODF ----------------------------------------------------------------------------------
 
 
@@ -145,6 +158,23 @@ def test_odf_external_href_in_styles_is_flagged() -> None:
     )
     blob = _zip({"content.xml": _odf_content("Pictures/x.png"), "styles.xml": styles})
     assert scan_linked_resources(_ODT, blob).has_external_links is True
+
+
+def test_odf_text_hyperlink_is_not_flagged() -> None:
+    """A ``text:a`` hyperlink anchor with an external xlink:href is a clickable link, not a linked
+    resource — NOT flagged (only draw:image / draw:object / linked sections are the 8.34 hazard)."""
+    content = (
+        b'<?xml version="1.0" encoding="UTF-8"?>'
+        b"<office:document-content "
+        b'xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" '
+        b'xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" '
+        b'xmlns:xlink="http://www.w3.org/1999/xlink">'
+        b"<office:body><office:text><text:p>"
+        b'<text:a xlink:href="https://example.com/page">click</text:a>'
+        b"</text:p></office:text></office:document-content>"
+    )
+    blob = _zip({"content.xml": content, "styles.xml": b"<x/>"})
+    assert scan_linked_resources(_ODT, blob) == LinkScan(False)
 
 
 # --- RTF ----------------------------------------------------------------------------------
