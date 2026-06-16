@@ -48,16 +48,24 @@ def resolve_route_endpoint() -> Callable[[FastAPI, str, str], str | None]:
 
         def walk(routes: Iterable[BaseRoute]) -> str | None:
             for route in routes:
-                if route.matches(scope)[0] is Match.NONE:
+                match = route.matches(scope)[0]
+                if match is Match.NONE:
                     continue
-                # _IncludedRouter (FastAPI >=0.137) matches by prefix and delegates to its own
-                # routes; recurse to the leaf instead of reading a (missing) .endpoint.
+                # _IncludedRouter (FastAPI >=0.137) matches by prefix (method-agnostic) + delegates
+                # to its own routes; recurse to the leaf instead of reading a (missing) .endpoint.
                 included = getattr(route, "original_router", None)
                 if included is not None:
                     leaf = walk(included.routes)
                     if leaf is not None:
                         return leaf
                     continue  # prefix matched but no leaf did — keep scanning siblings
+                # A LEAF route only wins on Match.FULL (path AND method). A Match.PARTIAL means the
+                # path matched but the method did not — Starlette keeps scanning for a FULL match
+                # (it falls back to PARTIAL only for a 405), so a partial must NOT win here — else a
+                # method-sensitive guard (e.g. PATCH on a path whose GET is declared first) would
+                # resolve to the wrong endpoint and silently pass.
+                if match is not Match.FULL:
+                    continue
                 endpoint = getattr(route, "endpoint", None)
                 if endpoint is not None:
                     return str(endpoint.__name__)

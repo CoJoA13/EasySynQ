@@ -43,3 +43,18 @@ def test_raise_dcr_route_resolves(resolve_route_endpoint: _Resolve) -> None:
     path = "/api/v1/management-reviews/r/outputs/o/raise-dcr"
     name = resolve_route_endpoint(create_app(), path, "POST")
     assert name == "raise_output_dcr_endpoint", f"{path} resolves to {name}"
+
+
+def test_resolver_is_method_sensitive_full_match_not_partial(
+    resolve_route_endpoint: _Resolve,
+) -> None:
+    """The shared resolver must win on a FULL (path+method) match, never a PARTIAL (path-only). On
+    /admin/config the GET (get_config_endpoint) is declared BEFORE the PATCH
+    (update_config_endpoint), so a partial-wins resolver would resolve PATCH to the GET endpoint —
+    the false-PASS these verb guards exist to catch (Codex P2 on #168 / fastapi 0.137)."""
+    from easysynq_api.main import create_app
+
+    app = create_app()
+    path = "/api/v1/admin/config"
+    assert resolve_route_endpoint(app, path, "GET") == "get_config_endpoint"
+    assert resolve_route_endpoint(app, path, "PATCH") == "update_config_endpoint"
