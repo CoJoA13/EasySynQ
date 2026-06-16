@@ -2,6 +2,11 @@
 # apps/api/* and the single migrations/ tree land at predictable paths:
 #   /app/alembic.ini  + script_location %(here)s/../../migrations -> /migrations
 # Build with:  docker build -f apps/api/Dockerfile -t easysynq/api .   (from repo root)
+
+# uv binary source as a NAMED stage so Dependabot's docker ecosystem tracks the uv image — its parser
+# reads `FROM` lines, not `COPY --from=<image>` (dependabot-core#5103). Only the /uv binary is copied.
+FROM ghcr.io/astral-sh/uv:0.4 AS uv
+
 FROM python:3.12-slim-bookworm AS base
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -23,7 +28,7 @@ https://apt.postgresql.org/pub/repos/apt bookworm-pgdg main" > /etc/apt/sources.
     && apt-get purge -y curl gnupg \
     && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/*
-COPY --from=ghcr.io/astral-sh/uv:0.4 /uv /usr/local/bin/uv
+COPY --from=uv /uv /usr/local/bin/uv
 WORKDIR /app
 
 # --- dependency layer (cached) ---

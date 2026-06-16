@@ -149,8 +149,8 @@ jobs:
   # baseline surfaces without blocking merges on pre-existing transitive CVEs). But a scan that FAILS TO
   # RUN (uvx/npm/registry error → no valid report) DOES fail its step, so a never-ran scan can't read
   # green (Codex #153). NOT in branch protection's required checks. RATCHET to a hard gate once the
-  # baseline is clean: make pip-audit/npm-audit also fail on findings, set trivy `exit-code: "1"` + drop
-  # its `continue-on-error`, and add `security` to the required checks.
+  # baseline is clean: make pip-audit/npm-audit also fail on findings, set trivy `exit-code: "1"`, and
+  # add `security` to the required checks.
   security:
     runs-on: ubuntu-latest
     steps:
@@ -197,7 +197,6 @@ jobs:
           jq '.metadata.vulnerabilities' "$RUNNER_TEMP/npm-audit.json"
       - name: trivy filesystem scan (vuln + secret + IaC misconfig; HIGH/CRITICAL)
         uses: aquasecurity/trivy-action@v0.36.0
-        continue-on-error: true # warn-only: a trivy/DB-fetch hiccup must not fail the (non-required) job
         with:
           scan-type: fs
           scan-ref: .
@@ -206,24 +205,30 @@ jobs:
           exit-code: "0"
           format: table
       # The fs scan above does NOT detect base-image / apt OS-package CVEs (Trivy needs an image
-      # target). Scan the two Dockerfile FROM refs so a vulnerable base layer can't be baked into the
-      # air-gap bundle unnoticed (Codex #153). NOTE: this covers the BASE layer; a full built-image
-      # scan (our own apt installs) is the ratchet — kept off the per-PR path for build-time cost.
-      - name: trivy image scan — API base (python:3.12-slim-bookworm)
+      # target). DERIVE the base refs from the Dockerfiles (the `FROM` lines Dependabot bumps) so the
+      # scan never drifts from what's actually built (Codex #153); `tail -1` = the final runtime base.
+      # No `continue-on-error` — like the audit steps, a trivy/DB-fetch failure should SURFACE (the job
+      # is non-required, so it never blocks a merge). A full built-image scan (our apt layer) is the ratchet.
+      - name: resolve Dockerfile base image refs
+        id: bases
+        run: |
+          {
+            echo "api=$(grep -E '^FROM ' apps/api/Dockerfile | tail -1 | awk '{print $2}')"
+            echo "web=$(grep -E '^FROM ' apps/web/Dockerfile | tail -1 | awk '{print $2}')"
+          } >> "$GITHUB_OUTPUT"
+      - name: trivy image scan — API base
         uses: aquasecurity/trivy-action@v0.36.0
-        continue-on-error: true # warn-only (the action's vuln-DB fetch can be flaky on a non-required job)
         with:
           scan-type: image
-          image-ref: python:3.12-slim-bookworm
+          image-ref: ${{ steps.bases.outputs.api }}
           severity: HIGH,CRITICAL
           exit-code: "0"
           format: table
-      - name: trivy image scan — web base (node:22-slim)
+      - name: trivy image scan — web base
         uses: aquasecurity/trivy-action@v0.36.0
-        continue-on-error: true # warn-only
         with:
           scan-type: image
-          image-ref: node:22-slim
+          image-ref: ${{ steps.bases.outputs.web }}
           severity: HIGH,CRITICAL
           exit-code: "0"
           format: table
