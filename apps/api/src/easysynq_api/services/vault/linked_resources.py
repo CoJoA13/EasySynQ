@@ -241,9 +241,9 @@ def _is_ooxml_field_member(name_lower: str) -> bool:
     # ppt/slides/slide1.xml, ppt/slideLayouts/…, ppt/notesSlides/…
     if "/slides/" in name_lower or "/slidelayouts/" in name_lower or "/notesslides/" in name_lower:
         return True
-    # xl/worksheets/sheet1.xml (cell field instructions are rare but possible)
-    if "/worksheets/" in name_lower:
-        return True
+    # NB: xl/worksheets/* are deliberately NOT field-scanned — SpreadsheetML has no INCLUDE*/LINK
+    # field instructions (Excel external links live in *.rels, already covered by the rels scan), so
+    # scanning cells would only false-positive on the literal word "LINK" in a cell.
     return False
 
 
