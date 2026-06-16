@@ -14,7 +14,13 @@ that `just`, the `.sh` glue, and Claude Code's `.claude/hooks/*.sh` all require*
   Bash's `bash` for recipes, so run it from **PowerShell or Git Bash** — either works as long as
   `bash.exe` is on PATH.
 - The app is **OPERATIONAL**: log in `demo` / `Demo-Password-1` (System Administrator).
-- `just check` — the full local CI (api + web fast loops; no Docker needed).
+- `just check` runs ruff + ruff-format + mypy-strict + the **full `pytest -m unit`** (api) + the web
+  loop (eslint/tsc/build/test); no Docker. ⚠ On this native-Windows box the **`-m unit` leg is RED by
+  a known 17-failure baseline** (ProactorEventLoop / `O_NOFOLLOW` native issues — mirror symlinks ×12,
+  ingestion `O_NOFOLLOW` ×5, in 3 files), and `pytest -m integration` can't run locally either → treat
+  the **full unit + integration suites as CI-authoritative**, NOT a clean local gate. For a clean LOCAL
+  signal run the fast sub-checks (ruff + mypy-strict + the web loop) + **targeted** unit files
+  (`cd apps/api && uv run pytest tests/unit/test_<x>.py`); anything failing outside the 17-baseline is a real regression.
 - `just demo-user` — (re)create the `demo` login (see Keycloak note). `just seed-personas` — the SoD
   `priya`/`ken`/`mara` fixture. Both now live in `scripts/demo-user.sh` / `scripts/seed-personas.sh`
   (plain scripts, not justfile shebang recipes) so they run identically on Windows + Git Bash.

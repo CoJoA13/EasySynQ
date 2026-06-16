@@ -1,7 +1,7 @@
 # EasySynQ — Project Context
 
 > Orientation for a new session. The **authoritative** detail lives in `docs/` — start with
-> `docs/00-overview.md` (front door) and `docs/decisions-register.md` (binding decisions, R1–R45).
+> `docs/00-overview.md` (front door) and `docs/decisions-register.md` (binding decisions, R1–R46).
 > The recurring-patterns catalog + the machine playbook live in `.claude/rules/`; the slice changelog
 > + operator/dev reference live in `docs/` (all linked under Deep Dive — read on demand). Keep this
 > file lean; new lessons go to **Recent learnings** (below) or `engineering-patterns`, not inline.
@@ -63,7 +63,7 @@ Celery workers · Keycloak (auth) · Gotenberg/LibreOffice (rendering) · Caddy 
 
 ## Deep Dive — read on demand
 
-- **`docs/decisions-register.md`** — AUTHORITATIVE (R1–R45); supersedes conflicting section text. Read before any design call.
+- **`docs/decisions-register.md`** — AUTHORITATIVE (R1–R46); supersedes conflicting section text. Read before any design call.
 - **`docs/14-data-model.md`** (ERD) — schema source of truth; read before a migration/ORM change.
 - **`docs/15-api-design.md`** — endpoints + gates; read before adding/changing an endpoint (update `openapi.yaml` in-PR).
 - **`docs/07-authorization-model.md`** — permission catalog, RBAC+ABAC scoping, deny-wins; read before authz work.
@@ -110,4 +110,4 @@ Celery workers · Keycloak (auth) · Gotenberg/LibreOffice (rendering) · Caddy 
 - 2026-06-13 — Only a released kind=DOCUMENT with `current_effective_version_id` set flips a ★ checklist node (kind=RECORD sits at PARTIAL forever) → make a ★ subject a **shared-PK DOCUMENT subtype** riding the unchanged document machinery; freeze its minutes by hashing **BARE** `rfc8785` bytes (NO preamble), folded one-kwarg into `metadata_snapshot`, flushing before `_emit` (S-mr-1).
 ## Current status
 
-> **MVP COMPLETE** (S0–S11). **v1 feature-complete** — every family shipped end-to-end: Records & evidence · Ingestion · Audits/Findings/CAPA · Revision/change-depth (**DCR** — read + write + diff + annotate + CREATE-implement; no residuals) · Drift **D1–D5** · Acknowledgements · Quality Objectives (lifecycle/revision + KPI trend chart) · Management Review (backend + UI + outputs→action-systems + filed-minutes pack) · Improvement Initiatives (clause 10.3, R46 — **backend core only**; OFI/MR spawn seams + UI are slice 2+) — so the **ISO 9001:2015 ★ spine is complete**. The full **web-UI track is feature-complete** (~962 web tests). **Migration head `0052` (next `0053`).** Per-slice changelog + named deferred residuals: `docs/slice-history.md`.
+> **MVP COMPLETE** (S0–S11). The **ISO 9001:2015 ★ spine is feature-complete** — every ★ family shipped end-to-end: Records & evidence · Ingestion · Audits/Findings/CAPA · Revision/change-depth (**DCR** — read + write + diff + annotate + CREATE-implement; no residuals) · Drift **D1–D5** · Acknowledgements · Quality Objectives (lifecycle/revision + KPI trend chart) · Management Review (backend + UI + outputs→action-systems + filed-minutes pack) — and the **web-UI track is feature-complete for them** (~962 web tests). **PARTIAL (the one in-flight family):** the **non-★ Improvement Initiatives** (clause 10.3, R46) has shipped only its **backend core** (slice 1 of 4) — still to come: the OFI/MR spawn endpoints (**S-improvement-2**), the register/drawer UI (**S-improvement-3**), and the opt-in verified-benefit stage (**S-improvement-4**); it has **no SPA surface yet**. **Migration head `0052` (next `0053`).** Per-slice changelog + named deferred residuals: `docs/slice-history.md`.
