@@ -143,3 +143,37 @@ jobs:
         run: npm ci
       - working-directory: apps/web
         run: npm run lint && npm run typecheck && npm run build && npm test
+
+  # Dependency + filesystem vulnerability scan (Phase-1 tech-debt: I-1). WARN-ONLY for now: every step
+  # swallows its non-zero find-exit (`|| true` / trivy `--exit-code 0`), so the job surfaces the current
+  # vuln/secret/misconfig baseline on each PR WITHOUT blocking merges on pre-existing transitive CVEs.
+  # This job is intentionally NOT in branch protection's required checks. RATCHET to a hard gate once the
+  # baseline is clean: drop the `|| true`, set trivy `--exit-code 1`, and add `security` to required checks.
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: install uv
+        uses: astral-sh/setup-uv@v8.2.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: "apps/api/uv.lock"
+      - name: pip-audit (Python deps, resolved from uv.lock)
+        working-directory: apps/api
+        run: |
+          uv export --frozen --no-emit-project --format requirements-txt -o "$RUNNER_TEMP/py-requirements.txt"
+          uvx pip-audit -r "$RUNNER_TEMP/py-requirements.txt" --desc || true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - name: npm audit (web deps, from package-lock.json)
+        working-directory: apps/web
+        run: npm audit --audit-level=high || true
+      - name: trivy filesystem scan (vuln + secret + IaC misconfig; HIGH/CRITICAL)
+        run: |
+          curl -sfL "https://raw.githubusercontent.com/aquasecurity/trivy/v0.55.0/contrib/install.sh" \
+            | sh -s -- -b "$RUNNER_TEMP/bin" v0.55.0
+          "$RUNNER_TEMP/bin/trivy" fs --scanners vuln,secret,misconfig \
+            --severity HIGH,CRITICAL --exit-code 0 --no-progress .
