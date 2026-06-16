@@ -5,7 +5,7 @@
 
 # uv binary source as a NAMED stage so Dependabot's docker ecosystem tracks the uv image — its parser
 # reads `FROM` lines, not `COPY --from=<image>` (dependabot-core#5103). Only the /uv binary is copied.
-FROM ghcr.io/astral-sh/uv:0.4 AS uv
+FROM ghcr.io/astral-sh/uv:0.11 AS uv
 
 FROM python:3.12-slim-bookworm AS base
 ENV PYTHONUNBUFFERED=1 \
