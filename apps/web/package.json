@@ -15,11 +15,11 @@
   "dependencies": {
     "@mantine/core": "^7.13.0",
     "@mantine/hooks": "^7.13.0",
-    "@tanstack/react-query": "^5.56.0",
+    "@tanstack/react-query": "^5.101.0",
     "oidc-client-ts": "^3.1.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "react-router-dom": "^7.16.0"
+    "react-router-dom": "^7.17.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.11.0",
@@ -37,11 +37,11 @@
     "jsdom": "^25.0.1",
     "msw": "^2.14.6",
     "postcss": "^8.4.47",
-    "prettier": "^3.3.3",
-    "prettier-plugin-tailwindcss": "^0.6.8",
+    "prettier": "^3.8.4",
+    "prettier-plugin-tailwindcss": "^0.8.0",
     "tailwindcss": "^3.4.13",
     "typescript": "^5.6.2",
-    "typescript-eslint": "^8.7.0",
+    "typescript-eslint": "^8.61.1",
     "vite": "^5.4.8",
     "vitest": "^2.1.1"
   }
