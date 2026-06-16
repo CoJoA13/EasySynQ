@@ -8,67 +8,53 @@ is *safe but wrong* (a 422) — assert the app-level resolution order is right."
 
 from __future__ import annotations
 
+from collections.abc import Callable
 
-def test_next_due_resolves_before_review_id() -> None:
+from fastapi import FastAPI
+
+_Resolve = Callable[[FastAPI, str, str], str | None]
+
+
+def test_next_due_resolves_before_review_id(resolve_route_endpoint: _Resolve) -> None:
     """GET /management-reviews/next-due must resolve to next_due_endpoint, NOT the {review_id}
     str-convertor route (the S-pack-2 shadow guard). 'next-due' never parses as a UUID, so a
     wrong mount order fails 422-shaped, not 404 — assert the app-level resolution order."""
-    from starlette.routing import Match
-
     from easysynq_api.main import create_app
 
-    app = create_app()
     path = "/api/v1/management-reviews/next-due"
-    winner = next(
-        (
-            r
-            for r in app.router.routes
-            if r.matches({"type": "http", "path": path, "method": "GET"})[0] != Match.NONE
-        ),
-        None,
-    )
-    assert winner is not None
-    assert winner.endpoint.__name__ == "next_due_endpoint", (
-        f"{path} resolves to {winner.endpoint.__name__}, not next_due_endpoint"
-    )
+    name = resolve_route_endpoint(create_app(), path, "GET")
+    assert name == "next_due_endpoint", f"{path} resolves to {name}, not next_due_endpoint"
 
 
-def test_raise_capa_route_resolves() -> None:
+def test_raise_capa_route_resolves(resolve_route_endpoint: _Resolve) -> None:
     """POST /management-reviews/{id}/outputs/{oid}/raise-capa resolves to the spawn endpoint (not a
     shadow). Distinct suffix from /outputs/{oid}, so no str-convertor collision — but pin it."""
-    from starlette.routing import Match
-
     from easysynq_api.main import create_app
 
-    app = create_app()
     path = "/api/v1/management-reviews/r/outputs/o/raise-capa"
-    winner = next(
-        (
-            r
-            for r in app.router.routes
-            if r.matches({"type": "http", "path": path, "method": "POST"})[0] != Match.NONE
-        ),
-        None,
-    )
-    assert winner is not None
-    assert winner.endpoint.__name__ == "raise_output_capa_endpoint"
+    name = resolve_route_endpoint(create_app(), path, "POST")
+    assert name == "raise_output_capa_endpoint", f"{path} resolves to {name}"
 
 
-def test_raise_dcr_route_resolves() -> None:
+def test_raise_dcr_route_resolves(resolve_route_endpoint: _Resolve) -> None:
     """POST /management-reviews/{id}/outputs/{oid}/raise-dcr resolves to the DCR spawn endpoint."""
-    from starlette.routing import Match
+    from easysynq_api.main import create_app
 
+    path = "/api/v1/management-reviews/r/outputs/o/raise-dcr"
+    name = resolve_route_endpoint(create_app(), path, "POST")
+    assert name == "raise_output_dcr_endpoint", f"{path} resolves to {name}"
+
+
+def test_resolver_is_method_sensitive_full_match_not_partial(
+    resolve_route_endpoint: _Resolve,
+) -> None:
+    """The shared resolver must win on a FULL (path+method) match, never a PARTIAL (path-only). On
+    /admin/config the GET (get_config_endpoint) is declared BEFORE the PATCH
+    (update_config_endpoint), so a partial-wins resolver would resolve PATCH to the GET endpoint —
+    the false-PASS these verb guards exist to catch (Codex P2 on #168 / fastapi 0.137)."""
     from easysynq_api.main import create_app
 
     app = create_app()
-    path = "/api/v1/management-reviews/r/outputs/o/raise-dcr"
-    winner = next(
-        (
-            r
-            for r in app.router.routes
-            if r.matches({"type": "http", "path": path, "method": "POST"})[0] != Match.NONE
-        ),
-        None,
-    )
-    assert winner is not None
-    assert winner.endpoint.__name__ == "raise_output_dcr_endpoint"
+    path = "/api/v1/admin/config"
+    assert resolve_route_endpoint(app, path, "GET") == "get_config_endpoint"
+    assert resolve_route_endpoint(app, path, "PATCH") == "update_config_endpoint"
