@@ -12,6 +12,9 @@ The PUBLIC delivery router (``api/pack_share.py``) is the separate, latch-exempt
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
+from fastapi import FastAPI
 from fastapi.routing import APIRoute
 
 from easysynq_api.api.pack_share import router as pack_share_router
@@ -88,27 +91,18 @@ def test_public_delivery_paths_are_latch_exempt() -> None:
     assert _PUBLIC_PATHS <= _LATCH_EXEMPT_EXACT
 
 
-def test_public_delivery_paths_resolve_to_the_public_no_auth_endpoint() -> None:
+def test_public_delivery_paths_resolve_to_the_public_no_auth_endpoint(
+    resolve_route_endpoint: Callable[[FastAPI, str, str], str | None],
+) -> None:
     # Regression guard: ``{pack_id}`` uses the str path-convertor (UUIDs validate post-match), so
     # the static ``…/shared`` literals must mount BEFORE the authenticated ``/{pack_id}`` route —
     # else ``/evidence-packs/shared`` resolves to the authenticated get_pack_endpoint (401, not the
     # guest landing). The app-level resolution order is what matters → assert against the wired app.
-    from starlette.routing import Match
-
     from easysynq_api.main import create_app
 
     app = create_app()
     public_names = {r.endpoint.__name__ for r in _public_routes()}
     for path in _PUBLIC_PATHS:
-        winner = next(
-            (
-                r
-                for r in app.router.routes
-                if r.matches({"type": "http", "path": path, "method": "GET"})[0] != Match.NONE
-            ),
-            None,
-        )
-        assert winner is not None
-        assert winner.endpoint.__name__ in public_names, (
-            f"{path} resolves to {winner.endpoint.__name__}, not the public delivery endpoint"
-        )
+        name = resolve_route_endpoint(app, path, "GET")
+        assert name is not None
+        assert name in public_names, f"{path} resolves to {name}, not the public delivery endpoint"
