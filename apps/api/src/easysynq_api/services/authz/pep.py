@@ -19,13 +19,13 @@ from fastapi import Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...auth.dependencies import get_current_user
-from ...config import get_settings
 from ...db.models.app_user import AppUser
 from ...db.session import get_session
 from ...domain.authz import RequestContext, ResourceContext, authorize
 from ...domain.authz.types import Decision, Effect
 from ...logging import request_id_var
 from ...problems import ProblemException
+from ...redis_client import redis_client
 from .audit import AuthzAuditEvent, AuthzAuditSink, DbAuthzAuditSink
 from .repository import (
     gather_grants,
@@ -278,9 +278,7 @@ async def invalidate_user_permissions(user_id: uuid.UUID) -> None:
     """
     # The cache is an optimization; a Redis hiccup must never fail a grant mutation.
     with contextlib.suppress(Exception):
-        import redis.asyncio as aioredis
-
-        client = aioredis.from_url(get_settings().redis_url)  # type: ignore[no-untyped-call]
+        client = redis_client()
         try:
             await client.incr(f"perm_epoch:{user_id}")
         finally:

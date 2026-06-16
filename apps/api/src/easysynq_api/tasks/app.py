@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from typing import Any, ParamSpec, Protocol, TypeVar, cast
+
 from celery import Celery
 
 from ..config import get_settings
@@ -126,3 +129,31 @@ app.conf.update(
         },
     },
 )
+
+_P = ParamSpec("_P")
+# Covariant: ``_R_co`` only ever appears in return position in the Protocol (the task's call
+# result), which mypy --strict requires a covariant TypeVar for.
+_R_co = TypeVar("_R_co", covariant=True)
+
+
+class CeleryTask(Protocol[_P, _R_co]):
+    """The typed surface of a registered Celery task we actually use.
+
+    Celery ships no type stubs (it is in mypy's untyped-module override), so ``app.task`` is an
+    untyped decorator (hence the former per-task ``# type: ignore[untyped-decorator]``). This
+    Protocol restores call-site type-checking: ``delay`` carries the SAME ParamSpec as the task, so
+    a wrong-arity ``foo.delay(...)`` is now a type error."""
+
+    def __call__(self, *args: _P.args, **kwargs: _P.kwargs) -> _R_co: ...
+    def delay(self, *args: _P.args, **kwargs: _P.kwargs) -> Any: ...
+    def apply_async(self, *args: Any, **kwargs: Any) -> Any: ...
+
+
+def task(*, name: str, **options: Any) -> Callable[[Callable[_P, _R_co]], CeleryTask[_P, _R_co]]:
+    """Typed replacement for ``@app.task(name=…)`` — removes the per-site untyped-decorator ignore
+    while preserving registration (same ``name=``) and ``.delay()`` ergonomics."""
+
+    def deco(fn: Callable[_P, _R_co]) -> CeleryTask[_P, _R_co]:
+        return cast("CeleryTask[_P, _R_co]", app.task(name=name, **options)(fn))
+
+    return deco

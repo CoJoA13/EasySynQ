@@ -15,9 +15,7 @@ from __future__ import annotations
 
 from typing import Any
 
-import redis.asyncio as aioredis
-
-from ...config import get_settings
+from ...redis_client import redis_client
 
 _RELEASE_LUA = """
 if redis.call('GET', KEYS[1]) == ARGV[1] then
@@ -39,8 +37,7 @@ def _key(source_root_hash: str) -> str:
 
 
 def _redis() -> Any:
-    # Typed as Any: redis.asyncio's response unions don't play well with mypy --strict await.
-    return aioredis.from_url(get_settings().redis_url, decode_responses=True)  # type: ignore[no-untyped-call]
+    return redis_client(decode_responses=True)
 
 
 async def acquire(source_root_hash: str, *, ttl: int) -> str | None:
