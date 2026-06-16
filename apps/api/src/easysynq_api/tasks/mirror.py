@@ -22,7 +22,7 @@ from ..config import get_settings
 from ..services.common.pg_locks import LOCK_MIRROR_SYNC, pg_advisory_lock
 from ..services.vault.mirror_scan import scan_and_sync
 from ..services.vault.render_gotenberg import GotenbergRenderSink
-from .app import app
+from .app import task
 
 logger = logging.getLogger("easysynq.mirror.tasks")
 
@@ -90,13 +90,13 @@ async def _run_mirror_scan() -> dict[str, object]:
         await engine.dispose()
 
 
-@app.task(name="easysynq.mirror.sync")  # type: ignore[untyped-decorator]
+@task(name="easysynq.mirror.sync")
 def mirror_sync() -> int:
     """Scan-first full rebuild + atomic swap of the read-only mirror; returns the doc count."""
     return asyncio.run(_run_mirror_sync())
 
 
-@app.task(name="easysynq.mirror.scan")  # type: ignore[untyped-decorator]
+@task(name="easysynq.mirror.scan")
 def mirror_scan() -> dict[str, object]:
     """Hourly D2+D3 integrity scan (R11); rebuilds only on divergence/staleness/no-baseline."""
     return asyncio.run(_run_mirror_scan())
