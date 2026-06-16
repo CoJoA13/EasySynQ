@@ -264,7 +264,10 @@ async def test_catalog_count_unchanged_no_new_key(
 ) -> None:
     async with get_sessionmaker()() as s:
         n = len((await s.execute(select(Permission))).scalars().all())
-    assert n == 100  # S-obj-1 adds NO permission key
+    # S-obj-1 (R44) adds NO permission key; the absolute catalog is 102 after R46
+    # (S-improvement-1) added improvement.read/improvement.manage (the other count assertion is
+    # test_authz.py:133).
+    assert n == 102
 
 
 async def test_scorecard_rollup_counts_by_rag(
