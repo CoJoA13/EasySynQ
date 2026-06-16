@@ -28,6 +28,7 @@ from .api.document_types import router as document_types_router
 from .api.documents import router as documents_router
 from .api.drift import router as drift_router
 from .api.health import router as health_router
+from .api.improvement import router as improvement_router
 from .api.ingestion import router as ingestion_router
 from .api.mgmt_review import router as mgmt_review_router
 from .api.objectives import router as objectives_router
@@ -156,6 +157,7 @@ def create_app() -> FastAPI:
     app.include_router(objectives_router)  # S-obj-1: clause-6.2 Quality Objectives (obj.*/kpi.*)
     app.include_router(mgmt_review_router)  # S-mr-1: clause-9.3 Management Review (mgmtReview.*)
     app.include_router(dcr_router)  # S-dcr-1: Document Change Request core + intake (/dcrs)
+    app.include_router(improvement_router)  # S-improvement-1: clause-10.3 Improvement Initiatives
     app.include_router(retention_policies_router)  # S-rec-4: retention-policy CRUD + soft-archive
     app.include_router(ingestion_router)  # S-ing-1: import run + scan/inventory (NOT latch-exempt)
     app.include_router(search_router)  # S10: Postgres-FTS search (filter-not-403, Indexer seam)

@@ -1,6 +1,6 @@
 # EasySynQ Decisions Register
 
-This document is the **single authoritative source of truth** for the EasySynQ self-hosted ISO 9001:2015 QMS specification. It records the locked foundational decisions, the locked stakeholder decisions, and the normative resolutions (R1–R45) to every finding raised in the gap audit (`17-gaps-and-open-questions.md`); R38 (slice S-rec-4) is the first post-v1 *additive* decision (additive catalog extensibility + SoD-6), R39 (slice family S-aud/S-capa) locks the Audits/Findings/CAPA model + workflow posture, R40 (slice family S-dcr) locks the Revision & change-depth (DCR) family model + the InApproval reject-loop target, and R41 (slice S-drift-3) adds the `drift.read` SYSTEM-domain permission key; R42 (slice S-ack-1) adds the `document.distribute` CONTENT-domain key, and R43 locks the Acknowledgements-family model.
+This document is the **single authoritative source of truth** for the EasySynQ self-hosted ISO 9001:2015 QMS specification. It records the locked foundational decisions, the locked stakeholder decisions, and the normative resolutions (R1–R46) to every finding raised in the gap audit (`17-gaps-and-open-questions.md`); R38 (slice S-rec-4) is the first post-v1 *additive* decision (additive catalog extensibility + SoD-6), R39 (slice family S-aud/S-capa) locks the Audits/Findings/CAPA model + workflow posture, R40 (slice family S-dcr) locks the Revision & change-depth (DCR) family model + the InApproval reject-loop target, and R41 (slice S-drift-3) adds the `drift.read` SYSTEM-domain permission key; R42 (slice S-ack-1) adds the `document.distribute` CONTENT-domain key, and R43 locks the Acknowledgements-family model.
 
 **Precedence:** Where this register conflicts with any text in sections `01`–`15`, **this register supersedes that text.** Section editors MUST back-propagate the changes listed under each resolution's *Back-propagation* note. The exact tokens, enum values, state names, and field names quoted here are **canonical and verbatim** — they must be reproduced character-for-character (case, snake_case, dot-namespacing, and all) wherever the underlying concept appears. Do not soften, rename, abbreviate, or omit any token.
 
@@ -52,7 +52,7 @@ Proceed with the **full reconcile-and-harden pass** — i.e., adopt R1–R37 bel
 
 ---
 
-## Part 3 — Resolutions R1–R45
+## Part 3 — Resolutions R1–R46
 
 Each resolution states the decision, the exact canonical tokens/enums/states/field-names verbatim, and a Back-propagation note listing the section files that change.
 
@@ -1066,6 +1066,66 @@ tail; the input compiler; the close gate), 13 §5.2 (the MR dashboard backed by 
 vocabulary restated to calm tables/RAG**; the pack is v1.1), 14 §9 (as-built tables + the DOCUMENT-head
 deviation + the reserved `spawned_*` seams), 15 (the `/management-reviews*` endpoints), 16 (the ★ spine
 feature-complete).
+
+---
+
+### R46 — Improvement Initiatives family (clause 10.3) — slice family S-improvement
+
+**Decision (owner, 2026-06-15).** An Improvement Initiative is an **own-table mutable-state workflow
+object** (the DCR / R22 doctrine) — NOT a `kind=RECORD` immutable artifact and NOT a
+`documented_information` subtype. This is a **deliberate, register-sanctioned deviation from doc 02's
+RECORD (`M/R='R'`) classification:** clause 10.3 is **non-★** (the frozen clause seed carries
+`is_mandatory_star=False`; the compliance checklist only scans `is_mandatory_star=True` clauses), so
+there is **no ★ node to flip** — the very R44/R45 rationale that justified routing OBJ/MR through the
+`kind=DOCUMENT` path is **absent** here. An initiative's essence is a *progressing activity owned over
+time* (a moving `stage`), not point-in-time immutable captured content, so the own table is the
+right-fit shape; copying the DOCUMENT path by blind analogy would be a category error. The mutable
+`stage` is the headline; the append-only `improvement_initiative_stage_event` trail (REVOKE
+UPDATE,DELETE — the `dcr_stage_event`/`capa_stage` precedent; no `updated_at`) is the immutable
+history. Lifecycle (R46 §F2) is the **simple stage-completion close, unsigned**: `Open → InProgress →
+Completed → Closed` (+ `Cancelled` from the pre-completion states only); the `Closed` transition MAY
+freeze a free-text realized-benefit note into the sealed `stage_event.payload` (the lightweight 10.3
+continual-improvement evidence). **No signed gate, no effectiveness loop, no new `SignatureMeaning`**
+(R2 closed); the `stage_event.signed_event_id` Part-11 hook ships day-one but stays NULL/unsigned in
+v1.x (D3). An initiative is purely operational PostgreSQL state — never a Released version, never the
+mirror, no blob / disposition / WORM-destroy path (D2).
+
+**Two additive (R38) CONTENT-domain permission keys**, seeded in migration `0052`:
+`improvement.read` and `improvement.manage` (both `is_system_domain=false`, `sod_sensitive=false`,
+`sig_hook=false`, `finest_scope=PROCESS`). Granted to **QMS Owner** (read + manage, org/QMS scope) and
+**Process Owner** (read + manage, PROCESS-scoped via the `:assignment_process` placeholder — rides
+SYSTEM overrides until owner-assignment binding lands); **Internal Auditor** gets read only (the
+checklist-read precedent — the auditor raises OFIs and reads the improvement pipeline but does not
+drive initiatives). **Riding `capa.*` was rejected** (the R41/R42 anti-pattern): it conflates
+corrective action (10.2) with improvement opportunity (10.3) and silently widens every CAPA holder's
+reach. Per R38: additive only — no rename/removal; the catalog count moves **100 → 102**.
+
+**Spawn cardinality (F5):** **1:N one-way `source_link_id`** on the initiative (the polymorphic
+origin id — a `finding.id` for `source=OFI`, a `review_output.id` for `source=review`, NULL for
+`manual`); a per-(org, source_link_id) `spawn_idempotency_key` partial-UNIQUE makes a retry return the
+same initiative. `review_output.spawned_initiative_id` is **left reserved-null** (not dropped) — this
+closes the S-mr-3 deferral (the seam now has a table to point at) without un-reserving the latch.
+Audit: the initiative's acts emit additive `INITIATIVE_RAISED` / `INITIATIVE_UPDATED` /
+`INITIATIVE_TRANSITIONED` on a fresh `audit_object_type='improvement_initiative'` (an own-table id is
+not a record id — the `ncr`/`dcr` precedent; `scope_ref=<identifier>`); the slice-2 MR-side spawn adds
+`MGMT_REVIEW_INITIATIVE_SPAWNED` on `object_type='document'`. **Migration `0052`.**
+
+**Implemented in slice S-improvement-1 (migration `0052`):** `improvement_initiative` own table
+(mutable `stage`) + the append-only `improvement_initiative_stage_event` trail + the
+`improvement_stage` / `improvement_source` enums + the four `INITIATIVE_*`/`MGMT_REVIEW_INITIATIVE_*`
+event types + `audit_object_type='improvement_initiative'` + the two `improvement.*` keys & role
+grants. `domain/improvement/fsm.py` (the pure edge map) + `services/improvement` (create / transition
+/ update / list / get / stage-events; `_improvement_scope`). `/improvement-initiatives` router (the 6
+lifecycle endpoints). All spawn-seam columns ship now so **slice 2 (the OFI-finding + MR-output spawn)
+is zero-migration**. **Deferred (named, not faked):** the spawn endpoints (S-improvement-2); the
+register/drawer/PDCA-ACT tile UI (S-improvement-3); the optional unsigned **Verified** benefit-review
+stage and/or an engine-routed management-authorization approval (S-improvement-4, opt-in); discrete
+`improvement_initiative_action` milestone rows; objective-miss / 9.1.3 auto-seed.
+
+**Back-propagation:** 02 (10.3 as-built — own-table workflow object + the RECORD-deviation note), 07
+§3 (`improvement.*` now reach a resource), 14 §9 (the last named-but-unbuilt entity is now built —
+as-built `improvement_initiative`/`_stage_event` tables + the reserved `source_link` seam), 15 (the
+`/improvement-initiatives*` endpoints), 16 (clause 10 fully addressed — 10.2 CAPA + 10.3 initiatives).
 
 ---
 

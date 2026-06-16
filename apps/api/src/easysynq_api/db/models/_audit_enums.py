@@ -73,6 +73,12 @@ class AuditObjectType(enum.Enum):
     # per R22, so it cannot reuse ``record``). Added via ``ALTER TYPE audit_object_type ADD VALUE``
     # in 0040 (the ``ncr`` precedent above).
     dcr = "dcr"
+    # the Improvement Initiative own-table (S-improvement-1, doc 02 Cl 10.3 / doc 14 §9, R46) —
+    # INITIATIVE_RAISED / INITIATIVE_UPDATED / INITIATIVE_TRANSITIONED key here on the
+    # ``improvement_initiative.id`` (a mutable workflow object per R22/R46, NOT a record subtype, so
+    # it cannot reuse ``record``). Added via ``ALTER TYPE audit_object_type ADD VALUE`` in 0052 (the
+    # ``ncr``/``dcr`` precedent above).
+    improvement_initiative = "improvement_initiative"
 
 
 class EventType(enum.Enum):
@@ -379,6 +385,19 @@ class EventType(enum.Enum):
     # (object_type=document).
     MGMT_REVIEW_CAPA_SPAWNED = "MGMT_REVIEW_CAPA_SPAWNED"
     MGMT_REVIEW_DCR_SPAWNED = "MGMT_REVIEW_DCR_SPAWNED"
+    # the Improvement Initiatives family (S-improvement-1, doc 02 Cl 10.3 / doc 14 §9, R46). The
+    # initiative is a mutable workflow object (object_type=improvement_initiative, NOT a record).
+    # INITIATIVE_RAISED = intake (Open, the manual raise + the slice-2 OFI/MR spawns);
+    # INITIATIVE_UPDATED = metadata edit; INITIATIVE_TRANSITIONED = any stage move (the unsigned
+    # Open→InProgress→Completed→Closed / Cancelled lifecycle). MGMT_REVIEW_INITIATIVE_SPAWNED =
+    # the MR-side spawn act (object_type=document, the MR id), mirroring MGMT_REVIEW_CAPA_SPAWNED /
+    # _DCR_SPAWNED; defined in 0052 though first emitted in slice 2 (so slice 2 is zero-migration).
+    # Added via ALTER TYPE event_type ADD VALUE in 0052 (the additive pattern; a from-scratch
+    # ``upgrade head`` rebuilds the type from EVENT_TYPE_VALUES, so the members live here too).
+    INITIATIVE_RAISED = "INITIATIVE_RAISED"
+    INITIATIVE_UPDATED = "INITIATIVE_UPDATED"
+    INITIATIVE_TRANSITIONED = "INITIATIVE_TRANSITIONED"
+    MGMT_REVIEW_INITIATIVE_SPAWNED = "MGMT_REVIEW_INITIATIVE_SPAWNED"
 
 
 class CheckpointSinkKind(enum.Enum):
