@@ -16,7 +16,7 @@ version: "rule-heuristic-1"
 # ----------------------------------------------------------------- Scoring cutoffs (doc 09 §6.3-§6.5)
 # The score->band cutoffs + dimension weights, externalized here so an org override rides this pack's
 # `version` pin (the calibrated v1 values reproduce the §6.5 worked examples). Omit any key to keep
-# its default; each must be a positive int and medium_threshold <= high_threshold. (NB: the MinHash
+# its default; each is a positive int (cutoffs/margins <= 100); medium_threshold < high_threshold. (NB: the MinHash
 # near-dup signature constants are deliberately NOT here — they are determinism-locked; see minhash.py.)
 scoring:
   high_threshold: 85         # score >= this -> HIGH band
