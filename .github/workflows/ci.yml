@@ -105,7 +105,7 @@ jobs:
           --durations-path .test_durations --store-durations --clean-durations
       - name: publish fresh shard durations
         if: success()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: test-durations-${{ matrix.group }}
           path: apps/api/.test_durations
