@@ -191,6 +191,65 @@ async def test_octet_stream_short_circuits_non_renderable() -> None:
     assert result.status is RenderStatus.NON_RENDERABLE
 
 
+_DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+
+def _docx(rels: bytes | None = None) -> bytes:
+    """A minimal docx-shaped ZIP. With ``rels`` set, embeds it as the relationships part."""
+    import zipfile
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("word/document.xml", b"<w:document/>")
+        if rels is not None:
+            zf.writestr("word/_rels/document.xml.rels", rels)
+    return buf.getvalue()
+
+
+_EXTERNAL_REL = (
+    b'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+    b'<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+    b'<Relationship Id="rId1" '
+    b'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" '
+    b'Target="http://example.com/logo.png" TargetMode="External"/>'
+    b"</Relationships>"
+)
+
+
+async def test_externally_linked_office_short_circuits_non_renderable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """[gotenberg-8.34] An Office source referencing an EXTERNAL linked resource is R26 BEFORE any
+    Gotenberg POST — the structural scan short-circuits convert (LibreOffice 8.34 would convert it
+    with HTTP 200 but omit the linked content, so caching it would be a lossy controlled copy)."""
+
+    def _explode(_r: httpx.Request) -> httpx.Response:
+        raise AssertionError("Gotenberg must NOT be POSTed for an externally-linked source")
+
+    _mock_gotenberg(monkeypatch, _explode)
+    result = await GotenbergRenderSink().render(_req(mime=_DOCX_MIME), _docx(_EXTERNAL_REL))
+    assert result.status is RenderStatus.NON_RENDERABLE
+    assert result.reason is not None and "external" in result.reason.lower()
+
+
+async def test_clean_office_still_reaches_convert(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A clean Office source (no external links) still POSTs to LibreOffice and renders normally —
+    the scan does not block legitimate documents."""
+    posted = False
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        nonlocal posted
+        assert request.url.path == "/forms/libreoffice/convert"
+        posted = True
+        return httpx.Response(200, content=_pdf())
+
+    _mock_gotenberg(monkeypatch, _handler)
+    result = await GotenbergRenderSink().render(_req(mime=_DOCX_MIME), _docx())
+    assert posted, "a clean Office source must still reach Gotenberg"
+    assert result.status is RenderStatus.RENDERED
+    assert result.reason is None
+
+
 async def test_gotenberg_200_renders(monkeypatch: pytest.MonkeyPatch) -> None:
     """A 200 from Gotenberg (office→PDF) is overlaid → RENDERED. Also proves the sink POSTs to the
     LibreOffice route with the right upload filename (so LibreOffice picks the docx filter)."""

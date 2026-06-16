@@ -467,6 +467,7 @@ def _metadata(
     no_controlled_rendition: bool,
     clause_refs: list[ClauseRef],
     process_refs: list[ProcessRef],
+    no_controlled_rendition_reason: str | None = None,
 ) -> bytes:
     meta: dict[str, object] = {
         "identifier": eff.identifier,
@@ -495,6 +496,10 @@ def _metadata(
         # R26 (doc 04 §11.4): a genuinely non-renderable format — surfaced for the QM dashboard
         # (doc 13). Distinct from "pending"; only present when true.
         meta["no_controlled_rendition"] = True
+        if no_controlled_rendition_reason:
+            # The human WHY (R26) — e.g. an externally-linked source LibreOffice 8.34 omits. Only
+            # present when the renderer supplied one (a bare R26 format has no reason).
+            meta["no_controlled_rendition_reason"] = no_controlled_rendition_reason
     return (json.dumps(meta, indent=2, sort_keys=True) + "\n").encode()
 
 
@@ -565,16 +570,19 @@ async def _cache_rendition(session: AsyncSession, eff: EffectiveDoc, pdf: bytes)
 
 async def _resolve_rendition(
     eff: EffectiveDoc, source_bytes: bytes, render_sink: RenderSink, session: AsyncSession | None
-) -> tuple[bytes, str, str, bool]:
-    """(content, ext, render_status, no_controlled_rendition). Cache hit first; else render via the
-    sink and (when a session is available — the worker path) cache a RENDERED result."""
+) -> tuple[bytes, str, str, bool, str | None]:
+    """(content, ext, render_status, no_controlled_rendition, reason). Cache hit first; else render
+    via the sink and (when a session is available — the worker path) cache a RENDERED result. The
+    final ``reason`` is the R26 human WHY (e.g. an externally-linked source LibreOffice 8.34 omits),
+    set only on the NON_RENDERABLE branch; None otherwise. The decision logic is UNCHANGED — this
+    only carries the renderer's reason out to ``metadata.json``."""
     # Cache hit — a prior sync already rendered this exact version.
     if eff.rendition_blob_sha256:
         try:
             cached = await storage.fetch_bytes(
                 eff.rendition_blob_sha256, bucket=get_settings().s3_bucket_renditions
             )
-            return cached, ".pdf", RenderStatus.RENDERED.value, False
+            return cached, ".pdf", RenderStatus.RENDERED.value, False, None
         except Exception:  # noqa: BLE001 — cached rendition vanished; re-render below
             logger.warning(
                 "mirror.rendition_cache_miss",
@@ -604,10 +612,16 @@ async def _resolve_rendition(
     if result.status is RenderStatus.RENDERED and result.pdf is not None:
         if session is not None:
             await _cache_rendition(session, eff, result.pdf)
-        return result.pdf, ".pdf", RenderStatus.RENDERED.value, False
+        return result.pdf, ".pdf", RenderStatus.RENDERED.value, False, None
     if result.status is RenderStatus.NON_RENDERABLE:
-        return source_bytes, _ext(eff.mime_type), RenderStatus.NON_RENDERABLE.value, True
-    return source_bytes, _ext(eff.mime_type), RenderStatus.PENDING.value, False
+        return (
+            source_bytes,
+            _ext(eff.mime_type),
+            RenderStatus.NON_RENDERABLE.value,
+            True,
+            result.reason,
+        )
+    return source_bytes, _ext(eff.mime_type), RenderStatus.PENDING.value, False, None
 
 
 async def build_tree(
@@ -642,7 +656,7 @@ async def build_tree(
 
     for eff in effs:
         source_bytes = await storage.fetch_bytes(eff.object_key, bucket=eff.bucket)
-        content, ext, render_status, no_rendition = await _resolve_rendition(
+        content, ext, render_status, no_rendition, no_rendition_reason = await _resolve_rendition(
             eff, source_bytes, render_sink, session
         )
         if render_status == RenderStatus.PENDING.value:
@@ -663,7 +677,15 @@ async def build_tree(
         _write(doc_dir / source_filename, content, manifest, build_root, extra=doc_ref)
         _write(
             doc_dir / "metadata.json",
-            _metadata(eff, source_filename, render_status, no_rendition, refs, proc_refs),
+            _metadata(
+                eff,
+                source_filename,
+                render_status,
+                no_rendition,
+                refs,
+                proc_refs,
+                no_rendition_reason,
+            ),
             manifest,
             build_root,
             extra=doc_ref,

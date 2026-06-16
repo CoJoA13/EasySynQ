@@ -89,7 +89,7 @@ services:
   # and rendering is resilient anyway: a renderer outage yields render_status=pending and the next
   # mirror reconcile re-renders (a renderer probe in /readyz is a v1 add).
   renderer:
-    image: gotenberg/gotenberg:8.33
+    image: gotenberg/gotenberg:8.34
     restart: unless-stopped
     command: ["gotenberg", "--api-port=3000"]
     networks: [internal]
