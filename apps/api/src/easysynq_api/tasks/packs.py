@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from ..config import get_settings
 from ..services.packs import build, build_and_cache_portfolio, reap_stalled_builds
-from .app import app
+from .app import task
 
 logger = logging.getLogger("easysynq.packs.tasks")
 
@@ -58,13 +58,13 @@ async def _run_reaper() -> dict[str, int]:
         await engine.dispose()
 
 
-@app.task(name="easysynq.packs.build_evidence_pack")  # type: ignore[untyped-decorator]
+@task(name="easysynq.packs.build_evidence_pack")
 def build_evidence_pack(pack_id: str) -> None:
     """Assemble + seal one evidence pack (idempotent on retry; fail-closed)."""
     asyncio.run(_run_build(pack_id))
 
 
-@app.task(name="easysynq.packs.reap_stalled_builds")  # type: ignore[untyped-decorator]
+@task(name="easysynq.packs.reap_stalled_builds")
 def reap_stalled_builds_task() -> dict[str, int]:
     """Flip packs stuck in BUILDING past the stall window → FAILED; returns ``{reaped}``."""
     return asyncio.run(_run_reaper())

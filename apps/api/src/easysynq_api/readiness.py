@@ -18,6 +18,7 @@ from sqlalchemy import text
 
 from .config import Settings, get_settings
 from .db.session import get_engine
+from .redis_client import redis_client
 
 
 def _find_migrations_dir() -> Path:
@@ -55,9 +56,7 @@ async def _check_postgres() -> DependencyStatus:
 
 async def _check_redis(settings: Settings) -> DependencyStatus:
     try:
-        import redis.asyncio as aioredis
-
-        client = aioredis.from_url(settings.redis_url)  # type: ignore[no-untyped-call]
+        client = redis_client()
         try:
             await client.ping()
         finally:
