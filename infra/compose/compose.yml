@@ -35,7 +35,7 @@ services:
     networks: [internal]
 
   redis:
-    image: redis:7
+    image: redis:8
     restart: unless-stopped
     command: ["redis-server", "--save", "", "--appendonly", "no"]
     healthcheck:
