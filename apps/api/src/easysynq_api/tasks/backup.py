@@ -2,7 +2,7 @@
 
 ``backup_run`` writes the nightly durable archive(s); ``backup_restore_test`` runs the gating
 backup→restore-into-scratch drill (gate G-C). Both follow the S6/S7 worker idiom — a thin
-``@app.task`` over ``asyncio.run`` of an async coroutine with its own disposed engine. The drill
+``@task`` over ``asyncio.run`` of an async coroutine with its own disposed engine. The drill
 needs the OWNER DB role for pg_dump/CREATE DATABASE; the worker container exposes it via
 ``DATABASE_URL_SYNC`` (the same owner DSN Alembic uses) — see CLAUDE.md.
 
@@ -21,16 +21,16 @@ from ..services.backup import (
     run_scheduled_backups,
     run_scheduled_restore_tests,
 )
-from .app import app
+from .app import task
 
 
-@app.task(name="easysynq.backup.run")  # type: ignore[untyped-decorator]
+@task(name="easysynq.backup.run")
 def backup_run() -> dict[str, Any]:
     """Nightly durable backup of every configured backup_policy (best-effort + logged)."""
     return asyncio.run(run_scheduled_backups())
 
 
-@app.task(name="easysynq.backup.restore_test")  # type: ignore[untyped-decorator]
+@task(name="easysynq.backup.restore_test")
 def backup_restore_test(org_id: str, actor_id: str | None = None) -> dict[str, Any]:
     """Run the backup→restore-into-scratch drill for ``org_id`` and persist PASS/FAIL (gate G-C)."""
     return asyncio.run(
@@ -38,7 +38,7 @@ def backup_restore_test(org_id: str, actor_id: str | None = None) -> dict[str, A
     )
 
 
-@app.task(name="easysynq.backup.scheduled_restore_test")  # type: ignore[untyped-decorator]
+@task(name="easysynq.backup.scheduled_restore_test")
 def backup_scheduled_restore_test() -> dict[str, Any]:
     """Scheduled (Beat) retained-backup verify for EVERY backup_policy — decrypts + restores the
     NEWEST RETAINED durable archive into scratch + runs the integrity triad, catching a

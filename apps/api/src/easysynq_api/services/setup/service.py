@@ -23,7 +23,6 @@ import zoneinfo
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-import redis.asyncio as aioredis
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -38,6 +37,7 @@ from ...db.models.storage_config import StorageConfig
 from ...db.models.system_config import SetupState, SystemConfig
 from ...logging import request_id_var
 from ...problems import ProblemException
+from ...redis_client import redis_client
 from ..audit.checkpoint import tamper_evidence_attested
 from ..backup import configure_backup_destination_check
 from ..vault import storage
@@ -104,7 +104,7 @@ def _emit(
 
 
 def _redis() -> Any:
-    return aioredis.from_url(get_settings().redis_url, decode_responses=True)  # type: ignore[no-untyped-call]
+    return redis_client(decode_responses=True)
 
 
 async def _check_rate_limit() -> None:
