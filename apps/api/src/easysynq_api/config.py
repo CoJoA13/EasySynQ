@@ -96,6 +96,11 @@ class Settings(BaseSettings):
     # Rolling sample size per Beat run (NULLS-FIRST rotation). A ``full`` pass (CLI
     # ``mirror scan --full``) ignores this and walks all blobs unconditionally.
     blob_verify_sample_size: int = 500
+    # Phase-1 (I-7): scheduled restore-test drill cadence — the gating backup→restore-into-scratch→
+    # integrity-triad drill is run for every backup_policy on this interval so a silently-rotting
+    # backup is caught between the manual G-C drills (the nightly job only WRITES archives). Weekly
+    # default; heavy (scratch DB + full pg_restore + blob re-hash) → deliberately infrequent.
+    restore_test_interval_seconds: int = 604800  # weekly
     # S-ack-1 (R43): the informational acknowledgement due window — due_at = mint + N days. RAG
     # display only; no escalation in v1 (the notifications family owns delivery/escalation).
     ack_due_days: int = 14

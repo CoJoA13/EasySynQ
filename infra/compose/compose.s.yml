@@ -1,26 +1,87 @@
 # S profile (tiny / pilot, ≤25 users). Single replica of everything; OpenSearch
 # absent (R34, Postgres-FTS only). This is the default shape — base already runs
 # one replica per service. `beat` is exactly 1 by design (never scale it).
+#
+# deploy.resources.limits = GENEROUS runaway-bounds (Phase-1 tech-debt: I-4), NOT reservations —
+# `docker compose up` (v2) applies them as hard per-container caps. They are sized to bound a runaway
+# (the ~1 GB Tika JVM, the renderer, a leaking worker) on a single small host WITHOUT biting normal
+# pilot use, so one misbehaving service can't starve its neighbours. Raise per your host for heavier
+# load; the M profile sizes its own (intentionally left to the operator's prod-host capacity).
 services:
+  postgres:
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2g
+  redis:
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512m
+  keycloak:
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 1536m   # JVM
   api:
     deploy:
       replicas: 1
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 1536m
   worker:
     deploy:
       replicas: 1
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2g       # orchestrates render / OCR
   renderer:
     deploy:
       replicas: 1
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 1536m
   tika:
     deploy:
       replicas: 1      # S-ing-2: one Tika sidecar serves the worker (OCR scales via worker cores).
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2g       # JVM ~1 GB + OCR headroom
   beat:
     deploy:
       replicas: 1      # NEVER more than 1 — two schedulers double-fire.
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512m
+  web:
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512m
+  proxy:
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512m
   # Dev-only: publish MinIO's S3 API to the host so the browser can reach the presigned PUT/GET URLs
   # (the in-app upload + controlled-copy download). Activate it by also setting
   # S3_PUBLIC_ENDPOINT=http://localhost:9000 in .env, so URLs are signed against this host. A real
   # deploy instead gives MinIO its own public endpoint rather than exposing it on the app host.
   minio:
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2g
     ports:
       - "${S3_PORT:-9000}:9000"
