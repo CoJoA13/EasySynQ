@@ -66,3 +66,24 @@ def test_returns_none_when_only_a_drill_residue_is_present(tmp_path: Path) -> No
     _touch(tmp_path, "easysynq-backup-fdeadbeefdeadbeefdeadbeefdeadbeef.tar")
     _touch(tmp_path, "easysynq-backup-fdeadbeefdeadbeefdeadbeefdeadbeef.tar.sha256")
     assert _newest_retained_archive(str(tmp_path)) is None
+
+
+def test_skips_in_progress_newest_without_sidecar(tmp_path: Path) -> None:
+    """The Codex P2 overlap case: the weekly verify races a nightly that has written the newest
+    .tar.enc but NOT its .sha256 sidecar yet. The finder must skip that in-progress archive and fall
+    back to the newest COMPLETE one — else the verify FAILs a backup merely still being written."""
+    older = "easysynq-backup-20260301T000000Z-cccccccc.tar.enc"
+    _touch(tmp_path, older)
+    _touch(tmp_path, older + ".sha256")
+    newest_in_progress = "easysynq-backup-20260615T120000Z-bbbbbbbb.tar.enc"
+    _touch(tmp_path, newest_in_progress)  # sidecar not written yet
+    newest = _newest_retained_archive(str(tmp_path))
+    assert newest is not None
+    assert newest.name == older, newest.name  # fell back to the complete archive
+
+
+def test_returns_none_when_only_incomplete_archive(tmp_path: Path) -> None:
+    """If the ONLY archive lacks its sidecar, there is nothing complete to verify → None (SKIP), not
+    a spurious FAIL on a half-written backup."""
+    _touch(tmp_path, "easysynq-backup-20260615T120000Z-bbbbbbbb.tar.enc")  # no sidecar
+    assert _newest_retained_archive(str(tmp_path)) is None

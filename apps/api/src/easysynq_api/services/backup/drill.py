@@ -525,12 +525,19 @@ _DURABLE_ARCHIVE_RE = re.compile(r"easysynq-backup-\d{8}T\d{6}Z-[0-9a-f]{8}\.tar
 
 
 def _newest_retained_archive(destination: str) -> Path | None:
-    """The NEWEST durable archive in ``destination`` (the one an operator would actually restore
-    from) — the encrypted ``…tar.enc`` or the plaintext-fallback ``…tar``, restricted to the durable
-    ``YYYYMMDDTHHMMSSZ-<uuid8>`` stamp (so ``.sha256`` sidecars AND a hard-crash drill residue are
-    excluded; see ``_DURABLE_ARCHIVE_RE``). The stamp sorts chronologically, so the lexical-max
-    matching name is the chronologically-newest archive. ``None`` if the directory is absent or has
-    no durable archive yet."""
+    """The NEWEST *complete* durable archive in ``destination`` (the one an operator would actually
+    restore from) — the encrypted ``…tar.enc`` or the plaintext-fallback ``…tar``, restricted to the
+    durable ``YYYYMMDDTHHMMSSZ-<uuid8>`` stamp (so ``.sha256`` sidecars AND a hard-crash drill
+    residue are excluded; see ``_DURABLE_ARCHIVE_RE``). The stamp sorts chronologically, so the
+    lexical-max matching name is the chronologically-newest archive.
+
+    An archive is a candidate ONLY once its ``.sha256`` sidecar exists: the weekly verifier can
+    overlap ``backup-nightly`` (both Beat-scheduled; the weekly interval is a multiple of the
+    nightly), and ``build_durable_backup`` writes the ``.tar``/``.tar.enc`` BEFORE its sidecar — so
+    selecting the newest in-progress archive would FAIL ``verify_archive`` (sidecar absent) and
+    persist a spurious ``RESTORE_TEST_FAILED`` for a backup merely still being written. Skipping
+    sidecar-less archives falls back to the newest COMPLETE one (Codex P2, #155). ``None`` if the
+    directory is absent or has no complete durable archive yet."""
     dest_dir = Path(destination)
     if not dest_dir.is_dir():
         return None
@@ -538,7 +545,7 @@ def _newest_retained_archive(destination: str) -> Path | None:
         (
             p
             for p in dest_dir.glob("easysynq-backup-*.tar*")
-            if _DURABLE_ARCHIVE_RE.fullmatch(p.name)
+            if _DURABLE_ARCHIVE_RE.fullmatch(p.name) and p.with_name(p.name + ".sha256").exists()
         ),
         key=lambda p: p.name,
     )
