@@ -45,6 +45,15 @@ _MAX_MEMBER_BYTES = 8 * 1024 * 1024
 # Largest prefix of an RTF / legacy-OLE body we scan for link markers (linked-field instructions
 # and the OLE link monikers live early; a deep scan only adds cost, never correctness).
 _MAX_TEXT_SCAN_BYTES = 4 * 1024 * 1024
+# TOTAL zip-scan budget (zip-bomb confinement). The per-member cap above bounds ONE part, but a zip
+# packed with thousands of ~8 MB members could still force gigabytes of decompression. So the zip
+# scan stops once it has either inspected ``_MAX_ZIP_MEMBERS`` members OR decompressed
+# ``_MAX_ZIP_TOTAL_BYTES`` cumulatively, whichever first — then fails open (LinkScan(False)),
+# consistent with the doctrine (a false negative here is the bounded cost of refusing to be
+# zip-bombed; a real Office package has a handful of small .rels/content parts, far under either
+# bound). Both caps generously exceed any legitimate Office package.
+_MAX_ZIP_MEMBERS = 512
+_MAX_ZIP_TOTAL_BYTES = 64 * 1024 * 1024
 
 # ── MIME groupings ────────────────────────────────────────────────────────────────────────
 # Only RTF and legacy-OLE are routed by mime; OOXML/ODF are detected by CONTAINER CONTENT (a zip
@@ -148,7 +157,7 @@ def _scan_zip_container(source_bytes: bytes) -> LinkScan:
             if is_ooxml:
                 return _scan_ooxml(zf, names)
             if "content.xml" in lower:
-                return _scan_odf(zf)
+                return _scan_odf(zf, names)
     except Exception:  # noqa: BLE001 — not a real/usable zip → fail-open
         return LinkScan(False)
     return LinkScan(False)
@@ -201,29 +210,59 @@ def _read_member(zf: zipfile.ZipFile, name: str) -> bytes | None:
     return data
 
 
-# ── Shared field-code link detector (OOXML field instructions + RTF \fldinst) ─────────────────
+# ── OOXML field-code link detector (WordprocessingML/PresentationML field instructions) ───────
 
-# A *linked* (not embedded, not hyperlink) field instruction. Both WordprocessingML
-# (``<w:instrText>INCLUDEPICTURE "…"</w:instrText>`` / ``<w:fldSimple w:instr="…">``) and RTF
-# (``{\*\fldinst INCLUDEPICTURE …}``) name the same field keywords:
-#   • INCLUDEPICTURE / INCLUDETEXT — inherently file-linking field instructions: their target may
-#     be a URL, a UNC path, ``C:\x.png`` or ``/x.png`` — ALL dropped by 8.34. Flag on the keyword,
-#     independent of the target form (closes the relative/local-absolute false-negative).
-#   • LINK — the DDE/OLE-link field. Matched only by callers that already know they are inside a
-#     field context (RTF anchors it to ``\fldinst``; OOXML members ARE field XML). The whole-word
+# A *linked* (not embedded, not hyperlink) field instruction. OOXML field keywords are
+# **case-insensitive** (Word writes ``INCLUDEPICTURE`` but accepts/round-trips any case), and the
+# two families anchor differently:
+#   • INCLUDEPICTURE / INCLUDETEXT — inherently file-linking field instructions whose target may be
+#     a URL, a UNC path, ``C:\x.png`` or ``/x.png`` — ALL dropped by 8.34. These keywords NEVER
+#     occur in body prose, so they are flagged ANYWHERE in a content part, word-bounded, regardless
+#     of target form (closes the relative/local-absolute false-negative).
+#   • LINK — the DDE/OLE-link field. A bare ``LINK`` is an ordinary English word, so it must be
+#     anchored to a FIELD-INSTRUCTION context: inside a ``<…instrText>…</…instrText>`` element OR a
+#     ``…instr="…"`` attribute (the ``<w:fldSimple>`` compact form). A body ``<w:t>LINK</w:t>`` run
+#     is NOT a field instruction → not flagged (the Fix-1 false-positive). The whole-word
 #     ``\bLINK\b`` deliberately does NOT match inside ``HYPERLINK``: ``R`` and ``L`` are both word
-#     chars, so there is no ``\b`` between them (verified by the ``HYPERLINK``-not-flagged tests).
+#     chars, so there is no ``\b`` between them (verified by the ``HYPERLINK``-not-flagged tests),
+#     and that boundary holds under IGNORECASE.
 # Each keyword is bracketed by ``\b`` word boundaries — matches ``>INCLUDEPICTURE`` (tag-tight) and
-# `` INCLUDEPICTURE `` (space-delimited) alike; no quantifier → ReDoS-trivial.
-_FIELD_KEYWORD_RE = re.compile(r"\b(?:INCLUDEPICTURE|INCLUDETEXT|LINK)\b")
+# `` INCLUDEPICTURE `` (space-delimited) alike; no nested quantifier → ReDoS-safe.
+_OOXML_INCLUDE_RE = re.compile(r"\b(?:INCLUDEPICTURE|INCLUDETEXT)\b", re.IGNORECASE)
+# ``LINK`` inside an ``instrText`` element body (any namespace prefix). The opening-tag matcher
+# ``<[^<>/][^<>]*\binstrText\b[^<>]*>`` requires the char after ``<`` to be neither ``<``/``>`` nor
+# a ``/`` — so it matches the OPENING ``<w:instrText>`` only, never the ``</w:instrText>`` close
+# (whose trailing text would otherwise be reachable). A single bounded lazy gap (``[^<]{0,4096}?``)
+# between that ``>`` and ``LINK`` confines the search to one instruction-text element — non-nested,
+# so ReDoS-safe; ``[^<]`` can't cross into a sibling element's text, so a later body
+# ``<w:t>LINK</w:t>`` is not reachable.
+_OOXML_INSTRTEXT_LINK_RE = re.compile(
+    r"<[^<>/][^<>]*\binstrText\b[^<>]*>[^<]{0,4096}?\bLINK\b",
+    re.IGNORECASE,
+)
+# ``LINK`` inside a ``…instr="…"`` field-instruction attribute (the ``<w:fldSimple w:instr="…">``
+# compact form). The bounded ``[^"]{0,4096}?`` stays inside the quoted attribute value — non-nested,
+# ReDoS-safe.
+_OOXML_INSTR_ATTR_LINK_RE = re.compile(
+    r"\binstr\s*=\s*\"[^\"]{0,4096}?\bLINK\b",
+    re.IGNORECASE,
+)
 # Linked-OLE-object control words (RTF) — a present marker is a linked (not embedded) object.
 _OLE_LINK_CW_RE = re.compile(r"\\obj(?:autlink|link)\b", re.IGNORECASE)
 
 
 def _has_linked_field(text: str) -> bool:
-    """True if ``text`` (a field-context string — an OOXML field member or an RTF \\fldinst window)
-    contains a linked field keyword. Pure regex, bounded input, ReDoS-safe."""
-    return _FIELD_KEYWORD_RE.search(text) is not None
+    """True if ``text`` (an OOXML content part) carries a linked field instruction.
+
+    ``INCLUDEPICTURE``/``INCLUDETEXT`` match anywhere (they are never body prose); ``LINK`` matches
+    ONLY inside an ``instrText`` element body or an ``instr="…"`` attribute (a field-instruction
+    context), so a bare ``<w:t>LINK</w:t>`` body run is not flagged. Case-insensitive (OOXML field
+    keywords are), pure regex, bounded input, ReDoS-safe."""
+    return (
+        _OOXML_INCLUDE_RE.search(text) is not None
+        or _OOXML_INSTRTEXT_LINK_RE.search(text) is not None
+        or _OOXML_INSTR_ATTR_LINK_RE.search(text) is not None
+    )
 
 
 # Content members whose field instructions can carry a linked INCLUDE*/LINK (WordprocessingML body,
@@ -254,15 +293,26 @@ def _scan_ooxml(zf: zipfile.ZipFile, names: list[str]) -> LinkScan:
     """Inspect every ``*.rels`` part for a non-hyperlink ``<Relationship TargetMode="External">``
     (External mode alone is the signal — the resource is OUTSIDE the package, even with a relative
     ``Target``), AND scan the WordprocessingML/PresentationML/SpreadsheetML content members for a
-    linked field instruction (INCLUDEPICTURE/INCLUDETEXT/LINK) that has no ``.rels`` entry."""
+    linked field instruction (INCLUDEPICTURE/INCLUDETEXT/LINK) that has no ``.rels`` entry.
+
+    Bounded against a zip-bomb: it **short-circuits** the moment a hit is found (an external rel in
+    the current member, or a field hit) and stops once the cumulative member-count
+    (:data:`_MAX_ZIP_MEMBERS`) or decompressed-byte budget (:data:`_MAX_ZIP_TOTAL_BYTES`) is
+    exhausted — then fails open (``LinkScan(False)``), per the doctrine."""
     rel_count = 0
     field_hit = False
+    members_inspected = 0
+    total_bytes = 0
     for name in names:
+        if members_inspected >= _MAX_ZIP_MEMBERS or total_bytes >= _MAX_ZIP_TOTAL_BYTES:
+            break  # cumulative zip-bomb budget exhausted → fail open with what we have
         nl = name.lower()
         if nl.endswith(".rels"):
             data = _read_member(zf, name)
             if data is None:
                 continue
+            members_inspected += 1
+            total_bytes += len(data)
             root = _parse_xml(data)
             if root is None:
                 continue
@@ -285,14 +335,19 @@ def _scan_ooxml(zf: zipfile.ZipFile, names: list[str]) -> LinkScan:
                 if (rel.get("Type") or "").strip().lower().endswith("/hyperlink"):
                     continue
                 rel_count += 1
+            if rel_count:
+                break  # short-circuit: a hit downgrades the doc; no need to scan further parts
         elif not field_hit and _is_ooxml_field_member(nl):
             data = _read_member(zf, name)
             if data is None:
                 continue
+            members_inspected += 1
+            total_bytes += len(data)
             # ``errors="ignore"`` never raises; field keywords are ASCII so a mojibake tail can't
             # hide or fabricate one. Field XML is UTF-8 by the OOXML spec.
             if _has_linked_field(data.decode("utf-8", errors="ignore")):
                 field_hit = True
+                break  # short-circuit
     if rel_count:
         return LinkScan(
             True,
@@ -310,10 +365,24 @@ def _scan_ooxml(zf: zipfile.ZipFile, names: list[str]) -> LinkScan:
 # ── ODF (.odt / .ods / .odp) ──────────────────────────────────────────────────────────────────
 
 
-def _scan_odf(zf: zipfile.ZipFile) -> LinkScan:
-    """Inspect ``content.xml`` + ``styles.xml`` for any ``xlink:href`` whose value is an external
-    scheme/path. A relative ``Pictures/...`` href is embedded → ignored."""
+def _normalize_member_path(href: str) -> str:
+    """Normalize a relative ODF href to a zip-member-style path for membership comparison.
+
+    Strips a single leading ``./`` (a ``../`` escape can never be a member and is left intact so the
+    membership test fails). Pure string normalization — no filesystem access."""
+    h = href.strip()
+    while h.startswith("./"):
+        h = h[2:]
+    return h
+
+
+def _scan_odf(zf: zipfile.ZipFile, names: list[str]) -> LinkScan:
+    """Inspect ``content.xml`` + ``styles.xml`` for any ``xlink:href`` that 8.34 drops: an external
+    scheme/absolute/UNC target, OR a RELATIVE href that is NOT a package member (a sibling-file link
+    like ``../assets/logo.png`` — dropped just like an external one). A relative href that IS a zip
+    member (``Pictures/100000000.png``) is genuinely embedded → ignored."""
     href_attr = f"{{{_XLINK_NS}}}href"
+    members = frozenset(names)
     count = 0
     for member in ("content.xml", "styles.xml"):
         data = _read_member(zf, member)
@@ -326,27 +395,40 @@ def _scan_odf(zf: zipfile.ZipFile) -> LinkScan:
             if el.tag in _ODF_HYPERLINK_TAGS:  # a hyperlink anchor renders fine → skip
                 continue
             href = el.get(href_attr)
-            if href is not None and _is_external_target(href):
+            if href is None or not href.strip():
+                continue
+            if _is_external_target(href):
+                count += 1
+            elif _normalize_member_path(href) not in members:
+                # A relative href that is NOT a zip member is a link to a sibling file outside the
+                # package (``../assets/logo.png``, or a bare ``logo.png`` not packed in) — 8.34
+                # drops it the same as an external one. An embedded ``Pictures/…`` IS a member →
+                # skipped.
                 count += 1
     if count:
         return LinkScan(
             True,
-            f"{count} external xlink:href target(s) — LibreOffice 8.34 omits these",
+            f"{count} external/linked xlink:href target(s) — LibreOffice 8.34 omits these",
         )
     return LinkScan(False)
 
 
 # ── RTF ────────────────────────────────────────────────────────────────────────────────────
 
-# A linked RTF field is detected by the field KEYWORD inside a field context, independent of the
-# target form (the target may be ``C:\x.png``, ``/x.png``, ``\\unc\x``, or ``http://…`` — ALL
-# dropped by 8.34). INCLUDEPICTURE/INCLUDETEXT are inherently file-linking instructions (flag on the
-# keyword). ``LINK`` matches ONLY when it follows a ``\fldinst`` field-instruction marker within a
-# bounded window — so body prose ("click this link http://…") never matches. The gap is a SINGLE
-# bounded lazy quantifier (``[\s\S]{0,256}?``) — non-nested, so no catastrophic backtracking. The
-# leading word boundary on each keyword means ``\fldinst`` then "HYPERLINK" does NOT match ``LINK``.
+# A linked RTF field is detected by the field COMMAND keyword immediately following a ``\fldinst``
+# field-instruction marker, independent of the target form (the target may be ``C:\x.png``,
+# ``/x.png``, ``\\unc\x``, or ``http://…`` — ALL dropped by 8.34). INCLUDEPICTURE/INCLUDETEXT are
+# inherently file-linking instructions; ``LINK`` is the DDE/OLE-link command. The keyword must be
+# the COMMAND token — i.e. appear right after ``\fldinst`` separated only by RTF field-wrapper chars
+# (whitespace + the group/control punctuation ``{ } \ *`` of ``{\*\fldinst …}``), NOT arbitrary
+# text. So ``\fldinst {HYPERLINK "https://x/link"}`` does NOT match the ``link`` buried in the URL
+# argument (a hyperlink must keep rendering), while ``\fldinst {INCLUDEPICTURE "…"}`` /
+# ``{\*\fldinst LINK Excel.Sheet …}`` DO. The gap is a SINGLE bounded class repetition
+# (``[\s{}\\*]{0,40}``) — non-nested, no catastrophic backtracking. The leading word boundary on
+# each keyword means a following "HYPERLINK" command does NOT match ``LINK`` (R/L are both word
+# chars).
 _RTF_FLDINST_LINK_RE = re.compile(
-    r"\\fldinst[\s\S]{0,256}?\b(?:INCLUDEPICTURE|INCLUDETEXT|LINK)\b",
+    r"\\fldinst[\s{}\\*]{0,40}\b(?:INCLUDEPICTURE|INCLUDETEXT|LINK)\b",
     re.IGNORECASE,
 )
 
@@ -377,10 +459,16 @@ def _scan_legacy_ole(source_bytes: bytes) -> LinkScan:
     """Bounded raw-byte scan of a legacy OLE2 document for a link moniker (ASCII or UTF-16LE).
 
     No structural parse (CFB has no relationships part) — a substring hit on a link marker is enough
-    to fail-safe to source-only. Capped at ``_MAX_TEXT_SCAN_BYTES``."""
+    to fail-safe to source-only. URI schemes are case-insensitive (``FILE://`` == ``file://``), so
+    both views are lowercased before matching the (already-lowercase) markers; the UNC ``\\\\``
+    marker is case-irrelevant. Capped at ``_MAX_TEXT_SCAN_BYTES``."""
     window = source_bytes[:_MAX_TEXT_SCAN_BYTES]
+    # Lowercase both the ASCII view and the UTF-16LE-decoded view so an uppercase ``FILE://`` /
+    # ``HTTP://`` moniker is caught. ``errors="ignore"`` never raises on misaligned binary bytes.
+    ascii_view = window.decode("latin-1").lower()
+    utf16_view = window.decode("utf-16-le", errors="ignore").lower()
     for marker in _OLE_LINK_MARKERS:
-        if marker.encode("ascii") in window or marker.encode("utf-16-le") in window:
+        if marker in ascii_view or marker in utf16_view:
             return LinkScan(
                 True,
                 "linked OLE object / external reference — LibreOffice 8.34 omits these",

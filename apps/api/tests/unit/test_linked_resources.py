@@ -169,6 +169,46 @@ def test_ooxml_hyperlink_field_is_not_flagged() -> None:
     assert scan_linked_resources(_DOCX, blob) == LinkScan(False)
 
 
+def test_ooxml_body_text_link_word_is_not_flagged() -> None:
+    """Fix 1: a body run ``<w:t>LINK</w:t>`` (ordinary prose, NOT a field instruction) must NOT be
+    flagged — ``LINK`` only matches inside an ``instrText`` element / ``instr="…"`` attribute."""
+    doc = (
+        b'<?xml version="1.0"?>'
+        b'<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        b"<w:body><w:p><w:r><w:t>LINK</w:t></w:r></w:p></w:body></w:document>"
+    )
+    blob = _zip({"word/document.xml": doc, "[Content_Types].xml": b"<Types/>"})
+    assert scan_linked_resources(_DOCX, blob) == LinkScan(False)
+
+
+def test_ooxml_instrtext_link_dde_field_is_flagged() -> None:
+    """Fix 1: a DDE LINK field (``<w:instrText> LINK Excel.Sheet …</w:instrText>``) — ``LINK``
+    inside a field-instruction element — IS flagged."""
+    doc = (
+        b'<?xml version="1.0"?>'
+        b'<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        b'<w:body><w:p><w:r><w:instrText> LINK Excel.Sheet.12 "C:\\\\book.xlsx" "Sheet1!R1C1"'
+        b"</w:instrText></w:r></w:p></w:body></w:document>"
+    )
+    blob = _zip({"word/document.xml": doc, "[Content_Types].xml": b"<Types/>"})
+    scan = scan_linked_resources(_DOCX, blob)
+    assert scan.has_external_links is True
+    assert scan.reason is not None and "field" in scan.reason
+
+
+def test_ooxml_lowercase_includepicture_field_is_flagged() -> None:
+    """Fix 2: OOXML field keywords are case-insensitive — a lowercase ``includepicture`` instruction
+    must still be flagged."""
+    doc = (
+        b'<?xml version="1.0"?>'
+        b'<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        b'<w:body><w:p><w:r><w:instrText>includepicture "https://x/i.png"</w:instrText></w:r>'
+        b"</w:p></w:body></w:document>"
+    )
+    blob = _zip({"word/document.xml": doc, "[Content_Types].xml": b"<Types/>"})
+    assert scan_linked_resources(_DOCX, blob).has_external_links is True
+
+
 def test_ooxml_variant_mime_external_rel_is_flagged_by_container() -> None:
     """A .dotx template carries a variant mime ABSENT from any fixed allowlist; routing by container
     content (a present ``.rels`` member) still scans it, so its external rel is flagged (P1-c)."""
@@ -207,14 +247,30 @@ def test_odf_external_href_is_flagged() -> None:
 
 
 def test_odf_relative_href_is_not_flagged() -> None:
-    """A relative Pictures/ href is embedded → False."""
+    """A relative ``Pictures/`` href that IS a packed zip member is embedded → False (Fix 4: an
+    embedded image is a real member, so it passes the membership test)."""
     blob = _zip(
         {
             "content.xml": _odf_content("Pictures/100000000.png"),
+            "Pictures/100000000.png": b"\x89PNG embedded bytes",
             "styles.xml": b"<x/>",
         }
     )
     assert scan_linked_resources(_ODT, blob) == LinkScan(False)
+
+
+def test_odf_relative_href_not_a_member_is_flagged() -> None:
+    """Fix 4: a RELATIVE href to a sibling file that is NOT a zip member (``../assets/logo.png``) is
+    a linked external relative path — 8.34 drops it just like an absolute/scheme link → flagged."""
+    blob = _zip(
+        {
+            "content.xml": _odf_content("../assets/logo.png"),
+            "styles.xml": b"<x/>",
+        }
+    )
+    scan = scan_linked_resources(_ODT, blob)
+    assert scan.has_external_links is True
+    assert scan.reason is not None and "xlink:href" in scan.reason
 
 
 def test_odf_external_href_in_styles_is_flagged() -> None:
@@ -227,7 +283,13 @@ def test_odf_external_href_in_styles_is_flagged() -> None:
         b'xlink:href="file:///etc/logo.png"/>'
         b"</office:document-styles>"
     )
-    blob = _zip({"content.xml": _odf_content("Pictures/x.png"), "styles.xml": styles})
+    blob = _zip(
+        {
+            "content.xml": _odf_content("Pictures/x.png"),
+            "Pictures/x.png": b"embedded",  # a real member so only the styles.xml href triggers
+            "styles.xml": styles,
+        }
+    )
     assert scan_linked_resources(_ODT, blob).has_external_links is True
 
 
@@ -302,6 +364,20 @@ def test_rtf_includepicture_posix_target_is_flagged() -> None:
     assert scan_linked_resources(_RTF, body).has_external_links is True
 
 
+def test_rtf_fldinst_hyperlink_with_link_in_url_is_not_flagged() -> None:
+    r"""Fix 3: ``\fldinst {HYPERLINK "https://example.com/link"}`` must NOT match — the ``link`` is
+    buried in the URL ARGUMENT, not the field COMMAND token, and a hyperlink must keep rendering."""
+    body = rb'{\rtf1{\field{\*\fldinst HYPERLINK "https://example.com/link"}}}'
+    assert scan_linked_resources(_RTF, body) == LinkScan(False)
+
+
+def test_rtf_fldinst_link_command_is_flagged() -> None:
+    r"""Fix 3: ``{\*\fldinst LINK Excel.Sheet.12 …}`` — ``LINK`` as the field COMMAND token directly
+    after ``\fldinst`` (separated only by field-wrapper chars) — IS flagged."""
+    body = rb'{\rtf1{\field{\*\fldinst LINK Excel.Sheet.12 "C:\\book.xlsx" "Sheet1!R1C1"}}}'
+    assert scan_linked_resources(_RTF, body).has_external_links is True
+
+
 def test_rtf_body_prose_link_without_fldinst_is_not_flagged() -> None:
     r"""Body prose containing the word "link" and a URL, with NO \fldinst field context, is NOT
     flagged (P2-b) — LINK only matches inside an RTF field instruction."""
@@ -338,6 +414,18 @@ def test_legacy_ole_utf16le_file_marker_is_flagged() -> None:
     assert scan_linked_resources(_DOC, body).has_external_links is True
 
 
+def test_legacy_ole_uppercase_ascii_file_marker_is_flagged() -> None:
+    """Fix 5: URI schemes are case-insensitive — an uppercase ASCII ``FILE://`` is caught."""
+    body = b"\xd0\xcf\x11\xe0" + b"...padding..." + b"FILE://server/x" + b"...more..."
+    assert scan_linked_resources(_DOC, body).has_external_links is True
+
+
+def test_legacy_ole_uppercase_http_marker_is_flagged() -> None:
+    """Fix 5: an uppercase ``HTTP://`` moniker is caught too."""
+    body = b"\xd0\xcf\x11\xe0" + b"see HTTP://example.com/x for more"
+    assert scan_linked_resources(_DOC, body).has_external_links is True
+
+
 def test_legacy_ole_clean_bytes_are_not_flagged() -> None:
     """A .doc with no link marker → False."""
     body = b"\xd0\xcf\x11\xe0" + (b"\x00\x01\x02\x03" * 64)
@@ -367,6 +455,29 @@ def test_ooxml_malformed_rels_xml_fails_open() -> None:
     """A real zip whose .rels member is malformed XML → False (per-member fail-open, no crash)."""
     blob = _zip({"word/_rels/document.xml.rels": b"<Relationships><not-closed"})
     assert scan_linked_resources(_DOCX, blob) == LinkScan(False)
+
+
+def test_ooxml_many_clean_members_are_bounded_and_not_flagged() -> None:
+    """Fix 6: a zip with FAR more clean ``.rels`` parts than the member budget, none external, is
+    NOT flagged and the loop is bounded (it stops once the cumulative member budget is spent)."""
+    clean = _rels(
+        '<Relationship Id="rId1" '
+        'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" '
+        'Target="styles.xml"/>'
+    )
+    members = {"[Content_Types].xml": b"<Types/>"}
+    members.update({f"word/parts/p{i}.xml.rels": clean for i in range(2000)})
+    assert scan_linked_resources(_DOCX, _zip(members)) == LinkScan(False)
+
+
+def test_ooxml_short_circuits_on_first_external_rel() -> None:
+    """Fix 6: an external rel in an EARLY member flags immediately even amid thousands of parts (the
+    short-circuit returns on the first hit without scanning the rest)."""
+    ext = _rels('<Relationship Id="rId1" Target="https://x/logo.png" TargetMode="External"/>')
+    clean = _rels('<Relationship Id="rId1" Target="styles.xml"/>')
+    members = {"word/_rels/document.xml.rels": ext}
+    members.update({f"word/parts/p{i}.xml.rels": clean for i in range(2000)})
+    assert scan_linked_resources(_DOCX, _zip(members)).has_external_links is True
 
 
 def test_mime_with_charset_parameter_is_handled() -> None:
