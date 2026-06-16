@@ -141,6 +141,17 @@ tags:
       (PATCH) + cancel; assess (S-dcr-2), route + approval (S-dcr-4), implement/close (S-dcr-5) are
       later slices. Keys are the seeded changeRequest.* catalog family (R5 normalizes doc 15's
       dcr.*): create/read are granted by 0004, assess/close backfilled by 0040 — no new keys.
+  - name: improvement
+    description: >-
+      Improvement Initiatives — clause 10.3 continual improvement (slice S-improvement-1, doc 02
+      Cl 10.3, doc 14 §9, R46). An initiative is an own-table mutable-state WORKFLOW object (R22/R46
+      — NOT a kind=RECORD artifact and NOT a documented_information subtype; clause 10.3 is non-★ so
+      there is no checklist node to flip). The mutable stage (Open → InProgress → Completed → Closed,
+      + Cancelled) is the headline; an append-only improvement_initiative_stage_event trail is the
+      immutable, unsigned history. Two additive CONTENT keys (R46, catalog 100→102): improvement.read
+      (GET, row-filtered) / improvement.manage (create, edit, transition), both PROCESS finest-scope
+      (SYSTEM fallback). S-improvement-1 wires the manual raise + lifecycle; the OFI-finding/MR-output
+      spawn (S-improvement-2) and the register UI (S-improvement-3) are later slices.
   - name: objectives
     description: >-
       Quality Objectives (S-obj-1, doc 02 Cl 6.2 / doc 14 §8) — clause-6.2 objectives as
@@ -4541,6 +4552,143 @@ paths:
         "404": { $ref: "#/components/responses/ProblemResponse" }
         "409": { $ref: "#/components/responses/ProblemResponse" }
 
+  /improvement-initiatives:
+    post:
+      tags: [improvement]
+      operationId: createImprovementInitiative
+      summary: >-
+        Manually raise an improvement initiative at Open (S-improvement-1; doc 02 Cl 10.3, R46;
+        source=manual). Allocates IMP-{YYYY}-{NNNN}; writes the genesis Open stage event + an
+        INITIATIVE_RAISED audit. Needs improvement.manage (scope from the body's optional process_id;
+        SYSTEM fallback).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ImprovementInitiativeCreate" }
+      responses:
+        "201":
+          description: The raised initiative (stage=Open).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ImprovementInitiative" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "422": { $ref: "#/components/responses/ProblemResponse" }
+    get:
+      tags: [improvement]
+      operationId: listImprovementInitiatives
+      summary: >-
+        List the org's improvement initiatives (newest first), row-filtered to what the caller may
+        improvement.read. Filter stage / source / owner_user_id / process_id. Needs improvement.read.
+      parameters:
+        - name: stage
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/ImprovementStage" }
+        - name: source
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/ImprovementSource" }
+        - { name: owner_user_id, in: query, required: false, schema: { type: string, format: uuid } }
+        - { name: process_id, in: query, required: false, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: The org's (visible) improvement initiatives.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/ImprovementInitiative" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+  /improvement-initiatives/{initiative_id}:
+    get:
+      tags: [improvement]
+      operationId: getImprovementInitiative
+      summary: A single improvement initiative. Needs improvement.read.
+      parameters:
+        - { name: initiative_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: The initiative.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ImprovementInitiative" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+    patch:
+      tags: [improvement]
+      operationId: patchImprovementInitiative
+      summary: >-
+        Edit an initiative's mutable metadata (title / description / target_outcome / owner_user_id /
+        process_id) — never the stage (use the transition endpoint). Writes an INITIATIVE_UPDATED audit
+        when something changes. Needs improvement.manage.
+      parameters:
+        - { name: initiative_id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ImprovementInitiativePatch" }
+      responses:
+        "200":
+          description: The edited initiative.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ImprovementInitiative" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "422": { $ref: "#/components/responses/ProblemResponse" }
+  /improvement-initiatives/{initiative_id}/stage-events:
+    get:
+      tags: [improvement]
+      operationId: listImprovementInitiativeStageEvents
+      summary: The append-only stage-event trail (oldest → newest). Needs improvement.read.
+      parameters:
+        - { name: initiative_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: The transition trail.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/ImprovementInitiativeStageEvent" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+  /improvement-initiatives/{initiative_id}/transition:
+    post:
+      tags: [improvement]
+      operationId: transitionImprovementInitiative
+      summary: >-
+        Move an initiative along the unsigned FSM (Open → InProgress → Completed → Closed, + Cancelled
+        from the pre-completion states). FSM-guarded — 409 improvement_transition_invalid on an illegal
+        move. A Cancelled / Closed move requires a comment; outcome (on a Closed move) folds into the
+        sealed stage_event payload (the lightweight 10.3 evidence). Appends a stage event + an
+        INITIATIVE_TRANSITIONED audit. Needs improvement.manage.
+      parameters:
+        - { name: initiative_id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ImprovementInitiativeTransition" }
+      responses:
+        "200":
+          description: The transitioned initiative.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ImprovementInitiative" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409": { $ref: "#/components/responses/ProblemResponse" }
+        "422": { $ref: "#/components/responses/ProblemResponse" }
+
   /capas/{capa_id}/raise-dcr:
     post:
       tags: [dcr]
@@ -6946,6 +7094,104 @@ components:
       additionalProperties: false
       properties:
         comment: { type: [string, "null"], maxLength: 2000 }
+    ImprovementStage:
+      type: string
+      description: >-
+        The improvement-initiative lifecycle (R46 §4 — the simple stage-completion close, unsigned).
+        Closed / Cancelled are terminal; Cancelled is reachable only from Open / InProgress.
+      enum: [Open, InProgress, Completed, Closed, Cancelled]
+    ImprovementSource:
+      type: string
+      description: >-
+        Where the initiative was raised from. OFI = a one-click raise off an OBSERVATION/OFI finding;
+        review = an MR-output spawn; manual = a standalone raise (the OFI/review spawns land in
+        S-improvement-2). OFI is upper to match FindingType.OFI.
+      enum: [OFI, review, manual]
+    ImprovementInitiativeStageEvent:
+      type: object
+      additionalProperties: false
+      required: [id, from_state, to_state, actor_id, comment, payload, occurred_at]
+      properties:
+        id: { type: string, format: uuid }
+        from_state:
+          oneOf:
+            - { $ref: "#/components/schemas/ImprovementStage" }
+            - { type: "null" }
+          description: NULL on the genesis (raise/create) event.
+        to_state: { $ref: "#/components/schemas/ImprovementStage" }
+        actor_id: { type: [string, "null"], format: uuid }
+        comment: { type: [string, "null"] }
+        payload:
+          type: [object, "null"]
+          additionalProperties: true
+          description: The sealed per-transition narrative (e.g. the Closed realized-benefit outcome note).
+        occurred_at: { type: string, format: date-time }
+    ImprovementInitiative:
+      type: object
+      additionalProperties: false
+      required:
+        [id, identifier, title, description, target_outcome, source, source_link_id, process_id,
+         owner_user_id, stage, opened_at, closed_at, created_by, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        identifier: { type: string, description: "IMP-{YYYY}-{NNNN} (4-digit SEQ)." }
+        title: { type: string }
+        description: { type: [string, "null"] }
+        target_outcome:
+          type: [string, "null"]
+          description: The intended improvement / success measure (the 10.3 opportunity).
+        source: { $ref: "#/components/schemas/ImprovementSource" }
+        source_link_id:
+          type: [string, "null"]
+          format: uuid
+          description: >-
+            The polymorphic origin id (a finding.id for OFI / a review_output.id for review; NULL for
+            manual). Populated by the S-improvement-2 spawns.
+        process_id: { type: [string, "null"], format: uuid }
+        owner_user_id: { type: [string, "null"], format: uuid }
+        stage: { $ref: "#/components/schemas/ImprovementStage" }
+        opened_at: { type: string, format: date-time }
+        closed_at:
+          type: [string, "null"]
+          format: date-time
+          description: Set at the Closed / Cancelled transition.
+        created_by: { type: string, format: uuid }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: [string, "null"], format: date-time }
+    ImprovementInitiativeCreate:
+      type: object
+      additionalProperties: false
+      required: [title]
+      properties:
+        title: { type: string, minLength: 1, maxLength: 500 }
+        description: { type: [string, "null"], maxLength: 8000 }
+        target_outcome: { type: [string, "null"], maxLength: 4000 }
+        process_id: { type: [string, "null"], format: uuid }
+        owner_user_id: { type: [string, "null"], format: uuid }
+    ImprovementInitiativePatch:
+      type: object
+      additionalProperties: false
+      description: All fields optional; null/absent = unchanged (this slice cannot clear a field).
+      properties:
+        title: { type: [string, "null"], minLength: 1, maxLength: 500 }
+        description: { type: [string, "null"], maxLength: 8000 }
+        target_outcome: { type: [string, "null"], maxLength: 4000 }
+        owner_user_id: { type: [string, "null"], format: uuid }
+        process_id: { type: [string, "null"], format: uuid }
+    ImprovementInitiativeTransition:
+      type: object
+      additionalProperties: false
+      required: [to_state]
+      properties:
+        to_state: { $ref: "#/components/schemas/ImprovementStage" }
+        comment:
+          type: [string, "null"]
+          maxLength: 4000
+          description: Required for a Cancelled / Closed move (a terminal decision is always explained).
+        outcome:
+          type: [string, "null"]
+          maxLength: 8000
+          description: On a Closed move, folded into the sealed stage_event.payload (the 10.3 evidence).
     DocumentLinkType:
       type: string
       enum: [parent_of, child_of, references, supersedes]

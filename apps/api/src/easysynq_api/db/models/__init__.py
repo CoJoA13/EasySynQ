@@ -25,6 +25,7 @@ from ._dcr_enums import (
 )
 from ._drift_enums import DriftScanKind, DriftScanStatus
 from ._evidence_enums import EvidenceForTargetType
+from ._improvement_enums import ImprovementSource, ImprovementStage
 from ._ingestion_enums import (
     ImportCommitResultStatus,
     ImportConfidenceBand,
@@ -107,6 +108,8 @@ from .import_file import ImportFile
 from .import_proposal_node import ImportProposalNode
 from .import_run import ImportRun
 from .import_version_family import ImportVersionFamily
+from .improvement_initiative import ImprovementInitiative
+from .improvement_initiative_stage_event import ImprovementInitiativeStageEvent
 from .kpi_measurement import KpiMeasurement
 from .management_review import ManagementReview
 from .mirror_build import MirrorBuild
@@ -215,6 +218,10 @@ __all__ = [
     "ImportRun",
     "ImportRunStatus",
     "ImportVersionFamily",
+    "ImprovementInitiative",
+    "ImprovementInitiativeStageEvent",
+    "ImprovementSource",
+    "ImprovementStage",
     "KpiMeasurement",
     "ManagementReview",
     "ManagementReviewCloseState",
