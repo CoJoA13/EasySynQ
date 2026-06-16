@@ -1,5 +1,7 @@
-import { Badge, Group, Paper, Text } from "@mantine/core";
-import type { ObjectiveScorecard } from "../../lib/types";
+import { Group, Paper, Text } from "@mantine/core";
+import type { ObjectiveRag, ObjectiveScorecard } from "../../lib/types";
+import { StatusBadge } from "../../lib/StatusBadge";
+import { RAG_TONE } from "./labels";
 
 interface Props {
   total: number;
@@ -7,12 +9,10 @@ interface Props {
   byRag: ObjectiveScorecard["by_rag"];
 }
 
-const CHIPS: { key: keyof ObjectiveScorecard["by_rag"]; color: string }[] = [
-  { key: "green", color: "green" },
-  { key: "amber", color: "yellow" },
-  { key: "red", color: "red" },
-  { key: "unmeasured", color: "gray" },
-];
+// The RAG keys carry the count + the canonical status tone (success/warning/danger/neutral) — so each
+// scorecard chip routes through StatusBadge: the tone supplies the AA-tuned colour pair AND a non-colour
+// glyph, and the "{count} {key}" label disambiguates (status is NEVER colour-only, DP-7).
+const KEYS: ObjectiveRag[] = ["green", "amber", "red", "unmeasured"];
 
 export function ObjectiveScorecardBand({ total, onTarget, byRag }: Props) {
   return (
@@ -22,10 +22,8 @@ export function ObjectiveScorecardBand({ total, onTarget, byRag }: Props) {
           {onTarget} / {total} on target
         </Text>
         <Group gap="xs">
-          {CHIPS.map((c) => (
-            <Badge key={c.key} color={c.color} variant="light">
-              {byRag[c.key]} {c.key}
-            </Badge>
+          {KEYS.map((k) => (
+            <StatusBadge key={k} tone={RAG_TONE[k]} label={`${byRag[k]} ${k}`} kind="Objectives" />
           ))}
         </Group>
       </Group>

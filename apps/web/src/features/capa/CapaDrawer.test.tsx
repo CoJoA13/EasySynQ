@@ -2,13 +2,22 @@ import { screen } from "@testing-library/react";
 import { axe } from "jest-axe";
 import { http, HttpResponse } from "msw";
 import { expect, test, vi } from "vitest";
+import { TONE_GLYPH } from "../../lib/status";
 import { server } from "../../test/msw/server";
 import { renderWithProviders } from "../../test/render";
 import { CapaDrawer } from "./CapaDrawer";
 
 test("renders the title, the closed-loop thread and the close gate", async () => {
-  renderWithProviders(<CapaDrawer capaId="ca000001-0001-0001-0001-000000000001" onClose={vi.fn()} />);
+  renderWithProviders(
+    <CapaDrawer capaId="ca000001-0001-0001-0001-000000000001" onClose={vi.fn()} />,
+  );
   expect(await screen.findByText(/Supplier re-evaluation overdue/)).toBeInTheDocument();
+  // Severity rides the canonical StatusBadge (Major → warning ◔): label + accessible name + a
+  // non-colour glyph (DP-7), replacing the old ad-hoc red/orange/gray Mantine colour map. Scope to
+  // the badge's unique aria-label — "Major" / "◔" can appear elsewhere in the drawer body.
+  const severity = screen.getByLabelText("Severity: Major");
+  expect(severity).toHaveTextContent("Major");
+  expect(severity).toHaveTextContent(TONE_GLYPH.warning);
   expect(screen.getByText("Closed-loop thread")).toBeInTheDocument();
   expect(screen.getByText("Raised")).toBeInTheDocument();
   expect(screen.getByText("Containment")).toBeInTheDocument();
@@ -16,7 +25,9 @@ test("renders the title, the closed-loop thread and the close gate", async () =>
 });
 
 test("renders the Verify→RootCause loop honestly (cycle_marker>0)", async () => {
-  renderWithProviders(<CapaDrawer capaId="ca000005-0005-0005-0005-000000000005" onClose={vi.fn()} />);
+  renderWithProviders(
+    <CapaDrawer capaId="ca000005-0005-0005-0005-000000000005" onClose={vi.fn()} />,
+  );
   // the loop fixture carries multiple current-cycle (cycle 1) stages, each labelled "Cycle 2"
   const loopLabels = await screen.findAllByText(/Cycle 2/);
   expect(loopLabels.length).toBeGreaterThan(0);
@@ -28,7 +39,9 @@ test("surfaces a calm error (not an endless spinner) when the detail load fails"
       HttpResponse.json({ code: "not_found", title: "Not found" }, { status: 404 }),
     ),
   );
-  renderWithProviders(<CapaDrawer capaId="ca000099-0099-0099-0099-000000000099" onClose={vi.fn()} />);
+  renderWithProviders(
+    <CapaDrawer capaId="ca000099-0099-0099-0099-000000000099" onClose={vi.fn()} />,
+  );
   expect(await screen.findByText(/Couldn't load this CAPA/)).toBeInTheDocument();
 });
 
@@ -70,12 +83,22 @@ test("renders the Advance panel form for the caller's permitted stage", async ()
         raised_by: "bbbb1111-1111-1111-1111-111111111111",
         created_at: "2026-05-28T09:00:00+00:00",
         stages: [
-          { id: "s1", stage: "Raised", content_block: { problem: "x" }, cycle_marker: 0, created_by: "bbbb1111-1111-1111-1111-111111111111", created_at: "2026-05-28T09:00:00+00:00", evidence_links: [] },
+          {
+            id: "s1",
+            stage: "Raised",
+            content_block: { problem: "x" },
+            cycle_marker: 0,
+            created_by: "bbbb1111-1111-1111-1111-111111111111",
+            created_at: "2026-05-28T09:00:00+00:00",
+            evidence_links: [],
+          },
         ],
       }),
     ),
   );
-  renderWithProviders(<CapaDrawer capaId="ca000002-0002-0002-0002-000000000002" onClose={() => {}} />);
+  renderWithProviders(
+    <CapaDrawer capaId="ca000002-0002-0002-0002-000000000002" onClose={() => {}} />,
+  );
   expect(await screen.findByText("Next step")).toBeInTheDocument();
   expect(await screen.findByRole("button", { name: /Record root cause/ })).toBeInTheDocument();
 });

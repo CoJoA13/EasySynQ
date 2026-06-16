@@ -1,21 +1,12 @@
-import {
-  Alert,
-  Anchor,
-  Badge,
-  Button,
-  Container,
-  Group,
-  Loader,
-  Table,
-  Text,
-  Title,
-} from "@mantine/core";
+import { Alert, Anchor, Button, Container, Group, Loader, Table, Text, Title } from "@mantine/core";
 import { useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { usePermissions } from "../../app/shell/usePermissions";
 import { RegisterToolbar, SortableTh } from "../../lib/RegisterToolbar";
 import { sortRows, useDebouncedSearch, useTableSort } from "../../lib/registerControls";
-import type { MgmtReview } from "../../lib/types";
+import { StatusBadge } from "../../lib/StatusBadge";
+import type { Tone } from "../../lib/status";
+import type { MgmtReview, MgmtReviewCloseState } from "../../lib/types";
 import { useRowKeyboardNav } from "../../lib/useRowKeyboardNav";
 import { StateBadge } from "../document/StateBadge";
 import { useMgmtReviews } from "./hooks";
@@ -23,6 +14,14 @@ import { NewManagementReviewModal } from "./NewManagementReviewModal";
 
 const SORT_KEYS = ["identifier", "title", "period", "review_date", "status"] as const;
 type SortKey = (typeof SORT_KEYS)[number];
+
+// close_state → label + canonical status tone (feature-local; only Tone + glyphs are shared,
+// S-statusbadge-2). Closed → success ✓ (closed-ok / done); ActionsTracked → info ● (open/active,
+// actions still being tracked, not yet closed).
+const CLOSE_STATE_META: Record<MgmtReviewCloseState, { label: string; tone: Tone }> = {
+  Closed: { label: "Closed", tone: "success" },
+  ActionsTracked: { label: "Actions tracked", tone: "info" },
+};
 
 // The Status column shows the close_state ("Closed"/"Actions tracked") once a review is released; sort
 // on that token so the two open-action reviews cluster apart from the closed ones.
@@ -191,12 +190,11 @@ export function ManagementReviewsRegisterPage() {
                     <Table.Td>{mr.review_date ?? "—"}</Table.Td>
                     <Table.Td>
                       {mr.close_state ? (
-                        <Badge
-                          variant="light"
-                          color={mr.close_state === "Closed" ? "gray" : "blue"}
-                        >
-                          {mr.close_state === "Closed" ? "Closed" : "Actions tracked"}
-                        </Badge>
+                        <StatusBadge
+                          tone={CLOSE_STATE_META[mr.close_state].tone}
+                          label={CLOSE_STATE_META[mr.close_state].label}
+                          kind="Status"
+                        />
                       ) : (
                         "—"
                       )}

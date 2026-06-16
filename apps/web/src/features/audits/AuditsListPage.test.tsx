@@ -37,7 +37,7 @@ test("table renders identifier/title/lead/state/date, newest-first; identifier l
   expect(within(rows[1]!).getByText("REC-000061")).toBeInTheDocument();
   expect(within(rows[1]!).getByText("Purchasing & Suppliers audit")).toBeInTheDocument();
   expect(within(rows[1]!).getByText("Mara Quality")).toBeInTheDocument(); // directory resolution
-  expect(within(rows[1]!).getByText(/● In progress/)).toBeInTheDocument();
+  expect(within(rows[1]!).getByText("In progress")).toBeInTheDocument();
   expect(within(rows[2]!).getByText("REC-000066")).toBeInTheDocument();
   expect(within(rows[3]!).getByText("REC-000055")).toBeInTheDocument();
   // a lead the directory can't resolve degrades to a short id ("—" when null).

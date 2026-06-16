@@ -16,18 +16,23 @@ function r(ui: React.ReactElement) {
 }
 
 const nc: Finding = {
-  id: "fd000001-0001-0001-0001-000000000001", identifier: "REC-000062",
+  id: "fd000001-0001-0001-0001-000000000001",
+  identifier: "REC-000062",
   title: "Supplier re-evaluation overdue for 2 vendors",
-  audit_id: "au000001-0001-0001-0001-000000000001", finding_type: "NC", severity: "Major",
-  clause_ref: "8.4", process_ref: "Purchasing",
+  audit_id: "au000001-0001-0001-0001-000000000001",
+  finding_type: "NC",
+  severity: "Major",
+  clause_ref: "8.4",
+  process_ref: "Purchasing",
   auto_capa_id: "ca000001-0001-0001-0001-000000000001",
-  correction_of: null, superseded_by_correction: null,
+  correction_of: null,
+  superseded_by_correction: null,
 };
 
 test("a live NC renders badge + title + tags + the CAPA state chip + the deep-link", () => {
   r(<FindingPanel finding={nc} capaState="RootCause" canCorrect onCorrect={() => {}} />);
   expect(screen.getByText("REC-000062")).toBeInTheDocument();
-  expect(screen.getByText(/⚑ Major NC/)).toBeInTheDocument();
+  expect(screen.getByText("Major NC")).toBeInTheDocument();
   expect(screen.getByText(/Supplier re-evaluation overdue/)).toBeInTheDocument();
   expect(screen.getByText("8.4")).toBeInTheDocument();
   expect(screen.getByText(/CAPA: Root cause/)).toBeInTheDocument();
@@ -61,7 +66,13 @@ test("a successor shows its corrects-link; Correct fires the callback when allow
   const u = userEvent.setup();
   r(
     <FindingPanel
-      finding={{ ...nc, finding_type: "OBSERVATION", severity: null, auto_capa_id: null, correction_of: "fd000003-0003-0003-0003-000000000003" }}
+      finding={{
+        ...nc,
+        finding_type: "OBSERVATION",
+        severity: null,
+        auto_capa_id: null,
+        correction_of: "fd000003-0003-0003-0003-000000000003",
+      }}
       capaState={undefined}
       canCorrect
       onCorrect={onCorrect}

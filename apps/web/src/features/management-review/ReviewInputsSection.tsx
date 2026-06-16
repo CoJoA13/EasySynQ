@@ -1,18 +1,27 @@
 import { Alert, Badge, Card, Group, Stack, Table, Text, Title } from "@mantine/core";
 import type { ReviewInput } from "../../lib/types";
 import { humanizeToken } from "../../lib/labels";
+import { StatusBadge } from "../../lib/StatusBadge";
+import type { Tone } from "../../lib/status";
 import { formatTimestamp } from "../../lib/time";
 import { INPUT_LABEL } from "./labels";
 
-const RAG_COLOR: Record<string, string> = {
-  green: "green",
-  amber: "yellow",
-  red: "red",
-  unmeasured: "gray",
+// The four RAG bands carried by the OBJECTIVES_STATUS summary (a finite key set so the maps below
+// index to a defined value under noUncheckedIndexedAccess).
+type RagBand = "green" | "amber" | "red" | "unmeasured";
+
+// RAG → canonical status tone (feature-local — only Tone + glyphs are shared, S-statusbadge-2).
+// green→success ✓ (on target), amber→warning ◔ (at risk), red→danger ✕ (off target),
+// unmeasured→neutral ○ (no data) — mirrors the objectives-register RAG mapping.
+const RAG_TONE: Record<RagBand, Tone> = {
+  green: "success",
+  amber: "warning",
+  red: "danger",
+  unmeasured: "neutral",
 };
 
 // #2b: the RAG MEANING, not the colour word — so the auditor reads the status on a greyscale export.
-const RAG_MEANING: Record<string, string> = {
+const RAG_MEANING: Record<RagBand, string> = {
   green: "on target",
   amber: "at risk",
   red: "off target",
@@ -43,9 +52,12 @@ function ObjectivesBand({ summary }: { summary: Record<string, unknown> }) {
       </Text>
       <Group gap="xs">
         {(["green", "amber", "red", "unmeasured"] as const).map((k) => (
-          <Badge key={k} variant="light" color={RAG_COLOR[k]}>
-            {`${byRag[k] ?? 0} ${RAG_MEANING[k]}`}
-          </Badge>
+          <StatusBadge
+            key={k}
+            tone={RAG_TONE[k]}
+            label={`${byRag[k] ?? 0} ${RAG_MEANING[k]}`}
+            kind="Objective status"
+          />
         ))}
       </Group>
     </Stack>

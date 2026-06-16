@@ -1,6 +1,7 @@
-import { Alert, Anchor, Badge, Container, Group, Loader, Table, Text, Title } from "@mantine/core";
+import { Alert, Anchor, Container, Group, Loader, Table, Text, Title } from "@mantine/core";
 import { Link } from "react-router-dom";
 import { AsOf } from "../../lib/AsOf";
+import { StatusBadge } from "../../lib/StatusBadge";
 import { CoverageBadge } from "./CoverageBadge";
 import { useComplianceChecklist } from "./useComplianceChecklist";
 
@@ -87,14 +88,7 @@ export function CompliancePage() {
               </Table.Td>
               <Table.Td>
                 {r.overdue_review ? (
-                  <Badge
-                    variant="light"
-                    color="var(--es-danger)"
-                    leftSection={<span aria-hidden="true">▲</span>}
-                    aria-label="Review overdue"
-                  >
-                    Overdue
-                  </Badge>
+                  <StatusBadge tone="danger" label="Overdue" kind="Review" />
                 ) : (
                   <Text c="dimmed" size="sm">
                     —

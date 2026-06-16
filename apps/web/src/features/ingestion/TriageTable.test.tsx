@@ -44,8 +44,9 @@ function baseProps(over: Partial<Parameters<typeof TriageTable>[0]> = {}) {
 test("renders the high-confidence row with its identifier and a 'High' confidence", () => {
   renderWithProviders(<TriageTable {...baseProps()} />);
   expect(screen.getByText("SOP-PUR-014 Purchasing.docx")).toBeInTheDocument();
-  // ConfidenceCell (Task 6) carries aria-label="Confidence: High 92%" (title-cased band label).
-  expect(screen.getByLabelText("Confidence: High 92%")).toBeInTheDocument();
+  // ConfidenceCell carries aria-label="Confidence: High · 92%" (title-cased band · kind_conf%,
+  // unified visible/accessible label after the S-statusbadge-2 StatusBadge migration).
+  expect(screen.getByLabelText("Confidence: High · 92%")).toBeInTheDocument();
 });
 
 test("shows the family member-count meta line for a file in familyMap", () => {

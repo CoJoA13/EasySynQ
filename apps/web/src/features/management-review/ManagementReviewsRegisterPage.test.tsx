@@ -4,6 +4,8 @@ import { http, HttpResponse } from "msw";
 import { Route, Routes, useParams } from "react-router-dom";
 import { expect, it, describe } from "vitest";
 import { renderWithProviders } from "../../test/render";
+import { TONE_GLYPH } from "../../lib/status";
+import type { MgmtReviewListResponse } from "../../lib/types";
 import { server } from "../../test/msw/server";
 import { ManagementReviewsRegisterPage } from "./ManagementReviewsRegisterPage";
 
@@ -188,5 +190,56 @@ describe("ManagementReviewsRegisterPage", () => {
       expect(screen.getByText("detail route: mr-0001-0001-0001-000000000001")).toBeInTheDocument(),
     );
     expect(posted).toBe(true);
+  });
+
+  // S-statusbadge-2: the Status column close_state chip is the canonical StatusBadge — a text label
+  // AND a non-colour glyph (never colour alone, DP-7). Closed→success ✓, ActionsTracked→info ●.
+  it("renders the close_state column as a canonical StatusBadge (label + glyph + accessible name)", async () => {
+    server.use(
+      http.get("/api/v1/management-reviews", () =>
+        HttpResponse.json({
+          data: [
+            {
+              id: "mr-0001-0001-0001-000000000001",
+              identifier: "MR-001",
+              title: "Closed review",
+              current_state: "Effective",
+              period_label: "2026 Annual",
+              review_date: "2026-06-12",
+              attendees: null,
+              close_state: "Closed",
+              closed_at: "2026-06-13T09:00:00+00:00",
+              created_at: "2026-06-01T09:00:00+00:00",
+            },
+            {
+              id: "mr-0002-0002-0002-000000000002",
+              identifier: "MR-002",
+              title: "Tracking review",
+              current_state: "Effective",
+              period_label: "2026 Q1",
+              review_date: "2026-03-15",
+              attendees: null,
+              close_state: "ActionsTracked",
+              closed_at: null,
+              created_at: "2026-03-01T09:00:00+00:00",
+            },
+          ],
+        } satisfies MgmtReviewListResponse),
+      ),
+    );
+    renderWithProviders(<ManagementReviewsRegisterPage />, { route: "/management-reviews" });
+    await waitFor(() => expect(screen.getByText("MR-001")).toBeInTheDocument());
+
+    // Closed → success ✓
+    const closedRow = screen.getByText("MR-001").closest("tr")!;
+    expect(within(closedRow).getByLabelText("Status: Closed")).toBeInTheDocument();
+    expect(within(closedRow).getByText("Closed")).toBeInTheDocument();
+    expect(within(closedRow).getByText(TONE_GLYPH.success)).toBeInTheDocument();
+
+    // ActionsTracked → info ●, label "Actions tracked"
+    const trackedRow = screen.getByText("MR-002").closest("tr")!;
+    expect(within(trackedRow).getByLabelText("Status: Actions tracked")).toBeInTheDocument();
+    expect(within(trackedRow).getByText("Actions tracked")).toBeInTheDocument();
+    expect(within(trackedRow).getByText(TONE_GLYPH.info)).toBeInTheDocument();
   });
 });

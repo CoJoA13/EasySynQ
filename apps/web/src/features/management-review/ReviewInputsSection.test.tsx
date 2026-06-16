@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import { screen } from "@testing-library/react";
 import { renderWithProviders } from "../../test/render";
+import { TONE_GLYPH } from "../../lib/status";
 import type { ReviewInput } from "../../lib/types";
 import { ReviewInputsSection } from "./ReviewInputsSection";
 
@@ -75,6 +76,24 @@ it("renders the OBJECTIVES_STATUS card with the RAG band and on-target count", (
   expect(screen.getByText(/0 unmeasured/i)).toBeInTheDocument();
   // The input label
   expect(screen.getByText(/Quality objectives status/i)).toBeInTheDocument();
+});
+
+it("RAG chips carry the canonical StatusBadge tone + glyph + accessible name (colour-safe)", () => {
+  // S-statusbadge-2: each RAG chip is a StatusBadge — a text label AND a non-colour glyph (never
+  // colour alone, DP-7). green→success ✓, amber→warning ◔, red→danger ✕, unmeasured→neutral ○.
+  renderWithProviders(<ReviewInputsSection inputs={[OBJECTIVES_INPUT]} />);
+  const cases = [
+    ["3 on target", TONE_GLYPH.success],
+    ["1 at risk", TONE_GLYPH.warning],
+    ["1 off target", TONE_GLYPH.danger],
+    ["0 unmeasured", TONE_GLYPH.neutral],
+  ] as const;
+  for (const [label, glyph] of cases) {
+    // accessible name = "<kind>: <label>"; the glyph is the non-colour channel.
+    // (all four tones are distinct here, so each glyph appears exactly once.)
+    expect(screen.getByLabelText(`Objective status: ${label}`)).toBeInTheDocument();
+    expect(screen.getByText(glyph)).toBeInTheDocument();
+  }
 });
 
 it("renders the AUDIT_RESULTS card as a generic key/value table", () => {

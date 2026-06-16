@@ -1,3 +1,4 @@
+import type { Tone } from "../../lib/status";
 import type { CapaCloseState, CapaSource, NcSeverity } from "../../lib/types";
 
 export type CapaColumnKey = "open" | "correction" | "rootcause" | "action" | "verify" | "closed";
@@ -32,11 +33,13 @@ export const SEVERITY_LABEL: Record<NcSeverity, string> = {
   Minor: "Minor",
 };
 
-// Mantine badge color per severity (Critical red, Major orange, Minor gray).
-export const SEVERITY_COLOR: Record<NcSeverity, string> = {
-  Critical: "red",
-  Major: "orange",
-  Minor: "gray",
+// Canonical status tone per severity (S-statusbadge-2): Critical is a hard fail (danger ✕), Major is a
+// needs-attention amber (warning ◔ — it was never red), Minor is inert (neutral ○). Feeds the shared
+// StatusBadge via SeverityBadge — replaces the old ad-hoc Mantine colour map (red/orange/gray).
+export const SEVERITY_TONE: Record<NcSeverity, Tone> = {
+  Critical: "danger",
+  Major: "warning",
+  Minor: "neutral",
 };
 
 export const SOURCE_LABEL: Record<CapaSource, string> = {

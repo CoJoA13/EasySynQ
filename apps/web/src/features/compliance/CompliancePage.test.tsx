@@ -52,9 +52,9 @@ describe("overdue-review leg (S-web-8)", () => {
     renderWithProviders(<CompliancePage />, { route: "/compliance" });
     await screen.findByText(/4\.3/);
     const overdueRow = screen.getByText(/4\.3/).closest("tr")!;
-    expect(within(overdueRow).getByLabelText("Review overdue")).toBeInTheDocument();
+    expect(within(overdueRow).getByLabelText("Review: Overdue")).toBeInTheDocument();
     const cleanRow = screen.getByText(/6\.2/).closest("tr")!;
-    expect(within(cleanRow).queryByLabelText("Review overdue")).not.toBeInTheDocument();
+    expect(within(cleanRow).queryByLabelText("Review: Overdue")).not.toBeInTheDocument();
   });
 
   test("overdue is orthogonal — the 4.3 row is still COVERED", async () => {
@@ -62,6 +62,6 @@ describe("overdue-review leg (S-web-8)", () => {
     await screen.findByText(/4\.3/);
     const row = screen.getByText(/4\.3/).closest("tr")!;
     expect(within(row).getByLabelText("Coverage: Covered")).toBeInTheDocument();
-    expect(within(row).getByLabelText("Review overdue")).toBeInTheDocument();
+    expect(within(row).getByLabelText("Review: Overdue")).toBeInTheDocument();
   });
 });

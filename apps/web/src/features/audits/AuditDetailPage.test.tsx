@@ -32,8 +32,9 @@ test("renders header (identifier · title · state) + plan/programme context", a
   harness("au000001-0001-0001-0001-000000000001");
   expect(await screen.findByText("REC-000061")).toBeInTheDocument();
   expect(screen.getByText("Purchasing & Suppliers audit")).toBeInTheDocument();
-  // getAllBy: once Task 13 mounts the stepper, "● In progress" appears twice (badge + current node).
-  expect(screen.getAllByText(/● In progress/).length).toBeGreaterThan(0);
+  // The lifecycle stepper's current node renders "● In progress"; the migrated AuditStateBadge now
+  // renders its glyph + label as separate nodes, so assert the badge's label text directly.
+  expect(screen.getAllByText("In progress").length).toBeGreaterThan(0);
   expect(screen.getByText("Mara Quality")).toBeInTheDocument(); // lead via directory
   // Plan context: scheduled date + checklist ref + auditee process + the programme title.
   expect(await screen.findByText(/2026-05-28/)).toBeInTheDocument();

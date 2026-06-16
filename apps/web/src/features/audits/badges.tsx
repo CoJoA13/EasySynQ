@@ -1,37 +1,37 @@
-import { Badge } from "@mantine/core";
+import { StatusBadge } from "../../lib/StatusBadge";
+import type { Tone } from "../../lib/status";
 import type { AuditState, FindingType, NcSeverity } from "../../lib/types";
-import { SEVERITY_COLOR, SEVERITY_LABEL } from "../capa/columns";
+import { SEVERITY_LABEL } from "../capa/columns";
 import { AUDIT_STATE_LABEL } from "./labels";
 
-// DP-7: glyph + label, never color-only. Text content is the accessible name (no aria-label —
-// looped rows would duplicate it; tests scope within(row)).
-const STATE_GLYPH: Record<AuditState, string> = {
-  Scheduled: "◷",
-  Planned: "◷",
-  InProgress: "●",
-  FindingsDraft: "✎",
-  Reported: "▤",
-  Closing: "◔",
-  Closed: "✓",
-};
-
-const STATE_COLOR: Record<AuditState, string> = {
-  Scheduled: "gray",
-  Planned: "gray",
-  InProgress: "blue",
-  FindingsDraft: "yellow",
-  Reported: "violet",
-  Closing: "orange",
-  Closed: "green",
+// Audit lifecycle state → canonical tone (FSM: Scheduled → Planned → InProgress → FindingsDraft →
+// Reported → Closing → Closed). The tone supplies both the AA-tuned colour pair AND the non-colour
+// glyph via StatusBadge (status is NEVER colour-only, DP-7). Labels are reused verbatim from
+// AUDIT_STATE_LABEL. Map stays feature-local (only Tone + glyphs are shared).
+const STATE_TONE: Record<AuditState, Tone> = {
+  Scheduled: "neutral", // not yet started (was gray)
+  Planned: "neutral", // plan finalized, not yet started (was gray)
+  InProgress: "info", // fieldwork active (was blue ●)
+  FindingsDraft: "warning", // drafting findings — in progress (was yellow)
+  Reported: "info", // report issued, not yet closed (was violet)
+  Closing: "warning", // closing in progress (was orange)
+  Closed: "success", // done / closed-ok (was green ✓)
 };
 
 export function AuditStateBadge({ state }: { state: AuditState }) {
   return (
-    <Badge variant="light" color={STATE_COLOR[state]}>
-      {STATE_GLYPH[state]} {AUDIT_STATE_LABEL[state]}
-    </Badge>
+    <StatusBadge tone={STATE_TONE[state]} label={AUDIT_STATE_LABEL[state]} kind="Audit state" />
   );
 }
+
+// Finding severity → canonical tone. Faithful to the prior hues AND consistent with CAPA's
+// SeverityBadge (one severity convention app-wide): Critical → danger (red), Major → warning (amber),
+// Minor → neutral (gray). An NC with no recorded severity still reads as danger (the prior bare-NC red).
+const SEVERITY_TONE: Record<NcSeverity, Tone> = {
+  Critical: "danger",
+  Major: "warning",
+  Minor: "neutral",
+};
 
 export function FindingTypeBadge({
   type,
@@ -41,23 +41,12 @@ export function FindingTypeBadge({
   severity: NcSeverity | null;
 }) {
   if (type === "NC") {
-    const sev = severity ? `${SEVERITY_LABEL[severity]} ` : "";
-    return (
-      <Badge variant="light" color={severity ? SEVERITY_COLOR[severity] : "red"}>
-        ⚑ {sev}NC
-      </Badge>
-    );
+    const label = severity ? `${SEVERITY_LABEL[severity]} NC` : "NC";
+    const tone: Tone = severity ? SEVERITY_TONE[severity] : "danger";
+    return <StatusBadge tone={tone} label={label} kind="Finding type" />;
   }
   if (type === "OBSERVATION") {
-    return (
-      <Badge variant="light" color="gray">
-        ◆ Observation
-      </Badge>
-    );
+    return <StatusBadge tone="neutral" label="Observation" kind="Finding type" />;
   }
-  return (
-    <Badge variant="light" color="blue">
-      ➚ OFI
-    </Badge>
-  );
+  return <StatusBadge tone="info" label="OFI" kind="Finding type" />;
 }
