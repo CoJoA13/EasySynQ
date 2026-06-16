@@ -164,6 +164,17 @@ def test_scoring_rejects_non_positive(tmp_path: Path) -> None:
         load_rule_pack(_write(tmp_path, "version: t\nscoring:\n  high_threshold: 0\n"))
 
 
+def test_scoring_rejects_cutoff_above_score_cap(tmp_path: Path) -> None:
+    # candidate scores cap at 100, so a cutoff/floor/margin above 100 makes a band/kind unreachable
+    with pytest.raises(RulePackError, match="must be <= 100"):
+        load_rule_pack(_write(tmp_path, "version: t\nscoring:\n  high_threshold: 101\n"))
+    with pytest.raises(RulePackError, match="must be <= 100"):
+        load_rule_pack(_write(tmp_path, "version: t\nscoring:\n  kind_unknown_floor: 150\n"))
+    # the boundary value 100 is allowed
+    pack = load_rule_pack(_write(tmp_path, "version: t\nscoring:\n  high_threshold: 100\n"))
+    assert pack.scoring.high_threshold == 100
+
+
 def test_scoring_rejects_bool_and_float(tmp_path: Path) -> None:
     # bool ⊂ int, so the bool guard must come first; a float is not an int either.
     with pytest.raises(RulePackError, match="positive int"):

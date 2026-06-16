@@ -94,6 +94,19 @@ class ScoringConfig:
     pdca_tie_margin: int = 5  # clause scores within this → the higher-numbered wins the PDCA derive
 
 
+# The cutoff / floor / margin fields are compared against candidate scores, which ``_score_rules`` /
+# ``_score_processes`` cap at 100 — so the loader bounds them to ≤ 100 (a value above the cap makes
+# a band or kind unreachable). The two process weights are additive contributions that saturate at
+# the cap, so they stay positive-only (like the YAML matcher weights).
+_SCORE_DOMAIN_FIELDS = (
+    "high_threshold",
+    "medium_threshold",
+    "kind_unknown_floor",
+    "ambiguous_margin",
+    "pdca_tie_margin",
+)
+
+
 @dataclass(frozen=True, slots=True)
 class RulePack:
     version: str
@@ -185,8 +198,9 @@ def _scoring(raw: Any) -> ScoringConfig:
     """Parse + validate an optional top-level ``scoring:`` mapping. Absent → calibrated defaults.
 
     Every supplied knob must be a positive int; an unknown key is refused (a typo silently taking
-    the default would be a quiet mis-calibration), and ``medium_threshold`` may not exceed
-    ``high_threshold`` (else the MEDIUM band would be empty / inverted)."""
+    the default would be a quiet mis-calibration); the score-domain fields are bounded to ≤ 100 (a
+    cutoff above the score cap makes a band/kind unreachable); and ``medium_threshold`` may not
+    exceed ``high_threshold`` (else the MEDIUM band would be empty / inverted)."""
     if raw is None:
         return ScoringConfig()
     if not isinstance(raw, dict):
@@ -201,6 +215,14 @@ def _scoring(raw: Any) -> ScoringConfig:
             raise RulePackError(f"scoring.{key} must be a positive int (got {val!r})")
         values[key] = val
     cfg = ScoringConfig(**values)
+    # Score-domain fields above the 100-point cap make a band/kind unreachable — fail fast on the
+    # quiet mis-calibration rather than ship it (the process weights saturate at the cap, so they
+    # are deliberately not bounded here).
+    for fld in _SCORE_DOMAIN_FIELDS:
+        if getattr(cfg, fld) > 100:
+            raise RulePackError(
+                f"scoring.{fld} must be <= 100 (candidate scores are capped at 100)"
+            )
     if cfg.medium_threshold > cfg.high_threshold:
         raise RulePackError("scoring.medium_threshold must be <= high_threshold")
     return cfg
