@@ -20,7 +20,7 @@ that `just`, the `.sh` glue, and Claude Code's `.claude/hooks/*.sh` all require*
   ingestion `O_NOFOLLOW` ×5, in 3 files), and `pytest -m integration` can't run locally either → treat
   the **full unit + integration suites as CI-authoritative**, NOT a clean local gate. For a clean LOCAL
   signal run the fast sub-checks (ruff + mypy-strict + the web loop) + **targeted** unit files
-  (`uv run pytest tests/unit/test_<x>.py`); anything failing outside the 17-baseline is a real regression.
+  (`cd apps/api && uv run pytest tests/unit/test_<x>.py`); anything failing outside the 17-baseline is a real regression.
 - `just demo-user` — (re)create the `demo` login (see Keycloak note). `just seed-personas` — the SoD
   `priya`/`ken`/`mara` fixture. Both now live in `scripts/demo-user.sh` / `scripts/seed-personas.sh`
   (plain scripts, not justfile shebang recipes) so they run identically on Windows + Git Bash.
