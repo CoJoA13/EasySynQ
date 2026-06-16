@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import sys
 import uuid
 from pathlib import Path
 from typing import Any
@@ -33,6 +34,14 @@ from easysynq_api.services.vault.mirror_scan import (
     quarantine_tree,
     write_quarantine,
     write_quarantine_index,
+)
+
+# These tests CREATE symlinks (retarget/type-swap, never-follow walk, symlinked-parent quarantine),
+# which needs an elevated privilege on native Windows (WinError 1314). CI (Linux) runs them;
+# skipping here keeps the owner's local Windows unit run clean (see the module docstring).
+_skip_on_windows = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="POSIX symlink creation needs an elevated privilege on Windows; CI (Linux) covers it",
 )
 
 
@@ -121,6 +130,7 @@ def test_extra_and_missing_files(tmp_path: Path) -> None:
     assert len(findings) == 2
 
 
+@_skip_on_windows
 def test_symlink_retarget_and_type_swaps(tmp_path: Path) -> None:
     build = tmp_path / "b"
     manifest, msha = _make_build(
@@ -157,6 +167,7 @@ def test_manifest_tamper_detected_via_stored_digest(tmp_path: Path) -> None:
     assert f.expected_sha256 == msha
 
 
+@_skip_on_windows
 def test_walker_never_follows_symlinks(tmp_path: Path) -> None:
     """A symlinked dir's contents must NOT be re-walked (py3.12 rglob would); an out-of-tree
     symlink target must never be entered."""
@@ -445,6 +456,7 @@ async def test_regular_file_builds_parent_is_quarantined(
     assert not (tmp_path / ".builds").exists()  # moved aside → builds.mkdir won't wedge
 
 
+@_skip_on_windows
 def test_quarantine_dir_rejects_symlinked_parent(tmp_path: Path) -> None:
     """Codex P2: a pre-planted `.quarantine` symlink would redirect the forensic evidence OUTSIDE
     the mirror; _quarantine_dir removes the redirect and writes the real dir under the mirror root.

@@ -18,7 +18,13 @@ from easysynq_api.domain.ingestion.rule_classifier import (
     _Scored,
     band_of,
 )
-from easysynq_api.domain.ingestion.rule_pack import Matcher, Rule, RulePack, default_rule_pack
+from easysynq_api.domain.ingestion.rule_pack import (
+    Matcher,
+    Rule,
+    RulePack,
+    ScoringConfig,
+    default_rule_pack,
+)
 
 _CLAUSE_PDCA = {
     "4.3": "PLAN",
@@ -186,3 +192,53 @@ def test_pdca_excludes_bare_header_clauses() -> None:
 def test_pdca_none_when_no_requirement_node_clause() -> None:
     assert _derive_pdca([_Scored("7", 90, None, ())], _CLAUSE_PDCA) is None
     assert _derive_pdca([], _CLAUSE_PDCA) is None
+
+
+# --- the pack's scoring config threads into banding / ambiguity (C-3) --------------------------
+
+
+def _type_only_pack(weight: int, scoring: ScoringConfig | None = None) -> RulePack:
+    m = Matcher(
+        signal="header_keyword",
+        target="header",
+        keywords=("alpha",),
+        weight=weight,
+        explanation="a",
+    )
+    return RulePack(
+        version="t",
+        type_rules=(Rule("A", (m,), "document"),),
+        scoring=scoring if scoring is not None else ScoringConfig(),
+    )
+
+
+def test_custom_scoring_high_threshold_downgrades_band() -> None:
+    f = FileFeatures(filename="x", rel_path="x", header_block="alpha")
+    default_band = RuleHeuristicClassifier(_type_only_pack(90)).classify(f, clause_pdca={}).band
+    raised = (
+        RuleHeuristicClassifier(_type_only_pack(90, ScoringConfig(high_threshold=95)))
+        .classify(f, clause_pdca={})
+        .band
+    )
+    assert default_band == "HIGH"  # 90 ≥ the default 85 cutoff
+    assert raised == "MEDIUM"  # same 90 score, the pack's raised cutoff downgrades it
+
+
+def test_custom_scoring_ambiguous_margin_changes_ambiguity() -> None:
+    a = Matcher(
+        signal="header_keyword", target="header", keywords=("alpha",), weight=50, explanation="a"
+    )
+    b = Matcher(
+        signal="header_keyword", target="header", keywords=("beta",), weight=45, explanation="b"
+    )
+    f = FileFeatures(filename="x", rel_path="x", header_block="alpha beta")
+    rules = (Rule("A", (a,), "document"), Rule("B", (b,), "document"))
+    # default margin 10: the 5-pt gap between the top two → ambiguous
+    assert (
+        RuleHeuristicClassifier(RulePack(version="t", type_rules=rules))
+        .classify(f, clause_pdca={})
+        .ambiguous
+    )
+    # a tighter margin 3 (via the pack) → the same 5-pt gap is no longer ambiguous
+    tight = RulePack(version="t", type_rules=rules, scoring=ScoringConfig(ambiguous_margin=3))
+    assert not RuleHeuristicClassifier(tight).classify(f, clause_pdca={}).ambiguous
