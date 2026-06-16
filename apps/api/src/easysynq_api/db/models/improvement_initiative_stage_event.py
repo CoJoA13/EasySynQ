@@ -41,12 +41,27 @@ class ImprovementInitiativeStageEvent(Base):
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    # The four FKs carry EXPLICIT short names matching the migration: the convention default over
+    # this 34-char table name exceeds PG's 63-char identifier limit for initiative_id (74) and
+    # signed_event_id (69), so PG would truncate, diverging the ORM name from the stored name →
+    # `alembic check` phantom-DROP, migrations CI red (the process_link/document_link precedent).
+    # Names are byte-identical to migration 0052's tokens.
     org_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("organization.id", ondelete="RESTRICT"), nullable=False
+        UUID(as_uuid=True),
+        ForeignKey(
+            "organization.id",
+            ondelete="RESTRICT",
+            name="fk_imp_init_stage_event_org_id_organization",
+        ),
+        nullable=False,
     )
     initiative_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("improvement_initiative.id", ondelete="RESTRICT"),
+        ForeignKey(
+            "improvement_initiative.id",
+            ondelete="RESTRICT",
+            name="fk_imp_init_stage_event_initiative_id",
+        ),
         nullable=False,
     )
     # NULL on the genesis (raise/create) event — an initiative is born at Open with no predecessor.
@@ -56,7 +71,11 @@ class ImprovementInitiativeStageEvent(Base):
     to_state: Mapped[ImprovementStage] = mapped_column(improvement_stage_enum, nullable=False)
     # NULL for a future system/Beat move; always a user in v1.x.
     actor_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("app_user.id", ondelete="RESTRICT"), nullable=True
+        UUID(as_uuid=True),
+        ForeignKey(
+            "app_user.id", ondelete="RESTRICT", name="fk_imp_init_stage_event_actor_id_app_user"
+        ),
+        nullable=True,
     )
     comment: Mapped[str | None] = mapped_column(Text, nullable=True)
     # The sealed per-transition narrative (e.g. the Closed outcome / realized-benefit note — the
@@ -65,7 +84,13 @@ class ImprovementInitiativeStageEvent(Base):
     # Forward seam: ships day-one, stays NULL/unsigned in v1.x — the D3 Part-11 reserved hook (the
     # dcr_stage_event.signed_event_id precedent). signature_event is shipped substrate → no cycle.
     signed_event_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("signature_event.id", ondelete="RESTRICT"), nullable=True
+        UUID(as_uuid=True),
+        ForeignKey(
+            "signature_event.id",
+            ondelete="RESTRICT",
+            name="fk_imp_init_stage_event_signed_event_id_signature_event",
+        ),
+        nullable=True,
     )
     occurred_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

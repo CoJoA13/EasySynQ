@@ -141,7 +141,11 @@ async def _initiative_scope(request: Request, session: AsyncSession) -> Resource
     return _scope_for(initiative.process_id)
 
 
-_read = require("improvement.read")
+# Single-resource reads gate at the initiative's PROCESS scope so a PROCESS-scoped grant (R46 grants
+# Process Owner improvement.read PROCESS-scoped) is reachable; a bare SYSTEM gate would fail-closed
+# mis-DENY it (the S-pack-1 R28 lesson). The LIST is auth-only (get_current_user) + the row-filter
+# below — never a hard 403 — the api/records.py filter-not-403 precedent (doc 15 §9.3).
+_read_scoped = require("improvement.read", async_scope_resolver=_initiative_scope)
 _manage = require("improvement.manage", async_scope_resolver=_initiative_scope)
 
 
@@ -187,7 +191,7 @@ async def create_initiative_endpoint(
 
 @router.get("/improvement-initiatives")
 async def list_initiatives_endpoint(
-    caller: AppUser = Depends(_read),
+    caller: AppUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
     stage: ImprovementStage | None = None,
     source: ImprovementSource | None = None,
@@ -218,7 +222,7 @@ async def list_initiatives_endpoint(
 @router.get("/improvement-initiatives/{initiative_id}")
 async def get_initiative_endpoint(
     initiative_id: uuid.UUID,
-    caller: AppUser = Depends(_read),
+    caller: AppUser = Depends(_read_scoped),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
     initiative = await _load(session, caller, initiative_id)
@@ -228,7 +232,7 @@ async def get_initiative_endpoint(
 @router.get("/improvement-initiatives/{initiative_id}/stage-events")
 async def list_stage_events_endpoint(
     initiative_id: uuid.UUID,
-    caller: AppUser = Depends(_read),
+    caller: AppUser = Depends(_read_scoped),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
     """The append-only stage-event trail (oldest → newest; gate ``improvement.read``)."""
