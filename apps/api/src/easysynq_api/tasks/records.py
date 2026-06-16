@@ -23,7 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from ..config import get_settings
 from ..services.records import build_structured_pdf as _build_structured_pdf
 from ..services.records import sweep_due_records
-from .app import app
+from .app import task
 
 logger = logging.getLogger("easysynq.records.tasks")
 
@@ -42,7 +42,7 @@ async def _run_retention_sweep() -> dict[str, int]:
         await engine.dispose()
 
 
-@app.task(name="easysynq.records.retention_sweep")  # type: ignore[untyped-decorator]
+@task(name="easysynq.records.retention_sweep")
 def retention_sweep() -> dict[str, int]:
     """Sweep due records; returns ``{flipped, disposed, skipped}`` counts for this run."""
     return asyncio.run(_run_retention_sweep())
@@ -60,7 +60,7 @@ async def _run_build_structured_pdf(record_id: str) -> None:
         await engine.dispose()
 
 
-@app.task(name="easysynq.records.build_structured_pdf")  # type: ignore[untyped-decorator]
+@task(name="easysynq.records.build_structured_pdf")
 def build_structured_pdf(record_id: str) -> None:
     """Build the Stage-2 structured-record PDF rendition (S-rec-3; idempotent, best-effort)."""
     asyncio.run(_run_build_structured_pdf(record_id))
