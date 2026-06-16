@@ -204,31 +204,51 @@ jobs:
           severity: HIGH,CRITICAL
           exit-code: "0"
           format: table
-      # The fs scan above does NOT detect base-image / apt OS-package CVEs (Trivy needs an image
-      # target). DERIVE the base refs from the Dockerfiles (the `FROM` lines Dependabot bumps) so the
-      # scan never drifts from what's actually built (Codex #153); `tail -1` = the final runtime base.
-      # No `continue-on-error` — like the audit steps, a trivy/DB-fetch failure should SURFACE (the job
-      # is non-required, so it never blocks a merge). A full built-image scan (our apt layer) is the ratchet.
-      - name: resolve Dockerfile base image refs
-        id: bases
-        run: |
-          {
-            echo "api=$(grep -E '^FROM ' apps/api/Dockerfile | tail -1 | awk '{print $2}')"
-            echo "web=$(grep -E '^FROM ' apps/web/Dockerfile | tail -1 | awk '{print $2}')"
-          } >> "$GITHUB_OUTPUT"
-      - name: trivy image scan — API base
+      # The fs scan above does NOT detect base-image / apt / copied-stage CVEs (Trivy needs an image
+      # target). BUILD the API image and scan THAT so it covers exactly what ships — the python base +
+      # the apt layer (postgresql-client, libmagic) + the /uv binary copied from the `uv` stage (Codex
+      # #153). The web image has no apt/COPY-from, so its base ref (derived from the Dockerfile FROM so
+      # it tracks Dependabot bumps) + npm-audit suffice. No `continue-on-error`: a build/scan failure
+      # should SURFACE (the job is non-required, so it never blocks a merge).
+      - name: build the API image (scan target = exactly what ships)
+        run: docker build -f apps/api/Dockerfile -t easysynq-api:scan .
+      - name: trivy image scan — built API image
         uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: image
-          image-ref: ${{ steps.bases.outputs.api }}
+          image-ref: easysynq-api:scan
           severity: HIGH,CRITICAL
           exit-code: "0"
           format: table
+      - name: resolve the web base ref (tracks the Dockerfile FROM Dependabot bumps)
+        id: webbase
+        run: echo "ref=$(grep -E '^FROM ' apps/web/Dockerfile | tail -1 | awk '{print $2}')" >> "$GITHUB_OUTPUT"
       - name: trivy image scan — web base
         uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: image
-          image-ref: ${{ steps.bases.outputs.web }}
+          image-ref: ${{ steps.webbase.outputs.ref }}
           severity: HIGH,CRITICAL
           exit-code: "0"
           format: table
+
+  # The air-gap bundle (scripts/airgap-bundle.sh) collects image refs from infra/images.lock, so a
+  # Dependabot bump to compose.yml (the new `docker-compose` ecosystem) must ALSO land in images.lock,
+  # or the offline bundle ships the stale ref while Compose asks for the new one (Codex #153). Assert
+  # every Compose `image:` ref is pinned in images.lock.
+  compose-images-lock:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: every Compose image must be pinned in infra/images.lock
+        run: |
+          compose=$(grep -hE '^[[:space:]]+image:[[:space:]]' infra/compose/compose.yml infra/compose/compose.*.yml 2>/dev/null | awk '{print $2}' | sort -u)
+          lock=$(grep -vE '^[[:space:]]*#' infra/images.lock | awk 'NF>=2 {print $2}' | sort -u)
+          missing=$(comm -23 <(printf '%s\n' "$compose") <(printf '%s\n' "$lock"))
+          if [ -n "$missing" ]; then
+            echo "::error::Compose image(s) not pinned in infra/images.lock — the air-gap bundle would drift:"
+            printf '  %s\n' $missing
+            echo "Add them to infra/images.lock (then \`just images-update\` for digests)."
+            exit 1
+          fi
+          echo "OK — every Compose image ref is pinned in images.lock."
