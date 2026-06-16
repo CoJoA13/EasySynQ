@@ -128,3 +128,48 @@ type_rules:
 """
     pack = load_rule_pack(_write(tmp_path, body))
     assert pack.type_rules[0].matchers[0].keywords == ("quality policy",)
+
+
+# --- scoring block (the externalized score→band cutoffs, C-3) ----------------------------------
+
+
+def test_scoring_defaults_when_absent(tmp_path: Path) -> None:
+    pack = load_rule_pack(_write(tmp_path, "version: t\ntype_rules: []\n"))
+    s = pack.scoring
+    assert (s.high_threshold, s.medium_threshold, s.ambiguous_margin) == (85, 60, 10)
+    assert (s.kind_unknown_floor, s.process_folder_weight, s.process_header_weight) == (30, 30, 15)
+    assert s.pdca_tie_margin == 5
+
+
+def test_default_pack_carries_calibrated_scoring() -> None:
+    s = default_rule_pack().scoring
+    assert s.high_threshold == 85 and s.medium_threshold == 60 and s.ambiguous_margin == 10
+
+
+def test_scoring_partial_override_keeps_other_defaults(tmp_path: Path) -> None:
+    body = "version: t\nscoring:\n  high_threshold: 95\n  ambiguous_margin: 4\n"
+    s = load_rule_pack(_write(tmp_path, body)).scoring
+    assert s.high_threshold == 95 and s.ambiguous_margin == 4
+    assert s.medium_threshold == 60  # an untouched key keeps its default
+
+
+def test_scoring_rejects_medium_above_high(tmp_path: Path) -> None:
+    body = "version: t\nscoring:\n  high_threshold: 50\n  medium_threshold: 70\n"
+    with pytest.raises(RulePackError, match="medium_threshold"):
+        load_rule_pack(_write(tmp_path, body))
+
+
+def test_scoring_rejects_non_positive(tmp_path: Path) -> None:
+    with pytest.raises(RulePackError, match="positive int"):
+        load_rule_pack(_write(tmp_path, "version: t\nscoring:\n  high_threshold: 0\n"))
+
+
+def test_scoring_rejects_unknown_key(tmp_path: Path) -> None:
+    # a typo'd key must be refused, not silently defaulted (a quiet mis-calibration)
+    with pytest.raises(RulePackError, match="unknown scoring keys"):
+        load_rule_pack(_write(tmp_path, "version: t\nscoring:\n  high_treshold: 85\n"))
+
+
+def test_scoring_rejects_non_mapping(tmp_path: Path) -> None:
+    with pytest.raises(RulePackError, match="scoring must be a mapping"):
+        load_rule_pack(_write(tmp_path, "version: t\nscoring: 85\n"))

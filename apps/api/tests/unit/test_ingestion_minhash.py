@@ -67,3 +67,12 @@ def test_clustering_decision_is_exact_jaccard_threshold() -> None:
 
 def test_connected_components_drops_singletons() -> None:
     assert mh.connected_components(["x", "y", "z"], []) == []  # no edges → no clusters
+
+
+def test_near_dup_threshold_mirrors_settings_default() -> None:
+    # The pure-domain §7.1 default and the runtime Settings knob must stay in sync. config.py cannot
+    # import the domain module (wrong-direction dependency), so this guard pins them; if either the
+    # minhash constant or settings.import_near_dup_threshold is changed, the other must follow.
+    from easysynq_api.config import Settings
+
+    assert Settings().import_near_dup_threshold == mh.NEAR_DUP_THRESHOLD

@@ -17,7 +17,7 @@ pattern is refused with ``RulePackError`` (proven by a unit test feeding an OWAS
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Any
 
@@ -76,12 +76,32 @@ class Rule:
 
 
 @dataclass(frozen=True, slots=True)
+class ScoringConfig:
+    """The classifier's score-to-band cutoffs + dimension weights (doc 09 §6.3-§6.5).
+
+    Defaults reproduce the calibrated v1 values; an org pack may override any subset via a top-level
+    ``scoring:`` block. These live in the versioned pack (not Settings) so a cutoff change rides the
+    SAME ``version`` pin as the matcher weights they are calibrated against — ``classifier_version``
+    on every result then reflects the cutoffs too.
+    """
+
+    high_threshold: int = 85  # score ≥ this → HIGH band
+    medium_threshold: int = 60  # score ≥ this (and < high) → MEDIUM; below → LOW
+    ambiguous_margin: int = 10  # top-two within this → the dimension is ambiguous (Needs-Decision)
+    kind_unknown_floor: int = 30  # max(DOCUMENT, RECORD) below this → kind is UNKNOWN (R10)
+    process_folder_weight: int = 30  # an existing process name appearing as a folder token
+    process_header_weight: int = 15  # …or in the header
+    pdca_tie_margin: int = 5  # clause scores within this → the higher-numbered wins the PDCA derive
+
+
+@dataclass(frozen=True, slots=True)
 class RulePack:
     version: str
     kind_rules: tuple[Rule, ...] = ()
     type_rules: tuple[Rule, ...] = ()
     clause_rules: tuple[Rule, ...] = ()
     process_rules: tuple[Rule, ...] = ()
+    scoring: ScoringConfig = ScoringConfig()  # frozen → a shared immutable default is safe
 
 
 def validate_pattern(pattern: str) -> re.Pattern[str]:
@@ -161,6 +181,31 @@ def _rules(raw: Any, *, dimension: str) -> tuple[Rule, ...]:
     return tuple(out)
 
 
+def _scoring(raw: Any) -> ScoringConfig:
+    """Parse + validate an optional top-level ``scoring:`` mapping. Absent → calibrated defaults.
+
+    Every supplied knob must be a positive int; an unknown key is refused (a typo silently taking
+    the default would be a quiet mis-calibration), and ``medium_threshold`` may not exceed
+    ``high_threshold`` (else the MEDIUM band would be empty / inverted)."""
+    if raw is None:
+        return ScoringConfig()
+    if not isinstance(raw, dict):
+        raise RulePackError("scoring must be a mapping")
+    known = {f.name for f in fields(ScoringConfig)}
+    unknown = set(raw) - known
+    if unknown:
+        raise RulePackError(f"unknown scoring keys: {sorted(unknown)}")
+    values: dict[str, int] = {}
+    for key, val in raw.items():
+        if isinstance(val, bool) or not isinstance(val, int) or val <= 0:
+            raise RulePackError(f"scoring.{key} must be a positive int (got {val!r})")
+        values[key] = val
+    cfg = ScoringConfig(**values)
+    if cfg.medium_threshold > cfg.high_threshold:
+        raise RulePackError("scoring.medium_threshold must be <= high_threshold")
+    return cfg
+
+
 def load_rule_pack(path: str | Path) -> RulePack:
     """Load + validate a YAML rule pack. Raises ``RulePackError`` on malformed/unsafe content."""
     data = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
@@ -172,6 +217,7 @@ def load_rule_pack(path: str | Path) -> RulePack:
         type_rules=_rules(data.get("type_rules"), dimension="type_rules"),
         clause_rules=_rules(data.get("clause_rules"), dimension="clause_rules"),
         process_rules=_rules(data.get("process_rules"), dimension="process_rules"),
+        scoring=_scoring(data.get("scoring")),
     )
 
 
