@@ -10,11 +10,11 @@ from __future__ import annotations
 
 import asyncio
 
-from .app import app
+from .app import task
 
 
-# Celery ships no type stubs (ignore_missing_imports), so app.task is an untyped decorator.
-@app.task(name="easysynq.release_due_versions")  # type: ignore[untyped-decorator]
+# Uses the typed ``task`` wrapper (see tasks/app.py).
+@task(name="easysynq.release_due_versions")
 def release_due_versions() -> int:
     """Release all Approved versions whose ``effective_from <= now``; returns the count released."""
     from ..services.vault.lifecycle import release_due

@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from ..config import get_settings
 from ..services.common.pg_locks import LOCK_BLOB_VERIFY, pg_advisory_lock
 from ..services.vault.blob_verify import persist_blob_verify, verify_blobs
-from .app import app
+from .app import task
 
 logger = logging.getLogger("easysynq.blob.tasks")
 
@@ -49,7 +49,7 @@ async def _run_blob_verify() -> dict[str, object]:
         await engine.dispose()
 
 
-@app.task(name="easysynq.blob.verify")  # type: ignore[untyped-decorator]
+@task(name="easysynq.blob.verify")
 def blob_verify() -> dict[str, object]:
     """Daily D1 rolling blob re-hash (doc 03 §8.2): stamps verified_at on OK, alarms on findings."""
     return asyncio.run(_run_blob_verify())

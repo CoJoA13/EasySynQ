@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from ..config import get_settings
 from ..services.mgmt_review.cadence import sweep_mgmt_reviews
-from .app import app
+from .app import task
 
 logger = logging.getLogger("easysynq.mgmt_review.tasks")
 
@@ -28,7 +28,7 @@ async def _run_mgmt_review_sweep() -> dict[str, int]:
         await engine.dispose()
 
 
-@app.task(name="easysynq.documents.mgmt_review_sweep")  # type: ignore[untyped-decorator]
+@task(name="easysynq.documents.mgmt_review_sweep")
 def mgmt_review_sweep() -> dict[str, int]:
     """Daily cadence sweep; mints the next Scheduled Management Review when the horizon is reached.
     Returns ``{mgmt_reviews_opened, skipped_open, skipped_lock_held}``."""
