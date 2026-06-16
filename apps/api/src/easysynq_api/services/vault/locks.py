@@ -11,9 +11,7 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-import redis.asyncio as aioredis
-
-from ...config import get_settings
+from ...redis_client import redis_client
 
 LOCK_TTL_SECONDS = 28800  # 8 hours (R24)
 
@@ -37,8 +35,7 @@ def _key(document_id: uuid.UUID) -> str:
 
 
 def _redis() -> Any:
-    # Typed as Any: redis.asyncio's response unions don't play well with mypy --strict await.
-    return aioredis.from_url(get_settings().redis_url, decode_responses=True)  # type: ignore[no-untyped-call]
+    return redis_client(decode_responses=True)
 
 
 async def acquire(document_id: uuid.UUID) -> str | None:

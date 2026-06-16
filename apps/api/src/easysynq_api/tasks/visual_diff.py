@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from ..config import get_settings
 from ..services.diff.visual import build_visual_diff
 from ..services.vault.render_gotenberg import GotenbergRenderSink
-from .app import app
+from .app import task
 
 logger = logging.getLogger("easysynq.visual_diff.tasks")
 
@@ -36,7 +36,7 @@ async def _run(visual_diff_id: uuid.UUID) -> None:
         await engine.dispose()
 
 
-@app.task(name="easysynq.visual_diff")  # type: ignore[untyped-decorator]
+@task(name="easysynq.visual_diff")
 def visual_diff(visual_diff_id: str) -> None:
     """Build the cached page-image comparison for a ``visual_diff`` row."""
     asyncio.run(_run(uuid.UUID(visual_diff_id)))
