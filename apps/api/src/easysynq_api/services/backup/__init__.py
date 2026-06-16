@@ -22,6 +22,7 @@ from .service import (
     run_restore,
     run_restore_test,
     run_scheduled_backups,
+    run_scheduled_restore_tests,
 )
 
 __all__ = [
@@ -34,4 +35,5 @@ __all__ = [
     "run_restore",
     "run_restore_test",
     "run_scheduled_backups",
+    "run_scheduled_restore_tests",
 ]

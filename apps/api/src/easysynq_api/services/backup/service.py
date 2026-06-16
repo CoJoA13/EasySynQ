@@ -166,6 +166,38 @@ async def run_restore_test(
         await engine.dispose()
 
 
+async def run_scheduled_restore_tests() -> dict[str, Any]:
+    """Run the gating restore-test drill for every configured ``backup_policy`` (one per org;
+    single-org in MVP, D1) on the Beat cadence — so a silently-rotting backup is caught between the
+    manual G-C drills (Phase-1 I-7; the nightly job only WRITES archives, this proves they restore).
+    Reuses ``run_restore_test`` verbatim (its ``LOCK_RESTORE_DRILL`` serialization + persisted
+    ``last_restore_test_result`` + RESTORE_TEST_PASSED/_FAILED audit + never-raise contract) with a
+    SYSTEM actor. Best-effort: one org's failure never aborts the others, and the drill itself never
+    raises (an honest FAIL is persisted + audited)."""
+    settings = get_settings()
+    engine = create_async_engine(settings.database_url)
+    sessionmaker: async_sessionmaker[AsyncSession] = async_sessionmaker(
+        engine, expire_on_commit=False
+    )
+    try:
+        async with sessionmaker() as session:
+            org_ids = list((await session.scalars(select(BackupPolicy.org_id))).all())
+    finally:
+        await engine.dispose()
+    # Each run_restore_test opens + disposes its own engine/session (a fresh unit per org), so the
+    # org-id read above is closed first — never one session reused across the per-org drills.
+    results: list[dict[str, Any]] = []
+    for org_id in org_ids:
+        try:
+            out = await run_restore_test(org_id, actor_id=None)
+            results.append({"org_id": str(org_id), **out})
+        except Exception as exc:
+            logger.exception("scheduled restore-test errored for org %s", org_id)
+            results.append({"org_id": str(org_id), "result": "FAIL", "error": str(exc)[:200]})
+    logger.info("restore-test.scheduled.done", extra={"extra_fields": {"orgs": len(results)}})
+    return {"restore_tests": results}
+
+
 async def run_restore(
     org_id: uuid.UUID,
     actor_id: uuid.UUID | None = None,
