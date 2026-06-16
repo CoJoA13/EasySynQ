@@ -211,6 +211,11 @@ async def test_drill_tears_down_scratch_namespace(
     result = await backup_service.run_restore_test(org_id, admin_id)
     assert result["result"] == "PASS", result
 
+    # The drill's transient verification archive (+ its .sha256 sidecar) is removed from the backup
+    # destination — a SCHEDULED drill must not accumulate PLAINTEXT db dumps there (Codex P1, #155).
+    leftover = [f for f in os.listdir(dest) if f.startswith("easysynq-backup-")]
+    assert leftover == [], leftover
+
     settings = get_settings()
     # No scratch DB remains.
     import psycopg

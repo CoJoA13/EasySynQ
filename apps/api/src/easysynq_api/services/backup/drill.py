@@ -413,6 +413,7 @@ def run_drill(
     drill_id = uuid.uuid4().hex
     scratch_db = f"{_SCRATCH_PREFIX}{drill_id}"
     handle: ScratchHandle | None = None
+    archive_path: Path | None = None
     try:
         with TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -451,6 +452,20 @@ def run_drill(
         logger.exception("restore-drill crashed")
         return DrillResult("FAIL", f"drill error: {type(exc).__name__}: {exc}"[:300])
     finally:
+        # The drill's archive is a TRANSIENT verification artifact — written to ``destination`` to
+        # prove it round-trips (then restored FROM), so once the triad has run it must NOT linger:
+        # a SCHEDULED drill would otherwise accumulate PLAINTEXT db dumps in the backup directory,
+        # bypassing the encryption operators expect for stored backups. Only the durable nightly
+        # backup (``build_durable_backup``) writes a RETAINED archive — AES-256-GCM-encrypted when a
+        # key is set; the drill never encrypts, so its ``.tar`` + ``.sha256`` are removed here.
+        if archive_path is not None:
+            for _p in (archive_path, archive_path.with_name(archive_path.name + ".sha256")):
+                try:
+                    _p.unlink(missing_ok=True)
+                except OSError:  # best-effort cleanup; a stranded artifact must not fail the drill
+                    logger.warning(
+                        "restore-drill: archive cleanup failed for %s", _p, exc_info=True
+                    )
         if handle is not None:
             try:
                 _drop_scratch_db(owner_dsn, scratch_db)
