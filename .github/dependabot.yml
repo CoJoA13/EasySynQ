@@ -1,0 +1,57 @@
+# Dependency-update automation (Phase-1 tech-debt: I-5). Air-gap-safe — Dependabot only opens PRs
+# against this GitHub repo; the self-hosted prod host never phones home. Minor/patch are grouped to
+# keep PR noise low; majors come as individual PRs (they usually need a human migration). Tune the
+# limits/cadence freely. NOTE: Dependabot updates the manifests + lockfiles, but CI (uv sync --frozen
+# / npm ci) still gates every bump, and the `security` CI job surfaces advisories independently.
+version: 2
+updates:
+  # Python API (uv — updates pyproject.toml + uv.lock together)
+  - package-ecosystem: "uv"
+    directory: "/apps/api"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    groups:
+      python-minor-patch:
+        update-types: ["minor", "patch"]
+
+  # Web SPA
+  - package-ecosystem: "npm"
+    directory: "/apps/web"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    groups:
+      web-minor-patch:
+        update-types: ["minor", "patch"]
+
+  # CI action pins (keeps astral-sh/setup-uv, actions/*, trivy fresh — supply-chain hygiene)
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    groups:
+      ci-actions:
+        update-types: ["minor", "patch"]
+
+  # Container base images (FROM lines in the two Dockerfiles)
+  - package-ecosystem: "docker"
+    directory: "/apps/api"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+  - package-ecosystem: "docker"
+    directory: "/apps/web"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+
+  # Deployed stack runtime images pinned in infra/compose/compose.yml (postgres, redis, minio,
+  # keycloak, gotenberg, tika, caddy, mailpit) — a SEPARATE Dependabot ecosystem from the Dockerfiles
+  # (`docker-compose`), else those service images never get the weekly update PRs (Codex #153).
+  - package-ecosystem: "docker-compose"
+    directory: "/infra/compose"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
