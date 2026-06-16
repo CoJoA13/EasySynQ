@@ -164,6 +164,14 @@ def test_scoring_rejects_non_positive(tmp_path: Path) -> None:
         load_rule_pack(_write(tmp_path, "version: t\nscoring:\n  high_threshold: 0\n"))
 
 
+def test_scoring_rejects_bool_and_float(tmp_path: Path) -> None:
+    # bool ⊂ int, so the bool guard must come first; a float is not an int either.
+    with pytest.raises(RulePackError, match="positive int"):
+        load_rule_pack(_write(tmp_path, "version: t\nscoring:\n  high_threshold: true\n"))
+    with pytest.raises(RulePackError, match="positive int"):
+        load_rule_pack(_write(tmp_path, "version: t\nscoring:\n  ambiguous_margin: 1.5\n"))
+
+
 def test_scoring_rejects_unknown_key(tmp_path: Path) -> None:
     # a typo'd key must be refused, not silently defaulted (a quiet mis-calibration)
     with pytest.raises(RulePackError, match="unknown scoring keys"):
