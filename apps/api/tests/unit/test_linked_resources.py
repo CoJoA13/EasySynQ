@@ -13,6 +13,8 @@ from __future__ import annotations
 import io
 import zipfile
 
+import pytest
+
 from easysynq_api.services.vault.linked_resources import LinkScan, scan_linked_resources
 
 _DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
@@ -217,6 +219,44 @@ def test_ooxml_variant_mime_external_rel_is_flagged_by_container() -> None:
     assert scan_linked_resources(_DOTX, blob).has_external_links is True
 
 
+def test_ooxml_split_instrtext_includepicture_runs_is_flagged() -> None:
+    """Round-3 P1: Word can split ONE field instruction across adjacent ``<w:instrText>`` runs
+    (``INCLUDE`` in one, ``PICTURE "…"`` in the next). The scanner now PARSES the part and
+    concatenates instrText text in document order, so the rejoined ``INCLUDEPICTURE`` keyword is
+    flagged — a raw-text regex over the split runs would have missed it."""
+    doc = (
+        b'<?xml version="1.0"?>'
+        b'<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        b'<w:body><w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r>'
+        b'<w:r><w:instrText xml:space="preserve">INCLUDE</w:instrText></w:r>'
+        b'<w:r><w:instrText xml:space="preserve">PICTURE "https://x/i.png"</w:instrText></w:r>'
+        b'<w:r><w:fldChar w:fldCharType="end"/></w:r></w:p></w:body></w:document>'
+    )
+    blob = _zip({"word/document.xml": doc, "[Content_Types].xml": b"<Types/>"})
+    scan = scan_linked_resources(_DOCX, blob)
+    assert scan.has_external_links is True
+    assert scan.reason is not None and "field" in scan.reason
+
+
+@pytest.mark.parametrize("part", ["word/footnotes.xml", "word/endnotes.xml", "word/comments.xml"])
+def test_ooxml_includepicture_in_story_part_is_flagged(part: str) -> None:
+    """Round-3 P2: footnote/endnote/comment story parts are rendered by LibreOffice and can carry
+    field instructions, so they are field-scanned too (previously skipped → a false-negative)."""
+    story = (
+        b'<?xml version="1.0"?>'
+        b'<w:stories xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        b'<w:p><w:r><w:instrText>INCLUDEPICTURE "https://x/note.png"</w:instrText></w:r></w:p>'
+        b"</w:stories>"
+    )
+    doc = (
+        b'<?xml version="1.0"?>'
+        b'<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        b"<w:body><w:p/></w:body></w:document>"
+    )
+    blob = _zip({"word/document.xml": doc, part: story, "[Content_Types].xml": b"<Types/>"})
+    assert scan_linked_resources(_DOCX, blob).has_external_links is True
+
+
 # --- ODF ----------------------------------------------------------------------------------
 
 
@@ -271,6 +311,22 @@ def test_odf_relative_href_not_a_member_is_flagged() -> None:
     scan = scan_linked_resources(_ODT, blob)
     assert scan.has_external_links is True
     assert scan.reason is not None and "xlink:href" in scan.reason
+
+
+def test_odf_embedded_subdocument_directory_is_not_flagged() -> None:
+    """Round-3 P2: an embedded ODF subdocument (a chart / OLE object) is referenced as
+    ``./Object 1`` but stored as a DIRECTORY (``Object 1/content.xml`` …) with no exact ``Object 1``
+    zip entry. A directory prefix of a package member counts as embedded → NOT flagged, so an
+    ordinary ODT/ODG-with-chart is not false-positively downgraded to source-only."""
+    blob = _zip(
+        {
+            "content.xml": _odf_content("./Object 1"),
+            "Object 1/content.xml": b"<x/>",
+            "Object 1/styles.xml": b"<x/>",
+            "styles.xml": b"<x/>",
+        }
+    )
+    assert scan_linked_resources(_ODT, blob) == LinkScan(False)
 
 
 def test_odf_external_href_in_styles_is_flagged() -> None:

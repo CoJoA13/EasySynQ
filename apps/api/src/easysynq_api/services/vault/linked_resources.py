@@ -213,56 +213,67 @@ def _read_member(zf: zipfile.ZipFile, name: str) -> bytes | None:
 # ── OOXML field-code link detector (WordprocessingML/PresentationML field instructions) ───────
 
 # A *linked* (not embedded, not hyperlink) field instruction. OOXML field keywords are
-# **case-insensitive** (Word writes ``INCLUDEPICTURE`` but accepts/round-trips any case), and the
-# two families anchor differently:
+# **case-insensitive** (Word writes ``INCLUDEPICTURE`` but accepts/round-trips any case):
 #   • INCLUDEPICTURE / INCLUDETEXT — inherently file-linking field instructions whose target may be
 #     a URL, a UNC path, ``C:\x.png`` or ``/x.png`` — ALL dropped by 8.34. These keywords NEVER
-#     occur in body prose, so they are flagged ANYWHERE in a content part, word-bounded, regardless
-#     of target form (closes the relative/local-absolute false-negative).
-#   • LINK — the DDE/OLE-link field. A bare ``LINK`` is an ordinary English word, so it must be
-#     anchored to a FIELD-INSTRUCTION context: inside a ``<…instrText>…</…instrText>`` element OR a
-#     ``…instr="…"`` attribute (the ``<w:fldSimple>`` compact form). A body ``<w:t>LINK</w:t>`` run
-#     is NOT a field instruction → not flagged (the Fix-1 false-positive). The whole-word
-#     ``\bLINK\b`` deliberately does NOT match inside ``HYPERLINK``: ``R`` and ``L`` are both word
-#     chars, so there is no ``\b`` between them (verified by the ``HYPERLINK``-not-flagged tests),
-#     and that boundary holds under IGNORECASE.
-# Each keyword is bracketed by ``\b`` word boundaries — matches ``>INCLUDEPICTURE`` (tag-tight) and
-# `` INCLUDEPICTURE `` (space-delimited) alike; no nested quantifier → ReDoS-safe.
-_OOXML_INCLUDE_RE = re.compile(r"\b(?:INCLUDEPICTURE|INCLUDETEXT)\b", re.IGNORECASE)
-# ``LINK`` inside an ``instrText`` element body (any namespace prefix). The opening-tag matcher
-# ``<[^<>/][^<>]*\binstrText\b[^<>]*>`` requires the char after ``<`` to be neither ``<``/``>`` nor
-# a ``/`` — so it matches the OPENING ``<w:instrText>`` only, never the ``</w:instrText>`` close
-# (whose trailing text would otherwise be reachable). A single bounded lazy gap (``[^<]{0,4096}?``)
-# between that ``>`` and ``LINK`` confines the search to one instruction-text element — non-nested,
-# so ReDoS-safe; ``[^<]`` can't cross into a sibling element's text, so a later body
-# ``<w:t>LINK</w:t>`` is not reachable.
-_OOXML_INSTRTEXT_LINK_RE = re.compile(
-    r"<[^<>/][^<>]*\binstrText\b[^<>]*>[^<]{0,4096}?\bLINK\b",
-    re.IGNORECASE,
-)
-# ``LINK`` inside a ``…instr="…"`` field-instruction attribute (the ``<w:fldSimple w:instr="…">``
-# compact form). The bounded ``[^"]{0,4096}?`` stays inside the quoted attribute value — non-nested,
-# ReDoS-safe.
-_OOXML_INSTR_ATTR_LINK_RE = re.compile(
-    r"\binstr\s*=\s*\"[^\"]{0,4096}?\bLINK\b",
-    re.IGNORECASE,
-)
+#     occur in body prose, so a field-instruction hit is flagged regardless of target form (closes
+#     the relative/local-absolute false-negative).
+#   • LINK — the DDE/OLE-link field. A bare ``LINK`` is an ordinary English word, so it is matched
+#     ONLY in a field-instruction context (the concatenated ``instrText`` text / a ``fldSimple``
+#     ``instr`` attribute — see :func:`_has_linked_field_member`), so a body ``<w:t>LINK</w:t>`` run
+#     is NOT flagged. The whole-word ``\bLINK\b`` deliberately does NOT match inside ``HYPERLINK``:
+#     ``R`` and ``L`` are both word chars, so there is no ``\b`` between them (verified by the
+#     ``HYPERLINK``-not-flagged tests), and that boundary holds under IGNORECASE.
+# Each keyword is bracketed by ``\b`` word boundaries; no nested quantifier → ReDoS-safe.
+_FIELD_KEYWORD_RE = re.compile(r"\b(?:INCLUDEPICTURE|INCLUDETEXT|LINK)\b", re.IGNORECASE)
 # Linked-OLE-object control words (RTF) — a present marker is a linked (not embedded) object.
 _OLE_LINK_CW_RE = re.compile(r"\\obj(?:autlink|link)\b", re.IGNORECASE)
 
 
-def _has_linked_field(text: str) -> bool:
-    """True if ``text`` (an OOXML content part) carries a linked field instruction.
+def _local_name(tag: object) -> str:
+    """The local element/attr name without ElementTree's ``{namespace}`` Clark-notation prefix.
 
-    ``INCLUDEPICTURE``/``INCLUDETEXT`` match anywhere (they are never body prose); ``LINK`` matches
-    ONLY inside an ``instrText`` element body or an ``instr="…"`` attribute (a field-instruction
-    context), so a bare ``<w:t>LINK</w:t>`` body run is not flagged. Case-insensitive (OOXML field
-    keywords are), pure regex, bounded input, ReDoS-safe."""
-    return (
-        _OOXML_INCLUDE_RE.search(text) is not None
-        or _OOXML_INSTRTEXT_LINK_RE.search(text) is not None
-        or _OOXML_INSTR_ATTR_LINK_RE.search(text) is not None
-    )
+    ``{…/wordprocessingml/…}instrText`` → ``instrText``; an unprefixed ``instrText`` is returned
+    as-is. Used to match field elements/attributes regardless of the source's namespace prefix."""
+    if not isinstance(tag, str):
+        return ""
+    return tag.rsplit("}", 1)[-1]
+
+
+def _has_linked_field_member(data: bytes) -> bool:
+    r"""True if a parsed OOXML content part carries a linked INCLUDE*/LINK field instruction.
+
+    Word may split a single field instruction across adjacent ``<w:instrText>`` runs (``INCLUDE`` in
+    one run, ``PICTURE "https://…"`` in the next), so a raw-text keyword regex misses it. So this
+    **parses** the part, concatenates the text of every ``instrText`` element in document order with
+    **no separator** — rejoining a keyword Word split across runs — and collects every
+    ``<w:fldSimple>`` ``instr`` attribute (the compact field form, each a complete instruction).
+
+    The field-keyword match (``INCLUDEPICTURE``/``INCLUDETEXT``/``LINK``, IGNORECASE) then runs on
+    that. Because every collected fragment is itself field-instruction text, ``LINK`` may match
+    anywhere in it — the ``instrText``-context requirement (a bare body ``<w:t>LINK</w:t>`` run must
+    NOT match) is satisfied structurally, since a ``w:t`` run is never collected. The ``\bLINK\b``
+    boundary still excludes ``HYPERLINK``. Element/attr names are matched by **local name** so any
+    namespace prefix works. Fail-open: a malformed / DTD-bearing part → no hit (defer to the normal
+    render path, which handles malformed sources)."""
+    root = _parse_xml(data)
+    if root is None:
+        return False
+    instr_runs: list[str] = []
+    for el in root.iter():  # type: ignore[attr-defined]
+        local = _local_name(el.tag)
+        if local == "instrText":
+            if el.text:
+                instr_runs.append(el.text)
+        elif local == "fldSimple":
+            for attr_key, attr_val in el.attrib.items():
+                # each fldSimple instr is one complete instruction → check it independently (never
+                # fused into the instrText stream, where concatenation could splice a false match)
+                if _local_name(attr_key) != "instr" or not attr_val:
+                    continue
+                if _FIELD_KEYWORD_RE.search(attr_val):
+                    return True
+    return _FIELD_KEYWORD_RE.search("".join(instr_runs)) is not None
 
 
 # Content members whose field instructions can carry a linked INCLUDE*/LINK (WordprocessingML body,
@@ -273,9 +284,11 @@ def _is_ooxml_field_member(name_lower: str) -> bool:
         return False
     if name_lower.endswith("/document.xml") or name_lower == "word/document.xml":
         return True
-    # word/header1.xml, word/footer2.xml, …
+    # word/header1.xml, word/footer2.xml, word/footnotes.xml, word/endnotes.xml, word/comments.xml —
+    # LibreOffice renders footnote/endnote/comment stories and they can carry field instructions, so
+    # they are field-scanned too (startswith → tolerant of numbered/variant names).
     base = name_lower.rsplit("/", 1)[-1]
-    if base.startswith("header") or base.startswith("footer"):
+    if base.startswith(("header", "footer", "footnotes", "endnotes", "comments")):
         return True
     # ppt/slides/slide1.xml, ppt/slideLayouts/…, ppt/notesSlides/…
     if "/slides/" in name_lower or "/slidelayouts/" in name_lower or "/notesslides/" in name_lower:
@@ -343,9 +356,7 @@ def _scan_ooxml(zf: zipfile.ZipFile, names: list[str]) -> LinkScan:
                 continue
             members_inspected += 1
             total_bytes += len(data)
-            # ``errors="ignore"`` never raises; field keywords are ASCII so a mojibake tail can't
-            # hide or fabricate one. Field XML is UTF-8 by the OOXML spec.
-            if _has_linked_field(data.decode("utf-8", errors="ignore")):
+            if _has_linked_field_member(data):
                 field_hit = True
                 break  # short-circuit
     if rel_count:
@@ -376,6 +387,20 @@ def _normalize_member_path(href: str) -> str:
     return h
 
 
+def _is_package_member(href_norm: str, members: frozenset[str]) -> bool:
+    """True if a normalized relative href names a package member OR a directory prefix of one.
+
+    An ODF embedded subdocument (an OLE object / chart) is referenced as ``./Object 1`` but stored
+    as ``Object 1/content.xml`` etc. — a *directory*, with no exact ``Object 1`` entry. An exact
+    membership test false-positives on it (and would source-only an ordinary ODT/ODG-with-chart),
+    so the href also counts as embedded when it is a directory prefix of any member. A true
+    sibling-file link (``../assets/logo.png``) matches neither and is left to be flagged."""
+    if href_norm in members:
+        return True
+    prefix = href_norm.rstrip("/") + "/"
+    return any(m.startswith(prefix) for m in members)
+
+
 def _scan_odf(zf: zipfile.ZipFile, names: list[str]) -> LinkScan:
     """Inspect ``content.xml`` + ``styles.xml`` for any ``xlink:href`` that 8.34 drops: an external
     scheme/absolute/UNC target, OR a RELATIVE href that is NOT a package member (a sibling-file link
@@ -399,11 +424,12 @@ def _scan_odf(zf: zipfile.ZipFile, names: list[str]) -> LinkScan:
                 continue
             if _is_external_target(href):
                 count += 1
-            elif _normalize_member_path(href) not in members:
-                # A relative href that is NOT a zip member is a link to a sibling file outside the
-                # package (``../assets/logo.png``, or a bare ``logo.png`` not packed in) — 8.34
-                # drops it the same as an external one. An embedded ``Pictures/…`` IS a member →
-                # skipped.
+            elif not _is_package_member(_normalize_member_path(href), members):
+                # A relative href that is NOT a package member is a link to a sibling file outside
+                # the package (``../assets/logo.png``, or a bare ``logo.png`` not packed in) — 8.34
+                # drops it the same as an external one. An embedded ``Pictures/…`` member, or an
+                # embedded subdocument referenced by its directory (``./Object 1`` →
+                # ``Object 1/content.xml``), IS in the package → skipped.
                 count += 1
     if count:
         return LinkScan(
