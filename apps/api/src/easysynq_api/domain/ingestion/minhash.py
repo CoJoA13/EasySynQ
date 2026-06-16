@@ -26,11 +26,19 @@ import random
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
+# ── Determinism-locked signature math (intentionally NOT runtime config) ──────────────
+# SHINGLE_K / NUM_PERM / LSH_BANDS / LSH_ROWS / _PERM_SEED / the primes define the signature.
+# They are deliberately FIXED constants, not Settings/YAML knobs: changing any between two
+# runs over one corpus changes the emitted signatures, breaking the byte-identical-signature
+# invariant the ``import_dupe_cluster`` DELETE-then-INSERT idempotency (and cross-worker /
+# re-delivery determinism) relies on. The only org-tuneable knob is the *decision* threshold
+# ``NEAR_DUP_THRESHOLD`` (the exact-Jaccard cutoff, NOT signature math), overridden at runtime
+# via ``settings.import_near_dup_threshold``.
 SHINGLE_K = 5  # k-word shingle size (doc 09 §7.1 normalized-text technique)
 NUM_PERM = 128  # MinHash signature length
 LSH_BANDS = 32  # 32 x 4 = 128; knee ≈ (1/32)^(1/4) ≈ 0.42 (below 0.85 → high recall)
 LSH_ROWS = 4
-NEAR_DUP_THRESHOLD = 0.85  # §7.1 default Jaccard threshold
+NEAR_DUP_THRESHOLD = 0.85  # §7.1 Jaccard cutoff; mirrored by settings.import_near_dup_threshold
 
 _MERSENNE_PRIME = (1 << 61) - 1  # the classic MinHash multiply-mod prime
 _MAX_HASH = (1 << 32) - 1

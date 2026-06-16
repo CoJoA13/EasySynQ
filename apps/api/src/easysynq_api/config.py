@@ -159,7 +159,10 @@ class Settings(BaseSettings):
         4 * 1024 * 1024
     )  # full_text inline cap (text_truncated flag)
     import_run_stall_seconds: int = 6 * 3600  # reaper absolute backstop on an in-progress run
-    # S-ing-3 dedup: the §7.1 near-dup Jaccard threshold (in-process MinHash). OpenSearch is the
+    # S-ing-3 dedup: the §7.1 near-dup Jaccard threshold (in-process MinHash) — the runtime-
+    # authoritative value the dedup worker applies (services/ingestion/dedup.py). MIRRORS the §7.1
+    # default ``minhash.NEAR_DUP_THRESHOLD`` (the canonical pure-domain default; config must not
+    # import the domain module, so a guard unit test pins the two in sync). OpenSearch is the
     # documented v1 drop-in for the DedupDetector/Indexer seams (R34) — absent in MVP/v1, no
     # container; this URL is the reserved drop-in target only (nothing connects to it yet).
     import_near_dup_threshold: float = 0.85

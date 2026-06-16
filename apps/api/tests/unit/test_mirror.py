@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import uuid
 from pathlib import Path
 from typing import Any
@@ -26,6 +27,14 @@ from easysynq_api.services.vault.render import (
     RenderRequest,
     RenderResult,
     RenderStatus,
+)
+
+# Creating a POSIX symlink on native Windows needs an elevated privilege (WinError 1314), so the
+# atomic-swap + cross-clause / by-process symlink proofs can only run on POSIX. CI (Linux) still
+# runs them; skipping here keeps the owner's local Windows unit run clean.
+_skip_on_windows = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="POSIX symlink creation needs an elevated privilege on Windows; CI (Linux) covers it",
 )
 
 # A fixed framework id + the seven top-level ISO words, mirroring fetch_top_words output, so the
@@ -104,6 +113,7 @@ def _only_source(build: Path) -> Path:
     return sources[0]
 
 
+@_skip_on_windows
 def test_atomic_swap_repoints_current_and_prunes(tmp_path: Path) -> None:
     """A swap repoints ``current`` at the new build and prunes the prior one."""
     mirror = tmp_path / "m"
@@ -117,6 +127,7 @@ def test_atomic_swap_repoints_current_and_prunes(tmp_path: Path) -> None:
     assert not (mirror / ".builds" / "b1").exists()  # prior build pruned
 
 
+@_skip_on_windows
 def test_mirror_atomic_swap_no_partial_tree(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -325,6 +336,7 @@ async def test_build_tree_places_real_bytes_under_primary(
     assert [c["number"] for c in meta["clauses"]] == ["8.4"]
 
 
+@_skip_on_windows
 async def test_build_tree_symlinks_into_other_clause(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -344,6 +356,7 @@ async def test_build_tree_symlinks_into_other_clause(
     assert _only_source(build).read_bytes() == b"SHARED"
 
 
+@_skip_on_windows
 async def test_build_tree_symlink_target_stays_in_build_root(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -354,6 +367,7 @@ async def test_build_tree_symlink_target_stays_in_build_root(
     assert link.resolve().is_relative_to(build.resolve())
 
 
+@_skip_on_windows
 async def test_build_tree_manifest_distinguishes_symlinks(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -464,6 +478,7 @@ def test_placement_process_dedup_on_safe_name() -> None:
 # --- S9d: build_tree writes the by-process symlinks -------------------------------------------
 
 
+@_skip_on_windows
 async def test_build_tree_by_process_symlink_resolves(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -480,6 +495,7 @@ async def test_build_tree_by_process_symlink_resolves(
     assert (link / "metadata.json").exists()  # readable through the link
 
 
+@_skip_on_windows
 async def test_build_tree_by_process_clause_and_process_share_real_folder(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -502,6 +518,7 @@ async def test_build_tree_by_process_clause_and_process_share_real_folder(
     assert _only_source(build).read_bytes() == b"BYTES"
 
 
+@_skip_on_windows
 async def test_build_tree_by_process_manifest_and_metadata(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -517,6 +534,7 @@ async def test_build_tree_by_process_manifest_and_metadata(
     assert [p["name"] for p in meta["processes"]] == ["Purchasing", "Sales"]  # sorted by name
 
 
+@_skip_on_windows
 async def test_build_tree_unmapped_doc_with_process_link(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
