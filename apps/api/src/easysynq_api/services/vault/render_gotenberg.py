@@ -23,6 +23,7 @@ import mimetypes
 import httpx
 
 from ...config import get_settings
+from .linked_resources import scan_linked_resources
 from .render import RenderRequest, RenderResult, RenderStatus
 from .watermark import stamp_controlled_copy
 
@@ -94,6 +95,15 @@ class GotenbergRenderSink:
         mime = request.mime_type
         if _is_non_renderable(mime):
             return RenderResult.non_renderable()
+
+        # Gotenberg-8.34 coupling: LibreOffice 8.34 converts an Office/RTF/ODF source that
+        # references an EXTERNAL linked resource (http(s)/file/UNC/absolute) with HTTP 200 but OMITS
+        # the linked content from the PDF. Caching that lossy convert as the mirror's CONTROLLED
+        # COPY would be a WORM/mirror integrity hazard — so a structurally-linked source is marked
+        # non-renderable (R26, source-only) BEFORE any convert. Embedded/relative media is fine.
+        scan = scan_linked_resources(mime, source_bytes)
+        if scan.has_external_links:
+            return RenderResult.non_renderable(reason=scan.reason)
 
         if mime == "application/pdf":
             base = source_bytes

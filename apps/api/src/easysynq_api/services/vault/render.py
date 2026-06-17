@@ -38,10 +38,14 @@ class RenderStatus(enum.Enum):
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class RenderResult:
-    """The outcome of a render attempt. ``pdf`` is set only when ``status is RENDERED``."""
+    """The outcome of a render attempt. ``pdf`` is set only when ``status is RENDERED``; ``reason``
+    is a short human string (R26) carried only on a NON_RENDERABLE result that wants to explain WHY
+    (e.g. an externally-linked source that LibreOffice 8.34 omits) — it lands in the mirror's
+    ``metadata.json`` for an auditor. RENDERED/PENDING leave it None."""
 
     status: RenderStatus
     pdf: bytes | None = None
+    reason: str | None = None
 
     @classmethod
     def rendered(cls, pdf: bytes) -> RenderResult:
@@ -52,8 +56,8 @@ class RenderResult:
         return cls(RenderStatus.PENDING, None)
 
     @classmethod
-    def non_renderable(cls) -> RenderResult:
-        return cls(RenderStatus.NON_RENDERABLE, None)
+    def non_renderable(cls, reason: str | None = None) -> RenderResult:
+        return cls(RenderStatus.NON_RENDERABLE, None, reason)
 
 
 @dataclasses.dataclass(frozen=True, slots=True)

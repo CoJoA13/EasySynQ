@@ -141,6 +141,56 @@ async def test_non_renderable_format_no_controlled_rendition(
     assert meta["no_controlled_rendition"] is True
 
 
+_DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+
+def _externally_linked_docx() -> bytes:
+    """A minimal docx-shaped ZIP whose document relationships reference an EXTERNAL http image. The
+    structural scan flags this BEFORE any Gotenberg convert, so the test needs no live Gotenberg."""
+    import zipfile
+
+    rels = (
+        b'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        b'<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        b'<Relationship Id="rId1" '
+        b'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" '
+        b'Target="http://example.com/logo.png" TargetMode="External"/>'
+        b"</Relationships>"
+    )
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("word/document.xml", b"<w:document/>")
+        zf.writestr("word/_rels/document.xml.rels", rels)
+    return buf.getvalue()
+
+
+async def test_externally_linked_office_no_controlled_rendition(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    subj: SimpleNamespace,
+    tmp_path: Path,
+) -> None:
+    """[gotenberg-8.34] An Office source referencing an EXTERNAL linked resource (LibreOffice 8.34
+    converts-but-omits) stays source bytes + ``no_controlled_rendition`` + a reason string — never a
+    lossy cached controlled copy. The structural scan short-circuits before any Gotenberg POST, so
+    this needs no live renderer."""
+    mirror = tmp_path / "m"
+    await _grant(subj)
+    ha, hb = _auth(token_factory, subj.a), _auth(token_factory, subj.b)
+    docx = _externally_linked_docx()
+    doc = await _release_manual(app_client, ha, hb, await s5.type_id("SOP"), docx, _DOCX_MIME)
+
+    await sync_mirror(mirror_path=mirror, render_sink=GotenbergRenderSink())
+
+    doc_dir = _doc_dir(mirror, doc["identifier"])
+    assert _source_file(doc_dir).read_bytes() == docx  # source kept verbatim, no PDF
+    meta = json.loads((doc_dir / "metadata.json").read_text())
+    assert meta["render_status"] == "unrenderable"
+    assert meta["no_controlled_rendition"] is True
+    assert isinstance(meta["no_controlled_rendition_reason"], str)
+    assert meta["no_controlled_rendition_reason"]
+
+
 async def test_rendition_cached_second_sync_skips_render(
     app_client: AsyncClient,
     token_factory: Callable[..., str],
