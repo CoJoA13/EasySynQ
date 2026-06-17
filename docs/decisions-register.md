@@ -1117,7 +1117,19 @@ event types + `audit_object_type='improvement_initiative'` + the two `improvemen
 grants. `domain/improvement/fsm.py` (the pure edge map) + `services/improvement` (create / transition
 / update / list / get / stage-events; `_improvement_scope`). `/improvement-initiatives` router (the 6
 lifecycle endpoints). All spawn-seam columns ship now so **slice 2 (the OFI-finding + MR-output spawn)
-is zero-migration**. **Deferred (named, not faked):** the spawn endpoints (S-improvement-2); the
+was zero-migration**.
+
+**Implemented in slice S-improvement-2 (zero-migration; PR #182):** the two spawn endpoints —
+`POST /findings/{finding_id}/raise-initiative` (OBSERVATION/OFI → `source=OFI`; 422
+`finding_not_improvable` on an NC, 409 `finding_superseded` on a corrected finding; inherits the
+audit auditee process) + `POST /management-reviews/{review_id}/outputs/{output_id}/raise-initiative`
+(ACTION/IMPROVEMENT → `source=review`; 422 `output_not_improvable` on a DECISION, 409
+`review_not_tracking`; emits `MGMT_REVIEW_INITIATIVE_SPAWNED`). Both are 1:N + optional
+`Idempotency-Key` (201 new / 200 replay; the replay re-authorizes the **stored** initiative scope) and
+mint no `signature_event` (R43); `review_output.spawned_initiative_id` stays reserved-null (un-reserving
+the reciprocal latch is a future `0053` owner call).
+
+**Deferred (named, not faked):** the
 register/drawer/PDCA-ACT tile UI (S-improvement-3); the optional unsigned **Verified** benefit-review
 stage and/or an engine-routed management-authorization approval (S-improvement-4, opt-in); discrete
 `improvement_initiative_action` milestone rows; objective-miss / 9.1.3 auto-seed.
@@ -1125,7 +1137,8 @@ stage and/or an engine-routed management-authorization approval (S-improvement-4
 **Back-propagation:** 02 (10.3 as-built — own-table workflow object + the RECORD-deviation note), 07
 §3 (`improvement.*` now reach a resource), 14 §9 (the last named-but-unbuilt entity is now built —
 as-built `improvement_initiative`/`_stage_event` tables + the reserved `source_link` seam), 15 (the
-`/improvement-initiatives*` endpoints), 16 (clause 10 fully addressed — 10.2 CAPA + 10.3 initiatives).
+`/improvement-initiatives*` lifecycle + the `raise-initiative` spawn endpoints, §8.12b), 16 (clause 10
+fully addressed — 10.2 CAPA + 10.3 initiatives).
 
 ---
 
