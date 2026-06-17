@@ -148,16 +148,25 @@ def scan_linked_resources(mime_type: str, source_bytes: bytes) -> LinkScan:
 
 
 def _scan_zip_container(source_bytes: bytes) -> LinkScan:
-    """Fingerprint a renderable zip by member layout → OOXML or ODF scan (else fail-open False)."""
+    """Fingerprint a renderable zip by member layout → ODF or OOXML scan (else fail-open False).
+
+    **ODF is checked FIRST.** A real ODF package always has a TOP-LEVEL ``content.xml`` and a real
+    OOXML package never does (OOXML uses ``[Content_Types].xml`` + ``word/document.xml`` …). An ODF
+    that embeds an OOXML/OLE object carries that object's ``.rels`` member, so keying OOXML off a
+    bare ``.rels`` would mis-route the ODF to the OOXML branch and skip its own
+    ``content.xml``/``styles.xml`` link scan (a round-4 false-negative). Top-level ``content.xml``
+    is the unambiguous ODF signal, so it wins; only a zip WITHOUT one falls through to the OOXML
+    fingerprint check."""
     try:
         with zipfile.ZipFile(io.BytesIO(source_bytes)) as zf:
             names = zf.namelist()
             lower = [n.lower() for n in names]
-            is_ooxml = "[content_types].xml" in lower or any(n.endswith(".rels") for n in lower)
-            if is_ooxml:
-                return _scan_ooxml(zf, names)
-            if "content.xml" in lower:
+            if (
+                "content.xml" in lower
+            ):  # top-level → ODF (even if an embedded object brings a .rels)
                 return _scan_odf(zf, names)
+            if "[content_types].xml" in lower or any(n.endswith(".rels") for n in lower):
+                return _scan_ooxml(zf, names)
     except Exception:  # noqa: BLE001 — not a real/usable zip → fail-open
         return LinkScan(False)
     return LinkScan(False)
@@ -316,7 +325,13 @@ def _scan_ooxml(zf: zipfile.ZipFile, names: list[str]) -> LinkScan:
     field_hit = False
     members_inspected = 0
     total_bytes = 0
-    for name in names:
+    # Scan relationship parts FIRST: they are few + tiny and carry the most reliable signal (an
+    # External relationship), so a package with more field-scannable content parts than the member
+    # budget must not exhaust it on those (in archive order) before a later ``.rels`` is read (a
+    # round-4 false-negative). A stable sort keeps each group's archive order; field members are
+    # then scanned under the SAME shared budget.
+    ordered = sorted(names, key=lambda n: 0 if n.lower().endswith(".rels") else 1)
+    for name in ordered:
         if members_inspected >= _MAX_ZIP_MEMBERS or total_bytes >= _MAX_ZIP_TOTAL_BYTES:
             break  # cumulative zip-bomb budget exhausted → fail open with what we have
         nl = name.lower()
@@ -441,20 +456,27 @@ def _scan_odf(zf: zipfile.ZipFile, names: list[str]) -> LinkScan:
 
 # ── RTF ────────────────────────────────────────────────────────────────────────────────────
 
-# A linked RTF field is detected by the field COMMAND keyword immediately following a ``\fldinst``
+# A linked RTF field is detected by the field COMMAND keyword that follows a ``\fldinst``
 # field-instruction marker, independent of the target form (the target may be ``C:\x.png``,
 # ``/x.png``, ``\\unc\x``, or ``http://…`` — ALL dropped by 8.34). INCLUDEPICTURE/INCLUDETEXT are
 # inherently file-linking instructions; ``LINK`` is the DDE/OLE-link command. The keyword must be
-# the COMMAND token — i.e. appear right after ``\fldinst`` separated only by RTF field-wrapper chars
-# (whitespace + the group/control punctuation ``{ } \ *`` of ``{\*\fldinst …}``), NOT arbitrary
-# text. So ``\fldinst {HYPERLINK "https://x/link"}`` does NOT match the ``link`` buried in the URL
-# argument (a hyperlink must keep rendering), while ``\fldinst {INCLUDEPICTURE "…"}`` /
-# ``{\*\fldinst LINK Excel.Sheet …}`` DO. The gap is a SINGLE bounded class repetition
-# (``[\s{}\\*]{0,40}``) — non-nested, no catastrophic backtracking. The leading word boundary on
-# each keyword means a following "HYPERLINK" command does NOT match ``LINK`` (R/L are both word
-# chars).
+# the COMMAND token — appearing after ``\fldinst`` separated only by RTF field-wrapper noise, NOT
+# arbitrary body text. That noise is whitespace, the group/star punctuation ``{ } *`` of
+# ``{\*\fldinst …}``, AND any bounded run of RTF control words/symbols (Word emits charformat /
+# language runs inside the field group, e.g. ``\fldinst \lang1033\rtlch INCLUDEPICTURE …`` — the
+# round-4 false-negative). The gap therefore alternates over: a single ``[\s{}*]`` char; a control
+# WORD ``\<letters>[-digits]`` + an optional trailing delimiter space; or a control SYMBOL
+# ``\<non-letter>`` (``\*``, ``\\``, ``\{`` …). The three alternatives are disjoint on their first
+# char (whitespace/brace/star vs ``\``+letter vs ``\``+non-letter), so there is no overlap and the
+# ``{0,40}`` bound caps iterations — non-nested, no catastrophic backtracking (ReDoS-safe). Because
+# the gap's chars are only RTF noise, it CANNOT cross a command token like ``HYPERLINK`` to reach
+# the ``link`` buried in a URL argument: ``\fldinst {HYPERLINK "https://x/link"}`` does NOT match
+# (a hyperlink must keep rendering), while ``\fldinst {INCLUDEPICTURE "…"}`` /
+# ``{\*\fldinst \lang1033 LINK Excel.Sheet …}`` DO. The leading word boundary on each keyword means
+# a following ``HYPERLINK`` command does NOT match ``LINK`` (R/L are both word chars).
 _RTF_FLDINST_LINK_RE = re.compile(
-    r"\\fldinst[\s{}\\*]{0,40}\b(?:INCLUDEPICTURE|INCLUDETEXT|LINK)\b",
+    r"\\fldinst(?:[\s{}*]|\\[A-Za-z]+-?\d*\s?|\\[^A-Za-z]){0,40}"
+    r"\b(?:INCLUDEPICTURE|INCLUDETEXT|LINK)\b",
     re.IGNORECASE,
 )
 

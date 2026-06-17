@@ -329,6 +329,24 @@ def test_odf_embedded_subdocument_directory_is_not_flagged() -> None:
     assert scan_linked_resources(_ODT, blob) == LinkScan(False)
 
 
+def test_odf_with_embedded_rels_still_uses_odf_scan() -> None:
+    """Round-4 P1: an ODF that embeds an OOXML/OLE object carries that object's ``.rels`` member.
+    Routing must key off the TOP-LEVEL ``content.xml`` (the unambiguous ODF signal) FIRST, so the
+    ODT's own external draw:image is still ODF-scanned and flagged — not diverted to the OOXML
+    branch (which would never inspect the top-level ``content.xml``/``styles.xml``)."""
+    blob = _zip(
+        {
+            "content.xml": _odf_content("http://example.com/logo.png"),
+            "styles.xml": b"<x/>",
+            # an embedded OOXML object brings its own .rels — must NOT divert routing to OOXML
+            "Object 1/word/_rels/document.xml.rels": _rels(
+                '<Relationship Id="rId1" Target="media/i.png" TargetMode="Internal"/>'
+            ),
+        }
+    )
+    assert scan_linked_resources(_ODT, blob).has_external_links is True
+
+
 def test_odf_external_href_in_styles_is_flagged() -> None:
     """styles.xml (header/footer logos live there) is scanned too."""
     styles = (
@@ -434,6 +452,22 @@ def test_rtf_fldinst_link_command_is_flagged() -> None:
     assert scan_linked_resources(_RTF, body).has_external_links is True
 
 
+def test_rtf_fldinst_control_words_before_command_is_flagged() -> None:
+    r"""Round-4 P1: Word emits charformat/language control words inside the field group
+    (``\fldinst \lang1033\rtlch INCLUDEPICTURE "http://..."``). The gap skips bounded RTF control
+    words before the command token, so the linked field is still flagged."""
+    body = rb'{\rtf1{\field{\*\fldinst \lang1033\rtlch INCLUDEPICTURE "http://x/i.png" \\d}}}'
+    assert scan_linked_resources(_RTF, body).has_external_links is True
+
+
+def test_rtf_fldinst_hyperlink_with_control_words_is_not_flagged() -> None:
+    r"""Round-4: control words before a HYPERLINK command must not cause a false match — the gap is
+    only RTF noise (whitespace/braces/control words), so it cannot cross the ``HYPERLINK`` command
+    token to reach the ``link`` buried in the URL argument."""
+    body = rb'{\rtf1{\field{\*\fldinst \lang1033 HYPERLINK "https://example.com/link"}}}'
+    assert scan_linked_resources(_RTF, body) == LinkScan(False)
+
+
 def test_rtf_body_prose_link_without_fldinst_is_not_flagged() -> None:
     r"""Body prose containing the word "link" and a URL, with NO \fldinst field context, is NOT
     flagged (P2-b) — LINK only matches inside an RTF field instruction."""
@@ -533,6 +567,17 @@ def test_ooxml_short_circuits_on_first_external_rel() -> None:
     clean = _rels('<Relationship Id="rId1" Target="styles.xml"/>')
     members = {"word/_rels/document.xml.rels": ext}
     members.update({f"word/parts/p{i}.xml.rels": clean for i in range(2000)})
+    assert scan_linked_resources(_DOCX, _zip(members)).has_external_links is True
+
+
+def test_ooxml_late_external_rel_after_many_field_parts_is_flagged() -> None:
+    """Round-4 P1: a package with more field-scannable content parts than the member budget, with an
+    external ``.rels`` LATER in archive order, must still flag. The scan reads ``.rels`` parts FIRST
+    (few + tiny, the most reliable signal), so the budget can't starve them based on archive order —
+    in archive order the 600 slides come before the relationship part."""
+    ext = _rels('<Relationship Id="rId1" Target="https://x/logo.png" TargetMode="External"/>')
+    members: dict[str, bytes] = {f"ppt/slides/slide{i}.xml": b"<p:sld/>" for i in range(600)}
+    members["ppt/slides/_rels/slide1.xml.rels"] = ext  # AFTER the 600 slides in archive order
     assert scan_linked_resources(_DOCX, _zip(members)).has_external_links is True
 
 
