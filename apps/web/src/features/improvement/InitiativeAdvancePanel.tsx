@@ -7,13 +7,17 @@ import { EditInitiativeModal } from "./EditInitiativeModal";
 import { TransitionModal } from "./TransitionModal";
 import { useTransitionInitiative } from "./mutations";
 
-// The clause-10.3 initiative cockpit. Affordances gate on usePermissions().can("improvement.manage")
-// (PROCESS finest-scope, SYSTEM fallback in v1 — the MR cockpit precedent; the initiative serializer
-// carries NO capabilities block) AND the FSM stage. Start/Complete are one-click (the FSM allows them
+// The clause-10.3 initiative cockpit. Affordances gate on improvement.manage at the INITIATIVE'S
+// scope — PROCESS-scoped to its process_id (SYSTEM when unscoped), mirroring the CAPA AdvancePanel and
+// the backend's _initiative_scope, so a Process-Owner with only a PROCESS-scoped grant can drive the
+// FSM (the serializer carries NO capabilities block). Start/Complete are one-click (the FSM allows them
 // with no comment); Cancel/Close open a comment-required modal (Close also folds an optional realized-
 // benefit outcome). The terminal Closed/Cancelled stages expose no actions.
 export function InitiativeAdvancePanel({ initiative }: { initiative: Initiative }) {
-  const { can } = usePermissions();
+  const scope: { level: string; id?: string } = initiative.process_id
+    ? { level: "PROCESS", id: initiative.process_id }
+    : { level: "SYSTEM" };
+  const { can } = usePermissions(scope);
   const transition = useTransitionInitiative(initiative.id);
   const [error, setError] = useState<string | null>(null);
   const [cancelling, setCancelling] = useState(false);

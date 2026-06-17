@@ -141,6 +141,48 @@ test("shows the FSM transition affordance in the drawer only with improvement.ma
   expect(await screen.findByRole("button", { name: "Mark completed" })).toBeInTheDocument();
 });
 
+test("honors a PROCESS-scoped improvement.manage grant in the cockpit", async () => {
+  const PROC = "50000000-0000-0000-0000-0000000000cc";
+  // The initiative is process-scoped; the grant is ALLOW only at that PROCESS scope (empty at SYSTEM).
+  // The cockpit shows only if it asks at the initiative's scope (the CAPA AdvancePanel pattern) — a
+  // SYSTEM-only check would get [] here and render nothing.
+  server.use(
+    http.get("/api/v1/improvement-initiatives/:id", () =>
+      HttpResponse.json({
+        id: "10000000-0000-0000-0000-000000000002",
+        identifier: "IMP-2026-0002",
+        title: "Improve calibration record completeness",
+        description: null,
+        target_outcome: null,
+        source: "OFI",
+        source_link_id: "30000000-0000-0000-0000-000000000001",
+        process_id: PROC,
+        owner_user_id: null,
+        stage: "InProgress",
+        opened_at: "2026-06-12T09:00:00Z",
+        closed_at: null,
+        created_by: "20000000-0000-0000-0000-0000000000aa",
+        created_at: "2026-06-12T09:00:00Z",
+        updated_at: null,
+      }),
+    ),
+    http.get("/api/v1/me/permissions", ({ request }) => {
+      const url = new URL(request.url);
+      const ok =
+        url.searchParams.get("scope_level") === "PROCESS" &&
+        url.searchParams.get("scope_id") === PROC;
+      return HttpResponse.json({
+        scope: { level: url.searchParams.get("scope_level") ?? "SYSTEM", selector: null },
+        permissions: ok ? [{ key: "improvement.manage", effect: "ALLOW", source: null }] : [],
+      });
+    }),
+  );
+  renderWithProviders(<ImprovementRegisterPage />, {
+    route: "/improvement?initiative=10000000-0000-0000-0000-000000000002",
+  });
+  expect(await screen.findByRole("button", { name: "Mark completed" })).toBeInTheDocument();
+});
+
 test("a Cancel move requires a comment before the confirm button enables", async () => {
   // The detail fixture is InProgress → the cockpit offers "Cancel initiative" (a comment-required move).
   grantManage();
