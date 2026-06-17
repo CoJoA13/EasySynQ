@@ -59,6 +59,7 @@ from ..services.mgmt_review import (
     release_review,
     spawn_capa_for_output,
     spawn_dcr_for_output,
+    spawn_initiative_for_output,
     spawn_mr_actions,
     submit_review_for_review,
     update_output,
@@ -76,6 +77,10 @@ from ..services.vault.release_scope import enrich_release_sod_scope
 from ..services.vault.review import today_org
 from ..services.workflow import repository as wf_repo
 from .dcr import _dcr, _dcr_doc_scope
+
+# Reuse the improvement-initiative serializer + scope helper (one source → no drift; the .dcr import
+# above is the same cross-router precedent). api/improvement imports only services → no cycle.
+from .improvement import _initiative, _scope_for
 
 router = APIRouter(prefix="/api/v1", tags=["management-reviews"])
 
@@ -129,6 +134,18 @@ class OutputDcrCreate(BaseModel):
     reason_text: str = Field(min_length=1, max_length=4000)
     target_document_id: uuid.UUID | None = None
     proposed_effective_from: datetime.datetime | None = None
+
+
+class OutputInitiativeCreate(BaseModel):
+    """Body for raising an improvement initiative from an MR output (S-improvement-2). An MR has no
+    process, so the initiative's home process (and the gate scope) come from the optional
+    ``process_id`` here (SYSTEM when omitted); ``source``/``source_link_id`` derive from output."""
+
+    title: str = Field(min_length=1, max_length=500)
+    description: str | None = Field(default=None, max_length=8000)
+    target_outcome: str | None = Field(default=None, max_length=4000)
+    owner_user_id: uuid.UUID | None = None
+    process_id: uuid.UUID | None = None
 
 
 # --- serializers ---
@@ -551,6 +568,45 @@ async def raise_output_dcr_endpoint(
     return JSONResponse(
         status_code=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
         content=_dcr(dcr),
+    )
+
+
+@router.post("/management-reviews/{review_id}/outputs/{output_id}/raise-initiative")
+async def raise_output_initiative_endpoint(
+    review_id: uuid.UUID,
+    output_id: uuid.UUID,
+    body: OutputInitiativeCreate,
+    request: Request,
+    caller: AppUser = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+    authz_sink: AuthzAuditSink = Depends(get_authz_audit_sink),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+) -> JSONResponse:
+    """Raise an Improvement Initiative from an ACTION/IMPROVEMENT output (S-improvement-2). Gate
+    ``improvement.manage`` at the body's optional ``process_id`` (SYSTEM fallback — an MR has no
+    process; the manual-create body-scope precedent). 422 ``output_not_improvable`` on a DECISION;
+    409 ``review_not_tracking`` unless the review is released-and-tracking. 1:N + Idempotency-Key
+    (201 new / 200 replay); the link is one-way on the initiative (``source=review``);
+    ``review_output.spawned_initiative_id`` stays reserved-null (R46). Returns the initiative."""
+    await _load_review(session, caller, review_id)  # 404 cross-org
+    await enforce(
+        session, authz_sink, request, caller, "improvement.manage", _scope_for(body.process_id)
+    )
+    initiative, created = await spawn_initiative_for_output(
+        session,
+        caller,
+        review_id=review_id,
+        output_id=output_id,
+        title=body.title,
+        description=body.description,
+        target_outcome=body.target_outcome,
+        owner_user_id=body.owner_user_id,
+        process_id=body.process_id,
+        idempotency_key=idempotency_key,
+    )
+    return JSONResponse(
+        status_code=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+        content=_initiative(initiative),
     )
 
 

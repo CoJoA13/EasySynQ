@@ -34,6 +34,29 @@ async def get_initiative(
     return await session.get(ImprovementInitiative, initiative_id)
 
 
+async def get_spawned_initiative(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    source_link_id: uuid.UUID,
+    idempotency_key: str | None,
+) -> ImprovementInitiative | None:
+    """The initiative this origin already spawned for ``idempotency_key`` (None when no key) — the
+    idempotent-replay lookup keyed on the ``(org_id, source_link_id, spawn_idempotency_key)``
+    partial-UNIQUE ``uq_improvement_initiative_spawn`` (the ``_find_spawned_dcr_for_output``
+    precedent). A NULL key never dedups: every keyless spawn is fresh (R46's 1:N origin link)."""
+    if idempotency_key is None:
+        return None
+    return (
+        await session.execute(
+            select(ImprovementInitiative).where(
+                ImprovementInitiative.org_id == org_id,
+                ImprovementInitiative.source_link_id == source_link_id,
+                ImprovementInitiative.spawn_idempotency_key == idempotency_key,
+            )
+        )
+    ).scalar_one_or_none()
+
+
 async def list_initiatives(
     session: AsyncSession,
     org_id: uuid.UUID,
