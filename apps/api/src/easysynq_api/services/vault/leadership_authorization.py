@@ -159,6 +159,40 @@ async def release_authorization_status(
     }
 
 
+async def assert_release_authorized(
+    session: AsyncSession, doc: DocumentedInformation, version: DocumentVersion
+) -> None:
+    """The shared S-leadership-1 release gate: raise 409 ``leadership_authorization_required`` when
+    ``doc`` is a leadership artifact (POL/OBJ/MR), the org flag is on, and ``version`` lacks a
+    Top-Management verify signature. A no-op unless the flag is on AND the type matches (ordinary
+    documents and default installs are unaffected).
+
+    Called by the cutover chokepoint (``vault/lifecycle._cutover`` — the direct, OBJ, and MR
+    release paths) AND **preflighted synchronously by the DCR implement** (``services/dcr``): a
+    REVISE/CREATE go-live of a leadership artifact only reaches ``_cutover`` later inside the async
+    ``release_due`` sweep (which swallows this 409 and skips), so without the preflight the
+    implement would commit the DCR as Implemented while the version stays Approved (stuck). The
+    preflight surfaces the 409 before that commit."""
+    if doc.document_type_id is None:
+        return
+    config = await session.get(SystemConfig, doc.org_id)
+    if config is None or not config.leadership_release_requires_top_management_authorization:
+        return
+    code = await _doc_type_code(session, doc)
+    if code not in LEADERSHIP_DOC_TYPES:
+        return
+    if not await has_release_authorization(session, version.id):
+        raise ProblemException(
+            status=409,
+            code="leadership_authorization_required",
+            title="Top-Management authorization required before release",
+            detail=(
+                "this leadership artifact requires a signed Top-Management authorization of the "
+                "Approved version before it can be released"
+            ),
+        )
+
+
 def _emit_authorized(
     session: AsyncSession,
     actor: AppUser,
