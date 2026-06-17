@@ -4790,6 +4790,55 @@ paths:
         "403": { $ref: "#/components/responses/ProblemResponse" }
         "404": { $ref: "#/components/responses/ProblemResponse" }
 
+  /documents/{document_id}/request-leadership-authorization:
+    post:
+      tags: [documents]
+      operationId: requestLeadershipAuthorization
+      summary: >-
+        Request a signed Top-Management RELEASE authorization for an Approved leadership artifact
+        (POL/OBJ/MR; S-leadership-1, doc 10 §2.5, R45). Opens an engine workflow routed to the reserved
+        "Top Management" role; the Approved version becomes releasable only when a member signs
+        (meaning=verify on the document_version) via POST /tasks/{id}/decision. The SIGN is candidate-pool
+        authority (no key); this request gates document.approve at the document's scope. 409 unless a
+        leadership type / unless Approved / if an authorization is already in flight;
+        current_state=NEEDS_ATTENTION when no Top-Management member is assigned. The welded approve/release
+        path is unchanged (this gate is opt-in via leadership_release_requires_top_management_authorization).
+      parameters:
+        - { name: document_id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/LeadershipAuthorizationRequest" }
+      responses:
+        "201":
+          description: The opened authorization cycle (instance + materialized Top-Management tasks).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LeadershipAuthorizationCycle" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409": { $ref: "#/components/responses/ProblemResponse" }
+  /documents/{document_id}/leadership-authorization:
+    get:
+      tags: [documents]
+      operationId: getLeadershipAuthorization
+      summary: >-
+        The leadership release-authorization status for a document (S-leadership-1): is_leadership_artifact
+        (POL/OBJ/MR), required (the org flag is on AND it is a leadership type → release is gated), the
+        current Approved version_id, whether that version is already authorized, and the latest
+        authorization cycle (instance) or null. Never 404 for a no-cycle document. Needs document.read.
+      parameters:
+        - { name: document_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: The leadership release-authorization status.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LeadershipAuthorizationStatus" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+
   /capas/{capa_id}/raise-dcr:
     post:
       tags: [dcr]
@@ -6602,7 +6651,7 @@ components:
         definition_version: { type: integer, description: "Pinned at instantiation." }
         subject_type:
           type: string
-          enum: [DOCUMENT, DCR, CAPA, AUDIT, MGMT_REVIEW, PERIODIC_REVIEW, DOC_ACK, IMPROVEMENT_INITIATIVE]
+          enum: [DOCUMENT, DCR, CAPA, AUDIT, MGMT_REVIEW, PERIODIC_REVIEW, DOC_ACK, IMPROVEMENT_INITIATIVE, LEADERSHIP_AUTHORIZATION]
         subject_id: { type: string, format: uuid }
         current_state:
           type: string
@@ -6622,7 +6671,7 @@ components:
         outcome:
           type: string
           enum: [approve, changes_requested, reject, complete, acknowledge, verify]
-          description: "approve signs (document.approve); changes_requested/reject returns to Draft (document.review); verify is the IMPROVEMENT_INITIATIVE management-authorization sign-off (S-improvement-4) — verify/reject only for that subject."
+          description: "approve signs (document.approve); changes_requested/reject returns to Draft (document.review); verify is the management-authorization / leadership-release sign-off (S-improvement-4 IMPROVEMENT_INITIATIVE; S-leadership-1 LEADERSHIP_AUTHORIZATION) — verify/reject only for those subjects."
         comment:
           type: [string, "null"]
           description: "Required (non-empty) for changes_requested/reject; recorded as the decision intent."
@@ -6977,6 +7026,13 @@ components:
             Severity-aware SoD-4 relaxation (R39): when false (default, STRICT) a CAPA's action
             implementer may not verify it; when true a Minor CAPA may be self-verified (Critical/Major
             always hard-enforce). A forward seam exposed now; enforced in S-capa-3.
+        leadership_release_requires_top_management_authorization:
+          type: boolean
+          description: >-
+            S-leadership-1 (doc 10 §2.5, R45): when true, a leadership artifact (POL/OBJ/MR) may not be
+            released until a Top-Management member signs a verify authorization on the Approved version.
+            Default OFF (opt-in) — dormant on a fresh install; the welded approve/release path is
+            unchanged.
     OrgConfigUpdate:
       type: object
       additionalProperties: false
@@ -6985,6 +7041,7 @@ components:
         capture_pre_release_templates: { type: [boolean, "null"] }
         allow_self_disposition: { type: [boolean, "null"] }
         allow_capa_self_verify: { type: [boolean, "null"] }
+        leadership_release_requires_top_management_authorization: { type: [boolean, "null"] }
 
     CapaSource:
       type: string
@@ -7387,6 +7444,66 @@ components:
         tasks:
           type: array
           items: { $ref: "#/components/schemas/ImprovementInitiativeAuthorizationTask" }
+    LeadershipAuthorizationRequest:
+      type: object
+      additionalProperties: false
+      description: The optional justification for requesting a Top-Management release authorization (S-leadership-1).
+      properties:
+        comment: { type: [string, "null"], maxLength: 4000 }
+    LeadershipAuthorizationTask:
+      type: object
+      additionalProperties: false
+      required: [id, stage_key, state, assignee_user_id, candidate_pool, action_expected]
+      properties:
+        id: { type: string, format: uuid }
+        stage_key: { type: string }
+        state: { type: string }
+        assignee_user_id: { type: [string, "null"], format: uuid }
+        candidate_pool:
+          type: [array, "null"]
+          items: { type: string }
+        action_expected: { type: [string, "null"] }
+    LeadershipAuthorizationCycle:
+      type: object
+      additionalProperties: false
+      description: >-
+        A Top-Management release-authorization cycle for a leadership artifact (S-leadership-1) — the
+        workflow instance + its tasks (the GET /documents/{id}/approval analogue).
+      required: [instance_id, subject_id, current_state, started_at, tasks]
+      properties:
+        instance_id: { type: string, format: uuid }
+        subject_id: { type: string, format: uuid }
+        current_state:
+          type: string
+          description: >-
+            The pending stage key, COMPLETED (the version is authorized → release is permitted),
+            REJECTED, or NEEDS_ATTENTION (no Top-Management member assigned).
+        started_at: { type: [string, "null"], format: date-time }
+        tasks:
+          type: array
+          items: { $ref: "#/components/schemas/LeadershipAuthorizationTask" }
+    LeadershipAuthorizationStatus:
+      type: object
+      additionalProperties: false
+      description: >-
+        The leadership release-authorization status for a document (S-leadership-1) — whether the gate
+        applies and whether the current Approved version is authorized.
+      required: [is_leadership_artifact, required, version_id, authorized, instance]
+      properties:
+        is_leadership_artifact:
+          type: boolean
+          description: Whether the document is a leadership artifact (document_type.code ∈ {POL, OBJ, MR}).
+        required:
+          type: boolean
+          description: Whether the org flag is on AND it is a leadership type → release is gated.
+        version_id: { type: [string, "null"], format: uuid }
+        authorized:
+          type: boolean
+          description: Whether the current Approved version carries a Top-Management verify signature.
+        instance:
+          oneOf:
+            - { $ref: "#/components/schemas/LeadershipAuthorizationCycle" }
+            - { type: "null" }
     DocumentLinkType:
       type: string
       enum: [parent_of, child_of, references, supersedes]

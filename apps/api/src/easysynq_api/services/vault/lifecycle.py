@@ -432,6 +432,18 @@ async def obsolete(
     return doc
 
 
+async def _assert_leadership_release_authorized(
+    session: AsyncSession, doc: DocumentedInformation, version: DocumentVersion
+) -> None:
+    """S-leadership-1 release gate — delegates to the shared
+    ``leadership_authorization.assert_release_authorized`` (the same gate the DCR implement
+    preflights). The local import avoids an import cycle (the authorization module imports the
+    workflow engine)."""
+    from .leadership_authorization import assert_release_authorized
+
+    await assert_release_authorized(session, doc, version)
+
+
 # --- the atomic single-Effective cutover (T6 + T10) -------------------------------------
 
 
@@ -481,6 +493,11 @@ async def _cutover(
         raise IllegalTransition(
             Action.release, doc.current_state, allowed_actions(doc.current_state)
         )
+
+    # S-leadership-1: enforce the Top-Management release authorization (a no-op unless the org flag
+    # is on AND this is a leadership artifact) BEFORE any state mutation, so a blocked release
+    # rolls back nothing.
+    await _assert_leadership_release_authorized(session, doc, version)
 
     eff_from = version.effective_from or now
     if eff_from > now:

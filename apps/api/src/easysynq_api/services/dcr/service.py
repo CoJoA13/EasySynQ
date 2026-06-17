@@ -911,6 +911,18 @@ async def implement_dcr(
 
     # REVISE / CREATE: schedule the cutover (immediate = now → swept on the next release_due tick).
     version = await _resolve_implement_version(session, actor, dcr, resulting_version_id)
+    # S-leadership-1: preflight the Top-Management release gate SYNCHRONOUSLY. The cutover itself
+    # runs later in the async release_due sweep (which swallows the gate's 409 and skips), so
+    # without this a leadership artifact's (POL/OBJ/MR) DCR go-live would commit as Implemented here
+    # while the version stays Approved (stuck, never releasable until separately authorized) —
+    # surface the 409 before committing. A no-op unless the flag is on AND the target is a
+    # leadership type. The local import avoids an import cycle (the authz module imports the
+    # engine).
+    target_doc = await session.get(DocumentedInformation, version.document_id)
+    if target_doc is not None:
+        from ..vault.leadership_authorization import assert_release_authorized
+
+        await assert_release_authorized(session, target_doc, version)
     version.effective_from = dcr.proposed_effective_from or _now()
     version.dcr_id = dcr.id
     dcr.resulting_version_id = version.id

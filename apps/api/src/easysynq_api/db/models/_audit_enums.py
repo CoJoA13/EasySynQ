@@ -404,6 +404,13 @@ class EventType(enum.Enum):
     # event_type ADD VALUE in 0053 (the additive pattern; a from-scratch ``upgrade head`` rebuilds
     # the type from EVENT_TYPE_VALUES, so the member lives here too).
     INITIATIVE_AUTHORIZED = "INITIATIVE_AUTHORIZED"
+    # S-leadership-1: the signed Top-Management *release authorization* of a leadership artifact
+    # (POL/OBJ/MR) — object_type=version (the version-level vault audit), scope_ref=doc.identifier.
+    # The leadership
+    # ``verify`` sign-off is first-class in the audit trail (the precondition for release, distinct
+    # from the RELEASED audit emitted by the cutover). Added via ALTER TYPE event_type ADD VALUE in
+    # 0054 (a from-scratch ``upgrade head`` rebuilds the type from EVENT_TYPE_VALUES).
+    LEADERSHIP_AUTHORIZED = "LEADERSHIP_AUTHORIZED"
 
 
 class CheckpointSinkKind(enum.Enum):

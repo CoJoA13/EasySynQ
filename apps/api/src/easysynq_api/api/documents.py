@@ -31,6 +31,7 @@ from ..db.models._vault_enums import (
     DocumentKind,
     DocumentLinkType,
 )
+from ..db.models._workflow_enums import WorkflowSubjectType
 from ..db.models.app_user import AppUser
 from ..db.models.audit_event import AuditEvent
 from ..db.models.clause import Clause
@@ -46,6 +47,7 @@ from ..db.models.process_link import ProcessLink
 from ..db.models.quality_objective import QualityObjective
 from ..db.models.role import Role
 from ..db.models.visual_diff import VisualDiff
+from ..db.models.workflow import Task, WorkflowInstance
 from ..db.models.working_draft import WorkingDraft
 from ..db.session import get_session
 from ..domain.authz import RequestContext, ResourceContext, authorize
@@ -82,10 +84,15 @@ from ..services.vault import (
     submit_review,
 )
 from ..services.vault import repository as vault_repo
+from ..services.vault.leadership_authorization import (
+    release_authorization_status,
+    request_leadership_authorization,
+)
 from ..services.vault.locks import LOCK_TTL_SECONDS
 from ..services.vault.release_scope import enrich_release_sod_scope
 from ..services.vault.review import compute_next_review_due, review_state, today_org
 from ..services.workflow import instantiate_approval
+from ..services.workflow import repository as wf_repo
 from ..tasks.visual_diff import visual_diff as visual_diff_task
 
 router = APIRouter(prefix="/api/v1", tags=["documents"])
@@ -480,6 +487,11 @@ _distribute = require("document.distribute", async_scope_resolver=_document_scop
 # path-only dependency cannot see). obsolete is a flat sig-hook action; start-revision reuses
 # ``document.edit`` (no ``document.revise`` key exists).
 _submit = require("document.submit", async_scope_resolver=_document_scope)
+# S-leadership-1: gate the "request Top-Management release authorization" act. Only the REQUEST
+# reuses document.approve at the doc's scope; the SIGN is keyless candidate-pool authority (no SoD
+# enrichment here — _document_scope carries no author/approver, so this is a plain "holds approve"
+# gate, not the approval SoD overlay).
+_approve = require("document.approve", async_scope_resolver=_document_scope)
 _obsolete = require("document.obsolete", async_scope_resolver=_document_scope, sig_hook=True)
 # S7d export/print. The cheap cached controlled-copy presign stays on document.read (/download). The
 # per-request UNCONTROLLED-when-printed export is gated on the SoD-sensitive document.export; the
@@ -1516,6 +1528,84 @@ async def release_endpoint(
     await enforce(session, authz_sink, request, caller, "document.release", resource, sig_hook=True)
     doc = await release(caller, document_id, vault_sink, sig_sink, version_id=body.version_id)
     return _document(doc)
+
+
+# --- S-leadership-1: Top-Management release authorization (POL/OBJ/MR) ---------------------
+
+
+class LeadershipAuthorizationRequest(BaseModel):
+    comment: str | None = None
+
+
+def _leadership_authorization(instance: WorkflowInstance, tasks: list[Task]) -> dict[str, Any]:
+    """The current Top-Management release-authorization cycle for a leadership artifact — the latest
+    workflow instance + its tasks (the ``GET /documents/{id}/approval`` analogue). ``current_state``
+    is the pending stage key, ``COMPLETED`` (the version is authorized → release is permitted),
+    ``REJECTED``, or ``NEEDS_ATTENTION`` (no Top-Management member assigned)."""
+    return {
+        "instance_id": str(instance.id),
+        "subject_id": str(instance.subject_id),
+        "current_state": instance.current_state,
+        "started_at": instance.started_at.isoformat() if instance.started_at else None,
+        "tasks": [
+            {
+                "id": str(t.id),
+                "stage_key": t.stage_key,
+                "state": t.state.value,
+                "assignee_user_id": str(t.assignee_user_id) if t.assignee_user_id else None,
+                "candidate_pool": t.candidate_pool,
+                "action_expected": t.action_expected,
+            }
+            for t in tasks
+        ],
+    }
+
+
+@router.post(
+    "/documents/{document_id}/request-leadership-authorization",
+    status_code=status.HTTP_201_CREATED,
+)
+async def request_leadership_authorization_endpoint(
+    document_id: uuid.UUID,
+    caller: AppUser = Depends(_approve),
+    session: AsyncSession = Depends(get_session),
+    body: LeadershipAuthorizationRequest | None = None,
+) -> dict[str, Any]:
+    """Request a Top-Management RELEASE authorization for an Approved leadership artifact
+    (POL/OBJ/MR) — gate ``document.approve`` at the doc's scope (the requester; the SIGN is
+    candidate-pool authority, not a key). Opens an engine workflow routed to the reserved "Top
+    Management" role; the Approved version becomes releasable only when a member signs
+    (``meaning=verify``). 409 unless a leadership type / unless Approved / if an authorization is
+    already in flight; ``NEEDS_ATTENTION`` when no Top-Management member is assigned. The welded
+    approve/release path is unchanged."""
+    instance = await request_leadership_authorization(
+        session, caller, document_id, comment=body.comment if body else None
+    )
+    tasks = await wf_repo.list_instance_tasks(session, instance.id)
+    return _leadership_authorization(instance, tasks)
+
+
+@router.get("/documents/{document_id}/leadership-authorization")
+async def get_leadership_authorization_endpoint(
+    document_id: uuid.UUID,
+    caller: AppUser = Depends(_read),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """The leadership release-authorization status for a document (gate ``document.read``):
+    ``is_leadership_artifact`` (POL/OBJ/MR), ``required`` (the org flag is on AND it is a leadership
+    type → release is gated), the current Approved ``version_id``, whether that version is already
+    ``authorized``, and the latest authorization cycle (``instance``) or ``null``. Never 404 for a
+    no-cycle document (the ``GET /documents/{id}/approval`` analogue)."""
+    doc = await _load_document(session, caller, document_id)
+    state = await release_authorization_status(session, doc)
+    instance = await wf_repo.latest_instance_for_subject(
+        session, caller.org_id, WorkflowSubjectType.LEADERSHIP_AUTHORIZATION, doc.id
+    )
+    cycle = None
+    if instance is not None:
+        tasks = await wf_repo.list_instance_tasks(session, instance.id)
+        cycle = _leadership_authorization(instance, tasks)
+    return {**state, "instance": cycle}
 
 
 @router.post("/documents/{document_id}/start-revision")

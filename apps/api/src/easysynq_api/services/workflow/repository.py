@@ -256,9 +256,10 @@ async def list_user_tasks_with_subject(
 ) -> list[tuple[Task, WorkflowSubjectType | None, uuid.UUID | None, str | None, str | None]]:
     """My Tasks enriched with the resolved subject (type, id, human identifier, source title) in ONE
     query — no N+1. Joins the (NOT-NULL) instance, then LEFT JOINs the disjoint backing tables:
-    ``documented_information`` covers DOCUMENT/CAPA/MGMT_REVIEW/PERIODIC_REVIEW/DOC_ACK; ``dcr``
-    covers DCR; ``improvement_initiative`` covers IMPROVEMENT_INITIATIVE. ``subject_id`` is a
-    polymorphic UUID across non-overlapping id spaces, so at most one LEFT JOIN matches a row and
+    ``documented_information`` covers DOCUMENT/CAPA/MGMT_REVIEW/PERIODIC_REVIEW/DOC_ACK and
+    (S-leadership-1) LEADERSHIP_AUTHORIZATION (its ``subject_id`` is the leadership doc's id);
+    ``dcr`` covers DCR; ``improvement_initiative`` covers IMPROVEMENT_INITIATIVE. ``subject_id`` is
+    a polymorphic UUID across non-overlapping id spaces, so at most one LEFT JOIN matches a row and
     ``coalesce`` picks the live label."""
     stmt = (
         select(
@@ -310,5 +311,7 @@ async def subject_label(
     if subject_type == WorkflowSubjectType.IMPROVEMENT_INITIATIVE:
         initiative = await session.get(ImprovementInitiative, subject_id)
         return (initiative.identifier, initiative.title) if initiative is not None else (None, None)
+    # DOCUMENT/CAPA/MGMT_REVIEW/PERIODIC_REVIEW/DOC_ACK and (S-leadership-1)
+    # LEADERSHIP_AUTHORIZATION all carry a ``documented_information`` id as the subject → here.
     di = await session.get(DocumentedInformation, subject_id)
     return (di.identifier, di.title) if di is not None else (None, None)

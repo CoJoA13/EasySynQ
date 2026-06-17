@@ -101,6 +101,20 @@ class SystemConfig(Base):
         default=False,
         nullable=False,
     )
+    # S-leadership-1 (doc 10 §2.5, decisions-register R45): the org opt-in to require a signed
+    # Top-Management *release authorization* (``signature_event meaning=verify`` on the
+    # ``document_version``) before a leadership artifact (POL/OBJ/MR) may be released. Defaults OFF
+    # — dormant on a fresh install (no behaviour change; the welded approve/release path is
+    # unchanged). Flipping it on (AND assigning members to the seeded, member-less "Top Management"
+    # role) activates the gate; with no members the engine fails closed to NEEDS_ATTENTION and
+    # release stays blocked. Gated on the SYSTEM-only ``config.update`` (admin) via /admin/config,
+    # like the toggles above.
+    leadership_release_requires_top_management_authorization: Mapped[bool] = mapped_column(
+        Boolean,
+        server_default=false(),
+        default=False,
+        nullable=False,
+    )
     # S-mr-1: clause-9.3 management-review cadence (coded default; org-tunable later, additive).
     # ``mgmt_review_owner_user_id`` is the owner the cadence sweep assigns the minted Draft MR to;
     # NULL → the sweep degrades to a logged no-op (it can't create an ownerless document).
