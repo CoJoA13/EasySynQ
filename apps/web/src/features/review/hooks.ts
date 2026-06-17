@@ -95,6 +95,7 @@ export function useDecideTask() {
         void qc.invalidateQueries({ queryKey: ["initiatives"] });
         void qc.invalidateQueries({ queryKey: ["initiative-stage-events", subjectId] });
         void qc.invalidateQueries({ queryKey: ["initiative-authorization", subjectId] });
+        void qc.invalidateQueries({ queryKey: ["my-tasks"] });
       } else {
         void qc.invalidateQueries({ queryKey: ["capa", subjectId] });
         void qc.invalidateQueries({ queryKey: ["capas"] });

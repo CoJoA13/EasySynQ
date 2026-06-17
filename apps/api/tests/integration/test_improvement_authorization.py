@@ -256,20 +256,18 @@ async def test_request_twice_is_conflict(
     assert again.json()["code"] == "authorization_in_progress"
 
 
-# --- 3. A Top-Management decline neither signs nor closes the initiative ----------------------
+# --- 3. A Top-Management decline is decisive: ends the cycle, no signature, re-requestable --------
 
 
-async def test_decline_does_not_sign_or_close(
+async def test_decline_is_decisive_and_rerequestable(
     app_client: AsyncClient, token_factory: Callable[..., str]
 ) -> None:
-    """A Top-Management decline mints NO signature and does NOT close the initiative (it stays
-    Completed). ⚠ Run-scoped to the N-independent facts only: the seeded stage is a single
-    Top-Management ANY quorum, so one decline drives the cycle to FAILED→REJECTED ONLY when the org
-    has exactly one Top-Management member (``remaining==0``). The shared integration DB always has
-    several (this file + ``test_capa`` assign more), so ``current_state`` after one decline is
-    pool-size-dependent (REJECTED at N=1, still pending at N>1) — never asserted here. The
-    safety-critical invariants (no signature, no signed close, initiative untouched) hold for any
-    N."""
+    """A Top-Management decline mints NO signature, leaves the initiative Completed, and is
+    DECISIVE — it ends the authorization cycle (REJECTED) immediately, even with multiple
+    Top-Management members in the shared DB (the single Top-Management ANY stage would otherwise
+    leave the cycle pending on one negative; the service forces it terminal + skips sibling tasks,
+    the decide_dcr_approval precedent). Because REJECTED is terminal, a fresh request is then
+    allowed."""
     tm_subj = _subject("auth-tm4")
     await _assign_top_mgmt(tm_subj)
     htm = _auth(token_factory, tm_subj)
@@ -287,7 +285,7 @@ async def test_decline_does_not_sign_or_close(
             json={"outcome": "reject", "comment": "Benefit not demonstrated"},
         )
     ).json()
-    # A decline never signs (regardless of whether it terminated the cycle).
+    assert declined["current_state"] == "REJECTED", declined
     assert declined.get("signature_event_id") is None
 
     # The initiative is untouched (still Completed) and no signed stage event exists.
@@ -306,6 +304,18 @@ async def test_decline_does_not_sign_or_close(
             )
         ).scalar_one()
         assert signed_hooks == 0
+
+    # The cycle is terminal (REJECTED) → a fresh authorization can be requested.
+    again = await _request_auth(app_client, hm, initiative_id)
+    assert again["current_state"] == "top_mgmt_authorization"
+
+    # A non-verify/reject outcome (e.g. approve) is refused (422) — it must not mint a verify
+    # signature via the generic ANY quorum.
+    fresh_task = await _my_pending_task(app_client, htm, str(again["instance_id"]))
+    bad = await app_client.post(
+        f"/api/v1/tasks/{fresh_task}/decision", headers=htm, json={"outcome": "approve"}
+    )
+    assert bad.status_code == 422, bad.text
 
 
 # --- 4. The SIGN is candidate-pool authority (a non-member 404-collapses) ----------------------

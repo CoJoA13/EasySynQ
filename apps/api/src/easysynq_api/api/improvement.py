@@ -336,9 +336,9 @@ async def transition_initiative_endpoint(
 )
 async def request_authorization_endpoint(
     initiative_id: uuid.UUID,
-    body: InitiativeAuthorizationRequest,
     caller: AppUser = Depends(_manage),
     session: AsyncSession = Depends(get_session),
+    body: InitiativeAuthorizationRequest | None = None,
 ) -> dict[str, Any]:
     """Request a Top-Management authorization for a Completed initiative (gate
     ``improvement.manage`` at the initiative's PROCESS scope — the requester is the owner/manager;
@@ -347,7 +347,9 @@ async def request_authorization_endpoint(
     (``meaning=verify``). 409 unless Completed / 409 if an authorization is already in flight;
     ``NEEDS_ATTENTION`` when no Top-Management member is assigned. The unsigned ``/transition``
     close remains available."""
-    instance = await request_authorization(session, caller, initiative_id, comment=body.comment)
+    instance = await request_authorization(
+        session, caller, initiative_id, comment=body.comment if body else None
+    )
     tasks = await wf_repo.list_instance_tasks(session, instance.id)
     return _authorization(instance, tasks)
 

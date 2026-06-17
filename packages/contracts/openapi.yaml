@@ -6621,8 +6621,8 @@ components:
       properties:
         outcome:
           type: string
-          enum: [approve, changes_requested, reject, complete, acknowledge]
-          description: "approve signs (document.approve); changes_requested/reject returns to Draft (document.review)."
+          enum: [approve, changes_requested, reject, complete, acknowledge, verify]
+          description: "approve signs (document.approve); changes_requested/reject returns to Draft (document.review); verify is the IMPROVEMENT_INITIATIVE management-authorization sign-off (S-improvement-4) — verify/reject only for that subject."
         comment:
           type: [string, "null"]
           description: "Required (non-empty) for changes_requested/reject; recorded as the decision intent."
@@ -6654,7 +6654,7 @@ components:
         task_id: { type: string, format: uuid }
         instance_id: { type: string, format: uuid }
         stage_key: { type: string }
-        outcome: { type: string, enum: [approve, changes_requested, reject, complete, acknowledge] }
+        outcome: { type: string, enum: [approve, changes_requested, reject, complete, acknowledge, verify] }
         decided_at: { type: [string, "null"], format: date-time }
         decided_by: { type: string, format: uuid }
         signature_event:
@@ -6668,6 +6668,9 @@ components:
         signature_event_id: { type: [string, "null"], format: uuid }
         document_version_id: { type: [string, "null"], format: uuid }
         acknowledgement_id: { type: [string, "null"], format: uuid }
+        # S-improvement-4: present on a COMPLETING IMPROVEMENT_INITIATIVE verify (the initiative's new
+        # stage after the authorized close; signature_event_id above carries the verify signature).
+        initiative_stage: { type: [string, "null"] }
         # The engine's _response() always emits these four; additionalProperties:false made the
         # contract reject every real response (a pre-existing gap closed with S-ack-1).
         stage_state: { type: [string, "null"] }

@@ -35,16 +35,23 @@ export function InitiativeAdvancePanel({ initiative }: { initiative: Initiative 
 
   // S-improvement-4: at Completed, a manager may EITHER close unsigned (/transition) OR request a
   // signed Top-Management authorization. Only fetch the cycle when Completed (the only state it can
-  // exist in). authPending suppresses the unsigned close to avoid the close-vs-sign race (the server
-  // 409 backstops it regardless); NEEDS_ATTENTION = no Top-Management member assigned (re-requestable).
-  const { data: authorization } = useInitiativeAuthorization(
-    stage === "Completed" ? initiative.id : null,
-  );
+  // exist in). The unsigned close + the request are offered ONLY once the cycle query has RESOLVED
+  // to "no active cycle" (null, or a terminal-state row) — while it is loading/errored we suppress
+  // them so a manager can't close unsigned in the loading window and orphan a pending sign-off (the
+  // server 409 backstops it, but the UI must not invite the race). authPending → "awaiting";
+  // NEEDS_ATTENTION = no Top-Management member assigned (re-requestable).
+  const {
+    data: authorization,
+    isLoading: authLoading,
+    isError: authError,
+  } = useInitiativeAuthorization(stage === "Completed" ? initiative.id : null);
+  const authResolved = !authLoading && !authError; // settled: data is null (no cycle) or a row
   const authPending =
-    authorization !== undefined &&
-    authorization !== null &&
-    !_AUTH_TERMINAL.includes(authorization.current_state);
+    authResolved && authorization != null && !_AUTH_TERMINAL.includes(authorization.current_state);
   const authNeedsAttention = authorization?.current_state === "NEEDS_ATTENTION";
+  // The Completed-stage actions (unsigned close + request) are safe to show only once the cycle has
+  // resolved AND no cycle is currently in flight.
+  const canActOnCompleted = stage === "Completed" && authResolved && !authPending;
 
   async function quickMove(toState: "InProgress" | "Completed") {
     setError(null);
@@ -79,12 +86,12 @@ export function InitiativeAdvancePanel({ initiative }: { initiative: Initiative 
             Mark completed
           </Button>
         )}
-        {stage === "Completed" && !authPending && (
+        {canActOnCompleted && (
           <Button size="xs" onClick={() => setClosing(true)}>
             Close initiative
           </Button>
         )}
-        {stage === "Completed" && !authPending && (
+        {canActOnCompleted && (
           <Button size="xs" variant="light" onClick={() => setRequesting(true)}>
             Request management authorization
           </Button>
@@ -109,6 +116,11 @@ export function InitiativeAdvancePanel({ initiative }: { initiative: Initiative 
       {authNeedsAttention && (
         <Text size="xs" c="orange.8">
           No Top-Management approver is assigned — assign one, then request again.
+        </Text>
+      )}
+      {stage === "Completed" && !authResolved && (
+        <Text size="xs" c="dimmed">
+          Checking authorization status…
         </Text>
       )}
 

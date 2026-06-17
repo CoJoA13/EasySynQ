@@ -23,11 +23,12 @@ import json
 import uuid
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...db.models._audit_enums import ActorType, AuditObjectType, EventType
 from ...db.models._improvement_enums import ImprovementStage
-from ...db.models._workflow_enums import WorkflowSubjectType
+from ...db.models._workflow_enums import TaskState, WorkflowSubjectType
 from ...db.models.app_user import AppUser
 from ...db.models.audit_event import AuditEvent
 from ...db.models.improvement_initiative import ImprovementInitiative
@@ -44,6 +45,12 @@ from . import repository as repo
 # The seeded (mig 0053) effective definition: a single Top-Management ANY stage that signs
 # ``meaning=verify`` and advances to COMPLETED.
 _AUTH_DEF_KEY = "improvement_initiative_authorization"
+# The ONLY outcomes this leadership sign-off accepts: ``verify`` (the positive sign that closes the
+# initiative) and ``reject`` (decline). The generic engine treats EVERY positive TaskOutcomeKind
+# (approve/complete/acknowledge/verify) as satisfying an ANY quorum, so without this allow-list a
+# Top-Management candidate could POST ``approve`` and still mint a ``verify`` signature + close the
+# initiative without the required verify decision (the PERIODIC_REVIEW complete-only precedent).
+_ALLOWED_OUTCOMES = frozenset({"verify", "reject"})
 # The engine's terminal/sentinel instance states. Anything else means the flow is still running, so
 # the request guard treats only these as "no active authorization" (NEEDS_ATTENTION is an abandoned
 # fail-closed instance → a re-request is allowed once a Top-Management approver is assigned).
@@ -223,8 +230,16 @@ async def decide_initiative_authorization(
     and flips the initiative to ``Closed`` (+ ``closed_at``), all in ONE transaction. The
     append-only stage-event table never gets an UPDATE: the stage-event id is pre-generated so the
     signature (``signed_object_id`` = that id) and the stage event (``signed_event_id`` = the
-    flushed signature id) are two mutually-referencing INSERTs. A reject leaves the initiative at
-    ``Completed`` (re-requestable); no signature."""
+    flushed signature id) are two mutually-referencing INSERTs. A reject is DECISIVE — it ends the
+    cycle (REJECTED) and leaves the initiative at ``Completed`` (re-requestable); no signature."""
+    # Accept ONLY verify/reject — never a generic positive (approve/complete/acknowledge) that the
+    # ANY-quorum engine would treat as completing → a spurious verify signature (Codex P2).
+    if outcome not in _ALLOWED_OUTCOMES:
+        raise ProblemException(
+            status=422,
+            code="validation_error",
+            title=f"Unsupported outcome for an initiative authorization: {outcome}",
+        )
     # Lock the instance FIRST (the serialization point); engine.decide re-locks re-entrantly.
     instance = await wf_repo.lock_instance_for_update(session, task.instance_id)
     if instance is None or instance.org_id != actor.org_id:
@@ -307,6 +322,27 @@ async def decide_initiative_authorization(
         )
         result["initiative_stage"] = ImprovementStage.Closed.value
         result["signature_event_id"] = str(sig.id) if sig is not None else None
+    elif outcome == "reject":
+        # A decline is DECISIVE — one Top-Management member ends the authorization. The engine's ANY
+        # quorum does NOT fail on a single negative when the pool has other live candidates, so we
+        # force the instance terminal + skip its sibling PENDING tasks here (the decide_dcr_approval
+        # precedent); else the lingering non-terminal instance would block a re-request and let a
+        # different member later verify. The initiative stays Completed (untouched); no signature.
+        pending = (
+            (
+                await session.execute(
+                    select(Task)
+                    .where(Task.instance_id == instance.id, Task.state == TaskState.PENDING)
+                    .with_for_update()
+                )
+            )
+            .scalars()
+            .all()
+        )
+        for sibling in pending:
+            sibling.state = TaskState.SKIPPED
+        instance.current_state = engine.REJECTED
+        result["current_state"] = engine.REJECTED
 
     await session.commit()
     return result
