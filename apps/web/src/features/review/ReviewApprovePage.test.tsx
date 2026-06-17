@@ -434,4 +434,15 @@ describe("ReviewApprovePage IMPROVEMENT_INITIATIVE branch (S-improvement-4)", ()
     expect(await screen.findByText("This task has already been decided.")).toBeInTheDocument();
     expect(screen.queryByRole("radio", { name: "Verify benefit & authorize close" })).toBeNull();
   });
+
+  test("the initiative authorization page has no axe violations (heading order)", async () => {
+    server.use(
+      http.get("/api/v1/improvement-initiatives/:id", () =>
+        HttpResponse.json(initiativeCompletedFixture),
+      ),
+    );
+    const { container } = renderAtTask(improvementAuthTask.id);
+    await screen.findByText("IMP-2026-0005");
+    expect(await axe(container)).toHaveNoViolations();
+  });
 });
