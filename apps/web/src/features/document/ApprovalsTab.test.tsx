@@ -5,6 +5,7 @@ import { expect, test } from "vitest";
 import type { DocumentSummary } from "../../lib/types";
 import { renderWithProviders, TEST_AUTH } from "../../test/render";
 import { server } from "../../test/msw/server";
+import { leadershipAuthorizedStatus, leadershipRequiredStatus } from "../../test/msw/handlers";
 import { ApprovalsTab } from "./ApprovalsTab";
 
 const RELEASABLE = {
@@ -111,4 +112,27 @@ test("#3: Release confirms first — the bare click never releases; confirming P
   // Confirming fires the release (proving the descriptor binds the release mutation, not another).
   await u.click(await findByRole("button", { name: "Release document" }));
   await waitFor(() => expect(released).toBe(true));
+});
+
+test("S-leadership-1: suppresses Release + shows the gate when authorization is required & unauthorized", async () => {
+  server.use(
+    http.get("/api/v1/documents/:id/leadership-authorization", () =>
+      HttpResponse.json(leadershipRequiredStatus),
+    ),
+  );
+  const { findByText, queryByRole } = renderWithProviders(<ApprovalsTab doc={doc(RELEASABLE)} />);
+  // capabilities.release is true, but the gate blocks Release until a Top-Management member signs.
+  expect(await findByText(/authorization required/i)).toBeInTheDocument();
+  expect(queryByRole("button", { name: "Release" })).toBeNull();
+});
+
+test("S-leadership-1: shows Release once the version is authorized", async () => {
+  server.use(
+    http.get("/api/v1/documents/:id/leadership-authorization", () =>
+      HttpResponse.json(leadershipAuthorizedStatus),
+    ),
+  );
+  const { findByRole, findByText } = renderWithProviders(<ApprovalsTab doc={doc(RELEASABLE)} />);
+  expect(await findByText(/release may proceed/i)).toBeInTheDocument();
+  expect(await findByRole("button", { name: "Release" })).toBeInTheDocument();
 });

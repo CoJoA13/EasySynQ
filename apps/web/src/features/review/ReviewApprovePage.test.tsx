@@ -13,6 +13,7 @@ import {
   dcrApprovalTask,
   improvementAuthTask,
   initiativeCompletedFixture,
+  leadershipAuthTask,
   objectiveVersionWithCommitment,
   objectiveVersionV1Effective,
   objectiveVersionV2WithCommitment,
@@ -443,6 +444,63 @@ describe("ReviewApprovePage IMPROVEMENT_INITIATIVE branch (S-improvement-4)", ()
     );
     const { container } = renderAtTask(improvementAuthTask.id);
     await screen.findByText("IMP-2026-0005");
+    expect(await axe(container)).toHaveNoViolations();
+  });
+});
+
+describe("ReviewApprovePage LEADERSHIP_AUTHORIZATION branch (S-leadership-1)", () => {
+  test("a leadership task renders the document context + an Authorize-release card, no redline", async () => {
+    // leadershipAuthTask (subject_type LEADERSHIP_AUTHORIZATION) is wired into GET /tasks/:id. Its
+    // subject doc (LEADERSHIP_DOC_ID) isn't a doc fixture → the context's calm fallback surfaces the
+    // identity carried on the task (POL-001 / Quality Policy).
+    renderAtTask(leadershipAuthTask.id);
+    expect(await screen.findByText("POL-001")).toBeInTheDocument();
+    expect(await screen.findByText("Quality Policy")).toBeInTheDocument();
+    // the verify sign-off outcome (NOT "Approve") + NO document redline
+    expect(await screen.findByRole("radio", { name: "Authorize release" })).toBeInTheDocument();
+    expect(screen.queryByText(/redline|version compare|compare from/i)).toBeNull();
+  });
+
+  test("never routes the welded document path — no workflow-instance read for a leadership task", async () => {
+    // The #1 regression risk: the isDocumentSubject negation MUST exclude LEADERSHIP_AUTHORIZATION, or
+    // it falls through to the welded document-approval path (resolving the version + applying a redline).
+    let instanceHit = false;
+    server.use(
+      http.get("/api/v1/workflow-instances/:id", () => {
+        instanceHit = true;
+        return HttpResponse.json(approvalFixture);
+      }),
+    );
+    renderAtTask(leadershipAuthTask.id);
+    expect(await screen.findByRole("radio", { name: "Authorize release" })).toBeInTheDocument();
+    expect(instanceHit).toBe(false);
+  });
+
+  test("ticking the sign checkbox is required before the verify decision can be submitted", async () => {
+    const { findByRole, getByLabelText, getByRole } = renderAtTask(leadershipAuthTask.id);
+    await userEvent.click(await findByRole("radio", { name: "Authorize release" }));
+    const submit = getByRole("button", { name: "Submit decision" });
+    expect(submit).toBeDisabled();
+    await userEvent.click(getByLabelText(/Signing as .* — meaning: verify/));
+    expect(submit).toBeEnabled();
+  });
+
+  test("a decided leadership task shows the Decided alert, not the card", async () => {
+    server.use(
+      http.get("/api/v1/tasks/:id", () =>
+        HttpResponse.json({ ...leadershipAuthTask, state: "DONE" }),
+      ),
+    );
+    renderAtTask(leadershipAuthTask.id);
+    expect(await screen.findByText("This task has already been decided.")).toBeInTheDocument();
+    expect(screen.queryByRole("radio", { name: "Authorize release" })).toBeNull();
+  });
+
+  test("the leadership authorization page has no axe violations (heading order)", async () => {
+    const { container } = renderAtTask(leadershipAuthTask.id);
+    // Wait for the context to RESOLVE (the loading Loader's aria-label-on-span trips axe), then audit.
+    await screen.findByText("POL-001");
+    await screen.findByRole("radio", { name: "Authorize release" });
     expect(await axe(container)).toHaveNoViolations();
   });
 });

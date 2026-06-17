@@ -96,6 +96,15 @@ export function useDecideTask() {
         void qc.invalidateQueries({ queryKey: ["initiative-stage-events", subjectId] });
         void qc.invalidateQueries({ queryKey: ["initiative-authorization", subjectId] });
         void qc.invalidateQueries({ queryKey: ["my-tasks"] });
+      } else if (subjectType === "LEADERSHIP_AUTHORIZATION") {
+        // subjectId IS the document id (POL/OBJ/MR share the documented_information id). verify flips
+        // `authorized` → the release-gate panel re-reads it and re-enables Release; the document FSM is
+        // untouched (release is the separate act), so no version churn (S-leadership-1).
+        void qc.invalidateQueries({ queryKey: ["leadership-authorization", subjectId] });
+        void qc.invalidateQueries({ queryKey: ["document", subjectId] });
+        void qc.invalidateQueries({ queryKey: ["objective", subjectId] });
+        void qc.invalidateQueries({ queryKey: ["management-review", subjectId] });
+        void qc.invalidateQueries({ queryKey: ["my-tasks"] });
       } else {
         void qc.invalidateQueries({ queryKey: ["capa", subjectId] });
         void qc.invalidateQueries({ queryKey: ["capas"] });

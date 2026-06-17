@@ -370,7 +370,8 @@ export type DecisionSubjectType =
   | "CAPA"
   | "PERIODIC_REVIEW"
   | "DCR"
-  | "IMPROVEMENT_INITIATIVE";
+  | "IMPROVEMENT_INITIATIVE"
+  | "LEADERSHIP_AUTHORIZATION";
 
 // POST /tasks/{id}/decision for a PERIODIC_REVIEW subject returns the wf-engine dict, NOT
 // DecisionResult (services/vault/review.py:245-380). The UI ignores the body (invalidate+refetch).
@@ -409,6 +410,45 @@ export interface DecisionResult {
   decided_by: string;
   signature_event: SignatureEventSummary | null;
   comment: string | null;
+}
+
+// ---- S-leadership-1 FE: document-backed Top-Management RELEASE authorization (POL/OBJ/MR) ----
+// Pinned to the runtime serializer (api/documents.py::_leadership_authorization +
+// services/vault/leadership_authorization.release_authorization_status). POL/OBJ/MR all share the
+// documented_information id, so these endpoints take a document id (objective.id / mr.id work too).
+export interface LeadershipAuthorizationTask {
+  id: string;
+  stage_key: string;
+  state: string;
+  assignee_user_id: string | null;
+  candidate_pool: string[] | null;
+  // Task.action_expected is a nullable Text column (the action label), echoed raw by the serializer —
+  // string | null (matches openapi + the inbox Task type; NOT a bool).
+  action_expected: string | null;
+}
+
+export interface LeadershipAuthorizationCycle {
+  instance_id: string;
+  subject_id: string;
+  // the pending stage key ("leadership_authorization") | "COMPLETED" | "REJECTED" | "NEEDS_ATTENTION".
+  current_state: string;
+  started_at: string | null;
+  tasks: LeadershipAuthorizationTask[];
+}
+
+export interface LeadershipAuthorizationStatus {
+  is_leadership_artifact: boolean;
+  // the org flag is ON *and* it is a leadership type → release is gated.
+  required: boolean;
+  version_id: string | null;
+  // the current Approved version already carries a Top-Management verify signature.
+  authorized: boolean;
+  instance: LeadershipAuthorizationCycle | null;
+}
+
+// POST /documents/{id}/request-leadership-authorization body (optional).
+export interface LeadershipAuthorizationRequest {
+  comment?: string | null;
 }
 
 // ---- S-web-6 (Global Search + Compliance Checklist) -------------------------------------

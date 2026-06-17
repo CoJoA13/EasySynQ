@@ -37,6 +37,8 @@ import type {
   ObjectiveCommitment,
   ObjectiveListResponse,
   ObjectivePlan,
+  LeadershipAuthorizationCycle,
+  LeadershipAuthorizationStatus,
   ObjectiveScorecard,
   ReviewInput,
   ReviewOutput,
@@ -2217,6 +2219,113 @@ export const improvementAuthTask = {
   subject_id: INIT_COMPLETED_ID,
 } satisfies Task;
 
+// ---- S-leadership-1: document-backed Top-Management RELEASE authorization (POL/OBJ/MR) ----
+export const LEADERSHIP_DOC_ID = "0b1eade5-0000-0000-0000-000000000001";
+export const LEADERSHIP_AUTH_TASK_ID = "0b1eade5-0000-0000-0000-0000000000a1";
+export const LEADERSHIP_AUTH_INSTANCE_ID = "0b1eade5-0000-0000-0000-0000000000b1";
+const LEADERSHIP_VERSION_ID = "0b1eade5-0000-0000-0000-0000000000c1";
+
+const leadershipPendingCycle = {
+  instance_id: LEADERSHIP_AUTH_INSTANCE_ID,
+  subject_id: LEADERSHIP_DOC_ID,
+  current_state: "leadership_authorization",
+  started_at: "2026-06-17T10:00:00+00:00",
+  tasks: [
+    {
+      id: LEADERSHIP_AUTH_TASK_ID,
+      stage_key: "leadership_authorization",
+      state: "PENDING",
+      assignee_user_id: null,
+      candidate_pool: [TOPMGMT_USER_ID],
+      action_expected: "authorize_release",
+    },
+  ],
+} satisfies LeadershipAuthorizationCycle;
+
+// Default GET /documents/:id/leadership-authorization: NOT a leadership artifact → the gate self-
+// suppresses, keeping every existing document/objective/MR detail test green.
+export const leadershipNotApplicableStatus = {
+  is_leadership_artifact: false,
+  required: false,
+  version_id: null,
+  authorized: false,
+  instance: null,
+} satisfies LeadershipAuthorizationStatus;
+
+// required, no cycle yet → the Request panel.
+export const leadershipRequiredStatus = {
+  is_leadership_artifact: true,
+  required: true,
+  version_id: LEADERSHIP_VERSION_ID,
+  authorized: false,
+  instance: null,
+} satisfies LeadershipAuthorizationStatus;
+
+// required, a cycle in progress → the "awaiting" panel (no Request button).
+export const leadershipInProgressStatus = {
+  is_leadership_artifact: true,
+  required: true,
+  version_id: LEADERSHIP_VERSION_ID,
+  authorized: false,
+  instance: leadershipPendingCycle,
+} satisfies LeadershipAuthorizationStatus;
+
+// required, but no Top-Management member assigned → fail-closed NEEDS_ATTENTION warning.
+export const leadershipNeedsAttentionStatus = {
+  is_leadership_artifact: true,
+  required: true,
+  version_id: LEADERSHIP_VERSION_ID,
+  authorized: false,
+  instance: {
+    instance_id: LEADERSHIP_AUTH_INSTANCE_ID,
+    subject_id: LEADERSHIP_DOC_ID,
+    current_state: "NEEDS_ATTENTION",
+    started_at: "2026-06-17T10:00:00+00:00",
+    tasks: [],
+  },
+} satisfies LeadershipAuthorizationStatus;
+
+// required AND authorized (a Top-Management verify signature exists) → release may proceed.
+export const leadershipAuthorizedStatus = {
+  is_leadership_artifact: true,
+  required: true,
+  version_id: LEADERSHIP_VERSION_ID,
+  authorized: true,
+  instance: {
+    instance_id: LEADERSHIP_AUTH_INSTANCE_ID,
+    subject_id: LEADERSHIP_DOC_ID,
+    current_state: "COMPLETED",
+    started_at: "2026-06-17T10:00:00+00:00",
+    tasks: [
+      {
+        id: LEADERSHIP_AUTH_TASK_ID,
+        stage_key: "leadership_authorization",
+        state: "DONE",
+        assignee_user_id: TOPMGMT_USER_ID,
+        candidate_pool: [TOPMGMT_USER_ID],
+        action_expected: "authorize_release",
+      },
+    ],
+  },
+} satisfies LeadershipAuthorizationStatus;
+
+// The Top-Management leadership-authorization task detail (GET /tasks/{id}) → the verify/reject arm.
+export const leadershipAuthTask = {
+  id: LEADERSHIP_AUTH_TASK_ID,
+  instance_id: LEADERSHIP_AUTH_INSTANCE_ID,
+  stage_key: "leadership_authorization",
+  type: "VERIFY",
+  state: "PENDING",
+  assignee_user_id: TOPMGMT_USER_ID,
+  candidate_pool: [TOPMGMT_USER_ID],
+  action_expected: "authorize_release",
+  due_at: null,
+  subject_type: "LEADERSHIP_AUTHORIZATION",
+  subject_id: LEADERSHIP_DOC_ID,
+  subject_identifier: "POL-001",
+  subject_title: "Quality Policy",
+} satisfies Task;
+
 export const handlers = [
   // ---- S-improvement-3 Improvement Initiatives (default happy-path; per-test overrides) ----
   // IMPORTANT: the two-segment /…/:id/{stage-events,authorization,request-authorization} routes MUST
@@ -2761,6 +2870,14 @@ export const handlers = [
   http.get("/api/v1/roles", () => HttpResponse.json(rolesFixture)),
   // ---- S-web-5 review/approve (default happy-path; per-test overrides for error cases) ----
   http.get("/api/v1/documents/:id/approval", () => HttpResponse.json(approvalFixture)),
+  // S-leadership-1: default → not a leadership artifact (the gate self-suppresses). Per-test overrides
+  // supply the required/in-progress/needs-attention/authorized variants.
+  http.get("/api/v1/documents/:id/leadership-authorization", () =>
+    HttpResponse.json(leadershipNotApplicableStatus),
+  ),
+  http.post("/api/v1/documents/:id/request-leadership-authorization", () =>
+    HttpResponse.json(leadershipPendingCycle, { status: 201 }),
+  ),
   http.get("/api/v1/tasks", ({ request }) => {
     const type = new URL(request.url).searchParams.get("type");
     if (type === "DOC_ACK") return HttpResponse.json([docAckListRow]);
@@ -2771,6 +2888,7 @@ export const handlers = [
     if (params.id === docAckTask.id) return HttpResponse.json(docAckTask);
     if (params.id === dcrApprovalTask.id) return HttpResponse.json(dcrApprovalTask);
     if (params.id === improvementAuthTask.id) return HttpResponse.json(improvementAuthTask);
+    if (params.id === leadershipAuthTask.id) return HttpResponse.json(leadershipAuthTask);
     return HttpResponse.json(approveTask);
   }),
   http.get("/api/v1/workflow-instances/:id", () => HttpResponse.json(approvalFixture)),

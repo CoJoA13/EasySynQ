@@ -7,6 +7,8 @@ import { ApiError, useApi } from "../../lib/api";
 import { ConfirmDestructive } from "../../lib/ConfirmDestructive";
 import { ApprovalStepper } from "../document/ApprovalStepper";
 import { StateBadge } from "../document/StateBadge";
+import { useLeadershipAuthorization } from "../leadership/hooks";
+import { LeadershipReleaseGate } from "../leadership/LeadershipReleaseGate";
 import { useMgmtReview, useMgmtReviewApproval } from "./hooks";
 import { useCloseReview, useCompileInputs, useReleaseReview, useSubmitReview } from "./mutations";
 import { ReviewInputsSection } from "./ReviewInputsSection";
@@ -28,6 +30,9 @@ export function ManagementReviewDetailPage() {
   const { id = null } = useParams();
   const { data: mr, isLoading, isError, forbidden } = useMgmtReview(id);
   const { data: instance } = useMgmtReviewApproval(id);
+  // S-leadership-1: clause 9.3 Management Review is a leadership artifact — release is gated on a
+  // Top-Management authorization when the org flag is on (suppresses Release; the gate panel explains).
+  const lead = useLeadershipAuthorization(id);
   const { data: directory } = useUserDirectory();
   const { can } = usePermissions();
   const api = useApi();
@@ -74,7 +79,8 @@ export function ManagementReviewDetailPage() {
   const canRecord = can("mgmtReview.record_outputs");
   const canCompile = canRecord && isDraft;
   const canSubmit = canRecord && isDraft;
-  const canRelease = mr.capabilities?.release === true && mr.current_state === "Approved";
+  const canRelease =
+    mr.capabilities?.release === true && mr.current_state === "Approved" && !lead.blocksRelease;
   const canClose = canRecord && mr.close_state === "ActionsTracked";
 
   async function run(fn: () => Promise<unknown>) {
@@ -157,7 +163,7 @@ export function ManagementReviewDetailPage() {
           tracking={mr.close_state === "ActionsTracked"}
         />
 
-        {(canCompile || canSubmit || canRelease || canClose || instance) && (
+        {(canCompile || canSubmit || canRelease || canClose || instance || lead.blocksRelease) && (
           <Card withBorder>
             <Stack gap="sm">
               <Text fw={600}>Lifecycle</Text>
@@ -210,6 +216,7 @@ export function ManagementReviewDetailPage() {
                   </Text>
                 </Group>
               )}
+              <LeadershipReleaseGate documentId={mr.id} currentState={mr.current_state} />
               {canRelease && (
                 <Group>
                   <Button

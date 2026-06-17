@@ -8,6 +8,7 @@ import { useCapaApproval } from "../capa/hooks";
 import { CapaApprovalContext } from "./CapaApprovalContext";
 import { DcrApprovalContext } from "./DcrApprovalContext";
 import { InitiativeApprovalContext } from "./InitiativeApprovalContext";
+import { LeadershipApprovalContext } from "./LeadershipApprovalContext";
 import { DecisionCard } from "./DecisionCard";
 import { ObjectiveCommitmentContext, type ObjectiveCommitment } from "./ObjectiveCommitmentContext";
 import { PeriodicReviewContext } from "./PeriodicReviewContext";
@@ -30,6 +31,7 @@ export function ReviewApprovePage() {
   const isMgmtReview = task?.subject_type === "MGMT_REVIEW";
   const isDcr = task?.subject_type === "DCR";
   const isImprovement = task?.subject_type === "IMPROVEMENT_INITIATIVE";
+  const isLeadership = task?.subject_type === "LEADERSHIP_AUTHORIZATION";
   // Only a DOCUMENT-subject task resolves its subject doc via the instance; every other subject (CAPA /
   // periodic / DOC_ACK / MGMT_REVIEW / DCR) carries its subject id on the task itself and the decider may
   // hold no workflow read at all. ⚠ One named invariant in ONE place so a future arm can't forget a
@@ -37,7 +39,13 @@ export function ReviewApprovePage() {
   // MR container, not a kind=DOCUMENT version) — that would apply the wrong document.read gate + a
   // meaningless redline.
   const isDocumentSubject =
-    !isCapa && !isPeriodic && !isDocAck && !isMgmtReview && !isDcr && !isImprovement;
+    !isCapa &&
+    !isPeriodic &&
+    !isDocAck &&
+    !isMgmtReview &&
+    !isDcr &&
+    !isImprovement &&
+    !isLeadership;
   const { data: instance } = useWorkflowInstance(
     isDocumentSubject && task ? task.instance_id : null,
   );
@@ -262,6 +270,39 @@ export function ReviewApprovePage() {
               <DecisionCard
                 taskId={task.id}
                 subjectType="IMPROVEMENT_INITIATIVE"
+                subjectId={task.subject_id!}
+              />
+            ) : (
+              decidedAlert
+            )}
+          </Grid.Col>
+        </Grid>
+      </Stack>
+    );
+  }
+
+  if (isLeadership) {
+    // S-leadership-1: a document-backed Top-Management RELEASE authorization (POL/OBJ/MR). The subject
+    // IS a kind=DOCUMENT (its id is the documented_information id), but it must NOT route the welded
+    // document-approval path (that would resolve the version + a redline + apply the approval stepper).
+    // It SIGNS (meaning=verify on the Approved version); authority is candidate-pool (Top Management)
+    // membership, server-side (404-collapse), NOT a can() check — the card shows whenever PENDING.
+    return (
+      <Stack gap="lg">
+        <Title order={2}>Authorize release — Top-Management sign-off</Title>
+        <Grid gutter="lg" align="flex-start">
+          <Grid.Col span={{ base: 12, md: 7 }}>
+            <LeadershipApprovalContext
+              documentId={task.subject_id!}
+              fallbackIdentifier={task.subject_identifier}
+              fallbackTitle={task.subject_title}
+            />
+          </Grid.Col>
+          <Grid.Col span={{ base: 12, md: 5 }}>
+            {decidable ? (
+              <DecisionCard
+                taskId={task.id}
+                subjectType="LEADERSHIP_AUTHORIZATION"
                 subjectId={task.subject_id!}
               />
             ) : (

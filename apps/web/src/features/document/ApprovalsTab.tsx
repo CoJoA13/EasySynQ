@@ -7,6 +7,8 @@ import { ApiError } from "../../lib/api";
 import { ConfirmDestructive } from "../../lib/ConfirmDestructive";
 import type { DocumentSummary } from "../../lib/types";
 import { useReleaseDocument } from "../authoring/hooks";
+import { useLeadershipAuthorization } from "../leadership/hooks";
+import { LeadershipReleaseGate } from "../leadership/LeadershipReleaseGate";
 import { ApprovalStepper } from "./ApprovalStepper";
 import { useDocumentApproval } from "./useDocumentApproval";
 
@@ -20,6 +22,10 @@ export function ApprovalsTab({ doc }: { doc: DocumentSummary }) {
   const { data: instance, isLoading, isError, error } = useDocumentApproval(doc.id);
   const { data: directory } = useUserDirectory();
   const release = useReleaseDocument();
+  // S-leadership-1: for a leadership artifact (POL/OBJ/MR) with the org flag on, release is held until a
+  // Top-Management member authorizes it. `blocksRelease` suppresses the Release button (capabilities.release
+  // does NOT fold in the gate); the panel below explains/offers the request.
+  const lead = useLeadershipAuthorization(doc.id);
   const [confirming, setConfirming] = useState(false);
 
   const nameOf = (id: string | null) =>
@@ -55,7 +61,8 @@ export function ApprovalsTab({ doc }: { doc: DocumentSummary }) {
       t.state === "PENDING" &&
       (t.assignee_user_id === myId || (t.candidate_pool ?? []).includes(myId ?? "")),
   );
-  const canRelease = doc.capabilities?.release === true && doc.current_state === "Approved";
+  const canRelease =
+    doc.capabilities?.release === true && doc.current_state === "Approved" && !lead.blocksRelease;
 
   return (
     <Stack gap="md">
@@ -70,6 +77,10 @@ export function ApprovalsTab({ doc }: { doc: DocumentSummary }) {
           Review &amp; approve →
         </Anchor>
       )}
+      {/* The gate renders after the !instance guard above — safe because an Approved doc (the only state
+          where the gate is actionable) always has an approval instance. OBJ/MR guard their card with
+          lead.blocksRelease instead, since their Lifecycle card can collapse without an instance. */}
+      <LeadershipReleaseGate documentId={doc.id} currentState={doc.current_state} />
       {canRelease && (
         <Group>
           <Button color="teal" onClick={() => setConfirming(true)}>

@@ -7,6 +7,8 @@ import { Route, Routes } from "react-router-dom";
 import type { Objective } from "../../lib/types";
 import { renderWithProviders } from "../../test/render";
 import {
+  leadershipAuthorizedStatus,
+  leadershipRequiredStatus,
   objectiveDetailFixture,
   objectiveUnderRevisionDetailFixture,
 } from "../../test/msw/handlers";
@@ -99,6 +101,69 @@ it("shows Release (and not Submit) on an Approved objective with release capabil
   renderAt(ID);
   await waitFor(() => expect(screen.getByRole("button", { name: "Release" })).toBeInTheDocument());
   expect(screen.queryByRole("button", { name: "Submit for review" })).not.toBeInTheDocument();
+});
+
+it("S-leadership-1: suppresses Release + shows the gate when Top-Management authorization is required", async () => {
+  // clause 6.2 Objectives are a leadership artifact — with the org flag on, release is held until a
+  // Top-Management member signs, even though capabilities.release is true.
+  server.use(
+    http.get("/api/v1/objectives/:id", () =>
+      HttpResponse.json({
+        ...objectiveDetailFixture,
+        current_state: "Approved",
+        capabilities: { submit: false, release: true, edit: false, start_revision: false },
+        pending_commitment: null,
+      } satisfies Objective),
+    ),
+    http.get("/api/v1/documents/:id/leadership-authorization", () =>
+      HttpResponse.json(leadershipRequiredStatus),
+    ),
+  );
+  renderAt(ID);
+  expect(await screen.findByText(/authorization required/i)).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Release" })).not.toBeInTheDocument();
+});
+
+it("S-leadership-1: shows Release once the objective is authorized", async () => {
+  server.use(
+    http.get("/api/v1/objectives/:id", () =>
+      HttpResponse.json({
+        ...objectiveDetailFixture,
+        current_state: "Approved",
+        capabilities: { submit: false, release: true, edit: false, start_revision: false },
+        pending_commitment: null,
+      } satisfies Objective),
+    ),
+    http.get("/api/v1/documents/:id/leadership-authorization", () =>
+      HttpResponse.json(leadershipAuthorizedStatus),
+    ),
+  );
+  renderAt(ID);
+  await waitFor(() => expect(screen.getByRole("button", { name: "Release" })).toBeInTheDocument());
+  expect(screen.getByText(/release may proceed/i)).toBeInTheDocument();
+});
+
+it("S-leadership-1: shows the gate via blocksRelease even with no instance + no release capability", async () => {
+  // Isolates the lead.blocksRelease-only Lifecycle-card term: no approval instance, release capability
+  // false (Release never shows), but the org gate is required → the panel must still render (a requester
+  // who holds document.approve but isn't the releaser still needs to start the authorization, by SoD).
+  server.use(
+    http.get("/api/v1/objectives/:id", () =>
+      HttpResponse.json({
+        ...objectiveDetailFixture,
+        current_state: "Approved",
+        capabilities: { submit: false, release: false, edit: false, start_revision: false },
+        pending_commitment: null,
+      } satisfies Objective),
+    ),
+    http.get("/api/v1/objectives/:id/approval", () => HttpResponse.json(null)),
+    http.get("/api/v1/documents/:id/leadership-authorization", () =>
+      HttpResponse.json(leadershipRequiredStatus),
+    ),
+  );
+  renderAt(ID);
+  expect(await screen.findByText(/authorization required/i)).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Release" })).not.toBeInTheDocument();
 });
 
 it("#3: Release confirms first — confirming POSTs the objective release (not submit)", async () => {
