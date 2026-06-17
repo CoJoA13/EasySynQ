@@ -30,6 +30,7 @@ from ..services.ack.decide import decide_doc_ack
 from ..services.authz import AuthzAuditSink, enforce, get_authz_audit_sink
 from ..services.capa import decide_capa_action_plan
 from ..services.dcr import decide_dcr_approval
+from ..services.improvement import decide_initiative_authorization
 from ..services.mgmt_review import decide_mr_task
 from ..services.vault import (
     SignatureEventSink,
@@ -257,6 +258,21 @@ async def decide_endpoint(
     # key gates it (the role-resolved pool IS the authority); it writes the per-approver signatures.
     if instance is not None and instance.subject_type is WorkflowSubjectType.DCR:
         return await decide_dcr_approval(
+            session,
+            task,
+            caller,
+            outcome=body.outcome,
+            comment=body.comment,
+            idempotency_key=idempotency_key,
+            sig_sink=sig_sink,
+        )
+    # An Improvement-Initiative management authorization (S-improvement-4) routes to the improvement
+    # service, which OWNS its authorization (decide_initiative_authorization -> _assert_initiative_
+    # authorizer: candidate-pool + live-role 404-collapse; no permission key — the Top-Management
+    # candidate pool IS the authority). On the COMPLETING verify it writes the signature + the
+    # signed Closed stage event and closes the initiative.
+    if instance is not None and instance.subject_type is WorkflowSubjectType.IMPROVEMENT_INITIATIVE:
+        return await decide_initiative_authorization(
             session,
             task,
             caller,

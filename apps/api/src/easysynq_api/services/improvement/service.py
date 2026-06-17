@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...db.models._audit_enums import ActorType, AuditObjectType, EventType
 from ...db.models._improvement_enums import ImprovementSource, ImprovementStage
+from ...db.models._workflow_enums import WorkflowSubjectType
 from ...db.models.app_user import AppUser
 from ...db.models.audit_event import AuditEvent
 from ...db.models.improvement_initiative import ImprovementInitiative
@@ -33,7 +34,13 @@ from ...domain.vault import format_identifier
 from ...logging import request_id_var
 from ...problems import ProblemException
 from ..vault import repository as vault_repo
+from ..workflow import engine
+from ..workflow import repository as wf_repo
 from . import repository as repo
+
+# The engine's terminal/sentinel instance states (an authorization is "in flight" if its instance is
+# NOT in one of these) — the S-improvement-4 unsigned-close guard.
+_AUTH_TERMINAL_STATES = (engine.COMPLETED, engine.REJECTED, engine.NEEDS_ATTENTION)
 
 _IMP_PREFIX = "IMP"  # IMP-{YYYY}-{NNNN}: per-(org, "IMP", year) counter; 4-digit SEQ.
 
@@ -279,6 +286,25 @@ async def transition_initiative(
             "improvement_transition_invalid",
             f"An improvement initiative in {before.value} cannot move to {to_state.value}",
         )
+    # S-improvement-4: block the UNSIGNED close while a Top-Management authorization is in flight —
+    # else the initiative would close unsigned with the sign-off task left pending (a later verify
+    # then 409s on the Closed→Closed transition). The signed authorized close runs in
+    # decide_initiative_authorization, NOT here, so it is unaffected. Only the Completed→Closed move
+    # can collide (an authorization exists only at Completed).
+    if to_state is ImprovementStage.Closed:
+        active = await wf_repo.find_nonterminal_instance(
+            session,
+            actor.org_id,
+            WorkflowSubjectType.IMPROVEMENT_INITIATIVE,
+            initiative.id,
+            _AUTH_TERMINAL_STATES,
+        )
+        if active is not None:
+            raise _conflict(
+                "authorization_in_progress",
+                "A management authorization is in progress — sign it off or let it terminalize "
+                "before closing the initiative unsigned.",
+            )
     payload: dict[str, Any] | None = None
     if to_state is ImprovementStage.Closed and outcome is not None:
         payload = {"outcome": outcome}

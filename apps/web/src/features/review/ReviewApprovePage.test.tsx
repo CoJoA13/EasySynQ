@@ -2,6 +2,7 @@ import { http, HttpResponse } from "msw";
 import { Route, Routes } from "react-router-dom";
 import { describe, expect, test } from "vitest";
 import { screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { server } from "../../test/msw/server";
 import { renderWithProviders } from "../../test/render";
@@ -10,6 +11,8 @@ import {
   capaApprovalFixture,
   capaApprovalTask,
   dcrApprovalTask,
+  improvementAuthTask,
+  initiativeCompletedFixture,
   objectiveVersionWithCommitment,
   objectiveVersionV1Effective,
   objectiveVersionV2WithCommitment,
@@ -365,6 +368,81 @@ describe("ReviewApprovePage DCR branch", () => {
   test("DCR review page has no axe violations", async () => {
     const { container } = mount("/tasks/task-dcr-1");
     await screen.findByText("DCR-2026-0001");
+    expect(await axe(container)).toHaveNoViolations();
+  });
+});
+
+describe("ReviewApprovePage IMPROVEMENT_INITIATIVE branch (S-improvement-4)", () => {
+  test("an initiative authorization task renders the initiative context + a verify decision card, no redline", async () => {
+    // improvementAuthTask (subject_type IMPROVEMENT_INITIATIVE) is wired into GET /tasks/:id; the
+    // context reads the Completed initiative (override so it matches the task's subject_id).
+    server.use(
+      http.get("/api/v1/improvement-initiatives/:id", () =>
+        HttpResponse.json(initiativeCompletedFixture),
+      ),
+    );
+    renderAtTask(improvementAuthTask.id);
+    expect(await screen.findByText("IMP-2026-0005")).toBeInTheDocument();
+    // the verify sign-off outcome (not "Approve") + NO document redline
+    expect(
+      await screen.findByRole("radio", { name: "Verify benefit & authorize close" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/redline|version compare|compare from/i)).toBeNull();
+  });
+
+  test("never resolves a subject document — no workflow-instance read for an initiative task", async () => {
+    let instanceHit = false;
+    server.use(
+      http.get("/api/v1/improvement-initiatives/:id", () =>
+        HttpResponse.json(initiativeCompletedFixture),
+      ),
+      http.get("/api/v1/workflow-instances/:id", () => {
+        instanceHit = true;
+        return HttpResponse.json(approvalFixture);
+      }),
+    );
+    renderAtTask(improvementAuthTask.id);
+    expect(await screen.findByText("IMP-2026-0005")).toBeInTheDocument();
+    expect(instanceHit).toBe(false);
+  });
+
+  test("ticking the sign checkbox is required before the verify decision can be submitted", async () => {
+    server.use(
+      http.get("/api/v1/improvement-initiatives/:id", () =>
+        HttpResponse.json(initiativeCompletedFixture),
+      ),
+    );
+    const { findByRole, getByLabelText, getByRole } = renderAtTask(improvementAuthTask.id);
+    await userEvent.click(await findByRole("radio", { name: "Verify benefit & authorize close" }));
+    // The sign checkbox surfaces (meaning: verify) and gates the submit until ticked.
+    const submit = getByRole("button", { name: "Submit decision" });
+    expect(submit).toBeDisabled();
+    await userEvent.click(getByLabelText(/Signing as .* — meaning: verify/));
+    expect(submit).toBeEnabled();
+  });
+
+  test("a decided initiative authorization task shows the Decided alert, not the card", async () => {
+    server.use(
+      http.get("/api/v1/improvement-initiatives/:id", () =>
+        HttpResponse.json(initiativeCompletedFixture),
+      ),
+      http.get("/api/v1/tasks/:id", () =>
+        HttpResponse.json({ ...improvementAuthTask, state: "DONE" }),
+      ),
+    );
+    renderAtTask(improvementAuthTask.id);
+    expect(await screen.findByText("This task has already been decided.")).toBeInTheDocument();
+    expect(screen.queryByRole("radio", { name: "Verify benefit & authorize close" })).toBeNull();
+  });
+
+  test("the initiative authorization page has no axe violations (heading order)", async () => {
+    server.use(
+      http.get("/api/v1/improvement-initiatives/:id", () =>
+        HttpResponse.json(initiativeCompletedFixture),
+      ),
+    );
+    const { container } = renderAtTask(improvementAuthTask.id);
+    await screen.findByText("IMP-2026-0005");
     expect(await axe(container)).toHaveNoViolations();
   });
 });

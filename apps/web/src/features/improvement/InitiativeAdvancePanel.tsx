@@ -1,11 +1,16 @@
-import { Alert, Button, Group, Stack } from "@mantine/core";
+import { Alert, Button, Group, Stack, Text } from "@mantine/core";
 import { useState } from "react";
 import { ApiError } from "../../lib/api";
 import { usePermissions } from "../../app/shell/usePermissions";
 import type { Initiative } from "../../lib/types";
 import { EditInitiativeModal } from "./EditInitiativeModal";
+import { RequestAuthorizationModal } from "./RequestAuthorizationModal";
 import { TransitionModal } from "./TransitionModal";
+import { useInitiativeAuthorization } from "./hooks";
 import { useTransitionInitiative } from "./mutations";
+
+// Instance states that mean an authorization cycle is no longer running (the engine sentinels).
+const _AUTH_TERMINAL = ["COMPLETED", "REJECTED", "NEEDS_ATTENTION"];
 
 // The clause-10.3 initiative cockpit. Affordances gate on improvement.manage at the INITIATIVE'S
 // scope — PROCESS-scoped to its process_id (SYSTEM when unscoped), mirroring the CAPA AdvancePanel and
@@ -23,9 +28,30 @@ export function InitiativeAdvancePanel({ initiative }: { initiative: Initiative 
   const [cancelling, setCancelling] = useState(false);
   const [closing, setClosing] = useState(false);
   const [editing, setEditing] = useState(false);
+  const [requesting, setRequesting] = useState(false);
 
   const stage = initiative.stage;
   const active = stage === "Open" || stage === "InProgress" || stage === "Completed";
+
+  // S-improvement-4: at Completed, a manager may EITHER close unsigned (/transition) OR request a
+  // signed Top-Management authorization. Only fetch the cycle when Completed (the only state it can
+  // exist in). The unsigned close + the request are offered ONLY once the cycle query has RESOLVED
+  // to "no active cycle" (null, or a terminal-state row) — while it is loading/errored we suppress
+  // them so a manager can't close unsigned in the loading window and orphan a pending sign-off (the
+  // server 409 backstops it, but the UI must not invite the race). authPending → "awaiting";
+  // NEEDS_ATTENTION = no Top-Management member assigned (re-requestable).
+  const {
+    data: authorization,
+    isLoading: authLoading,
+    isError: authError,
+  } = useInitiativeAuthorization(stage === "Completed" ? initiative.id : null);
+  const authResolved = !authLoading && !authError; // settled: data is null (no cycle) or a row
+  const authPending =
+    authResolved && authorization != null && !_AUTH_TERMINAL.includes(authorization.current_state);
+  const authNeedsAttention = authorization?.current_state === "NEEDS_ATTENTION";
+  // The Completed-stage actions (unsigned close + request) are safe to show only once the cycle has
+  // resolved AND no cycle is currently in flight.
+  const canActOnCompleted = stage === "Completed" && authResolved && !authPending;
 
   async function quickMove(toState: "InProgress" | "Completed") {
     setError(null);
@@ -60,9 +86,14 @@ export function InitiativeAdvancePanel({ initiative }: { initiative: Initiative 
             Mark completed
           </Button>
         )}
-        {stage === "Completed" && (
+        {canActOnCompleted && (
           <Button size="xs" onClick={() => setClosing(true)}>
             Close initiative
+          </Button>
+        )}
+        {canActOnCompleted && (
+          <Button size="xs" variant="light" onClick={() => setRequesting(true)}>
+            Request management authorization
           </Button>
         )}
         {(stage === "Open" || stage === "InProgress") && (
@@ -76,6 +107,22 @@ export function InitiativeAdvancePanel({ initiative }: { initiative: Initiative 
           </Button>
         )}
       </Group>
+
+      {authPending && (
+        <Text size="xs" c="dimmed">
+          Management authorization requested — awaiting a Top-Management sign-off.
+        </Text>
+      )}
+      {authNeedsAttention && (
+        <Text size="xs" c="orange.8">
+          No Top-Management approver is assigned — assign one, then request again.
+        </Text>
+      )}
+      {stage === "Completed" && !authResolved && (
+        <Text size="xs" c="dimmed">
+          Checking authorization status…
+        </Text>
+      )}
 
       {cancelling && (
         <TransitionModal
@@ -100,6 +147,9 @@ export function InitiativeAdvancePanel({ initiative }: { initiative: Initiative 
         />
       )}
       {editing && <EditInitiativeModal initiative={initiative} onClose={() => setEditing(false)} />}
+      {requesting && (
+        <RequestAuthorizationModal initiative={initiative} onClose={() => setRequesting(false)} />
+      )}
     </Stack>
   );
 }

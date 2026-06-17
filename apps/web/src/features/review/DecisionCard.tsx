@@ -30,18 +30,27 @@ const OUTCOMES: Record<DecisionSubjectType, { value: DecisionOutcome; label: str
     { value: "changes_requested", label: "Request changes" },
     { value: "reject", label: "Reject" },
   ],
+  // S-improvement-4: the Top-Management leadership sign-off. verify signs (closes the initiative as
+  // authorized); reject declines (leaving it Completed, re-requestable). No "request changes" — a
+  // benefit either is or isn't verified.
+  IMPROVEMENT_INITIATIVE: [
+    { value: "verify", label: "Verify benefit & authorize close" },
+    { value: "reject", label: "Decline" },
+  ],
 };
 const SIGN_OUTCOME: Record<DecisionSubjectType, DecisionOutcome> = {
   DOCUMENT: "approve",
   CAPA: "approve",
   PERIODIC_REVIEW: "complete",
   DCR: "approve",
+  IMPROVEMENT_INITIATIVE: "verify",
 };
 const SIGN_MEANING: Record<DecisionSubjectType, string> = {
   DOCUMENT: "approval",
   CAPA: "approval",
   PERIODIC_REVIEW: "review confirmed",
   DCR: "approval",
+  IMPROVEMENT_INITIATIVE: "verify",
 };
 
 // S-web-5: the approver's decision form. Approve signs (a v1 logged confirmation, the signature_event

@@ -7,6 +7,7 @@ import { VersionCompare } from "../document/VersionCompare";
 import { useCapaApproval } from "../capa/hooks";
 import { CapaApprovalContext } from "./CapaApprovalContext";
 import { DcrApprovalContext } from "./DcrApprovalContext";
+import { InitiativeApprovalContext } from "./InitiativeApprovalContext";
 import { DecisionCard } from "./DecisionCard";
 import { ObjectiveCommitmentContext, type ObjectiveCommitment } from "./ObjectiveCommitmentContext";
 import { PeriodicReviewContext } from "./PeriodicReviewContext";
@@ -28,13 +29,15 @@ export function ReviewApprovePage() {
   const isDocAck = task?.subject_type === "DOC_ACK";
   const isMgmtReview = task?.subject_type === "MGMT_REVIEW";
   const isDcr = task?.subject_type === "DCR";
+  const isImprovement = task?.subject_type === "IMPROVEMENT_INITIATIVE";
   // Only a DOCUMENT-subject task resolves its subject doc via the instance; every other subject (CAPA /
   // periodic / DOC_ACK / MGMT_REVIEW / DCR) carries its subject id on the task itself and the decider may
   // hold no workflow read at all. ⚠ One named invariant in ONE place so a future arm can't forget a
   // negation: a DCR (or MR) task must NOT resolve a subject document (its subject is the change request /
   // MR container, not a kind=DOCUMENT version) — that would apply the wrong document.read gate + a
   // meaningless redline.
-  const isDocumentSubject = !isCapa && !isPeriodic && !isDocAck && !isMgmtReview && !isDcr;
+  const isDocumentSubject =
+    !isCapa && !isPeriodic && !isDocAck && !isMgmtReview && !isDcr && !isImprovement;
   const { data: instance } = useWorkflowInstance(
     isDocumentSubject && task ? task.instance_id : null,
   );
@@ -233,6 +236,34 @@ export function ReviewApprovePage() {
           <Grid.Col span={{ base: 12, md: 5 }}>
             {decidable ? (
               <DecisionCard taskId={task.id} subjectType="DCR" subjectId={task.subject_id!} />
+            ) : (
+              decidedAlert
+            )}
+          </Grid.Col>
+        </Grid>
+      </Stack>
+    );
+  }
+
+  if (isImprovement) {
+    // S-improvement-4: an Improvement Initiative authorization. The subject is the initiative (NOT a
+    // kind=DOCUMENT version) → best-effort context (improvement.read, calm-403 degrade), no redline.
+    // It SIGNS (meaning=verify); authority is candidate-pool (Top Management) membership, enforced
+    // server-side (404-collapse), NOT a can() check — so the card shows whenever the task is PENDING.
+    return (
+      <Stack gap="lg">
+        <Title order={2}>Authorize improvement — management sign-off</Title>
+        <Grid gutter="lg" align="flex-start">
+          <Grid.Col span={{ base: 12, md: 7 }}>
+            <InitiativeApprovalContext initiativeId={task.subject_id!} />
+          </Grid.Col>
+          <Grid.Col span={{ base: 12, md: 5 }}>
+            {decidable ? (
+              <DecisionCard
+                taskId={task.id}
+                subjectType="IMPROVEMENT_INITIATIVE"
+                subjectId={task.subject_id!}
+              />
             ) : (
               decidedAlert
             )}

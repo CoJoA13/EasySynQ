@@ -4739,6 +4739,56 @@ paths:
         "404": { $ref: "#/components/responses/ProblemResponse" }
         "409": { $ref: "#/components/responses/ProblemResponse" }
         "422": { $ref: "#/components/responses/ProblemResponse" }
+  /improvement-initiatives/{initiative_id}/request-authorization:
+    post:
+      tags: [improvement]
+      operationId: requestImprovementInitiativeAuthorization
+      summary: >-
+        Request a signed Top-Management authorization for a Completed initiative (S-improvement-4). Opens
+        an engine workflow routed to the reserved "Top Management" role; the initiative is closed only
+        when a member signs (meaning=verify) via POST /tasks/{id}/decision. The SIGN is candidate-pool
+        authority (no key); this request gates improvement.manage at the initiative's PROCESS scope.
+        409 unless the initiative is Completed / 409 if an authorization is already in flight;
+        current_state=NEEDS_ATTENTION when no Top-Management member is assigned. The unsigned /transition
+        close remains available (this is an opt-in alternative).
+      parameters:
+        - { name: initiative_id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ImprovementInitiativeAuthorizationRequest" }
+      responses:
+        "201":
+          description: The opened authorization cycle (instance + materialized Top-Management tasks).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ImprovementInitiativeAuthorization" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409": { $ref: "#/components/responses/ProblemResponse" }
+  /improvement-initiatives/{initiative_id}/authorization:
+    get:
+      tags: [improvement]
+      operationId: getImprovementInitiativeAuthorization
+      summary: >-
+        The initiative's current management-authorization cycle (S-improvement-4) — the latest
+        authorization workflow instance + its tasks, or null when never requested (the
+        GET /documents/{id}/approval analogue; never 404 for a no-cycle initiative). Needs
+        improvement.read.
+      parameters:
+        - { name: initiative_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: The current authorization cycle, or null when never requested.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/ImprovementInitiativeAuthorization" }
+                  - { type: "null" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
 
   /capas/{capa_id}/raise-dcr:
     post:
@@ -6552,7 +6602,7 @@ components:
         definition_version: { type: integer, description: "Pinned at instantiation." }
         subject_type:
           type: string
-          enum: [DOCUMENT, DCR, CAPA, AUDIT, MGMT_REVIEW, PERIODIC_REVIEW, DOC_ACK]
+          enum: [DOCUMENT, DCR, CAPA, AUDIT, MGMT_REVIEW, PERIODIC_REVIEW, DOC_ACK, IMPROVEMENT_INITIATIVE]
         subject_id: { type: string, format: uuid }
         current_state:
           type: string
@@ -6571,8 +6621,8 @@ components:
       properties:
         outcome:
           type: string
-          enum: [approve, changes_requested, reject, complete, acknowledge]
-          description: "approve signs (document.approve); changes_requested/reject returns to Draft (document.review)."
+          enum: [approve, changes_requested, reject, complete, acknowledge, verify]
+          description: "approve signs (document.approve); changes_requested/reject returns to Draft (document.review); verify is the IMPROVEMENT_INITIATIVE management-authorization sign-off (S-improvement-4) — verify/reject only for that subject."
         comment:
           type: [string, "null"]
           description: "Required (non-empty) for changes_requested/reject; recorded as the decision intent."
@@ -6604,7 +6654,7 @@ components:
         task_id: { type: string, format: uuid }
         instance_id: { type: string, format: uuid }
         stage_key: { type: string }
-        outcome: { type: string, enum: [approve, changes_requested, reject, complete, acknowledge] }
+        outcome: { type: string, enum: [approve, changes_requested, reject, complete, acknowledge, verify] }
         decided_at: { type: [string, "null"], format: date-time }
         decided_by: { type: string, format: uuid }
         signature_event:
@@ -6618,6 +6668,9 @@ components:
         signature_event_id: { type: [string, "null"], format: uuid }
         document_version_id: { type: [string, "null"], format: uuid }
         acknowledgement_id: { type: [string, "null"], format: uuid }
+        # S-improvement-4: present on a COMPLETING IMPROVEMENT_INITIATIVE verify (the initiative's new
+        # stage after the authorized close; signature_event_id above carries the verify signature).
+        initiative_stage: { type: [string, "null"] }
         # The engine's _response() always emits these four; additionalProperties:false made the
         # contract reject every real response (a pre-existing gap closed with S-ack-1).
         stage_state: { type: [string, "null"] }
@@ -7208,7 +7261,7 @@ components:
     ImprovementInitiativeStageEvent:
       type: object
       additionalProperties: false
-      required: [id, from_state, to_state, actor_id, comment, payload, occurred_at]
+      required: [id, from_state, to_state, actor_id, comment, payload, signed_event_id, occurred_at]
       properties:
         id: { type: string, format: uuid }
         from_state:
@@ -7223,6 +7276,12 @@ components:
           type: [object, "null"]
           additionalProperties: true
           description: The sealed per-transition narrative (e.g. the Closed realized-benefit outcome note).
+        signed_event_id:
+          type: [string, "null"]
+          format: uuid
+          description: >-
+            NULL for every unsigned move; the FK to the leadership verify signature on the signed
+            authorized-close event (S-improvement-4) — the timeline's "verified by leadership" marker.
         occurred_at: { type: string, format: date-time }
     ImprovementInitiative:
       type: object
@@ -7290,6 +7349,44 @@ components:
           type: [string, "null"]
           maxLength: 8000
           description: On a Closed move, folded into the sealed stage_event.payload (the 10.3 evidence).
+    ImprovementInitiativeAuthorizationRequest:
+      type: object
+      additionalProperties: false
+      description: The optional justification for requesting a Top-Management authorization (S-improvement-4).
+      properties:
+        comment: { type: [string, "null"], maxLength: 4000 }
+    ImprovementInitiativeAuthorizationTask:
+      type: object
+      additionalProperties: false
+      required: [id, stage_key, state, assignee_user_id, candidate_pool, action_expected]
+      properties:
+        id: { type: string, format: uuid }
+        stage_key: { type: string }
+        state: { type: string }
+        assignee_user_id: { type: [string, "null"], format: uuid }
+        candidate_pool:
+          type: [array, "null"]
+          items: { type: string }
+        action_expected: { type: [string, "null"] }
+    ImprovementInitiativeAuthorization:
+      type: object
+      additionalProperties: false
+      description: >-
+        The current management-authorization cycle for an initiative (S-improvement-4) — the latest
+        authorization workflow instance + its tasks (the GET /documents/{id}/approval analogue).
+      required: [instance_id, subject_id, current_state, started_at, tasks]
+      properties:
+        instance_id: { type: string, format: uuid }
+        subject_id: { type: string, format: uuid }
+        current_state:
+          type: string
+          description: >-
+            The pending stage key, COMPLETED (granted → the initiative is Closed), REJECTED, or
+            NEEDS_ATTENTION (no Top-Management member assigned).
+        started_at: { type: [string, "null"], format: date-time }
+        tasks:
+          type: array
+          items: { $ref: "#/components/schemas/ImprovementInitiativeAuthorizationTask" }
     DocumentLinkType:
       type: string
       enum: [parent_of, child_of, references, supersedes]

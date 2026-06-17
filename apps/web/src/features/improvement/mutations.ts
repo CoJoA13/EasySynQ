@@ -2,6 +2,8 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useApi } from "../../lib/api";
 import type {
   Initiative,
+  InitiativeAuthorization,
+  InitiativeAuthorizationRequestBody,
   InitiativeCreateBody,
   InitiativePatchBody,
   InitiativeSpawnBody,
@@ -90,5 +92,26 @@ export function useTransitionInitiative(id: string) {
     mutationFn: (body: InitiativeTransitionBody) =>
       api.send<Initiative>("POST", `/api/v1/improvement-initiatives/${id}/transition`, body),
     onSettled: invalidate,
+  });
+}
+
+// S-improvement-4: request a Top-Management authorization (POST /request-authorization). onSettled:
+// a 409 (not-Completed / already-in-flight) means a concurrent change → refetch the authorization
+// cycle to self-heal the cockpit. Busts the initiative invalidator + the authorization query.
+export function useRequestInitiativeAuthorization(id: string) {
+  const api = useApi();
+  const qc = useQueryClient();
+  const invalidate = useInitiativeInvalidator(id);
+  return useMutation({
+    mutationFn: (body: InitiativeAuthorizationRequestBody) =>
+      api.send<InitiativeAuthorization>(
+        "POST",
+        `/api/v1/improvement-initiatives/${id}/request-authorization`,
+        body,
+      ),
+    onSettled: () => {
+      invalidate();
+      void qc.invalidateQueries({ queryKey: ["initiative-authorization", id] });
+    },
   });
 }
