@@ -232,19 +232,21 @@ async def decide_initiative_authorization(
     signature (``signed_object_id`` = that id) and the stage event (``signed_event_id`` = the
     flushed signature id) are two mutually-referencing INSERTs. A reject is DECISIVE — it ends the
     cycle (REJECTED) and leaves the initiative at ``Completed`` (re-requestable); no signature."""
-    # Accept ONLY verify/reject — never a generic positive (approve/complete/acknowledge) that the
-    # ANY-quorum engine would treat as completing → a spurious verify signature (Codex P2).
+    # Lock the instance FIRST (the serialization point); engine.decide re-locks re-entrantly.
+    instance = await wf_repo.lock_instance_for_update(session, task.instance_id)
+    if instance is None or instance.org_id != actor.org_id:
+        raise _not_found("Workflow instance")
+    await _assert_initiative_authorizer(session, actor, task, instance)
+    # Validate the outcome AFTER the authority check so a non-pool caller gets the 404-collapse, not
+    # a 422 that would leak the task's existence (Codex P2). Accept ONLY verify/reject — never a
+    # generic positive (approve/complete/acknowledge) the ANY-quorum engine would treat as
+    # completing → a spurious verify signature.
     if outcome not in _ALLOWED_OUTCOMES:
         raise ProblemException(
             status=422,
             code="validation_error",
             title=f"Unsupported outcome for an initiative authorization: {outcome}",
         )
-    # Lock the instance FIRST (the serialization point); engine.decide re-locks re-entrantly.
-    instance = await wf_repo.lock_instance_for_update(session, task.instance_id)
-    if instance is None or instance.org_id != actor.org_id:
-        raise _not_found("Workflow instance")
-    await _assert_initiative_authorizer(session, actor, task, instance)
 
     result = await engine.decide(
         session,

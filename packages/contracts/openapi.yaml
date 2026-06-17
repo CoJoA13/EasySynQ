@@ -6602,7 +6602,7 @@ components:
         definition_version: { type: integer, description: "Pinned at instantiation." }
         subject_type:
           type: string
-          enum: [DOCUMENT, DCR, CAPA, AUDIT, MGMT_REVIEW, PERIODIC_REVIEW, DOC_ACK]
+          enum: [DOCUMENT, DCR, CAPA, AUDIT, MGMT_REVIEW, PERIODIC_REVIEW, DOC_ACK, IMPROVEMENT_INITIATIVE]
         subject_id: { type: string, format: uuid }
         current_state:
           type: string

@@ -402,3 +402,35 @@ async def test_sign_is_idempotent_on_replay(
             )
         ).scalar_one()
         assert sig_count == 1
+
+
+# --- 6. The unsigned close is blocked while an authorization is in flight ----------------------
+
+
+async def test_unsigned_close_blocked_while_authorization_pending(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """While a Top-Management authorization is in flight, the UNSIGNED ``/transition`` close is
+    refused (409 ``authorization_in_progress``) — else the initiative would close unsigned with the
+    sign-off task orphaned (a later verify would 409 on Closed→Closed). The signed authorized close
+    runs through the decision endpoint, not /transition, so it is unaffected."""
+    await _assign_top_mgmt(_subject("auth-tm7"))
+    mgr_subj = _subject("auth-mgr7")
+    await _grant(mgr_subj, _IMP_KEYS)
+    hm = _auth(token_factory, mgr_subj)
+    initiative_id = await _drive_to_completed(
+        app_client, hm, title="No unsigned close while pending"
+    )
+
+    await _request_auth(app_client, hm, initiative_id)
+    blocked = await app_client.post(
+        f"/api/v1/improvement-initiatives/{initiative_id}/transition",
+        headers=hm,
+        json={"to_state": "Closed", "comment": "trying an unsigned close"},
+    )
+    assert blocked.status_code == 409, blocked.text
+    assert blocked.json()["code"] == "authorization_in_progress"
+    # The initiative is untouched (still Completed).
+    assert (
+        await app_client.get(f"/api/v1/improvement-initiatives/{initiative_id}", headers=hm)
+    ).json()["stage"] == "Completed"
