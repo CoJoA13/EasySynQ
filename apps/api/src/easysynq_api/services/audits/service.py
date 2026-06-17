@@ -529,6 +529,17 @@ async def raise_initiative_from_finding(
     existing = await get_spawned_initiative(session, actor.org_id, finding.id, idempotency_key)
     if existing is not None:
         return existing, False
+    # Reject a SUPERSEDED finding (corrected away — Record.superseded_by_correction set, which the
+    # audit close gate also excludes): the original is no longer the live finding, so raising fresh
+    # improvement work from an obsolete row — e.g. an OBS later corrected to NC — is incoherent.
+    # Checked AFTER the replay so a retry of a still-valid prior raise replays even once the finding
+    # is later corrected (Codex P2).
+    record = await session.get(Record, finding.id)
+    if record is not None and record.superseded_by_correction is not None:
+        raise _conflict(
+            "finding_superseded",
+            "This finding has been corrected/superseded; raise from the live successor instead.",
+        )
     audit = await repo.get_audit(session, finding.audit_id)
     plan = await repo.get_audit_plan(session, audit.plan_id) if audit is not None else None
     process_id = plan.auditee_process_id if plan is not None else None

@@ -39,11 +39,11 @@ from ..services.audits import (
     update_audit_program,
 )
 from ..services.audits import repository as audits_repo
-from ..services.authz import require
+from ..services.authz import AuthzAuditSink, enforce, get_authz_audit_sink, require
 
 # Reuse the canonical improvement-initiative serializer (one source → no drift). api/improvement
 # imports only services, so there is no import cycle (the api/objectives↔api/workflow precedent).
-from .improvement import _initiative
+from .improvement import _initiative, _scope_for
 
 router = APIRouter(prefix="/api/v1", tags=["audits"])
 
@@ -563,14 +563,17 @@ async def correct_finding_endpoint(
 async def raise_initiative_from_finding_endpoint(
     finding_id: uuid.UUID,
     body: FindingInitiativeCreate,
+    request: Request,
     caller: AppUser = Depends(_raise_initiative),
     session: AsyncSession = Depends(get_session),
+    authz_sink: AuthzAuditSink = Depends(get_authz_audit_sink),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ) -> JSONResponse:
-    """Raise an improvement initiative from an OBSERVATION/OFI finding (S-improvement-2; gate
-    ``improvement.manage`` at the finding's audit auditee process). 422
-    ``finding_not_improvable`` on an NC, 404 on an unknown finding. 1:N + Idempotency-Key (201 new /
-    200 replay). ``source=OFI`` + ``source_link_id=finding.id``; inherits the audited process."""
+    """Raise an improvement initiative from an OBSERVATION/OFI finding (S-improvement-2; the
+    ``_raise_initiative`` dep gates ``improvement.manage`` at the finding's audit auditee process).
+    422 ``finding_not_improvable`` on an NC, 409 ``finding_superseded`` on a corrected finding, 404
+    on an unknown finding. 1:N + Idempotency-Key (201 new / 200 replay). ``source=OFI`` +
+    ``source_link_id=finding.id``; inherits the audited process."""
     initiative, created = await raise_initiative_from_finding(
         session,
         caller,
@@ -581,6 +584,18 @@ async def raise_initiative_from_finding_endpoint(
         owner_user_id=body.owner_user_id,
         idempotency_key=idempotency_key,
     )
+    if not created:
+        # An idempotent replay returns the ORIGINAL initiative, whose process may have been
+        # reassigned away from the finding's audit process the dep just authorized — re-authorize
+        # against its STORED scope so a replay can't surface an out-of-grant initiative (Codex P2).
+        await enforce(
+            session,
+            authz_sink,
+            request,
+            caller,
+            "improvement.manage",
+            _scope_for(initiative.process_id),
+        )
     return JSONResponse(
         status_code=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
         content=_initiative(initiative),

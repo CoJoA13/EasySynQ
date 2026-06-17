@@ -269,6 +269,11 @@ async def spawn_initiative_for_output(
     existing = await get_spawned_initiative(session, actor.org_id, output_id, idempotency_key)
     if existing is not None:
         return existing, False
+    # Best-effort tracking-window guard: close_state is read unlocked, so a concurrent close_review
+    # (which locks the MR satellite row, not this one) is not serialized against. Benign by design,
+    # exactly as for spawn_capa_for_output / spawn_dcr_for_output — the close gate reads only the
+    # spawned MR_ACTION task state, never spawned initiatives, so an initiative spawned in the tiny
+    # just-after-close window is still coherent (Codex P2; matches the documented siblings).
     if review.close_state is not ManagementReviewCloseState.ActionsTracked:
         raise _conflict(
             "review_not_tracking",

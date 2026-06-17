@@ -604,6 +604,18 @@ async def raise_output_initiative_endpoint(
         process_id=body.process_id,
         idempotency_key=idempotency_key,
     )
+    if not created:
+        # An idempotent replay returns the ORIGINAL initiative, which may live in a different
+        # process than the one just authorized — re-authorize against its STORED scope so a caller
+        # scoped to process B can't read an A-scoped initiative via a known key (Codex P2).
+        await enforce(
+            session,
+            authz_sink,
+            request,
+            caller,
+            "improvement.manage",
+            _scope_for(initiative.process_id),
+        )
     return JSONResponse(
         status_code=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
         content=_initiative(initiative),

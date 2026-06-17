@@ -26,7 +26,7 @@ from easysynq_api.db.session import get_sessionmaker
 
 from . import s5_helpers as s5
 from .test_audits import _FINDING_KEYS
-from .test_improvement import _event_count, _grant, _seed_process, _subject
+from .test_improvement import _event_count, _grant, _grant_process, _seed_process, _subject
 from .test_mgmt_review import _MR_KEYS, _auth, _create_review, _drive_review_to_release
 from .test_mgmt_review import _grant as _mr_grant
 
@@ -212,6 +212,39 @@ async def test_raise_initiative_from_finding_idempotency(
     )
     assert other.status_code == 201, other.text
     assert other.json()["id"] != first.json()["id"]
+
+
+async def test_raise_initiative_from_superseded_finding_is_409(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """A corrected (superseded) finding is no longer the live finding → 409 finding_superseded; its
+    live successor IS improvable (Codex P2)."""
+    subject = _subject("imp-sup")
+    proc_id = await _seed_process(subject)
+    await _grant(subject, (*_FINDING_KEYS, "improvement.manage"))
+    h = _auth(token_factory, subject)
+    audit_id = await _new_audit_with_process(app_client, h, proc_id)
+    finding = await _new_finding(app_client, h, audit_id, "OBSERVATION")
+    # correct it (OBS → OFI): captures a superseding successor, marking the original superseded
+    corr = await app_client.post(
+        f"/api/v1/findings/{finding['id']}/correction",
+        headers=h,
+        json={"finding_type": "OFI", "reason": "reclassified as an improvement"},
+    )
+    assert corr.status_code == 201, corr.text
+
+    blocked = await app_client.post(
+        f"/api/v1/findings/{finding['id']}/raise-initiative", headers=h, json={"title": "stale"}
+    )
+    assert blocked.status_code == 409, blocked.text
+    assert blocked.json()["code"] == "finding_superseded"
+
+    # the live successor is improvable
+    ok = await app_client.post(
+        f"/api/v1/findings/{corr.json()['id']}/raise-initiative", headers=h, json={"title": "live"}
+    )
+    assert ok.status_code == 201, ok.text
+    assert ok.json()["source"] == "OFI"
 
 
 # --- MR-output-origin helpers -----------------------------------------------------------------
@@ -479,3 +512,41 @@ async def test_raise_initiative_mr_idempotency_replays_after_close(
     replay = await app_client.post(url, headers={**hs, "Idempotency-Key": key}, json={"title": "B"})
     assert replay.status_code == 200, replay.text
     assert replay.json()["id"] == first.json()["id"]
+
+
+async def test_raise_initiative_mr_replay_rejects_foreign_process_scope(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """Codex P2: an idempotent replay re-authorizes the STORED initiative scope. A caller granted
+    only on process B cannot read an A-scoped initiative via a known key — gate-1 (their own process
+    B) passes, but gate-2 against the stored scope (A) denies → 403."""
+    salt = uuid.uuid4().hex[:8]
+    owner_sub = f"mr-own-{salt}"
+    owner_id = await _mr_grant(owner_sub, ())
+    rid = await _drive_review_to_release(
+        app_client, token_factory, salt, action_owner_subject=owner_sub, action_owner_id=owner_id
+    )
+    # creator: PROCESS-A-scoped improvement.manage; raises an A-scoped initiative from the output
+    creator = f"mr-sm-{salt}"
+    hs = _auth(token_factory, creator)
+    proc_a = await _seed_process(creator)
+    await _grant_process(creator, "improvement.manage", proc_a)
+    oid = await _action_output_id(app_client, hs, rid)
+    url = f"/api/v1/management-reviews/{rid}/outputs/{oid}/raise-initiative"
+    key = uuid.uuid4().hex
+
+    first = await app_client.post(
+        url, headers={**hs, "Idempotency-Key": key}, json={"title": "A", "process_id": proc_a}
+    )
+    assert first.status_code == 201, first.text
+    assert first.json()["process_id"] == proc_a
+
+    # a caller scoped only to process B replays the same (output, key) with process_id=B → 403
+    other = _subject("imp-otherproc")
+    proc_b = await _seed_process(other)
+    await _grant_process(other, "improvement.manage", proc_b)
+    ho = _auth(token_factory, other)
+    replay = await app_client.post(
+        url, headers={**ho, "Idempotency-Key": key}, json={"title": "B", "process_id": proc_b}
+    )
+    assert replay.status_code == 403, replay.text

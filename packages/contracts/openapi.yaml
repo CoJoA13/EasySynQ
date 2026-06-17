@@ -2945,6 +2945,11 @@ paths:
               schema: { $ref: "#/components/schemas/ImprovementInitiative" }
         "403": { $ref: "#/components/responses/ProblemResponse" }
         "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409":
+          description: "The finding has been corrected/superseded (finding_superseded)."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
         "422":
           description: "Not an OBSERVATION/OFI finding (finding_not_improvable)."
           content:
