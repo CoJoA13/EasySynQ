@@ -211,6 +211,22 @@ def test_ooxml_lowercase_includepicture_field_is_flagged() -> None:
     assert scan_linked_resources(_DOCX, blob).has_external_links is True
 
 
+def test_ooxml_with_dummy_content_xml_still_scans_rels() -> None:
+    """Round-6 P1: a crafted OOXML package carrying an inert top-level ``content.xml`` must NOT
+    bypass the OOXML ``.rels`` scan. Both fingerprints present → both scans run (OR-ed), so the real
+    external relationship is still caught (the symmetric flip of the round-4 ODF-routing fix)."""
+    rels = _rels('<Relationship Id="rId1" Target="https://x/logo.png" TargetMode="External"/>')
+    blob = _zip(
+        {
+            "content.xml": b"<x/>",  # inert dummy ODF-looking member
+            "[Content_Types].xml": b"<Types/>",
+            "word/document.xml": b"<x/>",
+            "word/_rels/document.xml.rels": rels,
+        }
+    )
+    assert scan_linked_resources(_DOCX, blob).has_external_links is True
+
+
 def test_ooxml_variant_mime_external_rel_is_flagged_by_container() -> None:
     """A .dotx template carries a variant mime ABSENT from any fixed allowlist; routing by container
     content (a present ``.rels`` member) still scans it, so its external rel is flagged (P1-c)."""

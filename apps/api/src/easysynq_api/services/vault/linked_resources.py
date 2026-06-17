@@ -148,23 +148,25 @@ def scan_linked_resources(mime_type: str, source_bytes: bytes) -> LinkScan:
 
 
 def _scan_zip_container(source_bytes: bytes) -> LinkScan:
-    """Fingerprint a renderable zip by member layout → ODF or OOXML scan (else fail-open False).
+    """Fingerprint a renderable zip and run EVERY applicable scan (ODF + OOXML), OR-ing the results
+    (else fail-open False).
 
-    **ODF is checked FIRST.** A real ODF package always has a TOP-LEVEL ``content.xml`` and a real
-    OOXML package never does (OOXML uses ``[Content_Types].xml`` + ``word/document.xml`` …). An ODF
-    that embeds an OOXML/OLE object carries that object's ``.rels`` member, so keying OOXML off a
-    bare ``.rels`` would mis-route the ODF to the OOXML branch and skip its own
-    ``content.xml``/``styles.xml`` link scan (a round-4 false-negative). Top-level ``content.xml``
-    is the unambiguous ODF signal, so it wins; only a zip WITHOUT one falls through to the OOXML
-    fingerprint check."""
+    A zip can legitimately carry BOTH fingerprints, and a strict either/or routing skips one side's
+    links in two real cases: an ODF embedding an OOXML/OLE object brings that object's ``.rels`` (so
+    an OOXML-first route would skip the ODT's own ``content.xml``/``styles.xml`` links — round 4),
+    while a crafted OOXML can carry an inert top-level ``content.xml`` (so an ODF-first route would
+    skip the package's real ``.rels`` links — round 6). So both scans run when their fingerprint is
+    present — a top-level ``content.xml`` → ODF, and ``[Content_Types].xml`` / any ``*.rels`` →
+    OOXML — short-circuiting on the first hit. (A normal package has only one fingerprint, so the
+    other scan is a no-op; both are individually bounded, so running both stays bounded.)"""
     try:
         with zipfile.ZipFile(io.BytesIO(source_bytes)) as zf:
             names = zf.namelist()
             lower = [n.lower() for n in names]
-            if (
-                "content.xml" in lower
-            ):  # top-level → ODF (even if an embedded object brings a .rels)
-                return _scan_odf(zf, names)
+            if "content.xml" in lower:  # top-level → ODF fingerprint
+                odf = _scan_odf(zf, names)
+                if odf.has_external_links:
+                    return odf
             if "[content_types].xml" in lower or any(n.endswith(".rels") for n in lower):
                 return _scan_ooxml(zf, names)
     except Exception:  # noqa: BLE001 — not a real/usable zip → fail-open
