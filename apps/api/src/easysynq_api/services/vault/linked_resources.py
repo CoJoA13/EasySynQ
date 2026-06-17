@@ -318,28 +318,33 @@ def _scan_ooxml(zf: zipfile.ZipFile, names: list[str]) -> LinkScan:
     linked field instruction (INCLUDEPICTURE/INCLUDETEXT/LINK) that has no ``.rels`` entry.
 
     Bounded against a zip-bomb: it **short-circuits** the moment a hit is found (an external rel in
-    the current member, or a field hit) and stops once the cumulative member-count
-    (:data:`_MAX_ZIP_MEMBERS`) or decompressed-byte budget (:data:`_MAX_ZIP_TOTAL_BYTES`) is
-    exhausted — then fails open (``LinkScan(False)``), per the doctrine."""
+    the current member, or a field hit), caps the cumulative decompressed bytes at
+    :data:`_MAX_ZIP_TOTAL_BYTES`, and gives the two part categories **independent member budgets**
+    (each :data:`_MAX_ZIP_MEMBERS`) — relationship parts (the External-relationship signal) and
+    field-code content parts (INCLUDEPICTURE/INCLUDETEXT/LINK, which may have NO ``.rels`` entry).
+    Independent budgets mean neither category can starve the other regardless of archive order or
+    how many parts of the other kind precede it: a late ``.rels`` behind >512 field parts (round 4)
+    AND >512 ``.rels`` ahead of the field-code parts (round 5) are both covered. Once both budgets
+    (or the byte cap) are spent it fails open (``LinkScan(False)``), per the doctrine. Both caps
+    generously exceed any legitimate package."""
     rel_count = 0
     field_hit = False
-    members_inspected = 0
+    rels_inspected = 0
+    fields_inspected = 0
     total_bytes = 0
-    # Scan relationship parts FIRST: they are few + tiny and carry the most reliable signal (an
-    # External relationship), so a package with more field-scannable content parts than the member
-    # budget must not exhaust it on those (in archive order) before a later ``.rels`` is read (a
-    # round-4 false-negative). A stable sort keeps each group's archive order; field members are
-    # then scanned under the SAME shared budget.
-    ordered = sorted(names, key=lambda n: 0 if n.lower().endswith(".rels") else 1)
-    for name in ordered:
-        if members_inspected >= _MAX_ZIP_MEMBERS or total_bytes >= _MAX_ZIP_TOTAL_BYTES:
-            break  # cumulative zip-bomb budget exhausted → fail open with what we have
+    for name in names:
+        if total_bytes >= _MAX_ZIP_TOTAL_BYTES:
+            break  # cumulative byte budget exhausted → fail open with what we have
+        if rels_inspected >= _MAX_ZIP_MEMBERS and fields_inspected >= _MAX_ZIP_MEMBERS:
+            break  # both per-category member budgets spent → fail open
         nl = name.lower()
         if nl.endswith(".rels"):
+            if rels_inspected >= _MAX_ZIP_MEMBERS:
+                continue  # rels budget spent; keep scanning for field-code parts
             data = _read_member(zf, name)
             if data is None:
                 continue
-            members_inspected += 1
+            rels_inspected += 1
             total_bytes += len(data)
             root = _parse_xml(data)
             if root is None:
@@ -366,10 +371,12 @@ def _scan_ooxml(zf: zipfile.ZipFile, names: list[str]) -> LinkScan:
             if rel_count:
                 break  # short-circuit: a hit downgrades the doc; no need to scan further parts
         elif not field_hit and _is_ooxml_field_member(nl):
+            if fields_inspected >= _MAX_ZIP_MEMBERS:
+                continue  # field-code budget spent; keep scanning for .rels parts
             data = _read_member(zf, name)
             if data is None:
                 continue
-            members_inspected += 1
+            fields_inspected += 1
             total_bytes += len(data)
             if _has_linked_field_member(data):
                 field_hit = True

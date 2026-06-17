@@ -581,6 +581,28 @@ def test_ooxml_late_external_rel_after_many_field_parts_is_flagged() -> None:
     assert scan_linked_resources(_DOCX, _zip(members)).has_external_links is True
 
 
+def test_ooxml_field_code_scanned_despite_many_rels() -> None:
+    """Round-5 P2: a package with more clean ``.rels`` parts than the member budget must still get
+    its field-code content parts scanned. Relationship and field-code parts have INDEPENDENT member
+    budgets, so >512 benign ``.rels`` cannot starve the INCLUDEPICTURE/LINK field scan (the
+    symmetric case of the round-4 late-rels fix — document.xml here sits AFTER the 700 rels)."""
+    clean = _rels(
+        '<Relationship Id="rId1" '
+        'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" '
+        'Target="styles.xml"/>'
+    )
+    doc = (
+        b'<?xml version="1.0"?>'
+        b'<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        b'<w:body><w:p><w:r><w:instrText>INCLUDEPICTURE "https://x/i.png"</w:instrText></w:r>'
+        b"</w:p></w:body></w:document>"
+    )
+    members: dict[str, bytes] = {f"word/parts/p{i}.xml.rels": clean for i in range(700)}
+    members["word/document.xml"] = doc  # AFTER the 700 rels in archive order
+    members["[Content_Types].xml"] = b"<Types/>"
+    assert scan_linked_resources(_DOCX, _zip(members)).has_external_links is True
+
+
 def test_mime_with_charset_parameter_is_handled() -> None:
     """A mime carrying a ``; charset=`` parameter still routes to the right scanner."""
     rels = _rels('<Relationship Id="rId1" Target="http://x/y" TargetMode="External"/>')
