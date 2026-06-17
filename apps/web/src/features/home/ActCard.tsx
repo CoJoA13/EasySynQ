@@ -50,8 +50,14 @@ export function ActCard() {
     lines.push(<StatLine key="init" value={n} label="initiatives in progress" tone="neutral" />);
   }
 
-  const allForbidden = ca.forbidden && nc.forbidden && co.forbidden && init.forbidden;
-  const loading = ca.isLoading || nc.isLoading || co.isLoading || init.isLoading;
+  // ACT no-access is governed by the ACTIONABLE reads only — NOT the initiatives read. The initiatives
+  // list endpoint is auth-only / filter-not-403 (api/improvement.py): a caller with no improvement.read
+  // gets an empty 200, never a 403, so `init.forbidden` is ~never true. Folding it into allForbidden
+  // would make a no-ACT-access user (all three actionable reads 403) render a misleading
+  // "0 initiatives in progress" instead of TileNoAccess. The init line is purely additive — when
+  // allForbidden wins, the ternary below shows TileNoAccess and the pushed line is never rendered.
+  const allForbidden = ca.forbidden && nc.forbidden && co.forbidden;
+  const loading = ca.isLoading || nc.isLoading || co.isLoading;
 
   return (
     <QuadrantCard

@@ -114,20 +114,27 @@ it("shows open CAPAs, awaiting NCRs and complaints, RAG red on an awaiting NCR",
   );
 });
 
-it("renders no-access when all four reads are forbidden", async () => {
-  // allForbidden now also requires the initiatives read to be forbidden (S-improvement-3b).
+it("renders no-access when the actionable reads are forbidden, even though the initiatives read returns data", async () => {
+  // ACT no-access is governed by the ACTIONABLE reads (CAPA/NCR/complaint) only. The initiatives list is
+  // auth-only / filter-not-403 (it returns a filtered/empty 200, never a 403), so it must NOT keep the
+  // tile out of TileNoAccess (Codex P2 regression guard). Even with initiatives data present, all three
+  // actionable reads forbidden → no access, and the initiatives line is suppressed.
   const forbid = () => HttpResponse.json({ code: "forbidden" }, { status: 403 });
   server.use(
     http.get("/api/v1/capas", forbid),
     http.get("/api/v1/ncrs", forbid),
     http.get("/api/v1/complaints", forbid),
-    http.get("/api/v1/improvement-initiatives", forbid),
+    http.get("/api/v1/improvement-initiatives", () =>
+      HttpResponse.json({ data: mixedInitiatives }),
+    ),
   );
   renderWithProviders(<ActCard />);
   const card = await screen.findByRole("group", { name: /act quadrant/i });
   await waitFor(() =>
     expect(within(card).getByText(/no access to this section/i)).toBeInTheDocument(),
   );
+  // The initiatives line must NOT leak through the no-access state.
+  expect(within(card).queryByLabelText(/initiatives in progress/)).toBeNull();
 });
 
 // ---- S-improvement-3b: the "initiatives in progress" StatLine ----
@@ -167,12 +174,13 @@ it("the initiatives line is neutral and never raises the tile RAG above the acti
   expect(within(card).queryByLabelText(/status: needs attention/i)).toBeNull();
 });
 
-it("renders the initiatives line when the 3 actionable reads are forbidden but initiatives ARE allowed", async () => {
-  // allForbidden requires ALL FOUR reads forbidden — so with CAPAs/NCRs/complaints 403 but the
-  // initiatives read allowed, the card does NOT show TileNoAccess; the initiatives line renders.
+it("shows the initiatives line alongside a partially-accessible tile (one actionable read available)", async () => {
+  // A user with SOME ACT access (CAPAs readable) but the others forbidden: the tile is NOT no-access,
+  // and the initiatives line renders beside the available CAPA line. Guards the additive-line behaviour
+  // without conflating the initiatives read with tile access.
   const forbid = () => HttpResponse.json({ code: "forbidden" }, { status: 403 });
   server.use(
-    http.get("/api/v1/capas", forbid),
+    http.get("/api/v1/capas", () => HttpResponse.json({ data: [] })),
     http.get("/api/v1/ncrs", forbid),
     http.get("/api/v1/complaints", forbid),
     http.get("/api/v1/improvement-initiatives", () =>
@@ -185,10 +193,10 @@ it("renders the initiatives line when the 3 actionable reads are forbidden but i
   await waitFor(() =>
     expect(within(card).getByLabelText("3 initiatives in progress")).toBeInTheDocument(),
   );
-  // ...and the no-access panel is NOT shown (not all four reads are forbidden).
+  // ...and the no-access panel is NOT shown (the CAPA read succeeded).
   expect(within(card).queryByText(/no access to this section/i)).toBeNull();
+  expect(within(card).getByLabelText("0 CAPAs open")).toBeInTheDocument();
   // The forbidden actionable reads simply omit their lines (no crash).
-  expect(within(card).queryByLabelText(/CAPAs open/)).toBeNull();
   expect(within(card).queryByLabelText(/NCRs awaiting disposition/)).toBeNull();
   expect(within(card).queryByLabelText(/complaints awaiting triage/)).toBeNull();
 });
