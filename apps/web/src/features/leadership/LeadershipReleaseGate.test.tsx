@@ -82,12 +82,16 @@ describe("LeadershipReleaseGate", () => {
     expect(screen.queryByRole("button", { name: REQUEST_BTN })).toBeNull();
   });
 
-  test("NEEDS_ATTENTION → a fail-closed warning", async () => {
+  test("NEEDS_ATTENTION → a warning AND a re-request affordance (CX-2)", async () => {
     statusReturns(leadershipNeedsAttentionStatus);
+    grantApprove();
     renderWithProviders(
       <LeadershipReleaseGate documentId={LEADERSHIP_DOC_ID} currentState="Approved" />,
     );
-    expect(await screen.findByText(/no top-management member is assigned/i)).toBeInTheDocument();
+    expect(await screen.findByText(/no top-management member was assigned/i)).toBeInTheDocument();
+    // CX-2: NEEDS_ATTENTION is terminal/re-requestable — the approver can retry once an admin assigns
+    // a member, so the Request button must remain (not just a dead-end warning).
+    expect(screen.getByRole("button", { name: REQUEST_BTN })).toBeInTheDocument();
   });
 
   test("authorized → the release-may-proceed confirmation", async () => {
@@ -114,8 +118,14 @@ describe("LeadershipReleaseGate", () => {
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
-  test("a request 409 surfaces calmly (already authorized)", async () => {
-    statusReturns(leadershipRequiredStatus);
+  test("a request 409 surfaces calmly AND refetches the status (CR-1 / CX-5)", async () => {
+    let statusFetches = 0;
+    server.use(
+      http.get("/api/v1/documents/:id/leadership-authorization", () => {
+        statusFetches += 1;
+        return HttpResponse.json(leadershipRequiredStatus);
+      }),
+    );
     grantApprove();
     server.use(
       http.post("/api/v1/documents/:id/request-leadership-authorization", () =>
@@ -131,5 +141,8 @@ describe("LeadershipReleaseGate", () => {
     );
     await u.click(await screen.findByRole("button", { name: REQUEST_BTN }));
     expect(await screen.findByText(/already authorized/i)).toBeInTheDocument();
+    // CR-1/CX-5: the request's onSettled invalidation refetches the status even on a 409, so a
+    // concurrent approver's progress can't leave the panel stale.
+    await waitFor(() => expect(statusFetches).toBeGreaterThan(1));
   });
 });

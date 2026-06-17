@@ -40,8 +40,14 @@ export function useRequestLeadershipAuthorization(documentId: string) {
         comment ? { comment } : undefined,
       ),
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["leadership-authorization", documentId] });
+      // A NEW cycle was opened → the caller's task list may have changed.
       void qc.invalidateQueries({ queryKey: ["my-tasks"] });
+    },
+    // CR-1 / CX-5: refetch the status on BOTH success and the expected 409s
+    // (already_authorized / authorization_in_progress) — a concurrent approver may have advanced the
+    // cycle, so a conflict means the cached "no cycle" status is stale and the panel must re-derive.
+    onSettled: () => {
+      void qc.invalidateQueries({ queryKey: ["leadership-authorization", documentId] });
     },
   });
 }

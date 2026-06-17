@@ -56,18 +56,11 @@ export function LeadershipReleaseGate({
     );
   }
 
-  if (needsAttention) {
-    return (
-      <Alert color="orange" title="Authorization can't proceed">
-        <Text size="sm">
-          No Top-Management member is assigned to authorize this release — contact an administrator.
-        </Text>
-      </Alert>
-    );
-  }
-
-  // No cycle yet, or a prior one was declined → offer to request, but only when there is an Approved
-  // version to authorize (the request 409s document_not_approved otherwise).
+  // No cycle yet, a prior one was declined (REJECTED), or it stalled with no Top-Management member
+  // (NEEDS_ATTENTION) — all three are terminal/re-requestable, so offer to request, but only when there
+  // is an Approved version to authorize (the request 409s document_not_approved otherwise). CX-2: the
+  // NEEDS_ATTENTION case keeps the Request affordance so an approver can retry once an admin assigns a
+  // Top-Management member (the backend permits a fresh cycle from a terminal NEEDS_ATTENTION instance).
   if (!isApproved) return null;
 
   const canRequest = perms.can("document.approve");
@@ -86,11 +79,19 @@ export function LeadershipReleaseGate({
   }
 
   return (
-    <Alert color="yellow" title="Top-Management authorization required">
+    <Alert
+      color={needsAttention ? "orange" : "yellow"}
+      title={
+        needsAttention
+          ? "Top-Management authorization couldn't proceed"
+          : "Top-Management authorization required"
+      }
+    >
       <Stack gap="sm">
         <Text size="sm">
-          This is a leadership artifact (Quality Policy / Objectives / Management Review). Release
-          to Effective is held until a Top-Management member authorizes it.
+          {needsAttention
+            ? "The previous request couldn't proceed — no Top-Management member was assigned. Once an administrator assigns one, request authorization again."
+            : "This is a leadership artifact (Quality Policy / Objectives / Management Review). Release to Effective is held until a Top-Management member authorizes it."}
         </Text>
         {error && (
           <Text size="sm" c="red">
