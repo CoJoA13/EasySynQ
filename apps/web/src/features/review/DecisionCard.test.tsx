@@ -90,6 +90,35 @@ describe("DecisionCard — DCR", () => {
   });
 });
 
+describe("DecisionCard — LEADERSHIP_AUTHORIZATION", () => {
+  const LEAD = "0b1eade5-0000-0000-0000-000000000001";
+
+  test("offers verify/reject only and the verify signature (meaning: verify)", async () => {
+    renderWithProviders(
+      <DecisionCard taskId="task-lead-1" subjectType="LEADERSHIP_AUTHORIZATION" subjectId={LEAD} />,
+      { route: "/tasks/task-lead-1" },
+    );
+    expect(screen.getByRole("radio", { name: "Authorize release" })).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "Decline" })).toBeInTheDocument();
+    expect(screen.queryByRole("radio", { name: "Approve" })).toBeNull();
+    await userEvent.click(screen.getByRole("radio", { name: "Authorize release" }));
+    expect(screen.getByLabelText(/Signing as .* meaning: verify/)).toBeInTheDocument();
+  });
+
+  test("Decline requires a comment before submit", async () => {
+    const u = userEvent.setup();
+    renderWithProviders(
+      <DecisionCard taskId="task-lead-1" subjectType="LEADERSHIP_AUTHORIZATION" subjectId={LEAD} />,
+      { route: "/tasks/task-lead-1" },
+    );
+    const submit = screen.getByRole("button", { name: "Submit decision" });
+    await u.click(screen.getByRole("radio", { name: "Decline" }));
+    expect(submit).toBeDisabled();
+    await u.type(screen.getByLabelText(/Comment/), "Not yet appropriate.");
+    expect(submit).toBeEnabled();
+  });
+});
+
 describe("DecisionCard — PERIODIC_REVIEW", () => {
   test("offers complete + changes_requested only", () => {
     renderCard({ subjectType: "PERIODIC_REVIEW" });

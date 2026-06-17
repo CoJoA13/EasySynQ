@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Route, Routes } from "react-router-dom";
 import { renderWithProviders } from "../../test/render";
 import { server } from "../../test/msw/server";
+import { leadershipAuthorizedStatus, leadershipRequiredStatus } from "../../test/msw/handlers";
 import type { MgmtReviewDetail } from "../../lib/types";
 import { ManagementReviewDetailPage } from "./ManagementReviewDetailPage";
 
@@ -156,6 +157,32 @@ it("shows Release when capabilities.release is true and state is Approved", asyn
   );
   renderAt(ID);
   await waitFor(() => expect(screen.getByRole("button", { name: "Release" })).toBeInTheDocument());
+});
+
+it("S-leadership-1: suppresses Release + shows the gate when Top-Management authorization is required", async () => {
+  // clause 9.3 Management Review is a leadership artifact — release is held until a Top-Management
+  // member signs, even though capabilities.release is true.
+  server.use(
+    http.get("/api/v1/management-reviews/:id", () => HttpResponse.json(mgmtReviewApproved(true))),
+    http.get("/api/v1/documents/:id/leadership-authorization", () =>
+      HttpResponse.json(leadershipRequiredStatus),
+    ),
+  );
+  renderAt(ID);
+  expect(await screen.findByText(/authorization required/i)).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Release" })).not.toBeInTheDocument();
+});
+
+it("S-leadership-1: shows Release once the review is authorized", async () => {
+  server.use(
+    http.get("/api/v1/management-reviews/:id", () => HttpResponse.json(mgmtReviewApproved(true))),
+    http.get("/api/v1/documents/:id/leadership-authorization", () =>
+      HttpResponse.json(leadershipAuthorizedStatus),
+    ),
+  );
+  renderAt(ID);
+  await waitFor(() => expect(screen.getByRole("button", { name: "Release" })).toBeInTheDocument());
+  expect(screen.getByText(/release may proceed/i)).toBeInTheDocument();
 });
 
 it("hides Release when capabilities.release is false (SoD-2), even at Approved", async () => {

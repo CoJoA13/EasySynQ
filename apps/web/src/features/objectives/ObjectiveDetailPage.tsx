@@ -6,6 +6,8 @@ import { ApiError } from "../../lib/api";
 import { ConfirmDestructive } from "../../lib/ConfirmDestructive";
 import { ApprovalStepper } from "../document/ApprovalStepper";
 import { StateBadge } from "../document/StateBadge";
+import { useLeadershipAuthorization } from "../leadership/hooks";
+import { LeadershipReleaseGate } from "../leadership/LeadershipReleaseGate";
 import { useObjective, useObjectiveApproval } from "./hooks";
 import {
   useReleaseObjective,
@@ -26,6 +28,9 @@ export function ObjectiveDetailPage() {
   const { id = null } = useParams();
   const { data: o, isLoading, isError, forbidden } = useObjective(id);
   const { data: instance } = useObjectiveApproval(id);
+  // S-leadership-1: clause 6.2 Quality Objectives are a leadership artifact — release is gated on a
+  // Top-Management authorization when the org flag is on (suppresses Release; the gate panel explains).
+  const lead = useLeadershipAuthorization(id);
   const { data: directory } = useUserDirectory();
   const submit = useSubmitObjectiveForReview();
   const release = useReleaseObjective();
@@ -71,7 +76,8 @@ export function ObjectiveDetailPage() {
   // Affordances gate on capability AND state — quiet absence, never a dead button (the
   // AuthorActions posture: canRevise = Effective && caps; draftLike = Draft ∪ UnderRevision).
   const canSubmit = o.capabilities?.submit === true && draftLike;
-  const canRelease = o.capabilities?.release === true && o.current_state === "Approved";
+  const canRelease =
+    o.capabilities?.release === true && o.current_state === "Approved" && !lead.blocksRelease;
   const canStartRevision =
     o.capabilities?.start_revision === true && o.current_state === "Effective";
   const canEdit = o.capabilities?.edit === true && draftLike;
@@ -100,7 +106,12 @@ export function ObjectiveDetailPage() {
         </div>
         <CommitmentHero objective={o} />
         <ProposedRevisionCard objective={o} />
-        {(canSubmit || canRelease || canStartRevision || canEdit || instance) && (
+        {(canSubmit ||
+          canRelease ||
+          canStartRevision ||
+          canEdit ||
+          instance ||
+          lead.blocksRelease) && (
           <Card withBorder>
             <Stack gap="sm">
               <Text fw={600}>Lifecycle</Text>
@@ -168,6 +179,7 @@ export function ObjectiveDetailPage() {
                   </Text>
                 </Group>
               )}
+              <LeadershipReleaseGate documentId={o.id} currentState={o.current_state} />
               {canRelease && (
                 <Group>
                   <Button

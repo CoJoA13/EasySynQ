@@ -78,6 +78,11 @@ export function useDecideTask() {
         void qc.invalidateQueries({ queryKey: ["document", subjectId] });
         void qc.invalidateQueries({ queryKey: ["document-approval", subjectId] });
         void qc.invalidateQueries({ queryKey: ["document-versions", subjectId] });
+        // CX-3: an approval mints a NEW Approved version. The leadership-authorization status is
+        // version-scoped but cached by document id, so this re-approval would otherwise serve the prior
+        // version's stale `authorized:true` (POL/OBJ/MR all re-approve via this welded DOCUMENT path) →
+        // the gate would hide Request + show Release for an unauthorized new version until the cutover 409s.
+        void qc.invalidateQueries({ queryKey: ["leadership-authorization", subjectId] });
       } else if (subjectType === "PERIODIC_REVIEW") {
         // subjectId IS the document id — the clock reset must show on the doc page + library.
         void qc.invalidateQueries({ queryKey: ["document", subjectId] });
@@ -95,6 +100,15 @@ export function useDecideTask() {
         void qc.invalidateQueries({ queryKey: ["initiatives"] });
         void qc.invalidateQueries({ queryKey: ["initiative-stage-events", subjectId] });
         void qc.invalidateQueries({ queryKey: ["initiative-authorization", subjectId] });
+        void qc.invalidateQueries({ queryKey: ["my-tasks"] });
+      } else if (subjectType === "LEADERSHIP_AUTHORIZATION") {
+        // subjectId IS the document id (POL/OBJ/MR share the documented_information id). verify flips
+        // `authorized` → the release-gate panel re-reads it and re-enables Release; the document FSM is
+        // untouched (release is the separate act), so no version churn (S-leadership-1).
+        void qc.invalidateQueries({ queryKey: ["leadership-authorization", subjectId] });
+        void qc.invalidateQueries({ queryKey: ["document", subjectId] });
+        void qc.invalidateQueries({ queryKey: ["objective", subjectId] });
+        void qc.invalidateQueries({ queryKey: ["management-review", subjectId] });
         void qc.invalidateQueries({ queryKey: ["my-tasks"] });
       } else {
         void qc.invalidateQueries({ queryKey: ["capa", subjectId] });

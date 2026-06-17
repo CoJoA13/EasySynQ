@@ -37,6 +37,13 @@ const OUTCOMES: Record<DecisionSubjectType, { value: DecisionOutcome; label: str
     { value: "verify", label: "Verify benefit & authorize close" },
     { value: "reject", label: "Decline" },
   ],
+  // S-leadership-1: the document-backed Top-Management RELEASE authorization (POL/OBJ/MR). verify
+  // signs (meaning=verify on the Approved document_version → release is permitted); reject declines
+  // (the document stays Approved, re-requestable). Same verify/reject shape as the initiative.
+  LEADERSHIP_AUTHORIZATION: [
+    { value: "verify", label: "Authorize release" },
+    { value: "reject", label: "Decline" },
+  ],
 };
 const SIGN_OUTCOME: Record<DecisionSubjectType, DecisionOutcome> = {
   DOCUMENT: "approve",
@@ -44,6 +51,7 @@ const SIGN_OUTCOME: Record<DecisionSubjectType, DecisionOutcome> = {
   PERIODIC_REVIEW: "complete",
   DCR: "approve",
   IMPROVEMENT_INITIATIVE: "verify",
+  LEADERSHIP_AUTHORIZATION: "verify",
 };
 const SIGN_MEANING: Record<DecisionSubjectType, string> = {
   DOCUMENT: "approval",
@@ -51,6 +59,7 @@ const SIGN_MEANING: Record<DecisionSubjectType, string> = {
   PERIODIC_REVIEW: "review confirmed",
   DCR: "approval",
   IMPROVEMENT_INITIATIVE: "verify",
+  LEADERSHIP_AUTHORIZATION: "verify",
 };
 
 // S-web-5: the approver's decision form. Approve signs (a v1 logged confirmation, the signature_event
