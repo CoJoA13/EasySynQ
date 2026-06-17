@@ -30,8 +30,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from ...config import get_settings
 from ...db.models._vault_enums import VersionState
 from ...db.models.app_user import AppUser
+from ...db.models.document_type import DocumentType
 from ...db.models.document_version import DocumentVersion
 from ...db.models.documented_information import DocumentedInformation
+from ...db.models.system_config import SystemConfig
 from ...db.models.working_draft import WorkingDraft
 from ...db.session import get_sessionmaker
 from ...domain.vault import Action, IllegalTransition, allowed_actions, apply_transition
@@ -432,6 +434,42 @@ async def obsolete(
     return doc
 
 
+async def _assert_leadership_release_authorized(
+    session: AsyncSession, doc: DocumentedInformation, version: DocumentVersion
+) -> None:
+    """S-leadership-1 release gate: when the org sets
+    ``leadership_release_requires_top_management_authorization`` AND ``doc`` is a leadership
+    artifact (POL/OBJ/MR), the Approved ``version`` may not be released until a Top-Management
+    member has signed a ``verify`` authorization on it (vault/leadership_authorization.py).
+    Additive — a no-op unless the flag is on AND the type matches, so ordinary documents and default
+    installs are unaffected. The local import avoids an import cycle (the authorization module
+    imports the workflow engine)."""
+    if doc.document_type_id is None:
+        return
+    config = await session.get(SystemConfig, doc.org_id)
+    if config is None or not config.leadership_release_requires_top_management_authorization:
+        return
+    from .leadership_authorization import LEADERSHIP_DOC_TYPES, has_release_authorization
+
+    code = (
+        await session.execute(
+            select(DocumentType.code).where(DocumentType.id == doc.document_type_id)
+        )
+    ).scalar_one_or_none()
+    if code not in LEADERSHIP_DOC_TYPES:
+        return
+    if not await has_release_authorization(session, version.id):
+        raise ProblemException(
+            status=409,
+            code="leadership_authorization_required",
+            title="Top-Management authorization required before release",
+            detail=(
+                "this leadership artifact requires a signed Top-Management authorization of the "
+                "Approved version before it can be released"
+            ),
+        )
+
+
 # --- the atomic single-Effective cutover (T6 + T10) -------------------------------------
 
 
@@ -481,6 +519,11 @@ async def _cutover(
         raise IllegalTransition(
             Action.release, doc.current_state, allowed_actions(doc.current_state)
         )
+
+    # S-leadership-1: enforce the Top-Management release authorization (a no-op unless the org flag
+    # is on AND this is a leadership artifact) BEFORE any state mutation, so a blocked release
+    # rolls back nothing.
+    await _assert_leadership_release_authorized(session, doc, version)
 
     eff_from = version.effective_from or now
     if eff_from > now:

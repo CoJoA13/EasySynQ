@@ -33,6 +33,14 @@ class WorkflowSubjectType(enum.Enum):
     # (the CAPA/DCR engine precedent on an own-table subject). Added via ``ALTER TYPE
     # workflow_subject_type ADD VALUE`` in 0053; a from-scratch upgrade rebuilds from these members.
     IMPROVEMENT_INITIATIVE = "IMPROVEMENT_INITIATIVE"
+    # S-leadership-1 (clause 5.2/6.2/9.3, doc 10 §2.5, R45): a leadership artifact's (POL/OBJ/MR)
+    # engine-routed Top-Management *release authorization* — the signed ``verify`` sign-off that
+    # is a precondition for releasing the document (the S-improvement-4 caller pattern on a document
+    # subject; ``subject_id`` is the ``documented_information`` id, the signature binds to the
+    # ``document_version``). A DISTINCT subject type (not overloading DOCUMENT) keeps the
+    # ``/tasks/{id}/decision`` dispatch uniformly subject-type-keyed and the welded DOCUMENT
+    # fallthrough byte-identical. Added via ``ALTER TYPE … ADD VALUE`` in 0054.
+    LEADERSHIP_AUTHORIZATION = "LEADERSHIP_AUTHORIZATION"
 
 
 class WorkflowStageMode(enum.Enum):

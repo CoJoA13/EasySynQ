@@ -45,6 +45,9 @@ class OrgConfigUpdate(BaseModel):
     # also
     # verify it (Critical/Major always hard-enforce). Forward seam; enforced in S-capa-3.
     allow_capa_self_verify: bool | None = None
+    # S-leadership-1 (doc 10 §2.5, R45): require a signed Top-Management release authorization
+    # before a leadership artifact (POL/OBJ/MR) may be released. Default OFF — opt-in.
+    leadership_release_requires_top_management_authorization: bool | None = None
 
 
 def _rid() -> uuid.UUID | None:
@@ -63,6 +66,9 @@ def _config_view(cfg: SystemConfig) -> dict[str, Any]:
         "capture_pre_release_templates": cfg.capture_pre_release_templates,
         "allow_self_disposition": cfg.allow_self_disposition,
         "allow_capa_self_verify": cfg.allow_capa_self_verify,
+        "leadership_release_requires_top_management_authorization": (
+            cfg.leadership_release_requires_top_management_authorization
+        ),
     }
 
 
@@ -103,6 +109,16 @@ async def update_config_endpoint(
         before["allow_capa_self_verify"] = cfg.allow_capa_self_verify
         cfg.allow_capa_self_verify = body.allow_capa_self_verify
         after["allow_capa_self_verify"] = body.allow_capa_self_verify
+    if body.leadership_release_requires_top_management_authorization is not None:
+        before["leadership_release_requires_top_management_authorization"] = (
+            cfg.leadership_release_requires_top_management_authorization
+        )
+        cfg.leadership_release_requires_top_management_authorization = (
+            body.leadership_release_requires_top_management_authorization
+        )
+        after["leadership_release_requires_top_management_authorization"] = (
+            body.leadership_release_requires_top_management_authorization
+        )
     if after:
         session.add(
             AuditEvent(

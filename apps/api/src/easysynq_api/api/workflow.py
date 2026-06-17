@@ -39,6 +39,7 @@ from ..services.vault import (
     get_vault_signature_sink,
 )
 from ..services.vault import repository as vault_repo
+from ..services.vault.leadership_authorization import decide_leadership_authorization
 from ..services.vault.review import decide_periodic_review
 from ..services.workflow import decide as decide_service
 from ..services.workflow import repository as wf_repo
@@ -273,6 +274,26 @@ async def decide_endpoint(
     # signed Closed stage event and closes the initiative.
     if instance is not None and instance.subject_type is WorkflowSubjectType.IMPROVEMENT_INITIATIVE:
         return await decide_initiative_authorization(
+            session,
+            task,
+            caller,
+            outcome=body.outcome,
+            comment=body.comment,
+            idempotency_key=idempotency_key,
+            sig_sink=sig_sink,
+        )
+    # A leadership artifact's (POL/OBJ/MR) Top-Management RELEASE authorization (S-leadership-1)
+    # routes to the vault leadership-authorization service, which OWNS its authorization
+    # (decide_leadership_authorization -> _assert_leadership_authorizer: candidate-pool + live-role
+    # 404-collapse; no permission key — the Top-Management candidate pool IS the authority). On the
+    # COMPLETING verify it mints the verify signature on the document_version; the release gate in
+    # lifecycle._cutover then permits release. The welded DOCUMENT approval path (the final
+    # fallthrough) is untouched.
+    if (
+        instance is not None
+        and instance.subject_type is WorkflowSubjectType.LEADERSHIP_AUTHORIZATION
+    ):
+        return await decide_leadership_authorization(
             session,
             task,
             caller,
