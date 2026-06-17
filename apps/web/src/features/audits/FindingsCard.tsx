@@ -1,7 +1,11 @@
 import { Alert, Button, Group, Loader, Paper, Stack, Text, Title } from "@mantine/core";
+import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { usePermissions } from "../../app/shell/usePermissions";
 import type { Audit, CapaCloseState, Finding } from "../../lib/types";
 import { useCapas } from "../capa/hooks";
+import { useRaiseInitiativeFromFinding } from "../improvement/mutations";
+import { SpawnInitiativeModal } from "../improvement/SpawnInitiativeModal";
 import { FindingPanel } from "./FindingPanel";
 import { useFindings } from "./hooks";
 
@@ -27,8 +31,15 @@ export function FindingsCard({
   const findings = useFindings(audit.id);
   const perms = usePermissions(scope);
   const capas = useCapas(); // cross-ref for the per-NC CAPA state chips; degrades on 403
+  const navigate = useNavigate();
   const closed = audit.state === "Closed";
   const canCreate = !perms.isLoading && perms.can("finding.create");
+  // improvement.manage resolved at the audit's auditee-process scope — the FE mirror of the backend
+  // _finding_scope gate. Not closed-gated: raising an improvement from a still-open OFI is valid even
+  // after the audit closes (the backend permits it; the named scope excludes only NC + superseded).
+  const canRaiseInitiative = !perms.isLoading && perms.can("improvement.manage");
+  const [raiseInitFor, setRaiseInitFor] = useState<string | null>(null);
+  const raiseInit = useRaiseInitiativeFromFinding(raiseInitFor ?? "");
 
   if (findings.forbidden) {
     return (
@@ -54,8 +65,7 @@ export function FindingsCard({
   const capaStates = new Map<string, CapaCloseState>(
     (capas.forbidden ? [] : (capas.data ?? [])).map((c) => [c.id, c.close_state]),
   );
-  const blocking =
-    capas.forbidden ? 0 : rows.filter((f) => isBlocking(f, capaStates)).length;
+  const blocking = capas.forbidden ? 0 : rows.filter((f) => isBlocking(f, capaStates)).length;
   // isSuccess: while the CAPA list is loading, the empty map would over-count every live NC as
   // blocking — wait for the resolved list so the note is honest in both directions.
   const showReadiness =
@@ -78,8 +88,8 @@ export function FindingsCard({
       )}
       {showReadiness && (
         <Alert color="orange" mb="sm" title="Close readiness">
-          {blocking} live NC finding{blocking === 1 ? "" : "s"} without a Closed CAPA — closing
-          will be blocked. Close the CAPA, or correct the finding to Observation/OFI.
+          {blocking} live NC finding{blocking === 1 ? "" : "s"} without a Closed CAPA — closing will
+          be blocked. Close the CAPA, or correct the finding to Observation/OFI.
         </Alert>
       )}
       {rows.length === 0 ? (
@@ -97,9 +107,19 @@ export function FindingsCard({
               }
               canCorrect={canCreate && !closed}
               onCorrect={onCorrect}
+              canRaiseInitiative={canRaiseInitiative}
+              onRaiseInitiative={(finding) => setRaiseInitFor(finding.id)}
             />
           ))}
         </Stack>
+      )}
+      {raiseInitFor && (
+        <SpawnInitiativeModal
+          heading="Raise an improvement initiative from this finding"
+          mutation={raiseInit}
+          onClose={() => setRaiseInitFor(null)}
+          onCreated={(id) => navigate(`/improvement?initiative=${id}`)}
+        />
       )}
     </Paper>
   );

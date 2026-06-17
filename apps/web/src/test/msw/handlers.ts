@@ -21,6 +21,7 @@ import type {
   Initiative,
   InitiativeList,
   InitiativePatchBody,
+  InitiativeSpawnBody,
   InitiativeStageEvent,
   InitiativeStageEventList,
   InitiativeTransitionBody,
@@ -2191,6 +2192,59 @@ export const handlers = [
       stage: body.to_state,
     } satisfies Initiative);
   }),
+  // ---- S-improvement-3b spawn-from-origin (1:N idempotent — 201 new / 200 replay; default 201).
+  // Pinned `satisfies Initiative` to the _initiative serializer. Echo the request body title; derive
+  // source/source_link_id server-side. process_id rides only the MR-output body. Per-test overrides
+  // (server.use) drive the 422/409 error cases or assert the Idempotency-Key header. ----
+  http.post("/api/v1/findings/:findingId/raise-initiative", async ({ params, request }) => {
+    const body = (await request.json()) as InitiativeSpawnBody;
+    return HttpResponse.json(
+      {
+        id: "10000000-0000-0000-0000-0000000000f1",
+        identifier: "IMP-2026-0010",
+        title: body.title,
+        description: body.description,
+        target_outcome: body.target_outcome,
+        source: "OFI",
+        source_link_id: String(params.findingId),
+        process_id: null,
+        owner_user_id: body.owner_user_id,
+        stage: "Open",
+        opened_at: "2026-06-17T09:00:00Z",
+        closed_at: null,
+        created_by: "20000000-0000-0000-0000-0000000000aa",
+        created_at: "2026-06-17T09:00:00Z",
+        updated_at: null,
+      } satisfies Initiative,
+      { status: 201 },
+    );
+  }),
+  http.post(
+    "/api/v1/management-reviews/:reviewId/outputs/:outputId/raise-initiative",
+    async ({ params, request }) => {
+      const body = (await request.json()) as InitiativeSpawnBody;
+      return HttpResponse.json(
+        {
+          id: "10000000-0000-0000-0000-0000000000f2",
+          identifier: "IMP-2026-0011",
+          title: body.title,
+          description: body.description,
+          target_outcome: body.target_outcome,
+          source: "review",
+          source_link_id: String(params.outputId),
+          process_id: body.process_id ?? null,
+          owner_user_id: body.owner_user_id,
+          stage: "Open",
+          opened_at: "2026-06-17T09:00:00Z",
+          closed_at: null,
+          created_by: "20000000-0000-0000-0000-0000000000aa",
+          created_at: "2026-06-17T09:00:00Z",
+          updated_at: null,
+        } satisfies Initiative,
+        { status: 201 },
+      );
+    },
+  ),
   // ---- S-dcr-ui-1 DCR (default happy-path; per-test overrides for 403/empty/error) ----
   // IMPORTANT: /dcrs/:id/impact MUST register BEFORE /dcrs/:id or MSW matches "impact" as :id.
   http.get("/api/v1/dcrs/:id/impact", () => HttpResponse.json(dcrImpactFixture)),

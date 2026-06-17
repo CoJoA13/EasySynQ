@@ -6,9 +6,14 @@ import { FindingTypeBadge } from "./badges";
 // One finding. capaState: the cross-ref'd CAPA close_state (undefined = capa.read denied →
 // chip omitted; the deep-link always renders — the board page enforces its own access).
 const CAPA_STATE_LABEL: Record<CapaCloseState, string> = {
-  Raised: "Raised", Containment: "Containment", RootCause: "Root cause",
-  ActionPlan: "Action plan", Implement: "Implement", Verify: "Verify",
-  Closed: "Closed", Rejected: "Rejected",
+  Raised: "Raised",
+  Containment: "Containment",
+  RootCause: "Root cause",
+  ActionPlan: "Action plan",
+  Implement: "Implement",
+  Verify: "Verify",
+  Closed: "Closed",
+  Rejected: "Rejected",
 };
 
 export function FindingPanel({
@@ -16,11 +21,15 @@ export function FindingPanel({
   capaState,
   canCorrect,
   onCorrect,
+  canRaiseInitiative,
+  onRaiseInitiative,
 }: {
   finding: Finding;
   capaState: CapaCloseState | undefined;
   canCorrect: boolean;
   onCorrect: (finding: Finding) => void;
+  canRaiseInitiative: boolean;
+  onRaiseInitiative: (finding: Finding) => void;
 }) {
   const superseded = finding.superseded_by_correction !== null;
   return (
@@ -35,7 +44,11 @@ export function FindingPanel({
         {finding.title ?? "—"}
       </Text>
       <Group gap="xs" mb={4}>
-        {finding.clause_ref && <Badge variant="outline" color="gray">{finding.clause_ref}</Badge>}
+        {finding.clause_ref && (
+          <Badge variant="outline" color="gray">
+            {finding.clause_ref}
+          </Badge>
+        )}
         {finding.process_ref && (
           <Badge variant="outline" color="gray">
             {finding.process_ref}
@@ -65,11 +78,20 @@ export function FindingPanel({
             </Anchor>
           )}
         </Group>
-        {canCorrect && !superseded && (
-          <Button size="xs" variant="subtle" onClick={() => onCorrect(finding)}>
-            Correct
-          </Button>
-        )}
+        <Group gap="xs">
+          {/* Raise-only (the reserved-null spawned_initiative_id latch → no View link, the Raise-DCR
+              precedent). Only an improvable, live finding (OFI/OBSERVATION, not superseded). */}
+          {canRaiseInitiative && !superseded && finding.finding_type !== "NC" && (
+            <Button size="xs" variant="subtle" onClick={() => onRaiseInitiative(finding)}>
+              Raise initiative
+            </Button>
+          )}
+          {canCorrect && !superseded && (
+            <Button size="xs" variant="subtle" onClick={() => onCorrect(finding)}>
+              Correct
+            </Button>
+          )}
+        </Group>
       </Group>
     </Paper>
   );

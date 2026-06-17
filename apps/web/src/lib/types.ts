@@ -1550,3 +1550,16 @@ export interface InitiativeTransitionBody {
   comment?: string | null; // required server-side for a Closed/Cancelled move (422 otherwise)
   outcome?: string | null; // folded into the sealed stage_event.payload on a Closed move only
 }
+
+// ---- S-improvement-3b spawn body (pinned to FindingInitiativeCreate (api/audits.py) +
+// OutputInitiativeCreate (api/mgmt_review.py)). Raise an initiative FROM an ISO origin — a 1:N idempotent
+// recording act (Idempotency-Key header, 201 new / 200 replay). `source`/`source_link_id` derive
+// server-side. `process_id` is present ONLY for the MR-output spawn (SYSTEM fallback when null/absent);
+// the finding spawn derives the process from the audit's auditee process. ----
+export interface InitiativeSpawnBody {
+  title: string;
+  description: string | null;
+  target_outcome: string | null;
+  owner_user_id: string | null;
+  process_id?: string | null; // MR-output spawn only
+}

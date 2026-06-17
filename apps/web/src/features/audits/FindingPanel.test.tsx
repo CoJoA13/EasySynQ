@@ -29,8 +29,18 @@ const nc: Finding = {
   superseded_by_correction: null,
 };
 
+const noRaise = { canRaiseInitiative: false, onRaiseInitiative: () => {} };
+
 test("a live NC renders badge + title + tags + the CAPA state chip + the deep-link", () => {
-  r(<FindingPanel finding={nc} capaState="RootCause" canCorrect onCorrect={() => {}} />);
+  r(
+    <FindingPanel
+      finding={nc}
+      capaState="RootCause"
+      canCorrect
+      onCorrect={() => {}}
+      {...noRaise}
+    />,
+  );
   expect(screen.getByText("REC-000062")).toBeInTheDocument();
   expect(screen.getByText("Major NC")).toBeInTheDocument();
   expect(screen.getByText(/Supplier re-evaluation overdue/)).toBeInTheDocument();
@@ -43,7 +53,15 @@ test("a live NC renders badge + title + tags + the CAPA state chip + the deep-li
 });
 
 test("the CAPA chip is omitted when capaState is undefined (capa.read degrade) — the link stays", () => {
-  r(<FindingPanel finding={nc} capaState={undefined} canCorrect={false} onCorrect={() => {}} />);
+  r(
+    <FindingPanel
+      finding={nc}
+      capaState={undefined}
+      canCorrect={false}
+      onCorrect={() => {}}
+      {...noRaise}
+    />,
+  );
   expect(screen.queryByText(/CAPA:/)).toBeNull();
   expect(screen.getByRole("link", { name: /View CAPA/ })).toBeInTheDocument();
 });
@@ -55,6 +73,7 @@ test("a superseded finding renders muted with no Correct action", () => {
       capaState="Closed"
       canCorrect
       onCorrect={() => {}}
+      {...noRaise}
     />,
   );
   expect(screen.getByText(/Superseded by correction/)).toBeInTheDocument();
@@ -76,6 +95,7 @@ test("a successor shows its corrects-link; Correct fires the callback when allow
       capaState={undefined}
       canCorrect
       onCorrect={onCorrect}
+      {...noRaise}
     />,
   );
   expect(screen.getByText(/Corrects an earlier finding/)).toBeInTheDocument();
@@ -90,7 +110,63 @@ test("a finding title with markup renders as literal text (XSS-safe)", () => {
       capaState={undefined}
       canCorrect={false}
       onCorrect={() => {}}
+      {...noRaise}
     />,
   );
   expect(screen.getByText("<img src=x onerror=alert(1)>")).toBeInTheDocument();
+});
+
+// ---- S-improvement-3b: the Raise-initiative affordance on the panel ----
+const ofi: Finding = {
+  ...nc,
+  id: "fd000002-0002-0002-0002-000000000002",
+  identifier: "REC-000063",
+  finding_type: "OFI",
+  severity: null,
+  auto_capa_id: null,
+};
+
+test("Raise initiative shows for an OFI when canRaiseInitiative and fires onRaiseInitiative", async () => {
+  const onRaiseInitiative = vi.fn();
+  const u = userEvent.setup();
+  r(
+    <FindingPanel
+      finding={ofi}
+      capaState={undefined}
+      canCorrect={false}
+      onCorrect={() => {}}
+      canRaiseInitiative
+      onRaiseInitiative={onRaiseInitiative}
+    />,
+  );
+  await u.click(screen.getByRole("button", { name: "Raise initiative" }));
+  expect(onRaiseInitiative).toHaveBeenCalledWith(expect.objectContaining({ id: ofi.id }));
+});
+
+test("Raise initiative is hidden for an NC even with canRaiseInitiative", () => {
+  r(
+    <FindingPanel
+      finding={nc}
+      capaState={undefined}
+      canCorrect={false}
+      onCorrect={() => {}}
+      canRaiseInitiative
+      onRaiseInitiative={() => {}}
+    />,
+  );
+  expect(screen.queryByRole("button", { name: "Raise initiative" })).toBeNull();
+});
+
+test("Raise initiative is hidden for a superseded OFI even with canRaiseInitiative", () => {
+  r(
+    <FindingPanel
+      finding={{ ...ofi, superseded_by_correction: "fd000099-0099-0099-0099-000000000099" }}
+      capaState={undefined}
+      canCorrect={false}
+      onCorrect={() => {}}
+      canRaiseInitiative
+      onRaiseInitiative={() => {}}
+    />,
+  );
+  expect(screen.queryByRole("button", { name: "Raise initiative" })).toBeNull();
 });

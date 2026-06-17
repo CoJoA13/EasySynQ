@@ -13,6 +13,8 @@ import { AddOutputModal } from "./AddOutputModal";
 import { RaiseMrCapaModal } from "./RaiseMrCapaModal";
 import { SpawnDcrModal } from "../dcr/SpawnDcrModal";
 import { useRaiseDcrFromMrOutput } from "../dcr/mutations";
+import { SpawnInitiativeModal } from "../improvement/SpawnInitiativeModal";
+import { useRaiseInitiativeFromMrOutput } from "../improvement/mutations";
 
 function ActionRow({
   output,
@@ -56,13 +58,17 @@ export function ReviewOutputsSection({
   const [removing, setRemoving] = useState<ReviewOutput | null>(null);
   const [raiseFor, setRaiseFor] = useState<string | null>(null);
   const [raiseDcrFor, setRaiseDcrFor] = useState<string | null>(null);
+  const [raiseInitFor, setRaiseInitFor] = useState<string | null>(null);
   const raiseDcr = useRaiseDcrFromMrOutput(reviewId, raiseDcrFor ?? "");
+  const raiseInit = useRaiseInitiativeFromMrOutput(reviewId, raiseInitFor ?? "");
   const nameOf = (id: string | null) =>
     id ? (directory?.find((u) => u.id === id)?.display_name ?? "a user") : "—";
   const byType = (t: ReviewOutput["output_type"]) => outputs.filter((o) => o.output_type === t);
   const canEdit = editable && can("mgmtReview.record_outputs");
   const canRaiseCapa = tracking && can("capa.create");
   const canRaiseDcr = tracking && can("changeRequest.create");
+  // SYSTEM-default scope here (an MR has no process) — v1 SYSTEM-gated, consistent with the family.
+  const canRaiseInitiative = tracking && can("improvement.manage");
 
   return (
     <Stack gap="sm">
@@ -115,6 +121,17 @@ export function ReviewOutputsSection({
                         Raise DCR
                       </Button>
                     )}
+                    {/* Initiative spawn is 1:N idempotent (reserved-null latch) — Raise-only, no View link.
+                        ACTION + IMPROVEMENT outputs are improvable (a DECISION is 422 server-side). */}
+                    {(t === "ACTION" || t === "IMPROVEMENT") && canRaiseInitiative && (
+                      <Button
+                        size="compact-xs"
+                        variant="light"
+                        onClick={() => setRaiseInitFor(o.id)}
+                      >
+                        Raise initiative
+                      </Button>
+                    )}
                     {canEdit && (
                       <Button
                         size="compact-xs"
@@ -152,6 +169,15 @@ export function ReviewOutputsSection({
           title="Raise a change request from this action"
           mutation={raiseDcr}
           onClose={() => setRaiseDcrFor(null)}
+        />
+      )}
+      {raiseInitFor && (
+        <SpawnInitiativeModal
+          heading="Raise an improvement initiative from this output"
+          mutation={raiseInit}
+          showProcessPicker
+          onClose={() => setRaiseInitFor(null)}
+          onCreated={(id) => navigate(`/improvement?initiative=${id}`)}
         />
       )}
       <ConfirmDestructive
