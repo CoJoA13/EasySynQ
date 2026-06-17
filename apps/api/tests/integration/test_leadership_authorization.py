@@ -235,7 +235,7 @@ async def test_obj_full_mechanism_request_verify_release(
         assert decision["current_state"] == "COMPLETED", decision
         sig_id = decision["signature_event_id"]
         assert sig_id is not None
-        assert decision["version_id"] == version_id
+        assert decision["document_version_id"] == version_id
 
         # The verify signature binds to the document_version; the leadership act is first-class.
         async with get_sessionmaker()() as s:
@@ -496,7 +496,7 @@ async def test_sign_is_idempotent_on_replay(
     ).json()
     assert first["current_state"] == "COMPLETED"
     sig_id = first["signature_event_id"]
-    version_id = first["version_id"]
+    version_id = first["document_version_id"]
     assert sig_id is not None
 
     replay = (
@@ -520,6 +520,37 @@ async def test_sign_is_idempotent_on_replay(
             )
         ).scalar_one()
         assert sig_count == 1
+
+
+# --- 8b. A version is authorized exactly once (re-request 409s) --------------------------------
+
+
+async def test_request_rejected_when_already_authorized(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """Once a version is authorized (a COMPLETED verify), a fresh request for the SAME version is a
+    409 ``already_authorized`` — a version is authorized exactly once (no duplicate verify sig, so
+    the replay re-derivation stays single-valued). POL is verified but never released."""
+    salt = uuid.uuid4().hex[:8]
+    tm_subj = f"ld-duptm-{salt}"
+    await _assign_top_mgmt(tm_subj)
+    htm = _auth(token_factory, tm_subj)
+    did, ha, _ = await _approved_pol(app_client, token_factory, salt)
+
+    req = await _request(app_client, ha, did)
+    task_id = await _my_pending_task(app_client, htm, str(req["instance_id"]))
+    decision = (
+        await app_client.post(
+            f"/api/v1/tasks/{task_id}/decision", headers=htm, json={"outcome": "verify"}
+        )
+    ).json()
+    assert decision["current_state"] == "COMPLETED", decision
+
+    again = await app_client.post(
+        f"/api/v1/documents/{did}/request-leadership-authorization", headers=ha, json={}
+    )
+    assert again.status_code == 409, again.text
+    assert again.json()["code"] == "already_authorized"
 
 
 # --- 9. MR (non-singleton): release endpoint hits the same shared _cutover gate ----------------

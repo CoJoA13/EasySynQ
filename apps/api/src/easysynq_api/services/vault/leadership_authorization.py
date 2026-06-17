@@ -230,6 +230,16 @@ async def request_leadership_authorization(
             "document_not_approved",
             "No Approved version to authorize for release",
         )
+    # A version is authorized exactly ONCE. The single-active guard below only blocks a NON-terminal
+    # instance; a COMPLETED authorization is terminal, so without this a second request (before
+    # release) would mint a duplicate verify signature on the same version — which both violates the
+    # invariant and breaks the ``scalar_one_or_none()`` replay re-derivation (a 500). Re-authorize a
+    # NEW Approved version (a later revision) is fine — has_release_authorization is version-scoped.
+    if await has_release_authorization(session, version.id):
+        raise _conflict(
+            "already_authorized",
+            "This version already has a Top-Management release authorization",
+        )
     existing = await wf_repo.find_nonterminal_instance(
         session,
         actor.org_id,
@@ -301,7 +311,7 @@ async def _enrich_completed_replay(
     decision COMPLETED — so a retry's body matches. A version is authorized exactly once (the
     signature is version-scoped + minted once on COMPLETE)."""
     version_id_raw = (instance.context or {}).get("version_id")
-    result["version_id"] = version_id_raw
+    result["document_version_id"] = version_id_raw
     result["document_id"] = str(instance.subject_id)
     if version_id_raw is None:
         result["signature_event_id"] = None
@@ -406,7 +416,7 @@ async def decide_leadership_authorization(
             },
         )
         result["document_id"] = str(instance.subject_id)
-        result["version_id"] = str(version_id)
+        result["document_version_id"] = str(version_id)
         result["signature_event_id"] = str(sig.id) if sig is not None else None
     elif outcome == "reject":
         # A decline is DECISIVE — one Top-Management member ends the authorization. The engine's ANY
@@ -430,6 +440,11 @@ async def decide_leadership_authorization(
             sibling.state = TaskState.SKIPPED
         instance.current_state = engine.REJECTED
         result["current_state"] = engine.REJECTED
+        # The generic ANY quorum returned stage_state=PENDING (it does not fail on one negative
+        # while live candidates remain); we forced the instance terminal + skipped siblings, so
+        # reflect a terminal/FAILED stage in the response (else a client reads a REJECTED
+        # current_state but a PENDING stage).
+        result["stage_state"] = "FAILED"
 
     await session.commit()
     return result

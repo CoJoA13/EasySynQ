@@ -6651,7 +6651,7 @@ components:
         definition_version: { type: integer, description: "Pinned at instantiation." }
         subject_type:
           type: string
-          enum: [DOCUMENT, DCR, CAPA, AUDIT, MGMT_REVIEW, PERIODIC_REVIEW, DOC_ACK, IMPROVEMENT_INITIATIVE]
+          enum: [DOCUMENT, DCR, CAPA, AUDIT, MGMT_REVIEW, PERIODIC_REVIEW, DOC_ACK, IMPROVEMENT_INITIATIVE, LEADERSHIP_AUTHORIZATION]
         subject_id: { type: string, format: uuid }
         current_state:
           type: string
@@ -6671,7 +6671,7 @@ components:
         outcome:
           type: string
           enum: [approve, changes_requested, reject, complete, acknowledge, verify]
-          description: "approve signs (document.approve); changes_requested/reject returns to Draft (document.review); verify is the IMPROVEMENT_INITIATIVE management-authorization sign-off (S-improvement-4) — verify/reject only for that subject."
+          description: "approve signs (document.approve); changes_requested/reject returns to Draft (document.review); verify is the management-authorization / leadership-release sign-off (S-improvement-4 IMPROVEMENT_INITIATIVE; S-leadership-1 LEADERSHIP_AUTHORIZATION) — verify/reject only for those subjects."
         comment:
           type: [string, "null"]
           description: "Required (non-empty) for changes_requested/reject; recorded as the decision intent."
