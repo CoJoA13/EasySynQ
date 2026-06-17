@@ -4,8 +4,14 @@ import type {
   Initiative,
   InitiativeCreateBody,
   InitiativePatchBody,
+  InitiativeSpawnBody,
   InitiativeTransitionBody,
 } from "../../lib/types";
+
+export interface SpawnInitiativeVars {
+  body: InitiativeSpawnBody;
+  idempotencyKey: string;
+}
 
 // After any initiative write, re-read the server (NEVER optimistic — the FSM/gate truth is server-only).
 function useInitiativeInvalidator(id?: string) {
@@ -27,6 +33,38 @@ export function useCreateInitiative() {
   return useMutation({
     mutationFn: (body: InitiativeCreateBody) =>
       api.send<Initiative>("POST", "/api/v1/improvement-initiatives", body),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["initiatives"] }),
+  });
+}
+
+// OFI/OBSERVATION finding → initiative (1:N idempotent — 201 new / 200 replay both resolve to an
+// Initiative, NO status branching). onSuccess (not onSettled): a 200 replay IS a success, there is no
+// 409 race to self-heal. The modal mints a per-mount Idempotency-Key. source=OFI is derived server-side.
+export function useRaiseInitiativeFromFinding(findingId: string) {
+  const api = useApi();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ body, idempotencyKey }: SpawnInitiativeVars) =>
+      api.send<Initiative>("POST", `/api/v1/findings/${findingId}/raise-initiative`, body, {
+        "Idempotency-Key": idempotencyKey,
+      }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["initiatives"] }),
+  });
+}
+
+// ACTION/IMPROVEMENT MR output → initiative (1:N idempotent). The optional body.process_id homes the
+// initiative (an MR has no process); source=review is derived server-side.
+export function useRaiseInitiativeFromMrOutput(reviewId: string, outputId: string) {
+  const api = useApi();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ body, idempotencyKey }: SpawnInitiativeVars) =>
+      api.send<Initiative>(
+        "POST",
+        `/api/v1/management-reviews/${reviewId}/outputs/${outputId}/raise-initiative`,
+        body,
+        { "Idempotency-Key": idempotencyKey },
+      ),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["initiatives"] }),
   });
 }

@@ -1,5 +1,13 @@
 import { TONE_GLYPH, type Tone } from "../../lib/status";
-import type { Audit, Capa, Complaint, DriftStatus, Ncr } from "../../lib/types";
+import type {
+  Audit,
+  Capa,
+  Complaint,
+  DriftStatus,
+  Initiative,
+  InitiativeStage,
+  Ncr,
+} from "../../lib/types";
 
 // The dashboard's RAG vocabulary. `neutral` = an informational/unscored signal (NOT objectives'
 // `unmeasured`, which maps to neutral). N9: every value is status against a coded rule, read at
@@ -95,3 +103,8 @@ export const ncrsAwaitingCount = (n: Ncr[]): number =>
   n.filter((x) => x.disposition === null).length;
 export const complaintsAwaitingCount = (c: Complaint[]): number =>
   c.filter((x) => x.spawned_capa_id === null).length;
+// Improvement initiatives "in progress" = the non-terminal stages (excludes Closed + Cancelled). A purely
+// informational count on the ACT tile — improvement activity is healthy, never a RAG signal (no countRag).
+const INITIATIVE_IN_PROGRESS: InitiativeStage[] = ["Open", "InProgress", "Completed"];
+export const initiativesInProgressCount = (i: Initiative[]): number =>
+  i.filter((x) => INITIATIVE_IN_PROGRESS.includes(x.stage)).length;
