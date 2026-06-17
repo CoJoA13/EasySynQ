@@ -582,6 +582,21 @@ PDCA "Check" (`14 §9`). The program is a **maintained document**; an `audit` an
 | POST | `/management-reviews/{id}/close` | `mgmtReview.record_outputs` | — | The close gate (mirrors `_audit_close_gate`): `409 review_close_blocked` until every ACTION task is DONE; flips `close_state` `ActionsTracked→Closed`. |
 | PATCH | `/management-reviews/{id}` | `mgmtReview.create` | — | Metadata PATCH (e.g. `attendees`, `review_date`) while Draft. |
 
+### 8.12b Improvement Initiatives — as built (slices S-improvement-1/2, clause 10.3, R46)
+
+> An **Improvement Initiative** is an **own-table mutable-state workflow object** (the DCR / R22 doctrine — NOT a `kind=RECORD`, NOT a `documented_information` subtype), because clause 10.3 is **non-★** (no ★ checklist node to flip). The mutable `stage` (`Open → InProgress → Completed → Closed`, `+ Cancelled` from the pre-completion states) is the headline; the append-only `improvement_initiative_stage_event` trail (REVOKE UPDATE,DELETE) is the immutable history. Two additive CONTENT keys (R38, catalog 100→102): `improvement.read` / `improvement.manage` (PROCESS finest-scope, `sig_hook=False`). **No signature on any act (R43).** All contracted in `packages/contracts/openapi.yaml`.
+
+| Method | Path | Perm | Notes |
+|---|---|---|---|
+| POST | `/improvement-initiatives` | `improvement.manage` | **(S-improvement-1)** Manually raise at `Open` (`source=manual`). Allocates `IMP-{YYYY}-{NNNN}`; writes the genesis stage event + an `INITIATIVE_RAISED` audit. Scope from the body's optional `process_id` (SYSTEM fallback). |
+| GET | `/improvement-initiatives` | `improvement.read` | List (newest first), **row-filtered** to the caller's grant scope (R28). Filter `stage`/`source`/`owner_user_id`/`process_id`. |
+| GET | `/improvement-initiatives/{id}` | `improvement.read` | Detail. |
+| GET | `/improvement-initiatives/{id}/stage-events` | `improvement.read` | The append-only stage-event trail (oldest→newest). |
+| PATCH | `/improvement-initiatives/{id}` | `improvement.manage` | Edit mutable metadata (never `stage`). A `process_id` reassignment also enforces `improvement.manage` on the **target** process. |
+| POST | `/improvement-initiatives/{id}/transition` | `improvement.manage` | FSM move (`409 improvement_transition_invalid`); a Closed/Cancelled move requires a comment; a Closed move may fold a realized-benefit `outcome` into the sealed stage event. |
+| POST | `/findings/{finding_id}/raise-initiative` | `improvement.manage` | **(S-improvement-2)** Raise from an `OBSERVATION`/`OFI` finding (`source=OFI`, `source_link_id=finding.id`). `422 finding_not_improvable` on an `NC` (it carries its mandatory CAPA instead). 1:N — an `Idempotency-Key` makes a retry return the same initiative (201 new / 200 replay). Scope = the finding's audit auditee process; the initiative **inherits** that process (an auditor raises the OFI, a Process Owner turns it into an initiative). |
+| POST | `/management-reviews/{review_id}/outputs/{output_id}/raise-initiative` | `improvement.manage` | **(S-improvement-2)** Raise from an `ACTION`/`IMPROVEMENT` MR output (`source=review`, `source_link_id=output.id`); emits `MGMT_REVIEW_INITIATIVE_SPAWNED` on the MR doc. `422 output_not_improvable` (a `DECISION`); `409 review_not_tracking` unless released-and-tracking. 1:N + `Idempotency-Key` (201/200). The link is one-way on the initiative; `review_output.spawned_initiative_id` stays **reserved-null** (R46 — un-reserving the reciprocal latch is a future owner-flipped migration). Scope from the body's optional `process_id` (SYSTEM fallback). |
+
 ### 8.13 Audit Trail — immutable, hash-chained journal (`/audit-events`)
 
 Read-only projection of `audit_event` (`14 §12`). The auditor's primary evidence surface. **No POST/PATCH/DELETE ever** — append-only and hash-chained is a *system invariant*, not an API capability; the app DB role lacks UPDATE/DELETE on this table.

@@ -13,7 +13,8 @@ import datetime
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, Depends, Request, status
+from fastapi import APIRouter, Depends, Header, Request, status
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -34,10 +35,15 @@ from ..services.audits import (
     create_audit_plan,
     create_audit_program,
     create_finding,
+    raise_initiative_from_finding,
     update_audit_program,
 )
 from ..services.audits import repository as audits_repo
-from ..services.authz import require
+from ..services.authz import AuthzAuditSink, enforce, get_authz_audit_sink, require
+
+# Reuse the canonical improvement-initiative serializer (one source → no drift). api/improvement
+# imports only services, so there is no import cycle (the api/objectives↔api/workflow precedent).
+from .improvement import _initiative, _scope_for
 
 router = APIRouter(prefix="/api/v1", tags=["audits"])
 
@@ -86,6 +92,17 @@ class FindingCorrection(BaseModel):
     clause_ref: str | None = Field(default=None, max_length=100)
     process_ref: str | None = Field(default=None, max_length=300)
     reason: str | None = Field(default=None, max_length=300)
+
+
+class FindingInitiativeCreate(BaseModel):
+    """Body for raising an improvement initiative from a finding (S-improvement-2). The
+    initiative is human-authored (forward-looking activity), distinct from the finding's record;
+    ``source``/``source_link_id``/``process_id`` derive from the finding + audit, not the body."""
+
+    title: str = Field(min_length=1, max_length=500)
+    description: str | None = Field(default=None, max_length=8000)
+    target_outcome: str | None = Field(default=None, max_length=4000)
+    owner_user_id: uuid.UUID | None = None
 
 
 # --- serializers ------------------------------------------------------------------------------
@@ -232,6 +249,10 @@ _finding_correct = require("finding.create", async_scope_resolver=_finding_scope
 _finding_read = require(
     "finding.read"
 )  # SYSTEM default + org-scoped query (the family read precedent)
+# raise-initiative (S-improvement-2): gate improvement.manage at the finding's audit auditee process
+# (the _finding_scope path resolver) — NOT a finding.* key (R46 rejected riding capa.*/finding.* for
+# improvement; a Process Owner of the audited process or a SYSTEM grant raises it).
+_raise_initiative = require("improvement.manage", async_scope_resolver=_finding_scope)
 
 
 # --- programmes -------------------------------------------------------------------------------
@@ -536,3 +557,46 @@ async def correct_finding_endpoint(
         )
     f, ident, title, co, sbc = row
     return _finding(f, ident, title, correction_of=co, superseded_by_correction=sbc)
+
+
+@router.post("/findings/{finding_id}/raise-initiative")
+async def raise_initiative_from_finding_endpoint(
+    finding_id: uuid.UUID,
+    body: FindingInitiativeCreate,
+    request: Request,
+    caller: AppUser = Depends(_raise_initiative),
+    session: AsyncSession = Depends(get_session),
+    authz_sink: AuthzAuditSink = Depends(get_authz_audit_sink),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+) -> JSONResponse:
+    """Raise an improvement initiative from an OBSERVATION/OFI finding (S-improvement-2; the
+    ``_raise_initiative`` dep gates ``improvement.manage`` at the finding's audit auditee process).
+    422 ``finding_not_improvable`` on an NC, 409 ``finding_superseded`` on a corrected finding, 404
+    on an unknown finding. 1:N + Idempotency-Key (201 new / 200 replay). ``source=OFI`` +
+    ``source_link_id=finding.id``; inherits the audited process."""
+    initiative, created = await raise_initiative_from_finding(
+        session,
+        caller,
+        finding_id,
+        title=body.title,
+        description=body.description,
+        target_outcome=body.target_outcome,
+        owner_user_id=body.owner_user_id,
+        idempotency_key=idempotency_key,
+    )
+    if not created:
+        # An idempotent replay returns the ORIGINAL initiative, whose process may have been
+        # reassigned away from the finding's audit process the dep just authorized — re-authorize
+        # against its STORED scope so a replay can't surface an out-of-grant initiative (Codex P2).
+        await enforce(
+            session,
+            authz_sink,
+            request,
+            caller,
+            "improvement.manage",
+            _scope_for(initiative.process_id),
+        )
+    return JSONResponse(
+        status_code=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+        content=_initiative(initiative),
+    )

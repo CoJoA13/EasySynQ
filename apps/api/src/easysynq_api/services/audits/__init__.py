@@ -7,6 +7,7 @@ from .service import (
     create_audit_plan,
     create_audit_program,
     create_finding,
+    raise_initiative_from_finding,
     update_audit_program,
 )
 
@@ -17,5 +18,6 @@ __all__ = [
     "create_audit_plan",
     "create_audit_program",
     "create_finding",
+    "raise_initiative_from_finding",
     "update_audit_program",
 ]

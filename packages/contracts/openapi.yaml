@@ -2905,6 +2905,57 @@ paths:
         "409": { $ref: "#/components/responses/ProblemResponse" }
         "422": { $ref: "#/components/responses/ProblemResponse" }
 
+  /findings/{finding_id}/raise-initiative:
+    parameters:
+      - { name: finding_id, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      tags: [audits]
+      operationId: raiseInitiativeFromFinding
+      summary: >-
+        Raise an improvement initiative from an OBSERVATION/OFI finding (S-improvement-2; doc 02 Cl
+        10.3, R46; source=OFI, source_link_id=finding.id). 422 finding_not_improvable on an NC. 1:N —
+        an Idempotency-Key makes a retry return the same initiative (201 new / 200 replay). The
+        initiative inherits the audited process. Needs improvement.manage (scope = the finding's
+        audit auditee process; an auditor raises the OFI, a Process Owner turns it into an initiative).
+      parameters:
+        - { name: Idempotency-Key, in: header, required: false, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [title]
+              properties:
+                title: { type: string, minLength: 1, maxLength: 500 }
+                description: { type: [string, "null"], maxLength: 8000 }
+                target_outcome: { type: [string, "null"], maxLength: 4000 }
+                owner_user_id: { type: [string, "null"], format: uuid }
+      responses:
+        "201":
+          description: A new initiative (stage=Open, source=OFI).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ImprovementInitiative" }
+        "200":
+          description: An idempotent replay of an already-spawned initiative (Idempotency-Key matched).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ImprovementInitiative" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409":
+          description: "The finding has been corrected/superseded (finding_superseded)."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "422":
+          description: "Not an OBSERVATION/OFI finding (finding_not_improvable)."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
   /admin/imports:
     get:
       tags: [imports]
@@ -5315,6 +5366,53 @@ paths:
         "404": { $ref: "#/components/responses/ProblemResponse" }
         "409":
           description: "Not an ACTION output or review not in a tracking state."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  /management-reviews/{review_id}/outputs/{output_id}/raise-initiative:
+    post:
+      tags: [management-reviews]
+      operationId: raiseInitiativeFromMrOutput
+      summary: "Spawn an improvement initiative from an ACTION/IMPROVEMENT output (1:N, idempotent via Idempotency-Key). Gated improvement.manage (body process_id scope, SYSTEM fallback)."
+      parameters:
+        - { name: review_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: output_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: Idempotency-Key, in: header, required: false, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [title]
+              properties:
+                title: { type: string, minLength: 1, maxLength: 500 }
+                description: { type: [string, "null"], maxLength: 8000 }
+                target_outcome: { type: [string, "null"], maxLength: 4000 }
+                owner_user_id: { type: [string, "null"], format: uuid }
+                process_id: { type: [string, "null"], format: uuid }
+      responses:
+        "201":
+          description: "A new initiative (source=review). review_output.spawned_initiative_id stays reserved-null (R46)."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ImprovementInitiative" }
+        "200":
+          description: "An idempotent replay of an already-spawned initiative (Idempotency-Key matched)."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ImprovementInitiative" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409":
+          description: "Review not in a tracking state (review_not_tracking)."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "422":
+          description: "Not an ACTION/IMPROVEMENT output (output_not_improvable)."
           content:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }

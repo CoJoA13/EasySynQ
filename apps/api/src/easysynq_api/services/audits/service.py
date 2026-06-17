@@ -20,10 +20,12 @@ import uuid
 from typing import Any
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...db.models._audit_enums import ActorType, AuditObjectType, EventType
 from ...db.models._capa_enums import CapaSource, NcSeverity
+from ...db.models._improvement_enums import ImprovementSource
 from ...db.models._iso_audit_enums import AuditState, FindingType
 from ...db.models.app_user import AppUser
 from ...db.models.audit import Audit
@@ -32,6 +34,7 @@ from ...db.models.audit_finding import AuditFinding
 from ...db.models.audit_plan import AuditPlan
 from ...db.models.audit_program import AuditProgram
 from ...db.models.documented_information import DocumentedInformation
+from ...db.models.improvement_initiative import ImprovementInitiative
 from ...db.models.process import Process
 from ...db.models.record import Record
 from ...domain.audits import finding_blocks_close, next_state, transition_allowed
@@ -39,6 +42,8 @@ from ...domain.vault import format_identifier
 from ...logging import request_id_var
 from ...problems import ProblemException
 from ..capa.service import build_capa
+from ..improvement.repository import get_spawned_initiative
+from ..improvement.service import create_initiative
 from ..records.service import capture_record, emit_record_event
 from ..vault import repository as vault_repo
 from . import repository as repo
@@ -487,6 +492,80 @@ async def correct_finding(
     await session.commit()
     await session.refresh(successor)
     return successor
+
+
+async def raise_initiative_from_finding(
+    session: AsyncSession,
+    actor: AppUser,
+    finding_id: uuid.UUID,
+    *,
+    title: str,
+    description: str | None = None,
+    target_outcome: str | None = None,
+    owner_user_id: uuid.UUID | None = None,
+    idempotency_key: str | None = None,
+) -> tuple[ImprovementInitiative, bool]:
+    """Raise an Improvement Initiative from an OBSERVATION/OFI finding (S-improvement-2). The non-NC
+    findings are the improvement opportunities; an NC is corrective-action work
+    (it already carries its mandatory CAPA) and is NOT improvable here → 422
+    ``finding_not_improvable`` (owner-locked eligibility). 1:N — the link lives one-way on the
+    initiative (``source=OFI``, ``source_link_id=finding.id``); an Idempotency-Key makes a retry
+    return the same initiative (created=False). The initiative inherits the *audited* process (the
+    audit's plan auditee process — NOT the finding's soft ``process_ref``; the
+    ``_auto_capa_for_finding`` precedent) so a Process-Owner ``improvement.manage`` grant reaches it
+    (R28). Composes ``create_initiative(_commit=False)`` in ONE txn; NO signature (R43)."""
+    finding = await repo.get_finding(session, finding_id)
+    if finding is None or finding.org_id != actor.org_id:
+        raise _not_found("Finding")
+    if finding.finding_type not in (FindingType.OBSERVATION, FindingType.OFI):
+        raise ProblemException(
+            status=422,
+            code="finding_not_improvable",
+            title="Only an OBSERVATION or OFI finding can raise an improvement initiative",
+        )
+    # Idempotent replay FIRST (finding_type is immutable, so an eligibility re-check above is safe
+    # before this; there is no mutable-state gate on this path — an OFI from a finalized audit
+    # is still improvable, by design).
+    existing = await get_spawned_initiative(session, actor.org_id, finding.id, idempotency_key)
+    if existing is not None:
+        return existing, False
+    # Reject a SUPERSEDED finding (corrected away — Record.superseded_by_correction set, which the
+    # audit close gate also excludes): the original is no longer the live finding, so raising fresh
+    # improvement work from an obsolete row — e.g. an OBS later corrected to NC — is incoherent.
+    # Checked AFTER the replay so a retry of a still-valid prior raise replays even once the finding
+    # is later corrected (Codex P2).
+    record = await session.get(Record, finding.id)
+    if record is not None and record.superseded_by_correction is not None:
+        raise _conflict(
+            "finding_superseded",
+            "This finding has been corrected/superseded; raise from the live successor instead.",
+        )
+    audit = await repo.get_audit(session, finding.audit_id)
+    plan = await repo.get_audit_plan(session, audit.plan_id) if audit is not None else None
+    process_id = plan.auditee_process_id if plan is not None else None
+    try:
+        initiative = await create_initiative(
+            session,
+            actor,
+            title=title,
+            description=description,
+            target_outcome=target_outcome,
+            source=ImprovementSource.OFI,
+            source_link_id=finding.id,
+            spawn_idempotency_key=idempotency_key,
+            process_id=process_id,
+            owner_user_id=owner_user_id,
+            _commit=False,
+        )
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        existing = await get_spawned_initiative(session, actor.org_id, finding.id, idempotency_key)
+        if existing is not None:
+            return existing, False
+        raise
+    await session.refresh(initiative)
+    return initiative, True
 
 
 async def _audit_close_gate(session: AsyncSession, audit: Audit) -> None:
