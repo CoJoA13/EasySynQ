@@ -141,6 +141,32 @@ test("shows the FSM transition affordance in the drawer only with improvement.ma
   expect(await screen.findByRole("button", { name: "Mark completed" })).toBeInTheDocument();
 });
 
+test("a Cancel move requires a comment before the confirm button enables", async () => {
+  // The detail fixture is InProgress → the cockpit offers "Cancel initiative" (a comment-required move).
+  grantManage();
+  const u = userEvent.setup();
+  renderWithProviders(<ImprovementRegisterPage />, {
+    route: "/improvement?initiative=10000000-0000-0000-0000-000000000002",
+  });
+  await u.click(await screen.findByRole("button", { name: "Cancel initiative" }));
+  const confirm = await screen.findByRole("button", { name: "Confirm cancellation" });
+  expect(confirm).toBeDisabled();
+  await u.type(screen.getByLabelText(/^Comment/), "Superseded by a broader programme.");
+  expect(confirm).toBeEnabled();
+});
+
+test("renders a calm error in the drawer when the detail load fails", async () => {
+  server.use(
+    http.get("/api/v1/improvement-initiatives/:id", () =>
+      HttpResponse.json({ code: "error", title: "Server error" }, { status: 500 }),
+    ),
+  );
+  renderWithProviders(<ImprovementRegisterPage />, {
+    route: "/improvement?initiative=10000000-0000-0000-0000-000000000002",
+  });
+  expect(await screen.findByText(/Couldn't load this initiative/)).toBeInTheDocument();
+});
+
 test("a Close move requires a comment before the confirm button enables", async () => {
   grantManage();
   // Override the detail to a Completed initiative so the cockpit offers "Close initiative".
