@@ -363,9 +363,14 @@ export interface WorkflowInstance {
   tasks?: Task[];
 }
 
-export type DecisionOutcome = "approve" | "changes_requested" | "reject" | "complete";
+export type DecisionOutcome = "approve" | "changes_requested" | "reject" | "complete" | "verify";
 
-export type DecisionSubjectType = "DOCUMENT" | "CAPA" | "PERIODIC_REVIEW" | "DCR";
+export type DecisionSubjectType =
+  | "DOCUMENT"
+  | "CAPA"
+  | "PERIODIC_REVIEW"
+  | "DCR"
+  | "IMPROVEMENT_INITIATIVE";
 
 // POST /tasks/{id}/decision for a PERIODIC_REVIEW subject returns the wf-engine dict, NOT
 // DecisionResult (services/vault/review.py:245-380). The UI ignores the body (invalidate+refetch).
@@ -1522,11 +1527,37 @@ export interface InitiativeStageEvent {
   actor_id: string | null; // an app_user.id; null reserved for future system moves
   comment: string | null;
   payload: Record<string, unknown> | null; // genesis {source}; Closed-with-outcome {outcome}; else null
+  // S-improvement-4: null for every unsigned move; the FK to the leadership `verify` signature on the
+  // signed authorized-close event (the timeline's "verified by leadership" marker).
+  signed_event_id: string | null;
   occurred_at: string;
 }
 
 export interface InitiativeStageEventList {
   data: InitiativeStageEvent[];
+}
+
+// ---- S-improvement-4: the engine-routed Top-Management authorization cycle (pinned to api/improvement.py
+// _authorization). The latest workflow instance + its tasks, or null when never requested. ----
+export interface InitiativeAuthorizationTask {
+  id: string;
+  stage_key: string;
+  state: string;
+  assignee_user_id: string | null;
+  candidate_pool: string[] | null;
+  action_expected: string | null;
+}
+export interface InitiativeAuthorization {
+  instance_id: string;
+  subject_id: string;
+  // The pending stage key, COMPLETED (granted → the initiative is Closed), REJECTED, or
+  // NEEDS_ATTENTION (no Top-Management member assigned).
+  current_state: string;
+  started_at: string | null;
+  tasks: InitiativeAuthorizationTask[];
+}
+export interface InitiativeAuthorizationRequestBody {
+  comment?: string | null;
 }
 
 // ---- write bodies (pinned to api/improvement.py InitiativeCreate / InitiativePatch / InitiativeTransition) ----

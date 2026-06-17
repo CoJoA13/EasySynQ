@@ -19,6 +19,7 @@ import type {
   Finding,
   FindingList,
   Initiative,
+  InitiativeAuthorization,
   InitiativeList,
   InitiativePatchBody,
   InitiativeSpawnBody,
@@ -2153,6 +2154,7 @@ export const initiativeStageEventsFixture = [
     actor_id: INIT_ACTOR_ID,
     comment: null,
     payload: { source: "manual" },
+    signed_event_id: null,
     occurred_at: "2026-06-10T09:00:00Z",
   },
   {
@@ -2162,15 +2164,75 @@ export const initiativeStageEventsFixture = [
     actor_id: INIT_ACTOR_ID,
     comment: "Kicking off the work.",
     payload: null,
+    signed_event_id: null,
     occurred_at: "2026-06-11T09:00:00Z",
   },
 ] satisfies InitiativeStageEvent[];
 
+// ---- S-improvement-4 authorization fixtures (pinned to api/improvement.py _authorization / _task) ----
+const INIT_COMPLETED_ID = "10000000-0000-0000-0000-000000000005";
+const INIT_AUTH_INSTANCE_ID = "50000000-0000-0000-0000-000000000001";
+const INIT_AUTH_TASK_ID = "task-init-auth-1";
+const TOPMGMT_USER_ID = "bbbb1111-1111-1111-1111-111111111111";
+
+// A Completed initiative (the only stage from which an authorization can be requested).
+export const initiativeCompletedFixture = {
+  ...initiativeFixtures[0]!,
+  id: INIT_COMPLETED_ID,
+  identifier: "IMP-2026-0005",
+  title: "Authorize me",
+  stage: "Completed",
+} satisfies Initiative;
+
+// The pending authorization cycle for a Completed initiative (one Top-Management task).
+export const initiativeAuthorizationFixture = {
+  instance_id: INIT_AUTH_INSTANCE_ID,
+  subject_id: INIT_COMPLETED_ID,
+  current_state: "top_mgmt_authorization",
+  started_at: "2026-06-17T09:00:00Z",
+  tasks: [
+    {
+      id: INIT_AUTH_TASK_ID,
+      stage_key: "top_mgmt_authorization",
+      state: "PENDING",
+      assignee_user_id: TOPMGMT_USER_ID,
+      candidate_pool: [TOPMGMT_USER_ID],
+      action_expected: "authorize_initiative",
+    },
+  ],
+} satisfies InitiativeAuthorization;
+
+// The Top-Management authorization task detail (GET /tasks/{id}) → the IMPROVEMENT_INITIATIVE leg.
+export const improvementAuthTask = {
+  id: INIT_AUTH_TASK_ID,
+  instance_id: INIT_AUTH_INSTANCE_ID,
+  stage_key: "top_mgmt_authorization",
+  type: "VERIFY",
+  state: "PENDING",
+  assignee_user_id: TOPMGMT_USER_ID,
+  candidate_pool: [TOPMGMT_USER_ID],
+  action_expected: "authorize_initiative",
+  due_at: null,
+  subject_type: "IMPROVEMENT_INITIATIVE",
+  subject_id: INIT_COMPLETED_ID,
+} satisfies Task;
+
 export const handlers = [
   // ---- S-improvement-3 Improvement Initiatives (default happy-path; per-test overrides) ----
-  // IMPORTANT: /…/:id/stage-events MUST register BEFORE /…/:id or MSW matches "stage-events" as :id.
+  // IMPORTANT: the two-segment /…/:id/{stage-events,authorization,request-authorization} routes MUST
+  // register BEFORE /…/:id or MSW matches the suffix as :id.
   http.get("/api/v1/improvement-initiatives/:id/stage-events", () =>
     HttpResponse.json({ data: initiativeStageEventsFixture } satisfies InitiativeStageEventList),
+  ),
+  // Default: no authorization cycle yet (the common case — a Completed initiative not yet routed).
+  // Tests that exercise a pending/NEEDS_ATTENTION cycle override this with initiativeAuthorizationFixture.
+  http.get("/api/v1/improvement-initiatives/:id/authorization", () =>
+    HttpResponse.json(null satisfies InitiativeAuthorization | null),
+  ),
+  http.post("/api/v1/improvement-initiatives/:id/request-authorization", () =>
+    HttpResponse.json(initiativeAuthorizationFixture satisfies InitiativeAuthorization, {
+      status: 201,
+    }),
   ),
   http.get("/api/v1/improvement-initiatives/:id", () =>
     HttpResponse.json(initiativeFixtures[1]! satisfies Initiative),
@@ -2708,6 +2770,7 @@ export const handlers = [
     if (params.id === periodicReviewTask.id) return HttpResponse.json(periodicReviewTask);
     if (params.id === docAckTask.id) return HttpResponse.json(docAckTask);
     if (params.id === dcrApprovalTask.id) return HttpResponse.json(dcrApprovalTask);
+    if (params.id === improvementAuthTask.id) return HttpResponse.json(improvementAuthTask);
     return HttpResponse.json(approveTask);
   }),
   http.get("/api/v1/workflow-instances/:id", () => HttpResponse.json(approvalFixture)),

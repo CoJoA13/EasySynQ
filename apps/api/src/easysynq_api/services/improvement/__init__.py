@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from .authorization import (
+    decide_initiative_authorization,
+    request_authorization,
+)
 from .service import (
     create_initiative,
     transition_initiative,
@@ -10,6 +14,8 @@ from .service import (
 
 __all__ = [
     "create_initiative",
+    "decide_initiative_authorization",
+    "request_authorization",
     "transition_initiative",
     "update_initiative",
 ]

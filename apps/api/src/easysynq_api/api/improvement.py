@@ -26,19 +26,23 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..auth.dependencies import get_current_user
 from ..db.models._improvement_enums import ImprovementSource, ImprovementStage
+from ..db.models._workflow_enums import WorkflowSubjectType
 from ..db.models.app_user import AppUser
 from ..db.models.improvement_initiative import ImprovementInitiative
 from ..db.models.improvement_initiative_stage_event import ImprovementInitiativeStageEvent
+from ..db.models.workflow import Task, WorkflowInstance
 from ..db.session import get_session
 from ..domain.authz import RequestContext, ResourceContext, authorize
 from ..problems import ProblemException
 from ..services.authz import AuthzAuditSink, enforce, gather_grants, get_authz_audit_sink, require
 from ..services.improvement import (
     create_initiative,
+    request_authorization,
     transition_initiative,
     update_initiative,
 )
 from ..services.improvement import repository as improvement_repo
+from ..services.workflow import repository as wf_repo
 
 router = APIRouter(prefix="/api/v1", tags=["improvement"])
 
@@ -79,6 +83,12 @@ class InitiativeTransition(BaseModel):
         return self
 
 
+class InitiativeAuthorizationRequest(BaseModel):
+    # An optional justification for asking leadership to authorize (folded into the engine instance
+    # context; the binding leadership note is the verifier's comment at sign time).
+    comment: str | None = Field(default=None, max_length=4000)
+
+
 # --- serializers ------------------------------------------------------------------------------
 
 
@@ -110,7 +120,35 @@ def _stage_event(e: ImprovementInitiativeStageEvent) -> dict[str, Any]:
         "actor_id": str(e.actor_id) if e.actor_id else None,
         "comment": e.comment,
         "payload": e.payload,
+        # S-improvement-4: NULL for every unsigned move; the FK to the leadership ``verify``
+        # signature on the signed authorized-close event (the timeline's "verified by leadership"
+        # marker — rendered as a presence flag, never raw HTML).
+        "signed_event_id": str(e.signed_event_id) if e.signed_event_id else None,
         "occurred_at": e.occurred_at.isoformat(),
+    }
+
+
+def _authorization(instance: WorkflowInstance, tasks: list[Task]) -> dict[str, Any]:
+    """The current management-authorization cycle for an initiative — the latest workflow instance
+    + its tasks (the ``GET /documents/{id}/approval`` analogue). ``current_state`` is the pending
+    stage key, ``COMPLETED`` (granted → the initiative is Closed), ``REJECTED``, or
+    ``NEEDS_ATTENTION`` (no Top-Management member assigned)."""
+    return {
+        "instance_id": str(instance.id),
+        "subject_id": str(instance.subject_id),
+        "current_state": instance.current_state,
+        "started_at": instance.started_at.isoformat() if instance.started_at else None,
+        "tasks": [
+            {
+                "id": str(t.id),
+                "stage_key": t.stage_key,
+                "state": t.state.value,
+                "assignee_user_id": str(t.assignee_user_id) if t.assignee_user_id else None,
+                "candidate_pool": t.candidate_pool,
+                "action_expected": t.action_expected,
+            }
+            for t in tasks
+        ],
     }
 
 
@@ -290,3 +328,44 @@ async def transition_initiative_endpoint(
         outcome=body.outcome,
     )
     return _initiative(initiative)
+
+
+@router.post(
+    "/improvement-initiatives/{initiative_id}/request-authorization",
+    status_code=status.HTTP_201_CREATED,
+)
+async def request_authorization_endpoint(
+    initiative_id: uuid.UUID,
+    body: InitiativeAuthorizationRequest,
+    caller: AppUser = Depends(_manage),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """Request a Top-Management authorization for a Completed initiative (gate
+    ``improvement.manage`` at the initiative's PROCESS scope — the requester is the owner/manager;
+    the SIGN is candidate-pool authority, not a key). Opens an engine workflow routed to the
+    reserved "Top Management" role; the initiative closes only when a member signs
+    (``meaning=verify``). 409 unless Completed / 409 if an authorization is already in flight;
+    ``NEEDS_ATTENTION`` when no Top-Management member is assigned. The unsigned ``/transition``
+    close remains available."""
+    instance = await request_authorization(session, caller, initiative_id, comment=body.comment)
+    tasks = await wf_repo.list_instance_tasks(session, instance.id)
+    return _authorization(instance, tasks)
+
+
+@router.get("/improvement-initiatives/{initiative_id}/authorization")
+async def get_authorization_endpoint(
+    initiative_id: uuid.UUID,
+    caller: AppUser = Depends(_read_scoped),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any] | None:
+    """The initiative's current management-authorization cycle (gate ``improvement.read``) — the
+    latest authorization workflow instance + its tasks, or ``null`` when never requested (the
+    ``GET /documents/{id}/approval`` analogue; never 404 for a no-cycle initiative)."""
+    initiative = await _load(session, caller, initiative_id)
+    instance = await wf_repo.latest_instance_for_subject(
+        session, caller.org_id, WorkflowSubjectType.IMPROVEMENT_INITIATIVE, initiative.id
+    )
+    if instance is None:
+        return None
+    tasks = await wf_repo.list_instance_tasks(session, instance.id)
+    return _authorization(instance, tasks)

@@ -66,6 +66,13 @@ export function InitiativeStageTimeline({
                 {outcome}
               </Text>
             ) : null}
+            {/* S-improvement-4: a signed authorized close — leadership verified the benefit
+                (meaning=verify). Surfaced as a presence marker, never raw HTML (the XSS rule). */}
+            {e.signed_event_id ? (
+              <Text size="xs" c="teal.8" mt={4}>
+                ✓ Verified &amp; authorized by management (signed)
+              </Text>
+            ) : null}
           </Timeline.Item>
         );
       })}

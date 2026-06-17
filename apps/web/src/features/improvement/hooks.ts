@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { ApiError, useApi } from "../../lib/api";
 import type {
   Initiative,
+  InitiativeAuthorization,
   InitiativeList,
   InitiativeStageEvent,
   InitiativeStageEventList,
@@ -30,6 +31,22 @@ export function useInitiative(id: string | null) {
   const query = useQuery({
     queryKey: ["initiative", id],
     queryFn: () => api.get<Initiative>(`/api/v1/improvement-initiatives/${id!}`),
+    enabled: id !== null,
+    retry: false,
+  });
+  return { ...query, forbidden: forbiddenOf(query.error) };
+}
+
+// S-improvement-4: the current management-authorization cycle (latest workflow instance + tasks), or
+// null when never requested. Gated improvement.read; a 403 degrades calmly (forbidden) — never crash.
+export function useInitiativeAuthorization(id: string | null) {
+  const api = useApi();
+  const query = useQuery({
+    queryKey: ["initiative-authorization", id],
+    queryFn: () =>
+      api.get<InitiativeAuthorization | null>(
+        `/api/v1/improvement-initiatives/${id!}/authorization`,
+      ),
     enabled: id !== null,
     retry: false,
   });

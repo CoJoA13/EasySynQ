@@ -28,6 +28,11 @@ class WorkflowSubjectType(enum.Enum):
     MGMT_REVIEW = "MGMT_REVIEW"
     PERIODIC_REVIEW = "PERIODIC_REVIEW"
     DOC_ACK = "DOC_ACK"  # S-ack-1: per-user read-&-understood obligations (doc 10 §8.1, R43)
+    # S-improvement-4 (clause 10.3, R46): an Improvement Initiative's engine-routed Top-Management
+    # authorization — the signed ``verify`` leadership sign-off that closes a Completed initiative
+    # (the CAPA/DCR engine precedent on an own-table subject). Added via ``ALTER TYPE
+    # workflow_subject_type ADD VALUE`` in 0053; a from-scratch upgrade rebuilds from these members.
+    IMPROVEMENT_INITIATIVE = "IMPROVEMENT_INITIATIVE"
 
 
 class WorkflowStageMode(enum.Enum):

@@ -45,6 +45,10 @@ class SignedObjectType(enum.Enum):
     record = "record"
     capa_stage = "capa_stage"
     dcr = "dcr"  # S-dcr-4: a DCR approval signature (per-approver, signed_object_id = the DCR id)
+    # S-improvement-4: a signed Top-Management authorization of an Improvement Initiative
+    # (signed_object_id = the Closed stage-event row id; meaning='verify') — the own-table analogue
+    # of capa_stage. Added via ``ALTER TYPE signed_object_type ADD VALUE`` in 0053.
+    improvement_initiative_stage_event = "improvement_initiative_stage_event"
 
 
 def _vals(e: type[enum.Enum]) -> list[str]:

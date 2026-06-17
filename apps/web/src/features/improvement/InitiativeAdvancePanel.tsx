@@ -1,11 +1,16 @@
-import { Alert, Button, Group, Stack } from "@mantine/core";
+import { Alert, Button, Group, Stack, Text } from "@mantine/core";
 import { useState } from "react";
 import { ApiError } from "../../lib/api";
 import { usePermissions } from "../../app/shell/usePermissions";
 import type { Initiative } from "../../lib/types";
 import { EditInitiativeModal } from "./EditInitiativeModal";
+import { RequestAuthorizationModal } from "./RequestAuthorizationModal";
 import { TransitionModal } from "./TransitionModal";
+import { useInitiativeAuthorization } from "./hooks";
 import { useTransitionInitiative } from "./mutations";
+
+// Instance states that mean an authorization cycle is no longer running (the engine sentinels).
+const _AUTH_TERMINAL = ["COMPLETED", "REJECTED", "NEEDS_ATTENTION"];
 
 // The clause-10.3 initiative cockpit. Affordances gate on improvement.manage at the INITIATIVE'S
 // scope — PROCESS-scoped to its process_id (SYSTEM when unscoped), mirroring the CAPA AdvancePanel and
@@ -23,9 +28,23 @@ export function InitiativeAdvancePanel({ initiative }: { initiative: Initiative 
   const [cancelling, setCancelling] = useState(false);
   const [closing, setClosing] = useState(false);
   const [editing, setEditing] = useState(false);
+  const [requesting, setRequesting] = useState(false);
 
   const stage = initiative.stage;
   const active = stage === "Open" || stage === "InProgress" || stage === "Completed";
+
+  // S-improvement-4: at Completed, a manager may EITHER close unsigned (/transition) OR request a
+  // signed Top-Management authorization. Only fetch the cycle when Completed (the only state it can
+  // exist in). authPending suppresses the unsigned close to avoid the close-vs-sign race (the server
+  // 409 backstops it regardless); NEEDS_ATTENTION = no Top-Management member assigned (re-requestable).
+  const { data: authorization } = useInitiativeAuthorization(
+    stage === "Completed" ? initiative.id : null,
+  );
+  const authPending =
+    authorization !== undefined &&
+    authorization !== null &&
+    !_AUTH_TERMINAL.includes(authorization.current_state);
+  const authNeedsAttention = authorization?.current_state === "NEEDS_ATTENTION";
 
   async function quickMove(toState: "InProgress" | "Completed") {
     setError(null);
@@ -60,9 +79,14 @@ export function InitiativeAdvancePanel({ initiative }: { initiative: Initiative 
             Mark completed
           </Button>
         )}
-        {stage === "Completed" && (
+        {stage === "Completed" && !authPending && (
           <Button size="xs" onClick={() => setClosing(true)}>
             Close initiative
+          </Button>
+        )}
+        {stage === "Completed" && !authPending && (
+          <Button size="xs" variant="light" onClick={() => setRequesting(true)}>
+            Request management authorization
           </Button>
         )}
         {(stage === "Open" || stage === "InProgress") && (
@@ -76,6 +100,17 @@ export function InitiativeAdvancePanel({ initiative }: { initiative: Initiative 
           </Button>
         )}
       </Group>
+
+      {authPending && (
+        <Text size="xs" c="dimmed">
+          Management authorization requested — awaiting a Top-Management sign-off.
+        </Text>
+      )}
+      {authNeedsAttention && (
+        <Text size="xs" c="orange.8">
+          No Top-Management approver is assigned — assign one, then request again.
+        </Text>
+      )}
 
       {cancelling && (
         <TransitionModal
@@ -100,6 +135,9 @@ export function InitiativeAdvancePanel({ initiative }: { initiative: Initiative 
         />
       )}
       {editing && <EditInitiativeModal initiative={initiative} onClose={() => setEditing(false)} />}
+      {requesting && (
+        <RequestAuthorizationModal initiative={initiative} onClose={() => setRequesting(false)} />
+      )}
     </Stack>
   );
 }

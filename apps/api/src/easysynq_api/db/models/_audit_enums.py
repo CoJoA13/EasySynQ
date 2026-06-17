@@ -398,6 +398,12 @@ class EventType(enum.Enum):
     INITIATIVE_UPDATED = "INITIATIVE_UPDATED"
     INITIATIVE_TRANSITIONED = "INITIATIVE_TRANSITIONED"
     MGMT_REVIEW_INITIATIVE_SPAWNED = "MGMT_REVIEW_INITIATIVE_SPAWNED"
+    # S-improvement-4: the signed Top-Management authorization that closes a Completed initiative
+    # (object_type=improvement_initiative). The leadership ``verify`` sign-off is first-class in the
+    # audit trail (distinct from the unsigned INITIATIVE_TRANSITIONED close). Added via ALTER TYPE
+    # event_type ADD VALUE in 0053 (the additive pattern; a from-scratch ``upgrade head`` rebuilds
+    # the type from EVENT_TYPE_VALUES, so the member lives here too).
+    INITIATIVE_AUTHORIZED = "INITIATIVE_AUTHORIZED"
 
 
 class CheckpointSinkKind(enum.Enum):

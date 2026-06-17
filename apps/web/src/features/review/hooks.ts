@@ -88,6 +88,13 @@ export function useDecideTask() {
         void qc.invalidateQueries({ queryKey: ["dcrs"] });
         void qc.invalidateQueries({ queryKey: ["dcr-impact", subjectId] });
         void qc.invalidateQueries({ queryKey: ["my-tasks"] });
+      } else if (subjectType === "IMPROVEMENT_INITIATIVE") {
+        // subjectId IS the initiative id — the verify sign closed it; refresh the drawer + its trail
+        // + the authorization cycle + the register/Home dashboard line (S-improvement-4).
+        void qc.invalidateQueries({ queryKey: ["initiative", subjectId] });
+        void qc.invalidateQueries({ queryKey: ["initiatives"] });
+        void qc.invalidateQueries({ queryKey: ["initiative-stage-events", subjectId] });
+        void qc.invalidateQueries({ queryKey: ["initiative-authorization", subjectId] });
       } else {
         void qc.invalidateQueries({ queryKey: ["capa", subjectId] });
         void qc.invalidateQueries({ queryKey: ["capas"] });
