@@ -1483,3 +1483,70 @@ export interface DcrImplementBody {
   force_retire?: boolean; // RETIRE only
   override_justification?: string | null;
 }
+
+// ---- S-improvement-3 Improvement Initiatives (clause 10.3, R46) ----
+// Pinned to api/improvement.py `_initiative` / `_stage_event` serializers. An initiative is an
+// own-table mutable-state workflow object (the DCR doctrine, NON-★); the append-only stage trail is a
+// SEPARATE endpoint (GET /improvement-initiatives/{id}/stage-events), NOT embedded in the detail
+// (unlike DcrDetail). There is NO server-computed `capabilities` block — write affordances gate on
+// usePermissions().can("improvement.manage") + the FSM stage (the management-review cockpit precedent).
+export type InitiativeStage = "Open" | "InProgress" | "Completed" | "Closed" | "Cancelled";
+export type InitiativeSource = "OFI" | "review" | "manual";
+
+export interface Initiative {
+  id: string;
+  identifier: string; // IMP-{YYYY}-{NNNN}
+  title: string;
+  description: string | null;
+  target_outcome: string | null;
+  source: InitiativeSource;
+  source_link_id: string | null; // finding.id (OFI) / review_output.id (review) / null (manual)
+  process_id: string | null;
+  owner_user_id: string | null; // an app_user.id
+  stage: InitiativeStage;
+  opened_at: string; // ISO datetime
+  closed_at: string | null; // set on Closed/Cancelled
+  created_by: string; // an app_user.id
+  created_at: string; // ISO datetime
+  updated_at: string | null; // null until first edit/transition
+}
+
+export interface InitiativeList {
+  data: Initiative[];
+}
+
+export interface InitiativeStageEvent {
+  id: string;
+  from_state: InitiativeStage | null; // null on the genesis (Open) event
+  to_state: InitiativeStage;
+  actor_id: string | null; // an app_user.id; null reserved for future system moves
+  comment: string | null;
+  payload: Record<string, unknown> | null; // genesis {source}; Closed-with-outcome {outcome}; else null
+  occurred_at: string;
+}
+
+export interface InitiativeStageEventList {
+  data: InitiativeStageEvent[];
+}
+
+// ---- write bodies (pinned to api/improvement.py InitiativeCreate / InitiativePatch / InitiativeTransition) ----
+export interface InitiativeCreateBody {
+  title: string;
+  description?: string | null;
+  target_outcome?: string | null;
+  process_id?: string | null;
+  owner_user_id?: string | null;
+}
+// PATCH — every field optional; null/absent = unchanged (cannot clear a field, mirrors the backend).
+export interface InitiativePatchBody {
+  title?: string;
+  description?: string | null;
+  target_outcome?: string | null;
+  owner_user_id?: string | null;
+  process_id?: string | null;
+}
+export interface InitiativeTransitionBody {
+  to_state: InitiativeStage;
+  comment?: string | null; // required server-side for a Closed/Cancelled move (422 otherwise)
+  outcome?: string | null; // folded into the sealed stage_event.payload on a Closed move only
+}

@@ -93,6 +93,16 @@ export function LeftRail() {
           active={pathname.startsWith("/management-reviews")}
         />
       )}
+      {can("improvement.read") && (
+        // S-improvement-3: gated — improvement.read (PROCESS finest-scope, SYSTEM fallback in v1); the
+        // ACT-phase clause-10.3 continual-improvement register. Mirrors the objective.read entry.
+        <NavLink
+          component={Link}
+          to="/improvement"
+          label="Improvement"
+          active={pathname.startsWith("/improvement")}
+        />
+      )}
       {PHASES.map((phase) => {
         const top = (clauses ?? []).filter((c) => c.pdca_phase === phase && c.parent_id === null);
         if (top.length === 0) return null;

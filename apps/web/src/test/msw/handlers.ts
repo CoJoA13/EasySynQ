@@ -18,6 +18,12 @@ import type {
   EffectivePolicy,
   Finding,
   FindingList,
+  Initiative,
+  InitiativeList,
+  InitiativePatchBody,
+  InitiativeStageEvent,
+  InitiativeStageEventList,
+  InitiativeTransitionBody,
   Measurement,
   MeasurementListResponse,
   MgmtReview,
@@ -2071,7 +2077,120 @@ export const dcrApprovalTask = {
   subject_id: DCR_REVISE_ID,
 } satisfies Task;
 
+// ---- S-improvement-3 Improvement Initiatives (pinned to api/improvement.py _initiative/_stage_event) ----
+const INIT_OPEN_ID = "10000000-0000-0000-0000-000000000001";
+const INIT_OFI_ID = "10000000-0000-0000-0000-000000000002";
+const INIT_CLOSED_ID = "10000000-0000-0000-0000-000000000003";
+const INIT_ACTOR_ID = "20000000-0000-0000-0000-0000000000aa";
+
+export const initiativeFixtures = [
+  {
+    id: INIT_OPEN_ID,
+    identifier: "IMP-2026-0001",
+    title: "Reduce supplier onboarding lead time",
+    description: "Streamline the supplier qualification workflow.",
+    target_outcome: "Cut onboarding from 30 to 15 days.",
+    source: "manual",
+    source_link_id: null,
+    process_id: null,
+    owner_user_id: null,
+    stage: "Open",
+    opened_at: "2026-06-10T09:00:00Z",
+    closed_at: null,
+    created_by: INIT_ACTOR_ID,
+    created_at: "2026-06-10T09:00:00Z",
+    updated_at: null,
+  },
+  {
+    id: INIT_OFI_ID,
+    identifier: "IMP-2026-0002",
+    title: "Improve calibration record completeness",
+    description: null,
+    target_outcome: "100% calibration records on file.",
+    source: "OFI",
+    source_link_id: "30000000-0000-0000-0000-000000000001",
+    process_id: null,
+    owner_user_id: "20000000-0000-0000-0000-0000000000bb",
+    stage: "InProgress",
+    opened_at: "2026-06-12T09:00:00Z",
+    closed_at: null,
+    created_by: INIT_ACTOR_ID,
+    created_at: "2026-06-12T09:00:00Z",
+    updated_at: "2026-06-13T09:00:00Z",
+  },
+  {
+    id: INIT_CLOSED_ID,
+    identifier: "IMP-2026-0003",
+    title: "Digitize training acknowledgements",
+    description: "Move from paper sign-off to the QMS ack flow.",
+    target_outcome: null,
+    source: "review",
+    source_link_id: "30000000-0000-0000-0000-000000000002",
+    process_id: null,
+    owner_user_id: null,
+    stage: "Closed",
+    opened_at: "2026-05-01T09:00:00Z",
+    closed_at: "2026-06-01T09:00:00Z",
+    created_by: INIT_ACTOR_ID,
+    created_at: "2026-05-01T09:00:00Z",
+    updated_at: "2026-06-01T09:00:00Z",
+  },
+] satisfies Initiative[];
+
+const initiativeCreatedFixture = {
+  ...initiativeFixtures[0]!,
+  id: "10000000-0000-0000-0000-000000000004",
+  identifier: "IMP-2026-0004",
+  title: "Newly raised initiative",
+} satisfies Initiative;
+
+export const initiativeStageEventsFixture = [
+  {
+    id: "40000000-0000-0000-0000-000000000001",
+    from_state: null,
+    to_state: "Open",
+    actor_id: INIT_ACTOR_ID,
+    comment: null,
+    payload: { source: "manual" },
+    occurred_at: "2026-06-10T09:00:00Z",
+  },
+  {
+    id: "40000000-0000-0000-0000-000000000002",
+    from_state: "Open",
+    to_state: "InProgress",
+    actor_id: INIT_ACTOR_ID,
+    comment: "Kicking off the work.",
+    payload: null,
+    occurred_at: "2026-06-11T09:00:00Z",
+  },
+] satisfies InitiativeStageEvent[];
+
 export const handlers = [
+  // ---- S-improvement-3 Improvement Initiatives (default happy-path; per-test overrides) ----
+  // IMPORTANT: /…/:id/stage-events MUST register BEFORE /…/:id or MSW matches "stage-events" as :id.
+  http.get("/api/v1/improvement-initiatives/:id/stage-events", () =>
+    HttpResponse.json({ data: initiativeStageEventsFixture } satisfies InitiativeStageEventList),
+  ),
+  http.get("/api/v1/improvement-initiatives/:id", () =>
+    HttpResponse.json(initiativeFixtures[1]! satisfies Initiative),
+  ),
+  http.get("/api/v1/improvement-initiatives", () =>
+    HttpResponse.json({ data: initiativeFixtures } satisfies InitiativeList),
+  ),
+  http.post("/api/v1/improvement-initiatives", () =>
+    HttpResponse.json(initiativeCreatedFixture satisfies Initiative, { status: 201 }),
+  ),
+  http.patch("/api/v1/improvement-initiatives/:id", async ({ request }) => {
+    const body = (await request.json()) as InitiativePatchBody;
+    return HttpResponse.json({ ...initiativeFixtures[1]!, ...body } satisfies Initiative);
+  }),
+  http.post("/api/v1/improvement-initiatives/:id/transition", async ({ request }) => {
+    const body = (await request.json()) as InitiativeTransitionBody;
+    return HttpResponse.json({
+      ...initiativeFixtures[1]!,
+      stage: body.to_state,
+    } satisfies Initiative);
+  }),
   // ---- S-dcr-ui-1 DCR (default happy-path; per-test overrides for 403/empty/error) ----
   // IMPORTANT: /dcrs/:id/impact MUST register BEFORE /dcrs/:id or MSW matches "impact" as :id.
   http.get("/api/v1/dcrs/:id/impact", () => HttpResponse.json(dcrImpactFixture)),
