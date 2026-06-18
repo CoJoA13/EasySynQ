@@ -44,18 +44,17 @@ down_revision: str | None = "0054_leadership_authorization"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
-# The CAPTURE-TIME backfill (Codex P1): for each EXISTING reading, freeze the commitment that was
-# GOVERNING at its ``created_at`` — the document_version whose effective window contains it (the
-# latest ``effective_from <= created_at``) — exactly what ``record_measurement`` froze for a NEW
-# reading at that instant. Freezing the CURRENT commitment instead would re-stamp a reading
-# captured BEFORE a direction/threshold revision with the post-revision basis, permanently sealing
-# the very retroactive re-grade this slice removes. BOTH columns gate on the SAME predicate — the
-# capture-time version's snapshot carries an OBJECT ``objective_commitment`` fold — mirroring the
-# runtime ``governing = raw if isinstance(raw, dict) else None`` guard (service.py): a reading
-# captured pre-first-release (no applicable Effective version) or a fold-less version falls back
-# to the working row for BOTH columns. With the fold present, ``->>'at_risk_threshold'`` is SQL NULL
-# for a JSON null (no amber band) → a NULL Numeric. ``effective_from``/``effective_to`` are set at
-# every cutover (lifecycle ``_cutover``; the DCR/import/ingestion go-live paths likewise).
+# The CAPTURE-TIME backfill (Codex P1/P2): for each EXISTING reading, freeze the commitment that
+# was the CURRENT effective version at its ``created_at`` — what ``record_measurement`` froze (it
+# reads ``current_effective_version_id``, which only moves at ``_cutover``). So a version's
+# governing window runs from when the pointer ACTUALLY moved to it: the PRIOR version's
+# ``effective_to`` (stamped at the real cutover), or its own ``effective_from`` if first, up to its
+# own ``effective_to``. Using bare ``effective_from`` would mis-seal a reading taken in the gap
+# between a SCHEDULED future ``effective_from`` and the later ``release_due`` sweep that cuts over
+# (the pointer was still on the prior version then). BOTH columns gate on the same OBJECT-fold
+# predicate (the runtime ``isinstance(raw, dict)`` guard): no governing version (pre-first-release)
+# or a fold-less version falls back to the working row for BOTH; a present fold with a JSON null
+# threshold → NULL (no amber band).
 _BACKFILL = """
     UPDATE kpi_measurement AS km
     SET direction_at_capture = (
@@ -82,10 +81,12 @@ _BACKFILL = """
             (
                 SELECT dv.metadata_snapshot -> 'objective_commitment'
                 FROM document_version AS dv
+                LEFT JOIN document_version AS prv ON prv.superseded_by_version_id = dv.id
                 WHERE dv.document_id = qo.id
-                  AND dv.effective_from IS NOT NULL
-                  AND dv.effective_from <= m.created_at
-                ORDER BY dv.effective_from DESC
+                  AND COALESCE(prv.effective_to, dv.effective_from) IS NOT NULL
+                  AND COALESCE(prv.effective_to, dv.effective_from) <= m.created_at
+                  AND (dv.effective_to IS NULL OR m.created_at < dv.effective_to)
+                ORDER BY COALESCE(prv.effective_to, dv.effective_from) DESC
                 LIMIT 1
             ) AS commitment
         FROM kpi_measurement AS m
