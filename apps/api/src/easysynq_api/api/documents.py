@@ -560,6 +560,13 @@ _FILTER_ALLOW: frozenset[tuple[str, str]] = frozenset(
 _LIST_SCAN_CAP = 2000
 
 
+def _ilike_escape(term: str) -> str:
+    """Escape ILIKE wildcards so a user-supplied term matches literally (mirrors the search
+    indexer's escaping, services/search/indexer.py). Backslash first (the escape char itself), then
+    ``%``/``_``; the caller wraps the result as ``%escaped%`` for a case-insensitive substring."""
+    return term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 def _parse_filter_bool(field: str, value: str) -> bool:
     """Parse a boolean filter value ("true"/"false"); anything else → 422."""
     if value == "true":
@@ -679,10 +686,28 @@ async def list_documents(
     session: AsyncSession = Depends(get_session),
     limit: int = 50,
     offset: int = 0,
+    q: str | None = Query(
+        None,
+        description="Free-text, case-insensitive SUBSTRING match over identifier/title "
+        "(a typeahead narrowing; the document.read row-filter remains the security boundary). "
+        "Trimmed; blank is ignored.",
+    ),
 ) -> dict[str, Any]:
     limit = min(max(limit, 1), 100)
     offset = max(offset, 0)
     filters = _parse_document_filters(request)
+    # q is a top-level free-text param (a sibling of limit/offset), NOT part of the filter[…][…]
+    # eq/has/gte/lte grammar (so _FILTER_ALLOW is untouched). A blank/whitespace q adds no condition
+    # → the endpoint stays byte-identical for callers that never send it (Library, etc.).
+    search = (q or "").strip()
+    if search:
+        pat = f"%{_ilike_escape(search)}%"
+        filters.append(
+            or_(
+                DocumentedInformation.identifier.ilike(pat, escape="\\"),
+                DocumentedInformation.title.ilike(pat, escape="\\"),
+            )
+        )
     grants = await gather_grants(session, caller.id, caller.org_id, "document.read")
     docs = (
         (

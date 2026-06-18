@@ -1,4 +1,6 @@
-import { SegmentedControl, Select, Stack, Text, Textarea, TextInput } from "@mantine/core";
+import { Loader, SegmentedControl, Select, Stack, Text, Textarea, TextInput } from "@mantine/core";
+import { useDebouncedValue } from "@mantine/hooks";
+import { useEffect, useMemo, useState } from "react";
 import { useDocuments } from "../library/useDocuments";
 import type { ChangeSignificance, DcrChangeType } from "../../lib/types";
 import { CHANGE_TYPE_LABEL } from "./labels";
@@ -22,7 +24,9 @@ export const EMPTY_DCR_FIELDS: DcrFieldsValue = {
 // reason non-empty AND (CREATE has no target | REVISE/RETIRE has its target) — mirrors the backend
 // CREATE⟺no-target biconditional so create_has_target/target_required are unreachable from the UI.
 export function isDcrFieldsValid(v: DcrFieldsValue): boolean {
-  return v.reason_text.trim().length > 0 && (v.change_type === "CREATE" || v.target_document_id !== null);
+  return (
+    v.reason_text.trim().length > 0 && (v.change_type === "CREATE" || v.target_document_id !== null)
+  );
 }
 
 // A native date (YYYY-MM-DD) → the UTC-midnight ISO-8601 instant of that calendar date (R8:
@@ -38,12 +42,42 @@ export function DcrRaiseFields({
   value: DcrFieldsValue;
   onChange: (v: DcrFieldsValue) => void;
 }) {
-  // The target lists Effective controlled Documents (the revise/retire target). useDocuments has no
-  // free-text filter, so the Select is `searchable` (client-side label filter) over a generous page.
-  const { data: docsPage } = useDocuments({ current_state: "Effective" }, { limit: 200, offset: 0 });
-  const targetOptions = (docsPage?.data ?? [])
-    .filter((d) => d.kind === "DOCUMENT")
-    .map((d) => ({ value: d.id, label: `${d.identifier} — ${d.title}` }));
+  // The target lists Effective controlled Documents (the revise/retire target). A debounced `q`
+  // narrows server-side (GET /documents — substring ILIKE on identifier/title), so a target beyond
+  // the old 200-row client cap is reachable. react-query keys by `q`, so a slow earlier response
+  // can't clobber a newer one (the stale-response race the CommandPalette guards by hand is a
+  // non-issue here). document.read is a filter-not-403 → a low-scope caller sees fewer rows, never a
+  // crash. The server already excludes Records (kind=DOCUMENT), so no client kind filter is needed.
+  const [search, setSearch] = useState("");
+  const [debounced] = useDebouncedValue(search, 200);
+  const {
+    data: docsPage,
+    isFetching,
+    isError,
+  } = useDocuments(
+    { current_state: "Effective", q: debounced.trim() || undefined },
+    { limit: 20, offset: 0 },
+  );
+  // Keep the picked option present even after a later, narrower search drops it from the page, so
+  // the Select can always resolve its label and `value` never desyncs (the Codex stale-row edge).
+  const [selected, setSelected] = useState<{ value: string; label: string } | null>(null);
+  // The parent nulls target_document_id when switching to CREATE — mirror that into the local
+  // display state so a stale selection/search doesn't linger when the picker re-shows for REVISE.
+  useEffect(() => {
+    if (value.target_document_id === null) {
+      setSelected(null);
+      setSearch("");
+    }
+  }, [value.target_document_id]);
+  const serverOptions = useMemo(
+    () =>
+      (docsPage?.data ?? []).map((d) => ({ value: d.id, label: `${d.identifier} — ${d.title}` })),
+    [docsPage],
+  );
+  const targetOptions = useMemo(() => {
+    if (!selected || serverOptions.some((o) => o.value === selected.value)) return serverOptions;
+    return [selected, ...serverOptions];
+  }, [serverOptions, selected]);
   const showTarget = value.change_type !== "CREATE";
   // RETIRE obsoletes immediately on implement — the backend ignores proposed_effective_from for it, so
   // offering a date would mislead (Codex #8). Only REVISE/CREATE schedule a cutover off it.
@@ -68,10 +102,12 @@ export function DcrRaiseFields({
               proposed_effective_from: v === "RETIRE" ? null : value.proposed_effective_from,
             })
           }
-          data={(Object.entries(CHANGE_TYPE_LABEL) as [DcrChangeType, string][]).map(([val, label]) => ({
-            value: val,
-            label,
-          }))}
+          data={(Object.entries(CHANGE_TYPE_LABEL) as [DcrChangeType, string][]).map(
+            ([val, label]) => ({
+              value: val,
+              label,
+            }),
+          )}
         />
       </div>
 
@@ -82,9 +118,24 @@ export function DcrRaiseFields({
           searchable
           placeholder="Pick the document to revise or retire"
           value={value.target_document_id}
-          onChange={(v) => onChange({ ...value, target_document_id: v })}
+          onChange={(v) => {
+            // capture the picked option's label so it survives a later, narrower search
+            setSelected(v ? (targetOptions.find((o) => o.value === v) ?? null) : null);
+            onChange({ ...value, target_document_id: v });
+          }}
+          onSearchChange={setSearch}
+          // The server already narrowed by `q`; don't re-filter client-side — Mantine's default
+          // filter would drop the unioned selected option (its label needn't contain the new term).
+          filter={({ options }) => options}
           data={targetOptions}
-          nothingFoundMessage="No matching documents"
+          rightSection={isFetching ? <Loader size="xs" /> : undefined}
+          nothingFoundMessage={
+            isError
+              ? "Couldn’t load documents — you may not have access."
+              : isFetching
+                ? "Searching…"
+                : "No matching documents"
+          }
           comboboxProps={{ keepMounted: false }}
         />
       )}
@@ -117,7 +168,9 @@ export function DcrRaiseFields({
           type="date"
           label="Proposed effective from (optional)"
           value={value.proposed_effective_from ?? ""}
-          onChange={(e) => onChange({ ...value, proposed_effective_from: e.currentTarget.value || null })}
+          onChange={(e) =>
+            onChange({ ...value, proposed_effective_from: e.currentTarget.value || null })
+          }
         />
       )}
     </Stack>

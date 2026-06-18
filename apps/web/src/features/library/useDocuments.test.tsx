@@ -83,3 +83,19 @@ test("buildDocumentsQuery omits the narrowing filters when undefined (LibraryPag
   expect(p.has("filter[has_effective_version][eq]")).toBe(false);
   expect(p.has("filter[managed_subtype][eq]")).toBe(false);
 });
+
+// s-dcr-target-typeahead: the DCR target picker's free-text filter rides a TOP-LEVEL `q` param (a
+// sibling of limit/offset), NOT the bracketed filter[…][…] grammar.
+test("buildDocumentsQuery emits a top-level q and omits it when blank", () => {
+  const qs = buildDocumentsQuery(
+    { current_state: "Effective", q: "SOP-PUR" },
+    { limit: 20, offset: 0 },
+  );
+  const p = new URLSearchParams(qs);
+  expect(p.get("q")).toBe("SOP-PUR");
+  expect(p.has("filter[q][eq]")).toBe(false); // never bracketed
+  // a blank q is dropped → callers that never set it stay byte-identical
+  expect(
+    new URLSearchParams(buildDocumentsQuery({ q: "" }, { limit: 20, offset: 0 })).has("q"),
+  ).toBe(false);
+});
