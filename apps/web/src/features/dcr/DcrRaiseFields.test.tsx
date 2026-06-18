@@ -124,6 +124,24 @@ it("narrows the picker by the debounced server `q` (a mid-identifier substring t
   expect(lastQ).toBe("PUR");
 });
 
+it("re-shows the REVISE picker on a clean slate after a CREATE round-trip (no stale search filter)", async () => {
+  renderWithProviders(<Harness />);
+  const input = screen.getByLabelText(/Target document/);
+  await userEvent.click(input);
+  // narrow the picker by typing, then leave for CREATE without selecting
+  await userEvent.type(input, "PUR");
+  await waitFor(() => expect(screen.queryByRole("option", { name: /SOP-QMS-001/ })).toBeNull());
+  // round-trip through CREATE (the picker hides/unmounts) and back to REVISE
+  await userEvent.click(screen.getByRole("radio", { name: "Create" }));
+  await userEvent.click(screen.getByRole("radio", { name: "Revise" }));
+  // the re-shown picker must be a clean slate — opening it lists the FULL starter page again (both
+  // docs), not a stale "PUR"-filtered set. Guards against a regression that pins the search across
+  // the hide/show (e.g. controlling searchValue without clearing it).
+  await userEvent.click(screen.getByLabelText(/Target document/));
+  expect(await screen.findByRole("option", { name: /SOP-QMS-001/ })).toBeInTheDocument();
+  expect(screen.getByRole("option", { name: /SOP-PUR-014/ })).toBeInTheDocument();
+});
+
 it("keeps the selected target available after a non-matching search (the unioned option never desyncs)", async () => {
   renderWithProviders(<Harness />);
   const input = screen.getByLabelText(/Target document/);

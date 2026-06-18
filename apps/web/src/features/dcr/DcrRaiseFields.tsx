@@ -1,6 +1,6 @@
 import { Loader, SegmentedControl, Select, Stack, Text, Textarea, TextInput } from "@mantine/core";
 import { useDebouncedValue } from "@mantine/hooks";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useDocuments } from "../library/useDocuments";
 import type { ChangeSignificance, DcrChangeType } from "../../lib/types";
 import { CHANGE_TYPE_LABEL } from "./labels";
@@ -58,26 +58,28 @@ export function DcrRaiseFields({
     { current_state: "Effective", q: debounced.trim() || undefined },
     { limit: 20, offset: 0 },
   );
-  // Keep the picked option present even after a later, narrower search drops it from the page, so
-  // the Select can always resolve its label and `value` never desyncs (the Codex stale-row edge).
+  // Remember the picked option's label so the Select can always resolve the COMMITTED target's
+  // label even after a later, narrower search drops it from the page (the Codex stale-row edge).
   const [selected, setSelected] = useState<{ value: string; label: string } | null>(null);
-  // The parent nulls target_document_id when switching to CREATE — mirror that into the local
-  // display state so a stale selection/search doesn't linger when the picker re-shows for REVISE.
-  useEffect(() => {
-    if (value.target_document_id === null) {
-      setSelected(null);
-      setSearch("");
-    }
-  }, [value.target_document_id]);
   const serverOptions = useMemo(
     () =>
       (docsPage?.data ?? []).map((d) => ({ value: d.id, label: `${d.identifier} — ${d.title}` })),
     [docsPage],
   );
   const targetOptions = useMemo(() => {
-    if (!selected || serverOptions.some((o) => o.value === selected.value)) return serverOptions;
+    // Union the remembered option in ONLY while it is the committed target and the current page
+    // doesn't already carry it. Gating on target_document_id makes a stale pick inert the moment
+    // the parent clears the target (the CREATE switch), so no orphan option can leak — no effect
+    // needed, and the picker re-shows clean for REVISE (the Select unmounts on CREATE + remounts).
+    if (
+      !selected ||
+      selected.value !== value.target_document_id ||
+      serverOptions.some((o) => o.value === selected.value)
+    ) {
+      return serverOptions;
+    }
     return [selected, ...serverOptions];
-  }, [serverOptions, selected]);
+  }, [serverOptions, selected, value.target_document_id]);
   const showTarget = value.change_type !== "CREATE";
   // RETIRE obsoletes immediately on implement — the backend ignores proposed_effective_from for it, so
   // offering a date would mislead (Codex #8). Only REVISE/CREATE schedule a cutover off it.
