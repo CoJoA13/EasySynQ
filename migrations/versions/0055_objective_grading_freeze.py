@@ -6,20 +6,23 @@ flipped the direction or moved the amber band retroactively re-graded every hist
 past green could read red). This adds the two missing frozen columns so the ENTIRE verdict basis is
 snapshotted at capture.
 
-Additive, backend-only. Two new ``kpi_measurement`` columns:
+Additive, backend-only. Two new ``kpi_measurement`` columns, both NULLABLE:
   - ``direction_at_capture`` (existing ``objective_direction`` enum, REUSED — ``create_type=False``;
-    no ADD VALUE, so no ``autocommit_block``): added nullable → backfilled → ``SET NOT NULL`` (the
-    3-step pattern so a *populated* DB doesn't abort — the 0023 fresh-DB blind-spot lesson).
+    no ADD VALUE, so no ``autocommit_block``). Nullable mirrors the nullable ``objective_id`` (the
+    serializer handles an objective-less reading) — a NOT NULL would abort the migration on any
+    ad-hoc/imported objective-less measurement (Codex). ``record_measurement`` always sets it for a
+    real (objective-bound) reading; the serializer reads it only for those.
   - ``at_risk_threshold_at_capture`` (Numeric, nullable — mirrors the nullable
     ``at_risk_threshold``; null = no amber band).
 
-Backfill mirrors ``resolve_commitment`` EXACTLY (the read-back switch): each existing reading
-freezes the GOVERNING Effective commitment's direction/threshold where one exists, else the working
-``quality_objective`` row — i.e. the value it currently grades against, so the backfill is
-behaviour-preserving (and fixes the re-grade hole for historical rows too). ``SET NOT NULL`` on
-``direction_at_capture`` is safe: every existing row already has a NOT-NULL ``target_at_capture``
-which ``record_measurement`` computes from the objective row, so every row provably has an
-``objective_id`` → the backfill (keyed on ``objective_id``) covers all of them.
+Capture-time backfill: each existing reading freezes the commitment that was the CURRENT effective
+version at its ``created_at`` — what ``record_measurement`` froze (it reads
+``current_effective_version_id``, which only moves at ``_cutover``). The version-selection therefore
+(1) considers ONLY versions that actually went Effective (``version_state='Effective'`` or a stamped
+``effective_to`` — never a still-Approved scheduled revision), and (2) starts each version's window
+at the PRIOR version's ``effective_to`` (the real cutover), not its own (possibly scheduled)
+``effective_from``. A reading on a fold-less / no-governing-version objective falls back to the
+working row.
 
 ⚠ ``kpi_measurement`` carries ``REVOKE UPDATE,DELETE`` for the app role (0049); this backfill UPDATE
 runs as the migration OWNER role (``DATABASE_URL_SYNC``), which is not subject to that REVOKE. The
@@ -83,6 +86,9 @@ _BACKFILL = """
                 FROM document_version AS dv
                 LEFT JOIN document_version AS prv ON prv.superseded_by_version_id = dv.id
                 WHERE dv.document_id = qo.id
+                  -- only versions that ACTUALLY cut over (never a still-Approved scheduled
+                  -- revision whose effective_from has passed but release_due hasn't run)
+                  AND (dv.version_state = 'Effective'::version_state OR dv.effective_to IS NOT NULL)
                   AND COALESCE(prv.effective_to, dv.effective_from) IS NOT NULL
                   AND COALESCE(prv.effective_to, dv.effective_from) <= m.created_at
                   AND (dv.effective_to IS NULL OR m.created_at < dv.effective_to)
@@ -98,7 +104,9 @@ _BACKFILL = """
 
 def upgrade() -> None:
     direction = postgresql.ENUM(name="objective_direction", create_type=False)
-    # 1. Add nullable (so the backfill can populate before the NOT NULL is enforced).
+    # Both columns are nullable (an objective-less reading has no grading basis; a NOT NULL would
+    # abort the migration on such a row — Codex). record_measurement always sets them for a real
+    # objective-bound reading; the capture-time backfill sets the existing objective-bound rows.
     op.add_column(
         "kpi_measurement",
         sa.Column("direction_at_capture", direction, nullable=True),
@@ -107,10 +115,7 @@ def upgrade() -> None:
         "kpi_measurement",
         sa.Column("at_risk_threshold_at_capture", sa.Numeric(), nullable=True),
     )
-    # 2. Behaviour-preserving backfill (governing-else-working — the resolve_commitment twin).
     op.execute(_BACKFILL)
-    # 3. Enforce NOT NULL on the direction (every reading has a governing/working direction).
-    op.alter_column("kpi_measurement", "direction_at_capture", nullable=False)
 
 
 def downgrade() -> None:

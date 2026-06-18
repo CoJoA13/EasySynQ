@@ -67,11 +67,12 @@ class KpiMeasurement(Base):
     value: Mapped[Decimal] = mapped_column(Numeric, nullable=False)
     target_at_capture: Mapped[Decimal] = mapped_column(Numeric, nullable=False)
     # The grading basis frozen at capture (S-obj-freeze, 0055) — alongside target_at_capture, so a
-    # later commitment revision cannot re-grade a historical reading. direction_at_capture is NOT
-    # NULL (every reading is recorded against an objective, so a governing/working direction always
-    # exists — mirrors target_at_capture); at_risk_threshold_at_capture is nullable (no amber band).
-    direction_at_capture: Mapped[ObjectiveDirection] = mapped_column(
-        objective_direction_enum, nullable=False
+    # later commitment revision cannot re-grade a historical reading. Both nullable, mirroring the
+    # nullable objective_id: an objective-less reading has no basis (and is never serialized by the
+    # objective-scoped endpoints); record_measurement always sets both for a real objective-bound
+    # reading. at_risk_threshold_at_capture is also null when the commitment has no amber band.
+    direction_at_capture: Mapped[ObjectiveDirection | None] = mapped_column(
+        objective_direction_enum, nullable=True
     )
     at_risk_threshold_at_capture: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
     unit: Mapped[str] = mapped_column(Text, nullable=False)

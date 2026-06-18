@@ -126,6 +126,20 @@ def _measurement(m: KpiMeasurement) -> dict[str, Any]:
     # revision (target, DIRECTION, or amber threshold) can no longer re-grade a historical reading.
     # A measurement always has a value → rag is never "unmeasured" here (N9). The frozen basis stays
     # internal (the user-facing output is the corrected `rag`); the columns are not exposed.
+    # direction_at_capture is nullable in the schema (an objective-less reading has none) but is
+    # always set for a real objective-bound reading — the only kind these endpoints serialize. The
+    # None branch is therefore unreachable here; guard it so a value-less basis reads "unmeasured".
+    direction = m.direction_at_capture
+    rag = (
+        rag_status(
+            current=m.value,
+            target=m.target_at_capture,
+            direction=direction,
+            at_risk_threshold=m.at_risk_threshold_at_capture,
+        )
+        if direction is not None
+        else "unmeasured"
+    )
     return {
         "id": str(m.id),
         "objective_id": str(m.objective_id) if m.objective_id else None,
@@ -136,12 +150,7 @@ def _measurement(m: KpiMeasurement) -> dict[str, Any]:
         "unit": m.unit,
         "source": m.source,
         "created_at": m.created_at.isoformat(),
-        "rag": rag_status(
-            current=m.value,
-            target=m.target_at_capture,
-            direction=m.direction_at_capture,
-            at_risk_threshold=m.at_risk_threshold_at_capture,
-        ),
+        "rag": rag,
     }
 
 
