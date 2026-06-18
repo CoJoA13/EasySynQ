@@ -452,19 +452,26 @@ async def _document_capabilities(
 
 
 async def _can_request_leadership_authorization(
-    session: AsyncSession, caller: AppUser, doc: DocumentedInformation
+    session: AsyncSession, caller: AppUser, doc: DocumentedInformation, *, source_ip: str | None
 ) -> bool:
     """CX-1: the pure authz probe behind the FE "Request Top-Management authorization" button —
     does the caller hold ``document.approve`` at this document's scope, the EXACT gate the request
     endpoint enforces (``_approve`` = ``require("document.approve")`` over ``_document_scope``: NO
-    sig_hook, NO SoD overlay, NO process_ids). The AUTHZ answer ONLY — the FE ANDs it with the
-    runtime is_leadership / required / Approved / in-flight state already in the status payload (the
-    obsolete-capability-vs-§7.3-runtime-gate split). An over-strict probe (folding sig_hook/SoD or
-    state) would HIDE a button the server would actually allow — the inverse false-PASS to avoid. A
-    capability probe writes no authz-audit row, so it uses the pure PDP (gather_grants + authorize),
-    never enforce."""
+    sig_hook, NO process_ids; the SoD overlay is inert here — the scope carries no author/approver —
+    so a plain ``authorize`` matches the endpoint's effective result). ``source_ip`` is threaded the
+    way the PEP's ``evaluate`` builds it (``request.client.host``) so an ``ip_allow``-narrowed grant
+    evaluates IDENTICALLY to the POST gate (Codex P2: omitting it made the probe over-strict — the
+    PDP rejects an ``ip_allow`` predicate when ``source_ip`` is None, while the POST set it from the
+    request → a hidden button the server would actually allow). The AUTHZ answer ONLY — the FE ANDs
+    it with the runtime is_leadership / required / Approved / in-flight state already in the status
+    payload (the obsolete-capability-vs-§7.3-runtime-gate split). A capability probe writes no
+    authz-audit row, so it uses the pure PDP (gather_grants + authorize), never enforce."""
     base = await _document_scope_by_id(session, doc.id)
-    ctx = RequestContext(now=datetime.datetime.now(datetime.UTC), actor_user_id=str(caller.id))
+    ctx = RequestContext(
+        now=datetime.datetime.now(datetime.UTC),
+        source_ip=source_ip,
+        actor_user_id=str(caller.id),
+    )
     grants = await gather_grants(session, caller.id, caller.org_id, "document.approve")
     return authorize(grants, "document.approve", base, ctx).allow
 
@@ -1606,6 +1613,7 @@ async def request_leadership_authorization_endpoint(
 @router.get("/documents/{document_id}/leadership-authorization")
 async def get_leadership_authorization_endpoint(
     document_id: uuid.UUID,
+    request: Request,
     caller: AppUser = Depends(_read),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
@@ -1618,7 +1626,9 @@ async def get_leadership_authorization_endpoint(
     ``GET /documents/{id}/approval`` analogue)."""
     doc = await _load_document(session, caller, document_id)
     state = await release_authorization_status(session, doc)
-    can_request = await _can_request_leadership_authorization(session, caller, doc)
+    can_request = await _can_request_leadership_authorization(
+        session, caller, doc, source_ip=request.client.host if request.client else None
+    )
     instance = await wf_repo.latest_instance_for_subject(
         session, caller.org_id, WorkflowSubjectType.LEADERSHIP_AUTHORIZATION, doc.id
     )
