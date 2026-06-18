@@ -2862,7 +2862,11 @@ export const handlers = [
         org_role_id: "or000099-0099-0099-0099-000000000099",
         org_role_assignment_id: "oa000001-0001-0001-0001-000000000001",
         role_assignment_id: "ra000001-0001-0001-0001-000000000001",
-        bound_scope: { level: "PROCESS", selector: { process_ids: [String(params.id)] } },
+        bound_scope: {
+          level: "PROCESS",
+          selector: { process_ids: [String(params.id)] },
+          managed_by: "owner_assignment",
+        },
       },
       { status: 201 },
     );

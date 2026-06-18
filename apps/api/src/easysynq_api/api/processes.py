@@ -212,6 +212,10 @@ _manage = require("process.manage", async_scope_resolver=_process_scope)
 # finest-scope, content/QMS tier) gets its first require() consumer — a SYSTEM override matches in
 # v1, a concrete PROCESS grant once owner-assignment binds it.
 _assign_owner = require("process.assign_owner", async_scope_resolver=_process_scope)
+# GET /owners reads at the process's PROCESS scope so a PROCESS-scoped owner can view their own
+# process's owner bindings (a SYSTEM process.read still matches). The list/map/detail reads stay
+# SYSTEM-scoped (the deferred per-process read-filtering); only this new read adopts the resolver.
+_read_scoped = require("process.read", async_scope_resolver=_process_scope)
 
 
 # --- reads ------------------------------------------------------------------------------
@@ -432,11 +436,11 @@ async def remove_edge_endpoint(
 @router.get("/processes/{process_id}/owners")
 async def list_process_owners_endpoint(
     process_id: uuid.UUID,
-    caller: AppUser = Depends(_read),
+    caller: AppUser = Depends(_read_scoped),
     session: AsyncSession = Depends(get_session),
 ) -> list[dict[str, Any]]:
-    """The process's recorded owners (the org_role_assignment RACI rows). Gated process.read — the
-    same lens as the process roster/map (doc 15 §8.4)."""
+    """The process's recorded owners (the org_role_assignment RACI rows). Gated process.read at the
+    process's PROCESS scope, so a PROCESS-scoped owner can read their own process's bindings."""
     await _load_process(session, caller, process_id)
     rows = (
         await session.execute(

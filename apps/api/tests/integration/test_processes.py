@@ -546,13 +546,32 @@ async def _po_role_assignments(user_id: uuid.UUID) -> list[RoleAssignment]:
 
 
 async def _owner_role_process_ids(user_id: uuid.UUID) -> list[str] | None:
-    """The concrete process_ids on the user's PROCESS-scoped 'Process Owner' role_assignment (the
-    owner-assignment-managed row), or None when no such assignment exists (the last-process drop).
-    Filters to bound_scope.level==PROCESS so an admin's SYSTEM grant on the same role is ignored."""
+    """The concrete process_ids on the user's owner-assignment-managed 'Process Owner'
+    role_assignment (the row carrying the ``managed_by`` marker), or None when none exists (the
+    last-process drop). Filtering on the marker ignores any admin-granted SYSTEM/PROCESS row."""
     for ra in await _po_role_assignments(user_id):
-        if (ra.bound_scope or {}).get("level") == "PROCESS":
-            return sorted((ra.bound_scope or {}).get("selector", {}).get("process_ids", []))
+        bs = ra.bound_scope or {}
+        if bs.get("managed_by") == "owner_assignment":
+            return sorted(bs.get("selector", {}).get("process_ids", []))
     return None
+
+
+async def _assign_role_bound(subject: str, role_name: str, bound_scope: dict) -> uuid.UUID:
+    """Directly create a role_assignment with a caller-chosen bound_scope (no managed_by marker) —
+    the admin/CLI path, used to prove owner-assignment never touches a non-managed grant."""
+    async with get_sessionmaker()() as s:
+        user = await _ensure_user(s, subject)
+        role = (
+            await s.execute(select(Role).where(Role.org_id == user.org_id, Role.name == role_name))
+        ).scalar_one()
+        s.add(
+            RoleAssignment(
+                org_id=user.org_id, user_id=user.id, role_id=role.id, bound_scope=bound_scope
+            )
+        )
+        uid = user.id
+        await s.commit()
+        return uid
 
 
 async def _link_doc_to_process(
@@ -753,6 +772,70 @@ async def test_owner_assignment_does_not_clobber_admin_system_grant(
     assert len(remaining) == 1
     assert (remaining[0].bound_scope or {}).get("level") == "SYSTEM"
     assert await _owner_role_process_ids(owner_id) is None
+
+
+async def test_owner_assignment_does_not_confer_workflow_candidacy(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    """An owner-assignment mint confers the PROCESS permission set but NOT org-wide workflow
+    candidacy — users_with_roles excludes the managed_by-marked assignment, so a per-process owner
+    is not flooded into every 'Process Owner'-named stage (the Codex P1). A deliberate org-wide
+    'Process Owner' role assignment (no marker) stays a candidate."""
+    from easysynq_api.services.workflow import repository as wf_repo
+
+    await _grant(subj.a, "process.create")
+    await _grant(subj.a, "process.assign_owner")
+    ha = _auth(token_factory, subj.a)
+    proc = await _create_process(app_client, ha)
+    owner_id = await _user_id(subj.b)
+    r = await app_client.post(
+        f"/api/v1/processes/{proc['id']}/owner", headers=ha, json={"user_id": str(owner_id)}
+    )
+    assert r.status_code == 201, r.text
+
+    # A deliberate org-wide Process Owner (SYSTEM-bound, no marker) for contrast.
+    org_wide_id = await s5.grant_role(subj.c, "Process Owner")
+
+    org_id = await s5.default_org_id()
+    async with get_sessionmaker()() as s:
+        pool = await wf_repo.users_with_roles(s, org_id, ["Process Owner"])
+    assert owner_id not in pool  # the per-process owner is NOT a workflow candidate
+    assert org_wide_id in pool  # the org-wide Process Owner IS
+
+
+async def test_owner_assignment_does_not_clobber_admin_process_grant(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    """An admin's separately-granted PROCESS-scoped (unmarked) 'Process Owner' assignment is neither
+    extended on assign nor deleted on the last-process revoke — owner-assignment only ever touches
+    its own managed_by-marked row (the Codex finding, the PROCESS variant of the SYSTEM case)."""
+    await _grant(subj.a, "process.create")
+    await _grant(subj.a, "process.assign_owner")
+    ha = _auth(token_factory, subj.a)
+    proc = await _create_process(app_client, ha)
+    owner_id = await _user_id(subj.b)
+
+    # An admin grants the Process Owner permission-role bound to a DIFFERENT process (unmarked).
+    other_process_id = str(uuid.uuid4())
+    await _assign_role_bound(
+        subj.b, "Process Owner", {"level": "PROCESS", "selector": {"process_id": other_process_id}}
+    )
+
+    await app_client.post(
+        f"/api/v1/processes/{proc['id']}/owner", headers=ha, json={"user_id": str(owner_id)}
+    )
+    # Two rows now: the admin's unmarked PROCESS row + the owner-assignment marked row.
+    assert len(await _po_role_assignments(owner_id)) == 2
+    assert await _owner_role_process_ids(owner_id) == [proc["id"]]
+
+    # Revoking the last owned process drops ONLY the marked row; the admin's unmarked row survives.
+    rev = await app_client.delete(f"/api/v1/processes/{proc['id']}/owner/{owner_id}", headers=ha)
+    assert rev.status_code == 204, rev.text
+    remaining = await _po_role_assignments(owner_id)
+    assert len(remaining) == 1
+    bs = remaining[0].bound_scope or {}
+    assert bs.get("managed_by") is None
+    assert bs.get("selector", {}).get("process_id") == other_process_id
 
 
 async def _seed_foreign_process(created_by: uuid.UUID) -> tuple[str, str]:

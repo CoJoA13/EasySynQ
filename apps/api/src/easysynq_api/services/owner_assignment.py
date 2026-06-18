@@ -52,6 +52,14 @@ _PROCESS_OWNER_ROLE_NAME = "Process Owner"
 # The placeholder the seeded Process-Owner role_grant scope_templates carry until owner-assignment
 # binds a real process (migrations 0004/0036/0040/...); never a real process id.
 _PLACEHOLDER = ":assignment_process"
+# A ``managed_by`` marker stamped onto every owner-assignment-minted bound_scope. The PDP ignores it
+# (``_scope_from_dict`` reads level/selector/predicates only), but it lets this service (a) identify
+# its OWN role_assignment row — never clobbering an admin's separately-granted Process-Owner row on
+# assign/revoke — and (b) be EXCLUDED from workflow candidate resolution (``users_with_roles``): an
+# owner-assignment confers the PROCESS *permission* set, NOT org-wide *workflow candidacy* (so a
+# per-process owner is not flooded into every "Process Owner"-named stage — the cross-process
+# escalation Codex flagged on the DCR/leadership/improvement workflows).
+_MANAGED_BY = "owner_assignment"
 
 
 def _rid() -> uuid.UUID | None:
@@ -109,7 +117,11 @@ def _bound_process_ids(bound_scope: dict[str, Any] | None) -> set[str]:
 
 
 def _process_bound_scope(process_ids: set[str]) -> dict[str, Any]:
-    return {"level": "PROCESS", "selector": {"process_ids": sorted(process_ids)}}
+    return {
+        "level": "PROCESS",
+        "selector": {"process_ids": sorted(process_ids)},
+        "managed_by": _MANAGED_BY,
+    }
 
 
 async def _resolve_or_create_org_role(
@@ -160,11 +172,12 @@ async def _lock_user(session: AsyncSession, user_id: uuid.UUID) -> None:
 async def _owner_role_assignment(
     session: AsyncSession, *, org_id: uuid.UUID, user_id: uuid.UUID, role_id: uuid.UUID
 ) -> RoleAssignment | None:
-    """The user's PROCESS-scoped Process-Owner role_assignment — the SINGLE row owner-assignment
-    manages. role_assignment has no uniqueness backstop and an admin may separately grant the same
-    permission-role at SYSTEM/placeholder scope via POST /users/{id}/roles; filtering to a
-    bound_scope.level==PROCESS row means owner-assignment never clobbers that admin grant on assign
-    nor deletes it on revoke (the diff-critic finding). Deterministic on the lowest id."""
+    """The SINGLE owner-assignment-managed Process-Owner role_assignment for the user (the row
+    carrying the ``managed_by`` marker). role_assignment has no uniqueness backstop and an admin may
+    separately grant the same permission-role at ANY scope (SYSTEM or PROCESS) via POST
+    /users/{id}/roles; matching ONLY the marked row means owner-assignment never clobbers that admin
+    grant on assign nor deletes it on revoke (the diff-critic + Codex finding). Deterministic on the
+    lowest id."""
     rows = (
         (
             await session.execute(
@@ -181,7 +194,7 @@ async def _owner_role_assignment(
         .all()
     )
     for ra in rows:
-        if (ra.bound_scope or {}).get("level") == "PROCESS":
+        if (ra.bound_scope or {}).get("managed_by") == _MANAGED_BY:
             return ra
     return None
 
@@ -327,7 +340,6 @@ async def revoke_process_owner(
     assignment = await _owner_role_assignment(
         session, org_id=org_id, user_id=user.id, role_id=perm_role.id
     )
-    removed_assignment = False
     role_event_id: uuid.UUID | None = None
     if assignment is not None:
         role_event_id = assignment.id
@@ -337,7 +349,6 @@ async def revoke_process_owner(
             assignment.bound_scope = _process_bound_scope(process_ids)
         else:
             # No inert empty PROCESS grant — drop the assignment when the last process is removed.
-            removed_assignment = True
             await session.delete(assignment)
         await session.flush()
 
@@ -351,10 +362,13 @@ async def revoke_process_owner(
         after={"user_id": str(user.id)},
     )
     if role_event_id is not None:
+        # Revoke ALWAYS reduces access (narrow the process_ids set OR delete the row), so the
+        # permission-side event is ROLE_REVOKE either way — a narrow is a removal, not an assign, so
+        # audit consumers scanning for authorization removals see it (the Codex finding).
         _audit(
             session,
             actor,
-            EventType.ROLE_REVOKE if removed_assignment else EventType.ROLE_ASSIGN,
+            EventType.ROLE_REVOKE,
             AuditObjectType.permission,
             role_event_id,
             target_user_id=user.id,
