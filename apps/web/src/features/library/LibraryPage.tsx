@@ -5,7 +5,6 @@ import {
   Grid,
   Group,
   SegmentedControl,
-  Skeleton,
   Stack,
   Table,
   Text,
@@ -13,6 +12,7 @@ import {
 } from "@mantine/core";
 import { useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
+import { SkeletonList } from "../../lib/states";
 import { useDocumentTypes } from "../../app/shell/useDocumentTypes";
 import { usePermissions } from "../../app/shell/usePermissions";
 import { useUserDirectory } from "../../app/shell/useUserDirectory";
@@ -139,20 +139,12 @@ export function LibraryPage() {
 
             {isError && <Text c="red">Could not load documents.</Text>}
 
-            {isLoading && (
-              <Stack gap="xs" aria-label="Loading documents">
-                {Array.from({ length: 5 }).map((_, i) => (
-                  <Skeleton key={i} height={32} />
-                ))}
-              </Stack>
-            )}
+            {isLoading && <SkeletonList rows={5} height={32} label="Loading documents" />}
 
             {!isLoading && !isError && rows.length === 0 && (
               <Stack gap="xs" align="flex-start">
                 <Text>
-                  {hasFilters
-                    ? "No documents match these filters."
-                    : "No documents yet."}
+                  {hasFilters ? "No documents match these filters." : "No documents yet."}
                 </Text>
                 {hasFilters && (
                   <Button variant="light" size="sm" onClick={clearFilters}>
@@ -200,7 +192,9 @@ export function LibraryPage() {
                         </Text>
                       </Table.Td>
                       <Table.Td>{d.title}</Table.Td>
-                      <Table.Td>{d.document_type_id ? (typeMap.get(d.document_type_id) ?? "—") : "—"}</Table.Td>
+                      <Table.Td>
+                        {d.document_type_id ? (typeMap.get(d.document_type_id) ?? "—") : "—"}
+                      </Table.Td>
                       <Table.Td>{ownerMap.get(d.owner_user_id) ?? "—"}</Table.Td>
                       <Table.Td>
                         <Group gap={4}>
@@ -215,7 +209,9 @@ export function LibraryPage() {
                         <StateBadge state={d.current_state} />
                       </Table.Td>
                       <Table.Td>
-                        <Text size="sm">{d.effective_from ? d.effective_from.slice(0, 10) : "—"}</Text>
+                        <Text size="sm">
+                          {d.effective_from ? d.effective_from.slice(0, 10) : "—"}
+                        </Text>
                       </Table.Td>
                     </Table.Tr>
                   ))}

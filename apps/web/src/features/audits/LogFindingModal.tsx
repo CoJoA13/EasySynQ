@@ -1,7 +1,7 @@
 import { Alert, Anchor, Button, Group, Modal, Select, Stack, Text, TextInput } from "@mantine/core";
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { ApiError } from "../../lib/api";
+import { MutationErrorState } from "../../lib/states";
 import type { Finding, FindingType, NcSeverity } from "../../lib/types";
 import { useCreateFinding } from "./mutations";
 
@@ -46,7 +46,8 @@ export function LogFindingModal({
       },
       {
         onSuccess: (f) => {
-          if (f.auto_capa_id) setCreated(f); // NC → show the CAPA confirmation
+          if (f.auto_capa_id)
+            setCreated(f); // NC → show the CAPA confirmation
           else onClose();
         },
       },
@@ -54,7 +55,12 @@ export function LogFindingModal({
   }
 
   return (
-    <Modal opened={opened} onClose={onClose} title="Log finding" closeButtonProps={{ "aria-label": "Close log finding dialog" }}>
+    <Modal
+      opened={opened}
+      onClose={onClose}
+      title="Log finding"
+      closeButtonProps={{ "aria-label": "Close log finding dialog" }}
+    >
       {created ? (
         <Stack gap="sm">
           <Alert color="green" title="Finding logged">
@@ -71,7 +77,13 @@ export function LogFindingModal({
         </Stack>
       ) : (
         <Stack gap="sm">
-          <Select label="Type" required data={TYPE_OPTIONS} value={type} onChange={(v) => setType(v as FindingType | null)} />
+          <Select
+            label="Type"
+            required
+            data={TYPE_OPTIONS}
+            value={type}
+            onChange={(v) => setType(v as FindingType | null)}
+          />
           <Select
             label={type === "NC" ? "Severity (required for an NC)" : "Severity"}
             data={SEVERITY_OPTIONS}
@@ -79,19 +91,35 @@ export function LogFindingModal({
             onChange={(v) => setSeverity(v as NcSeverity | null)}
             clearable
           />
-          <TextInput label="Summary" maxLength={300} value={summary} onChange={(e) => setSummary(e.currentTarget.value)} />
-          <TextInput label="Clause ref" placeholder="e.g. 8.4" value={clauseRef} onChange={(e) => setClauseRef(e.currentTarget.value)} />
-          <TextInput label="Process ref" value={processRef} onChange={(e) => setProcessRef(e.currentTarget.value)} />
+          <TextInput
+            label="Summary"
+            maxLength={300}
+            value={summary}
+            onChange={(e) => setSummary(e.currentTarget.value)}
+          />
+          <TextInput
+            label="Clause ref"
+            placeholder="e.g. 8.4"
+            value={clauseRef}
+            onChange={(e) => setClauseRef(e.currentTarget.value)}
+          />
+          <TextInput
+            label="Process ref"
+            value={processRef}
+            onChange={(e) => setProcessRef(e.currentTarget.value)}
+          />
           {create.isError && (
-            <Alert color="red" title="Couldn't log the finding">
-              {create.error instanceof ApiError ? create.error.message : "Please try again."}
-            </Alert>
+            <MutationErrorState title="Couldn't log the finding" error={create.error} />
           )}
           <Group justify="flex-end">
             <Button variant="default" onClick={onClose}>
               Cancel
             </Button>
-            <Button onClick={submit} disabled={!type || ncWithoutSeverity} loading={create.isPending}>
+            <Button
+              onClick={submit}
+              disabled={!type || ncWithoutSeverity}
+              loading={create.isPending}
+            >
               Log finding
             </Button>
           </Group>

@@ -1,6 +1,6 @@
-import { Alert, Button, Group, Modal, Stack, Switch, TextInput } from "@mantine/core";
+import { Button, Group, Modal, Stack, Switch, TextInput } from "@mantine/core";
 import { useState } from "react";
-import { ApiError } from "../../lib/api";
+import { MutationErrorState } from "../../lib/states";
 import type { AuditProgram } from "../../lib/types";
 import { useCreateProgram, useUpdateProgram } from "./mutations";
 
@@ -64,9 +64,7 @@ export function ProgramForm({
           />
         )}
         {active.isError && (
-          <Alert color="red" title="Couldn't save the programme">
-            {active.error instanceof ApiError ? active.error.message : "Please try again."}
-          </Alert>
+          <MutationErrorState title="Couldn't save the programme" error={active.error} />
         )}
         <Group justify="flex-end">
           <Button variant="default" onClick={onClose}>

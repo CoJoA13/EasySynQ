@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useUserDirectory } from "../../app/shell/useUserDirectory";
 import { usePermissions } from "../../app/shell/usePermissions";
+import { AsOf } from "../../lib/AsOf";
 import { EmptyState, ErrorState, LoadingState, NoAccessState } from "../../lib/states";
 import { RegisterToolbar, SortableTh } from "../../lib/RegisterToolbar";
 import {
@@ -30,7 +31,7 @@ function formatDate(iso: string): string {
 }
 
 export function ImprovementRegisterPage() {
-  const { data, isLoading, isError, forbidden, refetch } = useInitiatives();
+  const { data, isLoading, isError, forbidden, dataUpdatedAt, refetch } = useInitiatives();
   const { data: directory } = useUserDirectory();
   const [params, setParams] = useSearchParams();
   const [selected, setSelected] = useState<string | null>(() => params.get("initiative"));
@@ -135,6 +136,8 @@ export function ImprovementRegisterPage() {
           <Button onClick={() => setRaising(true)}>New initiative</Button>
         )}
       </Group>
+
+      <AsOf at={dataUpdatedAt} />
 
       {rows.length === 0 ? (
         <EmptyState message="No improvement initiatives yet." />

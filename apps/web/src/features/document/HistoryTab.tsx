@@ -1,6 +1,6 @@
 import { Badge, Group, Stack, Text } from "@mantine/core";
 import { ApiError } from "../../lib/api";
-import { EmptyState, LoadingState } from "../../lib/states";
+import { EmptyState, InlineState, LoadingState } from "../../lib/states";
 import { useDocumentVersions } from "./useDocumentVersions";
 
 // The History tab: the immutable version timeline (newest first), read-only. Gated
@@ -12,16 +12,10 @@ export function HistoryTab({ documentId, active }: { documentId: string | null; 
   if (isError) {
     if (error instanceof ApiError && error.status === 403) {
       return (
-        <Text size="sm" c="dimmed">
-          You don't have access to the version history.
-        </Text>
+        <InlineState kind="forbidden">You don't have access to the version history.</InlineState>
       );
     }
-    return (
-      <Text size="sm" c="red">
-        Could not load version history.
-      </Text>
-    );
+    return <InlineState kind="error">Could not load version history.</InlineState>;
   }
   if (!data || data.length === 0) {
     return <EmptyState message="No versions yet." />;

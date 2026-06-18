@@ -1,9 +1,10 @@
-import { Anchor, Button, Group, Skeleton, Stack, Table, Text, Title } from "@mantine/core";
+import { Anchor, Button, Group, Stack, Table, Text, Title } from "@mantine/core";
 import { useDisclosure } from "@mantine/hooks";
 import { Link, useNavigate } from "react-router-dom";
 import { usePermissions } from "../../app/shell/usePermissions";
 import { ApiError } from "../../lib/api";
-import { ErrorState, NoAccessState } from "../../lib/states";
+import { AsOf } from "../../lib/AsOf";
+import { ErrorState, NoAccessState, SkeletonList } from "../../lib/states";
 import { ImportStatusBadge } from "./ImportStatusBadge";
 import { NewImportModal } from "./NewImportModal";
 import { useImportRuns } from "./hooks";
@@ -11,7 +12,7 @@ import { useImportRuns } from "./hooks";
 // The runs landing (D-1): a calm list of import runs + a gated New-Import entry. Presentational over
 // useImportRuns(); a 403 → the calm no-access panel (import has no hidden_by_scope — full deny).
 export function IngestionRunsPage() {
-  const { data, isLoading, isError, error, refetch } = useImportRuns();
+  const { data, isLoading, isError, error, refetch, dataUpdatedAt } = useImportRuns();
   const { can } = usePermissions();
   const navigate = useNavigate();
   const [modalOpen, modal] = useDisclosure(false);
@@ -44,17 +45,13 @@ export function IngestionRunsPage() {
         )}
       </Group>
 
+      <AsOf at={dataUpdatedAt} />
+
       {isError && !forbidden && (
         <ErrorState title="Couldn't load import runs" onRetry={() => refetch()} />
       )}
 
-      {isLoading && (
-        <Stack gap="xs" aria-label="Loading import runs">
-          {Array.from({ length: 4 }).map((_, i) => (
-            <Skeleton key={i} height={36} />
-          ))}
-        </Stack>
-      )}
+      {isLoading && <SkeletonList rows={4} height={36} label="Loading import runs" />}
 
       {!isLoading && !isError && runs.length === 0 && <Text>No imports yet.</Text>}
 

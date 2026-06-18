@@ -1,6 +1,7 @@
 import { Alert, Button, Group, Loader, Modal, Select, Stack, Text } from "@mantine/core";
 import { useMemo, useState } from "react";
 import { ApiError } from "../../lib/api";
+import { InlineState } from "../../lib/states";
 import { useDocumentVersions } from "../document/useDocumentVersions";
 import { useDocuments } from "../library/useDocuments";
 import { useImplementDcr } from "./mutations";
@@ -84,15 +85,15 @@ export function ImplementCreateDcrModal({
         )}
         {docId !== null && versions.isLoading && <Loader size="sm" />}
         {noApproved && (
-          <Text size="sm" c="red">
+          <InlineState kind="error">
             That document has no approved version to release. Approve it first.
-          </Text>
+          </InlineState>
         )}
         {versionsError && (
-          <Text size="sm" c="red">
+          <InlineState kind="error">
             Couldn&apos;t load this document&apos;s versions — this step needs draft-read access to
             resolve the version to release. Ask someone with document access to implement.
-          </Text>
+          </InlineState>
         )}
         <Group justify="flex-end">
           <Button variant="subtle" onClick={onClose}>

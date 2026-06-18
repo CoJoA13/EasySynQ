@@ -2,6 +2,7 @@ import { Anchor, Button, Container, Group, Table, Text, Title } from "@mantine/c
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { usePermissions } from "../../app/shell/usePermissions";
+import { AsOf } from "../../lib/AsOf";
 import { EmptyState, ErrorState, LoadingState, NoAccessState } from "../../lib/states";
 import type { Complaint } from "../../lib/types";
 import { SEVERITY_LABEL } from "./columns";
@@ -10,7 +11,7 @@ import { useComplaints } from "./hooks";
 import { SpawnCapaModal } from "./SpawnCapaModal";
 
 export function ComplaintsPage() {
-  const { data, isLoading, isError, forbidden, refetch } = useComplaints();
+  const { data, isLoading, isError, forbidden, dataUpdatedAt, refetch } = useComplaints();
   const { can } = usePermissions();
   const [formOpen, setFormOpen] = useState(false);
   const [spawnComplaint, setSpawnComplaint] = useState<Complaint | null>(null);
@@ -59,6 +60,7 @@ export function ComplaintsPage() {
           <Button onClick={() => setFormOpen(true)}>＋ Log complaint</Button>
         )}
       </Group>
+      <AsOf at={dataUpdatedAt} />
       {rows.length === 0 ? (
         <EmptyState message="No complaints logged yet." />
       ) : (

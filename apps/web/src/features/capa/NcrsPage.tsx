@@ -2,6 +2,7 @@ import { Badge, Button, Container, Group, Stack, Table, Text, Title } from "@man
 import { useState } from "react";
 import { usePermissions } from "../../app/shell/usePermissions";
 import { useUserDirectory } from "../../app/shell/useUserDirectory";
+import { AsOf } from "../../lib/AsOf";
 import { EmptyState, ErrorState, LoadingState, NoAccessState } from "../../lib/states";
 import type { DirectoryUser, Ncr } from "../../lib/types";
 import { SEVERITY_LABEL } from "./columns";
@@ -18,7 +19,7 @@ function actorLabel(userId: string, directory: DirectoryUser[]): string {
 }
 
 export function NcrsPage() {
-  const { data, isLoading, isError, forbidden, refetch } = useNcrs();
+  const { data, isLoading, isError, forbidden, dataUpdatedAt, refetch } = useNcrs();
   const { can } = usePermissions();
   const { data: directory } = useUserDirectory();
   const [formOpen, setFormOpen] = useState(false);
@@ -66,6 +67,7 @@ export function NcrsPage() {
         <Title order={3}>Nonconforming Output (NCR)</Title>
         {can("ncr.create") && <Button onClick={() => setFormOpen(true)}>＋ Raise NCR</Button>}
       </Group>
+      <AsOf at={dataUpdatedAt} />
       {rows.length === 0 ? (
         <EmptyState message="No NCRs raised yet." />
       ) : (

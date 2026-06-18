@@ -1,7 +1,7 @@
-import { Alert, Button, Group, Modal, Select, Stack, TextInput } from "@mantine/core";
+import { Button, Group, Modal, Select, Stack, TextInput } from "@mantine/core";
 import { useState } from "react";
 import { useUserDirectory } from "../../app/shell/useUserDirectory";
-import { ApiError } from "../../lib/api";
+import { MutationErrorState } from "../../lib/states";
 import { useProcesses } from "./hooks";
 import { useCreatePlan } from "./mutations";
 
@@ -73,9 +73,7 @@ export function PlanForm({
           onChange={(e) => setChecklistRef(e.currentTarget.value)}
         />
         {create.isError && (
-          <Alert color="red" title="Couldn't save the plan">
-            {create.error instanceof ApiError ? create.error.message : "Please try again."}
-          </Alert>
+          <MutationErrorState title="Couldn't save the plan" error={create.error} />
         )}
         <Group justify="flex-end">
           <Button variant="default" onClick={onClose}>

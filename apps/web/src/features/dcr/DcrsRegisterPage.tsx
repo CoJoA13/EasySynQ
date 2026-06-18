@@ -11,6 +11,7 @@ import {
   useUrlParam,
 } from "../../lib/registerControls";
 import { useRowKeyboardNav } from "../../lib/useRowKeyboardNav";
+import { AsOf } from "../../lib/AsOf";
 import { EmptyState, ErrorState, LoadingState, NoAccessState } from "../../lib/states";
 import { DcrDrawer } from "./DcrDrawer";
 import { DcrStateBadge } from "./DcrStateBadge";
@@ -65,7 +66,7 @@ function formatDate(iso: string): string {
 }
 
 export function DcrsRegisterPage() {
-  const { data, isLoading, isError, forbidden, refetch } = useDcrs();
+  const { data, isLoading, isError, forbidden, dataUpdatedAt, refetch } = useDcrs();
   const [params, setParams] = useSearchParams();
   const [selected, setSelected] = useState<string | null>(() => params.get("dcr"));
   // URL-backed enum filters (critique #5): they survive navigation + are shareable. Distinct keys
@@ -154,6 +155,8 @@ export function DcrsRegisterPage() {
         <Title order={2}>Change requests</Title>
         {can("changeRequest.create") && <Button onClick={() => setRaising(true)}>Raise DCR</Button>}
       </Group>
+
+      <AsOf at={dataUpdatedAt} />
 
       {rows.length === 0 ? (
         <EmptyState message="No change requests yet." />
