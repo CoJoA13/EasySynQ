@@ -1,5 +1,6 @@
 import {
   Anchor,
+  Box,
   Button,
   Container,
   Group,
@@ -172,9 +173,13 @@ export function AuditsListPage() {
         />
       </RegisterToolbar>
       {all.length === 0 ? (
-        <EmptyState message="No audits yet." />
+        <Box mt="md">
+          <EmptyState message="No audits yet." />
+        </Box>
       ) : rows.length === 0 ? (
-        <EmptyState message="No audits match your filters." />
+        <Box mt="md">
+          <EmptyState message="No audits match your filters." />
+        </Box>
       ) : (
         <Table striped highlightOnHover mt="md">
           <Table.Thead>
