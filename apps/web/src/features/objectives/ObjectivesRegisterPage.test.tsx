@@ -15,10 +15,11 @@ it("renders the band and a row per objective with a RAG status badge", async () 
   await waitFor(() => expect(screen.getByText("OBJ-001")).toBeInTheDocument());
   expect(screen.getByText(/1\s*\/\s*4 on target/i)).toBeInTheDocument();
   const row = screen.getByText("On-time delivery rate").closest("tr")!;
-  // The amber row's RAG pill is the canonical StatusBadge: amber → warning → ◔ glyph + "Status: Amber"
-  // accessible name (status is never colour-only, DP-7). Scope to the row — other rows carry RAG pills too.
-  expect(within(row).getByText("Amber")).toBeInTheDocument();
-  expect(within(row).getByLabelText("Status: Amber")).toBeInTheDocument();
+  // The amber row's RAG pill is the canonical StatusBadge: amber → warning → ◔ glyph + the MEANING
+  // label "Needs attention" (never the colour word "Amber"; DP-5). Scope to the row — other rows carry
+  // RAG pills too.
+  expect(within(row).getByText("Needs attention")).toBeInTheDocument();
+  expect(within(row).getByLabelText("Status: Needs attention")).toBeInTheDocument();
   expect(within(row).getByText(TONE_GLYPH.warning)).toBeInTheDocument();
   expect(within(row).getByText("92 / 95 %")).toBeInTheDocument();
   // unmeasured row shows an em dash for the current value
@@ -74,12 +75,37 @@ it("RAG filter narrows visible rows client-side", async () => {
   expect(screen.getByText("OBJ-002")).toBeInTheDocument();
   expect(screen.getByText("OBJ-003")).toBeInTheDocument();
   expect(screen.getByText("OBJ-004")).toBeInTheDocument();
-  // Click the "Red" chip filter.
-  await user.click(screen.getByRole("radio", { name: "Red" }));
+  // Click the red ("Action required") chip filter — the segment shows the meaning, not the colour word.
+  await user.click(screen.getByRole("radio", { name: "Action required" }));
   // Only the red row (OBJ-002, "Customer complaints per quarter") remains.
   expect(screen.getByText("OBJ-002")).toBeInTheDocument();
   expect(screen.queryByText("OBJ-003")).not.toBeInTheDocument(); // green row gone
   expect(screen.queryByText("OBJ-001")).not.toBeInTheDocument(); // amber row gone
+});
+
+it("sorts the Status column by triage severity (worst first), not the raw rag key", async () => {
+  const user = userEvent.setup();
+  renderWithProviders(<ObjectivesRegisterPage />, { route: "/objectives" });
+  await waitFor(() => expect(screen.getByText("OBJ-001")).toBeInTheDocument());
+  // Click the Status column → ascending by severity: red → amber → green → unmeasured. The row anchors
+  // (role=link) reflect the table order: OBJ-002 (red/Action required) first, OBJ-004 (unmeasured) last
+  // — NOT the alphabetical raw-rag order (amber, green, red, unmeasured) the old sort produced (Codex P3).
+  await user.click(screen.getByRole("button", { name: "Sort by Status" }));
+  expect(screen.getAllByRole("link").map((a) => a.textContent)).toEqual([
+    "OBJ-002",
+    "OBJ-001",
+    "OBJ-003",
+    "OBJ-004",
+  ]);
+  // Click again → descending (best-first): green → amber → red, but the unmeasured row (no data)
+  // STAYS LAST in both directions via the null-last comparator, never jumps to the top (Codex P2).
+  await user.click(screen.getByRole("button", { name: "Sort by Status" }));
+  expect(screen.getAllByRole("link").map((a) => a.textContent)).toEqual([
+    "OBJ-003",
+    "OBJ-001",
+    "OBJ-002",
+    "OBJ-004",
+  ]);
 });
 
 it("debounced search filters rows by identifier and title", async () => {

@@ -12,10 +12,11 @@ it("renders the on-target headline and each RAG count, accessibly", async () => 
     <ObjectiveScorecardBand total={4} onTarget={1} byRag={BY_RAG} />,
   );
   expect(screen.getByText(/1\s*\/\s*4 on target/i)).toBeInTheDocument();
-  expect(screen.getByText("1 green")).toBeInTheDocument();
-  expect(screen.getByText("1 amber")).toBeInTheDocument();
-  expect(screen.getByText("1 red")).toBeInTheDocument();
-  expect(screen.getByText("1 unmeasured")).toBeInTheDocument();
+  // Each chip carries the MEANING, never the colour word ("1 green") — DP-5, S-obj-rag-legibility.
+  expect(screen.getByText("1 on track")).toBeInTheDocument();
+  expect(screen.getByText("1 needs attention")).toBeInTheDocument();
+  expect(screen.getByText("1 action required")).toBeInTheDocument();
+  expect(screen.getByText("1 not yet measured")).toBeInTheDocument();
   expect(await axe(container)).toHaveNoViolations();
 });
 
@@ -23,10 +24,10 @@ it("carries each RAG count on a canonical StatusBadge (tone glyph + accessible n
   renderWithProviders(<ObjectiveScorecardBand total={4} onTarget={1} byRag={BY_RAG} />);
   // Each chip gets the canonical non-colour glyph for its RAG → tone mapping plus an accessible name
   // (status is never colour-only, DP-7): green→success ✓, amber→warning ◔, red→danger ✕, unmeasured→neutral ○.
-  expect(screen.getByLabelText("Objectives: 1 green")).toBeInTheDocument();
-  expect(screen.getByLabelText("Objectives: 1 amber")).toBeInTheDocument();
-  expect(screen.getByLabelText("Objectives: 1 red")).toBeInTheDocument();
-  expect(screen.getByLabelText("Objectives: 1 unmeasured")).toBeInTheDocument();
+  expect(screen.getByLabelText("Objectives: 1 on track")).toBeInTheDocument();
+  expect(screen.getByLabelText("Objectives: 1 needs attention")).toBeInTheDocument();
+  expect(screen.getByLabelText("Objectives: 1 action required")).toBeInTheDocument();
+  expect(screen.getByLabelText("Objectives: 1 not yet measured")).toBeInTheDocument();
   // All four canonical glyphs are present (one per chip).
   expect(screen.getByText(TONE_GLYPH.success)).toBeInTheDocument();
   expect(screen.getByText(TONE_GLYPH.warning)).toBeInTheDocument();
