@@ -64,3 +64,20 @@ it("shows a neutral couldn't-load (not green) when drift errors with no acks", a
   expect(within(card).queryByText(/all caught up/i)).not.toBeInTheDocument();
   expect(within(card).queryByLabelText(/status: on track/i)).not.toBeInTheDocument();
 });
+
+it("shows couldn't-load (NOT no-access) when drift is forbidden AND the ack count fails", async () => {
+  // a failed ack read alongside forbidden drift must NOT collapse to TileNoAccess — the error
+  // discriminator (not the silent count===0) governs the no-access decision (Codex P2 #205).
+  server.use(
+    http.get("/api/v1/admin/drift/status", () =>
+      HttpResponse.json({ code: "forbidden" }, { status: 403 }),
+    ),
+    http.get("/api/v1/tasks", () => new HttpResponse(null, { status: 500 })),
+  );
+  renderWithProviders(<DoCard />);
+  const card = await screen.findByRole("group", { name: /do quadrant/i });
+  await waitFor(() =>
+    expect(within(card).getByText(/couldn't load this section/i)).toBeInTheDocument(),
+  );
+  expect(within(card).queryByText(/no access to this section/i)).not.toBeInTheDocument();
+});

@@ -9,7 +9,7 @@ import { driftRag, driftStatusText, worstRag, type Rag } from "./rag";
 // circulation + the caller's acknowledgements (self-scoped — DO stays visible to everyone via acks).
 export function DoCard() {
   const dr = useDriftStatus();
-  const { count: ackCount, isError: ackError } = useAckCount();
+  const { count: ackCount, isError: ackError, isLoading: ackLoading } = useAckCount();
 
   const lines: ReactNode[] = [];
   const rags: Rag[] = [];
@@ -43,8 +43,12 @@ export function DoCard() {
     );
   }
 
-  const allForbidden = dr.forbidden && ackCount === 0;
-  const loading = dr.isLoading;
+  // A failed/still-loading ack read is NOT "no access" — the acks endpoint is self-scoped (auth-only,
+  // never a 403), so only a genuine RESOLVED zero folds into the no-access decision. An ack ERROR
+  // therefore falls through to the "Couldn't load this section." fallback, never a misleading
+  // TileNoAccess (using the new error/loading discriminator consistently with the hidden ack line).
+  const allForbidden = dr.forbidden && !ackError && !ackLoading && ackCount === 0;
+  const loading = dr.isLoading || ackLoading;
 
   return (
     <QuadrantCard
