@@ -117,6 +117,7 @@ from .ncr import Ncr
 from .numbering_counter import NumberingCounter
 from .objective_plan import ObjectivePlan
 from .org_role import OrgRole
+from .org_role_assignment import OrgRoleAssignment
 from .organization import Organization
 from .pack_item import PackItem
 from .pack_share_link import PackShareLink
@@ -233,6 +234,7 @@ __all__ = [
     "NumberingCounter",
     "ObjectivePlan",
     "OrgRole",
+    "OrgRoleAssignment",
     "Organization",
     "PackInclusionStatus",
     "PackItem",

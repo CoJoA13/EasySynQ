@@ -33,6 +33,7 @@ from easysynq_api.db.models.org_role import OrgRole
 from easysynq_api.db.models.organization import Organization
 from easysynq_api.db.models.permission import Permission
 from easysynq_api.db.models.process import Process
+from easysynq_api.db.models.role import Role, RoleAssignment
 from easysynq_api.db.models.scope import Scope
 from easysynq_api.db.models.supplier import Supplier
 from easysynq_api.db.session import get_sessionmaker
@@ -510,6 +511,202 @@ async def test_process_link_requires_manage_metadata(
         f"/api/v1/documents/{did}/process-links", headers=hc, json={"process_id": proc["id"]}
     )
     assert r.status_code == 403, r.text
+
+
+# --- owner-assignment (S-owner-assignment-1) --------------------------------------------
+
+
+async def _user_id(subject: str) -> uuid.UUID:
+    """The app_user.id for a kc subject (JIT-create the row so the assign endpoint resolves it)."""
+    async with get_sessionmaker()() as s:
+        user = await _ensure_user(s, subject)
+        await s.flush()
+        uid = user.id
+        await s.commit()
+        return uid
+
+
+async def _owner_role_process_ids(user_id: uuid.UUID) -> list[str] | None:
+    """The concrete process_ids on the user's seeded 'Process Owner' role_assignment, or None when
+    no such assignment exists (the last-process-removed drop)."""
+    async with get_sessionmaker()() as s:
+        org_id = await s5.default_org_id()
+        role = (
+            await s.execute(select(Role).where(Role.org_id == org_id, Role.name == "Process Owner"))
+        ).scalar_one()
+        ra = (
+            (
+                await s.execute(
+                    select(RoleAssignment).where(
+                        RoleAssignment.user_id == user_id, RoleAssignment.role_id == role.id
+                    )
+                )
+            )
+            .scalars()
+            .first()
+        )
+        if ra is None:
+            return None
+        return sorted((ra.bound_scope or {}).get("selector", {}).get("process_ids", []))
+
+
+async def _link_doc_to_process(
+    client: AsyncClient, h: dict[str, str], did: str, process_id: str
+) -> None:
+    r = await client.post(
+        f"/api/v1/documents/{did}/process-links", headers=h, json={"process_id": process_id}
+    )
+    assert r.status_code == 201, r.text
+
+
+async def test_assign_owner_mints_working_process_grant(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    """Assigning a process owner mints a concrete PROCESS-scoped 'Process Owner' grant that
+    authorizes document.read on a process-linked doc — flipping a previously-403 read to 200 with
+    NO SYSTEM override. Proves both halves of the slice: the binding mint AND the _document_scope
+    process_ids migration."""
+    await s5.grant_lifecycle(subj.a)
+    await _grant(subj.a, "process.create")
+    await _grant(subj.a, "process.assign_owner")
+    ha = _auth(token_factory, subj.a)
+    did = await _doc_id(app_client, ha)
+    proc = await _create_process(app_client, ha)
+    await _link_doc_to_process(app_client, ha, did, proc["id"])
+
+    # subj.b: the owner-to-be — a fresh user with no grants. Before binding: 403 on the linked doc.
+    owner_id = await _user_id(subj.b)
+    hb = _auth(token_factory, subj.b)
+    before = await app_client.get(f"/api/v1/documents/{did}", headers=hb)
+    assert before.status_code == 403, before.text
+
+    r = await app_client.post(
+        f"/api/v1/processes/{proc['id']}/owner", headers=ha, json={"user_id": str(owner_id)}
+    )
+    assert r.status_code == 201, r.text
+    assert r.json()["bound_scope"]["selector"]["process_ids"] == [proc["id"]]
+
+    # After binding: subj.b can read the process-linked doc via the bound PROCESS grant.
+    after = await app_client.get(f"/api/v1/documents/{did}", headers=hb)
+    assert after.status_code == 200, after.text
+
+    # A doc the owner's process is NOT linked to stays 403 (the bound scope is narrow, AZ-INV-8).
+    other = await _doc_id(app_client, ha)
+    other_read = await app_client.get(f"/api/v1/documents/{other}", headers=hb)
+    assert other_read.status_code == 403, other_read.text
+
+
+async def test_assign_owner_records_raci_and_unions_processes(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    """The RACI org_role_assignment row lands + is audited; a second process unions into the SAME
+    role_assignment's process_ids set (not a second assignment row); re-assign is idempotent."""
+    await _grant(subj.a, "process.create")
+    await _grant(subj.a, "process.assign_owner")
+    ha = _auth(token_factory, subj.a)
+    p1 = await _create_process(app_client, ha)
+    p2 = await _create_process(app_client, ha)
+    owner_id = await _user_id(subj.b)
+
+    r1 = await app_client.post(
+        f"/api/v1/processes/{p1['id']}/owner", headers=ha, json={"user_id": str(owner_id)}
+    )
+    assert r1.status_code == 201, r1.text
+    assert r1.json()["bound_scope"]["selector"]["process_ids"] == [p1["id"]]
+    assert await _audit_count(EventType.PROCESS_OWNER_ASSIGNED, p1["id"]) >= 1
+    row = await _audit_row(EventType.PROCESS_OWNER_ASSIGNED, p1["id"])
+    assert row.object_type == AuditObjectType.process
+
+    owners = await app_client.get(f"/api/v1/processes/{p1['id']}/owners", headers=ha)
+    assert owners.status_code == 200, owners.text
+    listed = owners.json()
+    assert any(o["user_id"] == str(owner_id) for o in listed)
+    assert all(o["org_role_name"] == "Process Owner" for o in listed)
+
+    # A second process unions into the SAME role_assignment (one growing row, not two).
+    r2 = await app_client.post(
+        f"/api/v1/processes/{p2['id']}/owner", headers=ha, json={"user_id": str(owner_id)}
+    )
+    assert r2.status_code == 201, r2.text
+    assert sorted(r2.json()["bound_scope"]["selector"]["process_ids"]) == sorted(
+        [p1["id"], p2["id"]]
+    )
+    assert r2.json()["role_assignment_id"] == r1.json()["role_assignment_id"]
+    assert await _owner_role_process_ids(owner_id) == sorted([p1["id"], p2["id"]])
+
+    # Re-assigning p1 is idempotent — no duplicate process id, same set.
+    r3 = await app_client.post(
+        f"/api/v1/processes/{p1['id']}/owner", headers=ha, json={"user_id": str(owner_id)}
+    )
+    assert r3.status_code == 201, r3.text
+    assert await _owner_role_process_ids(owner_id) == sorted([p1["id"], p2["id"]])
+
+
+async def test_revoke_owner_narrows_then_drops(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    """Revoking one of two owned processes narrows the bound_scope to the remaining process;
+    revoking the last drops the role_assignment entirely; a re-revoke of a non-owner is 404."""
+    await _grant(subj.a, "process.create")
+    await _grant(subj.a, "process.assign_owner")
+    ha = _auth(token_factory, subj.a)
+    p1 = await _create_process(app_client, ha)
+    p2 = await _create_process(app_client, ha)
+    owner_id = await _user_id(subj.b)
+    await app_client.post(
+        f"/api/v1/processes/{p1['id']}/owner", headers=ha, json={"user_id": str(owner_id)}
+    )
+    await app_client.post(
+        f"/api/v1/processes/{p2['id']}/owner", headers=ha, json={"user_id": str(owner_id)}
+    )
+
+    r = await app_client.delete(f"/api/v1/processes/{p1['id']}/owner/{owner_id}", headers=ha)
+    assert r.status_code == 204, r.text
+    assert await _owner_role_process_ids(owner_id) == [p2["id"]]
+    assert await _audit_count(EventType.PROCESS_OWNER_REVOKED, p1["id"]) >= 1
+    owners1 = await app_client.get(f"/api/v1/processes/{p1['id']}/owners", headers=ha)
+    assert all(o["user_id"] != str(owner_id) for o in owners1.json())
+
+    # Revoking the last owned process drops the role_assignment (no inert empty PROCESS grant).
+    r2 = await app_client.delete(f"/api/v1/processes/{p2['id']}/owner/{owner_id}", headers=ha)
+    assert r2.status_code == 204, r2.text
+    assert await _owner_role_process_ids(owner_id) is None
+
+    # Re-revoking a non-owner → 404.
+    r3 = await app_client.delete(f"/api/v1/processes/{p2['id']}/owner/{owner_id}", headers=ha)
+    assert r3.status_code == 404, r3.text
+
+
+async def test_assign_owner_requires_permission(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    """process.assign_owner gates the bind — a caller with only process.read is denied (403)."""
+    await _grant(subj.a, "process.create")
+    ha = _auth(token_factory, subj.a)
+    proc = await _create_process(app_client, ha)
+    owner_id = await _user_id(subj.b)
+
+    await _grant(subj.c, "process.read")
+    hc = _auth(token_factory, subj.c)
+    r = await app_client.post(
+        f"/api/v1/processes/{proc['id']}/owner", headers=hc, json={"user_id": str(owner_id)}
+    )
+    assert r.status_code == 403, r.text
+
+
+async def test_assign_owner_unknown_user_404(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    await _grant(subj.a, "process.create")
+    await _grant(subj.a, "process.assign_owner")
+    ha = _auth(token_factory, subj.a)
+    proc = await _create_process(app_client, ha)
+    r = await app_client.post(
+        f"/api/v1/processes/{proc['id']}/owner",
+        headers=ha,
+        json={"user_id": str(uuid.uuid4())},
+    )
+    assert r.status_code == 404, r.text
 
 
 async def _seed_foreign_process(created_by: uuid.UUID) -> tuple[str, str]:

@@ -2049,6 +2049,68 @@ paths:
         "403": { $ref: "#/components/responses/ProblemResponse" }
         "404": { $ref: "#/components/responses/ProblemResponse" }
 
+  /processes/{process_id}/owners:
+    parameters:
+      - { name: process_id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [processes]
+      operationId: listProcessOwners
+      summary: The process's recorded owners (org_role_assignment RACI rows). Needs process.read.
+      responses:
+        "200":
+          description: The owner bindings for this process.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/ProcessOwner" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+
+  /processes/{process_id}/owner:
+    post:
+      tags: [processes]
+      operationId: assignProcessOwner
+      summary: >-
+        Bind a user as the accountable owner of this process — records the RACI fact AND mints the
+        concrete PROCESS-scoped Process-Owner grant (substituting the :assignment_process
+        placeholder). Idempotent. Needs process.assign_owner.
+      parameters:
+        - { name: process_id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OwnerAssignCreate" }
+      responses:
+        "201":
+          description: The resulting owner binding (plus the minted bound_scope).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProcessOwnerResult" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409":
+          description: The "Process Owner" permission role is not seeded in this org (role_not_seeded).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  /processes/{process_id}/owner/{user_id}:
+    delete:
+      tags: [processes]
+      operationId: revokeProcessOwner
+      summary: >-
+        Unbind a user as owner of this process — removes the RACI row AND narrows the Process-Owner
+        grant's process_ids (dropping it when the last owned process goes). Needs process.assign_owner.
+      parameters:
+        - { name: process_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: user_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "204": { description: Unbound. }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+
   /records:init-upload:
     post:
       tags: [records]
@@ -6572,6 +6634,43 @@ components:
       properties:
         to_process_id: { type: string, format: uuid }
         io_label: { type: [string, "null"] }
+
+    OwnerAssignCreate:
+      type: object
+      additionalProperties: false
+      required: [user_id]
+      description: "Bind a process owner. org_role_id defaults to the org's generic 'Process Owner' org_role (resolve-or-created)."
+      properties:
+        user_id: { type: string, format: uuid }
+        org_role_id: { type: [string, "null"], format: uuid }
+
+    ProcessOwner:
+      type: object
+      additionalProperties: false
+      required: [id, user_id, org_role_id, org_role_name]
+      description: "A process's recorded owner — an org_role_assignment RACI row (NOT itself a permission grant)."
+      properties:
+        id: { type: string, format: uuid }
+        process_id: { type: [string, "null"], format: uuid }
+        user_id: { type: string, format: uuid }
+        org_role_id: { type: string, format: uuid }
+        org_role_name: { type: string }
+        created_at: { type: [string, "null"], format: date-time }
+
+    ProcessOwnerResult:
+      type: object
+      additionalProperties: false
+      required: [process_id, user_id, org_role_id, org_role_assignment_id, role_assignment_id, bound_scope]
+      description: "The owner binding (RACI) plus the minted/extended PROCESS-scoped role_assignment bound_scope."
+      properties:
+        process_id: { type: string, format: uuid }
+        user_id: { type: string, format: uuid }
+        org_role_id: { type: string, format: uuid }
+        org_role_assignment_id: { type: string, format: uuid }
+        role_assignment_id: { type: string, format: uuid }
+        bound_scope:
+          type: object
+          description: "The concretized PROCESS grant scope, e.g. { level: PROCESS, selector: { process_ids: [...] } }."
 
     ProcessMap:
       type: object

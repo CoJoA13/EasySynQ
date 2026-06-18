@@ -9,7 +9,6 @@ from the body in-handler; the list is row-filtered to what the caller may ``docu
 
 from __future__ import annotations
 
-import dataclasses
 import datetime
 import re
 import uuid
@@ -363,32 +362,24 @@ async def _document_scope_by_id(session: AsyncSession, doc_id: uuid.UUID) -> Res
     if doc.document_type_id:
         dt = await session.get(DocumentType, doc.document_type_id)
         level = dt.document_level.value if dt else None
+    # S-owner-assignment-1 (R28): populate ``process_ids`` from the doc's ProcessLink ids so a
+    # PROCESS-scoped grant (e.g. a bound Process Owner's ``document.*``) authorizes across EVERY
+    # document gate — not just ``document.distribute``. AZ-INV-8-safe: an attribute can only newly
+    # *match* a grant that already targets that exact process; it never widens an
+    # ARTIFACT/FOLDER/DOC_CLASS/SYSTEM match. This is the repo-wide ``_document_scope`` migration
+    # the former ``_document_scope_with_processes`` docstring deferred to owner-assignment.
+    process_ids = (
+        await session.execute(
+            select(ProcessLink.process_id).where(ProcessLink.documented_information_id == doc.id)
+        )
+    ).scalars()
     return ResourceContext(
         artifact_id=str(doc.id),
         folder_path=doc.folder_path,
         document_level=level,
         lifecycle_state=doc.current_state.value,
+        process_ids=frozenset(str(p) for p in process_ids),
     )
-
-
-async def _document_scope_with_processes(
-    request: Request, session: AsyncSession
-) -> ResourceContext:
-    """``_document_scope`` + the doc's ProcessLink ids — R28: a PROCESS-scoped grant can only
-    match when ``resource.process_ids`` is populated (the S-ack-1 decide-leg precedent). Used by
-    the distribution/acknowledgement gates; the repo-wide ``_document_scope`` migration is the
-    owner-assignment track's call."""
-    base = await _document_scope(request, session)
-    if base.artifact_id is None:
-        return base
-    process_ids = (
-        await session.execute(
-            select(ProcessLink.process_id).where(
-                ProcessLink.documented_information_id == uuid.UUID(base.artifact_id)
-            )
-        )
-    ).scalars()
-    return dataclasses.replace(base, process_ids=frozenset(str(p) for p in process_ids))
 
 
 async def _release_scope(
@@ -503,9 +494,9 @@ _checkout = require("document.checkout", async_scope_resolver=_document_scope)
 _edit = require("document.edit", async_scope_resolver=_document_scope)
 _manage_metadata = require("document.manage_metadata", async_scope_resolver=_document_scope)
 # S-ack-1 (R42): distribution-list management + the named coverage matrix (doc 04 §8.1/§8.2).
-# The scope carries process_ids so a PROCESS-scoped grant (legal via the R35 content-tier
-# permission.grant) can match (Codex P2).
-_distribute = require("document.distribute", async_scope_resolver=_document_scope_with_processes)
+# ``_document_scope`` now carries process_ids for every gate (S-owner-assignment-1), so a
+# PROCESS-scoped grant (legal via the R35 content-tier permission.grant) matches here too.
+_distribute = require("document.distribute", async_scope_resolver=_document_scope)
 # Lifecycle actions. submit-review (S4) instantiates the approval workflow; approve/request-changes
 # route through POST /tasks/{id}/decision now (S5, removed from here). release is a flat sig-hook
 # action but enforces imperatively in-handler (its SoD-2 scope needs the body's version_id, which a
@@ -737,6 +728,23 @@ async def list_documents(
             .all()
         ):
             levels[dt.id] = dt.document_level.value
+    # S-owner-assignment-1: batch-load each candidate doc's process links ONCE (one grouped query
+    # over the bounded scan window — no N+1) so the per-row read-filter can match a PROCESS-scoped
+    # document.read grant (the list-side half of the _document_scope process_ids migration). A doc
+    # with no link gets an empty set → byte-identical filtering for the SYSTEM/ARTIFACT-scoped case.
+    process_ids_by_doc: dict[uuid.UUID, frozenset[str]] = {}
+    doc_ids = [d.id for d in docs]
+    if doc_ids:
+        grouped: dict[uuid.UUID, set[str]] = {}
+        for di_id, p_id in (
+            await session.execute(
+                select(ProcessLink.documented_information_id, ProcessLink.process_id).where(
+                    ProcessLink.documented_information_id.in_(doc_ids)
+                )
+            )
+        ).all():
+            grouped.setdefault(di_id, set()).add(str(p_id))
+        process_ids_by_doc = {k: frozenset(v) for k, v in grouped.items()}
     ctx = RequestContext(now=datetime.datetime.now(datetime.UTC))
     visible: list[DocumentedInformation] = []
     for d in docs:
@@ -744,6 +752,7 @@ async def list_documents(
             artifact_id=str(d.id),
             folder_path=d.folder_path,
             document_level=levels.get(d.document_type_id) if d.document_type_id else None,
+            process_ids=process_ids_by_doc.get(d.id, frozenset()),
         )
         if authorize(grants, "document.read", resource, ctx).allow:
             visible.append(d)

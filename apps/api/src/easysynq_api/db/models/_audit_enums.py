@@ -411,6 +411,16 @@ class EventType(enum.Enum):
     # from the RELEASED audit emitted by the cutover). Added via ALTER TYPE event_type ADD VALUE in
     # 0054 (a from-scratch ``upgrade head`` rebuilds the type from EVENT_TYPE_VALUES).
     LEADERSHIP_AUTHORIZED = "LEADERSHIP_AUTHORIZED"
+    # S-owner-assignment-1: process-owner accountability binding (doc 02 §3.4 / doc 14 §3). An
+    # admin/QMS act binds (PROCESS_OWNER_ASSIGNED) or unbinds (PROCESS_OWNER_REVOKED) a user as the
+    # accountable owner of a process — recording the ``org_role_assignment`` RACI fact AND minting
+    # the concrete PROCESS-scoped ``role_assignment.bound_scope`` that substitutes the seeded
+    # ``:assignment_process`` placeholder. Keyed object_type=process (scope_ref=user:{id}); the
+    # bound_scope mint also emits a permission-typed ROLE_ASSIGN (the authz-mutation trail,
+    # AZ-INV-5). Added via ALTER TYPE event_type ADD VALUE in 0056 (a from-scratch ``upgrade head``
+    # rebuilds the type from EVENT_TYPE_VALUES).
+    PROCESS_OWNER_ASSIGNED = "PROCESS_OWNER_ASSIGNED"
+    PROCESS_OWNER_REVOKED = "PROCESS_OWNER_REVOKED"
 
 
 class CheckpointSinkKind(enum.Enum):
