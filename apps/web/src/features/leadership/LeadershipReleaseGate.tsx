@@ -1,6 +1,5 @@
 import { Alert, Button, Group, Stack, Text } from "@mantine/core";
 import { useState } from "react";
-import { usePermissions } from "../../app/shell/usePermissions";
 import { ApiError } from "../../lib/api";
 import { useLeadershipAuthorization, useRequestLeadershipAuthorization } from "./hooks";
 
@@ -20,7 +19,6 @@ export function LeadershipReleaseGate({
   documentId: string;
   currentState: string;
 }) {
-  const perms = usePermissions();
   const { data, isLoading } = useLeadershipAuthorization(documentId);
   const request = useRequestLeadershipAuthorization(documentId);
   const [error, setError] = useState<string | null>(null);
@@ -63,7 +61,10 @@ export function LeadershipReleaseGate({
   // Top-Management member (the backend permits a fresh cycle from a terminal NEEDS_ATTENTION instance).
   if (!isApproved) return null;
 
-  const canRequest = perms.can("document.approve");
+  // CX-1: gate on the server-computed, ABAC-aware per-document capability (does the caller hold
+  // document.approve at THIS doc's scope) — NOT a SYSTEM-scoped /me/permissions probe, which missed a
+  // content/process/folder/doc-class-scoped approver. `data` is non-null past the early-return guard.
+  const canRequest = data.can_request === true;
 
   async function onRequest() {
     setError(null);

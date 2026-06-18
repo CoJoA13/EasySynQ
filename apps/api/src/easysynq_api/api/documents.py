@@ -451,6 +451,24 @@ async def _document_capabilities(
     return caps
 
 
+async def _can_request_leadership_authorization(
+    session: AsyncSession, caller: AppUser, doc: DocumentedInformation
+) -> bool:
+    """CX-1: the pure authz probe behind the FE "Request Top-Management authorization" button —
+    does the caller hold ``document.approve`` at this document's scope, the EXACT gate the request
+    endpoint enforces (``_approve`` = ``require("document.approve")`` over ``_document_scope``: NO
+    sig_hook, NO SoD overlay, NO process_ids). The AUTHZ answer ONLY — the FE ANDs it with the
+    runtime is_leadership / required / Approved / in-flight state already in the status payload (the
+    obsolete-capability-vs-§7.3-runtime-gate split). An over-strict probe (folding sig_hook/SoD or
+    state) would HIDE a button the server would actually allow — the inverse false-PASS to avoid. A
+    capability probe writes no authz-audit row, so it uses the pure PDP (gather_grants + authorize),
+    never enforce."""
+    base = await _document_scope_by_id(session, doc.id)
+    ctx = RequestContext(now=datetime.datetime.now(datetime.UTC), actor_user_id=str(caller.id))
+    grants = await gather_grants(session, caller.id, caller.org_id, "document.approve")
+    return authorize(grants, "document.approve", base, ctx).allow
+
+
 async def _load_document(
     session: AsyncSession, caller: AppUser, raw_id: uuid.UUID, *, for_update: bool = False
 ) -> DocumentedInformation:
@@ -1594,10 +1612,13 @@ async def get_leadership_authorization_endpoint(
     """The leadership release-authorization status for a document (gate ``document.read``):
     ``is_leadership_artifact`` (POL/OBJ/MR), ``required`` (the org flag is on AND it is a leadership
     type → release is gated), the current Approved ``version_id``, whether that version is already
-    ``authorized``, and the latest authorization cycle (``instance``) or ``null``. Never 404 for a
-    no-cycle document (the ``GET /documents/{id}/approval`` analogue)."""
+    ``authorized``, ``can_request`` (CX-1: whether THIS caller holds ``document.approve`` at the
+    doc's scope → may start a cycle; the request endpoint's gate, ABAC-aware), and the latest
+    authorization cycle (``instance``) or ``null``. Never 404 for a no-cycle document (the
+    ``GET /documents/{id}/approval`` analogue)."""
     doc = await _load_document(session, caller, document_id)
     state = await release_authorization_status(session, doc)
+    can_request = await _can_request_leadership_authorization(session, caller, doc)
     instance = await wf_repo.latest_instance_for_subject(
         session, caller.org_id, WorkflowSubjectType.LEADERSHIP_AUTHORIZATION, doc.id
     )
@@ -1605,7 +1626,7 @@ async def get_leadership_authorization_endpoint(
     if instance is not None:
         tasks = await wf_repo.list_instance_tasks(session, instance.id)
         cycle = _leadership_authorization(instance, tasks)
-    return {**state, "instance": cycle}
+    return {**state, "can_request": can_request, "instance": cycle}
 
 
 @router.post("/documents/{document_id}/start-revision")
