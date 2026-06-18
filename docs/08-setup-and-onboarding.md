@@ -337,18 +337,18 @@ flowchart TD
 
 The wizard pre-creates bundles mirroring the canonical personas so the org starts usable, then can customize. Each is a *typical bundle*, never a hard boundary (Vision permission philosophy).
 
-> **Permission-key canon (reconciled per Decisions Register R5).** The seeded bundles use the **doc 07 catalog keys exactly**. The legacy spellings normalize as: `document.author` → `{document.create, document.edit, document.submit}`; `capa.own` → `capa.*` (note: `capa.own` is a *role concept*, not a permission); `audit_qms.*` → `audit.*` (e.g., `audit_qms.conduct` → `audit.conduct`); and the import family `import.initiate`/`import.administer` → `import.execute` / `import.review` / `import.commit`. `record.create` stays `record.create`. Do not reintroduce the legacy spellings.
+> **Permission-key canon (reconciled per Decisions Register R5).** The seeded bundles use the **doc 07 catalog keys exactly**. The legacy spellings normalize as: `document.author` → `{document.create, document.edit, document.submit}`; `capa.own` → `capa.*` (note: `capa.own` is a *role concept*, not a permission); `audit_qms.*` → `audit.*` (e.g., `audit_qms.conduct` → `audit.conduct`); the import family `import.initiate`/`import.administer` → `import.execute` / `import.review` / `import.commit`; and `evidencepack.generate` → `report.evidence_pack.generate`. `record.create` stays `record.create`. The Quality-Manager-row tokens `framework.configure` / `lifecycle.configure` / `orgrole.manage` / `mgmtreview.own` are **illustrative role concepts, not catalog keys** — the framework/lifecycle configuration and QMS OrgRole/RACI authority ride the QMS Owner reservation (doc 07 §4.3), and management-review capability is the `mgmtReview.*` family (`mgmtReview.read` / `mgmtReview.create` / `mgmtReview.record_outputs`). Do not reintroduce the legacy spellings.
 
 | Seeded Role bundle | Maps to persona | Typical capabilities (illustrative — full catalog in Permissions doc) | Default scope |
 |---|---|---|---|
 | **System Administrator** | Avery | `user.*`, `role.*`, `storage.*`, `backup.*`, `restore.*`, `config.*`, `import.execute`, `import.review`, `import.commit`, `system.audit_log.read` — **no** QMS content caps | System |
-| **Quality Manager** | Mara | QMS-wide `document.read`, `framework.configure`, `lifecycle.configure`, `orgrole.manage`, `audit.*`, `mgmtreview.own`, `evidencepack.generate`, `capa.verify` | Org-wide |
+| **Quality Manager** | Mara | QMS-wide `document.read`, `audit.*`, `mgmtReview.*`, `report.evidence_pack.generate`, `capa.verify` (+ the illustrative QMS-config concepts `framework.configure` / `lifecycle.configure` / `orgrole.manage` — see the note above) | Org-wide |
 | **Process Owner** | Diego | `document.read` (all), `{document.create, document.edit, document.submit}`/`record.create`/`capa.*` **scoped to owned process** | Per-process |
 | **Author** | Priya | `document.checkout`, `document.edit`, `document.submit` within assigned folders/processes | Folder/process |
 | **Approver** | Ken | `document.review`, `document.approve|reject` (the signature hook) within scope | Folder/process |
 | **Internal Auditor** | Ingrid | broad `document.read` + `record.read`, `audit.conduct`, `finding.create`, `capa.link` — **explicitly NO** `{document.create, document.edit, document.submit}`/`document.approve` (independence) | Org-wide read |
 | **Read-only Employee** | Sam | `document.read` (Released only) within area; optional `document.acknowledge` (normalized per R5; the catalog key — R42/R43 context) | Area/process |
-| **External Auditor (Guest)** | Olsen | `evidencepack.read` only, **time-boxed**, scope-limited; every view logged | Bound to one evidence pack |
+| **External Auditor (Guest)** | Olsen | `document.read` / `record.read` / `report.read` **only within the bound pack**, **time-boxed**, scope-limited; every view logged | Bound to one evidence pack |
 
 ### 10.2 What the screen captures per role
 
@@ -390,7 +390,7 @@ Granting permissions is itself split along the Admin/QMS line, resolving the app
 
 | Tier | Who may hold `permission.grant` / `permission.revoke` | Domains | Scope |
 |---|---|---|---|
-| **CONTENT permissions** | The **Quality-Manager / QMS Owner** (Mara) **MAY** hold `permission.grant` (and `permission.revoke`) | `document.*`, `record.*`, `audit.*`, `capa.*`, `changeRequest.*`, `evidencepack.*` | **WITHIN QMS scope** |
+| **CONTENT permissions** | The **Quality-Manager / QMS Owner** (Mara) **MAY** hold `permission.grant` (and `permission.revoke`) | `document.*`, `record.*`, `audit.*`, `capa.*`, `changeRequest.*`, `improvement.*`, `report.evidence_pack.generate` | **WITHIN QMS scope** |
 | **SYSTEM permissions** | **Admin-only** (Avery) | `user.*`, `role.*`, `storage.*`, `backup.*`, `restore.*`, `config.*`, `import.*` | **SYSTEM scope** |
 
 So the QMS Owner can delegate *content* authority (e.g., grant `document.edit` on a folder to an author) without ever touching *system* authority — and Avery retains exclusive control over system-permission granting. This means the QMS no longer depends on Avery to administer content-side delegation, which keeps the separation-of-duties boundary clean in both directions.
@@ -654,7 +654,7 @@ stateDiagram-v2
 - Edit per-user **overrides** (explicit grant/deny; deny wins).
 - **Effective-permissions explorer:** select a user + a target (doc/folder/process) and see the resolved decision with the *reason trace* (which bundle/attribute/override produced allow/deny) — essential for debugging deny-by-default and for audit defense.
 - The **self-grant friction** (§10.4) applies identically here: adding QMS content caps to an admin/self is high-friction and high-visibility.
-- The **two-tier `permission.grant` boundary** (§10.5) applies identically here: the QMS Owner may hold `permission.grant`/`permission.revoke` scoped to CONTENT domains within QMS scope (`document.*`, `record.*`, `audit.*`, `capa.*`, `changeRequest.*`, `evidencepack.*`), while SYSTEM-permission granting (`user.*`, `role.*`, `storage.*`, `backup.*`, `restore.*`, `config.*`, `import.*`) stays admin-only at SYSTEM scope (reconciled per Decisions Register R35).
+- The **two-tier `permission.grant` boundary** (§10.5) applies identically here: the QMS Owner may hold `permission.grant`/`permission.revoke` scoped to CONTENT domains within QMS scope (`document.*`, `record.*`, `audit.*`, `capa.*`, `changeRequest.*`, `improvement.*`, `report.evidence_pack.generate`), while SYSTEM-permission granting (`user.*`, `role.*`, `storage.*`, `backup.*`, `restore.*`, `config.*`, `import.*`) stays admin-only at SYSTEM scope (reconciled per Decisions Register R35).
 
 ### 15.4 System settings
 

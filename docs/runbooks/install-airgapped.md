@@ -33,8 +33,10 @@ phone-home). The bundle is built on a connected host and transferred offline.
    docker compose -f infra/compose/compose.yml -f infra/compose/compose.s.yml \
                   -f infra/compose/compose.airgap.yml up -d
    ```
-   Set `SITE_ADDRESS` to your domain and provide a cert, or use the internal self-signed issuer
-   (`CADDY_TLS_INTERNAL`). Then follow [install-online.md](install-online.md) steps 2–4.
+   Set `SITE_ADDRESS` to your domain and provide a cert, or use the internal self-signed issuer by
+   setting `CADDY_TLS_DIRECTIVE="tls internal"` (the air-gap overlay does this for you). The internal
+   CA requires `SITE_ADDRESS` to be a hostname — `tls internal` is invalid on a plain `:80` listener.
+   Then follow [install-online.md](install-online.md) steps 2–4.
 
 ## Assumed network capabilities
 No outbound HTTP. The browser reaches Caddy on the published port; everything else is the internal

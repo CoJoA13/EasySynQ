@@ -39,7 +39,7 @@ fourth subject leg to the `/tasks` decision surface.
 
 Read against code 2026-06-13. CLAUDE.md / the memory note are narrative; these are pinned.
 
-1. **Capabilities CAN be PROCESS-scoped server-side.** [`_dcr_doc_scope`](../../apps/api/src/easysynq_api/api/dcr.py)
+1. **Capabilities CAN be PROCESS-scoped server-side.** [`_dcr_doc_scope`](../../../apps/api/src/easysynq_api/api/dcr.py)
    (`api/dcr.py:166`) resolves the full `ResourceContext` (incl. `process_ids` from the target doc's
    process-links) — every write dependency (`_dcr_assess`/`_dcr_route`/`_dcr_implement`/`_dcr_close`)
    already authorizes against it. The "SYSTEM-scoped" claim in ui-2a learning #7 is a *client-side*

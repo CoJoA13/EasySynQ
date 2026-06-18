@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python 3.12 · FastAPI · SQLAlchemy 2 (async) · Alembic · PostgreSQL 16 · pytest (unit + testcontainers integration).
 
-**Spec:** [docs/superpowers/specs/2026-06-11-s-obj-quality-objectives-design.md](2026-06-11-s-obj-quality-objectives-design.md)
+**Spec:** [docs/superpowers/specs/2026-06-11-s-obj-quality-objectives-design.md](../specs/2026-06-11-s-obj-quality-objectives-design.md)
 
 ---
 

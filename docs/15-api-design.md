@@ -205,7 +205,7 @@ The JWT `acr`/`amr` (auth-context) is carried onto `signature_event.auth_context
 
 ## 6. Server-Side Authorization (request-time, deny-by-default)
 
-Every authenticated route declares (a) the **required permission key(s)** (from the `07` catalog, e.g. `document.checkout`, `dcr.approve`, `record.create`, `import.execute`) and (b) how to derive the **target scope** of the resource (`SYSTEM | PROCESS | FOLDER | DOC_CLASS | ARTIFACT`, `14 §3`). A FastAPI dependency runs the policy engine (§9) **before** the handler. The resolution order is the `14 §1.7/§3` contract: **explicit user `DENY` → explicit user `ALLOW` → role grant within scope → default deny**, with **deny-wins** and **SoD** evaluated against immutable version/audit history. The endpoint tables in §8 name the key(s) per route; full engine detail is §9.
+Every authenticated route declares (a) the **required permission key(s)** (from the `07` catalog, e.g. `document.checkout`, `changeRequest.approve`, `record.create`, `import.execute`) and (b) how to derive the **target scope** of the resource (`SYSTEM | PROCESS | FOLDER | DOC_CLASS | ARTIFACT`, `14 §3`). A FastAPI dependency runs the policy engine (§9) **before** the handler. The resolution order is the `14 §1.7/§3` contract: **explicit user `DENY` → explicit user `ALLOW` → role grant within scope → default deny**, with **deny-wins** and **SoD** evaluated against immutable version/audit history. The endpoint tables in §8 name the key(s) per route; full engine detail is §9.
 
 ---
 
@@ -229,9 +229,11 @@ Every authenticated route declares (a) the **required permission key(s)** (from 
 | CAPAs | `/capas`, `/capas/{id}/stages` | `capa`, `capa_stage` |
 | Audits | `/audit-programs`, `/audits`, `/audits/{id}/findings` | `audit_program`, `audit_plan`, `audit`, `audit_finding` |
 | Management Review | `/management-reviews` | `management_review`, `review_input`, `review_output` |
+| Improvement Initiatives | `/improvement-initiatives` | `improvement_initiative`, `improvement_initiative_stage_event` |
 | Audit Trail | `/audit-events`, `/{resource}/{id}/audit-events` | `audit_event`, `audit_checkpoint` |
 | Search | `/search` | OpenSearch (Postgres-FTS fallback) |
 | Dashboards / Reports | `/dashboards/*`, `/reports/*` | aggregates |
+| Evidence Packs | `/evidence-packs` | `evidence_pack`, `pack_item`, `pack_share_link`, `record` (`record_type=EVIDENCE`) |
 | Retention | `/retention-policies`, `/records/{id}/disposition` | `retention_policy`, `disposition_event` |
 | Admin / Config | `/admin/*` | `organization`, `instance_config`, `storage_config`, `setup_state`, `identity_provider_config`, `numbering_scheme` |
 | Backup | `/admin/backups` | `backup_policy`, `backup_run` |
@@ -370,6 +372,15 @@ stateDiagram-v2
     Obsolete --> [*]
 ```
 
+#### 8.5a Leadership Release Authorization — as built (slice S-leadership-1, clause 5.2/6.2/9.3, R45)
+
+> **Opt-in, additive.** For the clause-5/6/9 **leadership artifacts** (`document_type.code ∈ {POL, OBJ, MR}`), an org may require a **signed Top-Management RELEASE authorization** before an `Approved` version can be released. The gate is enforced at the shared `vault/lifecycle._cutover` chokepoint (direct release + OBJ + MR + DCR-implement go-live) and is **OFF by default** via the `system_config` flag **`leadership_release_requires_top_management_authorization`** (surfaced under the `/admin/*` config — §8.17). When OFF, the welded approve/release path is **byte-identical**. The sign-off mints a `signature_event(meaning=verify)` on the **existing `document_version`** (reusing the R2 set — no own-table stage event, no two-INSERT seam) plus a `LEADERSHIP_AUTHORIZATION` workflow subject. **Authority = Top-Management candidate-pool membership — NO new permission key.** All contracted in `packages/contracts/openapi.yaml`.
+
+| Method | Path | Perm | Idem | Notes |
+|---|---|---|---|---|
+| POST | `/documents/{id}/request-leadership-authorization` | `document.approve` (on the subject) | ✓ | Request the signed Top-Management release authorization for an **Approved** leadership artifact — opens an engine workflow routed to the reserved "Top Management" role; the version becomes releasable only when a member **signs** (`meaning=verify` on the `document_version`) via `POST /tasks/{id}/decision`. The **SIGN is candidate-pool authority — no key**; this *request* gates `document.approve`. `409` unless a leadership type / unless `Approved` / if an authorization is already in flight (`already_authorized` once the version carries a verify sig); `current_state=NEEDS_ATTENTION` when no Top-Management member is assigned. Body: optional `{ note? }`. |
+| GET | `/documents/{id}/leadership-authorization` | `document.read` | — | The release-authorization status: `is_leadership_artifact` (POL/OBJ/MR), `required` (the org flag is on **and** it is a leadership type → release is gated), the current Approved `version_id`, `authorized` (that version already carries a Top-Management verify signature), and the latest authorization cycle `instance` (or `null`). Never 404 for a no-cycle document. |
+
 ### 8.6 Versions (`/documents/{id}/versions`)
 
 Immutable snapshots (`14 §5.3`). Two-step presigned upload keeps large blobs off the API tier; blobs are **content-addressed by SHA-256** and WORM-locked in MinIO (`14 §5.4`).
@@ -444,7 +455,7 @@ Per reconciliation **R6**, "approvals" are **not** standalone tables: an approva
 | GET | `/tasks?assignee=me&state=PENDING` | `task.read` | — | The reviewer/approver queue. Filter `type`, `state`, `instance_id`, `stage_key`, `due_at`. Also surfaced via `/me/actions`. |
 | GET | `/tasks/{id}` | `task.read` | — | Task detail + the subject it acts on. |
 | POST | `/tasks/{id}/claim` | `task.claim` | ✓ | Claim a pool task (`PENDING→CLAIMED`). |
-| POST | `/tasks/{id}/decision` | derived from subject (`document.approve` \| `dcr.approve` \| `capa.verify` \| `record.approve`) | ✓ | `{ outcome:"approve"\|"reject"\|"acknowledge"\|"complete"\|"verify"\|"changes_requested", comment? }` (idempotent via `client_token`). Writes a `task_outcome` **and** a `signature_event` and an `audit_event` in one transaction. **SoD enforced:** an author/auditor excluded by `sod_author_excluded`/`sod_constraint` → `403 sod_violation`. May require `acr=mfa` (config) → else `403 step_up_required`. Reject returns the subject to `Draft`/`Open` with the comment. |
+| POST | `/tasks/{id}/decision` | derived from subject (`document.approve` \| `changeRequest.approve` \| `capa.verify` \| `document.acknowledge`) | ✓ | `{ outcome:"approve"\|"reject"\|"acknowledge"\|"complete"\|"verify"\|"changes_requested", comment? }` (idempotent via `client_token`). Writes a `task_outcome` **and** a `signature_event` and an `audit_event` in one transaction. **SoD enforced:** an author/auditor excluded by `sod_author_excluded`/`sod_constraint` → `403 sod_violation`. May require `acr=mfa` (config) → else `403 step_up_required`. Reject returns the subject to `Draft`/`Open` with the comment. |
 | POST | `/tasks/{id}/reassign` | `task.reassign` | ✓ | `{ to_user_id, reason }` (delegation-aware). |
 | POST | `/tasks/{id}/escalate` | `task.escalate` | ✓ | Manual escalation; SLA breach auto-escalates via Beat (`task` state `ESCALATED`). |
 
@@ -582,9 +593,9 @@ PDCA "Check" (`14 §9`). The program is a **maintained document**; an `audit` an
 | POST | `/management-reviews/{id}/close` | `mgmtReview.record_outputs` | — | The close gate (mirrors `_audit_close_gate`): `409 review_close_blocked` until every ACTION task is DONE; flips `close_state` `ActionsTracked→Closed`. |
 | PATCH | `/management-reviews/{id}` | `mgmtReview.create` | — | Metadata PATCH (e.g. `attendees`, `review_date`) while Draft. |
 
-### 8.12b Improvement Initiatives — as built (slices S-improvement-1/2, clause 10.3, R46)
+### 8.12b Improvement Initiatives — as built (slices S-improvement-1/2/4, clause 10.3, R46)
 
-> An **Improvement Initiative** is an **own-table mutable-state workflow object** (the DCR / R22 doctrine — NOT a `kind=RECORD`, NOT a `documented_information` subtype), because clause 10.3 is **non-★** (no ★ checklist node to flip). The mutable `stage` (`Open → InProgress → Completed → Closed`, `+ Cancelled` from the pre-completion states) is the headline; the append-only `improvement_initiative_stage_event` trail (REVOKE UPDATE,DELETE) is the immutable history. Two additive CONTENT keys (R38, catalog 100→102): `improvement.read` / `improvement.manage` (PROCESS finest-scope, `sig_hook=False`). **No signature on any act (R43).** All contracted in `packages/contracts/openapi.yaml`.
+> An **Improvement Initiative** is an **own-table mutable-state workflow object** (the DCR / R22 doctrine — NOT a `kind=RECORD`, NOT a `documented_information` subtype), because clause 10.3 is **non-★** (no ★ checklist node to flip). The mutable `stage` (`Open → InProgress → Completed → Closed`, `+ Cancelled` from the pre-completion states) is the headline; the append-only `improvement_initiative_stage_event` trail (REVOKE UPDATE,DELETE) is the immutable history. Two additive CONTENT keys (R38, catalog 100→102): `improvement.read` / `improvement.manage` (PROCESS finest-scope, `sig_hook=False`). The ordinary acts are **unsigned (R43)**; the **opt-in S-improvement-4** Top-Management authorization is the one signed exception (see below). All contracted in `packages/contracts/openapi.yaml`.
 
 | Method | Path | Perm | Notes |
 |---|---|---|---|
@@ -596,6 +607,8 @@ PDCA "Check" (`14 §9`). The program is a **maintained document**; an `audit` an
 | POST | `/improvement-initiatives/{id}/transition` | `improvement.manage` | FSM move (`409 improvement_transition_invalid`); a Closed/Cancelled move requires a comment; a Closed move may fold a realized-benefit `outcome` into the sealed stage event. |
 | POST | `/findings/{finding_id}/raise-initiative` | `improvement.manage` | **(S-improvement-2)** Raise from an `OBSERVATION`/`OFI` finding (`source=OFI`, `source_link_id=finding.id`). `422 finding_not_improvable` on an `NC` (it carries its mandatory CAPA instead). 1:N — an `Idempotency-Key` makes a retry return the same initiative (201 new / 200 replay). Scope = the finding's audit auditee process; the initiative **inherits** that process (an auditor raises the OFI, a Process Owner turns it into an initiative). |
 | POST | `/management-reviews/{review_id}/outputs/{output_id}/raise-initiative` | `improvement.manage` | **(S-improvement-2)** Raise from an `ACTION`/`IMPROVEMENT` MR output (`source=review`, `source_link_id=output.id`); emits `MGMT_REVIEW_INITIATIVE_SPAWNED` on the MR doc. `422 output_not_improvable` (a `DECISION`); `409 review_not_tracking` unless released-and-tracking. 1:N + `Idempotency-Key` (201/200). The link is one-way on the initiative; `review_output.spawned_initiative_id` stays **reserved-null** (R46 — un-reserving the reciprocal latch is a future owner-flipped migration). Scope from the body's optional `process_id` (SYSTEM fallback). |
+| POST | `/improvement-initiatives/{id}/request-authorization` | `improvement.manage` (at the initiative's PROCESS scope) | **(S-improvement-4, opt-in)** Request a **signed Top-Management authorization** for a **Completed** initiative — opens an engine workflow routed to the reserved "Top Management" role; the initiative is closed only when a member **signs** (`meaning=verify`, reusing the R2 set) via `POST /tasks/{id}/decision`. The **SIGN is candidate-pool authority — no new permission key**; this *request* gates `improvement.manage`. `409` unless `Completed` / `409` if an authorization is already in flight; `current_state=NEEDS_ATTENTION` when no Top-Management member is assigned. Mints a `LEADERSHIP_AUTHORIZATION`-style cycle; the unsigned `/transition` close stays available (this is an alternative, not a replacement). Body: optional `{ note? }`. |
+| GET | `/improvement-initiatives/{id}/authorization` | `improvement.read` | **(S-improvement-4)** The initiative's current management-authorization cycle (instance + tasks), or `null` when never requested (the `GET /documents/{id}/approval` analogue; never 404 for a no-cycle initiative). |
 
 ### 8.13 Audit Trail — immutable, hash-chained journal (`/audit-events`)
 

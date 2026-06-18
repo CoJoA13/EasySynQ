@@ -1,8 +1,9 @@
 # Spec — Scheduled retained-backup verification (redesign of Phase-1 I-7 / PR #155)
 
-> **Status:** approved design, NOT yet implemented. Implement on branch `chore/scheduled-restore-test`
-> (PR [#155](https://github.com/CoJoA13/EasySynQ/pull/155), currently a **draft**). Owner approved the
-> "verify retained archives" direction + the design calls below on 2026-06-16.
+> **Status:** ✅ SHIPPED — merged as PR [#155](https://github.com/CoJoA13/EasySynQ/pull/155)
+> (squash `6308565`, 2026-06-16). This is the point-in-time approved design (owner approved the
+> "verify retained archives" direction + the design calls below on 2026-06-16); the as-built narrative
+> lives in [`../../slice-history.md`](../../slice-history.md).
 
 ## Why (the gap Codex caught)
 

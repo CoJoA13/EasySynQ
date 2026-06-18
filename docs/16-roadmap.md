@@ -87,88 +87,35 @@ Records/evidence capture, retention/disposition, Evidence Packs, audits/findings
 
 ## 4. v1 — "A Complete ISO 9001:2015 QMS"
 
-> **🟡 IN PROGRESS (v1 started 2026-06-03).** The **Records & evidence family is COMPLETE** on `main` (migration head
-> `0027`) — the first three capability rows below: **S-rec-1** (capture + evidence-linking + correction), **S-rec-2**
-> (retention/disposition lifecycle + daily Beat sweep + the R27 dual-control WORM-destroy hatch), the **Evidence Packs
-> (UJ-7)** family **S-pack-1** (scope resolution + immutable build/seal) + **S-pack-2** (external delivery via a
-> time-boxed revocable Ed25519 share link + the PDF portfolio), and **S-rec-3** (Mode-B structured-form capture: a
-> Form/Template carries a versioned `field_schema`; capture validates `form_field_values` against the pinned Effective
-> version's schema). **UJ-7 (one-click evidence pack) works end-to-end.** Deferred to later v1 slices: CAPA's multi-stage
-> close-out, workflows+notifications *delivery/escalation*, the web UI, and the rest of search/reporting, plus the
-> records-family residual Mode B for the `audit`/`capa` multi-stage records (once those entities land). The
-> **records-family close-out — `/retention-policies` CRUD + soft-archive + the creator≠disposer SoD-6** — shipped in
-> **S-rec-4** (migration `0028`, the first additive catalog extension, R38). The **Ingestion engine (UJ-2)** family is now
-> STARTED: **S-ing-1** (run + scan/inventory foundation, migration `0029`) ships an idempotent, crash-safe scan that
-> inventories a read-only mounted source tree into transient `import_*` staging; **S-ing-2** (extract + classify,
-> migration `0030`) adds the Tika `-full` sidecar [extractors + Tesseract OCR over HTTP] + the pure
-> `RuleHeuristicClassifier`; **S-ing-3** (dedup + version-families + proposal, migration `0031`) adds the three §7
-> detectors [exact / near-dup via **in-process MinHash** behind a `DedupDetector` seam / version-family], the §7.2
-> provably-total canonical pick, and the §8 proposal — all still writing nothing to the vault. **S-ing-4** (the
-> human-in-the-loop review, migration `0032`) adds the §9 decision surface — per-file accept/correct/exclude/defer + the
-> **R10 `kind` confirmation** (folded at read, never on the engine classification), live-mutating merge/split, the §9.2a
-> bulk lever, and the §9.3 pre-commit checklist (blocking conflicts + the non-blocking ★-coverage projection) — turning a
-> `Proposed` run into a confirmed, commit-ready set, still writing nothing to the vault. **S-ing-5** (the COMMIT, migration
-> `0033`) is the capstone that **completes the Ingestion family (UJ-2)**: it migrates the `commit_ready` keep-items into the
-> vault as Effective **Rev A** controlled documents + immutable Records, per-item transactional + idempotent (the
-> `import_commit_result` ledger) + resumable (PartiallyCommitted → re-POST resumes), each with `import_provenance` (doc 14 §5.1)
-> + a baseline `signature_event(meaning=import_baseline)` (R2) + the §12.1 Import Report (a RETAIN_PERMANENT EVIDENCE Record +
-> the mirror `_ImportReport/` export), preserving the source doc-code as the vault identifier per R10. **OpenSearch posture
-> (S-ing-3):** near-dup ships as in-process MinHash; the OpenSearch container itself stays **absent (R34)** — the
-> `DedupDetector`/`Indexer` OpenSearch impls are reserved, not-built drop-ins. The **Ingestion engine (UJ-2) family is
-> COMPLETE**. The **Audits/Findings/CAPA family (UJ-5/UJ-6)** is now **STARTED**: **S-aud-1** (migration `0034`) ships
-> the internal-audit programmes/plans (own-table scheduling) + the `audit` record (a `kind=RECORD` subtype) walked
-> through the linear lifecycle FSM (Scheduled→…→Closing→Closed); the family's locked model + workflow + SoD posture is
-> **R39** (+declarative-routing · severity-aware SoD-4 · block-until-corrected audit close · `audit_program` own-table).
-> **S-wf-engine** (migration `0035`) then adds the doc-10 **declarative workflow engine** (multi-stage + tri-state quorum
-> [ANY/ALL/N_OF_M/PERCENT, distinct approvers, early-fail] + `conditional`/ROUTER routing over an `ast`-sandboxed predicate
-> grammar + candidate-pool resolution + due-date SLA) on the existing `workflow_*` tables, the S5 DOCUMENT approval left
-> byte-identical — the substrate S-capa-2's severity-routed CAPA approval rides. **S-capa-1** (migration `0036`) then
-> ships the **CAPA core + intake**: `capa` (a `kind=RECORD` subtype with a mutable `close_state` + an append-only
-> `capa_stage` trail; Raised→Containment wired), `ncr` (ISO 8.7 own-table + recorded disposition, R20), `complaint`
-> (R16, a shared-PK subtype) + the idempotent **complaint→CAPA spawn**, the slice-0 grant-backfill of the orphaned
-> `capa.update`/`ncr.create`/`ncr.record_correction` keys, and the `allow_capa_self_verify` SoD-4 config seam (enforced
-> in S-capa-3). **S-aud-2** (migration `0037`) then ships **audit findings + the NC→CAPA auto-link + the REAL close
-> gate**: `audit_finding` (a `kind=RECORD` subtype; NC/OBSERVATION/OFI), the atomic NC→CAPA auto-link (an NC mandatorily
-> auto-creates its CAPA, SYSTEM-side under the auditor's `finding.create`), the deferred bidirectional cross-FK
-> (`capa.origin_finding_id`↔`audit_finding.auto_capa_id`), the **general** finding-retype/correction path, the
-> block-until-corrected **audit-close gate** (409 until every live NC has a Closed CAPA), and the enabled
-> `evidence_for_link` FINDING/CAPA_STAGE targets. **S-capa-2** (migration `0038`, seed-only) then ships
-> **RootCause + ActionPlan stages + the severity-routed engine approval + the real `signature_event`
-> write**: `/capas/{id}/root-cause` (`capa.record_rca`) + `/capas/{id}/action-plan` (`capa.plan_action`,
-> which opens the seeded `capa_action_plan_approval` workflow — Critical = QMS-Owner→Top-Management
-> sequential, Major/Minor = QMS-Owner ANY) + the `/tasks/{id}/decision` CAPA dispatch that, on the
-> completing approval, writes a `signature_event(meaning=approval, signed_object=capa_stage)` + the signed
-> ActionPlan stage and flips `close_state` to ActionPlan, plus a NEW additive **Top Management** role.
-> **S-capa-3** (zero-migration) then ships **Implement / Verify / Close — the M4 closure gate + severity-aware
-> SoD-4**: `/capas/{id}/implement` (`capa.capture_effectiveness`) + `/verify` (`capa.verify`; the real
-> `signature_event(meaning=verify)` + SoD-4 verifier≠implementer, Critical/Major hard / Minor honours
-> `allow_capa_self_verify`) + `/close` (`capa.close`; the M4 gate → Closed, else the `not_effective`
-> effectiveness loop `Verify→RootCause`+`cycle_marker++` re-proposing + re-approving a revised plan, else 409
-> `capa_close_incomplete`), with the `evidence_frozen` unlink guard. This is the production path that drives a
-> CAPA to Closed and satisfies the S-aud-2 block-until-corrected audit-close gate. The close-out slice
-> **S-aud-capa-pack** (migration `0039`) adds Evidence-Pack **Finding/CAPA scope** + a content-hash-sealed
-> dossier (the finding fields / CAPA stage trail + e-signatures — "prove this NC was closed effectively"),
-> so **the Audits/Findings/CAPA family is now COMPLETE.** The **Revision & Change Depth (DCR) family (doc 05, R40)**
-> then shipped end-to-end across **S-dcr-1..5** (core+intake `0040` · where-used/impact+assess `0041` · redline/diff
-> `0042` · routing+approval `0043` · implement/close + the shared-path §7.3 obsoletion gate + the CAPA→DCR loop +
-> the deferred cross-FK `0044`) — **the DCR family is COMPLETE** (deferred to the v1.x drift family: scheduled
-> re-review D5 + drift detection D1–D4). **Migration head is `0045`.** See `CLAUDE.md` for shipped detail.
+> **🟢 SUBSTANTIALLY DELIVERED (as-built snapshot 2026-06-17; migration head `0054`).** The ISO 9001:2015 **★ spine is
+> feature-complete** — every ★ family has shipped end-to-end on `main`, and the **web-UI track is feature-complete for them**
+> (~1040 tests). Shipped families:
 >
-> **Web-UI track (`apps/web`, React/Mantine SPA) — IN PROGRESS.** The SPA is being built as a vertical operational
-> journey. **Shipped: S-web-1 … S-web-7c** — app shell + token port, faceted Library + read-only drawer, Document
-> Authoring, the Document detail page + text/visual redline, Review & Approve (**closes UJ-3**), Global Search +
-> Compliance Checklist, the Ingestion Review UI (**closes UJ-2**), and the Nonconformity & CAPA front door (the CAPA
-> board + lifecycle writes + Complaint & NCR intake). **Next:** S-web-7d (audits & findings) · then the PDCA dashboard
-> (deferred until acks/objectives land). Per-slice detail in `docs/slice-history.md`; design specs/plans in
-> `docs/superpowers/{specs,plans}/` (read the one matching your slice, not eagerly).
+> - **Records & evidence** (capture/evidence-linking/correction, Mode-B structured-form capture) + **Retention & disposition**
+>   (policies-as-data, the R27 dual-control WORM-destroy hatch, `/retention-policies` CRUD + SoD-6) — S-rec-1..4.
+> - **Traceability chain + Evidence Packs (UJ-7)** — clause/process **and** Finding/CAPA scope, immutable/self-verifying,
+>   time-boxed revocable external-auditor delivery — S-pack-1/2 + S-aud-capa-pack. *One-click evidence pack works end-to-end.*
+> - **Ingestion engine (UJ-2)** — scan/inventory → extract/classify → dedup/version-families/proposal → human-in-the-loop
+>   review → COMMIT, with `import_provenance` + `signature_event(meaning=import_baseline)` (R2) — S-ing-1..5 (+ the S-ing-4b
+>   review UI). OpenSearch stays **absent (R34)**: near-dup ships as in-process MinHash behind a reserved `DedupDetector` seam.
+> - **Audits/Findings/CAPA (UJ-5/UJ-6)** — internal-audit programmes/plans + `audit_finding` + the NC→CAPA auto-link +
+>   the multi-stage CAPA close-out (RootCause → ActionPlan → Implement → Verify → Close, the M4 gate) + the block-until-corrected
+>   audit-close gate — S-aud-1/2 + S-capa-1/2/3 + the **declarative workflow engine** S-wf-engine (R39).
+> - **Revision & Change Depth (DCR, R40)** — read + write + diff (metadata + text + visual) + annotate + CREATE-implement,
+>   with the shared-path §7.3 obsoletion gate + the CAPA→DCR loop — S-dcr-1..5 (+ the DCR SPA). *DCR family COMPLETE, no residuals.*
+> - **Drift D1–D5** (mirror tamper/staleness scan + auto-correct, blob-integrity verify, scheduled re-review currency sweep),
+>   **Distribution & acknowledgement** (issue-on-release + version-pinned read-and-understood evidence + ack dashboard),
+>   **Quality Objectives** (clause 6.2 lifecycle/revision + the KPI trend chart), **Management Review** (clause 9.3 backend + UI +
+>   outputs→action-systems + the filed-minutes pack), and the **PDCA dashboard (Home)** health wheel.
+> - **Improvement Initiatives** (clause 10.3, R46 — the non-★ own-table workflow object) end-to-end: backend + spawn endpoints +
+>   SPA + the opt-in signed, engine-routed Top-Management authorization (migrations `0052`/`0053`).
+> - **Leadership release routing** (S-leadership-1, migration `0054`) — an opt-in, additive Top-Management RELEASE authorization
+>   for the clause-5/6/9 leadership artifacts (POL §5.2 / OBJ §6.2 / MR §9.3); backend (#190) + FE (#192).
 >
-> **Management Review family (clause 9.3) — SHIPPED (S-mr-1, migration `0050`, R45).** The Management Review is a
-> kind=DOCUMENT `MR` subtype (the S-obj-1 precedent — the register-sanctioned deviation from the doc-14 §9 RECORD
-> prescription) whose minutes freeze into the version snapshot at submit; **one released MR flips the 9.3 ★ node COVERED**,
-> so **the ISO 9001:2015 ★ spine is now feature-complete.** It rides the already-seeded `mgmtReview.*` keys (no new key,
-> catalog stays 100), with the owner-gated input compiler, the `MR_ACTION` spawn + the `_audit_close_gate`-style close
-> gate, and a daily cadence Beat sweep. **Remaining: S-mr-2** (the MR dashboard UI + the Home "next review in N days"
-> widget); deferrals (named, not faked) in R45.
+> **This block is a point-in-time snapshot.** The authoritative live status is **`CLAUDE.md` "Current status"** + the per-slice
+> changelog **`docs/slice-history.md`** (named, not-faked deferrals live there); the web design specs/plans in
+> `docs/superpowers/{specs,plans}/`. Deferred to **v1.x**: OpenSearch full-text + currency/overdue + audit-log search; the
+> notification *delivery/escalation/digest* tail; reporting depth; and the items named per family in slice-history.
 
 **Goal:** everything an organization needs to *run and certify* an ISO 9001:2015 QMS, end to end, and to face an external audit with a one-click evidence pack.
 
@@ -177,15 +124,15 @@ Records/evidence capture, retention/disposition, Evidence Packs, audits/findings
 | ✅ **Records & evidence capture** | Three capture modes (upload, structured-form-from-Effective-template, link-as-evidence); record types catalog; `source_version_id` pinning; immutability + `correction_of`; WORM retention hold. **Shipped (S-rec-1 + S-rec-3).** | 06 §2-4 | MVP vault, forms-as-Documents |
 | ✅ **Retention & disposition** | Retention policies as data; resolution precedence; one-way ratchet; legal hold; disposition lifecycle with tombstones; Beat retention sweep. **Shipped (S-rec-2).** Plus **`/retention-policies` CRUD + soft-archive** and the **creator≠disposer SoD-6** (overridable via `allow_self_disposition`). **Shipped (S-rec-4, R38).** | 06 §5, 07 §7 | records, Beat |
 | ✅ **Traceability chain + Evidence Packs (UJ-7)** | requirement→process→document→record→evidence chain; clause/process/finding/CAPA-scoped packs; immutable, self-verifying, gap-honest; time-boxed external-auditor guest delivery. **Shipped (S-pack-1/2 + S-aud-capa-pack)** — clause/process **and** Finding/CAPA scope (the latter with a content-hash-sealed narrative + e-signature dossier). | 06 §6-7 | records, search, authz scope |
-| ✅ **Audits & findings (UJ-5)** | Audit program/plan/audit/finding; finding types (NC/Observation/OFI) + severity; NC auto-creates CAPA. **Shipped (S-aud-1/2 + the S-web-7 board/lifecycle UI; web findings UI = S-web-7d).** | 02 §2 (9.2), 06, 10 | records, authz (auditor independence) |
+| ✅ **Audits & findings (UJ-5)** | Audit program/plan/audit/finding; finding types (NC/Observation/OFI) + severity; NC auto-creates CAPA. **Shipped (S-aud-1/2 + the S-web-7 board/lifecycle UI + the S-web-7d audits & findings UI, #105).** | 02 §2 (9.2), 06, 10 | records, authz (auditor independence) |
 | ✅ **CAPA / improvement (UJ-6)** | Multi-stage CAPA record (NC → correction → RCA → action → verification → close); close-guards (RCA + action + effectiveness all present, metric M4). **Shipped (S-capa-1/2/3 + S-aud-capa-pack; web = S-web-7a/7b/7c).** | 06, 10 | audits, records |
-| ✅ **Revision/change depth** | DCR (reason, impact assessment, routing); where-used/impact analysis; major/minor significance; effectivity windows + scheduled future revisions; redline/diff (text + metadata + visual). **COMPLETE (R40):** **S-dcr-1** ships the DCR core + intake — `dcr` own-table (mutable-state FSM, R22 — not a record) + append-only `dcr_stage_event` + `DCR-{YYYY}-{SEQ}` id + POST/GET/PATCH `/dcrs` + cancel (mig `0040`). **S-dcr-2** ships where-used/impact + assess — the `document_link` doc↔doc graph + CRUD, `GET /documents/{id}/where-used` (the §7.2 categories + the §7.3 obsoletion_safety advisory), `POST /dcrs/{id}/assess` (Open→Assessed) auto-populating the 7 §5.3 `impact_assessment` dimensions + `GET/PUT …/impact` (mig `0041`; obsoletion *enforcement* deferred to S-dcr-5). **S-dcr-3a** ships the redline/diff core — `GET /documents/{id}/versions/{vid}/diff?from={vid2}` (gate `document.read_draft`): metadata diff (frozen `metadata_snapshot`) + text redline (on-demand Tika extraction + `difflib` line-LCS, fail-closed → `unavailable`) + the provenance header (signature_event[] + change reason); zero-migration. **S-dcr-3b** adds the visual page-image diff (worker-async: pypdfium2 rasterize + Pillow `ImageChops` overlay — permissive, no AGPL/PyMuPDF, no system dep; `visual_diff` cache table mig `0042`; POST-compute(202)/GET-poll/`page/{n}?layer=` PNG-stream, gate `document.read_draft`) → the doc 05 §8 **full diff (metadata + text + visual) is complete**. **S-dcr-4** ships routing + approval — the seeded `dcr_approval` workflow (ROUTER on change_significance: MAJOR → Process Owner → QMS Owner; MINOR → QMS Owner), `POST /dcrs/{id}/route` (Assessed→Routed→InApproval) + the DCR `POST /tasks/{id}/decision` dispatch (per-approver `signature_event`s per doc 05 §5.4; reject→Rejected, changes_requested→Open is decisive; mig `0043`). **S-dcr-5** ships implement/close + effectivity + the shared-path §7.3 obsoletion gate + the CAPA→DCR loop + the deferred cross-FK (mig `0044`) — **DCR-as-orchestrator**: `POST /dcrs/{id}/implement` drives the vault action atomically (REVISE/CREATE schedule the `release_due` cutover; RETIRE obsoletes) + **also enforces the underlying `document.release`/`document.obsolete` (SoD-2)** so a revision's author can't self-implement; `POST /dcrs/{id}/close`; the **§7.3 obsoletion gate now fires on the SHARED `document.obsolete`** (`force_retire`+justification); `POST /capas/{id}/raise-dcr` (1:N, Idempotency-Key). **CLOSES the DCR family.** Deferred to the v1.x drift family: scheduled re-review (D5) + drift detection (D1–D4). | 05 | MVP versions |
-| 🟡 **Drift detection** | Mirror tamper/staleness scan with auto-correct; controlled-rendition verify token (CURRENT/SUPERSEDED/UNKNOWN); blob integrity verify; scheduled re-review currency sweep. **Partial: S-drift-1 ships D5** (scheduled re-review currency sweep — mig `0045` review columns + the seeded `periodic_review` workflow, the daily Beat sweep + `PERIODIC_REVIEW` owner tasks, the `review_confirmed` signature + clock reset, the checklist overdue leg). **D1–D4 remain** (S-drift-2 mirror tamper/staleness scan; S-drift-3 blob integrity verify + the D4 superseded-copies report). | 05 §9, 12 | mirror, blobs, Beat |
-| 🟡 **Distribution & acknowledgement** | Issue-on-release to dynamic distribution lists; version-pinned read-and-understood acknowledgements as immutable evidence; ack dashboard. **(S-ack-1 ✅ backend — engine, coverage, R42/R43; the UI tail = S-ack-2; Remind + the §6.3 report stay deferred)** | 04 §8 | records, notifications |
+| ✅ **Revision/change depth** | DCR (reason, impact assessment, routing); where-used/impact analysis; major/minor significance; effectivity windows + scheduled future revisions; redline/diff (text + metadata + visual). **COMPLETE (R40):** **S-dcr-1** ships the DCR core + intake — `dcr` own-table (mutable-state FSM, R22 — not a record) + append-only `dcr_stage_event` + `DCR-{YYYY}-{SEQ}` id + POST/GET/PATCH `/dcrs` + cancel (mig `0040`). **S-dcr-2** ships where-used/impact + assess — the `document_link` doc↔doc graph + CRUD, `GET /documents/{id}/where-used` (the §7.2 categories + the §7.3 obsoletion_safety advisory), `POST /dcrs/{id}/assess` (Open→Assessed) auto-populating the 7 §5.3 `impact_assessment` dimensions + `GET/PUT …/impact` (mig `0041`; obsoletion *enforcement* deferred to S-dcr-5). **S-dcr-3a** ships the redline/diff core — `GET /documents/{id}/versions/{vid}/diff?from={vid2}` (gate `document.read_draft`): metadata diff (frozen `metadata_snapshot`) + text redline (on-demand Tika extraction + `difflib` line-LCS, fail-closed → `unavailable`) + the provenance header (signature_event[] + change reason); zero-migration. **S-dcr-3b** adds the visual page-image diff (worker-async: pypdfium2 rasterize + Pillow `ImageChops` overlay — permissive, no AGPL/PyMuPDF, no system dep; `visual_diff` cache table mig `0042`; POST-compute(202)/GET-poll/`page/{n}?layer=` PNG-stream, gate `document.read_draft`) → the doc 05 §8 **full diff (metadata + text + visual) is complete**. **S-dcr-4** ships routing + approval — the seeded `dcr_approval` workflow (ROUTER on change_significance: MAJOR → Process Owner → QMS Owner; MINOR → QMS Owner), `POST /dcrs/{id}/route` (Assessed→Routed→InApproval) + the DCR `POST /tasks/{id}/decision` dispatch (per-approver `signature_event`s per doc 05 §5.4; reject→Rejected, changes_requested→Open is decisive; mig `0043`). **S-dcr-5** ships implement/close + effectivity + the shared-path §7.3 obsoletion gate + the CAPA→DCR loop + the deferred cross-FK (mig `0044`) — **DCR-as-orchestrator**: `POST /dcrs/{id}/implement` drives the vault action atomically (REVISE/CREATE schedule the `release_due` cutover; RETIRE obsoletes) + **also enforces the underlying `document.release`/`document.obsolete` (SoD-2)** so a revision's author can't self-implement; `POST /dcrs/{id}/close`; the **§7.3 obsoletion gate now fires on the SHARED `document.obsolete`** (`force_retire`+justification); `POST /capas/{id}/raise-dcr` (1:N, Idempotency-Key). **CLOSES the DCR family.** (The once-deferred drift family — scheduled re-review D5 + drift detection D1–D4 — has since shipped; see the Drift detection row.) | 05 | MVP versions |
+| ✅ **Drift detection** | Mirror tamper/staleness scan with auto-correct; controlled-rendition verify token (CURRENT/SUPERSEDED/UNKNOWN); blob integrity verify; scheduled re-review currency sweep. **COMPLETE (D1–D5):** **S-drift-1** ships D5 (scheduled re-review currency sweep — the seeded `periodic_review` workflow, the daily Beat sweep + `PERIODIC_REVIEW` owner tasks, the `review_confirmed` signature + clock reset, the checklist overdue leg; PR #106); **S-drift-2** ships the D1/D2 mirror tamper/staleness scan + auto-correct (`MIRROR_STALE`/`MIRROR_TAMPER`, PG-manifest-authoritative, quarantine-before-rebuild; PR #108); **S-drift-3** ships the D3/D4 blob-integrity verify + the superseded-copies report (PR #110). | 05 §9, 12 | mirror, blobs, Beat |
+| ✅ **Distribution & acknowledgement** | Issue-on-release to dynamic distribution lists; version-pinned read-and-understood acknowledgements as immutable evidence; ack dashboard. **Shipped: S-ack-1 (backend — engine, coverage, R42/R43) + S-ack-2 (#114, the acknowledgement UI tail).** Deferred (v1.x): Remind + the §6.3 report. | 04 §8 | records, notifications |
 | 🟡 **Search & reporting** | OpenSearch full-text + faceted + metadata; clause/process/state filters; ★ mandatory-coverage **Compliance Checklist**; currency/overdue reports; audit-log search. **Partial: the Postgres-FTS search + the ★ Compliance Checklist shipped (S10 backend + S-web-6 UI); OpenSearch full-text, currency/overdue reports + audit-log search deferred (v1.x).** | 13 | OpenSearch, records |
 | 🟡 **Workflow & notifications** | Approval/review routing topologies (single/sequential/parallel-quorum/lightweight/policy-apex); CAPA/audit/retention/review/ack tasks; My Tasks; escalations; SMTP + in-app delivery + digests. **Partial: the declarative workflow engine (S-wf-engine) + the document/CAPA/DCR approval routes + the My-Tasks inbox (S-web-5) shipped; SMTP/escalation/digest delivery deferred (v1.x).** | 10 | authz routing, SMTP |
 | ✅ **Ingestion engine (UJ-2)** | Scan & preview existing QMS; proposed source→document mapping with process/clause hints; baseline version creation; legacy-identifier preservation; bulk record import (CSV sidecar); mirror generation. **Shipped (S-ing-1..5 + the S-ing-4b review UI — UJ-2 closed.) Import default (R10): current/latest version only as the controlled baseline, with older copies archived as provenance** (not approved revision history); **revision-chain reconstruction is opt-in per document-family with explicit confirmation**; the **Document-vs-Record (`kind`) classification is ALWAYS human-confirmed regardless of confidence**; the review UI scales to thousands of low-confidence items (bulk triage). | 09 | vault, records, setup import hand-off |
-| **PDCA dashboard (Home)** | The four-quadrant health wheel reading live signals from documents/records/audits/CAPA; process-scoped PDCA pages. **Now buildable: acks (S-ack-1/2) + objectives (S-obj-1) both landed — the two key signals the dashboard was waiting for. UI slice to follow (S-obj-2 or dedicated dash slice).** | 02 §5.3, 11 | all engines emitting health |
+| ✅ **PDCA dashboard (Home)** | The four-quadrant health wheel reading live signals from documents/records/audits/CAPA; process-scoped PDCA pages. **Shipped (S-home-1, #117): the PDCA Home health wheel reading the live document/record/audit/CAPA/ack/objective signals.** | 02 §5.3, 11 | all engines emitting health |
 
 **v1 exit = the seven user journeys (UJ-1…UJ-7) all work end-to-end**, and the success metrics (M1 audit-pack < 30 min, M2 zero uncontrolled effective, M3 < 5% overdue, M4 100% CAPA traceability, M7 100% audit-trail completeness) are demonstrably met on the M-profile reference deployment (~150 docs, ~50 users).
 

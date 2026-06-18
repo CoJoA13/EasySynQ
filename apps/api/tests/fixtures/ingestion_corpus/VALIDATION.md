@@ -16,8 +16,8 @@ per-dimension accuracy band and a published validation method. This documents th
   measures the band and asserts the regression floors below).
 - **Corpus:** `apps/api/tests/fixtures/ingestion_corpus/corpus.json` — **45 hand-authored labeled
   examples** spanning documents (POL/SOP/WI/FRM) and records (AUDIT/MGMT_REVIEW/CAPA/CALIBRATION/
-  COMPETENCE/SUPPLIER_EVAL/complaint) plus low-signal/UNKNOWN files. Each entry carries ground-truth
-  `kind` / `type` / `clauses[]`.
+  COMPETENCE/SUPPLIER_EVAL) plus low-signal/UNKNOWN-type files (e.g. a customer-complaint record that
+  classifies `kind=RECORD` with `type=null`). Each entry carries ground-truth `kind` / `type` / `clauses[]`.
 - **Method:** the classifier scores each entry; we compute `kind` accuracy, `type` accuracy (over
   entries with a labeled concrete type), and **micro** `clause` precision/recall (over the multi-label
   clause set).

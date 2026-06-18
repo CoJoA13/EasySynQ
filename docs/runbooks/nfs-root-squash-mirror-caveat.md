@@ -24,5 +24,7 @@ docker compose -f infra/compose/compose.yml exec worker sh -c \
 touch "$MIRROR_PATH/current/.should-fail" 2>&1 | grep -i "read-only\|permission denied"
 ```
 If the mirror diverges from the vault (a tampered/edited RO file), the next reconcile **overwrites**
-it from the vault (AC#2) — the vault always wins. Drift *detection*/quarantine/alarm is v1 (D-6); the
-MVP guarantee is RO-mount + regeneration.
+it from the vault (AC#2) — the vault always wins. Drift *detection*/quarantine/alarm is now built
+(S-drift-2: the reconcile compares against the PG `mirror_build` manifest, quarantines a divergent
+tree before rebuild, and emits `MIRROR_STALE`/`MIRROR_TAMPER` audit events) — see
+[mirror-drift-scan.md](mirror-drift-scan.md). Either way the vault remains authoritative on reconcile.

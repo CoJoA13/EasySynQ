@@ -48,7 +48,7 @@ classDiagram
       +string key  "e.g. procedure_approval"
       +int version
       +bool effective
-      +string subject_type  "DOCUMENT|DCR|CAPA|AUDIT|MGMT_REVIEW|PERIODIC_REVIEW"
+      +string subject_type  "DOCUMENT|DCR|CAPA|AUDIT|MGMT_REVIEW|PERIODIC_REVIEW|DOC_ACK|IMPROVEMENT_INITIATIVE|LEADERSHIP_AUTHORIZATION"  // 9 values (WorkflowSubjectType)
       +Stage[] stages
       +Predicate[] entry_conditions
       +SlaPolicy default_sla
