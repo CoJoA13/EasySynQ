@@ -348,7 +348,7 @@ The wizard pre-creates bundles mirroring the canonical personas so the org start
 | **Approver** | Ken | `document.review`, `document.approve|reject` (the signature hook) within scope | Folder/process |
 | **Internal Auditor** | Ingrid | broad `document.read` + `record.read`, `audit.conduct`, `finding.create`, `capa.link` — **explicitly NO** `{document.create, document.edit, document.submit}`/`document.approve` (independence) | Org-wide read |
 | **Read-only Employee** | Sam | `document.read` (Released only) within area; optional `document.acknowledge` (normalized per R5; the catalog key — R42/R43 context) | Area/process |
-| **External Auditor (Guest)** | Olsen | `evidencepack.read` only, **time-boxed**, scope-limited; every view logged | Bound to one evidence pack |
+| **External Auditor (Guest)** | Olsen | `document.read` / `record.read` / `report.read` **only within the bound pack**, **time-boxed**, scope-limited; every view logged | Bound to one evidence pack |
 
 ### 10.2 What the screen captures per role
 
@@ -390,7 +390,7 @@ Granting permissions is itself split along the Admin/QMS line, resolving the app
 
 | Tier | Who may hold `permission.grant` / `permission.revoke` | Domains | Scope |
 |---|---|---|---|
-| **CONTENT permissions** | The **Quality-Manager / QMS Owner** (Mara) **MAY** hold `permission.grant` (and `permission.revoke`) | `document.*`, `record.*`, `audit.*`, `capa.*`, `changeRequest.*`, `evidencepack.*` | **WITHIN QMS scope** |
+| **CONTENT permissions** | The **Quality-Manager / QMS Owner** (Mara) **MAY** hold `permission.grant` (and `permission.revoke`) | `document.*`, `record.*`, `audit.*`, `capa.*`, `changeRequest.*`, `improvement.*`, `report.evidence_pack.generate` | **WITHIN QMS scope** |
 | **SYSTEM permissions** | **Admin-only** (Avery) | `user.*`, `role.*`, `storage.*`, `backup.*`, `restore.*`, `config.*`, `import.*` | **SYSTEM scope** |
 
 So the QMS Owner can delegate *content* authority (e.g., grant `document.edit` on a folder to an author) without ever touching *system* authority — and Avery retains exclusive control over system-permission granting. This means the QMS no longer depends on Avery to administer content-side delegation, which keeps the separation-of-duties boundary clean in both directions.
@@ -654,7 +654,7 @@ stateDiagram-v2
 - Edit per-user **overrides** (explicit grant/deny; deny wins).
 - **Effective-permissions explorer:** select a user + a target (doc/folder/process) and see the resolved decision with the *reason trace* (which bundle/attribute/override produced allow/deny) — essential for debugging deny-by-default and for audit defense.
 - The **self-grant friction** (§10.4) applies identically here: adding QMS content caps to an admin/self is high-friction and high-visibility.
-- The **two-tier `permission.grant` boundary** (§10.5) applies identically here: the QMS Owner may hold `permission.grant`/`permission.revoke` scoped to CONTENT domains within QMS scope (`document.*`, `record.*`, `audit.*`, `capa.*`, `changeRequest.*`, `evidencepack.*`), while SYSTEM-permission granting (`user.*`, `role.*`, `storage.*`, `backup.*`, `restore.*`, `config.*`, `import.*`) stays admin-only at SYSTEM scope (reconciled per Decisions Register R35).
+- The **two-tier `permission.grant` boundary** (§10.5) applies identically here: the QMS Owner may hold `permission.grant`/`permission.revoke` scoped to CONTENT domains within QMS scope (`document.*`, `record.*`, `audit.*`, `capa.*`, `changeRequest.*`, `improvement.*`, `report.evidence_pack.generate`), while SYSTEM-permission granting (`user.*`, `role.*`, `storage.*`, `backup.*`, `restore.*`, `config.*`, `import.*`) stays admin-only at SYSTEM scope (reconciled per Decisions Register R35).
 
 ### 15.4 System settings
 

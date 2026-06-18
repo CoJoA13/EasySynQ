@@ -2,7 +2,7 @@
 
 The controlled vault's integrity rests on **object-lock**: the `documents` **and** `records` buckets
 must each be created **object-lock-enabled at creation time** — it **cannot be retro-added** (R37).
-Setup gate **G-B** verifies this (the WORM probe) and refuses to finalize otherwise.
+Setup gate **G-B** verifies the **`documents`** bucket (the WORM probe — `verify_storage()` → `worm_probe()` defaults to it) and refuses to finalize otherwise. The **`records`** bucket is **not** auto-probed at setup, so provision it object-lock-enabled here (below); its WORM guarantee is enforced when record evidence is first promoted (a non-locked `records` bucket fails then with `worm_required`).
 
 ## Provision the vault buckets (object-lock + GOVERNANCE)
 The Compose `minio-init` provisions these for the dev stack. For a production/external MinIO/S3:
