@@ -32,6 +32,9 @@ from easysynq_api.tasks.lifecycle import release_due_versions
 from . import s5_helpers as s5
 from .test_capa import _assign_seeded_role, _my_pending_task
 from .test_dcr import _auth, _grant, _subject
+from .test_leadership_authorization import _assign_top_mgmt, _set_leadership_flag
+from .test_leadership_authorization import _my_pending_task as _my_leadership_task
+from .test_leadership_authorization import _request as _request_leadership
 
 pytestmark = pytest.mark.integration
 
@@ -666,3 +669,103 @@ async def test_create_implement_rejects_managed_subtype(
     )
     assert r.status_code == 409, r.text
     assert r.json()["code"] == "create_target_managed_subtype"
+
+
+async def test_revise_implement_blocked_until_leadership_authorized(
+    app_client: AsyncClient, token_factory: Callable[..., str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """S-leadership-1 preflight (the Codex P2 regression guard): a REVISE DCR whose target is a
+    leadership artifact (OBJ) is BLOCKED at implement when the org flag is on and the Approved
+    version lacks a Top-Management ``verify`` signature. The implement service preflights the gate
+    SYNCHRONOUSLY (``assert_release_authorized``) BEFORE committing — because the real cutover runs
+    later in the async ``release_due`` sweep, which SWALLOWS the gate's 409 (it catches
+    ``ProblemException`` and skips). Without the preflight the DCR would commit as Implemented while
+    the version stayed Approved (a stuck false-success). So: with the flag on the implement 409s and
+    rolls back (the DCR stays Approved); once a Top-Management member authorizes the version, the
+    SAME implement succeeds → the sweep cuts the version over to Effective → the DCR closes. This
+    proves the preflight blocks, rolls back, AND does not over-block (the full go-live completes).
+
+    OBJ is a non-singleton leadership type (``is_singleton=False``), so pushing it Effective is
+    safe in the shared session DB; the gate keys on ``document_type.code`` + the flag + a version
+    ``verify`` signature, so a plain OBJ-typed controlled document exercises it (no managed-subtype
+    row needed, and REVISE never trips the CREATE-only managed-subtype guard). The flag is flipped
+    ON in a ``try`` and reset OFF in ``finally`` (the suite shares one session DB); every assertion
+    is scoped to this run's own ids.
+    """
+    monkeypatch.setattr(release_due_versions, "delay", lambda *a, **k: None)
+    org_id = await s5.default_org_id()
+
+    # An OBJ-typed controlled document driven to Approved, then targeted by a REVISE DCR.
+    author = _subject("ldi-author")
+    await s5.grant_lifecycle(author)  # holds document.approve (the request gate) + document.release
+    ha = _auth(token_factory, author)
+    approver = _subject("ldi-approver")
+    await s5.grant_role(approver, "Approver")
+    hb = _auth(token_factory, approver)
+    did = await s5.drive_to_approved(app_client, ha, hb, await s5.type_id("OBJ"), b"ldi-obj-v1")
+
+    req = _subject("ldi-req")
+    await _grant(req, _DCR_DRIVER_PERMS)
+    hreq = _auth(token_factory, req)
+    qms = _subject("ldi-qms")
+    await _assign_seeded_role(qms, "QMS Owner")
+    hq = _auth(token_factory, qms)
+    dcr_id = await _drive_dcr_to_approved(
+        app_client, hreq, hq, change_type="REVISE", target_document_id=did
+    )
+
+    # A THIRD-party implementer (≠ the version author) holding changeRequest.implement +
+    # document.release, so SoD-2 passes.
+    impl = _subject("ldi-impl")
+    await s5.grant_lifecycle(impl)
+    await _grant(impl, ("changeRequest.implement",))
+    himpl = _auth(token_factory, impl)
+
+    # A Top-Management member (candidate-pool authority — no permission key gates the sign).
+    tm = _subject("ldi-tm")
+    await _assign_top_mgmt(tm)
+    htm = _auth(token_factory, tm)
+
+    await _set_leadership_flag(org_id, True)
+    try:
+        # --- Blocked arm: the gate fires synchronously; the implement rolls back. ---
+        blocked = await app_client.post(f"/api/v1/dcrs/{dcr_id}/implement", headers=himpl, json={})
+        assert blocked.status_code == 409, blocked.text
+        assert blocked.json()["code"] == "leadership_authorization_required"
+        # The DCR flip never committed — it stays Approved (no false 'Implemented').
+        after_block = await app_client.get(f"/api/v1/dcrs/{dcr_id}", headers=hreq)
+        assert after_block.json()["state"] == "Approved", after_block.text
+
+        # --- Authorize the version: request (document.approve) + a Top-Management verify. ---
+        rq = await _request_leadership(app_client, ha, did, comment="Authorize release")
+        instance_id = str(rq["instance_id"])
+        task_id = await _my_leadership_task(app_client, htm, instance_id)
+        decision = (
+            await app_client.post(
+                f"/api/v1/tasks/{task_id}/decision",
+                headers=htm,
+                json={"outcome": "verify", "comment": "Endorsed by leadership"},
+            )
+        ).json()
+        assert decision["current_state"] == "COMPLETED", decision
+        assert decision["signature_event_id"] is not None
+
+        # --- Positive arm: the SAME implement now passes the preflight → schedules the cutover. ---
+        done = await app_client.post(f"/api/v1/dcrs/{dcr_id}/implement", headers=himpl, json={})
+        assert done.status_code == 200, done.text
+        assert done.json()["state"] == "Implemented"
+        rv = done.json()["resulting_version_id"]
+        assert rv
+
+        # The sweep cuts the now-authorized version over to Effective (no longer swallowed).
+        from easysynq_api.services.vault import release_due
+
+        assert uuid.UUID(rv) in await release_due()
+        assert (await s5.get_version(rv)).version_state is VersionState.Effective
+
+        # The change took effect → the DCR closes.
+        c = await app_client.post(f"/api/v1/dcrs/{dcr_id}/close", headers=hreq)
+        assert c.status_code == 200, c.text
+        assert c.json()["state"] == "Closed"
+    finally:
+        await _set_leadership_flag(org_id, False)
