@@ -44,15 +44,20 @@ down_revision: str | None = "0054_leadership_authorization"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
-# The behaviour-preserving backfill — the SQL twin of resolve_commitment: governing Effective
-# commitment when one exists (current_effective_version_id set), else the working-row fields. One
-# UPDATE sets both columns. ``->>'at_risk_threshold'`` yields SQL NULL for a JSON null (no amber
-# band), which casts to a NULL Numeric — exactly the "governing has no threshold" case.
+# The behaviour-preserving backfill — the SQL twin of resolve_commitment: the governing Effective
+# commitment when one exists, else the working-row fields. BOTH columns gate on the SAME predicate
+# (an Effective version whose snapshot carries an OBJECT ``objective_commitment`` fold), which
+# mirrors the runtime ``governing = raw if isinstance(raw, dict) else None`` guard (service.py): a
+# version present but fold absent / JSON-null / non-object falls back to the working row for BOTH
+# columns. (A version-pointer-only gate would NULL a threshold the live grader still used — LESS
+# defensive than the runtime it mirrors.) With the fold present, ``->>'at_risk_threshold'`` yields
+# SQL NULL for a JSON null (no amber band) → a NULL Numeric, exactly "governing has no band".
 _BACKFILL = """
     UPDATE kpi_measurement AS km
     SET direction_at_capture = (
             CASE
                 WHEN di.current_effective_version_id IS NOT NULL
+                     AND jsonb_typeof(dv.metadata_snapshot -> 'objective_commitment') = 'object'
                      AND dv.metadata_snapshot -> 'objective_commitment' ->> 'direction' IS NOT NULL
                 THEN dv.metadata_snapshot -> 'objective_commitment' ->> 'direction'
                 ELSE qo.direction::text
@@ -61,6 +66,7 @@ _BACKFILL = """
         at_risk_threshold_at_capture = (
             CASE
                 WHEN di.current_effective_version_id IS NOT NULL
+                     AND jsonb_typeof(dv.metadata_snapshot -> 'objective_commitment') = 'object'
                 THEN (
                     dv.metadata_snapshot -> 'objective_commitment' ->> 'at_risk_threshold'
                 )::numeric
