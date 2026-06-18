@@ -31,9 +31,11 @@ test("lists processes and, without process.assign_owner, the drawer is read-only
   const dialog = await screen.findByRole("dialog");
   // The current owner (from the default fixture) is shown by display name.
   expect(await within(dialog).findByText("Diego Owner")).toBeInTheDocument();
-  // The default permissions (empty) hide the write affordances — no Owner Select, no Assign button.
+  // The default permissions (empty) hide ALL write affordances — no Owner Select, no Assign button,
+  // no per-owner Remove control.
   expect(within(dialog).queryByLabelText("Owner")).not.toBeInTheDocument();
   expect(within(dialog).queryByRole("button", { name: /assign owner/i })).not.toBeInTheDocument();
+  expect(within(dialog).queryByRole("button", { name: /remove owner/i })).not.toBeInTheDocument();
   expect(within(dialog).getByText(/need process\.assign_owner/i)).toBeInTheDocument();
 });
 

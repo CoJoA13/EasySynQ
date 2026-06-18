@@ -160,7 +160,12 @@ async def _lock_user(session: AsyncSession, user_id: uuid.UUID) -> None:
 async def _owner_role_assignment(
     session: AsyncSession, *, org_id: uuid.UUID, user_id: uuid.UUID, role_id: uuid.UUID
 ) -> RoleAssignment | None:
-    return (
+    """The user's PROCESS-scoped Process-Owner role_assignment — the SINGLE row owner-assignment
+    manages. role_assignment has no uniqueness backstop and an admin may separately grant the same
+    permission-role at SYSTEM/placeholder scope via POST /users/{id}/roles; filtering to a
+    bound_scope.level==PROCESS row means owner-assignment never clobbers that admin grant on assign
+    nor deletes it on revoke (the diff-critic finding). Deterministic on the lowest id."""
+    rows = (
         (
             await session.execute(
                 select(RoleAssignment)
@@ -173,8 +178,12 @@ async def _owner_role_assignment(
             )
         )
         .scalars()
-        .first()
+        .all()
     )
+    for ra in rows:
+        if (ra.bound_scope or {}).get("level") == "PROCESS":
+            return ra
+    return None
 
 
 async def assign_process_owner(

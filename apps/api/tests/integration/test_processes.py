@@ -526,15 +526,13 @@ async def _user_id(subject: str) -> uuid.UUID:
         return uid
 
 
-async def _owner_role_process_ids(user_id: uuid.UUID) -> list[str] | None:
-    """The concrete process_ids on the user's seeded 'Process Owner' role_assignment, or None when
-    no such assignment exists (the last-process-removed drop)."""
+async def _po_role_assignments(user_id: uuid.UUID) -> list[RoleAssignment]:
     async with get_sessionmaker()() as s:
         org_id = await s5.default_org_id()
         role = (
             await s.execute(select(Role).where(Role.org_id == org_id, Role.name == "Process Owner"))
         ).scalar_one()
-        ra = (
+        return list(
             (
                 await s.execute(
                     select(RoleAssignment).where(
@@ -543,11 +541,18 @@ async def _owner_role_process_ids(user_id: uuid.UUID) -> list[str] | None:
                 )
             )
             .scalars()
-            .first()
+            .all()
         )
-        if ra is None:
-            return None
-        return sorted((ra.bound_scope or {}).get("selector", {}).get("process_ids", []))
+
+
+async def _owner_role_process_ids(user_id: uuid.UUID) -> list[str] | None:
+    """The concrete process_ids on the user's PROCESS-scoped 'Process Owner' role_assignment (the
+    owner-assignment-managed row), or None when no such assignment exists (the last-process drop).
+    Filters to bound_scope.level==PROCESS so an admin's SYSTEM grant on the same role is ignored."""
+    for ra in await _po_role_assignments(user_id):
+        if (ra.bound_scope or {}).get("level") == "PROCESS":
+            return sorted((ra.bound_scope or {}).get("selector", {}).get("process_ids", []))
+    return None
 
 
 async def _link_doc_to_process(
@@ -707,6 +712,44 @@ async def test_assign_owner_unknown_user_404(
         json={"user_id": str(uuid.uuid4())},
     )
     assert r.status_code == 404, r.text
+
+
+async def test_owner_assignment_does_not_clobber_admin_system_grant(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    """An admin's separately-granted SYSTEM-scoped 'Process Owner' role_assignment survives an owner
+    assign + last-process revoke — owner-assignment only ever manages its own PROCESS-scoped row, so
+    it never clobbers (assign) nor deletes (revoke) the admin grant (the diff-critic finding)."""
+    await _grant(subj.a, "process.create")
+    await _grant(subj.a, "process.assign_owner")
+    ha = _auth(token_factory, subj.a)
+    proc = await _create_process(app_client, ha)
+    owner_id = await _user_id(subj.b)
+
+    # An admin grants the Process Owner PERMISSION-role org-wide (a SYSTEM bound_scope).
+    await s5.grant_role(subj.b, "Process Owner")
+    before = await _po_role_assignments(owner_id)
+    assert len(before) == 1
+    assert (before[0].bound_scope or {}).get("level") == "SYSTEM"
+
+    # Owner-assign creates a SEPARATE PROCESS-scoped row; the SYSTEM grant is untouched.
+    r = await app_client.post(
+        f"/api/v1/processes/{proc['id']}/owner", headers=ha, json={"user_id": str(owner_id)}
+    )
+    assert r.status_code == 201, r.text
+    levels = sorted(
+        (ra.bound_scope or {}).get("level") for ra in await _po_role_assignments(owner_id)
+    )
+    assert levels == ["PROCESS", "SYSTEM"]
+    assert await _owner_role_process_ids(owner_id) == [proc["id"]]
+
+    # Revoking the last owned process drops ONLY the PROCESS row; the admin SYSTEM grant survives.
+    rev = await app_client.delete(f"/api/v1/processes/{proc['id']}/owner/{owner_id}", headers=ha)
+    assert rev.status_code == 204, rev.text
+    remaining = await _po_role_assignments(owner_id)
+    assert len(remaining) == 1
+    assert (remaining[0].bound_scope or {}).get("level") == "SYSTEM"
+    assert await _owner_role_process_ids(owner_id) is None
 
 
 async def _seed_foreign_process(created_by: uuid.UUID) -> tuple[str, str]:
