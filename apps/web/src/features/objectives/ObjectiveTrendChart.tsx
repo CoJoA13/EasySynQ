@@ -201,22 +201,24 @@ export function ObjectiveTrendChart({
         {/* value line — only with ≥2 readings (a trend needs two points) */}
         {n >= 2 && <polyline points={valuePts} fill="none" stroke={VALUE_LINE} strokeWidth={2} />}
 
-        {/* per-reading markers: the canonical RAG glyph (the DP-5 non-colour channel — ✓/◔/✕),
-            coloured by the server RAG verbatim (N9 — never recomputed). data-rag is the stable
-            marker/test hook; the glyph IS the marker so the status survives a greyscale read. */}
+        {/* per-reading markers: a RAG-coloured dot (the colour channel, server RAG verbatim — N9)
+            with the canonical glyph (✓/◔/✕) in a DARK fill on top (the DP-5 non-colour shape channel).
+            The dark glyph stays AA-legible on all three dot colours — a yellow-on-white glyph would not
+            (Codex P2). data-rag is the stable marker/test hook. */}
         {series.map((p, i) => (
           <g key={`p${i}`} data-rag={p.rag}>
             {/* <title> MUST be the first child of its <g> so SVG 1.1 user agents expose it as the
                 point's hover tooltip (Codex P3). */}
             <title>{`${p.period}: ${p.valueStr} ${unit} (target ${p.targetStr}) — ${RAG_LABEL[p.rag]}`}</title>
+            <circle cx={xAt(i)} cy={yAt(p.value)} r={7} fill={RAG_FILL[p.rag]} />
             <text
               x={xAt(i)}
               y={yAt(p.value)}
               textAnchor="middle"
               dominantBaseline="central"
-              fontSize={13}
+              fontSize={10}
               fontWeight={700}
-              fill={RAG_FILL[p.rag]}
+              fill="var(--mantine-color-dark-7)"
               aria-hidden
             >
               {RAG_GLYPH[p.rag]}
@@ -253,15 +255,16 @@ export function ObjectiveTrendChart({
         </Group>
         {(["green", "amber", "red"] as const).map((r) => (
           <Group gap={6} key={r}>
-            <svg width={12} height={12} aria-hidden>
+            <svg width={14} height={14} aria-hidden>
+              <circle cx={7} cy={7} r={6} fill={RAG_FILL[r]} />
               <text
-                x={6}
-                y={6}
+                x={7}
+                y={7}
                 textAnchor="middle"
                 dominantBaseline="central"
-                fontSize={12}
+                fontSize={9}
                 fontWeight={700}
-                fill={RAG_FILL[r]}
+                fill="var(--mantine-color-dark-7)"
               >
                 {RAG_GLYPH[r]}
               </text>

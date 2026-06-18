@@ -91,8 +91,21 @@ it("sorts the Status column by triage severity (worst first), not the raw rag ke
   // (role=link) reflect the table order: OBJ-002 (red/Action required) first, OBJ-004 (unmeasured) last
   // — NOT the alphabetical raw-rag order (amber, green, red, unmeasured) the old sort produced (Codex P3).
   await user.click(screen.getByRole("button", { name: "Sort by Status" }));
-  const order = screen.getAllByRole("link").map((a) => a.textContent);
-  expect(order).toEqual(["OBJ-002", "OBJ-001", "OBJ-003", "OBJ-004"]);
+  expect(screen.getAllByRole("link").map((a) => a.textContent)).toEqual([
+    "OBJ-002",
+    "OBJ-001",
+    "OBJ-003",
+    "OBJ-004",
+  ]);
+  // Click again → descending (best-first): green → amber → red, but the unmeasured row (no data)
+  // STAYS LAST in both directions via the null-last comparator, never jumps to the top (Codex P2).
+  await user.click(screen.getByRole("button", { name: "Sort by Status" }));
+  expect(screen.getAllByRole("link").map((a) => a.textContent)).toEqual([
+    "OBJ-003",
+    "OBJ-001",
+    "OBJ-002",
+    "OBJ-004",
+  ]);
 });
 
 it("debounced search filters rows by identifier and title", async () => {

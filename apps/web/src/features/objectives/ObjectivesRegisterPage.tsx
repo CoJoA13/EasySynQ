@@ -37,9 +37,11 @@ function currentOverTarget(o: Objective): string {
 // Critique #5 (power-user triage): debounced search + sortable columns + ↑/↓ row-nav, reusing the
 // shared lib/registerControls primitives (the TasksInbox wiring shape). Default sort is by `identifier`
 // asc — the human ref is the row anchor and the natural, stable register ordering. The `status` sort
-// value is the RAG SEVERITY rank (worst-first: Action required → Needs attention → On track → Not yet
-// measured), NOT the raw `o.rag` string — alphabetical-by-key would scramble the meaning labels (Codex
-// P3). `current` sorts on the numeric current_value (nulls — unmeasured rows — sort last via sortRows).
+// value is the RAG SEVERITY rank (worst-first: Action required → Needs attention → On track), NOT the
+// raw `o.rag` string — alphabetical-by-key would scramble the meaning labels (Codex P3). `unmeasured`
+// returns null so the null-last comparator keeps no-data rows last in BOTH directions (a numeric rank
+// would jump them to the top on a desc/best-first sort — Codex P2). `current` likewise sorts numeric
+// current_value with nulls last.
 const SORT_KEYS = ["identifier", "title", "current", "status", "due"] as const;
 type SortKey = (typeof SORT_KEYS)[number];
 
@@ -52,7 +54,7 @@ function sortValue(o: Objective, key: SortKey): string | number | null | undefin
     case "current":
       return o.current_value == null ? null : Number(o.current_value);
     case "status":
-      return RAG_SEVERITY[o.rag];
+      return o.rag === "unmeasured" ? null : RAG_SEVERITY[o.rag];
     case "due":
       return o.due_date;
   }

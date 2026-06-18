@@ -163,8 +163,12 @@ it("marks each point by its server RAG verbatim — the canonical glyph AND colo
     TONE_GLYPH.warning,
     TONE_GLYPH.success,
   ]);
-  // ...and the colour, server-verbatim.
-  const fills = markers.map((m) => m.querySelector("text")?.getAttribute("fill"));
+  // the glyph fill is a dark AA-legible token (not the RAG colour), so an amber ◔ is readable.
+  expect(markers[1]?.querySelector("text")?.getAttribute("fill")).toBe(
+    "var(--mantine-color-dark-7)",
+  );
+  // ...the colour channel rides the dot, server-verbatim.
+  const fills = markers.map((m) => m.querySelector("circle")?.getAttribute("fill"));
   expect(fills[0]).toBe("var(--mantine-color-red-6)");
   expect(fills[1]).toBe("var(--mantine-color-yellow-6)");
   expect(fills[2]).toBe("var(--mantine-color-green-6)");
