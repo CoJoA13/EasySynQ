@@ -119,20 +119,13 @@ class ObjectiveSubmitBody(BaseModel):
 
 
 # --- serializers ---
-def _measurement(
-    m: KpiMeasurement,
-    *,
-    direction: ObjectiveDirection,
-    at_risk_threshold: Decimal | None,
-) -> dict[str, Any]:
-    # S-obj-charts (Part 1): per-reading RAG via the pure rule — value vs the FROZEN
-    # target_at_capture (so a later target edit can't rewrite a past verdict), with
-    # direction/threshold from the objective's GOVERNING commitment (passed in by the call
-    # site). A measurement always has a value → rag is never "unmeasured" here (N9).
-    # ⚠ Only target_at_capture is frozen: a commitment revision that changes DIRECTION or the
-    # at_risk_threshold re-grades historical readings against the current commitment (a HIGHER→LOWER
-    # flip can turn an old green reading red). Accepted as descriptive (N9) — truly freezing the
-    # grading inputs per reading would need a migration (owner call, deferred v1.x).
+def _measurement(m: KpiMeasurement) -> dict[str, Any]:
+    # S-obj-freeze: per-reading RAG via the pure rule against the per-reading FROZEN grading basis —
+    # value vs target_at_capture, graded under direction_at_capture + at_risk_threshold_at_capture
+    # (all snapshotted at capture from the then-governing commitment, 0055). A later commitment
+    # revision (target, DIRECTION, or amber threshold) can no longer re-grade a historical reading.
+    # A measurement always has a value → rag is never "unmeasured" here (N9). The frozen basis stays
+    # internal (the user-facing output is the corrected `rag`); the columns are not exposed.
     return {
         "id": str(m.id),
         "objective_id": str(m.objective_id) if m.objective_id else None,
@@ -146,8 +139,8 @@ def _measurement(
         "rag": rag_status(
             current=m.value,
             target=m.target_at_capture,
-            direction=direction,
-            at_risk_threshold=at_risk_threshold,
+            direction=m.direction_at_capture,
+            at_risk_threshold=m.at_risk_threshold_at_capture,
         ),
     }
 
@@ -796,23 +789,9 @@ async def record_measurement_endpoint(
         unit=body.unit,
         source=body.source,
     )
-    row = await get_objective(session, objective_id)
-    if row is None:  # pragma: no cover — we just recorded against it, so it exists
-        raise ProblemException(
-            status=500, code="internal_error", title="Objective row not found after measurement"
-        )
-    qo, _ident, _title, _state, gov = row
-    c = resolve_commitment(
-        gov,
-        target_value=qo.target_value,
-        unit=qo.unit,
-        direction=qo.direction,
-        due_date=qo.due_date,
-        at_risk_threshold=qo.at_risk_threshold,
-        baseline_value=qo.baseline_value,
-        policy_id=qo.policy_id,
-    )
-    return _measurement(m, direction=c.direction, at_risk_threshold=c.at_risk_threshold)
+    # S-obj-freeze: the grading basis (direction/threshold) is now frozen on the row — no need to
+    # resolve the governing commitment to serialize the reading's rag.
+    return _measurement(m)
 
 
 @router.get("/objectives/{objective_id}/measurements")
@@ -821,29 +800,12 @@ async def list_measurements_endpoint(
     caller: AppUser = Depends(_kpi_read),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
-    row = await get_objective(session, objective_id)
+    # An unknown / non-OBJ id simply has no measurements (list_measurements filters by objective_id
+    # → empty), preserving the current 200 + empty data (the read is gated by _kpi_read; no 404).
+    # S-obj-freeze: each reading carries its own frozen grading basis, so no governing-commitment
+    # resolution is needed to serialize rag.
     ms = await list_measurements(session, objective_id)
-    if row is None:
-        # An unknown / non-OBJ id has no measurements anyway — preserve the current 200 + empty
-        # data (the read is already gated by _kpi_read; do NOT introduce a 404 here).
-        return {"data": []}
-    qo, _ident, _title, _state, gov = row
-    c = resolve_commitment(
-        gov,
-        target_value=qo.target_value,
-        unit=qo.unit,
-        direction=qo.direction,
-        due_date=qo.due_date,
-        at_risk_threshold=qo.at_risk_threshold,
-        baseline_value=qo.baseline_value,
-        policy_id=qo.policy_id,
-    )
-    return {
-        "data": [
-            _measurement(m, direction=c.direction, at_risk_threshold=c.at_risk_threshold)
-            for m in ms
-        ]
-    }
+    return {"data": [_measurement(m) for m in ms]}
 
 
 @router.post("/objectives/{objective_id}/plans", status_code=status.HTTP_201_CREATED)

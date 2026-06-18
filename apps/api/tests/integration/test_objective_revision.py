@@ -11,9 +11,11 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
 
+from easysynq_api.db.models._objective_enums import ObjectiveDirection
 from easysynq_api.db.models._vault_enums import VersionState
 from easysynq_api.db.models.document_version import DocumentVersion
 from easysynq_api.db.models.documented_information import DocumentedInformation
+from easysynq_api.db.models.kpi_measurement import KpiMeasurement
 from easysynq_api.db.models.working_draft import WorkingDraft
 from easysynq_api.db.session import get_sessionmaker
 
@@ -444,15 +446,24 @@ async def test_pending_commitment_null_without_divergence(
 async def test_measurement_mid_revision_captures_governing(
     app_client: AsyncClient, token_factory: Callable[..., str]
 ) -> None:
-    """O-2: the unit gate + target_at_capture read the governing commitment — an unapproved edit
-    can never leak into evidence-grade KPI_READING records."""
+    """O-2 + S-obj-freeze: the unit gate + the FULL frozen grading basis (target, direction,
+    threshold) read the governing commitment — an unapproved mid-revision edit can never leak into
+    evidence-grade KPI_READING records."""
     oid, ho, _hap, _hrl = await _drive_to_effective(app_client, token_factory, "Mid-rev capture")
     assert (
         await app_client.post(f"/api/v1/objectives/{oid}/start-revision", headers=ho)
     ).status_code == 200
+    # edit unit/target AND the grading basis (direction + threshold) in the uncommitted working row
     assert (
         await app_client.patch(
-            f"/api/v1/objectives/{oid}", headers=ho, json={"unit": "count", "target_value": "10"}
+            f"/api/v1/objectives/{oid}",
+            headers=ho,
+            json={
+                "unit": "count",
+                "target_value": "10",
+                "direction": "LOWER_IS_BETTER",
+                "at_risk_threshold": None,
+            },
         )
     ).status_code == 200
     # governing unit is still "%" — a "count" reading is rejected, a "%" one accepted
@@ -460,6 +471,17 @@ async def test_measurement_mid_revision_captures_governing(
     assert await _record(app_client, ho, oid, value="97", unit="%", period="2026-05-31") == 201
     ms = (await app_client.get(f"/api/v1/objectives/{oid}/measurements", headers=ho)).json()["data"]
     assert ms[0]["target_at_capture"] == "98"  # the governing v1 target, never the in-edit 10
+    # the frozen basis is internal (not exposed) — assert it captured GOVERNING, not the in-edit row
+    async with get_sessionmaker()() as s:
+        km = (
+            await s.execute(
+                select(KpiMeasurement).where(KpiMeasurement.objective_id == uuid.UUID(oid))
+            )
+        ).scalar_one()
+        assert (
+            km.direction_at_capture is ObjectiveDirection.HIGHER_IS_BETTER
+        )  # governing, not LOWER
+        assert str(km.at_risk_threshold_at_capture) == "95"  # governing band, not the cleared None
 
 
 async def test_same_unit_revision_preserves_current_value(
