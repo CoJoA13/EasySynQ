@@ -1,7 +1,12 @@
 """The ``kpi_measurement`` projection (S-obj-1, doc 14 §6 / §9.1.1) of a ``KPI_READING`` record. The
 record (record_id) is the WORM evidence; this is the append-only queryable time-series. Insert-only
-(REVOKE UPDATE,DELETE in 0049 — corrections create a new record + projection). ``target_at_capture``
-freezes the objective's then-target so a later target edit can't rewrite a past verdict."""
+(REVOKE UPDATE,DELETE in 0049 — corrections create a new record + projection).
+
+``target_at_capture``, ``direction_at_capture`` and ``at_risk_threshold_at_capture`` freeze the
+ENTIRE grading basis at capture (S-obj-freeze, 0055): a later commitment revision (target, direction
+OR amber threshold) can no longer re-grade a historical verdict. All three are snapshotted from the
+then-GOVERNING commitment (working-row fallback pre-first-release) in the same
+``record_measurement`` transaction."""
 
 from __future__ import annotations
 
@@ -14,6 +19,7 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from ..base import Base
+from ._objective_enums import ObjectiveDirection, objective_direction_enum
 
 
 class KpiMeasurement(Base):
@@ -60,6 +66,15 @@ class KpiMeasurement(Base):
     period: Mapped[datetime.date] = mapped_column(Date, nullable=False)
     value: Mapped[Decimal] = mapped_column(Numeric, nullable=False)
     target_at_capture: Mapped[Decimal] = mapped_column(Numeric, nullable=False)
+    # The grading basis frozen at capture (S-obj-freeze, 0055) — alongside target_at_capture, so a
+    # later commitment revision cannot re-grade a historical reading. Both nullable, mirroring the
+    # nullable objective_id: an objective-less reading has no basis (and is never serialized by the
+    # objective-scoped endpoints); record_measurement always sets both for a real objective-bound
+    # reading. at_risk_threshold_at_capture is also null when the commitment has no amber band.
+    direction_at_capture: Mapped[ObjectiveDirection | None] = mapped_column(
+        objective_direction_enum, nullable=True
+    )
+    at_risk_threshold_at_capture: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
     unit: Mapped[str] = mapped_column(Text, nullable=False)
     source: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime.datetime] = mapped_column(

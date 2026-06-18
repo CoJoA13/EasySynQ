@@ -227,8 +227,10 @@ async def record_measurement(
     if governing is not None:
         gc = parse_commitment(governing)
         effective_unit, effective_target = gc.unit, gc.target_value
+        effective_direction, effective_threshold = gc.direction, gc.at_risk_threshold
     else:
         effective_unit, effective_target = qo.unit, qo.target_value
+        effective_direction, effective_threshold = qo.direction, qo.at_risk_threshold
     # The reading must be in the objective's GOVERNING unit — current_value/RAG compare the
     # raw value against the governing target with no conversion (a mismatch would corrupt the
     # scorecard).
@@ -254,12 +256,22 @@ async def record_measurement(
             "period": period.isoformat(),
             "value": str(value),
             "target_at_capture": str(target_at_capture),
+            # Seal the FULL frozen grading basis into the WORM evidence record (Codex P2), not just
+            # the kpi_measurement projection — so an auditor / evidence-pack reading the record can
+            # reconstruct + verify the RAG basis after a later direction/threshold revision.
+            "direction_at_capture": effective_direction.value,
+            "at_risk_threshold_at_capture": (
+                str(effective_threshold) if effective_threshold is not None else None
+            ),
             "unit": unit,
             "source": source,
         },
         _commit=False,
     )
 
+    # S-obj-freeze: snapshot the FULL grading basis (target + direction + amber threshold) from the
+    # SAME governing/working resolution as the target, so a later commitment revision cannot
+    # re-grade this reading. effective_direction is never None; the threshold may be None.
     measurement = KpiMeasurement(
         org_id=actor.org_id,
         record_id=record.id,
@@ -268,6 +280,8 @@ async def record_measurement(
         period=period,
         value=value,
         target_at_capture=target_at_capture,
+        direction_at_capture=effective_direction,
+        at_risk_threshold_at_capture=effective_threshold,
         unit=unit,
         source=source,
     )

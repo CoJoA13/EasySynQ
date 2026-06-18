@@ -8468,7 +8468,7 @@ components:
         rag:
           type: string
           enum: [green, amber, red, unmeasured]
-          description: "Per-reading RAG: value vs target_at_capture, direction/threshold from the governing commitment. Never 'unmeasured' for a measurement (value always present)."
+          description: "Per-reading RAG graded entirely off the reading's frozen basis (value vs target_at_capture, under the direction + amber threshold snapshotted at capture); a later commitment revision cannot re-grade it. Never 'unmeasured' for a measurement (value always present)."
 
     MeasurementCreate:
       type: object
