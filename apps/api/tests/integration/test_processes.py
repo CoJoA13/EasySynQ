@@ -608,6 +608,7 @@ async def test_assign_owner_records_raci_and_unions_processes(
     role_assignment's process_ids set (not a second assignment row); re-assign is idempotent."""
     await _grant(subj.a, "process.create")
     await _grant(subj.a, "process.assign_owner")
+    await _grant(subj.a, "process.read")  # GET /owners is gated process.read (the roster lens)
     ha = _auth(token_factory, subj.a)
     p1 = await _create_process(app_client, ha)
     p2 = await _create_process(app_client, ha)
@@ -654,6 +655,7 @@ async def test_revoke_owner_narrows_then_drops(
     revoking the last drops the role_assignment entirely; a re-revoke of a non-owner is 404."""
     await _grant(subj.a, "process.create")
     await _grant(subj.a, "process.assign_owner")
+    await _grant(subj.a, "process.read")  # GET /owners is gated process.read (the roster lens)
     ha = _auth(token_factory, subj.a)
     p1 = await _create_process(app_client, ha)
     p2 = await _create_process(app_client, ha)
@@ -670,6 +672,7 @@ async def test_revoke_owner_narrows_then_drops(
     assert await _owner_role_process_ids(owner_id) == [p2["id"]]
     assert await _audit_count(EventType.PROCESS_OWNER_REVOKED, p1["id"]) >= 1
     owners1 = await app_client.get(f"/api/v1/processes/{p1['id']}/owners", headers=ha)
+    assert owners1.status_code == 200, owners1.text
     assert all(o["user_id"] != str(owner_id) for o in owners1.json())
 
     # Revoking the last owned process drops the role_assignment (no inert empty PROCESS grant).
