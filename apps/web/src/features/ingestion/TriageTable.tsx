@@ -1,9 +1,6 @@
 import { Button, Checkbox, Group, Skeleton, Stack, Table, Text } from "@mantine/core";
-import type {
-  ConfirmedKind,
-  ImportDecisionAction,
-  ImportFile,
-} from "../../lib/types";
+import { EmptyState } from "../../lib/states";
+import type { ConfirmedKind, ImportDecisionAction, ImportFile } from "../../lib/types";
 import { ConfidenceCell } from "./ConfidenceCell";
 import { IdentifierCell } from "./IdentifierCell";
 import { KindCell } from "./KindCell";
@@ -59,7 +56,7 @@ export function TriageTable({
     );
   }
   if (files.length === 0) {
-    return <Text c="dimmed">Nothing in this queue.</Text>;
+    return <EmptyState message="Nothing in this queue." />;
   }
 
   return (
@@ -173,9 +170,7 @@ export function TriageTable({
               </Table.Td>
               <Table.Td ta="center">
                 <Text size="sm" ff="monospace">
-                  {file.review?.clause_numbers.length
-                    ? file.review.clause_numbers.join(", ")
-                    : "—"}
+                  {file.review?.clause_numbers.length ? file.review.clause_numbers.join(", ") : "—"}
                 </Text>
               </Table.Td>
               <Table.Td>
@@ -194,7 +189,11 @@ export function TriageTable({
                     correction is done via the BulkActionBar's "Correct to type/owner/clause" menus or
                     the detail drawer. */}
                 <Group gap={4} wrap="nowrap">
-                  <Button variant="subtle" size="compact-sm" onClick={() => onRowAction(file, "accept")}>
+                  <Button
+                    variant="subtle"
+                    size="compact-sm"
+                    onClick={() => onRowAction(file, "accept")}
+                  >
                     Accept
                   </Button>
                   <Button

@@ -1,10 +1,8 @@
 import {
-  Alert,
   Anchor,
   Button,
   Container,
   Group,
-  Loader,
   Paper,
   SegmentedControl,
   SimpleGrid,
@@ -17,6 +15,7 @@ import { Link } from "react-router-dom";
 import { usePermissions } from "../../app/shell/usePermissions";
 import { useUserDirectory } from "../../app/shell/useUserDirectory";
 import { RegisterToolbar, SortableTh } from "../../lib/RegisterToolbar";
+import { EmptyState, ErrorState, LoadingState, NoAccessState } from "../../lib/states";
 import {
   sortRows,
   useDebouncedSearch,
@@ -51,7 +50,7 @@ function Tile({ label, value }: { label: string; value: number }) {
 }
 
 export function AuditsListPage() {
-  const { data, isLoading, isError, forbidden } = useAudits();
+  const { data, isLoading, isError, forbidden, refetch } = useAudits();
   const { data: directory } = useUserDirectory();
   // status filter is URL-backed ("" = All) so it survives navigation + is shareable.
   const [filter, setFilter] = useUrlParam("status", "");
@@ -102,17 +101,21 @@ export function AuditsListPage() {
         <Title order={3} mb="md">
           Internal Audit
         </Title>
-        <Alert color="gray" title="No access">
-          You don't have access to internal audits. They're available to roles holding{" "}
-          <code>audit.read</code> (QMS Owner, Process Owner, Internal Auditor).
-        </Alert>
+        <NoAccessState
+          message={
+            <>
+              You don't have access to internal audits. They're available to roles holding{" "}
+              <code>audit.read</code> (QMS Owner, Process Owner, Internal Auditor).
+            </>
+          }
+        />
       </Container>
     );
   }
   if (isLoading) {
     return (
       <Container size="xl" py="md">
-        <Loader />
+        <LoadingState label="Loading audits" />
       </Container>
     );
   }
@@ -122,9 +125,7 @@ export function AuditsListPage() {
         <Title order={3} mb="md">
           Internal Audit
         </Title>
-        <Alert color="red" title="Couldn't load audits">
-          Please try again.
-        </Alert>
+        <ErrorState title="Couldn't load audits" onRetry={() => refetch()} />
       </Container>
     );
   }
@@ -171,13 +172,9 @@ export function AuditsListPage() {
         />
       </RegisterToolbar>
       {all.length === 0 ? (
-        <Text c="dimmed" mt="md">
-          No audits yet.
-        </Text>
+        <EmptyState message="No audits yet." />
       ) : rows.length === 0 ? (
-        <Text c="dimmed" mt="md">
-          No audits match your filters.
-        </Text>
+        <EmptyState message="No audits match your filters." />
       ) : (
         <Table striped highlightOnHover mt="md">
           <Table.Thead>

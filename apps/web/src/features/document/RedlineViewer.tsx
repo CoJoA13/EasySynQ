@@ -1,6 +1,7 @@
-import { Alert, Anchor, Card, Group, Loader, Stack, Table, Text } from "@mantine/core";
+import { Alert, Anchor, Card, Group, Stack, Table, Text } from "@mantine/core";
 import { useMemo, useRef, useState } from "react";
 import { ApiError, useApi } from "../../lib/api";
+import { LoadingState } from "../../lib/states";
 import type { MetadataDiffEntry } from "../../lib/types";
 import { useVersionDiff } from "./useVersionDiff";
 
@@ -35,7 +36,7 @@ export function RedlineViewer({
     [data],
   );
 
-  if (isLoading) return <Loader size="sm" aria-label="Loading redline" />;
+  if (isLoading) return <LoadingState label="Loading redline" />;
   if (isError) {
     if (error instanceof ApiError && error.status === 403) {
       return (

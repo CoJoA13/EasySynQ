@@ -1,5 +1,6 @@
-import { Loader, Stack, Text } from "@mantine/core";
+import { Stack, Text } from "@mantine/core";
 import type { WhereUsed, WhereUsedLink } from "../../lib/types";
+import { EmptyState, LoadingState } from "../../lib/states";
 import { useWhereUsed } from "./useWhereUsed";
 
 // The Where-used tab: the doc-05 §7.2 dependency categories (read-only). Neighbour titles are
@@ -16,7 +17,10 @@ function LinkGroup({ title, links }: { title: string; links: WhereUsedLink[] }) 
           <Text span ff="monospace" size="sm">
             {l.identifier}
           </Text>{" "}
-          — {l.title} <Text span c="dimmed">({l.current_state})</Text>
+          — {l.title}{" "}
+          <Text span c="dimmed">
+            ({l.current_state})
+          </Text>
         </Text>
       ))}
     </Stack>
@@ -46,19 +50,14 @@ export function WhereUsedTab({
 }) {
   const { data, isLoading, isError } = useWhereUsed(documentId, active);
 
-  if (isLoading) return <Loader size="sm" aria-label="Loading where-used" />;
+  if (isLoading) return <LoadingState label="Loading where-used" />;
   if (isError)
     return (
       <Text size="sm" c="red">
         Could not load where-used.
       </Text>
     );
-  if (!data || !hasAny(data))
-    return (
-      <Text size="sm" c="dimmed">
-        Nothing depends on this document yet.
-      </Text>
-    );
+  if (!data || !hasAny(data)) return <EmptyState message="Nothing depends on this document yet." />;
 
   return (
     <Stack gap="md" aria-label="Where-used">
@@ -69,7 +68,10 @@ export function WhereUsedTab({
           </Text>
           {data.processes.map((p) => (
             <Text key={p.id} size="sm">
-              {p.name} <Text span c="dimmed">({p.state})</Text>
+              {p.name}{" "}
+              <Text span c="dimmed">
+                ({p.state})
+              </Text>
             </Text>
           ))}
         </Stack>

@@ -1,7 +1,8 @@
-import { Alert, Badge, Button, Container, Group, Loader, Stack, Table, Text, Title } from "@mantine/core";
+import { Badge, Button, Container, Group, Stack, Table, Text, Title } from "@mantine/core";
 import { useState } from "react";
 import { usePermissions } from "../../app/shell/usePermissions";
 import { useUserDirectory } from "../../app/shell/useUserDirectory";
+import { EmptyState, ErrorState, LoadingState, NoAccessState } from "../../lib/states";
 import type { DirectoryUser, Ncr } from "../../lib/types";
 import { SEVERITY_LABEL } from "./columns";
 import { DispositionModal } from "./DispositionModal";
@@ -17,7 +18,7 @@ function actorLabel(userId: string, directory: DirectoryUser[]): string {
 }
 
 export function NcrsPage() {
-  const { data, isLoading, isError, forbidden } = useNcrs();
+  const { data, isLoading, isError, forbidden, refetch } = useNcrs();
   const { can } = usePermissions();
   const { data: directory } = useUserDirectory();
   const [formOpen, setFormOpen] = useState(false);
@@ -29,16 +30,21 @@ export function NcrsPage() {
         <Title order={3} mb="md">
           Nonconforming Output (NCR)
         </Title>
-        <Alert color="gray" title="No access">
-          You don't have access to NCRs. They're available to roles holding <code>ncr.read</code>.
-        </Alert>
+        <NoAccessState
+          message={
+            <>
+              You don't have access to NCRs. They're available to roles holding{" "}
+              <code>ncr.read</code>.
+            </>
+          }
+        />
       </Container>
     );
   }
   if (isLoading) {
     return (
       <Container size="lg" py="md">
-        <Loader />
+        <LoadingState label="Loading NCRs" />
       </Container>
     );
   }
@@ -48,9 +54,7 @@ export function NcrsPage() {
         <Title order={3} mb="md">
           Nonconforming Output (NCR)
         </Title>
-        <Alert color="red" title="Couldn't load NCRs">
-          Please try again.
-        </Alert>
+        <ErrorState title="Couldn't load NCRs" onRetry={() => refetch()} />
       </Container>
     );
   }
@@ -63,7 +67,7 @@ export function NcrsPage() {
         {can("ncr.create") && <Button onClick={() => setFormOpen(true)}>＋ Raise NCR</Button>}
       </Group>
       {rows.length === 0 ? (
-        <Text c="dimmed">No NCRs raised yet.</Text>
+        <EmptyState message="No NCRs raised yet." />
       ) : (
         <Table striped highlightOnHover>
           <Table.Thead>
@@ -122,7 +126,9 @@ export function NcrsPage() {
         </Table>
       )}
       <NcrForm opened={formOpen} onClose={() => setFormOpen(false)} />
-      {disposeNcr && <DispositionModal ncr={disposeNcr} opened onClose={() => setDisposeNcr(null)} />}
+      {disposeNcr && (
+        <DispositionModal ncr={disposeNcr} opened onClose={() => setDisposeNcr(null)} />
+      )}
     </Container>
   );
 }

@@ -1,7 +1,8 @@
-import { Alert, Anchor, Button, Container, Group, Loader, Table, Text, Title } from "@mantine/core";
+import { Alert, Anchor, Box, Button, Container, Group, Table, Text, Title } from "@mantine/core";
 import { useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { usePermissions } from "../../app/shell/usePermissions";
+import { EmptyState, ErrorState, LoadingState, NoAccessState } from "../../lib/states";
 import { RegisterToolbar, SortableTh } from "../../lib/RegisterToolbar";
 import { sortRows, useDebouncedSearch, useTableSort } from "../../lib/registerControls";
 import { StatusBadge } from "../../lib/StatusBadge";
@@ -41,7 +42,7 @@ function sortValue(mr: MgmtReview, key: SortKey): string | null | undefined {
 }
 
 export function ManagementReviewsRegisterPage() {
-  const { data, isLoading, isError, forbidden } = useMgmtReviews();
+  const { data, isLoading, isError, forbidden, refetch } = useMgmtReviews();
   const { can } = usePermissions();
   const navigate = useNavigate();
   const [createOpen, setCreateOpen] = useState(false);
@@ -71,9 +72,7 @@ export function ManagementReviewsRegisterPage() {
         <Title order={2} mb="md">
           Management reviews
         </Title>
-        <Alert color="gray" title="No access">
-          You don't have access to Management Reviews. It's available to the Quality Manager.
-        </Alert>
+        <NoAccessState message="You don't have access to Management Reviews. It's available to the Quality Manager." />
       </Container>
     );
   }
@@ -83,16 +82,14 @@ export function ManagementReviewsRegisterPage() {
         <Title order={2} mb="md">
           Management reviews
         </Title>
-        <Alert color="red" title="Couldn't load management reviews">
-          Please try again.
-        </Alert>
+        <ErrorState title="Couldn't load management reviews" onRetry={() => refetch()} />
       </Container>
     );
   }
   if (isLoading || !data) {
     return (
       <Container size="lg" py="md">
-        <Loader />
+        <LoadingState label="Loading management reviews" />
       </Container>
     );
   }
@@ -120,9 +117,9 @@ export function ManagementReviewsRegisterPage() {
             countNoun="reviews"
           />
           {visible.length === 0 ? (
-            <Text c="dimmed" mt="md">
-              No management reviews match your search.
-            </Text>
+            <Box mt="md">
+              <EmptyState message="No management reviews match your search." />
+            </Box>
           ) : (
             <Table striped highlightOnHover mt="md">
               <Table.Thead>

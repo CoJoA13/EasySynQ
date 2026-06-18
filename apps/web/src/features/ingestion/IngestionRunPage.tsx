@@ -1,7 +1,8 @@
-import { Alert, Anchor, Container, Loader, Title } from "@mantine/core";
+import { Alert, Anchor, Container, Title } from "@mantine/core";
 import { Link, useParams } from "react-router-dom";
 import { usePermissions } from "../../app/shell/usePermissions";
 import { ApiError } from "../../lib/api";
+import { LoadingState, NoAccessState } from "../../lib/states";
 import { CommitProgress } from "./CommitProgress";
 import { ReviewCockpit } from "./ReviewCockpit";
 import { RunTerminalSummary } from "./RunTerminalSummary";
@@ -27,8 +28,8 @@ export function IngestionRunPage() {
 
   if (isLoading && !run) {
     return (
-      <Container size="lg" py="md" aria-label="Loading import run">
-        <Loader />
+      <Container size="lg" py="md">
+        <LoadingState label="Loading import run" />
       </Container>
     );
   }
@@ -41,9 +42,7 @@ export function IngestionRunPage() {
           Import review
         </Title>
         {forbidden ? (
-          <Alert color="gray" title="No access">
-            You don't have access to import review.
-          </Alert>
+          <NoAccessState message="You don't have access to import review." />
         ) : (
           <Alert color="gray" title="Not found">
             Import run not found.{" "}
@@ -76,6 +75,9 @@ export function IngestionRunPage() {
   // pre-Proposed (Created/Scanning/Extracting/Classifying/… ) and any additive stage → scan progress.
   // Cancel is gated on import.execute (ScanProgress hides the button when onCancel is undefined).
   return (
-    <ScanProgress run={run} onCancel={can("import.execute") ? () => cancelRun.mutate() : undefined} />
+    <ScanProgress
+      run={run}
+      onCancel={can("import.execute") ? () => cancelRun.mutate() : undefined}
+    />
   );
 }

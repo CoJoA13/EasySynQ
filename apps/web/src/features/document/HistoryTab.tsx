@@ -1,5 +1,6 @@
-import { Badge, Group, Loader, Stack, Text } from "@mantine/core";
+import { Badge, Group, Stack, Text } from "@mantine/core";
 import { ApiError } from "../../lib/api";
+import { EmptyState, LoadingState } from "../../lib/states";
 import { useDocumentVersions } from "./useDocumentVersions";
 
 // The History tab: the immutable version timeline (newest first), read-only. Gated
@@ -7,7 +8,7 @@ import { useDocumentVersions } from "./useDocumentVersions";
 export function HistoryTab({ documentId, active }: { documentId: string | null; active: boolean }) {
   const { data, isLoading, isError, error } = useDocumentVersions(documentId, active);
 
-  if (isLoading) return <Loader size="sm" aria-label="Loading version history" />;
+  if (isLoading) return <LoadingState label="Loading version history" />;
   if (isError) {
     if (error instanceof ApiError && error.status === 403) {
       return (
@@ -23,11 +24,7 @@ export function HistoryTab({ documentId, active }: { documentId: string | null; 
     );
   }
   if (!data || data.length === 0) {
-    return (
-      <Text size="sm" c="dimmed">
-        No versions yet.
-      </Text>
-    );
+    return <EmptyState message="No versions yet." />;
   }
 
   return (

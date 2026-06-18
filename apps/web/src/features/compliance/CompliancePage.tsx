@@ -1,12 +1,13 @@
-import { Alert, Anchor, Container, Group, Loader, Table, Text, Title } from "@mantine/core";
+import { Anchor, Container, Group, Table, Text, Title } from "@mantine/core";
 import { Link } from "react-router-dom";
 import { AsOf } from "../../lib/AsOf";
 import { StatusBadge } from "../../lib/StatusBadge";
+import { ErrorState, LoadingState, NoAccessState } from "../../lib/states";
 import { CoverageBadge } from "./CoverageBadge";
 import { useComplianceChecklist } from "./useComplianceChecklist";
 
 export function CompliancePage() {
-  const { data, isLoading, isError, forbidden, dataUpdatedAt } = useComplianceChecklist();
+  const { data, isLoading, isError, forbidden, dataUpdatedAt, refetch } = useComplianceChecklist();
 
   if (forbidden) {
     return (
@@ -14,17 +15,21 @@ export function CompliancePage() {
         <Title order={2} mb="md">
           Compliance Checklist
         </Title>
-        <Alert color="gray" title="No access">
-          You don&rsquo;t have access to the Compliance Checklist. It&rsquo;s available to the
-          Quality Manager and Internal Auditor roles.
-        </Alert>
+        <NoAccessState
+          message={
+            <>
+              You don&rsquo;t have access to the Compliance Checklist. It&rsquo;s available to the
+              Quality Manager and Internal Auditor roles.
+            </>
+          }
+        />
       </Container>
     );
   }
   if (isLoading) {
     return (
       <Container size="md" py="md">
-        <Loader />
+        <LoadingState label="Loading the checklist" />
       </Container>
     );
   }
@@ -34,9 +39,7 @@ export function CompliancePage() {
         <Title order={2} mb="md">
           Compliance Checklist
         </Title>
-        <Alert color="red" title="Couldn't load the checklist">
-          Please try again.
-        </Alert>
+        <ErrorState title="Couldn't load the checklist" onRetry={() => refetch()} />
       </Container>
     );
   }

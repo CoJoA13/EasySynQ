@@ -1,6 +1,7 @@
-import { Alert, Anchor, Button, Card, Grid, Loader, Stack, Text, Title } from "@mantine/core";
+import { Alert, Anchor, Button, Card, Grid, Stack, Text, Title } from "@mantine/core";
 import { Link, useParams } from "react-router-dom";
 import { ApiError } from "../../lib/api";
+import { LoadingState } from "../../lib/states";
 import { useDocument } from "../document/useDocument";
 import { useDocumentVersions } from "../document/useDocumentVersions";
 import { VersionCompare } from "../document/VersionCompare";
@@ -56,7 +57,7 @@ export function ReviewApprovePage() {
   // decision card on it, so they never approve before the plan they're signing has actually loaded.
   const capaApproval = useCapaApproval(isCapa ? (task?.subject_id ?? null) : null);
 
-  if (isLoading) return <Loader aria-label="Loading task" />;
+  if (isLoading) return <LoadingState label="Loading task" />;
   if (isError || !task) {
     const status = error instanceof ApiError ? error.status : 0;
     return (
@@ -117,7 +118,7 @@ export function ReviewApprovePage() {
             {!decidable ? (
               decidedAlert
             ) : capaApproval.isLoading ? (
-              <Loader aria-label="Loading the action plan" />
+              <LoadingState label="Loading the action plan" />
             ) : capaApproval.data?.proposed_action_plan ? (
               <DecisionCard taskId={task.id} subjectType="CAPA" subjectId={task.subject_id!} />
             ) : (

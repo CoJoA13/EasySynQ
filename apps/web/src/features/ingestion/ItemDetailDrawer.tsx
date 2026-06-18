@@ -1,5 +1,6 @@
-import { Badge, Button, Divider, Group, Loader, Menu, Stack, Text } from "@mantine/core";
+import { Badge, Button, Divider, Group, Menu, Stack, Text } from "@mantine/core";
 import { DetailDrawer } from "../../app/shell/DetailDrawer";
+import { LoadingState } from "../../lib/states";
 import type {
   ConfirmedKind,
   ImportClassificationEvidence,
@@ -46,7 +47,7 @@ export function ItemDetailDrawer({
   return (
     <DetailDrawer opened={fileId !== null} onClose={onClose} title="Item detail">
       {isLoading || !detail ? (
-        <Loader />
+        <LoadingState label="Loading item detail" />
       ) : (
         <Stack gap="md">
           {/* Header — filename + proposed identifier (DP-5 shape, quiet absence → "—"). */}
@@ -126,8 +127,8 @@ export function ItemDetailDrawer({
           ) : (
             <Text size="sm" c="dimmed">
               Inspect-only — this file is not a commit candidate
-              {detail.scan_flags.disposition === "quarantine" ? " (quarantined)" : ""}, so no decision
-              can be recorded against it.
+              {detail.scan_flags.disposition === "quarantine" ? " (quarantined)" : ""}, so no
+              decision can be recorded against it.
             </Text>
           )}
 

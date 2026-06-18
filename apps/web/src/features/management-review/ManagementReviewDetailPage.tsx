@@ -1,9 +1,10 @@
-import { Alert, Button, Card, Container, Group, Loader, Stack, Text, Title } from "@mantine/core";
+import { Alert, Button, Card, Container, Group, Stack, Text, Title } from "@mantine/core";
 import { useState } from "react";
 import { useParams } from "react-router-dom";
 import { useUserDirectory } from "../../app/shell/useUserDirectory";
 import { usePermissions } from "../../app/shell/usePermissions";
 import { ApiError, useApi } from "../../lib/api";
+import { LoadingState } from "../../lib/states";
 import { ConfirmDestructive } from "../../lib/ConfirmDestructive";
 import { ApprovalStepper } from "../document/ApprovalStepper";
 import { StateBadge } from "../document/StateBadge";
@@ -57,7 +58,7 @@ export function ManagementReviewDetailPage() {
     if (isLoading)
       return (
         <Container size="lg" py="md">
-          <Loader />
+          <LoadingState label="Loading the review" />
         </Container>
       );
     return (

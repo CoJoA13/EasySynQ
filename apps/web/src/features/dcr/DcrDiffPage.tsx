@@ -1,7 +1,8 @@
-import { Alert, Anchor, Group, Loader, SegmentedControl, Stack, Text, Title } from "@mantine/core";
+import { Anchor, Group, Loader, SegmentedControl, Stack, Text, Title } from "@mantine/core";
 import { useMemo } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { ApiError } from "../../lib/api";
+import { ErrorState, LoadingState } from "../../lib/states";
 import { RedlineViewer } from "../document/RedlineViewer";
 import { VisualDiffViewer } from "../document/VisualDiffViewer";
 import { useDocumentVersions } from "../document/useDocumentVersions";
@@ -17,7 +18,7 @@ import { resolvePredecessor } from "./resolvePredecessor";
 export function DcrDiffPage() {
   const { id } = useParams();
   const dcrId = id ?? null;
-  const { data: dcr, isLoading, isError } = useDcr(dcrId);
+  const { data: dcr, isLoading, isError, refetch } = useDcr(dcrId);
   const [params, setParams] = useSearchParams();
   const mode = params.get("mode") === "visual" ? "visual" : "text";
 
@@ -48,15 +49,21 @@ export function DcrDiffPage() {
 
   const back = dcrId ? `/dcrs?dcr=${dcrId}` : "/dcrs";
 
-  if (isLoading) return <Loader />;
+  if (isLoading) return <LoadingState label="Loading change request" />;
   if (isError || !dcr) {
     return (
-      <Alert color="red" title="Couldn't load this change request">
-        It may have been removed, or you may not have access.{" "}
-        <Anchor component={Link} to="/dcrs">
-          Back to change requests
-        </Anchor>
-      </Alert>
+      <ErrorState
+        title="Couldn't load this change request"
+        message={
+          <>
+            It may have been removed, or you may not have access.{" "}
+            <Anchor component={Link} to="/dcrs">
+              Back to change requests
+            </Anchor>
+          </>
+        }
+        onRetry={() => refetch()}
+      />
     );
   }
 

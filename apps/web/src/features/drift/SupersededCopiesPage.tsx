@@ -1,17 +1,7 @@
-import {
-  Alert,
-  Anchor,
-  Container,
-  Group,
-  Loader,
-  Pagination,
-  Stack,
-  Table,
-  Text,
-  Title,
-} from "@mantine/core";
+import { Anchor, Container, Group, Pagination, Stack, Table, Text, Title } from "@mantine/core";
 import { useState } from "react";
 import { Link } from "react-router-dom";
+import { EmptyState, ErrorState, LoadingState, NoAccessState } from "../../lib/states";
 import { formatTimestamp } from "../../lib/time";
 import { SUPERSEDED_PAGE_SIZE, useSupersededCopies } from "./hooks";
 
@@ -21,7 +11,7 @@ import { SUPERSEDED_PAGE_SIZE, useSupersededCopies } from "./hooks";
 // (offset/limit) — no virtualization (the S-ing-4b rule).
 export function SupersededCopiesPage() {
   const [page, setPage] = useState(1);
-  const { data, isLoading, isError, forbidden } = useSupersededCopies(
+  const { data, isLoading, isError, forbidden, refetch } = useSupersededCopies(
     (page - 1) * SUPERSEDED_PAGE_SIZE,
   );
 
@@ -31,17 +21,21 @@ export function SupersededCopiesPage() {
         <Title order={2} mb="md">
           Superseded copies
         </Title>
-        <Alert color="gray" title="No access">
-          You don&rsquo;t have access to the drift status surface. It requires the drift.read
-          permission (System Administrator).
-        </Alert>
+        <NoAccessState
+          message={
+            <>
+              You don&rsquo;t have access to the drift status surface. It requires the drift.read
+              permission (System Administrator).
+            </>
+          }
+        />
       </Container>
     );
   }
   if (isLoading) {
     return (
       <Container size="lg" py="md">
-        <Loader aria-label="Loading superseded copies" />
+        <LoadingState label="Loading superseded copies" />
       </Container>
     );
   }
@@ -51,9 +45,7 @@ export function SupersededCopiesPage() {
         <Title order={2} mb="md">
           Superseded copies
         </Title>
-        <Alert color="red" title="Couldn't load the report">
-          Please try again.
-        </Alert>
+        <ErrorState title="Couldn't load the report" onRetry={() => refetch()} />
       </Container>
     );
   }
@@ -71,7 +63,7 @@ export function SupersededCopiesPage() {
           </Text>
         </div>
         {data.items.length === 0 ? (
-          <Text c="dimmed">No outstanding copies of superseded versions.</Text>
+          <EmptyState message="No outstanding copies of superseded versions." />
         ) : (
           <Table striped highlightOnHover aria-label="Superseded copies">
             <Table.Thead>

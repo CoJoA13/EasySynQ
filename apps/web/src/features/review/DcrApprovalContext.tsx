@@ -1,4 +1,5 @@
-import { Alert, Badge, Group, Loader, Stack, Text, Title } from "@mantine/core";
+import { Alert, Badge, Group, Stack, Text, Title } from "@mantine/core";
+import { LoadingState } from "../../lib/states";
 import { CHANGE_TYPE_LABEL, REASON_LABEL, SIGNIFICANCE_LABEL } from "../dcr/labels";
 import { DcrImpactTable } from "../dcr/DcrImpactTable";
 import { DcrStateBadge } from "../dcr/DcrStateBadge";
@@ -11,7 +12,7 @@ export function DcrApprovalContext({ dcrId }: { dcrId: string }) {
   const { data: dcr, isLoading, isError, forbidden } = useDcr(dcrId);
   const { data: impact } = useDcrImpact(dcrId);
 
-  if (isLoading) return <Loader aria-label="Loading the change request" />;
+  if (isLoading) return <LoadingState label="Loading the change request" />;
   if (isError || !dcr) {
     return (
       <Alert color="yellow" title="Change request not visible to you">

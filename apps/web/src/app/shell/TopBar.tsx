@@ -20,7 +20,11 @@ export function TopBar({
   onOpenSearch: () => void;
 }) {
   const { logout } = useAuth();
-  const ackCount = useAckCount();
+  const { count: ackCount, isError: ackError } = useAckCount();
+  // Three distinct bell states (never a confident "0" on failure): a numeric badge when there are open
+  // acks; a calm gray indeterminate dot — with a "(count unavailable)" name — when the count couldn't be
+  // loaded; and no badge at all on a genuine zero.
+  const showAckCount = !ackError && ackCount > 0;
   return (
     <Group h="100%" px="md" justify="space-between" wrap="nowrap">
       <Group gap="sm" wrap="nowrap">
@@ -49,12 +53,17 @@ export function TopBar({
         <ActionIcon component={Link} to="/tasks" variant="subtle" aria-label="Tasks">
           <IconTasks />
         </ActionIcon>
-        <Indicator label={ackCount} size={16} disabled={ackCount === 0}>
+        <Indicator
+          label={showAckCount ? ackCount : undefined}
+          size={ackError ? 10 : 16}
+          color={ackError ? "gray" : undefined}
+          disabled={!showAckCount && !ackError}
+        >
           <ActionIcon
             component={Link}
             to="/tasks?type=DOC_ACK&state=PENDING"
             variant="subtle"
-            aria-label="Acknowledgements"
+            aria-label={ackError ? "Acknowledgements (count unavailable)" : "Acknowledgements"}
           >
             <IconBell />
           </ActionIcon>

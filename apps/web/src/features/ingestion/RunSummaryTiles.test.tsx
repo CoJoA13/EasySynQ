@@ -22,6 +22,13 @@ test("renders the four tiles from run.counts.by_band + the checklist review stat
   expect(await axe(container)).toHaveNoViolations();
 });
 
+test("uses the canonical glyph vocabulary — ◔ for Medium, ✓ for High, ▲ retired", () => {
+  renderWithProviders(<RunSummaryTiles run={run} review={review} />);
+  expect(screen.getByText("✓")).toBeInTheDocument(); // High → success
+  expect(screen.getByText("◔")).toBeInTheDocument(); // Medium → warning (was ▲)
+  expect(screen.queryByText("▲")).not.toBeInTheDocument();
+});
+
 test("the values render verbatim (2, 1, 4, and '1 / 4')", () => {
   renderWithProviders(<RunSummaryTiles run={run} review={review} />);
   expect(screen.getByText("2")).toBeInTheDocument();

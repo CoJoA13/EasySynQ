@@ -1,9 +1,18 @@
 import {
-  Alert, Anchor, Breadcrumbs, Container, Grid, Group, Loader, Paper, Text, Title,
+  Alert,
+  Anchor,
+  Breadcrumbs,
+  Container,
+  Grid,
+  Group,
+  Paper,
+  Text,
+  Title,
 } from "@mantine/core";
 import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { useUserDirectory } from "../../app/shell/useUserDirectory";
+import { LoadingState, NoAccessState } from "../../lib/states";
 import type { Finding } from "../../lib/types";
 import { AuditStateBadge } from "./badges";
 import { CorrectFindingModal } from "./CorrectFindingModal";
@@ -28,17 +37,21 @@ export function AuditDetailPage() {
   if (audit.forbidden) {
     return (
       <Container size="xl" py="md">
-        <Alert color="gray" title="No access">
-          You don't have access to internal audits. They're available to roles holding{" "}
-          <code>audit.read</code>.
-        </Alert>
+        <NoAccessState
+          message={
+            <>
+              You don't have access to internal audits. They're available to roles holding{" "}
+              <code>audit.read</code>.
+            </>
+          }
+        />
       </Container>
     );
   }
   if (audit.isLoading) {
     return (
       <Container size="xl" py="md">
-        <Loader />
+        <LoadingState label="Loading audit" />
       </Container>
     );
   }
@@ -86,7 +99,10 @@ export function AuditDetailPage() {
         <div>
           <Title order={3}>{a.title ?? "Internal audit"}</Title>
           <Text size="sm" c="dimmed">
-            Lead auditor <Text span fw={500}>{lead}</Text>
+            Lead auditor{" "}
+            <Text span fw={500}>
+              {lead}
+            </Text>
             {a.started_at ? ` · started ${a.started_at}` : ""}
             {a.completed_at ? ` · completed ${a.completed_at}` : ""}
           </Text>

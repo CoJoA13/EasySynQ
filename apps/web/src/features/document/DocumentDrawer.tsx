@@ -1,9 +1,10 @@
-import { Anchor, Loader, Tabs } from "@mantine/core";
+import { Anchor, Tabs } from "@mantine/core";
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { DetailDrawer } from "../../app/shell/DetailDrawer";
 import { useDocumentTypes } from "../../app/shell/useDocumentTypes";
 import { useUserDirectory } from "../../app/shell/useUserDirectory";
+import { LoadingState } from "../../lib/states";
 import type { DocumentSummary } from "../../lib/types";
 import { AuthorActions } from "../authoring/AuthorActions";
 import { ArtifactHeader } from "./ArtifactHeader";
@@ -42,7 +43,7 @@ export function DocumentDrawer({
 
   return (
     <DetailDrawer opened={opened} onClose={onClose} title={doc?.identifier ?? "Document"}>
-      {isLoading && !doc && <Loader aria-label="Loading document" />}
+      {isLoading && !doc && <LoadingState label="Loading document" />}
       {doc && (
         <>
           <ArtifactHeader doc={doc} typeName={typeName} ownerName={ownerName} />

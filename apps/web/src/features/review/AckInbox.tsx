@@ -1,7 +1,8 @@
-import { Alert, Button, Checkbox, Group, Loader, Stack, Table, Text, Title } from "@mantine/core";
+import { Alert, Button, Checkbox, Group, Stack, Table, Text, Title } from "@mantine/core";
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { ApiError } from "../../lib/api";
+import { EmptyState, LoadingState } from "../../lib/states";
 import type { Task } from "../../lib/types";
 import { useBulkSelection } from "../../lib/useBulkSelection";
 import { useBulkAcknowledge } from "./ackHooks";
@@ -32,7 +33,7 @@ export function AckInbox() {
     useBulkSelection(rows);
   const [summary, setSummary] = useState<string | null>(null);
 
-  if (isLoading) return <Loader aria-label="Loading acknowledgements" />;
+  if (isLoading) return <LoadingState label="Loading acknowledgements" />;
   if (isError) {
     if (error instanceof ApiError && error.status === 403)
       return <Text c="dimmed">You don't have access to the acknowledgement queue.</Text>;
@@ -62,7 +63,7 @@ export function AckInbox() {
         </Alert>
       )}
       {rows.length === 0 ? (
-        <Text c="dimmed">No documents awaiting your acknowledgement.</Text>
+        <EmptyState message="No documents awaiting your acknowledgement." />
       ) : (
         <>
           <Group>

@@ -9,7 +9,7 @@ import { driftRag, driftStatusText, worstRag, type Rag } from "./rag";
 // circulation + the caller's acknowledgements (self-scoped — DO stays visible to everyone via acks).
 export function DoCard() {
   const dr = useDriftStatus();
-  const ackCount = useAckCount();
+  const { count: ackCount, isError: ackError } = useAckCount();
 
   const lines: ReactNode[] = [];
   const rags: Rag[] = [];
@@ -17,15 +17,30 @@ export function DoCard() {
   if (!dr.forbidden && !dr.isError && dr.data) {
     const rag = driftRag(dr.data);
     rags.push(rag);
-    lines.push(<StatLine key="int" label={`Mirror & blob integrity — ${driftStatusText(dr.data)}`} tone={rag} />);
+    lines.push(
+      <StatLine
+        key="int"
+        label={`Mirror & blob integrity — ${driftStatusText(dr.data)}`}
+        tone={rag}
+      />,
+    );
     if (dr.data.superseded_copies.copies > 0) {
       lines.push(
-        <StatLine key="sc" value={dr.data.superseded_copies.copies} label="superseded copies in circulation" tone="neutral" />,
+        <StatLine
+          key="sc"
+          value={dr.data.superseded_copies.copies}
+          label="superseded copies in circulation"
+          tone="neutral"
+        />,
       );
     }
   }
-  if (ackCount > 0) {
-    lines.push(<StatLine key="ack" value={ackCount} label="acknowledgements awaiting you" tone="neutral" />);
+  // Only show the ack line on a real count — an errored read (count 0 on failure) renders nothing, never
+  // a misleading "0 acknowledgements" (the silent-zero the TopBar bell also guards against).
+  if (!ackError && ackCount > 0) {
+    lines.push(
+      <StatLine key="ack" value={ackCount} label="acknowledgements awaiting you" tone="neutral" />,
+    );
   }
 
   const allForbidden = dr.forbidden && ackCount === 0;
