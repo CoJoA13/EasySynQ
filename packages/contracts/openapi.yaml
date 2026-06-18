@@ -7488,7 +7488,7 @@ components:
       description: >-
         The leadership release-authorization status for a document (S-leadership-1) — whether the gate
         applies and whether the current Approved version is authorized.
-      required: [is_leadership_artifact, required, version_id, authorized, instance]
+      required: [is_leadership_artifact, required, version_id, authorized, can_request, instance]
       properties:
         is_leadership_artifact:
           type: boolean
@@ -7500,6 +7500,13 @@ components:
         authorized:
           type: boolean
           description: Whether the current Approved version carries a Top-Management verify signature.
+        can_request:
+          type: boolean
+          description: >-
+            CX-1: whether the caller may request a Top-Management release authorization for this
+            document — they hold document.approve at the document's scope (the request endpoint's gate,
+            ABAC-aware, unlike a SYSTEM-scoped /me/permissions probe). The authz answer only; the FE
+            ANDs it with is_leadership_artifact / required / Approved / in-flight state.
         instance:
           oneOf:
             - { $ref: "#/components/schemas/LeadershipAuthorizationCycle" }

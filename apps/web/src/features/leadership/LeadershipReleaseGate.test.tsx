@@ -2,7 +2,7 @@ import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { describe, expect, test } from "vitest";
-import type { LeadershipAuthorizationStatus, MePermissions } from "../../lib/types";
+import type { LeadershipAuthorizationStatus } from "../../lib/types";
 import { server } from "../../test/msw/server";
 import { renderWithProviders } from "../../test/render";
 import {
@@ -15,15 +15,10 @@ import {
 } from "../../test/msw/handlers";
 import { LeadershipReleaseGate } from "./LeadershipReleaseGate";
 
-const APPROVE_PERMS = {
-  scope: { level: "SYSTEM", selector: null },
-  permissions: [{ key: "document.approve", effect: "ALLOW", source: "system_override" }],
-} satisfies MePermissions;
-
-function grantApprove() {
-  server.use(http.get("/api/v1/me/permissions", () => HttpResponse.json(APPROVE_PERMS)));
-}
-
+// CX-1: the Request button now gates on the server-computed `can_request` field carried on the
+// leadership-authorization status (the ABAC-aware "holds document.approve at this doc's scope"
+// answer) — NOT a SYSTEM-scoped /me/permissions probe. So these tests drive button visibility
+// purely through the status fixtures' `can_request`, with no /me/permissions mock.
 function statusReturns(body: LeadershipAuthorizationStatus) {
   server.use(
     http.get("/api/v1/documents/:id/leadership-authorization", () => HttpResponse.json(body)),
@@ -51,9 +46,9 @@ describe("LeadershipReleaseGate", () => {
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
-  test("required + unauthorized + no cycle → the Request panel (gated on document.approve)", async () => {
+  test("required + unauthorized + no cycle + can_request → the Request panel", async () => {
+    // can_request:true (the server-computed, scope-aware capability) → the button shows.
     statusReturns(leadershipRequiredStatus);
-    grantApprove();
     renderWithProviders(
       <LeadershipReleaseGate documentId={LEADERSHIP_DOC_ID} currentState="Approved" />,
     );
@@ -61,9 +56,9 @@ describe("LeadershipReleaseGate", () => {
     expect(screen.getByRole("button", { name: REQUEST_BTN })).toBeInTheDocument();
   });
 
-  test("hides the Request button when the caller lacks document.approve", async () => {
-    // default /me/permissions = [] → no document.approve
-    statusReturns(leadershipRequiredStatus);
+  test("hides the Request button when can_request is false (caller lacks approve at scope)", async () => {
+    // CX-1: the gate reads the server's per-doc capability, not a SYSTEM-scoped /me/permissions probe.
+    statusReturns({ ...leadershipRequiredStatus, can_request: false });
     renderWithProviders(
       <LeadershipReleaseGate documentId={LEADERSHIP_DOC_ID} currentState="Approved" />,
     );
@@ -73,8 +68,8 @@ describe("LeadershipReleaseGate", () => {
   });
 
   test("a cycle in progress → the awaiting panel, no Request button", async () => {
+    // can_request is true in this fixture → proves the in-progress STATE suppresses the button.
     statusReturns(leadershipInProgressStatus);
-    grantApprove();
     renderWithProviders(
       <LeadershipReleaseGate documentId={LEADERSHIP_DOC_ID} currentState="Approved" />,
     );
@@ -84,7 +79,6 @@ describe("LeadershipReleaseGate", () => {
 
   test("NEEDS_ATTENTION → a warning AND a re-request affordance (CX-2)", async () => {
     statusReturns(leadershipNeedsAttentionStatus);
-    grantApprove();
     renderWithProviders(
       <LeadershipReleaseGate documentId={LEADERSHIP_DOC_ID} currentState="Approved" />,
     );
@@ -110,7 +104,6 @@ describe("LeadershipReleaseGate", () => {
         return HttpResponse.json(leadershipRequiredStatus);
       }),
     );
-    grantApprove();
     renderWithProviders(
       <LeadershipReleaseGate documentId={LEADERSHIP_DOC_ID} currentState="InReview" />,
     );
@@ -126,7 +119,6 @@ describe("LeadershipReleaseGate", () => {
         return HttpResponse.json(leadershipRequiredStatus);
       }),
     );
-    grantApprove();
     server.use(
       http.post("/api/v1/documents/:id/request-leadership-authorization", () =>
         HttpResponse.json(

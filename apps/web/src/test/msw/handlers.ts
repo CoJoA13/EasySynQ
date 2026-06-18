@@ -2249,33 +2249,40 @@ export const leadershipNotApplicableStatus = {
   required: false,
   version_id: null,
   authorized: false,
+  // CX-1: the pure authz answer (holds document.approve at this doc's scope). Inert here (the gate
+  // self-suppresses on !is_leadership_artifact); false is the realistic default for an arbitrary doc.
+  can_request: false,
   instance: null,
 } satisfies LeadershipAuthorizationStatus;
 
-// required, no cycle yet → the Request panel.
+// required, no cycle yet → the Request panel (the caller is a scoped approver → can_request).
 export const leadershipRequiredStatus = {
   is_leadership_artifact: true,
   required: true,
   version_id: LEADERSHIP_VERSION_ID,
   authorized: false,
+  can_request: true,
   instance: null,
 } satisfies LeadershipAuthorizationStatus;
 
-// required, a cycle in progress → the "awaiting" panel (no Request button).
+// required, a cycle in progress → the "awaiting" panel. can_request: true proves the in-progress
+// STATE suppresses the Request button, not the authz cap.
 export const leadershipInProgressStatus = {
   is_leadership_artifact: true,
   required: true,
   version_id: LEADERSHIP_VERSION_ID,
   authorized: false,
+  can_request: true,
   instance: leadershipPendingCycle,
 } satisfies LeadershipAuthorizationStatus;
 
-// required, but no Top-Management member assigned → fail-closed NEEDS_ATTENTION warning.
+// required, but no Top-Management member assigned → fail-closed NEEDS_ATTENTION warning + re-request.
 export const leadershipNeedsAttentionStatus = {
   is_leadership_artifact: true,
   required: true,
   version_id: LEADERSHIP_VERSION_ID,
   authorized: false,
+  can_request: true,
   instance: {
     instance_id: LEADERSHIP_AUTH_INSTANCE_ID,
     subject_id: LEADERSHIP_DOC_ID,
@@ -2285,12 +2292,14 @@ export const leadershipNeedsAttentionStatus = {
   },
 } satisfies LeadershipAuthorizationStatus;
 
-// required AND authorized (a Top-Management verify signature exists) → release may proceed.
+// required AND authorized (a Top-Management verify signature exists) → release may proceed. can_request
+// is inert here (the authorized branch suppresses the button regardless).
 export const leadershipAuthorizedStatus = {
   is_leadership_artifact: true,
   required: true,
   version_id: LEADERSHIP_VERSION_ID,
   authorized: true,
+  can_request: true,
   instance: {
     instance_id: LEADERSHIP_AUTH_INSTANCE_ID,
     subject_id: LEADERSHIP_DOC_ID,

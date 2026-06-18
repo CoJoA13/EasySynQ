@@ -443,6 +443,9 @@ export interface LeadershipAuthorizationStatus {
   version_id: string | null;
   // the current Approved version already carries a Top-Management verify signature.
   authorized: boolean;
+  // CX-1: the caller holds document.approve at THIS document's scope (server-computed, ABAC-aware) →
+  // may start an authorization cycle. The FE ANDs it with required/Approved/in-flight state.
+  can_request: boolean;
   instance: LeadershipAuthorizationCycle | null;
 }
 

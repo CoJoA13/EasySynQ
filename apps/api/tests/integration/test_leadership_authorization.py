@@ -210,6 +210,9 @@ async def test_obj_full_mechanism_request_verify_release(
         assert pre["is_leadership_artifact"] is True
         assert pre["required"] is True
         assert pre["authorized"] is False
+        # CX-1: the releaser can READ the status (document.read) but does NOT hold
+        # document.approve → can_request is False (the per-caller, scope-aware request gate).
+        assert pre["can_request"] is False
         version_id = pre["version_id"]
         assert version_id is not None
 
@@ -606,3 +609,24 @@ async def test_mr_release_gated_when_flag_on(
         assert rel.json()["code"] == "leadership_authorization_required"
     finally:
         await _set_leadership_flag(org_id, False)
+
+
+# --- 10. CX-1: the per-caller, scope-aware ``can_request`` capability --------------------------
+
+
+async def test_status_can_request_is_per_caller(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """CX-1: ``can_request`` on the leadership-authorization status is the server-computed,
+    ABAC-aware answer to "may THIS caller request a Top-Management authorization" — it reflects
+    whether the caller holds ``document.approve`` at the document's scope (the request endpoint's
+    exact gate), NOT a SYSTEM-scoped /me/permissions probe (the visibility gap CX-1 closes). It is
+    the pure authz answer, independent of the org flag / Approved state (so this test needs
+    neither): the requester (holds document.approve) reads True; the releaser (holds
+    document.release + read but NOT approve) reads False — both can GET the status."""
+    salt = uuid.uuid4().hex[:8]
+    oid, hrq, hrl = await _approved_obj(app_client, token_factory, salt)
+    st_requester = await _status(app_client, hrq, oid)
+    assert st_requester["can_request"] is True, st_requester
+    st_releaser = await _status(app_client, hrl, oid)
+    assert st_releaser["can_request"] is False, st_releaser
