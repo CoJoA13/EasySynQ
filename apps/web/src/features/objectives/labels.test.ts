@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { bandZones, fmtValueUnit, RAG_COLOR, RAG_GLYPH, RAG_LABEL, RAG_TONE } from "./labels";
+import {
+  bandZones,
+  fmtValueUnit,
+  RAG_COLOR,
+  RAG_GLYPH,
+  RAG_LABEL,
+  RAG_SEVERITY,
+  RAG_TONE,
+} from "./labels";
 import { TONE_GLYPH } from "../../lib/status";
 
 describe("fmtValueUnit", () => {
@@ -36,6 +44,14 @@ describe("RAG maps", () => {
     expect(RAG_GLYPH.amber).toBe(TONE_GLYPH.warning);
     expect(RAG_GLYPH.red).toBe(TONE_GLYPH.danger);
     expect(RAG_GLYPH.unmeasured).toBe(TONE_GLYPH.neutral);
+  });
+
+  it("ranks rag by triage severity (worst first) for the status sort", () => {
+    // red < amber < green < unmeasured → a Status-column sort orders by severity, not the alphabetical
+    // raw-key order that the meaning relabel no longer matches (Codex P3).
+    expect(RAG_SEVERITY.red).toBeLessThan(RAG_SEVERITY.amber);
+    expect(RAG_SEVERITY.amber).toBeLessThan(RAG_SEVERITY.green);
+    expect(RAG_SEVERITY.green).toBeLessThan(RAG_SEVERITY.unmeasured);
   });
 });
 

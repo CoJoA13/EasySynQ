@@ -83,6 +83,18 @@ it("RAG filter narrows visible rows client-side", async () => {
   expect(screen.queryByText("OBJ-001")).not.toBeInTheDocument(); // amber row gone
 });
 
+it("sorts the Status column by triage severity (worst first), not the raw rag key", async () => {
+  const user = userEvent.setup();
+  renderWithProviders(<ObjectivesRegisterPage />, { route: "/objectives" });
+  await waitFor(() => expect(screen.getByText("OBJ-001")).toBeInTheDocument());
+  // Click the Status column → ascending by severity: red → amber → green → unmeasured. The row anchors
+  // (role=link) reflect the table order: OBJ-002 (red/Action required) first, OBJ-004 (unmeasured) last
+  // — NOT the alphabetical raw-rag order (amber, green, red, unmeasured) the old sort produced (Codex P3).
+  await user.click(screen.getByRole("button", { name: "Sort by Status" }));
+  const order = screen.getAllByRole("link").map((a) => a.textContent);
+  expect(order).toEqual(["OBJ-002", "OBJ-001", "OBJ-003", "OBJ-004"]);
+});
+
 it("debounced search filters rows by identifier and title", async () => {
   const user = userEvent.setup();
   renderWithProviders(<ObjectivesRegisterPage />, { route: "/objectives" });

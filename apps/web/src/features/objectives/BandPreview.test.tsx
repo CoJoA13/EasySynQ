@@ -24,6 +24,16 @@ it("draws a three-zone preview with the canonical glyph per zone + the threshold
   expect(within(band).getByText(TONE_GLYPH.success)).toBeInTheDocument();
 });
 
+it("orders the accessible name worst→best even for a lower-is-better band (not reversed)", () => {
+  // For lower-is-better, the visual band runs better→worse left-to-right (green, amber, red), so the
+  // accessible name must order by SEVERITY, not display order — else it announces "On track" as the
+  // worst zone (Codex P2).
+  renderWithProviders(<BandPreview target="5" threshold="8" direction="LOWER_IS_BETTER" />);
+  const band = screen.getByRole("img", { name: /status band/i });
+  const name = band.getAttribute("aria-label") ?? "";
+  expect(name).toMatch(/worse to better: Action required, Needs attention, On track/);
+});
+
 it("shows the soft warning when the threshold is on the wrong side", () => {
   renderWithProviders(<BandPreview target="95" threshold="96" direction="HIGHER_IS_BETTER" />);
   expect(screen.getByText(/below the target/i)).toBeInTheDocument();

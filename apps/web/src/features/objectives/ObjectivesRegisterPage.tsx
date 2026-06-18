@@ -17,7 +17,7 @@ import type { Objective } from "../../lib/types";
 import { AsOf } from "../../lib/AsOf";
 import { usePermissions } from "../../app/shell/usePermissions";
 import { useObjectiveScorecard } from "./hooks";
-import { fmtValueUnit, RAG_LABEL, RAG_TONE } from "./labels";
+import { fmtValueUnit, RAG_LABEL, RAG_SEVERITY, RAG_TONE } from "./labels";
 import { ObjectiveScorecardBand } from "./ObjectiveScorecardBand";
 import { StateBadge } from "../document/StateBadge";
 import { StatusBadge } from "../../lib/StatusBadge";
@@ -37,8 +37,9 @@ function currentOverTarget(o: Objective): string {
 // Critique #5 (power-user triage): debounced search + sortable columns + ↑/↓ row-nav, reusing the
 // shared lib/registerControls primitives (the TasksInbox wiring shape). Default sort is by `identifier`
 // asc — the human ref is the row anchor and the natural, stable register ordering. The `status` sort
-// value is the RAW `o.rag` string (green/amber/red/unmeasured), and `current` sorts on the numeric
-// current_value (nulls — unmeasured rows — sort last via sortRows).
+// value is the RAG SEVERITY rank (worst-first: Action required → Needs attention → On track → Not yet
+// measured), NOT the raw `o.rag` string — alphabetical-by-key would scramble the meaning labels (Codex
+// P3). `current` sorts on the numeric current_value (nulls — unmeasured rows — sort last via sortRows).
 const SORT_KEYS = ["identifier", "title", "current", "status", "due"] as const;
 type SortKey = (typeof SORT_KEYS)[number];
 
@@ -51,7 +52,7 @@ function sortValue(o: Objective, key: SortKey): string | number | null | undefin
     case "current":
       return o.current_value == null ? null : Number(o.current_value);
     case "status":
-      return o.rag;
+      return RAG_SEVERITY[o.rag];
     case "due":
       return o.due_date;
   }

@@ -155,6 +155,8 @@ it("marks each point by its server RAG verbatim — the canonical glyph AND colo
   const markers = Array.from(chartSvg(container).querySelectorAll<SVGGElement>("[data-rag]"));
   // oldest-left: red, amber, green
   expect(markers.map((m) => m.getAttribute("data-rag"))).toEqual(["red", "amber", "green"]);
+  // the <title> is the FIRST child of each marker <g> so SVG 1.1 user agents expose the tooltip (Codex P3).
+  expect(markers[0]?.firstElementChild?.tagName.toLowerCase()).toBe("title");
   // the non-colour channel (DP-5): danger ✕ / warning ◔ / success ✓ — the status survives greyscale.
   expect(markers.map((m) => m.querySelector("text")?.textContent)).toEqual([
     TONE_GLYPH.danger,

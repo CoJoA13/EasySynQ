@@ -40,6 +40,17 @@ export const RAG_LABEL: Record<ObjectiveRag, string> = {
   unmeasured: "Not yet measured",
 };
 
+// Triage severity rank (worst → best) for sorting the register's Status column and ordering the band's
+// accessible name — so a status sort/announce reflects severity, not the alphabetical order of the raw
+// `rag` key (which the meaning relabel no longer matches). Mirrors Home's worst-wins ordering
+// (red > amber > green); unmeasured sorts last.
+export const RAG_SEVERITY: Record<ObjectiveRag, number> = {
+  red: 0,
+  amber: 1,
+  green: 2,
+  unmeasured: 3,
+};
+
 export const ATTAINMENT_LABEL: Record<ObjectiveAttainment, string> = {
   in_progress: "In progress",
   met: "Met",

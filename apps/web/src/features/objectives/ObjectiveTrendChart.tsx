@@ -206,6 +206,9 @@ export function ObjectiveTrendChart({
             marker/test hook; the glyph IS the marker so the status survives a greyscale read. */}
         {series.map((p, i) => (
           <g key={`p${i}`} data-rag={p.rag}>
+            {/* <title> MUST be the first child of its <g> so SVG 1.1 user agents expose it as the
+                point's hover tooltip (Codex P3). */}
+            <title>{`${p.period}: ${p.valueStr} ${unit} (target ${p.targetStr}) — ${RAG_LABEL[p.rag]}`}</title>
             <text
               x={xAt(i)}
               y={yAt(p.value)}
@@ -218,7 +221,6 @@ export function ObjectiveTrendChart({
             >
               {RAG_GLYPH[p.rag]}
             </text>
-            <title>{`${p.period}: ${p.valueStr} ${unit} (target ${p.targetStr}) — ${RAG_LABEL[p.rag]}`}</title>
           </g>
         ))}
       </svg>

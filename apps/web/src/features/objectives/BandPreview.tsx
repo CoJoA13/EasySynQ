@@ -21,6 +21,12 @@ export function BandPreview({
   if (target.trim() === "" || Number.isNaN(t)) return null;
   const thr = threshold.trim() === "" || Number.isNaN(Number(threshold)) ? null : Number(threshold);
   const model = bandZones({ target: t, threshold: thr, direction });
+  // Worst → best by severity (red > amber > green), NOT the visual left→right order — which runs
+  // better→worse for a lower-is-better objective (zones come back green,amber,red). Ordering the
+  // accessible name by severity keeps "worse to better" correct in both directions (Codex P2).
+  const zonesWorstFirst = (["red", "amber", "green"] as RagZone[]).filter((z) =>
+    model.zones.includes(z),
+  );
 
   return (
     <Stack gap={4}>
@@ -29,7 +35,7 @@ export function BandPreview({
         // The accessible name carries the MEANING per zone (not the raw colour key), so a screen
         // reader / a11y-tree audit gets the same non-colour channel the visual glyphs give — the
         // aria-hidden glyph chips are decorative duplicates of this label (Codex P2).
-        aria-label={`Status band, worse to better: ${model.zones
+        aria-label={`Status band, worse to better: ${zonesWorstFirst
           .map((z) => RAG_LABEL[z])
           .join(", ")}`}
         style={{ display: "flex", height: 18, borderRadius: 4, overflow: "hidden" }}
