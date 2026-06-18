@@ -8,9 +8,14 @@ it("draws a three-zone preview with the canonical glyph per zone + the threshold
   renderWithProviders(<BandPreview target="95" threshold="90" direction="HIGHER_IS_BETTER" />);
   expect(screen.getByText(/90 at-risk/i)).toBeInTheDocument();
   expect(screen.getByText(/95 target/i)).toBeInTheDocument();
-  // a labelled meter for screen readers
-  const band = screen.getByRole("img", { name: /green.*amber.*red|status band/i });
+  // a labelled meter for screen readers — its accessible name carries the MEANING per zone, never the
+  // raw colour key, so the AT channel gets the same non-colour meaning as the visual glyphs (Codex P2).
+  const band = screen.getByRole("img", { name: /status band/i });
   expect(band).toBeInTheDocument();
+  const bandName = band.getAttribute("aria-label") ?? "";
+  expect(bandName).toMatch(/Action required/);
+  expect(bandName).toMatch(/On track/);
+  expect(bandName).not.toMatch(/\b(red|amber|green)\b/i);
   // the DP-5 non-colour channel: each zone carries its canonical glyph (red ✕ / amber ◔ / green ✓),
   // so the worse→better band reads in greyscale, not by colour alone. Scoped to the band — the "95
   // target ✓" caption below it also renders a ✓.

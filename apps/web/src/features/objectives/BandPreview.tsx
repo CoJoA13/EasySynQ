@@ -1,5 +1,5 @@
 import { Box, Group, Stack, Text } from "@mantine/core";
-import { bandZones, RAG_GLYPH, type RagZone } from "./labels";
+import { bandZones, RAG_GLYPH, RAG_LABEL, type RagZone } from "./labels";
 import type { ObjectiveDirection } from "../../lib/types";
 
 const ZONE_COLOR: Record<RagZone, string> = {
@@ -26,7 +26,12 @@ export function BandPreview({
     <Stack gap={4}>
       <Box
         role="img"
-        aria-label={`Status band: ${model.zones.join(", ")} from worse to better`}
+        // The accessible name carries the MEANING per zone (not the raw colour key), so a screen
+        // reader / a11y-tree audit gets the same non-colour channel the visual glyphs give — the
+        // aria-hidden glyph chips are decorative duplicates of this label (Codex P2).
+        aria-label={`Status band, worse to better: ${model.zones
+          .map((z) => RAG_LABEL[z])
+          .join(", ")}`}
         style={{ display: "flex", height: 18, borderRadius: 4, overflow: "hidden" }}
       >
         {/* Each zone carries its canonical glyph (✕/◔/✓) in a white inset chip — the DP-5 non-colour
