@@ -1,5 +1,6 @@
-import { Alert, Button, Center, Loader, Stack, Text } from "@mantine/core";
+import { Alert, Anchor, Button, Center, Loader, Skeleton, Stack, Text } from "@mantine/core";
 import type { ReactNode } from "react";
+import { ApiError } from "./api";
 
 // The shared calm state primitives for the whole SPA — one place for "loading", "couldn't load",
 // "no access", and "nothing here yet". Before this they were hand-rolled per feature (a bare <Loader/>
@@ -73,5 +74,97 @@ export function EmptyState({ message, action }: { message: ReactNode; action?: R
       <Text c="dimmed">{message}</Text>
       {action}
     </Stack>
+  );
+}
+
+// The COMPACT inline-state idiom — a sibling of the four page-level primitives above, sized for an
+// in-tab / in-drawer / in-card body where a full <Alert> panel or a centered <Loader> is too heavy. It
+// renders ONE `<Text size="sm">`, matching the long-standing hand-rolled `<Text size="sm" c="dimmed">` /
+// `<Text size="sm" c="red">` it consolidates across the document tabs, the /tasks + /acks inboxes, and
+// the DCR diff/impact surfaces. The `kind` carries both the semantics and the colour: a calm dimmed
+// read for loading / forbidden / empty, red for a genuine load failure. `loading` is a polite live
+// region (role="status") so AT announces it when a tab body swaps in; the others are static text.
+// `onRetry` (error only) adds the inline "Try again" affordance the hand-rolled inline errors lacked —
+// the same gap ErrorState closed for the page-level panels — wired to the query's refetch.
+export function InlineState({
+  kind,
+  children,
+  onRetry,
+}: {
+  kind: "loading" | "forbidden" | "empty" | "error";
+  children: ReactNode;
+  onRetry?: () => void;
+}) {
+  if (kind === "error") {
+    return (
+      <Text size="sm" c="red">
+        {children}
+        {onRetry && (
+          <>
+            {" "}
+            <Anchor component="button" type="button" onClick={onRetry} c="red">
+              Try again
+            </Anchor>
+          </>
+        )}
+      </Text>
+    );
+  }
+  // loading announces (live region); forbidden/empty are calm static text. role="status" on the <Text>
+  // (a <p>) is valid and lets the dimmed message carry its own accessible name.
+  return (
+    <Text size="sm" c="dimmed" {...(kind === "loading" ? { role: "status" } : {})}>
+      {children}
+    </Text>
+  );
+}
+
+// A list/table loading placeholder — N stacked <Skeleton> rows. Replaces the hand-rolled
+// `<Stack gap="xs">{…map(<Skeleton/>)}</Stack>` table loaders (LibraryPage / TriageTable /
+// IngestionRunsPage) with one configurable primitive; `rows`/`height` mirror each table's row count +
+// row height. It is always a live region (role="status", overridable) so a screen reader hears the
+// surface is loading; `label` supplies the accessible name (an aria-label on a roleless container is an
+// axe violation — hanging it off role="status" keeps it clean, and fixes the prior nameless loaders).
+export function SkeletonList({
+  rows,
+  height,
+  gap = "xs",
+  label,
+  role = "status",
+}: {
+  rows: number;
+  height: number;
+  gap?: number | string;
+  label?: string;
+  role?: string;
+}) {
+  return (
+    <Stack gap={gap} role={role} aria-label={label}>
+      {Array.from({ length: rows }).map((_, i) => (
+        <Skeleton key={i} height={height} />
+      ))}
+    </Stack>
+  );
+}
+
+// A calm mutation-error panel — the write-side sibling of ErrorState. The create/update forms that each
+// hand-rolled `<Alert color="red" title="…">{e instanceof ApiError ? e.message : "Please try again."}
+// </Alert>` on a failed mutation now share one component: it unwraps the RFC-9457 ApiError message
+// centrally and renders the calm red Alert. `error` is the mutation's `.error` (unknown); `fallback` is
+// shown when it isn't an ApiError. Distinct from ErrorState (a READ failure, with a retry button) — a
+// mutation error surfaces the server's reason and is retried by re-submitting the form.
+export function MutationErrorState({
+  title,
+  error,
+  fallback = "Please try again.",
+}: {
+  title: string;
+  error: unknown;
+  fallback?: ReactNode;
+}) {
+  return (
+    <Alert color="red" title={title}>
+      {error instanceof ApiError ? error.message : fallback}
+    </Alert>
   );
 }

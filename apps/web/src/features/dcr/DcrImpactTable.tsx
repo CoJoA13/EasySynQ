@@ -1,5 +1,6 @@
 import { Button, Stack, Table, Text, Textarea } from "@mantine/core";
 import { useMemo, useState } from "react";
+import { InlineState } from "../../lib/states";
 import type { DcrImpact } from "../../lib/types";
 import { dimensionLabel } from "./labels";
 import { useAnnotateImpact } from "./mutations";
@@ -121,9 +122,7 @@ function EditableImpactTable({ impact, dcrId }: { impact: DcrImpact[]; dcrId: st
         </Table.Tbody>
       </Table>
       {annotate.isError && (
-        <Text size="sm" c="red">
-          Couldn't save the annotations. Please try again.
-        </Text>
+        <InlineState kind="error">Couldn't save the annotations. Please try again.</InlineState>
       )}
       <Button
         w="fit-content"

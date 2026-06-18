@@ -1,5 +1,5 @@
-import { Button, Checkbox, Group, Skeleton, Stack, Table, Text } from "@mantine/core";
-import { EmptyState } from "../../lib/states";
+import { Button, Checkbox, Group, Table, Text } from "@mantine/core";
+import { EmptyState, SkeletonList } from "../../lib/states";
 import type { ConfirmedKind, ImportDecisionAction, ImportFile } from "../../lib/types";
 import { ConfidenceCell } from "./ConfidenceCell";
 import { IdentifierCell } from "./IdentifierCell";
@@ -47,13 +47,7 @@ export function TriageTable({
   onRowAction: (file: ImportFile, action: ImportDecisionAction) => void;
 }) {
   if (loading) {
-    return (
-      <Stack gap="xs" role="status" aria-label="Loading files">
-        {Array.from({ length: 5 }).map((_, i) => (
-          <Skeleton key={i} height={44} />
-        ))}
-      </Stack>
-    );
+    return <SkeletonList rows={5} height={44} label="Loading files" />;
   }
   if (files.length === 0) {
     return <EmptyState message="Nothing in this queue." />;

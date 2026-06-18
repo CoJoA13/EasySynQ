@@ -15,6 +15,7 @@ import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { usePermissions } from "../../app/shell/usePermissions";
 import { useUserDirectory } from "../../app/shell/useUserDirectory";
+import { AsOf } from "../../lib/AsOf";
 import { RegisterToolbar, SortableTh } from "../../lib/RegisterToolbar";
 import { EmptyState, ErrorState, LoadingState, NoAccessState } from "../../lib/states";
 import {
@@ -51,7 +52,7 @@ function Tile({ label, value }: { label: string; value: number }) {
 }
 
 export function AuditsListPage() {
-  const { data, isLoading, isError, forbidden, refetch } = useAudits();
+  const { data, isLoading, isError, forbidden, dataUpdatedAt, refetch } = useAudits();
   const { data: directory } = useUserDirectory();
   // status filter is URL-backed ("" = All) so it survives navigation + is shareable.
   const [filter, setFilter] = useUrlParam("status", "");
@@ -148,6 +149,7 @@ export function AuditsListPage() {
         <Title order={3}>Internal Audit</Title>
         {can("audit.create") && <Button onClick={() => setNewOpen(true)}>＋ New audit</Button>}
       </Group>
+      <AsOf at={dataUpdatedAt} />
       <SimpleGrid cols={{ base: 1, sm: 3 }} mb="md">
         {/* "… audits" labels: distinct from the segmented control's All/Active/Closed radio names. */}
         <Tile label="Total audits" value={all.length} />

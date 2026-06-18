@@ -2,7 +2,7 @@ import { Alert, Button, Group, Modal, Select, Stack, Text, TextInput } from "@ma
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useUserDirectory } from "../../app/shell/useUserDirectory";
-import { ApiError } from "../../lib/api";
+import { MutationErrorState } from "../../lib/states";
 import { useAuditPlans, useAuditPrograms } from "./hooks";
 import { useCreateAudit } from "./mutations";
 
@@ -64,7 +64,9 @@ export function NewAuditModal({ opened, onClose }: { opened: boolean; onClose: (
             disabled={!programId}
             data={planRows.map((p) => ({
               value: p.id,
-              label: [p.scheduled_date ?? "unscheduled", p.checklist_ref].filter((x): x is string => Boolean(x)).join(" · "),
+              label: [p.scheduled_date ?? "unscheduled", p.checklist_ref]
+                .filter((x): x is string => Boolean(x))
+                .join(" · "),
             }))}
             value={planId}
             onChange={setPlanId}
@@ -84,9 +86,7 @@ export function NewAuditModal({ opened, onClose }: { opened: boolean; onClose: (
             />
           )}
           {create.isError && (
-            <Alert color="red" title="Couldn't create the audit">
-              {create.error instanceof ApiError ? create.error.message : "Please try again."}
-            </Alert>
+            <MutationErrorState title="Couldn't create the audit" error={create.error} />
           )}
           <Group justify="flex-end">
             <Button variant="default" onClick={onClose}>

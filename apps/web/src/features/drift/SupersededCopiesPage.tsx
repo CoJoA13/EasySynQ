@@ -1,6 +1,7 @@
 import { Anchor, Container, Group, Pagination, Stack, Table, Text, Title } from "@mantine/core";
 import { useState } from "react";
 import { Link } from "react-router-dom";
+import { AsOf } from "../../lib/AsOf";
 import { EmptyState, ErrorState, LoadingState, NoAccessState } from "../../lib/states";
 import { formatTimestamp } from "../../lib/time";
 import { SUPERSEDED_PAGE_SIZE, useSupersededCopies } from "./hooks";
@@ -11,7 +12,7 @@ import { SUPERSEDED_PAGE_SIZE, useSupersededCopies } from "./hooks";
 // (offset/limit) — no virtualization (the S-ing-4b rule).
 export function SupersededCopiesPage() {
   const [page, setPage] = useState(1);
-  const { data, isLoading, isError, forbidden, refetch } = useSupersededCopies(
+  const { data, isLoading, isError, forbidden, dataUpdatedAt, refetch } = useSupersededCopies(
     (page - 1) * SUPERSEDED_PAGE_SIZE,
   );
 
@@ -62,6 +63,7 @@ export function SupersededCopiesPage() {
             recall list; each paper copy resolves via its verify QR.
           </Text>
         </div>
+        <AsOf at={dataUpdatedAt} />
         {data.items.length === 0 ? (
           <EmptyState message="No outstanding copies of superseded versions." />
         ) : (

@@ -1,5 +1,6 @@
 import { Alert, Avatar, Badge, Card, Group, Stack, Table, Text } from "@mantine/core";
 import { usePermissions } from "../../app/shell/usePermissions";
+import { InlineState } from "../../lib/states";
 import type { AckStatus } from "../../lib/types";
 import { AckCoverageRing } from "./AckCoverageRing";
 import { DistributionEditor } from "./DistributionEditor";
@@ -13,10 +14,22 @@ const STATUS_COLOR: Record<AckStatus, string> = {
 
 function initials(name: string | null): string {
   if (!name) return "?";
-  return name.split(/\s+/).slice(0, 2).map((p) => p[0]?.toUpperCase() ?? "").join("") || "?";
+  return (
+    name
+      .split(/\s+/)
+      .slice(0, 2)
+      .map((p) => p[0]?.toUpperCase() ?? "")
+      .join("") || "?"
+  );
 }
 
-export function AcknowledgementsTab({ documentId, active }: { documentId: string; active: boolean }) {
+export function AcknowledgementsTab({
+  documentId,
+  active,
+}: {
+  documentId: string;
+  active: boolean;
+}) {
   // ARTIFACT is the valid scope level for a document (resource_for_scope handles
   // SYSTEM/FRAMEWORK/PROCESS/FOLDER/DOC_CLASS/ARTIFACT; an unknown level silently falls back to
   // SYSTEM). "DOC" would only ever match a SYSTEM-scoped grant, hiding the editor from a holder whose
@@ -28,12 +41,13 @@ export function AcknowledgementsTab({ documentId, active }: { documentId: string
   const matrix = useAcknowledgements(documentId, active && canManage && flagOn);
 
   if (!active) return null;
-  if (dist.isLoading) return <Text c="dimmed">Loading acknowledgement coverage…</Text>;
+  if (dist.isLoading)
+    return <InlineState kind="loading">Loading acknowledgement coverage…</InlineState>;
   if (dist.isError) {
     return dist.forbidden ? (
-      <Text size="sm" c="dimmed">You don't have access to acknowledgement coverage.</Text>
+      <InlineState kind="forbidden">You don't have access to acknowledgement coverage.</InlineState>
     ) : (
-      <Text size="sm" c="red">Could not load acknowledgement coverage.</Text>
+      <InlineState kind="error">Could not load acknowledgement coverage.</InlineState>
     );
   }
 
@@ -44,7 +58,9 @@ export function AcknowledgementsTab({ documentId, active }: { documentId: string
       <Card withBorder>
         <Stack gap="sm">
           <Text fw={600}>Acknowledgement coverage</Text>
-          <Text size="sm" c="dimmed">Read-and-understood coverage of the governing revision (Cl 7.3 awareness).</Text>
+          <Text size="sm" c="dimmed">
+            Read-and-understood coverage of the governing revision (Cl 7.3 awareness).
+          </Text>
           <AckCoverageRing coverage={dist.data?.coverage ?? null} />
         </Stack>
       </Card>
@@ -63,22 +79,36 @@ export function AcknowledgementsTab({ documentId, active }: { documentId: string
                   <Group gap="xs" align="center">
                     <Avatar.Group>
                       {pending.slice(0, 4).map((r) => (
-                        <Avatar key={r.user_id} radius="xl" size="sm">{initials(r.display_name)}</Avatar>
+                        <Avatar key={r.user_id} radius="xl" size="sm">
+                          {initials(r.display_name)}
+                        </Avatar>
                       ))}
-                      {pending.length > 4 && <Avatar radius="xl" size="sm">+{pending.length - 4}</Avatar>}
+                      {pending.length > 4 && (
+                        <Avatar radius="xl" size="sm">
+                          +{pending.length - 4}
+                        </Avatar>
+                      )}
                     </Avatar.Group>
-                    <Text size="xs" c="dimmed">awaiting acknowledgement</Text>
+                    <Text size="xs" c="dimmed">
+                      awaiting acknowledgement
+                    </Text>
                   </Group>
                 )}
               </Group>
               {matrix.isLoading ? (
-                <Text c="dimmed">Loading the matrix…</Text>
+                <InlineState kind="loading">Loading the matrix…</InlineState>
               ) : matrix.isError ? (
-                <Text size="sm" c="dimmed">
-                  {matrix.forbidden ? "You don't have access to the named matrix." : "Could not load the matrix."}
-                </Text>
+                matrix.forbidden ? (
+                  <InlineState kind="forbidden">
+                    You don't have access to the named matrix.
+                  </InlineState>
+                ) : (
+                  <InlineState kind="error">Could not load the matrix.</InlineState>
+                )
               ) : (matrix.data ?? []).length === 0 ? (
-                <Text size="sm" c="dimmed">No one is distributed for acknowledgement yet.</Text>
+                <InlineState kind="empty">
+                  No one is distributed for acknowledgement yet.
+                </InlineState>
               ) : (
                 <Table aria-label="Acknowledgement matrix" striped>
                   <Table.Thead>
@@ -93,7 +123,11 @@ export function AcknowledgementsTab({ documentId, active }: { documentId: string
                     {(matrix.data ?? []).map((r) => (
                       <Table.Tr key={r.user_id}>
                         <Table.Td>{r.display_name ?? r.user_id}</Table.Td>
-                        <Table.Td><Badge color={STATUS_COLOR[r.status]} variant="light">{r.status}</Badge></Table.Td>
+                        <Table.Td>
+                          <Badge color={STATUS_COLOR[r.status]} variant="light">
+                            {r.status}
+                          </Badge>
+                        </Table.Td>
                         <Table.Td>{r.acknowledged_revision_label ?? "—"}</Table.Td>
                         <Table.Td>{r.due_at ? r.due_at.slice(0, 10) : "—"}</Table.Td>
                       </Table.Tr>

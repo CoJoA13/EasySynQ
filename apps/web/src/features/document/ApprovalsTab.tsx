@@ -5,6 +5,7 @@ import { useMe } from "../../app/shell/useMe";
 import { useUserDirectory } from "../../app/shell/useUserDirectory";
 import { ApiError } from "../../lib/api";
 import { ConfirmDestructive } from "../../lib/ConfirmDestructive";
+import { InlineState } from "../../lib/states";
 import type { DocumentSummary } from "../../lib/types";
 import { useReleaseDocument } from "../authoring/hooks";
 import { useLeadershipAuthorization } from "../leadership/hooks";
@@ -31,30 +32,13 @@ export function ApprovalsTab({ doc }: { doc: DocumentSummary }) {
   const nameOf = (id: string | null) =>
     id ? (directory?.find((u) => u.id === id)?.display_name ?? "a user") : "—";
 
-  if (isLoading)
-    return (
-      <Text size="sm" c="dimmed">
-        Loading approvals…
-      </Text>
-    );
+  if (isLoading) return <InlineState kind="loading">Loading approvals…</InlineState>;
   if (isError && error instanceof ApiError && error.status === 403)
     return (
-      <Text size="sm" c="dimmed">
-        You don't have access to the approval history.
-      </Text>
+      <InlineState kind="forbidden">You don't have access to the approval history.</InlineState>
     );
-  if (isError)
-    return (
-      <Text size="sm" c="red">
-        Could not load approvals.
-      </Text>
-    );
-  if (!instance)
-    return (
-      <Text size="sm" c="dimmed">
-        No approval activity yet.
-      </Text>
-    );
+  if (isError) return <InlineState kind="error">Could not load approvals.</InlineState>;
+  if (!instance) return <InlineState kind="empty">No approval activity yet.</InlineState>;
 
   const myOpenTask = (instance.tasks ?? []).find(
     (t) =>

@@ -2,6 +2,7 @@ import { Alert, Anchor, Box, Button, Container, Group, Table, Text, Title } from
 import { useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { usePermissions } from "../../app/shell/usePermissions";
+import { AsOf } from "../../lib/AsOf";
 import { EmptyState, ErrorState, LoadingState, NoAccessState } from "../../lib/states";
 import { RegisterToolbar, SortableTh } from "../../lib/RegisterToolbar";
 import { sortRows, useDebouncedSearch, useTableSort } from "../../lib/registerControls";
@@ -42,7 +43,7 @@ function sortValue(mr: MgmtReview, key: SortKey): string | null | undefined {
 }
 
 export function ManagementReviewsRegisterPage() {
-  const { data, isLoading, isError, forbidden, refetch } = useMgmtReviews();
+  const { data, isLoading, isError, forbidden, dataUpdatedAt, refetch } = useMgmtReviews();
   const { can } = usePermissions();
   const navigate = useNavigate();
   const [createOpen, setCreateOpen] = useState(false);
@@ -101,6 +102,7 @@ export function ManagementReviewsRegisterPage() {
           <Button onClick={() => setCreateOpen(true)}>New management review</Button>
         )}
       </Group>
+      <AsOf at={dataUpdatedAt} />
       {data.data.length === 0 ? (
         <Alert color="gray" title="No management reviews yet" mt="md">
           {can("mgmtReview.create")

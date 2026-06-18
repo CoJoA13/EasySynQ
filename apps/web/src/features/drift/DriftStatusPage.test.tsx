@@ -1,4 +1,4 @@
-import { screen } from "@testing-library/react";
+import { screen, within } from "@testing-library/react";
 import { axe } from "jest-axe";
 import { http, HttpResponse } from "msw";
 import { describe, expect, test } from "vitest";
@@ -19,9 +19,14 @@ describe("DriftStatusPage", () => {
     expect(screen.getByText("CLEAN")).toBeInTheDocument();
     expect(screen.getByText("DIVERGENT")).toBeInTheDocument();
     // The non-colour glyph channel (DP-5 / DP-7) survives a greyscale audit-export: CLEAN→success ✓,
-    // DIVERGENT→danger ✕ (the retired ▲ is gone). Both glyphs are distinct here so getByText is unambiguous.
+    // DIVERGENT→danger ✕ (the retired ▲ is gone). ✓ is unique to the CLEAN badge; ✕ now also appears on
+    // the failing-blob count below, so scope the badge-glyph assertion to the DIVERGENT badge itself.
     expect(screen.getByText(TONE_GLYPH.success)).toBeInTheDocument();
-    expect(screen.getByText(TONE_GLYPH.danger)).toBeInTheDocument();
+    expect(
+      within(screen.getByLabelText("Blob integrity status: DIVERGENT")).getByText(
+        TONE_GLYPH.danger,
+      ),
+    ).toBeInTheDocument();
     // counts render generically + humanised (#2b) — a MIRROR key and a BLOB_REHASH key both appear
     expect(screen.getByText("Rebuild triggered")).toBeInTheDocument();
     expect(screen.getByText("Sample limit")).toBeInTheDocument();
@@ -41,10 +46,12 @@ describe("DriftStatusPage", () => {
       ),
     );
     renderWithProviders(<DriftStatusPage />);
-    expect(await screen.findByLabelText("Mirror scan status: FAILED")).toBeInTheDocument();
+    const failedBadge = await screen.findByLabelText("Mirror scan status: FAILED");
+    expect(failedBadge).toBeInTheDocument();
     expect(screen.getByText("FAILED")).toBeInTheDocument();
-    // FAILED → danger ✕ (the strongest greyscale-safe signal for an auditor), not warning.
-    expect(screen.getByText(TONE_GLYPH.danger)).toBeInTheDocument();
+    // FAILED → danger ✕ (the strongest greyscale-safe signal for an auditor), not warning. Scoped to the
+    // badge (the failing-blob count also carries a danger ✕ under the default fixture's failing > 0).
+    expect(within(failedBadge).getByText(TONE_GLYPH.danger)).toBeInTheDocument();
   });
 
   test("treats counts as an OPEN bag — an unknown key still renders", async () => {
@@ -97,6 +104,49 @@ describe("DriftStatusPage", () => {
     renderWithProviders(<DriftStatusPage />);
     await screen.findByText("Mirror scan");
     expect(screen.queryByText(/unresolved integrity findings/)).not.toBeInTheDocument();
+  });
+
+  test("the failing-blob count carries the danger glyph when > 0 (DP-5 non-colour channel)", async () => {
+    // Both scans CLEAN (BLOB_REHASH absent), so the ONLY danger ✕ on the page is the failing count's.
+    server.use(
+      http.get("/api/v1/admin/drift/status", () =>
+        HttpResponse.json({
+          ...driftStatusFixture,
+          scans: {
+            ...driftStatusFixture.scans,
+            MIRROR: { ...driftStatusFixture.scans.MIRROR!, status: "CLEAN" },
+            BLOB_REHASH: null,
+          },
+          blob_coverage: { ...driftStatusFixture.blob_coverage, failing: 3 },
+        }),
+      ),
+    );
+    renderWithProviders(<DriftStatusPage />);
+    const failingMetric = await screen.findByText(/Failing:/);
+    expect(failingMetric).toHaveTextContent(TONE_GLYPH.danger);
+    expect(failingMetric).toHaveTextContent("Failing: 3");
+  });
+
+  test("the failing-blob count stays neutral (no glyph) when 0", async () => {
+    server.use(
+      http.get("/api/v1/admin/drift/status", () =>
+        HttpResponse.json({
+          ...driftStatusFixture,
+          scans: {
+            ...driftStatusFixture.scans,
+            MIRROR: { ...driftStatusFixture.scans.MIRROR!, status: "CLEAN" },
+            BLOB_REHASH: null,
+          },
+          blob_coverage: { ...driftStatusFixture.blob_coverage, failing: 0 },
+        }),
+      ),
+    );
+    renderWithProviders(<DriftStatusPage />);
+    const failingMetric = await screen.findByText(/Failing:/);
+    expect(failingMetric).toHaveTextContent("Failing: 0");
+    expect(failingMetric).not.toHaveTextContent(TONE_GLYPH.danger);
+    // CLEAN scans + zero failing → no danger glyph anywhere on the page.
+    expect(screen.queryByText(TONE_GLYPH.danger)).not.toBeInTheDocument();
   });
 
   test("D4 headline links to the superseded-copies tab", async () => {

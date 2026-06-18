@@ -1,7 +1,7 @@
 import { Alert, Anchor, Card, Group, Stack, Table, Text } from "@mantine/core";
 import { useMemo, useRef, useState } from "react";
 import { ApiError, useApi } from "../../lib/api";
-import { LoadingState } from "../../lib/states";
+import { InlineState, LoadingState } from "../../lib/states";
 import type { MetadataDiffEntry } from "../../lib/types";
 import { useVersionDiff } from "./useVersionDiff";
 
@@ -39,17 +39,9 @@ export function RedlineViewer({
   if (isLoading) return <LoadingState label="Loading redline" />;
   if (isError) {
     if (error instanceof ApiError && error.status === 403) {
-      return (
-        <Text size="sm" c="dimmed">
-          You don't have access to the redline.
-        </Text>
-      );
+      return <InlineState kind="forbidden">You don't have access to the redline.</InlineState>;
     }
-    return (
-      <Text size="sm" c="red">
-        Could not load the redline.
-      </Text>
-    );
+    return <InlineState kind="error">Could not load the redline.</InlineState>;
   }
   if (!data) return null;
 

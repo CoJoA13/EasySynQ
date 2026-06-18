@@ -15,7 +15,7 @@ import { AsOf } from "../../lib/AsOf";
 import { humanizeToken } from "../../lib/labels";
 import { ErrorState, LoadingState, NoAccessState } from "../../lib/states";
 import { StatusBadge } from "../../lib/StatusBadge";
-import type { Tone } from "../../lib/status";
+import { TONE_GLYPH, type Tone } from "../../lib/status";
 import { formatTimestamp } from "../../lib/time";
 import type { DriftScanStatusValue, DriftScanSummary } from "../../lib/types";
 import { useDriftStatus } from "./hooks";
@@ -162,7 +162,17 @@ export function DriftStatusPage() {
             <Group gap="lg">
               <Text size="sm">Total blobs: {cov.total}</Text>
               <Text size="sm">Never verified: {cov.never_verified}</Text>
-              <Text size="sm">Failing: {cov.failing}</Text>
+              {/* DP-5: when failing > 0 the count carries the canonical danger glyph (✕, non-colour
+                  channel) on the AA --es-danger-text token, so the failing condition is legible by
+                  shape + label, not colour alone; a zero count stays neutral. */}
+              <Text
+                size="sm"
+                c={cov.failing > 0 ? "var(--es-danger-text)" : undefined}
+                fw={cov.failing > 0 ? 600 : undefined}
+              >
+                {cov.failing > 0 && <span aria-hidden="true">{TONE_GLYPH.danger} </span>}
+                Failing: {cov.failing}
+              </Text>
               <Text size="sm" c="dimmed">
                 Oldest stamp: {cov.oldest_verified_at ? fmt(cov.oldest_verified_at) : "—"}
               </Text>

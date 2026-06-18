@@ -17,6 +17,7 @@ import {
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { usePermissions } from "../../app/shell/usePermissions";
+import { AsOf } from "../../lib/AsOf";
 import { EmptyState, ErrorState, LoadingState, NoAccessState } from "../../lib/states";
 import type { Capa, CapaCloseState, CapaSource, NcSeverity } from "../../lib/types";
 import { CapaCard } from "./CapaCard";
@@ -34,7 +35,7 @@ import { RaiseCapaModal } from "./RaiseCapaModal";
 const TERMINAL: CapaCloseState[] = ["Closed", "Rejected"];
 
 export function CapaBoardPage() {
-  const { data, isLoading, isError, forbidden, refetch } = useCapas();
+  const { data, isLoading, isError, forbidden, dataUpdatedAt, refetch } = useCapas();
   const [view, setView] = useState<"board" | "list">("board");
   const [source, setSource] = useState<CapaSource | "">("");
   const [severity, setSeverity] = useState<NcSeverity | "">("");
@@ -140,6 +141,7 @@ export function CapaBoardPage() {
         </Group>
       </Group>
 
+      <AsOf at={dataUpdatedAt} />
       <SimpleGrid cols={{ base: 1, sm: 2 }} mb="md">
         <Card withBorder padding="sm">
           <Text size="xs" c="dimmed">

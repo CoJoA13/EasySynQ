@@ -1,6 +1,6 @@
-import { Alert, Button, Group, Modal, Select, Stack, TextInput } from "@mantine/core";
+import { Button, Group, Modal, Select, Stack, TextInput } from "@mantine/core";
 import { useState } from "react";
-import { ApiError } from "../../lib/api";
+import { MutationErrorState } from "../../lib/states";
 import type { Finding, FindingType, NcSeverity } from "../../lib/types";
 import { useCorrectFinding } from "./mutations";
 
@@ -53,9 +53,20 @@ export function CorrectFindingModal({
   }
 
   return (
-    <Modal opened={opened} onClose={onClose} title={`Correct ${finding.identifier ?? "finding"}`} closeButtonProps={{ "aria-label": "Close correct finding dialog" }}>
+    <Modal
+      opened={opened}
+      onClose={onClose}
+      title={`Correct ${finding.identifier ?? "finding"}`}
+      closeButtonProps={{ "aria-label": "Close correct finding dialog" }}
+    >
       <Stack gap="sm">
-        <Select label="Type" required data={TYPE_OPTIONS} value={type} onChange={(v) => v && setType(v as FindingType)} />
+        <Select
+          label="Type"
+          required
+          data={TYPE_OPTIONS}
+          value={type}
+          onChange={(v) => v && setType(v as FindingType)}
+        />
         <Select
           label={type === "NC" ? "Severity (required for an NC)" : "Severity"}
           data={SEVERITY_OPTIONS}
@@ -63,13 +74,24 @@ export function CorrectFindingModal({
           onChange={(v) => setSeverity(v as NcSeverity | null)}
           clearable
         />
-        <TextInput label="Clause ref" value={clauseRef} onChange={(e) => setClauseRef(e.currentTarget.value)} />
-        <TextInput label="Process ref" value={processRef} onChange={(e) => setProcessRef(e.currentTarget.value)} />
-        <TextInput label="Reason" maxLength={300} value={reason} onChange={(e) => setReason(e.currentTarget.value)} />
+        <TextInput
+          label="Clause ref"
+          value={clauseRef}
+          onChange={(e) => setClauseRef(e.currentTarget.value)}
+        />
+        <TextInput
+          label="Process ref"
+          value={processRef}
+          onChange={(e) => setProcessRef(e.currentTarget.value)}
+        />
+        <TextInput
+          label="Reason"
+          maxLength={300}
+          value={reason}
+          onChange={(e) => setReason(e.currentTarget.value)}
+        />
         {correct.isError && (
-          <Alert color="red" title="Couldn't correct the finding">
-            {correct.error instanceof ApiError ? correct.error.message : "Please try again."}
-          </Alert>
+          <MutationErrorState title="Couldn't correct the finding" error={correct.error} />
         )}
         <Group justify="flex-end">
           <Button variant="default" onClick={onClose}>

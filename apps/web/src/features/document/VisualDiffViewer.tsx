@@ -14,6 +14,7 @@ import {
 } from "@mantine/core";
 import { useEffect, useRef, useState } from "react";
 import { ApiError, useApi } from "../../lib/api";
+import { InlineState } from "../../lib/states";
 import type { VisualDiffLayer } from "../../lib/types";
 import { useVisualDiff } from "./useVisualDiff";
 
@@ -84,7 +85,12 @@ export function VisualDiffViewer({
 }) {
   const api = useApi();
   // Mounting IS the enable signal — the viewer is only rendered in visual mode.
-  const { status, isLoading, isError, error, retry } = useVisualDiff(documentId, toVid, fromVid, true);
+  const { status, isLoading, isError, error, retry } = useVisualDiff(
+    documentId,
+    toVid,
+    fromVid,
+    true,
+  );
 
   const pages = status?.pages ?? [];
   const changed = pages.filter((p) => p.changed).map((p) => p.page);
@@ -133,18 +139,10 @@ export function VisualDiffViewer({
 
   // --- 403 → quiet (DP-6) ---
   if (isError && error instanceof ApiError && error.status === 403) {
-    return (
-      <Text size="sm" c="dimmed">
-        You don't have access to the visual diff.
-      </Text>
-    );
+    return <InlineState kind="forbidden">You don't have access to the visual diff.</InlineState>;
   }
   if (isError) {
-    return (
-      <Text size="sm" c="red">
-        Could not load the visual diff.
-      </Text>
-    );
+    return <InlineState kind="error">Could not load the visual diff.</InlineState>;
   }
 
   // --- Pending / loading → the §4.9 phased long-op affordance (skeletons match the final layout) ---
@@ -186,8 +184,8 @@ export function VisualDiffViewer({
       <Alert color="red" title="Visual diff failed">
         <Stack gap="xs">
           <Text size="sm">
-            {status.reason ?? "The page images could not be rendered."}{" "}
-            The text redline still works; or open the source files:
+            {status.reason ?? "The page images could not be rendered."} The text redline still
+            works; or open the source files:
           </Text>
           <Group gap="md">
             <Anchor component="button" type="button" onClick={() => void openSource(fromVid)}>
@@ -208,8 +206,8 @@ export function VisualDiffViewer({
       <Alert color="yellow" title="Visual diff unavailable">
         <Stack gap="xs">
           <Text size="sm">
-            {status.reason ?? "One of these versions can't be rendered to page images."}{" "}
-            The text redline still works; or open the source files:
+            {status.reason ?? "One of these versions can't be rendered to page images."} The text
+            redline still works; or open the source files:
           </Text>
           <Group gap="md">
             <Anchor component="button" type="button" onClick={() => void openSource(fromVid)}>
@@ -232,7 +230,14 @@ export function VisualDiffViewer({
 
   return (
     <Card withBorder>
-      <Stack gap="md" role="group" aria-label="Visual page diff" tabIndex={0} onKeyDown={onKeyDown} style={{ outline: "none" }}>
+      <Stack
+        gap="md"
+        role="group"
+        aria-label="Visual page diff"
+        tabIndex={0}
+        onKeyDown={onKeyDown}
+        style={{ outline: "none" }}
+      >
         <Group justify="space-between" align="center">
           <Text size="xs" fw={700} c="dimmed" tt="uppercase">
             Page images
@@ -264,7 +269,10 @@ export function VisualDiffViewer({
                     borderRadius: 4,
                     fontSize: "0.875rem",
                     fontWeight: p.page === page ? 700 : 400,
-                    color: p.page === page ? "var(--es-accent, #2563eb)" : "var(--es-text-muted, #6b7280)",
+                    color:
+                      p.page === page
+                        ? "var(--es-accent, #2563eb)"
+                        : "var(--es-text-muted, #6b7280)",
                     background: p.page === page ? "var(--es-accent-soft, #eff6ff)" : "transparent",
                   }}
                 >
@@ -288,7 +296,11 @@ export function VisualDiffViewer({
               <img
                 src={img.src}
                 alt={`Page ${page + 1} of ${pageCount} — ${layerLabel} layer (${isChanged ? "changed" : "unchanged"})`}
-                style={{ maxWidth: "100%", height: "auto", border: "1px solid var(--es-border, #e5e7eb)" }}
+                style={{
+                  maxWidth: "100%",
+                  height: "auto",
+                  border: "1px solid var(--es-border, #e5e7eb)",
+                }}
               />
             )}
             {img.state === "missing" && (

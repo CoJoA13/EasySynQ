@@ -1,6 +1,6 @@
 import { Stack, Text } from "@mantine/core";
 import type { WhereUsed, WhereUsedLink } from "../../lib/types";
-import { EmptyState, LoadingState } from "../../lib/states";
+import { EmptyState, InlineState, LoadingState } from "../../lib/states";
 import { useWhereUsed } from "./useWhereUsed";
 
 // The Where-used tab: the doc-05 §7.2 dependency categories (read-only). Neighbour titles are
@@ -51,12 +51,7 @@ export function WhereUsedTab({
   const { data, isLoading, isError } = useWhereUsed(documentId, active);
 
   if (isLoading) return <LoadingState label="Loading where-used" />;
-  if (isError)
-    return (
-      <Text size="sm" c="red">
-        Could not load where-used.
-      </Text>
-    );
+  if (isError) return <InlineState kind="error">Could not load where-used.</InlineState>;
   if (!data || !hasAny(data)) return <EmptyState message="Nothing depends on this document yet." />;
 
   return (
