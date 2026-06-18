@@ -15,6 +15,7 @@ from sqlalchemy import ColumnElement
 
 from easysynq_api.api.documents import (
     _filter_condition,
+    _ilike_escape,
     _parse_document_filters,
     _parse_filter_bool,
 )
@@ -103,3 +104,18 @@ def test_parse_document_filters_known_field_unknown_op_400() -> None:
         _parse_document_filters(_fake_request(("filter[has_effective_version][gte]", "true")))
     assert exc.value.status == 400
     assert exc.value.code == "unknown_filter"
+
+
+# --- _ilike_escape: the s-dcr-target-typeahead free-text `q` wildcard guard --------------------
+
+
+def test_ilike_escape_leaves_plain_text_untouched() -> None:
+    assert _ilike_escape("SOP-PUR-014") == "SOP-PUR-014"
+
+
+def test_ilike_escape_neutralises_wildcards() -> None:
+    # %, _ and the escape char itself must be neutralised so a user term can't broaden the match.
+    # Backslash is escaped FIRST (order matters) so an escaped %/_ keeps one leading backslash.
+    assert _ilike_escape("a%b_c") == "a\\%b\\_c"
+    assert _ilike_escape("a\\b") == "a\\\\b"
+    assert _ilike_escape("100%_x") == "100\\%\\_x"

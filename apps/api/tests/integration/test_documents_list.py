@@ -77,6 +77,20 @@ async def _create_in_folder(
     return r.json()
 
 
+async def _create_titled(
+    client: AsyncClient, h: dict[str, str], type_id: str, title: str, area: str = "PUR"
+) -> dict:
+    """Create a Draft doc with a caller-chosen title (the shared _create hardcodes "Test Doc"), so a
+    test can exercise the free-text `q` substring over a distinguishable title."""
+    r = await client.post(
+        "/api/v1/documents",
+        headers=h,
+        json={"title": title, "document_type_id": type_id, "area_code": area},
+    )
+    assert r.status_code == 201, r.text
+    return r.json()
+
+
 async def _grant_read_folder(subject: str, folder_path: str) -> None:
     """Grant document.read at FOLDER scope (a SUBSET grant), so the row-filter drops out-of-folder
     docs — proving offset slices the POST-authz set, not a pre-authz SQL OFFSET."""
@@ -421,3 +435,69 @@ async def test_filter_has_effective_version_bad_value_422(
     )
     assert r.status_code == 422, r.text
     assert r.json()["code"] == "validation_error"
+
+
+async def test_q_substring_narrows_identifier_and_title_case_insensitive(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    """s-dcr-target-typeahead: the free-text `q` does a case-insensitive SUBSTRING match over
+    identifier/title. Run-scoped via the owner_user_id filter (subj.a is a fresh salted subject → it
+    owns exactly the two docs created here, though the integration suite shares one session DB)."""
+    await s5.grant_lifecycle(subj.a)
+    ha = _auth(token_factory, subj.a)
+    type_id = await s5.type_id("SOP")
+    salt = uuid.uuid4().hex[:8]
+    # "Alpha"/"Beta" so a title term can't collide with the auto-allocated SOP-PUR-NNNN identifier;
+    # the salt is hex (no a/l/p/h…) so it never accidentally matches a search term.
+    d1 = await _create_titled(app_client, ha, type_id, f"Alpha {salt}")
+    d2 = await _create_titled(app_client, ha, type_id, f"Beta {salt}")
+    owner = d1["owner_user_id"]
+    base = f"/api/v1/documents?limit=100&filter[owner_user_id][eq]={owner}"
+
+    async def ids(term: str) -> set[str]:
+        r = await app_client.get(f"{base}&q={quote(term)}", headers=ha)
+        assert r.status_code == 200, r.text
+        return {d["id"] for d in r.json()["data"]}
+
+    # title substring — a LOWER-case query vs the capitalised "Alpha" proves case-insensitivity; the
+    # "Beta" doc (neither its title nor its SOP-PUR identifier) contains "alpha", so it's excluded.
+    title_hit = await ids("alpha")
+    assert d1["id"] in title_hit
+    assert d2["id"] not in title_hit
+    # identifier substring — the full allocated identifier is unique to d1 (d2's seq differs), and
+    # d1's title "Alpha …" contains no identifier text, so this isolates the identifier column.
+    id_hit = await ids(d1["identifier"])
+    assert d1["id"] in id_hit
+    assert d2["id"] not in id_hit
+    # a non-matching term yields an empty page (not an error)
+    assert await ids(f"zzz{salt}") == set()
+
+
+async def test_q_escapes_wildcards_and_ands_with_current_state(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    """`q` escapes ILIKE wildcards (a literal `%` can't broaden to match-all) and ANDs with the
+    bracketed filter grammar."""
+    await s5.grant_lifecycle(subj.a)
+    ha = _auth(token_factory, subj.a)
+    type_id = await s5.type_id("SOP")
+    salt = uuid.uuid4().hex[:8]
+    d1 = await _create_titled(app_client, ha, type_id, f"Alpha {salt}")  # Draft
+    owner = d1["owner_user_id"]
+    base = f"/api/v1/documents?limit=100&filter[owner_user_id][eq]={owner}"
+
+    # `%` is ESCAPED, not a wildcard: it matches only a literal "%", which neither identifier nor
+    # title contains — so it must NOT broaden to match-all (the un-escaped-ILIKE bug).
+    pct = await app_client.get(f"{base}&q={quote('%')}", headers=ha)
+    assert pct.status_code == 200, pct.text
+    assert d1["id"] not in {d["id"] for d in pct.json()["data"]}
+
+    # q ANDs with filter[current_state][eq]: same q, d1 matches only under its real state (Draft).
+    drafts = await app_client.get(
+        f"{base}&filter[current_state][eq]=Draft&q={quote('alpha')}", headers=ha
+    )
+    assert d1["id"] in {d["id"] for d in drafts.json()["data"]}
+    approved = await app_client.get(
+        f"{base}&filter[current_state][eq]=Approved&q={quote('alpha')}", headers=ha
+    )
+    assert d1["id"] not in {d["id"] for d in approved.json()["data"]}

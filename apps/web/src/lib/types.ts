@@ -147,6 +147,9 @@ export interface DocumentFilters {
   // non-managed-subtype. Omitted (undefined) by default — only the CREATE picker sets them.
   has_effective_version?: boolean;
   managed_subtype?: boolean;
+  // s-dcr-target-typeahead: free-text substring over identifier/title (server-side). Emitted as a
+  // top-level `q=` param (not bracketed). Omitted when blank — other callers stay byte-identical.
+  q?: string;
 }
 
 export type PdcaPhase = "PLAN" | "DO" | "CHECK" | "ACT";

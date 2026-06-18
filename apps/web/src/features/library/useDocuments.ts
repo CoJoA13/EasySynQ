@@ -25,6 +25,9 @@ export function buildDocumentsQuery(filters: DocumentFilters, page: PageParams):
     p.set("filter[has_effective_version][eq]", String(filters.has_effective_version));
   if (filters.managed_subtype !== undefined)
     p.set("filter[managed_subtype][eq]", String(filters.managed_subtype));
+  // s-dcr-target-typeahead: a top-level free-text param (NOT bracketed). Emitted only when non-empty,
+  // so the Library + the other useDocuments callers (which never set `q`) keep an identical query.
+  if (filters.q) p.set("q", filters.q);
   return p.toString();
 }
 
