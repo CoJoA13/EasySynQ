@@ -142,6 +142,29 @@ it("re-shows the REVISE picker on a clean slate after a CREATE round-trip (no st
   expect(screen.getByRole("option", { name: /SOP-PUR-014/ })).toBeInTheDocument();
 });
 
+it("does not re-offer a prior pick once the target is cleared (no stale unioned orphan)", async () => {
+  renderWithProviders(<Harness />);
+  const input = screen.getByLabelText(/Target document/);
+  await userEvent.click(input);
+  // commit a target (PUR) — `selected` now remembers it — then clear it via the CREATE round-trip
+  await userEvent.click(await screen.findByRole("option", { name: /SOP-PUR-014/ }));
+  expect(screen.getByTestId("target")).toHaveTextContent("doc00001-0001-0001-0001-000000000001");
+  await userEvent.click(screen.getByRole("radio", { name: "Create" }));
+  await userEvent.click(screen.getByRole("radio", { name: "Revise" }));
+  expect(screen.getByTestId("target")).toHaveTextContent("none");
+  // search a term that the server page EXCLUDES PUR from; because PUR is no longer the committed
+  // target, the union must NOT re-inject it as an orphan — only the server matches show. (Gate on
+  // PUR-gone + QMS-present in one waitFor so it retries past the debounce/refetch, never matching
+  // the transient q="" list where both are present.)
+  const reshown = screen.getByLabelText(/Target document/);
+  await userEvent.click(reshown);
+  await userEvent.type(reshown, "QMS");
+  await waitFor(() => {
+    expect(screen.queryByRole("option", { name: /SOP-PUR-014/ })).toBeNull();
+    expect(screen.getByRole("option", { name: /SOP-QMS-001/ })).toBeInTheDocument();
+  });
+});
+
 it("keeps the selected target available after a non-matching search (the unioned option never desyncs)", async () => {
   renderWithProviders(<Harness />);
   const input = screen.getByLabelText(/Target document/);
