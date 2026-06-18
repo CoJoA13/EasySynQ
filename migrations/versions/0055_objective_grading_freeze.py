@@ -44,39 +44,54 @@ down_revision: str | None = "0054_leadership_authorization"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
-# The behaviour-preserving backfill — the SQL twin of resolve_commitment: the governing Effective
-# commitment when one exists, else the working-row fields. BOTH columns gate on the SAME predicate
-# (an Effective version whose snapshot carries an OBJECT ``objective_commitment`` fold), which
-# mirrors the runtime ``governing = raw if isinstance(raw, dict) else None`` guard (service.py): a
-# version present but fold absent / JSON-null / non-object falls back to the working row for BOTH
-# columns. (A version-pointer-only gate would NULL a threshold the live grader still used — LESS
-# defensive than the runtime it mirrors.) With the fold present, ``->>'at_risk_threshold'`` yields
-# SQL NULL for a JSON null (no amber band) → a NULL Numeric, exactly "governing has no band".
+# The CAPTURE-TIME backfill (Codex P1): for each EXISTING reading, freeze the commitment that was
+# GOVERNING at its ``created_at`` — the document_version whose effective window contains it (the
+# latest ``effective_from <= created_at``) — exactly what ``record_measurement`` froze for a NEW
+# reading at that instant. Freezing the CURRENT commitment instead would re-stamp a reading
+# captured BEFORE a direction/threshold revision with the post-revision basis, permanently sealing
+# the very retroactive re-grade this slice removes. BOTH columns gate on the SAME predicate — the
+# capture-time version's snapshot carries an OBJECT ``objective_commitment`` fold — mirroring the
+# runtime ``governing = raw if isinstance(raw, dict) else None`` guard (service.py): a reading
+# captured pre-first-release (no applicable Effective version) or a fold-less version falls back
+# to the working row for BOTH columns. With the fold present, ``->>'at_risk_threshold'`` is SQL NULL
+# for a JSON null (no amber band) → a NULL Numeric. ``effective_from``/``effective_to`` are set at
+# every cutover (lifecycle ``_cutover``; the DCR/import/ingestion go-live paths likewise).
 _BACKFILL = """
     UPDATE kpi_measurement AS km
     SET direction_at_capture = (
             CASE
-                WHEN di.current_effective_version_id IS NOT NULL
-                     AND jsonb_typeof(dv.metadata_snapshot -> 'objective_commitment') = 'object'
-                     AND dv.metadata_snapshot -> 'objective_commitment' ->> 'direction' IS NOT NULL
-                THEN dv.metadata_snapshot -> 'objective_commitment' ->> 'direction'
-                ELSE qo.direction::text
+                WHEN g.commitment IS NOT NULL
+                     AND jsonb_typeof(g.commitment) = 'object'
+                     AND g.commitment ->> 'direction' IS NOT NULL
+                THEN g.commitment ->> 'direction'
+                ELSE g.working_direction
             END
         )::objective_direction,
         at_risk_threshold_at_capture = (
             CASE
-                WHEN di.current_effective_version_id IS NOT NULL
-                     AND jsonb_typeof(dv.metadata_snapshot -> 'objective_commitment') = 'object'
-                THEN (
-                    dv.metadata_snapshot -> 'objective_commitment' ->> 'at_risk_threshold'
-                )::numeric
-                ELSE qo.at_risk_threshold
+                WHEN g.commitment IS NOT NULL AND jsonb_typeof(g.commitment) = 'object'
+                THEN (g.commitment ->> 'at_risk_threshold')::numeric
+                ELSE g.working_threshold
             END
         )
-    FROM quality_objective AS qo
-    JOIN documented_information AS di ON di.id = qo.id
-    LEFT JOIN document_version AS dv ON dv.id = di.current_effective_version_id
-    WHERE km.objective_id = qo.id
+    FROM (
+        SELECT
+            m.id AS km_id,
+            qo.direction::text AS working_direction,
+            qo.at_risk_threshold AS working_threshold,
+            (
+                SELECT dv.metadata_snapshot -> 'objective_commitment'
+                FROM document_version AS dv
+                WHERE dv.document_id = qo.id
+                  AND dv.effective_from IS NOT NULL
+                  AND dv.effective_from <= m.created_at
+                ORDER BY dv.effective_from DESC
+                LIMIT 1
+            ) AS commitment
+        FROM kpi_measurement AS m
+        JOIN quality_objective AS qo ON qo.id = m.objective_id
+    ) AS g
+    WHERE km.id = g.km_id
 """
 
 

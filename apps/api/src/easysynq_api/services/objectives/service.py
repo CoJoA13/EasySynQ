@@ -256,6 +256,13 @@ async def record_measurement(
             "period": period.isoformat(),
             "value": str(value),
             "target_at_capture": str(target_at_capture),
+            # Seal the FULL frozen grading basis into the WORM evidence record (Codex P2), not just
+            # the kpi_measurement projection — so an auditor / evidence-pack reading the record can
+            # reconstruct + verify the RAG basis after a later direction/threshold revision.
+            "direction_at_capture": effective_direction.value,
+            "at_risk_threshold_at_capture": (
+                str(effective_threshold) if effective_threshold is not None else None
+            ),
             "unit": unit,
             "source": source,
         },
