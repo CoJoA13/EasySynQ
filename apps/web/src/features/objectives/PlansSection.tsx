@@ -5,13 +5,20 @@ import { usePermissions } from "../../app/shell/usePermissions";
 import { useUserDirectory } from "../../app/shell/useUserDirectory";
 import { useRemovePlan } from "./mutations";
 import { AddPlanModal } from "./AddPlanModal";
+import { EmptyState } from "../../lib/states";
 
 function nameOf(userId: string | null, dir: { id: string; display_name: string | null }[]): string {
   if (!userId) return "no owner";
   return dir.find((u) => u.id === userId)?.display_name ?? `${userId.slice(0, 8)}…`;
 }
 
-export function PlansSection({ objectiveId, plans }: { objectiveId: string; plans: ObjectivePlan[] }) {
+export function PlansSection({
+  objectiveId,
+  plans,
+}: {
+  objectiveId: string;
+  plans: ObjectivePlan[];
+}) {
   const { data: directory } = useUserDirectory();
   const { can } = usePermissions();
   const manage = can("objective.manage");
@@ -22,10 +29,14 @@ export function PlansSection({ objectiveId, plans }: { objectiveId: string; plan
     <Stack gap="sm">
       <Group justify="space-between">
         <Title order={3}>Plans</Title>
-        {manage && <Button size="xs" onClick={() => setAddOpen(true)}>Add plan</Button>}
+        {manage && (
+          <Button size="xs" onClick={() => setAddOpen(true)}>
+            Add plan
+          </Button>
+        )}
       </Group>
       {plans.length === 0 ? (
-        <Text c="dimmed" size="sm">No plans yet.</Text>
+        <EmptyState message="No plans yet." />
       ) : (
         plans.map((p) => (
           <Card key={p.id} withBorder padding="sm" radius="md">
@@ -39,7 +50,9 @@ export function PlansSection({ objectiveId, plans }: { objectiveId: string; plan
               </div>
               {manage && (
                 <ActionIcon
-                  variant="subtle" color="gray" aria-label="Remove plan"
+                  variant="subtle"
+                  color="gray"
+                  aria-label="Remove plan"
                   loading={remove.isPending && remove.variables === p.id}
                   onClick={() => remove.mutate(p.id)}
                 >

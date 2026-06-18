@@ -1,4 +1,5 @@
-import { Badge, Group, Loader, Stack, Text, Title } from "@mantine/core";
+import { Badge, Group, Stack, Text, Title } from "@mantine/core";
+import { LoadingState } from "../../lib/states";
 import { ContentBlock } from "../capa/ContentBlock";
 import { SOURCE_LABEL } from "../capa/columns";
 import { SeverityBadge } from "../capa/SeverityBadge";
@@ -9,7 +10,7 @@ import { useCapa, useCapaApproval } from "../capa/hooks";
 export function CapaApprovalContext({ capaId }: { capaId: string }) {
   const { data: capa, isLoading } = useCapa(capaId);
   const { data: approval } = useCapaApproval(capaId);
-  if (isLoading || !capa) return <Loader aria-label="Loading CAPA" />;
+  if (isLoading || !capa) return <LoadingState label="Loading CAPA" />;
   return (
     <Stack gap="md">
       <div>

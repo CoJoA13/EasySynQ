@@ -1,8 +1,9 @@
-import { Alert, Button, Group, Loader, Stack, Table, Text, Title } from "@mantine/core";
+import { Button, Group, Stack, Table, Text, Title } from "@mantine/core";
 import { useState } from "react";
 import type { ObjectiveDirection } from "../../lib/types";
 import { usePermissions } from "../../app/shell/usePermissions";
 import { useObjectiveMeasurements } from "./hooks";
+import { EmptyState, ErrorState, LoadingState, NoAccessState } from "../../lib/states";
 import { ObjectiveTrendChart } from "./ObjectiveTrendChart";
 import { RecordMeasurementModal } from "./RecordMeasurementModal";
 
@@ -15,7 +16,7 @@ export function MeasurementsSection({
   unit: string;
   direction?: ObjectiveDirection;
 }) {
-  const { data, isLoading, isError, forbidden } = useObjectiveMeasurements(objectiveId);
+  const { data, isLoading, isError, forbidden, refetch } = useObjectiveMeasurements(objectiveId);
   const { can } = usePermissions();
   const [open, setOpen] = useState(false);
   return (
@@ -29,19 +30,17 @@ export function MeasurementsSection({
         )}
       </Group>
       {forbidden ? (
-        <Alert color="gray" title="No access">
-          You don't have access to the measurement history for this objective.
-        </Alert>
+        <NoAccessState message="You don't have access to the measurement history for this objective." />
       ) : isError ? (
-        <Alert color="red" title="Couldn't load measurements">
-          Something went wrong loading the measurement history. Please try again.
-        </Alert>
+        <ErrorState
+          title="Couldn't load measurements"
+          message="Something went wrong loading the measurement history. Please try again."
+          onRetry={() => refetch()}
+        />
       ) : isLoading ? (
-        <Loader />
+        <LoadingState label="Loading measurements" />
       ) : (data ?? []).length === 0 ? (
-        <Text c="dimmed" size="sm">
-          No measurements recorded yet.
-        </Text>
+        <EmptyState message="No measurements recorded yet." />
       ) : (
         <>
           <ObjectiveTrendChart measurements={data ?? []} unit={unit} direction={direction} />

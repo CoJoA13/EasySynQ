@@ -498,7 +498,7 @@ describe("ReviewApprovePage LEADERSHIP_AUTHORIZATION branch (S-leadership-1)", (
 
   test("the leadership authorization page has no axe violations (heading order)", async () => {
     const { container } = renderAtTask(leadershipAuthTask.id);
-    // Wait for the context to RESOLVE (the loading Loader's aria-label-on-span trips axe), then audit.
+    // Wait for the context to RESOLVE (audit the loaded surface, not the LoadingState), then audit.
     await screen.findByText("POL-001");
     await screen.findByRole("radio", { name: "Authorize release" });
     expect(await axe(container)).toHaveNoViolations();

@@ -1,5 +1,6 @@
-import { Alert, Container, Loader, Stack, Text, Title } from "@mantine/core";
+import { Container, Stack, Text, Title } from "@mantine/core";
 import { useSearchParams } from "react-router-dom";
+import { ErrorState, LoadingState } from "../../lib/states";
 import { useSearch } from "./hooks";
 import { SearchResultRow } from "./SearchResultRow";
 
@@ -7,7 +8,7 @@ export function SearchResultsPage() {
   const [params] = useSearchParams();
   const q = params.get("q") ?? "";
   const term = q.trim();
-  const { data, isLoading, isError } = useSearch(q);
+  const { data, isLoading, isError, refetch } = useSearch(q);
 
   return (
     <Container size="lg" py="md">
@@ -17,11 +18,13 @@ export function SearchResultsPage() {
       {term.length === 0 ? (
         <Text c="dimmed">Type a query to search documents.</Text>
       ) : isLoading ? (
-        <Loader />
+        <LoadingState label="Loading search results" />
       ) : isError || !data ? (
-        <Alert color="red" title="Search is unavailable">
-          Something went wrong running your search. Please try again.
-        </Alert>
+        <ErrorState
+          title="Search is unavailable"
+          message="Something went wrong running your search. Please try again."
+          onRetry={() => refetch()}
+        />
       ) : (
         <Stack gap="xs">
           <Text c="dimmed" size="sm">

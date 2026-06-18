@@ -1,10 +1,11 @@
-import { Loader, Stack, Table, Text, Title } from "@mantine/core";
+import { Stack, Table, Text, Title } from "@mantine/core";
 import { useMemo } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { ApiError } from "../../lib/api";
 import { humanizeStageKey, humanizeToken } from "../../lib/labels";
 import { RegisterToolbar, SortableTh } from "../../lib/RegisterToolbar";
 import { sortRows, useDebouncedSearch, useTableSort } from "../../lib/registerControls";
+import { EmptyState, LoadingState } from "../../lib/states";
 import type { Task } from "../../lib/types";
 import { useRowKeyboardNav } from "../../lib/useRowKeyboardNav";
 import { TaskStateBadge } from "../document/TaskStateBadge";
@@ -76,7 +77,7 @@ function GeneralTasksInbox() {
     return sortRows(matched, sort, dir, sortValue);
   }, [tasks, query, sort, dir]);
 
-  if (isLoading) return <Loader aria-label="Loading tasks" />;
+  if (isLoading) return <LoadingState label="Loading tasks" />;
   if (isError) {
     if (error instanceof ApiError && error.status === 403)
       return <Text c="dimmed">You don't have access to the task queue.</Text>;
@@ -89,7 +90,7 @@ function GeneralTasksInbox() {
     <Stack gap="md">
       <Title order={2}>Review &amp; Approve</Title>
       {total === 0 ? (
-        <Text c="dimmed">No tasks in your queue.</Text>
+        <EmptyState message="No tasks in your queue." />
       ) : (
         <>
           <RegisterToolbar
@@ -100,7 +101,7 @@ function GeneralTasksInbox() {
             countNoun="tasks"
           />
           {visible.length === 0 ? (
-            <Text c="dimmed">No tasks match your search.</Text>
+            <EmptyState message="No tasks match your search." />
           ) : (
             <Table aria-label="My tasks" striped highlightOnHover>
               <Table.Thead>

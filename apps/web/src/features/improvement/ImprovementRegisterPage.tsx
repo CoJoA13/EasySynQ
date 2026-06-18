@@ -1,19 +1,9 @@
-import {
-  Alert,
-  Anchor,
-  Button,
-  Container,
-  Group,
-  Loader,
-  Select,
-  Table,
-  Text,
-  Title,
-} from "@mantine/core";
+import { Anchor, Box, Button, Container, Group, Select, Table, Title } from "@mantine/core";
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useUserDirectory } from "../../app/shell/useUserDirectory";
 import { usePermissions } from "../../app/shell/usePermissions";
+import { EmptyState, ErrorState, LoadingState, NoAccessState } from "../../lib/states";
 import { RegisterToolbar, SortableTh } from "../../lib/RegisterToolbar";
 import {
   sortRows,
@@ -40,7 +30,7 @@ function formatDate(iso: string): string {
 }
 
 export function ImprovementRegisterPage() {
-  const { data, isLoading, isError, forbidden } = useInitiatives();
+  const { data, isLoading, isError, forbidden, refetch } = useInitiatives();
   const { data: directory } = useUserDirectory();
   const [params, setParams] = useSearchParams();
   const [selected, setSelected] = useState<string | null>(() => params.get("initiative"));
@@ -115,17 +105,14 @@ export function ImprovementRegisterPage() {
         <Title order={2} mb="md">
           Improvement
         </Title>
-        <Alert color="gray" title="No access">
-          You don't have access to the improvement register. It's available to roles holding the
-          improvement read permission.
-        </Alert>
+        <NoAccessState message="You don't have access to the improvement register. It's available to roles holding the improvement read permission." />
       </Container>
     );
   }
   if (isLoading) {
     return (
       <Container size="md" py="md">
-        <Loader />
+        <LoadingState label="Loading improvement initiatives" />
       </Container>
     );
   }
@@ -135,9 +122,7 @@ export function ImprovementRegisterPage() {
         <Title order={2} mb="md">
           Improvement
         </Title>
-        <Alert color="red" title="Couldn't load improvement initiatives">
-          Please try again.
-        </Alert>
+        <ErrorState title="Couldn't load improvement initiatives" onRetry={() => void refetch()} />
       </Container>
     );
   }
@@ -152,7 +137,7 @@ export function ImprovementRegisterPage() {
       </Group>
 
       {rows.length === 0 ? (
-        <Text c="dimmed">No improvement initiatives yet.</Text>
+        <EmptyState message="No improvement initiatives yet." />
       ) : (
         <>
           <RegisterToolbar
@@ -181,9 +166,9 @@ export function ImprovementRegisterPage() {
           </RegisterToolbar>
 
           {visible.length === 0 ? (
-            <Text c="dimmed" mt="md">
-              No initiatives match your filters.
-            </Text>
+            <Box mt="md">
+              <EmptyState message="No initiatives match your filters." />
+            </Box>
           ) : (
             <Table highlightOnHover mt="md">
               <Table.Thead>

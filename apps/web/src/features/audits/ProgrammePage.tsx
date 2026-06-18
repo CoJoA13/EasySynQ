@@ -1,14 +1,15 @@
-import { Alert, Badge, Button, Container, Group, Loader, Table, Text, Title } from "@mantine/core";
+import { Badge, Button, Container, Group, Table, Text, Title } from "@mantine/core";
 import { useState } from "react";
 import { usePermissions } from "../../app/shell/usePermissions";
 import { useUserDirectory } from "../../app/shell/useUserDirectory";
+import { EmptyState, ErrorState, LoadingState, NoAccessState } from "../../lib/states";
 import type { AuditProgram } from "../../lib/types";
 import { useAuditPlans, useAuditPrograms, useProcesses } from "./hooks";
 import { PlanForm } from "./PlanForm";
 import { ProgramForm } from "./ProgramForm";
 
 export function ProgrammePage() {
-  const { data, isLoading, isError, forbidden } = useAuditPrograms();
+  const { data, isLoading, isError, forbidden, refetch } = useAuditPrograms();
   const { can } = usePermissions();
   // null = closed; "new" = create; a programme = edit. Keyed remount resets the form state.
   const [editing, setEditing] = useState<AuditProgram | "new" | null>(null);
@@ -30,17 +31,21 @@ export function ProgrammePage() {
         <Title order={3} mb="md">
           Audit Programme
         </Title>
-        <Alert color="gray" title="No access">
-          You don't have access to the audit programme. It's available to roles holding{" "}
-          <code>audit.read</code>.
-        </Alert>
+        <NoAccessState
+          message={
+            <>
+              You don't have access to the audit programme. It's available to roles holding{" "}
+              <code>audit.read</code>.
+            </>
+          }
+        />
       </Container>
     );
   }
   if (isLoading) {
     return (
       <Container size="xl" py="md">
-        <Loader />
+        <LoadingState label="Loading programmes" />
       </Container>
     );
   }
@@ -50,9 +55,7 @@ export function ProgrammePage() {
         <Title order={3} mb="md">
           Audit Programme
         </Title>
-        <Alert color="red" title="Couldn't load programmes">
-          Please try again.
-        </Alert>
+        <ErrorState title="Couldn't load programmes" onRetry={() => refetch()} />
       </Container>
     );
   }
@@ -61,12 +64,10 @@ export function ProgrammePage() {
     <Container size="xl" py="md">
       <Group justify="space-between" mb="md">
         <Title order={3}>Audit Programme</Title>
-        {can("audit.plan") && (
-          <Button onClick={() => setEditing("new")}>＋ New programme</Button>
-        )}
+        {can("audit.plan") && <Button onClick={() => setEditing("new")}>＋ New programme</Button>}
       </Group>
       {rows.length === 0 ? (
-        <Text c="dimmed">No programmes yet.</Text>
+        <EmptyState message="No programmes yet." />
       ) : (
         <Table striped highlightOnHover mb="lg">
           <Table.Thead>
@@ -133,7 +134,7 @@ export function ProgrammePage() {
             )}
           </Group>
           {(plans.data ?? []).length === 0 ? (
-            <Text c="dimmed">No plans in this programme yet.</Text>
+            <EmptyState message="No plans in this programme yet." />
           ) : (
             <Table striped>
               <Table.Thead>
@@ -150,8 +151,8 @@ export function ProgrammePage() {
                     <Table.Td>{p.scheduled_date ?? "—"}</Table.Td>
                     <Table.Td>
                       {p.auditee_process_id
-                        ? ((processes.data ?? []).find((x) => x.id === p.auditee_process_id)?.name ??
-                          `${p.auditee_process_id.slice(0, 8)}…`)
+                        ? ((processes.data ?? []).find((x) => x.id === p.auditee_process_id)
+                            ?.name ?? `${p.auditee_process_id.slice(0, 8)}…`)
                         : "—"}
                     </Table.Td>
                     <Table.Td>

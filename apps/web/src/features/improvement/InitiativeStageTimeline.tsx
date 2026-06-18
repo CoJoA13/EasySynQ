@@ -1,4 +1,5 @@
 import { Text, Timeline } from "@mantine/core";
+import { EmptyState } from "../../lib/states";
 import type { DirectoryUser, InitiativeStage, InitiativeStageEvent } from "../../lib/types";
 import { INITIATIVE_STAGE_META } from "./labels";
 
@@ -33,11 +34,7 @@ export function InitiativeStageTimeline({
   directory: DirectoryUser[];
 }) {
   if (events.length === 0) {
-    return (
-      <Text size="sm" c="dimmed">
-        No history yet.
-      </Text>
-    );
+    return <EmptyState message="No history yet." />;
   }
   return (
     <Timeline active={events.length} bulletSize={16} lineWidth={2}>

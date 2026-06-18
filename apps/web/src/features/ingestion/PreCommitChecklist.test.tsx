@@ -53,6 +53,14 @@ test("renders the kind-confirmed advisory row as '1 / 4' (warning, never danger)
   expect(within(kindRow).queryByRole("button", { name: "Show items" })).not.toBeInTheDocument();
 });
 
+test("a warn advisory row uses the canonical ◔ glyph (the retired ▲ is gone)", () => {
+  renderWithProviders(<PreCommitChecklist checklist={CHECKLIST} onShowBlocker={() => {}} />);
+  // kind-confirmed (1/4) is a warn row → ◔
+  const kindRow = screen.getByLabelText("Advisory: Kind confirmed on every item");
+  expect(within(kindRow).getByText("◔")).toBeInTheDocument();
+  expect(screen.queryByText("▲")).not.toBeInTheDocument();
+});
+
 test("renders the Unknown / Low triaged advisory row from unknown_low", () => {
   renderWithProviders(<PreCommitChecklist checklist={CHECKLIST} onShowBlocker={() => {}} />);
   const triagedRow = screen.getByLabelText("Advisory: Unknown / Low triaged");

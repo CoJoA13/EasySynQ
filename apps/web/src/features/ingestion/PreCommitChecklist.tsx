@@ -1,4 +1,5 @@
 import { Button, Card, Group, Stack, Text } from "@mantine/core";
+import { TONE_GLYPH } from "../../lib/status";
 import type { ImportChecklist, ImportChecklistBlocker } from "../../lib/types";
 
 // A human label for each known blocker `type`; an unknown type degrades to a title-cased fallback so
@@ -11,10 +12,7 @@ const BLOCKER_LABELS: Record<string, string> = {
 };
 
 function blockerLabel(type: string): string {
-  return (
-    BLOCKER_LABELS[type] ??
-    type.replace(/_/g, " ").replace(/^\w/, (c) => c.toUpperCase())
-  );
+  return BLOCKER_LABELS[type] ?? type.replace(/_/g, " ").replace(/^\w/, (c) => c.toUpperCase());
 }
 
 // One danger row per blocking[] entry: a ✕ glyph + the human label + a "Show items" button that
@@ -45,8 +43,8 @@ function BlockerRow({
       style={{ borderBottom: "1px solid var(--es-border)" }}
     >
       <Group gap="xs" wrap="nowrap">
-        <Text span aria-hidden="true" c="var(--es-danger)" fw={700}>
-          ✕
+        <Text span aria-hidden="true" c="var(--es-danger-text)" fw={700}>
+          {TONE_GLYPH.danger}
         </Text>
         <Text span size="sm">
           {label}
@@ -57,7 +55,12 @@ function BlockerRow({
           </Text>
         )}
       </Group>
-      <Button variant="light" color="var(--es-danger)" size="compact-sm" onClick={() => onShowBlocker(blocker)}>
+      <Button
+        variant="light"
+        color="var(--es-danger)"
+        size="compact-sm"
+        onClick={() => onShowBlocker(blocker)}
+      >
         Show items
       </Button>
     </Group>
@@ -76,9 +79,15 @@ function AdvisoryRow({
   value: string;
   tone: "ok" | "warn" | "neutral";
 }) {
-  const glyph = tone === "ok" ? "✓" : tone === "warn" ? "▲" : "•";
+  // Canonical glyph vocabulary (TONE_GLYPH) on AA-tuned -text colours — ▲ retired (warn → ◔), • → ○.
+  const glyph =
+    tone === "ok" ? TONE_GLYPH.success : tone === "warn" ? TONE_GLYPH.warning : TONE_GLYPH.neutral;
   const color =
-    tone === "ok" ? "var(--es-success)" : tone === "warn" ? "var(--es-warning)" : "var(--es-text-muted)";
+    tone === "ok"
+      ? "var(--es-success-text)"
+      : tone === "warn"
+        ? "var(--es-warning-text)"
+        : "var(--es-text-muted)";
   return (
     <Group
       justify="space-between"
@@ -131,7 +140,8 @@ export function PreCommitChecklist({
       <Stack gap={2} mb="sm">
         <Text fw={600}>Pre-commit checklist</Text>
         <Text size="sm" c="dimmed">
-          A calm gate before anything becomes controlled — advisory, never an auto-compliance judgment.
+          A calm gate before anything becomes controlled — advisory, never an auto-compliance
+          judgment.
         </Text>
       </Stack>
 
@@ -150,8 +160,8 @@ export function PreCommitChecklist({
 
       <Stack gap={2} mt="sm">
         <Text size="sm" c="dimmed" maw="70ch">
-          Mandatory-coverage is a non-blocking projection of the Compliance Checklist onto the confirmed
-          set — missing items may simply not exist yet.
+          Mandatory-coverage is a non-blocking projection of the Compliance Checklist onto the
+          confirmed set — missing items may simply not exist yet.
         </Text>
         <Text size="sm" c="dimmed">
           Commit can proceed with gaps.

@@ -1,10 +1,60 @@
 import { Box, NavLink, Stack, Text } from "@mantine/core";
 import { Link, useLocation } from "react-router-dom";
+import { GlyphLegend } from "../../lib/GlyphLegend";
 import type { PdcaPhase } from "../../lib/types";
 import { usePermissions } from "./usePermissions";
 import { useClauses } from "./useClauses";
 
 const PHASES: PdcaPhase[] = ["PLAN", "DO", "CHECK", "ACT"];
+
+// The IA flows the way ISO 9001 flows (design principle 1): the feature nav is grouped by PDCA phase,
+// mirroring the Home quadrants + the clause spine, and each phase's clause-filter links nest under the
+// same heading (one PLAN/DO/CHECK/ACT label set, no duplication). Phase ↔ clause-range labels match the
+// Home QuadrantCard chips.
+const PHASE_CLAUSES: Record<PdcaPhase, string> = {
+  PLAN: "Cl 4–6",
+  DO: "Cl 7–8",
+  CHECK: "Cl 9",
+  ACT: "Cl 10",
+};
+
+// One feature nav entry. `gate` (a permission key) hides the entry when the caller lacks it (calm-403
+// still lives on the page for the unconditional entries — the CAPA precedent); `prefix` drives the
+// active state. Owner-confirmed phase placement: Change requests (DCR) sits under ACT with CAPA +
+// Improvement (change-as-improvement); Library / Review & Approve / Import are the DO doc-control
+// cluster; Objectives is the lone built PLAN register; the CHECK reads are Compliance / Audit / MR /
+// Drift.
+type NavItem = { to: string; label: string; prefix: string; gate?: string };
+
+const NAV: Record<PdcaPhase, NavItem[]> = {
+  PLAN: [{ to: "/objectives", label: "Objectives", prefix: "/objectives", gate: "objective.read" }],
+  DO: [
+    { to: "/library", label: "Library", prefix: "/library" },
+    { to: "/tasks", label: "Review & Approve", prefix: "/tasks" },
+    { to: "/ingestion", label: "Import", prefix: "/ingestion", gate: "import.review" },
+  ],
+  CHECK: [
+    {
+      to: "/compliance",
+      label: "Compliance",
+      prefix: "/compliance",
+      gate: "report.compliance_checklist.read",
+    },
+    { to: "/audits", label: "Internal Audit", prefix: "/audits" },
+    {
+      to: "/management-reviews",
+      label: "Management reviews",
+      prefix: "/management-reviews",
+      gate: "mgmtReview.read",
+    },
+    { to: "/drift", label: "Drift", prefix: "/drift", gate: "drift.read" },
+  ],
+  ACT: [
+    { to: "/capa", label: "Nonconformity & CAPA", prefix: "/capa" },
+    { to: "/improvement", label: "Improvement", prefix: "/improvement", gate: "improvement.read" },
+    { to: "/dcrs", label: "Change requests", prefix: "/dcrs", gate: "changeRequest.read" },
+  ],
+};
 
 export function LeftRail() {
   const { pathname } = useLocation();
@@ -13,116 +63,52 @@ export function LeftRail() {
   return (
     <Stack gap="xs" p="sm">
       <NavLink component={Link} to="/" label="Home" active={pathname === "/"} />
-      <NavLink
-        component={Link}
-        to="/library"
-        label="Library"
-        active={pathname.startsWith("/library")}
-      />
-      <NavLink
-        component={Link}
-        to="/tasks"
-        label="Review & Approve"
-        active={pathname.startsWith("/tasks")}
-      />
-      {can("report.compliance_checklist.read") && (
-        // S-web-6: gated — only QMS Owner / Internal Auditor hold the SYSTEM report key.
-        <NavLink
-          component={Link}
-          to="/compliance"
-          label="Compliance"
-          active={pathname.startsWith("/compliance")}
-        />
-      )}
-      <NavLink
-        component={Link}
-        to="/capa"
-        label="Nonconformity & CAPA"
-        active={pathname.startsWith("/capa")}
-      />
-      <NavLink
-        component={Link}
-        to="/audits"
-        label="Internal Audit"
-        active={pathname.startsWith("/audits")}
-      />
-      {can("changeRequest.read") && (
-        // S-dcr-ui-1: gated — changeRequest.read; the change-control (DCR) register.
-        <NavLink
-          component={Link}
-          to="/dcrs"
-          label="Change requests"
-          active={pathname.startsWith("/dcrs")}
-        />
-      )}
-      {can("import.review") && (
-        // S-ing-4b: gated — import review is an admin-only SYSTEM key (no ABAC scope).
-        <NavLink
-          component={Link}
-          to="/ingestion"
-          label="Import"
-          active={pathname.startsWith("/ingestion")}
-        />
-      )}
-      {can("drift.read") && (
-        // S-web-8: gated — drift.read is the admin-side SYSTEM key (R41); System Administrator
-        // holds it natively (seeded 0047).
-        <NavLink
-          component={Link}
-          to="/drift"
-          label="Drift"
-          active={pathname.startsWith("/drift")}
-        />
-      )}
-      {can("objective.read") && (
-        // S-obj-2: gated — objective.read (PROCESS finest-scope, SYSTEM fallback in v1); the PLAN-phase
-        // register (clause 6.2). Mirrors the drift.read entry.
-        <NavLink
-          component={Link}
-          to="/objectives"
-          label="Objectives"
-          active={pathname.startsWith("/objectives")}
-        />
-      )}
-      {can("mgmtReview.read") && (
-        // S-mr-2: gated — mgmtReview.read (SYSTEM finest-scope); the CHECK-phase clause-9.3 register.
-        <NavLink
-          component={Link}
-          to="/management-reviews"
-          label="Management reviews"
-          active={pathname.startsWith("/management-reviews")}
-        />
-      )}
-      {can("improvement.read") && (
-        // S-improvement-3: gated — improvement.read (PROCESS finest-scope, SYSTEM fallback in v1); the
-        // ACT-phase clause-10.3 continual-improvement register. Mirrors the objective.read entry.
-        <NavLink
-          component={Link}
-          to="/improvement"
-          label="Improvement"
-          active={pathname.startsWith("/improvement")}
-        />
-      )}
+
       {PHASES.map((phase) => {
-        const top = (clauses ?? []).filter((c) => c.pdca_phase === phase && c.parent_id === null);
-        if (top.length === 0) return null;
+        const items = NAV[phase].filter((it) => !it.gate || can(it.gate));
+        const topClauses = (clauses ?? []).filter(
+          (c) => c.pdca_phase === phase && c.parent_id === null,
+        );
+        // Drop a phase entirely when the caller can see neither a feature link nor a clause under it.
+        if (items.length === 0 && topClauses.length === 0) return null;
         return (
-          <Box key={phase} mt="sm">
+          <Box key={phase} mt="sm" role="group" aria-label={`${phase} section`}>
             <Text size="xs" fw={700} c="dimmed" tt="uppercase" px="xs">
-              {phase}
+              {phase} · {PHASE_CLAUSES[phase]}
             </Text>
-            {top.map((c) => (
-              // S-web-2: a clause link filters the Library by that exact clause number.
+            {items.map((it) => (
               <NavLink
-                key={c.id}
+                key={it.to}
                 component={Link}
-                to={`/library?clause=${encodeURIComponent(c.number)}`}
-                label={`${c.number} ${c.title}`}
+                to={it.to}
+                label={it.label}
+                active={pathname.startsWith(it.prefix)}
               />
             ))}
+            {topClauses.length > 0 && (
+              <>
+                <Text size="0.625rem" fw={600} c="dimmed" tt="uppercase" px="xs" mt={6}>
+                  Clauses
+                </Text>
+                {topClauses.map((c) => (
+                  // S-web-2: a clause link filters the Library by that exact clause number.
+                  <NavLink
+                    key={c.id}
+                    component={Link}
+                    to={`/library?clause=${encodeURIComponent(c.number)}`}
+                    label={`${c.number} ${c.title}`}
+                  />
+                ))}
+              </>
+            )}
           </Box>
         );
       })}
+
+      {/* The in-product legend for the canonical non-colour status vocabulary (✓◔✕●○★). */}
+      <Box mt="md" px="xs">
+        <GlyphLegend />
+      </Box>
     </Stack>
   );
 }

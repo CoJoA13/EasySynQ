@@ -1,4 +1,5 @@
 import { Group, Paper, SimpleGrid, Stack, Text } from "@mantine/core";
+import { TONE_GLYPH, type Tone } from "../../lib/status";
 import type { ImportChecklistReviewStats, ImportRun } from "../../lib/types";
 
 // run.counts is a FLAT, top-level-merged bag of per-stage keys (e.g. by_band.HIGH, quarantine,
@@ -15,34 +16,30 @@ export function countAt(counts: Record<string, unknown> | null, ...path: string[
   return typeof node === "number" && Number.isFinite(node) ? node : 0;
 }
 
+// Each tile carries a canonical status `tone` → the ONE glyph vocabulary (TONE_GLYPH) on the AA-tuned
+// `--es-<tone>-text` colour (the bespoke ●▲☑ set — incl. the retired ▲ — is gone; a glyph filled with
+// the base hue would be a low-contrast amber-on-white mark, the S-obj-rag trap, so it rides the darker
+// -text token). DP-7: the glyph is a second channel; the label + value carry the meaning.
 function MetricTile({
-  glyph,
-  glyphColor,
+  tone,
   label,
   value,
   ariaValue,
 }: {
-  glyph: string;
-  glyphColor: string;
+  tone: Tone;
   label: string;
   value: string;
   ariaValue: string;
 }) {
   return (
-    <Paper
-      withBorder
-      p="md"
-      radius="md"
-      role="group"
-      aria-label={`${label}: ${ariaValue}`}
-    >
+    <Paper withBorder p="md" radius="md" role="group" aria-label={`${label}: ${ariaValue}`}>
       <Stack gap={4}>
         <Group gap="xs" justify="space-between" wrap="nowrap">
           <Text size="sm" c="dimmed">
             {label}
           </Text>
-          <Text aria-hidden c={glyphColor}>
-            {glyph}
+          <Text aria-hidden c={`var(--es-${tone}-text)`}>
+            {TONE_GLYPH[tone]}
           </Text>
         </Group>
         <Text fz="1.75rem" fw={700} ff="monospace">
@@ -73,29 +70,20 @@ export function RunSummaryTiles({
   return (
     <SimpleGrid cols={{ base: 1, sm: 2, lg: 4 }} spacing="md">
       <MetricTile
-        glyph="●"
-        glyphColor="var(--es-success)"
+        tone="success"
         label="Auto-classified · High"
         value={String(high)}
         ariaValue={String(high)}
       />
+      <MetricTile tone="warning" label="Medium" value={String(medium)} ariaValue={String(medium)} />
       <MetricTile
-        glyph="▲"
-        glyphColor="var(--es-warning)"
-        label="Medium"
-        value={String(medium)}
-        ariaValue={String(medium)}
-      />
-      <MetricTile
-        glyph="✕"
-        glyphColor="var(--es-danger)"
+        tone="danger"
         label="Needs decision"
         value={String(needs)}
         ariaValue={String(needs)}
       />
       <MetricTile
-        glyph="☑"
-        glyphColor="var(--es-accent)"
+        tone="info"
         label="Kind confirmed"
         value={`${kindConfirmed} / ${keepItems}`}
         ariaValue={`${kindConfirmed} of ${keepItems}`}

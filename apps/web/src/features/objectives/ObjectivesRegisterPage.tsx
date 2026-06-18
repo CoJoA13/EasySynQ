@@ -4,7 +4,6 @@ import {
   Button,
   Container,
   Group,
-  Loader,
   SegmentedControl,
   Table,
   Text,
@@ -17,6 +16,7 @@ import type { Objective } from "../../lib/types";
 import { AsOf } from "../../lib/AsOf";
 import { usePermissions } from "../../app/shell/usePermissions";
 import { useObjectiveScorecard } from "./hooks";
+import { ErrorState, LoadingState, NoAccessState } from "../../lib/states";
 import { fmtValueUnit, RAG_LABEL, RAG_SEVERITY, RAG_TONE } from "./labels";
 import { ObjectiveScorecardBand } from "./ObjectiveScorecardBand";
 import { StateBadge } from "../document/StateBadge";
@@ -61,7 +61,7 @@ function sortValue(o: Objective, key: SortKey): string | number | null | undefin
 }
 
 export function ObjectivesRegisterPage() {
-  const { data, isLoading, isError, forbidden, dataUpdatedAt } = useObjectiveScorecard();
+  const { data, isLoading, isError, forbidden, dataUpdatedAt, refetch } = useObjectiveScorecard();
   const { can } = usePermissions();
   const navigate = useNavigate();
   const [rag, setRag] = useUrlParam("rag", "");
@@ -88,10 +88,7 @@ export function ObjectivesRegisterPage() {
         <Title order={2} mb="md">
           Quality objectives
         </Title>
-        <Alert color="gray" title="No access">
-          You don't have access to Quality Objectives. It's available to the Quality Manager and
-          Process Owner roles.
-        </Alert>
+        <NoAccessState message="You don't have access to Quality Objectives. It's available to the Quality Manager and Process Owner roles." />
       </Container>
     );
   }
@@ -102,9 +99,11 @@ export function ObjectivesRegisterPage() {
         <Title order={2} mb="md">
           Quality objectives
         </Title>
-        <Alert color="red" title="Couldn't load quality objectives">
-          Something went wrong loading the objectives. Please try again.
-        </Alert>
+        <ErrorState
+          title="Couldn't load quality objectives"
+          message="Something went wrong loading the objectives. Please try again."
+          onRetry={() => refetch()}
+        />
       </Container>
     );
   }
@@ -112,7 +111,7 @@ export function ObjectivesRegisterPage() {
   if (isLoading || !data) {
     return (
       <Container size="lg" py="md">
-        <Loader />
+        <LoadingState label="Loading quality objectives" />
       </Container>
     );
   }

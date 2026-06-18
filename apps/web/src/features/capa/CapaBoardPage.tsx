@@ -1,12 +1,10 @@
 import {
-  Alert,
   Badge,
   Box,
   Button,
   Card,
   Container,
   Group,
-  Loader,
   ScrollArea,
   SegmentedControl,
   Select,
@@ -19,6 +17,7 @@ import {
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { usePermissions } from "../../app/shell/usePermissions";
+import { EmptyState, ErrorState, LoadingState, NoAccessState } from "../../lib/states";
 import type { Capa, CapaCloseState, CapaSource, NcSeverity } from "../../lib/types";
 import { CapaCard } from "./CapaCard";
 import { CapaDrawer } from "./CapaDrawer";
@@ -35,7 +34,7 @@ import { RaiseCapaModal } from "./RaiseCapaModal";
 const TERMINAL: CapaCloseState[] = ["Closed", "Rejected"];
 
 export function CapaBoardPage() {
-  const { data, isLoading, isError, forbidden } = useCapas();
+  const { data, isLoading, isError, forbidden, refetch } = useCapas();
   const [view, setView] = useState<"board" | "list">("board");
   const [source, setSource] = useState<CapaSource | "">("");
   const [severity, setSeverity] = useState<NcSeverity | "">("");
@@ -88,17 +87,21 @@ export function CapaBoardPage() {
         <Title order={2} mb="md">
           Nonconformity &amp; CAPA
         </Title>
-        <Alert color="gray" title="No access">
-          You don't have access to the CAPA board. It's available to the Quality Manager, Process
-          Owner and Internal Auditor roles.
-        </Alert>
+        <NoAccessState
+          message={
+            <>
+              You don't have access to the CAPA board. It's available to the Quality Manager,
+              Process Owner and Internal Auditor roles.
+            </>
+          }
+        />
       </Container>
     );
   }
   if (isLoading) {
     return (
       <Container size="md" py="md">
-        <Loader />
+        <LoadingState label="Loading CAPAs" />
       </Container>
     );
   }
@@ -108,9 +111,7 @@ export function CapaBoardPage() {
         <Title order={2} mb="md">
           Nonconformity &amp; CAPA
         </Title>
-        <Alert color="red" title="Couldn't load CAPAs">
-          Please try again.
-        </Alert>
+        <ErrorState title="Couldn't load CAPAs" onRetry={() => refetch()} />
       </Container>
     );
   }
@@ -201,7 +202,7 @@ export function CapaBoardPage() {
       </Group>
 
       {filtered.length === 0 ? (
-        <Text c="dimmed">No CAPAs match.</Text>
+        <EmptyState message="No CAPAs match." />
       ) : view === "board" ? (
         <ScrollArea>
           <Group align="flex-start" wrap="nowrap" gap="md">

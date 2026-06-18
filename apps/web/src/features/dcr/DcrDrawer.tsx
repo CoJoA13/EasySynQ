@@ -1,9 +1,10 @@
-import { Alert, Anchor, Badge, Group, Loader, Stack, Text, Title } from "@mantine/core";
+import { Anchor, Badge, Group, Stack, Text, Title } from "@mantine/core";
 import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { DetailDrawer } from "../../app/shell/DetailDrawer";
 import { useUserDirectory } from "../../app/shell/useUserDirectory";
 import type { DirectoryUser } from "../../lib/types";
+import { ErrorState, LoadingState } from "../../lib/states";
 import { useDocument } from "../document/useDocument";
 import { DcrAdvancePanel } from "./DcrAdvancePanel";
 import { DcrImpactTable } from "./DcrImpactTable";
@@ -31,7 +32,7 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
 }
 
 export function DcrDrawer({ dcrId, onClose }: { dcrId: string | null; onClose: () => void }) {
-  const { data: dcr, isLoading, isError } = useDcr(dcrId);
+  const { data: dcr, isLoading, isError, refetch } = useDcr(dcrId);
   const { data: impact } = useDcrImpact(dcrId);
   const { data: directoryData } = useUserDirectory();
   const directory = directoryData ?? [];
@@ -60,11 +61,13 @@ export function DcrDrawer({ dcrId, onClose }: { dcrId: string | null; onClose: (
       }
     >
       {isLoading ? (
-        <Loader />
+        <LoadingState label="Loading change request" />
       ) : isError || !dcr ? (
-        <Alert color="red" title="Couldn't load this change request">
-          It may have been removed, or you may not have access. Close this panel and try again.
-        </Alert>
+        <ErrorState
+          title="Couldn't load this change request"
+          message="It may have been removed, or you may not have access. Close this panel and try again."
+          onRetry={() => refetch()}
+        />
       ) : (
         <Stack gap="lg">
           <Group gap="xs">

@@ -1,5 +1,6 @@
-import { Alert, Loader, Stack, Text, Title } from "@mantine/core";
+import { Alert, Stack, Text, Title } from "@mantine/core";
 import { ApiError } from "../../lib/api";
+import { LoadingState } from "../../lib/states";
 import { StateBadge } from "../document/StateBadge";
 import { useDocument } from "../document/useDocument";
 
@@ -28,7 +29,7 @@ export function LeadershipApprovalContext({
   });
   const forbidden = error instanceof ApiError && error.status === 403;
 
-  if (isLoading) return <Loader aria-label="Loading the document" />;
+  if (isLoading) return <LoadingState label="Loading the document" />;
 
   if (isError || !doc) {
     return (

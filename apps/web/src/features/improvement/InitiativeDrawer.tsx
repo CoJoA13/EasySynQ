@@ -1,7 +1,8 @@
-import { Alert, Badge, Group, Loader, Stack, Text, Title } from "@mantine/core";
+import { Badge, Group, Stack, Text, Title } from "@mantine/core";
 import type { ReactNode } from "react";
 import { DetailDrawer } from "../../app/shell/DetailDrawer";
 import { useUserDirectory } from "../../app/shell/useUserDirectory";
+import { ErrorState, LoadingState } from "../../lib/states";
 import type { DirectoryUser } from "../../lib/types";
 import { useProcesses } from "../objectives/hooks";
 import { InitiativeAdvancePanel } from "./InitiativeAdvancePanel";
@@ -35,7 +36,7 @@ export function InitiativeDrawer({
   initiativeId: string | null;
   onClose: () => void;
 }) {
-  const { data: initiative, isLoading, isError } = useInitiative(initiativeId);
+  const { data: initiative, isLoading, isError, refetch } = useInitiative(initiativeId);
   const { data: events } = useInitiativeStageEvents(initiativeId);
   const { data: directoryData } = useUserDirectory();
   const { data: processData } = useProcesses();
@@ -64,11 +65,13 @@ export function InitiativeDrawer({
       }
     >
       {isLoading ? (
-        <Loader />
+        <LoadingState label="Loading initiative" />
       ) : isError || !initiative ? (
-        <Alert color="red" title="Couldn't load this initiative">
-          It may have been removed, or you may not have access. Close this panel and try again.
-        </Alert>
+        <ErrorState
+          title="Couldn't load this initiative"
+          message="It may have been removed, or you may not have access. Close this panel and try again."
+          onRetry={() => void refetch()}
+        />
       ) : (
         <Stack gap="lg">
           <Group gap="xs">

@@ -1,4 +1,5 @@
-import { Alert, Badge, Loader, Stack, Text, Title } from "@mantine/core";
+import { Alert, Badge, Stack, Text, Title } from "@mantine/core";
+import { LoadingState } from "../../lib/states";
 import { INITIATIVE_STAGE_META } from "../improvement/labels";
 import { useInitiative } from "../improvement/hooks";
 
@@ -9,7 +10,7 @@ import { useInitiative } from "../improvement/hooks";
 export function InitiativeApprovalContext({ initiativeId }: { initiativeId: string }) {
   const { data: initiative, isLoading, isError, forbidden } = useInitiative(initiativeId);
 
-  if (isLoading) return <Loader aria-label="Loading the initiative" />;
+  if (isLoading) return <LoadingState label="Loading the initiative" />;
   if (isError || !initiative) {
     return (
       <Alert color="yellow" title="Initiative not visible to you">

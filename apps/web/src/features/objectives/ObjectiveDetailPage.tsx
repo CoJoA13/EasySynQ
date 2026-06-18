@@ -1,9 +1,10 @@
-import { Alert, Button, Card, Container, Group, Loader, Stack, Text, Title } from "@mantine/core";
+import { Alert, Button, Card, Container, Group, Stack, Text, Title } from "@mantine/core";
 import { useState } from "react";
 import { useParams } from "react-router-dom";
 import { useUserDirectory } from "../../app/shell/useUserDirectory";
 import { ApiError } from "../../lib/api";
 import { ConfirmDestructive } from "../../lib/ConfirmDestructive";
+import { ErrorState, LoadingState, NoAccessState } from "../../lib/states";
 import { ApprovalStepper } from "../document/ApprovalStepper";
 import { StateBadge } from "../document/StateBadge";
 import { useLeadershipAuthorization } from "../leadership/hooks";
@@ -26,7 +27,7 @@ function errMsg(e: unknown): string {
 
 export function ObjectiveDetailPage() {
   const { id = null } = useParams();
-  const { data: o, isLoading, isError, forbidden } = useObjective(id);
+  const { data: o, isLoading, isError, forbidden, refetch } = useObjective(id);
   const { data: instance } = useObjectiveApproval(id);
   // S-leadership-1: clause 6.2 Quality Objectives are a leadership artifact — release is gated on a
   // Top-Management authorization when the org flag is on (suppresses Release; the gate panel explains).
@@ -49,7 +50,7 @@ export function ObjectiveDetailPage() {
   if (isLoading) {
     return (
       <Container size="lg" py="md">
-        <Loader />
+        <LoadingState label="Loading objective" />
       </Container>
     );
   }
@@ -57,11 +58,15 @@ export function ObjectiveDetailPage() {
   if (isError || !o) {
     return (
       <Container size="lg" py="md">
-        <Alert color={forbidden ? "gray" : "red"} title="Couldn't load this objective">
-          {forbidden
-            ? "You don't have access to this objective."
-            : "It may have been removed, or you may not have access."}
-        </Alert>
+        {forbidden ? (
+          <NoAccessState message="You don't have access to this objective." />
+        ) : (
+          <ErrorState
+            title="Couldn't load this objective"
+            message="It may have been removed, or you may not have access."
+            onRetry={() => refetch()}
+          />
+        )}
       </Container>
     );
   }

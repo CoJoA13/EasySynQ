@@ -4,7 +4,6 @@ import {
   Card,
   Container,
   Group,
-  Loader,
   SimpleGrid,
   Stack,
   Table,
@@ -14,6 +13,7 @@ import {
 import { Link } from "react-router-dom";
 import { AsOf } from "../../lib/AsOf";
 import { humanizeToken } from "../../lib/labels";
+import { ErrorState, LoadingState, NoAccessState } from "../../lib/states";
 import { StatusBadge } from "../../lib/StatusBadge";
 import type { Tone } from "../../lib/status";
 import { formatTimestamp } from "../../lib/time";
@@ -96,7 +96,7 @@ function ScanCard({ title, scan }: { title: string; scan: DriftScanSummary | nul
 }
 
 export function DriftStatusPage() {
-  const { data, isLoading, isError, forbidden } = useDriftStatus();
+  const { data, isLoading, isError, forbidden, refetch } = useDriftStatus();
 
   if (forbidden) {
     return (
@@ -104,17 +104,21 @@ export function DriftStatusPage() {
         <Title order={2} mb="md">
           Drift status
         </Title>
-        <Alert color="gray" title="No access">
-          You don&rsquo;t have access to the drift status surface. It requires the drift.read
-          permission (System Administrator).
-        </Alert>
+        <NoAccessState
+          message={
+            <>
+              You don&rsquo;t have access to the drift status surface. It requires the drift.read
+              permission (System Administrator).
+            </>
+          }
+        />
       </Container>
     );
   }
   if (isLoading) {
     return (
       <Container size="lg" py="md">
-        <Loader aria-label="Loading drift status" />
+        <LoadingState label="Loading drift status" />
       </Container>
     );
   }
@@ -124,9 +128,7 @@ export function DriftStatusPage() {
         <Title order={2} mb="md">
           Drift status
         </Title>
-        <Alert color="red" title="Couldn't load the drift status">
-          Please try again.
-        </Alert>
+        <ErrorState title="Couldn't load the drift status" onRetry={() => refetch()} />
       </Container>
     );
   }

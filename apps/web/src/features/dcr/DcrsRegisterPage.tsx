@@ -1,15 +1,4 @@
-import {
-  Alert,
-  Anchor,
-  Button,
-  Container,
-  Group,
-  Loader,
-  Select,
-  Table,
-  Text,
-  Title,
-} from "@mantine/core";
+import { Anchor, Box, Button, Container, Group, Select, Table, Title } from "@mantine/core";
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import type { Dcr, DcrChangeType, DcrReasonClass, DcrState } from "../../lib/types";
@@ -22,6 +11,7 @@ import {
   useUrlParam,
 } from "../../lib/registerControls";
 import { useRowKeyboardNav } from "../../lib/useRowKeyboardNav";
+import { EmptyState, ErrorState, LoadingState, NoAccessState } from "../../lib/states";
 import { DcrDrawer } from "./DcrDrawer";
 import { DcrStateBadge } from "./DcrStateBadge";
 import { CHANGE_TYPE_LABEL, REASON_LABEL, SIGNIFICANCE_LABEL } from "./labels";
@@ -75,7 +65,7 @@ function formatDate(iso: string): string {
 }
 
 export function DcrsRegisterPage() {
-  const { data, isLoading, isError, forbidden } = useDcrs();
+  const { data, isLoading, isError, forbidden, refetch } = useDcrs();
   const [params, setParams] = useSearchParams();
   const [selected, setSelected] = useState<string | null>(() => params.get("dcr"));
   // URL-backed enum filters (critique #5): they survive navigation + are shareable. Distinct keys
@@ -136,17 +126,14 @@ export function DcrsRegisterPage() {
         <Title order={2} mb="md">
           Change requests
         </Title>
-        <Alert color="gray" title="No access">
-          You don't have access to the change-request register. It's available to roles holding the
-          change-request read permission.
-        </Alert>
+        <NoAccessState message="You don't have access to the change-request register. It's available to roles holding the change-request read permission." />
       </Container>
     );
   }
   if (isLoading) {
     return (
       <Container size="md" py="md">
-        <Loader />
+        <LoadingState label="Loading change requests" />
       </Container>
     );
   }
@@ -156,9 +143,7 @@ export function DcrsRegisterPage() {
         <Title order={2} mb="md">
           Change requests
         </Title>
-        <Alert color="red" title="Couldn't load change requests">
-          Please try again.
-        </Alert>
+        <ErrorState title="Couldn't load change requests" onRetry={() => refetch()} />
       </Container>
     );
   }
@@ -171,7 +156,7 @@ export function DcrsRegisterPage() {
       </Group>
 
       {rows.length === 0 ? (
-        <Text c="dimmed">No change requests yet.</Text>
+        <EmptyState message="No change requests yet." />
       ) : (
         <>
           <RegisterToolbar
@@ -212,9 +197,9 @@ export function DcrsRegisterPage() {
           </RegisterToolbar>
 
           {visible.length === 0 ? (
-            <Text c="dimmed" mt="md">
-              No change requests match your filters.
-            </Text>
+            <Box mt="md">
+              <EmptyState message="No change requests match your filters." />
+            </Box>
           ) : (
             <Table highlightOnHover mt="md">
               <Table.Thead>

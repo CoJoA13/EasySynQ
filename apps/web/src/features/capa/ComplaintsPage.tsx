@@ -1,7 +1,8 @@
-import { Alert, Anchor, Button, Container, Group, Loader, Table, Text, Title } from "@mantine/core";
+import { Anchor, Button, Container, Group, Table, Text, Title } from "@mantine/core";
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { usePermissions } from "../../app/shell/usePermissions";
+import { EmptyState, ErrorState, LoadingState, NoAccessState } from "../../lib/states";
 import type { Complaint } from "../../lib/types";
 import { SEVERITY_LABEL } from "./columns";
 import { ComplaintForm } from "./ComplaintForm";
@@ -9,7 +10,7 @@ import { useComplaints } from "./hooks";
 import { SpawnCapaModal } from "./SpawnCapaModal";
 
 export function ComplaintsPage() {
-  const { data, isLoading, isError, forbidden } = useComplaints();
+  const { data, isLoading, isError, forbidden, refetch } = useComplaints();
   const { can } = usePermissions();
   const [formOpen, setFormOpen] = useState(false);
   const [spawnComplaint, setSpawnComplaint] = useState<Complaint | null>(null);
@@ -20,16 +21,21 @@ export function ComplaintsPage() {
         <Title order={3} mb="md">
           Complaints
         </Title>
-        <Alert color="gray" title="No access">
-          You don't have access to complaints. They're available to roles holding <code>record.read</code>.
-        </Alert>
+        <NoAccessState
+          message={
+            <>
+              You don't have access to complaints. They're available to roles holding{" "}
+              <code>record.read</code>.
+            </>
+          }
+        />
       </Container>
     );
   }
   if (isLoading) {
     return (
       <Container size="lg" py="md">
-        <Loader />
+        <LoadingState label="Loading complaints" />
       </Container>
     );
   }
@@ -39,9 +45,7 @@ export function ComplaintsPage() {
         <Title order={3} mb="md">
           Complaints
         </Title>
-        <Alert color="red" title="Couldn't load complaints">
-          Please try again.
-        </Alert>
+        <ErrorState title="Couldn't load complaints" onRetry={() => refetch()} />
       </Container>
     );
   }
@@ -51,10 +55,12 @@ export function ComplaintsPage() {
     <Container size="lg" py="md">
       <Group justify="space-between" mb="md">
         <Title order={3}>Complaints</Title>
-        {can("record.create") && <Button onClick={() => setFormOpen(true)}>＋ Log complaint</Button>}
+        {can("record.create") && (
+          <Button onClick={() => setFormOpen(true)}>＋ Log complaint</Button>
+        )}
       </Group>
       {rows.length === 0 ? (
-        <Text c="dimmed">No complaints logged yet.</Text>
+        <EmptyState message="No complaints logged yet." />
       ) : (
         <Table striped highlightOnHover>
           <Table.Thead>
@@ -99,11 +105,7 @@ export function ComplaintsPage() {
       )}
       <ComplaintForm opened={formOpen} onClose={() => setFormOpen(false)} />
       {spawnComplaint && (
-        <SpawnCapaModal
-          complaint={spawnComplaint}
-          opened
-          onClose={() => setSpawnComplaint(null)}
-        />
+        <SpawnCapaModal complaint={spawnComplaint} opened onClose={() => setSpawnComplaint(null)} />
       )}
     </Container>
   );
