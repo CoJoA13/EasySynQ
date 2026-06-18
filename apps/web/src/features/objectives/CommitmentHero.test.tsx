@@ -30,10 +30,10 @@ it("shows current vs target, the RAG and attainment badges, and the meta", async
   const { container } = renderWithProviders(<CommitmentHero objective={OBJ} />);
   expect(screen.getByText("92")).toBeInTheDocument();
   expect(screen.getByText(/target 95\s*%/i)).toBeInTheDocument();
-  // The RAG pill is the canonical StatusBadge: amber → tone warning → ◔ glyph + "Status: Amber" name
-  // (status is never colour-only, DP-7); the label still carries the meaning.
-  expect(screen.getByText("Amber")).toBeInTheDocument();
-  expect(screen.getByLabelText("Status: Amber")).toBeInTheDocument();
+  // The RAG pill is the canonical StatusBadge: amber → tone warning → ◔ glyph + the MEANING label
+  // "Needs attention" (never the colour word "Amber"; status is never colour-only, DP-5).
+  expect(screen.getByText("Needs attention")).toBeInTheDocument();
+  expect(screen.getByLabelText("Status: Needs attention")).toBeInTheDocument();
   expect(screen.getByText(TONE_GLYPH.warning)).toBeInTheDocument();
   expect(screen.getByText("In progress")).toBeInTheDocument();
   expect(screen.getByText("Higher is better")).toBeInTheDocument();

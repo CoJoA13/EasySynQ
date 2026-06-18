@@ -37,6 +37,9 @@ export function CommitmentHero({ objective: o }: { objective: Objective }) {
               {o.current_value ? o.unit : ""} · target {o.target_value} {o.unit}
             </Text>
           </Group>
+          {/* A magnitude fill (progress toward target), not a status channel — its RAG colour only
+              reinforces the StatusBadge directly below, which carries the non-colour glyph + meaning
+              label. So the bar is intentionally colour-only (DP-5 is satisfied by the badge). */}
           {pct !== null && (
             <Progress value={pct} color={RAG_COLOR[o.rag]} aria-label="Progress toward target" />
           )}

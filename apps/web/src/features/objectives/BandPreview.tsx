@@ -1,5 +1,5 @@
 import { Box, Group, Stack, Text } from "@mantine/core";
-import { bandZones, type RagZone } from "./labels";
+import { bandZones, RAG_GLYPH, type RagZone } from "./labels";
 import type { ObjectiveDirection } from "../../lib/types";
 
 const ZONE_COLOR: Record<RagZone, string> = {
@@ -9,8 +9,14 @@ const ZONE_COLOR: Record<RagZone, string> = {
 };
 
 export function BandPreview({
-  target, threshold, direction,
-}: { target: string; threshold: string; direction: ObjectiveDirection }) {
+  target,
+  threshold,
+  direction,
+}: {
+  target: string;
+  threshold: string;
+  direction: ObjectiveDirection;
+}) {
   const t = Number(target);
   if (target.trim() === "" || Number.isNaN(t)) return null;
   const thr = threshold.trim() === "" || Number.isNaN(Number(threshold)) ? null : Number(threshold);
@@ -21,18 +27,57 @@ export function BandPreview({
       <Box
         role="img"
         aria-label={`Status band: ${model.zones.join(", ")} from worse to better`}
-        style={{ display: "flex", height: 14, borderRadius: 4, overflow: "hidden" }}
+        style={{ display: "flex", height: 18, borderRadius: 4, overflow: "hidden" }}
       >
+        {/* Each zone carries its canonical glyph (✕/◔/✓) in a white inset chip — the DP-5 non-colour
+            channel, so the band reads worse→better in greyscale, not by colour alone. The chip's dark
+            glyph stays AA-legible on all three zone colours (white-on-yellow text would not). */}
         {model.zones.map((z) => (
-          <Box key={z} style={{ flex: 1, background: ZONE_COLOR[z] }} />
+          <Box
+            key={z}
+            style={{
+              flex: 1,
+              background: ZONE_COLOR[z],
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <Box
+              aria-hidden
+              style={{
+                width: 14,
+                height: 14,
+                borderRadius: "50%",
+                background: "var(--mantine-color-white)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                fontSize: 10,
+                fontWeight: 700,
+                lineHeight: 1,
+                color: "var(--mantine-color-dark-7)",
+              }}
+            >
+              {RAG_GLYPH[z]}
+            </Box>
+          </Box>
         ))}
       </Box>
       <Group justify="space-between">
-        {thr !== null && <Text size="xs" c="dimmed">{thr} at-risk</Text>}
-        <Text size="xs" c="dimmed">{t} target ✓</Text>
+        {thr !== null && (
+          <Text size="xs" c="dimmed">
+            {thr} at-risk
+          </Text>
+        )}
+        <Text size="xs" c="dimmed">
+          {t} target ✓
+        </Text>
       </Group>
       {model.warn && (
-        <Text size="xs" c="yellow.8">{model.warn}</Text>
+        <Text size="xs" c="yellow.8">
+          {model.warn}
+        </Text>
       )}
     </Stack>
   );

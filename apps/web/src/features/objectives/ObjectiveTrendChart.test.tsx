@@ -5,6 +5,7 @@ import { MantineProvider } from "@mantine/core";
 import type { ReactElement } from "react";
 import type { Measurement } from "../../lib/types";
 import { theme } from "../../theme/mantine";
+import { TONE_GLYPH } from "../../lib/status";
 import { ObjectiveTrendChart } from "./ObjectiveTrendChart";
 
 function renderChart(ui: ReactElement) {
@@ -139,20 +140,29 @@ const PRECISE: Measurement[] = [
 it("renders N points oldest-left (reversing the newest-first input)", () => {
   const { container } = renderChart(<ObjectiveTrendChart measurements={NEWEST_FIRST} unit="%" />);
   const svg = chartSvg(container);
-  const points = svg.querySelectorAll("circle");
+  const points = svg.querySelectorAll("[data-rag]");
   expect(points.length).toBe(3);
   // The reading <title> children are ordered oldest-left → the first point is the earliest period.
-  const titles = Array.from(svg.querySelectorAll("circle title")).map((t) => t.textContent ?? "");
+  const titles = Array.from(svg.querySelectorAll("[data-rag] title")).map(
+    (t) => t.textContent ?? "",
+  );
   expect(titles[0]).toContain("2026-01-01");
   expect(titles[titles.length - 1]).toContain("2026-03-01");
 });
 
-it("fills each point by its server RAG (verbatim, never recomputed)", () => {
+it("marks each point by its server RAG verbatim — the canonical glyph AND colour (never recomputed)", () => {
   const { container } = renderChart(<ObjectiveTrendChart measurements={NEWEST_FIRST} unit="%" />);
-  const fills = Array.from(chartSvg(container).querySelectorAll("circle")).map((c) =>
-    c.getAttribute("fill"),
-  );
+  const markers = Array.from(chartSvg(container).querySelectorAll<SVGGElement>("[data-rag]"));
   // oldest-left: red, amber, green
+  expect(markers.map((m) => m.getAttribute("data-rag"))).toEqual(["red", "amber", "green"]);
+  // the non-colour channel (DP-5): danger ✕ / warning ◔ / success ✓ — the status survives greyscale.
+  expect(markers.map((m) => m.querySelector("text")?.textContent)).toEqual([
+    TONE_GLYPH.danger,
+    TONE_GLYPH.warning,
+    TONE_GLYPH.success,
+  ]);
+  // ...and the colour, server-verbatim.
+  const fills = markers.map((m) => m.querySelector("text")?.getAttribute("fill"));
   expect(fills[0]).toBe("var(--mantine-color-red-6)");
   expect(fills[1]).toBe("var(--mantine-color-yellow-6)");
   expect(fills[2]).toBe("var(--mantine-color-green-6)");
@@ -173,7 +183,7 @@ it("renders the single-reading state: one point, no value polyline, the caption"
     <ObjectiveTrendChart measurements={SINGLE} unit="%" />,
   );
   const svg = chartSvg(container);
-  expect(svg.querySelectorAll("circle").length).toBe(1);
+  expect(svg.querySelectorAll("[data-rag]").length).toBe(1);
   // no value polyline (a trend needs ≥2 points); the dashed target reference is still present.
   expect(svg.querySelectorAll("polyline").length).toBe(1);
   const target = svg.querySelector("polyline[stroke-dasharray]");
@@ -201,8 +211,8 @@ it("charts only readings in the current unit and notes the rest", () => {
   );
   const svg = chartSvg(container);
   // only the same-unit (%) reading is plotted; the ppm reading is excluded.
-  expect(svg.querySelectorAll("circle").length).toBe(1);
-  expect(svg.querySelector("circle title")?.textContent).toContain("%");
+  expect(svg.querySelectorAll("[data-rag]").length).toBe(1);
+  expect(svg.querySelector("[data-rag] title")?.textContent).toContain("%");
   expect(getByText(/in a different unit/i)).toBeInTheDocument();
 });
 
@@ -217,7 +227,7 @@ it("explains (no chart) when every reading is in a previous unit", () => {
 
 it("renders the raw decimal value, never a rounded one that could contradict the RAG", () => {
   const { container } = renderChart(<ObjectiveTrendChart measurements={PRECISE} unit="%" />);
-  const title = chartSvg(container).querySelector("circle title")?.textContent ?? "";
+  const title = chartSvg(container).querySelector("[data-rag] title")?.textContent ?? "";
   expect(title).toContain("94.999");
   // must NOT round to "95 %" — that would read as on-target while the point is amber.
   expect(title).not.toContain("95 %");

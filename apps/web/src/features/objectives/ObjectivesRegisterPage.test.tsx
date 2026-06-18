@@ -15,10 +15,11 @@ it("renders the band and a row per objective with a RAG status badge", async () 
   await waitFor(() => expect(screen.getByText("OBJ-001")).toBeInTheDocument());
   expect(screen.getByText(/1\s*\/\s*4 on target/i)).toBeInTheDocument();
   const row = screen.getByText("On-time delivery rate").closest("tr")!;
-  // The amber row's RAG pill is the canonical StatusBadge: amber → warning → ◔ glyph + "Status: Amber"
-  // accessible name (status is never colour-only, DP-7). Scope to the row — other rows carry RAG pills too.
-  expect(within(row).getByText("Amber")).toBeInTheDocument();
-  expect(within(row).getByLabelText("Status: Amber")).toBeInTheDocument();
+  // The amber row's RAG pill is the canonical StatusBadge: amber → warning → ◔ glyph + the MEANING
+  // label "Needs attention" (never the colour word "Amber"; DP-5). Scope to the row — other rows carry
+  // RAG pills too.
+  expect(within(row).getByText("Needs attention")).toBeInTheDocument();
+  expect(within(row).getByLabelText("Status: Needs attention")).toBeInTheDocument();
   expect(within(row).getByText(TONE_GLYPH.warning)).toBeInTheDocument();
   expect(within(row).getByText("92 / 95 %")).toBeInTheDocument();
   // unmeasured row shows an em dash for the current value
@@ -74,8 +75,8 @@ it("RAG filter narrows visible rows client-side", async () => {
   expect(screen.getByText("OBJ-002")).toBeInTheDocument();
   expect(screen.getByText("OBJ-003")).toBeInTheDocument();
   expect(screen.getByText("OBJ-004")).toBeInTheDocument();
-  // Click the "Red" chip filter.
-  await user.click(screen.getByRole("radio", { name: "Red" }));
+  // Click the red ("Action required") chip filter — the segment shows the meaning, not the colour word.
+  await user.click(screen.getByRole("radio", { name: "Action required" }));
   // Only the red row (OBJ-002, "Customer complaints per quarter") remains.
   expect(screen.getByText("OBJ-002")).toBeInTheDocument();
   expect(screen.queryByText("OBJ-003")).not.toBeInTheDocument(); // green row gone

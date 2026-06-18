@@ -1,6 +1,6 @@
 import { Group, Stack, Text } from "@mantine/core";
 import type { Measurement, ObjectiveDirection, ObjectiveRag } from "../../lib/types";
-import { DIRECTION_LABEL, RAG_LABEL } from "./labels";
+import { DIRECTION_LABEL, RAG_GLYPH, RAG_LABEL } from "./labels";
 
 // SVG point fill by RAG — CSS-var colours (the BandPreview ZONE_COLOR idiom), NOT the Mantine
 // colour *name* tokens in labels.ts RAG_COLOR (those feed Mantine `color` props, not SVG fills).
@@ -201,11 +201,25 @@ export function ObjectiveTrendChart({
         {/* value line — only with ≥2 readings (a trend needs two points) */}
         {n >= 2 && <polyline points={valuePts} fill="none" stroke={VALUE_LINE} strokeWidth={2} />}
 
-        {/* per-reading points, filled by the server RAG verbatim (N9 — never recomputed) */}
+        {/* per-reading markers: the canonical RAG glyph (the DP-5 non-colour channel — ✓/◔/✕),
+            coloured by the server RAG verbatim (N9 — never recomputed). data-rag is the stable
+            marker/test hook; the glyph IS the marker so the status survives a greyscale read. */}
         {series.map((p, i) => (
-          <circle key={`p${i}`} cx={xAt(i)} cy={yAt(p.value)} r={4} fill={RAG_FILL[p.rag]}>
+          <g key={`p${i}`} data-rag={p.rag}>
+            <text
+              x={xAt(i)}
+              y={yAt(p.value)}
+              textAnchor="middle"
+              dominantBaseline="central"
+              fontSize={13}
+              fontWeight={700}
+              fill={RAG_FILL[p.rag]}
+              aria-hidden
+            >
+              {RAG_GLYPH[p.rag]}
+            </text>
             <title>{`${p.period}: ${p.valueStr} ${unit} (target ${p.targetStr}) — ${RAG_LABEL[p.rag]}`}</title>
-          </circle>
+          </g>
         ))}
       </svg>
 
@@ -237,8 +251,18 @@ export function ObjectiveTrendChart({
         </Group>
         {(["green", "amber", "red"] as const).map((r) => (
           <Group gap={6} key={r}>
-            <svg width={10} height={10} aria-hidden>
-              <circle cx={5} cy={5} r={4} fill={RAG_FILL[r]} />
+            <svg width={12} height={12} aria-hidden>
+              <text
+                x={6}
+                y={6}
+                textAnchor="middle"
+                dominantBaseline="central"
+                fontSize={12}
+                fontWeight={700}
+                fill={RAG_FILL[r]}
+              >
+                {RAG_GLYPH[r]}
+              </text>
             </svg>
             <Text size="xs" c="dimmed">
               {RAG_LABEL[r]}
