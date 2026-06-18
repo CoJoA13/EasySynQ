@@ -14,6 +14,14 @@
 
 ### Task 1: Rewrite `.github/workflows/ci.yml` (concurrency + caches + durations publishing)
 
+> **Superseded note (as-built):** the inlined YAML below is the pre-review draft; the shipped `ci.yml`
+> follows the corrections in [`../specs/2026-06-10-ci-improvements-design.md`](../specs/2026-06-10-ci-improvements-design.md)
+> §3 (`### .github/workflows/ci.yml`): the concurrency `group` uses a per-run id on main
+> (`ci-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}`, not bare
+> `github.ref`); `setup-uv` is pinned to `@v8.2.0` (not floating `@v8`); and each shard's
+> `upload-artifact` step adds `include-hidden-files: true` + `if-no-files-found: error`. Read the snippet
+> for shape; defer to the spec §3 and the live `ci.yml` for the exact values.
+
 **Files:**
 - Modify: `.github/workflows/ci.yml` (full replacement below)
 

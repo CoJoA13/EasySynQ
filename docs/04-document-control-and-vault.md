@@ -361,7 +361,7 @@ These extend the universal `DocumentedInformation` control fields (doc 02 §6.2)
 | `clause_map[]` | M:N → Clause | ✔ (≥1) | ✔ | Drives clause spine + ★ mandatory coverage. |
 | `process_links[]` | M:N → Process | ○ | ✔ | Drives Process Map lens. |
 | `folder_path` | `ltree` (nullable) | ○ | ✔ | Materialized logical path on the `documented_information` entity; a **scope selector** for the first-class `FOLDER` scope level, **not physical storage** (reconciled per Decisions Register R6). Set/edited via document metadata (see §6.3); scope evaluation uses subtree-prefix (ltree ancestor) matching. |
-| `pdca_phase` | enum | ✔ | ✔ | PLAN \| DO \| CHECK \| ACT (dashboard placement). |
+| `pdca_phase` | enum | ✔ | — | PLAN \| DO \| CHECK \| ACT (dashboard placement). **Derived, not stored** — placement is **clause-driven** off the mapped clause's `pdca_phase`; the metadata column was never added to `documented_information` (see §10.3 build note). |
 | `effective_from` (`effective_date`) | `timestamptz` (UTC) | (set at release) | ✔ | When the revision governs. Stored as `timestamptz` in **UTC**; **captured in the UI as a DATE interpreted as local-midnight in the org timezone and converted to UTC at save**; displayed in org tz (reconciled per Decisions Register R8). |
 | `review_period` | interval | ✔ | ✔ | e.g. 12/24/36 months → drives `next_review_due` (§9). |
 | `next_review_due` | date (derived) | — | — | `effective_from + review_period`; recomputed on release/review. |
@@ -574,7 +574,7 @@ The periodic integrity check (§10.4) is the defense against a tampered mirror f
 **Quarantine-before-overwrite.** On detecting a divergent mirror file (on-disk SHA-256 ≠ manifest), the worker:
 1. **Copies the tampered bytes to a quarantine area FIRST**, so forensic evidence is preserved before any change. The quarantine area is outside the live tree (e.g. `_quarantine/{detected-at}/...`) and is itself worker-written, not user-writable.
 2. **Then overwrites the file from the vault** (the authoritative source) to restore the one-way invariant.
-3. **Logs the anomaly to the audit trail** (`MIRROR_DRIFT_DETECTED`) with the document/version, the divergent vs expected digest, and the quarantine location.
+3. **Logs the anomaly to the audit trail** — `MIRROR_STALE` when the divergent file matches an *older* version of the same document (stale revision), or `MIRROR_TAMPER` for foreign/extra/missing/symlink-divergent content (aligns with doc 05 §9.2) — with the document/version, the divergent vs expected digest, and the quarantine location.
 
 **Scan cadence vs accepted drift window.** Integrity scanning runs on two cadences: an **incremental check on every `mirror-sync`** (touched paths) and a **full nightly reconcile via Beat** (the whole tree against the manifest). The **accepted drift window** — the maximum time a tampered file can sit undetected — is therefore bounded by the nightly full-reconcile interval for files not otherwise touched; deployments needing a tighter window may shorten the full-scan interval (a documented cost/throughput trade-off). A tampered file is never treated as authoritative regardless of when detected, because authority lives only in the vault.
 

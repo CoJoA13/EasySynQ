@@ -158,6 +158,7 @@ Intent: nonconformity & corrective action, and continual improvement.
 
 Notes:
 - Clause 10 is the **ACT** stage; CAPAs and improvement initiatives feed *back* into Clause 6 planning (new risks/objectives) and Clause 4 (context revisited) — the loop closes.
+- **As-built (S-improvement-1):** 10.3 is now implemented. An `ImprovementInitiative` is an **own-table mutable-state workflow object** (the DCR/R22 doctrine), a **deliberate, register-sanctioned deviation from the RECORD classification above (R46):** the family ships end-to-end (own-table model + stage-event log, migration 0052; engine-routed signed Top-Management authorization, migration 0053). 10.3 is **non-★** (no mandatory documented-information node to flip), so the row carries no ★. It is raised manually or spawned from an OFI finding / Management-Review output — see doc 15 §8.12b.
 
 ### 2.1 Consolidated mandatory documented information (the "★" set)
 

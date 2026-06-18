@@ -6,7 +6,7 @@
 
 **Architecture:** A `form_template`-style commitment-freeze (canonical-JSON WORM source blob + a `metadata_snapshot.objective_commitment` fold) is folded into a single `objective.manage`-gated "Submit for review" action; the OBJ then rides the existing DOCUMENT `/tasks` approve leg (`document.approve`) and the INV-1 SERIALIZABLE `release` cutover (`document.release`). No migration (head stays `0049`), no new permission key (catalog stays 100), no new signature meaning (R2 closed). The front-end reuses the `ApprovalStepper`, adds Submit/Release affordances, an `ObjectiveCommitmentContext` approver card, and a create-modal policy picker.
 
-**Tech Stack:** FastAPI / Python 3.12 (api), Alembic-free, PostgreSQL 16 + MinIO (WORM), React/TS + Mantine + TanStack Query + MSW + vitest (web). Spec: [docs/superpowers/specs/2026-06-11-s-obj-3-objective-lifecycle-design.md](docs/superpowers/specs/2026-06-11-s-obj-3-objective-lifecycle-design.md).
+**Tech Stack:** FastAPI / Python 3.12 (api), Alembic-free, PostgreSQL 16 + MinIO (WORM), React/TS + Mantine + TanStack Query + MSW + vitest (web). Spec: [docs/superpowers/specs/2026-06-11-s-obj-3-objective-lifecycle-design.md](../specs/2026-06-11-s-obj-3-objective-lifecycle-design.md).
 
 ---
 

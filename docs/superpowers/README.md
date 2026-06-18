@@ -18,11 +18,11 @@
 | **S-web-5** — Review & Approve (closes UJ-3) | `specs/2026-06-08-web-track-s-web-5-review-and-approve-design.md` | `plans/2026-06-08-web-track-s-web-5-review-and-approve.md` | ✅ shipped |
 | **S-web-6** — Global Search + Compliance Checklist | `specs/2026-06-08-web-track-s-web-6-search-and-compliance-design.md` | `plans/2026-06-08-s-web-6-search-and-compliance.md` | ✅ shipped |
 | **S-ing-4b** — Ingestion Review UI (closes UJ-2) | `specs/2026-06-08-web-track-s-ing-4b-ingestion-review-design.md` | `plans/2026-06-08-web-track-s-ing-4b-ingestion-review.md` | ✅ shipped |
-| **S-web-7** — Nonconformity & CAPA front door (epic) | `specs/2026-06-08-web-track-s-web-7-nc-capa-design.md` (shared design for 7a–7d) | — (per-sub-slice plans below) | epic — 7a/7b/7c ✅, 7d open |
+| **S-web-7** — Nonconformity & CAPA front door (epic) | `specs/2026-06-08-web-track-s-web-7-nc-capa-design.md` (shared design for 7a–7d) | — (per-sub-slice plans below) | epic — 7a/7b/7c/7d ✅ |
 | **S-web-7a** — CAPA read spine (board + drawer) | (in the S-web-7 epic spec) | `plans/2026-06-08-web-track-s-web-7a-capa-board.md` | ✅ shipped |
 | **S-web-7b** — CAPA lifecycle writes | `specs/2026-06-09-web-track-s-web-7b-capa-lifecycle-writes-design.md` | `plans/2026-06-09-web-track-s-web-7b-capa-lifecycle-writes.md` | ✅ shipped |
 | **S-web-7c** — Complaint & NCR intake | `specs/2026-06-09-web-track-s-web-7c-complaint-ncr-intake-design.md` | `plans/2026-06-09-s-web-7c-complaint-ncr-intake.md` | ✅ shipped |
-| **S-web-7d** — Audits & findings | (will be carved from the S-web-7 epic spec) | _(not yet written)_ | ⏳ next |
+| **S-web-7d** — Audits & findings | `specs/2026-06-09-web-track-s-web-7d-audits-findings-design.md` | `plans/2026-06-09-s-web-7d-audits-findings.md` | ✅ shipped (#105) |
 
 > **Backend slices (S0–S11, the v1 families) were not built with this spec→plan flow** — their narrative is in
 > `../slice-history.md` + the squash-merge commits. This folder is the web-UI track's working archive only.

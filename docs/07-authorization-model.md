@@ -166,6 +166,8 @@ Permissions are named `resource.action`. The catalog below is **complete for v1*
 | `capa.capture_effectiveness` | Attach effectiveness evidence | PROCESS | – |
 | `capa.verify` | Verify effectiveness (enforces M4: RCA + action + evidence present) (reconciled per Decisions Register R5 — split from `capa.verify_close`) | PROCESS / SYSTEM | **yes (core)** |
 | `capa.close` | Close the CAPA after verification (reconciled per Decisions Register R5 — split from `capa.verify_close`) | PROCESS / SYSTEM | **yes (core)** |
+| `improvement.read` | View Improvement Initiatives (clause 10.3 continual-improvement) (additive key — R38 / R46 / slice S-improvement-1, migration `0052`) | PROCESS | – |
+| `improvement.manage` | Create/drive an Improvement Initiative through its FSM (the own-table workflow object) (additive key — R38 / R46 / slice S-improvement-1, migration `0052`) | PROCESS | – |
 
 > **Note (per Decisions Register R5).** The canonical CAPA permission family is `capa.create` / `capa.update` / `capa.verify` / `capa.close`. The finer-grained `capa.record_rca` / `capa.plan_action` / `capa.capture_effectiveness` actions are retained as the detailed v1 expansion of `capa.update`. `capa.own` is a **role concept, not a permission**.
 
@@ -189,7 +191,7 @@ Permissions are named `resource.action`. The catalog below is **complete for v1*
 | `mgmtReview.read` / `mgmtReview.create` / `mgmtReview.record_outputs` | View / hold / record outputs of a Management Review (9.3) | SYSTEM | yes (record_outputs) |
 | `objective.read` / `objective.manage` | View / maintain Quality Objectives (6.2) | PROCESS / SYSTEM | – |
 
-> **As-built (S-mr-1, R45):** `mgmtReview.read` / `create` / `record_outputs` now reach a concrete resource (the `MR` document + its `/management-reviews*` endpoints) — no new key, catalog stays 100. `record_outputs` is **non-signing** (`sig_hook=False` — recording an output mints no signature, R43); its `sod_sensitive` flag is documentary-only. Sign-off of the review itself rides the standard signed `document.approve` / `document.release` (SoD-2).
+> **As-built (S-mr-1, R45):** `mgmtReview.read` / `create` / `record_outputs` now reach a concrete resource (the `MR` document + its `/management-reviews*` endpoints) — no new key (the catalog has since grown additively to 102 keys via `improvement.read` / `improvement.manage`, R46 / slice S-improvement-1). `record_outputs` is **non-signing** (`sig_hook=False` — recording an output mints no signature, R43); its `sod_sensitive` flag is documentary-only. Sign-off of the review itself rides the standard signed `document.approve` / `document.release` (SoD-2).
 | `register.read` / `register.manage` | View / maintain Context, Interested-Party, Risk registers (4.x/6.1) | SYSTEM / PROCESS | – |
 | `kpi.read` / `kpi.record` | View / capture KPI readings (9.1.1 — a Record) | PROCESS | – |
 
@@ -208,7 +210,7 @@ Permissions are named `resource.action`. The catalog below is **complete for v1*
 |---|---|---|---|
 | `user.create` / `user.read` / `user.update` / `user.deactivate` | Manage user accounts | SYSTEM | not `delete` — deactivate preserves audit linkage |
 | `user.role.assign` / `user.role.revoke` | Assign/revoke role bundles to users | SYSTEM | last-ADMIN guard (§2.2) |
-| `permission.grant` / `permission.revoke` | Apply direct per-user overrides | SYSTEM / QMS-scope (two-tier) | every change audited (AZ-INV-5); **two-tier model (R35):** scopable to CONTENT domains (`document.*`, `record.*`, `audit.*`, `capa.*`, `changeRequest.*`, `evidencepack.*`) within QMS scope for the QMS Owner; granting SYSTEM permissions (`user.*`, `role.*`, `storage.*`, `backup.*`, `restore.*`, `config.*`, `import.*`) stays admin-only at SYSTEM scope (reconciled per Decisions Register R35) |
+| `permission.grant` / `permission.revoke` | Apply direct per-user overrides | SYSTEM / QMS-scope (two-tier) | every change audited (AZ-INV-5); **two-tier model (R35):** scopable to CONTENT domains (`document.*`, `record.*`, `audit.*`, `capa.*`, `changeRequest.*`, `report.evidence_pack.generate`) within QMS scope for the QMS Owner; granting SYSTEM permissions (`user.*`, `role.*`, `storage.*`, `backup.*`, `restore.*`, `config.*`, `import.*`) stays admin-only at SYSTEM scope (reconciled per Decisions Register R35) |
 | `role.create` / `role.read` / `role.update` / `role.delete` | Define org-specific role bundles | SYSTEM | reserved roles undeletable |
 | `delegation.administer` | Configure who *may* delegate, ceilings, max windows | SYSTEM | – |
 | `guest.administer` | Provision time-boxed external/guest accounts (Olsen) | SYSTEM | bind to scope window |
@@ -236,6 +238,7 @@ Permissions are named `resource.action`. The catalog below is **complete for v1*
 | `finding` | create, read, link_capa |
 | `ncr` | create, read, record_correction |
 | `capa` | create, read, update, record_rca, plan_action, capture_effectiveness, verify, close |
+| `improvement` | read, manage |
 | `process` | read, create, manage, assign_owner |
 | `clauseMap` | read, map_artifact |
 | `mgmtReview` | read, create, record_outputs |
@@ -283,11 +286,11 @@ EasySynQ ships these as a fast start; they are **not** authoritative and carry *
 | Seeded role | `is_reserved` | Typical persona | Core bundle (abbreviated) |
 |---|---|---|---|
 | **System Administrator** | yes | Avery | All §3.9 perms; `guest.administer`, `import.execute` / `import.review` / `import.commit` (reconciled per Decisions Register R5). **No** QMS-content perms. |
-| **QMS Owner** | yes | Mara | Org-wide `*.read`; `framework`/lifecycle config (QMS side); `role.read`; `mgmtReview.*`; `report.evidence_pack.generate`; `audit.plan`; `capa.verify` / `capa.close`; `permission.grant` *scoped to CONTENT permission domains (`document.*`, `record.*`, `audit.*`, `capa.*`, `changeRequest.*`, `evidencepack.*`) within QMS scope* — delegated admin of QMS perms only; **system permissions (`user.*`, `role.*`, `storage.*`, `backup.*`, `restore.*`, `config.*`, `import.*`) remain admin-only at SYSTEM scope** (reconciled per Decisions Register R35). |
-| **Process Owner** | no | Diego | Scoped to `:process`: `document.create/edit/submit/manage_metadata`, `record.create/read`, `capa.create/record_rca/plan_action/capture_effectiveness`, `process.manage`, `kpi.record`, broad `read`. |
+| **QMS Owner** | yes | Mara | Org-wide `*.read`; `framework`/lifecycle config (QMS side); `role.read`; `mgmtReview.*`; `report.evidence_pack.generate`; `audit.plan`; `capa.verify` / `capa.close`; `improvement.read` / `improvement.manage` (R46); `permission.grant` *scoped to CONTENT permission domains (`document.*`, `record.*`, `audit.*`, `capa.*`, `changeRequest.*`, `report.evidence_pack.generate`) within QMS scope* — delegated admin of QMS perms only; **system permissions (`user.*`, `role.*`, `storage.*`, `backup.*`, `restore.*`, `config.*`, `import.*`) remain admin-only at SYSTEM scope** (reconciled per Decisions Register R35). |
+| **Process Owner** | no | Diego | Scoped to `:process`: `document.create/edit/submit/manage_metadata`, `record.create/read`, `capa.create/record_rca/plan_action/capture_effectiveness`, `improvement.read/manage` (R46), `process.manage`, `kpi.record`, broad `read`. |
 | **Author** | no | Priya | Scoped to `:folder`/`:process`: `document.create/checkout/edit/submit`, `document.read_draft`, `record.create`, `changeRequest.create`. **No** `approve`/`release`. |
 | **Approver** | no | Ken | Scoped to `:doc_class`/`:process`: `document.review/approve`, `changeRequest.approve`. **No** `edit`/`submit` on the same artifact (SoD §7). |
-| **Internal Auditor** | no | Ingrid | Broad `*.read` incl. `document.read_obsolete`, `record.read`, `clauseMap.read`, `report.read`, and `report.compliance_checklist.read` (the ★ mandatory-coverage view — **added to the bundle in S10** via migration `0021`, since the auditor is the natural consumer of coverage); `audit.create/conduct/close`, `finding.*`. **Hard-excludes** all `document.edit/approve/release` (independence — Vision §6.2). |
+| **Internal Auditor** | no | Ingrid | Broad `*.read` incl. `document.read_obsolete`, `record.read`, `clauseMap.read`, `report.read`, `improvement.read` (R46), and `report.compliance_checklist.read` (the ★ mandatory-coverage view — **added to the bundle in S10** via migration `0021`, since the auditor is the natural consumer of coverage); `audit.create/conduct/close`, `finding.*`. **Hard-excludes** all `document.edit/approve/release` (independence — Vision §6.2). |
 | **Employee (Read-only)** | no | Sam | Scoped to `:area`: `document.read`, `document.print_controlled`, `document.acknowledge`, `record.read` (own/area), `process.read`. |
 | **External Auditor (Guest)** | no | Olsen | Guest principal; `document.read` + `record.read` + `report.read` **only within a bound Evidence Pack**, plus `EXPIRES_AT` and `IP/scope` constraints (§5.4, §9). |
 
@@ -297,7 +300,7 @@ EasySynQ ships these as a fast start; they are **not** authoritative and carry *
 
 `permission.grant` / `permission.revoke` are governed by a **two-tier model**:
 
-- **Tier 1 — CONTENT domains, QMS scope (QMS Owner / Quality Manager).** The **QMS Owner (Mara) MAY hold `permission.grant`** scoped to the **CONTENT permission domains** — namely `document.*`, `record.*`, `audit.*`, `capa.*`, `changeRequest.*`, `evidencepack.*` — **WITHIN QMS scope**. This is the delegated administration of QMS content authority and does **not** require being an ADMIN (per stakeholder decision (a)).
+- **Tier 1 — CONTENT domains, QMS scope (QMS Owner / Quality Manager).** The **QMS Owner (Mara) MAY hold `permission.grant`** scoped to the **CONTENT permission domains** — namely `document.*`, `record.*`, `audit.*`, `capa.*`, `changeRequest.*`, `report.evidence_pack.generate` — **WITHIN QMS scope**. This is the delegated administration of QMS content authority and does **not** require being an ADMIN (per stakeholder decision (a)).
 - **Tier 2 — SYSTEM domains, SYSTEM scope (Admin only).** Granting **SYSTEM permissions** — namely `user.*`, `role.*`, `storage.*`, `backup.*`, `restore.*`, `config.*`, `import.*` — **remains admin-only at SYSTEM scope**. The QMS Owner cannot grant these.
 
 A QMS Owner therefore administers *who governs the QMS content* without ever being able to grant *who runs the system*, and an Admin runs the system without acquiring QMS-content granting authority by default. Any **QMS→admin crossing** (e.g., an ADMIN self-granting QMS-content permissions for recovery) keeps the **self-grant friction + full audit** described in §2.2 (the `PRIVILEGE_ESCALATION` flag, mandatory reason, and surfacing on Mara's review feed). Doc 08 §10 states the same two-tier model verbatim; the two documents are reconciled and must not diverge.
@@ -499,11 +502,11 @@ A reference deployment with two processes (**Purchasing**, **Production**) and a
 | Persona | In/out QMS | Assigned role(s) | Bound scope(s) | Net effect (plain language) |
 |---|---|---|---|---|
 | **Avery** (Admin) | Outside | System Administrator (reserved) | SYSTEM | Runs the system; creates users/roles; configures storage/backups; provisions guests; imports a QMS. **Cannot** author/approve/release QMS content (AZ-INV-6). |
-| **Mara** (Quality Mgr) | Inside | QMS Owner (reserved) | SYSTEM | Org-wide read; configures framework/lifecycle (QMS side); runs management review; generates evidence packs; plans audits; verifies/closes CAPAs; delegated `permission.grant` **scoped to CONTENT domains (`document.*`, `record.*`, `audit.*`, `capa.*`, `changeRequest.*`, `evidencepack.*`) within QMS scope** — cannot grant SYSTEM permissions (admin-only) (reconciled per Decisions Register R35). |
-| **Diego** (Process Owner) | Inside | Process Owner | PROCESS = Purchasing (+subprocs) | Authors/owns Purchasing docs & records; manages the process; owns Purchasing CAPAs. Read-only elsewhere. |
+| **Mara** (Quality Mgr) | Inside | QMS Owner (reserved) | SYSTEM | Org-wide read; configures framework/lifecycle (QMS side); runs management review; generates evidence packs; plans audits; verifies/closes CAPAs; reads/drives Improvement Initiatives (R46); delegated `permission.grant` **scoped to CONTENT domains (`document.*`, `record.*`, `audit.*`, `capa.*`, `changeRequest.*`, `report.evidence_pack.generate`) within QMS scope** — cannot grant SYSTEM permissions (admin-only) (reconciled per Decisions Register R35). |
+| **Diego** (Process Owner) | Inside | Process Owner | PROCESS = Purchasing (+subprocs) | Authors/owns Purchasing docs & records; manages the process; owns Purchasing CAPAs; drives Purchasing Improvement Initiatives (R46). Read-only elsewhere. |
 | **Priya** (Author) | Inside | Author | FOLDER = /SOPs/Purchasing | Checks out/edits/submits docs in that folder; creates records from templates. **No** approve/release. |
 | **Ken** (Approver) | Inside | Approver | DOC_CLASS = Level-2 Procedure (org-wide) | Reviews/approves Level-2 procedures anywhere. **Cannot** edit/submit; **cannot** approve a version he authored (SoD-1). |
-| **Ingrid** (Internal Auditor) | Inside | Internal Auditor | SYSTEM (read) + PROCESS (conduct) | Broad read incl. obsolete versions & records; creates/conducts/closes audits; logs findings; links CAPAs. **Hard-excluded** from editing/approving controlled docs (independence; SoD-3). |
+| **Ingrid** (Internal Auditor) | Inside | Internal Auditor | SYSTEM (read) + PROCESS (conduct) | Broad read incl. obsolete versions & records & Improvement Initiatives (R46); creates/conducts/closes audits; logs findings; links CAPAs. **Hard-excluded** from editing/approving controlled docs (independence; SoD-3). |
 | **Sam** (Employee) | Inside | Employee (Read-only) | PROCESS = Production (area) | Reads & prints controlled current Production procedures; acknowledges reads. Nothing else. |
 | **Olsen** (External Auditor) | Outside (guest) | External Auditor (Guest) | ARTIFACT-set = Evidence Pack #EP-2026-03; `valid_until = 2026-06-07`; `read_only` | Reads only the assembled pack's current docs + linked records; every view logged; access auto-expires. |
 

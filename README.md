@@ -33,53 +33,22 @@ invariant* rather than a discipline problem.
   See [`CLAUDE.md`](CLAUDE.md) for the per-slice detail and the v1/v1.x deferrals.
 
   Run it: `just up s`, then open **http://localhost** (dev login `demo` / `Demo-Password-1`).
-- **v1 phase: in progress** 🟡 — the **Records & evidence** slice family ([`docs/06`](docs/06-records-and-evidence.md))
-  is shipping depth-first on `main`:
-  - **S-rec-1** (capture + evidence-linking + correction): immutable upload capture (base + WORM-sealed evidence in a
-    dedicated `records` bucket + a `content_hash` seal), the `evidence_for_link` evidence-for sub-resource
-    (record→clause/process/document), `correction_of` (correct, don't change), `source_version_id` pinning (R21), and
-    **retention-policy-as-data** (a 5-tier resolver + the snapshot-at-capture ratchet).
-  - **S-rec-2** (retention/disposition lifecycle): the disposition state machine + a daily Beat **retention sweep**
-    (auto-disposes low-risk policies, flags the rest for human approval), the `DISPOSED` **tombstone** (metadata +
-    audit survive the bytes), **legal hold**, and the R27 **dual-control WORM-destroy-under-legal-order** escape hatch
-    (two distinct authorizers, fail-closed physical purge, GDPR refused-with-reason logging).
-  - **S-pack-1** (Evidence Packs / UJ-7 — scope resolution + immutable build/seal): the auditor-facing headline. An
-    on-demand, scope-limited (clause/process + date overlay), **immutable, self-verifying** bundle of records + their
-    evidence + a traceability manifest, assembled by the worker and sealed as a `RETAIN_PERMANENT` EVIDENCE Record. The
-    build is **R28-honest** — every in-scope record is classified `INCLUDED` / `EXCLUDED_PERMISSION` (the generator
-    couldn't read it) / `EXCLUDED_ABSENCE` (its evidence was destroyed), so nothing is ever silently dropped, plus a gap
-    report of in-scope ★ clauses lacking evidence.
-  - **S-pack-2** (Evidence Packs / UJ-7 — external delivery + PDF portfolio, completes UJ-7): hand a sealed pack to an
-    external auditor via a **time-boxed, revocable Ed25519 share link** — a signed token validated *outside* the PEP
-    (domain-separated from the S7c verify token, fails closed if the key isn't provisioned) backed by a `pack_share_link`
-    record. A **public, no-auth, latch-exempt** guest landing + `format=zip|pdf` download re-checks the revocable DB row
-    on every access (revoke is immediate), audits each view, and streams the bytes through the API (no presigned URL
-    outlives a revoke). The `format=pdf` **portfolio** is a printable cover + traceability index + the §11.3-stamped
-    controlled-document renditions, built best-effort at seal so a renderer outage never blocks the canonical pack. (The
-    heavier `guest_grant`/ABAC/Keycloak-guest path stays v1.x.)
-  - **S-rec-3** (Mode-B structured-form capture — completes the records family): fill a controlled **Form/Template** to
-    capture a record. A Form/Template is a controlled document (`FRM`) carrying a `field_schema` (a small, dependency-free
-    field-list DSL); the schema is versioned through the normal document lifecycle (its check-in's WORM source blob **is**
-    the canonical-serialized schema, also pinned into the version snapshot). Mode-B capture resolves the template's
-    **Effective** version, validates the submitted `form_field_values` against **that version's pinned schema** (so
-    already-captured records keep showing the edition that was in force), and pins `source_version_id`. A best-effort PDF
-    rendition of the fielded data builds after capture; an org toggle (`PATCH /admin/config`, admin-only) optionally allows
-    capturing against a pre-release draft for controlled migrations.
-  - **S-rec-4** (records-family close-out): **`/retention-policies` CRUD + soft-archive** (a hard delete is impossible —
-    three RESTRICT FKs — so retirement is a soft archive; PATCH is *extend-forward only* while records are pinned, and you
-    shorten future retention by archiving a policy and creating a shorter one), plus the **creator≠disposer SoD-6** — a
-    record's own capturer may not dispose it (`409 sod_self_disposition`) unless the org sets `allow_self_disposition`. Its
-    two keys (`retention.read`/`retention.manage`) are the first **additive** permission-catalog extension
-    (decisions-register **R38** refines "closed at v1" to "no rename/removal; additive growth allowed").
+- **v1 phase: the ISO 9001:2015 ★ spine is feature-complete** ✅ — every ★ family shipped end-to-end on `main`
+  (each via a PR with green CI), and the React/TS web track is feature-complete for them:
+  - **Records & evidence** ([`docs/06`](docs/06-records-and-evidence.md)) — capture → retention/disposition + management →
+    evidence packs (with revocable external share links) → Mode-B structured-form capture.
+  - **Ingestion engine** ([`docs/09`](docs/09-ingestion-engine.md), UJ-2) — the read-only on-ramp that imports an existing
+    QMS file tree into the controlled vault (scan/inventory → extract/classify → dedup/propose → review → commit).
+  - **Audits / Findings / CAPA**, **Document Change Requests** (read/write/diff/annotate/CREATE-implement),
+    **Mirror drift D1–D5**, **Acknowledgements**, **Quality Objectives** (lifecycle/revision + KPI trend chart), and
+    **Management Review** (backend + UI + outputs→action-systems + filed-minutes pack).
+  - **Improvement Initiatives** (clause 10.3, R46) — the own-table workflow object end-to-end, including the opt-in
+    signed, engine-routed Top-Management authorization.
+  - **Leadership release routing** (S-leadership-1) — an opt-in, document-backed Top-Management RELEASE authorization for
+    the clause-5/6/9 leadership artifacts (POL §5.2 / OBJ §6.2 / MR §9.3), gated by an org config flag (default off).
 
-  The v1 **records family is complete** (capture → retention/disposition + management → evidence packs → structured forms).
-
-- **v1 Ingestion engine: STARTED** 🟡 — the on-ramp that imports an existing QMS file tree into the controlled vault
-  ([`docs/09`](docs/09-ingestion-engine.md), UJ-2). A depth-first family; **S-ing-1** (run + scan/inventory foundation)
-  shipped: point the worker at a **read-only** mounted source tree → `POST /api/v1/admin/imports` → an idempotent,
-  crash-safe scan inventories every file (size/mtime/mime/sha256 + a §4.2 filters/quarantine verdict), content-addresses
-  included bytes into a non-WORM staging bucket, and produces a calm summary — all transient `import_*` rows; **it writes
-  nothing to the vault** (extract/classify · dedup/propose · review · commit are slices 2–5). Migration head `0029`.
+  See [`CLAUDE.md`](CLAUDE.md) Current-status and [`docs/slice-history.md`](docs/slice-history.md) for the per-slice
+  detail and the v1/v1.x deferrals. Migration head `0054`.
 
 ## Repository layout
 
@@ -88,14 +57,14 @@ packages/contracts/   OpenAPI-first source of truth (openapi.yaml → generated 
 apps/api/             FastAPI / Python 3.12 (the vault, lifecycle, PDP/PEP, audit)
 apps/web/             React/TS + Mantine + Tailwind SPA
 migrations/           Alembic (single tree)
-infra/compose/        Docker Compose stack (S/M profiles) + Caddy / Keycloak / MinIO config
+infra/compose/        Docker Compose stack (S/M profiles ship; L is spec-only) + Caddy / Keycloak / MinIO config
 scripts/              install.sh, easysynq (admin CLI), gen-contracts.sh
 docs/                 the specification + the implementation plan
 ```
 
 ## Quick start (developer)
 
-Requires Docker Compose v2, [uv](https://docs.astral.sh/uv/), Node 20+, and [just](https://github.com/casey/just).
+Requires Docker Compose v2, [uv](https://docs.astral.sh/uv/), Node 22, and [just](https://github.com/casey/just).
 
 ```bash
 just setup            # install deps, pre-commit, generate the contract
@@ -103,5 +72,6 @@ just up s             # bring up the stack (S profile)
 # the API is reachable behind Caddy; /healthz and /readyz report status
 ```
 
-> The four locked foundational decisions (D1–D4) and the Decisions Register (R1–R37) govern everything; see
+> The four locked foundational decisions (D1–D4) and the Decisions Register (R1–R46 — see
+> [`docs/decisions-register.md`](docs/decisions-register.md)) govern everything; see
 > [`docs/00-overview.md`](docs/00-overview.md). Data never leaves the org boundary; there is no phone-home.

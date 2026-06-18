@@ -65,8 +65,6 @@ All record types are concrete leaves of `Record (RETAINED)` in the canonical tax
 | **Training / Competence Record** (`COMPETENCE`) | 7.2, 7.3 | training matrix / awareness ack template | Upload (certs) + structured + bulk | duration of employment + N yr | `person_id`, `competence_item`, `evidence_type` (education\|training\|experience), `awareness_ack?`, `expiry?` |
 | **Calibration / Maintenance Record** (`CALIBRATION`) | 7.1.5.1, 7.1.5.2 | calibration procedure / cert template | Upload (cert) + structured | equipment life + N yr | `measuring_resource_id`, `cal_date`, `next_due`, `standard_traceability`, `result` (pass/adjusted/fail), `cert_blob` |
 | **Management Review Minutes** (`MGMT_REVIEW`) | 9.3 | MR agenda template | Structured + attachments | permanent (recommended) | `review_date`, `inputs[]` (links to KPIs/audits/CAPAs), `outputs[]` (decisions/actions), `attendees[]` |
-
-> **As-built (S-mr-1, R45):** the `MGMT_REVIEW` *record* type above is now the **imported-legacy-minutes** path (evidence of a review held outside EasySynQ; does **not** flip the 9.3 ★). An **authored** review held in-product is instead an **`MR` *document*** (a kind=DOCUMENT subtype of `documented_information` — see doc 02 / doc 14 §9), whose minutes freeze into the released version snapshot. The two coexist.
 | **Supplier Evaluation** (`SUPPLIER_EVAL`) | 8.4 | supplier eval template | Structured + upload | supplier-active + N yr | `supplier_id`, `eval_type` (initial\|re-eval), `score`, `criteria_results{}`, `re_eval_due` |
 | **Release Record** (`RELEASE`) | 8.6 | release/acceptance template | Structured + upload | product liability period | `release_authority` (person/org_role), `acceptance_criteria_met`, `batch/lot_ref`, `linked_inspection_records[]` |
 | **KPI / Metric Reading** (`KPI_READING`) | 9.1.1 | KPI definition (objective) | Structured / integration ingest | rolling N yr or per objective | `objective_id`, `period`, `value`, `target_at_capture`, `unit`, `source` |
@@ -76,6 +74,8 @@ All record types are concrete leaves of `Record (RETAINED)` in the canonical tax
 | **Change Record** (`CHANGE`) | 6.3, 8.5.6 | change template | Structured | tied to affected artifact | `change_scope`, `rationale`, `resources`, `responsibilities`, `verification` |
 | **Customer Complaint** (`COMPLAINT`) | 8.2.1, 9.1.2, 10.2 | complaint intake template | Structured + upload | per assigned policy (typically rolling N yr) | `customer`, `received_at`, `channel`, `description`, `severity` — can one-click spawn an NCR/CAPA with `source=complaint` (reconciled per Decisions Register R16) |
 | **Generic Evidence** (`EVIDENCE`) | any | none (ad-hoc) | Upload + link | per assigned policy | minimal; exists to attach arbitrary proof and link it into the chain |
+
+> **As-built (S-mr-1, R45):** the `MGMT_REVIEW` *record* type above is now the **imported-legacy-minutes** path (evidence of a review held outside EasySynQ; does **not** flip the 9.3 ★). An **authored** review held in-product is instead an **`MR` *document*** (a kind=DOCUMENT subtype of `documented_information` — see doc 02 / doc 14 §9), whose minutes freeze into the released version snapshot. The two coexist.
 
 **Design notes:**
 

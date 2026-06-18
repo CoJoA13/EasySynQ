@@ -34,7 +34,7 @@ The following is the **single concrete recommended stack**. Alternatives and rat
 | **Frontend framework** | **React + TypeScript** (Vite build) | React 18+, TS 5+ | SPA delivering progressive-disclosure, clause-aligned UI |
 | **UI components / styling** | **Mantine** component library + **Tailwind CSS** utility layer + CSS variables design-token system | Mantine 7+, Tailwind 3+ | Accessible primitives (WCAG 2.2 AA baseline), calm theming, dark/light |
 | **Client data layer** | **TanStack Query** + a hand-written typed API client (`apps/web/src/lib/api.ts`); `openapi.yaml` is the contract (redocly-lint only, **not** codegen) | — | Caching, optimistic UX, request dedupe |
-| **Backend language/framework** | **Python 3.12 + FastAPI** (ASGI, Uvicorn/Gunicorn) | FastAPI 0.11x | REST/JSON API, OpenAPI-first, async I/O |
+| **Backend language/framework** | **Python 3.12 + FastAPI** (ASGI, Uvicorn/Gunicorn) | FastAPI >= 0.137 | REST/JSON API, OpenAPI-first, async I/O |
 | **ORM / migrations** | **SQLAlchemy 2.x + Alembic** | — | Typed data access, versioned schema migrations |
 | **Relational database** | **PostgreSQL** | 16+ | Source of truth for metadata, lifecycle, audit, permissions |
 | **Object / blob storage** | **MinIO** (S3-compatible), self-hosted | latest LTS | Immutable, content-addressed document binaries & renditions |
@@ -221,14 +221,17 @@ stateDiagram-v2
     Draft --> InReview: Submit for review
     InReview --> Draft: Changes requested
     InReview --> Approved: Reviewer/Approver approves
-    Approved --> Released: Effective date reached / released
-    Released --> UnderRevision: Start revision (new draft version)
+    Approved --> Effective: Effective date reached / released
+    Effective --> UnderRevision: Start revision (new draft version)
     UnderRevision --> InReview: Submit revised
-    Released --> Obsolete: Supersede / withdraw
+    Effective --> Superseded: Newer version becomes Effective
+    Effective --> Obsolete: Withdraw / make obsolete
+    Superseded --> Obsolete: Withdraw / make obsolete
     Obsolete --> [*]
-    note right of Released
-        Only Released versions are written
-        to the read-only filesystem mirror.
+    note right of Effective
+        Only Effective versions are written
+        to the read-only filesystem mirror
+        (R1; see doc 04 §3.1).
         Approval record is immutable and
         ready to carry e-signature (Part 11)
         as a future, additive field set.
