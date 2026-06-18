@@ -9,6 +9,7 @@ from the body in-handler; the list is row-filtered to what the caller may ``docu
 
 from __future__ import annotations
 
+import dataclasses
 import datetime
 import re
 import uuid
@@ -1059,12 +1060,35 @@ async def list_process_links_endpoint(
     return [_process_link(link, p) for link, p in rows]
 
 
+async def _enforce_target_process(
+    session: AsyncSession,
+    sink: AuthzAuditSink,
+    request: Request,
+    caller: AppUser,
+    doc: DocumentedInformation,
+    target_process_id: uuid.UUID,
+) -> None:
+    """Authorize a process-LINK mutation against the TARGET process, not just the document.
+
+    Since S-owner-assignment-1 made ``_document_scope`` carry ALL of a doc's linked process ids, the
+    ``document.manage_metadata`` gate now matches for an owner of ANY linked process — which would
+    let an owner of process A add/remove links to process B on a doc linked to A+B. Re-enforce
+    ``document.manage_metadata`` over a scope whose process_ids is JUST the target process: a
+    SYSTEM/ARTIFACT-scoped holder still passes (they hold doc-level authority); a PROCESS-scoped
+    holder must own the *target* process. 403 on deny."""
+    base = await _document_scope_by_id(session, doc.id)
+    target_scope = dataclasses.replace(base, process_ids=frozenset({str(target_process_id)}))
+    await enforce(session, sink, request, caller, "document.manage_metadata", target_scope)
+
+
 @router.post("/documents/{document_id}/process-links", status_code=status.HTTP_201_CREATED)
 async def link_process_endpoint(
     document_id: uuid.UUID,
     body: ProcessLinkCreate,
+    request: Request,
     caller: AppUser = Depends(_manage_metadata),
     session: AsyncSession = Depends(get_session),
+    authz_sink: AuthzAuditSink = Depends(get_authz_audit_sink),
 ) -> dict[str, Any]:
     doc = await _load_document(session, caller, document_id)
     process = await vault_repo.get_process(session, body.process_id)
@@ -1077,6 +1101,7 @@ async def link_process_endpoint(
                 {"field": "process_id", "code": "not_found", "message": "process does not exist"}
             ],
         )
+    await _enforce_target_process(session, authz_sink, request, caller, doc, process.id)
     if await vault_repo.get_process_link(session, process.id, doc.id) is not None:
         raise ProblemException(status=409, code="conflict", title="Process already linked")
     link = ProcessLink(
@@ -1111,8 +1136,10 @@ async def link_process_endpoint(
 async def unlink_process_endpoint(
     document_id: uuid.UUID,
     process_id: uuid.UUID,
+    request: Request,
     caller: AppUser = Depends(_manage_metadata),
     session: AsyncSession = Depends(get_session),
+    authz_sink: AuthzAuditSink = Depends(get_authz_audit_sink),
 ) -> Response:
     doc = await _load_document(session, caller, document_id)
     link = await vault_repo.get_process_link(session, process_id, doc.id)
@@ -1120,6 +1147,9 @@ async def unlink_process_endpoint(
     # explicit org guard is belt-and-suspenders (mirrors processes.remove_edge_endpoint).
     if link is None or link.org_id != caller.org_id:
         raise ProblemException(status=404, code="not_found", title="Process link not found")
+    # Authorize the unlink against the TARGET process too (a PROCESS owner of a *different* linked
+    # process must not remove this link — S-owner-assignment-1's _document_scope widening).
+    await _enforce_target_process(session, authz_sink, request, caller, doc, process_id)
     process = await vault_repo.get_process(session, process_id)
     await session.delete(link)
     _emit_process_link_event(

@@ -61,12 +61,16 @@ async def resolve_audience(
     if role_ids:
         rows = (
             await session.execute(
-                select(RoleAssignment.user_id).where(
+                select(RoleAssignment.user_id, RoleAssignment.bound_scope).where(
                     RoleAssignment.org_id == org_id, RoleAssignment.role_id.in_(role_ids)
                 )
             )
-        ).scalars()
-        candidates.update(rows)
+        ).all()
+        # Exclude owner-assignment-managed grants (a ``managed_by`` marker on the bound_scope): a
+        # per-process owner holds the scoped PERMISSION set, not org-wide role membership, so an
+        # unrelated document distributed to the role must not flood ack obligations onto every
+        # process owner in the org (mirrors workflow ``users_with_roles``; S-owner-assignment-1).
+        candidates.update(uid for uid, bs in rows if not (bs or {}).get("managed_by"))
     if not candidates:
         return set()
     active = (

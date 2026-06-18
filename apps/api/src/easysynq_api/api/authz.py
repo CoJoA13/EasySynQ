@@ -262,7 +262,10 @@ async def list_user_roles(
             .where(RoleAssignment.user_id == user_id, RoleAssignment.org_id == caller.org_id)
         )
     ).all()
-    return [_assignment(a, name) for a, name in rows]
+    # Hide owner-assignment-managed grants (a ``managed_by`` marker): they are bound to a process
+    # and managed via /processes/{id}/owner, NOT this generic role surface — surfacing them here
+    # would invite a revoke that orphans the org_role_assignment RACI row (S-owner-assignment-1).
+    return [_assignment(a, name) for a, name in rows if not (a.bound_scope or {}).get("managed_by")]
 
 
 @router.post("/users/{user_id}/roles", status_code=status.HTTP_201_CREATED)
@@ -305,6 +308,15 @@ async def revoke_user_role(
     assignment = await session.get(RoleAssignment, assignment_id)
     if assignment is None or assignment.user_id != user_id or assignment.org_id != granter.org_id:
         raise ProblemException(status=404, code="not_found", title="Role assignment not found")
+    # An owner-assignment-managed grant must be revoked through owner-assignment (which also drops
+    # the org_role_assignment RACI row); a bare delete here would orphan it (S-owner-assignment-1).
+    if (assignment.bound_scope or {}).get("managed_by"):
+        raise ProblemException(
+            status=409,
+            code="conflict",
+            title="This grant is managed by owner-assignment; revoke it via "
+            "DELETE /processes/{process_id}/owner/{user_id}",
+        )
     _audit_authz_change(
         session,
         granter,

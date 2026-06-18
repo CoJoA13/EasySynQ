@@ -659,12 +659,15 @@ async def test_assign_owner_records_raci_and_unions_processes(
     assert r2.json()["role_assignment_id"] == r1.json()["role_assignment_id"]
     assert await _owner_role_process_ids(owner_id) == sorted([p1["id"], p2["id"]])
 
-    # Re-assigning p1 is idempotent — no duplicate process id, same set.
+    # Re-assigning p1 is idempotent — no duplicate process id, same set, AND no phantom audit row
+    # (a fully no-op retry writes no PROCESS_OWNER_ASSIGNED event — the Codex finding).
+    assert await _audit_count(EventType.PROCESS_OWNER_ASSIGNED, p1["id"]) == 1
     r3 = await app_client.post(
         f"/api/v1/processes/{p1['id']}/owner", headers=ha, json={"user_id": str(owner_id)}
     )
     assert r3.status_code == 201, r3.text
     assert await _owner_role_process_ids(owner_id) == sorted([p1["id"], p2["id"]])
+    assert await _audit_count(EventType.PROCESS_OWNER_ASSIGNED, p1["id"]) == 1
 
 
 async def test_revoke_owner_narrows_then_drops(
@@ -836,6 +839,74 @@ async def test_owner_assignment_does_not_clobber_admin_process_grant(
     bs = remaining[0].bound_scope or {}
     assert bs.get("managed_by") is None
     assert bs.get("selector", {}).get("process_id") == other_process_id
+
+
+async def test_managed_owner_grant_not_revocable_via_generic_role_surface(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    """An owner-assignment-managed grant is hidden from the generic per-user role list and a direct
+    revoke there is refused (409) — it must be revoked via owner-assignment, which also drops the
+    org_role_assignment RACI row (else the roster says owner while gates 403 — the Codex P2)."""
+    await _grant(subj.a, "process.create")
+    await _grant(subj.a, "process.assign_owner")
+    await _grant(subj.a, "permission.grant")  # the generic role-revoke gate
+    await _grant(subj.a, "user.read")
+    ha = _auth(token_factory, subj.a)
+    proc = await _create_process(app_client, ha)
+    owner_id = await _user_id(subj.b)
+    await app_client.post(
+        f"/api/v1/processes/{proc['id']}/owner", headers=ha, json={"user_id": str(owner_id)}
+    )
+
+    # The managed Process-Owner grant is HIDDEN from the generic per-user role list.
+    listed = await app_client.get(f"/api/v1/users/{owner_id}/roles", headers=ha)
+    assert listed.status_code == 200, listed.text
+    assert all(a["role_name"] != "Process Owner" for a in listed.json())
+
+    # A direct revoke via the generic surface is refused (409).
+    managed = [
+        ra
+        for ra in await _po_role_assignments(owner_id)
+        if (ra.bound_scope or {}).get("managed_by")
+    ]
+    assert len(managed) == 1
+    revoke = await app_client.delete(f"/api/v1/users/{owner_id}/roles/{managed[0].id}", headers=ha)
+    assert revoke.status_code == 409, revoke.text
+
+
+async def test_process_owner_cannot_mutate_links_for_unowned_process(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    """A Process Owner (owner-assignment) of process A on a doc linked to A+B cannot remove the link
+    to B (a process they don't own), but CAN remove the link to A — the link endpoints re-authorize
+    document.manage_metadata against the TARGET process (the Codex P2 from the _document_scope
+    widening)."""
+    await s5.grant_lifecycle(subj.a)
+    await _grant(subj.a, "process.create")
+    await _grant(subj.a, "process.assign_owner")
+    ha = _auth(token_factory, subj.a)
+    did = await _doc_id(app_client, ha)
+    proc_a = await _create_process(app_client, ha)
+    proc_b = await _create_process(app_client, ha)
+    await _link_doc_to_process(app_client, ha, did, proc_a["id"])
+    await _link_doc_to_process(app_client, ha, did, proc_b["id"])
+
+    owner_id = await _user_id(subj.b)
+    await app_client.post(
+        f"/api/v1/processes/{proc_a['id']}/owner", headers=ha, json={"user_id": str(owner_id)}
+    )
+    hb = _auth(token_factory, subj.b)
+
+    # The A-owner CANNOT unlink the doc from B (unowned) → 403.
+    deny = await app_client.delete(
+        f"/api/v1/documents/{did}/process-links/{proc_b['id']}", headers=hb
+    )
+    assert deny.status_code == 403, deny.text
+    # ...but CAN unlink it from A (their own process) → 204.
+    allow = await app_client.delete(
+        f"/api/v1/documents/{did}/process-links/{proc_a['id']}", headers=hb
+    )
+    assert allow.status_code == 204, allow.text
 
 
 async def _seed_foreign_process(created_by: uuid.UUID) -> tuple[str, str]:

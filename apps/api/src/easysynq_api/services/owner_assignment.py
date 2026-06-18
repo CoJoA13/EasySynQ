@@ -232,6 +232,7 @@ async def assign_process_owner(
             )
         )
     ).scalar_one_or_none()
+    binding_created = binding is None
     if binding is None:
         binding = OrgRoleAssignment(
             org_id=org_id,
@@ -250,46 +251,53 @@ async def assign_process_owner(
     assignment = await _owner_role_assignment(
         session, org_id=org_id, user_id=user.id, role_id=perm_role.id
     )
-    process_ids = _bound_process_ids(assignment.bound_scope if assignment else None)
-    process_ids.add(str(process.id))
+    before_ids = _bound_process_ids(assignment.bound_scope if assignment else None)
+    process_ids = before_ids | {str(process.id)}
+    process_added = process_ids != before_ids
     bound_scope = _process_bound_scope(process_ids)
     if assignment is None:
         assignment = RoleAssignment(
             org_id=org_id, user_id=user.id, role_id=perm_role.id, bound_scope=bound_scope
         )
         session.add(assignment)
-    else:
+        await session.flush()
+    elif process_added:
         # Reassign a fresh dict — SQLAlchemy does not track in-place JSONB mutation (S-ing-4).
         assignment.bound_scope = bound_scope
-    await session.flush()
+        await session.flush()
 
-    # 3. Audit both halves (AZ-INV-5), then commit + invalidate the user's cached PDP grants.
-    _audit(
-        session,
-        actor,
-        EventType.PROCESS_OWNER_ASSIGNED,
-        AuditObjectType.process,
-        process.id,
-        target_user_id=user.id,
-        after={
-            "user_id": str(user.id),
-            "org_role_id": str(org_role.id),
-            "role_assignment_id": str(assignment.id),
-        },
-    )
-    _audit(
-        session,
-        actor,
-        EventType.ROLE_ASSIGN,
-        AuditObjectType.permission,
-        assignment.id,
-        target_user_id=user.id,
-        after={
-            "role_id": str(perm_role.id),
-            "role_name": perm_role.name,
-            "bound_scope": bound_scope,
-        },
-    )
+    # 3. Audit both halves (AZ-INV-5) ONLY on a real state change — a fully-idempotent retry (the
+    # binding already exists AND the process is already in the bound_scope) writes nothing, so audit
+    # consumers don't see a phantom "access granted again" (the Codex finding); skip the cache bust
+    # too when nothing changed. Then commit + invalidate.
+    changed = binding_created or process_added
+    if changed:
+        _audit(
+            session,
+            actor,
+            EventType.PROCESS_OWNER_ASSIGNED,
+            AuditObjectType.process,
+            process.id,
+            target_user_id=user.id,
+            after={
+                "user_id": str(user.id),
+                "org_role_id": str(org_role.id),
+                "role_assignment_id": str(assignment.id),
+            },
+        )
+        _audit(
+            session,
+            actor,
+            EventType.ROLE_ASSIGN,
+            AuditObjectType.permission,
+            assignment.id,
+            target_user_id=user.id,
+            after={
+                "role_id": str(perm_role.id),
+                "role_name": perm_role.name,
+                "bound_scope": bound_scope,
+            },
+        )
     result = {
         "process_id": str(process.id),
         "user_id": str(user.id),
@@ -299,7 +307,8 @@ async def assign_process_owner(
         "bound_scope": bound_scope,
     }
     await session.commit()
-    await invalidate_user_permissions(user.id)
+    if changed:
+        await invalidate_user_permissions(user.id)
     return result
 
 
