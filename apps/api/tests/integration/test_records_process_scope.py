@@ -333,14 +333,13 @@ async def test_process_owner_cannot_unlink_unowned_process(
 async def test_process_owner_correction_cannot_introduce_unowned_source(
     app_client: AsyncClient, token_factory: Callable[..., str]
 ) -> None:
-    """S-records-W / R2-3: correcting a source-LESS record re-auths the body source PER-PROCESS, so
-    a Process-Owner of P1 cannot introduce a source linked to P1+P2 (the per-process loop denies P2
-    even though the intersection-match passes on P1 — W-CX-1) NOR a source with NO process links
-    (the empty re-auth denies a process-only holder, like a fresh capture — W-CX-2). 403 before
+    """S-records-W / R2-3 / W-CX-1: correcting a source-LESS record re-auths the body source's
+    processes PER-PROCESS, so a Process-Owner of P1 cannot introduce a source linked to P1+P2 (the
+    per-process loop denies P2 even though the intersection-match passes on P1) — 403 before
     ``capture_correction`` runs."""
     author = _subject("wcorr-a")
     await _grant(author, _AUTHOR_PERMS)
-    await s5.grant_lifecycle(author)  # document.create + manage_metadata for the source docs
+    await s5.grant_lifecycle(author)  # document.create + manage_metadata for the source doc
     ha = _auth(token_factory, author)
     p1 = await _create_process(app_client, ha)
     p2 = await _create_process(app_client, ha)
@@ -349,25 +348,23 @@ async def test_process_owner_correction_cannot_introduce_unowned_source(
     shared = await _create(app_client, ha, await s5.type_id("SOP"))  # source spanning P1 + P2
     await _link_doc_to_process(app_client, ha, shared["id"], p1["id"])
     await _link_doc_to_process(app_client, ha, shared["id"], p2["id"])
-    processless = await _create(app_client, ha, await s5.type_id("SOP"))  # source with NO links
 
     owner = _subject("wcorr-b")
     await _grant_process(owner, "record.create", p1["id"])  # owns P1, NOT P2
     hb = _auth(token_factory, owner)
     # The author stages evidence (init-upload is SYSTEM record.create); the re-auth 403s first.
     sha = await _upload_evidence(app_client, ha, f"corr-{uuid.uuid4().hex}".encode())
-    for source_id, label in ((shared["id"], "P1+P2 source"), (processless["id"], "process-less")):
-        deny = await app_client.post(
-            f"/api/v1/records/{original['id']}/correction",
-            headers=hb,
-            json={
-                "record_type": "EVIDENCE",
-                "title": "smuggled source",
-                "source_document_id": source_id,
-                "evidence": [{"sha256": sha, "content_type": "application/pdf"}],
-            },
-        )
-        assert deny.status_code == 403, f"{label}: {deny.text}"
+    deny = await app_client.post(
+        f"/api/v1/records/{original['id']}/correction",
+        headers=hb,
+        json={
+            "record_type": "EVIDENCE",
+            "title": "smuggled source",
+            "source_document_id": shared["id"],
+            "evidence": [{"sha256": sha, "content_type": "application/pdf"}],
+        },
+    )
+    assert deny.status_code == 403, deny.text
 
 
 async def test_process_owner_cannot_capture_under_unowned_shared_doc(

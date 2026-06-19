@@ -583,13 +583,13 @@ async def correction_endpoint(
     session: AsyncSession = Depends(get_session),
     authz_sink: AuthzAuditSink = Depends(get_authz_audit_sink),
 ) -> dict[str, Any]:
-    # S-records-W: re-auth the SUCCESSOR's inherited process binding PER-PROCESS (own ALL; mirror
-    # capture; a single multi-process scope would intersection-MATCH — Codex W-CX-1/3). A successor
-    # WITH a source inherits leg B = that source's processes (the original's OWN source when
-    # source-backed — ``capture_correction`` forces it — else the body's); a SOURCE-LESS successor
-    # inherits the ORIGINAL's effective binding via the R3-1 walk (W-CX-2). An empty set re-auths
-    # empty process_ids → a PROCESS-only holder is DENIED (like a fresh capture under a process-less
-    # source); a PROCESS holder reaches the endpoint only via the original's binding, so it is rare.
+    # S-records-W: re-auth the SUCCESSOR's REAL effective process binding PER-PROCESS (own ALL;
+    # mirror capture; a single multi-process scope would intersection-MATCH — Codex W-CX-1/3). The
+    # successor's effective source is the original's OWN source when source-backed
+    # (``capture_correction`` FORCES it) else the body's; its binding = that source's processes when
+    # the source carries them, else (process-less or no source) the ORIGINAL's effective binding,
+    # which a source-less successor inherits via the R3-1 walk (W-CX-2 / round-3: a forced
+    # process-less source must NOT false-deny an owner of the original's real binding).
     original = await records_repo.get_record(session, record_id)
     if original is not None:
         effective_source = (
@@ -597,20 +597,17 @@ async def correction_endpoint(
             if original.source_document_id is not None
             else body.source_document_id
         )
+        source_processes: frozenset[str] = frozenset()
         if effective_source is not None:
             source_doc = await session.get(DocumentedInformation, effective_source)
-            inherited = (
-                frozenset(
+            if source_doc is not None and source_doc.org_id == caller.org_id:
+                source_processes = frozenset(
                     str(p.id)
                     for _link, p in await vault_repo.list_process_links(session, source_doc.id)
                 )
-                if source_doc is not None and source_doc.org_id == caller.org_id
-                else frozenset()
-            )
-        else:
-            inherited = frozenset(
-                await records_repo.record_process_ids_effective(session, original)
-            )
+        inherited = source_processes or frozenset(
+            await records_repo.record_process_ids_effective(session, original)
+        )
         if inherited:
             for pid in inherited:
                 await _enforce_target_process_record(
