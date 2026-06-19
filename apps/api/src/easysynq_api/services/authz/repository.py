@@ -41,8 +41,19 @@ def _scope_from_dict(
 
 
 def _grant_from_role(role_name: str, grant: RoleGrant, assignment: RoleAssignment) -> ResolvedGrant:
-    # bound_scope (concrete, set at assignment) wins over the role's scope_template default.
-    raw = assignment.bound_scope or grant.scope_template
+    # bound_scope (concrete, set at assignment) concretizes the role's PARAMETERIZED scope_template
+    # (e.g. a PROCESS template's :assignment_process placeholder) and wins over its default. BUT a
+    # SYSTEM-level template carries no placeholder to concretize, so a (narrowing) bound_scope must
+    # NOT clamp it: clamping a SYSTEM-finest grant — e.g. a bound Process-Owner's clauseMap.read —
+    # down to the bound PROCESS would make it unsatisfiable against the SYSTEM clause-map resource
+    # (S-records-C). A SYSTEM template stays SYSTEM regardless of bound_scope; every other template
+    # still defers to the bound_scope when one is present.
+    template_level = _scope_from_dict(grant.scope_template)[0]
+    raw = (
+        grant.scope_template
+        if template_level is ScopeLevel.SYSTEM
+        else (assignment.bound_scope or grant.scope_template)
+    )
     level, selector, predicates = _scope_from_dict(raw)
     return ResolvedGrant(
         effect=Effect.ALLOW,
