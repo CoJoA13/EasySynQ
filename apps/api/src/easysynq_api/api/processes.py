@@ -1,10 +1,12 @@
 """Process IA — the ISO 9001 Clause 4.4 process graph + authoring (slice S9c, doc 15 §8.4).
 
-``GET /processes`` / ``/processes/{id}`` / ``/processes/map`` read the process landscape (gate
-``process.read``, **default SYSTEM scope** — the ``GET /clauses`` shape: QMS Owner / Internal
-Auditor see the org-wide map; per-process read-filtering for PROCESS-scoped owners is deferred — the
-seeded PROCESS grants carry an unsubstituted ``:assignment_process`` placeholder that matches no
-concrete process yet). Authoring — ``POST /processes`` (``process.create``, SYSTEM, **seeded but
+``GET /processes`` / ``/processes/map`` read the process landscape gated ``process.read`` and
+**row-filtered per-process** (filter-not-403, doc 18 §5.2 — S-process-scope-2): a SYSTEM grant
+matches every row so QMS Owner / Internal Auditor see the org-wide map byte-identical, while a bound
+Process Owner's PROCESS-scoped grant narrows to their owned processes (a no-grant caller gets
+``200`` + empty, never ``403``). ``GET /processes/{id}`` is a single-resource read enforced at the
+process's PROCESS scope (``_read_scoped``) — ``403`` on deny. Authoring — ``POST /processes``
+(``process.create``, SYSTEM, **seeded but
 held by no role** → grant via override until the role UI, the ``document.export`` precedent),
 ``PATCH /processes/{id}`` (``process.manage`` + ``_process_scope``; confirms ``SEED→ACTIVE``), and
 the edge sub-resource — mutates the graph. ``org_role``/``supplier`` are FK targets only in S9c (no
@@ -24,6 +26,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..auth.dependencies import get_current_user
 from ..db.models._audit_enums import ActorType, AuditObjectType, EventType
 from ..db.models._clause_enums import PdcaPhase
 from ..db.models._process_enums import ProcessState
@@ -34,10 +37,10 @@ from ..db.models.org_role_assignment import OrgRoleAssignment
 from ..db.models.process import Process
 from ..db.models.process_edge import ProcessEdge
 from ..db.session import get_session
-from ..domain.authz import ResourceContext
+from ..domain.authz import RequestContext, ResourceContext, authorize
 from ..logging import request_id_var
 from ..problems import ProblemException
-from ..services.authz import require
+from ..services.authz import gather_grants, require
 from ..services.owner_assignment import assign_process_owner, revoke_process_owner
 from ..services.vault import repository as repo
 
@@ -75,12 +78,18 @@ class OwnerAssignCreate(BaseModel):
     user_id: uuid.UUID
 
 
-def _process(p: Process) -> dict[str, Any]:
+def _process(p: Process, visible_ids: set[str] | None = None) -> dict[str, Any]:
+    parent_id = str(p.parent_id) if p.parent_id else None
+    # On a row-filtered surface (``visible_ids`` supplied), don't disclose a parent the caller can't
+    # read — null the pointer rather than leak a hidden process id (the edge-filter rationale; no
+    # dangling hierarchy pointer). Detail / authoring pass ``visible_ids=None`` → intact.
+    if visible_ids is not None and parent_id is not None and parent_id not in visible_ids:
+        parent_id = None
     return {
         "id": str(p.id),
         "org_id": str(p.org_id),
         "name": p.name,
-        "parent_id": str(p.parent_id) if p.parent_id else None,
+        "parent_id": parent_id,
         "owner_org_role_id": str(p.owner_org_role_id) if p.owner_org_role_id else None,
         "pdca_phase": p.pdca_phase.value,
         "criteria": p.criteria,
@@ -202,44 +211,80 @@ async def _require_org_process(
     return proc
 
 
-_read = require("process.read")  # default SYSTEM scope (GET /clauses shape)
 _create = require("process.create")  # SYSTEM; seeded-but-ungranted → override-until-UI
 _manage = require("process.manage", async_scope_resolver=_process_scope)
 # S-owner-assignment-1: bind/unbind a process owner. The seeded process.assign_owner key (PROCESS
 # finest-scope, content/QMS tier) gets its first require() consumer — a SYSTEM override matches in
 # v1, a concrete PROCESS grant once owner-assignment binds it.
 _assign_owner = require("process.assign_owner", async_scope_resolver=_process_scope)
-# GET /owners reads at the process's PROCESS scope so a PROCESS-scoped owner can view their own
-# process's owner bindings (a SYSTEM process.read still matches). The list/map/detail reads stay
-# SYSTEM-scoped (the deferred per-process read-filtering); only this new read adopts the resolver.
+# S-process-scope-2: per-process read-filtering. The SINGLE-resource reads (detail + GET /owners)
+# enforce process.read at the process's PROCESS scope (a SYSTEM grant still matches; a bound Process
+# Owner matches their own process; else 403). The LIST surfaces (/processes + /map) row-filter
+# instead (filter-not-403, doc 18 §5.2) via _readable_processes — a list can't enforce at one scope.
 _read_scoped = require("process.read", async_scope_resolver=_process_scope)
 
 
 # --- reads ------------------------------------------------------------------------------
 
 
+async def _readable_processes(
+    request: Request, session: AsyncSession, caller: AppUser
+) -> list[Process]:
+    """The org's processes the caller may ``process.read``, row-filtered (filter-not-403, doc 18
+    §5.2 / doc 15 §9.3 — the GET /records + /search precedent). A SYSTEM grant matches every row so
+    QMS Owner / Internal Auditor (and a ``demo`` SYSTEM override) see the org-wide landscape
+    byte-identical; a bound Process Owner's PROCESS-scoped grant narrows to their owned processes
+    (S-process-scope-2 — this unblocks the create-in-process picker). ``source_ip`` is threaded so
+    the probe evaluates an ``ip_allow`` predicate exactly as the replaced ``require()`` enforce did
+    (the PEP builds it the same way; ``ip_allow`` is v1-deferred but kept faithful here)."""
+    procs = await repo.list_processes(session, caller.org_id)
+    grants = await gather_grants(session, caller.id, caller.org_id, "process.read")
+    ctx = RequestContext(
+        now=datetime.datetime.now(datetime.UTC),
+        source_ip=request.client.host if request.client else None,
+    )
+    return [
+        p
+        for p in procs
+        if authorize(
+            grants, "process.read", ResourceContext(process_ids=frozenset({str(p.id)})), ctx
+        ).allow
+    ]
+
+
 @router.get("/processes")
 async def list_processes_endpoint(
-    caller: AppUser = Depends(_read),
+    request: Request,
+    caller: AppUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> list[dict[str, Any]]:
-    return [_process(p) for p in await repo.list_processes(session, caller.org_id)]
+    procs = await _readable_processes(request, session, caller)
+    visible_ids = {str(p.id) for p in procs}
+    return [_process(p, visible_ids) for p in procs]
 
 
 @router.get("/processes/map")
 async def process_map_endpoint(
-    caller: AppUser = Depends(_read),
+    request: Request,
+    caller: AppUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, list[dict[str, Any]]]:
-    nodes = [_process(p) for p in await repo.list_processes(session, caller.org_id)]
-    edges = [_edge(e) for e in await repo.list_process_edges(session, caller.org_id)]
-    return {"nodes": nodes, "edges": edges}
+    procs = await _readable_processes(request, session, caller)
+    visible_ids = {str(p.id) for p in procs}
+    # Drop any edge whose endpoint is hidden by the caller's scope — no dangling edge to a process
+    # they can't read (the row-filter graph variant; the search precedent filters a flat list).
+    edges = [
+        _edge(e)
+        for e in await repo.list_process_edges(session, caller.org_id)
+        if str(e.from_process_id) in visible_ids and str(e.to_process_id) in visible_ids
+    ]
+    return {"nodes": [_process(p, visible_ids) for p in procs], "edges": edges}
 
 
 @router.get("/processes/{process_id}")
 async def get_process_endpoint(
     process_id: uuid.UUID,
-    caller: AppUser = Depends(_read),
+    caller: AppUser = Depends(_read_scoped),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
     return _process(await _load_process(session, caller, process_id))

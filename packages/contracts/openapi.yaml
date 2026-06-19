@@ -55,9 +55,11 @@ tags:
   - name: processes
     description: >-
       The ISO 9001 Clause 4.4 process landscape (slice S9c) — the process graph (nodes + edges)
-      and the M:N document↔process link. Reads need process.read (default SYSTEM scope); authoring
-      needs process.create (create) / process.manage (update, edges); the per-document
-      process-link sub-resources (under /documents/{id}) need document.manage_metadata.
+      and the M:N document↔process link. The list reads (/processes, /processes/map) are
+      row-filtered by process.read (filter, not 403); the single-process read needs process.read at
+      the process's scope; authoring needs process.create (create) / process.manage (update, edges);
+      the per-document process-link sub-resources (under /documents/{id}) need
+      document.manage_metadata.
   - name: records
     description: >-
       Records & documented evidence (slice S-rec-1, doc 06) — the "retain" half of ISO documented
@@ -1914,14 +1916,17 @@ paths:
     get:
       tags: [processes]
       operationId: listProcesses
-      summary: The org's process nodes (default SYSTEM scope). Needs process.read.
+      summary: The org's process nodes the caller may read (row-filtered by process.read).
+      description: >-
+        Row-filtered by process.read (filter, not 403 — doc 18 §5.2): a SYSTEM grant sees the
+        org-wide landscape, a bound Process Owner narrows to their owned processes, a no-grant
+        caller gets 200 + an empty list.
       responses:
         "200":
-          description: The process nodes.
+          description: The process nodes the caller may read (possibly empty).
           content:
             application/json:
               schema: { type: array, items: { $ref: "#/components/schemas/Process" } }
-        "403": { $ref: "#/components/responses/ProblemResponse" }
     post:
       tags: [processes]
       operationId: createProcess
@@ -1953,14 +1958,17 @@ paths:
     get:
       tags: [processes]
       operationId: getProcessMap
-      summary: The process graph as {nodes, edges}. Needs process.read.
+      summary: The process graph as {nodes, edges}, row-filtered by process.read.
+      description: >-
+        Row-filtered by process.read (filter, not 403 — doc 18 §5.2): nodes narrow to the processes
+        the caller may read, and an edge is dropped when either endpoint is hidden by their scope (no
+        dangling edge). A SYSTEM grant sees the full landscape; a no-grant caller gets empty.
       responses:
         "200":
-          description: The process landscape.
+          description: The process landscape the caller may read (nodes + edges; possibly empty).
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ProcessMap" }
-        "403": { $ref: "#/components/responses/ProblemResponse" }
 
   /processes/{process_id}:
     parameters:
@@ -1968,7 +1976,7 @@ paths:
     get:
       tags: [processes]
       operationId: getProcess
-      summary: A single process node. Needs process.read.
+      summary: A single process node. Needs process.read at the process's scope (403 on deny).
       responses:
         "200":
           description: The process.
