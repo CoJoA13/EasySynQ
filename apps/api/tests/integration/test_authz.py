@@ -184,6 +184,16 @@ async def test_seed_catalog_and_roles(
     assert "user.read" in admin_keys
     assert not any(k.startswith(("document.", "record.", "capa.")) for k in admin_keys)
 
+    # S-records-C (migration 0057): the Process Owner role gains clauseMap.read at SYSTEM (the
+    # create-in-process wizard's clause step) — a NEW grant on an EXISTING key (catalog stays 102,
+    # R38 additive). SYSTEM scope so a bound owner's PROCESS bound_scope cannot clamp it away.
+    process_owner = next(r for r in roles if r["name"] == "Process Owner")
+    po_grants = (await app_client.get(f"/api/v1/roles/{process_owner['id']}", headers=h)).json()[
+        "grants"
+    ]
+    clausemap = next(g for g in po_grants if g["permission_key"] == "clauseMap.read")
+    assert clausemap["scope_template"]["level"] == "SYSTEM"
+
 
 # --- PEP enforcement --------------------------------------------------------------------
 

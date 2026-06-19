@@ -30,6 +30,7 @@ from easysynq_api.db.session import get_sessionmaker
 from easysynq_api.domain.authz.types import Effect, ScopeLevel
 
 from . import s5_helpers as s5
+from .test_processes import _assign_role_bound
 from .test_vault import (
     _auth,
     _checkin,
@@ -189,6 +190,23 @@ async def test_list_clauses_requires_clausemap_read(
     hb = _auth(token_factory, subj.b)
     r = await app_client.get("/api/v1/clauses", headers=hb)
     assert r.status_code == 403, r.text
+
+
+async def test_bound_process_owner_reads_clauses(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    """S-records-C: a BOUND Process-Owner — the seeded ``Process Owner`` role assigned with a
+    PROCESS ``bound_scope`` (as owner-assignment mints) — reads the SYSTEM clause map. Migration
+    0057 grants the role ``clauseMap.read`` @ SYSTEM, and ``_grant_from_role`` no longer clamps a
+    SYSTEM grant to the bound PROCESS, so ``GET /clauses`` 200s. Without either change it 403s (the
+    role lacked the grant; a PROCESS-clamped grant cannot match the SYSTEM clause-map resource).
+    Unblocks the create-in-process wizard's clause step for a bound owner."""
+    bound = {"level": "PROCESS", "selector": {"process_ids": [str(uuid.uuid4())]}}
+    await _assign_role_bound(subj.a, "Process Owner", bound)
+    ha = _auth(token_factory, subj.a)
+    r = await app_client.get("/api/v1/clauses", headers=ha)
+    assert r.status_code == 200, r.text
+    assert len(r.json()) == 83
 
 
 # --- map / unmap round-trip + audit ------------------------------------------------------

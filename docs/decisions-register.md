@@ -1,6 +1,6 @@
 # EasySynQ Decisions Register
 
-This document is the **single authoritative source of truth** for the EasySynQ self-hosted ISO 9001:2015 QMS specification. It records the locked foundational decisions, the locked stakeholder decisions, and the normative resolutions (R1–R46) to every finding raised in the gap audit (`17-gaps-and-open-questions.md`); R38 (slice S-rec-4) is the first post-v1 *additive* decision (additive catalog extensibility + SoD-6), R39 (slice family S-aud/S-capa) locks the Audits/Findings/CAPA model + workflow posture, R40 (slice family S-dcr) locks the Revision & change-depth (DCR) family model + the InApproval reject-loop target, and R41 (slice S-drift-3) adds the `drift.read` SYSTEM-domain permission key; R42 (slice S-ack-1) adds the `document.distribute` CONTENT-domain key, and R43 locks the Acknowledgements-family model.
+This document is the **single authoritative source of truth** for the EasySynQ self-hosted ISO 9001:2015 QMS specification. It records the locked foundational decisions, the locked stakeholder decisions, and the normative resolutions (R1–R47) to every finding raised in the gap audit (`17-gaps-and-open-questions.md`); R38 (slice S-rec-4) is the first post-v1 *additive* decision (additive catalog extensibility + SoD-6), R39 (slice family S-aud/S-capa) locks the Audits/Findings/CAPA model + workflow posture, R40 (slice family S-dcr) locks the Revision & change-depth (DCR) family model + the InApproval reject-loop target, and R41 (slice S-drift-3) adds the `drift.read` SYSTEM-domain permission key; R42 (slice S-ack-1) adds the `document.distribute` CONTENT-domain key, and R43 locks the Acknowledgements-family model.
 
 **Precedence:** Where this register conflicts with any text in sections `01`–`15`, **this register supersedes that text.** Section editors MUST back-propagate the changes listed under each resolution's *Back-propagation* note. The exact tokens, enum values, state names, and field names quoted here are **canonical and verbatim** — they must be reproduced character-for-character (case, snake_case, dot-namespacing, and all) wherever the underlying concept appears. Do not soften, rename, abbreviate, or omit any token.
 
@@ -52,7 +52,7 @@ Proceed with the **full reconcile-and-harden pass** — i.e., adopt R1–R37 bel
 
 ---
 
-## Part 3 — Resolutions R1–R46
+## Part 3 — Resolutions R1–R47
 
 Each resolution states the decision, the exact canonical tokens/enums/states/field-names verbatim, and a Back-propagation note listing the section files that change.
 
@@ -1139,6 +1139,35 @@ stage and/or an engine-routed management-authorization approval (S-improvement-4
 as-built `improvement_initiative`/`_stage_event` tables + the reserved `source_link` seam), 15 (the
 `/improvement-initiatives*` lifecycle + the `raise-initiative` spawn endpoints, §8.12b), 16 (clause 10
 fully addressed — 10.2 CAPA + 10.3 initiatives).
+
+---
+
+### R47 — `clauseMap.read` for the Process Owner role (S-records-C): an R38-additive role grant
+
+**Decision (owner, 2026-06-19).** The seeded **Process Owner** role gains a **SYSTEM-scoped
+`clauseMap.read`** grant (migration `0057`) so a bound Process-Owner can read the org-wide ISO clause
+map (`GET /clauses`) — the create-in-process wizard's clause step. This is the **most conservative**
+R38-additive change yet: it adds **no permission key** (`clauseMap.read` already exists — seeded in
+`0004`, held by QMS Owner / Internal Auditor), only a **new role grant** on an existing key, so the
+catalog count **stays 102**. The migration inserts the grant for **every** org's Process Owner role
+(by role name, idempotent `on_conflict_do_nothing`), reaching a renamed install (e.g. `AHT`), not just
+the `DEFAULT` org `0004` seeds.
+
+**The grant alone is insufficient — a companion resolver fix is part of this decision.** A bound
+Process-Owner's `role_assignment` carries a PROCESS `bound_scope` (the owner-assignment mint), and
+`services/authz/repository._grant_from_role` resolved **every** grant of that assignment through the
+bound_scope (`bound_scope or scope_template`), which would clamp the new SYSTEM `clauseMap.read` down
+to PROCESS — unsatisfiable against the SYSTEM clause-map resource. The fix: a **SYSTEM-level
+`scope_template` is never clamped by a `bound_scope`** (a SYSTEM-finest grant carries no
+`:assignment_process` placeholder to concretize); parameterized (PROCESS/FOLDER/…) templates still
+defer to the bound_scope exactly as before. Verified blast radius = precisely this case — every
+pre-existing bound assignment uses `bound_scope={"level":"SYSTEM"}` (unaffected), and the only
+PROCESS-bound role today (the owner-assignment Process Owner) had no SYSTEM grant before this slice.
+
+**Back-propagation:** none required (07 already lists `clauseMap.read`; this records the new
+Process-Owner holder + the resolver semantics). Closes the named "records process-scope read" arc's
+final functional gap (the wizard's clause step for a bound Process-Owner; the picker landed in
+S-process-scope-2).
 
 ---
 
