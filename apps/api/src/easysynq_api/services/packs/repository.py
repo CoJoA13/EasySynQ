@@ -162,18 +162,24 @@ async def _process_candidate_ids(
         fresh = successors - base
         if not fresh:
             break
+        # "owned" == a NON-EMPTY own union, matching record_process_ids exactly (leg A: a PROCESS
+        # evidence link; leg B: a source doc that HAS a process link). A source doc with NO process
+        # link leaves the own union empty, so that successor still inherits (the Codex round-3
+        # finding — ``source_document_id IS NOT NULL`` was too coarse).
         owned = set(
             (
                 await session.scalars(
                     select(Record.id).where(
                         Record.id.in_(fresh),
                         or_(
-                            Record.source_document_id.isnot(None),
                             Record.id.in_(
                                 select(EvidenceForLink.record_id).where(
                                     EvidenceForLink.record_id.in_(fresh),
                                     EvidenceForLink.target_type == EvidenceForTargetType.PROCESS,
                                 )
+                            ),
+                            Record.source_document_id.in_(
+                                select(ProcessLink.documented_information_id)
                             ),
                         ),
                     )
