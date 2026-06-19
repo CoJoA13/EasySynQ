@@ -1171,6 +1171,58 @@ S-process-scope-2).
 
 ---
 
+### R48 — `PROCESS`-grant descendant inclusion is v1.x-deferred; v1 is own-id-only (reconcile)
+
+**Decision (owner, 2026-06-19).** The authorization spec (07 §5.1 table, §5.3, the §9.1 Diego persona
+row) and 15 §9.2 described a `PROCESS` grant as **optionally including descendants** via an
+`include_subprocesses` flag (designed **default `true`**). The **v1 PDP does not implement this**:
+`domain/authz/pdp.py` `_matches_scope` matches a PROCESS grant purely on
+`bool(scoped & resource.process_ids)` — an **own-id intersection** that never walks
+`process.parent_id`. Every PROCESS-scoped surface built to date is consistent with own-id-only:
+owner-assignment (slice S-owner-assignment-1) mints an explicit `process_ids` set; `_document_scope`, the
+records resolver (`services/records/repository.record_process_ids*`), search, and the
+`GET /processes`/`/map` row-filter all match on own-id / own-link sets. This register entry
+**reconciles the docs to the code**: in **v1 a `PROCESS` grant covers only its own `process_id`**, and
+**descendant (subprocess) inclusion is v1.x-deferred**. (No code change — `pdp.py` is already the
+authority; the integration test `test_process_owner_list_hides_unreadable_parent_id` already encodes
+and asserts own-id-only behavior, where a bound child-owner does not reach a resource via the parent.)
+
+**Why deferred, not removed.** Descendant inclusion is **not a single-surface fix** — it is a
+cross-cutting authz-model change that must land identically everywhere a PROCESS scope is matched
+(documents, records, processes, CAPA, search) or the scope model becomes inconsistent and exploitable.
+A spec-of-the-fork (S-include-subprocesses) confirmed the trap concretely: the naive implementation
+(expand a PROCESS grant's `process_ids` to the `parent_id` subtree at the `gather_grants`
+grant-resolution chokepoint) would **silently defeat every per-target write re-auth guard**
+(`_enforce_target_process_record`, `_enforce_target_process`, the per-process `capa.create` gate),
+because each re-enforces against a single literal target process id that the expanded grant would now
+intersect — re-opening exactly the non-converging records/CAPA **write-escalation** surface the
+records-process-scope arc (S-records-W) deliberately trimmed to broad-only. A faithful `default true`
+flip would also **silently widen every existing bound Process-Owner grant** at once (no grant carries
+the flag today). The multi-standard / hierarchy-following intent is therefore **retained in the spec**
+(marked v1.x), not deleted.
+
+**The better long-term design, if v1.x ever implements it.** Mirror how `FOLDER` already achieves
+descendant inclusion with **zero per-check walk** (R6): the ltree `folder_path` carries the hierarchy
+as a string, so the PDP's subtree-prefix test needs no DB traversal. The process analogue is a
+**materialized ltree ancestry column** on `process` (org-rooted node-id path, maintained on
+insert/reparent), letting the PROCESS branch mirror the FOLDER branch — but that is its own slice (a
+migration + backfill + reparent-rewrite + a resource-side path on every `ResourceContext` builder) and
+its own register decision, **not** an on-the-fly grant-side expansion.
+
+**Scope of the reconcile (docs only; no migration, no new key, no behavior change).** 07 §5.1 PROCESS
+selector cell + §5.3 Processes bullet + the §9.1 Diego "(+subprocs)" bound-scope cell; 15 §9.2 "Scope
+inheritance" bullet. The data-model entries describing `process.parent_id` as a self-FK (14 / the ERD
+`parent/subprocess` edge) are **factual schema** (a process *can* nest) and are **unchanged** — the
+nesting exists; only its **authz-grant inheritance** is deferred.
+
+**Back-propagation:** none beyond the four doc edits above. Raised by Codex CX-3 on S-process-scope-2,
+named as a non-goal in the records-process-scope spec
+(`docs/superpowers/specs/2026-06-19-records-process-scope-authz-design.md` §7) and the
+S-process-scope-2 slice-history entry — both stay as historical record; this entry makes it a binding
+decision.
+
+---
+
 ## Part 4 — Gap-audit finding → resolution map
 
 This table maps **every** gap-audit finding id from `17-gaps-and-open-questions.md` — Section A (Gaps: A1–A14), Section B (Contradictions/Inconsistencies: B1–B15), Section C (Risks & Hard Problems: C1–C12, including C6b), and Section D (Open Questions: D1–D14) — to the R-number(s) that resolve it. Several findings share a resolution (the audit raised the same concern as a gap, a contradiction, and an open question); those rows point to the same R-number.

@@ -316,7 +316,7 @@ Every grant (whether via role or override) carries a **scope** that *narrows* wh
 | Scope level | Selector | Example | Typical use |
 |---|---|---|---|
 | `SYSTEM` | (none — global) | applies QMS-wide | Mara's org-wide read; Avery's admin |
-| `PROCESS` | `process_id` (+ optional descendants) | "Purchasing process" | Diego owns Purchasing |
+| `PROCESS` | `process_id` (v1: own-id only — subprocess inclusion deferred per R48) | "Purchasing process" | Diego owns Purchasing |
 | `FOLDER` | `documented_information.folder_path` (`ltree`) — **subtree-prefix (ltree ancestor) match** (reconciled per Decisions Register R6) | "/SOPs/Purchasing" | Priya authors one folder |
 | `DOC_CLASS` | `document_level` (and optionally `kind` + `type`) — e.g., `L2_PROCEDURE` (reconciled per Decisions Register R7) | "all Level-2 Procedures" | Ken approves only Level-2 |
 | `ARTIFACT` | single `document_id` / `record_id` | "SOP-PUR-002" | per-document override |
@@ -337,7 +337,7 @@ A grant **G** with scope **S** matches a request for action **A** on artifact **
 ### 5.3 Scope inheritance
 
 - **Folders** inherit down their subtree via **ltree subtree-prefix matching on `documented_information.folder_path`** (per R6); a grant on `/SOPs` covers `/SOPs/Purchasing/SOP-PUR-002` unless a narrower DENY intervenes.
-- **Processes** may form a parent/child map; a `PROCESS` grant optionally includes descendants (`include_subprocesses` flag, default true).
+- **Processes** may form a parent/child map (`process.parent_id` self-FK). **In v1 a `PROCESS` grant covers only its own `process_id`** — an own-id intersection; the PDP does **not** walk `parent_id` (`domain/authz/pdp.py` `_matches_scope`, PROCESS branch). The `include_subprocesses` flag (designed default `true`) for **descendant (subprocess) inclusion is v1.x-deferred** (per Decisions Register **R48**): it is a cross-cutting authz-model change that must land consistently across documents, records, and processes, so the design intent is preserved here but is **not implemented in v1**.
 - **An artifact in multiple processes** (M:N `process_links`, Domain §6.2): a `PROCESS`-scoped grant matches if the artifact is linked to **any** in-scope process for ALLOW, but a `PROCESS`-scoped DENY matches if linked to **any** denied process (deny is conservative).
 
 ### 5.4 Time-boxed & contextual scope (guests + delegation)
@@ -503,7 +503,7 @@ A reference deployment with two processes (**Purchasing**, **Production**) and a
 |---|---|---|---|---|
 | **Avery** (Admin) | Outside | System Administrator (reserved) | SYSTEM | Runs the system; creates users/roles; configures storage/backups; provisions guests; imports a QMS. **Cannot** author/approve/release QMS content (AZ-INV-6). |
 | **Mara** (Quality Mgr) | Inside | QMS Owner (reserved) | SYSTEM | Org-wide read; configures framework/lifecycle (QMS side); runs management review; generates evidence packs; plans audits; verifies/closes CAPAs; reads/drives Improvement Initiatives (R46); delegated `permission.grant` **scoped to CONTENT domains (`document.*`, `record.*`, `audit.*`, `capa.*`, `changeRequest.*`, `improvement.*`, `report.evidence_pack.generate`) within QMS scope** — cannot grant SYSTEM permissions (admin-only) (reconciled per Decisions Register R35). |
-| **Diego** (Process Owner) | Inside | Process Owner | PROCESS = Purchasing (+subprocs) | Authors/owns Purchasing docs & records; manages the process; owns Purchasing CAPAs; drives Purchasing Improvement Initiatives (R46). Read-only elsewhere. |
+| **Diego** (Process Owner) | Inside | Process Owner | PROCESS = Purchasing (v1: own-id; subprocs R48-deferred) | Authors/owns Purchasing docs & records; manages the process; owns Purchasing CAPAs; drives Purchasing Improvement Initiatives (R46). Read-only elsewhere. |
 | **Priya** (Author) | Inside | Author | FOLDER = /SOPs/Purchasing | Checks out/edits/submits docs in that folder; creates records from templates. **No** approve/release. |
 | **Ken** (Approver) | Inside | Approver | DOC_CLASS = Level-2 Procedure (org-wide) | Reviews/approves Level-2 procedures anywhere. **Cannot** edit/submit; **cannot** approve a version he authored (SoD-1). |
 | **Ingrid** (Internal Auditor) | Inside | Internal Auditor | SYSTEM (read) + PROCESS (conduct) | Broad read incl. obsolete versions & records & Improvement Initiatives (R46); creates/conducts/closes audits; logs findings; links CAPAs. **Hard-excluded** from editing/approving controlled docs (independence; SoD-3). |
