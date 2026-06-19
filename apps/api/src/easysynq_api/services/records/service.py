@@ -637,6 +637,10 @@ async def link_evidence(
     base = await repo.get_base(session, record_id)
     if base is None or base.org_id != actor.org_id or base.kind != DocumentKind.RECORD:
         raise ProblemException(status=404, code="not_found", title="Record not found")
+    # ⚠ Codex W round-5 P2 (TOCTOU): lock the Record row FOR UPDATE before minting a binding-
+    # relevant evidence link, so a concurrent correction (which locks the same row before its union
+    # re-auth) serializes against this write — neither can act on a stale process binding.
+    await _load_record(session, actor, record_id, for_update=True)
     try:
         ttype = EvidenceForTargetType(target_type)
     except ValueError as exc:
@@ -708,7 +712,10 @@ async def link_evidence(
 async def unlink_evidence(
     session: AsyncSession, actor: AppUser, record_id: uuid.UUID, link_id: uuid.UUID
 ) -> None:
-    record = await _load_record(session, actor, record_id)
+    # FOR UPDATE: removing a leg-A binding races a concurrent correction the same way an add does
+    # (Codex W round-5 P2) — lock the Record row first so the correction's union re-auth serializes
+    # against the link change (lock order Record→Capa matches the CAPA-freeze block below).
+    record = await _load_record(session, actor, record_id, for_update=True)
     link = await repo.get_evidence_link_by_id(session, link_id)
     if link is None or link.record_id != record.id or link.org_id != actor.org_id:
         raise ProblemException(status=404, code="not_found", title="Evidence link not found")

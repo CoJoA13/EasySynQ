@@ -19,7 +19,7 @@ from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Request, Response, status
 from pydantic import BaseModel, Field
-from sqlalchemy import ColumnElement
+from sqlalchemy import ColumnElement, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..auth.dependencies import get_current_user
@@ -596,7 +596,20 @@ async def correction_endpoint(
     # correction walk) PLUS any new source — the converging deny-broader floor. The process-less-
     # source / source-less paths still resolve to the original's real binding (W-CX-2 / round-3: a
     # forced process-less source must NOT false-deny an owner of the original's real binding).
-    original = await records_repo.get_record(session, record_id)
+    # ⚠ Codex W round-5 P2 (TOCTOU): lock the Record row FOR UPDATE and HOLD it through
+    # capture_correction's supersede (which re-acquires the same lock re-entrantly). The binding-
+    # minting evidence-link writes now lock the SAME row, so a concurrent PROCESS link cannot commit
+    # a new binding between this re-auth read and the supersede — without the lock a P1-only owner
+    # could pass the union check while the record is P1-only and a P2 link lands before the cutover.
+    # populate_existing refreshes the row the authz resolver may have cached into the identity map.
+    original = (
+        await session.execute(
+            select(Record)
+            .where(Record.id == record_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one_or_none()
     if original is not None:
         effective_source = (
             original.source_document_id

@@ -10,6 +10,7 @@ own-id-scoped (the shared session DB accumulates rows).
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from collections.abc import Callable
 
@@ -19,9 +20,11 @@ from sqlalchemy import select
 
 from easysynq_api.db.models.authz_grant import PermissionOverride
 from easysynq_api.db.models.permission import Permission
+from easysynq_api.db.models.record import Record
 from easysynq_api.db.models.scope import Scope
 from easysynq_api.db.session import get_sessionmaker
 from easysynq_api.domain.authz.types import Effect, ScopeLevel
+from easysynq_api.services.records.service import link_evidence
 
 from . import s5_helpers as s5
 from .test_processes import _create_process, _link_doc_to_process
@@ -520,3 +523,52 @@ async def test_process_owner_correction_cannot_supersede_co_bound_record(
         json={"record_type": "RELEASE", "title": "supersede co-bound"},
     )
     assert deny.status_code == 403, deny.text
+
+
+async def test_binding_writes_serialize_on_record_lock(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """S-records-W (Codex W round-5 P2 / TOCTOU): correction_endpoint, link_evidence and
+    unlink_evidence all lock the Record row FOR UPDATE, so a binding-minting evidence-link write
+    cannot interleave with a correction's union re-auth (which would let a P1-only owner supersede a
+    record before a concurrent P2 link is visible). Proof: while one session holds the Record lock —
+    exactly as those writers do — BOTH a concurrent ``link_evidence`` AND a concurrent
+    ``POST /correction`` BLOCK until it releases, then both complete. Without the locks they would
+    commit immediately (the assertions on ``.done()`` would fail)."""
+    author = _subject("wser-a")
+    await _grant(author, _AUTHOR_PERMS)
+    await s5.grant_lifecycle(author)  # broad authz → the correction 201s in either race order
+    ha = _auth(token_factory, author)
+    p1 = await _create_process(app_client, ha)
+    p2 = await _create_process(app_client, ha)
+    record = await _source_backed_record(app_client, ha, p1["id"])  # bound to P1 via source
+    rid = uuid.UUID(record["id"])
+
+    sm = get_sessionmaker()
+    locker = sm()
+    worker = sm()
+    try:
+        # Hold the Record FOR UPDATE lock, exactly as correction_endpoint / link_evidence do.
+        await locker.execute(select(Record).where(Record.id == rid).with_for_update())
+        actor = await _ensure_user(worker, author)
+        link_task = asyncio.create_task(
+            link_evidence(worker, actor, rid, target_type="process", target_id=uuid.UUID(p2["id"]))
+        )
+        corr_task = asyncio.create_task(
+            app_client.post(
+                f"/api/v1/records/{rid}/correction",
+                headers=ha,
+                json={"record_type": "RELEASE", "title": "raced correction"},
+            )
+        )
+        await asyncio.sleep(0.5)
+        assert not link_task.done(), "link_evidence did not block on the held Record lock"
+        assert not corr_task.done(), "correction did not block on the held Record lock"
+        await locker.rollback()  # release the lock → both blocked writers proceed and serialize
+        link = await asyncio.wait_for(link_task, timeout=10)
+        assert link is not None
+        corr = await asyncio.wait_for(corr_task, timeout=10)
+        assert corr.status_code == 201, corr.text
+    finally:
+        await worker.close()
+        await locker.close()
