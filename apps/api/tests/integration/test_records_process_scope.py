@@ -365,3 +365,37 @@ async def test_process_owner_correction_cannot_introduce_unowned_source(
         },
     )
     assert deny.status_code == 403, deny.text
+
+
+async def test_process_owner_cannot_capture_under_unowned_shared_doc(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """S-records-W (spec §6/§8): capture re-auths EACH of the source doc's processes — a
+    Process-Owner of P1 cannot capture a record under a doc linked to P1+P2 (the successor would
+    inherit the unowned P2 via leg B). The per-process loop 403s on P2 even though the base
+    intersection-match passes on P1 (this would 201 without the loop)."""
+    author = _subject("wcap-a")
+    await _grant(author, _AUTHOR_PERMS)
+    await s5.grant_lifecycle(author)  # document.create + manage_metadata for the shared source doc
+    ha = _auth(token_factory, author)
+    p1 = await _create_process(app_client, ha)
+    p2 = await _create_process(app_client, ha)
+    doc = await _create(app_client, ha, await s5.type_id("SOP"))
+    await _link_doc_to_process(app_client, ha, doc["id"], p1["id"])
+    await _link_doc_to_process(app_client, ha, doc["id"], p2["id"])  # D spans P1 + P2
+    sha = await _upload_evidence(app_client, ha, f"cap-{uuid.uuid4().hex}".encode())
+
+    owner = _subject("wcap-b")
+    await _grant_process(owner, "record.create", p1["id"])  # owns P1, NOT P2
+    hb = _auth(token_factory, owner)
+    deny = await app_client.post(
+        "/api/v1/records",
+        headers=hb,
+        json={
+            "record_type": "EVIDENCE",
+            "title": "shared-doc capture",
+            "source_document_id": doc["id"],
+            "evidence": [{"sha256": sha, "content_type": "application/pdf"}],
+        },
+    )
+    assert deny.status_code == 403, deny.text

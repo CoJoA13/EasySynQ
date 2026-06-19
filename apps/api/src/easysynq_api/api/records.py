@@ -435,6 +435,20 @@ async def capture_endpoint(
     # scoped grant authorizes a Mode-B capture against its template ([Fold 16]).
     resource = await _capture_scope(session, caller, body.source_document_id)
     await enforce(session, authz_sink, request, caller, "record.create", resource)
+    # S-records-W: a Mode-B capture inherits the source doc's processes (leg B), so re-enforce
+    # record.create over EACH source process individually (mirror documents.create's per-process
+    # loop, documents.py:800-824) — the base enforce matches if ANY source process is owned, so
+    # without this a Process-Owner of P1 could mint a P1+P2-bound record under a shared doc. SYSTEM/
+    # FOLDER holders still pass every iteration; a PROCESS holder must own EVERY source process.
+    for pid in resource.process_ids:
+        await enforce(
+            session,
+            authz_sink,
+            request,
+            caller,
+            "record.create",
+            dataclasses.replace(resource, process_ids=frozenset({pid})),
+        )
     record = await capture_record(
         session,
         caller,
