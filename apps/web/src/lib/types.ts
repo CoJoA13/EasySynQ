@@ -189,6 +189,9 @@ export interface DocumentCreate {
   area_code?: string;
   folder_path?: string;
   classification?: string;
+  // S-process-scope-1: optionally link the new document to processes at creation. A bound Process
+  // Owner (PROCESS-scoped document.create) must declare ≥1 owned process; omitting it = unlinked.
+  process_ids?: string[];
 }
 
 // POST /documents/{id}/checkout response (also the working-draft mirror row).

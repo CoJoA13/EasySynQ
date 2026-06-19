@@ -229,7 +229,17 @@ async def _record_scope(request: Any, session: AsyncSession) -> ResourceContext:
     base = await session.get(DocumentedInformation, record_id)
     if base is None:
         return ResourceContext(artifact_id=str(record_id))
-    return ResourceContext(artifact_id=str(base.id), folder_path=base.folder_path)
+    # S-process-scope-1: a record inherits its process scope from its SOURCE document's links (the
+    # canonical record→process binding — _capture_scope on create + the packs repository read both
+    # key on source_document_id), so a bound Process Owner's PROCESS-scoped record.read/dispose
+    # matches. An ad-hoc record (no source) stays unscoped (SYSTEM/ARTIFACT grants only), as today.
+    record = await records_repo.get_record(session, record_id)
+    process_ids: frozenset[str] = frozenset()
+    if record is not None and record.source_document_id is not None:
+        process_ids = await vault_repo.process_ids_for_doc(session, record.source_document_id)
+    return ResourceContext(
+        artifact_id=str(base.id), folder_path=base.folder_path, process_ids=process_ids
+    )
 
 
 async def _capture_scope(
@@ -377,9 +387,20 @@ async def list_records_endpoint(
     # Filter-not-403 (doc 15 §9.3): drop rows the caller may not record.read.
     grants = await gather_grants(session, caller.id, caller.org_id, "record.read")
     ctx = RequestContext(now=datetime.datetime.now(datetime.UTC))
+    # S-process-scope-1: batch-load each record's SOURCE-document process links (the _record_scope
+    # inheritance, list side) so a bound Process Owner's PROCESS-scoped record.read matches.
+    source_ids = [r.source_document_id for r, _ in rows if r.source_document_id is not None]
+    process_ids_by_source = await vault_repo.process_ids_for_docs(session, source_ids)
     visible: list[tuple[Record, DocumentedInformation]] = []
     for record, base in rows:
-        resource = ResourceContext(artifact_id=str(record.id), folder_path=base.folder_path)
+        process_ids = (
+            process_ids_by_source.get(record.source_document_id, frozenset())
+            if record.source_document_id is not None
+            else frozenset()
+        )
+        resource = ResourceContext(
+            artifact_id=str(record.id), folder_path=base.folder_path, process_ids=process_ids
+        )
         if authorize(grants, "record.read", resource, ctx).allow:
             visible.append((record, base))
     return [_record(r, b) for r, b in visible]

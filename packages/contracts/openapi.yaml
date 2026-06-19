@@ -6275,6 +6275,16 @@ components:
         area_code: { type: [string, "null"] }
         folder_path: { type: [string, "null"] }
         classification: { type: string, enum: [Public, Internal, Confidential, Restricted], default: Internal }
+        process_ids:
+          type: array
+          items: { type: string, format: uuid }
+          default: []
+          description: >-
+            Optional processes to link the new document to at creation (S-process-scope-1). Each is
+            authorized as a process link (document.manage_metadata over the target process); the
+            empty default is byte-identical to a pre-slice create (folder/doc-class scoped, no links).
+            Required for a PROCESS-scoped author (a bound Process Owner) whose document.create grant
+            only matches when at least one owned process is declared.
 
     MetadataUpdate:
       type: object

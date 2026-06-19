@@ -40,12 +40,17 @@ async def _readable_hits(
     Returns (visible, hidden_count)."""
     grants = await gather_grants(session, caller.id, caller.org_id, "document.read")
     ctx = RequestContext(now=datetime.datetime.now(datetime.UTC))
+    # S-process-scope-1: batch-load each candidate's process links so a bound Process Owner's
+    # PROCESS-scoped document.read matches (the GET /documents row-filter pattern). A hit with no
+    # link gets an empty set → byte-identical filtering for the SYSTEM/ARTIFACT-scoped case.
+    process_ids_by_doc = await vault_repo.process_ids_for_docs(session, [h.doc_id for h in hits])
     visible: list[SearchHit] = []
     for h in hits:
         resource = ResourceContext(
             artifact_id=str(h.doc_id),
             folder_path=h.folder_path,
             document_level=h.document_level,
+            process_ids=process_ids_by_doc.get(h.doc_id, frozenset()),
         )
         if authorize(grants, "document.read", resource, ctx).allow:
             visible.append(h)
@@ -93,10 +98,15 @@ async def suggest_endpoint(
     raw = await get_indexer().suggest(session, caller.org_id, q, limit=_CANDIDATE_CAP)
     grants = await gather_grants(session, caller.id, caller.org_id, "document.read")
     ctx = RequestContext(now=datetime.datetime.now(datetime.UTC))
+    # S-process-scope-1: process links per suggestion so a PROCESS-scoped document.read matches.
+    process_ids_by_doc = await vault_repo.process_ids_for_docs(session, [s.doc_id for s in raw])
     out: list[dict[str, str]] = []
     for s in raw:
         resource = ResourceContext(
-            artifact_id=str(s.doc_id), folder_path=s.folder_path, document_level=s.document_level
+            artifact_id=str(s.doc_id),
+            folder_path=s.folder_path,
+            document_level=s.document_level,
+            process_ids=process_ids_by_doc.get(s.doc_id, frozenset()),
         )
         if authorize(grants, "document.read", resource, ctx).allow:
             out.append({"id": str(s.doc_id), "identifier": s.identifier, "title": s.title})

@@ -107,6 +107,12 @@ class DocumentCreate(BaseModel):
     area_code: str | None = None
     folder_path: str | None = None
     classification: str = "Internal"
+    # S-process-scope-1: optionally link the new document to one or more processes AT creation. This
+    # is the only way a bound Process Owner (whose document.create is PROCESS-scoped) can create —
+    # a brand-new doc has no ProcessLink, so without a declared process its create scope carries no
+    # process_ids and the PROCESS grant matches nothing. Empty (the default) = byte-identical to the
+    # pre-slice create (folder/doc-class scoped, no links). Order-preserving; deduped server-side.
+    process_ids: list[uuid.UUID] = Field(default_factory=list)
 
 
 class MetadataUpdate(BaseModel):
@@ -367,19 +373,14 @@ async def _document_scope_by_id(session: AsyncSession, doc_id: uuid.UUID) -> Res
     # PROCESS-scoped grant (e.g. a bound Process Owner's ``document.*``) authorizes across EVERY
     # document gate — not just ``document.distribute``. AZ-INV-8-safe: an attribute can only newly
     # *match* a grant that already targets that exact process; it never widens an
-    # ARTIFACT/FOLDER/DOC_CLASS/SYSTEM match. This is the repo-wide ``_document_scope`` migration
-    # the former ``_document_scope_with_processes`` docstring deferred to owner-assignment.
-    process_ids = (
-        await session.execute(
-            select(ProcessLink.process_id).where(ProcessLink.documented_information_id == doc.id)
-        )
-    ).scalars()
+    # ARTIFACT/FOLDER/DOC_CLASS/SYSTEM match. S-process-scope-1 routes this through the shared
+    # ``vault_repo.process_ids_for_doc`` loader (the same loader search/workflow-reads now use).
     return ResourceContext(
         artifact_id=str(doc.id),
         folder_path=doc.folder_path,
         document_level=level,
         lifecycle_state=doc.current_state.value,
-        process_ids=frozenset(str(p) for p in process_ids),
+        process_ids=await vault_repo.process_ids_for_doc(session, doc.id),
     )
 
 
@@ -733,19 +734,8 @@ async def list_documents(
     # over the bounded scan window — no N+1) so the per-row read-filter can match a PROCESS-scoped
     # document.read grant (the list-side half of the _document_scope process_ids migration). A doc
     # with no link gets an empty set → byte-identical filtering for the SYSTEM/ARTIFACT-scoped case.
-    process_ids_by_doc: dict[uuid.UUID, frozenset[str]] = {}
-    doc_ids = [d.id for d in docs]
-    if doc_ids:
-        grouped: dict[uuid.UUID, set[str]] = {}
-        for di_id, p_id in (
-            await session.execute(
-                select(ProcessLink.documented_information_id, ProcessLink.process_id).where(
-                    ProcessLink.documented_information_id.in_(doc_ids)
-                )
-            )
-        ).all():
-            grouped.setdefault(di_id, set()).add(str(p_id))
-        process_ids_by_doc = {k: frozenset(v) for k, v in grouped.items()}
+    # S-process-scope-1 routes this through the shared ``vault_repo.process_ids_for_docs`` loader.
+    process_ids_by_doc = await vault_repo.process_ids_for_docs(session, [d.id for d in docs])
     ctx = RequestContext(now=datetime.datetime.now(datetime.UTC))
     visible: list[DocumentedInformation] = []
     for d in docs:
@@ -788,8 +778,48 @@ async def create_document_endpoint(
 ) -> dict[str, Any]:
     dt = await session.get(DocumentType, body.document_type_id)
     level = dt.document_level.value if dt else None
-    resource = ResourceContext(folder_path=body.folder_path, document_level=level)
+    # S-process-scope-1: dedup the declared processes (order-preserving) — a duplicate would trip
+    # the ProcessLink UNIQUE on create.
+    declared: list[uuid.UUID] = list(dict.fromkeys(body.process_ids))
+    # The base create gate carries the declared process_ids so a PROCESS-scoped document.create
+    # grant (a bound Process Owner) matches; a FOLDER/DOC_CLASS/SYSTEM holder matches as before.
+    resource = ResourceContext(
+        folder_path=body.folder_path,
+        document_level=level,
+        process_ids=frozenset(str(p) for p in declared),
+    )
     await enforce(session, authz_sink, request, caller, "document.create", resource)
+    # Validate + per-process authorize each declared link BEFORE creating anything. The per-process
+    # document.manage_metadata enforce (over JUST that one process) mirrors _enforce_target_process:
+    # the base create gate matches if ANY declared process is owned, so without this a Process Owner
+    # of P1 could smuggle a link to an unowned P2 (the S-owner-assignment-1 escalation class). A
+    # SYSTEM/FOLDER holder still passes; a PROCESS holder must own the target. An Author (no
+    # manage_metadata) can only create UNLINKED — exactly as today.
+    processes: list[Process] = []
+    for pid in declared:
+        process = await vault_repo.get_process(session, pid)
+        if process is None or process.org_id != caller.org_id:
+            raise ProblemException(
+                status=422,
+                code="validation_error",
+                title="Process does not exist",
+                errors=[
+                    {
+                        "field": "process_ids",
+                        "code": "not_found",
+                        "message": "process does not exist",
+                    }
+                ],
+            )
+        link_scope = ResourceContext(
+            folder_path=body.folder_path,
+            document_level=level,
+            process_ids=frozenset({str(process.id)}),
+        )
+        await enforce(session, authz_sink, request, caller, "document.manage_metadata", link_scope)
+        processes.append(process)
+    # create_document creates the doc AND the ProcessLink rows + PROCESS_LINKED audit in ONE txn, so
+    # a failed link can never strand a doc its (process-scoped) creator could no longer even read.
     doc = await create_document(
         session,
         vault_sink,
@@ -799,6 +829,7 @@ async def create_document_endpoint(
         area_code=body.area_code,
         folder_path=body.folder_path,
         classification=body.classification,
+        processes=processes,
     )
     return _document(doc)
 

@@ -15,6 +15,7 @@ import hashlib
 import logging
 import re
 import uuid
+from collections.abc import Sequence
 from typing import Any, Literal
 
 import rfc8785
@@ -37,6 +38,8 @@ from ...db.models.document_version import DocumentVersion as DocumentVersionMode
 from ...db.models.documented_information import DocumentedInformation
 from ...db.models.form_template import FormTemplate
 from ...db.models.management_review import ManagementReview
+from ...db.models.process import Process
+from ...db.models.process_link import ProcessLink
 from ...db.models.quality_objective import QualityObjective
 from ...db.models.working_draft import WorkingDraft
 from ...domain.records.form_schema import FieldError, validate_schema
@@ -170,6 +173,7 @@ async def create_document(
     area_code: str | None = None,
     folder_path: str | None = None,
     classification: str = "Internal",
+    processes: Sequence[Process] = (),
 ) -> DocumentedInformation:
     dt = await repository.get_document_type(session, document_type_id)
     if dt is None or dt.org_id != actor.org_id:
@@ -208,6 +212,33 @@ async def create_document(
     session.add(doc)
     await session.flush()  # populate doc.id for the audit row's object_id
     _emit(session, sink, "DOCUMENT_CREATED", actor, "document", doc.id, identifier=doc.identifier)
+    # S-process-scope-1: link the declared processes in the SAME txn so the doc + its ProcessLinks +
+    # the PROCESS_LINKED audit commit atomically — a half-linked doc (created but unlinked) would be
+    # invisible to a process-scoped owner who can no longer read it. The api layer already validated
+    # each process (existence + org) and authorized the link (document.manage_metadata over the
+    # target). The PROCESS_LINKED row carries identifier=doc.identifier so it lands on the
+    # per-document audit trail, byte-compatible with the standalone link endpoint's event.
+    for process in processes:
+        session.add(
+            ProcessLink(
+                org_id=doc.org_id,
+                process_id=process.id,
+                documented_information_id=doc.id,
+                created_by=actor.id,
+            )
+        )
+        _emit(
+            session,
+            sink,
+            "PROCESS_LINKED",
+            actor,
+            "document",
+            doc.id,
+            identifier=doc.identifier,
+            after={"process_id": str(process.id), "process_name": process.name},
+        )
+    if processes:
+        await session.flush()
     await session.commit()
     await session.refresh(doc)
     return doc
