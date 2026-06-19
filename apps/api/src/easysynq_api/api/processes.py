@@ -20,6 +20,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Request, Response, status
 from pydantic import BaseModel
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -28,6 +29,8 @@ from ..db.models._clause_enums import PdcaPhase
 from ..db.models._process_enums import ProcessState
 from ..db.models.app_user import AppUser
 from ..db.models.audit_event import AuditEvent
+from ..db.models.org_role import OrgRole
+from ..db.models.org_role_assignment import OrgRoleAssignment
 from ..db.models.process import Process
 from ..db.models.process_edge import ProcessEdge
 from ..db.session import get_session
@@ -35,6 +38,7 @@ from ..domain.authz import ResourceContext
 from ..logging import request_id_var
 from ..problems import ProblemException
 from ..services.authz import require
+from ..services.owner_assignment import assign_process_owner, revoke_process_owner
 from ..services.vault import repository as repo
 
 router = APIRouter(prefix="/api/v1", tags=["processes"])
@@ -67,6 +71,10 @@ class EdgeCreate(BaseModel):
     io_label: str | None = None
 
 
+class OwnerAssignCreate(BaseModel):
+    user_id: uuid.UUID
+
+
 def _process(p: Process) -> dict[str, Any]:
     return {
         "id": str(p.id),
@@ -92,6 +100,17 @@ def _edge(e: ProcessEdge) -> dict[str, Any]:
         "from_process_id": str(e.from_process_id),
         "to_process_id": str(e.to_process_id),
         "io_label": e.io_label,
+    }
+
+
+def _owner(a: OrgRoleAssignment, org_role_name: str) -> dict[str, Any]:
+    return {
+        "id": str(a.id),
+        "process_id": str(a.process_id) if a.process_id else None,
+        "user_id": str(a.user_id),
+        "org_role_id": str(a.org_role_id),
+        "org_role_name": org_role_name,
+        "created_at": a.created_at.isoformat() if a.created_at else None,
     }
 
 
@@ -165,6 +184,15 @@ async def _load_process(session: AsyncSession, caller: AppUser, process_id: uuid
     return proc
 
 
+async def _load_user(session: AsyncSession, caller: AppUser, user_id: uuid.UUID) -> AppUser:
+    # Org-scoped (D1 single-org today; keeps the surface tenant-safe). A cross-org target reads as
+    # not-found (no existence leak — the authz._get_user precedent).
+    user = await session.get(AppUser, user_id)
+    if user is None or user.org_id != caller.org_id:
+        raise ProblemException(status=404, code="not_found", title="User not found")
+    return user
+
+
 async def _require_org_process(
     session: AsyncSession, caller: AppUser, process_id: uuid.UUID, field: str
 ) -> Process:
@@ -177,6 +205,14 @@ async def _require_org_process(
 _read = require("process.read")  # default SYSTEM scope (GET /clauses shape)
 _create = require("process.create")  # SYSTEM; seeded-but-ungranted → override-until-UI
 _manage = require("process.manage", async_scope_resolver=_process_scope)
+# S-owner-assignment-1: bind/unbind a process owner. The seeded process.assign_owner key (PROCESS
+# finest-scope, content/QMS tier) gets its first require() consumer — a SYSTEM override matches in
+# v1, a concrete PROCESS grant once owner-assignment binds it.
+_assign_owner = require("process.assign_owner", async_scope_resolver=_process_scope)
+# GET /owners reads at the process's PROCESS scope so a PROCESS-scoped owner can view their own
+# process's owner bindings (a SYSTEM process.read still matches). The list/map/detail reads stay
+# SYSTEM-scoped (the deferred per-process read-filtering); only this new read adopts the resolver.
+_read_scoped = require("process.read", async_scope_resolver=_process_scope)
 
 
 # --- reads ------------------------------------------------------------------------------
@@ -388,4 +424,60 @@ async def remove_edge_endpoint(
         before={"to_process_id": str(edge.to_process_id), "io_label": edge.io_label},
     )
     await session.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+# --- owner-assignment (process.assign_owner) --------------------------------------------
+
+
+@router.get("/processes/{process_id}/owners")
+async def list_process_owners_endpoint(
+    process_id: uuid.UUID,
+    caller: AppUser = Depends(_read_scoped),
+    session: AsyncSession = Depends(get_session),
+) -> list[dict[str, Any]]:
+    """The process's recorded owners (the org_role_assignment RACI rows). Gated process.read at the
+    process's PROCESS scope, so a PROCESS-scoped owner can read their own process's bindings."""
+    await _load_process(session, caller, process_id)
+    rows = (
+        await session.execute(
+            select(OrgRoleAssignment, OrgRole.name)
+            .join(OrgRole, OrgRole.id == OrgRoleAssignment.org_role_id)
+            .where(
+                OrgRoleAssignment.org_id == caller.org_id,
+                OrgRoleAssignment.process_id == process_id,
+            )
+            .order_by(OrgRoleAssignment.created_at)
+        )
+    ).all()
+    return [_owner(a, name) for a, name in rows]
+
+
+@router.post("/processes/{process_id}/owner", status_code=status.HTTP_201_CREATED)
+async def assign_process_owner_endpoint(
+    process_id: uuid.UUID,
+    body: OwnerAssignCreate,
+    caller: AppUser = Depends(_assign_owner),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """Bind a user as the accountable owner of this process — recording the RACI fact AND minting
+    the concrete PROCESS-scoped Process-Owner grant (substituting the :assignment_process
+    placeholder). Idempotent. Gated process.assign_owner at the process's PROCESS scope."""
+    proc = await _load_process(session, caller, process_id)
+    user = await _load_user(session, caller, body.user_id)
+    return await assign_process_owner(session, actor=caller, process=proc, user=user)
+
+
+@router.delete("/processes/{process_id}/owner/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def revoke_process_owner_endpoint(
+    process_id: uuid.UUID,
+    user_id: uuid.UUID,
+    caller: AppUser = Depends(_assign_owner),
+    session: AsyncSession = Depends(get_session),
+) -> Response:
+    """Unbind a user as owner of this process — removing the RACI row AND narrowing the
+    Process-Owner grant's process_ids (dropping it when the last owned process goes)."""
+    proc = await _load_process(session, caller, process_id)
+    user = await _load_user(session, caller, user_id)
+    await revoke_process_owner(session, actor=caller, process=proc, user=user)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

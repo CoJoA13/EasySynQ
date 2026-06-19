@@ -56,21 +56,24 @@ async def first_stage(session: AsyncSession, definition_id: uuid.UUID) -> Workfl
 async def users_with_roles(
     session: AsyncSession, org_id: uuid.UUID, role_names: list[str]
 ) -> list[uuid.UUID]:
-    """Concrete candidate user ids for a stage's role-named assignees (deterministic order)."""
+    """Concrete candidate user ids for a stage's role-named assignees (deterministic order). An
+    assignment whose ``bound_scope`` carries a ``managed_by`` marker (an automated, scoped mint —
+    S-owner-assignment-1's per-process owner grant) is EXCLUDED: it confers the scoped *permission*
+    set, NOT org-wide *workflow candidacy*, so a per-process owner is not flooded into every stage
+    naming their role regardless of process (the cross-process escalation Codex flagged). A
+    deliberate org-wide assignment (no marker) stays a candidate."""
     if not role_names:
         return []
     rows = (
-        (
-            await session.execute(
-                select(RoleAssignment.user_id)
-                .join(Role, Role.id == RoleAssignment.role_id)
-                .where(RoleAssignment.org_id == org_id, Role.name.in_(role_names))
-            )
+        await session.execute(
+            select(RoleAssignment.user_id, RoleAssignment.bound_scope)
+            .join(Role, Role.id == RoleAssignment.role_id)
+            .where(RoleAssignment.org_id == org_id, Role.name.in_(role_names))
         )
-        .scalars()
-        .all()
+    ).all()
+    return list(
+        dict.fromkeys(uid for uid, bound_scope in rows if not (bound_scope or {}).get("managed_by"))
     )
-    return list(dict.fromkeys(rows))
 
 
 async def get_task(session: AsyncSession, task_id: uuid.UUID) -> Task | None:

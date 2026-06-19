@@ -262,7 +262,10 @@ async def list_user_roles(
             .where(RoleAssignment.user_id == user_id, RoleAssignment.org_id == caller.org_id)
         )
     ).all()
-    return [_assignment(a, name) for a, name in rows]
+    # Hide owner-assignment-managed grants (a ``managed_by`` marker): they are bound to a process
+    # and managed via /processes/{id}/owner, NOT this generic role surface — surfacing them here
+    # would invite a revoke that orphans the org_role_assignment RACI row (S-owner-assignment-1).
+    return [_assignment(a, name) for a, name in rows if not (a.bound_scope or {}).get("managed_by")]
 
 
 @router.post("/users/{user_id}/roles", status_code=status.HTTP_201_CREATED)
@@ -276,8 +279,15 @@ async def assign_user_role(
     target = await _get_user(session, user_id, granter.org_id)
     role = await _resolve_role(session, target.org_id, body.role_id, body.role_name)
     await assert_can_assign_role(session, sink, granter, role.id)
+    # ``managed_by`` is a RESERVED bound_scope marker set ONLY by owner-assignment (it drives the
+    # hide/409 on the generic role surface + the candidacy/ack exclusions). Strip it here so a
+    # generic caller cannot forge an assignment that masquerades as owner-assignment-managed and
+    # becomes un-revocable through this surface (the Codex finding).
+    bound_scope = body.bound_scope
+    if bound_scope is not None and "managed_by" in bound_scope:
+        bound_scope = {k: v for k, v in bound_scope.items() if k != "managed_by"}
     assignment = RoleAssignment(
-        org_id=target.org_id, user_id=target.id, role_id=role.id, bound_scope=body.bound_scope
+        org_id=target.org_id, user_id=target.id, role_id=role.id, bound_scope=bound_scope
     )
     session.add(assignment)
     await session.flush()  # populate assignment.id for the audit row's object_id
@@ -287,7 +297,7 @@ async def assign_user_role(
         EventType.ROLE_ASSIGN,
         assignment.id,
         target.id,
-        after={"role_id": str(role.id), "role_name": role.name, "bound_scope": body.bound_scope},
+        after={"role_id": str(role.id), "role_name": role.name, "bound_scope": bound_scope},
     )
     await session.commit()
     await session.refresh(assignment)
@@ -305,6 +315,15 @@ async def revoke_user_role(
     assignment = await session.get(RoleAssignment, assignment_id)
     if assignment is None or assignment.user_id != user_id or assignment.org_id != granter.org_id:
         raise ProblemException(status=404, code="not_found", title="Role assignment not found")
+    # An owner-assignment-managed grant must be revoked through owner-assignment (which also drops
+    # the org_role_assignment RACI row); a bare delete here would orphan it (S-owner-assignment-1).
+    if (assignment.bound_scope or {}).get("managed_by"):
+        raise ProblemException(
+            status=409,
+            code="conflict",
+            title="This grant is managed by owner-assignment; revoke it via "
+            "DELETE /processes/{process_id}/owner/{user_id}",
+        )
     _audit_authz_change(
         session,
         granter,

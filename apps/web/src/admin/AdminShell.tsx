@@ -6,7 +6,11 @@ import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
 export function AdminShell() {
   const { pathname } = useLocation();
   const navigate = useNavigate();
-  const tab = pathname.includes("/admin/roles") ? "roles" : "users";
+  const tab = pathname.includes("/admin/roles")
+    ? "roles"
+    : pathname.includes("/admin/processes")
+      ? "processes"
+      : "users";
   return (
     <Container size="lg" py="xl">
       <Stack gap="md">
@@ -20,6 +24,7 @@ export function AdminShell() {
           <Tabs.List>
             <Tabs.Tab value="users">Users</Tabs.Tab>
             <Tabs.Tab value="roles">Roles</Tabs.Tab>
+            <Tabs.Tab value="processes">Processes</Tabs.Tab>
           </Tabs.List>
         </Tabs>
         <Outlet />

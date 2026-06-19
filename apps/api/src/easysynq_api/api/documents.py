@@ -363,32 +363,24 @@ async def _document_scope_by_id(session: AsyncSession, doc_id: uuid.UUID) -> Res
     if doc.document_type_id:
         dt = await session.get(DocumentType, doc.document_type_id)
         level = dt.document_level.value if dt else None
+    # S-owner-assignment-1 (R28): populate ``process_ids`` from the doc's ProcessLink ids so a
+    # PROCESS-scoped grant (e.g. a bound Process Owner's ``document.*``) authorizes across EVERY
+    # document gate — not just ``document.distribute``. AZ-INV-8-safe: an attribute can only newly
+    # *match* a grant that already targets that exact process; it never widens an
+    # ARTIFACT/FOLDER/DOC_CLASS/SYSTEM match. This is the repo-wide ``_document_scope`` migration
+    # the former ``_document_scope_with_processes`` docstring deferred to owner-assignment.
+    process_ids = (
+        await session.execute(
+            select(ProcessLink.process_id).where(ProcessLink.documented_information_id == doc.id)
+        )
+    ).scalars()
     return ResourceContext(
         artifact_id=str(doc.id),
         folder_path=doc.folder_path,
         document_level=level,
         lifecycle_state=doc.current_state.value,
+        process_ids=frozenset(str(p) for p in process_ids),
     )
-
-
-async def _document_scope_with_processes(
-    request: Request, session: AsyncSession
-) -> ResourceContext:
-    """``_document_scope`` + the doc's ProcessLink ids — R28: a PROCESS-scoped grant can only
-    match when ``resource.process_ids`` is populated (the S-ack-1 decide-leg precedent). Used by
-    the distribution/acknowledgement gates; the repo-wide ``_document_scope`` migration is the
-    owner-assignment track's call."""
-    base = await _document_scope(request, session)
-    if base.artifact_id is None:
-        return base
-    process_ids = (
-        await session.execute(
-            select(ProcessLink.process_id).where(
-                ProcessLink.documented_information_id == uuid.UUID(base.artifact_id)
-            )
-        )
-    ).scalars()
-    return dataclasses.replace(base, process_ids=frozenset(str(p) for p in process_ids))
 
 
 async def _release_scope(
@@ -503,9 +495,9 @@ _checkout = require("document.checkout", async_scope_resolver=_document_scope)
 _edit = require("document.edit", async_scope_resolver=_document_scope)
 _manage_metadata = require("document.manage_metadata", async_scope_resolver=_document_scope)
 # S-ack-1 (R42): distribution-list management + the named coverage matrix (doc 04 §8.1/§8.2).
-# The scope carries process_ids so a PROCESS-scoped grant (legal via the R35 content-tier
-# permission.grant) can match (Codex P2).
-_distribute = require("document.distribute", async_scope_resolver=_document_scope_with_processes)
+# ``_document_scope`` now carries process_ids for every gate (S-owner-assignment-1), so a
+# PROCESS-scoped grant (legal via the R35 content-tier permission.grant) matches here too.
+_distribute = require("document.distribute", async_scope_resolver=_document_scope)
 # Lifecycle actions. submit-review (S4) instantiates the approval workflow; approve/request-changes
 # route through POST /tasks/{id}/decision now (S5, removed from here). release is a flat sig-hook
 # action but enforces imperatively in-handler (its SoD-2 scope needs the body's version_id, which a
@@ -737,6 +729,23 @@ async def list_documents(
             .all()
         ):
             levels[dt.id] = dt.document_level.value
+    # S-owner-assignment-1: batch-load each candidate doc's process links ONCE (one grouped query
+    # over the bounded scan window — no N+1) so the per-row read-filter can match a PROCESS-scoped
+    # document.read grant (the list-side half of the _document_scope process_ids migration). A doc
+    # with no link gets an empty set → byte-identical filtering for the SYSTEM/ARTIFACT-scoped case.
+    process_ids_by_doc: dict[uuid.UUID, frozenset[str]] = {}
+    doc_ids = [d.id for d in docs]
+    if doc_ids:
+        grouped: dict[uuid.UUID, set[str]] = {}
+        for di_id, p_id in (
+            await session.execute(
+                select(ProcessLink.documented_information_id, ProcessLink.process_id).where(
+                    ProcessLink.documented_information_id.in_(doc_ids)
+                )
+            )
+        ).all():
+            grouped.setdefault(di_id, set()).add(str(p_id))
+        process_ids_by_doc = {k: frozenset(v) for k, v in grouped.items()}
     ctx = RequestContext(now=datetime.datetime.now(datetime.UTC))
     visible: list[DocumentedInformation] = []
     for d in docs:
@@ -744,6 +753,7 @@ async def list_documents(
             artifact_id=str(d.id),
             folder_path=d.folder_path,
             document_level=levels.get(d.document_type_id) if d.document_type_id else None,
+            process_ids=process_ids_by_doc.get(d.id, frozenset()),
         )
         if authorize(grants, "document.read", resource, ctx).allow:
             visible.append(d)
@@ -1050,12 +1060,35 @@ async def list_process_links_endpoint(
     return [_process_link(link, p) for link, p in rows]
 
 
+async def _enforce_target_process(
+    session: AsyncSession,
+    sink: AuthzAuditSink,
+    request: Request,
+    caller: AppUser,
+    doc: DocumentedInformation,
+    target_process_id: uuid.UUID,
+) -> None:
+    """Authorize a process-LINK mutation against the TARGET process, not just the document.
+
+    Since S-owner-assignment-1 made ``_document_scope`` carry ALL of a doc's linked process ids, the
+    ``document.manage_metadata`` gate now matches for an owner of ANY linked process — which would
+    let an owner of process A add/remove links to process B on a doc linked to A+B. Re-enforce
+    ``document.manage_metadata`` over a scope whose process_ids is JUST the target process: a
+    SYSTEM/ARTIFACT-scoped holder still passes (they hold doc-level authority); a PROCESS-scoped
+    holder must own the *target* process. 403 on deny."""
+    base = await _document_scope_by_id(session, doc.id)
+    target_scope = dataclasses.replace(base, process_ids=frozenset({str(target_process_id)}))
+    await enforce(session, sink, request, caller, "document.manage_metadata", target_scope)
+
+
 @router.post("/documents/{document_id}/process-links", status_code=status.HTTP_201_CREATED)
 async def link_process_endpoint(
     document_id: uuid.UUID,
     body: ProcessLinkCreate,
+    request: Request,
     caller: AppUser = Depends(_manage_metadata),
     session: AsyncSession = Depends(get_session),
+    authz_sink: AuthzAuditSink = Depends(get_authz_audit_sink),
 ) -> dict[str, Any]:
     doc = await _load_document(session, caller, document_id)
     process = await vault_repo.get_process(session, body.process_id)
@@ -1068,6 +1101,7 @@ async def link_process_endpoint(
                 {"field": "process_id", "code": "not_found", "message": "process does not exist"}
             ],
         )
+    await _enforce_target_process(session, authz_sink, request, caller, doc, process.id)
     if await vault_repo.get_process_link(session, process.id, doc.id) is not None:
         raise ProblemException(status=409, code="conflict", title="Process already linked")
     link = ProcessLink(
@@ -1102,8 +1136,10 @@ async def link_process_endpoint(
 async def unlink_process_endpoint(
     document_id: uuid.UUID,
     process_id: uuid.UUID,
+    request: Request,
     caller: AppUser = Depends(_manage_metadata),
     session: AsyncSession = Depends(get_session),
+    authz_sink: AuthzAuditSink = Depends(get_authz_audit_sink),
 ) -> Response:
     doc = await _load_document(session, caller, document_id)
     link = await vault_repo.get_process_link(session, process_id, doc.id)
@@ -1111,6 +1147,9 @@ async def unlink_process_endpoint(
     # explicit org guard is belt-and-suspenders (mirrors processes.remove_edge_endpoint).
     if link is None or link.org_id != caller.org_id:
         raise ProblemException(status=404, code="not_found", title="Process link not found")
+    # Authorize the unlink against the TARGET process too (a PROCESS owner of a *different* linked
+    # process must not remove this link — S-owner-assignment-1's _document_scope widening).
+    await _enforce_target_process(session, authz_sink, request, caller, doc, process_id)
     process = await vault_repo.get_process(session, process_id)
     await session.delete(link)
     _emit_process_link_event(

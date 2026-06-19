@@ -116,6 +116,19 @@ export const directoryFixture = [
   { id: "bbbb2222-2222-2222-2222-222222222222", display_name: "Diego Owner" },
 ];
 
+// S-owner-assignment-1: GET /processes/{id}/owners — the _owner serializer (api/processes.py).
+// Default = one owner (Diego) so the drawer's owners list renders without an override.
+export const processOwnersFixture = [
+  {
+    id: "oa000001-0001-0001-0001-000000000001",
+    process_id: "pr000001-0001-0001-0001-000000000001",
+    user_id: "bbbb2222-2222-2222-2222-222222222222",
+    org_role_id: "or000099-0099-0099-0099-000000000099",
+    org_role_name: "Process Owner",
+    created_at: "2026-01-02T09:00:00+00:00",
+  },
+];
+
 export const versionFixture = [
   {
     id: "dddd1111-1111-1111-1111-111111111111",
@@ -2837,6 +2850,28 @@ export const handlers = [
     ),
   ),
   http.get("/api/v1/processes", () => HttpResponse.json(processesFixture)),
+  // S-owner-assignment-1: owner-assignment endpoints. Default owners empty; POST mints a
+  // ProcessOwnerResult (the SPA ignores the body — it invalidates + refetches); DELETE → 204.
+  http.get("/api/v1/processes/:id/owners", () => HttpResponse.json(processOwnersFixture)),
+  http.post("/api/v1/processes/:id/owner", async ({ params, request }) => {
+    const body = (await request.json()) as { user_id: string };
+    return HttpResponse.json(
+      {
+        process_id: String(params.id),
+        user_id: body.user_id,
+        org_role_id: "or000099-0099-0099-0099-000000000099",
+        org_role_assignment_id: "oa000001-0001-0001-0001-000000000001",
+        role_assignment_id: "ra000001-0001-0001-0001-000000000001",
+        bound_scope: {
+          level: "PROCESS",
+          selector: { process_ids: [String(params.id)] },
+          managed_by: "owner_assignment",
+        },
+      },
+      { status: 201 },
+    );
+  }),
+  http.delete("/api/v1/processes/:id/owner/:userId", () => new HttpResponse(null, { status: 204 })),
   // Pinned to the real _evidence_link serializer (api/records.py): {id, record_id, target_type, target_id,
   // link_reason, created_at} — NOT a record_identifier (that field only exists on the per-stage projection).
   // The UI ignores this body (it invalidates + refetches), but the fixture must match the real shape.
