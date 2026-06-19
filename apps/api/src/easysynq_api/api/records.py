@@ -12,16 +12,18 @@ list is row-filtered to what the caller may ``record.read`` (doc 15 §9.3), not 
 
 from __future__ import annotations
 
+import dataclasses
 import datetime
 import uuid
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Request, Response, status
 from pydantic import BaseModel, Field
-from sqlalchemy import ColumnElement
+from sqlalchemy import ColumnElement, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..auth.dependencies import get_current_user
+from ..db.models._evidence_enums import EvidenceForTargetType
 from ..db.models._record_enums import RecordDispositionState, RecordType
 from ..db.models.app_user import AppUser
 from ..db.models.blob import Blob
@@ -232,13 +234,14 @@ async def _record_scope(request: Any, session: AsyncSession) -> ResourceContext:
     return ResourceContext(artifact_id=str(base.id), folder_path=base.folder_path)
 
 
-async def _record_read_scope(request: Any, session: AsyncSession) -> ResourceContext:
-    """The records READ scope (S-records-R) — the record's FULL context INCLUDING its process
-    bindings (``record_process_ids`` leg A + leg B + the R3-1 correction fallback), so a bound
-    Process-Owner's PROCESS-scoped ``record.read`` authorizes a record bound to their process.
-    **Decoupled** from the WRITE gate (``_record_scope``, still process-blind): enabling reads never
-    lets a Process-Owner mint a binding (the spec's central result). A SYSTEM/ARTIFACT/FOLDER grant
-    still matches via its own field — byte-identical."""
+async def _record_process_scope(request: Any, session: AsyncSession) -> ResourceContext:
+    """A record's FULL process-aware scope (S-records-R/W) — its context INCLUDING its process
+    bindings (``record_process_ids`` leg A + leg B + the R3-1 correction fallback). Used by the
+    ``record.read`` gate AND (S-records-W) the per-record ``record.create`` WRITE gate, so a bound
+    Process-Owner can read AND author records bound to their process. A SYSTEM/ARTIFACT/FOLDER grant
+    still matches via its own field — byte-identical. The binding-MINTING writes (correction +
+    evidence-link) additionally re-authorize the TARGET process (``_enforce_target_process_record``)
+    so a Process-Owner cannot escalate to an unowned process."""
     raw = request.path_params.get("record_id")
     if not raw:
         return ResourceContext.system()
@@ -262,6 +265,66 @@ async def _record_read_scope(request: Any, session: AsyncSession) -> ResourceCon
         framework_id=str(base.framework_id),
         process_ids=frozenset(process_ids),
     )
+
+
+async def _record_base_scope(session: AsyncSession, record_id: uuid.UUID) -> ResourceContext:
+    """The record's FULL NON-process scope (artifact/kind/folder/framework, NO process_ids) — the
+    base for the per-target re-auth (``process_ids`` is then replaced with JUST the target)."""
+    base = await session.get(DocumentedInformation, record_id)
+    if base is None:
+        return ResourceContext(artifact_id=str(record_id))
+    return ResourceContext(
+        artifact_id=str(base.id),
+        kind="RECORD",
+        folder_path=base.folder_path,
+        framework_id=str(base.framework_id),
+    )
+
+
+async def _enforce_target_process_record(
+    session: AsyncSession,
+    sink: AuthzAuditSink,
+    request: Request,
+    caller: AppUser,
+    record_id: uuid.UUID,
+    target_process_ids: frozenset[str],
+) -> None:
+    """Re-authorize a binding-MINTING record write against the TARGET process(es) — the records
+    analogue of ``documents._enforce_target_process``. S-records-W made the per-record WRITE gate
+    process-aware (a Process-Owner reaches the write for a record bound to ANY of their processes),
+    so re-enforce ``record.create`` over a scope whose ``process_ids`` is JUST the target: a SYSTEM/
+    ARTIFACT/FOLDER holder still passes (record-level authority via the preserved fields), but a
+    PROCESS-scoped holder must own the SPECIFIC target. An EMPTY target set → no PROCESS holder
+    matches (only artifact/folder/SYSTEM), e.g. a CAPA stage whose CAPA carries no process."""
+    base = await _record_base_scope(session, record_id)
+    target_scope = dataclasses.replace(base, process_ids=frozenset(target_process_ids))
+    await enforce(session, sink, request, caller, "record.create", target_scope)
+
+
+async def _enforce_evidence_link_target(
+    session: AsyncSession,
+    sink: AuthzAuditSink,
+    request: Request,
+    caller: AppUser,
+    record_id: uuid.UUID,
+    target_type: str,
+    target_id: uuid.UUID,
+) -> None:
+    """Re-auth an evidence-link target (S-records-W; shared by add + remove). A Process-Owner's
+    evidence-link write is restricted to **PROCESS targets they own** (the only target that mints a
+    leg-A binding the records read gate honors): re-auth ``record.create`` over the target process.
+    EVERY other target type — CLAUSE / DOCUMENT / FINDING / CAPA_STAGE — re-auths over an EMPTY
+    process set, so a PROCESS-only holder is DENIED while a SYSTEM/ARTIFACT/FOLDER holder still
+    passes (unchanged from pre-W). These cross-cutting compliance annotations (the CAPA-closure
+    evidence gate — R3-2, the FINDING/DOCUMENT process surfaces — Codex W-CX-1) need broad
+    authority, not a process-scoped grant; scoping a Process-Owner to a target's OWN process is a
+    future refinement — deny is the converging safe floor."""
+    target = (
+        frozenset({str(target_id)})
+        if target_type == EvidenceForTargetType.PROCESS.value
+        else frozenset()
+    )
+    await _enforce_target_process_record(session, sink, request, caller, record_id, target)
 
 
 async def _capture_scope(
@@ -296,12 +359,16 @@ async def _load(
     return record, base
 
 
-# S-records-R: the READ gate resolves the process-aware `_record_read_scope`; the per-record WRITE
-# gates stay on the process-BLIND `_record_scope` (the decoupling — enabling reads never lets a
-# Process-Owner mint a binding; Process-Owner record authoring is Slice W).
-_read = require("record.read", async_scope_resolver=_record_read_scope)
+# S-records-W: BOTH the READ gate and the per-record binding-MINTING WRITE gate (correction +
+# evidence-link add/remove) resolve the process-aware `_record_process_scope`, so a bound
+# Process-Owner can read AND author records bound to their process; the writes additionally re-auth
+# the TARGET process in-handler (`_enforce_target_process_record`). `_dispose` stays on the
+# process-BLIND `_record_scope` (disposition mints no process binding; SoD dual-control unchanged).
+_read = require("record.read", async_scope_resolver=_record_process_scope)
 _create = require("record.create")  # SYSTEM scope (create/init-upload — no path id)
-_create_scoped = require("record.create", async_scope_resolver=_record_scope)  # per-record writes
+_create_scoped = require(  # per-record binding-minting writes (correction + evidence-link)
+    "record.create", async_scope_resolver=_record_process_scope
+)
 # Disposition / legal-hold / dual-control destroy all gate on record.dispose (SoD-sensitive; doc 06
 # §5.3, doc 15 §8.9). Per-record scope from the path id (SYSTEM grants always match).
 _dispose = require("record.dispose", async_scope_resolver=_record_scope)
@@ -357,6 +424,20 @@ async def capture_endpoint(
     # scoped grant authorizes a Mode-B capture against its template ([Fold 16]).
     resource = await _capture_scope(session, caller, body.source_document_id)
     await enforce(session, authz_sink, request, caller, "record.create", resource)
+    # S-records-W: a Mode-B capture inherits the source doc's processes (leg B), so re-enforce
+    # record.create over EACH source process individually (mirror documents.create's per-process
+    # loop, documents.py:800-824) — the base enforce matches if ANY source process is owned, so
+    # without this a Process-Owner of P1 could mint a P1+P2-bound record under a shared doc. SYSTEM/
+    # FOLDER holders still pass every iteration; a PROCESS holder must own EVERY source process.
+    for pid in resource.process_ids:
+        await enforce(
+            session,
+            authz_sink,
+            request,
+            caller,
+            "record.create",
+            dataclasses.replace(resource, process_ids=frozenset({pid})),
+        )
     record = await capture_record(
         session,
         caller,
@@ -497,9 +578,64 @@ async def get_rendition_endpoint(
 async def correction_endpoint(
     record_id: uuid.UUID,
     body: CorrectionCreate,
+    request: Request,
     caller: AppUser = Depends(_create_scoped),
     session: AsyncSession = Depends(get_session),
+    authz_sink: AuthzAuditSink = Depends(get_authz_audit_sink),
 ) -> dict[str, Any]:
+    # S-records-W: re-auth a correction over the UNION of the successor's new-source processes AND
+    # the ORIGINAL's FULL effective binding, PER-PROCESS (own ALL; mirror capture; a single multi-
+    # process scope would intersection-MATCH — Codex W-CX-1/3). The successor's effective source is
+    # the original's OWN source when source-backed (``capture_correction`` FORCES it) else the body.
+    # ⚠ Codex W round-4 P1: an earlier ``source_processes or effective(original)`` SHORT-CIRCUITED —
+    # as soon as the successor had any source process it skipped the original's OTHER bindings, so a
+    # P1-only owner could supersede a record co-bound to an unowned P2 (its source-doc P1 satisfied
+    # the re-auth) and ``capture_correction`` (which does NOT carry the original's EvidenceForLinks)
+    # minted a P1-only successor P2 owners can no longer read. The union forces the caller to own
+    # EVERY process the original is currently bound to (leg A evidence + leg B source + the R3-1
+    # correction walk) PLUS any new source — the converging deny-broader floor. The process-less-
+    # source / source-less paths still resolve to the original's real binding (W-CX-2 / round-3: a
+    # forced process-less source must NOT false-deny an owner of the original's real binding).
+    # ⚠ Codex W round-5 P2 (TOCTOU): lock the Record row FOR UPDATE and HOLD it through
+    # capture_correction's supersede (which re-acquires the same lock re-entrantly). The binding-
+    # minting evidence-link writes now lock the SAME row, so a concurrent PROCESS link cannot commit
+    # a new binding between this re-auth read and the supersede — without the lock a P1-only owner
+    # could pass the union check while the record is P1-only and a P2 link lands before the cutover.
+    # populate_existing refreshes the row the authz resolver may have cached into the identity map.
+    original = (
+        await session.execute(
+            select(Record)
+            .where(Record.id == record_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one_or_none()
+    if original is not None:
+        effective_source = (
+            original.source_document_id
+            if original.source_document_id is not None
+            else body.source_document_id
+        )
+        source_processes: frozenset[str] = frozenset()
+        if effective_source is not None:
+            source_doc = await session.get(DocumentedInformation, effective_source)
+            if source_doc is not None and source_doc.org_id == caller.org_id:
+                source_processes = frozenset(
+                    str(p.id)
+                    for _link, p in await vault_repo.list_process_links(session, source_doc.id)
+                )
+        inherited = source_processes | frozenset(
+            await records_repo.record_process_ids_effective(session, original)
+        )
+        if inherited:
+            for pid in inherited:
+                await _enforce_target_process_record(
+                    session, authz_sink, request, caller, record_id, frozenset({pid})
+                )
+        else:
+            await _enforce_target_process_record(
+                session, authz_sink, request, caller, record_id, frozenset()
+            )
     new_record = await capture_correction(
         session,
         caller,
@@ -533,9 +669,14 @@ async def list_evidence_links_endpoint(
 async def link_evidence_endpoint(
     record_id: uuid.UUID,
     body: EvidenceLinkCreate,
+    request: Request,
     caller: AppUser = Depends(_create_scoped),
     session: AsyncSession = Depends(get_session),
+    authz_sink: AuthzAuditSink = Depends(get_authz_audit_sink),
 ) -> dict[str, Any]:
+    await _enforce_evidence_link_target(
+        session, authz_sink, request, caller, record_id, body.target_type, body.target_id
+    )
     link = await link_evidence(
         session,
         caller,
@@ -553,9 +694,18 @@ async def link_evidence_endpoint(
 async def unlink_evidence_endpoint(
     record_id: uuid.UUID,
     link_id: uuid.UUID,
+    request: Request,
     caller: AppUser = Depends(_create_scoped),
     session: AsyncSession = Depends(get_session),
+    authz_sink: AuthzAuditSink = Depends(get_authz_audit_sink),
 ) -> Response:
+    # S-records-W: re-auth the target of the link being REMOVED (mirror the add) — the link's 404 +
+    # the CAPA-freeze guard stay in unlink_evidence.
+    link = await records_repo.get_evidence_link_by_id(session, link_id)
+    if link is not None and link.record_id == record_id and link.org_id == caller.org_id:
+        await _enforce_evidence_link_target(
+            session, authz_sink, request, caller, record_id, link.target_type.value, link.target_id
+        )
     await unlink_evidence(session, caller, record_id, link_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
