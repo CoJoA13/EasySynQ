@@ -47,6 +47,54 @@ async def _assign_owner(
     assert r.status_code == 201, r.text
 
 
+# --- the process landscape row-filter (S-process-scope-2) --------------------------------
+
+
+async def test_process_owner_list_and_map_narrow_to_owned(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    """A bound Process Owner of P1 (not P2) sees ONLY P1 on GET /processes and /map — the P1→P2 edge
+    is dropped (P2 hidden) — while the SYSTEM author sees both processes + the edge byte-identical.
+    The per-process read-filter (filter-not-403) that unblocks the create-in-process picker."""
+    await _grant(subj.a, "process.create")
+    await _grant(subj.a, "process.manage")  # to add the edge
+    await _grant(subj.a, "process.read")  # SYSTEM read → the author's full-landscape baseline
+    await _grant(subj.a, "process.assign_owner")
+    ha = _auth(token_factory, subj.a)
+    p1 = await _create_process(app_client, ha)
+    p2 = await _create_process(app_client, ha)
+    edge = await app_client.post(
+        f"/api/v1/processes/{p1['id']}/edges", headers=ha, json={"to_process_id": p2["id"]}
+    )
+    assert edge.status_code == 201, edge.text
+
+    owner_id = await _user_id(subj.b)
+    await _assign_owner(app_client, ha, p1["id"], owner_id)
+    hb = _auth(token_factory, subj.b)
+
+    # The bound owner's list narrows to P1 only (P2 hidden) — and it is 200, not 403.
+    listed = await app_client.get("/api/v1/processes", headers=hb)
+    assert listed.status_code == 200, listed.text
+    assert {p["id"] for p in listed.json()} == {p1["id"]}
+
+    # The map narrows nodes to P1 AND drops the P1→P2 edge (the dangling-edge guard).
+    mp = await app_client.get("/api/v1/processes/map", headers=hb)
+    assert mp.status_code == 200, mp.text
+    body = mp.json()
+    assert {n["id"] for n in body["nodes"]} == {p1["id"]}
+    assert not any(
+        e["from_process_id"] == p1["id"] and e["to_process_id"] == p2["id"] for e in body["edges"]
+    )
+
+    # The SYSTEM author still sees BOTH processes + the edge (byte-identical full landscape).
+    author_map = (await app_client.get("/api/v1/processes/map", headers=ha)).json()
+    assert {p1["id"], p2["id"]} <= {n["id"] for n in author_map["nodes"]}
+    assert any(
+        e["from_process_id"] == p1["id"] and e["to_process_id"] == p2["id"]
+        for e in author_map["edges"]
+    )
+
+
 # --- the document.create write-path -----------------------------------------------------
 
 

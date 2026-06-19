@@ -384,6 +384,11 @@ async def test_reads_list_detail_map(
     detail = await app_client.get(f"/api/v1/processes/{a['id']}", headers=h)
     assert detail.status_code == 200 and detail.json()["id"] == a["id"]
 
+    # A SYSTEM process.read holder still gets 404 (not 403) on a nonexistent id — the detail
+    # endpoint's _read_scoped move stays byte-identical for SYSTEM callers (S-process-scope-2).
+    missing = await app_client.get(f"/api/v1/processes/{uuid.uuid4()}", headers=h)
+    assert missing.status_code == 404, missing.text
+
     mp = await app_client.get("/api/v1/processes/map", headers=h)
     assert mp.status_code == 200
     body = mp.json()
@@ -393,13 +398,23 @@ async def test_reads_list_detail_map(
     )
 
 
-async def test_read_requires_permission(
+async def test_list_filters_not_403_for_no_grant(
     app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
 ) -> None:
+    """A list surface FILTERS, never 403s (doc 18 §5.2, S-process-scope-2): a no-grant caller gets
+    200 + an empty list (and empty map), disclosing nothing. The single-resource DETAIL still 403s
+    (authz-before-existence)."""
     # subj.b is a fresh JIT user with no grants → no process.read.
     h = _auth(token_factory, subj.b)
-    r = await app_client.get("/api/v1/processes", headers=h)
-    assert r.status_code == 403, r.text
+    listed = await app_client.get("/api/v1/processes", headers=h)
+    assert listed.status_code == 200, listed.text
+    assert listed.json() == []
+    mp = await app_client.get("/api/v1/processes/map", headers=h)
+    assert mp.status_code == 200, mp.text
+    assert mp.json() == {"nodes": [], "edges": []}
+    # The detail of an arbitrary process still 403s (single-resource, not a list).
+    detail = await app_client.get(f"/api/v1/processes/{uuid.uuid4()}", headers=h)
+    assert detail.status_code == 403, detail.text
 
 
 async def test_create_requires_permission(
