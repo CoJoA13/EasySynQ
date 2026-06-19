@@ -29,6 +29,7 @@ import {
   SEVERITY_LABEL,
   SOURCE_LABEL,
 } from "./columns";
+import { useProcesses } from "../objectives/hooks";
 import { useCapas } from "./hooks";
 import { RaiseCapaModal } from "./RaiseCapaModal";
 
@@ -47,6 +48,18 @@ export function CapaBoardPage() {
   const [selected, setSelected] = useState<string | null>(() => params.get("capa"));
   const [raiseOpen, setRaiseOpen] = useState(false);
   const perms = usePermissions();
+  // The Raise affordance must reach a bound Process-Owner, who holds capa.create only at their owned
+  // process(es) — never at SYSTEM. Probe capa.create at the caller's first readable process (the
+  // owner-assignment binding mints process.read + capa.create over the SAME bound set, so any readable
+  // process the owner can read is one they can raise in). SYSTEM-grant holders short-circuit via `perms`.
+  // The server's PROCESS-scoped POST /capas enforce stays the true boundary (a 403 surfaces calmly).
+  const { data: readableProcesses } = useProcesses();
+  const firstProcessId = readableProcesses?.[0]?.id;
+  const processPerms = usePermissions(
+    firstProcessId ? { level: "PROCESS", id: firstProcessId } : undefined,
+  );
+  const canRaiseCapa =
+    perms.can("capa.create") || (!!firstProcessId && processPerms.can("capa.create"));
 
   // Open the drawer for ?capa=<id> on mount + whenever the param changes (a deep-link while mounted).
   // Guarded on a non-null id so clearing the param on close never re-opens the drawer.
@@ -127,9 +140,7 @@ export function CapaBoardPage() {
       <Group justify="space-between" mb="md">
         <Title order={2}>Nonconformity &amp; CAPA</Title>
         <Group gap="sm">
-          {perms.can("capa.create") && (
-            <Button onClick={() => setRaiseOpen(true)}>＋ Raise CAPA</Button>
-          )}
+          {canRaiseCapa && <Button onClick={() => setRaiseOpen(true)}>＋ Raise CAPA</Button>}
           <SegmentedControl
             value={view}
             onChange={(v) => setView(v as "board" | "list")}

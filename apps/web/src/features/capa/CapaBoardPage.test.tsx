@@ -4,6 +4,7 @@ import { axe } from "jest-axe";
 import { http, HttpResponse } from "msw";
 import { useLocation } from "react-router-dom";
 import { expect, test } from "vitest";
+import type { MePermissions } from "../../lib/types";
 import { server } from "../../test/msw/server";
 import { renderWithProviders } from "../../test/render";
 import { CapaBoardPage } from "./CapaBoardPage";
@@ -112,4 +113,39 @@ test("shows the Raise CAPA button when the caller holds capa.create and opens th
   const raise = await screen.findByRole("button", { name: /Raise CAPA/ });
   await u.click(raise);
   expect(await screen.findByLabelText(/^Title/)).toBeInTheDocument();
+});
+
+// A bound Process-Owner holds capa.create ONLY at their owned process scope, never at SYSTEM. The
+// board probes capa.create at the first readable process (GET /processes → Purchasing first), so the
+// PROCESS-scoped grant surfaces the Raise affordance the SYSTEM-only probe would have hidden.
+test("shows the Raise CAPA button for a purely-PROCESS-scoped capa.create holder", async () => {
+  server.use(
+    http.get("/api/v1/me/permissions", ({ request }) => {
+      const level = new URL(request.url).searchParams.get("scope_level");
+      return HttpResponse.json({
+        scope: { level: level ?? "SYSTEM", selector: null },
+        permissions:
+          level === "PROCESS" ? [{ key: "capa.create", effect: "ALLOW", source: null }] : [],
+      } satisfies MePermissions);
+    }),
+  );
+  renderWithProviders(<CapaBoardPage />, { route: "/capa" });
+  expect(await screen.findByRole("button", { name: /Raise CAPA/ })).toBeInTheDocument();
+});
+
+// The gate must key on capa.CREATE, never on "has readable processes": an Internal Auditor holds
+// SYSTEM capa.read (board access) + SYSTEM process.read (a non-empty process list) but no capa.create
+// at ANY scope — they must NOT see the Raise button.
+test("hides the Raise CAPA button for a read-only caller with no capa.create", async () => {
+  server.use(
+    http.get("/api/v1/me/permissions", () =>
+      HttpResponse.json({
+        scope: { level: "SYSTEM", selector: null },
+        permissions: [{ key: "capa.read", effect: "ALLOW", source: null }],
+      } satisfies MePermissions),
+    ),
+  );
+  renderWithProviders(<CapaBoardPage />, { route: "/capa" });
+  await screen.findByText(/Supplier re-evaluation/);
+  expect(screen.queryByRole("button", { name: /Raise CAPA/ })).toBeNull();
 });
