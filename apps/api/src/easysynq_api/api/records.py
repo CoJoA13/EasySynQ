@@ -27,8 +27,6 @@ from ..db.models._evidence_enums import EvidenceForTargetType
 from ..db.models._record_enums import RecordDispositionState, RecordType
 from ..db.models.app_user import AppUser
 from ..db.models.blob import Blob
-from ..db.models.capa import Capa
-from ..db.models.capa_stage import CapaStage
 from ..db.models.disposition_event import DispositionEvent
 from ..db.models.documented_information import DocumentedInformation
 from ..db.models.evidence_blob import EvidenceBlob
@@ -303,19 +301,6 @@ async def _enforce_target_process_record(
     await enforce(session, sink, request, caller, "record.create", target_scope)
 
 
-async def _capa_stage_process_ids(session: AsyncSession, stage_id: uuid.UUID) -> frozenset[str]:
-    """The process(es) governing a CAPA stage's authority — the parent CAPA's ``process_id`` (the
-    R3-2 capa_stage evidence-link re-auth target). Empty when the stage/CAPA is missing or the CAPA
-    carries no process (then only artifact/folder/SYSTEM ``record.create`` matches the re-auth)."""
-    stage = await session.get(CapaStage, stage_id)
-    if stage is None:
-        return frozenset()
-    capa = await session.get(Capa, stage.capa_id)
-    if capa is None or capa.process_id is None:
-        return frozenset()
-    return frozenset({str(capa.process_id)})
-
-
 async def _enforce_evidence_link_target(
     session: AsyncSession,
     sink: AuthzAuditSink,
@@ -325,17 +310,21 @@ async def _enforce_evidence_link_target(
     target_type: str,
     target_id: uuid.UUID,
 ) -> None:
-    """Re-auth a binding-MINTING evidence-link target (S-records-W; shared by add + remove). PROCESS
-    → the target process (leg A); CAPA_STAGE → the parent CAPA's process (R3-2 — feeds the M4
-    CAPA-closure evidence gate). CLAUSE/DOCUMENT/FINDING (or an unknown type) mint no process
-    binding → no re-auth (``link_evidence`` does the existence/framework checks)."""
-    if target_type == EvidenceForTargetType.PROCESS.value:
-        await _enforce_target_process_record(
-            session, sink, request, caller, record_id, frozenset({str(target_id)})
-        )
-    elif target_type == EvidenceForTargetType.CAPA_STAGE.value:
-        targets = await _capa_stage_process_ids(session, target_id)
-        await _enforce_target_process_record(session, sink, request, caller, record_id, targets)
+    """Re-auth an evidence-link target (S-records-W; shared by add + remove). A Process-Owner's
+    evidence-link write is restricted to **PROCESS targets they own** (the only target that mints a
+    leg-A binding the records read gate honors): re-auth ``record.create`` over the target process.
+    EVERY other target type — CLAUSE / DOCUMENT / FINDING / CAPA_STAGE — re-auths over an EMPTY
+    process set, so a PROCESS-only holder is DENIED while a SYSTEM/ARTIFACT/FOLDER holder still
+    passes (unchanged from pre-W). These cross-cutting compliance annotations (the CAPA-closure
+    evidence gate — R3-2, the FINDING/DOCUMENT process surfaces — Codex W-CX-1) need broad
+    authority, not a process-scoped grant; scoping a Process-Owner to a target's OWN process is a
+    future refinement — deny is the converging safe floor."""
+    target = (
+        frozenset({str(target_id)})
+        if target_type == EvidenceForTargetType.PROCESS.value
+        else frozenset()
+    )
+    await _enforce_target_process_record(session, sink, request, caller, record_id, target)
 
 
 async def _capture_scope(
@@ -594,35 +583,43 @@ async def correction_endpoint(
     session: AsyncSession = Depends(get_session),
     authz_sink: AuthzAuditSink = Depends(get_authz_audit_sink),
 ) -> dict[str, Any]:
-    # S-records-W: a correction successor inherits its EFFECTIVE source document's processes (leg
-    # B), so re-auth record.create over EACH effective-source process individually — a PROCESS
-    # holder must own ALL of them (mirror capture; a single multi-process scope would
-    # intersection-MATCH and let a P1-owner author under a P1+P2 source — Codex W-CX-1/3). The
-    # effective source is the original's OWN source when source-backed (``capture_correction``
-    # forces it) else the body's source. An empty source-process set re-auths with empty
-    # process_ids, denying a PROCESS-only holder like a fresh capture under a process-less source.
+    # S-records-W: re-auth the SUCCESSOR's inherited process binding PER-PROCESS (own ALL; mirror
+    # capture; a single multi-process scope would intersection-MATCH — Codex W-CX-1/3). A successor
+    # WITH a source inherits leg B = that source's processes (the original's OWN source when
+    # source-backed — ``capture_correction`` forces it — else the body's); a SOURCE-LESS successor
+    # inherits the ORIGINAL's effective binding via the R3-1 walk (W-CX-2). An empty set re-auths
+    # empty process_ids → a PROCESS-only holder is DENIED (like a fresh capture under a process-less
+    # source); a PROCESS holder reaches the endpoint only via the original's binding, so it is rare.
     original = await records_repo.get_record(session, record_id)
-    effective_source = None
     if original is not None:
         effective_source = (
             original.source_document_id
             if original.source_document_id is not None
             else body.source_document_id
         )
-    if effective_source is not None:
-        source_doc = await session.get(DocumentedInformation, effective_source)
-        if source_doc is not None and source_doc.org_id == caller.org_id:
-            links = await vault_repo.list_process_links(session, source_doc.id)
-            source_processes = frozenset(str(p.id) for _link, p in links)
-            if source_processes:
-                for pid in source_processes:
-                    await _enforce_target_process_record(
-                        session, authz_sink, request, caller, record_id, frozenset({pid})
-                    )
-            else:
-                await _enforce_target_process_record(
-                    session, authz_sink, request, caller, record_id, frozenset()
+        if effective_source is not None:
+            source_doc = await session.get(DocumentedInformation, effective_source)
+            inherited = (
+                frozenset(
+                    str(p.id)
+                    for _link, p in await vault_repo.list_process_links(session, source_doc.id)
                 )
+                if source_doc is not None and source_doc.org_id == caller.org_id
+                else frozenset()
+            )
+        else:
+            inherited = frozenset(
+                await records_repo.record_process_ids_effective(session, original)
+            )
+        if inherited:
+            for pid in inherited:
+                await _enforce_target_process_record(
+                    session, authz_sink, request, caller, record_id, frozenset({pid})
+                )
+        else:
+            await _enforce_target_process_record(
+                session, authz_sink, request, caller, record_id, frozenset()
+            )
     new_record = await capture_correction(
         session,
         caller,

@@ -25,7 +25,7 @@ from easysynq_api.domain.authz.types import Effect, ScopeLevel
 
 from . import s5_helpers as s5
 from .test_processes import _create_process, _link_doc_to_process
-from .test_records import _capture, _grant, _subject, _upload_evidence
+from .test_records import _capture, _first_iso_clause_id, _grant, _subject, _upload_evidence
 from .test_vault import _auth, _create, _ensure_user
 
 pytestmark = pytest.mark.integration
@@ -398,6 +398,71 @@ async def test_process_owner_cannot_capture_under_unowned_shared_doc(
             "record_type": "EVIDENCE",
             "title": "shared-doc capture",
             "source_document_id": doc["id"],
+            "evidence": [{"sha256": sha, "content_type": "application/pdf"}],
+        },
+    )
+    assert deny.status_code == 403, deny.text
+
+
+async def test_process_owner_cannot_link_non_process_target(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """S-records-W (Codex W-CX-1): a Process-Owner's evidence-link write is restricted to PROCESS
+    targets — linking a record to a CLAUSE (or any FINDING/DOCUMENT/CAPA_STAGE) re-auths over an
+    empty process set, so a process-only holder is DENIED. The SYSTEM author can create the link."""
+    author = _subject("wnp-a")
+    await _grant(author, _AUTHOR_PERMS)
+    ha = _auth(token_factory, author)
+    p1 = await _create_process(app_client, ha)
+    rec = await _capture_evidence(app_client, ha)
+    await _link_process(
+        app_client, ha, rec["id"], p1["id"]
+    )  # rec bound to P1 → owner reaches write
+    clause_id = await _first_iso_clause_id()
+
+    owner = _subject("wnp-b")
+    await _grant_process(owner, "record.create", p1["id"])
+    hb = _auth(token_factory, owner)
+    deny = await app_client.post(
+        f"/api/v1/records/{rec['id']}/evidence-links",
+        headers=hb,
+        json={"target_type": "clause", "target_id": clause_id},
+    )
+    assert deny.status_code == 403, deny.text
+    # The SYSTEM author can create the clause link (broad authority — unchanged from pre-W).
+    ok = await app_client.post(
+        f"/api/v1/records/{rec['id']}/evidence-links",
+        headers=ha,
+        json={"target_type": "clause", "target_id": clause_id},
+    )
+    assert ok.status_code == 201, ok.text
+
+
+async def test_process_owner_correction_reauths_inherited_binding(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """S-records-W (Codex W-CX-2): a SOURCE-LESS correction (no body source) inherits the ORIGINAL's
+    effective binding via the R3-1 walk, so a Process-Owner of P1 cannot correct a source-less
+    record bound (via leg-A links) to P1+P2 — the per-process re-auth over {P1,P2} denies P2."""
+    author = _subject("winh-a")
+    await _grant(author, _AUTHOR_PERMS)
+    ha = _auth(token_factory, author)
+    p1 = await _create_process(app_client, ha)
+    p2 = await _create_process(app_client, ha)
+    original = await _capture_evidence(app_client, ha)  # source-LESS
+    await _link_process(app_client, ha, original["id"], p1["id"])
+    await _link_process(app_client, ha, original["id"], p2["id"])  # bound to P1 + P2 via leg A
+
+    owner = _subject("winh-b")
+    await _grant_process(owner, "record.create", p1["id"])  # owns P1, NOT P2
+    hb = _auth(token_factory, owner)
+    sha = await _upload_evidence(app_client, ha, f"inh-{uuid.uuid4().hex}".encode())
+    deny = await app_client.post(
+        f"/api/v1/records/{original['id']}/correction",
+        headers=hb,
+        json={
+            "record_type": "EVIDENCE",
+            "title": "inherited-binding correction",
             "evidence": [{"sha256": sha, "content_type": "application/pdf"}],
         },
     )

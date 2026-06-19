@@ -2320,7 +2320,7 @@ paths:
     post:
       tags: [records]
       operationId: linkEvidence
-      summary: Link the record as evidence for a clause/process/document. Needs record.create (a PROCESS-scoped caller must own a PROCESS or CAPA_STAGE target — S-records-W).
+      summary: Link the record as evidence for a clause/process/document. Needs record.create (a PROCESS-scoped caller can only link a PROCESS target they own; other target types need SYSTEM/folder authority — S-records-W).
       requestBody:
         required: true
         content:
@@ -2351,7 +2351,7 @@ paths:
     delete:
       tags: [records]
       operationId: unlinkEvidence
-      summary: Remove an evidence-for link (an audited annotation). Needs record.create (re-authorized against the link's PROCESS/CAPA_STAGE target — S-records-W).
+      summary: Remove an evidence-for link (an audited annotation). Needs record.create (a PROCESS-scoped caller can only remove a PROCESS link they own — S-records-W).
       parameters:
         - { name: record_id, in: path, required: true, schema: { type: string, format: uuid } }
         - { name: link_id, in: path, required: true, schema: { type: string, format: uuid } }
