@@ -598,9 +598,9 @@ async def correction_endpoint(
     # B), so re-auth record.create over EACH effective-source process individually — a PROCESS
     # holder must own ALL of them (mirror capture; a single multi-process scope would
     # intersection-MATCH and let a P1-owner author under a P1+P2 source — Codex W-CX-1/3). The
-    # effective source is the original's OWN source when source-backed (``capture_correction`` FORCES
-    # it) else the body's source. An empty source-process set re-auths with empty process_ids so a
-    # PROCESS-only holder is DENIED, like a fresh capture under a process-less source (W-CX-2).
+    # effective source is the original's OWN source when source-backed (``capture_correction``
+    # forces it) else the body's source. An empty source-process set re-auths with empty
+    # process_ids, denying a PROCESS-only holder like a fresh capture under a process-less source.
     original = await records_repo.get_record(session, record_id)
     effective_source = None
     if original is not None:

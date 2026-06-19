@@ -334,9 +334,9 @@ async def test_process_owner_correction_cannot_introduce_unowned_source(
     app_client: AsyncClient, token_factory: Callable[..., str]
 ) -> None:
     """S-records-W / R2-3: correcting a source-LESS record re-auths the body source PER-PROCESS, so
-    a Process-Owner of P1 cannot introduce a source linked to P1+P2 (the per-process loop denies P2 even
-    though the intersection-match passes on P1 — W-CX-1) NOR a source with NO process links (the empty
-    re-auth denies a process-only holder, matching a fresh capture — W-CX-2). 403 before
+    a Process-Owner of P1 cannot introduce a source linked to P1+P2 (the per-process loop denies P2
+    even though the intersection-match passes on P1 — W-CX-1) NOR a source with NO process links
+    (the empty re-auth denies a process-only holder, like a fresh capture — W-CX-2). 403 before
     ``capture_correction`` runs."""
     author = _subject("wcorr-a")
     await _grant(author, _AUTHOR_PERMS)
