@@ -67,10 +67,6 @@ async def list_records(
 
 # --- process binding (S-records-R: the records process-scope read source of truth) -------
 
-# The bounded depth of the R3-1 correction-chain walk (defence-in-depth: the chain is provably
-# acyclic / at-most-once-successor, so termination is guaranteed regardless — see the spec §11.4).
-_CORRECTION_WALK_MAX_HOPS = 8
-
 
 async def record_process_ids(session: AsyncSession, record: Record) -> set[str]:
     """The processes a record is bound to — for the PDP ``ResourceContext`` so a PROCESS-scoped
@@ -101,21 +97,23 @@ async def record_process_ids(session: AsyncSession, record: Record) -> set[str]:
 
 
 async def record_process_ids_effective(
-    session: AsyncSession, record: Record, *, hops_left: int = _CORRECTION_WALK_MAX_HOPS
+    session: AsyncSession, record: Record, *, _seen: frozenset[uuid.UUID] = frozenset()
 ) -> set[str]:
     """``record_process_ids`` with the R3-1 correction-chain fallback: a source-LESS evidence
     correction inherits no source-doc binding, so it would be invisible to the process that owned
     the original. When a record's OWN union is empty AND it is a correction (``correction_of``),
-    fold in the predecessor's effective binding (bounded hops; never crosses an org — the
-    predecessor is the same-org original). A record that has its OWN binding never walks (no
-    widening)."""
+    fold in the predecessor's effective binding. Terminates via a visited set — the chain is acyclic
+    by construction (``capture_correction`` rejects an already-superseded original), but the guard
+    makes it robust on ANY input with NO arbitrary hop cap that could drop visibility on a long but
+    legitimate chain (the Codex CX-3 finding). Never crosses an org; never widens a record that has
+    its own binding."""
     own = await record_process_ids(session, record)
-    if own or hops_left <= 0 or record.correction_of is None:
+    if own or record.correction_of is None or record.id in _seen:
         return own
     predecessor = await session.get(Record, record.correction_of)
     if predecessor is None or predecessor.org_id != record.org_id:
-        return own  # empty
-    return await record_process_ids_effective(session, predecessor, hops_left=hops_left - 1)
+        return own
+    return await record_process_ids_effective(session, predecessor, _seen=_seen | {record.id})
 
 
 async def record_process_ids_for(

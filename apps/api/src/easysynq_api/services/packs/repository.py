@@ -121,7 +121,14 @@ async def _process_candidate_ids(
     session: AsyncSession, org_id: uuid.UUID, process_ids: list[uuid.UUID]
 ) -> set[uuid.UUID]:
     """PROCESS scope: UNION of (records evidence-for the process) AND (records under a
-    process-linked source document)."""
+    process-linked source document).
+
+    NOTE (S-records-R / Codex CX-2 — deferred residual): this candidate pre-filter selects records
+    by their OWN process binding and does NOT walk ``correction_of``, so a source-LESS correction
+    (whose process visibility is inherited via the chain — see
+    ``records_repo.record_process_ids_effective``) is shown at ``/records`` but omitted from a
+    PROCESS evidence pack. Bounded/rare; the records read gate + the pack CLASSIFIER stay
+    consistent (both use the effective binding). A candidate walk is a separate enhancement."""
     if not process_ids:
         return set()
     leg_a = (

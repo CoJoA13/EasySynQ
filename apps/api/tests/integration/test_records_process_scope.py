@@ -214,3 +214,39 @@ async def test_process_owner_read_does_not_enable_writes(
         json={"target_type": "process", "target_id": p1["id"]},
     )
     assert link_attempt.status_code == 403, link_attempt.text
+
+
+async def _correct(client: AsyncClient, h: dict[str, str], record_id: str) -> str:
+    """Capture a source-less correction of ``record_id``; returns the successor id."""
+    sha = await _upload_evidence(client, h, f"corr-{uuid.uuid4().hex}".encode())
+    r = await client.post(
+        f"/api/v1/records/{record_id}/correction",
+        headers=h,
+        json={
+            "record_type": "EVIDENCE",
+            "title": "Corrected",
+            "evidence": [{"sha256": sha, "content_type": "application/pdf"}],
+        },
+    )
+    assert r.status_code == 201, r.text
+    return r.json()["id"]
+
+
+async def test_correction_chain_two_hops_keeps_visibility(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """The R3-1 walk recovers process visibility across MULTIPLE hops (a correction of a correction)
+    — the visited-set walk has no arbitrary hop cap that would drop it (Codex CX-3)."""
+    author = _subject("rc2-a")
+    await _grant(author, _AUTHOR_PERMS)
+    ha = _auth(token_factory, author)
+    p1 = await _create_process(app_client, ha)
+    original = await _capture_evidence(app_client, ha)
+    await _link_process(app_client, ha, original["id"], p1["id"])  # leg A → {P1}
+    s1 = await _correct(app_client, ha, original["id"])  # source-less successor (empty own union)
+    s2 = await _correct(app_client, ha, s1)  # correction of the correction (2 hops to {P1})
+
+    owner = _subject("rc2-b")
+    await _grant_process(owner, "record.read", p1["id"])
+    hb = _auth(token_factory, owner)
+    assert (await app_client.get(f"/api/v1/records/{s2}", headers=hb)).status_code == 200
