@@ -790,7 +790,7 @@ flowchart TD
 ```
 
 - **Deny-wins absolutely**; default is deny.
-- **Scope inheritance:** a grant at `PROCESS`/`FOLDER`/`DOC_CLASS` covers artifacts beneath it; narrowing-only ABAC predicates (`lifecycle_state`, `pdca_phase`, `requirement_source`, `valid_from/until`, `ip_allow`, `read_only`) can only further constrain a grant (`14 §3` AZ-INV-8).
+- **Scope inheritance:** a grant at `FOLDER`/`DOC_CLASS` covers artifacts beneath it (ltree subtree / doc-class match). A **`PROCESS` grant in v1 covers only its own `process_id`** — artifacts linked to that exact process, **not** descendant/subprocess artifacts (`include_subprocesses` descendant inclusion is **v1.x-deferred per Decisions Register R48**; doc 07 §5.3). Narrowing-only ABAC predicates (`lifecycle_state`, `pdca_phase`, `requirement_source`, `valid_from/until`, `ip_allow`, `read_only`) can only further constrain a grant (`14 §3` AZ-INV-8).
 - **SoD** (`sod_constraint`) is evaluated against **immutable version/audit history** so an author cannot edit-then-approve the same version; HARD_DENY blocks, FLAG_AND_REQUIRE_REASON forces a reason. Auditor-cannot-approve and verifier≠owner are the same machinery.
 - **Delegations** lend a subset of permissions within a scope and time window; they appear in resolution with `source: delegation`.
 
