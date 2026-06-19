@@ -389,8 +389,13 @@ async def get_instance_endpoint(
         if doc.document_type_id:
             dt = await session.get(DocumentType, doc.document_type_id)
             level = dt.document_level.value if dt else None
+    # S-process-scope-1: carry the subject doc's process_ids so a bound Process Owner's
+    # PROCESS-scoped document.read authorizes this read (mirrors the detail _document_scope).
     resource = ResourceContext(
-        artifact_id=str(instance.subject_id), folder_path=folder, document_level=level
+        artifact_id=str(instance.subject_id),
+        folder_path=folder,
+        document_level=level,
+        process_ids=await vault_repo.process_ids_for_doc(session, instance.subject_id),
     )
     await enforce(session, authz_sink, request, caller, "document.read", resource)
     tasks = await wf_repo.list_instance_tasks(session, instance.id) if expand == "tasks" else None
@@ -416,8 +421,12 @@ async def get_document_approval_endpoint(
     if doc.document_type_id:
         dt = await session.get(DocumentType, doc.document_type_id)
         level = dt.document_level.value if dt else None
+    # S-process-scope-1: process_ids so a bound Process Owner's PROCESS document.read matches.
     resource = ResourceContext(
-        artifact_id=str(doc.id), folder_path=doc.folder_path, document_level=level
+        artifact_id=str(doc.id),
+        folder_path=doc.folder_path,
+        document_level=level,
+        process_ids=await vault_repo.process_ids_for_doc(session, doc.id),
     )
     await enforce(session, authz_sink, request, caller, "document.read", resource)
     instance = await wf_repo.latest_instance_for_subject(

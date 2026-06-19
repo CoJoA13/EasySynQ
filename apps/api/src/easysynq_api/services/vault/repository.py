@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 from typing import Any
 
 from sqlalchemy import ColumnElement, asc, desc, func, select
@@ -324,3 +325,31 @@ async def list_process_links(
         )
     ).all()
     return [(link, proc) for link, proc in rows]
+
+
+async def process_ids_for_docs(
+    session: AsyncSession, doc_ids: Sequence[uuid.UUID]
+) -> dict[uuid.UUID, frozenset[str]]:
+    """Map each ``documented_information`` id → the frozenset of its ``ProcessLink`` process ids (as
+    strings). Ids with no link are absent (callers default to ``frozenset()``). The single shared
+    loader behind every document-scope ``ResourceContext.process_ids`` — so the S-owner-assignment-1
+    R28 enrichment (a bound Process Owner's PROCESS grant authorizing across the document gates)
+    stays consistent everywhere a doc's authz scope resolves (detail/list/search/workflow-read)."""
+    if not doc_ids:
+        return {}
+    grouped: dict[uuid.UUID, set[str]] = {}
+    for di_id, p_id in (
+        await session.execute(
+            select(ProcessLink.documented_information_id, ProcessLink.process_id).where(
+                ProcessLink.documented_information_id.in_(doc_ids)
+            )
+        )
+    ).all():
+        grouped.setdefault(di_id, set()).add(str(p_id))
+    return {k: frozenset(v) for k, v in grouped.items()}
+
+
+async def process_ids_for_doc(session: AsyncSession, doc_id: uuid.UUID) -> frozenset[str]:
+    """The single document's linked process ids (str) — the per-doc convenience over
+    ``process_ids_for_docs`` (empty when the doc has no links)."""
+    return (await process_ids_for_docs(session, [doc_id])).get(doc_id, frozenset())

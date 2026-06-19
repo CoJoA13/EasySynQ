@@ -7,6 +7,7 @@ import { http, HttpResponse } from "msw";
 import { MemoryRouter, Route, Routes, useSearchParams } from "react-router-dom";
 import { expect, it } from "vitest";
 import { AuthContext } from "../../lib/auth";
+import { createdDocFixture } from "../../test/msw/handlers";
 import { server } from "../../test/msw/server";
 import { TEST_AUTH } from "../../test/render";
 import { theme } from "../../theme/mantine";
@@ -56,6 +57,49 @@ it("step 1 creates the document, advances to upload, and is accessible", async (
   expect(await axe(container)).toHaveNoViolations();
   await fillMetadataAndCreate(user);
   expect(await screen.findByText(/upload the document file/i)).toBeInTheDocument();
+});
+
+it("links chosen processes — sends process_ids in the create body (S-process-scope-1)", async () => {
+  let body: Record<string, unknown> | null = null;
+  server.use(
+    http.post("/api/v1/documents", async ({ request }) => {
+      body = (await request.json()) as Record<string, unknown>;
+      return HttpResponse.json(createdDocFixture, { status: 201 });
+    }),
+  );
+  renderWizard();
+  const user = userEvent.setup();
+  await user.type(screen.getByLabelText(/title/i), "Supplier SOP");
+  await user.click(screen.getByPlaceholderText(/pick a document type/i));
+  await user.click(await screen.findByText(/SOP — Procedure/));
+  // pick a process in the new MultiSelect, then create (placeholder targets the search input —
+  // a searchable MultiSelect's label associates with two inputs, so getByLabelText is ambiguous)
+  await user.click(screen.getByPlaceholderText(/no processes linked/i));
+  await user.click(await screen.findByText("Purchasing"));
+  await user.click(screen.getByRole("button", { name: /create & continue/i }));
+  await screen.findByText(/upload the document file/i);
+  expect(body).toMatchObject({
+    process_ids: ["pr000001-0001-0001-0001-000000000001"],
+  });
+});
+
+it("omits process_ids when no process is chosen (byte-identical create body)", async () => {
+  let body: Record<string, unknown> | null = null;
+  server.use(
+    http.post("/api/v1/documents", async ({ request }) => {
+      body = (await request.json()) as Record<string, unknown>;
+      return HttpResponse.json(createdDocFixture, { status: 201 });
+    }),
+  );
+  renderWizard();
+  const user = userEvent.setup();
+  await user.type(screen.getByLabelText(/title/i), "Supplier SOP");
+  await user.click(screen.getByPlaceholderText(/pick a document type/i));
+  await user.click(await screen.findByText(/SOP — Procedure/));
+  await user.click(screen.getByRole("button", { name: /create & continue/i }));
+  await screen.findByText(/upload the document file/i);
+  expect(body).not.toBeNull();
+  expect(body && "process_ids" in body).toBe(false);
 });
 
 it("drives create → upload → clauses → submit and lands back on the library", async () => {

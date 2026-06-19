@@ -3,6 +3,7 @@ import {
   Button,
   Container,
   Group,
+  MultiSelect,
   Select,
   Stack,
   Stepper,
@@ -15,6 +16,7 @@ import { useNavigate } from "react-router-dom";
 import { useDocumentTypes } from "../../app/shell/useDocumentTypes";
 import { ApiError } from "../../lib/api";
 import type { DocumentSummary } from "../../lib/types";
+import { useProcesses } from "../objectives/hooks";
 import { CheckInPanel } from "./CheckInPanel";
 import { ClauseMapper } from "./ClauseMapper";
 import { useClauseMappings, useCreateDocument, useSubmitReview } from "./hooks";
@@ -33,6 +35,7 @@ function errMsg(e: unknown): string {
 export function NewDocumentWizard() {
   const navigate = useNavigate();
   const { data: types } = useDocumentTypes();
+  const { data: processes } = useProcesses();
   const createDoc = useCreateDocument();
   const submitReview = useSubmitReview();
 
@@ -46,6 +49,7 @@ export function NewDocumentWizard() {
   const [classification, setClassification] = useState<string>("Internal");
   const [areaCode, setAreaCode] = useState("");
   const [folderPath, setFolderPath] = useState("");
+  const [processIds, setProcessIds] = useState<string[]>([]);
 
   const { data: mappings } = useClauseMappings(doc?.id ?? null, active >= 2 && doc !== null);
   const clauseCount = mappings?.length ?? 0;
@@ -61,6 +65,9 @@ export function NewDocumentWizard() {
         classification,
         area_code: areaCode.trim() || undefined,
         folder_path: folderPath.trim() || undefined,
+        // S-process-scope-1: only send when ≥1 process is chosen, so an unscoped author's create
+        // body stays byte-identical to the pre-slice shape.
+        ...(processIds.length > 0 ? { process_ids: processIds } : {}),
       });
       setDoc(created);
       setActive(1);
@@ -91,7 +98,12 @@ export function NewDocumentWizard() {
         </Group>
 
         {error && (
-          <Alert color="red" title="Could not continue" withCloseButton onClose={() => setError(null)}>
+          <Alert
+            color="red"
+            title="Could not continue"
+            withCloseButton
+            onClose={() => setError(null)}
+          >
             {error}
           </Alert>
         )}
@@ -100,8 +112,8 @@ export function NewDocumentWizard() {
           <Stepper.Step label="Metadata" description="Identify the document">
             <Stack gap="md" mt="md">
               <Text size="sm" c="dimmed">
-                The vault allocates the identifier ({"{TYPE}-{AREA}-{SEQ}"}); the document is created
-                as a Draft. You become its owner.
+                The vault allocates the identifier ({"{TYPE}-{AREA}-{SEQ}"}); the document is
+                created as a Draft. You become its owner.
               </Text>
               <TextInput
                 label="Title"
@@ -138,6 +150,16 @@ export function NewDocumentWizard() {
                 value={folderPath}
                 onChange={(e) => setFolderPath(e.currentTarget.value)}
               />
+              <MultiSelect
+                label="Processes"
+                description="Optional. Link this document to one or more processes. Required if you author within a process you own."
+                placeholder={processIds.length === 0 ? "No processes linked" : undefined}
+                data={(processes ?? []).map((p) => ({ value: p.id, label: p.name }))}
+                value={processIds}
+                onChange={setProcessIds}
+                searchable
+                clearable
+              />
               <Group>
                 <Button
                   loading={createDoc.isPending}
@@ -153,8 +175,8 @@ export function NewDocumentWizard() {
           <Stepper.Step label="Upload" description="First version">
             <Stack gap="md" mt="md">
               <Text size="sm" c="dimmed">
-                Upload the document file as the first version (Rev A). Check it out, attach the file,
-                and check it in.
+                Upload the document file as the first version (Rev A). Check it out, attach the
+                file, and check it in.
               </Text>
               {doc && (
                 <CheckInPanel
@@ -164,11 +186,7 @@ export function NewDocumentWizard() {
                 />
               )}
               <Group>
-                <Button
-                  variant="default"
-                  disabled={!uploaded}
-                  onClick={() => setActive(2)}
-                >
+                <Button variant="default" disabled={!uploaded} onClick={() => setActive(2)}>
                   Continue
                 </Button>
               </Group>
@@ -205,7 +223,8 @@ export function NewDocumentWizard() {
                     — {doc.title}
                   </Text>
                   <Text size="sm" c="dimmed">
-                    Type: {typeName ?? "—"} · {clauseCount} clause{clauseCount === 1 ? "" : "s"} mapped
+                    Type: {typeName ?? "—"} · {clauseCount} clause{clauseCount === 1 ? "" : "s"}{" "}
+                    mapped
                   </Text>
                 </Stack>
               )}
