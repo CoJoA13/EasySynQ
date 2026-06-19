@@ -2269,6 +2269,8 @@ paths:
       description: >-
         Captures a NEW record (correction_of → the original) and flags the original
         superseded_by_correction; the original stays retrievable forever. 409 if already superseded.
+        A PROCESS-scoped caller correcting a source-less record with a new source document must own
+        that document's processes (S-records-W; 403 otherwise).
       parameters:
         - { name: record_id, in: path, required: true, schema: { type: string, format: uuid } }
       requestBody:
@@ -2318,7 +2320,7 @@ paths:
     post:
       tags: [records]
       operationId: linkEvidence
-      summary: Link the record as evidence for a clause/process/document. Needs record.create.
+      summary: Link the record as evidence for a clause/process/document. Needs record.create (a PROCESS-scoped caller must own a PROCESS or CAPA_STAGE target — S-records-W).
       requestBody:
         required: true
         content:
@@ -2349,7 +2351,7 @@ paths:
     delete:
       tags: [records]
       operationId: unlinkEvidence
-      summary: Remove an evidence-for link (an audited annotation). Needs record.create.
+      summary: Remove an evidence-for link (an audited annotation). Needs record.create (re-authorized against the link's PROCESS/CAPA_STAGE target — S-records-W).
       parameters:
         - { name: record_id, in: path, required: true, schema: { type: string, format: uuid } }
         - { name: link_id, in: path, required: true, schema: { type: string, format: uuid } }

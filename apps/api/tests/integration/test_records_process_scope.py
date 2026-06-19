@@ -23,22 +23,21 @@ from easysynq_api.db.models.scope import Scope
 from easysynq_api.db.session import get_sessionmaker
 from easysynq_api.domain.authz.types import Effect, ScopeLevel
 
-from .test_processes import _create_process
+from . import s5_helpers as s5
+from .test_processes import _create_process, _link_doc_to_process
 from .test_records import _capture, _grant, _subject, _upload_evidence
-from .test_vault import _auth, _ensure_user
+from .test_vault import _auth, _create, _ensure_user
 
 pytestmark = pytest.mark.integration
 
 
-async def _grant_process(subject: str, key: str, process_id: str) -> uuid.UUID:
-    """Mint a PROCESS-scoped override for ``key`` (no SYSTEM) — the direct-PROCESS-grant precedent
-    (test_processes ``:assignment_process`` / ``_assign_role_bound``)."""
+async def _grant_scoped(subject: str, key: str, *, level: ScopeLevel, selector: dict) -> uuid.UUID:
+    """Mint a scoped permission override (no SYSTEM) — the direct-grant precedent (test_processes
+    ``:assignment_process`` / ``_assign_role_bound``)."""
     async with get_sessionmaker()() as s:
         user = await _ensure_user(s, subject)
         perm = (await s.execute(select(Permission).where(Permission.key == key))).scalar_one()
-        scope = Scope(
-            org_id=user.org_id, level=ScopeLevel.PROCESS, selector={"process_id": process_id}
-        )
+        scope = Scope(org_id=user.org_id, level=level, selector=selector)
         s.add(scope)
         await s.flush()
         s.add(
@@ -52,6 +51,20 @@ async def _grant_process(subject: str, key: str, process_id: str) -> uuid.UUID:
         )
         await s.commit()
         return user.id
+
+
+async def _grant_process(subject: str, key: str, *process_ids: str) -> uuid.UUID:
+    """A PROCESS-scoped override over the given process ids."""
+    return await _grant_scoped(
+        subject, key, level=ScopeLevel.PROCESS, selector={"process_ids": list(process_ids)}
+    )
+
+
+async def _grant_artifact(subject: str, key: str, artifact_id: str) -> uuid.UUID:
+    """An ARTIFACT-scoped override on one record (for the AZ-INV-8 not-over-blocked proof)."""
+    return await _grant_scoped(
+        subject, key, level=ScopeLevel.ARTIFACT, selector={"artifact_id": artifact_id}
+    )
 
 
 async def _capture_evidence(client: AsyncClient, h: dict[str, str]) -> dict:
@@ -185,37 +198,6 @@ async def test_correction_chain_keeps_process_visibility(
     assert (await app_client.get(f"/api/v1/records/{successor_id}", headers=hb)).status_code == 200
 
 
-async def test_process_owner_read_does_not_enable_writes(
-    app_client: AsyncClient, token_factory: Callable[..., str]
-) -> None:
-    """The decoupling (the spec's central invariant): an owner with BOTH PROCESS ``record.read`` AND
-    PROCESS ``record.create`` {P1} can READ a P1-bound record but still 403s a per-record WRITE on
-    it — the write gates stay process-blind (``_record_scope``), so enabling reads never enables
-    authoring. (Process-Owner record authoring is Slice W.)"""
-    author = _subject("rdw-a")
-    await _grant(author, _AUTHOR_PERMS)
-    ha = _auth(token_factory, author)
-    p1 = await _create_process(app_client, ha)
-    rec = await _capture_evidence(app_client, ha)
-    await _link_process(app_client, ha, rec["id"], p1["id"])
-
-    owner = _subject("rdw-b")
-    await _grant_process(owner, "record.read", p1["id"])
-    await _grant_process(owner, "record.create", p1["id"])  # PROCESS record.create too
-    hb = _auth(token_factory, owner)
-
-    # The read works (the enriched read scope matches the PROCESS grant)...
-    assert (await app_client.get(f"/api/v1/records/{rec['id']}", headers=hb)).status_code == 200
-    # ...but a per-record WRITE 403s at the process-BLIND _create_scoped gate, even with PROCESS
-    # record.create {P1} — proving reads and writes are decoupled (this would 201 if coupled).
-    link_attempt = await app_client.post(
-        f"/api/v1/records/{rec['id']}/evidence-links",
-        headers=hb,
-        json={"target_type": "process", "target_id": p1["id"]},
-    )
-    assert link_attempt.status_code == 403, link_attempt.text
-
-
 async def _correct(client: AsyncClient, h: dict[str, str], record_id: str) -> str:
     """Capture a source-less correction of ``record_id``; returns the successor id."""
     sha = await _upload_evidence(client, h, f"corr-{uuid.uuid4().hex}".encode())
@@ -250,3 +232,136 @@ async def test_correction_chain_two_hops_keeps_visibility(
     await _grant_process(owner, "record.read", p1["id"])
     hb = _auth(token_factory, owner)
     assert (await app_client.get(f"/api/v1/records/{s2}", headers=hb)).status_code == 200
+
+
+# --- Slice W: Process-Owner record authoring (write-enable) + target re-auth -------------
+
+
+async def test_process_owner_evidence_link_reauths_target(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """S-records-W: a Process-Owner of {P1, P1b} reaches the evidence-link write on a record bound
+    to P1 and CAN link it to another OWNED process (P1b), but the target re-auth DENIES linking it
+    to an unowned P2. A SYSTEM author links to P2 unchanged (byte-identical)."""
+    author = _subject("wel-a")
+    await _grant(author, _AUTHOR_PERMS)
+    ha = _auth(token_factory, author)
+    p1 = await _create_process(app_client, ha)
+    p1b = await _create_process(app_client, ha)
+    p2 = await _create_process(app_client, ha)
+    rec = await _capture_evidence(app_client, ha)
+    await _link_process(app_client, ha, rec["id"], p1["id"])  # bind R to P1 (author, leg A)
+
+    owner = _subject("wel-b")
+    await _grant_process(owner, "record.create", p1["id"], p1b["id"])  # owns P1, P1b — NOT P2
+    hb = _auth(token_factory, owner)
+
+    owned = await app_client.post(
+        f"/api/v1/records/{rec['id']}/evidence-links",
+        headers=hb,
+        json={"target_type": "process", "target_id": p1b["id"]},
+    )
+    assert owned.status_code == 201, owned.text
+    unowned = await app_client.post(
+        f"/api/v1/records/{rec['id']}/evidence-links",
+        headers=hb,
+        json={"target_type": "process", "target_id": p2["id"]},
+    )
+    assert unowned.status_code == 403, unowned.text
+    sys_link = await app_client.post(
+        f"/api/v1/records/{rec['id']}/evidence-links",
+        headers=ha,
+        json={"target_type": "process", "target_id": p2["id"]},
+    )
+    assert sys_link.status_code == 201, sys_link.text
+
+
+async def test_artifact_holder_not_over_blocked_on_link(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """AZ-INV-8 / R2-1: an ARTIFACT-scoped ``record.create`` holder of the record can evidence-link
+    it to ANY process — the re-auth preserves the record's ``artifact_id``, so the artifact grant
+    still matches after ``process_ids`` is replaced with the target (not over-blocked)."""
+    author = _subject("wart-a")
+    await _grant(author, _AUTHOR_PERMS)
+    ha = _auth(token_factory, author)
+    p2 = await _create_process(app_client, ha)
+    rec = await _capture_evidence(app_client, ha)
+
+    holder = _subject("wart-b")
+    await _grant_artifact(holder, "record.create", rec["id"])  # ARTIFACT-scoped on this record
+    hh = _auth(token_factory, holder)
+    linked = await app_client.post(
+        f"/api/v1/records/{rec['id']}/evidence-links",
+        headers=hh,
+        json={"target_type": "process", "target_id": p2["id"]},
+    )
+    assert linked.status_code == 201, linked.text
+
+
+async def test_process_owner_cannot_unlink_unowned_process(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """S-records-W: the evidence-link DELETE re-auths the link's TARGET — a Process-Owner of P1 on a
+    record bound to P1+P2 CANNOT remove its link to the unowned P2 (403), but CAN remove its link to
+    P1 (204)."""
+    author = _subject("wdl-a")
+    await _grant(author, _AUTHOR_PERMS)
+    ha = _auth(token_factory, author)
+    p1 = await _create_process(app_client, ha)
+    p2 = await _create_process(app_client, ha)
+    rec = await _capture_evidence(app_client, ha)
+    await _link_process(app_client, ha, rec["id"], p1["id"])
+    await _link_process(app_client, ha, rec["id"], p2["id"])  # R bound to P1 AND P2
+    links = (await app_client.get(f"/api/v1/records/{rec['id']}/evidence-links", headers=ha)).json()
+    link_p1 = next(link["id"] for link in links if link["target_id"] == p1["id"])
+    link_p2 = next(link["id"] for link in links if link["target_id"] == p2["id"])
+
+    owner = _subject("wdl-b")
+    await _grant_process(owner, "record.create", p1["id"])  # owns P1 only
+    hb = _auth(token_factory, owner)
+    deny = await app_client.delete(
+        f"/api/v1/records/{rec['id']}/evidence-links/{link_p2}", headers=hb
+    )
+    assert deny.status_code == 403, deny.text
+    allow = await app_client.delete(
+        f"/api/v1/records/{rec['id']}/evidence-links/{link_p1}", headers=hb
+    )
+    assert allow.status_code == 204, allow.text
+
+
+async def test_process_owner_correction_cannot_introduce_unowned_source(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """S-records-W / R2-3: correcting a source-LESS record keeps the body's source, so a
+    Process-Owner of P1 cannot introduce a body source document linked to an unowned P2 (the
+    successor would inherit P2) — 403 before ``capture_correction`` runs."""
+    author = _subject("wcorr-a")
+    await _grant(author, _AUTHOR_PERMS)
+    await s5.grant_lifecycle(author)  # document.create + manage_metadata for the source doc
+    ha = _auth(token_factory, author)
+    p1 = await _create_process(app_client, ha)
+    p2 = await _create_process(app_client, ha)
+    original = await _capture_evidence(app_client, ha)  # source-LESS
+    await _link_process(app_client, ha, original["id"], p1["id"])  # owner reaches the correction
+    # A source document linked to P2 (any state — the re-auth runs before capture_correction).
+    doc = await _create(app_client, ha, await s5.type_id("SOP"))
+    await _link_doc_to_process(app_client, ha, doc["id"], p2["id"])
+
+    owner = _subject("wcorr-b")
+    await _grant_process(owner, "record.create", p1["id"])  # owns P1, NOT P2
+    hb = _auth(token_factory, owner)
+    # The author stages the evidence (init-upload is SYSTEM record.create); the re-auth 403s before
+    # capture_correction validates it anyway.
+    sha = await _upload_evidence(app_client, ha, f"corr-{uuid.uuid4().hex}".encode())
+    deny = await app_client.post(
+        f"/api/v1/records/{original['id']}/correction",
+        headers=hb,
+        json={
+            "record_type": "EVIDENCE",
+            "title": "smuggled source",
+            "source_document_id": doc["id"],
+            "evidence": [{"sha256": sha, "content_type": "application/pdf"}],
+        },
+    )
+    assert deny.status_code == 403, deny.text
