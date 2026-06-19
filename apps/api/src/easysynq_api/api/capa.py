@@ -8,10 +8,14 @@ precedent; the row's ``process_id`` for path-id writes — an async scope resolv
 ``_audit_scope``
 precedent), with a SYSTEM fallback so a SYSTEM grant/override always matches. A concrete PROCESS
 grant
-matches once owner-assignment binds the seeded ``:assignment_process`` placeholder. Reads
-(``capa.read`` / ``ncr.read`` / ``record.read`` for complaints) gate at SYSTEM + an org-scoped query
-(the S-aud-1 audits-list precedent). Complaint capture rides ``record.create`` (a complaint IS a
-record); the complaint→CAPA spawn rides ``capa.create``.
+matches once owner-assignment binds the seeded ``:assignment_process`` placeholder. ``capa.read``
+reads are PROCESS-scoped so a bound Process Owner can reach the board the process-scoped raise
+targets: the LIST (``GET /capas``) row-filters per-process (filter-not-403, the
+``_readable_processes`` precedent) and the single reads (``GET /capas/{id}`` + ``/approval``)
+enforce at the CAPA's PROCESS scope — a SYSTEM grant matches every row/CAPA, so SYSTEM holders are
+byte-identical. ``ncr.read`` / ``record.read`` (complaints) still gate at SYSTEM + an org-scoped
+query (the S-aud-1 audits-list precedent). Complaint capture rides ``record.create`` (a complaint IS
+a record); the complaint→CAPA spawn rides ``capa.create``.
 """
 
 from __future__ import annotations
@@ -35,9 +39,9 @@ from ..db.models.complaint import Complaint
 from ..db.models.ncr import Ncr
 from ..db.models.workflow import Task, WorkflowInstance
 from ..db.session import get_session
-from ..domain.authz import ResourceContext
+from ..domain.authz import RequestContext, ResourceContext, authorize
 from ..problems import ProblemException
-from ..services.authz import AuthzAuditSink, enforce, get_authz_audit_sink, require
+from ..services.authz import AuthzAuditSink, enforce, gather_grants, get_authz_audit_sink, require
 from ..services.capa import (
     advance_capa_to_containment,
     advance_capa_to_implement,
@@ -289,7 +293,11 @@ async def _ncr_scope(request: Request, session: AsyncSession) -> ResourceContext
     return ResourceContext(process_ids=frozenset({str(ncr.process_id)}))
 
 
-_capa_read = require("capa.read")
+# Single-CAPA reads enforce capa.read at the CAPA's PROCESS scope (a SYSTEM grant still matches; a
+# bound Process Owner matches their own process's CAPA; else 403). The LIST surface (GET /capas)
+# row-filters instead (filter-not-403, doc 18 §5.2) via _readable_capas — a list can't enforce at
+# one scope. Both unblock a bound Process Owner reaching the board the process-scoped raise targets.
+_capa_read_scoped = require("capa.read", async_scope_resolver=_capa_scope)
 _ncr_read = require("ncr.read")
 _complaint_read = require("record.read")
 _complaint_create = require("record.create")  # complaints are ad-hoc records (SYSTEM, no process)
@@ -332,12 +340,36 @@ async def raise_capa_endpoint(
     return await _capa_full(session, capa)
 
 
+async def _readable_capas(
+    request: Request, session: AsyncSession, caller: AppUser
+) -> list[tuple[Capa, str | None, str | None, datetime.datetime | None]]:
+    """The org's CAPAs the caller may ``capa.read``, row-filtered per-process (filter-not-403, doc
+    18 §5.2 — the ``_readable_processes`` precedent). A SYSTEM grant matches every row (QMS Owner /
+    Internal Auditor / a Top-Management approver / a ``demo`` override see the org-wide list
+    byte-identical); a bound Process Owner's PROCESS-scoped ``capa.read`` narrows to CAPAs in their
+    owned process(es); a process-less (ad-hoc/SYSTEM) CAPA needs a SYSTEM grant; a no-grant caller
+    gets an empty list, never ``403``. ``source_ip`` is threaded so an ``ip_allow`` predicate
+    evaluates exactly as the replaced ``require()`` enforce did (``ip_allow`` is v1-deferred)."""
+    rows = await capa_repo.list_capas(session, caller.org_id)
+    grants = await gather_grants(session, caller.id, caller.org_id, "capa.read")
+    ctx = RequestContext(
+        now=datetime.datetime.now(datetime.UTC),
+        source_ip=request.client.host if request.client else None,
+    )
+    return [
+        row
+        for row in rows
+        if authorize(grants, "capa.read", _process_scope(row[0].process_id), ctx).allow
+    ]
+
+
 @router.get("/capas")
 async def list_capas_endpoint(
-    caller: AppUser = Depends(_capa_read),
+    request: Request,
+    caller: AppUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
-    rows = await capa_repo.list_capas(session, caller.org_id)
+    rows = await _readable_capas(request, session, caller)
     return {
         "data": [
             _capa(c, ident, title=title, created_at=created) for c, ident, title, created in rows
@@ -348,7 +380,7 @@ async def list_capas_endpoint(
 @router.get("/capas/{capa_id}")
 async def get_capa_endpoint(
     capa_id: uuid.UUID,
-    caller: AppUser = Depends(_capa_read),
+    caller: AppUser = Depends(_capa_read_scoped),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
     capa = await capa_repo.get_capa(session, capa_id)
@@ -363,14 +395,15 @@ async def get_capa_endpoint(
 @router.get("/capas/{capa_id}/approval")
 async def get_capa_approval_endpoint(
     capa_id: uuid.UUID,
-    caller: AppUser = Depends(_capa_read),
+    caller: AppUser = Depends(_capa_read_scoped),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any] | None:
     """The CAPA's current action-plan approval cycle (the latest CAPA workflow instance + its
     tasks + the proposed action plan from the instance context), or ``null`` when none has opened.
-    Gated ``capa.read`` (the S-web-5 ``GET /documents/{id}/approval`` mirror) — so a
-    Top-Management approver, who holds only ``capa.read``, can read what they sign without
-    ``document.read``."""
+    Gated ``capa.read`` at the CAPA's PROCESS scope (the S-web-5 ``GET /documents/{id}/approval``
+    mirror) — so a Top-Management approver, who holds only SYSTEM ``capa.read``, can read what they
+    sign (the SYSTEM grant matches), and a bound Process Owner can read their own process's CAPA,
+    both without ``document.read``."""
     capa = await capa_repo.get_capa(session, capa_id)
     if capa is None or capa.org_id != caller.org_id:
         raise ProblemException(status=404, code="not_found", title="CAPA not found")

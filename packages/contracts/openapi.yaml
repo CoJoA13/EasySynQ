@@ -4066,22 +4066,25 @@ paths:
     get:
       tags: [capa]
       operationId: listCapas
-      summary: List the org's CAPAs. Needs capa.read.
+      summary: The org's CAPAs the caller may read (row-filtered by capa.read).
+      description: >-
+        Row-filtered per-process by capa.read (filter, not 403 — doc 18 §5.2): a SYSTEM grant sees
+        every CAPA, a bound Process Owner narrows to CAPAs in their owned process(es) (a process-less
+        ad-hoc CAPA needs a SYSTEM grant), a no-grant caller gets 200 + an empty list.
       responses:
         "200":
-          description: The org's CAPAs.
+          description: The CAPAs the caller may read (possibly empty).
           content:
             application/json:
               schema:
                 type: object
                 properties:
                   data: { type: array, items: { $ref: "#/components/schemas/Capa" } }
-        "403": { $ref: "#/components/responses/ProblemResponse" }
   /capas/{capa_id}:
     get:
       tags: [capa]
       operationId: getCapa
-      summary: A CAPA with its sealed stage trail. Needs capa.read.
+      summary: A CAPA with its sealed stage trail. Needs capa.read at the CAPA's PROCESS scope (SYSTEM grant matches; a bound Process Owner reads their own process's CAPA; else 403).
       parameters:
         - { name: capa_id, in: path, required: true, schema: { type: string, format: uuid } }
       responses:
@@ -4246,7 +4249,7 @@ paths:
     get:
       tags: [capa]
       operationId: getCapaApproval
-      summary: The CAPA's current action-plan approval cycle (or null)
+      summary: The CAPA's current action-plan approval cycle (or null). Needs capa.read at the CAPA's PROCESS scope (a SYSTEM-holding Top-Management approver matches; a bound Process Owner reads their own; else 403).
       parameters:
         - { name: capa_id, in: path, required: true, schema: { type: string, format: uuid } }
       responses:

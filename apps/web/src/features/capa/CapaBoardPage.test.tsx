@@ -133,6 +133,28 @@ test("shows the Raise CAPA button for a purely-PROCESS-scoped capa.create holder
   expect(await screen.findByRole("button", { name: /Raise CAPA/ })).toBeInTheDocument();
 });
 
+// The board threads requireProcess=!systemCanCreate into the modal: a PROCESS-only creator (no SYSTEM
+// capa.create) gets a REQUIRED process picker ("Process"), not the optional one — a process-less raise
+// would 403 at the server's SYSTEM-scope enforce.
+test("opens the Raise modal with a required process picker for a PROCESS-only creator", async () => {
+  server.use(
+    http.get("/api/v1/me/permissions", ({ request }) => {
+      const level = new URL(request.url).searchParams.get("scope_level");
+      return HttpResponse.json({
+        scope: { level: level ?? "SYSTEM", selector: null },
+        permissions:
+          level === "PROCESS" ? [{ key: "capa.create", effect: "ALLOW", source: null }] : [],
+      } satisfies MePermissions);
+    }),
+  );
+  const u = userEvent.setup();
+  renderWithProviders(<CapaBoardPage />, { route: "/capa" });
+  await u.click(await screen.findByRole("button", { name: /Raise CAPA/ }));
+  // The required picker renders with Mantine's asterisk (prefix match), NOT the optional label.
+  expect(await screen.findByLabelText(/^Process/)).toBeInTheDocument();
+  expect(screen.queryByLabelText("Process (optional)")).toBeNull();
+});
+
 // The gate must key on capa.CREATE, never on "has readable processes": an Internal Auditor holds
 // SYSTEM capa.read (board access) + SYSTEM process.read (a non-empty process list) but no capa.create
 // at ANY scope — they must NOT see the Raise button.

@@ -87,3 +87,20 @@ test("omits the process picker when no processes are readable", async () => {
   expect(await screen.findByLabelText(/^Title/)).toBeInTheDocument();
   expect(screen.queryByLabelText("Process (optional)")).toBeNull();
 });
+
+// A PROCESS-only caller (no SYSTEM capa.create) MUST pick a process — a process-less raise would 403
+// at the server's SYSTEM-scope enforce — so requireProcess makes the picker required + gates submit.
+test("requireProcess makes the picker required and gates Raise until a process is picked", async () => {
+  const u = userEvent.setup();
+  wrap(<RaiseCapaModal opened requireProcess onClose={vi.fn()} onCreated={vi.fn()} />);
+  await u.type(screen.getByLabelText(/^Title/), "Press tool wear");
+  await u.click(await screen.findByLabelText(/^Severity/));
+  await u.click(await screen.findByRole("option", { name: "Minor" }));
+  // The label is the required "Process" (not "Process (optional)"), and the button stays disabled.
+  expect(screen.queryByLabelText("Process (optional)")).toBeNull();
+  expect(screen.getByRole("button", { name: /Raise CAPA/ })).toBeDisabled();
+  // The required label renders with Mantine's asterisk, so query by prefix (not the optional label).
+  await u.click(await screen.findByLabelText(/^Process/));
+  await u.click(await screen.findByRole("option", { name: "Purchasing" }));
+  expect(screen.getByRole("button", { name: /Raise CAPA/ })).toBeEnabled();
+});

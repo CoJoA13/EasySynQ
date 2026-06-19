@@ -58,8 +58,8 @@ export function CapaBoardPage() {
   const processPerms = usePermissions(
     firstProcessId ? { level: "PROCESS", id: firstProcessId } : undefined,
   );
-  const canRaiseCapa =
-    perms.can("capa.create") || (!!firstProcessId && processPerms.can("capa.create"));
+  const systemCanCreate = perms.can("capa.create");
+  const canRaiseCapa = systemCanCreate || (!!firstProcessId && processPerms.can("capa.create"));
 
   // Open the drawer for ?capa=<id> on mount + whenever the param changes (a deep-link while mounted).
   // Guarded on a non-null id so clearing the param on close never re-opens the drawer.
@@ -284,6 +284,7 @@ export function CapaBoardPage() {
         opened={raiseOpen}
         onClose={() => setRaiseOpen(false)}
         onCreated={(id) => setSelected(id)}
+        requireProcess={!systemCanCreate}
       />
     </Container>
   );

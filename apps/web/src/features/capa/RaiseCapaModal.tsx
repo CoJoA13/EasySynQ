@@ -17,15 +17,20 @@ export function RaiseCapaModal({
   opened,
   onClose,
   onCreated,
+  requireProcess = false,
 }: {
   opened: boolean;
   onClose: () => void;
   onCreated: (id: string) => void;
+  // True when the caller can raise ONLY at PROCESS scope (no SYSTEM capa.create). The picker then
+  // becomes required — a process-less submit would 403 at the server's SYSTEM-scope enforce, so we
+  // gate the button on a pick rather than let it fail. A SYSTEM-create holder leaves it optional.
+  requireProcess?: boolean;
 }) {
   const m = useRaiseCapa();
-  // Optional process scope: a bound Process-Owner holds capa.create only at their owned process(es),
-  // so the raise must carry that process_id for the server's PROCESS-scoped enforce to pass. Omit the
-  // picker (and stay byte-identical to the SYSTEM/ad-hoc raise) when the caller can't read any process.
+  // Process scope: a bound Process-Owner holds capa.create only at their owned process(es), so the
+  // raise must carry that process_id for the server's PROCESS-scoped enforce to pass. Omit the picker
+  // (and stay byte-identical to the SYSTEM/ad-hoc raise) when the caller can't read any process.
   const { data: processes } = useProcesses();
   const [title, setTitle] = useState("");
   const [severity, setSeverity] = useState<NcSeverity | null>(null);
@@ -84,8 +89,10 @@ export function RaiseCapaModal({
         />
         {processes && processes.length > 0 && (
           <Select
-            label="Process (optional)"
-            clearable
+            label={requireProcess ? "Process" : "Process (optional)"}
+            required={requireProcess}
+            clearable={!requireProcess}
+            placeholder={requireProcess ? "Pick the owning process" : undefined}
             value={processId}
             onChange={setProcessId}
             data={processes.map((p) => ({ value: p.id, label: p.name }))}
@@ -106,7 +113,7 @@ export function RaiseCapaModal({
           <Button
             onClick={() => void submit()}
             loading={m.isPending}
-            disabled={title.trim().length === 0 || !severity}
+            disabled={title.trim().length === 0 || !severity || (requireProcess && !processId)}
           >
             Raise CAPA
           </Button>
