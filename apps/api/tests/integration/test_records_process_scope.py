@@ -30,14 +30,12 @@ from .test_vault import _auth, _ensure_user
 pytestmark = pytest.mark.integration
 
 
-async def _grant_process_read(subject: str, process_id: str) -> uuid.UUID:
-    """Mint a PROCESS-scoped ``record.read`` override (no SYSTEM) — the direct-PROCESS-grant
-    precedent (test_processes ``:assignment_process`` / ``_assign_role_bound``)."""
+async def _grant_process(subject: str, key: str, process_id: str) -> uuid.UUID:
+    """Mint a PROCESS-scoped override for ``key`` (no SYSTEM) — the direct-PROCESS-grant precedent
+    (test_processes ``:assignment_process`` / ``_assign_role_bound``)."""
     async with get_sessionmaker()() as s:
         user = await _ensure_user(s, subject)
-        perm = (
-            await s.execute(select(Permission).where(Permission.key == "record.read"))
-        ).scalar_one()
+        perm = (await s.execute(select(Permission).where(Permission.key == key))).scalar_one()
         scope = Scope(
             org_id=user.org_id, level=ScopeLevel.PROCESS, selector={"process_id": process_id}
         )
@@ -101,7 +99,7 @@ async def test_process_owner_reads_record_linked_to_owned_process(
     await _link_process(app_client, ha, r2["id"], p2["id"])
 
     owner = _subject("rps-b")
-    await _grant_process_read(owner, p1["id"])
+    await _grant_process(owner, "record.read", p1["id"])
     hb = _auth(token_factory, owner)
 
     assert (await app_client.get(f"/api/v1/records/{r1['id']}", headers=hb)).status_code == 200
@@ -127,7 +125,7 @@ async def test_process_owner_record_list_filters_by_process(
     await _link_process(app_client, ha, r2["id"], p2["id"])
 
     owner = _subject("rpl-b")
-    await _grant_process_read(owner, p1["id"])
+    await _grant_process(owner, "record.read", p1["id"])
     hb = _auth(token_factory, owner)
 
     listed = await app_client.get("/api/v1/records?limit=100", headers=hb)
@@ -149,7 +147,7 @@ async def test_source_less_record_invisible_to_process_owner(
     unbound = await _capture_evidence(app_client, ha)  # no link
 
     owner = _subject("rsl-b")
-    await _grant_process_read(owner, p1["id"])
+    await _grant_process(owner, "record.read", p1["id"])
     hb = _auth(token_factory, owner)
     assert (await app_client.get(f"/api/v1/records/{unbound['id']}", headers=hb)).status_code == 403
 
@@ -181,7 +179,38 @@ async def test_correction_chain_keeps_process_visibility(
     successor_id = corr.json()["id"]
 
     owner = _subject("rcc-b")
-    await _grant_process_read(owner, p1["id"])
+    await _grant_process(owner, "record.read", p1["id"])
     hb = _auth(token_factory, owner)
     # The successor has no OWN binding but inherits P1 via the correction_of walk → visible.
     assert (await app_client.get(f"/api/v1/records/{successor_id}", headers=hb)).status_code == 200
+
+
+async def test_process_owner_read_does_not_enable_writes(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """The decoupling (the spec's central invariant): an owner with BOTH PROCESS ``record.read`` AND
+    PROCESS ``record.create`` {P1} can READ a P1-bound record but still 403s a per-record WRITE on
+    it — the write gates stay process-blind (``_record_scope``), so enabling reads never enables
+    authoring. (Process-Owner record authoring is Slice W.)"""
+    author = _subject("rdw-a")
+    await _grant(author, _AUTHOR_PERMS)
+    ha = _auth(token_factory, author)
+    p1 = await _create_process(app_client, ha)
+    rec = await _capture_evidence(app_client, ha)
+    await _link_process(app_client, ha, rec["id"], p1["id"])
+
+    owner = _subject("rdw-b")
+    await _grant_process(owner, "record.read", p1["id"])
+    await _grant_process(owner, "record.create", p1["id"])  # PROCESS record.create too
+    hb = _auth(token_factory, owner)
+
+    # The read works (the enriched read scope matches the PROCESS grant)...
+    assert (await app_client.get(f"/api/v1/records/{rec['id']}", headers=hb)).status_code == 200
+    # ...but a per-record WRITE 403s at the process-BLIND _create_scoped gate, even with PROCESS
+    # record.create {P1} — proving reads and writes are decoupled (this would 201 if coupled).
+    link_attempt = await app_client.post(
+        f"/api/v1/records/{rec['id']}/evidence-links",
+        headers=hb,
+        json={"target_type": "PROCESS", "target_id": p1["id"]},
+    )
+    assert link_attempt.status_code == 403, link_attempt.text
