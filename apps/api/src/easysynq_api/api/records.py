@@ -12,6 +12,7 @@ list is row-filtered to what the caller may ``record.read`` (doc 15 §9.3), not 
 
 from __future__ import annotations
 
+import dataclasses
 import datetime
 import uuid
 from typing import Any, Literal
@@ -22,6 +23,7 @@ from sqlalchemy import ColumnElement
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..auth.dependencies import get_current_user
+from ..db.models._evidence_enums import EvidenceForTargetType
 from ..db.models._record_enums import RecordDispositionState, RecordType
 from ..db.models.app_user import AppUser
 from ..db.models.blob import Blob
@@ -217,15 +219,7 @@ def _record(
 # --- helpers + gates --------------------------------------------------------------------
 
 
-async def _record_scope(request: Any, session: AsyncSession) -> ResourceContext:
-    """Resolve a record's ARTIFACT authz scope from the path id (SYSTEM grants always match)."""
-    raw = request.path_params.get("record_id")
-    if not raw:
-        return ResourceContext.system()
-    try:
-        record_id = uuid.UUID(str(raw))
-    except ValueError:
-        return ResourceContext.system()
+async def _record_scope_by_id(session: AsyncSession, record_id: uuid.UUID) -> ResourceContext:
     base = await session.get(DocumentedInformation, record_id)
     if base is None:
         return ResourceContext(artifact_id=str(record_id))
@@ -242,6 +236,37 @@ async def _record_scope(request: Any, session: AsyncSession) -> ResourceContext:
     return ResourceContext(
         artifact_id=str(base.id), folder_path=base.folder_path, process_ids=process_ids
     )
+
+
+async def _record_scope(request: Any, session: AsyncSession) -> ResourceContext:
+    """Resolve a record's authz scope from the path id (SYSTEM grants always match)."""
+    raw = request.path_params.get("record_id")
+    if not raw:
+        return ResourceContext.system()
+    try:
+        record_id = uuid.UUID(str(raw))
+    except ValueError:
+        return ResourceContext.system()
+    return await _record_scope_by_id(session, record_id)
+
+
+async def _enforce_record_target_process(
+    session: AsyncSession,
+    sink: AuthzAuditSink,
+    request: Request,
+    caller: AppUser,
+    record_id: uuid.UUID,
+    target_process_id: uuid.UUID,
+) -> None:
+    """Re-authorize a record-process binding mutation against the TARGET process (S-process-scope).
+    Mirrors documents._enforce_target_process: keep the record's resolved scope (artifact/folder),
+    replace ONLY process_ids with the single target, then re-enforce record.create. A SYSTEM/FOLDER/
+    ARTIFACT record.create holder still passes (record-level authority); a PROCESS-scoped owner must
+    hold record.create for the target process — so an owner of P1 can neither add nor remove a
+    P2 evidence binding (which would change who can record.read the record). 403 on deny."""
+    base = await _record_scope_by_id(session, record_id)
+    target_scope = dataclasses.replace(base, process_ids=frozenset({str(target_process_id)}))
+    await enforce(session, sink, request, caller, "record.create", target_scope)
 
 
 async def _capture_scope(
@@ -475,12 +500,19 @@ async def correction_endpoint(
     session: AsyncSession = Depends(get_session),
     authz_sink: AuthzAuditSink = Depends(get_authz_audit_sink),
 ) -> dict[str, Any]:
-    # S-process-scope-1: the correction's NEW record inherits its source document's process scope
-    # (records_repo.process_ids_for_record), so re-authorize record.create against that source scope
-    # too — mirroring the capture endpoint — else a correction over a P1-scoped original could name
-    # an unowned-P2 source and mint a P2-readable record. No-op when the correction has no source.
-    if body.source_document_id is not None:
-        source_scope = await _capture_scope(session, caller, body.source_document_id)
+    # S-process-scope-1: the correction's NEW record inherits its source document's process scope,
+    # so re-authorize record.create against that source (mirroring the capture endpoint). Use the
+    # EFFECTIVE source capture_correction actually pins: a source-backed original FORCES its own
+    # source (the body's is ignored), an ad-hoc original keeps the body's — so check the original's
+    # source when present, else the body's. No-op when neither has a source.
+    original = await records_repo.get_record(session, record_id)
+    effective_source = (
+        original.source_document_id
+        if original is not None and original.source_document_id is not None
+        else body.source_document_id
+    )
+    if effective_source is not None:
+        source_scope = await _capture_scope(session, caller, effective_source)
         await enforce(session, authz_sink, request, caller, "record.create", source_scope)
     new_record = await capture_correction(
         session,
@@ -522,13 +554,12 @@ async def link_evidence_endpoint(
 ) -> dict[str, Any]:
     # S-process-scope-1: binding a record AS EVIDENCE FOR a process makes it record.read-visible to
     # that process's scope (records_repo.process_ids_for_record), so re-authorize the TARGET process
-    # — record.create over JUST {target} — mirroring documents._enforce_target_process. The
-    # _create_scoped dependency already authorized record.create over the record's existing scope; a
-    # SYSTEM holder still passes, but a PROCESS-scoped owner must also hold record.create for the
-    # target process (so an owner of P1 can't make a record readable to an unowned P2's owners).
+    # (the _create_scoped dependency already authorized record.create over the record's existing
+    # scope; this stops a PROCESS-scoped owner of P1 making the record readable to an unowned P2).
     if body.target_type == "process":
-        target_scope = ResourceContext(process_ids=frozenset({str(body.target_id)}))
-        await enforce(session, authz_sink, request, caller, "record.create", target_scope)
+        await _enforce_record_target_process(
+            session, authz_sink, request, caller, record_id, body.target_id
+        )
     link = await link_evidence(
         session,
         caller,
@@ -546,9 +577,23 @@ async def link_evidence_endpoint(
 async def unlink_evidence_endpoint(
     record_id: uuid.UUID,
     link_id: uuid.UUID,
+    request: Request,
     caller: AppUser = Depends(_create_scoped),
     session: AsyncSession = Depends(get_session),
+    authz_sink: AuthzAuditSink = Depends(get_authz_audit_sink),
 ) -> Response:
+    # S-process-scope-1: removing a PROCESS evidence link changes who can record.read the record, so
+    # re-authorize the link's TARGET process — else a PROCESS owner of P1 could, via a joint P1+P2
+    # record, delete P2's evidence binding. Same target re-auth as the POST.
+    link = await records_repo.get_evidence_link_by_id(session, link_id)
+    if (
+        link is not None
+        and link.record_id == record_id
+        and link.target_type is EvidenceForTargetType.PROCESS
+    ):
+        await _enforce_record_target_process(
+            session, authz_sink, request, caller, record_id, link.target_id
+        )
     await unlink_evidence(session, caller, record_id, link_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 

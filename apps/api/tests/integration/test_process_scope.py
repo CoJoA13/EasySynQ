@@ -490,12 +490,13 @@ async def test_evidence_link_reauthorizes_target_process(
     assert deny.status_code == 403, deny.text
 
 
-async def test_correction_reauthorizes_source_process(
+async def test_correction_reauthorizes_inherited_source_process(
     app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
 ) -> None:
-    """A correction's NEW record inherits its source document's process scope, so the correction
-    endpoint re-authorizes record.create against the source. A Process Owner of P1 correcting a
-    P1-scoped record may name a P1 source but NOT an unowned-P2 source (the Codex P2 over-grant)."""
+    """capture_correction FORCES a source-backed original's own source (the body's is ignored), so
+    the correction endpoint re-authorizes the EFFECTIVE source — even when the body omits it. A P1
+    owner correcting a record whose inherited source is an unowned P2 is denied until they also own
+    P2 (the Codex round-2 P1: inherited-source over-grant)."""
     await s5.grant_lifecycle(subj.a)
     await _grant(subj.a, "record.create")
     await _grant(subj.a, "record.read")
@@ -504,47 +505,93 @@ async def test_correction_reauthorizes_source_process(
     ha = _auth(token_factory, subj.a)
     p1 = await _create_process(app_client, ha)
     p2 = await _create_process(app_client, ha)
-    d1, v1 = await _doc_version_linked(app_client, ha, p1["id"])
     d2, v2 = await _doc_version_linked(app_client, ha, p2["id"])
 
+    # A source-backed original (source = D2, process P2), then evidence-linked to P1 so a P1 owner
+    # can reach it via the union scope.
     orig = await app_client.post(
         "/api/v1/records",
         headers=ha,
         json={
             "record_type": "RELEASE",
-            "title": "Original",
-            "source_document_id": d1,
-            "source_version_id": v1,
+            "title": "Original (P2 source)",
+            "source_document_id": d2,
+            "source_version_id": v2,
         },
     )
     assert orig.status_code == 201, orig.text
     rid = orig.json()["id"]
+    seed = await app_client.post(
+        f"/api/v1/records/{rid}/evidence-links",
+        headers=ha,
+        json={"target_type": "process", "target_id": p1["id"]},
+    )
+    assert seed.status_code == 201, seed.text
 
     owner_id = await _user_id(subj.b)
     await _assign_owner(app_client, ha, p1["id"], owner_id)
     hb = _auth(token_factory, subj.b)
 
-    # Correcting with an UNOWNED-P2 source → 403 (re-authorized against the source's process scope).
+    # subj.b owns P1 (passes _create_scoped via the union), but the body OMITS the source — the
+    # inherited D2/P2 source is what capture_correction would pin → 403 (effective-source re-auth).
     deny = await app_client.post(
         f"/api/v1/records/{rid}/correction",
         headers=hb,
-        json={
-            "record_type": "RELEASE",
-            "title": "Corrected (P2 source)",
-            "source_document_id": d2,
-            "source_version_id": v2,
-        },
+        json={"record_type": "RELEASE", "title": "Corrected (inherits P2 source)"},
     )
     assert deny.status_code == 403, deny.text
-    # Correcting with the OWNED-P1 source → 201.
+    # Once subj.b also owns P2 (the inherited source's process), the same correction succeeds.
+    await _assign_owner(app_client, ha, p2["id"], owner_id)
     ok = await app_client.post(
         f"/api/v1/records/{rid}/correction",
         headers=hb,
-        json={
-            "record_type": "RELEASE",
-            "title": "Corrected (P1 source)",
-            "source_document_id": d1,
-            "source_version_id": v1,
-        },
+        json={"record_type": "RELEASE", "title": "Corrected (now owns P2)"},
     )
     assert ok.status_code == 201, ok.text
+
+
+async def test_evidence_link_delete_reauthorizes_target_process(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    """Removing a PROCESS evidence link narrows who can record.read the record, so the unlink
+    endpoint re-authorizes the link's TARGET process: a P1 owner of a joint P1+P2 record can delete
+    the P1 link but NOT the P2 link (the Codex round-2 P1: unlink over-grant)."""
+    await s5.grant_lifecycle(subj.a)
+    await _grant(subj.a, "record.create")
+    await _grant(subj.a, "record.read")
+    await _grant(subj.a, "process.create")
+    await _grant(subj.a, "process.assign_owner")
+    ha = _auth(token_factory, subj.a)
+    p1 = await _create_process(app_client, ha)
+    p2 = await _create_process(app_client, ha)
+    rec = await app_client.post(
+        "/api/v1/records", headers=ha, json={"record_type": "EVIDENCE", "title": "Joint"}
+    )
+    assert rec.status_code == 201, rec.text
+    rid = rec.json()["id"]
+    l1 = await app_client.post(
+        f"/api/v1/records/{rid}/evidence-links",
+        headers=ha,
+        json={"target_type": "process", "target_id": p1["id"]},
+    )
+    l2 = await app_client.post(
+        f"/api/v1/records/{rid}/evidence-links",
+        headers=ha,
+        json={"target_type": "process", "target_id": p2["id"]},
+    )
+    assert l1.status_code == 201 and l2.status_code == 201, (l1.text, l2.text)
+
+    owner_id = await _user_id(subj.b)
+    await _assign_owner(app_client, ha, p1["id"], owner_id)
+    hb = _auth(token_factory, subj.b)
+
+    # subj.b owns P1 (passes _create_scoped via the union) but cannot delete the P2 evidence link.
+    deny = await app_client.delete(
+        f"/api/v1/records/{rid}/evidence-links/{l2.json()['id']}", headers=hb
+    )
+    assert deny.status_code == 403, deny.text
+    # ...but can delete the P1 link (their own process) → 204.
+    ok = await app_client.delete(
+        f"/api/v1/records/{rid}/evidence-links/{l1.json()['id']}", headers=hb
+    )
+    assert ok.status_code == 204, ok.text
