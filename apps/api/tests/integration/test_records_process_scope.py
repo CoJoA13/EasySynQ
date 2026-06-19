@@ -74,7 +74,7 @@ async def _link_process(
     r = await client.post(
         f"/api/v1/records/{record_id}/evidence-links",
         headers=h,
-        json={"target_type": "PROCESS", "target_id": process_id},
+        json={"target_type": "process", "target_id": process_id},
     )
     assert r.status_code == 201, r.text
 
@@ -211,6 +211,6 @@ async def test_process_owner_read_does_not_enable_writes(
     link_attempt = await app_client.post(
         f"/api/v1/records/{rec['id']}/evidence-links",
         headers=hb,
-        json={"target_type": "PROCESS", "target_id": p1["id"]},
+        json={"target_type": "process", "target_id": p1["id"]},
     )
     assert link_attempt.status_code == 403, link_attempt.text
