@@ -120,6 +120,27 @@ async def test_process_owner_capa_detail_and_approval_enforce_process_scope(
     ).status_code == 403
 
 
+async def test_system_capa_read_holder_reads_a_process_scoped_capa(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    """A SYSTEM ``capa.read`` holder (the Top-Management CAPA-approver shape) reads a PROCESS-scoped
+    CAPA's detail + approval + sees it in the list — the SYSTEM grant satisfies the PROCESS-resolved
+    resource, so the welded approver path is byte-identical under the new scoped reads."""
+    await _grant(subj.a, "capa.create")
+    await _grant(subj.a, "process.create")
+    ha = _auth(token_factory, subj.a)
+    p1 = await _create_process(app_client, ha)
+    capa_p1 = await _raise_capa(app_client, ha, process_id=p1["id"])
+
+    await _grant(subj.c, "capa.read")  # SYSTEM capa.read only — no process binding
+    hc = _auth(token_factory, subj.c)
+    assert (await app_client.get(f"/api/v1/capas/{capa_p1}", headers=hc)).status_code == 200
+    assert (
+        await app_client.get(f"/api/v1/capas/{capa_p1}/approval", headers=hc)
+    ).status_code == 200
+    assert capa_p1 in await _capa_ids(app_client, hc)
+
+
 async def test_capa_list_no_grant_is_empty_not_403(
     app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
 ) -> None:

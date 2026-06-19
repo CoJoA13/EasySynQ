@@ -150,9 +150,32 @@ test("opens the Raise modal with a required process picker for a PROCESS-only cr
   const u = userEvent.setup();
   renderWithProviders(<CapaBoardPage />, { route: "/capa" });
   await u.click(await screen.findByRole("button", { name: /Raise CAPA/ }));
-  // The required picker renders with Mantine's asterisk (prefix match), NOT the optional label.
-  expect(await screen.findByLabelText(/^Process/)).toBeInTheDocument();
+  // The required placeholder is set ONLY when requireProcess=true — a genuine discriminator that the
+  // board threaded requireProcess=!systemCanCreate (an optional picker carries no placeholder). The
+  // submit-gate MECHANICS are covered by the RaiseCapaModal test; here we pin the board's threading.
+  expect(await screen.findByPlaceholderText("Pick the owning process")).toBeInTheDocument();
   expect(screen.queryByLabelText("Process (optional)")).toBeNull();
+});
+
+// The modal is conditionally mounted, so closing it unmounts + discards the draft — a picked-then-
+// cancelled field must not bleed into the next raise (the RaiseInitiativeModal precedent).
+test("re-opening the Raise modal discards the previous draft", async () => {
+  server.use(
+    http.get("/api/v1/me/permissions", () =>
+      HttpResponse.json({
+        scope: { level: "SYSTEM", selector: null },
+        permissions: [{ key: "capa.create", effect: "ALLOW", source: null }],
+      } satisfies MePermissions),
+    ),
+  );
+  const u = userEvent.setup();
+  renderWithProviders(<CapaBoardPage />, { route: "/capa" });
+  await u.click(await screen.findByRole("button", { name: /Raise CAPA/ }));
+  await u.type(await screen.findByLabelText(/^Title/), "Stale draft");
+  await u.click(screen.getByRole("button", { name: "Cancel" }));
+  // Re-open: the Title is empty again (the modal remounted fresh, not the stale draft).
+  await u.click(await screen.findByRole("button", { name: /Raise CAPA/ }));
+  expect(await screen.findByLabelText(/^Title/)).toHaveValue("");
 });
 
 // The gate must key on capa.CREATE, never on "has readable processes": an Internal Auditor holds

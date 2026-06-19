@@ -280,12 +280,16 @@ export function CapaBoardPage() {
       )}
 
       <CapaDrawer capaId={selected} onClose={closeDrawer} />
-      <RaiseCapaModal
-        opened={raiseOpen}
-        onClose={() => setRaiseOpen(false)}
-        onCreated={(id) => setSelected(id)}
-        requireProcess={!systemCanCreate}
-      />
+      {/* Conditionally mounted so close unmounts + resets the form (the RaiseInitiativeModal
+          precedent) — a picked-then-cancelled process must not persist into the next raise. */}
+      {raiseOpen && (
+        <RaiseCapaModal
+          opened
+          onClose={() => setRaiseOpen(false)}
+          onCreated={(id) => setSelected(id)}
+          requireProcess={!systemCanCreate}
+        />
+      )}
     </Container>
   );
 }
