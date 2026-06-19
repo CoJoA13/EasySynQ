@@ -413,15 +413,20 @@ async def test_cross_org_advance_is_denied(
     assert detail["close_state"] == "Raised"
 
 
-async def test_capa_read_requires_grant(
+async def test_capa_list_filters_not_403_ncr_still_enforces(
     app_client: AsyncClient, token_factory: Callable[..., str]
 ) -> None:
+    """S-capa-raise-process: GET /capas row-filters (filter-not-403, doc 18 §5.2) — a no-grant
+    caller gets 200 + an empty list (they hold capa.read at no scope, so no CAPA matches), NOT the
+    pre-slice 403. GET /ncrs is still SYSTEM-enforced (no row-filter) → 403."""
     subject = _subject("capa-nogrant")
     async with get_sessionmaker()() as s:
         await _ensure_user(s, subject)
         await s.commit()
     h = _auth(token_factory, subject)
-    assert (await app_client.get("/api/v1/capas", headers=h)).status_code == 403
+    capas = await app_client.get("/api/v1/capas", headers=h)
+    assert capas.status_code == 200, capas.text
+    assert capas.json()["data"] == []
     assert (await app_client.get("/api/v1/ncrs", headers=h)).status_code == 403
 
 
