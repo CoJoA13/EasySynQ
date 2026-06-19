@@ -121,7 +121,9 @@ async def _process_candidate_ids(
     session: AsyncSession, org_id: uuid.UUID, process_ids: list[uuid.UUID]
 ) -> set[uuid.UUID]:
     """PROCESS scope: UNION of (records evidence-for the process) AND (records under a
-    process-linked source document)."""
+    process-linked source document) AND (source-less correction successors that inherit a selected
+    process via ``correction_of`` — so a corrected record stays in the PROCESS evidence pack exactly
+    as it stays visible at ``/records``; the Codex CX-2 finding)."""
     if not process_ids:
         return set()
     leg_a = (
@@ -140,7 +142,56 @@ async def _process_candidate_ids(
             .where(Record.org_id == org_id, ProcessLink.process_id.in_(process_ids))
         )
     ).all()
-    return set(leg_a) | set(leg_b)
+    base = set(leg_a) | set(leg_b)
+    # CX-2: also include source-LESS correction successors that INHERIT a selected process via
+    # ``correction_of`` (matching ``records_repo.record_process_ids_effective`` / the read gate). A
+    # successor with its OWN binding is already selected by its own leg; only the empty-own ones
+    # inherit, and the walk stops at any OWNED successor (its successors inherit from IT, not from a
+    # selected process). Acyclic chain → terminates; ``fresh - base`` is the cycle backstop.
+    frontier = set(base)
+    while frontier:
+        successors = set(
+            (
+                await session.scalars(
+                    select(Record.id).where(
+                        Record.org_id == org_id, Record.correction_of.in_(frontier)
+                    )
+                )
+            ).all()
+        )
+        fresh = successors - base
+        if not fresh:
+            break
+        # "owned" == a NON-EMPTY own union, matching record_process_ids exactly (leg A: a PROCESS
+        # evidence link; leg B: a source doc that HAS a process link). A source doc with NO process
+        # link leaves the own union empty, so that successor still inherits (the Codex round-3
+        # finding — ``source_document_id IS NOT NULL`` was too coarse).
+        owned = set(
+            (
+                await session.scalars(
+                    select(Record.id).where(
+                        Record.id.in_(fresh),
+                        or_(
+                            Record.id.in_(
+                                select(EvidenceForLink.record_id).where(
+                                    EvidenceForLink.record_id.in_(fresh),
+                                    EvidenceForLink.target_type == EvidenceForTargetType.PROCESS,
+                                )
+                            ),
+                            Record.source_document_id.in_(
+                                select(ProcessLink.documented_information_id)
+                            ),
+                        ),
+                    )
+                )
+            ).all()
+        )
+        inheriting = fresh - owned
+        if not inheriting:
+            break
+        base |= inheriting
+        frontier = inheriting
+    return base
 
 
 async def _finding_candidate_ids(
@@ -229,29 +280,9 @@ async def resolve_candidates(
     return [(r, d) for r, d in rows]
 
 
-async def record_process_ids(session: AsyncSession, record: Record) -> set[str]:
-    """The processes a record is bound to — for the PDP ``ResourceContext`` (so a PROCESS-scoped
-    ``record.read`` grant is honored): its evidence-for PROCESS links + its source-doc links."""
-    via_link = (
-        await session.scalars(
-            select(EvidenceForLink.target_id).where(
-                EvidenceForLink.record_id == record.id,
-                EvidenceForLink.target_type == EvidenceForTargetType.PROCESS,
-            )
-        )
-    ).all()
-    via_doc: list[uuid.UUID] = []
-    if record.source_document_id is not None:
-        via_doc = list(
-            (
-                await session.scalars(
-                    select(ProcessLink.process_id).where(
-                        ProcessLink.documented_information_id == record.source_document_id
-                    )
-                )
-            ).all()
-        )
-    return {str(x) for x in (*via_link, *via_doc)}
+# ``record_process_ids`` moved to ``services/records/repository.py`` (the ONE source of truth,
+# shared with the records read gate — S-records-R). ``packs/service.classify_candidates`` calls
+# ``records_repo.record_process_ids_effective`` directly.
 
 
 async def has_destroy_tombstone(session: AsyncSession, record_id: uuid.UUID) -> bool:

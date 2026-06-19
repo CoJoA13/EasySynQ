@@ -23,6 +23,7 @@ from ...db.models.disposition_event import DispositionEvent
 from ...db.models.documented_information import DocumentedInformation
 from ...db.models.evidence_blob import EvidenceBlob
 from ...db.models.evidence_for_link import EvidenceForLink
+from ...db.models.process_link import ProcessLink
 from ...db.models.record import Record
 from ...db.models.retention_policy import RetentionPolicy
 from ...db.models.storage_config import StorageConfig
@@ -62,6 +63,102 @@ async def list_records(
         )
     ).all()
     return [(r, d) for r, d in rows]
+
+
+# --- process binding (S-records-R: the records process-scope read source of truth) -------
+
+
+async def record_process_ids(session: AsyncSession, record: Record) -> set[str]:
+    """The processes a record is bound to — for the PDP ``ResourceContext`` so a PROCESS-scoped
+    ``record.read`` grant is honored: the record's evidence-for PROCESS links (leg A) + its source
+    document's process links (leg B). A record holds no ``ProcessLink`` of its own. This is the ONE
+    source of truth shared by the records read gate AND the evidence-pack classifier (do NOT
+    re-derive the union elsewhere)."""
+    via_link = (
+        await session.scalars(
+            select(EvidenceForLink.target_id).where(
+                EvidenceForLink.record_id == record.id,
+                EvidenceForLink.target_type == EvidenceForTargetType.PROCESS,
+            )
+        )
+    ).all()
+    via_doc: list[uuid.UUID] = []
+    if record.source_document_id is not None:
+        via_doc = list(
+            (
+                await session.scalars(
+                    select(ProcessLink.process_id).where(
+                        ProcessLink.documented_information_id == record.source_document_id
+                    )
+                )
+            ).all()
+        )
+    return {str(x) for x in (*via_link, *via_doc)}
+
+
+async def record_process_ids_effective(session: AsyncSession, record: Record) -> set[str]:
+    """``record_process_ids`` with the R3-1 correction-chain fallback: a source-LESS evidence
+    correction inherits no source-doc binding, so it would be invisible to the process that owned
+    the original. When a record's OWN union is empty AND it is a correction (``correction_of``),
+    walk the chain to the first ancestor with a non-empty binding and return that. The walk is
+    ITERATIVE (no recursion limit) with NO hop cap (a long but legitimate chain keeps its
+    visibility — the Codex CX-3 findings) and cycle-safe via a visited set (the chain is acyclic by
+    construction — ``capture_correction`` rejects an already-superseded original — but the set makes
+    it robust on ANY input). Never crosses an org; never widens a record with its own binding."""
+    own = await record_process_ids(session, record)
+    if own or record.correction_of is None:
+        return own
+    seen = {record.id}
+    cursor: uuid.UUID | None = record.correction_of
+    while cursor is not None and cursor not in seen:
+        seen.add(cursor)
+        predecessor = await session.get(Record, cursor)
+        if predecessor is None or predecessor.org_id != record.org_id:
+            return set()
+        ancestor_own = await record_process_ids(session, predecessor)
+        if ancestor_own:
+            return ancestor_own
+        cursor = predecessor.correction_of
+    return set()
+
+
+async def record_process_ids_for(
+    session: AsyncSession, records: list[Record]
+) -> dict[uuid.UUID, set[str]]:
+    """Batched base unions (leg A + leg B) for a list of records — two grouped queries, no N+1. The
+    correction-chain (R3-1) fallback is applied PER-ROW by the caller only for the rare source-less
+    corrected rows (empty union + ``correction_of``), so the common path stays batched."""
+    if not records:
+        return {}
+    ids = [r.id for r in records]
+    out: dict[uuid.UUID, set[str]] = {r.id: set() for r in records}
+
+    link_rows = (
+        await session.execute(
+            select(EvidenceForLink.record_id, EvidenceForLink.target_id).where(
+                EvidenceForLink.record_id.in_(ids),
+                EvidenceForLink.target_type == EvidenceForTargetType.PROCESS,
+            )
+        )
+    ).all()
+    for rid, pid in link_rows:
+        out[rid].add(str(pid))
+
+    source_by_record = {r.id: r.source_document_id for r in records if r.source_document_id}
+    if source_by_record:
+        doc_rows = (
+            await session.execute(
+                select(ProcessLink.documented_information_id, ProcessLink.process_id).where(
+                    ProcessLink.documented_information_id.in_(set(source_by_record.values()))
+                )
+            )
+        ).all()
+        by_doc: dict[uuid.UUID, set[str]] = {}
+        for did, pid in doc_rows:
+            by_doc.setdefault(did, set()).add(str(pid))
+        for rid, did in source_by_record.items():
+            out[rid] |= by_doc.get(did, set())
+    return out
 
 
 # --- retention policy --------------------------------------------------------------------

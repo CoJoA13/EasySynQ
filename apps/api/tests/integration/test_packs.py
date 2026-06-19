@@ -280,6 +280,74 @@ async def test_pack_build_seal_r28_matrix_and_download(
         )
 
 
+async def test_process_pack_includes_source_less_correction(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """CX-2: a source-LESS correction of a process-linked record is a PROCESS pack candidate (it
+    inherits the original's process via ``correction_of``), so the PROCESS evidence pack includes it
+    exactly as ``/records`` shows it — the candidate query walks the correction chain."""
+    subject = _subject("pack-cx2")
+    user_id = await _grant(subject, _PACK_PERMS)
+    h = _auth(token_factory, subject)
+    process_id = await _make_process(user_id, f"Proc-{uuid.uuid4().hex[:8]}")
+    record_ids: list[str] = []
+    pack_uuid: uuid.UUID | None = None
+    try:
+        sha = await _upload_evidence(app_client, h, f"ev-{uuid.uuid4().hex}".encode())
+        orig = await _capture(
+            app_client,
+            h,
+            record_type="EVIDENCE",
+            title="orig",
+            evidence=[{"sha256": sha, "content_type": "application/pdf"}],
+        )
+        assert orig.status_code == 201, orig.text
+        original = orig.json()["id"]
+        await _link_process(app_client, h, original, process_id)  # leg A → the process
+        # A source-less correction copies no evidence link → it inherits the process only via the
+        # correction chain (not its own binding).
+        csha = await _upload_evidence(app_client, h, f"corr-{uuid.uuid4().hex}".encode())
+        corr = await app_client.post(
+            f"/api/v1/records/{original}/correction",
+            headers=h,
+            json={
+                "record_type": "EVIDENCE",
+                "title": "corrected",
+                "evidence": [{"sha256": csha, "content_type": "application/pdf"}],
+            },
+        )
+        assert corr.status_code == 201, corr.text
+        successor = corr.json()["id"]
+        record_ids = [original, successor]
+
+        created = await app_client.post(
+            "/api/v1/evidence-packs",
+            headers=h,
+            json={"title": "cx2 pack", "scope_kind": "PROCESS", "process_ids": [str(process_id)]},
+        )
+        assert created.status_code == 201, created.text
+        pack = created.json()
+        pack_uuid = uuid.UUID(pack["id"])
+        statuses = {i["record_id"]: i["inclusion_status"] for i in pack["items"] if i["record_id"]}
+        assert statuses.get(original) == "INCLUDED"
+        # The source-less correction is a candidate AND included (omitted entirely without CX-2).
+        assert statuses.get(successor) == "INCLUDED", f"correction omitted from pack: {statuses}"
+    finally:
+        # Break the correction RESTRICT cycle (correction_of <-> superseded_by_correction) so the
+        # bulk delete in _teardown can drop both rows.
+        if record_ids:
+            async with get_sessionmaker()() as s:
+                for rid in record_ids:
+                    rec = await s.get(Record, uuid.UUID(rid))
+                    if rec is not None:
+                        rec.correction_of = None
+                        rec.superseded_by_correction = None
+                await s.commit()
+        await _teardown(
+            record_ids=record_ids, pack_id=pack_uuid, scope_id=None, process_id=process_id
+        )
+
+
 async def test_pack_download_409_until_sealed_and_generate_guards(
     app_client: AsyncClient, token_factory: Callable[..., str]
 ) -> None:
