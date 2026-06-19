@@ -96,24 +96,30 @@ async def record_process_ids(session: AsyncSession, record: Record) -> set[str]:
     return {str(x) for x in (*via_link, *via_doc)}
 
 
-async def record_process_ids_effective(
-    session: AsyncSession, record: Record, *, _seen: frozenset[uuid.UUID] = frozenset()
-) -> set[str]:
+async def record_process_ids_effective(session: AsyncSession, record: Record) -> set[str]:
     """``record_process_ids`` with the R3-1 correction-chain fallback: a source-LESS evidence
     correction inherits no source-doc binding, so it would be invisible to the process that owned
     the original. When a record's OWN union is empty AND it is a correction (``correction_of``),
-    fold in the predecessor's effective binding. Terminates via a visited set — the chain is acyclic
-    by construction (``capture_correction`` rejects an already-superseded original), but the guard
-    makes it robust on ANY input with NO arbitrary hop cap that could drop visibility on a long but
-    legitimate chain (the Codex CX-3 finding). Never crosses an org; never widens a record that has
-    its own binding."""
+    walk the chain to the first ancestor with a non-empty binding and return that. The walk is
+    ITERATIVE (no recursion limit) with NO hop cap (a long but legitimate chain keeps its
+    visibility — the Codex CX-3 findings) and cycle-safe via a visited set (the chain is acyclic by
+    construction — ``capture_correction`` rejects an already-superseded original — but the set makes
+    it robust on ANY input). Never crosses an org; never widens a record with its own binding."""
     own = await record_process_ids(session, record)
-    if own or record.correction_of is None or record.id in _seen:
+    if own or record.correction_of is None:
         return own
-    predecessor = await session.get(Record, record.correction_of)
-    if predecessor is None or predecessor.org_id != record.org_id:
-        return own
-    return await record_process_ids_effective(session, predecessor, _seen=_seen | {record.id})
+    seen = {record.id}
+    cursor: uuid.UUID | None = record.correction_of
+    while cursor is not None and cursor not in seen:
+        seen.add(cursor)
+        predecessor = await session.get(Record, cursor)
+        if predecessor is None or predecessor.org_id != record.org_id:
+            return set()
+        ancestor_own = await record_process_ids(session, predecessor)
+        if ancestor_own:
+            return ancestor_own
+        cursor = predecessor.correction_of
+    return set()
 
 
 async def record_process_ids_for(

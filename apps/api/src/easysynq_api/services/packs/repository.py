@@ -121,14 +121,9 @@ async def _process_candidate_ids(
     session: AsyncSession, org_id: uuid.UUID, process_ids: list[uuid.UUID]
 ) -> set[uuid.UUID]:
     """PROCESS scope: UNION of (records evidence-for the process) AND (records under a
-    process-linked source document).
-
-    NOTE (S-records-R / Codex CX-2 — deferred residual): this candidate pre-filter selects records
-    by their OWN process binding and does NOT walk ``correction_of``, so a source-LESS correction
-    (whose process visibility is inherited via the chain — see
-    ``records_repo.record_process_ids_effective``) is shown at ``/records`` but omitted from a
-    PROCESS evidence pack. Bounded/rare; the records read gate + the pack CLASSIFIER stay
-    consistent (both use the effective binding). A candidate walk is a separate enhancement."""
+    process-linked source document) AND (source-less correction successors that inherit a selected
+    process via ``correction_of`` — so a corrected record stays in the PROCESS evidence pack exactly
+    as it stays visible at ``/records``; the Codex CX-2 finding)."""
     if not process_ids:
         return set()
     leg_a = (
@@ -147,7 +142,50 @@ async def _process_candidate_ids(
             .where(Record.org_id == org_id, ProcessLink.process_id.in_(process_ids))
         )
     ).all()
-    return set(leg_a) | set(leg_b)
+    base = set(leg_a) | set(leg_b)
+    # CX-2: also include source-LESS correction successors that INHERIT a selected process via
+    # ``correction_of`` (matching ``records_repo.record_process_ids_effective`` / the read gate). A
+    # successor with its OWN binding is already selected by its own leg; only the empty-own ones
+    # inherit, and the walk stops at any OWNED successor (its successors inherit from IT, not from a
+    # selected process). Acyclic chain → terminates; ``fresh - base`` is the cycle backstop.
+    frontier = set(base)
+    while frontier:
+        successors = set(
+            (
+                await session.scalars(
+                    select(Record.id).where(
+                        Record.org_id == org_id, Record.correction_of.in_(frontier)
+                    )
+                )
+            ).all()
+        )
+        fresh = successors - base
+        if not fresh:
+            break
+        owned = set(
+            (
+                await session.scalars(
+                    select(Record.id).where(
+                        Record.id.in_(fresh),
+                        or_(
+                            Record.source_document_id.isnot(None),
+                            Record.id.in_(
+                                select(EvidenceForLink.record_id).where(
+                                    EvidenceForLink.record_id.in_(fresh),
+                                    EvidenceForLink.target_type == EvidenceForTargetType.PROCESS,
+                                )
+                            ),
+                        ),
+                    )
+                )
+            ).all()
+        )
+        inheriting = fresh - owned
+        if not inheriting:
+            break
+        base |= inheriting
+        frontier = inheriting
+    return base
 
 
 async def _finding_candidate_ids(
