@@ -10,7 +10,6 @@ per org, but a fresh install whose org row postdates the migration has none, so
 from __future__ import annotations
 
 import uuid
-from collections.abc import Sequence
 
 from sqlalchemy import and_, asc, delete, desc, func, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -24,7 +23,6 @@ from ...db.models.disposition_event import DispositionEvent
 from ...db.models.documented_information import DocumentedInformation
 from ...db.models.evidence_blob import EvidenceBlob
 from ...db.models.evidence_for_link import EvidenceForLink
-from ...db.models.process_link import ProcessLink
 from ...db.models.record import Record
 from ...db.models.retention_policy import RetentionPolicy
 from ...db.models.storage_config import StorageConfig
@@ -44,49 +42,6 @@ async def get_record(session: AsyncSession, record_id: uuid.UUID) -> Record | No
 async def get_base(session: AsyncSession, record_id: uuid.UUID) -> DocumentedInformation | None:
     """The shared-PK base row (``documented_information``, kind=RECORD) for a record."""
     return await session.get(DocumentedInformation, record_id)
-
-
-async def process_ids_for_records(
-    session: AsyncSession, records: Sequence[Record]
-) -> dict[uuid.UUID, frozenset[str]]:
-    """Map each record id → the frozenset of processes it is bound to (as strings): the UNION of its
-    ``EvidenceForLink(target_type=PROCESS)`` targets AND its source document's ``ProcessLink`` ids.
-    The single source of truth for a record's process scope — shared by the ``record.read`` PEP on
-    BOTH the direct records surfaces (``_record_scope`` / the list) and the evidence-pack candidate
-    classifier, so the gate agrees across surfaces (S-process-scope-1). Records with no binding are
-    absent (callers default to ``frozenset()``)."""
-    if not records:
-        return {}
-    grouped: dict[uuid.UUID, set[str]] = {}
-    record_ids = [r.id for r in records]
-    for rid, target_id in (
-        await session.execute(
-            select(EvidenceForLink.record_id, EvidenceForLink.target_id).where(
-                EvidenceForLink.record_id.in_(record_ids),
-                EvidenceForLink.target_type == EvidenceForTargetType.PROCESS,
-            )
-        )
-    ).all():
-        grouped.setdefault(rid, set()).add(str(target_id))
-    # The source-document leg: a record inherits its source doc's process links.
-    source_by_record = {r.id: r.source_document_id for r in records if r.source_document_id}
-    if source_by_record:
-        for did, pid in (
-            await session.execute(
-                select(ProcessLink.documented_information_id, ProcessLink.process_id).where(
-                    ProcessLink.documented_information_id.in_(set(source_by_record.values()))
-                )
-            )
-        ).all():
-            for rid, source_did in source_by_record.items():
-                if source_did == did:
-                    grouped.setdefault(rid, set()).add(str(pid))
-    return {k: frozenset(v) for k, v in grouped.items()}
-
-
-async def process_ids_for_record(session: AsyncSession, record: Record) -> frozenset[str]:
-    """A single record's process scope (the EvidenceForLink-PROCESS + source-doc-link union)."""
-    return (await process_ids_for_records(session, [record])).get(record.id, frozenset())
 
 
 async def list_records(

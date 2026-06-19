@@ -34,7 +34,6 @@ from ...db.models.pack_share_link import PackShareLink
 from ...db.models.process_link import ProcessLink
 from ...db.models.record import Record
 from ...db.models.signature_event import SignatureEvent
-from ..records import repository as records_repo
 
 # --- pack header CRUD --------------------------------------------------------------------
 
@@ -232,10 +231,27 @@ async def resolve_candidates(
 
 async def record_process_ids(session: AsyncSession, record: Record) -> set[str]:
     """The processes a record is bound to — for the PDP ``ResourceContext`` (so a PROCESS-scoped
-    ``record.read`` grant is honored): its evidence-for PROCESS links + its source-doc links.
-    Delegates to the records repo so this gate agrees with the direct records read surfaces
-    (``_record_scope`` / the list) — one source of truth (S-process-scope-1)."""
-    return set(await records_repo.process_ids_for_record(session, record))
+    ``record.read`` grant is honored): its evidence-for PROCESS links + its source-doc links."""
+    via_link = (
+        await session.scalars(
+            select(EvidenceForLink.target_id).where(
+                EvidenceForLink.record_id == record.id,
+                EvidenceForLink.target_type == EvidenceForTargetType.PROCESS,
+            )
+        )
+    ).all()
+    via_doc: list[uuid.UUID] = []
+    if record.source_document_id is not None:
+        via_doc = list(
+            (
+                await session.scalars(
+                    select(ProcessLink.process_id).where(
+                        ProcessLink.documented_information_id == record.source_document_id
+                    )
+                )
+            ).all()
+        )
+    return {str(x) for x in (*via_link, *via_doc)}
 
 
 async def has_destroy_tombstone(session: AsyncSession, record_id: uuid.UUID) -> bool:
