@@ -229,29 +229,9 @@ async def resolve_candidates(
     return [(r, d) for r, d in rows]
 
 
-async def record_process_ids(session: AsyncSession, record: Record) -> set[str]:
-    """The processes a record is bound to — for the PDP ``ResourceContext`` (so a PROCESS-scoped
-    ``record.read`` grant is honored): its evidence-for PROCESS links + its source-doc links."""
-    via_link = (
-        await session.scalars(
-            select(EvidenceForLink.target_id).where(
-                EvidenceForLink.record_id == record.id,
-                EvidenceForLink.target_type == EvidenceForTargetType.PROCESS,
-            )
-        )
-    ).all()
-    via_doc: list[uuid.UUID] = []
-    if record.source_document_id is not None:
-        via_doc = list(
-            (
-                await session.scalars(
-                    select(ProcessLink.process_id).where(
-                        ProcessLink.documented_information_id == record.source_document_id
-                    )
-                )
-            ).all()
-        )
-    return {str(x) for x in (*via_link, *via_doc)}
+# ``record_process_ids`` moved to ``services/records/repository.py`` (the ONE source of truth,
+# shared with the records read gate — S-records-R). ``packs/service.classify_candidates`` calls
+# ``records_repo.record_process_ids_effective`` directly.
 
 
 async def has_destroy_tombstone(session: AsyncSession, record_id: uuid.UUID) -> bool:

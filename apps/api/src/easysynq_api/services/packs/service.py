@@ -43,6 +43,7 @@ from ...domain.authz import RequestContext, ResourceContext, authorize
 from ...logging import request_id_var
 from ...problems import ProblemException
 from ..authz import gather_grants
+from ..records import repository as records_repo
 from ..reports.checklist import compute_checklist
 from ..vault import repository as vault_repo
 from . import repository as repo
@@ -160,7 +161,10 @@ async def classify_candidates(
     ctx = RequestContext(now=_now())
     out: list[ClassifiedRecord] = []
     for record, base in candidates:
-        process_ids = await repo.record_process_ids(session, record)
+        # The ONE source of truth (S-records-R): the same effective binding the records read gate
+        # uses (leg A + leg B + the R3-1 correction fallback), so the pack classifier and
+        # ``/records`` agree on what a PROCESS-scoped caller may read.
+        process_ids = await records_repo.record_process_ids_effective(session, record)
         resource = ResourceContext(
             artifact_id=str(record.id),
             kind="RECORD",

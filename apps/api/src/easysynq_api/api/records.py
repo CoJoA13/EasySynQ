@@ -232,6 +232,38 @@ async def _record_scope(request: Any, session: AsyncSession) -> ResourceContext:
     return ResourceContext(artifact_id=str(base.id), folder_path=base.folder_path)
 
 
+async def _record_read_scope(request: Any, session: AsyncSession) -> ResourceContext:
+    """The records READ scope (S-records-R) — the record's FULL context INCLUDING its process
+    bindings (``record_process_ids`` leg A + leg B + the R3-1 correction fallback), so a bound
+    Process-Owner's PROCESS-scoped ``record.read`` authorizes a record bound to their process.
+    **Decoupled** from the WRITE gate (``_record_scope``, still process-blind): enabling reads never
+    lets a Process-Owner mint a binding (the spec's central result). A SYSTEM/ARTIFACT/FOLDER grant
+    still matches via its own field — byte-identical."""
+    raw = request.path_params.get("record_id")
+    if not raw:
+        return ResourceContext.system()
+    try:
+        record_id = uuid.UUID(str(raw))
+    except ValueError:
+        return ResourceContext.system()
+    base = await session.get(DocumentedInformation, record_id)
+    if base is None:
+        return ResourceContext(artifact_id=str(record_id))
+    record = await records_repo.get_record(session, record_id)
+    process_ids = (
+        await records_repo.record_process_ids_effective(session, record)
+        if record is not None
+        else set()
+    )
+    return ResourceContext(
+        artifact_id=str(base.id),
+        kind="RECORD",
+        folder_path=base.folder_path,
+        framework_id=str(base.framework_id),
+        process_ids=frozenset(process_ids),
+    )
+
+
 async def _capture_scope(
     session: AsyncSession, caller: AppUser, source_document_id: uuid.UUID | None
 ) -> ResourceContext:
@@ -264,7 +296,10 @@ async def _load(
     return record, base
 
 
-_read = require("record.read", async_scope_resolver=_record_scope)
+# S-records-R: the READ gate resolves the process-aware `_record_read_scope`; the per-record WRITE
+# gates stay on the process-BLIND `_record_scope` (the decoupling — enabling reads never lets a
+# Process-Owner mint a binding; Process-Owner record authoring is Slice W).
+_read = require("record.read", async_scope_resolver=_record_read_scope)
 _create = require("record.create")  # SYSTEM scope (create/init-upload — no path id)
 _create_scoped = require("record.create", async_scope_resolver=_record_scope)  # per-record writes
 # Disposition / legal-hold / dual-control destroy all gate on record.dispose (SoD-sensitive; doc 06
@@ -377,9 +412,22 @@ async def list_records_endpoint(
     # Filter-not-403 (doc 15 §9.3): drop rows the caller may not record.read.
     grants = await gather_grants(session, caller.id, caller.org_id, "record.read")
     ctx = RequestContext(now=datetime.datetime.now(datetime.UTC))
+    # S-records-R: batch-load each row's process binding so a bound Process-Owner's PROCESS-scoped
+    # record.read matches (the decoupled read scope; the write gates stay process-blind). The R3-1
+    # correction fallback runs only for the rare source-less corrected rows (empty union).
+    process_ids_by_record = await records_repo.record_process_ids_for(session, [r for r, _ in rows])
     visible: list[tuple[Record, DocumentedInformation]] = []
     for record, base in rows:
-        resource = ResourceContext(artifact_id=str(record.id), folder_path=base.folder_path)
+        pids = process_ids_by_record.get(record.id) or set()
+        if not pids and record.correction_of is not None:
+            pids = await records_repo.record_process_ids_effective(session, record)
+        resource = ResourceContext(
+            artifact_id=str(record.id),
+            kind="RECORD",
+            folder_path=base.folder_path,
+            framework_id=str(base.framework_id),
+            process_ids=frozenset(pids),
+        )
         if authorize(grants, "record.read", resource, ctx).allow:
             visible.append((record, base))
     return [_record(r, b) for r, b in visible]
