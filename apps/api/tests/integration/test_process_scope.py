@@ -51,6 +51,23 @@ async def _doc_id(client: AsyncClient, h: dict[str, str]) -> str:
     return (await _create(client, h, await s5.type_id("SOP")))["id"]
 
 
+async def _doc_version_linked(
+    client: AsyncClient, h: dict[str, str], process_id: str
+) -> tuple[str, str]:
+    """Create a doc, check in a first version, link it to ``process_id`` → (doc_id, version_id)."""
+    did = await _doc_id(client, h)
+    await client.post(f"/api/v1/documents/{did}/checkout", headers=h)
+    sha = await _upload(client, h, did, f"src-{uuid.uuid4().hex}".encode())
+    ci = await client.post(
+        f"/api/v1/documents/{did}/checkin",
+        headers=h,
+        json={"sha256": sha, "change_reason": "v1", "change_significance": "MAJOR"},
+    )
+    assert ci.status_code == 201, ci.text
+    await _link_doc_to_process(client, h, did, process_id)
+    return did, ci.json()["id"]
+
+
 # --- the document.create write-path -----------------------------------------------------
 
 
@@ -421,3 +438,113 @@ async def test_process_owner_reads_evidence_for_process_record(
     listed = await app_client.get("/api/v1/records", headers=hb)
     assert listed.status_code == 200, listed.text
     assert rid in {r["id"] for r in listed.json()}
+
+
+async def test_evidence_link_reauthorizes_target_process(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    """Binding a record AS EVIDENCE FOR a process makes it record.read-visible to that process — so
+    the evidence-link endpoint re-authorizes the TARGET process. A Process Owner of P1+P3 can link a
+    record (in their scope) to P3 but NOT to an unowned P2 (the Codex P1 over-grant)."""
+    await s5.grant_lifecycle(subj.a)
+    await _grant(subj.a, "record.create")
+    await _grant(subj.a, "record.read")
+    await _grant(subj.a, "process.create")
+    await _grant(subj.a, "process.assign_owner")
+    ha = _auth(token_factory, subj.a)
+    p1 = await _create_process(app_client, ha)
+    p2 = await _create_process(app_client, ha)
+    p3 = await _create_process(app_client, ha)
+
+    rec = await app_client.post(
+        "/api/v1/records", headers=ha, json={"record_type": "EVIDENCE", "title": "Linkable"}
+    )
+    assert rec.status_code == 201, rec.text
+    rid = rec.json()["id"]
+    # SYSTEM-seed the record into P1's scope so a P1 owner can subsequently manage its links.
+    seed = await app_client.post(
+        f"/api/v1/records/{rid}/evidence-links",
+        headers=ha,
+        json={"target_type": "process", "target_id": p1["id"]},
+    )
+    assert seed.status_code == 201, seed.text
+
+    owner_id = await _user_id(subj.b)
+    await _assign_owner(app_client, ha, p1["id"], owner_id)
+    await _assign_owner(app_client, ha, p3["id"], owner_id)
+    hb = _auth(token_factory, subj.b)
+
+    # The owner can link the (P1-scoped) record to P3 — a process they own.
+    ok = await app_client.post(
+        f"/api/v1/records/{rid}/evidence-links",
+        headers=hb,
+        json={"target_type": "process", "target_id": p3["id"]},
+    )
+    assert ok.status_code == 201, ok.text
+    # ...but NOT to P2, which they do not own → 403 (re-authorized against the target process).
+    deny = await app_client.post(
+        f"/api/v1/records/{rid}/evidence-links",
+        headers=hb,
+        json={"target_type": "process", "target_id": p2["id"]},
+    )
+    assert deny.status_code == 403, deny.text
+
+
+async def test_correction_reauthorizes_source_process(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    """A correction's NEW record inherits its source document's process scope, so the correction
+    endpoint re-authorizes record.create against the source. A Process Owner of P1 correcting a
+    P1-scoped record may name a P1 source but NOT an unowned-P2 source (the Codex P2 over-grant)."""
+    await s5.grant_lifecycle(subj.a)
+    await _grant(subj.a, "record.create")
+    await _grant(subj.a, "record.read")
+    await _grant(subj.a, "process.create")
+    await _grant(subj.a, "process.assign_owner")
+    ha = _auth(token_factory, subj.a)
+    p1 = await _create_process(app_client, ha)
+    p2 = await _create_process(app_client, ha)
+    d1, v1 = await _doc_version_linked(app_client, ha, p1["id"])
+    d2, v2 = await _doc_version_linked(app_client, ha, p2["id"])
+
+    orig = await app_client.post(
+        "/api/v1/records",
+        headers=ha,
+        json={
+            "record_type": "RELEASE",
+            "title": "Original",
+            "source_document_id": d1,
+            "source_version_id": v1,
+        },
+    )
+    assert orig.status_code == 201, orig.text
+    rid = orig.json()["id"]
+
+    owner_id = await _user_id(subj.b)
+    await _assign_owner(app_client, ha, p1["id"], owner_id)
+    hb = _auth(token_factory, subj.b)
+
+    # Correcting with an UNOWNED-P2 source → 403 (re-authorized against the source's process scope).
+    deny = await app_client.post(
+        f"/api/v1/records/{rid}/correction",
+        headers=hb,
+        json={
+            "record_type": "RELEASE",
+            "title": "Corrected (P2 source)",
+            "source_document_id": d2,
+            "source_version_id": v2,
+        },
+    )
+    assert deny.status_code == 403, deny.text
+    # Correcting with the OWNED-P1 source → 201.
+    ok = await app_client.post(
+        f"/api/v1/records/{rid}/correction",
+        headers=hb,
+        json={
+            "record_type": "RELEASE",
+            "title": "Corrected (P1 source)",
+            "source_document_id": d1,
+            "source_version_id": v1,
+        },
+    )
+    assert ok.status_code == 201, ok.text

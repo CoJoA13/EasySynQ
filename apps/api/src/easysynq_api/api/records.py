@@ -470,9 +470,18 @@ async def get_rendition_endpoint(
 async def correction_endpoint(
     record_id: uuid.UUID,
     body: CorrectionCreate,
+    request: Request,
     caller: AppUser = Depends(_create_scoped),
     session: AsyncSession = Depends(get_session),
+    authz_sink: AuthzAuditSink = Depends(get_authz_audit_sink),
 ) -> dict[str, Any]:
+    # S-process-scope-1: the correction's NEW record inherits its source document's process scope
+    # (records_repo.process_ids_for_record), so re-authorize record.create against that source scope
+    # too — mirroring the capture endpoint — else a correction over a P1-scoped original could name
+    # an unowned-P2 source and mint a P2-readable record. No-op when the correction has no source.
+    if body.source_document_id is not None:
+        source_scope = await _capture_scope(session, caller, body.source_document_id)
+        await enforce(session, authz_sink, request, caller, "record.create", source_scope)
     new_record = await capture_correction(
         session,
         caller,
@@ -506,9 +515,20 @@ async def list_evidence_links_endpoint(
 async def link_evidence_endpoint(
     record_id: uuid.UUID,
     body: EvidenceLinkCreate,
+    request: Request,
     caller: AppUser = Depends(_create_scoped),
     session: AsyncSession = Depends(get_session),
+    authz_sink: AuthzAuditSink = Depends(get_authz_audit_sink),
 ) -> dict[str, Any]:
+    # S-process-scope-1: binding a record AS EVIDENCE FOR a process makes it record.read-visible to
+    # that process's scope (records_repo.process_ids_for_record), so re-authorize the TARGET process
+    # — record.create over JUST {target} — mirroring documents._enforce_target_process. The
+    # _create_scoped dependency already authorized record.create over the record's existing scope; a
+    # SYSTEM holder still passes, but a PROCESS-scoped owner must also hold record.create for the
+    # target process (so an owner of P1 can't make a record readable to an unowned P2's owners).
+    if body.target_type == "process":
+        target_scope = ResourceContext(process_ids=frozenset({str(body.target_id)}))
+        await enforce(session, authz_sink, request, caller, "record.create", target_scope)
     link = await link_evidence(
         session,
         caller,
