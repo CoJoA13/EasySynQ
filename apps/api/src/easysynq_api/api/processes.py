@@ -78,12 +78,18 @@ class OwnerAssignCreate(BaseModel):
     user_id: uuid.UUID
 
 
-def _process(p: Process) -> dict[str, Any]:
+def _process(p: Process, visible_ids: set[str] | None = None) -> dict[str, Any]:
+    parent_id = str(p.parent_id) if p.parent_id else None
+    # On a row-filtered surface (``visible_ids`` supplied), don't disclose a parent the caller can't
+    # read — null the pointer rather than leak a hidden process id (the edge-filter rationale; no
+    # dangling hierarchy pointer). Detail / authoring pass ``visible_ids=None`` → intact.
+    if visible_ids is not None and parent_id is not None and parent_id not in visible_ids:
+        parent_id = None
     return {
         "id": str(p.id),
         "org_id": str(p.org_id),
         "name": p.name,
-        "parent_id": str(p.parent_id) if p.parent_id else None,
+        "parent_id": parent_id,
         "owner_org_role_id": str(p.owner_org_role_id) if p.owner_org_role_id else None,
         "pdca_phase": p.pdca_phase.value,
         "criteria": p.criteria,
@@ -221,17 +227,22 @@ _read_scoped = require("process.read", async_scope_resolver=_process_scope)
 # --- reads ------------------------------------------------------------------------------
 
 
-async def _readable_processes(session: AsyncSession, caller: AppUser) -> list[Process]:
+async def _readable_processes(
+    request: Request, session: AsyncSession, caller: AppUser
+) -> list[Process]:
     """The org's processes the caller may ``process.read``, row-filtered (filter-not-403, doc 18
     §5.2 / doc 15 §9.3 — the GET /records + /search precedent). A SYSTEM grant matches every row so
     QMS Owner / Internal Auditor (and a ``demo`` SYSTEM override) see the org-wide landscape
     byte-identical; a bound Process Owner's PROCESS-scoped grant narrows to their owned processes
-    (S-process-scope-2 — this unblocks the create-in-process picker). ``source_ip`` is not threaded:
-    it matches the records/search row-filters, ``ip_allow`` is v1-deferred, and a missing
-    ``source_ip`` only ever HIDES a row (the safe direction for a filter)."""
+    (S-process-scope-2 — this unblocks the create-in-process picker). ``source_ip`` is threaded so
+    the probe evaluates an ``ip_allow`` predicate exactly as the replaced ``require()`` enforce did
+    (the PEP builds it the same way; ``ip_allow`` is v1-deferred but kept faithful here)."""
     procs = await repo.list_processes(session, caller.org_id)
     grants = await gather_grants(session, caller.id, caller.org_id, "process.read")
-    ctx = RequestContext(now=datetime.datetime.now(datetime.UTC))
+    ctx = RequestContext(
+        now=datetime.datetime.now(datetime.UTC),
+        source_ip=request.client.host if request.client else None,
+    )
     return [
         p
         for p in procs
@@ -243,18 +254,22 @@ async def _readable_processes(session: AsyncSession, caller: AppUser) -> list[Pr
 
 @router.get("/processes")
 async def list_processes_endpoint(
+    request: Request,
     caller: AppUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> list[dict[str, Any]]:
-    return [_process(p) for p in await _readable_processes(session, caller)]
+    procs = await _readable_processes(request, session, caller)
+    visible_ids = {str(p.id) for p in procs}
+    return [_process(p, visible_ids) for p in procs]
 
 
 @router.get("/processes/map")
 async def process_map_endpoint(
+    request: Request,
     caller: AppUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, list[dict[str, Any]]]:
-    procs = await _readable_processes(session, caller)
+    procs = await _readable_processes(request, session, caller)
     visible_ids = {str(p.id) for p in procs}
     # Drop any edge whose endpoint is hidden by the caller's scope — no dangling edge to a process
     # they can't read (the row-filter graph variant; the search precedent filters a flat list).
@@ -263,7 +278,7 @@ async def process_map_endpoint(
         for e in await repo.list_process_edges(session, caller.org_id)
         if str(e.from_process_id) in visible_ids and str(e.to_process_id) in visible_ids
     ]
-    return {"nodes": [_process(p) for p in procs], "edges": edges}
+    return {"nodes": [_process(p, visible_ids) for p in procs], "edges": edges}
 
 
 @router.get("/processes/{process_id}")

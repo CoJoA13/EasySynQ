@@ -95,6 +95,36 @@ async def test_process_owner_list_and_map_narrow_to_owned(
     )
 
 
+async def test_process_owner_list_hides_unreadable_parent_id(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    """A bound owner of a CHILD process (not its parent) sees the child row with ``parent_id``
+    nulled — the row-filter must not disclose a hidden parent's id (the edge-filter rationale;
+    CX-2). The SYSTEM author still sees the real parent linkage."""
+    await _grant(subj.a, "process.create")
+    await _grant(subj.a, "process.read")
+    await _grant(subj.a, "process.assign_owner")
+    ha = _auth(token_factory, subj.a)
+    parent = await _create_process(app_client, ha)
+    child = await _create_process(app_client, ha, parent_id=parent["id"])
+
+    owner_id = await _user_id(subj.b)
+    await _assign_owner(app_client, ha, child["id"], owner_id)
+    hb = _auth(token_factory, subj.b)
+
+    listed = await app_client.get("/api/v1/processes", headers=hb)
+    assert listed.status_code == 200, listed.text
+    rows = {p["id"]: p for p in listed.json()}
+    assert set(rows) == {child["id"]}  # only the owned child is visible
+    assert rows[child["id"]]["parent_id"] is None  # the hidden parent is not disclosed
+
+    # The SYSTEM author sees the real parent linkage (no sanitization on a full-landscape read).
+    author_rows = {
+        p["id"]: p for p in (await app_client.get("/api/v1/processes", headers=ha)).json()
+    }
+    assert author_rows[child["id"]]["parent_id"] == parent["id"]
+
+
 # --- the document.create write-path -----------------------------------------------------
 
 
