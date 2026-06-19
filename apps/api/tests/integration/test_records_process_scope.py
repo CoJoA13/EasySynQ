@@ -26,7 +26,7 @@ from easysynq_api.domain.authz.types import Effect, ScopeLevel
 from . import s5_helpers as s5
 from .test_processes import _create_process, _link_doc_to_process
 from .test_records import _capture, _first_iso_clause_id, _grant, _subject, _upload_evidence
-from .test_vault import _auth, _create, _ensure_user
+from .test_vault import _auth, _checkin, _create, _ensure_user, _upload
 
 pytestmark = pytest.mark.integration
 
@@ -462,5 +462,61 @@ async def test_process_owner_correction_reauths_inherited_binding(
             "title": "inherited-binding correction",
             "evidence": [{"sha256": sha, "content_type": "application/pdf"}],
         },
+    )
+    assert deny.status_code == 403, deny.text
+
+
+async def _source_backed_record(client: AsyncClient, h: dict[str, str], *process_ids: str) -> dict:
+    """Capture a RELEASE record under a fresh SOP doc linked to ``process_ids`` (a leg-B source
+    binding). The author needs ``s5.grant_lifecycle`` for the document writes. A Draft checkin is
+    enough (R21 pins the version). Returns the record dict (carries ``source_document_id``)."""
+    doc = await _create(client, h, await s5.type_id("SOP"))
+    did = doc["id"]
+    for pid in process_ids:
+        await _link_doc_to_process(client, h, did, pid)
+    await client.post(f"/api/v1/documents/{did}/checkout", headers=h)
+    sha = await _upload(client, h, did, f"src-{uuid.uuid4().hex}".encode())
+    ci = await _checkin(client, h, did, sha, change_reason="v1", change_significance="MAJOR")
+    assert ci.status_code == 201, ci.text
+    r = await _capture(
+        client,
+        h,
+        record_type="RELEASE",
+        title=f"R-{uuid.uuid4().hex[:6]}",
+        source_document_id=did,
+        source_version_id=ci.json()["id"],
+    )
+    assert r.status_code == 201, r.text
+    return r.json()
+
+
+async def test_process_owner_correction_cannot_supersede_co_bound_record(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """S-records-W (Codex W round-4 P1): a correction re-auths the UNION of the successor's new
+    source AND the ORIGINAL's FULL effective binding, so a Process-Owner of P1 CANNOT supersede a
+    record co-bound to an unowned P2 (leg B source → P1, leg A evidence → P2). The earlier
+    ``source_processes or …`` SHORT-CIRCUITED on the owned P1 source and never checked the P2
+    binding — ``capture_correction`` (which does NOT carry the original's EvidenceForLinks) would
+    then mint a P1-only successor P2 owners could no longer read. The union denies (403) before
+    ``capture_correction`` runs."""
+    author = _subject("wcosup-a")
+    await _grant(author, _AUTHOR_PERMS)
+    await s5.grant_lifecycle(author)  # document.create + the source-doc writes
+    ha = _auth(token_factory, author)
+    p1 = await _create_process(app_client, ha)
+    p2 = await _create_process(app_client, ha)
+    original = await _source_backed_record(app_client, ha, p1["id"])  # leg B source → {P1}
+    await _link_process(app_client, ha, original["id"], p2["id"])  # leg A → {P2}; effective {P1,P2}
+
+    owner = _subject("wcosup-b")
+    await _grant_process(owner, "record.create", p1["id"])  # owns P1, NOT P2
+    hb = _auth(token_factory, owner)
+    # No body source → capture_correction FORCES the original's (owned) P1 source, so the denial can
+    # only come from the EXISTING P2 binding the union now re-auths. Without the union it would 201.
+    deny = await app_client.post(
+        f"/api/v1/records/{original['id']}/correction",
+        headers=hb,
+        json={"record_type": "RELEASE", "title": "supersede co-bound"},
     )
     assert deny.status_code == 403, deny.text

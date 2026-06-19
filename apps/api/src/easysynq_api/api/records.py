@@ -583,13 +583,19 @@ async def correction_endpoint(
     session: AsyncSession = Depends(get_session),
     authz_sink: AuthzAuditSink = Depends(get_authz_audit_sink),
 ) -> dict[str, Any]:
-    # S-records-W: re-auth the SUCCESSOR's REAL effective process binding PER-PROCESS (own ALL;
-    # mirror capture; a single multi-process scope would intersection-MATCH — Codex W-CX-1/3). The
-    # successor's effective source is the original's OWN source when source-backed
-    # (``capture_correction`` FORCES it) else the body's; its binding = that source's processes when
-    # the source carries them, else (process-less or no source) the ORIGINAL's effective binding,
-    # which a source-less successor inherits via the R3-1 walk (W-CX-2 / round-3: a forced
-    # process-less source must NOT false-deny an owner of the original's real binding).
+    # S-records-W: re-auth a correction over the UNION of the successor's new-source processes AND
+    # the ORIGINAL's FULL effective binding, PER-PROCESS (own ALL; mirror capture; a single multi-
+    # process scope would intersection-MATCH — Codex W-CX-1/3). The successor's effective source is
+    # the original's OWN source when source-backed (``capture_correction`` FORCES it) else the body.
+    # ⚠ Codex W round-4 P1: an earlier ``source_processes or effective(original)`` SHORT-CIRCUITED —
+    # as soon as the successor had any source process it skipped the original's OTHER bindings, so a
+    # P1-only owner could supersede a record co-bound to an unowned P2 (its source-doc P1 satisfied
+    # the re-auth) and ``capture_correction`` (which does NOT carry the original's EvidenceForLinks)
+    # minted a P1-only successor P2 owners can no longer read. The union forces the caller to own
+    # EVERY process the original is currently bound to (leg A evidence + leg B source + the R3-1
+    # correction walk) PLUS any new source — the converging deny-broader floor. The process-less-
+    # source / source-less paths still resolve to the original's real binding (W-CX-2 / round-3: a
+    # forced process-less source must NOT false-deny an owner of the original's real binding).
     original = await records_repo.get_record(session, record_id)
     if original is not None:
         effective_source = (
@@ -605,7 +611,7 @@ async def correction_endpoint(
                     str(p.id)
                     for _link, p in await vault_repo.list_process_links(session, source_doc.id)
                 )
-        inherited = source_processes or frozenset(
+        inherited = source_processes | frozenset(
             await records_repo.record_process_ids_effective(session, original)
         )
         if inherited:
