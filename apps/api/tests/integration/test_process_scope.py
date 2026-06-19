@@ -88,6 +88,37 @@ async def test_process_owner_creates_a_document_in_an_owned_process(
     assert (await app_client.get(f"/api/v1/documents/{new_id}", headers=hb)).status_code == 200
 
 
+async def test_process_owner_creates_with_multiple_owned_processes_deduped(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    """A Process Owner of TWO processes can create a doc linked to both; a duplicated id in the body
+    is deduped (no UNIQUE trip) and yields exactly the two distinct links."""
+    await s5.grant_lifecycle(subj.a)
+    await _grant(subj.a, "process.create")
+    await _grant(subj.a, "process.assign_owner")
+    ha = _auth(token_factory, subj.a)
+    p1 = await _create_process(app_client, ha)
+    p2 = await _create_process(app_client, ha)
+    owner_id = await _user_id(subj.b)
+    await _assign_owner(app_client, ha, p1["id"], owner_id)
+    await _assign_owner(app_client, ha, p2["id"], owner_id)
+
+    hb = _auth(token_factory, subj.b)
+    r = await app_client.post(
+        "/api/v1/documents",
+        headers=hb,
+        json={
+            "title": "Two-process SOP",
+            "document_type_id": await s5.type_id("SOP"),
+            "process_ids": [p1["id"], p1["id"], p2["id"]],  # duplicate p1 → deduped
+        },
+    )
+    assert r.status_code == 201, r.text
+    links = await app_client.get(f"/api/v1/documents/{r.json()['id']}/process-links", headers=hb)
+    assert links.status_code == 200, links.text
+    assert {p["process_id"] for p in links.json()} == {p1["id"], p2["id"]}
+
+
 async def test_process_owner_cannot_create_without_declaring_an_owned_process(
     app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
 ) -> None:
@@ -352,3 +383,41 @@ async def test_process_owner_reads_records_under_a_linked_source_doc(
     ids = {r["id"] for r in listed.json()}
     assert linked_rid in ids
     assert adhoc_rid not in ids
+
+
+async def test_process_owner_reads_evidence_for_process_record(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    """A source-LESS record bound to a process ONLY via an EvidenceForLink(PROCESS) is readable by
+    that process's owner — the records read scope unions evidence-for-process links with source-doc
+    links (matching the evidence-pack record.read gate; the S-process-scope-1 review P3)."""
+    await s5.grant_lifecycle(subj.a)
+    await _grant(subj.a, "record.create")
+    await _grant(subj.a, "record.read")
+    await _grant(subj.a, "process.create")
+    await _grant(subj.a, "process.assign_owner")
+    ha = _auth(token_factory, subj.a)
+    proc = await _create_process(app_client, ha)
+
+    rec = await app_client.post(
+        "/api/v1/records",
+        headers=ha,
+        json={"record_type": "EVIDENCE", "title": "Evidence for a process"},
+    )
+    assert rec.status_code == 201, rec.text
+    rid = rec.json()["id"]
+    link = await app_client.post(
+        f"/api/v1/records/{rid}/evidence-links",
+        headers=ha,
+        json={"target_type": "process", "target_id": proc["id"]},
+    )
+    assert link.status_code == 201, link.text
+
+    owner_id = await _user_id(subj.b)
+    await _assign_owner(app_client, ha, proc["id"], owner_id)
+    hb = _auth(token_factory, subj.b)
+
+    assert (await app_client.get(f"/api/v1/records/{rid}", headers=hb)).status_code == 200
+    listed = await app_client.get("/api/v1/records", headers=hb)
+    assert listed.status_code == 200, listed.text
+    assert rid in {r["id"] for r in listed.json()}

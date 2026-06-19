@@ -112,7 +112,8 @@ class DocumentCreate(BaseModel):
     # a brand-new doc has no ProcessLink, so without a declared process its create scope carries no
     # process_ids and the PROCESS grant matches nothing. Empty (the default) = byte-identical to the
     # pre-slice create (folder/doc-class scoped, no links). Order-preserving; deduped server-side.
-    process_ids: list[uuid.UUID] = Field(default_factory=list)
+    # Capped (a doc links to a handful of processes) to bound the per-process validate+authz loop.
+    process_ids: list[uuid.UUID] = Field(default_factory=list, max_length=50)
 
 
 class MetadataUpdate(BaseModel):
@@ -815,6 +816,9 @@ async def create_document_endpoint(
             folder_path=body.folder_path,
             document_level=level,
             process_ids=frozenset({str(process.id)}),
+            # The new doc is always created Draft — mirror the standalone _enforce_target_process
+            # scope so a lifecycle_state-predicated manage_metadata grant evaluates identically.
+            lifecycle_state=DocumentCurrentState.Draft.value,
         )
         await enforce(session, authz_sink, request, caller, "document.manage_metadata", link_scope)
         processes.append(process)

@@ -6279,6 +6279,7 @@ components:
           type: array
           items: { type: string, format: uuid }
           default: []
+          maxItems: 50
           description: >-
             Optional processes to link the new document to at creation (S-process-scope-1). Each is
             authorized as a process link (document.manage_metadata over the target process); the
