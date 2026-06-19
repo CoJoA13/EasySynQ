@@ -594,23 +594,34 @@ async def correction_endpoint(
     session: AsyncSession = Depends(get_session),
     authz_sink: AuthzAuditSink = Depends(get_authz_audit_sink),
 ) -> dict[str, Any]:
-    # S-records-W: a source-LESS original keeps the body's source (a source-BACKED original FORCES
-    # its OWN source — ``capture_correction`` — so the successor's process binding is unchanged and
-    # no new binding is minted). When the body introduces a NEW source, re-auth its processes so a
-    # Process-Owner cannot introduce a source linked to a process they don't own (R2-3 / CX-4).
+    # S-records-W: a correction successor inherits its EFFECTIVE source document's processes (leg
+    # B), so re-auth record.create over EACH effective-source process individually — a PROCESS
+    # holder must own ALL of them (mirror capture; a single multi-process scope would
+    # intersection-MATCH and let a P1-owner author under a P1+P2 source — Codex W-CX-1/3). The
+    # effective source is the original's OWN source when source-backed (``capture_correction`` FORCES
+    # it) else the body's source. An empty source-process set re-auths with empty process_ids so a
+    # PROCESS-only holder is DENIED, like a fresh capture under a process-less source (W-CX-2).
     original = await records_repo.get_record(session, record_id)
-    if (
-        original is not None
-        and original.source_document_id is None
-        and body.source_document_id is not None
-    ):
-        source_doc = await session.get(DocumentedInformation, body.source_document_id)
+    effective_source = None
+    if original is not None:
+        effective_source = (
+            original.source_document_id
+            if original.source_document_id is not None
+            else body.source_document_id
+        )
+    if effective_source is not None:
+        source_doc = await session.get(DocumentedInformation, effective_source)
         if source_doc is not None and source_doc.org_id == caller.org_id:
             links = await vault_repo.list_process_links(session, source_doc.id)
-            target_processes = frozenset(str(p.id) for _link, p in links)
-            if target_processes:
+            source_processes = frozenset(str(p.id) for _link, p in links)
+            if source_processes:
+                for pid in source_processes:
+                    await _enforce_target_process_record(
+                        session, authz_sink, request, caller, record_id, frozenset({pid})
+                    )
+            else:
                 await _enforce_target_process_record(
-                    session, authz_sink, request, caller, record_id, target_processes
+                    session, authz_sink, request, caller, record_id, frozenset()
                 )
     new_record = await capture_correction(
         session,
