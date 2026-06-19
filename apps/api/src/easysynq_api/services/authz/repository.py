@@ -47,11 +47,13 @@ def _grant_from_role(role_name: str, grant: RoleGrant, assignment: RoleAssignmen
     # NOT clamp it: clamping a SYSTEM-finest grant — e.g. a bound Process-Owner's clauseMap.read —
     # down to the bound PROCESS would make it unsatisfiable against the SYSTEM clause-map resource
     # (S-records-C). A SYSTEM template stays SYSTEM regardless of bound_scope; every other template
-    # still defers to the bound_scope when one is present.
-    template_level = _scope_from_dict(grant.scope_template)[0]
+    # still defers to the bound_scope when one is present. Only an EXPLICIT ``level == "SYSTEM"``
+    # template is exempt — a NULL/level-less template falls through to the bound_scope (the
+    # conservative, non-widening direction) rather than being silently treated as SYSTEM.
+    template_is_system = (grant.scope_template or {}).get("level") == "SYSTEM"
     raw = (
         grant.scope_template
-        if template_level is ScopeLevel.SYSTEM
+        if template_is_system
         else (assignment.bound_scope or grant.scope_template)
     )
     level, selector, predicates = _scope_from_dict(raw)

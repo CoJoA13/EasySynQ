@@ -53,3 +53,11 @@ def test_system_grant_without_bound_scope_stays_system() -> None:
     # No bound_scope → the role's own SYSTEM scope_template is used (also SYSTEM).
     resolved = _resolve({"level": "SYSTEM"}, None)
     assert resolved.level is ScopeLevel.SYSTEM
+
+
+def test_levelless_template_defers_to_bound_scope() -> None:
+    # Conservative direction: only an EXPLICIT level=="SYSTEM" template is exempt. A level-less
+    # template is NOT silently treated as SYSTEM, so it defers to the bound_scope (no reachable
+    # grant has this shape, but the exemption must not widen the unsafe direction).
+    resolved = _resolve({}, _PROCESS_BOUND)
+    assert resolved.level is ScopeLevel.PROCESS
