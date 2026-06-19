@@ -909,6 +909,37 @@ async def test_process_owner_cannot_mutate_links_for_unowned_process(
     assert allow.status_code == 204, allow.text
 
 
+async def test_generic_role_assign_strips_managed_marker(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    """A generic POST /users/{id}/roles cannot forge the owner-assignment ``managed_by`` marker — it
+    is stripped, so the assignment stays visible on the role list and revocable there (the Codex P2:
+    otherwise a caller could mint an un-revocable role assignment)."""
+    await _grant(subj.a, "permission.grant")
+    await _grant(subj.a, "user.read")
+    ha = _auth(token_factory, subj.a)
+    target_id = await _user_id(subj.b)
+
+    r = await app_client.post(
+        f"/api/v1/users/{target_id}/roles",
+        headers=ha,
+        json={
+            "role_name": "Process Owner",
+            "bound_scope": {"level": "SYSTEM", "managed_by": "owner_assignment"},
+        },
+    )
+    assert r.status_code == 201, r.text
+    assert (r.json()["bound_scope"] or {}).get("managed_by") is None  # the marker was stripped
+
+    listed = await app_client.get(f"/api/v1/users/{target_id}/roles", headers=ha)
+    assert any(a["role_name"] == "Process Owner" for a in listed.json())  # not hidden
+
+    revoke = await app_client.delete(
+        f"/api/v1/users/{target_id}/roles/{r.json()['id']}", headers=ha
+    )
+    assert revoke.status_code == 204, revoke.text  # not blocked
+
+
 async def _seed_foreign_process(created_by: uuid.UUID) -> tuple[str, str]:
     """A process under a throwaway SECOND org (returns (org_id, process_id))."""
     async with get_sessionmaker()() as s:

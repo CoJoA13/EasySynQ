@@ -279,8 +279,15 @@ async def assign_user_role(
     target = await _get_user(session, user_id, granter.org_id)
     role = await _resolve_role(session, target.org_id, body.role_id, body.role_name)
     await assert_can_assign_role(session, sink, granter, role.id)
+    # ``managed_by`` is a RESERVED bound_scope marker set ONLY by owner-assignment (it drives the
+    # hide/409 on the generic role surface + the candidacy/ack exclusions). Strip it here so a
+    # generic caller cannot forge an assignment that masquerades as owner-assignment-managed and
+    # becomes un-revocable through this surface (the Codex finding).
+    bound_scope = body.bound_scope
+    if bound_scope is not None and "managed_by" in bound_scope:
+        bound_scope = {k: v for k, v in bound_scope.items() if k != "managed_by"}
     assignment = RoleAssignment(
-        org_id=target.org_id, user_id=target.id, role_id=role.id, bound_scope=body.bound_scope
+        org_id=target.org_id, user_id=target.id, role_id=role.id, bound_scope=bound_scope
     )
     session.add(assignment)
     await session.flush()  # populate assignment.id for the audit row's object_id
@@ -290,7 +297,7 @@ async def assign_user_role(
         EventType.ROLE_ASSIGN,
         assignment.id,
         target.id,
-        after={"role_id": str(role.id), "role_name": role.name, "bound_scope": body.bound_scope},
+        after={"role_id": str(role.id), "role_name": role.name, "bound_scope": bound_scope},
     )
     await session.commit()
     await session.refresh(assignment)

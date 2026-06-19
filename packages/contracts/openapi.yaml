@@ -6639,10 +6639,9 @@ components:
       type: object
       additionalProperties: false
       required: [user_id]
-      description: "Bind a process owner. org_role_id defaults to the org's generic 'Process Owner' org_role (resolve-or-created)."
+      description: "Bind a user as owner of the process. The owner is keyed to the org's single 'Process Owner' org_role (resolve-or-created); the per-process specificity rides the binding."
       properties:
         user_id: { type: string, format: uuid }
-        org_role_id: { type: [string, "null"], format: uuid }
 
     ProcessOwner:
       type: object

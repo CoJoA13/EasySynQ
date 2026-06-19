@@ -73,9 +73,6 @@ class EdgeCreate(BaseModel):
 
 class OwnerAssignCreate(BaseModel):
     user_id: uuid.UUID
-    # Optional: the RACI org_role to bind. Defaults to the org's generic "Process Owner" org_role
-    # (resolve-or-created by the service); the per-process specificity rides the binding process_id.
-    org_role_id: uuid.UUID | None = None
 
 
 def _process(p: Process) -> dict[str, Any]:
@@ -468,9 +465,7 @@ async def assign_process_owner_endpoint(
     placeholder). Idempotent. Gated process.assign_owner at the process's PROCESS scope."""
     proc = await _load_process(session, caller, process_id)
     user = await _load_user(session, caller, body.user_id)
-    return await assign_process_owner(
-        session, actor=caller, process=proc, user=user, org_role_id=body.org_role_id
-    )
+    return await assign_process_owner(session, actor=caller, process=proc, user=user)
 
 
 @router.delete("/processes/{process_id}/owner/{user_id}", status_code=status.HTTP_204_NO_CONTENT)

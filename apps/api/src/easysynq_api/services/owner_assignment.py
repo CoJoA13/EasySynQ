@@ -205,7 +205,6 @@ async def assign_process_owner(
     actor: AppUser,
     process: Process,
     user: AppUser,
-    org_role_id: uuid.UUID | None = None,
 ) -> dict[str, Any]:
     """Bind ``user`` as owner of ``process`` (idempotent). Records the RACI org_role_assignment AND
     mints/extends the PROCESS-scoped Process-Owner role_assignment; audits both; invalidates the
@@ -213,15 +212,12 @@ async def assign_process_owner(
     org_id = actor.org_id
     await _lock_user(session, user.id)
 
-    # 1. RACI: the org_role (caller-supplied or the resolve-or-created generic "Process Owner").
-    if org_role_id is not None:
-        org_role = await session.get(OrgRole, org_role_id)
-        if org_role is None or org_role.org_id != org_id:
-            raise ProblemException(status=404, code="not_found", title="org_role not found")
-    else:
-        org_role = await _resolve_or_create_org_role(
-            session, org_id=org_id, name=_PROCESS_OWNER_ROLE_NAME, created_by=actor.id
-        )
+    # 1. RACI: the single generic "Process Owner" org_role (resolve-or-created). Keying every
+    # binding to ONE org_role means at most one org_role_assignment per (user, process), so revoke's
+    # (user, process) delete can never over-remove an unrelated RACI binding (the Codex finding).
+    org_role = await _resolve_or_create_org_role(
+        session, org_id=org_id, name=_PROCESS_OWNER_ROLE_NAME, created_by=actor.id
+    )
     binding = (
         await session.execute(
             select(OrgRoleAssignment).where(
