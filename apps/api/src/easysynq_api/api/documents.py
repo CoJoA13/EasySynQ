@@ -889,6 +889,10 @@ async def update_metadata_endpoint(
     # for_update=True callers of _load_document (unmap_clause, submit_review, this handler).
     wants_review_update = "review_period_months" in body.model_fields_set
     doc = await _load_document(session, caller, document_id, for_update=wants_review_update)
+    # S-risk-1b (D-3b): a managed-doc head (OBJ/MR/RSK) is system-managed via its own surface — its
+    # metadata IS its frozen snapshot, so the generic metadata PATCH must not touch it (the
+    # byte-path reservation, extended to the metadata/distribution/link mutations). Reads stay open.
+    await reject_objective_byte_path(session, doc)
     if body.title is not None:
         doc.title = body.title
     if body.folder_path is not None:
@@ -1011,6 +1015,11 @@ async def map_clause_endpoint(
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
     doc = await _load_document(session, caller, document_id)
+    # Reserve the RSK head's clause mapping (RSK-only — OBJ/MR may carry extra clause tags):
+    # removing its auto-created 6.1 mapping would make the publish path's submit_review() 422 on
+    # the zero-map
+    # gate, blocking publish until the system mapping is manually restored (Codex P2).
+    await reject_rsk_register_mutation(session, doc)
     clause = await vault_repo.get_clause(session, body.clause_id)
     if clause is None:
         raise ProblemException(status=404, code="not_found", title="Clause not found")
@@ -1073,6 +1082,7 @@ async def unmap_clause_endpoint(
     # locks the doc row): the submit's mapping count and a last-mapping delete can't interleave to
     # leave an InReview document with zero mappings.
     doc = await _load_document(session, caller, document_id, for_update=True)
+    await reject_rsk_register_mutation(session, doc)  # Codex P2: keep the RSK head's 6.1 map intact
     mapping = await vault_repo.get_clause_mapping(session, doc.id, clause_id)
     if mapping is None:
         raise ProblemException(status=404, code="not_found", title="Clause mapping not found")
@@ -1270,6 +1280,7 @@ async def create_document_link_endpoint(
     in-org controlled Documents; no self-link; 409 on a duplicate (from,to,type). Needs
     ``document.manage_metadata``."""
     doc = await _load_document(session, caller, document_id)
+    await reject_objective_byte_path(session, doc)  # S-risk-1b D-3b: reserve OBJ/MR/RSK heads
     if body.to_document_id == document_id:
         raise ProblemException(
             status=422,
@@ -1287,6 +1298,10 @@ async def create_document_link_endpoint(
             title="A link target must be a controlled Document (not a Record)",
             errors=[{"field": "to_document_id", "code": "not_a_document", "message": "not a doc"}],
         )
+    # Reserve the managed-doc heads as link TARGETS too (Codex P2): the from-side guard above only
+    # protects the path document, so a link from a normal doc TO an OBJ/MR/RSK head would otherwise
+    # mint a link row touching the reserved head.
+    await reject_objective_byte_path(session, target)
     link = DocumentLink(
         org_id=doc.org_id,
         from_document_id=doc.id,
@@ -1320,6 +1335,7 @@ async def delete_document_link_endpoint(
 ) -> Response:
     """Remove a document link touching this document. Needs ``document.manage_metadata``."""
     doc = await _load_document(session, caller, document_id)
+    await reject_objective_byte_path(session, doc)  # S-risk-1b D-3b: reserve OBJ/MR/RSK heads
     link = await session.get(DocumentLink, link_id)
     if (
         link is None
@@ -1327,6 +1343,14 @@ async def delete_document_link_endpoint(
         or document_id not in (link.from_document_id, link.to_document_id)
     ):
         raise ProblemException(status=404, code="not_found", title="Document link not found")
+    # Reserve the link's OTHER end too (Codex P2): if the path doc is normal but the far side is a
+    # managed head, deleting from the normal side would still mutate a link row touching the head.
+    other_id = (
+        link.to_document_id if link.from_document_id == document_id else link.from_document_id
+    )
+    other = await session.get(DocumentedInformation, other_id)
+    if other is not None:
+        await reject_objective_byte_path(session, other)
     before = {
         "to_document_id": str(link.to_document_id),
         "from_document_id": str(link.from_document_id),
@@ -1434,10 +1458,14 @@ async def update_distribution_endpoint(
     # A no-op body writes no audit row and enqueues no sweep.
     if not body.add_entries and body.acknowledgement_required is None:
         doc_ro = await _load_document(session, caller, document_id)
+        await reject_objective_byte_path(
+            session, doc_ro
+        )  # S-risk-1b D-3b: reserve OBJ/MR/RSK heads
         return await _distribution_payload(session, doc_ro)
     # FOR UPDATE (the update_metadata_endpoint precedent): the flag flip must not race a
     # concurrent cutover/sweep recompute reading acknowledgement_required mid-flight.
     doc = await _load_document(session, caller, document_id, for_update=True)
+    await reject_objective_byte_path(session, doc)  # S-risk-1b D-3b: reserve OBJ/MR/RSK heads
     before = {"acknowledgement_required": doc.acknowledgement_required}
     # Two-pass: validate everything BEFORE adding — an autoflush during a later item's
     # session.get would otherwise surface a pre-existing-duplicate IntegrityError outside
@@ -1527,6 +1555,7 @@ async def delete_distribution_entry_endpoint(
     # INSERT, minting an acknowledgement for a just-removed recipient (the POST path already
     # serializes the same way).
     doc = await _load_document(session, caller, document_id, for_update=True)
+    await reject_objective_byte_path(session, doc)  # S-risk-1b D-3b: reserve OBJ/MR/RSK heads
     entry = await session.get(DistributionEntry, entry_id)
     if entry is None or entry.org_id != caller.org_id or entry.document_id != doc.id:
         raise ProblemException(status=404, code="not_found", title="Distribution entry not found")
@@ -1777,6 +1806,8 @@ async def obsolete_endpoint(
     sig_sink: SignatureEventSink = Depends(get_vault_signature_sink),
 ) -> dict[str, Any]:
     doc = await _load_document(session, caller, document_id)
+    # The RSK head is reserved from obsoletion at the lifecycle.obsolete CHOKEPOINT (covers this
+    # route AND a RETIRE DCR — Codex), so no endpoint-level guard is needed here.
     return _document(
         await obsolete(
             session,

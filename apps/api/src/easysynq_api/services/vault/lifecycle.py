@@ -342,6 +342,14 @@ async def obsolete(
     409 ``obsoletion_blocked`` unless ``force_retire`` + a non-empty ``override_justification``
     (recorded on the signature intent + audit). Both the direct ``document.obsolete`` endpoint and
     the DCR RETIRE-implement reach this gate — one check covers both paths."""
+    # S-risk-1b (Codex): the RSK register head is never obsoletable — obsoleting the singleton makes
+    # find_head ignore it, so the next risk mints a SECOND head orphaning the old rows. Guarding the
+    # obsolete CHOKEPOINT (not just the endpoint) covers BOTH the generic /obsolete route and a
+    # RETIRE DCR (services/dcr/service.py calls obsolete() directly). RSK-only — OBJ/MR retire
+    # normally. Local import avoids a service<->lifecycle cycle (the leadership-gate pattern).
+    from .service import reject_rsk_register_mutation
+
+    await reject_rsk_register_mutation(session, doc)
     if not reason or not reason.strip():
         raise ProblemException(
             status=422,

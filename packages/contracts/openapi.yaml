@@ -5012,6 +5012,79 @@ paths:
                   data:
                     type: array
                     items: { $ref: "#/components/schemas/RiskOpportunity" }
+  /risks/register:
+    get:
+      tags: [risk]
+      operationId: getRiskRegister
+      summary: >-
+        The org's Risk & Opportunity register head lifecycle state (S-risk-1b) — state + the
+        governing-version pointer. Any authenticated org member may read it (org-level, not
+        row-level sensitive; the row contents are gated separately by GET /risks). exists:false
+        before the first risk is added (the head is lazily created on the first POST /risks).
+      responses:
+        "200":
+          description: The register head status.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RiskRegisterStatus" }
+  /risks/register/start-revision:
+    post:
+      tags: [risk]
+      operationId: startRiskRegisterRevision
+      summary: >-
+        Open an FSM revision on the Effective register (T7 Effective→UnderRevision) so its rows
+        become editable again (S-risk-1b). Gated register.manage @ SYSTEM (the org steward; a bound
+        Process Owner's PROCESS grant does not match the org head). 409 unless Effective.
+      responses:
+        "200":
+          description: The register head status (now UnderRevision).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RiskRegisterStatus" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "409": { $ref: "#/components/responses/ProblemResponse" }
+  /risks/register/publish:
+    post:
+      tags: [risk]
+      operationId: publishRiskRegister
+      summary: >-
+        Freeze the working rows + per-method scoring criteria into a new immutable register version
+        and submit it for review (T2/T9; S-risk-1b — the content-aware freeze). Gated
+        register.manage @ SYSTEM. 409 unless the head is Draft (first register) or UnderRevision.
+        Approval then routes through POST /tasks/{id}/decision (DOCUMENT leg); release via
+        /risks/register/release.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RiskRegisterPublish" }
+      responses:
+        "200":
+          description: The register head status (now InReview).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RiskRegisterStatus" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "409": { $ref: "#/components/responses/ProblemResponse" }
+        "422": { $ref: "#/components/responses/ProblemResponse" }
+  /risks/register/release:
+    post:
+      tags: [risk]
+      operationId: releaseRiskRegister
+      summary: >-
+        Release the Approved register version Effective (T6; S-risk-1b). Enforces document.release @
+        SYSTEM over the SoD-2-enriched scope (author/approver ≠ releaser; held by no seeded role → a
+        SYSTEM override in v1), then runs the shared INV-1 SERIALIZABLE cutover. After release the
+        satellite rows are read-only until the next revision.
+      responses:
+        "200":
+          description: The register head status (now Effective).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RiskRegisterStatus" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "409": { $ref: "#/components/responses/ProblemResponse" }
+        "422": { $ref: "#/components/responses/ProblemResponse" }
   /risks/{risk_id}:
     parameters:
       - { name: risk_id, in: path, required: true, schema: { type: string, format: uuid } }
@@ -7601,6 +7674,35 @@ components:
         clause_id: { type: [string, "null"], format: uuid }
         treatment: { type: [string, "null"], maxLength: 4000 }
         effectiveness: { type: [string, "null"], maxLength: 4000 }
+    RiskRegisterStatus:
+      type: object
+      additionalProperties: false
+      description: >-
+        The Risk & Opportunity register head lifecycle state (S-risk-1b). The rows version together
+        under this head; has_governing is true once a version is Effective (the live band is graded
+        against the governing version's frozen criteria).
+      required:
+        [exists, register_doc_id, identifier, state, current_effective_version_id, has_governing]
+      properties:
+        exists: { type: boolean }
+        register_doc_id: { type: [string, "null"], format: uuid }
+        identifier: { type: [string, "null"] }
+        state:
+          type: [string, "null"]
+          description: >-
+            The head's current lifecycle state
+            (Draft/InReview/Approved/Effective/UnderRevision/Superseded/Obsolete), or null when no
+            register exists yet.
+        current_effective_version_id: { type: [string, "null"], format: uuid }
+        has_governing: { type: boolean }
+    RiskRegisterPublish:
+      type: object
+      additionalProperties: false
+      description: >-
+        The optional publish body. change_reason is the INV-3 reason recorded on the frozen register
+        version (a system-generated default is used when omitted; a no-freeze re-publish ignores it).
+      properties:
+        change_reason: { type: [string, "null"], maxLength: 2000 }
     ImprovementStage:
       type: string
       description: >-
