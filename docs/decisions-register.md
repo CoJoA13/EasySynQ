@@ -1,6 +1,6 @@
 # EasySynQ Decisions Register
 
-This document is the **single authoritative source of truth** for the EasySynQ self-hosted ISO 9001:2015 QMS specification. It records the locked foundational decisions, the locked stakeholder decisions, and the normative resolutions (R1–R48) to every finding raised in the gap audit (`17-gaps-and-open-questions.md`); R38 (slice S-rec-4) is the first post-v1 *additive* decision (additive catalog extensibility + SoD-6), R39 (slice family S-aud/S-capa) locks the Audits/Findings/CAPA model + workflow posture, R40 (slice family S-dcr) locks the Revision & change-depth (DCR) family model + the InApproval reject-loop target, and R41 (slice S-drift-3) adds the `drift.read` SYSTEM-domain permission key; R42 (slice S-ack-1) adds the `document.distribute` CONTENT-domain key, and R43 locks the Acknowledgements-family model.
+This document is the **single authoritative source of truth** for the EasySynQ self-hosted ISO 9001:2015 QMS specification. It records the locked foundational decisions, the locked stakeholder decisions, and the normative resolutions (R1–R49) to every finding raised in the gap audit (`17-gaps-and-open-questions.md`); R38 (slice S-rec-4) is the first post-v1 *additive* decision (additive catalog extensibility + SoD-6), R39 (slice family S-aud/S-capa) locks the Audits/Findings/CAPA model + workflow posture, R40 (slice family S-dcr) locks the Revision & change-depth (DCR) family model + the InApproval reject-loop target, and R41 (slice S-drift-3) adds the `drift.read` SYSTEM-domain permission key; R42 (slice S-ack-1) adds the `document.distribute` CONTENT-domain key, and R43 locks the Acknowledgements-family model.
 
 **Precedence:** Where this register conflicts with any text in sections `01`–`15`, **this register supersedes that text.** Section editors MUST back-propagate the changes listed under each resolution's *Back-propagation* note. The exact tokens, enum values, state names, and field names quoted here are **canonical and verbatim** — they must be reproduced character-for-character (case, snake_case, dot-namespacing, and all) wherever the underlying concept appears. Do not soften, rename, abbreviate, or omit any token.
 
@@ -52,7 +52,7 @@ Proceed with the **full reconcile-and-harden pass** — i.e., adopt R1–R37 bel
 
 ---
 
-## Part 3 — Resolutions R1–R48
+## Part 3 — Resolutions R1–R49
 
 Each resolution states the decision, the exact canonical tokens/enums/states/field-names verbatim, and a Back-propagation note listing the section files that change.
 
@@ -1220,6 +1220,91 @@ named as a non-goal in the records-process-scope spec
 (`docs/superpowers/specs/2026-06-19-records-process-scope-authz-design.md` §7) and the
 S-process-scope-2 slice-history entry — both stay as historical record; this entry makes it a binding
 decision.
+
+---
+
+### R49 — Risk & Opportunity register family (clause 6.1) — slice family S-risk
+
+**Decision (owner, 2026-06-19).** The clause 6.1 Risks & Opportunities register is the **first register
+family** in EasySynQ and is modeled as a **maintained controlled Document** (per the registers-as-Documents
+doctrine — see *citation note* below): one `documented_information` with `kind=DOCUMENT`, a **new
+`document_type` code `RSK`**, `is_singleton` (one non-Obsolete head per org, enforced by a partial-unique
+guard beyond the Effective-only `uq_doc_info_singleton_effective`), holding many **`risk_opportunity`
+satellite rows** (`id` PK + `register_doc_id` FK + `row_version` — a register-**row** satellite, **not** a
+shared-PK subtype like `quality_objective`, because a register has many rows per head). The rows **are the
+version's controlled content**, edited **through FSM revisions** (`start_revision` → edit the satellite
+while Draft/UnderRevision → publish/release supersedes), **read-only while Effective**; live reads resolve
+against the **governing Effective version** (the `form_template`/objectives working-copy precedent). The
+register-document follows the **lightweight approval profile** (`04 §4.4`). This sets the pattern the future
+Context (4.1) / Interested Parties (4.2) registers reuse; this slice ships **risk only**.
+
+**Why a non-★ clause is Document-backed.** Clause 6.1 is **non-★** (`is_mandatory_star=False`,
+`iso9001_clauses.py`) — yet it is Document-backed, unlike `improvement_initiative` (clause 10.3, also
+non-★, own-table per R46). The discriminator is **register vs progressing-activity**, not ★-vs-non-★: ★
+*forces* the Document shape for a mandatory-DI clause (6.2/9.3 flip a checklist node); a **register** — a
+maintained controlled list — is bound to the Document lifecycle by `04 A3` + the doc-14 §0 finding-R3
+("Both, layered") **regardless of ★**. An *activity* that progresses through stages (improvement, DCR) is
+own-table; a *maintained register* is Document-backed.
+
+**⚠ R-citation note (do not propagate the mislabel).** `14 §6/§1.2/§328` and the S-obj-1 spec cite "R3"
+for the registers-as-Documents doctrine, but the **published R3** (this register) is *Authorization
+precedence (deny-wins)*. The registers-as-Documents doctrine is the **doc-14 §0 gap-audit finding-R3**
+("Both, layered", `14:582`) + `04 A3` — **not** a numbered resolution. R49 restates the doctrine in its own
+text and cites `14 §0/§6` + `04 A3`.
+
+**Scoring (R18-reconciled).** `scoring_method` enum (v1 sole value `5x5_matrix`, a forward-compatible
+append-only enum); `likelihood`,`severity` ∈ 1..5; `risk_rating = likelihood × severity` ∈ 1..25 **stored
+numeric**, derived by a **pure rule** (`domain/risk/rules.py`) and **re-derived on every write** (never
+client-supplied); a 4-band RAG (Critical/High/Medium/Low + Not-yet-measured) over the numeric reusing the
+objectives `green`/`amber`/`red`/`unmeasured` vocabulary + the ✓◔✕○ glyph canon. **Derive-and-freeze (the
+S-obj-freeze analogue):** the band is graded against the **governing version's frozen criteria** (pinned in
+`document_version.metadata_snapshot.risk_register.criteria` at publish — load-bearing for the live read,
+the `resolve_commitment(governing)` precedent), **not** live code, so a band-threshold change cannot
+retroactively re-grade history or the live register; a **golden test** pins each `scoring_method`'s code
+criteria (forcing the mint-a-new-value path); `scoring_method` is **write-once** (a re-score recomputes
+`risk_rating` + emits a `RISK_RESCORED` audit). No per-row `*_at_capture` column (the version snapshot pins
+the basis) and **no backfill** (greenfield — NOT-NULL from day one).
+
+**Permissions — ride the seeded `register.*` (no new key).** The risk **rows** gate on the already-seeded
+`register.read` / `register.manage` (`0004:97-98`, `finest_scope=PROCESS`) — **catalog stays 102, no R38
+catalog change**; the register **Document** lifecycle rides `document.*`. One **R38-additive *grant*** of
+`register.manage` to the **Process Owner** role (migration `0058`) lets bound owners maintain risks in their
+own process. **⚠ The grant MUST use the `_PROCESS_SCOPE` template** (`{"level":"PROCESS","selector":
+{"process_id":":assignment_process"}}`), **NOT** `_SYSTEM_SCOPE`: a SYSTEM scope_template is *exempt* from
+`bound_scope` clamping (`services/authz/repository.py:53`) and would match every process — the
+`clauseMap.read`/S-records-C grant was SYSTEM only because *its* resource is org-level, the opposite case.
+ADMIN gets no `register.*` (AZ-INV-6). The 3→2 reconcile of `15 §8.10b`'s aspirational `risk.read`/`risk.create`/`risk.update`:
+`risk.read → register.read`, `risk.create` + `risk.update` → `register.manage` (a deliberate coarsening,
+losing the create-vs-update split).
+
+**Process-scope (R48 own-id-only).** Risk rows carry `process_id`; `GET /risks` is a filter-not-403 row-filter
+(per-row `authorize` over `process_ids={row.process_id}` only — **no `artifact_id`** to avoid a shared-head
+leak; `source_ip` threaded; SYSTEM matches all). Writes re-enforce the **target** process (`POST` over
+`body.process_id`; `PATCH`-reassign over the new target — the `_enforce_target_process` discipline). Own-id
+only; **no `parent_id` walk** (R48). The head carries **zero `ProcessLink`s** (else a PROCESS `document.*`
+grant would match the org head).
+
+**CAPA & events.** Risk→CAPA one-click via `risk_opportunity.linked_capa_id`, idempotent under a **`FOR
+UPDATE` lock on the risk row** held across check-then-spawn (the R16 complaint precedent — the latch is the
+lock, not a UNIQUE); an additive **`CapaSource.risk`** enum value (`ALTER TYPE … ADD VALUE`). **No new**
+`SignatureMeaning` (R2), `audit_object_type`, or sig-hook; additive `RISK_*` event types only.
+
+**Migration `0058`** (creates `risk_opportunity`, seeds `RSK` `document_type` + the single-head guard, adds
+the `register.manage`→Process-Owner grant). **Deferred (named, not faked):** doc-10 `subject.risk_rating`
+workflow routing (the routing subject is the document but `risk_rating` is on the row — no resolver);
+`include_subprocesses` descendant scoping (R48); a register-steward role/UI for the org-head lifecycle (v1
+rides a SYSTEM override); the Context 4.1 / Interested Parties 4.2 registers (pattern set, not built);
+finer `register.*` create-vs-update SoD.
+
+**Validation.** Spec-first (`docs/superpowers/specs/2026-06-19-s-risk-register-design.md`) with a 5-lens
+adversarial refute panel that found and drove the fix of a real WORM-safety flaw (a freely-editable working
+satellite — withdrawn for the strict controlled-document model) and a real re-grade flaw (live-code band
+grading — fixed to governing-snapshot resolution) **before any migration**.
+
+**Back-propagation** (staged with the slices): `02` (6.1 register), `04` (`§4.5`→`§4.4` lightweight-profile
+pointer fix; `RSK` in the hierarchy), `07` (`register.*` now reach a resource), `10` (routing deferred),
+`13` (high-risk dashboard), `14` (as-built `risk_opportunity` + the stale `kpi_measurement` 0055-columns
+row fix), `15` (`/risks` endpoints; `§8.10b` gate mapping `risk.*`→`register.*`), `16`, `18`.
 
 ---
 
