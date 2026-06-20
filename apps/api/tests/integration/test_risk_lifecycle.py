@@ -83,11 +83,16 @@ async def _assign_owner(
 
 
 async def _setup_actors(subj: SimpleNamespace) -> None:
-    """Steward (author/publisher) holds register.manage+read @ SYSTEM; approver joins the
-    document_approval pool via the Approver role; releaser is a THIRD party with document.release
-    (SoD-2)."""
+    """Steward (author/publisher) holds register.manage+read @ SYSTEM AND document.release — yet
+    SoD-2 (not a missing grant) blocks them releasing their OWN register. The approver joins the
+    document_approval pool via the Approver role; the releaser is a THIRD party (SoD-2: author ≠
+    approver ≠ releaser)."""
     await _grant(subj.steward, "register.manage")
     await _grant(subj.steward, "register.read")
+    for key in ("document.release", "document.read", "document.read_draft"):
+        await _grant(
+            subj.steward, key
+        )  # the steward holds release; SoD-2 still denies self-release
     await s5.grant_role(subj.approver, "Approver")
     for key in ("document.release", "document.read", "document.read_draft"):
         await _grant(subj.releaser, key)
@@ -177,7 +182,20 @@ async def test_register_publish_freeze_and_revision_lifecycle(
         assert any(r["id"] == row["id"] for r in reg["rows"])
         assert "5x5_matrix" in reg["criteria"]
 
-    released = await _approve_and_release(app_client, head_id, hap, hrl)
+    # approve, then prove SoD-2 FIRES: the steward (the version author) holds document.release but
+    # cannot release their OWN register (403 sod_violation, not a missing-grant permission_denied).
+    task_id = await s5.task_for_doc(head_id)
+    dec = await app_client.post(
+        f"/api/v1/tasks/{task_id}/decision", headers=hap, json={"outcome": "approve"}
+    )
+    assert dec.status_code == 200, dec.text
+    self_rel = await app_client.post("/api/v1/risks/register/release", headers=hs)
+    assert self_rel.status_code == 403, self_rel.text
+    assert self_rel.json()["code"] == "sod_violation"
+    # the distinct third-party releaser completes the cutover.
+    rel = await app_client.post("/api/v1/risks/register/release", headers=hrl)
+    assert rel.status_code == 200, rel.text
+    released = rel.json()
     assert released["state"] == "Effective"
     assert released["has_governing"] is True
     v1_id = released["current_effective_version_id"]
