@@ -69,6 +69,42 @@ it("shows New (and opens the create modal) when editable + register.manage", asy
   expect(screen.getByRole("dialog")).toHaveTextContent(/new risk or opportunity/i);
 });
 
+it("shows New for a PROCESS-only register.manage holder (the first-readable-process probe)", async () => {
+  // editable head + a scope-aware /me/permissions: register.manage ONLY at PROCESS scope (empty at
+  // SYSTEM) — so canCreate must come from the first-readable-process probe, not a SYSTEM grant. This
+  // exercises the gate's PROCESS branch + requireProcess (the picker becomes required).
+  server.use(
+    http.get("/api/v1/risks/register", () =>
+      HttpResponse.json({
+        exists: true,
+        register_doc_id: "d0c00000-0000-0000-0000-0000000000aa",
+        identifier: "RSK-001",
+        state: "UnderRevision",
+        current_effective_version_id: null,
+        has_governing: false,
+      }),
+    ),
+    http.get("/api/v1/me/permissions", ({ request }) => {
+      const level = new URL(request.url).searchParams.get("scope_level");
+      return HttpResponse.json({
+        scope: { level: level ?? "SYSTEM", selector: null },
+        permissions:
+          level === "PROCESS" ? [{ key: "register.manage", effect: "ALLOW", source: "test" }] : [],
+      });
+    }),
+  );
+  const user = userEvent.setup();
+  renderWithProviders(<RisksRegisterPage />, { route: "/risks" });
+  await waitFor(() =>
+    expect(screen.getByText("Supplier single point of failure")).toBeInTheDocument(),
+  );
+  await user.click(screen.getByRole("button", { name: "New risk" }));
+  const dialog = await screen.findByRole("dialog");
+  // requireProcess (a PROCESS-only creator) → the picker is required; query by its placeholder, not
+  // the asterisked label (the S-capa-raise-process MAJOR).
+  expect(within(dialog).getByPlaceholderText("Pick the owning process")).toBeInTheDocument();
+});
+
 it("the band filter narrows the table (matrix + scorecard stay whole)", async () => {
   const user = userEvent.setup();
   renderWithProviders(<RisksRegisterPage />, { route: "/risks" });
