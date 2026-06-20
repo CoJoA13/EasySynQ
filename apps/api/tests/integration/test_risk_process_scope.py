@@ -20,6 +20,11 @@ from typing import Any
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import select
+
+from easysynq_api.db.models._audit_enums import EventType
+from easysynq_api.db.models.audit_event import AuditEvent
+from easysynq_api.db.session import get_sessionmaker
 
 from .test_processes import _create_process, _grant, _user_id
 from .test_vault import _auth
@@ -261,3 +266,19 @@ async def test_risk_rating_is_server_derived_and_re_derived(
     body = patched.json()
     assert body["risk_rating"] == 10
     assert body["band"] == "medium"
+
+    # the re-score emitted a RISK_RESCORED audit keyed on the register head (run-scoped: this row).
+    async with get_sessionmaker()() as s:
+        events = (
+            (
+                await s.execute(
+                    select(AuditEvent).where(
+                        AuditEvent.event_type == EventType.RISK_RESCORED,
+                        AuditEvent.object_id == uuid.UUID(row["register_doc_id"]),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+    assert any((e.after or {}).get("risk_id") == row["id"] for e in events)
