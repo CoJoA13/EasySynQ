@@ -111,6 +111,13 @@ Records/evidence capture, retention/disposition, Evidence Packs, audits/findings
 >   SPA + the opt-in signed, engine-routed Top-Management authorization (migrations `0052`/`0053`).
 > - **Leadership release routing** (S-leadership-1, migration `0054`) — an opt-in, additive Top-Management RELEASE authorization
 >   for the clause-5/6/9 leadership artifacts (POL §5.2 / OBJ §6.2 / MR §9.3); backend (#190) + FE (#192).
+> - **Risk & Opportunity register** (clause 6.1, R18/R49 — the **FIRST "register" family**, register-as-Document; migrations
+>   `0058`/`0059`) end-to-end: the `risk_opportunity` satellite + `/risks` CRUD (S-risk-1) + the controlled-document
+>   publish/freeze/release lifecycle with governing-snapshot band grading (S-risk-1b) + the MR 9.3.2(e) read-consumer (S-risk-2)
+>   + the risk→CAPA spawn seam (S-risk-3) + the doc-13/Home high-risk `GET /risks/summary` (S-risk-4a) + the **SPA** (register
+>   page / 5×5-matrix SVG / detail drawer + spawn / Home PLAN tile — S-risk-4b). **Deferred (named):** the in-app
+>   register-steward lifecycle console (**S-risk-5**; reopening rides the API in v1); the Context 4.1 / Interested Parties 4.2
+>   registers reuse this pattern.
 >
 > **This block is a point-in-time snapshot.** The authoritative live status is **`CLAUDE.md` "Current status"** + the per-slice
 > changelog **`docs/slice-history.md`** (named, not-faked deferrals live there); the web design specs/plans in
