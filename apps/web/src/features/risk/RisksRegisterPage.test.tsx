@@ -120,6 +120,23 @@ it("the band filter narrows the table (matrix + scorecard stay whole)", async ()
   expect(screen.getByText(/2 of 4 high or critical/i)).toBeInTheDocument();
 });
 
+it("sorting by Band is danger-first on the default (desc) click, not low-first", async () => {
+  const user = userEvent.setup();
+  renderWithProviders(<RisksRegisterPage />, { route: "/risks" });
+  await waitFor(() =>
+    expect(screen.getByText("Supplier single point of failure")).toBeInTheDocument(),
+  );
+  await user.click(screen.getByRole("button", { name: "Sort by Band" }));
+  // first Band click uses the table's default desc → must surface Critical before Low (the negated
+  // band_rank fix; a raw band_rank desc would put Low first).
+  const critical = screen.getByText("Supplier single point of failure"); // critical row
+  const low = screen.getByText("Minor labelling drift"); // low row
+  expect(critical.compareDocumentPosition(low) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  // toggle → asc → best-first (Low before Critical)
+  await user.click(screen.getByRole("button", { name: "Sort by Band" }));
+  expect(low.compareDocumentPosition(critical) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+});
+
 it("the type filter narrows to opportunities", async () => {
   const user = userEvent.setup();
   renderWithProviders(<RisksRegisterPage />, { route: "/risks" });

@@ -29,7 +29,10 @@ type NavItem = { to: string; label: string; prefix: string; gate?: string };
 const NAV: Record<PdcaPhase, NavItem[]> = {
   PLAN: [
     { to: "/objectives", label: "Objectives", prefix: "/objectives", gate: "objective.read" },
-    { to: "/risks", label: "Risk register", prefix: "/risks", gate: "register.read" },
+    // Ungated (the CAPA/Library precedent): GET /risks is filter-not-403, so a bound Process-Owner who
+    // holds register.read only at PROCESS scope must still see the link (the SYSTEM-scoped `can()` here
+    // can't see their grant); a no-grant caller lands on a calm empty register (Codex P2).
+    { to: "/risks", label: "Risk register", prefix: "/risks" },
   ],
   DO: [
     { to: "/library", label: "Library", prefix: "/library" },

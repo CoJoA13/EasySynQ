@@ -35,14 +35,16 @@ import { NewRiskModal } from "./NewRiskModal";
 const SORT_KEYS = ["rating", "band", "type"] as const;
 type SortKey = (typeof SORT_KEYS)[number];
 
-// Default sort = rating DESC (worst risks first — the most useful risk-register ordering). `band` sorts
-// by the danger-first band_rank (the server RAG_SEVERITY precedent); `type` alphabetical.
+// Default sort = rating DESC (worst risks first — the most useful risk-register ordering). `band` is
+// NEGATED band_rank so the table's default DESC click still surfaces danger-first (server ranks
+// Critical 0 → Low 3, so -rank gives Critical 0 ≥ Low -3 → Critical first on desc; Codex P3). `type`
+// alphabetical.
 function sortValue(r: RiskRow, key: SortKey): string | number | null {
   switch (key) {
     case "rating":
       return r.risk_rating;
     case "band":
-      return r.band_rank;
+      return -r.band_rank;
     case "type":
       return r.type;
   }

@@ -76,6 +76,21 @@ it("spawn seam: a linked risk shows the CAPA link and no treat button", async ()
   ).not.toBeInTheDocument();
 });
 
+it("spawn seam: a linked row keeps its CAPA link even after being reclassified to an opportunity", async () => {
+  // a risk that already latched a CAPA, then reclassified to opportunity — the traceability link must
+  // survive (Codex P2); only the spawn affordance is type-gated.
+  const linkedOpp = { ...riskListFixture.data[3]!, type: "opportunity" as const };
+  server.use(http.get("/api/v1/risks/:id", () => HttpResponse.json(linkedOpp)));
+  renderWithProviders(<RiskDetailDrawer riskId={LINKED} onClose={noop} headEditable={false} />);
+  const dialog = await screen.findByRole("dialog");
+  expect(
+    await within(dialog).findByRole("link", { name: /open the linked capa/i }),
+  ).toBeInTheDocument();
+  expect(
+    within(dialog).queryByRole("button", { name: /treat.*spawn capa/i }),
+  ).not.toBeInTheDocument();
+});
+
 it("spawn seam: an opportunity has no corrective-action section", async () => {
   grant("capa.create"); // even WITH capa.create, an opportunity offers no spawn (the server 422s it)
   renderWithProviders(<RiskDetailDrawer riskId={OPP} onClose={noop} headEditable={false} />);
@@ -109,6 +124,8 @@ it("edit is gated on headEditable AND register.manage", async () => {
   // head not editable → no edit button, a calm read-only note instead
   renderWithProviders(<RiskDetailDrawer riskId={HIGH} onClose={noop} headEditable={false} />);
   const dialog2 = await screen.findByRole("dialog");
-  expect(await within(dialog2).findByText(/effective \(read-only\)/i)).toBeInTheDocument();
+  expect(
+    await within(dialog2).findByText(/register isn't in an editable state/i),
+  ).toBeInTheDocument();
   expect(within(dialog2).queryByRole("button", { name: "Edit risk" })).not.toBeInTheDocument();
 });

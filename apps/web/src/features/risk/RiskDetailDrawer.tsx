@@ -26,15 +26,18 @@ export function RiskDetailDrawer({
   headEditable: boolean;
 }) {
   const { data: risk, isLoading, isError, forbidden, refetch } = useRisk(riskId);
-  // Probe at the row's OWN process (exact — the drawer has the row), SYSTEM for an org-level (null)
-  // row. ‖ a SYSTEM grant. Keyed on the permission KEY, never on process-count.
+  // Probe at the row's OWN process (exact — the drawer has the row); SYSTEM for an org-level (null)
+  // row. The PROCESS probe returns the EFFECTIVE decision (matching SYSTEM grants AND any scoped
+  // DENY), so for a process-owned row use it ALONE — OR-ing the raw SYSTEM result would bypass a
+  // process-level deny that carves this process out of a broader SYSTEM grant (deny-wins; Codex P3).
+  // Keyed on the permission KEY, never on process-count.
   const sys = usePermissions();
   const proc = usePermissions(
     risk?.process_id ? { level: "PROCESS", id: risk.process_id } : undefined,
   );
   const hasProc = !!risk?.process_id;
-  const canManage = sys.can("register.manage") || (hasProc && proc.can("register.manage"));
-  const canSpawn = sys.can("capa.create") || (hasProc && proc.can("capa.create"));
+  const canManage = hasProc ? proc.can("register.manage") : sys.can("register.manage");
+  const canSpawn = hasProc ? proc.can("capa.create") : sys.can("capa.create");
 
   const spawn = useSpawnRiskCapa(riskId ?? "");
   const [editOpen, setEditOpen] = useState(false);
@@ -111,10 +114,11 @@ export function RiskDetailDrawer({
             )}
           </Box>
 
-          {/* The risk → CAPA spawn seam — risks only (an opportunity has no corrective spawn; the
-              server 422s it). Linked → the CAPA reference; unlinked → the one-click treat-spawn,
-              gated capa.create @ the row's process, NOT on headEditable (operational, any head state). */}
-          {risk.type === "risk" && (
+          {/* The risk → CAPA spawn seam. The linked-CAPA reference shows for ANY row that has one —
+              so a risk reclassified to an opportunity keeps its traceability link (Codex P2); only the
+              SPAWN affordance is risk-only (the server 422s an opportunity spawn). The spawn is gated
+              capa.create @ the row's process, NOT on headEditable (operational, any head state). */}
+          {(risk.type === "risk" || risk.linked_capa_id) && (
             <>
               <Divider />
               <Box>
@@ -128,7 +132,7 @@ export function RiskDetailDrawer({
                       Open the linked CAPA
                     </Anchor>
                   </Group>
-                ) : canSpawn ? (
+                ) : risk.type === "risk" && canSpawn ? (
                   <Stack gap="xs">
                     {spawnError && <Alert color="red">{spawnError}</Alert>}
                     <Button
@@ -163,7 +167,8 @@ export function RiskDetailDrawer({
           )}
           {canManage && !headEditable && (
             <Text size="xs" c="dimmed">
-              This register is Effective (read-only). Start a revision to edit risks.
+              The register isn't in an editable state — risks are read-only. See the register banner
+              for the current step.
             </Text>
           )}
 
