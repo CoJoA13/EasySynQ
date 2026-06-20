@@ -76,6 +76,7 @@ from ..services.vault import (
     init_upload,
     obsolete,
     reject_objective_byte_path,
+    reject_rsk_register_mutation,
     release,
     render_dynamic_copy,
     set_working_schema,
@@ -778,6 +779,16 @@ async def create_document_endpoint(
     vault_sink: VaultAuditSink = Depends(get_vault_audit_sink),
 ) -> dict[str, Any]:
     dt = await session.get(DocumentType, body.document_type_id)
+    # S-risk-1: the Risk & Opportunity register is a system-managed singleton (one non-Obsolete RSK
+    # head per org, ZERO ProcessLinks, created only via the /risks service). A generic create here
+    # would let a bound Process Owner mint a process-linked or second RSK head that the register's
+    # _find_head would later adopt — defeating the zero-link/single-head invariant. Reserve it.
+    if dt is not None and dt.code == "RSK":
+        raise ProblemException(
+            status=422,
+            code="validation_error",
+            title="The Risk & Opportunity register is managed via /risks, not generic creation",
+        )
     level = dt.document_level.value if dt else None
     # S-process-scope-1: dedup the declared processes (order-preserving) — a duplicate would trip
     # the ProcessLink UNIQUE on create.
@@ -1126,6 +1137,10 @@ async def link_process_endpoint(
     authz_sink: AuthzAuditSink = Depends(get_authz_audit_sink),
 ) -> dict[str, Any]:
     doc = await _load_document(session, caller, document_id)
+    # S-risk-1: the RSK register head must never acquire a ProcessLink — a link makes a bound
+    # owner's
+    # PROCESS-scoped document.* grant match the org-wide head (escalation). Reserve it (Codex P1).
+    await reject_rsk_register_mutation(session, doc)
     process = await vault_repo.get_process(session, body.process_id)
     if process is None or process.org_id != caller.org_id:
         raise ProblemException(

@@ -162,6 +162,15 @@ tags:
       (PROCESS scope, SYSTEM fallback). objective.manage = create + plans; kpi.record =
       record a measurement; objective.read/kpi.read = list/get. Plans are mutable; measurements
       are append-only evidence-grade KPI_READING records (WORM/retention governed). R44.
+  - name: risk
+    description: >-
+      Risk & Opportunity register (S-risk-1, doc 02 Cl 6.1 / doc 14 §6, R18/R49) — the first register
+      family: one kind=DOCUMENT RSK register head (is_singleton) holding many risk_opportunity
+      satellite rows. risk_rating is server-derived (likelihood x severity) and re-derived on every
+      write; the displayed band grades against the (frozen) scoring criteria. Rides the seeded
+      register.read / register.manage keys (PROCESS scope, own-id-only per R48 — a bound Process Owner
+      reaches only their owned-process rows). The controlled-document publish/freeze/release lifecycle
+      is the deferred S-risk-1b.
 
 paths:
   /healthz:
@@ -4959,6 +4968,92 @@ paths:
         "409": { $ref: "#/components/responses/ProblemResponse" }
         "422": { $ref: "#/components/responses/ProblemResponse" }
 
+  /risks:
+    post:
+      tags: [risk]
+      operationId: createRisk
+      summary: >-
+        Author a risk/opportunity row on the org's Risk & Opportunity register (clause 6.1, S-risk-1).
+        Lazily get-or-creates the single kind=DOCUMENT RSK register head (which carries no
+        ProcessLinks). risk_rating is server-derived (likelihood x severity, never client-supplied).
+        Needs register.manage at the body process_id's PROCESS scope (SYSTEM for an org-level / null
+        process_id row).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RiskCreate" }
+      responses:
+        "201":
+          description: The authored risk row.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RiskOpportunity" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "409": { $ref: "#/components/responses/ProblemResponse" }
+        "422": { $ref: "#/components/responses/ProblemResponse" }
+    get:
+      tags: [risk]
+      operationId: listRisks
+      summary: >-
+        List the org's risk/opportunity rows (newest first), row-filtered to what the caller may
+        register.read (filter-not-403 — a no-grant caller gets 200 + empty; a bound Process Owner sees
+        only their owned-process rows; a SYSTEM grant sees all). Needs register.read.
+      responses:
+        "200":
+          description: The org's (visible) risk rows.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/RiskOpportunity" }
+  /risks/{risk_id}:
+    parameters:
+      - { name: risk_id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [risk]
+      operationId: getRisk
+      summary: >-
+        Read one risk row. Enforces register.read at the row's PROCESS scope (403-on-deny; a SYSTEM
+        grant matches). Needs register.read.
+      responses:
+        "200":
+          description: The risk row.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RiskOpportunity" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+    patch:
+      tags: [risk]
+      operationId: updateRisk
+      summary: >-
+        Partial-update a risk row (re-score / treat). risk_rating is re-derived when likelihood or
+        severity change (a re-score → RISK_RESCORED audit); scoring_method is write-once (422 on a
+        change). Reassigning process_id re-authorizes register.manage over the NEW target. Editable
+        only while the register head is Draft/UnderRevision (409 otherwise). Needs register.manage at
+        the row's (and the new target's) PROCESS scope.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RiskUpdate" }
+      responses:
+        "200":
+          description: The updated risk row.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RiskOpportunity" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409": { $ref: "#/components/responses/ProblemResponse" }
+        "422": { $ref: "#/components/responses/ProblemResponse" }
+
   /objectives:
     post:
       tags: [objectives]
@@ -7432,6 +7527,80 @@ components:
       additionalProperties: false
       properties:
         comment: { type: [string, "null"], maxLength: 2000 }
+    RiskOpportunityType:
+      type: string
+      description: A register row is a downside risk or an upside opportunity (clause 6.1).
+      enum: [risk, opportunity]
+    ScoringMethod:
+      type: string
+      description: >-
+        The scoring scheme (R49). v1 has the sole value 5x5_matrix; a new scheme mints a NEW value
+        (append-only) so existing rows keep their frozen criteria (derive-and-freeze).
+      enum: [5x5_matrix]
+    RiskBand:
+      type: string
+      description: >-
+        The RAG band derived from risk_rating against the (frozen) scoring criteria — server-computed,
+        read-only. Critical/High map to the danger tone, Medium to warning, Low to success.
+      enum: [critical, high, medium, low, unscored]
+    RiskOpportunity:
+      type: object
+      additionalProperties: false
+      required:
+        [id, register_doc_id, type, description, likelihood, severity, risk_rating, scoring_method, band, band_tone, band_rank, row_version]
+      properties:
+        id: { type: string, format: uuid }
+        register_doc_id: { type: string, format: uuid, description: The RSK register head id. }
+        type: { $ref: "#/components/schemas/RiskOpportunityType" }
+        description: { type: string }
+        process_id: { type: [string, "null"], format: uuid }
+        clause_id: { type: [string, "null"], format: uuid }
+        likelihood: { type: integer, minimum: 1, maximum: 5 }
+        severity: { type: integer, minimum: 1, maximum: 5 }
+        risk_rating:
+          type: integer
+          description: Server-derived likelihood x severity (read-only; re-derived on every write).
+        scoring_method: { $ref: "#/components/schemas/ScoringMethod" }
+        band: { $ref: "#/components/schemas/RiskBand" }
+        band_tone: { type: string, enum: [danger, warning, success, neutral] }
+        band_rank:
+          type: integer
+          description: Sort rank, danger-first (0=critical, 1=high, 2=medium, 3=low, 4=unscored).
+        treatment: { type: [string, "null"] }
+        effectiveness: { type: [string, "null"] }
+        linked_capa_id: { type: [string, "null"], format: uuid }
+        row_version: { type: integer }
+        created_at: { type: [string, "null"], format: date-time }
+        updated_at: { type: [string, "null"], format: date-time }
+    RiskCreate:
+      type: object
+      additionalProperties: false
+      required: [type, description, likelihood, severity]
+      properties:
+        type: { $ref: "#/components/schemas/RiskOpportunityType" }
+        description: { type: string, minLength: 1, maxLength: 4000 }
+        likelihood: { type: integer, minimum: 1, maximum: 5 }
+        severity: { type: integer, minimum: 1, maximum: 5 }
+        scoring_method: { $ref: "#/components/schemas/ScoringMethod" }
+        process_id: { type: [string, "null"], format: uuid }
+        clause_id: { type: [string, "null"], format: uuid }
+        treatment: { type: [string, "null"], maxLength: 4000 }
+    RiskUpdate:
+      type: object
+      additionalProperties: false
+      description: >-
+        Partial PATCH; an explicit null clears a nullable field. scoring_method is write-once;
+        risk_rating is server-derived (not settable).
+      properties:
+        type: { $ref: "#/components/schemas/RiskOpportunityType" }
+        description: { type: [string, "null"], minLength: 1, maxLength: 4000 }
+        likelihood: { type: [integer, "null"], minimum: 1, maximum: 5 }
+        severity: { type: [integer, "null"], minimum: 1, maximum: 5 }
+        scoring_method: { $ref: "#/components/schemas/ScoringMethod" }
+        process_id: { type: [string, "null"], format: uuid }
+        clause_id: { type: [string, "null"], format: uuid }
+        treatment: { type: [string, "null"], maxLength: 4000 }
+        effectiveness: { type: [string, "null"], maxLength: 4000 }
     ImprovementStage:
       type: string
       description: >-

@@ -421,6 +421,17 @@ class EventType(enum.Enum):
     # rebuilds the type from EVENT_TYPE_VALUES).
     PROCESS_OWNER_ASSIGNED = "PROCESS_OWNER_ASSIGNED"
     PROCESS_OWNER_REVOKED = "PROCESS_OWNER_REVOKED"
+    # S-risk-1 (clause 6.1 Risk & Opportunity register, R18/R49). RISK_RESCORED trails an explicit
+    # re-score of a risk_opportunity row (a likelihood/severity change that re-derives risk_rating)
+    # —
+    # auditable, never a silent in-place re-grade (spec §4). Keyed object_type=document (the
+    # register
+    # IS a documented_information, scope_ref=the head identifier — the R39 OBJECTIVE_* reuse). The
+    # register's own lifecycle (create/publish) rides the generic DOCUMENT_CREATED/CHECKIN/RELEASED
+    # events; no new SignatureMeaning (R2), audit_object_type, or sig-hook. Added via ALTER TYPE
+    # event_type ADD VALUE in 0058 (the additive pattern; a from-scratch ``upgrade head`` rebuilds
+    # the type from EVENT_TYPE_VALUES, so the member lives here too).
+    RISK_RESCORED = "RISK_RESCORED"
 
 
 class CheckpointSinkKind(enum.Enum):
