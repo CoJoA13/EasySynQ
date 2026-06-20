@@ -5,13 +5,15 @@ band edit cannot re-grade a published register (R49 L2)."""
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import Callable
 
 import pytest
 from fastapi import FastAPI
 
-from easysynq_api.db.models._risk_enums import ScoringMethod
+from easysynq_api.db.models._risk_enums import RiskOpportunityType, ScoringMethod
 from easysynq_api.db.models._vault_enums import VersionState
+from easysynq_api.db.models.risk_opportunity import RiskOpportunity
 from easysynq_api.domain.risk.register_content import (
     build_register,
     criteria_for_methods,
@@ -19,6 +21,7 @@ from easysynq_api.domain.risk.register_content import (
     resolve_criteria,
 )
 from easysynq_api.domain.risk.rules import RiskBand, default_criteria, risk_band
+from easysynq_api.services.risk.lifecycle import _frozen_row
 
 pytestmark = pytest.mark.unit
 
@@ -124,6 +127,36 @@ def test_risks_register_static_route_precedes_risk_id(
         resolve_route_endpoint(app, "/api/v1/risks/register/publish", "POST")
         == "publish_register_endpoint"
     )
+
+
+def test_frozen_row_excludes_linked_capa_id() -> None:
+    """S-risk-3 operational decision: ``linked_capa_id`` is NOT frozen into the version content — it
+    is OPERATIONAL metadata set by the risk→CAPA spawn at any head state (its own row-locked latch
+    path, not a register revision). The CONTROLLED snapshot must therefore never carry it, even when
+    the LIVE row has a CAPA linked — so a spawn while Effective never mutates the signed version,
+    and no governing read-of-record (the MR 9.3.2(e) summary) depends on it. The other content
+    fields are preserved."""
+    row = RiskOpportunity(
+        id=uuid.uuid4(),
+        register_doc_id=uuid.uuid4(),
+        org_id=uuid.uuid4(),
+        type=RiskOpportunityType.risk,
+        description="exposure",
+        likelihood=4,
+        severity=5,
+        risk_rating=20,
+        scoring_method=_M,
+        treatment="mitigate the exposure",
+        effectiveness="verified effective",
+        linked_capa_id=uuid.uuid4(),  # the LIVE row carries a CAPA link...
+        row_version=3,
+    )
+    frozen = _frozen_row(row)
+    assert "linked_capa_id" not in frozen  # ...but it is excluded from the frozen content
+    assert frozen["risk_rating"] == 20
+    assert frozen["treatment"] == "mitigate the exposure"
+    assert frozen["effectiveness"] == "verified effective"
+    assert frozen["row_version"] == 3
 
 
 def test_rsk_is_not_a_leadership_artifact() -> None:

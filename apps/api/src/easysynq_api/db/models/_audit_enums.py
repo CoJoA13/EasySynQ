@@ -432,6 +432,13 @@ class EventType(enum.Enum):
     # event_type ADD VALUE in 0058 (the additive pattern; a from-scratch ``upgrade head`` rebuilds
     # the type from EVENT_TYPE_VALUES, so the member lives here too).
     RISK_RESCORED = "RISK_RESCORED"
+    # S-risk-3 (clause 6.1, R49 §7): RISK_SPAWNED_CAPA trails the one-click risk→CAPA treatment
+    # spawn — the risk_opportunity.linked_capa_id latch is set + a CAPA raised (the CAPA emits its
+    # own CAPA_RAISED on the record side). Keyed object_type=document (object_id=register_doc_id) so
+    # the register head's audit-events surface it (the RISK_RESCORED / COMPLAINT_SPAWNED_CAPA
+    # shape). Added via ALTER TYPE event_type ADD VALUE in 0059 (additive; a from-scratch
+    # ``upgrade head`` rebuilds the type from EVENT_TYPE_VALUES, so the member lives here too).
+    RISK_SPAWNED_CAPA = "RISK_SPAWNED_CAPA"
 
 
 class CheckpointSinkKind(enum.Enum):

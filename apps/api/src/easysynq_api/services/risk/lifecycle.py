@@ -42,7 +42,14 @@ _EDITABLE = (DocumentCurrentState.Draft, DocumentCurrentState.UnderRevision)
 def _frozen_row(row: RiskOpportunity) -> dict[str, Any]:
     """A risk row's CONTROLLED content as-of freeze (the version's WORM body). Excludes audit
     bookkeeping (created_at/_by, updated_at/_by) — non-content + non-reproducible; the band BASIS is
-    the frozen criteria, not a per-row column."""
+    the frozen criteria, not a per-row column.
+
+    ⚠ ``linked_capa_id`` is EXCLUDED (S-risk-3): it is OPERATIONAL metadata, not version content —
+    the one-click risk→CAPA spawn sets it on the live satellite at any head state (its own
+    row-locked latch path, not a register revision), so it is deliberately not signed into the
+    frozen version (the objectives operational-rollup posture). No controlled read-of-record reads
+    it (the MR 9.3.2(e) summary reads treatment/effectiveness/rating/type/band — never the CAPA
+    link), so its absence from the snapshot changes no governing read."""
     return {
         "id": str(row.id),
         "type": row.type.value,
@@ -55,7 +62,6 @@ def _frozen_row(row: RiskOpportunity) -> dict[str, Any]:
         "scoring_method": row.scoring_method.value,
         "treatment": row.treatment,
         "effectiveness": row.effectiveness,
-        "linked_capa_id": str(row.linked_capa_id) if row.linked_capa_id else None,
         "row_version": row.row_version,
     }
 

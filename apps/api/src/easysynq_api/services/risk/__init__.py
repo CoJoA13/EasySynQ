@@ -10,6 +10,7 @@ from .service import (
     get_risk,
     list_risks,
     resolve_or_create_head,
+    spawn_capa_for_risk,
     update_risk_row,
 )
 
@@ -21,6 +22,7 @@ __all__ = [
     "list_risks",
     "publish_register",
     "resolve_or_create_head",
+    "spawn_capa_for_risk",
     "start_register_revision",
     "update_risk_row",
 ]

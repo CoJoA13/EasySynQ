@@ -81,7 +81,14 @@ def test_capa_family_enum_values() -> None:
         NcSeverity,
     )
 
-    assert [m.value for m in CapaSource] == ["audit", "process", "complaint", "review_output"]
+    # ``risk`` appended LAST (S-risk-3, the risk→CAPA spawn source) — additive, after review_output.
+    assert [m.value for m in CapaSource] == [
+        "audit",
+        "process",
+        "complaint",
+        "review_output",
+        "risk",
+    ]
     assert [m.value for m in NcrSource] == ["audit", "process", "complaint", "internal"]
     assert [m.value for m in NcSeverity] == ["Critical", "Major", "Minor"]
     # R20 verbatim (note the `return` keyword → member RETURN_, value "return").

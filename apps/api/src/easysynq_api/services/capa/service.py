@@ -370,6 +370,13 @@ async def raise_capa(
         raise _validation_error(
             "source", "reserved", "review_output is reserved for the Management-Review family"
         )
+    # Codex P2: ``risk`` is the spawn-only origin tag — a direct raise with source=risk would mark a
+    # CAPA risk-originated with NO risk id, NO linked_capa_id latch, and NO RISK_SPAWNED_CAPA audit,
+    # breaking the risk→CAPA traceability. Reject it; the spawn endpoint sets it via build_capa.
+    if source is CapaSource.risk:
+        raise _validation_error(
+            "source", "reserved", "risk is reserved for the risk→CAPA spawn (POST /risks/{id}/capa)"
+        )
     await _check_process(session, actor, process_id)
     return await build_capa(
         session,

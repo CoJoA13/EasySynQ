@@ -34,6 +34,12 @@ class CapaSource(enum.Enum):
     # RESERVED for the deferred Management-Review family (doc 10 §7) — forward-compatible, never
     # written until that slice ships (decisions-register R39 residual note).
     review_output = "review_output"
+    # S-risk-3 (clause 6.1, R49 §7): a CAPA spawned to TREAT a risk_opportunity row (the one-click
+    # risk→CAPA seam). The risk row's ``linked_capa_id`` latch holds the spawned CAPA; this source
+    # tags the CAPA's origin. Added via ``ALTER TYPE capa_source ADD VALUE`` in 0059 (the additive
+    # pattern; a from-scratch ``upgrade head`` rebuilds the type from CAPA_SOURCE_VALUES). Appended
+    # LAST so the Python member order matches PG's append-to-end ADD VALUE.
+    risk = "risk"
 
 
 class NcrSource(enum.Enum):

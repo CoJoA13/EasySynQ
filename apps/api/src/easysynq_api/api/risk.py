@@ -17,6 +17,7 @@ import uuid
 from typing import Any
 
 from fastapi import APIRouter, Depends, Request, status
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -45,6 +46,7 @@ from ..services.risk import (
     governing_register,
     list_risks,
     publish_register,
+    spawn_capa_for_risk,
     start_register_revision,
     update_risk_row,
 )
@@ -56,6 +58,9 @@ from ..services.vault import (
     release,
 )
 from ..services.vault.release_scope import enrich_release_sod_scope
+from .capa import (
+    _capa_full,
+)  # the single CAPA response builder (the complaint→CAPA spawn precedent)
 
 router = APIRouter(prefix="/api/v1", tags=["risk"])
 
@@ -131,6 +136,12 @@ _risk_manage_path = require("register.manage", async_scope_resolver=_risk_path_s
 # a bound Process-Owner's PROCESS grant does NOT match the org head, so they cannot publish the org
 # register unilaterally (D-4). NO path resolver — the head has no process / no {risk_id} path param.
 _register_manage_system = require("register.manage")
+# The risk→CAPA spawn gate: capa.create at the risk's OWN process scope (the _risk_path_scope
+# resolver — the risk's process_id, SYSTEM for an org-level row). Mirrors the complaint→CAPA gate
+# (capa.create, not register.manage — the linked_capa_id latch is operational metadata that rides
+# on the spawn authority). This is the FAST pre-lock 403; the service re-authorizes under the row
+# lock to close a process-reassign TOCTOU. Process Owner holds capa.create @ PROCESS.
+_risk_capa_create_path = require("capa.create", async_scope_resolver=_risk_path_scope)
 
 
 # --- serializer ---
@@ -384,3 +395,30 @@ async def update_risk_endpoint(
     row = await update_risk_row(session, authz_sink, request, caller, risk_id, updates=updates)
     governing = await governing_register(session, caller.org_id)
     return _risk(row, governing)
+
+
+@router.post("/risks/{risk_id}/capa")
+async def spawn_capa_for_risk_endpoint(
+    risk_id: uuid.UUID,
+    request: Request,
+    caller: AppUser = Depends(_risk_capa_create_path),
+    session: AsyncSession = Depends(get_session),
+    authz_sink: AuthzAuditSink = Depends(get_authz_audit_sink),
+) -> JSONResponse:
+    """One-click 'treat this risk' — idempotently spawn a CAPA to treat a risk row (clause 6.1 §7,
+    S-risk-3). 201 on the first spawn; 200 on an idempotent replay (the risk already latched a CAPA
+    — the SAME CAPA returned). Gated capa.create at the risk's OWN process scope (the
+    _risk_capa_create_path resolver gives the fast 403; the service re-authorizes under the row
+    lock to close a process-reassign TOCTOU) AND register.read on the locked risk (the caller must
+    be able to read the risk they treat — the service enforces it). The CAPA inherits the risk's
+    process_id + a severity auto-derived from the band; linked_capa_id is set on the live satellite
+    (operational metadata — works at any register head state, no editable gate). Only ``risk`` rows
+    can be treated — an ``opportunity`` row is rejected (422). On a replay, capa.read is re-checked
+    over the latched CAPA's OWN process (it may differ from the risk's current process after a
+    reassign, and the replay returns the CAPA's details). Returns the spawned CAPA (the
+    complaint→CAPA response shape)."""
+    capa, created = await spawn_capa_for_risk(session, authz_sink, request, caller, risk_id)
+    return JSONResponse(
+        status_code=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+        content=await _capa_full(session, capa),
+    )
