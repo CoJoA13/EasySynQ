@@ -38,6 +38,7 @@ from .api.processes import router as processes_router
 from .api.records import router as records_router
 from .api.reports import router as reports_router
 from .api.retention_policies import router as retention_policies_router
+from .api.risk import router as risk_router
 from .api.search import router as search_router
 from .api.setup import router as setup_router
 from .api.users import router as users_router
@@ -158,6 +159,7 @@ def create_app() -> FastAPI:
     app.include_router(mgmt_review_router)  # S-mr-1: clause-9.3 Management Review (mgmtReview.*)
     app.include_router(dcr_router)  # S-dcr-1: Document Change Request core + intake (/dcrs)
     app.include_router(improvement_router)  # S-improvement-1: clause-10.3 Improvement Initiatives
+    app.include_router(risk_router)  # S-risk-1: clause-6.1 Risk & Opportunity register (register.*)
     app.include_router(retention_policies_router)  # S-rec-4: retention-policy CRUD + soft-archive
     app.include_router(ingestion_router)  # S-ing-1: import run + scan/inventory (NOT latch-exempt)
     app.include_router(search_router)  # S10: Postgres-FTS search (filter-not-403, Indexer seam)

@@ -50,6 +50,7 @@ from ._pack_enums import (
 from ._process_enums import ProcessState, SupplierStatus
 from ._record_enums import RecordDispositionState, RecordType
 from ._retention_enums import DispositionAction, RetentionBasis
+from ._risk_enums import RiskOpportunityType, ScoringMethod
 from ._signature_enums import SignatureMeaning, SignatureMethod, SignedObjectType
 from ._vault_enums import (
     ChangeSignificance,
@@ -130,6 +131,7 @@ from .record import Record
 from .retention_policy import RetentionPolicy
 from .review_input import ReviewInput
 from .review_output import ReviewOutput
+from .risk_opportunity import RiskOpportunity
 from .role import Role, RoleAssignment, RoleGrant
 from .scope import Scope
 from .signature_event import SignatureEvent
@@ -259,10 +261,13 @@ __all__ = [
     "ReviewInputType",
     "ReviewOutput",
     "ReviewOutputType",
+    "RiskOpportunity",
+    "RiskOpportunityType",
     "Role",
     "RoleAssignment",
     "RoleGrant",
     "Scope",
+    "ScoringMethod",
     "SetupState",
     "SignatureEvent",
     "SignatureMeaning",

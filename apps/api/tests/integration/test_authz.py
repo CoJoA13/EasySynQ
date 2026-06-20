@@ -194,6 +194,17 @@ async def test_seed_catalog_and_roles(
     clausemap = next(g for g in po_grants if g["permission_key"] == "clauseMap.read")
     assert clausemap["scope_template"]["level"] == "SYSTEM"
 
+    # S-risk-1 (migration 0058): the Process Owner role gains register.manage at PROCESS (the risk
+    # register's row CRUD) — a NEW grant on an EXISTING key (catalog stays 102, R38 additive).
+    # PROCESS
+    # scope, NOT SYSTEM: a SYSTEM template is exempt from bound_scope clamping (authz/repository)
+    # and
+    # would let a bound owner manage every process's risks — the OPPOSITE of clauseMap.read (an
+    # org-level resource → SYSTEM). The bound owner's bound_scope clamps the :assignment_process
+    # placeholder to owned processes.
+    register_manage = next(g for g in po_grants if g["permission_key"] == "register.manage")
+    assert register_manage["scope_template"]["level"] == "PROCESS"
+
 
 # --- PEP enforcement --------------------------------------------------------------------
 
