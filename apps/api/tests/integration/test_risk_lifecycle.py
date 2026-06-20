@@ -312,6 +312,7 @@ async def test_managed_doc_heads_reserved_from_generic_mutations(
         "document.manage_metadata",
         "document.distribute",
         "document.obsolete",
+        "changeRequest.create",
         "objective.manage",
     ):
         await _grant(subj.steward, key)
@@ -364,6 +365,23 @@ async def test_managed_doc_heads_reserved_from_generic_mutations(
     )
     assert obs.status_code == 422, obs.text
     assert obs.json()["errors"][0]["code"] == "risk_register_managed_via_risks"
+
+    # Codex round 2: the RSK head is never a DCR target — a RETIRE/REVISE DCR raise targeting it
+    # 422s at _resolve_target (else a REVISE DCR could adopt the publish-Approved version + release
+    # it, bypassing /risks/register/release's SoD-2; a RETIRE would reach the obsolete chokepoint).
+    dcr = await app_client.post(
+        "/api/v1/dcrs",
+        headers=hs,
+        json={
+            "change_type": "RETIRE",
+            "change_significance": "MAJOR",
+            "reason_class": "other",
+            "reason_text": "retire the register via DCR",
+            "target_document_id": head_id,
+        },
+    )
+    assert dcr.status_code == 422, dcr.text
+    assert dcr.json()["errors"][0]["code"] == "risk_register_managed_via_risks"
 
     # Codex P2: the RSK head is reserved as a link TARGET too (a link from a normal doc TO it).
     sop = await _create(app_client, hs, await _sop_type_id())
