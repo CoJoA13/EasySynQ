@@ -39,6 +39,7 @@ from easysynq_api.services.risk import add_risk_row
 from easysynq_api.services.vault import get_vault_audit_sink
 
 from . import s5_helpers as s5
+from .test_mgmt_review import _MR_KEYS, _create_review
 from .test_processes import _create_process, _grant, _user_id
 from .test_vault import _auth, _create, _ensure_user, _sop_type_id
 
@@ -273,6 +274,116 @@ async def test_register_publish_freeze_and_revision_lifecycle(
         frozen_row = next(r for r in reg2["rows"] if r["id"] == row["id"])
         assert frozen_row["risk_rating"] == 4  # the new governing snapshot carries the re-score
     # the restore_register_head teardown returns the shared head to editable (even on failure).
+
+
+def _mr_risk_input(compile_json: dict[str, Any]) -> dict[str, Any]:
+    """The RISK_OPPORTUNITY_ACTIONS (9.3.2(e)) input row from a compile-inputs response."""
+    by_type = {ri["input_type"]: ri for ri in compile_json["inputs"]}
+    return by_type["RISK_OPPORTUNITY_ACTIONS"]
+
+
+async def test_mr_input_e_reads_governing_register(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    subj: SimpleNamespace,
+    restore_register_head: None,
+) -> None:
+    """S-risk-2: the Management-Review 9.3.2(e) input compiles the register's CONTROLLED
+    read-of-record — the GOVERNING (Effective) frozen snapshot, NOT the live working satellite.
+    Drive a critical, treated+effective risk to Effective, then compile an MR: input-(e) is
+    available with the summary (counts by band + the danger-tone high-risk count + effectiveness
+    over treated rows). Then start a revision and RE-SCORE that row to low on the LIVE satellite —
+    a fresh MR still reads the SAME governing high-risk count (the prior Effective snapshot,
+    unchanged until the next release), while GET /risks shows the live low band. The read-of-record
+    is the frozen snapshot, so
+    the WORM minutes can never freeze the steward's unpublished UnderRevision edits as controlled
+    evidence (spec §3; the restore_register_head teardown returns the shared head to editable)."""
+    await _setup_actors(subj)
+    for key in _MR_KEYS:  # the steward IS the MR owner whose grants gate the per-source reads (F3)
+        await _grant(subj.steward, key)
+    hs = _auth(token_factory, subj.steward)
+    hap = _auth(token_factory, subj.approver)
+    hrl = _auth(token_factory, subj.releaser)
+    await _drive_to_editable(app_client, hs, hap, hrl)
+
+    # a critical (4x5=20), treated + effectiveness-recorded risk on the working satellite.
+    row = await _create_risk(app_client, hs, likelihood=4, severity=5, description="mr-input-e")
+    head_id = row["register_doc_id"]
+    patched = await app_client.patch(
+        f"/api/v1/risks/{row['id']}",
+        headers=hs,
+        json={"treatment": "mitigate the exposure", "effectiveness": "verified effective"},
+    )
+    assert patched.status_code == 200, patched.text
+
+    # publish → approve → (third-party) release → the frozen Effective governing snapshot.
+    assert (await app_client.post("/api/v1/risks/register/publish", headers=hs)).status_code == 200
+    released = await _approve_and_release(app_client, head_id, hap, hrl)
+    assert released["state"] == "Effective"
+
+    # MR #1 — input-(e) is available with the controlled summary over the governing snapshot.
+    rid1 = await _create_review(app_client, hs, "MR reading the governing register")
+    c1 = await app_client.post(f"/api/v1/management-reviews/{rid1}/compile-inputs", headers=hs)
+    assert c1.status_code == 200, c1.text
+    risk1 = _mr_risk_input(c1.json())
+    assert risk1["available"] is True, risk1
+    summary1 = risk1["source_ref"]["summary"]
+    assert set(summary1["by_band"]) == {"critical", "high", "medium", "low", "unscored"}
+    governing_high_risk = summary1["high_risk"]
+    assert governing_high_risk >= 1  # my critical row (others may add; delta-robust)
+    assert summary1["by_band"]["critical"] >= 1
+    assert summary1["effectiveness"]["treated"] >= 1
+    assert summary1["effectiveness"]["recorded"] >= 1
+    assert (
+        summary1["effectiveness"]["recorded"] + summary1["effectiveness"]["pending"]
+        == summary1["effectiveness"]["treated"]
+    )
+
+    # start a revision and RE-SCORE the row to low (4x1=4) on the LIVE satellite. The governing
+    # Effective version is unchanged (its pointer only moves at the next release).
+    assert (
+        await app_client.post("/api/v1/risks/register/start-revision", headers=hs)
+    ).status_code == 200
+    rescored = await app_client.patch(
+        f"/api/v1/risks/{row['id']}", headers=hs, json={"severity": 1}
+    )
+    assert rescored.status_code == 200, rescored.text
+    assert rescored.json()["band"] == "low"  # the LIVE band reflects the re-score
+
+    # GET /risks (the live register) shows the row low — yet the MR's controlled read is governing.
+    listed = await app_client.get("/api/v1/risks", headers=hs)
+    assert next(r["band"] for r in listed.json()["data"] if r["id"] == row["id"]) == "low"
+
+    # MR #2 — a fresh compile during UnderRevision STILL reads the governing snapshot: the high-risk
+    # count is UNCHANGED (the live low edit is invisible to the controlled read-of-record).
+    rid2 = await _create_review(app_client, hs, "MR after the live re-score")
+    c2 = await app_client.post(f"/api/v1/management-reviews/{rid2}/compile-inputs", headers=hs)
+    assert c2.status_code == 200, c2.text
+    risk2 = _mr_risk_input(c2.json())
+    assert risk2["available"] is True, risk2
+    assert risk2["source_ref"]["summary"]["high_risk"] == governing_high_risk
+    assert risk2["source_ref"]["summary"]["by_band"]["critical"] >= 1
+    # the restore_register_head teardown returns the shared head to editable (even on failure).
+
+
+async def test_mr_input_e_gap_row_without_register_read(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """S-risk-2 / F3: an MR owner LACKING register.read yields an available=False
+    RISK_OPPORTUNITY_ACTIONS gap row (insufficient access) — never a 403 of the whole compile, and
+    independent of whether the shared org register has been published. Head-state independent (no
+    register lifecycle driven)."""
+    subject = f"rsk-mr-noreg-{uuid.uuid4().hex[:8]}"
+    for key in _MR_KEYS:
+        await _grant(subject, key)  # mgmtReview.* but NOT register.read
+    h = _auth(token_factory, subject)
+    rid = await _create_review(app_client, h, "MR without register.read")
+    r = await app_client.post(f"/api/v1/management-reviews/{rid}/compile-inputs", headers=h)
+    assert r.status_code == 200, r.text  # NOT a 403 — the compile succeeds, the source gap-rows
+    risk = _mr_risk_input(r.json())
+    assert risk["available"] is False, risk
+    assert risk["source_ref"]["reason"] == "not available (insufficient access)", risk
+    assert "summary" not in risk["source_ref"], risk
 
 
 async def test_publish_and_start_revision_require_system_register_manage(

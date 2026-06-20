@@ -48,13 +48,16 @@ _SOURCE_KEYS = (
     "drift.read",
 )
 
-# The 12 canonical 9.3.2 input types (enum-declaration order). 6 sourced + 6 sourceless gap.
+# The 12 canonical 9.3.2 input types (enum-declaration order). 7 sourced + 5 sourceless gap
+# (S-risk-2 moved RISK_OPPORTUNITY_ACTIONS into the sourced set — the clause-6.1 register's
+# governing read; sourced-but-gap until a register is published OR the owner lacks register.read).
 _SOURCED_TYPES = {
     "OBJECTIVES_STATUS",
     "PROCESS_PERFORMANCE",
     "NONCONFORMITIES_CAPA",
     "MONITORING_RESULTS",
     "AUDIT_RESULTS",
+    "RISK_OPPORTUNITY_ACTIONS",  # sourced-but-gap until a register is published (v1)
     "PRIOR_ACTIONS",  # sourced-but-gap until a 2nd review exists (v1)
 }
 _SOURCELESS_TYPES = {
@@ -62,7 +65,6 @@ _SOURCELESS_TYPES = {
     "CUSTOMER_SATISFACTION",
     "SUPPLIER_PERFORMANCE",
     "RESOURCE_ADEQUACY",
-    "RISK_OPPORTUNITY_ACTIONS",
     "IMPROVEMENT_OPPORTUNITIES",
 }
 
@@ -258,13 +260,17 @@ async def test_submit_twice_is_a_conflict(
 async def test_compile_inputs_writes_all_twelve_rows(
     app_client: AsyncClient, token_factory: Callable[..., str]
 ) -> None:
-    """A fully-granted owner compiles all 12 rows: the 6 sourced rows available=True with a summary,
-    the 6 sourceless gap rows available=False with a reason (F4). PRIOR_ACTIONS is a sourced-but-gap
-    row (no 2nd review yet)."""
+    """A fully-granted owner compiles all 12 rows: the 5 live sourced rows available=True with a
+    summary, the 5 sourceless gap rows available=False with a reason (F4). PRIOR_ACTIONS is a
+    sourced-but-gap row (no 2nd review yet); RISK_OPPORTUNITY_ACTIONS is a sourced-but-gap row here
+    because this owner is NOT granted register.read (the available case — register.read + a
+    published register — is proven by test_risk_lifecycle's governing-register MR test)."""
     subject = f"mr-comp-{uuid.uuid4()}"
     h = _auth(token_factory, subject)
     # The creator IS the review owner (create_document sets owner_user_id=actor.id); grant the union
-    # so every sourced read PDP-passes for the owner.
+    # so every sourced read PDP-passes for the owner. register.read is deliberately EXCLUDED so
+    # RISK_OPPORTUNITY_ACTIONS gap-rows deterministically (independent of whether a sibling test has
+    # published the shared org register — the governing snapshot persists once released).
     await _grant(subject, _MR_KEYS + _SOURCE_KEYS)
     rid = await _create_review(app_client, h, "Fully-granted compile")
 
@@ -298,10 +304,16 @@ async def test_compile_inputs_writes_all_twelve_rows(
     assert set(obj["by_rag"]) == {"green", "amber", "red", "unmeasured"}
     assert obj["on_target"] == obj["by_rag"]["green"]
 
-    # PRIOR_ACTIONS + the six sourceless inputs are gap rows (available=False with a reason).
-    for t in {"PRIOR_ACTIONS"} | _SOURCELESS_TYPES:
+    # PRIOR_ACTIONS + RISK_OPPORTUNITY_ACTIONS (sourced-but-gap here) + the five sourceless inputs
+    # are gap rows (available=False with a reason). RISK_OPPORTUNITY_ACTIONS gap-rows on the missing
+    # register.read grant (a no-access reason), not on a missing source.
+    for t in {"PRIOR_ACTIONS", "RISK_OPPORTUNITY_ACTIONS"} | _SOURCELESS_TYPES:
         assert by_type[t]["available"] is False, by_type[t]
         assert by_type[t]["source_ref"].get("reason"), by_type[t]
+    assert (
+        by_type["RISK_OPPORTUNITY_ACTIONS"]["source_ref"]["reason"]
+        == "not available (insufficient access)"
+    ), by_type["RISK_OPPORTUNITY_ACTIONS"]
 
 
 async def test_compile_inputs_owner_without_audit_read_yields_gap_row_not_403(
