@@ -525,26 +525,34 @@ The `ncr` record also carries an ISO 9001 8.7 **`disposition`** enum and a **`di
 
 ### 8.10b Risks & Opportunities (`/risks`)
 
-The Clause 6.1 risk-and-opportunity register, backed by `risk_opportunity` (`14`). Each item carries real scoring fields so workflow routing on `subject.risk_rating` (`10`) and the high-risk dashboards (`13`) resolve against stored values rather than free text: **`likelihood`**, **`severity`**, **`risk_rating`** (derived/stored from likelihood × severity), and **`scoring_method`** (reconciled per Decisions Register R18).
+The Clause 6.1 risk-and-opportunity register, backed by `risk_opportunity` (`14`) as a 1:many satellite of a `kind=DOCUMENT` `RSK` head (the **register-as-Document** model, R49). Each row carries real scoring fields so the high-risk dashboards (`13`) resolve against stored values rather than free text: **`likelihood`**, **`severity`**, **`risk_rating`** (`likelihood × severity`, **server-derived/stored + re-derived on every write**), and **`scoring_method`** (R18). The serializer also returns the **graded band** — `band` / `band_tone` / `band_rank` — graded against the **GOVERNING (Effective) version's FROZEN per-method criteria**, never live code (R49 L2 derive-and-freeze). The rows are **version content**, FSM-revision-edited; the head goes Draft → publish (freeze) → release → Effective, read-only while Effective until the next revision (S-risk-1b).
+
+> **As-built (S-risk-1 … 4b):** **gates ride the already-seeded `register.read` / `register.manage`** (PROCESS-scoped) — **NO new key, catalog stays 102**; this **reconciles** the earlier aspirational `risk.read` / `risk.create` / `risk.update` (a 3→2 coarsening: `risk.read → register.read`, `risk.create` + `risk.update → register.manage`; spec §8). The register-Document lifecycle rides `document.*`. `GET /risks` is a **filter-not-403** per-row read (a no-grant caller gets `200`+empty); the single-row GET enforces at the row's PROCESS scope. `risk_rating`/`band` are server-owned (not client-settable).
 
 ```json
 {
-  "id": "018f...rsk",
-  "type": "risk_opportunity",
-  "title": "Supplier qualification gap",
-  "likelihood": 4,
-  "severity": 5,
-  "risk_rating": 20,
-  "scoring_method": "5x5_matrix"
+  "id": "018f...rsk", "register_doc_id": "018f...hd",
+  "type": "risk", "description": "Supplier qualification gap",
+  "process_id": null, "clause_id": null,
+  "likelihood": 4, "severity": 5, "risk_rating": 20, "scoring_method": "5x5_matrix",
+  "band": "critical", "band_tone": "danger", "band_rank": 0,
+  "treatment": null, "effectiveness": null, "linked_capa_id": null,
+  "row_version": 1, "created_at": "…", "updated_at": "…"
 }
 ```
 
 | Method | Path | Perm | Idem | Notes |
 |---|---|---|---|---|
-| GET | `/risks` | `risk.read` | — | Filter `risk_rating`, `scoring_method`, `process_id`. Sort `-risk_rating` (high-risk views). |
-| POST | `/risks` | `risk.create` | ✓ | `{ title, likelihood, severity, scoring_method, process_id? }`. Server derives/stores `risk_rating` (reconciled per Decisions Register R18). |
-| GET | `/risks/{id}` | `risk.read` | — | `expand=process`. |
-| PATCH | `/risks/{id}` | `risk.update` | — | Re-score (`likelihood`, `severity`, `scoring_method`); `risk_rating` re-derived. `If-Match`. |
+| GET | `/risks` | `register.read` | — | Filter-not-403 per-row read; the SPA does search / band+type filter / sort client-side. |
+| POST | `/risks` | `register.manage` | — | `{ type, description, likelihood, severity, scoring_method?, process_id?, clause_id?, treatment? }`; enforced @ the body `process_id` (SYSTEM for an org-level row); `risk_rating` server-derived. `409` unless the head is Draft/UnderRevision; lazily mints the `RSK` head on the first row. |
+| GET | `/risks/{id}` | `register.read` | — | Enforced at the row's PROCESS scope (403-on-deny). |
+| PATCH | `/risks/{id}` | `register.manage` | — | Partial; re-score re-derives `risk_rating`; a `process_id` reassign re-enforces over the new target; `scoring_method` write-once. `409` unless the head is editable. |
+| GET | `/risks/summary` | `register.read` | — | **(S-risk-4a)** The high-risk read-of-record for doc-13/Home — `summarize_register` over the GOVERNING snapshot → `{ published, total, by_band, high_risk, by_type, effectiveness }`. Org-level enforce (SYSTEM), 403-on-deny — NOT a per-row filter; `published:false`+zeros pre-first-release. Mounted before `/risks/{risk_id}`. |
+| GET | `/risks/register` | (any member) | — | **(S-risk-1b)** The head lifecycle status `{ exists, register_doc_id, identifier, state, current_effective_version_id, has_governing }` (org-level, not row-sensitive). |
+| POST | `/risks/register/start-revision` | `register.manage` @ SYSTEM | — | **(S-risk-1b)** T7 (Effective→UnderRevision) — reopen the edit window. `409` unless Effective. |
+| POST | `/risks/register/publish` | `register.manage` @ SYSTEM | — | **(S-risk-1b)** Freeze the working rows + per-method criteria into a new version and submit for review. `409` unless Draft/UnderRevision; rejects a zero-row register. |
+| POST | `/risks/register/release` | `document.release` @ SYSTEM | — | **(S-risk-1b)** T6 (Approved→Effective) over the SoD-2-enriched scope (author/approver ≠ releaser); the shared INV-1 SERIALIZABLE cutover. |
+| POST | `/risks/{risk_id}/capa` | `capa.create` | — | **(S-risk-3)** One-click idempotent treat-spawn — latches `linked_capa_id` under a `FOR UPDATE` lock + mints a `source=risk` CAPA (inherits the risk's process; band-derived severity). 201 new / 200 replay (re-checks `capa.read` over the latched CAPA's process). Risks only (an `opportunity` → 422). Works at any head state. |
 
 ### 8.11 CAPAs (`/capas`)
 

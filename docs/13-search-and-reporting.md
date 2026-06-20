@@ -291,6 +291,8 @@ RAG colors come from **explicit, org-configurable, audited thresholds** stored a
 
 Center hub tile: **mandatory-item coverage** (`★` set) as a single RAG ("19/20 mandatory items current"). My Tasks rail (reconciled per Decisions Register R23; approvals, reviews, CAPAs, acknowledgements assigned to me) sits beside the wheel.
 
+> **As-built (S-risk-4a/4b, R49):** the PLAN "high-risk register items" tile reads **`GET /risks/summary`** — `summarize_register` over the register's **GOVERNING (Effective) frozen snapshot** → `{ published, total, by_band, high_risk, by_type, effectiveness }`, where `high_risk` is the danger-tone (High ∪ Critical) count (the controlled read-of-record, never the live working satellite). Gated `register.read` @ SYSTEM (org-level). The Home PLAN card surfaces it as a single high-risk `StatLine` (an honest "no published register yet" line pre-first-release); the full **Risk register page** (`/risks`) adds a 5×5-matrix SVG, the row register, and a detail drawer with the risk→CAPA spawn seam. Per N6/N9 the matrix + band pills are calm tone+glyph+label, not a verdict.
+
 ### 5.2 Management-Review dashboard (Clause 9.3)
 
 **Persona:** **Mara (Quality Manager)**, presented to **top management**. **Goal:** assemble, in-meeting and as an exportable pack, the full **9.3 input set** so the review and its outputs are evidenced. This dashboard is the spine of UJ-5/UJ-7 prep and is exportable as the management-review report (§7).
