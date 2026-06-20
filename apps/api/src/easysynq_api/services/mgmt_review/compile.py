@@ -1,17 +1,18 @@
 """compile_inputs (S-mr-1, clause 9.3.2) — the owner-grant-gated input compiler.
 
-``compile_inputs(session, review, owner)`` (Draft only) attempts each of the six sourced 9.3.2
+``compile_inputs(session, review, owner)`` (Draft only) attempts each of the seven sourced 9.3.2
 reads **gated on the review OWNER's grants** (the MR document's ``owner_user_id``), not the
 caller's — so the frozen 9.3 evidence is deterministic regardless of which authorized preparer
 triggered the compile. A source the owner can't read becomes a named ``available=False`` gap row
-(fail-closed per source, F3) — NEVER a 403 of the whole compile. The remaining six 9.3.2 inputs
-have no backend source yet and ship as fixed-reason gap rows.
+(fail-closed per source, F3) — NEVER a 403 of the whole compile. The remaining five 9.3.2 inputs
+have no backend source yet and ship as fixed-reason gap rows. (9.3.2(e) RISK_OPPORTUNITY_ACTIONS
+joined the sourced set in S-risk-2 — the clause-6.1 register's governing snapshot, R49.)
 
 ⚠ F3 traps (load-bearing):
 1. Gate on the OWNER's grants via the NON-auditing PDP path (``gather_grants`` + ``authorize`` at
    ``ResourceContext.system()`` — NOT ``pep.evaluate``/``enforce``/``require``, which emit an authz
    audit row per probe + raise 403). A typo'd key string returns empty grants → deny → a silent
-   gap row, so the six key strings are copied EXACTLY from the live endpoint ``require(...)`` calls.
+   gap row, so the key strings are copied EXACTLY from the live endpoint ``require(...)`` calls.
 2. The summaries are AS-OF snapshots (counts/RAG), not live queries retained for read-time.
 3. Re-compile REPLACES the working ``review_input`` set (delete-then-insert) in one txn; Draft-only.
 """
@@ -42,15 +43,17 @@ from ...domain.mgmt_review.inputs import (
     summarize_process_perf,
     summarize_scorecard,
 )
+from ...domain.risk.summary import summarize_register
 from ...problems import ProblemException
 from ..audits import repository as audits_repo
 from ..authz import gather_grants
 from ..capa import repository as capa_repo
 from ..objectives import compute_scorecard
 from ..reports import compute_checklist
+from ..risk import governing_register
 from ..vault import drift_report
 
-# The six sourced reads' permission keys — copied VERBATIM from the live endpoint require(...)
+# The sourced reads' permission keys — copied VERBATIM from the live endpoint require(...)
 # calls (a typo silently gap-rows everything; F3 trap 2). Complaints ride record.read (they are
 # ad-hoc records — capa.py:294 _complaint_read = require("record.read"); there is no complaint.read
 # key in the catalog).
@@ -62,18 +65,24 @@ _KEY_COMPLAINT = "record.read"
 _KEY_KPI = "kpi.read"
 _KEY_CHECKLIST = "report.compliance_checklist.read"
 _KEY_DRIFT = "drift.read"
+# 9.3.2(e) reads the clause-6.1 Risk & Opportunity register's CONTROLLED (governing) snapshot — the
+# register rows ride the seeded register.read key (S-risk, R49); no risk.* key exists.
+_KEY_REGISTER = "register.read"
 
 _REASON_NO_ACCESS = "not available (insufficient access)"
 _REASON_NO_SOURCE = "not available (no structured source)"
 _REASON_NO_PRIOR = "not available (no prior released review)"
+_REASON_NO_REGISTER = "not available (no published register)"
 
-# The six sourceless 9.3.2 inputs (b/c1/c7/d/e/f) — honest fixed-reason gap rows (s3/F4).
+# The five sourceless 9.3.2 inputs (b/c1/c7/d/f) — honest fixed-reason gap rows (s3/F4). 9.3.2(e)
+# RISK_OPPORTUNITY_ACTIONS left this set in S-risk-2 — it is now a sourced read of the clause-6.1
+# register's governing snapshot (a gap row only when the owner lacks register.read or no register
+# has been published yet — the PRIOR_ACTIONS-until-a-release shape).
 _SOURCELESS_GAPS = (
     ReviewInputType.CONTEXT_CHANGES,
     ReviewInputType.CUSTOMER_SATISFACTION,
     ReviewInputType.SUPPLIER_PERFORMANCE,
     ReviewInputType.RESOURCE_ADEQUACY,
-    ReviewInputType.RISK_OPPORTUNITY_ACTIONS,
     ReviewInputType.IMPROVEMENT_OPPORTUNITIES,
 )
 
@@ -177,6 +186,21 @@ async def _build_row(
         summary = summarize_process_perf(checklist, drift)
         return _source_ref(available=True, summary=summary, reason=None, now=now)
 
+    if input_type is ReviewInputType.RISK_OPPORTUNITY_ACTIONS:
+        # 9.3.2(e) — the clause-6.1 register's CONTROLLED (governing) read-of-record: the frozen
+        # snapshot of the head's current Effective version, NEVER the live working satellite (which
+        # during UnderRevision carries the steward's unpublished edits). The summary is captured
+        # as-of and frozen into the WORM minutes, so it must be the point-in-time governing view
+        # (spec §3/§8; R49 L2 — the band grades against the governing frozen criteria). A Draft-only
+        # register (no Effective version yet) is a gap row, the PRIOR_ACTIONS-until-a-release shape.
+        if not await _owner_holds(session, owner, _KEY_REGISTER):
+            return _source_ref(available=False, summary=None, reason=_REASON_NO_ACCESS, now=now)
+        register = await governing_register(session, org_id)
+        if register is None:
+            return _source_ref(available=False, summary=None, reason=_REASON_NO_REGISTER, now=now)
+        summary = summarize_register(register)
+        return _source_ref(available=True, summary=summary, reason=None, now=now)
+
     if input_type is ReviewInputType.PRIOR_ACTIONS:
         # Gap row until a second review exists (v1 — the prior-MR outputs read lands with the 2nd
         # review; the spec accepts this for the first cycle).
@@ -188,7 +212,7 @@ async def _build_row(
 
 
 # The ordered, positioned 9.3.2 set (the canonical 9.3.2(a)…(f) order — the enum's declaration
-# order). Sourced types resolve through _build_row; the six sourceless ones are fixed gap rows.
+# order). Sourced types resolve through _build_row; the five sourceless ones are fixed gap rows.
 _INPUT_ORDER: tuple[ReviewInputType, ...] = tuple(ReviewInputType)
 
 
