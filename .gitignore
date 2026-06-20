@@ -40,6 +40,8 @@ npm-debug.log*
 infra/data/
 qms-mirror/
 backups/
+# .import-source/ = the S-ing-1 worker :ro import mount (the org's source documents; D1 — never in git)
+.import-source/
 .claude/scheduled_tasks.lock
 .claude/settings.local.json
 .claude/workflows/
