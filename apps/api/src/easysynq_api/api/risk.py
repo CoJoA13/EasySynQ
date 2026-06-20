@@ -31,6 +31,7 @@ from ..db.session import get_session
 from ..domain.authz import RequestContext, ResourceContext, authorize
 from ..domain.risk.register_content import resolve_criteria
 from ..domain.risk.rules import BAND_RANK, BAND_TONE, risk_band
+from ..domain.risk.summary import summarize_register
 from ..problems import ProblemException
 from ..services.authz import (
     AuthzAuditSink,
@@ -321,6 +322,35 @@ async def release_register_endpoint(
     # ``expire_all`` lazy-loads an attribute in the sync serializer (MissingGreenlet).
     released = await release(caller, head.id, vault_sink, sig_sink)
     return _register_status(released)
+
+
+# register.read at the DEFAULT SYSTEM scope — the high-risk summary is an org-wide CONTROLLED read
+# (the read-of-record for the doc-13 dashboard / Home PLAN tile), gated identically to the S-risk-2
+# Management-Review input-(e) consumer: a SYSTEM register.read matches (QMS Owner / Auditor); a
+# no-grant caller gets 403. NOT a per-row filter — this is a cross-surface summary, org-wide BY
+# DESIGN (the named cross-cutting "should sourced summaries honor per-process denies" deferral stays
+# closed here, for consistency with every other sourced MR/dashboard summary).
+_register_read_system = require("register.read")
+
+
+@router.get("/risks/summary")
+async def risk_summary_endpoint(
+    caller: AppUser = Depends(_register_read_system),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """The org's Risk & Opportunity high-risk summary (the doc-13 / Home PLAN seam, S-risk-4a).
+
+    Projects the GOVERNING (current Effective) snapshot via pure ``summarize_register``: the
+    CONTROLLED read-of-record, never the live working satellite (an UnderRevision edit is
+    invisible until the next publish/release; the MR input-(e) discipline, S-risk-2). ``high_risk``
+    is the danger-tone (High and Critical) count. Pre-first-release (no published register →
+    ``governing`` is ``None``) returns ``published: false`` + an all-zero summary, so a brand-new
+    working register reads honestly as 'no published register yet' rather than a misleading
+    '0 high-risk'. Gated register.read @ SYSTEM (org-level)."""
+    governing = await governing_register(session, caller.org_id)
+    # ``summarize_register`` reads criteria only when a row needs grading, so the empty register
+    # never touches it (the all-zero shape is unit-proven — see test_risk_summary.py).
+    return {"published": governing is not None, **summarize_register(governing or {"rows": []})}
 
 
 @router.get("/risks/{risk_id}")
