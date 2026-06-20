@@ -571,3 +571,50 @@ async def test_row_write_serializes_on_head_lock(
     finally:
         await worker.close()
         await locker.close()
+
+
+async def test_spawn_capa_works_while_register_effective(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    subj: SimpleNamespace,
+    restore_register_head: None,
+) -> None:
+    """S-risk-3 operational decision: the risk→CAPA spawn works at ANY head state, INCLUDING
+    Effective — ``linked_capa_id`` is operational metadata (excluded from the frozen version
+    content), so the spawn has NO editable gate (unlike add_risk_row / update_risk_row, which 409
+    while Effective). Drive the register Effective, then prove a PATCH 409s but the spawn 201s and
+    latches the live row. The restore_register_head teardown returns the head to editable."""
+    await _setup_actors(subj)
+    await _grant(subj.steward, "capa.create")  # the steward spawns an org-level CAPA (SYSTEM scope)
+    await _grant(subj.steward, "capa.read")
+    hs = _auth(token_factory, subj.steward)
+    hap = _auth(token_factory, subj.approver)
+    hrl = _auth(token_factory, subj.releaser)
+    await _drive_to_editable(app_client, hs, hap, hrl)
+
+    row = await _create_risk(app_client, hs, likelihood=4, severity=5)  # 20 → critical (org-level)
+    head_id = row["register_doc_id"]
+    assert (await app_client.post("/api/v1/risks/register/publish", headers=hs)).status_code == 200
+    released = await _approve_and_release(app_client, head_id, hap, hrl)
+    assert released["state"] == "Effective"
+
+    # the edit gate now bites a normal row write (the S-risk-1 read-only-while-Effective invariant).
+    blocked = await app_client.patch(f"/api/v1/risks/{row['id']}", headers=hs, json={"severity": 1})
+    assert blocked.status_code == 409, blocked.text
+
+    # ...but the spawn is a SEPARATE operational path with no editable gate → 201 while Effective.
+    spawn = await app_client.post(f"/api/v1/risks/{row['id']}/capa", headers=hs)
+    assert spawn.status_code == 201, spawn.text
+    capa = spawn.json()
+    assert capa["source"] == "risk"
+    assert capa["severity"] == "Critical"  # the governing-graded critical band → CAPA Critical
+
+    # the live row carries linked_capa_id (operational display) even while Effective.
+    detail = await app_client.get(f"/api/v1/risks/{row['id']}", headers=hs)
+    assert detail.json()["linked_capa_id"] == capa["id"]
+
+    # idempotent replay while Effective — the SAME CAPA, 200.
+    again = await app_client.post(f"/api/v1/risks/{row['id']}/capa", headers=hs)
+    assert again.status_code == 200, again.text
+    assert again.json()["id"] == capa["id"]
+    # the restore_register_head teardown returns the shared head to editable (even on failure).

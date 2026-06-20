@@ -5126,6 +5126,34 @@ paths:
         "404": { $ref: "#/components/responses/ProblemResponse" }
         "409": { $ref: "#/components/responses/ProblemResponse" }
         "422": { $ref: "#/components/responses/ProblemResponse" }
+  /risks/{risk_id}/capa:
+    post:
+      tags: [risk]
+      operationId: spawnCapaForRisk
+      summary: >-
+        One-click "treat this risk" — idempotently spawn a CAPA to treat a risk row (clause 6.1,
+        S-risk-3). Returns 201 on the first spawn, 200 on an idempotent replay (the risk already
+        latched a CAPA — the SAME CAPA returned; the risk's linked_capa_id is the latch, held under a
+        FOR UPDATE row lock). The spawned CAPA inherits the risk's process_id and a severity
+        auto-derived from its band (Critical→Critical, High→Major, Medium/Low→Minor); source=risk.
+        linked_capa_id is operational metadata (not frozen version content) so the spawn works at any
+        register head state. Needs capa.create at the risk's own PROCESS scope (SYSTEM for an
+        org-level / process-less risk).
+      parameters:
+        - { name: risk_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "201":
+          description: A newly spawned CAPA (close_state=Raised, source=risk).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Capa" }
+        "200":
+          description: The existing CAPA (idempotent replay — the risk already spawned a CAPA).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Capa" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
 
   /objectives:
     post:
@@ -7343,8 +7371,10 @@ components:
 
     CapaSource:
       type: string
-      description: review_output is reserved for the deferred Management-Review family (never written in v1).
-      enum: [audit, process, complaint, review_output]
+      description: >-
+        review_output is reserved for the deferred Management-Review family (never written in v1).
+        risk tags a CAPA spawned to treat a risk_opportunity row (S-risk-3).
+      enum: [audit, process, complaint, review_output, risk]
     NcSeverity:
       type: string
       enum: [Critical, Major, Minor]

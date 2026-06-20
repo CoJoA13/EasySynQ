@@ -27,10 +27,12 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...db.models._audit_enums import ActorType, AuditObjectType, EventType
+from ...db.models._capa_enums import CapaSource, NcSeverity
 from ...db.models._risk_enums import RiskOpportunityType, ScoringMethod
 from ...db.models._vault_enums import DocumentCurrentState
 from ...db.models.app_user import AppUser
 from ...db.models.audit_event import AuditEvent
+from ...db.models.capa import Capa
 from ...db.models.clause import Clause
 from ...db.models.clause_mapping import ClauseMapping
 from ...db.models.document_type import DocumentType
@@ -38,11 +40,15 @@ from ...db.models.documented_information import DocumentedInformation
 from ...db.models.process import Process
 from ...db.models.risk_opportunity import RiskOpportunity
 from ...domain.authz import ResourceContext
-from ...domain.risk.rules import risk_rating
+from ...domain.risk.register_content import resolve_criteria
+from ...domain.risk.rules import RiskBand, risk_band, risk_rating
 from ...problems import ProblemException
 from ..authz import AuthzAuditSink, enforce
+from ..capa import repository as capa_repo
+from ..capa.service import build_capa
 from ..vault import VaultAuditSink, create_document
 from ..vault import repository as vault_repo
+from .queries import governing_register
 
 # A per-org transaction advisory lock that serializes the concurrent *first* head-create. The
 # two-arg form (ns, oid) is distinct from the single-arg global LOCK_* keys; it auto-releases at the
@@ -383,3 +389,110 @@ async def update_risk_row(
     await session.commit()
     await session.refresh(row)
     return row
+
+
+# The risk band → CAPA severity map for the auto-derived spawn severity (S-risk-3): the 4-band RAG
+# collapses onto the 3-value NcSeverity — Critical→Critical, High→Major, {Medium,Low}→Minor — so
+# only the highest risks route the CAPA's two-tier (QMS-Owner → Top-Management) Critical approval.
+# Total over RiskBand (``unscored`` is unreachable for a real row — likelihood/severity are NOT NULL
+# so risk_rating ≥ 1 → a real band — but mapped defensively so the lookup never KeyErrors).
+_BAND_TO_CAPA_SEVERITY: dict[RiskBand, NcSeverity] = {
+    RiskBand.critical: NcSeverity.Critical,
+    RiskBand.high: NcSeverity.Major,
+    RiskBand.medium: NcSeverity.Minor,
+    RiskBand.low: NcSeverity.Minor,
+    RiskBand.unscored: NcSeverity.Minor,
+}
+
+
+async def spawn_capa_for_risk(
+    session: AsyncSession,
+    authz_sink: AuthzAuditSink,
+    request: Request,
+    actor: AppUser,
+    risk_id: uuid.UUID,
+) -> tuple[Capa, bool]:
+    """Idempotently spawn a CAPA to TREAT a risk row (clause 6.1 §7; the complaint→CAPA shape).
+    Returns ``(capa, created)`` — ``created`` is False on an idempotent replay (the risk already
+    latched a CAPA).
+
+    ``linked_capa_id`` is OPERATIONAL metadata (S-risk-3 — excluded from the frozen version
+    content), so the spawn works at ANY register head state: there is NO editable gate and NO head
+    lock — only the RISK row is held ``FOR UPDATE`` across check-then-spawn (R16's real idempotency
+    guard is the parent-row lock, NOT a UNIQUE: two spawns would otherwise mint two distinct CAPA
+    ids that never collide). ``get_risk(for_update=True)`` forces ``populate_existing`` so the
+    locking load overrides the route's pre-lock identity-mapped read (the S-drift-1 trap: the
+    ``_risk_path_scope`` resolver already ``session.get``-loaded the row during authz).
+
+    Authz: ``capa.create`` is re-authorized over the row's CURRENT (freshly-locked) ``process_id``
+    here — the route gated a PRE-lock read a concurrent PATCH-reassign may have invalidated, and the
+    spawned CAPA inherits that process, so this re-auth is the real escalation boundary (the
+    S-records-W TOCTOU close). The CAPA's ``process_id`` is the risk's OWN already-authorized
+    column, so the spawn does not re-open the records/CAPA escalation surface (spec §7).
+    ``severity`` auto-derives from the governing-graded band."""
+    row = await get_risk(session, risk_id, for_update=True)
+    if row is None or row.org_id != actor.org_id:
+        raise ProblemException(status=404, code="not_found", title="Risk not found")
+    # TOCTOU close: re-authorize capa.create over the row's freshly-locked process (SYSTEM when None
+    # → an org-level risk's CAPA is org-level, SYSTEM-only). A null process_id reaches here only for
+    # a SYSTEM grant; a bound owner whose row was reassigned out from under them is denied.
+    await enforce(
+        session, authz_sink, request, actor, "capa.create", _risk_resource(row.process_id)
+    )
+    if row.linked_capa_id is not None:
+        existing = await capa_repo.get_capa(session, row.linked_capa_id)
+        await session.commit()  # release the FOR UPDATE lock promptly (no mutation on the replay)
+        # Org-check the loaded CAPA too (defense-in-depth) — a risk can only ever latch a same-org
+        # CAPA the spawn itself created.
+        if existing is None or existing.org_id != actor.org_id:
+            raise ProblemException(status=404, code="not_found", title="CAPA not found")
+        return existing, False
+
+    # Auto-derive the CAPA severity from the live band, graded against the GOVERNING frozen criteria
+    # (R49 L2 — the same basis the serializer + MR summary use; never a live module constant).
+    governing = await governing_register(session, actor.org_id)
+    band = risk_band(row.risk_rating, resolve_criteria(governing, row.scoring_method))
+    severity = _BAND_TO_CAPA_SEVERITY[band]
+    head = await session.get(DocumentedInformation, row.register_doc_id)
+    head_identifier = head.identifier if head is not None else None
+    capa = await build_capa(
+        session,
+        actor,
+        title=f"CAPA — treat risk: {row.description}"[:200],
+        severity=severity,
+        source=CapaSource.risk,
+        process_id=row.process_id,
+        raised_block={
+            "source": CapaSource.risk.value,
+            "risk_id": str(row.id),
+            "register_doc_id": str(row.register_doc_id),
+            "risk_identifier": head_identifier,
+            "risk_rating": row.risk_rating,
+            "band": band.value,
+            "risk_description": row.description,
+            "severity": severity.value,
+        },
+        _commit=False,
+    )
+    row.linked_capa_id = capa.id
+    session.add(
+        AuditEvent(
+            org_id=actor.org_id,
+            occurred_at=datetime.datetime.now(datetime.UTC),
+            actor_id=actor.id,
+            actor_type=ActorType.user,
+            event_type=EventType.RISK_SPAWNED_CAPA,
+            object_type=AuditObjectType.document,
+            object_id=row.register_doc_id,
+            scope_ref=head_identifier,
+            after={
+                "risk_id": str(row.id),
+                "linked_capa_id": str(capa.id),
+                "band": band.value,
+                "severity": severity.value,
+            },
+        )
+    )
+    await session.commit()
+    await session.refresh(row)
+    return capa, True

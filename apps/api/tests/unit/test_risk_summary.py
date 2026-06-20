@@ -41,7 +41,6 @@ def _row(
         "scoring_method": method.value,
         "treatment": treatment,
         "effectiveness": effectiveness,
-        "linked_capa_id": None,
         "row_version": 1,
     }
 
