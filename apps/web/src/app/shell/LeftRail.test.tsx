@@ -72,8 +72,9 @@ test("Objectives sits under the PLAN section (gated on objective.read)", async (
 test("each phase's clause-filter links nest under that phase heading", async () => {
   renderWithProviders(<LeftRail />, { route: "/library" });
   const plan = await screen.findByRole("group", { name: "PLAN section" });
-  // a PLAN clause (4/5/6) renders as a Library filter link inside the PLAN group
-  expect(within(plan).getByText("Clauses")).toBeInTheDocument();
+  // a PLAN clause (4/5/6) renders as a Library filter link inside the PLAN group. The PLAN section now
+  // renders eagerly (the ungated Risk-register link), so await the async clauses sub-heading.
+  expect(await within(plan).findByText("Clauses")).toBeInTheDocument();
   expect(
     within(plan)
       .getAllByRole("link")

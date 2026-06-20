@@ -810,7 +810,7 @@ export type ImportMutationResult = Record<string, unknown>;
 
 // ---- S-web-7 (Nonconformity & CAPA) -----------------------------------------------------
 export type NcSeverity = "Critical" | "Major" | "Minor";
-export type CapaSource = "audit" | "process" | "complaint" | "review_output";
+export type CapaSource = "audit" | "process" | "complaint" | "review_output" | "risk";
 export type CapaCloseState =
   | "Raised"
   | "Containment"
@@ -1642,4 +1642,86 @@ export interface InitiativeSpawnBody {
   target_outcome: string | null;
   owner_user_id: string | null;
   process_id?: string | null; // MR-output spawn only
+}
+
+// ---- S-risk-4 (Risk & Opportunity register, clause 6.1) — pinned to api/risk.py serializers ----
+export type RiskType = "risk" | "opportunity";
+// The RAG band, server-derived from risk_rating against the governing version's FROZEN criteria
+// (never re-graded client-side). unscored is forward-compat (v1 always derives a rating ≥1 → low+).
+export type RiskBand = "critical" | "high" | "medium" | "low" | "unscored";
+export type RiskScoringMethod = "5x5_matrix";
+// The RSK head is a kind=DOCUMENT subtype → its lifecycle state is the 7-state document one.
+export type RiskRegisterState = DocumentCurrentState;
+
+// One risk row — api/risk.py `_risk(...)`. band/band_tone/band_rank are server-graded; the FE renders
+// them verbatim (R49 L2). band_tone is the StatusBadge Tone subset for the four bands.
+export interface RiskRow {
+  id: string;
+  register_doc_id: string;
+  type: RiskType;
+  description: string;
+  process_id: string | null;
+  clause_id: string | null;
+  likelihood: number;
+  severity: number;
+  risk_rating: number;
+  scoring_method: RiskScoringMethod;
+  band: RiskBand;
+  band_tone: "danger" | "warning" | "success" | "neutral";
+  band_rank: number;
+  treatment: string | null;
+  effectiveness: string | null;
+  linked_capa_id: string | null;
+  row_version: number;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface RiskListResponse {
+  data: RiskRow[];
+}
+
+// The RSK register head lifecycle status — api/risk.py `_register_status` / `_NO_REGISTER`.
+export interface RiskRegisterStatus {
+  exists: boolean;
+  register_doc_id: string | null;
+  identifier: string | null;
+  state: RiskRegisterState | null;
+  current_effective_version_id: string | null;
+  has_governing: boolean;
+}
+
+// GET /risks/summary — the governing high-risk read-of-record (S-risk-4a). published:false + all-zero
+// counts before the first publish/release. high_risk = critical + high (the danger-tone set).
+export interface RiskSummary {
+  published: boolean;
+  total: number;
+  by_band: Record<RiskBand, number>;
+  high_risk: number;
+  by_type: Record<RiskType, number>;
+  effectiveness: { treated: number; recorded: number; pending: number };
+}
+
+export interface RiskCreateBody {
+  type: RiskType;
+  description: string;
+  likelihood: number;
+  severity: number;
+  scoring_method?: RiskScoringMethod;
+  process_id?: string;
+  clause_id?: string;
+  treatment?: string;
+}
+
+// Partial PATCH — omitted ≠ null; an explicit null clears a nullable field. scoring_method is
+// write-once (server-rejected on change); risk_rating is server-derived (not settable).
+export interface RiskUpdateBody {
+  type?: RiskType;
+  description?: string;
+  likelihood?: number;
+  severity?: number;
+  process_id?: string | null;
+  clause_id?: string | null;
+  treatment?: string | null;
+  effectiveness?: string | null;
 }

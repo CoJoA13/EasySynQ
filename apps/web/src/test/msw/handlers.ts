@@ -42,6 +42,10 @@ import type {
   ObjectiveScorecard,
   ReviewInput,
   ReviewOutput,
+  RiskListResponse,
+  RiskRegisterStatus,
+  RiskRow,
+  RiskSummary,
   SupersededCopies,
   Task,
   WorkflowInstance,
@@ -2348,7 +2352,130 @@ export const leadershipAuthTask = {
   subject_title: "Quality Policy",
 } satisfies Task;
 
+// ---- S-risk-4 Risk & Opportunity register fixtures (pinned to api/risk.py _risk / _register_status
+// + domain/risk/summary.summarize_register + api/capa.py _capa_full) ----
+const RISK_HEAD_ID = "d0c00000-0000-0000-0000-0000000000aa";
+function riskRow(over: Partial<RiskRow> & Pick<RiskRow, "id">): RiskRow {
+  return {
+    register_doc_id: RISK_HEAD_ID,
+    type: "risk",
+    description: "A risk",
+    process_id: null,
+    clause_id: null,
+    likelihood: 4,
+    severity: 5,
+    risk_rating: 20,
+    scoring_method: "5x5_matrix",
+    band: "critical",
+    band_tone: "danger",
+    band_rank: 0,
+    treatment: null,
+    effectiveness: null,
+    linked_capa_id: null,
+    row_version: 1,
+    created_at: "2026-06-20T09:00:00+00:00",
+    updated_at: "2026-06-20T09:00:00+00:00",
+    ...over,
+  } satisfies RiskRow;
+}
+
+export const riskListFixture = {
+  data: [
+    riskRow({
+      id: "ab000001-0001-0001-0001-000000000001",
+      description: "Supplier single point of failure",
+    }),
+    riskRow({
+      id: "ab000002-0002-0002-0002-000000000002",
+      description: "Untrained operators on the new line",
+      likelihood: 3,
+      severity: 4,
+      risk_rating: 12,
+      band: "high",
+      band_tone: "danger",
+      band_rank: 1,
+      treatment: "Roll out the training matrix",
+    }),
+    riskRow({
+      id: "ab000003-0003-0003-0003-000000000003",
+      type: "opportunity",
+      description: "Automate the inspection step",
+      likelihood: 2,
+      severity: 3,
+      risk_rating: 6,
+      band: "medium",
+      band_tone: "warning",
+      band_rank: 2,
+    }),
+    riskRow({
+      id: "ab000004-0004-0004-0004-000000000004",
+      description: "Minor labelling drift",
+      likelihood: 1,
+      severity: 2,
+      risk_rating: 2,
+      band: "low",
+      band_tone: "success",
+      band_rank: 3,
+      treatment: "Tighten the label QC",
+      effectiveness: "Verified at the next audit",
+      linked_capa_id: "ca000099-0099-0099-0099-000000000099",
+    }),
+  ],
+} satisfies RiskListResponse;
+
+export const riskSummaryFixture = {
+  published: true,
+  total: 4,
+  by_band: { critical: 1, high: 1, medium: 1, low: 1, unscored: 0 },
+  high_risk: 2,
+  by_type: { risk: 3, opportunity: 1 },
+  effectiveness: { treated: 2, recorded: 1, pending: 1 },
+} satisfies RiskSummary;
+
+export const riskRegisterStatusFixture = {
+  exists: true,
+  register_doc_id: RISK_HEAD_ID,
+  identifier: "RSK-001",
+  state: "Effective",
+  current_effective_version_id: "ve000001-0001-0001-0001-000000000001",
+  has_governing: true,
+} satisfies RiskRegisterStatus;
+
+// The risk→CAPA spawn response — _capa_full (no stages key; source:"risk").
+export const riskSpawnedCapaFixture = {
+  id: "ca000099-0099-0099-0099-000000000099",
+  identifier: "REC-000099",
+  title: "Treat: Supplier single point of failure",
+  source: "risk",
+  severity: "Critical",
+  process_id: null,
+  close_state: "Raised",
+  cycle_marker: 0,
+  origin_finding_id: null,
+  raised_by: null,
+  created_at: "2026-06-20T10:00:00+00:00",
+} satisfies Capa;
+
 export const handlers = [
+  http.get("/api/v1/risks", () => HttpResponse.json(riskListFixture)),
+  http.get("/api/v1/risks/summary", () => HttpResponse.json(riskSummaryFixture)),
+  http.get("/api/v1/risks/register", () => HttpResponse.json(riskRegisterStatusFixture)),
+  http.get("/api/v1/risks/:id", ({ params }) => {
+    const row = riskListFixture.data.find((r) => r.id === params.id) ?? riskListFixture.data[0]!;
+    return HttpResponse.json({ ...row, id: String(params.id) });
+  }),
+  http.post("/api/v1/risks", () =>
+    HttpResponse.json(
+      riskRow({ id: "ab0000ff-00ff-00ff-00ff-0000000000ff", description: "New risk" }),
+      { status: 201 },
+    ),
+  ),
+  http.patch("/api/v1/risks/:id", ({ params }) =>
+    HttpResponse.json(riskRow({ id: String(params.id) })),
+  ),
+  http.post("/api/v1/risks/:id/capa", () =>
+    HttpResponse.json(riskSpawnedCapaFixture, { status: 201 }),
+  ),
   // ---- S-improvement-3 Improvement Initiatives (default happy-path; per-test overrides) ----
   // IMPORTANT: the two-segment /…/:id/{stage-events,authorization,request-authorization} routes MUST
   // register BEFORE /…/:id or MSW matches the suffix as :id.
