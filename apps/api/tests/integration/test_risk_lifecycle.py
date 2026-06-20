@@ -19,6 +19,7 @@ independent. Grants are SYSTEM-scope overrides on JIT users; SoD-2: author ≠ a
 
 from __future__ import annotations
 
+import contextlib
 import uuid
 from collections.abc import Callable
 from types import SimpleNamespace
@@ -49,6 +50,24 @@ def subj() -> SimpleNamespace:
         releaser=f"kc-rlf-r-{salt}",
         owner=f"kc-rlf-o-{salt}",
     )
+
+
+@pytest.fixture
+async def restore_register_head(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> Any:
+    """Teardown guard for the head-advancing lifecycle test: restore the shared per-org RSK head to
+    editable so sibling tests' risk-creates succeed — even if the body fails mid-lifecycle (the
+    diff-critic cascade guard; a 500 after release() commits would otherwise leave it Effective).
+    Best-effort (never masks the body's failure); re-derives the steward/approver/releaser auth from
+    subj (the _setup_actors grants persist as DB rows). app_client outlives this teardown (reverse
+    finalizer order)."""
+    yield
+    hs = _auth(token_factory, subj.steward)
+    hap = _auth(token_factory, subj.approver)
+    hrl = _auth(token_factory, subj.releaser)
+    with contextlib.suppress(Exception):
+        await _drive_to_editable(app_client, hs, hap, hrl)
 
 
 async def _create_risk(
@@ -148,12 +167,16 @@ async def _drive_to_editable(
 
 
 async def test_register_publish_freeze_and_revision_lifecycle(
-    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    subj: SimpleNamespace,
+    restore_register_head: None,
 ) -> None:
     """The full controlled-document lifecycle on the shared head: publish freezes (rows+criteria) →
     approve → release → Effective + read-only; then start-revision → re-score → publish → approve →
     release SUPERSEDES v1 in place (new Effective version; v1 → Superseded), the governing snapshot
-    carrying the re-scored row. Restores the head to editable at the end (non-polluting)."""
+    carrying the re-scored row. The restore_register_head teardown returns the head to editable
+    (non-polluting) even if the body fails mid-lifecycle."""
     await _setup_actors(subj)
     hs = _auth(token_factory, subj.steward)
     hap = _auth(token_factory, subj.approver)
@@ -245,11 +268,7 @@ async def test_register_publish_freeze_and_revision_lifecycle(
         reg2 = (v2.metadata_snapshot or {}).get("risk_register")  # type: ignore[union-attr]
         frozen_row = next(r for r in reg2["rows"] if r["id"] == row["id"])
         assert frozen_row["risk_rating"] == 4  # the new governing snapshot carries the re-score
-
-    # restore the shared head to editable (UnderRevision) so other tests' risk-creates succeed.
-    assert (
-        await app_client.post("/api/v1/risks/register/start-revision", headers=hs)
-    ).status_code == 200
+    # the restore_register_head teardown returns the shared head to editable (even on failure).
 
 
 async def test_publish_and_start_revision_require_system_register_manage(

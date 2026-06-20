@@ -304,12 +304,12 @@ async def release_register_endpoint(
         raise ProblemException(status=409, code="conflict", title="No risk register to release")
     resource = await _register_release_scope(session, head)
     await enforce(session, authz_sink, request, caller, "document.release", resource, sig_hook=True)
-    await release(caller, head.id, vault_sink, sig_sink)
-    # release() committed in its own SERIALIZABLE session; this request session's identity map still
-    # holds the pre-release state — expire it so the status re-read refreshes from the DB.
-    session.expire_all()
-    head_after = await find_head(session, caller.org_id)
-    return _register_status(head_after) if head_after is not None else dict(_NO_REGISTER)
+    # release() runs the cutover in its OWN session and returns the doc fully refreshed
+    # (``_cutover``'s ``session.refresh`` + ``expire_on_commit=False`` retain every column on the
+    # detached instance). Read the status off THAT — re-reading via the request session after
+    # ``expire_all`` lazy-loads an attribute in the sync serializer (MissingGreenlet).
+    released = await release(caller, head.id, vault_sink, sig_sink)
+    return _register_status(released)
 
 
 @router.get("/risks/{risk_id}")
