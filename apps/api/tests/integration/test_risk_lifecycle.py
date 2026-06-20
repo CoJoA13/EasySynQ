@@ -19,6 +19,7 @@ independent. Grants are SYSTEM-scope overrides on JIT users; SoD-2: author ≠ a
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import uuid
 from collections.abc import Callable
@@ -29,14 +30,17 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
 
+from easysynq_api.db.models._risk_enums import RiskOpportunityType, ScoringMethod
 from easysynq_api.db.models._vault_enums import DocumentCurrentState, VersionState
 from easysynq_api.db.models.document_version import DocumentVersion
 from easysynq_api.db.models.documented_information import DocumentedInformation
 from easysynq_api.db.session import get_sessionmaker
+from easysynq_api.services.risk import add_risk_row
+from easysynq_api.services.vault import get_vault_audit_sink
 
 from . import s5_helpers as s5
 from .test_processes import _create_process, _grant, _user_id
-from .test_vault import _auth
+from .test_vault import _auth, _create, _ensure_user, _sop_type_id
 
 pytestmark = pytest.mark.integration
 
@@ -304,8 +308,10 @@ async def test_managed_doc_heads_reserved_from_generic_mutations(
     await _grant(subj.steward, "register.manage")
     for key in (
         "document.read",
+        "document.create",
         "document.manage_metadata",
         "document.distribute",
+        "document.obsolete",
         "objective.manage",
     ):
         await _grant(subj.steward, key)
@@ -340,6 +346,34 @@ async def test_managed_doc_heads_reserved_from_generic_mutations(
     assert link.status_code == 422, link.text
     assert link.json()["errors"][0]["code"] == "risk_register_managed_via_risks"
 
+    # Codex P2: the clause-mapping mutation is reserved (a random clause_id 422s on the reject
+    # before the clause is even looked up) — removing the auto 6.1 map would DoS publish's gate.
+    cmap = await app_client.post(
+        f"/api/v1/documents/{head_id}/clause-mappings",
+        headers=hs,
+        json={"clause_id": str(uuid.uuid4()), "is_requirement_level": True},
+    )
+    assert cmap.status_code == 422, cmap.text
+    assert cmap.json()["errors"][0]["code"] == "risk_register_managed_via_risks"
+
+    # Codex P2: generic obsolete is reserved for the RSK head (else the singleton would be retired,
+    # find_head would ignore it, and the next risk would mint a second head orphaning the old rows).
+    obs = await app_client.post(
+        f"/api/v1/documents/{head_id}/obsolete", headers=hs, json={"reason": "retire the register"}
+    )
+    assert obs.status_code == 422, obs.text
+    assert obs.json()["errors"][0]["code"] == "risk_register_managed_via_risks"
+
+    # Codex P2: the RSK head is reserved as a link TARGET too (a link from a normal doc TO it).
+    sop = await _create(app_client, hs, await _sop_type_id())
+    link_to = await app_client.post(
+        f"/api/v1/documents/{sop['id']}/links",
+        headers=hs,
+        json={"to_document_id": head_id, "link_type": "references"},
+    )
+    assert link_to.status_code == 422, link_to.text
+    assert link_to.json()["errors"][0]["code"] == "risk_register_managed_via_risks"
+
     # the fold extends to OBJ: a generic metadata PATCH on an objective head 422s too.
     obj = await app_client.post(
         "/api/v1/objectives",
@@ -358,3 +392,52 @@ async def test_managed_doc_heads_reserved_from_generic_mutations(
     )
     assert obj_meta.status_code == 422, obj_meta.text
     assert obj_meta.json()["errors"][0]["code"] == "objective_managed_via_objectives"
+
+
+async def test_row_write_serializes_on_head_lock(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """Codex P1: add_risk_row / update_risk_row lock the RSK head FOR UPDATE, exactly as
+    publish_register does while it freezes the rows — so a row write cannot interleave with a
+    publish freeze, leaving live content out of the version the approver signs. Proof: while one
+    HOLDS the head lock, a concurrent add_risk_row BLOCKS until it releases, then completes (without
+    the lock it would commit immediately, failing the .done() assertion). The S-records-W
+    held-lock-blocks idiom. Adds rows only → the head stays editable (non-polluting)."""
+    author = f"rsk-ser-{uuid.uuid4().hex[:8]}"
+    await _grant(author, "register.manage")
+    ha = _auth(token_factory, author)
+    first = await _create_risk(app_client, ha)  # mint/find the head + a first row (head editable)
+    head_id = uuid.UUID(first["register_doc_id"])
+
+    sink = get_vault_audit_sink()
+    sm = get_sessionmaker()
+    locker = sm()
+    worker = sm()
+    try:
+        # Hold the head FOR UPDATE, exactly as publish_register / the row writers do.
+        await locker.execute(
+            select(DocumentedInformation)
+            .where(DocumentedInformation.id == head_id)
+            .with_for_update()
+        )
+        actor = await _ensure_user(worker, author)
+        add_task = asyncio.create_task(
+            add_risk_row(
+                worker,
+                sink,
+                actor,
+                type=RiskOpportunityType.risk,
+                description="raced row",
+                likelihood=2,
+                severity=2,
+                scoring_method=ScoringMethod.MATRIX_5X5,
+            )
+        )
+        await asyncio.sleep(0.5)
+        assert not add_task.done(), "add_risk_row did not block on the held head lock"
+        await locker.rollback()  # release the lock → the blocked writer proceeds and serializes
+        row = await asyncio.wait_for(add_task, timeout=10)
+        assert row is not None
+    finally:
+        await worker.close()
+        await locker.close()

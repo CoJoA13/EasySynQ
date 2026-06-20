@@ -207,13 +207,20 @@ async def add_risk_row(
         await _validate_process(session, actor, process_id)
     if clause_id is not None:
         await _validate_clause(session, await _org_framework_id(session, actor.org_id), clause_id)
-    head = await resolve_or_create_head(session, vault_sink, actor)
-    if head.current_state not in _EDITABLE:
+    await resolve_or_create_head(session, vault_sink, actor)
+    # Re-load the head FOR UPDATE so the editable-gate + the insert serialize against a concurrent
+    # publish (which holds the head FOR UPDATE while it freezes the rows): without this lock a row
+    # insert could commit AFTER the freeze + the head moves to InReview, leaving live register
+    # content out of the version the approver signs and un-editable once Effective (Codex P1).
+    # find_head excludes Obsolete → None only on a concurrent retire (RSK is reserved from it).
+    head = await find_head(session, actor.org_id, for_update=True)
+    if head is None or head.current_state not in _EDITABLE:
+        state = head.current_state.value if head is not None else "obsolete"
         raise ProblemException(
             status=409,
             code="conflict",
             title="Risk register is not editable",
-            detail=f"current_state is {head.current_state.value}; start a revision to edit",
+            detail=f"current_state is {state}; start a revision to edit",
         )
     rating = risk_rating(likelihood, severity, scoring_method)
     row = RiskOpportunity(
@@ -298,10 +305,15 @@ async def update_risk_row(
     await enforce(
         session, authz_sink, request, actor, "register.manage", _risk_resource(row.process_id)
     )
+    # Lock the head FOR UPDATE (after the row lock — a consistent row→head order; publish locks only
+    # the head, so no cycle): the editable-gate + the update serialize against a concurrent publish
+    # freeze, so a row edit cannot land after the version is frozen (Codex P1; the S-records-W
+    # TOCTOU discipline). populate_existing overrides the authz-resolver's identity-mapped read.
     head = (
         await session.execute(
             select(DocumentedInformation)
             .where(DocumentedInformation.id == row.register_doc_id)
+            .with_for_update()
             .execution_options(populate_existing=True)
         )
     ).scalar_one()

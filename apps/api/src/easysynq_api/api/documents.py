@@ -1015,6 +1015,11 @@ async def map_clause_endpoint(
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
     doc = await _load_document(session, caller, document_id)
+    # Reserve the RSK head's clause mapping (RSK-only — OBJ/MR may carry extra clause tags):
+    # removing its auto-created 6.1 mapping would make the publish path's submit_review() 422 on
+    # the zero-map
+    # gate, blocking publish until the system mapping is manually restored (Codex P2).
+    await reject_rsk_register_mutation(session, doc)
     clause = await vault_repo.get_clause(session, body.clause_id)
     if clause is None:
         raise ProblemException(status=404, code="not_found", title="Clause not found")
@@ -1077,6 +1082,7 @@ async def unmap_clause_endpoint(
     # locks the doc row): the submit's mapping count and a last-mapping delete can't interleave to
     # leave an InReview document with zero mappings.
     doc = await _load_document(session, caller, document_id, for_update=True)
+    await reject_rsk_register_mutation(session, doc)  # Codex P2: keep the RSK head's 6.1 map intact
     mapping = await vault_repo.get_clause_mapping(session, doc.id, clause_id)
     if mapping is None:
         raise ProblemException(status=404, code="not_found", title="Clause mapping not found")
@@ -1292,6 +1298,10 @@ async def create_document_link_endpoint(
             title="A link target must be a controlled Document (not a Record)",
             errors=[{"field": "to_document_id", "code": "not_a_document", "message": "not a doc"}],
         )
+    # Reserve the managed-doc heads as link TARGETS too (Codex P2): the from-side guard above only
+    # protects the path document, so a link from a normal doc TO an OBJ/MR/RSK head would otherwise
+    # mint a link row touching the reserved head.
+    await reject_objective_byte_path(session, target)
     link = DocumentLink(
         org_id=doc.org_id,
         from_document_id=doc.id,
@@ -1333,6 +1343,14 @@ async def delete_document_link_endpoint(
         or document_id not in (link.from_document_id, link.to_document_id)
     ):
         raise ProblemException(status=404, code="not_found", title="Document link not found")
+    # Reserve the link's OTHER end too (Codex P2): if the path doc is normal but the far side is a
+    # managed head, deleting from the normal side would still mutate a link row touching the head.
+    other_id = (
+        link.to_document_id if link.from_document_id == document_id else link.from_document_id
+    )
+    other = await session.get(DocumentedInformation, other_id)
+    if other is not None:
+        await reject_objective_byte_path(session, other)
     before = {
         "to_document_id": str(link.to_document_id),
         "from_document_id": str(link.from_document_id),
@@ -1788,6 +1806,10 @@ async def obsolete_endpoint(
     sig_sink: SignatureEventSink = Depends(get_vault_signature_sink),
 ) -> dict[str, Any]:
     doc = await _load_document(session, caller, document_id)
+    # Reserve the RSK register head ONLY (not OBJ/MR, which retire legitimately): obsoleting the
+    # singleton head makes find_head ignore it, so the next risk mints a SECOND head and the old
+    # rows orphan (still org-listed, never in a future publish snapshot) — Codex P2.
+    await reject_rsk_register_mutation(session, doc)
     return _document(
         await obsolete(
             session,
