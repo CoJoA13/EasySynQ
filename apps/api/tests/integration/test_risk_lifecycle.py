@@ -356,8 +356,9 @@ async def test_managed_doc_heads_reserved_from_generic_mutations(
     assert cmap.status_code == 422, cmap.text
     assert cmap.json()["errors"][0]["code"] == "risk_register_managed_via_risks"
 
-    # Codex P2: generic obsolete is reserved for the RSK head (else the singleton would be retired,
-    # find_head would ignore it, and the next risk would mint a second head orphaning the old rows).
+    # Codex P2: obsoletion is reserved for the RSK head at the lifecycle.obsolete CHOKEPOINT (this
+    # exercises it via the generic route; a RETIRE DCR reaches the SAME guard) — else the singleton
+    # would be retired, find_head would ignore it, and the next risk would mint a second head.
     obs = await app_client.post(
         f"/api/v1/documents/{head_id}/obsolete", headers=hs, json={"reason": "retire the register"}
     )

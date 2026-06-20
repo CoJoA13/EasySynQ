@@ -1806,10 +1806,8 @@ async def obsolete_endpoint(
     sig_sink: SignatureEventSink = Depends(get_vault_signature_sink),
 ) -> dict[str, Any]:
     doc = await _load_document(session, caller, document_id)
-    # Reserve the RSK register head ONLY (not OBJ/MR, which retire legitimately): obsoleting the
-    # singleton head makes find_head ignore it, so the next risk mints a SECOND head and the old
-    # rows orphan (still org-listed, never in a future publish snapshot) — Codex P2.
-    await reject_rsk_register_mutation(session, doc)
+    # The RSK head is reserved from obsoletion at the lifecycle.obsolete CHOKEPOINT (covers this
+    # route AND a RETIRE DCR — Codex), so no endpoint-level guard is needed here.
     return _document(
         await obsolete(
             session,
