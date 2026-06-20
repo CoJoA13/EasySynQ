@@ -268,6 +268,11 @@ async def _commit_document(
         raise _ItemCommitError("unknown_document_type")
     if dt.code == _FRM_CODE:
         raise _ItemCommitError("form_template_import_unsupported")
+    # S-risk-1: the Risk & Opportunity register is system-managed via /risks (single non-Obsolete
+    # head, zero ProcessLinks). An import must not mint an RSK doc that _find_head would adopt
+    # (Codex).
+    if dt.code == "RSK":
+        raise _ItemCommitError("risk_register_import_unsupported")
 
     # Identifier: preserve the doc-code verbatim, else allocate a fresh {TYPE}-{AREA}-{SEQ}.
     legacy_identifier: str | None = None

@@ -320,3 +320,39 @@ async def test_risk_rating_is_server_derived_and_re_derived(
             .all()
         )
     assert any((e.after or {}).get("risk_id") == row["id"] for e in events)
+
+
+async def test_rsk_head_reserved_from_generic_document_mutation(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    """The RSK head is system-managed: even a SYSTEM document.* holder cannot link a process to it
+    (Codex P1 — a link would let a bound owner control the org register) nor drive its generic byte
+    lifecycle (Codex P2 — would release arbitrary bytes as the register). Both reserved → 422."""
+    await _grant(subj.a, "register.manage")
+    await _grant(subj.a, "process.create")
+    await _grant(subj.a, "document.read")
+    await _grant(subj.a, "document.manage_metadata")
+    await _grant(subj.a, "document.checkout")
+    ha = _auth(token_factory, subj.a)
+    p1 = await _create_process(app_client, ha)
+    head_id = (await _create_risk(app_client, ha, process_id=p1["id"]))["register_doc_id"]
+
+    link = await app_client.post(
+        f"/api/v1/documents/{head_id}/process-links", headers=ha, json={"process_id": p1["id"]}
+    )
+    assert link.status_code == 422, link.text
+    co = await app_client.post(f"/api/v1/documents/{head_id}/checkout", headers=ha)
+    assert co.status_code == 422, co.text
+
+
+async def test_risk_patch_rejects_unknown_fields(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    """A typo'd / unknown PATCH field 422s (extra='forbid'), never a silent no-op (Codex)."""
+    await _grant(subj.a, "register.manage")
+    await _grant(subj.a, "process.create")
+    ha = _auth(token_factory, subj.a)
+    p1 = await _create_process(app_client, ha)
+    row = await _create_risk(app_client, ha, process_id=p1["id"])
+    r = await app_client.patch(f"/api/v1/risks/{row['id']}", headers=ha, json={"severty": 3})
+    assert r.status_code == 422, r.text

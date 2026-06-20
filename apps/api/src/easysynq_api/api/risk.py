@@ -17,7 +17,7 @@ import uuid
 from typing import Any
 
 from fastapi import APIRouter, Depends, Request, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..auth.dependencies import get_current_user
@@ -48,6 +48,9 @@ router = APIRouter(prefix="/api/v1", tags=["risk"])
 
 # --- request bodies ---
 class RiskCreate(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid"
+    )  # reject unknown fields (the openapi additionalProperties:false)
     type: RiskOpportunityType
     description: str = Field(min_length=1, max_length=4000)
     likelihood: int = Field(ge=1, le=5)
@@ -62,6 +65,7 @@ class RiskUpdate(BaseModel):
     """Partial PATCH. Omitted ≠ null (``model_fields_set`` via ``exclude_unset``): an explicit null
     clears a nullable field, a null on a NOT-NULL field 422s. ``scoring_method`` is write-once."""
 
+    model_config = ConfigDict(extra="forbid")  # a typo'd field 422s, never a silent no-op (Codex)
     type: RiskOpportunityType | None = None
     description: str | None = Field(default=None, min_length=1, max_length=4000)
     likelihood: int | None = Field(default=None, ge=1, le=5)

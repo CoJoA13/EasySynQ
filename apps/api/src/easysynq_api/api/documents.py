@@ -76,6 +76,7 @@ from ..services.vault import (
     init_upload,
     obsolete,
     reject_objective_byte_path,
+    reject_rsk_register_mutation,
     release,
     render_dynamic_copy,
     set_working_schema,
@@ -1136,6 +1137,10 @@ async def link_process_endpoint(
     authz_sink: AuthzAuditSink = Depends(get_authz_audit_sink),
 ) -> dict[str, Any]:
     doc = await _load_document(session, caller, document_id)
+    # S-risk-1: the RSK register head must never acquire a ProcessLink — a link makes a bound
+    # owner's
+    # PROCESS-scoped document.* grant match the org-wide head (escalation). Reserve it (Codex P1).
+    await reject_rsk_register_mutation(session, doc)
     process = await vault_repo.get_process(session, body.process_id)
     if process is None or process.org_id != caller.org_id:
         raise ProblemException(

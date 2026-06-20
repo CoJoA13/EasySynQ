@@ -244,6 +244,30 @@ async def create_document(
     return doc
 
 
+async def reject_rsk_register_mutation(session: AsyncSession, doc: DocumentedInformation) -> None:
+    """The Risk & Opportunity register head is system-managed via ``/risks`` (zero ProcessLinks,
+    single non-Obsolete head, content-aware freeze/release in S-risk-1b). The generic document paths
+    — process-link add and the byte/lifecycle path — must NOT mutate it (S-risk-1; Codex). Detected
+    by ``document_type`` code: RSK is a 1:many satellite *head*, NOT a shared-PK subtype, so the
+    QualityObjective/ManagementReview PK-probe does not apply. Reads stay open."""
+    if doc.document_type_id is None:
+        return
+    dt = await repository.get_document_type(session, doc.document_type_id)
+    if dt is not None and dt.code == "RSK":
+        raise ProblemException(
+            status=422,
+            code="validation_error",
+            title="The Risk & Opportunity register is managed via /risks",
+            errors=[
+                {
+                    "field": "document_id",
+                    "code": "risk_register_managed_via_risks",
+                    "message": "use the /risks lifecycle, not generic document mutation",
+                }
+            ],
+        )
+
+
 async def reject_objective_byte_path(session: AsyncSession, doc: DocumentedInformation) -> None:
     """S-obj-4 (O-5) / S-mr-1: a content-managed DOCUMENT subtype's content IS its frozen snapshot —
     a Quality Objective's commitment OR a Management Review's minutes — so the generic byte path
@@ -253,6 +277,9 @@ async def reject_objective_byte_path(session: AsyncSession, doc: DocumentedInfor
     review, skip the MR_ACTION spawn + ``close_state`` hook, leaving an Effective review that cannot
     be closed). Kind guard = satellite existence (the S-rec-1 posture); a PK probe. Reads stay open.
     (Name kept for the OBJ call sites; it now guards both subtypes — Codex #4.)"""
+    await reject_rsk_register_mutation(
+        session, doc
+    )  # S-risk-1: the byte path must not touch the head
     if await session.get(QualityObjective, doc.id) is not None:
         raise ProblemException(
             status=422,
