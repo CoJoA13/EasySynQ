@@ -70,22 +70,30 @@ async def _rsk_document_type_id(session: AsyncSession, org_id: uuid.UUID) -> uui
     return dt.id
 
 
-async def _find_head(session: AsyncSession, org_id: uuid.UUID) -> DocumentedInformation | None:
+async def find_head(
+    session: AsyncSession, org_id: uuid.UUID, *, for_update: bool = False
+) -> DocumentedInformation | None:
     """The single non-Obsolete RSK head for the org (Effective OR its Draft/UnderRevision
-    successor)."""
-    return (
-        await session.execute(
-            select(DocumentedInformation)
-            .join(DocumentType, DocumentedInformation.document_type_id == DocumentType.id)
-            .where(
-                DocumentedInformation.org_id == org_id,
-                DocumentType.code == "RSK",
-                DocumentedInformation.current_state != DocumentCurrentState.Obsolete,
-            )
-            .order_by(DocumentedInformation.created_at)
-            .limit(1)
+    successor) — the one source of truth for "the org's register head" (used by the get-or-create,
+    the publish/revision lifecycle, and the GET status read). ``for_update`` locks ONLY the head row
+    + forces populate_existing (the S-drift-1 stale-identity-map trap: a locking SELECT returns the
+    cached attributes unless populate_existing overrides them)."""
+    stmt = (
+        select(DocumentedInformation)
+        .join(DocumentType, DocumentedInformation.document_type_id == DocumentType.id)
+        .where(
+            DocumentedInformation.org_id == org_id,
+            DocumentType.code == "RSK",
+            DocumentedInformation.current_state != DocumentCurrentState.Obsolete,
         )
-    ).scalar_one_or_none()
+        .order_by(DocumentedInformation.created_at)
+        .limit(1)
+    )
+    if for_update:
+        stmt = stmt.with_for_update(of=DocumentedInformation).execution_options(
+            populate_existing=True
+        )
+    return (await session.execute(stmt)).scalar_one_or_none()
 
 
 async def resolve_or_create_head(
@@ -97,7 +105,7 @@ async def resolve_or_create_head(
     (L1-MAJOR). Auto-maps the head to clause 6.1. The advisory lock guards the concurrent
     first-create
     (double-checked under the lock)."""
-    head = await _find_head(session, actor.org_id)
+    head = await find_head(session, actor.org_id)
     if head is not None:
         return head
     # No head — serialize the create so two concurrent first-risk POSTs cannot mint two heads.
@@ -107,7 +115,7 @@ async def resolve_or_create_head(
         text("SELECT pg_advisory_xact_lock(CAST(:ns AS integer), CAST(:oid AS integer))"),
         {"ns": _RISK_HEAD_LOCK_NS, "oid": _org_head_lock_oid(actor.org_id)},
     )
-    head = await _find_head(session, actor.org_id)  # re-check under the lock
+    head = await find_head(session, actor.org_id)  # re-check under the lock
     if head is not None:
         return head
     dt_id = await _rsk_document_type_id(session, actor.org_id)

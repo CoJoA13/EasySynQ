@@ -23,10 +23,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..auth.dependencies import get_current_user
 from ..db.models._risk_enums import RiskOpportunityType, ScoringMethod
 from ..db.models.app_user import AppUser
+from ..db.models.document_type import DocumentType
+from ..db.models.documented_information import DocumentedInformation
 from ..db.models.risk_opportunity import RiskOpportunity
 from ..db.session import get_session
 from ..domain.authz import RequestContext, ResourceContext, authorize
-from ..domain.risk.rules import BAND_RANK, BAND_TONE, default_criteria, risk_band
+from ..domain.risk.register_content import resolve_criteria
+from ..domain.risk.rules import BAND_RANK, BAND_TONE, risk_band
 from ..problems import ProblemException
 from ..services.authz import (
     AuthzAuditSink,
@@ -37,11 +40,22 @@ from ..services.authz import (
 )
 from ..services.risk import (
     add_risk_row,
+    find_head,
     get_risk,
+    governing_register,
     list_risks,
+    publish_register,
+    start_register_revision,
     update_risk_row,
 )
-from ..services.vault import VaultAuditSink, get_vault_audit_sink
+from ..services.vault import (
+    SignatureEventSink,
+    VaultAuditSink,
+    get_vault_audit_sink,
+    get_vault_signature_sink,
+    release,
+)
+from ..services.vault.release_scope import enrich_release_sod_scope
 
 router = APIRouter(prefix="/api/v1", tags=["risk"])
 
@@ -77,6 +91,14 @@ class RiskUpdate(BaseModel):
     effectiveness: str | None = Field(default=None, max_length=4000)
 
 
+class RegisterPublish(BaseModel):
+    """The optional publish body — an INV-3 change reason for the frozen register version (defaults
+    to a system-generated reason when omitted; a no-freeze re-publish ignores it, as in OBJ)."""
+
+    model_config = ConfigDict(extra="forbid")
+    change_reason: str | None = Field(default=None, max_length=2000)
+
+
 # --- authz scope ---
 def _risk_scope(process_id: uuid.UUID | None) -> ResourceContext:
     """The PROCESS scope from a row's own ``process_id`` (SYSTEM when none — an org-level row, only
@@ -104,15 +126,21 @@ async def _risk_path_scope(request: Request, session: AsyncSession) -> ResourceC
 
 _risk_read_scoped = require("register.read", async_scope_resolver=_risk_path_scope)
 _risk_manage_path = require("register.manage", async_scope_resolver=_risk_path_scope)
+# The head lifecycle (start-revision / publish) is an org-wide act — gate on register.manage at the
+# default SYSTEM scope (D-2b). The QMS Owner holds register.manage @ SYSTEM (the register steward);
+# a bound Process-Owner's PROCESS grant does NOT match the org head, so they cannot publish the org
+# register unilaterally (D-4). NO path resolver — the head has no process / no {risk_id} path param.
+_register_manage_system = require("register.manage")
 
 
 # --- serializer ---
-def _risk(row: RiskOpportunity) -> dict[str, Any]:
-    # S-risk-1b: route this through register_content.resolve_criteria(governing) once publish/freeze
-    # lands. In S-risk-1 the criteria are the golden-pinned default (no Effective version exists
-    # yet);
-    # the golden test is the criteria-immutability guard in the absence of versioning.
-    band = risk_band(row.risk_rating, default_criteria(row.scoring_method))
+def _risk(row: RiskOpportunity, governing: dict[str, Any] | None) -> dict[str, Any]:
+    # S-risk-1b: the displayed BAND grades the live row against the GOVERNING Effective version's
+    # FROZEN per-method criteria (resolve_criteria) — never a live module constant — so a code-level
+    # band-threshold edit cannot re-grade the live register (R49 L2). ``governing`` is None
+    # pre-first-release (the working Draft register) → resolve_criteria falls back to the v1
+    # golden-pinned default. The risk_rating itself is already re-derived on every write (S-risk-1).
+    band = risk_band(row.risk_rating, resolve_criteria(governing, row.scoring_method))
     return {
         "id": str(row.id),
         "register_doc_id": str(row.register_doc_id),
@@ -166,7 +194,122 @@ async def list_risks_endpoint(
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
     rows = await _readable_risks(request, session, caller)
-    return {"data": [_risk(r) for r in rows]}
+    governing = await governing_register(session, caller.org_id)
+    return {"data": [_risk(r, governing) for r in rows]}
+
+
+# --- the register-head lifecycle (S-risk-1b) -------------------------------------------------
+# ⚠ Static routes MUST precede /risks/{risk_id} — FastAPI's {risk_id} convertor would otherwise
+# match "/risks/register" (and 422 on the UUID parse). A real UUID never matches "register".
+def _register_status(head: DocumentedInformation) -> dict[str, Any]:
+    """The register head's lifecycle state (the shared GET + lifecycle-endpoint payload)."""
+    return {
+        "exists": True,
+        "register_doc_id": str(head.id),
+        "identifier": head.identifier,
+        "state": head.current_state.value,
+        "current_effective_version_id": (
+            str(head.current_effective_version_id) if head.current_effective_version_id else None
+        ),
+        "has_governing": head.current_effective_version_id is not None,
+    }
+
+
+_NO_REGISTER: dict[str, Any] = {
+    "exists": False,
+    "register_doc_id": None,
+    "identifier": None,
+    "state": None,
+    "current_effective_version_id": None,
+    "has_governing": False,
+}
+
+
+async def _register_release_scope(
+    session: AsyncSession, doc: DocumentedInformation
+) -> ResourceContext:
+    """Release scope = the head's document scope + the SoD-2 inputs for the version the cutover will
+    promote (the latest Approved): its author + approval signers (the ``_objective_release_scope``
+    mirror). The head carries no process, so no PROCESS context — release is a SYSTEM-scoped
+    document.release act."""
+    level: str | None = None
+    if doc.document_type_id:
+        dt = await session.get(DocumentType, doc.document_type_id)
+        level = dt.document_level.value if dt else None
+    base = ResourceContext(
+        artifact_id=str(doc.id),
+        folder_path=doc.folder_path,
+        document_level=level,
+        lifecycle_state=doc.current_state.value,
+    )
+    return await enrich_release_sod_scope(session, base, doc.id, None)
+
+
+@router.get("/risks/register")
+async def get_register_endpoint(
+    caller: AppUser = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """The org's risk register head lifecycle state. Any authenticated org member may read it (the
+    register's lifecycle state is org-level, not row-level sensitive; the row contents are gated
+    separately by GET /risks). ``exists:false`` before the first risk is added (the head is lazily
+    created on the first POST /risks)."""
+    head = await find_head(session, caller.org_id)
+    return _register_status(head) if head is not None else dict(_NO_REGISTER)
+
+
+@router.post("/risks/register/start-revision")
+async def start_register_revision_endpoint(
+    caller: AppUser = Depends(_register_manage_system),
+    session: AsyncSession = Depends(get_session),
+    vault_sink: VaultAuditSink = Depends(get_vault_audit_sink),
+) -> dict[str, Any]:
+    """T7 (Effective → UnderRevision) — open the edit window so rows become editable again. Gated
+    register.manage @ SYSTEM (D-2b); 409 unless the register is Effective."""
+    head = await start_register_revision(session, vault_sink, caller)
+    return _register_status(head)
+
+
+@router.post("/risks/register/publish")
+async def publish_register_endpoint(
+    body: RegisterPublish | None = None,
+    caller: AppUser = Depends(_register_manage_system),
+    session: AsyncSession = Depends(get_session),
+    vault_sink: VaultAuditSink = Depends(get_vault_audit_sink),
+) -> dict[str, Any]:
+    """Freeze the working rows + criteria into a new version and submit it for review (T2/T9). Gated
+    register.manage @ SYSTEM (D-2b); 409 unless the head is Draft/UnderRevision. Approval then
+    routes through POST /tasks/{id}/decision (DOCUMENT leg); release via /risks/register/release."""
+    head = await publish_register(
+        session, vault_sink, caller, change_reason=body.change_reason if body else None
+    )
+    return _register_status(head)
+
+
+@router.post("/risks/register/release")
+async def release_register_endpoint(
+    request: Request,
+    caller: AppUser = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+    authz_sink: AuthzAuditSink = Depends(get_authz_audit_sink),
+    vault_sink: VaultAuditSink = Depends(get_vault_audit_sink),
+    sig_sink: SignatureEventSink = Depends(get_vault_signature_sink),
+) -> dict[str, Any]:
+    """T6 (Approved → Effective). Enforces document.release @ SYSTEM over the SoD-2-enriched scope
+    (author/approver ≠ releaser — the OBJ release posture; held by no seeded role → a SYSTEM
+    override in v1), then runs the shared INV-1 SERIALIZABLE ``release`` cutover (RSK ∉
+    LEADERSHIP_DOC_TYPES, so the cutover leadership gate is a no-op). After release: read-only."""
+    head = await find_head(session, caller.org_id)
+    if head is None:
+        raise ProblemException(status=409, code="conflict", title="No risk register to release")
+    resource = await _register_release_scope(session, head)
+    await enforce(session, authz_sink, request, caller, "document.release", resource, sig_hook=True)
+    await release(caller, head.id, vault_sink, sig_sink)
+    # release() committed in its own SERIALIZABLE session; this request session's identity map still
+    # holds the pre-release state — expire it so the status re-read refreshes from the DB.
+    session.expire_all()
+    head_after = await find_head(session, caller.org_id)
+    return _register_status(head_after) if head_after is not None else dict(_NO_REGISTER)
 
 
 @router.get("/risks/{risk_id}")
@@ -178,7 +321,8 @@ async def get_risk_endpoint(
     row = await get_risk(session, risk_id)
     if row is None or row.org_id != caller.org_id:
         raise ProblemException(status=404, code="not_found", title="Risk not found")
-    return _risk(row)
+    governing = await governing_register(session, caller.org_id)
+    return _risk(row, governing)
 
 
 @router.post("/risks", status_code=status.HTTP_201_CREATED)
@@ -209,7 +353,8 @@ async def create_risk_endpoint(
         clause_id=body.clause_id,
         treatment=body.treatment,
     )
-    return _risk(row)
+    governing = await governing_register(session, caller.org_id)
+    return _risk(row, governing)
 
 
 @router.patch("/risks/{risk_id}")
@@ -237,4 +382,5 @@ async def update_risk_endpoint(
             _risk_scope(updates["process_id"]),
         )
     row = await update_risk_row(session, authz_sink, request, caller, risk_id, updates=updates)
-    return _risk(row)
+    governing = await governing_register(session, caller.org_id)
+    return _risk(row, governing)

@@ -889,6 +889,10 @@ async def update_metadata_endpoint(
     # for_update=True callers of _load_document (unmap_clause, submit_review, this handler).
     wants_review_update = "review_period_months" in body.model_fields_set
     doc = await _load_document(session, caller, document_id, for_update=wants_review_update)
+    # S-risk-1b (D-3b): a managed-doc head (OBJ/MR/RSK) is system-managed via its own surface — its
+    # metadata IS its frozen snapshot, so the generic metadata PATCH must not touch it (the
+    # byte-path reservation, extended to the metadata/distribution/link mutations). Reads stay open.
+    await reject_objective_byte_path(session, doc)
     if body.title is not None:
         doc.title = body.title
     if body.folder_path is not None:
@@ -1270,6 +1274,7 @@ async def create_document_link_endpoint(
     in-org controlled Documents; no self-link; 409 on a duplicate (from,to,type). Needs
     ``document.manage_metadata``."""
     doc = await _load_document(session, caller, document_id)
+    await reject_objective_byte_path(session, doc)  # S-risk-1b D-3b: reserve OBJ/MR/RSK heads
     if body.to_document_id == document_id:
         raise ProblemException(
             status=422,
@@ -1320,6 +1325,7 @@ async def delete_document_link_endpoint(
 ) -> Response:
     """Remove a document link touching this document. Needs ``document.manage_metadata``."""
     doc = await _load_document(session, caller, document_id)
+    await reject_objective_byte_path(session, doc)  # S-risk-1b D-3b: reserve OBJ/MR/RSK heads
     link = await session.get(DocumentLink, link_id)
     if (
         link is None
@@ -1434,10 +1440,14 @@ async def update_distribution_endpoint(
     # A no-op body writes no audit row and enqueues no sweep.
     if not body.add_entries and body.acknowledgement_required is None:
         doc_ro = await _load_document(session, caller, document_id)
+        await reject_objective_byte_path(
+            session, doc_ro
+        )  # S-risk-1b D-3b: reserve OBJ/MR/RSK heads
         return await _distribution_payload(session, doc_ro)
     # FOR UPDATE (the update_metadata_endpoint precedent): the flag flip must not race a
     # concurrent cutover/sweep recompute reading acknowledgement_required mid-flight.
     doc = await _load_document(session, caller, document_id, for_update=True)
+    await reject_objective_byte_path(session, doc)  # S-risk-1b D-3b: reserve OBJ/MR/RSK heads
     before = {"acknowledgement_required": doc.acknowledgement_required}
     # Two-pass: validate everything BEFORE adding — an autoflush during a later item's
     # session.get would otherwise surface a pre-existing-duplicate IntegrityError outside
@@ -1527,6 +1537,7 @@ async def delete_distribution_entry_endpoint(
     # INSERT, minting an acknowledgement for a just-removed recipient (the POST path already
     # serializes the same way).
     doc = await _load_document(session, caller, document_id, for_update=True)
+    await reject_objective_byte_path(session, doc)  # S-risk-1b D-3b: reserve OBJ/MR/RSK heads
     entry = await session.get(DistributionEntry, entry_id)
     if entry is None or entry.org_id != caller.org_id or entry.document_id != doc.id:
         raise ProblemException(status=404, code="not_found", title="Distribution entry not found")
