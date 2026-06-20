@@ -51,8 +51,12 @@ function sortValue(r: RiskRow, key: SortKey): string | number | null {
 }
 
 function bannerFor(state: string | null): string | null {
+  // ⚠ Don't instruct an action the SPA doesn't expose: the register-steward lifecycle (start-revision
+  // / publish / release) is the ratified F-1 deferral — the whole cycle rides the API / a SYSTEM
+  // override in v1, so the banner states the read-only fact + who reopens it, never "Start a revision"
+  // (there is no such button by design; Codex P1).
   if (state === "Effective")
-    return "This register is Effective (read-only). Start a revision to edit risks.";
+    return "This register is Effective (read-only) — a register steward opens the next revision to enable edits.";
   if (state === "InReview" || state === "Approved")
     return "A register revision is in review — risks are read-only until it's released.";
   if (state === "Superseded" || state === "Obsolete")
@@ -92,14 +96,16 @@ export function RisksRegisterPage() {
   const nav = useRowKeyboardNav<HTMLTableSectionElement>();
   const [createOpen, setCreateOpen] = useState(false);
 
-  // Drawer state, URL-seedable via ?risk=<id> (the CapaBoardPage idiom): local opens never touch the
-  // URL; only an inbound deep-link does; close removes the param (replace) only if present.
+  // Drawer state, URL-seedable via ?risk=<id>: local opens never touch the URL; a deep-link opens it.
+  // The sync effect keys on the ?risk= param ALONE (not the whole search-params) and follows it
+  // INCLUDING its removal — so back/forward that drops ?risk closes the drawer, while a change to
+  // another param (the band/type filters) leaves a locally-opened drawer untouched (Codex P3).
   const [params, setParams] = useSearchParams();
-  const [selected, setSelected] = useState<string | null>(() => params.get("risk"));
+  const riskParam = params.get("risk");
+  const [selected, setSelected] = useState<string | null>(riskParam);
   useEffect(() => {
-    const id = params.get("risk");
-    if (id) setSelected(id);
-  }, [params]);
+    setSelected(riskParam);
+  }, [riskParam]);
   function closeDrawer() {
     setSelected(null);
     if (params.has("risk")) {

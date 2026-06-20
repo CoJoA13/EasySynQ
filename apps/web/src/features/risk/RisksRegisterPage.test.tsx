@@ -167,6 +167,20 @@ it("opens the drawer from a row anchor", async () => {
   expect(within(dialog).getByText(/likelihood 4 × severity 5 = rating 20/i)).toBeInTheDocument();
 });
 
+it("a filter change does not close a locally-opened drawer (the ?risk-keyed sync effect)", async () => {
+  const user = userEvent.setup();
+  renderWithProviders(<RisksRegisterPage />, { route: "/risks" });
+  await waitFor(() =>
+    expect(screen.getByText("Untrained operators on the new line")).toBeInTheDocument(),
+  );
+  await user.click(screen.getByText("Untrained operators on the new line")); // local open (no URL change)
+  expect(await screen.findByRole("dialog")).toBeInTheDocument();
+  // change the band filter (writes ?band= to the URL) — the drawer must stay open because the sync
+  // effect keys on ?risk= alone, not the whole search-params (Codex P3 fix didn't over-close).
+  await user.click(screen.getByRole("radio", { name: "Medium" }));
+  expect(screen.getByRole("dialog")).toBeInTheDocument();
+});
+
 it("shows an empty state when there are no risks", async () => {
   server.use(http.get("/api/v1/risks", () => HttpResponse.json({ data: [] })));
   renderWithProviders(<RisksRegisterPage />, { route: "/risks" });
