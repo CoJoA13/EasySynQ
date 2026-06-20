@@ -778,6 +778,16 @@ async def create_document_endpoint(
     vault_sink: VaultAuditSink = Depends(get_vault_audit_sink),
 ) -> dict[str, Any]:
     dt = await session.get(DocumentType, body.document_type_id)
+    # S-risk-1: the Risk & Opportunity register is a system-managed singleton (one non-Obsolete RSK
+    # head per org, ZERO ProcessLinks, created only via the /risks service). A generic create here
+    # would let a bound Process Owner mint a process-linked or second RSK head that the register's
+    # _find_head would later adopt — defeating the zero-link/single-head invariant. Reserve it.
+    if dt is not None and dt.code == "RSK":
+        raise ProblemException(
+            status=422,
+            code="validation_error",
+            title="The Risk & Opportunity register is managed via /risks, not generic creation",
+        )
     level = dt.document_level.value if dt else None
     # S-process-scope-1: dedup the declared processes (order-preserving) — a duplicate would trip
     # the ProcessLink UNIQUE on create.

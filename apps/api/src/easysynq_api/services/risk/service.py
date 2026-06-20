@@ -22,6 +22,7 @@ import hashlib
 import uuid
 from typing import Any
 
+from fastapi import Request
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -36,9 +37,12 @@ from ...db.models.document_type import DocumentType
 from ...db.models.documented_information import DocumentedInformation
 from ...db.models.process import Process
 from ...db.models.risk_opportunity import RiskOpportunity
+from ...domain.authz import ResourceContext
 from ...domain.risk.rules import risk_rating
 from ...problems import ProblemException
+from ..authz import AuthzAuditSink, enforce
 from ..vault import VaultAuditSink, create_document
+from ..vault import repository as vault_repo
 
 # A per-org transaction advisory lock that serializes the concurrent *first* head-create. The
 # two-arg form (ns, oid) is distinct from the single-arg global LOCK_* keys; it auto-releases at the
@@ -145,16 +149,32 @@ async def _validate_process(session: AsyncSession, actor: AppUser, process_id: u
         )
 
 
+def _risk_resource(process_id: uuid.UUID | None) -> ResourceContext:
+    """The PROCESS scope from a row's own ``process_id`` (SYSTEM when none). Mirrors the route's
+    ``_risk_scope`` — kept here to avoid the service↔api circular import for the under-lock
+    re-auth."""
+    if process_id is None:
+        return ResourceContext.system()
+    return ResourceContext(process_ids=frozenset({str(process_id)}))
+
+
 async def _validate_clause(
-    session: AsyncSession, head: DocumentedInformation, clause_id: uuid.UUID
+    session: AsyncSession, framework_id: uuid.UUID, clause_id: uuid.UUID
 ) -> None:
     clause = await session.get(Clause, clause_id)
-    if clause is None or clause.framework_id != head.framework_id:
+    if clause is None or clause.framework_id != framework_id:
         raise ProblemException(
             status=422,
             code="validation_error",
             title="Unknown clause_id (must be a clause in your framework)",
         )
+
+
+async def _org_framework_id(session: AsyncSession, org_id: uuid.UUID) -> uuid.UUID:
+    framework = await vault_repo.get_framework(session, org_id)
+    if framework is None:
+        raise ProblemException(status=422, code="validation_error", title="No framework configured")
+    return framework.id
 
 
 async def add_risk_row(
@@ -173,11 +193,13 @@ async def add_risk_row(
 ) -> RiskOpportunity:
     """Author a risk row on the register's working satellite. ``risk_rating`` is server-derived. The
     head must be Draft/UnderRevision (the edit gate; in S-risk-1 the head stays Draft)."""
+    # Validate FK inputs BEFORE resolve_or_create_head (which COMMITS the head on the first risk) so
+    # a bad clause_id/process_id never orphans an empty register doc + consumed identifier.
     if process_id is not None:
         await _validate_process(session, actor, process_id)
-    head = await resolve_or_create_head(session, vault_sink, actor)
     if clause_id is not None:
-        await _validate_clause(session, head, clause_id)
+        await _validate_clause(session, await _org_framework_id(session, actor.org_id), clause_id)
+    head = await resolve_or_create_head(session, vault_sink, actor)
     if head.current_state not in _EDITABLE:
         raise ProblemException(
             status=409,
@@ -248,6 +270,8 @@ async def list_risks(session: AsyncSession, org_id: uuid.UUID) -> list[RiskOppor
 
 async def update_risk_row(
     session: AsyncSession,
+    authz_sink: AuthzAuditSink,
+    request: Request,
     actor: AppUser,
     risk_id: uuid.UUID,
     *,
@@ -255,13 +279,17 @@ async def update_risk_row(
 ) -> RiskOpportunity:
     """Apply a partial PATCH to a risk row. ``risk_rating`` is re-derived in the SAME txn when
     likelihood/severity change (a re-score → ``RISK_RESCORED`` audit); ``scoring_method`` is
-    write-once (a change → 422). The PROCESS reassign is re-authorized by the caller (the route)
-    BEFORE this call (the ``_enforce_target_process`` escalation guard). Rows are editable only
-    while
-    the head is Draft/UnderRevision."""
+    write-once (a change → 422). Reassigning ``process_id`` is re-authorized over the NEW target by
+    the caller (the route) BEFORE this call; here we ALSO re-authorize ``register.manage`` over the
+    row's CURRENT (freshly-locked) process — the path dependency authorized a PRE-lock read that a
+    concurrent reassign may have invalidated (the S-records-W under-lock re-auth, a TOCTOU close).
+    Rows are editable only while the head is Draft/UnderRevision."""
     row = await get_risk(session, risk_id, for_update=True)
     if row is None or row.org_id != actor.org_id:
         raise ProblemException(status=404, code="not_found", title="Risk not found")
+    await enforce(
+        session, authz_sink, request, actor, "register.manage", _risk_resource(row.process_id)
+    )
     head = (
         await session.execute(
             select(DocumentedInformation)
@@ -295,7 +323,7 @@ async def update_risk_row(
     if updates.get("process_id") is not None:
         await _validate_process(session, actor, updates["process_id"])
     if updates.get("clause_id") is not None:
-        await _validate_clause(session, head, updates["clause_id"])
+        await _validate_clause(session, head.framework_id, updates["clause_id"])
 
     before = {
         "likelihood": row.likelihood,

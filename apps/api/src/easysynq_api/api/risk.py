@@ -218,10 +218,12 @@ async def update_risk_endpoint(
     authz_sink: AuthzAuditSink = Depends(get_authz_audit_sink),
 ) -> dict[str, Any]:
     updates = body.model_dump(exclude_unset=True)
-    # Reassigning process_id re-enforces register.manage over the NEW target (the
+    # Setting/changing process_id re-enforces register.manage over the NEW target (the
     # _enforce_target_process escalation guard) — _risk_manage_path already authorized the CURRENT
-    # process. A row's scope is purely its own process_id (R48 own-id-only).
-    if updates.get("process_id") is not None:
+    # process. ⚠ Gate on PRESENCE, not non-null: an explicit ``process_id: null`` (clearing the row
+    # to org-level) must enforce at SYSTEM scope (`_risk_scope(None)`), else a bound PROCESS owner
+    # could downgrade their row to an org-level row they cannot create directly. R48 own-id-only.
+    if "process_id" in updates:
         await enforce(
             session,
             authz_sink,
@@ -230,5 +232,5 @@ async def update_risk_endpoint(
             "register.manage",
             _risk_scope(updates["process_id"]),
         )
-    row = await update_risk_row(session, caller, risk_id, updates=updates)
+    row = await update_risk_row(session, authz_sink, request, caller, risk_id, updates=updates)
     return _risk(row)
