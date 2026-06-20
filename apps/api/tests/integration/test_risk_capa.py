@@ -136,6 +136,7 @@ async def test_spawn_capa_race_serializes_to_one(
     set (populate_existing) and replays the existing CAPA (200). Without the lock both would mint a
     distinct CAPA → two ids → the single-id assertion fails."""
     await _grant(subj.a, "register.manage")
+    await _grant(subj.a, "register.read")
     await _grant(subj.a, "capa.create")
     await _grant(subj.a, "capa.read")
     await _grant(subj.a, "process.create")
@@ -187,3 +188,62 @@ async def test_spawn_capa_authz_escalation(
     assert denied_p2.status_code == 403, denied_p2.text  # no capa.create @ P2
     denied_sys = await app_client.post(f"/api/v1/risks/{risk_sys}/capa", headers=hb)
     assert denied_sys.status_code == 403, denied_sys.text  # SYSTEM scope → bound owner denied
+
+
+async def test_spawn_replay_denied_for_reassigned_risk_cross_process(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    """Codex P1: the latched CAPA keeps its ORIGINAL process when the risk is later reassigned. The
+    SYSTEM author creates a P1 risk, spawns a CAPA (@ P1), then reassigns the risk to P2. A bound
+    owner of P2 (capa.create + register.read @ P2 via the bundle, but NOT @ P1) then hits the replay
+    path and is 403'd — the replay re-authorizes capa.create over the CAPA's OWN process (P1), which
+    they do not own, so the cross-process CAPA is never disclosed to them."""
+    await _grant(subj.a, "register.manage")
+    await _grant(subj.a, "register.read")
+    await _grant(subj.a, "capa.create")
+    await _grant(subj.a, "capa.read")
+    await _grant(subj.a, "process.create")
+    await _grant(subj.a, "process.assign_owner")
+    ha = _auth(token_factory, subj.a)
+    p1 = await _create_process(app_client, ha)
+    p2 = await _create_process(app_client, ha)
+    row = await _create_risk(app_client, ha, process_id=p1["id"])
+    risk_id = row["id"]
+
+    spawn = await app_client.post(f"/api/v1/risks/{risk_id}/capa", headers=ha)  # CAPA @ P1
+    assert spawn.status_code == 201, spawn.text
+    # reassign the risk P1 → P2 (the head is editable in the default state; register.manage @ P2).
+    reassign = await app_client.patch(
+        f"/api/v1/risks/{risk_id}", headers=ha, json={"process_id": p2["id"]}
+    )
+    assert reassign.status_code == 200, reassign.text
+
+    owner_id = await _user_id(subj.b)
+    await _assign_owner(app_client, ha, p2["id"], owner_id)
+    hb = _auth(token_factory, subj.b)  # owns P2 only (capa.create + register.read @ P2, not @ P1)
+
+    denied = await app_client.post(f"/api/v1/risks/{risk_id}/capa", headers=hb)
+    assert denied.status_code == 403, (
+        denied.text
+    )  # the latched CAPA's OWN process (P1) is re-checked
+
+
+async def test_direct_capa_raise_rejects_risk_source(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    """Codex P2: ``risk`` is a spawn-only origin tag. A direct POST /capas with source=risk is
+    rejected (422) so a risk-originated CAPA can only be minted through the spawn endpoint (with its
+    linked_capa_id latch + RISK_SPAWNED_CAPA audit + a real risk back-pointer). A normal source
+    still raises."""
+    await _grant(subj.a, "capa.create")
+    ha = _auth(token_factory, subj.a)
+    rejected = await app_client.post(
+        "/api/v1/capas", headers=ha, json={"title": "sneaky", "severity": "Major", "source": "risk"}
+    )
+    assert rejected.status_code == 422, rejected.text
+    ok = await app_client.post(
+        "/api/v1/capas",
+        headers=ha,
+        json={"title": "legit", "severity": "Minor", "source": "process"},
+    )
+    assert ok.status_code == 201, ok.text

@@ -433,19 +433,35 @@ async def spawn_capa_for_risk(
     row = await get_risk(session, risk_id, for_update=True)
     if row is None or row.org_id != actor.org_id:
         raise ProblemException(status=404, code="not_found", title="Risk not found")
+    scope = _risk_resource(row.process_id)
+    # Codex P2: the caller must be able to READ the risk they treat — the spawn surfaces the risk
+    # description (the CAPA title + Raised block) AND mutates the risk's linked_capa_id, so gate on
+    # register.read over the locked risk's process IN ADDITION to the capa.create that authorizes
+    # the spawn itself (else a capa.create-only holder could spawn against a guessed risk id they
+    # cannot register.read, learning its description). Every seeded spawner (Process Owner bundle /
+    # SYSTEM) holds both, so this is a strict tightening that breaks no legitimate flow.
+    await enforce(session, authz_sink, request, actor, "register.read", scope)
     # TOCTOU close: re-authorize capa.create over the row's freshly-locked process (SYSTEM when None
     # → an org-level risk's CAPA is org-level, SYSTEM-only). A null process_id reaches here only for
     # a SYSTEM grant; a bound owner whose row was reassigned out from under them is denied.
-    await enforce(
-        session, authz_sink, request, actor, "capa.create", _risk_resource(row.process_id)
-    )
+    await enforce(session, authz_sink, request, actor, "capa.create", scope)
     if row.linked_capa_id is not None:
         existing = await capa_repo.get_capa(session, row.linked_capa_id)
-        await session.commit()  # release the FOR UPDATE lock promptly (no mutation on the replay)
         # Org-check the loaded CAPA too (defense-in-depth) — a risk can only ever latch a same-org
         # CAPA the spawn itself created.
         if existing is None or existing.org_id != actor.org_id:
+            await session.commit()  # release the FOR UPDATE lock (no mutation on the replay)
             raise ProblemException(status=404, code="not_found", title="CAPA not found")
+        # Codex P1: the risk may have been REASSIGNED to a new process since it spawned this CAPA,
+        # but the CAPA keeps its ORIGINAL process_id. Re-authorize capa.create over the CAPA's OWN
+        # process so a caller who owns only the risk's NEW process cannot replay (and read) a CAPA
+        # bound to a process they lack authority for. The legitimate same-process retry is
+        # unaffected (the CAPA's process == the risk's). Enforced BEFORE the commit so a deny rolls
+        # lock back cleanly.
+        await enforce(
+            session, authz_sink, request, actor, "capa.create", _risk_resource(existing.process_id)
+        )
+        await session.commit()  # release the FOR UPDATE lock promptly (no mutation on the replay)
         return existing, False
 
     # Auto-derive the CAPA severity from the live band, graded against the GOVERNING frozen criteria

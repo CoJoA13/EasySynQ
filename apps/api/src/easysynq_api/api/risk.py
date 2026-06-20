@@ -408,11 +408,14 @@ async def spawn_capa_for_risk_endpoint(
     """One-click 'treat this risk' — idempotently spawn a CAPA to treat a risk row (clause 6.1 §7,
     S-risk-3). 201 on the first spawn; 200 on an idempotent replay (the risk already latched a CAPA
     — the SAME CAPA returned). Gated capa.create at the risk's OWN process scope (the
-    _risk_capa_create_path resolver gives the fast 403; the service re-authorizes under the row lock
-    to close a process-reassign TOCTOU). The CAPA inherits the risk's process_id + a severity
-    auto-derived from the band; linked_capa_id is set on the live satellite (operational metadata —
-    works at any register head state, no editable gate). Returns the spawned CAPA (the
-    complaint→CAPA response shape)."""
+    _risk_capa_create_path resolver gives the fast 403; the service re-authorizes under the row
+    lock to close a process-reassign TOCTOU) AND register.read on the locked risk (the caller must
+    be able to read the risk they treat — the service enforces it). The CAPA inherits the risk's
+    process_id + a severity auto-derived from the band; linked_capa_id is set on the live satellite
+    (operational metadata — works at any register head state, no editable gate). On a replay,
+    capa.create is re-checked over the latched CAPA's OWN process (it may differ from the risk's
+    current process after a reassign). Returns the spawned CAPA (the complaint→CAPA response
+    shape)."""
     capa, created = await spawn_capa_for_risk(session, authz_sink, request, caller, risk_id)
     return JSONResponse(
         status_code=status.HTTP_201_CREATED if created else status.HTTP_200_OK,

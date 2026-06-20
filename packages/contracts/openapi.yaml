@@ -5137,8 +5137,9 @@ paths:
         FOR UPDATE row lock). The spawned CAPA inherits the risk's process_id and a severity
         auto-derived from its band (Critical→Critical, High→Major, Medium/Low→Minor); source=risk.
         linked_capa_id is operational metadata (not frozen version content) so the spawn works at any
-        register head state. Needs capa.create at the risk's own PROCESS scope (SYSTEM for an
-        org-level / process-less risk).
+        register head state. Needs BOTH capa.create AND register.read at the risk's own PROCESS scope
+        (SYSTEM for an org-level / process-less risk). On a replay, capa.create is also re-checked
+        over the latched CAPA's own process (which may differ after a risk reassign).
       parameters:
         - { name: risk_id, in: path, required: true, schema: { type: string, format: uuid } }
       responses:
