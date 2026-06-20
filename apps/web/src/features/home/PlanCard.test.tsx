@@ -54,7 +54,7 @@ it("omits the overdue line when the checklist read is forbidden", async () => {
   expect(within(card).queryByText(/reviews overdue/i)).not.toBeInTheDocument();
 });
 
-it("renders no-access when both reads are forbidden", async () => {
+it("renders no-access only when ALL actionable reads are forbidden (incl. the risk summary)", async () => {
   server.use(
     http.get("/api/v1/objectives/scorecard", () =>
       HttpResponse.json({ code: "forbidden" }, { status: 403 }),
@@ -62,10 +62,58 @@ it("renders no-access when both reads are forbidden", async () => {
     http.get("/api/v1/reports/compliance-checklist", () =>
       HttpResponse.json({ code: "forbidden" }, { status: 403 }),
     ),
+    http.get("/api/v1/risks/summary", () =>
+      HttpResponse.json({ code: "forbidden" }, { status: 403 }),
+    ),
   );
   renderWithProviders(<PlanCard />);
   const card = await screen.findByRole("group", { name: /plan quadrant/i });
   await waitFor(() =>
     expect(within(card).getByText(/no access to this section/i)).toBeInTheDocument(),
+  );
+});
+
+it("shows the high-risk line from the GOVERNING summary (action required when > 0)", async () => {
+  server.use(
+    http.get("/api/v1/objectives/scorecard", () =>
+      HttpResponse.json(
+        scorecard({ by_rag: { green: 8, amber: 0, red: 0, unmeasured: 0 }, on_target: 8 }),
+      ),
+    ),
+    http.get("/api/v1/reports/compliance-checklist", () => HttpResponse.json(checklist(0))),
+    // default /risks/summary fixture: published, high_risk 2
+  );
+  renderWithProviders(<PlanCard />);
+  const card = await screen.findByRole("group", { name: /plan quadrant/i });
+  await waitFor(() =>
+    expect(within(card).getByLabelText("2 high / critical risks")).toBeInTheDocument(),
+  );
+  // a high/critical risk drives the headline to Action required even with green objectives + 0 overdue
+  expect(within(card).getByLabelText(/status: action required/i)).toBeInTheDocument();
+});
+
+it("shows an honest 'no published register' line when the register is unpublished", async () => {
+  server.use(
+    http.get("/api/v1/objectives/scorecard", () =>
+      HttpResponse.json(
+        scorecard({ by_rag: { green: 8, amber: 0, red: 0, unmeasured: 0 }, on_target: 8 }),
+      ),
+    ),
+    http.get("/api/v1/reports/compliance-checklist", () => HttpResponse.json(checklist(0))),
+    http.get("/api/v1/risks/summary", () =>
+      HttpResponse.json({
+        published: false,
+        total: 0,
+        by_band: { critical: 0, high: 0, medium: 0, low: 0, unscored: 0 },
+        high_risk: 0,
+        by_type: { risk: 0, opportunity: 0 },
+        effectiveness: { treated: 0, recorded: 0, pending: 0 },
+      }),
+    ),
+  );
+  renderWithProviders(<PlanCard />);
+  const card = await screen.findByRole("group", { name: /plan quadrant/i });
+  await waitFor(() =>
+    expect(within(card).getByText(/no published risk register yet/i)).toBeInTheDocument(),
   );
 });

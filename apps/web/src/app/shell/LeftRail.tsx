@@ -27,7 +27,10 @@ const PHASE_CLAUSES: Record<PdcaPhase, string> = {
 type NavItem = { to: string; label: string; prefix: string; gate?: string };
 
 const NAV: Record<PdcaPhase, NavItem[]> = {
-  PLAN: [{ to: "/objectives", label: "Objectives", prefix: "/objectives", gate: "objective.read" }],
+  PLAN: [
+    { to: "/objectives", label: "Objectives", prefix: "/objectives", gate: "objective.read" },
+    { to: "/risks", label: "Risk register", prefix: "/risks", gate: "register.read" },
+  ],
   DO: [
     { to: "/library", label: "Library", prefix: "/library" },
     { to: "/tasks", label: "Review & Approve", prefix: "/tasks" },

@@ -47,6 +47,7 @@ export const SOURCE_LABEL: Record<CapaSource, string> = {
   process: "Process",
   complaint: "Complaint",
   review_output: "Mgmt review",
+  risk: "Risk",
 };
 
 // #2b: humanise the CAPA close_state so the raw backend casing ('RootCause'/'ActionPlan') never reaches
