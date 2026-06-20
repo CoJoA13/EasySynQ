@@ -412,10 +412,11 @@ async def spawn_capa_for_risk_endpoint(
     lock to close a process-reassign TOCTOU) AND register.read on the locked risk (the caller must
     be able to read the risk they treat — the service enforces it). The CAPA inherits the risk's
     process_id + a severity auto-derived from the band; linked_capa_id is set on the live satellite
-    (operational metadata — works at any register head state, no editable gate). On a replay,
-    capa.create is re-checked over the latched CAPA's OWN process (it may differ from the risk's
-    current process after a reassign). Returns the spawned CAPA (the complaint→CAPA response
-    shape)."""
+    (operational metadata — works at any register head state, no editable gate). Only ``risk`` rows
+    can be treated — an ``opportunity`` row is rejected (422). On a replay, capa.read is re-checked
+    over the latched CAPA's OWN process (it may differ from the risk's current process after a
+    reassign, and the replay returns the CAPA's details). Returns the spawned CAPA (the
+    complaint→CAPA response shape)."""
     capa, created = await spawn_capa_for_risk(session, authz_sink, request, caller, risk_id)
     return JSONResponse(
         status_code=status.HTTP_201_CREATED if created else status.HTTP_200_OK,

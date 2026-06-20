@@ -195,9 +195,9 @@ async def test_spawn_replay_denied_for_reassigned_risk_cross_process(
 ) -> None:
     """Codex P1: the latched CAPA keeps its ORIGINAL process when the risk is later reassigned. The
     SYSTEM author creates a P1 risk, spawns a CAPA (@ P1), then reassigns the risk to P2. A bound
-    owner of P2 (capa.create + register.read @ P2 via the bundle, but NOT @ P1) then hits the replay
-    path and is 403'd — the replay re-authorizes capa.create over the CAPA's OWN process (P1), which
-    they do not own, so the cross-process CAPA is never disclosed to them."""
+    owner of P2 (full P2 bundle incl. capa.read, but NOTHING on P1) then hits the replay path and is
+    403'd — the replay re-authorizes capa.read over the CAPA's OWN process (P1), which they do not
+    own, so the cross-process CAPA is never disclosed to them."""
     await _grant(subj.a, "register.manage")
     await _grant(subj.a, "register.read")
     await _grant(subj.a, "capa.create")
@@ -226,6 +226,60 @@ async def test_spawn_replay_denied_for_reassigned_risk_cross_process(
     assert denied.status_code == 403, (
         denied.text
     )  # the latched CAPA's OWN process (P1) is re-checked
+
+
+async def test_spawn_replay_requires_capa_read(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    """Codex round 2: the replay RETURNS the existing CAPA's details, so it is gated capa.read over
+    the CAPA's process (the GET /capas/{id} authority), not merely capa.create. A caller with
+    register.read + capa.create but NO capa.read reaches the spawn but is 403'd on the replay — they
+    cannot receive a CAPA they could not fetch directly."""
+    await _grant(subj.a, "register.manage")
+    await _grant(subj.a, "register.read")
+    await _grant(subj.a, "capa.create")
+    await _grant(subj.a, "capa.read")
+    ha = _auth(token_factory, subj.a)
+    row = await _create_risk(app_client, ha)  # org-level (SYSTEM scopes)
+    spawn = await app_client.post(f"/api/v1/risks/{row['id']}/capa", headers=ha)
+    assert spawn.status_code == 201, spawn.text  # CAPA spawned by subj.a
+
+    await _grant(subj.c, "register.read")
+    await _grant(subj.c, "capa.create")  # ...but deliberately NOT capa.read
+    hc = _auth(token_factory, subj.c)
+    denied = await app_client.post(f"/api/v1/risks/{row['id']}/capa", headers=hc)
+    assert denied.status_code == 403, (
+        denied.text
+    )  # the replay returns a CAPA read → capa.read gated
+
+
+async def test_spawn_rejects_opportunity_rows(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    """Codex round 2: a CAPA is a corrective/preventive action — only a ``risk`` row is treated by
+    one. A ``type=opportunity`` row is rejected (422); opportunities are pursued via improvement
+    initiatives, never stamped as a source=risk corrective CAPA."""
+    await _grant(subj.a, "register.manage")
+    await _grant(subj.a, "register.read")
+    await _grant(subj.a, "capa.create")
+    await _grant(subj.a, "capa.read")
+    await _grant(subj.a, "process.create")
+    ha = _auth(token_factory, subj.a)
+    p1 = await _create_process(app_client, ha)
+    opp = await app_client.post(
+        "/api/v1/risks",
+        headers=ha,
+        json={
+            "type": "opportunity",
+            "description": "an opportunity to pursue",
+            "likelihood": 2,
+            "severity": 2,
+            "process_id": p1["id"],
+        },
+    )
+    assert opp.status_code == 201, opp.text
+    rejected = await app_client.post(f"/api/v1/risks/{opp.json()['id']}/capa", headers=ha)
+    assert rejected.status_code == 422, rejected.text
 
 
 async def test_direct_capa_raise_rejects_risk_source(
