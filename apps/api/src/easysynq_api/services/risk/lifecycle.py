@@ -132,6 +132,18 @@ async def publish_register(
             ),
         )
     working = await _working_register(session, head.id)
+    # Reject an empty register (Codex): besides being meaningless to control, this closes a race —
+    # the first POST /risks commits the (0-row) head in resolve_or_create_head BEFORE it takes the
+    # head FOR UPDATE to insert the row, so a publish that locks the head in that window would
+    # freeze an EMPTY version and 409 the in-flight first risk (losing it). Rejecting under the lock
+    # keeps the head Draft, so the blocked row insert resumes and succeeds.
+    if not working["rows"]:
+        raise ProblemException(
+            status=409,
+            code="conflict",
+            title="Risk register has no rows to publish",
+            detail="add at least one risk or opportunity before publishing the register",
+        )
     latest = await vault_repo.latest_version(session, head.id)
     if register_needs_freeze(
         latest_version_state=latest.version_state if latest is not None else None,
