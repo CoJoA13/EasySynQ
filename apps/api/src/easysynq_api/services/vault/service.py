@@ -321,6 +321,17 @@ def reject_managed_register_creation(document_type_code: str | None) -> None:
         )
 
 
+async def is_managed_register_doc(session: AsyncSession, doc: DocumentedInformation) -> bool:
+    """True if ``doc`` is a managed register head (RSK/CTX — ``_MANAGED_REGISTERS``). The read-only
+    boolean behind ``reject_managed_register_mutation`` — for callers that need the predicate rather
+    than the raise (e.g. the CREATE-DCR-implement managed-subtype guard, alongside the OBJ/MR PK
+    probes). Reads stay open."""
+    if doc.document_type_id is None:
+        return False
+    dt = await repository.get_document_type(session, doc.document_type_id)
+    return dt is not None and dt.code in _MANAGED_REGISTERS
+
+
 async def reject_objective_byte_path(session: AsyncSession, doc: DocumentedInformation) -> None:
     """S-obj-4 (O-5) / S-mr-1 / S-risk-1b / S-context-1: a content-managed DOCUMENT subtype's
     content
