@@ -1426,6 +1426,20 @@ the **Management-Review 9.3.2(b)** context-change input, finally sourced from BO
 Interested-Parties governing summaries [un-gapping `CONTEXT_CHANGES`, the R50 / S-context-2 deferral]); the
 FE (`S-interested-parties-fe`, an own `/interested-parties` SPA cloning `features/context/`).
 
+**As-built update (S-interested-parties-2, ✅ PR #249, squash `0124132`):** the read consumers shipped —
+`GET /interested-parties/summary` (the `governing_register` + the pure `summarize_register` →
+`{published, total, by_party_type, by_influence [+ an `unspecified` bucket for a NULL influence],
+by_status, active, never_reviewed}`, gated `register.read` @ SYSTEM, 403-on-deny, mounted before `/{id}`)
+AND the **Management-Review 9.3.2(b)** `CONTEXT_CHANGES` consumer, now sourced from BOTH the 4.1 Context AND
+the 4.2 Interested-Parties governing summaries as a nested `{context, interested_parties}` envelope (each
+half `null` when its register is unpublished; `available` if either is published; a gap only when both are)
+— **un-gapping the long-carried `CONTEXT_CHANGES` sourceless gap**. NO migration (head stays `0061`), NO new
+permission key, **NO new `ReviewInputType` enum member** (the owner first chose two separate MR rows; a 2nd
+row would force a `review_input_type` `ALTER TYPE` migration + a 13th canonical input, against the binding
+NO-migration/12-input constraints — surfaced via AskUserQuestion and reverted to the nested single row).
+diff-critic + a 3-lens adversarial Workflow CLEAN (0 functional findings); Codex not run. The only remaining
+R51 residual is the FE (`S-interested-parties-fe`). Spec: `docs/superpowers/specs/2026-06-21-s-interested-parties-2-design.md`.
+
 **Validation.** Spec-first (`docs/superpowers/specs/2026-06-21-s-interested-parties-design.md`); the
 architecture is settled (R49/R50), so 4 owner decisions were surfaced via AskUserQuestion before any code
 (content model, `org_id`, scope-split, FE). migration-reviewer + diff-critic + a 3-lens adversarial Workflow
