@@ -31,6 +31,7 @@ import { RiskScorecardBand } from "./RiskScorecardBand";
 import { RiskMatrix } from "./RiskMatrix";
 import { RiskDetailDrawer } from "./RiskDetailDrawer";
 import { NewRiskModal } from "./NewRiskModal";
+import { RegisterLifecyclePanel } from "./RegisterLifecyclePanel";
 
 const SORT_KEYS = ["rating", "band", "type"] as const;
 type SortKey = (typeof SORT_KEYS)[number];
@@ -78,6 +79,10 @@ export function RisksRegisterPage() {
   );
   const systemCanManage = sys.can("register.manage");
   const canCreate = systemCanManage || (!!firstProcessId && procPerms.can("register.manage"));
+  // The register-steward console (S-risk-5) gates on SYSTEM keys ONLY — the org-head lifecycle is not
+  // process-scoped (start-revision/publish = register.manage @ SYSTEM; release = document.release @
+  // SYSTEM, held by no seeded role → a SYSTEM override in v1). NOT the first-readable-process probe.
+  const systemCanRelease = sys.can("document.release");
 
   const headState = status.data?.state ?? null;
   // null = no register yet (create bootstraps) OR status not-yet-loaded/errored → don't block (the
@@ -175,6 +180,13 @@ export function RisksRegisterPage() {
           {banner}
         </Alert>
       )}
+
+      <RegisterLifecyclePanel
+        state={headState}
+        canManage={systemCanManage}
+        canRelease={systemCanRelease}
+        rowCount={rows.length}
+      />
 
       {rows.length === 0 ? (
         <Alert color="gray" title="No risks or opportunities yet" mt="md">

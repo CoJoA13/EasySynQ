@@ -18,6 +18,22 @@ function grant(...keys: string[]) {
   );
 }
 
+// Flip the register head's lifecycle state (the steward-console gating source).
+function registerState(state: string) {
+  server.use(
+    http.get("/api/v1/risks/register", () =>
+      HttpResponse.json({
+        exists: true,
+        register_doc_id: "d0c00000-0000-0000-0000-0000000000aa",
+        identifier: "RSK-001",
+        state,
+        current_effective_version_id: "ve000001-0001-0001-0001-000000000001",
+        has_governing: true,
+      }),
+    ),
+  );
+}
+
 it("renders the matrix, scorecard, and a row per risk with a band badge", async () => {
   const { container } = renderWithProviders(<RisksRegisterPage />, { route: "/risks" });
   await waitFor(() =>
@@ -187,4 +203,138 @@ it("shows an empty state when there are no risks", async () => {
   await waitFor(() =>
     expect(screen.getByText(/no risks or opportunities yet/i)).toBeInTheDocument(),
   );
+});
+
+// ---- S-risk-5 register-steward lifecycle console ----
+
+it("hides the steward console for a non-steward (no register.manage / document.release)", async () => {
+  // default /me/permissions = empty → no steward affordance
+  renderWithProviders(<RisksRegisterPage />, { route: "/risks" });
+  await waitFor(() =>
+    expect(screen.getByText("Supplier single point of failure")).toBeInTheDocument(),
+  );
+  expect(screen.queryByText("Register lifecycle")).not.toBeInTheDocument();
+});
+
+it("the console shows Start revision on an Effective register (register.manage @ SYSTEM)", async () => {
+  grant("register.manage"); // default fixture state = Effective
+  renderWithProviders(<RisksRegisterPage />, { route: "/risks" });
+  await waitFor(() => expect(screen.getByText("Register lifecycle")).toBeInTheDocument());
+  expect(screen.getByRole("button", { name: "Start revision" })).toBeInTheDocument();
+  // Effective is not editable + no document.release → no Publish / Release affordance (quiet absence)
+  expect(screen.queryByRole("button", { name: "Publish revision" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Release" })).not.toBeInTheDocument();
+});
+
+it("the console is hidden for a PROCESS-only register.manage holder (org head is SYSTEM-only)", async () => {
+  registerState("UnderRevision"); // editable head, but…
+  server.use(
+    http.get("/api/v1/me/permissions", ({ request }) => {
+      const level = new URL(request.url).searchParams.get("scope_level");
+      return HttpResponse.json({
+        scope: { level: level ?? "SYSTEM", selector: null },
+        permissions:
+          level === "PROCESS" ? [{ key: "register.manage", effect: "ALLOW", source: "test" }] : [],
+      });
+    }),
+  );
+  renderWithProviders(<RisksRegisterPage />, { route: "/risks" });
+  await waitFor(() =>
+    expect(screen.getByText("Supplier single point of failure")).toBeInTheDocument(),
+  );
+  // a PROCESS-only holder CAN create rows (the New button, via the first-readable-process probe)…
+  expect(screen.getByRole("button", { name: "New risk" })).toBeInTheDocument();
+  // …but CANNOT steward the org head — the console is SYSTEM-gated, so it's hidden.
+  expect(screen.queryByText("Register lifecycle")).not.toBeInTheDocument();
+});
+
+it("publishes a register revision from the console on an editable head", async () => {
+  registerState("UnderRevision");
+  grant("register.manage");
+  const user = userEvent.setup();
+  renderWithProviders(<RisksRegisterPage />, { route: "/risks" });
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: "Publish revision" })).toBeInTheDocument(),
+  );
+  await user.click(screen.getByRole("button", { name: "Publish revision" }));
+  // the publish modal opens with an optional change-reason field
+  expect(await screen.findByText("Publish register revision")).toBeInTheDocument();
+  await user.type(screen.getByLabelText("Change reason"), "Q3 reassessment");
+  // exact name → the modal's submit, not the "Publish revision" opener
+  await user.click(screen.getByRole("button", { name: "Publish" }));
+  // the modal closes on success
+  await waitFor(() =>
+    expect(screen.queryByText("Publish register revision")).not.toBeInTheDocument(),
+  );
+});
+
+it("disables Publish until the register has at least one row", async () => {
+  registerState("Draft");
+  grant("register.manage");
+  server.use(http.get("/api/v1/risks", () => HttpResponse.json({ data: [] })));
+  renderWithProviders(<RisksRegisterPage />, { route: "/risks" });
+  await waitFor(() => expect(screen.getByText("Register lifecycle")).toBeInTheDocument());
+  expect(screen.getByRole("button", { name: "Publish revision" })).toBeDisabled();
+  expect(screen.getByText("Add a risk before publishing.")).toBeInTheDocument();
+});
+
+it("shows Release on an Approved register (document.release) and runs the confirm", async () => {
+  registerState("Approved");
+  grant("document.release"); // the cutover key (SYSTEM-override-only in v1)
+  const user = userEvent.setup();
+  renderWithProviders(<RisksRegisterPage />, { route: "/risks" });
+  await waitFor(() => expect(screen.getByRole("button", { name: "Release" })).toBeInTheDocument());
+  await user.click(screen.getByRole("button", { name: "Release" }));
+  const dialog = await screen.findByRole("dialog");
+  expect(
+    within(dialog).getByText(/promotes the approved version to effective/i),
+  ).toBeInTheDocument();
+  await user.click(within(dialog).getByRole("button", { name: "Release" }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+});
+
+it("the Release confirm stays open and surfaces the SoD-2 reason on a 409", async () => {
+  registerState("Approved");
+  grant("document.release");
+  server.use(
+    http.post("/api/v1/risks/register/release", () =>
+      HttpResponse.json(
+        { code: "sod_violation", title: "You can't release a revision you authored." },
+        { status: 409 },
+      ),
+    ),
+  );
+  const user = userEvent.setup();
+  renderWithProviders(<RisksRegisterPage />, { route: "/risks" });
+  await waitFor(() => expect(screen.getByRole("button", { name: "Release" })).toBeInTheDocument());
+  await user.click(screen.getByRole("button", { name: "Release" }));
+  const dialog = await screen.findByRole("dialog");
+  await user.click(within(dialog).getByRole("button", { name: "Release" }));
+  // the server reason lands calmly in-dialog and the confirm STAYS OPEN (ConfirmDestructive trap)
+  await waitFor(() =>
+    expect(
+      within(dialog).getByText("You can't release a revision you authored."),
+    ).toBeInTheDocument(),
+  );
+  expect(screen.getByRole("dialog")).toBeInTheDocument();
+});
+
+it("a document.release-only steward sees the card but no actionable button on Effective", async () => {
+  // the OR-gate's second leg: canRelease (document.release) opens the console, but on an Effective
+  // head with no register.manage there's nothing to release/publish/start → quiet absence, no
+  // instruction to an action the holder can't take.
+  grant("document.release"); // default fixture state = Effective
+  renderWithProviders(<RisksRegisterPage />, { route: "/risks" });
+  await waitFor(() => expect(screen.getByText("Register lifecycle")).toBeInTheDocument());
+  expect(screen.queryByRole("button", { name: "Release" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Start revision" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Publish revision" })).not.toBeInTheDocument();
+});
+
+it("points the steward to Tasks while a revision is in review", async () => {
+  registerState("InReview");
+  grant("register.manage");
+  renderWithProviders(<RisksRegisterPage />, { route: "/risks" });
+  await waitFor(() => expect(screen.getByText(/an approver decides in/i)).toBeInTheDocument());
+  expect(screen.getByRole("link", { name: "Tasks" })).toHaveAttribute("href", "/tasks");
 });
