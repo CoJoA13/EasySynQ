@@ -7,9 +7,8 @@ matching, so a
 wrong mount order resolves ``register`` to ``get_interested_party_endpoint`` and 422s on the bad
 UUID. ``register`` does not parse as a UUID, so the order is *safe but wrong* (a 422), which a
 no-grant 403 test could mask — assert the app-level resolution order directly. A real UUID still
-reaches the row route.
-
-(``GET /interested-parties/summary`` lands in S-interested-parties-2 — not asserted here.)"""
+reaches the row route. ``GET /interested-parties/summary`` (S-interested-parties-2) mounts before
+``{party_id}`` too — asserted below."""
 
 from __future__ import annotations
 
@@ -18,6 +17,17 @@ from collections.abc import Callable
 from fastapi import FastAPI
 
 _Resolve = Callable[[FastAPI, str, str], str | None]
+
+
+def test_summary_resolves_before_party_id(resolve_route_endpoint: _Resolve) -> None:
+    """GET /interested-parties/summary must resolve to interested_party_summary_endpoint, NOT the
+    {party_id} str-convertor route (the S-context shadow guard; S-interested-parties-2)."""
+    from easysynq_api.main import create_app
+
+    path = "/api/v1/interested-parties/summary"
+    expected = "interested_party_summary_endpoint"
+    name = resolve_route_endpoint(create_app(), path, "GET")
+    assert name == expected, f"{path} resolves to {name}, not {expected}"
 
 
 def test_register_resolves_before_party_id(resolve_route_endpoint: _Resolve) -> None:

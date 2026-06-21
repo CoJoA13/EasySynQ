@@ -36,6 +36,8 @@ from ...db.models.kpi_measurement import KpiMeasurement
 from ...db.models.management_review import ManagementReview
 from ...db.models.review_input import ReviewInput
 from ...domain.authz import RequestContext, ResourceContext, authorize
+from ...domain.context.summary import summarize_register as summarize_context
+from ...domain.interested_parties.summary import summarize_register as summarize_parties
 from ...domain.mgmt_review.inputs import (
     summarize_audits,
     summarize_capas_ncrs,
@@ -48,6 +50,8 @@ from ...problems import ProblemException
 from ..audits import repository as audits_repo
 from ..authz import gather_grants
 from ..capa import repository as capa_repo
+from ..context import governing_register as context_governing_register
+from ..interested_parties import governing_register as interested_parties_governing_register
 from ..objectives import compute_scorecard
 from ..reports import compute_checklist
 from ..risk import governing_register
@@ -74,12 +78,11 @@ _REASON_NO_SOURCE = "not available (no structured source)"
 _REASON_NO_PRIOR = "not available (no prior released review)"
 _REASON_NO_REGISTER = "not available (no published register)"
 
-# The five sourceless 9.3.2 inputs (b/c1/c7/d/f) — honest fixed-reason gap rows (s3/F4). 9.3.2(e)
-# RISK_OPPORTUNITY_ACTIONS left this set in S-risk-2 — it is now a sourced read of the clause-6.1
-# register's governing snapshot (a gap row only when the owner lacks register.read or no register
-# has been published yet — the PRIOR_ACTIONS-until-a-release shape).
+# The four sourceless 9.3.2 inputs (c1/c7/d/f) — honest fixed-reason gap rows (s3/F4). 9.3.2(e)
+# RISK_OPPORTUNITY_ACTIONS left this set in S-risk-2; 9.3.2(b) CONTEXT_CHANGES left it in
+# S-interested-parties-2 — both are now sourced reads of a register's governing snapshot (a gap row
+# only when the owner lacks register.read or no register has been published yet).
 _SOURCELESS_GAPS = (
-    ReviewInputType.CONTEXT_CHANGES,
     ReviewInputType.CUSTOMER_SATISFACTION,
     ReviewInputType.SUPPLIER_PERFORMANCE,
     ReviewInputType.RESOURCE_ADEQUACY,
@@ -201,6 +204,29 @@ async def _build_row(
         summary = summarize_register(register)
         return _source_ref(available=True, summary=summary, reason=None, now=now)
 
+    if input_type is ReviewInputType.CONTEXT_CHANGES:
+        # 9.3.2(b) — "changes in external/internal issues AND interested parties": the CONTROLLED
+        # (governing) read-of-record of BOTH clause-4 register heads' current Effective frozen
+        # snapshots, NEVER the live working satellites (which during UnderRevision carry the
+        # steward's unpublished edits — the WORM minutes must freeze the point-in-time governing
+        # view). One register.read gate covers both (org-level, SYSTEM). The nested
+        # {context, interested_parties} envelope keeps each pure projection's JSON leaves; a half is
+        # null when its register is unpublished. Available if EITHER is published; a gap only when
+        # BOTH are (the no-published-register shape).
+        if not await _owner_holds(session, owner, _KEY_REGISTER):
+            return _source_ref(available=False, summary=None, reason=_REASON_NO_ACCESS, now=now)
+        context_reg = await context_governing_register(session, org_id)
+        parties_reg = await interested_parties_governing_register(session, org_id)
+        if context_reg is None and parties_reg is None:
+            return _source_ref(available=False, summary=None, reason=_REASON_NO_REGISTER, now=now)
+        context_changes: dict[str, Any] = {
+            "context": summarize_context(context_reg) if context_reg is not None else None,
+            "interested_parties": (
+                summarize_parties(parties_reg) if parties_reg is not None else None
+            ),
+        }
+        return _source_ref(available=True, summary=context_changes, reason=None, now=now)
+
     if input_type is ReviewInputType.PRIOR_ACTIONS:
         # Gap row until a second review exists (v1 — the prior-MR outputs read lands with the 2nd
         # review; the spec accepts this for the first cycle).
@@ -212,7 +238,7 @@ async def _build_row(
 
 
 # The ordered, positioned 9.3.2 set (the canonical 9.3.2(a)…(f) order — the enum's declaration
-# order). Sourced types resolve through _build_row; the five sourceless ones are fixed gap rows.
+# order). Sourced types resolve through _build_row; the four sourceless ones are fixed gap rows.
 _INPUT_ORDER: tuple[ReviewInputType, ...] = tuple(ReviewInputType)
 
 

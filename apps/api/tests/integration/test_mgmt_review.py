@@ -48,9 +48,10 @@ _SOURCE_KEYS = (
     "drift.read",
 )
 
-# The 12 canonical 9.3.2 input types (enum-declaration order). 7 sourced + 5 sourceless gap
-# (S-risk-2 moved RISK_OPPORTUNITY_ACTIONS into the sourced set — the clause-6.1 register's
-# governing read; sourced-but-gap until a register is published OR the owner lacks register.read).
+# The 12 canonical 9.3.2 input types (enum-declaration order). 8 sourced + 4 sourceless gap
+# (S-risk-2 moved RISK_OPPORTUNITY_ACTIONS into the sourced set; S-interested-parties-2 moved
+# CONTEXT_CHANGES — both are governing-register reads, sourced-but-gap until a register is published
+# OR the owner lacks register.read).
 _SOURCED_TYPES = {
     "OBJECTIVES_STATUS",
     "PROCESS_PERFORMANCE",
@@ -58,10 +59,10 @@ _SOURCED_TYPES = {
     "MONITORING_RESULTS",
     "AUDIT_RESULTS",
     "RISK_OPPORTUNITY_ACTIONS",  # sourced-but-gap until a register is published (v1)
+    "CONTEXT_CHANGES",  # 9.3.2(b) — sourced from the 4.1 + 4.2 governing registers (S-ip-2)
     "PRIOR_ACTIONS",  # sourced-but-gap until a 2nd review exists (v1)
 }
 _SOURCELESS_TYPES = {
-    "CONTEXT_CHANGES",
     "CUSTOMER_SATISFACTION",
     "SUPPLIER_PERFORMANCE",
     "RESOURCE_ADEQUACY",
@@ -261,10 +262,10 @@ async def test_compile_inputs_writes_all_twelve_rows(
     app_client: AsyncClient, token_factory: Callable[..., str]
 ) -> None:
     """A fully-granted owner compiles all 12 rows: the 5 live sourced rows available=True with a
-    summary, the 5 sourceless gap rows available=False with a reason (F4). PRIOR_ACTIONS is a
-    sourced-but-gap row (no 2nd review yet); RISK_OPPORTUNITY_ACTIONS is a sourced-but-gap row here
+    summary, the other 7 available=False with a reason (F4). PRIOR_ACTIONS is a sourced-but-gap row
+    (no 2nd review yet); RISK_OPPORTUNITY_ACTIONS and CONTEXT_CHANGES are sourced-but-gap here
     because this owner is NOT granted register.read (the available case — register.read + a
-    published register — is proven by test_risk_lifecycle's governing-register MR test)."""
+    published register — is proven by the risk/interested-parties governing-MR tests)."""
     subject = f"mr-comp-{uuid.uuid4()}"
     h = _auth(token_factory, subject)
     # The creator IS the review owner (create_document sets owner_user_id=actor.id); grant the union
@@ -304,16 +305,17 @@ async def test_compile_inputs_writes_all_twelve_rows(
     assert set(obj["by_rag"]) == {"green", "amber", "red", "unmeasured"}
     assert obj["on_target"] == obj["by_rag"]["green"]
 
-    # PRIOR_ACTIONS + RISK_OPPORTUNITY_ACTIONS (sourced-but-gap here) + the five sourceless inputs
-    # are gap rows (available=False with a reason). RISK_OPPORTUNITY_ACTIONS gap-rows on the missing
-    # register.read grant (a no-access reason), not on a missing source.
-    for t in {"PRIOR_ACTIONS", "RISK_OPPORTUNITY_ACTIONS"} | _SOURCELESS_TYPES:
+    # PRIOR_ACTIONS + RISK_OPPORTUNITY_ACTIONS + CONTEXT_CHANGES (sourced-but-gap here) + the four
+    # sourceless inputs are gap rows (available=False with a reason). RISK_OPPORTUNITY_ACTIONS and
+    # CONTEXT_CHANGES gap-row on the missing register.read grant (a no-access reason), not a missing
+    # source.
+    for t in {"PRIOR_ACTIONS", "RISK_OPPORTUNITY_ACTIONS", "CONTEXT_CHANGES"} | _SOURCELESS_TYPES:
         assert by_type[t]["available"] is False, by_type[t]
         assert by_type[t]["source_ref"].get("reason"), by_type[t]
-    assert (
-        by_type["RISK_OPPORTUNITY_ACTIONS"]["source_ref"]["reason"]
-        == "not available (insufficient access)"
-    ), by_type["RISK_OPPORTUNITY_ACTIONS"]
+    for t in ("RISK_OPPORTUNITY_ACTIONS", "CONTEXT_CHANGES"):
+        assert by_type[t]["source_ref"]["reason"] == "not available (insufficient access)", by_type[
+            t
+        ]
 
 
 async def test_compile_inputs_owner_without_audit_read_yields_gap_row_not_403(

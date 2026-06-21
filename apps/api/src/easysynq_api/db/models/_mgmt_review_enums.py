@@ -10,7 +10,7 @@ from sqlalchemy import Enum as SAEnum
 
 class ReviewInputType(enum.Enum):
     PRIOR_ACTIONS = "PRIOR_ACTIONS"  # 9.3.2(a)
-    CONTEXT_CHANGES = "CONTEXT_CHANGES"  # 9.3.2(b) — gap (no source)
+    CONTEXT_CHANGES = "CONTEXT_CHANGES"  # 9.3.2(b) — sourced (context 4.1 + parties 4.2)
     CUSTOMER_SATISFACTION = "CUSTOMER_SATISFACTION"  # 9.3.2(c1) — gap
     OBJECTIVES_STATUS = "OBJECTIVES_STATUS"  # 9.3.2(c2)
     PROCESS_PERFORMANCE = "PROCESS_PERFORMANCE"  # 9.3.2(c3)
