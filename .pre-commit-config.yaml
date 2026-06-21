@@ -2,7 +2,12 @@
 minimum_pre_commit_version: "3.5.0"
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.6.9
+    # Pin to the SAME ruff the CI `api` job runs (`uv run ruff` = 0.15.17, uv-pinned). The local
+    # pre-commit ruff-format MUST match CI's, or the two wrap the same code differently and fight —
+    # e.g. v0.6.9 wrapped a long `assert cond, (msg)` as `assert (\n cond\n), msg` while 0.15.17
+    # wraps it as `assert cond, (\n msg\n)`, so a commit looped (pre-commit reformats → abort → uv
+    # re-reformats → CI). Bump this in lockstep with the uv.lock ruff pin (the S-context-2 lesson).
+    rev: v0.15.17
     hooks:
       - id: ruff
         args: [--fix]
