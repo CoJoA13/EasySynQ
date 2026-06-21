@@ -7,6 +7,10 @@ import type {
   AuditProgramList,
   Capa,
   Complaint,
+  ContextIssue,
+  ContextListResponse,
+  ContextRegisterStatus,
+  ContextRegisterSummary,
   Dcr,
   DcrDetail,
   DcrImpactList,
@@ -2456,6 +2460,81 @@ export const riskSpawnedCapaFixture = {
   created_at: "2026-06-20T10:00:00+00:00",
 } satisfies Capa;
 
+// ---- S-context-fe Context register fixtures (pinned to api/context.py _context_issue /
+// _register_status + domain/context/summary.summarize_register) ----
+const CONTEXT_HEAD_ID = "c0c00000-0000-0000-0000-0000000000bb";
+function contextIssue(over: Partial<ContextIssue> & Pick<ContextIssue, "id">): ContextIssue {
+  return {
+    register_doc_id: CONTEXT_HEAD_ID,
+    classification: "internal",
+    category: "strength",
+    status: "active",
+    description: "A context issue",
+    last_reviewed_at: "2026-06-01T00:00:00+00:00",
+    row_version: 1,
+    created_at: "2026-06-20T09:00:00+00:00",
+    updated_at: "2026-06-20T09:00:00+00:00",
+    ...over,
+  } satisfies ContextIssue;
+}
+
+export const contextListFixture = {
+  data: [
+    contextIssue({
+      id: "cc000001-0001-0001-0001-000000000001",
+      classification: "internal",
+      category: "strength",
+      description: "Skilled and certified QA team",
+    }),
+    contextIssue({
+      id: "cc000002-0002-0002-0002-000000000002",
+      classification: "internal",
+      category: "weakness",
+      description: "Legacy on-disk mirror is hard to maintain",
+      last_reviewed_at: null,
+    }),
+    contextIssue({
+      id: "cc000003-0003-0003-0003-000000000003",
+      classification: "external",
+      category: "opportunity",
+      description: "Growing demand for ISO-certified suppliers",
+    }),
+    contextIssue({
+      id: "cc000004-0004-0004-0004-000000000004",
+      classification: "external",
+      category: "threat",
+      description: "Single critical raw-material supplier",
+    }),
+    contextIssue({
+      id: "cc000005-0005-0005-0005-000000000005",
+      classification: "internal",
+      category: null,
+      status: "closed",
+      description: "Pending reorganisation of the QA function",
+      last_reviewed_at: null,
+    }),
+  ],
+} satisfies ContextListResponse;
+
+export const contextSummaryFixture = {
+  published: true,
+  total: 5,
+  by_classification: { internal: 3, external: 2 },
+  by_category: { strength: 1, weakness: 1, opportunity: 1, threat: 1, uncategorized: 1 },
+  by_status: { active: 4, closed: 1 },
+  active: 4,
+  never_reviewed: 2,
+} satisfies ContextRegisterSummary;
+
+export const contextRegisterStatusFixture = {
+  exists: true,
+  register_doc_id: CONTEXT_HEAD_ID,
+  identifier: "CTX-001",
+  state: "Effective",
+  current_effective_version_id: "vc000001-0001-0001-0001-000000000001",
+  has_governing: true,
+} satisfies ContextRegisterStatus;
+
 export const handlers = [
   http.get("/api/v1/risks", () => HttpResponse.json(riskListFixture)),
   http.get("/api/v1/risks/summary", () => HttpResponse.json(riskSummaryFixture)),
@@ -2494,6 +2573,43 @@ export const handlers = [
   ),
   http.post("/api/v1/risks/:id/capa", () =>
     HttpResponse.json(riskSpawnedCapaFixture, { status: 201 }),
+  ),
+  // ---- S-context-fe Context register (clause 4.1) — STATIC routes (/summary, /register*) MUST
+  // register BEFORE /:id or MSW (and the backend router) shadows the literal as :id. ----
+  http.get("/api/v1/context/summary", () => HttpResponse.json(contextSummaryFixture)),
+  http.get("/api/v1/context/register", () => HttpResponse.json(contextRegisterStatusFixture)),
+  http.post("/api/v1/context/register/start-revision", () =>
+    HttpResponse.json({
+      ...contextRegisterStatusFixture,
+      state: "UnderRevision",
+    } satisfies ContextRegisterStatus),
+  ),
+  http.post("/api/v1/context/register/publish", () =>
+    HttpResponse.json({
+      ...contextRegisterStatusFixture,
+      state: "InReview",
+    } satisfies ContextRegisterStatus),
+  ),
+  http.post("/api/v1/context/register/release", () =>
+    HttpResponse.json({
+      ...contextRegisterStatusFixture,
+      state: "Effective",
+    } satisfies ContextRegisterStatus),
+  ),
+  http.get("/api/v1/context", () => HttpResponse.json(contextListFixture)),
+  http.get("/api/v1/context/:id", ({ params }) => {
+    const row =
+      contextListFixture.data.find((r) => r.id === params.id) ?? contextListFixture.data[0]!;
+    return HttpResponse.json({ ...row, id: String(params.id) });
+  }),
+  http.post("/api/v1/context", () =>
+    HttpResponse.json(
+      contextIssue({ id: "cc0000ff-00ff-00ff-00ff-0000000000ff", description: "New issue" }),
+      { status: 201 },
+    ),
+  ),
+  http.patch("/api/v1/context/:id", ({ params }) =>
+    HttpResponse.json(contextIssue({ id: String(params.id) })),
   ),
   // ---- S-improvement-3 Improvement Initiatives (default happy-path; per-test overrides) ----
   // IMPORTANT: the two-segment /…/:id/{stage-events,authorization,request-authorization} routes MUST

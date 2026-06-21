@@ -191,6 +191,15 @@ async def test_register_publish_freeze_and_revision_lifecycle(
         f"/api/v1/tasks/{task_id}/decision", headers=hap, json={"outcome": "approve"}
     )
     assert dec.status_code == 200, dec.text
+    # the GET /context/register caps PREDICT the release outcomes below (S-context-fe): the steward
+    # (the version author) holds document.release but SoD-2 blocks self-release → can_release False,
+    # yet holds register.manage → can_manage True. The third-party releaser is the mirror.
+    s_caps = await _status(app_client, hs)
+    assert s_caps["can_manage"] is True
+    assert s_caps["can_release"] is False
+    r_caps = await _status(app_client, hrl)
+    assert r_caps["can_release"] is True
+    assert r_caps["can_manage"] is False
     self_rel = await app_client.post("/api/v1/context/register/release", headers=hs)
     assert self_rel.status_code == 403, self_rel.text
     assert self_rel.json()["code"] == "sod_violation"
@@ -296,3 +305,23 @@ async def test_row_write_serializes_on_head_lock(
     finally:
         await worker.close()
         await locker.close()
+
+
+async def test_register_status_capabilities(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """GET /context/register carries the server-computed can_release/can_manage (S-context-fe — the
+    steward console's faithful gate). A no-grant member sees both False; a register.manage holder
+    sees can_manage True (the SYSTEM steward probe). can_release stays False without that grant
+    regardless of the shared head's state (the SoD-2-aware multi-axis True path is proven by the
+    lifecycle test, where the caps predict the exact 403/200 release outcomes). Read-only — no head
+    drive, non-polluting."""
+    plain = f"ctx-caps-{uuid.uuid4().hex[:8]}"
+    hp = _auth(token_factory, plain)
+    st = await _status(app_client, hp)
+    assert st["can_manage"] is False
+    assert st["can_release"] is False
+    await _grant(plain, "register.manage")
+    st2 = await _status(app_client, hp)
+    assert st2["can_manage"] is True
+    assert st2["can_release"] is False  # no document.release grant → faithful False

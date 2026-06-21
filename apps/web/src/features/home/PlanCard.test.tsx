@@ -54,7 +54,7 @@ it("omits the overdue line when the checklist read is forbidden", async () => {
   expect(within(card).queryByText(/reviews overdue/i)).not.toBeInTheDocument();
 });
 
-it("renders no-access only when ALL actionable reads are forbidden (incl. the risk summary)", async () => {
+it("renders no-access only when ALL actionable reads are forbidden (risk + context incl.)", async () => {
   server.use(
     http.get("/api/v1/objectives/scorecard", () =>
       HttpResponse.json({ code: "forbidden" }, { status: 403 }),
@@ -63,6 +63,9 @@ it("renders no-access only when ALL actionable reads are forbidden (incl. the ri
       HttpResponse.json({ code: "forbidden" }, { status: 403 }),
     ),
     http.get("/api/v1/risks/summary", () =>
+      HttpResponse.json({ code: "forbidden" }, { status: 403 }),
+    ),
+    http.get("/api/v1/context/summary", () =>
       HttpResponse.json({ code: "forbidden" }, { status: 403 }),
     ),
   );
@@ -116,4 +119,22 @@ it("shows an honest 'no published register' line when the register is unpublishe
   await waitFor(() =>
     expect(within(card).getByText(/no published risk register yet/i)).toBeInTheDocument(),
   );
+});
+
+it("shows the active + never-reviewed context lines from the GOVERNING summary", async () => {
+  server.use(
+    http.get("/api/v1/objectives/scorecard", () =>
+      HttpResponse.json(
+        scorecard({ by_rag: { green: 8, amber: 0, red: 0, unmeasured: 0 }, on_target: 8 }),
+      ),
+    ),
+    http.get("/api/v1/reports/compliance-checklist", () => HttpResponse.json(checklist(0))),
+    // default /context/summary fixture: published, active 4, never_reviewed 2 (the read-of-record)
+  );
+  renderWithProviders(<PlanCard />);
+  const card = await screen.findByRole("group", { name: /plan quadrant/i });
+  await waitFor(() =>
+    expect(within(card).getByLabelText("4 active context issues")).toBeInTheDocument(),
+  );
+  expect(within(card).getByLabelText("2 context issues never reviewed")).toBeInTheDocument();
 });

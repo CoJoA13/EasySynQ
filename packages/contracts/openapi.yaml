@@ -7920,6 +7920,18 @@ components:
             register exists yet.
         current_effective_version_id: { type: [string, "null"], format: uuid }
         has_governing: { type: boolean }
+        can_release:
+          type: boolean
+          description: >-
+            S-context-fe (optional, GET /risks/register only): server-computed — does the caller hold
+            document.release over the head's multi-axis release scope (artifact + folder + level +
+            lifecycle_state + SoD-2)? The faithful steward release gate (a single-axis FE permissions
+            probe can't replicate it). Absent on the lifecycle-action responses.
+        can_manage:
+          type: boolean
+          description: >-
+            S-context-fe (optional, GET /risks/register only): server-computed — does the caller hold
+            register.manage @ SYSTEM (the steward probe gating start-revision / publish)?
     RiskRegisterPublish:
       type: object
       additionalProperties: false
@@ -8029,6 +8041,18 @@ components:
             register exists yet.
         current_effective_version_id: { type: [string, "null"], format: uuid }
         has_governing: { type: boolean }
+        can_release:
+          type: boolean
+          description: >-
+            S-context-fe (optional, GET /context/register only): server-computed — does the caller
+            hold document.release over the head's multi-axis release scope (artifact + folder + level +
+            lifecycle_state + SoD-2)? The faithful steward release gate (a single-axis FE permissions
+            probe can't replicate it). Absent on the lifecycle-action responses.
+        can_manage:
+          type: boolean
+          description: >-
+            S-context-fe (optional, GET /context/register only): server-computed — does the caller
+            hold register.manage @ SYSTEM (the steward probe gating start-revision / publish)?
     ContextRegisterPublish:
       type: object
       additionalProperties: false

@@ -217,6 +217,15 @@ async def test_register_publish_freeze_and_revision_lifecycle(
         f"/api/v1/tasks/{task_id}/decision", headers=hap, json={"outcome": "approve"}
     )
     assert dec.status_code == 200, dec.text
+    # parity with context: the GET /risks/register caps PREDICT the release outcomes below.
+    # The steward (author) holds document.release but SoD-2 blocks self-release: can_release False,
+    # yet holds register.manage: can_manage True; the third-party releaser is the mirror.
+    s_caps = await _status(app_client, hs)
+    assert s_caps["can_manage"] is True
+    assert s_caps["can_release"] is False
+    r_caps = await _status(app_client, hrl)
+    assert r_caps["can_release"] is True
+    assert r_caps["can_manage"] is False
     self_rel = await app_client.post("/api/v1/risks/register/release", headers=hs)
     assert self_rel.status_code == 403, self_rel.text
     assert self_rel.json()["code"] == "sod_violation"

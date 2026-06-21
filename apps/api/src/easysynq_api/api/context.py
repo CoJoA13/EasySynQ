@@ -42,6 +42,7 @@ from ..services.authz import (
     get_authz_audit_sink,
     require,
 )
+from ..services.authz.register_caps import register_capabilities
 from ..services.context import (
     add_context_issue,
     find_head,
@@ -195,6 +196,7 @@ async def _register_release_scope(
 
 @router.get("/context/register")
 async def get_register_endpoint(
+    request: Request,
     caller: AppUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
@@ -203,9 +205,18 @@ async def get_register_endpoint(
     separately
     by GET /context). ``exists:false`` before the first issue is added (the head is lazily created
     on
-    the first POST /context)."""
+    the first POST /context). Carries the server-computed ``can_release``/``can_manage`` capability
+    booleans (S-context-fe) — the steward console's faithful multi-axis release gate (a single-axis
+    FE probe can't replicate ``_register_release_scope``). GET-only; the action routes stay lean
+    (the FE refetches this after each mutation)."""
     head = await find_head(session, caller.org_id)
-    return _register_status(head) if head is not None else dict(_NO_REGISTER)
+    source_ip = request.client.host if request.client else None
+    release_scope = await _register_release_scope(session, head) if head is not None else None
+    caps = await register_capabilities(
+        session, caller, release_scope=release_scope, source_ip=source_ip
+    )
+    base = _register_status(head) if head is not None else dict(_NO_REGISTER)
+    return {**base, **caps}
 
 
 @router.post("/context/register/start-revision")
