@@ -79,10 +79,18 @@ export function RisksRegisterPage() {
   );
   const systemCanManage = sys.can("register.manage");
   const canCreate = systemCanManage || (!!firstProcessId && procPerms.can("register.manage"));
-  // The register-steward console (S-risk-5) gates on SYSTEM keys ONLY — the org-head lifecycle is not
-  // process-scoped (start-revision/publish = register.manage @ SYSTEM; release = document.release @
-  // SYSTEM, held by no seeded role → a SYSTEM override in v1). NOT the first-readable-process probe.
-  const systemCanRelease = sys.can("document.release");
+  // The register-steward console (S-risk-5):
+  //  • start-revision/publish gate on register.manage @ SYSTEM — the backend forces SYSTEM there
+  //    (a bound Process-Owner can't steward the org head). NOT the first-readable-process probe.
+  //  • release gates on document.release at the HEAD's EFFECTIVE scope: the backend builds a
+  //    doc-resource release scope (artifact_id = head.id, …), so a SYSTEM override OR an
+  //    artifact-scoped grant authorizes it. The ARTIFACT probe folds matching SYSTEM grants + scoped
+  //    DENYs (the S-risk-4b effective-scope doctrine), unlike a SYSTEM-only probe (Codex P2).
+  const registerDocId = status.data?.register_doc_id ?? null;
+  const releasePerms = usePermissions(
+    registerDocId ? { level: "ARTIFACT", id: registerDocId } : undefined,
+  );
+  const canRelease = releasePerms.can("document.release");
 
   const headState = status.data?.state ?? null;
   // null = no register yet (create bootstraps) OR status not-yet-loaded/errored → don't block (the
@@ -184,8 +192,7 @@ export function RisksRegisterPage() {
       <RegisterLifecyclePanel
         state={headState}
         canManage={systemCanManage}
-        canRelease={systemCanRelease}
-        rowCount={rows.length}
+        canRelease={canRelease}
       />
 
       {rows.length === 0 ? (

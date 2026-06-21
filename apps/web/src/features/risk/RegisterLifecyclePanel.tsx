@@ -12,8 +12,7 @@ import { useReleaseRiskRegister, useStartRiskRegisterRevision } from "./mutation
 interface Props {
   state: RiskRegisterState | null;
   canManage: boolean; // register.manage @ SYSTEM — start-revision / publish (the org-head steward)
-  canRelease: boolean; // document.release @ SYSTEM — the Approved→Effective cutover (SoD-2)
-  rowCount: number; // live working rows — publish 409s on an empty register
+  canRelease: boolean; // document.release @ the head's effective scope — the Approved→Effective cutover (SoD-2)
 }
 
 function errMsg(e: unknown): string {
@@ -25,11 +24,16 @@ function errMsg(e: unknown): string {
 // version is a DOCUMENT task) so it's not surfaced here.
 //
 // Gating is STATE × permission (the RSK head has no server `capabilities` block, unlike OBJ):
-// start-revision/publish on register.manage @ SYSTEM, release on document.release @ SYSTEM. SYSTEM
-// only — the org-head lifecycle is not process-scoped (a bound Process-Owner can't steward it). The
-// console renders only for a steward (quiet absence for everyone else); each button appears only when
-// its state allows the act (never a dead/disabled affordance — the OBJ Lifecycle-Card idiom).
-export function RegisterLifecyclePanel({ state, canManage, canRelease, rowCount }: Props) {
+// start-revision/publish on register.manage @ SYSTEM (the backend forces SYSTEM there), release on
+// document.release at the head's effective scope (the backend builds a doc-resource scope, so a
+// SYSTEM override OR an artifact-scoped grant authorizes it — the probe folds both + scoped DENYs).
+// The console renders only for a steward (quiet absence for everyone else); each button appears only
+// when its state allows the act (never a dead/disabled affordance — the OBJ Lifecycle-Card idiom).
+//
+// We DON'T gate Publish on a client row count: GET /risks is register.read-filtered, so a
+// manage-without-read steward would see 0 rows for a non-empty register. The server's empty-register
+// 409 is the source of truth — it surfaces calmly in PublishRegisterModal (Codex P2).
+export function RegisterLifecyclePanel({ state, canManage, canRelease }: Props) {
   const startRevision = useStartRiskRegisterRevision();
   const [publishOpen, setPublishOpen] = useState(false);
   const [releaseOpen, setReleaseOpen] = useState(false);
@@ -70,13 +74,9 @@ export function RegisterLifecyclePanel({ state, canManage, canRelease, rowCount 
         {canManage && editable && (
           <Group justify="space-between" wrap="nowrap" gap="md">
             <Text size="xs" c="dimmed">
-              {rowCount === 0
-                ? "Add a risk before publishing."
-                : "Freezes the rows + scoring criteria into a new version and submits it for approval."}
+              Freezes the rows + scoring criteria into a new version and submits it for approval.
             </Text>
-            <Button onClick={() => setPublishOpen(true)} disabled={rowCount === 0}>
-              Publish revision
-            </Button>
+            <Button onClick={() => setPublishOpen(true)}>Publish revision</Button>
           </Group>
         )}
 

@@ -32,7 +32,14 @@ export function PublishRegisterModal({ opened, onClose }: Props) {
   }
 
   return (
-    <Modal opened={opened} onClose={onClose} title="Publish register revision" centered>
+    <Modal
+      opened={opened}
+      // Never let Escape / a backdrop click dismiss mid-publish (the request continues; an eventual
+      // error would be lost with the unmounted state) — the ConfirmDestructive posture (Codex P2).
+      onClose={publish.isPending ? () => {} : onClose}
+      title="Publish register revision"
+      centered
+    >
       <Stack gap="sm">
         {error && <Alert color="red">{error}</Alert>}
         <Text size="sm">

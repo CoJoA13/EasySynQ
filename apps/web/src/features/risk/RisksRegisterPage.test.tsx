@@ -268,14 +268,55 @@ it("publishes a register revision from the console on an editable head", async (
   );
 });
 
-it("disables Publish until the register has at least one row", async () => {
+it("lets Publish proceed (not client-disabled) and surfaces the server's empty-register 409", async () => {
+  // a register.manage steward who lacks register.read sees 0 filtered rows even for a non-empty
+  // register, so the FE must NOT gate Publish on the client row count — the server's 409 is the
+  // source of truth and surfaces calmly in the modal (Codex P2). Here we simulate the empty case.
   registerState("Draft");
   grant("register.manage");
-  server.use(http.get("/api/v1/risks", () => HttpResponse.json({ data: [] })));
+  server.use(
+    http.get("/api/v1/risks", () => HttpResponse.json({ data: [] })),
+    http.post("/api/v1/risks/register/publish", () =>
+      HttpResponse.json(
+        { code: "register_empty", title: "Risk register has no rows to publish." },
+        { status: 409 },
+      ),
+    ),
+  );
+  const user = userEvent.setup();
   renderWithProviders(<RisksRegisterPage />, { route: "/risks" });
   await waitFor(() => expect(screen.getByText("Register lifecycle")).toBeInTheDocument());
-  expect(screen.getByRole("button", { name: "Publish revision" })).toBeDisabled();
-  expect(screen.getByText("Add a risk before publishing.")).toBeInTheDocument();
+  const publishBtn = screen.getByRole("button", { name: "Publish revision" });
+  expect(publishBtn).toBeEnabled();
+  await user.click(publishBtn);
+  expect(await screen.findByText("Publish register revision")).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "Publish" }));
+  // the server reason lands in the modal and it stays open
+  await waitFor(() =>
+    expect(screen.getByText("Risk register has no rows to publish.")).toBeInTheDocument(),
+  );
+  expect(screen.getByText("Publish register revision")).toBeInTheDocument();
+});
+
+it("shows Release for an ARTIFACT-scoped document.release grant (the head-effective probe)", async () => {
+  // document.release granted ONLY at the head's ARTIFACT scope (empty at SYSTEM) must still surface
+  // Release — the probe asks at the register's effective artifact scope, not SYSTEM (Codex P2). A
+  // SYSTEM-only probe would return false here and wrongly hide the button.
+  registerState("Approved");
+  server.use(
+    http.get("/api/v1/me/permissions", ({ request }) => {
+      const level = new URL(request.url).searchParams.get("scope_level");
+      return HttpResponse.json({
+        scope: { level: level ?? "SYSTEM", selector: null },
+        permissions:
+          level === "ARTIFACT"
+            ? [{ key: "document.release", effect: "ALLOW", source: "test" }]
+            : [],
+      });
+    }),
+  );
+  renderWithProviders(<RisksRegisterPage />, { route: "/risks" });
+  await waitFor(() => expect(screen.getByRole("button", { name: "Release" })).toBeInTheDocument());
 });
 
 it("shows Release on an Approved register (document.release) and runs the confirm", async () => {
