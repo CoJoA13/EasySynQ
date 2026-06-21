@@ -4,7 +4,10 @@
 # bundled contract hash drifts from packages/contracts/.contract.lock.
 set -euo pipefail
 
-ROOT="$(git rev-parse --show-toplevel 2>/dev/null || cd "$(dirname "$0")/.." && pwd)"
+# ⚠ The fallback MUST be a subshell: `A || B && pwd` is left-associative, so when `git rev-parse`
+# SUCCEEDS the `&& pwd` still runs and ROOT captures TWO lines (toplevel + pwd) → a mangled spec
+# path. Wrapping the fallback as `(cd … && pwd)` keeps `pwd` inside the `||` branch only.
+ROOT="$(git rev-parse --show-toplevel 2>/dev/null || (cd "$(dirname "$0")/.." && pwd))"
 SPEC="$ROOT/packages/contracts"
 DIST="$SPEC/dist"
 LOCK="$SPEC/.contract.lock"
