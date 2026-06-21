@@ -1815,3 +1815,94 @@ export interface ContextUpdateBody {
   description?: string;
   last_reviewed_at?: string | null;
 }
+
+// ---- S-interested-parties-fe (Interested Parties register, clause 4.2) — pinned to
+// api/interested_parties.py serializers + the openapi InterestedParty* schemas (R51) ----
+// Clause 4.2 is ORG-LEVEL (no process axis) and PURELY CATEGORICAL (no graded band) — like context,
+// unlike risk. party_type is the 7-way ISO-4.2 spine (NOT NULL); influence is the optional (nullable)
+// ORDERED relevance axis; party_name is the anchor identifier + needs_expectations the body (two text
+// fields, vs context's single description).
+export type InterestedPartyType =
+  | "customer"
+  | "regulator"
+  | "supplier"
+  | "employee"
+  | "owner"
+  | "community"
+  | "partner";
+export type InterestedPartyInfluence = "low" | "medium" | "high";
+export type InterestedPartyStatus = "active" | "closed";
+// The IPR head is a kind=DOCUMENT subtype → its lifecycle state is the 7-state document one.
+export type InterestedPartyRegisterState = DocumentCurrentState;
+
+// One interested party — api/interested_parties.py `_interested_party`. influence is the nullable
+// ordered axis; status is never null (a new party is always "active"; retire by closing).
+export interface InterestedParty {
+  id: string;
+  register_doc_id: string;
+  party_type: InterestedPartyType;
+  party_name: string;
+  needs_expectations: string;
+  influence: InterestedPartyInfluence | null;
+  status: InterestedPartyStatus;
+  last_reviewed_at: string | null;
+  row_version: number;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface InterestedPartyListResponse {
+  data: InterestedParty[];
+}
+
+// The IPR register head lifecycle status — api/interested_parties.py `_register_status` /
+// `_NO_REGISTER`. The optional can_release/can_manage are server-computed (GET
+// /interested-parties/register only) — the faithful steward gate (see RiskRegisterStatus).
+export interface InterestedPartyRegisterStatus {
+  exists: boolean;
+  register_doc_id: string | null;
+  identifier: string | null;
+  state: InterestedPartyRegisterState | null;
+  current_effective_version_id: string | null;
+  has_governing: boolean;
+  can_release?: boolean;
+  can_manage?: boolean;
+}
+
+// POST /interested-parties/register/publish body — `RegisterPublish` (optional change reason).
+export interface InterestedPartyRegisterPublishBody {
+  change_reason: string | null;
+}
+
+// GET /interested-parties/summary — the GOVERNING (Effective) categorical read-of-record
+// (S-interested-parties-2). published:false + all-zero counts before the first publish/release.
+// by_influence carries an "unspecified" bucket for NULL-influence rows; active == by_status.active;
+// never_reviewed counts rows with no last_reviewed_at.
+export interface InterestedPartyRegisterSummary {
+  published: boolean;
+  total: number;
+  by_party_type: Record<InterestedPartyType, number>;
+  by_influence: Record<InterestedPartyInfluence | "unspecified", number>;
+  by_status: Record<InterestedPartyStatus, number>;
+  active: number;
+  never_reviewed: number;
+}
+
+export interface InterestedPartyCreateBody {
+  party_type: InterestedPartyType;
+  party_name: string;
+  needs_expectations: string;
+  influence?: InterestedPartyInfluence | null;
+  last_reviewed_at?: string | null;
+}
+
+// Partial PATCH — omitted ≠ null; an explicit null clears influence/last_reviewed_at. A new party has
+// no status field on create (always "active"); status is settable here (active/closed).
+export interface InterestedPartyUpdateBody {
+  party_type?: InterestedPartyType;
+  party_name?: string;
+  needs_expectations?: string;
+  influence?: InterestedPartyInfluence | null;
+  status?: InterestedPartyStatus;
+  last_reviewed_at?: string | null;
+}

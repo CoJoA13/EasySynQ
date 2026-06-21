@@ -30,6 +30,10 @@ import type {
   InitiativeStageEvent,
   InitiativeStageEventList,
   InitiativeTransitionBody,
+  InterestedParty,
+  InterestedPartyListResponse,
+  InterestedPartyRegisterStatus,
+  InterestedPartyRegisterSummary,
   Measurement,
   MeasurementListResponse,
   MgmtReview,
@@ -2535,6 +2539,104 @@ export const contextRegisterStatusFixture = {
   has_governing: true,
 } satisfies ContextRegisterStatus;
 
+// ---- S-interested-parties-fe register fixtures (pinned to api/interested_parties.py
+// _interested_party / _register_status + domain/interested_parties/summary.summarize_register) ----
+const IP_HEAD_ID = "ee000000-0000-0000-0000-0000000000bb";
+function interestedParty(
+  over: Partial<InterestedParty> & Pick<InterestedParty, "id">,
+): InterestedParty {
+  return {
+    register_doc_id: IP_HEAD_ID,
+    party_type: "customer",
+    party_name: "An interested party",
+    needs_expectations: "On-time delivery and consistent quality.",
+    influence: "medium",
+    status: "active",
+    last_reviewed_at: "2026-06-01T00:00:00+00:00",
+    row_version: 1,
+    created_at: "2026-06-20T09:00:00+00:00",
+    updated_at: "2026-06-20T09:00:00+00:00",
+    ...over,
+  } satisfies InterestedParty;
+}
+
+export const interestedPartyListFixture = {
+  data: [
+    interestedParty({
+      id: "ee000001-0001-0001-0001-000000000001",
+      party_type: "customer",
+      party_name: "Acme Manufacturing",
+      needs_expectations: "Defect-free parts delivered to schedule.",
+      influence: "high",
+    }),
+    interestedParty({
+      id: "ee000002-0002-0002-0002-000000000002",
+      party_type: "customer",
+      party_name: "Beta Retail Group",
+      needs_expectations: "Competitive pricing and traceability.",
+      influence: "medium",
+      last_reviewed_at: null,
+    }),
+    interestedParty({
+      id: "ee000003-0003-0003-0003-000000000003",
+      party_type: "regulator",
+      party_name: "National accreditation body",
+      needs_expectations: "Demonstrable conformance to ISO 9001:2015.",
+      influence: "high",
+    }),
+    interestedParty({
+      id: "ee000004-0004-0004-0004-000000000004",
+      party_type: "supplier",
+      party_name: "Steel & Alloys Co",
+      needs_expectations: "Clear specifications and prompt payment.",
+      influence: "low",
+    }),
+    interestedParty({
+      id: "ee000005-0005-0005-0005-000000000005",
+      party_type: "partner",
+      party_name: "Regional logistics partner",
+      needs_expectations: "Accurate forecasts and stable volumes.",
+      influence: null,
+      last_reviewed_at: null,
+    }),
+    interestedParty({
+      id: "ee000006-0006-0006-0006-000000000006",
+      party_type: "customer",
+      party_name: "Former distributor (legacy)",
+      needs_expectations: "Honoured warranty claims on prior shipments.",
+      influence: "low",
+      status: "closed",
+    }),
+  ],
+} satisfies InterestedPartyListResponse;
+
+export const interestedPartySummaryFixture = {
+  published: true,
+  total: 6,
+  by_party_type: {
+    customer: 3,
+    regulator: 1,
+    supplier: 1,
+    employee: 0,
+    owner: 0,
+    community: 0,
+    partner: 1,
+  },
+  by_influence: { low: 2, medium: 1, high: 2, unspecified: 1 },
+  by_status: { active: 5, closed: 1 },
+  active: 5,
+  never_reviewed: 2,
+} satisfies InterestedPartyRegisterSummary;
+
+export const interestedPartyRegisterStatusFixture = {
+  exists: true,
+  register_doc_id: IP_HEAD_ID,
+  identifier: "IPR-001",
+  state: "Effective",
+  current_effective_version_id: "ve000001-0001-0001-0001-000000000001",
+  has_governing: true,
+} satisfies InterestedPartyRegisterStatus;
+
 export const handlers = [
   http.get("/api/v1/risks", () => HttpResponse.json(riskListFixture)),
   http.get("/api/v1/risks/summary", () => HttpResponse.json(riskSummaryFixture)),
@@ -2610,6 +2712,49 @@ export const handlers = [
   ),
   http.patch("/api/v1/context/:id", ({ params }) =>
     HttpResponse.json(contextIssue({ id: String(params.id) })),
+  ),
+  // ---- S-interested-parties-fe Interested Parties register (clause 4.2) — STATIC routes
+  // (/summary, /register*) MUST register BEFORE /:id or MSW (and the backend router) shadows the
+  // literal as :id. ----
+  http.get("/api/v1/interested-parties/summary", () =>
+    HttpResponse.json(interestedPartySummaryFixture),
+  ),
+  http.get("/api/v1/interested-parties/register", () =>
+    HttpResponse.json(interestedPartyRegisterStatusFixture),
+  ),
+  http.post("/api/v1/interested-parties/register/start-revision", () =>
+    HttpResponse.json({
+      ...interestedPartyRegisterStatusFixture,
+      state: "UnderRevision",
+    } satisfies InterestedPartyRegisterStatus),
+  ),
+  http.post("/api/v1/interested-parties/register/publish", () =>
+    HttpResponse.json({
+      ...interestedPartyRegisterStatusFixture,
+      state: "InReview",
+    } satisfies InterestedPartyRegisterStatus),
+  ),
+  http.post("/api/v1/interested-parties/register/release", () =>
+    HttpResponse.json({
+      ...interestedPartyRegisterStatusFixture,
+      state: "Effective",
+    } satisfies InterestedPartyRegisterStatus),
+  ),
+  http.get("/api/v1/interested-parties", () => HttpResponse.json(interestedPartyListFixture)),
+  http.get("/api/v1/interested-parties/:id", ({ params }) => {
+    const row =
+      interestedPartyListFixture.data.find((r) => r.id === params.id) ??
+      interestedPartyListFixture.data[0]!;
+    return HttpResponse.json({ ...row, id: String(params.id) });
+  }),
+  http.post("/api/v1/interested-parties", () =>
+    HttpResponse.json(
+      interestedParty({ id: "ee0000ff-00ff-00ff-00ff-0000000000ff", party_name: "New party" }),
+      { status: 201 },
+    ),
+  ),
+  http.patch("/api/v1/interested-parties/:id", ({ params }) =>
+    HttpResponse.json(interestedParty({ id: String(params.id) })),
   ),
   // ---- S-improvement-3 Improvement Initiatives (default happy-path; per-test overrides) ----
   // IMPORTANT: the two-segment /…/:id/{stage-events,authorization,request-authorization} routes MUST

@@ -35,6 +35,12 @@ const NAV: Record<PdcaPhase, NavItem[]> = {
     { to: "/risks", label: "Risk register", prefix: "/risks" },
     // Ungated, same reasoning: GET /context is filter-not-403 (a no-grant caller → calm empty register).
     { to: "/context", label: "Context", prefix: "/context" },
+    // Ungated, same reasoning: GET /interested-parties is filter-not-403 (clause 4.2 register).
+    {
+      to: "/interested-parties",
+      label: "Interested parties",
+      prefix: "/interested-parties",
+    },
   ],
   DO: [
     { to: "/library", label: "Library", prefix: "/library" },
