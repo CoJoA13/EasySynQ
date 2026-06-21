@@ -54,7 +54,7 @@ it("omits the overdue line when the checklist read is forbidden", async () => {
   expect(within(card).queryByText(/reviews overdue/i)).not.toBeInTheDocument();
 });
 
-it("renders no-access only when ALL actionable reads are forbidden (risk + context incl.)", async () => {
+it("renders no-access only when ALL actionable reads are forbidden (risk + context + IP incl.)", async () => {
   server.use(
     http.get("/api/v1/objectives/scorecard", () =>
       HttpResponse.json({ code: "forbidden" }, { status: 403 }),
@@ -66,6 +66,11 @@ it("renders no-access only when ALL actionable reads are forbidden (risk + conte
       HttpResponse.json({ code: "forbidden" }, { status: 403 }),
     ),
     http.get("/api/v1/context/summary", () =>
+      HttpResponse.json({ code: "forbidden" }, { status: 403 }),
+    ),
+    // The orthogonal /interested-parties/summary read must ALSO be forbidden for the no-access panel
+    // to show (it folds into allForbidden — the S-context-fe orthogonal-read trap).
+    http.get("/api/v1/interested-parties/summary", () =>
       HttpResponse.json({ code: "forbidden" }, { status: 403 }),
     ),
   );
@@ -137,4 +142,59 @@ it("shows the active + never-reviewed context lines from the GOVERNING summary",
     expect(within(card).getByLabelText("4 active context issues")).toBeInTheDocument(),
   );
   expect(within(card).getByLabelText("2 context issues never reviewed")).toBeInTheDocument();
+});
+
+it("shows the active + never-reviewed interested-parties lines from the GOVERNING summary", async () => {
+  server.use(
+    http.get("/api/v1/objectives/scorecard", () =>
+      HttpResponse.json(
+        scorecard({ by_rag: { green: 8, amber: 0, red: 0, unmeasured: 0 }, on_target: 8 }),
+      ),
+    ),
+    http.get("/api/v1/reports/compliance-checklist", () => HttpResponse.json(checklist(0))),
+    // default /interested-parties/summary fixture: published, active 5, never_reviewed 2
+  );
+  renderWithProviders(<PlanCard />);
+  const card = await screen.findByRole("group", { name: /plan quadrant/i });
+  await waitFor(() =>
+    expect(within(card).getByLabelText("5 active interested parties")).toBeInTheDocument(),
+  );
+  expect(within(card).getByLabelText("2 interested parties never reviewed")).toBeInTheDocument();
+});
+
+it("shows an honest 'no published register' line when the IP register is unpublished", async () => {
+  server.use(
+    http.get("/api/v1/objectives/scorecard", () =>
+      HttpResponse.json(
+        scorecard({ by_rag: { green: 8, amber: 0, red: 0, unmeasured: 0 }, on_target: 8 }),
+      ),
+    ),
+    http.get("/api/v1/reports/compliance-checklist", () => HttpResponse.json(checklist(0))),
+    http.get("/api/v1/interested-parties/summary", () =>
+      HttpResponse.json({
+        published: false,
+        total: 0,
+        by_party_type: {
+          customer: 0,
+          regulator: 0,
+          supplier: 0,
+          employee: 0,
+          owner: 0,
+          community: 0,
+          partner: 0,
+        },
+        by_influence: { low: 0, medium: 0, high: 0, unspecified: 0 },
+        by_status: { active: 0, closed: 0 },
+        active: 0,
+        never_reviewed: 0,
+      }),
+    ),
+  );
+  renderWithProviders(<PlanCard />);
+  const card = await screen.findByRole("group", { name: /plan quadrant/i });
+  await waitFor(() =>
+    expect(
+      within(card).getByText(/no published interested-parties register yet/i),
+    ).toBeInTheDocument(),
+  );
 });

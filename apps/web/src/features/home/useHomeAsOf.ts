@@ -7,6 +7,7 @@ import { useMgmtReviewNextDue } from "../management-review/hooks";
 import { useObjectiveScorecard } from "../objectives/hooks";
 import { useRiskSummary } from "../risk/hooks";
 import { useContextSummary } from "../context/hooks";
+import { useInterestedPartySummary } from "../interested-parties/hooks";
 import { useMyTasks } from "./hooks";
 
 // The page-wide "as of" for the QMS-health dashboard (critique #2b / P2). Home composes many
@@ -47,6 +48,7 @@ export function useHomeAsOf(): number | null {
     useObjectiveScorecard(),
     useRiskSummary(),
     useContextSummary(),
+    useInterestedPartySummary(),
     useComplianceChecklist(),
     // Drift contributes its last-scan freshness, not the fetch time (see driftScanFreshness).
     { isSuccess: drift.isSuccess, dataUpdatedAt: driftScanFreshness(drift.data) },
