@@ -157,6 +157,7 @@ The `permission` table is seeded from the **doc 07 canonical catalog**. The seed
 | **Author** | no | Scoped to `:folder`/`:process`: `document.create/checkout/edit/submit`, `document.read_draft`, `record.create`, `changeRequest.create`. No `approve`/`release`. |
 | **Approver** | no | Scoped to `:doc_class`/`:process`: `document.review/approve`, `changeRequest.approve`. No `edit`/`submit` on the same artifact (SoD). |
 | **Internal Auditor** | no | Broad `*.read`; `audit.create/conduct/close`, `finding.*`. Hard-excludes `document.edit/approve/release`. |
+| **Top Management** | yes | Membership-pool only (no direct permission grants); members are the eligible `meaning=verify` signers for the leadership-authorization preflight on POL/OBJ/MR release. (Migration `0038`.) |
 | **Employee (Read-only)** | no | Scoped to `:area`: `document.read`, `document.print_controlled`, `document.acknowledge`, `record.read` (own/area). |
 | **External Auditor (Guest)** | no | `document.read` + `record.read` + `report.read` only within a bound Evidence Pack. |
 
