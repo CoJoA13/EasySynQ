@@ -578,7 +578,7 @@ The Clause 4.1 "context of the organization" register, backed by `context_issue`
 | GET | `/context/register` | (any member) | — | The head lifecycle status `{ exists, register_doc_id, identifier, state, current_effective_version_id, has_governing }`. |
 | POST | `/context/register/start-revision` | `register.manage` @ SYSTEM | — | T7 (Effective→UnderRevision). `409` unless Effective. |
 | POST | `/context/register/publish` | `register.manage` @ SYSTEM | — | Freeze the working rows into a new version and submit for review. `409` unless Draft/UnderRevision; rejects a zero-row register. |
-| POST | `/context/register/release` | `document.release` @ SYSTEM | — | T6 (Approved→Effective) over the SoD-2-enriched scope (author/approver ≠ releaser); the shared INV-1 SERIALIZABLE cutover. |
+| POST | `/context/register/release` | `document.release` | — | T6 (Approved→Effective). Enforced over the **multi-axis** `_register_release_scope` (artifact_id + folder_path + document_level + lifecycle_state + SoD-2; author/approver ≠ releaser) — **NOT SYSTEM** (the S-risk-5 release posture; a future FE/`can_release` must not use a single-axis SYSTEM probe). Held by no seeded role → a SYSTEM override in v1. The shared INV-1 SERIALIZABLE cutover. |
 
 ### 8.11 CAPAs (`/capas`)
 
