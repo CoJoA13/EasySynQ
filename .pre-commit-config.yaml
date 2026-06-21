@@ -10,12 +10,20 @@ repos:
       - id: ruff-format
         files: ^apps/api/
 
-  - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.11.2
+  - repo: local
     hooks:
+      # Run the PROJECT's mypy (uv-pinned + full deps/stubs + the [tool.mypy] overrides),
+      # IDENTICAL to the CI `api` job's `uv run mypy src`. The old mirrors-mypy hook ran an OLDER
+      # mypy in an isolated venv missing the stub packages (types-PyYAML/types-redis) and PEP-695
+      # support — so it errored on UNTOUCHED files (yaml/redis imports, `type`/`def f[T]`) and
+      # blocked every commit. `language: system` reuses the project venv via `uv run`.
       - id: mypy
+        name: mypy (strict, apps/api/src — uv run, matches CI)
+        entry: bash -c 'cd apps/api && uv run mypy src'
+        language: system
         files: ^apps/api/src/
-        additional_dependencies: [pydantic>=2, "sqlalchemy[mypy]>=2", pydantic-settings]
+        pass_filenames: false
+        require_serial: true
 
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v5.0.0
@@ -34,9 +42,15 @@ repos:
 
   - repo: local
     hooks:
-      - id: contracts-check
-        name: openapi contract in sync
-        entry: bash scripts/gen-contracts.sh --check
+      # Match the CI `contracts` job EXACTLY: redocly-lint the contract with its config (which sets
+      # operation-4xx-response: off, etc.). The contract is lint-only, NOT codegen (CLAUDE.md), so
+      # the old `gen-contracts.sh --check` (codegen + a .contract.lock hash gate over a dormant
+      # pipeline) is not the gate — and it was doubly broken: a `ROOT="$(A || B && pwd)"` precedence
+      # bug made ROOT two lines, mangling the spec path ("openapi.yaml does not exist"). The codegen
+      # script (now fixed) stays available via `just contracts`.
+      - id: contracts-lint
+        name: openapi contract lint (redocly --config, matches CI)
+        entry: npx --yes @redocly/cli lint --config packages/contracts/redocly.yaml packages/contracts/openapi.yaml
         language: system
         files: ^packages/contracts/
         pass_filenames: false
