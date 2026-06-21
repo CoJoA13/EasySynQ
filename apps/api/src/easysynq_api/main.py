@@ -22,6 +22,7 @@ from .api.authz import router as authz_router
 from .api.capa import router as capa_router
 from .api.clauses import router as clauses_router
 from .api.config import router as config_router
+from .api.context import router as context_router
 from .api.dcr import router as dcr_router
 from .api.directory import router as directory_router
 from .api.document_types import router as document_types_router
@@ -160,6 +161,7 @@ def create_app() -> FastAPI:
     app.include_router(dcr_router)  # S-dcr-1: Document Change Request core + intake (/dcrs)
     app.include_router(improvement_router)  # S-improvement-1: clause-10.3 Improvement Initiatives
     app.include_router(risk_router)  # S-risk-1: clause-6.1 Risk & Opportunity register (register.*)
+    app.include_router(context_router)  # S-context-1: clause-4.1 Context register (register.*)
     app.include_router(retention_policies_router)  # S-rec-4: retention-policy CRUD + soft-archive
     app.include_router(ingestion_router)  # S-ing-1: import run + scan/inventory (NOT latch-exempt)
     app.include_router(search_router)  # S10: Postgres-FTS search (filter-not-403, Indexer seam)

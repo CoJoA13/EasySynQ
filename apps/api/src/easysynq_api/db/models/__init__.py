@@ -15,6 +15,11 @@ from ._capa_enums import (
     NcSeverity,
 )
 from ._clause_enums import PdcaPhase
+from ._context_enums import (
+    ContextCategory,
+    ContextClassification,
+    ContextIssueStatus,
+)
 from ._dcr_enums import (
     DcrChangeType,
     DcrReasonClass,
@@ -85,6 +90,7 @@ from .capa_stage import CapaStage
 from .clause import Clause
 from .clause_mapping import ClauseMapping
 from .complaint import Complaint
+from .context_issue import ContextIssue
 from .dcr import Dcr
 from .dcr_stage_event import DcrStageEvent
 from .disposition_event import DispositionEvent
@@ -175,6 +181,10 @@ __all__ = [
     "Clause",
     "ClauseMapping",
     "Complaint",
+    "ContextCategory",
+    "ContextClassification",
+    "ContextIssue",
+    "ContextIssueStatus",
     "Dcr",
     "DcrChangeType",
     "DcrReasonClass",

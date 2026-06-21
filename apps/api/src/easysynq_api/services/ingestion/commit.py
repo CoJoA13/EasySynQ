@@ -273,6 +273,10 @@ async def _commit_document(
     # (Codex).
     if dt.code == "RSK":
         raise _ItemCommitError("risk_register_import_unsupported")
+    # S-context-1: same for the Context register (system-managed via /context, single non-Obsolete
+    # CTX head) — an import must not mint a CTX doc the context find_head would adopt.
+    if dt.code == "CTX":
+        raise _ItemCommitError("context_register_import_unsupported")
 
     # Identifier: preserve the doc-code verbatim, else allocate a fresh {TYPE}-{AREA}-{SEQ}.
     legacy_identifier: str | None = None

@@ -347,9 +347,9 @@ async def obsolete(
     # obsolete CHOKEPOINT (not just the endpoint) covers BOTH the generic /obsolete route and a
     # RETIRE DCR (services/dcr/service.py calls obsolete() directly). RSK-only — OBJ/MR retire
     # normally. Local import avoids a service<->lifecycle cycle (the leadership-gate pattern).
-    from .service import reject_rsk_register_mutation
+    from .service import reject_managed_register_mutation
 
-    await reject_rsk_register_mutation(session, doc)
+    await reject_managed_register_mutation(session, doc)
     if not reason or not reason.strip():
         raise ProblemException(
             status=422,

@@ -23,6 +23,7 @@ from easysynq_api.db.models._capa_enums import CapaCloseState
 from easysynq_api.db.models._objective_enums import ObjectiveDirection
 from easysynq_api.db.models._vault_enums import DocumentCurrentState, VersionState
 from easysynq_api.db.models.capa import Capa
+from easysynq_api.db.models.document_type import DocumentType
 from easysynq_api.db.models.document_version import DocumentVersion
 from easysynq_api.db.models.documented_information import DocumentedInformation
 from easysynq_api.db.models.quality_objective import QualityObjective
@@ -661,6 +662,62 @@ async def test_create_implement_rejects_managed_subtype(
     hq = _auth(token_factory, qms)
     dcr_id = await _drive_dcr_to_approved(app_client, hreq, hq, change_type="CREATE")
     impl = _subject("crm-impl")
+    await s5.grant_lifecycle(impl)
+    await _grant(impl, ("changeRequest.implement",))
+    himpl = _auth(token_factory, impl)
+    r = await app_client.post(
+        f"/api/v1/dcrs/{dcr_id}/implement", headers=himpl, json={"resulting_version_id": rvid}
+    )
+    assert r.status_code == 409, r.text
+    assert r.json()["code"] == "create_target_managed_subtype"
+
+
+async def test_create_implement_rejects_managed_register(
+    app_client: AsyncClient, token_factory: Callable[..., str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """S-context-1 (Codex P2): a CREATE DCR must not release a managed register head (RSK/CTX). A
+    freshly-published register sits Approved with current_effective_version_id still null — without
+    the managed-register check in _resolve_implement_version it could be claimed as a CREATE DCR's
+    resulting version and released via the generic cutover, bypassing /context/register/release's
+    SoD-2 (the create-path sibling of the _resolve_target reservation; closes a pre-existing RSK gap
+    too). Reassign an Approved SOP doc to the CTX document_type to make it a managed register head;
+    set it Obsolete so the shared-org context find_head never adopts it (non-polluting — the guard
+    keys on the document_type code, not the state)."""
+    monkeypatch.setattr(release_due_versions, "delay", lambda *a, **k: None)
+    author = _subject("crr-author")
+    await s5.grant_lifecycle(author)
+    ha = _auth(token_factory, author)
+    approver = _subject("crr-approver")
+    await s5.grant_role(approver, "Approver")
+    hb = _auth(token_factory, approver)
+    did = await s5.drive_to_approved(app_client, ha, hb, await s5.type_id("SOP"), b"crr")
+    async with get_sessionmaker()() as s:
+        rvid = str(
+            (
+                await s.execute(
+                    select(DocumentVersion.id)
+                    .where(DocumentVersion.document_id == uuid.UUID(did))
+                    .order_by(DocumentVersion.version_seq.desc())
+                    .limit(1)
+                )
+            ).scalar_one()
+        )
+        doc_row = await s.get(DocumentedInformation, uuid.UUID(did))
+        assert doc_row is not None
+        ctx_type_id = (
+            await s.execute(select(DocumentType.id).where(DocumentType.code == "CTX"))
+        ).scalar_one()
+        doc_row.document_type_id = ctx_type_id
+        doc_row.current_state = DocumentCurrentState.Obsolete  # keep it out of context find_head
+        await s.commit()
+    req = _subject("crr-req")
+    await _grant(req, _DCR_DRIVER_PERMS)
+    hreq = _auth(token_factory, req)
+    qms = _subject("crr-qms")
+    await _assign_seeded_role(qms, "QMS Owner")
+    hq = _auth(token_factory, qms)
+    dcr_id = await _drive_dcr_to_approved(app_client, hreq, hq, change_type="CREATE")
+    impl = _subject("crr-impl")
     await s5.grant_lifecycle(impl)
     await _grant(impl, ("changeRequest.implement",))
     himpl = _auth(token_factory, impl)

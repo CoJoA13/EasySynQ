@@ -5176,6 +5176,161 @@ paths:
         "404": { $ref: "#/components/responses/ProblemResponse" }
         "422": { $ref: "#/components/responses/ProblemResponse" }
 
+  /context:
+    post:
+      tags: [context]
+      operationId: createContextIssue
+      summary: >-
+        Author a context issue on the org's Context register (clause 4.1, S-context-1). Lazily
+        get-or-creates the single kind=DOCUMENT CTX register head (org-level — no ProcessLinks, no
+        process_id on rows). A new issue is always status=active (close it via PATCH). Needs
+        register.manage @ SYSTEM (clause 4.1 is an org-wide QMS-leadership concern; a bound Process
+        Owner's PROCESS grant does not match the org register).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ContextIssueCreate" }
+      responses:
+        "201":
+          description: The authored context issue.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ContextIssue" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "409": { $ref: "#/components/responses/ProblemResponse" }
+        "422": { $ref: "#/components/responses/ProblemResponse" }
+    get:
+      tags: [context]
+      operationId: listContextIssues
+      summary: >-
+        List the org's context issues (newest first), filtered to what the caller may register.read
+        (filter-not-403 — a no-grant caller gets 200 + empty). Clause 4.1 is org-level, so this is
+        all-or-nothing at SYSTEM scope. Needs register.read @ SYSTEM.
+      responses:
+        "200":
+          description: The org's (visible) context issues.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/ContextIssue" }
+  /context/register:
+    get:
+      tags: [context]
+      operationId: getContextRegister
+      summary: >-
+        The org's Context register head lifecycle state (S-context-1) — state + the governing-version
+        pointer. Any authenticated org member may read it (org-level, not row-level sensitive; the row
+        contents are gated separately by GET /context). exists:false before the first issue is added.
+      responses:
+        "200":
+          description: The register head status.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ContextRegisterStatus" }
+  /context/register/start-revision:
+    post:
+      tags: [context]
+      operationId: startContextRegisterRevision
+      summary: >-
+        Open an FSM revision on the Effective register (T7 Effective→UnderRevision) so its rows
+        become editable again. Gated register.manage @ SYSTEM. 409 unless Effective.
+      responses:
+        "200":
+          description: The register head status (now UnderRevision).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ContextRegisterStatus" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "409": { $ref: "#/components/responses/ProblemResponse" }
+  /context/register/publish:
+    post:
+      tags: [context]
+      operationId: publishContextRegister
+      summary: >-
+        Freeze the working rows into a new immutable register version and submit it for review (T2/T9;
+        clause 4.1 has no scoring criteria — rows only). Gated register.manage @ SYSTEM. 409 unless
+        the head is Draft (first register) or UnderRevision. Approval routes through POST
+        /tasks/{id}/decision (DOCUMENT leg); release via /context/register/release.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ContextRegisterPublish" }
+      responses:
+        "200":
+          description: The register head status (now InReview).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ContextRegisterStatus" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "409": { $ref: "#/components/responses/ProblemResponse" }
+        "422": { $ref: "#/components/responses/ProblemResponse" }
+  /context/register/release:
+    post:
+      tags: [context]
+      operationId: releaseContextRegister
+      summary: >-
+        Release the Approved register version Effective (T6). Enforces document.release @ SYSTEM over
+        the SoD-2-enriched scope (author/approver ≠ releaser; held by no seeded role → a SYSTEM
+        override in v1), then runs the shared INV-1 SERIALIZABLE cutover. After release the rows are
+        read-only until the next revision.
+      responses:
+        "200":
+          description: The register head status (now Effective).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ContextRegisterStatus" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "409": { $ref: "#/components/responses/ProblemResponse" }
+        "422": { $ref: "#/components/responses/ProblemResponse" }
+  /context/{issue_id}:
+    parameters:
+      - { name: issue_id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [context]
+      operationId: getContextIssue
+      summary: >-
+        Read one context issue. Enforces register.read @ SYSTEM (403-on-deny; a SYSTEM grant matches).
+        Needs register.read.
+      responses:
+        "200":
+          description: The context issue.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ContextIssue" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+    patch:
+      tags: [context]
+      operationId: updateContextIssue
+      summary: >-
+        Partial-update a context issue (re-classify / close / record a review). An explicit null
+        clears a nullable field (category/last_reviewed_at); a null on classification/status/
+        description 422s. Editable only while the register head is Draft/UnderRevision (409 otherwise).
+        Needs register.manage @ SYSTEM.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ContextIssueUpdate" }
+      responses:
+        "200":
+          description: The updated context issue.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ContextIssue" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409": { $ref: "#/components/responses/ProblemResponse" }
+        "422": { $ref: "#/components/responses/ProblemResponse" }
+
   /objectives:
     post:
       tags: [objectives]
@@ -7794,6 +7949,75 @@ components:
             treated: { type: integer }
             recorded: { type: integer }
             pending: { type: integer }
+    ContextIssue:
+      type: object
+      additionalProperties: false
+      description: >-
+        A clause-4.1 context issue (S-context-1) — an internal/external issue on the org's Context
+        register. Org-level (no process_id). classification is the ISO spine; category is the optional
+        SWOT axis (R50); status retires an issue without deleting it.
+      required: [id, register_doc_id, classification, status, description, row_version]
+      properties:
+        id: { type: string, format: uuid }
+        register_doc_id: { type: string, format: uuid, description: The CTX register head id. }
+        classification: { type: string, enum: [internal, external] }
+        category: { type: [string, "null"], enum: [strength, weakness, opportunity, threat, null] }
+        status: { type: string, enum: [active, closed] }
+        description: { type: string }
+        last_reviewed_at: { type: [string, "null"], format: date-time }
+        row_version: { type: integer }
+        created_at: { type: [string, "null"], format: date-time }
+        updated_at: { type: [string, "null"], format: date-time }
+    ContextIssueCreate:
+      type: object
+      additionalProperties: false
+      description: A new context issue is always status=active (close it via PATCH).
+      required: [classification, description]
+      properties:
+        classification: { type: string, enum: [internal, external] }
+        description: { type: string, minLength: 1, maxLength: 4000 }
+        category: { type: [string, "null"], enum: [strength, weakness, opportunity, threat, null] }
+        last_reviewed_at: { type: [string, "null"], format: date-time }
+    ContextIssueUpdate:
+      type: object
+      additionalProperties: false
+      description: >-
+        Partial PATCH; an explicit null clears a nullable field (category/last_reviewed_at). A null on
+        classification/status/description is rejected (422) — those are NOT-NULL.
+      properties:
+        classification: { type: [string, "null"], enum: [internal, external, null] }
+        category: { type: [string, "null"], enum: [strength, weakness, opportunity, threat, null] }
+        status: { type: [string, "null"], enum: [active, closed, null] }
+        description: { type: [string, "null"], minLength: 1, maxLength: 4000 }
+        last_reviewed_at: { type: [string, "null"], format: date-time }
+    ContextRegisterStatus:
+      type: object
+      additionalProperties: false
+      description: >-
+        The Context register head lifecycle state (S-context-1). The rows version together under this
+        head; has_governing is true once a version is Effective.
+      required:
+        [exists, register_doc_id, identifier, state, current_effective_version_id, has_governing]
+      properties:
+        exists: { type: boolean }
+        register_doc_id: { type: [string, "null"], format: uuid }
+        identifier: { type: [string, "null"] }
+        state:
+          type: [string, "null"]
+          description: >-
+            The head's current lifecycle state
+            (Draft/InReview/Approved/Effective/UnderRevision/Superseded/Obsolete), or null when no
+            register exists yet.
+        current_effective_version_id: { type: [string, "null"], format: uuid }
+        has_governing: { type: boolean }
+    ContextRegisterPublish:
+      type: object
+      additionalProperties: false
+      description: >-
+        The optional publish body. change_reason is the INV-3 reason recorded on the frozen register
+        version (a system-generated default is used when omitted; a no-freeze re-publish ignores it).
+      properties:
+        change_reason: { type: [string, "null"], maxLength: 2000 }
     ImprovementStage:
       type: string
       description: >-
