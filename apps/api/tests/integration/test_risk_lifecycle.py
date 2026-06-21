@@ -627,3 +627,62 @@ async def test_spawn_capa_works_while_register_effective(
     assert again.status_code == 200, again.text
     assert again.json()["id"] == capa["id"]
     # the restore_register_head teardown returns the shared head to editable (even on failure).
+
+
+async def test_register_steward_role_drives_lifecycle_without_override(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    subj: SimpleNamespace,
+    restore_register_head: None,
+) -> None:
+    """S-register-steward (R52): a user holding ONLY the seeded Register Steward role (NO SYSTEM
+    override) drives the full register lifecycle — start-revision/publish (register.manage) and
+    release (document.release) — with a SEPARATE Approver approving. Proves the role makes
+    stewardship self-service without an override, and that the steward CANNOT self-approve (the role
+    excludes document.approve), so SoD holds at the role level. The restore_register_head teardown
+    returns the shared head to editable even on mid-lifecycle failure."""
+    # subj.steward publishes; subj.releaser releases — BOTH hold ONLY the Register Steward role
+    # (no _grant overrides). subj.approver holds ONLY the Approver role.
+    await s5.grant_role(subj.steward, "Register Steward")
+    await s5.grant_role(subj.releaser, "Register Steward")
+    await s5.grant_role(subj.approver, "Approver")
+    hs = _auth(token_factory, subj.steward)
+    hap = _auth(token_factory, subj.approver)
+    hrl = _auth(token_factory, subj.releaser)
+    await _drive_to_editable(app_client, hs, hap, hrl)
+
+    # register.manage @ SYSTEM (from the role) → the steward sees can_manage True with no override.
+    pre = await _status(app_client, hs)
+    assert pre["can_manage"] is True
+
+    row = await _create_risk(app_client, hs, likelihood=4, severity=5)  # 20 → critical
+    head_id = row["register_doc_id"]
+    pub = await app_client.post("/api/v1/risks/register/publish", headers=hs)
+    assert pub.status_code == 200, pub.text
+    assert pub.json()["state"] == "InReview"
+
+    # role separation: the steward (no document.approve) is 403 on the approval task.
+    task_id = await s5.task_for_doc(head_id)
+    self_approve = await app_client.post(
+        f"/api/v1/tasks/{task_id}/decision", headers=hs, json={"outcome": "approve"}
+    )
+    assert self_approve.status_code == 403, self_approve.text
+
+    # the SEPARATE Approver approves.
+    dec = await app_client.post(
+        f"/api/v1/tasks/{task_id}/decision", headers=hap, json={"outcome": "approve"}
+    )
+    assert dec.status_code == 200, dec.text
+
+    # the caps PREDICT the release: the third-party releaser (role's document.release) →
+    # can_release True with NO override; the publishing steward is the version author →
+    # SoD-2 → can_release False.
+    assert (await _status(app_client, hrl))["can_release"] is True
+    s_caps = await _status(app_client, hs)
+    assert s_caps["can_manage"] is True
+    assert s_caps["can_release"] is False
+
+    rel = await app_client.post("/api/v1/risks/register/release", headers=hrl)
+    assert rel.status_code == 200, rel.text
+    assert rel.json()["state"] == "Effective"
+    # restore_register_head returns the shared head to editable (even on failure).

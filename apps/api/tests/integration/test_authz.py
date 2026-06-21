@@ -162,6 +162,7 @@ async def test_seed_catalog_and_roles(
         "Employee (Read-only)",
         "External Auditor (Guest)",
         "Top Management",  # the Critical CAPA action-plan second-tier approver (S-capa-2, 0038)
+        "Register Steward",  # the register-head lifecycle steward (S-register-steward, R52, 0062)
     }
 
     approver = next(r for r in roles if r["name"] == "Approver")
@@ -204,6 +205,27 @@ async def test_seed_catalog_and_roles(
     # placeholder to owned processes.
     register_manage = next(g for g in po_grants if g["permission_key"] == "register.manage")
     assert register_manage["scope_template"]["level"] == "PROCESS"
+
+    # S-register-steward (migration 0062, R52): a NEW reserved Register Steward role holds the full
+    # register stewardship set at SYSTEM — the FIRST seeded role to hold document.release (release
+    # was SYSTEM-override-only in v1). It EXCLUDES document.approve (SoD: the approver stays
+    # separate). No new key (catalog stays 102 — asserted above).
+    steward = next(r for r in roles if r["name"] == "Register Steward")
+    assert steward["is_reserved"] is True
+    steward_grants = {
+        g["permission_key"]: g["scope_template"]["level"]
+        for g in (await app_client.get(f"/api/v1/roles/{steward['id']}", headers=h)).json()[
+            "grants"
+        ]
+    }
+    assert steward_grants == {
+        "register.read": "SYSTEM",
+        "register.manage": "SYSTEM",
+        "document.release": "SYSTEM",
+        "document.read": "SYSTEM",
+        "document.read_draft": "SYSTEM",
+    }
+    assert "document.approve" not in steward_grants  # SoD: the approver stays a separate role
 
 
 # --- PEP enforcement --------------------------------------------------------------------
