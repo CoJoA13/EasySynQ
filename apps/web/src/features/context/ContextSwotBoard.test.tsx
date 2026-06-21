@@ -23,6 +23,14 @@ it("renders the four SWOT quadrants, the uncategorized strip, and a labelled reg
   const strip = screen.getByRole("group", { name: "Uncategorized, 1 issue" });
   expect(within(strip).getByText("Pending reorganisation of the QA function")).toBeInTheDocument();
   expect(within(strip).getByText("Closed")).toBeInTheDocument();
+  // the closed chip folds its status INTO the accessible name — an explicit aria-label swallows the
+  // nested "Closed" badge per the ARIA name computation, so closed must not be strikethrough/dim alone
+  // (DP-5 / WCAG 2.2 AA). A sighted user sees the badge; AT hears "(closed)".
+  expect(
+    within(strip).getByRole("button", {
+      name: "Internal: Pending reorganisation of the QA function (closed)",
+    }),
+  ).toBeInTheDocument();
   expect(await axe(container)).toHaveNoViolations();
 });
 

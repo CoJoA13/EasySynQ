@@ -167,9 +167,11 @@ function IssueChip({
       ta="left"
       underline="never"
       // The accessible name carries the classification the board groups by (the visual glyph is
-      // aria-hidden) — so AT hears "Internal: …" and the board chips don't collide with the table's
-      // plain-description anchors (label-in-name holds: the name contains the visible description).
-      aria-label={`${CLASSIFICATION_LABEL[row.classification]}: ${row.description}`}
+      // aria-hidden) AND the closed state — an explicit aria-label OVERRIDES descendant content per the
+      // ARIA name computation, so the nested "Closed" badge would otherwise be swallowed, leaving closed
+      // status as strikethrough + dim ALONE (a DP-5 violation). Label-in-name holds (it contains the
+      // visible description); it also disambiguates from the table's plain-description anchors.
+      aria-label={`${CLASSIFICATION_LABEL[row.classification]}: ${row.description}${closed ? " (closed)" : ""}`}
       bg={selected ? "var(--mantine-color-default-hover)" : undefined}
       style={{ borderRadius: 4, padding: "2px 4px" }}
     >
