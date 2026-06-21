@@ -33,6 +33,7 @@ from ..db.models.document_type import DocumentType
 from ..db.models.documented_information import DocumentedInformation
 from ..db.session import get_session
 from ..domain.authz import RequestContext, ResourceContext, authorize
+from ..domain.context.summary import summarize_register
 from ..problems import ProblemException
 from ..services.authz import (
     AuthzAuditSink,
@@ -45,6 +46,7 @@ from ..services.context import (
     add_context_issue,
     find_head,
     get_context_issue,
+    governing_register,
     list_context_issues,
     publish_register,
     start_context_revision,
@@ -259,6 +261,29 @@ async def release_register_endpoint(
     # serializer → MissingGreenlet; the risk release precedent).
     released = await release(caller, head.id, vault_sink, sig_sink)
     return _register_status(released)
+
+
+# register.read @ SYSTEM — the context summary is an org-wide CONTROLLED read (the read-of-record
+# for the doc-13 / Home dashboard tile + the Context SPA, S-context-2/-fe), gated like the
+# single-row GET /context/{id} enforce. Clause 4.1 is fully org-level (no per-row/per-process
+# scoping), so this is a 403-on-deny enforce, NOT a per-row filter — the cross-cutting "should
+# sourced summaries honor per-process denies" deferral does not apply to org-level context.
+@router.get("/context/summary")
+async def context_summary_endpoint(
+    caller: AppUser = Depends(_context_read_system),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """The org's Context register summary (the Home/dashboard + Context-SPA seam, S-context-2).
+
+    Projects the GOVERNING (current Effective) snapshot via pure ``summarize_register``: the
+    CONTROLLED read-of-record, never the live working satellite (an UnderRevision edit is invisible
+    until the next publish/release; the MR read-of-record discipline). ``active`` is the open-issues
+    headline; ``never_reviewed`` counts rows with no ``last_reviewed_at``. Pre-first-release (no
+    published register → ``governing`` is ``None``) returns ``published: false`` + an all-zero
+    summary, so a brand-new working register reads honestly as 'no published register yet' rather
+    than a misleading set of zeros. Gated register.read @ SYSTEM (org-level)."""
+    governing = await governing_register(session, caller.org_id)
+    return {"published": governing is not None, **summarize_register(governing or {"rows": []})}
 
 
 @router.get("/context/{issue_id}")
