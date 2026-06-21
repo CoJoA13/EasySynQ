@@ -104,6 +104,7 @@ def _snapshot(
     mgmt_review_minutes: dict[str, Any] | None = None,
     risk_register: dict[str, Any] | None = None,
     context_register: dict[str, Any] | None = None,
+    interested_party_register: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Metadata as it was at check-in (doc 14 §5.3) — frozen onto the immutable version. Ordinary
     documents call this with no ``field_schema`` (the snapshot shape is unchanged). A Form/Template
@@ -149,6 +150,11 @@ def _snapshot(
     # (the subject is detected by key presence; the body never branches on doc kind).
     if context_register is not None:
         snap["context_register"] = context_register
+    # S-interested-parties-1 (clause 4.2): the Interested Parties register's frozen content — the
+    # rows-as-of (build_register's {rows}; no scoring criteria, like context_register) — under a NEW
+    # snapshot key (the subject is detected by key presence; the body never branches on doc kind).
+    if interested_party_register is not None:
+        snap["interested_party_register"] = interested_party_register
     return snap
 
 
@@ -262,7 +268,7 @@ async def create_document(
 # head holding 1:many satellite rows): the generic document paths must NOT mutate them. Keyed by
 # ``document_type`` code → (title, error-code, message). Each is a satellite *head*, NOT a shared-PK
 # subtype like OBJ/MR, so the QualityObjective/ManagementReview PK-probe does not apply. ADD a row
-# here for each new register family (S-risk-1 RSK, S-context-1 CTX).
+# here for each new register family (S-risk-1 RSK, S-context-1 CTX, S-interested-parties-1 IPR).
 _MANAGED_REGISTERS: dict[str, tuple[str, str, str]] = {
     "RSK": (
         "The Risk & Opportunity register is managed via /risks",
@@ -274,13 +280,19 @@ _MANAGED_REGISTERS: dict[str, tuple[str, str, str]] = {
         "context_register_managed_via_context",
         "use the /context lifecycle, not generic document mutation",
     ),
+    "IPR": (
+        "The Interested Parties register is managed via /interested-parties",
+        "interested_parties_register_managed_via_interested_parties",
+        "use the /interested-parties lifecycle, not generic document mutation",
+    ),
 }
 
 
 async def reject_managed_register_mutation(
     session: AsyncSession, doc: DocumentedInformation
 ) -> None:
-    """A register head (RSK risk, CTX context — ``_MANAGED_REGISTERS``) is system-managed via its
+    """A register head (RSK risk, CTX context, IPR interested parties — ``_MANAGED_REGISTERS``) is
+    system-managed via its
     own surface (zero ProcessLinks, single non-Obsolete head, content-aware freeze/release). The
     generic document paths — process-link add and the byte/lifecycle path — must NOT mutate it
     (S-risk-1 / S-context-1; Codex). Detected by ``document_type`` code: a register is a 1:many
@@ -301,7 +313,7 @@ async def reject_managed_register_mutation(
 
 
 def reject_managed_register_creation(document_type_code: str | None) -> None:
-    """A managed register head (RSK/CTX — ``_MANAGED_REGISTERS``) is created ONLY via its own
+    """A managed register head (RSK/CTX/IPR — ``_MANAGED_REGISTERS``) is created ONLY via its own
     service
     (``/risks`` / ``/context``), NEVER generic ``POST /documents`` (Codex P1, S-context-1). A
     generic
@@ -322,7 +334,8 @@ def reject_managed_register_creation(document_type_code: str | None) -> None:
 
 
 async def is_managed_register_doc(session: AsyncSession, doc: DocumentedInformation) -> bool:
-    """True if ``doc`` is a managed register head (RSK/CTX — ``_MANAGED_REGISTERS``). The read-only
+    """True if ``doc`` is a managed register head (RSK/CTX/IPR — ``_MANAGED_REGISTERS``). The
+    read-only
     boolean behind ``reject_managed_register_mutation`` — for callers that need the predicate rather
     than the raise (e.g. the CREATE-DCR-implement managed-subtype guard, alongside the OBJ/MR PK
     probes). Reads stay open."""
@@ -1085,6 +1098,108 @@ async def checkin_context_register(
     # Flush BEFORE _emit — NOT commit (publish_register owns the txn boundary). The
     # ``default=uuid.uuid4`` id is a FLUSH-time default, so the flush populates version.id for the
     # audit row's object_id (the checkin_risk_register contract verbatim).
+    await session.flush()
+    _emit(
+        session,
+        sink,
+        "CHECKIN",
+        actor,
+        "document_version",
+        version.id,
+        identifier=doc.identifier,
+        reason=change_reason.strip(),
+    )
+    return version
+
+
+async def checkin_interested_party_register(
+    session: AsyncSession,
+    sink: VaultAuditSink,
+    actor: AppUser,
+    doc: DocumentedInformation,
+    *,
+    register: dict[str, Any],
+    change_reason: str,
+    change_significance: str = "MAJOR",
+) -> DocumentVersionModel:
+    """Freeze an Interested Parties register's ``register`` (a pre-built JSON-safe dict — the rows
+    as-of, ``build_register``'s output; clause 4.2 has no scoring criteria) into an immutable
+    ``DocumentVersion`` (S-interested-parties-1, clause 4.2 — the ``checkin_context_register``
+    precedent verbatim).
+    The canonical-serialized register is the version's WORM source blob (server-side write — no
+    client upload, ``application/json`` → ``no_controlled_rendition`` R26), and the SAME dict is
+    pinned into ``metadata_snapshot`` under the NEW ``interested_party_register`` key. Like
+    ``checkin_context_register`` this FLUSHES (does not commit): the freeze is a sub-step of
+    ``interested_parties.lifecycle.publish_register``, which owns the submit/approval txn
+    boundary."""
+    if not change_reason or not change_reason.strip():
+        raise ProblemException(
+            status=422,
+            code="validation_error",
+            title="Check-in requires a change reason (INV-3)",
+            errors=[{"field": "change_reason", "code": "required", "message": "must be non-empty"}],
+        )
+    try:
+        significance = ChangeSignificance(change_significance)
+    except ValueError as exc:
+        raise ProblemException(
+            status=422,
+            code="validation_error",
+            title="Check-in requires change_significance MAJOR or MINOR (INV-3)",
+            errors=[{"field": "change_significance", "code": "invalid", "message": "MAJOR|MINOR"}],
+        ) from exc
+
+    payload = rfc8785.dumps(register)  # JCS — identical register → identical source blob
+    sha = hashlib.sha256(payload).hexdigest()
+    if await repository.get_blob(session, sha) is None:
+        await storage.put_staging_bytes(payload, sha, content_type="application/json")
+        promoted = await storage.finalize_worm(sha)
+        if not promoted.exists:  # pragma: no cover - defensive (we just wrote it)
+            raise ProblemException(
+                status=500, code="internal_error", title="Register object upload failed"
+            )
+        if promoted.retain_until is None:
+            raise ProblemException(
+                status=423, code="worm_required", title="Register object is not WORM-locked"
+            )
+        await session.execute(
+            pg_insert(Blob)
+            .values(
+                sha256=sha,
+                org_id=actor.org_id,
+                size_bytes=promoted.size or len(payload),
+                mime_type="application/json",
+                bucket=get_settings().s3_bucket_documents,
+                object_key=sha,
+                worm_locked=True,
+                worm_retain_until=promoted.retain_until,
+            )
+            .on_conflict_do_nothing(index_elements=["sha256"])
+        )
+        await session.flush()
+
+    seq = await repository.next_version_seq(session, doc.id)
+    dist_snap = await _distribution_snapshot(session, doc.id)
+    version = DocumentVersionModel(
+        org_id=actor.org_id,
+        document_id=doc.id,
+        version_seq=seq,
+        revision_label=revision_label(seq),
+        change_significance=significance,
+        change_reason=change_reason.strip(),
+        version_state=VersionState.Draft,
+        source_blob_sha256=sha,
+        # SAME register dict → bytes ≡ snapshot.
+        metadata_snapshot=_snapshot(
+            doc, interested_party_register=register, distribution=dist_snap
+        ),
+        author_user_id=actor.id,
+        created_by=actor.id,
+    )
+    session.add(version)
+    # Flush BEFORE _emit — NOT commit (publish_register owns the txn boundary). The
+    # ``default=uuid.uuid4`` id is a FLUSH-time default, so the flush populates version.id for the
+    # audit row's object_id (the checkin_context_register contract verbatim).
     await session.flush()
     _emit(
         session,

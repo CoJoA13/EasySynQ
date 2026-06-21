@@ -40,6 +40,11 @@ from ._ingestion_enums import (
     ImportKind,
     ImportRunStatus,
 )
+from ._interested_party_enums import (
+    InterestedPartyInfluence,
+    InterestedPartyStatus,
+    InterestedPartyType,
+)
 from ._iso_audit_enums import AuditState, FindingType
 from ._mgmt_review_enums import (
     ManagementReviewCloseState,
@@ -117,6 +122,7 @@ from .import_run import ImportRun
 from .import_version_family import ImportVersionFamily
 from .improvement_initiative import ImprovementInitiative
 from .improvement_initiative_stage_event import ImprovementInitiativeStageEvent
+from .interested_party import InterestedParty
 from .kpi_measurement import KpiMeasurement
 from .management_review import ManagementReview
 from .mirror_build import MirrorBuild
@@ -235,6 +241,10 @@ __all__ = [
     "ImprovementInitiativeStageEvent",
     "ImprovementSource",
     "ImprovementStage",
+    "InterestedParty",
+    "InterestedPartyInfluence",
+    "InterestedPartyStatus",
+    "InterestedPartyType",
     "KpiMeasurement",
     "ManagementReview",
     "ManagementReviewCloseState",

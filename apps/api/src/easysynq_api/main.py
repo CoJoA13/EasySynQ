@@ -31,6 +31,7 @@ from .api.drift import router as drift_router
 from .api.health import router as health_router
 from .api.improvement import router as improvement_router
 from .api.ingestion import router as ingestion_router
+from .api.interested_parties import router as interested_parties_router
 from .api.mgmt_review import router as mgmt_review_router
 from .api.objectives import router as objectives_router
 from .api.pack_share import router as pack_share_router
@@ -162,6 +163,8 @@ def create_app() -> FastAPI:
     app.include_router(improvement_router)  # S-improvement-1: clause-10.3 Improvement Initiatives
     app.include_router(risk_router)  # S-risk-1: clause-6.1 Risk & Opportunity register (register.*)
     app.include_router(context_router)  # S-context-1: clause-4.1 Context register (register.*)
+    # S-interested-parties-1: clause-4.2 Interested Parties register (register.*)
+    app.include_router(interested_parties_router)
     app.include_router(retention_policies_router)  # S-rec-4: retention-policy CRUD + soft-archive
     app.include_router(ingestion_router)  # S-ing-1: import run + scan/inventory (NOT latch-exempt)
     app.include_router(search_router)  # S10: Postgres-FTS search (filter-not-403, Indexer seam)

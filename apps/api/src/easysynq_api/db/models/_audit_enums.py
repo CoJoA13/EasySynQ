@@ -451,6 +451,17 @@ class EventType(enum.Enum):
     # member
     # lives here too).
     CONTEXT_ISSUE_UPDATED = "CONTEXT_ISSUE_UPDATED"
+    # S-interested-parties-1 (clause 4.2 Interested Parties register, R51): INTERESTED_PARTY_UPDATED
+    # trails an edit to an interested_party row (a party_type/party_name/needs_expectations/
+    # influence/status/last_reviewed change on the working register) — auditable, never a silent
+    # in-place change (the CONTEXT_ISSUE_UPDATED shape). Keyed object_type=document (the register IS
+    # a documented_information; scope_ref=the IPR head identifier, object_id=register_doc_id). The
+    # register's own lifecycle (create/publish/release) rides the generic
+    # DOCUMENT_CREATED/CHECKIN/RELEASED events; no new SignatureMeaning (R2), audit_object_type, or
+    # sig-hook. Added via ALTER TYPE event_type ADD VALUE in 0061 (the additive pattern; a
+    # from-scratch ``upgrade head`` rebuilds the type from EVENT_TYPE_VALUES, so the member lives
+    # here too).
+    INTERESTED_PARTY_UPDATED = "INTERESTED_PARTY_UPDATED"
 
 
 class CheckpointSinkKind(enum.Enum):

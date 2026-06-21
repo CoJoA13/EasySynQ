@@ -839,15 +839,17 @@ async def _resolve_implement_version(
             "the resulting version's document already has an effective version; a CREATE change "
             "request can only release the initial version of a new document",
         )
-    # Managed subtypes (Quality Objectives, Management Reviews) AND managed register heads (RSK/CTX)
+    # Managed subtypes (Quality Objectives, Management Reviews) AND managed register heads
+    # (RSK/CTX/IPR)
     # have their own create/release workspaces; a generic CREATE change request must not mint or
     # release one (Codex P2, S-context-1). ⚠ This branch is reached even though _resolve_target
-    # reserves RSK/CTX as REVISE/RETIRE targets, because a CREATE DCR has no target — so without
+    # reserves RSK/CTX/IPR as REVISE/RETIRE targets, because a CREATE DCR has no target — so without
     # this
     # a freshly-published register (Approved, current_effective_version_id still null) could be
     # claimed as the resulting version and released via the generic cutover, bypassing the
-    # /risks|/context register SoD-2 release (a pre-existing RSK gap S-risk-1b's reservation missed,
-    # now closed for both). Form templates (FRM) + ordinary controlled docs remain valid targets.
+    # /risks|/context|/interested-parties register SoD-2 release (a pre-existing RSK gap S-risk-1b's
+    # reservation missed, now closed for all three). Form templates (FRM) + ordinary controlled docs
+    # remain valid targets.
     if (
         (await session.get(QualityObjective, doc.id)) is not None
         or (await session.get(ManagementReview, doc.id)) is not None
@@ -856,7 +858,8 @@ async def _resolve_implement_version(
         raise _conflict(
             "create_target_managed_subtype",
             "this document is a managed subtype (objective / management review) or a managed "
-            "register (risk / context); create it from its own workspace, not via a change request",
+            "register (risk / context / interested parties); create it from its own workspace, not "
+            "via a change request",
         )
     if version.version_state is not VersionState.Approved:
         raise _conflict(

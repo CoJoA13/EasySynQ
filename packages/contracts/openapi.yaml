@@ -5350,6 +5350,163 @@ paths:
         "409": { $ref: "#/components/responses/ProblemResponse" }
         "422": { $ref: "#/components/responses/ProblemResponse" }
 
+  /interested-parties:
+    post:
+      tags: [interested-parties]
+      operationId: createInterestedParty
+      summary: >-
+        Author an interested party on the org's Interested Parties register (clause 4.2,
+        S-interested-parties-1). Lazily get-or-creates the single kind=DOCUMENT IPR register head
+        (org-level — no ProcessLinks, no process_id on rows). A new party is always status=active
+        (close it via PATCH). Needs register.manage @ SYSTEM (clause 4.2 is an org-wide
+        QMS-leadership concern; a bound Process Owner's PROCESS grant does not match the org
+        register).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/InterestedPartyCreate" }
+      responses:
+        "201":
+          description: The authored interested party.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/InterestedParty" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "409": { $ref: "#/components/responses/ProblemResponse" }
+        "422": { $ref: "#/components/responses/ProblemResponse" }
+    get:
+      tags: [interested-parties]
+      operationId: listInterestedParties
+      summary: >-
+        List the org's interested parties (newest first), filtered to what the caller may
+        register.read (filter-not-403 — a no-grant caller gets 200 + empty). Clause 4.2 is org-level,
+        so this is all-or-nothing at SYSTEM scope. Needs register.read @ SYSTEM.
+      responses:
+        "200":
+          description: The org's (visible) interested parties.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/InterestedParty" }
+  /interested-parties/register:
+    get:
+      tags: [interested-parties]
+      operationId: getInterestedPartyRegister
+      summary: >-
+        The org's Interested Parties register head lifecycle state (S-interested-parties-1) — state +
+        the governing-version pointer. Any authenticated org member may read it (org-level, not
+        row-level sensitive; the row contents are gated separately by GET /interested-parties).
+        exists:false before the first party is added.
+      responses:
+        "200":
+          description: The register head status.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/InterestedPartyRegisterStatus" }
+  /interested-parties/register/start-revision:
+    post:
+      tags: [interested-parties]
+      operationId: startInterestedPartyRegisterRevision
+      summary: >-
+        Open an FSM revision on the Effective register (T7 Effective→UnderRevision) so its rows
+        become editable again. Gated register.manage @ SYSTEM. 409 unless Effective.
+      responses:
+        "200":
+          description: The register head status (now UnderRevision).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/InterestedPartyRegisterStatus" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "409": { $ref: "#/components/responses/ProblemResponse" }
+  /interested-parties/register/publish:
+    post:
+      tags: [interested-parties]
+      operationId: publishInterestedPartyRegister
+      summary: >-
+        Freeze the working rows into a new immutable register version and submit it for review (T2/T9;
+        clause 4.2 has no scoring criteria — rows only). Gated register.manage @ SYSTEM. 409 unless
+        the head is Draft (first register) or UnderRevision. Approval routes through POST
+        /tasks/{id}/decision (DOCUMENT leg); release via /interested-parties/register/release.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/InterestedPartyRegisterPublish" }
+      responses:
+        "200":
+          description: The register head status (now InReview).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/InterestedPartyRegisterStatus" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "409": { $ref: "#/components/responses/ProblemResponse" }
+        "422": { $ref: "#/components/responses/ProblemResponse" }
+  /interested-parties/register/release:
+    post:
+      tags: [interested-parties]
+      operationId: releaseInterestedPartyRegister
+      summary: >-
+        Release the Approved register version Effective (T6). Enforces document.release @ SYSTEM over
+        the SoD-2-enriched scope (author/approver ≠ releaser; held by no seeded role → a SYSTEM
+        override in v1), then runs the shared INV-1 SERIALIZABLE cutover. After release the rows are
+        read-only until the next revision.
+      responses:
+        "200":
+          description: The register head status (now Effective).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/InterestedPartyRegisterStatus" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "409": { $ref: "#/components/responses/ProblemResponse" }
+        "422": { $ref: "#/components/responses/ProblemResponse" }
+  /interested-parties/{party_id}:
+    parameters:
+      - { name: party_id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [interested-parties]
+      operationId: getInterestedParty
+      summary: >-
+        Read one interested party. Enforces register.read @ SYSTEM (403-on-deny; a SYSTEM grant
+        matches). Needs register.read.
+      responses:
+        "200":
+          description: The interested party.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/InterestedParty" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+    patch:
+      tags: [interested-parties]
+      operationId: updateInterestedParty
+      summary: >-
+        Partial-update an interested party (re-categorise / close / record a review). An explicit
+        null clears a nullable field (influence/last_reviewed_at); a null on
+        party_type/party_name/needs_expectations/status 422s. Editable only while the register head
+        is Draft/UnderRevision (409 otherwise). Needs register.manage @ SYSTEM.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/InterestedPartyUpdate" }
+      responses:
+        "200":
+          description: The updated interested party.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/InterestedParty" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409": { $ref: "#/components/responses/ProblemResponse" }
+        "422": { $ref: "#/components/responses/ProblemResponse" }
+
   /objectives:
     post:
       tags: [objectives]
@@ -8104,6 +8261,100 @@ components:
             closed: { type: integer }
         active: { type: integer, description: The open-issues headline (= by_status.active). }
         never_reviewed: { type: integer, description: Rows (any status) with no last_reviewed_at. }
+    InterestedParty:
+      type: object
+      additionalProperties: false
+      description: >-
+        A clause-4.2 interested party (S-interested-parties-1) — a relevant party on the org's
+        Interested Parties register, with its needs/expectations. Org-level (no process_id).
+        party_type is the ISO spine; influence is the optional relevance axis (R51); status retires a
+        party without deleting it.
+      required:
+        [id, register_doc_id, party_type, party_name, needs_expectations, status, row_version]
+      properties:
+        id: { type: string, format: uuid }
+        register_doc_id: { type: string, format: uuid, description: The IPR register head id. }
+        party_type:
+          type: string
+          enum: [customer, regulator, supplier, employee, owner, community, partner]
+        party_name: { type: string }
+        needs_expectations: { type: string }
+        influence: { type: [string, "null"], enum: [low, medium, high, null] }
+        status: { type: string, enum: [active, closed] }
+        last_reviewed_at: { type: [string, "null"], format: date-time }
+        row_version: { type: integer }
+        created_at: { type: [string, "null"], format: date-time }
+        updated_at: { type: [string, "null"], format: date-time }
+    InterestedPartyCreate:
+      type: object
+      additionalProperties: false
+      description: A new interested party is always status=active (close it via PATCH).
+      required: [party_type, party_name, needs_expectations]
+      properties:
+        party_type:
+          type: string
+          enum: [customer, regulator, supplier, employee, owner, community, partner]
+        party_name: { type: string, minLength: 1, maxLength: 4000 }
+        needs_expectations: { type: string, minLength: 1, maxLength: 4000 }
+        influence: { type: [string, "null"], enum: [low, medium, high, null] }
+        last_reviewed_at: { type: [string, "null"], format: date-time }
+    InterestedPartyUpdate:
+      type: object
+      additionalProperties: false
+      description: >-
+        Partial PATCH; an explicit null clears a nullable field (influence/last_reviewed_at). A null
+        on party_type/party_name/needs_expectations/status is rejected (422) — those are NOT-NULL.
+      properties:
+        party_type:
+          type: [string, "null"]
+          enum: [customer, regulator, supplier, employee, owner, community, partner, null]
+        party_name: { type: [string, "null"], minLength: 1, maxLength: 4000 }
+        needs_expectations: { type: [string, "null"], minLength: 1, maxLength: 4000 }
+        influence: { type: [string, "null"], enum: [low, medium, high, null] }
+        status: { type: [string, "null"], enum: [active, closed, null] }
+        last_reviewed_at: { type: [string, "null"], format: date-time }
+    InterestedPartyRegisterStatus:
+      type: object
+      additionalProperties: false
+      description: >-
+        The Interested Parties register head lifecycle state (S-interested-parties-1). The rows
+        version together under this head; has_governing is true once a version is Effective.
+      required:
+        [exists, register_doc_id, identifier, state, current_effective_version_id, has_governing]
+      properties:
+        exists: { type: boolean }
+        register_doc_id: { type: [string, "null"], format: uuid }
+        identifier: { type: [string, "null"] }
+        state:
+          type: [string, "null"]
+          description: >-
+            The head's current lifecycle state
+            (Draft/InReview/Approved/Effective/UnderRevision/Superseded/Obsolete), or null when no
+            register exists yet.
+        current_effective_version_id: { type: [string, "null"], format: uuid }
+        has_governing: { type: boolean }
+        can_release:
+          type: boolean
+          description: >-
+            S-interested-parties-1 (optional, GET /interested-parties/register only): server-computed
+            — does the caller hold document.release over the head's multi-axis release scope (artifact
+            + folder + level + lifecycle_state + SoD-2)? The faithful steward release gate (a
+            single-axis FE permissions probe can't replicate it). Absent on the lifecycle-action
+            responses.
+        can_manage:
+          type: boolean
+          description: >-
+            S-interested-parties-1 (optional, GET /interested-parties/register only): server-computed
+            — does the caller hold register.manage @ SYSTEM (the steward probe gating start-revision /
+            publish)?
+    InterestedPartyRegisterPublish:
+      type: object
+      additionalProperties: false
+      description: >-
+        The optional publish body. change_reason is the INV-3 reason recorded on the frozen register
+        version (a system-generated default is used when omitted; a no-freeze re-publish ignores it).
+      properties:
+        change_reason: { type: [string, "null"], maxLength: 2000 }
     ImprovementStage:
       type: string
       description: >-
