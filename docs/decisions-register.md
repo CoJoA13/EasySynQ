@@ -1,6 +1,6 @@
 # EasySynQ Decisions Register
 
-This document is the **single authoritative source of truth** for the EasySynQ self-hosted ISO 9001:2015 QMS specification. It records the locked foundational decisions, the locked stakeholder decisions, and the normative resolutions (R1–R50) to every finding raised in the gap audit (`17-gaps-and-open-questions.md`); R38 (slice S-rec-4) is the first post-v1 *additive* decision (additive catalog extensibility + SoD-6), R39 (slice family S-aud/S-capa) locks the Audits/Findings/CAPA model + workflow posture, R40 (slice family S-dcr) locks the Revision & change-depth (DCR) family model + the InApproval reject-loop target, and R41 (slice S-drift-3) adds the `drift.read` SYSTEM-domain permission key; R42 (slice S-ack-1) adds the `document.distribute` CONTENT-domain key, and R43 locks the Acknowledgements-family model.
+This document is the **single authoritative source of truth** for the EasySynQ self-hosted ISO 9001:2015 QMS specification. It records the locked foundational decisions, the locked stakeholder decisions, and the normative resolutions (R1–R51) to every finding raised in the gap audit (`17-gaps-and-open-questions.md`); R38 (slice S-rec-4) is the first post-v1 *additive* decision (additive catalog extensibility + SoD-6), R39 (slice family S-aud/S-capa) locks the Audits/Findings/CAPA model + workflow posture, R40 (slice family S-dcr) locks the Revision & change-depth (DCR) family model + the InApproval reject-loop target, and R41 (slice S-drift-3) adds the `drift.read` SYSTEM-domain permission key; R42 (slice S-ack-1) adds the `document.distribute` CONTENT-domain key, and R43 locks the Acknowledgements-family model.
 
 **Precedence:** Where this register conflicts with any text in sections `01`–`15`, **this register supersedes that text.** Section editors MUST back-propagate the changes listed under each resolution's *Back-propagation* note. The exact tokens, enum values, state names, and field names quoted here are **canonical and verbatim** — they must be reproduced character-for-character (case, snake_case, dot-namespacing, and all) wherever the underlying concept appears. Do not soften, rename, abbreviate, or omit any token.
 
@@ -52,7 +52,7 @@ Proceed with the **full reconcile-and-harden pass** — i.e., adopt R1–R37 bel
 
 ---
 
-## Part 3 — Resolutions R1–R50
+## Part 3 — Resolutions R1–R51
 
 Each resolution states the decision, the exact canonical tokens/enums/states/field-names verbatim, and a Back-propagation note listing the section files that change.
 
@@ -1370,6 +1370,72 @@ AskUserQuestion before any code (content model, keys, 4.2-separate, scope).
 **Back-propagation:** `02` (4.1 ContextRegister as-built), `07` (`register.*` now reach the org-level
 context resource), `14` (as-built `context_issue` — note the enriched `category`/`status`/
 `last_reviewed_at` additions beyond the minimal contract), `15` (`/context` endpoints).
+
+---
+
+### R51 — Interested Parties register family (clause 4.2) — slice family S-interested-parties
+
+**Decision (owner, 2026-06-21).** The clause 4.2 "Understanding the needs and expectations of interested
+parties" register is the **third register family** (after R49 Risk & Opportunity and R50 Context) and the
+second half of clause 4, modeled — per the registers-as-Documents doctrine (doc-14 §0 finding-R3 "Both,
+layered" + `04 A3`; the R49/R50 *citation note* applies verbatim) — as a **maintained controlled Document**:
+one `documented_information` with `kind=DOCUMENT`, a **new `document_type` code `IPR`**, `is_singleton` (one
+non-Obsolete head per org), holding many **`interested_party` satellite rows** (`id` PK + `register_doc_id`
+FK + `row_version` — a register-**row** satellite, the R49/R50 shape, **not** a shared-PK subtype). The rows
+**are the version's controlled content**, FSM-revision-edited then frozen into an immutable version at
+publish; the lifecycle (start-revision / publish / freeze / release) ships **in the same slice** as the core
+(core+lifecycle together — the R50 fork; `S-interested-parties-1`). A near-byte-identical clone of the
+Context register (R50).
+
+**Content model (enriched + influence — the owner fork).** The contracted `14 §6` minimum is `party_name` +
+`needs_expectations`; the v1 as-built **enriches** it with `party_type`
+enum(`customer`,`regulator`,`supplier`,`employee`,`owner`,`community`,`partner`) — the ISO clause-4.2 spine
+(NOT NULL; the relevant interested-party category) — `influence` enum(`low`,`medium`,`high`) — the optional
+relevance axis (NULLABLE) — `status` enum(`active`,`closed`) (a new party is always `active`; retire by
+closing, never delete), and `last_reviewed_at`. The enum value tuples are **golden-pinned**
+(`tests/unit/test_interested_party_register_content.py`) and **append-only**. `influence` is a **categorical**
+axis, NOT a graded/computed one, so — like Context and unlike risk — there is **no `criteria` block, no
+`resolve_criteria`, no derive-and-freeze**: the frozen content is purely the rows.
+
+**Org-level (NOT process-scoped) — the owner fork.** Clause 4.2 interested parties are strategic and org-wide
+(customers, regulators, suppliers, employees, owners, the community), so `interested_party` carries **`org_id`**
+— the §1.1 org_id-everywhere convention, **correcting the `14 §6` editorial gap** that omitted it (the only
+register satellite that did; R50 named it) — but **no `process_id`** (deliberately unlike `risk_opportunity`,
+matching the Context posture). Authz rides the **already-seeded `register.read` / `register.manage` /
+`document.release`** keys at the **SYSTEM** scope — **catalog stays 102, NO new key, NO new role grant**. `GET
+/interested-parties` is filter-not-403 (a no-grant caller → 200 + empty); `GET /interested-parties/{id}`
+enforces `register.read` @ SYSTEM; `POST`/`PATCH` + the steward acts enforce `register.manage` @ SYSTEM;
+release is `document.release` + SoD-2 over the multi-axis `_register_release_scope` (a SYSTEM override in v1).
+Server-computed `can_release`/`can_manage` on `GET /interested-parties/register` via the shared
+register-agnostic `register_capabilities` (the S-context-fe pattern). ADMIN gets no `register.*` (AZ-INV-6).
+
+**Reservation (generalized to the quad).** `IPR` is added to `_MANAGED_REGISTERS = {RSK, CTX, IPR}` — the IPR
+head is reserved from the **create / mutate / DCR-implement / import** quad: the generic mutation chokepoint
+(metadata/distribution/links + link-target, clause-mapping, obsoletion at `lifecycle.obsolete`, DCR
+`_resolve_target`), the generic `POST /documents` create guard (`reject_managed_register_creation`), the
+CREATE-DCR `_resolve_implement_version` guard (`is_managed_register_doc`) — all keyed off the dict — **plus**
+the separate inline ingestion-import guard (`commit.py`, the one site not keyed off the dict), error code
+`interested_parties_register_managed_via_interested_parties`. The IPR head carries ZERO ProcessLinks.
+
+**Migration `0061`** (creates `interested_party` + the 3 enums + the `IPR` `document_type` + the additive
+`INTERESTED_PARTY_UPDATED` event type; NO role grant, NO new permission key).
+
+**Deferred (named, not faked):** the read consumers (`S-interested-parties-2` — `GET
+/interested-parties/summary` + `governing_register` + `summarize_register` [+ the `by_influence` bucket] +
+the **Management-Review 9.3.2(b)** context-change input, finally sourced from BOTH the 4.1 Context AND 4.2
+Interested-Parties governing summaries [un-gapping `CONTEXT_CHANGES`, the R50 / S-context-2 deferral]); the
+FE (`S-interested-parties-fe`, an own `/interested-parties` SPA cloning `features/context/`).
+
+**Validation.** Spec-first (`docs/superpowers/specs/2026-06-21-s-interested-parties-design.md`); the
+architecture is settled (R49/R50), so 4 owner decisions were surfaced via AskUserQuestion before any code
+(content model, `org_id`, scope-split, FE). migration-reviewer + diff-critic + a 3-lens adversarial Workflow
+all CLEAN/0-confirmed; Codex not run (owner squashed on green CI + 3 clean in-house reviews).
+
+**Back-propagation:** `02` (4.2 InterestedParty register as-built), `07` (`register.*` now reach the
+org-level interested-parties resource), `14 §6` (**`org_id` correction** + the as-built enriched columns),
+`15` (`/interested-parties` endpoints — §8.10d).
+
+Bumps the resolutions range **R1–R50 → R1–R51**.
 
 ---
 
