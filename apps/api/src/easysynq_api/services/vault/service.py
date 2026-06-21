@@ -300,6 +300,27 @@ async def reject_managed_register_mutation(
         )
 
 
+def reject_managed_register_creation(document_type_code: str | None) -> None:
+    """A managed register head (RSK/CTX — ``_MANAGED_REGISTERS``) is created ONLY via its own
+    service
+    (``/risks`` / ``/context``), NEVER generic ``POST /documents`` (Codex P1, S-context-1). A
+    generic
+    create would let any ``document.create`` holder mint a process-linked or *second* head that the
+    register's ``find_head`` (oldest non-Obsolete head of that code) would later adopt — defeating
+    the
+    zero-ProcessLink / single-non-Obsolete-head invariant and an escalation channel. Keyed by the
+    ``document_type`` code at create time (no doc row exists yet — the mutation guard's create-time
+    sibling); the title matches the per-code message with a ``, not generic creation`` suffix
+    (preserving the original RSK create-path response verbatim)."""
+    if document_type_code is not None and document_type_code in _MANAGED_REGISTERS:
+        title, _error_code, _message = _MANAGED_REGISTERS[document_type_code]
+        raise ProblemException(
+            status=422,
+            code="validation_error",
+            title=f"{title}, not generic creation",
+        )
+
+
 async def reject_objective_byte_path(session: AsyncSession, doc: DocumentedInformation) -> None:
     """S-obj-4 (O-5) / S-mr-1 / S-risk-1b / S-context-1: a content-managed DOCUMENT subtype's
     content

@@ -25,6 +25,10 @@ from typing import Any
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import select
+
+from easysynq_api.db.models.document_type import DocumentType
+from easysynq_api.db.session import get_sessionmaker
 
 from .test_processes import _create_process, _grant, _user_id
 from .test_vault import _auth, _create, _sop_type_id
@@ -236,3 +240,34 @@ async def test_process_bound_register_manage_cannot_create_context(
         "/api/v1/context", headers=ho, json={"classification": "internal", "description": "x"}
     )
     assert blocked.status_code == 403, blocked.text
+
+
+async def test_ctx_register_head_not_generically_creatable(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    """The CTX register head is system-managed (zero ProcessLinks, single head): the generic
+    POST /documents path reserves the CTX type too (Codex P1) — even a SYSTEM document.create holder
+    cannot mint a process-linked / second head that context find_head would adopt. Mirrors the RSK
+    create-path reservation; the create-time guard is reject_managed_register_creation({RSK,
+    CTX})."""
+    await _grant(subj.a, "document.create")
+    await _grant(subj.a, "process.create")
+    ha = _auth(token_factory, subj.a)
+    p1 = await _create_process(app_client, ha)
+    async with get_sessionmaker()() as s:
+        ctx_type_id = (
+            (await s.execute(select(DocumentType.id).where(DocumentType.code == "CTX")))
+            .scalars()
+            .first()
+        )
+    assert ctx_type_id is not None, "CTX document_type must be seeded by migration 0060"
+    r = await app_client.post(
+        "/api/v1/documents",
+        headers=ha,
+        json={
+            "title": "Sneaky context register head",
+            "document_type_id": str(ctx_type_id),
+            "process_ids": [p1["id"]],
+        },
+    )
+    assert r.status_code == 422, r.text
