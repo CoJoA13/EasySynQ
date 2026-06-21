@@ -146,6 +146,20 @@ The `permission` table is seeded from the **doc 07 canonical catalog**. The seed
 | Import | **`import.execute`** (run the scan/classify), **`import.review`** (review/correct classifications), **`import.commit`** (commit to vault) |
 | Grant/revoke | `permission.grant`, `permission.revoke` — scopable to CONTENT domains within QMS scope for the QMS Owner; system-permission granting stays SYSTEM-scope admin-only |
 
+**Seeded role bundles** (the `role` + `role_grant` rows seeded alongside the permission catalog — see `07 §4.2` for the full descriptions):
+
+| Seeded role | `is_reserved` | Core bundle (abbreviated) |
+|---|---|---|
+| **System Administrator** | yes | All §3.9 perms; no QMS-content perms. |
+| **QMS Owner** | yes | Org-wide `*.read`; framework/lifecycle config (QMS side); `mgmtReview.*`; `permission.grant` scoped to CONTENT domains. |
+| **Register Steward** | yes | Stewards the org-level registers (Risk 6.1 / Context 4.1 / Interested Parties 4.2): start-revision / publish / release the register heads; holds `document.release` @ SYSTEM, excludes `document.approve` for SoD (the approver stays a separate Approver/QMS-Owner; release stays releaser ≠ approver). (R52, migration `0062`.) |
+| **Process Owner** | no | Scoped to `:process`: `document.create/edit/submit`, `record.create/read`, `capa.create`, `process.manage`. |
+| **Author** | no | Scoped to `:folder`/`:process`: `document.create/checkout/edit/submit`, `document.read_draft`, `record.create`, `changeRequest.create`. No `approve`/`release`. |
+| **Approver** | no | Scoped to `:doc_class`/`:process`: `document.review/approve`, `changeRequest.approve`. No `edit`/`submit` on the same artifact (SoD). |
+| **Internal Auditor** | no | Broad `*.read`; `audit.create/conduct/close`, `finding.*`. Hard-excludes `document.edit/approve/release`. |
+| **Employee (Read-only)** | no | Scoped to `:area`: `document.read`, `document.print_controlled`, `document.acknowledge`, `record.read` (own/area). |
+| **External Auditor (Guest)** | no | `document.read` + `record.read` + `report.read` only within a bound Evidence Pack. |
+
 ---
 
 ## 4. Clauses, Processes, Frameworks — the ISO Information Architecture (Cluster C)

@@ -1,6 +1,6 @@
 # EasySynQ Decisions Register
 
-This document is the **single authoritative source of truth** for the EasySynQ self-hosted ISO 9001:2015 QMS specification. It records the locked foundational decisions, the locked stakeholder decisions, and the normative resolutions (R1–R51) to every finding raised in the gap audit (`17-gaps-and-open-questions.md`); R38 (slice S-rec-4) is the first post-v1 *additive* decision (additive catalog extensibility + SoD-6), R39 (slice family S-aud/S-capa) locks the Audits/Findings/CAPA model + workflow posture, R40 (slice family S-dcr) locks the Revision & change-depth (DCR) family model + the InApproval reject-loop target, and R41 (slice S-drift-3) adds the `drift.read` SYSTEM-domain permission key; R42 (slice S-ack-1) adds the `document.distribute` CONTENT-domain key, and R43 locks the Acknowledgements-family model.
+This document is the **single authoritative source of truth** for the EasySynQ self-hosted ISO 9001:2015 QMS specification. It records the locked foundational decisions, the locked stakeholder decisions, and the normative resolutions (R1–R52) to every finding raised in the gap audit (`17-gaps-and-open-questions.md`); R38 (slice S-rec-4) is the first post-v1 *additive* decision (additive catalog extensibility + SoD-6), R39 (slice family S-aud/S-capa) locks the Audits/Findings/CAPA model + workflow posture, R40 (slice family S-dcr) locks the Revision & change-depth (DCR) family model + the InApproval reject-loop target, and R41 (slice S-drift-3) adds the `drift.read` SYSTEM-domain permission key; R42 (slice S-ack-1) adds the `document.distribute` CONTENT-domain key, and R43 locks the Acknowledgements-family model.
 
 **Precedence:** Where this register conflicts with any text in sections `01`–`15`, **this register supersedes that text.** Section editors MUST back-propagate the changes listed under each resolution's *Back-propagation* note. The exact tokens, enum values, state names, and field names quoted here are **canonical and verbatim** — they must be reproduced character-for-character (case, snake_case, dot-namespacing, and all) wherever the underlying concept appears. Do not soften, rename, abbreviate, or omit any token.
 
@@ -52,7 +52,7 @@ Proceed with the **full reconcile-and-harden pass** — i.e., adopt R1–R37 bel
 
 ---
 
-## Part 3 — Resolutions R1–R51
+## Part 3 — Resolutions R1–R52
 
 Each resolution states the decision, the exact canonical tokens/enums/states/field-names verbatim, and a Back-propagation note listing the section files that change.
 
@@ -1450,6 +1450,22 @@ org-level interested-parties resource), `14 §6` (**`org_id` correction** + the 
 `15` (`/interested-parties` endpoints — §8.10d).
 
 Bumps the resolutions range **R1–R50 → R1–R51**.
+
+### R52 — Register Steward role (clause 4.1/4.2/6.1 register stewardship) — 2026-06-21
+
+The three register-steward consoles (Risk 6.1 / Context 4.1 / Interested Parties 4.2) are made
+self-service by a NEW reserved **Register Steward** role (migration `0062`) holding the full
+stewardship set at SYSTEM scope — `register.read · register.manage · document.release ·
+document.read · document.read_draft` — and deliberately EXCLUDING `document.approve` (SoD: the
+approver stays a separate Approver/QMS-Owner; register publish still routes its approval to that
+pool, and release stays releaser ≠ approver). This is the FIRST seeded role to hold
+`document.release`, so v1 release authority becomes **role-grantable** rather than
+SYSTEM-override-only; release remains gated by SoD-2 + the signature hook + (for POL/OBJ/MR) the
+Top-Management leadership-authorization preflight (the steward is not in that pool and cannot bypass
+it). No new permission key (catalog stays 102; R38 additive covers a new role + grants on existing
+keys). Supersedes the F-1 deferral named in R49/R50/R51.
+
+Bumps the resolutions range **R1–R51 → R1–R52**.
 
 ---
 

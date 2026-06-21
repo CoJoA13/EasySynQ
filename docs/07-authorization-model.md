@@ -293,6 +293,7 @@ EasySynQ ships these as a fast start; they are **not** authoritative and carry *
 | **Internal Auditor** | no | Ingrid | Broad `*.read` incl. `document.read_obsolete`, `record.read`, `clauseMap.read`, `report.read`, `improvement.read` (R46), and `report.compliance_checklist.read` (the ★ mandatory-coverage view — **added to the bundle in S10** via migration `0021`, since the auditor is the natural consumer of coverage); `audit.create/conduct/close`, `finding.*`. **Hard-excludes** all `document.edit/approve/release` (independence — Vision §6.2). |
 | **Employee (Read-only)** | no | Sam | Scoped to `:area`: `document.read`, `document.print_controlled`, `document.acknowledge`, `record.read` (own/area), `process.read`. |
 | **External Auditor (Guest)** | no | Olsen | Guest principal; `document.read` + `record.read` + `report.read` **only within a bound Evidence Pack**, plus `EXPIRES_AT` and `IP/scope` constraints (§5.4, §9). |
+| **Register Steward** | yes | — | Stewards the org-level registers (Risk 6.1 / Context 4.1 / Interested Parties 4.2): start-revision / publish / release the register heads; holds `document.release` @ SYSTEM, excludes `document.approve` for SoD (the approver stays a separate Approver/QMS-Owner; release stays releaser ≠ approver). (R52, migration `0062`.) |
 
 ### 4.3 The two-tier permission-grant model (CONTENT vs SYSTEM)
 
