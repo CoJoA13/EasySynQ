@@ -39,6 +39,7 @@ from easysynq_api.services.interested_parties import add_interested_party
 from easysynq_api.services.vault import get_vault_audit_sink
 
 from . import s5_helpers as s5
+from .test_mgmt_review import _MR_KEYS, _create_review
 from .test_processes import _grant
 from .test_vault import _auth, _ensure_user
 
@@ -329,3 +330,88 @@ async def test_register_status_capabilities(
     st2 = await _status(app_client, hp)
     assert st2["can_manage"] is True
     assert st2["can_release"] is False  # no document.release grant → faithful False
+
+
+def _mr_context_changes_input(compile_json: dict[str, Any]) -> dict[str, Any]:
+    """The CONTEXT_CHANGES (9.3.2(b)) input row from a compile-inputs response."""
+    by_type = {ri["input_type"]: ri for ri in compile_json["inputs"]}
+    return by_type["CONTEXT_CHANGES"]
+
+
+async def test_mr_input_b_sources_governing_parties_snapshot(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    subj: SimpleNamespace,
+    restore_interested_party_head: None,
+) -> None:
+    """S-interested-parties-2: the Management-Review 9.3.2(b) CONTEXT_CHANGES input sources the
+    clause-4 registers' CONTROLLED read-of-record — the GOVERNING (Effective) frozen snapshots of
+    BOTH the 4.1 context AND 4.2 interested-parties registers, NEVER the live working satellites.
+    The nested {context, interested_parties} envelope carries each half (null when its register is
+    unpublished). Drive a customer party to Effective → input-(b) is available with the 4.2 half
+    summarized (by_party_type/by_influence). Then start a revision and ADD a live party — a fresh MR
+    still reads the SAME governing 4.2 snapshot (the live add is invisible to the read-of-record),
+    proving the WORM minutes can never freeze the steward's unpublished UnderRevision edits. The
+    restore_interested_party_head teardown returns the shared head to editable."""
+    await _setup_actors(subj)  # grants the steward register.manage + register.read @ SYSTEM
+    for key in _MR_KEYS:  # the steward IS the MR owner whose grants gate the per-source reads (F3)
+        await _grant(subj.steward, key)
+    hs = _auth(token_factory, subj.steward)
+    hap = _auth(token_factory, subj.approver)
+    hrl = _auth(token_factory, subj.releaser)
+    await _drive_to_editable(app_client, hs, hap, hrl)
+
+    # a customer party (high influence) on the working satellite, driven to Effective.
+    row = await _create_party(app_client, hs, needs="mr-input-b")
+    head_id = row["register_doc_id"]
+    patched = await app_client.patch(
+        f"/api/v1/interested-parties/{row['id']}", headers=hs, json={"influence": "high"}
+    )
+    assert patched.status_code == 200, patched.text
+
+    assert (
+        await app_client.post("/api/v1/interested-parties/register/publish", headers=hs)
+    ).status_code == 200
+    released = await _approve_and_release(app_client, head_id, hap, hrl)
+    assert released["state"] == "Effective"
+
+    # MR #1 — input-(b) is available; the nested envelope's 4.2 half is the governing summary.
+    rid1 = await _create_review(app_client, hs, "MR reading the governing registers")
+    c1 = await app_client.post(f"/api/v1/management-reviews/{rid1}/compile-inputs", headers=hs)
+    assert c1.status_code == 200, c1.text
+    ctx1 = _mr_context_changes_input(c1.json())
+    assert ctx1["available"] is True, ctx1
+    summary1 = ctx1["source_ref"]["summary"]
+    assert set(summary1) == {"context", "interested_parties"}, summary1
+    parties1 = summary1["interested_parties"]
+    assert parties1 is not None, summary1  # the 4.2 register IS published (I just released it)
+    assert set(parties1["by_party_type"]) == {
+        "customer",
+        "regulator",
+        "supplier",
+        "employee",
+        "owner",
+        "community",
+        "partner",
+    }
+    assert set(parties1["by_influence"]) == {"low", "medium", "high", "unspecified"}
+    assert parties1["by_party_type"]["customer"] >= 1  # my row (others may add; delta-robust)
+    assert parties1["by_influence"]["high"] >= 1
+    # the 4.1 context half is whatever this shard's shared CTX head state is (null OR a dict).
+
+    # start a revision and ADD a live party. The governing Effective version is unchanged (its
+    # pointer only moves at the next release).
+    assert (
+        await app_client.post("/api/v1/interested-parties/register/start-revision", headers=hs)
+    ).status_code == 200
+    await _create_party(app_client, hs, needs="live-party-after-publish")
+
+    # MR #2 — a fresh compile during UnderRevision STILL reads the governing 4.2 snapshot: the
+    # interested_parties half is BYTE-IDENTICAL (the live add is invisible to the read-of-record).
+    rid2 = await _create_review(app_client, hs, "MR after the live add")
+    c2 = await app_client.post(f"/api/v1/management-reviews/{rid2}/compile-inputs", headers=hs)
+    assert c2.status_code == 200, c2.text
+    ctx2 = _mr_context_changes_input(c2.json())
+    assert ctx2["available"] is True, ctx2
+    assert ctx2["source_ref"]["summary"]["interested_parties"] == parties1
+    # the restore_interested_party_head teardown returns the shared head to editable (even on fail).

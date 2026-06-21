@@ -35,6 +35,7 @@ from ..db.models.documented_information import DocumentedInformation
 from ..db.models.interested_party import InterestedParty
 from ..db.session import get_session
 from ..domain.authz import RequestContext, ResourceContext, authorize
+from ..domain.interested_parties.summary import summarize_register
 from ..problems import ProblemException
 from ..services.authz import (
     AuthzAuditSink,
@@ -48,6 +49,7 @@ from ..services.interested_parties import (
     add_interested_party,
     find_head,
     get_interested_party,
+    governing_register,
     list_interested_parties,
     publish_register,
     start_interested_party_revision,
@@ -277,6 +279,24 @@ async def release_register_endpoint(
     # serializer → MissingGreenlet; the context release precedent).
     released = await release(caller, head.id, vault_sink, sig_sink)
     return _register_status(released)
+
+
+@router.get("/interested-parties/summary")
+async def interested_party_summary_endpoint(
+    caller: AppUser = Depends(_ip_read_system),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """The org's Interested Parties register summary (the Home/dashboard + IP-SPA seam,
+    S-interested-parties-2). Projects the GOVERNING (current Effective) snapshot via pure
+    ``summarize_register``: the CONTROLLED read-of-record, never the live working satellite (an
+    UnderRevision edit is invisible until the next publish/release; the MR read-of-record
+    discipline). ``active`` is the open-parties headline; ``never_reviewed`` counts rows with no
+    ``last_reviewed_at``. Pre-first-release (no published register → ``governing`` is ``None``)
+    returns ``published: false`` + an all-zero summary. Gated register.read @ SYSTEM (org-level).
+
+    ⚠ Static route — MUST precede /interested-parties/{party_id} (the str-convertor shadow)."""
+    governing = await governing_register(session, caller.org_id)
+    return {"published": governing is not None, **summarize_register(governing or {"rows": []})}
 
 
 @router.get("/interested-parties/{party_id}")

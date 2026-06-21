@@ -5466,6 +5466,25 @@ paths:
         "403": { $ref: "#/components/responses/ProblemResponse" }
         "409": { $ref: "#/components/responses/ProblemResponse" }
         "422": { $ref: "#/components/responses/ProblemResponse" }
+  /interested-parties/summary:
+    get:
+      tags: [interested-parties]
+      operationId: getInterestedPartySummary
+      summary: >-
+        The org's Interested Parties register summary (the Home/dashboard + IP-SPA seam,
+        S-interested-parties-2). Projects the GOVERNING (current Effective) register snapshot — the
+        CONTROLLED read-of-record, never the live working satellite (an UnderRevision edit is
+        invisible until the next publish/release; the MR read-of-record discipline). active is the
+        open-parties headline; never_reviewed counts rows with no last_reviewed_at. published:false +
+        an all-zero summary before the first publish/release. Gated register.read @ SYSTEM (org-level,
+        not a per-row filter — a no-grant caller gets 403).
+      responses:
+        "200":
+          description: The summary over the governing interested-parties register.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/InterestedPartyRegisterSummary" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
   /interested-parties/{party_id}:
     parameters:
       - { name: party_id, in: path, required: true, schema: { type: string, format: uuid } }
@@ -8355,6 +8374,53 @@ components:
         version (a system-generated default is used when omitted; a no-freeze re-publish ignores it).
       properties:
         change_reason: { type: [string, "null"], maxLength: 2000 }
+    InterestedPartyRegisterSummary:
+      type: object
+      additionalProperties: false
+      description: >-
+        The summary over the GOVERNING (current Effective) Interested Parties register snapshot
+        (S-interested-parties-2) — the Home/dashboard + IP-SPA read-of-record. published is false
+        before the first publish/release (then every count is zero). by_party_type is the ISO 4.2
+        spine; by_influence is the optional relevance axis (unspecified = a NULL influence). active is
+        the open-parties headline (= by_status.active); never_reviewed counts rows (any status) with
+        no last_reviewed_at (a clock-free freshness signal).
+      required:
+        [published, total, by_party_type, by_influence, by_status, active, never_reviewed]
+      properties:
+        published:
+          type: boolean
+          description: True once a register version is Effective; false (all-zero counts) before.
+        total: { type: integer }
+        by_party_type:
+          type: object
+          additionalProperties: false
+          required: [customer, regulator, supplier, employee, owner, community, partner]
+          properties:
+            customer: { type: integer }
+            regulator: { type: integer }
+            supplier: { type: integer }
+            employee: { type: integer }
+            owner: { type: integer }
+            community: { type: integer }
+            partner: { type: integer }
+        by_influence:
+          type: object
+          additionalProperties: false
+          required: [low, medium, high, unspecified]
+          properties:
+            low: { type: integer }
+            medium: { type: integer }
+            high: { type: integer }
+            unspecified: { type: integer }
+        by_status:
+          type: object
+          additionalProperties: false
+          required: [active, closed]
+          properties:
+            active: { type: integer }
+            closed: { type: integer }
+        active: { type: integer, description: The open-parties headline (= by_status.active). }
+        never_reviewed: { type: integer, description: Rows (any status) with no last_reviewed_at. }
     ImprovementStage:
       type: string
       description: >-
