@@ -2460,6 +2460,25 @@ export const handlers = [
   http.get("/api/v1/risks", () => HttpResponse.json(riskListFixture)),
   http.get("/api/v1/risks/summary", () => HttpResponse.json(riskSummaryFixture)),
   http.get("/api/v1/risks/register", () => HttpResponse.json(riskRegisterStatusFixture)),
+  // S-risk-5 register-steward lifecycle — each returns the resulting _register_status (RiskRegisterStatus).
+  http.post("/api/v1/risks/register/start-revision", () =>
+    HttpResponse.json({
+      ...riskRegisterStatusFixture,
+      state: "UnderRevision",
+    } satisfies RiskRegisterStatus),
+  ),
+  http.post("/api/v1/risks/register/publish", () =>
+    HttpResponse.json({
+      ...riskRegisterStatusFixture,
+      state: "InReview",
+    } satisfies RiskRegisterStatus),
+  ),
+  http.post("/api/v1/risks/register/release", () =>
+    HttpResponse.json({
+      ...riskRegisterStatusFixture,
+      state: "Effective",
+    } satisfies RiskRegisterStatus),
+  ),
   http.get("/api/v1/risks/:id", ({ params }) => {
     const row = riskListFixture.data.find((r) => r.id === params.id) ?? riskListFixture.data[0]!;
     return HttpResponse.json({ ...row, id: String(params.id) });

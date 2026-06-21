@@ -1691,6 +1691,12 @@ export interface RiskRegisterStatus {
   has_governing: boolean;
 }
 
+// POST /risks/register/publish body — api/risk.py `RegisterPublish`. The change reason is optional
+// (the server defaults a system reason when omitted/empty; ignored on a no-freeze re-publish).
+export interface RiskRegisterPublishBody {
+  change_reason: string | null;
+}
+
 // GET /risks/summary — the governing high-risk read-of-record (S-risk-4a). published:false + all-zero
 // counts before the first publish/release. high_risk = critical + high (the danger-tone set).
 export interface RiskSummary {
