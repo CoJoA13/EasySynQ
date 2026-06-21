@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { useObjectiveScorecard } from "../objectives/hooks";
 import { useComplianceChecklist } from "../compliance/useComplianceChecklist";
 import { useRiskSummary } from "../risk/hooks";
+import { useContextSummary } from "../context/hooks";
 import { QuadrantCard, TileNoAccess, TileSkeleton } from "./QuadrantCard";
 import { StatLine } from "./StatLine";
 import { countRag, overdueRag, planObjectivesRag, worstRag, type Rag } from "./rag";
@@ -12,6 +13,7 @@ export function PlanCard() {
   const sc = useObjectiveScorecard();
   const cl = useComplianceChecklist();
   const rk = useRiskSummary();
+  const ctx = useContextSummary();
 
   const lines: ReactNode[] = [];
   const rags: Rag[] = [];
@@ -49,9 +51,32 @@ export function PlanCard() {
       lines.push(<StatLine key="risk" label="no published risk register yet" tone="neutral" />);
     }
   }
+  if (!ctx.forbidden && !ctx.isError && ctx.data) {
+    if (ctx.data.published) {
+      // Active context issues are informational (the strategic picture, clause 4.1), not an alarm.
+      lines.push(
+        <StatLine key="ctx" value={ctx.data.active} label="active context issues" tone="neutral" />,
+      );
+      // Never-reviewed issues are the actionable freshness signal (amber when >0) → drives the RAG.
+      if (ctx.data.never_reviewed > 0) {
+        const rag = countRag(ctx.data.never_reviewed, "amber");
+        rags.push(rag);
+        lines.push(
+          <StatLine
+            key="ctx-rev"
+            value={ctx.data.never_reviewed}
+            label="context issues never reviewed"
+            tone={rag}
+          />,
+        );
+      }
+    } else {
+      lines.push(<StatLine key="ctx" label="no published context register yet" tone="neutral" />);
+    }
+  }
 
-  const allForbidden = sc.forbidden && cl.forbidden && rk.forbidden;
-  const loading = sc.isLoading || cl.isLoading || rk.isLoading;
+  const allForbidden = sc.forbidden && cl.forbidden && rk.forbidden && ctx.forbidden;
+  const loading = sc.isLoading || cl.isLoading || rk.isLoading || ctx.isLoading;
 
   return (
     <QuadrantCard

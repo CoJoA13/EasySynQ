@@ -33,6 +33,8 @@ const NAV: Record<PdcaPhase, NavItem[]> = {
     // holds register.read only at PROCESS scope must still see the link (the SYSTEM-scoped `can()` here
     // can't see their grant); a no-grant caller lands on a calm empty register (Codex P2).
     { to: "/risks", label: "Risk register", prefix: "/risks" },
+    // Ungated, same reasoning: GET /context is filter-not-403 (a no-grant caller → calm empty register).
+    { to: "/context", label: "Context", prefix: "/context" },
   ],
   DO: [
     { to: "/library", label: "Library", prefix: "/library" },

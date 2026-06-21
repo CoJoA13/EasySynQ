@@ -37,6 +37,7 @@ import { DcrsRegisterPage } from "./features/dcr/DcrsRegisterPage";
 import { DcrDiffPage } from "./features/dcr/DcrDiffPage";
 import { ImprovementRegisterPage } from "./features/improvement/ImprovementRegisterPage";
 import { RisksRegisterPage } from "./features/risk/RisksRegisterPage";
+import { ContextRegisterPage } from "./features/context/ContextRegisterPage";
 import { apiGet } from "./lib/api";
 import { useAuth } from "./lib/auth";
 
@@ -155,6 +156,7 @@ export function App() {
         <Route path="dcrs/:id/diff" element={<DcrDiffPage />} />
         <Route path="improvement" element={<ImprovementRegisterPage />} />
         <Route path="risks" element={<RisksRegisterPage />} />
+        <Route path="context" element={<ContextRegisterPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

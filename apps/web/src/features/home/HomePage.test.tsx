@@ -23,6 +23,7 @@ it("under the bare-demo shape, DO + My-Tasks render while content quadrants show
     http.get("/api/v1/objectives/scorecard", forbid),
     http.get("/api/v1/reports/compliance-checklist", forbid),
     http.get("/api/v1/risks/summary", forbid),
+    http.get("/api/v1/context/summary", forbid),
     http.get("/api/v1/audits", forbid),
     http.get("/api/v1/capas", forbid),
     http.get("/api/v1/ncrs", forbid),

@@ -18,8 +18,10 @@ function grant(...keys: string[]) {
   );
 }
 
-// Flip the register head's lifecycle state (the steward-console gating source).
-function registerState(state: string) {
+// Flip the register head's lifecycle state (the steward-console gating source). can_release is the
+// SERVER-computed multi-axis release gate (S-context-fe) — the page reads it off GET /risks/register,
+// not a single-axis FE probe; tests drive Release via this, not a /me/permissions grant.
+function registerState(state: string, caps?: { can_release?: boolean; can_manage?: boolean }) {
   server.use(
     http.get("/api/v1/risks/register", () =>
       HttpResponse.json({
@@ -29,6 +31,8 @@ function registerState(state: string) {
         state,
         current_effective_version_id: "ve000001-0001-0001-0001-000000000001",
         has_governing: true,
+        can_release: caps?.can_release ?? false,
+        can_manage: caps?.can_manage ?? false,
       }),
     ),
   );
@@ -298,30 +302,26 @@ it("lets Publish proceed (not client-disabled) and surfaces the server's empty-r
   expect(screen.getByText("Publish register revision")).toBeInTheDocument();
 });
 
-it("shows Release for an ARTIFACT-scoped document.release grant (the head-effective probe)", async () => {
-  // document.release granted ONLY at the head's ARTIFACT scope (empty at SYSTEM) must still surface
-  // Release — the probe asks at the register's effective artifact scope, not SYSTEM (Codex P2). A
-  // SYSTEM-only probe would return false here and wrongly hide the button.
-  registerState("Approved");
-  server.use(
-    http.get("/api/v1/me/permissions", ({ request }) => {
-      const level = new URL(request.url).searchParams.get("scope_level");
-      return HttpResponse.json({
-        scope: { level: level ?? "SYSTEM", selector: null },
-        permissions:
-          level === "ARTIFACT"
-            ? [{ key: "document.release", effect: "ALLOW", source: "test" }]
-            : [],
-      });
-    }),
+it("gates Release on the server can_release boolean, not a single-axis FE permission probe", async () => {
+  // S-context-fe: release authz is multi-axis (artifact + folder + level + lifecycle_state + SoD-2),
+  // which a single-axis /me/permissions probe can't replicate — so the page trusts the server-computed
+  // can_release. A SYSTEM document.release grant WITHOUT can_release must NOT surface Release…
+  registerState("Approved", { can_release: false });
+  grant("document.release");
+  const { unmount } = renderWithProviders(<RisksRegisterPage />, { route: "/risks" });
+  await waitFor(() =>
+    expect(screen.getByText("Supplier single point of failure")).toBeInTheDocument(),
   );
+  expect(screen.queryByRole("button", { name: "Release" })).not.toBeInTheDocument();
+  unmount();
+  // …while can_release:true surfaces it (the faithful multi-axis answer, server-computed).
+  registerState("Approved", { can_release: true });
   renderWithProviders(<RisksRegisterPage />, { route: "/risks" });
   await waitFor(() => expect(screen.getByRole("button", { name: "Release" })).toBeInTheDocument());
 });
 
-it("shows Release on an Approved register (document.release) and runs the confirm", async () => {
-  registerState("Approved");
-  grant("document.release"); // the cutover key (SYSTEM-override-only in v1)
+it("shows Release on an Approved register (can_release) and runs the confirm", async () => {
+  registerState("Approved", { can_release: true });
   const user = userEvent.setup();
   renderWithProviders(<RisksRegisterPage />, { route: "/risks" });
   await waitFor(() => expect(screen.getByRole("button", { name: "Release" })).toBeInTheDocument());
@@ -335,8 +335,7 @@ it("shows Release on an Approved register (document.release) and runs the confir
 });
 
 it("the Release confirm stays open and surfaces the SoD-2 reason on a 409", async () => {
-  registerState("Approved");
-  grant("document.release");
+  registerState("Approved", { can_release: true });
   server.use(
     http.post("/api/v1/risks/register/release", () =>
       HttpResponse.json(
@@ -360,11 +359,11 @@ it("the Release confirm stays open and surfaces the SoD-2 reason on a 409", asyn
   expect(screen.getByRole("dialog")).toBeInTheDocument();
 });
 
-it("a document.release-only steward sees the card but no actionable button on Effective", async () => {
-  // the OR-gate's second leg: canRelease (document.release) opens the console, but on an Effective
+it("a can_release-only steward sees the card but no actionable button on Effective", async () => {
+  // the OR-gate's second leg: canRelease (the server boolean) opens the console, but on an Effective
   // head with no register.manage there's nothing to release/publish/start → quiet absence, no
   // instruction to an action the holder can't take.
-  grant("document.release"); // default fixture state = Effective
+  registerState("Effective", { can_release: true }); // can_release but no register.manage
   renderWithProviders(<RisksRegisterPage />, { route: "/risks" });
   await waitFor(() => expect(screen.getByText("Register lifecycle")).toBeInTheDocument());
   expect(screen.queryByRole("button", { name: "Release" })).not.toBeInTheDocument();

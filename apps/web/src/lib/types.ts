@@ -1682,6 +1682,9 @@ export interface RiskListResponse {
 }
 
 // The RSK register head lifecycle status — api/risk.py `_register_status` / `_NO_REGISTER`.
+// can_release/can_manage are server-computed (S-context-fe) and present on GET /risks/register ONLY
+// (optional — the lifecycle-action responses omit them; the FE refetches the GET after each mutation).
+// can_release is the faithful multi-axis release gate (a single-axis FE probe can't replicate it).
 export interface RiskRegisterStatus {
   exists: boolean;
   register_doc_id: string | null;
@@ -1689,6 +1692,8 @@ export interface RiskRegisterStatus {
   state: RiskRegisterState | null;
   current_effective_version_id: string | null;
   has_governing: boolean;
+  can_release?: boolean;
+  can_manage?: boolean;
 }
 
 // POST /risks/register/publish body — api/risk.py `RegisterPublish`. The change reason is optional
@@ -1730,4 +1735,83 @@ export interface RiskUpdateBody {
   clause_id?: string | null;
   treatment?: string | null;
   effectiveness?: string | null;
+}
+
+// ---- S-context-fe (Context register, clause 4.1) — pinned to api/context.py serializers ----
+// Clause 4.1 context is ORG-LEVEL (no process axis) and PURELY CATEGORICAL (no graded band) — so,
+// unlike risk, there is no process_id / band / tone / score; classification is the ISO spine and
+// category is the optional (nullable) SWOT axis.
+export type ContextClassification = "internal" | "external";
+export type ContextCategory = "strength" | "weakness" | "opportunity" | "threat";
+export type ContextStatus = "active" | "closed";
+// The CTX head is a kind=DOCUMENT subtype → its lifecycle state is the 7-state document one.
+export type ContextRegisterState = DocumentCurrentState;
+
+// One context issue — api/context.py `_context_issue`. category is the nullable SWOT axis; status is
+// never null (a new issue is always "active"; retire by closing).
+export interface ContextIssue {
+  id: string;
+  register_doc_id: string;
+  classification: ContextClassification;
+  category: ContextCategory | null;
+  status: ContextStatus;
+  description: string;
+  last_reviewed_at: string | null;
+  row_version: number;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface ContextListResponse {
+  data: ContextIssue[];
+}
+
+// The CTX register head lifecycle status — api/context.py `_register_status` / `_NO_REGISTER`. The
+// optional can_release/can_manage are server-computed (GET /context/register only) — the faithful
+// steward gate (see RiskRegisterStatus).
+export interface ContextRegisterStatus {
+  exists: boolean;
+  register_doc_id: string | null;
+  identifier: string | null;
+  state: ContextRegisterState | null;
+  current_effective_version_id: string | null;
+  has_governing: boolean;
+  can_release?: boolean;
+  can_manage?: boolean;
+}
+
+// POST /context/register/publish body — api/context.py `RegisterPublish` (optional change reason).
+export interface ContextRegisterPublishBody {
+  change_reason: string | null;
+}
+
+// GET /context/summary — the GOVERNING (Effective) categorical read-of-record (S-context-2).
+// published:false + all-zero counts before the first publish/release. by_category carries an
+// "uncategorized" bucket for NULL-category rows; active == by_status.active; never_reviewed counts
+// rows with no last_reviewed_at.
+export interface ContextRegisterSummary {
+  published: boolean;
+  total: number;
+  by_classification: Record<ContextClassification, number>;
+  by_category: Record<ContextCategory | "uncategorized", number>;
+  by_status: Record<ContextStatus, number>;
+  active: number;
+  never_reviewed: number;
+}
+
+export interface ContextCreateBody {
+  classification: ContextClassification;
+  description: string;
+  category?: ContextCategory | null;
+  last_reviewed_at?: string | null;
+}
+
+// Partial PATCH — omitted ≠ null; an explicit null clears category/last_reviewed_at. A new issue has
+// no status field on create (always "active"); status is settable here (active/closed).
+export interface ContextUpdateBody {
+  classification?: ContextClassification;
+  category?: ContextCategory | null;
+  status?: ContextStatus;
+  description?: string;
+  last_reviewed_at?: string | null;
 }
