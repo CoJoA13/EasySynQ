@@ -277,6 +277,11 @@ async def _commit_document(
     # CTX head) — an import must not mint a CTX doc the context find_head would adopt.
     if dt.code == "CTX":
         raise _ItemCommitError("context_register_import_unsupported")
+    # S-interested-parties-1: same for the Interested Parties register (system-managed via
+    # /interested-parties, single non-Obsolete IPR head) — an import must not mint an IPR doc the
+    # interested-parties find_head would adopt.
+    if dt.code == "IPR":
+        raise _ItemCommitError("interested_parties_register_import_unsupported")
 
     # Identifier: preserve the doc-code verbatim, else allocate a fresh {TYPE}-{AREA}-{SEQ}.
     legacy_identifier: str | None = None
