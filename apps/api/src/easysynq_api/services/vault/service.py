@@ -103,6 +103,7 @@ def _snapshot(
     objective_commitment: dict[str, Any] | None = None,
     mgmt_review_minutes: dict[str, Any] | None = None,
     risk_register: dict[str, Any] | None = None,
+    context_register: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Metadata as it was at check-in (doc 14 §5.3) — frozen onto the immutable version. Ordinary
     documents call this with no ``field_schema`` (the snapshot shape is unchanged). A Form/Template
@@ -142,6 +143,12 @@ def _snapshot(
     # band basis lives here so the live read grades against the governing version's frozen criteria.
     if risk_register is not None:
         snap["risk_register"] = risk_register
+    # S-context-1 (clause 4.1): the Context register's frozen content — the rows-as-of
+    # (build_register's {rows}; no scoring criteria, unlike risk_register) — under a NEW snapshot
+    # key
+    # (the subject is detected by key presence; the body never branches on doc kind).
+    if context_register is not None:
+        snap["context_register"] = context_register
     return snap
 
 
@@ -251,46 +258,67 @@ async def create_document(
     return doc
 
 
-async def reject_rsk_register_mutation(session: AsyncSession, doc: DocumentedInformation) -> None:
-    """The Risk & Opportunity register head is system-managed via ``/risks`` (zero ProcessLinks,
-    single non-Obsolete head, content-aware freeze/release in S-risk-1b). The generic document paths
-    — process-link add and the byte/lifecycle path — must NOT mutate it (S-risk-1; Codex). Detected
-    by ``document_type`` code: RSK is a 1:many satellite *head*, NOT a shared-PK subtype, so the
-    QualityObjective/ManagementReview PK-probe does not apply. Reads stay open."""
+# The register heads that are system-managed via their OWN surface (a ``kind=DOCUMENT`` singleton
+# head holding 1:many satellite rows): the generic document paths must NOT mutate them. Keyed by
+# ``document_type`` code → (title, error-code, message). Each is a satellite *head*, NOT a shared-PK
+# subtype like OBJ/MR, so the QualityObjective/ManagementReview PK-probe does not apply. ADD a row
+# here for each new register family (S-risk-1 RSK, S-context-1 CTX).
+_MANAGED_REGISTERS: dict[str, tuple[str, str, str]] = {
+    "RSK": (
+        "The Risk & Opportunity register is managed via /risks",
+        "risk_register_managed_via_risks",
+        "use the /risks lifecycle, not generic document mutation",
+    ),
+    "CTX": (
+        "The Context register is managed via /context",
+        "context_register_managed_via_context",
+        "use the /context lifecycle, not generic document mutation",
+    ),
+}
+
+
+async def reject_managed_register_mutation(
+    session: AsyncSession, doc: DocumentedInformation
+) -> None:
+    """A register head (RSK risk, CTX context — ``_MANAGED_REGISTERS``) is system-managed via its
+    own surface (zero ProcessLinks, single non-Obsolete head, content-aware freeze/release). The
+    generic document paths — process-link add and the byte/lifecycle path — must NOT mutate it
+    (S-risk-1 / S-context-1; Codex). Detected by ``document_type`` code: a register is a 1:many
+    satellite *head*, NOT a shared-PK subtype, so the QualityObjective/ManagementReview PK-probe
+    does
+    not apply. Reads stay open."""
     if doc.document_type_id is None:
         return
     dt = await repository.get_document_type(session, doc.document_type_id)
-    if dt is not None and dt.code == "RSK":
+    if dt is not None and dt.code in _MANAGED_REGISTERS:
+        title, error_code, message = _MANAGED_REGISTERS[dt.code]
         raise ProblemException(
             status=422,
             code="validation_error",
-            title="The Risk & Opportunity register is managed via /risks",
-            errors=[
-                {
-                    "field": "document_id",
-                    "code": "risk_register_managed_via_risks",
-                    "message": "use the /risks lifecycle, not generic document mutation",
-                }
-            ],
+            title=title,
+            errors=[{"field": "document_id", "code": error_code, "message": message}],
         )
 
 
 async def reject_objective_byte_path(session: AsyncSession, doc: DocumentedInformation) -> None:
-    """S-obj-4 (O-5) / S-mr-1 / S-risk-1b: a content-managed DOCUMENT subtype's content IS its
-    frozen snapshot — a Quality Objective's commitment, a Management Review's minutes, OR a Risk
-    register's rows+criteria — so the generic byte path (checkout/checkin), the generic lifecycle
-    writers (start-revision/submit-review), AND the generic metadata/distribution/document-link
-    mutations (see api/documents.py) must not touch one: a byte-version would show the approver a
-    stale snapshot, a generic submit/release would advance a version around the content-aware freeze
-    (and, for a review, skip the MR_ACTION spawn + ``close_state`` hook), and a generic
-    metadata/distribution/link edit would mutate a head that is system-managed via its own surface
-    (S-risk-1b D-3b — the round-3 trim residual, now closed for OBJ/MR/RSK alike). Kind guard =
-    satellite existence (OBJ/MR PK probe) + the RSK ``document_type`` check (a 1:many head, not a
-    shared-PK subtype). Reads stay open. (Name
-    kept for the OBJ call sites; it now guards all three subtypes across all generic mutations.)"""
-    await reject_rsk_register_mutation(
+    """S-obj-4 (O-5) / S-mr-1 / S-risk-1b / S-context-1: a content-managed DOCUMENT subtype's
+    content
+    IS its frozen snapshot — a Quality Objective's commitment, a Management Review's minutes, a Risk
+    register's rows+criteria, OR a Context register's rows — so the generic byte path
+    (checkout/checkin), the generic lifecycle writers (start-revision/submit-review), AND the
+    generic
+    metadata/distribution/document-link mutations (see api/documents.py) must not touch one: a
+    byte-version would show the approver a stale snapshot, a generic submit/release would advance a
+    version around the content-aware freeze (and, for a review, skip the MR_ACTION spawn +
+    ``close_state`` hook), and a generic metadata/distribution/link edit would mutate a head that is
+    system-managed via its own surface (S-risk-1b D-3b — the round-3 trim residual, now closed for
+    OBJ/MR/RSK/CTX alike). Kind guard = satellite existence (OBJ/MR PK probe) + the register
+    ``document_type`` check (a 1:many head, not a shared-PK subtype). Reads stay open. (Name kept
+    for
+    the OBJ call sites; it now guards all four subtypes across all generic mutations.)"""
+    await reject_managed_register_mutation(
         session, doc
-    )  # S-risk-1: the byte path must not touch the head
+    )  # S-risk-1 / S-context-1: the byte path must not touch a register head
     if await session.get(QualityObjective, doc.id) is not None:
         raise ProblemException(
             status=422,
@@ -926,6 +954,105 @@ async def checkin_risk_register(
     # Flush BEFORE _emit — NOT commit (publish_register owns the txn boundary). The
     # ``default=uuid.uuid4`` id is a FLUSH-time default, so the flush populates version.id for the
     # audit row's object_id (the checkin_objective_commitment contract verbatim).
+    await session.flush()
+    _emit(
+        session,
+        sink,
+        "CHECKIN",
+        actor,
+        "document_version",
+        version.id,
+        identifier=doc.identifier,
+        reason=change_reason.strip(),
+    )
+    return version
+
+
+async def checkin_context_register(
+    session: AsyncSession,
+    sink: VaultAuditSink,
+    actor: AppUser,
+    doc: DocumentedInformation,
+    *,
+    register: dict[str, Any],
+    change_reason: str,
+    change_significance: str = "MAJOR",
+) -> DocumentVersionModel:
+    """Freeze a Context register's ``register`` (a pre-built JSON-safe dict — the rows as-of,
+    ``build_register``'s output; clause 4.1 has no scoring criteria) into an immutable
+    ``DocumentVersion`` (S-context-1, clause 4.1 — the ``checkin_risk_register`` precedent
+    verbatim).
+    The canonical-serialized register is the version's WORM source blob (server-side write — no
+    client upload, ``application/json`` → ``no_controlled_rendition`` R26), and the SAME dict is
+    pinned into ``metadata_snapshot`` under the NEW ``context_register`` key. Like
+    ``checkin_risk_register`` this FLUSHES (does not commit): the freeze is a sub-step of
+    ``context.lifecycle.publish_register``, which owns the submit/approval txn boundary."""
+    if not change_reason or not change_reason.strip():
+        raise ProblemException(
+            status=422,
+            code="validation_error",
+            title="Check-in requires a change reason (INV-3)",
+            errors=[{"field": "change_reason", "code": "required", "message": "must be non-empty"}],
+        )
+    try:
+        significance = ChangeSignificance(change_significance)
+    except ValueError as exc:
+        raise ProblemException(
+            status=422,
+            code="validation_error",
+            title="Check-in requires change_significance MAJOR or MINOR (INV-3)",
+            errors=[{"field": "change_significance", "code": "invalid", "message": "MAJOR|MINOR"}],
+        ) from exc
+
+    payload = rfc8785.dumps(register)  # JCS — identical register → identical source blob
+    sha = hashlib.sha256(payload).hexdigest()
+    if await repository.get_blob(session, sha) is None:
+        await storage.put_staging_bytes(payload, sha, content_type="application/json")
+        promoted = await storage.finalize_worm(sha)
+        if not promoted.exists:  # pragma: no cover - defensive (we just wrote it)
+            raise ProblemException(
+                status=500, code="internal_error", title="Register object upload failed"
+            )
+        if promoted.retain_until is None:
+            raise ProblemException(
+                status=423, code="worm_required", title="Register object is not WORM-locked"
+            )
+        await session.execute(
+            pg_insert(Blob)
+            .values(
+                sha256=sha,
+                org_id=actor.org_id,
+                size_bytes=promoted.size or len(payload),
+                mime_type="application/json",
+                bucket=get_settings().s3_bucket_documents,
+                object_key=sha,
+                worm_locked=True,
+                worm_retain_until=promoted.retain_until,
+            )
+            .on_conflict_do_nothing(index_elements=["sha256"])
+        )
+        await session.flush()
+
+    seq = await repository.next_version_seq(session, doc.id)
+    dist_snap = await _distribution_snapshot(session, doc.id)
+    version = DocumentVersionModel(
+        org_id=actor.org_id,
+        document_id=doc.id,
+        version_seq=seq,
+        revision_label=revision_label(seq),
+        change_significance=significance,
+        change_reason=change_reason.strip(),
+        version_state=VersionState.Draft,
+        source_blob_sha256=sha,
+        # SAME register dict → bytes ≡ snapshot.
+        metadata_snapshot=_snapshot(doc, context_register=register, distribution=dist_snap),
+        author_user_id=actor.id,
+        created_by=actor.id,
+    )
+    session.add(version)
+    # Flush BEFORE _emit — NOT commit (publish_register owns the txn boundary). The
+    # ``default=uuid.uuid4`` id is a FLUSH-time default, so the flush populates version.id for the
+    # audit row's object_id (the checkin_risk_register contract verbatim).
     await session.flush()
     _emit(
         session,

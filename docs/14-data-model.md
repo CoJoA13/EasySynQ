@@ -343,7 +343,7 @@ erDiagram
 
 | Entity | Key attributes | Notes / source |
 |---|---|---|
-| `context_issue` | `id` PK, `register_doc_id` FK, `org_id`, `classification` enum(`internal`,`external`), `description`, `row_version` | Cl 4.1 (`02`). |
+| `context_issue` | `id` PK, `register_doc_id` FK, `org_id`, `classification` enum(`internal`,`external`), `category` enum(`strength`,`weakness`,`opportunity`,`threat`) null, `status` enum(`active`,`closed`), `description`, `last_reviewed_at` null, `row_version`, audit bookkeeping (`created_at`/`_by`, `updated_at`/`_by`) | Cl 4.1 (`02`). As-built (S-context-1, migration `0060`, R50): a 1:many satellite of a `kind=DOCUMENT` `CTX` singleton head (the R49 register-as-Document shape), **org-level — no `process_id`** (clause 4.1 is org-wide; rides `register.*` @ SYSTEM). The v1 model **enriches** the contracted minimum (`classification`+`description`) with the optional SWOT `category`, the `status` lifecycle, and `last_reviewed_at` (R50). |
 | `interested_party` | `id` PK, `register_doc_id` FK, `party_name`, `needs_expectations`, `row_version` | Cl 4.2. |
 | `risk_opportunity` | `id` PK, `register_doc_id` FK, `type` enum(`risk`,`opportunity`), `description`, `process_id` null, `clause_id` null, `likelihood`, `severity`, `risk_rating` (derived/stored), `scoring_method`, `treatment`, `effectiveness`, `linked_capa_id` null, `row_version` | Cl 6.1; feeds mgmt-review input (e). Doc 10 workflow routing on `subject.risk_rating` and doc 13 high-risk dashboards resolve against these real fields (reconciled per Decisions Register R18). |
 | `quality_policy` | `id` PK/FK (singleton `document`) | Cl 5.2 ★, apex. |

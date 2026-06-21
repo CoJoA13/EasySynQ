@@ -75,8 +75,8 @@ from ..services.vault import (
     heartbeat,
     init_upload,
     obsolete,
+    reject_managed_register_mutation,
     reject_objective_byte_path,
-    reject_rsk_register_mutation,
     release,
     render_dynamic_copy,
     set_working_schema,
@@ -1019,7 +1019,7 @@ async def map_clause_endpoint(
     # removing its auto-created 6.1 mapping would make the publish path's submit_review() 422 on
     # the zero-map
     # gate, blocking publish until the system mapping is manually restored (Codex P2).
-    await reject_rsk_register_mutation(session, doc)
+    await reject_managed_register_mutation(session, doc)
     clause = await vault_repo.get_clause(session, body.clause_id)
     if clause is None:
         raise ProblemException(status=404, code="not_found", title="Clause not found")
@@ -1082,7 +1082,9 @@ async def unmap_clause_endpoint(
     # locks the doc row): the submit's mapping count and a last-mapping delete can't interleave to
     # leave an InReview document with zero mappings.
     doc = await _load_document(session, caller, document_id, for_update=True)
-    await reject_rsk_register_mutation(session, doc)  # Codex P2: keep the RSK head's 6.1 map intact
+    await reject_managed_register_mutation(
+        session, doc
+    )  # Codex P2: keep a register head's map intact
     mapping = await vault_repo.get_clause_mapping(session, doc.id, clause_id)
     if mapping is None:
         raise ProblemException(status=404, code="not_found", title="Clause mapping not found")
@@ -1150,7 +1152,7 @@ async def link_process_endpoint(
     # S-risk-1: the RSK register head must never acquire a ProcessLink — a link makes a bound
     # owner's
     # PROCESS-scoped document.* grant match the org-wide head (escalation). Reserve it (Codex P1).
-    await reject_rsk_register_mutation(session, doc)
+    await reject_managed_register_mutation(session, doc)
     process = await vault_repo.get_process(session, body.process_id)
     if process is None or process.org_id != caller.org_id:
         raise ProblemException(

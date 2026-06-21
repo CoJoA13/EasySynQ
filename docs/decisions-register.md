@@ -1,6 +1,6 @@
 # EasySynQ Decisions Register
 
-This document is the **single authoritative source of truth** for the EasySynQ self-hosted ISO 9001:2015 QMS specification. It records the locked foundational decisions, the locked stakeholder decisions, and the normative resolutions (R1–R49) to every finding raised in the gap audit (`17-gaps-and-open-questions.md`); R38 (slice S-rec-4) is the first post-v1 *additive* decision (additive catalog extensibility + SoD-6), R39 (slice family S-aud/S-capa) locks the Audits/Findings/CAPA model + workflow posture, R40 (slice family S-dcr) locks the Revision & change-depth (DCR) family model + the InApproval reject-loop target, and R41 (slice S-drift-3) adds the `drift.read` SYSTEM-domain permission key; R42 (slice S-ack-1) adds the `document.distribute` CONTENT-domain key, and R43 locks the Acknowledgements-family model.
+This document is the **single authoritative source of truth** for the EasySynQ self-hosted ISO 9001:2015 QMS specification. It records the locked foundational decisions, the locked stakeholder decisions, and the normative resolutions (R1–R50) to every finding raised in the gap audit (`17-gaps-and-open-questions.md`); R38 (slice S-rec-4) is the first post-v1 *additive* decision (additive catalog extensibility + SoD-6), R39 (slice family S-aud/S-capa) locks the Audits/Findings/CAPA model + workflow posture, R40 (slice family S-dcr) locks the Revision & change-depth (DCR) family model + the InApproval reject-loop target, and R41 (slice S-drift-3) adds the `drift.read` SYSTEM-domain permission key; R42 (slice S-ack-1) adds the `document.distribute` CONTENT-domain key, and R43 locks the Acknowledgements-family model.
 
 **Precedence:** Where this register conflicts with any text in sections `01`–`15`, **this register supersedes that text.** Section editors MUST back-propagate the changes listed under each resolution's *Back-propagation* note. The exact tokens, enum values, state names, and field names quoted here are **canonical and verbatim** — they must be reproduced character-for-character (case, snake_case, dot-namespacing, and all) wherever the underlying concept appears. Do not soften, rename, abbreviate, or omit any token.
 
@@ -52,7 +52,7 @@ Proceed with the **full reconcile-and-harden pass** — i.e., adopt R1–R37 bel
 
 ---
 
-## Part 3 — Resolutions R1–R49
+## Part 3 — Resolutions R1–R50
 
 Each resolution states the decision, the exact canonical tokens/enums/states/field-names verbatim, and a Back-propagation note listing the section files that change.
 
@@ -1305,6 +1305,71 @@ grading — fixed to governing-snapshot resolution) **before any migration**.
 pointer fix; `RSK` in the hierarchy), `07` (`register.*` now reach a resource), `10` (routing deferred),
 `13` (high-risk dashboard), `14` (as-built `risk_opportunity` + the stale `kpi_measurement` 0055-columns
 row fix), `15` (`/risks` endpoints; `§8.10b` gate mapping `risk.*`→`register.*`), `16`, `18`.
+
+---
+
+### R50 — Context register family (clause 4.1) — slice family S-context
+
+**Decision (owner, 2026-06-20).** The clause 4.1 "Context of the organization" register is the **second
+register family** (after R49's Risk & Opportunity register), modeled — per the registers-as-Documents
+doctrine (doc-14 §0 finding-R3 "Both, layered" + `04 A3`, NOT a numbered resolution; the R49 *citation
+note* applies verbatim) — as a **maintained controlled Document**: one `documented_information` with
+`kind=DOCUMENT`, a **new `document_type` code `CTX`**, `is_singleton` (one non-Obsolete head per org),
+holding many **`context_issue` satellite rows** (`id` PK + `register_doc_id` FK + `row_version` — a
+register-**row** satellite, the R49 shape, **not** a shared-PK subtype). The rows **are the version's
+controlled content**, FSM-revision-edited then frozen into an immutable version at publish; the lifecycle
+(start-revision / publish / freeze / release) ships **in the same slice** as the core (core+lifecycle
+together — the owner fork; the risk family split it 1 → 1b).
+
+**Content model (enriched — the owner fork).** The contracted `14 §6` minimum is `classification`
+enum(`internal`,`external`) + `description`; the v1 as-built **enriches** it with `category`
+enum(`strength`,`weakness`,`opportunity`,`threat`) — the optional **SWOT** axis (NULLABLE) — `status`
+enum(`active`,`closed`) (a new issue is always `active`; retire by closing, never delete), and
+`last_reviewed_at`. `classification` is the ISO clause-4.1 spine (the standard mandates external/internal
+issues). The enum value tuples are **golden-pinned** (`tests/unit/test_context_register_content.py`) and
+**append-only** — a PESTLE extension mints NEW values, never re-letters (so a frozen published row is never
+silently re-interpreted; the R49/S-obj-freeze discipline applied to a categorical axis). **No
+computed/graded axis** (SWOT + status are user inputs, not a derived band), so — unlike risk — there is
+**no `criteria` block, no `resolve_criteria`, no derive-and-freeze**: the frozen content is purely the rows.
+
+**Org-level (NOT process-scoped) — the owner fork.** Clause 4.1 context is strategic and org-wide (the
+standard's own examples: legal/market/cultural environment; org values/knowledge), so `context_issue`
+carries `org_id` but **no `process_id`** (deliberately unlike `risk_opportunity`, matching the `14 §6`
+contract). Authz rides the **already-seeded `register.read` / `register.manage`** keys at the **SYSTEM**
+scope — **catalog stays 102, NO new key, NO new role grant**: the QMS Owner holds `register.*` @ SYSTEM
+(the steward), and the `0058` Process-Owner `register.manage` @ PROCESS grant matches no (process-less)
+context row. `GET /context` is filter-not-403 (a no-grant caller → 200 + empty); `GET /context/{id}`
+enforces `register.read` @ SYSTEM; `POST`/`PATCH` + the steward acts enforce `register.manage` @ SYSTEM;
+release is `document.release` + SoD-2 (a SYSTEM override in v1). ADMIN gets no `register.*` (AZ-INV-6).
+
+**Reservation (generalized).** R49's `reject_rsk_register_mutation` head guard is generalized to
+`reject_managed_register_mutation`, keyed by a `_MANAGED_REGISTERS = {RSK, CTX}` `document_type`-code map
+(per-code message; the RSK behavior + error code `risk_register_managed_via_risks` byte-identical) — the
+CTX head is reserved from EVERY generic document mutation (metadata/distribution/links + link-target,
+clause-mapping, obsoletion at the `lifecycle.obsolete` CHOKEPOINT, DCR `_resolve_target`, and import) with
+error code `context_register_managed_via_context`, exactly as the RSK head is (D-3b, now covering CTX). The
+CTX head carries ZERO ProcessLinks (else a PROCESS `document.*` grant would match the org head).
+
+**Interested Parties (clause 4.2) is a SEPARATE register** (its own `interested_party` head + table + slice
+`S-interested-parties-1`), per the `14 §6` two-table contract — **not** typed rows in one head.
+
+**Migration `0060`** (creates `context_issue` + the 3 enums + the `CTX` `document_type` + the additive
+`CONTEXT_ISSUE_UPDATED` event type; NO role grant, NO new permission key).
+
+**Deferred (named, not faked):** the read consumers (`S-context-2` — `GET /context/summary` + the
+Management-Review 9.3.2(b) context-change input; the `governing_register` helper is the seam); the FE
+(`S-context-fe`); the Interested-Parties 4.2 register (`S-interested-parties-1`; the contract omits
+`org_id` — an editorial gap to add when built); the no-edit re-publish dedup integration path (covered at
+the unit level via `register_needs_freeze`); the carried-over server-computed `can_release`/`can_manage`
+capability on `GET /risks/register` (+ `/context/register`).
+
+**Validation.** Spec-first (`docs/superpowers/specs/2026-06-20-s-context-register-design.md`); the
+architecture is settled (R49 set the register-as-Document pattern), so 4 owner decisions were surfaced via
+AskUserQuestion before any code (content model, keys, 4.2-separate, scope).
+
+**Back-propagation:** `02` (4.1 ContextRegister as-built), `07` (`register.*` now reach the org-level
+context resource), `14` (as-built `context_issue` — note the enriched `category`/`status`/
+`last_reviewed_at` additions beyond the minimal contract), `15` (`/context` endpoints).
 
 ---
 

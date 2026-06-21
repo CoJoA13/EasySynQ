@@ -59,7 +59,7 @@ from ...domain.dcr import transition_allowed
 from ...domain.vault import format_identifier
 from ...logging import request_id_var
 from ...problems import ProblemException
-from ..vault import lifecycle, reject_rsk_register_mutation
+from ..vault import lifecycle, reject_managed_register_mutation
 from ..vault import repository as vault_repo
 from ..vault.audit import VaultAuditSink
 from ..vault.signature import SignatureEvent, SignatureEventSink
@@ -173,7 +173,7 @@ async def _resolve_target(
     # Reject it at the raise so neither a RETIRE DCR (reaches the obsolete chokepoint) nor a REVISE
     # DCR (could adopt the publish-created Approved version and release it, bypassing the
     # /risks/register/release SoD-2) can target it. RSK-only — OBJ/MR DCR-targeting is pre-existing.
-    await reject_rsk_register_mutation(session, target)
+    await reject_managed_register_mutation(session, target)
 
 
 async def raise_dcr(

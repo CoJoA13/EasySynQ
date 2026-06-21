@@ -554,6 +554,32 @@ The Clause 6.1 risk-and-opportunity register, backed by `risk_opportunity` (`14`
 | POST | `/risks/register/release` | `document.release` @ SYSTEM | — | **(S-risk-1b)** T6 (Approved→Effective) over the SoD-2-enriched scope (author/approver ≠ releaser); the shared INV-1 SERIALIZABLE cutover. |
 | POST | `/risks/{risk_id}/capa` | `capa.create` | — | **(S-risk-3)** One-click idempotent treat-spawn — latches `linked_capa_id` under a `FOR UPDATE` lock + mints a `source=risk` CAPA (inherits the risk's process; band-derived severity). 201 new / 200 replay (re-checks `capa.read` over the latched CAPA's process). Risks only (an `opportunity` → 422). Works at any head state. |
 
+### 8.10c Context register (`/context`)
+
+The Clause 4.1 "context of the organization" register, backed by `context_issue` (`14`) as a 1:many satellite of a `kind=DOCUMENT` `CTX` head (the **register-as-Document** model, R49/R50). Each row carries the ISO **`classification`** spine (`internal`/`external`), an optional **SWOT** `category` (`strength`/`weakness`/`opportunity`/`threat`, nullable), a `status` (`active`/`closed`), `description`, and `last_reviewed_at` (the enriched model, R50). The rows are **version content**, FSM-revision-edited; the head goes Draft → publish (freeze) → release → Effective, read-only while Effective until the next revision. **No computed/graded axis** (unlike risk — SWOT + status are user inputs), so the freeze is rows-only (no `criteria`).
+
+> **As-built (S-context-1):** clause 4.1 is **ORG-LEVEL** — the satellite carries **no `process_id`**. Gates ride the already-seeded `register.read` / `register.manage` at the **SYSTEM** scope — **NO new key, catalog stays 102, NO new role grant** (the QMS Owner is the steward; a bound Process-Owner's PROCESS `register.manage` grant matches no context row). `GET /context` is a **filter-not-403** read (a no-grant caller gets `200`+empty; all-or-nothing at SYSTEM); the single-row GET enforces `register.read` @ SYSTEM. The CTX head is reserved from every generic document mutation (`reject_managed_register_mutation`, now `{RSK, CTX}`). Interested Parties (4.2) is a **separate** register (own head/table/slice).
+
+```json
+{
+  "id": "018f...ctx", "register_doc_id": "018f...hd",
+  "classification": "external", "category": "threat", "status": "active",
+  "description": "New EU regulation on data residency", "last_reviewed_at": null,
+  "row_version": 1, "created_at": "…", "updated_at": "…"
+}
+```
+
+| Method | Path | Perm | Idem | Notes |
+|---|---|---|---|---|
+| GET | `/context` | `register.read` @ SYSTEM | — | Filter-not-403 (org-level → all-or-nothing); the SPA filters/sorts client-side. |
+| POST | `/context` | `register.manage` @ SYSTEM | — | `{ classification, description, category?, last_reviewed_at? }`; a new issue is always `status=active`. `409` unless the head is Draft/UnderRevision; lazily mints the `CTX` head on the first row. |
+| GET | `/context/{id}` | `register.read` @ SYSTEM | — | 403-on-deny. |
+| PATCH | `/context/{id}` | `register.manage` @ SYSTEM | — | Partial; an explicit null clears `category`/`last_reviewed_at`; a null on classification/status/description → 422. `409` unless the head is editable. |
+| GET | `/context/register` | (any member) | — | The head lifecycle status `{ exists, register_doc_id, identifier, state, current_effective_version_id, has_governing }`. |
+| POST | `/context/register/start-revision` | `register.manage` @ SYSTEM | — | T7 (Effective→UnderRevision). `409` unless Effective. |
+| POST | `/context/register/publish` | `register.manage` @ SYSTEM | — | Freeze the working rows into a new version and submit for review. `409` unless Draft/UnderRevision; rejects a zero-row register. |
+| POST | `/context/register/release` | `document.release` @ SYSTEM | — | T6 (Approved→Effective) over the SoD-2-enriched scope (author/approver ≠ releaser); the shared INV-1 SERIALIZABLE cutover. |
+
 ### 8.11 CAPAs (`/capas`)
 
 The unified multi-stage corrective/preventive container — **a Record whose stages are append-only `capa_stage` blocks** (`14 §9`, R5). Earlier stage-blocks are never rewritten; each may carry a `signature_event`.

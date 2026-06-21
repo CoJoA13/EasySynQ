@@ -439,6 +439,18 @@ class EventType(enum.Enum):
     # shape). Added via ALTER TYPE event_type ADD VALUE in 0059 (additive; a from-scratch
     # ``upgrade head`` rebuilds the type from EVENT_TYPE_VALUES, so the member lives here too).
     RISK_SPAWNED_CAPA = "RISK_SPAWNED_CAPA"
+    # S-context-1 (clause 4.1 Context register, R50): CONTEXT_ISSUE_UPDATED trails an edit to a
+    # context_issue row (a classification/category/status/description/last_reviewed change on the
+    # working register) — auditable, never a silent in-place change (the RISK_RESCORED shape). Keyed
+    # object_type=document (the register IS a documented_information; scope_ref=the CTX head
+    # identifier, object_id=register_doc_id). The register's own lifecycle (create/publish/release)
+    # rides the generic DOCUMENT_CREATED/CHECKIN/RELEASED events; no new SignatureMeaning (R2),
+    # audit_object_type, or sig-hook. Added via ALTER TYPE event_type ADD VALUE in 0060 (the
+    # additive
+    # pattern; a from-scratch ``upgrade head`` rebuilds the type from EVENT_TYPE_VALUES, so the
+    # member
+    # lives here too).
+    CONTEXT_ISSUE_UPDATED = "CONTEXT_ISSUE_UPDATED"
 
 
 class CheckpointSinkKind(enum.Enum):

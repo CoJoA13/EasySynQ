@@ -7,7 +7,7 @@ criteria) + the T2/T9 submit + the approval-workflow instantiation into ONE tran
 RSK head rides the generic DOCUMENT decide leg (approve) + the shared ``release`` cutover, unchanged
 (the objectives ``submit_objective_for_review`` precedent). The publish path calls the freeze/submit
 service functions DIRECTLY — it must NOT go through the reserved generic byte endpoints (which 422
-the RSK head via ``reject_rsk_register_mutation``)."""
+the RSK head via ``reject_managed_register_mutation``)."""
 
 from __future__ import annotations
 
