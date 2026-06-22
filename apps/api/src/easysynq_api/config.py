@@ -174,6 +174,22 @@ class Settings(BaseSettings):
     import_review_ambiguous_threshold: int = 0
     import_bulk_decision_max: int = 5000  # max files a single bulk-decision call may target
 
+    # S-notify-1 (doc 10 §9): SMTP relay for email notifications. Creds here (env, prod override);
+    # per-org enable is the system_config.notifications_email_enabled flag (default OFF). The worker
+    # is the only sender; an empty smtp_host means "no deliverable transport" → drain suppresses.
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_username: str = ""
+    smtp_password: str = ""
+    smtp_use_tls: bool = True  # STARTTLS
+    smtp_from_address: str = "noreply@easysynq.local"
+    smtp_from_name: str = "EasySynQ"
+    # Browser-facing base URL for notification deep links ({app_base_url}{spa_route}).
+    app_base_url: str = "http://localhost"
+    # The outbox drain retry ceiling (count-before-send lease; spec §4) + base backoff seconds.
+    notification_max_send_attempts: int = 5
+    notification_retry_base_seconds: int = 120
+
     @property
     def sync_dsn(self) -> str:
         """DSN Alembic uses (sync driver). Falls back to the async URL's driver name."""
