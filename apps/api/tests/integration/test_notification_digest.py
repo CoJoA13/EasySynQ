@@ -204,14 +204,32 @@ async def _email_for_task(task_id: uuid.UUID) -> NotificationEmail | None:
 
 
 # ---------------------------------------------------------------------------
+# Fixture: restore org email flag after each test that enables it
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+async def org_email_on(app_under_test: Any) -> Any:  # type: ignore[misc]
+    """Enable org email for the test, then restore it to False in teardown.
+
+    Tests that call _set_org_email_flag(org_id, enabled=True) use this fixture
+    instead of app_under_test so the flag is always reset, preventing cross-file
+    ordering flakes in test_notification_config.py (which asserts the flag starts False).
+    """
+    org_id = await _default_org_id()
+    await _set_org_email_flag(org_id, enabled=True)
+    yield app_under_test
+    await _set_org_email_flag(org_id, enabled=False)
+
+
+# ---------------------------------------------------------------------------
 # Test 1: ACTION_REQUIRED default (daily) — digest_due_at set, NO email row
 # ---------------------------------------------------------------------------
 
 
-async def test_daily_default_sets_digest_due_at_no_email(app_under_test: Any) -> None:
+async def test_daily_default_sets_digest_due_at_no_email(org_email_on: Any) -> None:
     """ACTION_REQUIRED defaults to DAILY: in-app row gets digest_due_at, no NotificationEmail."""
     org_id = await _default_org_id()
-    await _set_org_email_flag(org_id, enabled=True)
     user_id = await _seed_user(org_id, email="daily-default@example.com")
     # No preference row → defaults apply (action_required → DAILY)
     instance, task = await _seed_workflow_objects(org_id, user_id)
@@ -237,10 +255,9 @@ async def test_daily_default_sets_digest_due_at_no_email(app_under_test: Any) ->
 # ---------------------------------------------------------------------------
 
 
-async def test_immediate_no_quiet_hours_creates_email(app_under_test: Any) -> None:
+async def test_immediate_no_quiet_hours_creates_email(org_email_on: Any) -> None:
     """IMMEDIATE user with no quiet hours: one NotificationEmail created, next_attempt_at None."""
     org_id = await _default_org_id()
-    await _set_org_email_flag(org_id, enabled=True)
     user_id = await _seed_user(org_id, email="immediate-noq@example.com")
     await _set_user_pref(
         org_id,
@@ -279,10 +296,9 @@ async def test_immediate_no_quiet_hours_creates_email(app_under_test: Any) -> No
 # ---------------------------------------------------------------------------
 
 
-async def test_immediate_in_quiet_window_defers_to_window_end(app_under_test: Any) -> None:
+async def test_immediate_in_quiet_window_defers_to_window_end(org_email_on: Any) -> None:
     """IMMEDIATE user with quiet hours covering now: next_attempt_at = window_end."""
     org_id = await _default_org_id()
-    await _set_org_email_flag(org_id, enabled=True)
     user_id = await _seed_user(org_id, email="immediate-quiet@example.com")
     await _set_user_pref(
         org_id,
@@ -325,10 +341,9 @@ async def test_immediate_in_quiet_window_defers_to_window_end(app_under_test: An
 # ---------------------------------------------------------------------------
 
 
-async def test_mode_off_no_email(app_under_test: Any) -> None:
+async def test_mode_off_no_email(org_email_on: Any) -> None:
     """Mode OFF: in-app Notification row is created but NO NotificationEmail."""
     org_id = await _default_org_id()
-    await _set_org_email_flag(org_id, enabled=True)
     user_id = await _seed_user(org_id, email="mode-off@example.com")
     await _set_user_pref(
         org_id,
@@ -343,6 +358,9 @@ async def test_mode_off_no_email(app_under_test: Any) -> None:
 
     notif = await _notif_for_task(task.id)
     assert notif is not None, "Expected an in-app Notification row even with mode=OFF"
+    assert notif.digest_due_at is None, (
+        "Expected digest_due_at=None for OFF mode (not DAILY which sets it)"
+    )
 
     email_count = await _email_count_for_task(task.id)
     assert email_count == 0, f"Expected 0 email rows (mode OFF), got {email_count}"
@@ -353,13 +371,12 @@ async def test_mode_off_no_email(app_under_test: Any) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_doc_ack_immediate_creates_email(app_under_test: Any) -> None:
+async def test_doc_ack_immediate_creates_email(org_email_on: Any) -> None:
     """DOC_ACK with digest_mode_action_required=IMMEDIATE: a NotificationEmail IS created.
 
     The slice-1 DOC_ACK email exclusion (_DOC_ACK suppression) is removed in slice 3a.
     """
     org_id = await _default_org_id()
-    await _set_org_email_flag(org_id, enabled=True)
     user_id = await _seed_user(org_id, email="docack-immediate@example.com")
     await _set_user_pref(
         org_id,
