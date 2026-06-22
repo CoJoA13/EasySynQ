@@ -42,11 +42,15 @@ from easysynq_api.db.models.notification import (
     NotificationPreference,
 )
 from easysynq_api.db.models.organization import Organization
+from easysynq_api.db.models.role import Role, RoleAssignment
 from easysynq_api.db.models.system_config import SystemConfig
 from easysynq_api.db.models.workflow import Task, WorkflowDefinition, WorkflowInstance
 from easysynq_api.db.session import get_sessionmaker
 from easysynq_api.services.notifications import dispatch
+from easysynq_api.services.notifications.constants import EVENT_EMAIL_DELIVERY_FAILED
 from easysynq_api.services.notifications.digest import sweep_digests
+from easysynq_api.services.notifications.drain import drain_once
+from easysynq_api.services.notifications.mail import FakeMailSender
 from easysynq_api.services.notifications.preferences import effective_preferences
 from easysynq_api.services.notifications.quiet import window_end
 
@@ -585,3 +589,153 @@ async def test_sweep_ineligible_user_stamped_but_no_email(org_email_on: Any) -> 
     assert note is not None and note.digested_at is not None, (
         "digested_at must be set even when user is ineligible"
     )
+
+
+# ---------------------------------------------------------------------------
+# Helpers for digest-drain tests
+# ---------------------------------------------------------------------------
+
+
+async def _seed_admin(org_id: uuid.UUID, salt: str) -> uuid.UUID:
+    """Seed a System-Administrator-assigned user (needed for the FAILED emit path)."""
+    async with get_sessionmaker()() as s:
+        user = AppUser(
+            org_id=org_id,
+            keycloak_subject=f"digest-drain-admin-{salt}",
+            display_name=f"Digest Drain Admin {salt}",
+            email=f"digest-drain-admin-{salt}@example.com",
+            status=UserStatus.ACTIVE,
+        )
+        s.add(user)
+        await s.flush()
+        role = (
+            await s.execute(
+                select(Role).where(Role.org_id == org_id, Role.name == "System Administrator")
+            )
+        ).scalar_one()
+        s.add(
+            RoleAssignment(
+                org_id=org_id,
+                user_id=user.id,
+                role_id=role.id,
+                bound_scope={"level": "SYSTEM"},
+            )
+        )
+        await s.commit()
+        return user.id
+
+
+async def _seed_digest_email(
+    org_id: uuid.UUID,
+    user_id: uuid.UUID,
+    recipient_email: str,
+    *,
+    attempts: int = 0,
+) -> uuid.UUID:
+    """Seed a PENDING NotificationEmail(email_kind=DIGEST, notification_id=NULL) directly."""
+    async with get_sessionmaker()() as s:
+        email = NotificationEmail(
+            org_id=org_id,
+            notification_id=None,
+            recipient_user_id=user_id,
+            recipient_email=recipient_email,
+            subject="Your daily digest",
+            body="You have 2 new tasks.",
+            email_kind=NotificationEmailKind.DIGEST,
+            item_count=2,
+            attempts=attempts,
+        )
+        s.add(email)
+        await s.commit()
+        return email.id
+
+
+async def _get_email(email_id: uuid.UUID) -> NotificationEmail:
+    async with get_sessionmaker()() as s:
+        row = await s.get(NotificationEmail, email_id)
+        assert row is not None
+        return row
+
+
+# ---------------------------------------------------------------------------
+# Test 9 (digest_drain): a PENDING digest email drains to SENT — not SUPPRESSED
+# ---------------------------------------------------------------------------
+
+
+async def test_digest_drain_sends(org_email_on: Any) -> None:
+    """A PENDING DIGEST NotificationEmail (notification_id=NULL, recipient_user_id set,
+    org email ON, smtp configured) must drain to SENT via drain_once — NOT be suppressed."""
+    org_id = await _default_org_id()
+    salt = uuid.uuid4().hex[:8]
+    user_id = await _seed_user(org_id, email=f"digest-drain-{salt}@example.com")
+    email_id = await _seed_digest_email(org_id, user_id, f"digest-drain-{salt}@example.com")
+
+    sender = FakeMailSender()
+    settings = _configured_settings()
+    async with get_sessionmaker()() as session:
+        counts = await drain_once(session, sender, settings, now=_SWEEP_NOW)
+
+    assert counts["sent"] >= 1
+    row = await _get_email(email_id)
+    assert row.status == NotificationEmailStatus.SENT, (
+        f"Expected SENT, got {row.status} — digest row was wrongly suppressed"
+    )
+    assert row.sent_at is not None
+    assert row.attempts == 1
+    assert any(m.to == f"digest-drain-{salt}@example.com" for m in sender.sent)
+
+
+# ---------------------------------------------------------------------------
+# Test 10 (digest_drain): exhausted digest email → FAILED + admin notification with digest ref
+# ---------------------------------------------------------------------------
+
+
+async def test_digest_drain_failure_emits_to_admins(org_email_on: Any) -> None:
+    """A digest email row at max_attempts → FAILED + system.email_delivery_failed emitted
+    to org admins; the context notification_id must be 'digest:<id>', not None/NULL."""
+    org_id = await _default_org_id()
+    salt = uuid.uuid4().hex[:8]
+
+    user_id = await _seed_user(org_id, email=f"digest-exhaust-{salt}@example.com")
+    admin_id = await _seed_admin(org_id, salt)
+
+    settings = _configured_settings()
+    max_attempts = settings.notification_max_send_attempts
+
+    email_id = await _seed_digest_email(
+        org_id, user_id, f"digest-exhaust-{salt}@example.com", attempts=max_attempts
+    )
+
+    sender = FakeMailSender()
+    async with get_sessionmaker()() as session:
+        counts = await drain_once(session, sender, settings, now=_SWEEP_NOW)
+
+    assert counts["failed"] >= 1
+    row = await _get_email(email_id)
+    assert row.status == NotificationEmailStatus.FAILED
+    assert row.failed_at is not None
+
+    # A system.email_delivery_failed notification must have been emitted to the admin.
+    async with get_sessionmaker()() as s:
+        system_notes = (
+            (
+                await s.execute(
+                    select(Notification).where(
+                        Notification.org_id == org_id,
+                        Notification.recipient_user_id == admin_id,
+                        Notification.event_key == EVENT_EMAIL_DELIVERY_FAILED,
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+    assert len(system_notes) >= 1, (
+        "_emit_failure returned early for a digest row — admin was not notified"
+    )
+
+    # The context notification_id must be 'digest:<id>', not a NULL or plain None string.
+    note = system_notes[0]
+    ctx = note.context or {}
+    ref = ctx.get("notification_id", "")
+    assert ref == f"digest:{email_id}", f"Expected notification_id='digest:{email_id}', got {ref!r}"

@@ -38,16 +38,26 @@ async def _still_eligible(
     Also folds in the unconfigured-SMTP short-circuit (no deliverable transport)."""
     if not settings.smtp_host:
         return False
-    note = await session.get(Notification, row.notification_id)
-    if note is None:
-        return False
-    cfg = await session.get(SystemConfig, note.org_id)
+    if row.notification_id is not None:
+        # Single-notification email — resolve org/user via the source Notification row.
+        note = await session.get(Notification, row.notification_id)
+        if note is None:
+            return False
+        org_id = note.org_id
+        user_id = note.recipient_user_id
+    else:
+        # Digest email — no single source notification; use the email row's own columns.
+        org_id = row.org_id
+        if row.recipient_user_id is None:
+            return False
+        user_id = row.recipient_user_id
+    cfg = await session.get(SystemConfig, org_id)
     if not (cfg and cfg.notifications_email_enabled):
         return False
-    user = await session.get(AppUser, note.recipient_user_id)
+    user = await session.get(AppUser, user_id)
     if user is None or user.status in _INACTIVE:
         return False
-    pref = await session.get(NotificationPreference, note.recipient_user_id)
+    pref = await session.get(NotificationPreference, user_id)
     if pref is not None and not pref.email_enabled:  # absence ⇒ enabled (spec §3.4)
         return False
     return True
@@ -136,12 +146,10 @@ async def drain_once(
 
 
 async def _emit_failure(session: AsyncSession, row: NotificationEmail) -> None:
-    note = await session.get(Notification, row.notification_id)
-    if note is None:
-        return
     admins = await admin_user_ids(session, row.org_id)
     if not admins:
         return
+    ref = str(row.notification_id) if row.notification_id is not None else f"digest:{row.id}"
     await emit_system_notification(
         session,
         org_id=row.org_id,
@@ -151,7 +159,7 @@ async def _emit_failure(session: AsyncSession, row: NotificationEmail) -> None:
             "recipient_email": row.recipient_email,
             "attempts": row.attempts,
             "last_error": row.last_error or "(unknown)",
-            "notification_id": str(row.notification_id),
+            "notification_id": ref,
             "created_at": row.created_at.isoformat() if row.created_at else "",
         },
     )
