@@ -41,6 +41,7 @@ import type {
   MgmtReviewListResponse,
   MgmtReviewNextDue,
   Ncr,
+  Notification,
   Objective,
   ObjectiveCommitment,
   ObjectiveListResponse,
@@ -2637,6 +2638,31 @@ export const interestedPartyRegisterStatusFixture = {
   has_governing: true,
 } satisfies InterestedPartyRegisterStatus;
 
+export const notificationFixtures = [
+  {
+    id: "no000001-0001-0001-0001-000000000001",
+    event_key: "task.assigned",
+    subject_type: "DOCUMENT",
+    subject_id: "d0000001-0001-0001-0001-000000000001",
+    title: "Review requested: SOP-001",
+    body: "You have been assigned a review task for SOP-001.",
+    deep_link: "http://localhost/documents/d0000001-0001-0001-0001-000000000001",
+    created_at: "2026-06-22T09:00:00Z",
+    read_at: null,
+  },
+  {
+    id: "no000002-0002-0002-0002-000000000002",
+    event_key: "task.assigned",
+    subject_type: "CAPA",
+    subject_id: "ca000002-0002-0002-0002-000000000002",
+    title: "CAPA assigned: CAPA-002",
+    body: "You own a CAPA stage that needs attention.",
+    deep_link: "http://localhost/capa?capa=ca000002-0002-0002-0002-000000000002",
+    created_at: "2026-06-21T09:00:00Z",
+    read_at: "2026-06-21T10:00:00Z",
+  },
+] satisfies Notification[];
+
 export const handlers = [
   http.get("/api/v1/risks", () => HttpResponse.json(riskListFixture)),
   http.get("/api/v1/risks/summary", () => HttpResponse.json(riskSummaryFixture)),
@@ -3459,5 +3485,18 @@ export const handlers = [
   ),
   http.get("/api/v1/documents/:id/versions/:vid/download", () =>
     HttpResponse.json({ download_url: "https://minio.test/staging/working-copy" }),
+  ),
+  http.get("/api/v1/notifications", ({ request }) => {
+    const unread = new URL(request.url).searchParams.get("unread_only") === "true";
+    const rows = unread
+      ? notificationFixtures.filter((n) => n.read_at === null)
+      : notificationFixtures;
+    return HttpResponse.json(rows);
+  }),
+  http.post("/api/v1/notifications/:id/read", () => HttpResponse.json({ status: "ok" })),
+  http.post("/api/v1/notifications/read-all", () => HttpResponse.json({ marked: 1 })),
+  http.get("/api/v1/me/notification-preferences", () => HttpResponse.json({ email_enabled: true })),
+  http.put("/api/v1/me/notification-preferences", async ({ request }) =>
+    HttpResponse.json(await request.json()),
   ),
 ];

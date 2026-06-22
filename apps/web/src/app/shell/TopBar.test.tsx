@@ -1,8 +1,10 @@
+// apps/web/src/app/shell/TopBar.test.tsx
 import { screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { describe, expect, test } from "vitest";
-import { renderWithProviders } from "../../test/render";
 import { server } from "../../test/msw/server";
+import { renderWithProviders } from "../../test/render";
 import { TopBar } from "./TopBar";
 
 function renderBar() {
@@ -12,47 +14,45 @@ function renderBar() {
   );
 }
 
-describe("TopBar ack bell", () => {
-  test("the bell links to the filtered DOC_ACK inbox and keeps a distinct aria-label", async () => {
+describe("TopBar", () => {
+  test("keeps the Tasks work entry with a distinct label", async () => {
+    server.use(http.get("/api/v1/notifications", () => HttpResponse.json([])));
     renderBar();
-    const link = await screen.findByRole("link", { name: "Acknowledgements" });
-    expect(link).toHaveAttribute("href", "/tasks?type=DOC_ACK&state=PENDING");
-    expect(screen.getByLabelText("Tasks")).toBeInTheDocument(); // sibling untouched, distinct label
+    const tasks = await screen.findByRole("link", { name: "Tasks" });
+    expect(tasks).toHaveAttribute("href", "/tasks");
   });
 
-  test("shows the open-DOC_ACK count badge", async () => {
+  test("renders the merged notification bell with an unread badge", async () => {
     server.use(
-      http.get("/api/v1/tasks", ({ request }) => {
-        const type = new URL(request.url).searchParams.get("type");
-        return HttpResponse.json(type === "DOC_ACK" ? [{ id: "a" }, { id: "b" }, { id: "c" }] : []);
-      }),
+      http.get("/api/v1/notifications", () =>
+        HttpResponse.json([
+          {
+            id: "n1",
+            event_key: "task.assigned",
+            subject_type: "DOCUMENT",
+            subject_id: "d1",
+            title: "Review requested",
+            body: "",
+            deep_link: "http://localhost/documents/d1",
+            created_at: "2026-06-22T09:00:00Z",
+            read_at: null,
+          },
+        ]),
+      ),
     );
     renderBar();
-    expect(await screen.findByText("3")).toBeInTheDocument();
+    expect(await screen.findByText("1")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Notifications, 1 unread" })).toBeInTheDocument();
   });
 
-  test("a genuine zero is silent — no badge, plain aria-label", async () => {
-    server.use(http.get("/api/v1/tasks", () => HttpResponse.json([])));
+  test("the account menu offers notification settings", async () => {
+    server.use(http.get("/api/v1/notifications", () => HttpResponse.json([])));
     renderBar();
-    // the plain-named bell stays, but there is no numeric badge for zero
-    expect(await screen.findByRole("link", { name: "Acknowledgements" })).toBeInTheDocument();
-    expect(screen.queryByText("0")).not.toBeInTheDocument();
-  });
-
-  test("a failed count shows an indeterminate bell — never a confident 0 (the silent-zero fix)", async () => {
-    server.use(
-      http.get("/api/v1/tasks", ({ request }) => {
-        const type = new URL(request.url).searchParams.get("type");
-        if (type === "DOC_ACK") return new HttpResponse(null, { status: 500 });
-        return HttpResponse.json([]);
-      }),
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Account" }));
+    expect(await screen.findByRole("menuitem", { name: "Notification settings" })).toHaveAttribute(
+      "href",
+      "/settings/notifications",
     );
-    renderBar();
-    // the bell names itself unavailable, and no "0" masquerades as "no acks"
-    expect(
-      await screen.findByRole("link", { name: "Acknowledgements (count unavailable)" }),
-    ).toBeInTheDocument();
-    expect(screen.queryByText("0")).not.toBeInTheDocument();
-    expect(screen.queryByRole("link", { name: "Acknowledgements" })).not.toBeInTheDocument();
   });
 });

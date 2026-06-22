@@ -1,15 +1,17 @@
-import { ActionIcon, Burger, Button, Group, Indicator, Menu, Text } from "@mantine/core";
+// apps/web/src/app/shell/TopBar.tsx
+import { ActionIcon, Burger, Button, Group, Menu, Text } from "@mantine/core";
 import { Link } from "react-router-dom";
-import { IconBell, IconSearch, IconTasks, IconUser } from "../../lib/icons";
+import { IconSearch, IconTasks, IconUser } from "../../lib/icons";
 import { useAuth } from "../../lib/auth";
-import { useAckCount } from "./useAckCount";
+import { NotificationBell } from "../../features/notifications/NotificationBell";
 
-// S-web-6: the search box is a real button (not a read-only text input) — assistive tech announces an
-// action, not an edit field — and it is rendered on every breakpoint (no `visibleFrom`) so touch users
-// on small screens can open the palette without the keyboard hotkeys. To keep the no-wrap header from
-// overflowing on ~320px phones it is icon-only below `sm` (the "Search (⌘K)" label is desktop-only);
-// the `aria-label` (which matches the visible label on `sm+`, so no label/name mismatch) keeps the
-// button named when the label is hidden.
+// S-notify-fe: the ack-count Indicator is retired — the bell is now the merged NOTIFICATION bell
+// (awareness), and the Tasks icon stays the explicit WORK entry. DOC_ACK assignments flow as
+// notifications, so the bell's unread badge encompasses new-ack awareness; the durable open-ack work
+// count lives at /tasks. (useAckCount is unchanged and still powers Home's DoCard.)
+//
+// S-web-6: the search box is a real button (not a read-only text input) and renders on every breakpoint;
+// it is icon-only below `sm` to keep the no-wrap header from overflowing on ~320px phones.
 export function TopBar({
   navOpened,
   onToggleNav,
@@ -20,11 +22,6 @@ export function TopBar({
   onOpenSearch: () => void;
 }) {
   const { logout } = useAuth();
-  const { count: ackCount, isError: ackError } = useAckCount();
-  // Three distinct bell states (never a confident "0" on failure): a numeric badge when there are open
-  // acks; a calm gray indeterminate dot — with a "(count unavailable)" name — when the count couldn't be
-  // loaded; and no badge at all on a genuine zero.
-  const showAckCount = !ackError && ackCount > 0;
   return (
     <Group h="100%" px="md" justify="space-between" wrap="nowrap">
       <Group gap="sm" wrap="nowrap">
@@ -53,21 +50,7 @@ export function TopBar({
         <ActionIcon component={Link} to="/tasks" variant="subtle" aria-label="Tasks">
           <IconTasks />
         </ActionIcon>
-        <Indicator
-          label={showAckCount ? ackCount : undefined}
-          size={ackError ? 10 : 16}
-          color={ackError ? "gray" : undefined}
-          disabled={!showAckCount && !ackError}
-        >
-          <ActionIcon
-            component={Link}
-            to="/tasks?type=DOC_ACK&state=PENDING"
-            variant="subtle"
-            aria-label={ackError ? "Acknowledgements (count unavailable)" : "Acknowledgements"}
-          >
-            <IconBell />
-          </ActionIcon>
-        </Indicator>
+        <NotificationBell />
         <Menu position="bottom-end">
           <Menu.Target>
             <ActionIcon variant="subtle" aria-label="Account">
@@ -75,6 +58,9 @@ export function TopBar({
             </ActionIcon>
           </Menu.Target>
           <Menu.Dropdown>
+            <Menu.Item component={Link} to="/settings/notifications">
+              Notification settings
+            </Menu.Item>
             <Menu.Item onClick={logout}>Sign out</Menu.Item>
           </Menu.Dropdown>
         </Menu>

@@ -1906,3 +1906,20 @@ export interface InterestedPartyUpdateBody {
   status?: InterestedPartyStatus;
   last_reviewed_at?: string | null;
 }
+
+// S-notify-fe: the in-app notification + per-user preference shapes (pinned to api/notifications.py::_view).
+export interface Notification {
+  id: string;
+  event_key: string;
+  subject_type: string;
+  subject_id: string | null;
+  title: string;
+  body: string;
+  deep_link: string;
+  created_at: string;
+  read_at: string | null;
+}
+
+export interface NotificationPreferences {
+  email_enabled: boolean;
+}
