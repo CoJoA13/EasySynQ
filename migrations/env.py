@@ -41,6 +41,10 @@ target_metadata = Base.metadata
 #   * ``uq_improvement_initiative_spawn`` — the improvement-initiative spawn idempotency partial
 #     UNIQUE (0052, ``(org_id, source_link_id, spawn_idempotency_key) WHERE spawn_idempotency_key IS
 #     NOT NULL``; slice S-improvement-1).
+#   * ``uq_notification_dedup_task`` — the notification dedup partial UNIQUE (0063,
+#     ``... WHERE task_id IS NOT NULL``; slice S-notify-1).
+#   * ``uq_notification_email_one_per_notification`` — the notification_email one-per-notification
+#     partial UNIQUE (0064, ``... WHERE notification_id IS NOT NULL``; slice S-notify-3a).
 _MIGRATION_MANAGED_INDEXES = frozenset(
     {
         "ix_documented_information_search_tsv",
@@ -49,6 +53,7 @@ _MIGRATION_MANAGED_INDEXES = frozenset(
         "uq_dcr_spawn_idempotency_key",
         "uq_improvement_initiative_spawn",
         "uq_notification_dedup_task",
+        "uq_notification_email_one_per_notification",
     }
 )
 
