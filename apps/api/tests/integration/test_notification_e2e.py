@@ -10,6 +10,9 @@ Four tests that prove the multi-component contracts the per-task tests don't ful
    system.email_delivery_failed Notification to admin, body contains NO subject metadata.
 4. No-leak render: render system.email_delivery_failed with a bogus subject.title →
    output does NOT contain the value (whitelist drops it).
+
+S-notify-3a update: action_required defaults to DAILY. Test 1 sets the approver's mode to
+IMMEDIATE so a NotificationEmail row is created at enqueue (not held for a digest sweep).
 """
 
 from __future__ import annotations
@@ -26,9 +29,16 @@ from httpx import AsyncClient
 from sqlalchemy import select
 
 from easysynq_api.config import Settings, get_settings
-from easysynq_api.db.models._notification_enums import NotificationEmailStatus
+from easysynq_api.db.models._notification_enums import (
+    NotificationDigestMode,
+    NotificationEmailStatus,
+)
 from easysynq_api.db.models.app_user import AppUser, UserStatus
-from easysynq_api.db.models.notification import Notification, NotificationEmail
+from easysynq_api.db.models.notification import (
+    Notification,
+    NotificationEmail,
+    NotificationPreference,
+)
 from easysynq_api.db.models.organization import Organization
 from easysynq_api.db.models.role import Role, RoleAssignment
 from easysynq_api.db.models.system_config import SystemConfig
@@ -171,8 +181,12 @@ async def test_e2e_submit_review_enqueues_email_and_drain_sends(
     token_factory: Callable[..., str],
     app_under_test: Any,
 ) -> None:
-    """org flag ON + approver has email → submit-review creates a PENDING email row
-    for the approver → drain_once sends it (SENT, fake recorded)."""
+    """org flag ON + approver has email + IMMEDIATE mode → submit-review creates a PENDING email row
+    for the approver → drain_once sends it (SENT, fake recorded).
+
+    S-notify-3a: action_required defaults to DAILY; set IMMEDIATE on the approver's pref so an
+    email row is written at enqueue (not deferred to the digest sweep).
+    """
     salt = uuid.uuid4().hex[:8]
     author_kc = f"e2e-author-{salt}"
     approver_kc = f"e2e-approver-{salt}"
@@ -189,6 +203,16 @@ async def test_e2e_submit_review_enqueues_email_and_drain_sends(
         approver = await s.get(AppUser, approver_user_id)
         assert approver is not None
         approver.email = approver_email
+        await s.commit()
+
+    # S-notify-3a: action_required defaults to DAILY; set IMMEDIATE so an email row is
+    # created immediately at enqueue (not held for a digest sweep).
+    async with get_sessionmaker()() as s:
+        pref = await s.get(NotificationPreference, approver_user_id)
+        if pref is None:
+            pref = NotificationPreference(user_id=approver_user_id)
+            s.add(pref)
+        pref.digest_mode_action_required = NotificationDigestMode.IMMEDIATE
         await s.commit()
 
     org_id = await s5.default_org_id()

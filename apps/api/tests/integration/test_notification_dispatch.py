@@ -4,10 +4,13 @@ Tests run against a real migrated PG16 via testcontainers. The migration seeds t
 ``task.assigned`` template, so no manual template row is needed.
 
 Three tests:
-1. In-app + email rows are written when org email is enabled + user has an address.
+1. In-app + email rows are written when org email is enabled + user has an address + IMMEDIATE mode.
 2. Email row is suppressed (in-app only) when the org flag is OFF.
 3. SAVEPOINT non-poisoning: a render error rolls back only the savepoint; a sentinel row
    added to the same session BEFORE the call still commits.
+
+S-notify-3a update: action_required now defaults to DAILY. Test 1 sets IMMEDIATE explicitly to
+preserve the immediate-email assertion. Test 2 (org-flag-off) is unchanged.
 """
 
 from __future__ import annotations
@@ -19,9 +22,14 @@ import pytest
 import sqlalchemy as sa
 from sqlalchemy import select
 
+from easysynq_api.db.models._notification_enums import NotificationDigestMode
 from easysynq_api.db.models._workflow_enums import TaskState, TaskType, WorkflowSubjectType
 from easysynq_api.db.models.app_user import AppUser, UserStatus
-from easysynq_api.db.models.notification import Notification, NotificationEmail
+from easysynq_api.db.models.notification import (
+    Notification,
+    NotificationEmail,
+    NotificationPreference,
+)
 from easysynq_api.db.models.organization import Organization
 from easysynq_api.db.models.system_config import SystemConfig
 from easysynq_api.db.models.workflow import Task, WorkflowDefinition, WorkflowInstance
@@ -114,16 +122,36 @@ async def _set_org_email_flag(org_id: uuid.UUID, *, enabled: bool) -> None:
             await s.commit()
 
 
+async def _set_immediate_mode(user_id: uuid.UUID) -> None:
+    """Set digest_mode_action_required=IMMEDIATE so task.assigned emails fire right away.
+
+    S-notify-3a: action_required defaults to DAILY; tests that need an immediate email
+    must opt the user in explicitly.
+    """
+    async with get_sessionmaker()() as s:
+        pref = await s.get(NotificationPreference, user_id)
+        if pref is None:
+            pref = NotificationPreference(user_id=user_id)
+            s.add(pref)
+        pref.digest_mode_action_required = NotificationDigestMode.IMMEDIATE
+        await s.commit()
+
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
 
 
 async def test_enqueue_writes_in_app_and_email_when_enabled(app_under_test: Any) -> None:
-    """When org email is on + user has an address, both in-app and email rows are created."""
+    """When org email is on + user has an address + mode IMMEDIATE, both in-app and email rows.
+
+    S-notify-3a: action_required defaults to DAILY; set IMMEDIATE explicitly to keep the
+    immediate-email assertion valid.
+    """
     org_id = await _default_org_id()
     await _set_org_email_flag(org_id, enabled=True)
     user_id = await _seed_user(org_id, email="recipient@example.com")
+    await _set_immediate_mode(user_id)
     instance, task = await _seed_workflow_objects(org_id, user_id)
 
     async with get_sessionmaker()() as s:
