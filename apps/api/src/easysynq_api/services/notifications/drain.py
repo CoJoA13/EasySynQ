@@ -53,6 +53,13 @@ async def drain_once(
     )
 
     for row in rows:
+        # Unconfigured SMTP → suppress cleanly; no attempt increment, no failure notification.
+        if not settings.smtp_host:
+            row.status = NotificationEmailStatus.SUPPRESSED
+            await session.commit()
+            counts["suppressed"] += 1
+            continue
+
         # Exhausted? → make FAILED durable FIRST, then emit best-effort (adjustment #1 hardening).
         if row.attempts >= settings.notification_max_send_attempts:
             row.status = NotificationEmailStatus.FAILED

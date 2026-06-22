@@ -11,7 +11,7 @@ from typing import Any as AnyT
 import pytest
 from sqlalchemy import select
 
-from easysynq_api.config import get_settings
+from easysynq_api.config import Settings, get_settings
 from easysynq_api.db.models._notification_enums import NotificationEmailStatus
 from easysynq_api.db.models.app_user import AppUser, UserStatus
 from easysynq_api.db.models.notification import Notification, NotificationEmail
@@ -25,6 +25,22 @@ from easysynq_api.services.notifications.mail import FakeMailSender
 pytestmark = pytest.mark.integration
 
 _T0 = datetime.datetime(2030, 1, 1, 12, 0, 0, tzinfo=datetime.UTC)
+
+
+def _configured_settings() -> Settings:
+    """Return settings with smtp_host set to a non-empty value.
+
+    The testcontainer environment does not set SMTP_HOST, so get_settings() returns
+    smtp_host="" which triggers the suppression path. Tests that exercise SENT/FAILED/retry
+    paths need a configured transport so the drain proceeds past the suppression guard.
+    """
+    base = get_settings()
+    return Settings(
+        **{
+            **base.model_dump(),
+            "smtp_host": "test-smtp.local",
+        }
+    )
 
 
 async def _default_org_id() -> uuid.UUID:
@@ -134,7 +150,7 @@ async def test_drain_sends_pending_row(app_under_test: AnyT) -> None:
     email_id = await _seed_email_row(org_id, user_id, salt)
 
     sender = FakeMailSender()
-    settings = get_settings()
+    settings = _configured_settings()
     async with get_sessionmaker()() as session:
         counts = await drain_once(session, sender, settings, now=_T0)
 
@@ -162,7 +178,7 @@ async def test_drain_transient_failure_increments_attempts_and_stays_pending(
 
     # Sender that always raises (transient error).
     sender = FakeMailSender(fail_with=RuntimeError("smtp down"))
-    settings = get_settings()
+    settings = _configured_settings()
     async with get_sessionmaker()() as session:
         counts = await drain_once(session, sender, settings, now=_T0)
 
@@ -193,7 +209,7 @@ async def test_drain_exhausted_marks_failed_and_emits_system_notification(
     user_id = await _seed_user(org_id, salt)
     admin_id = await _seed_admin(org_id, salt)
 
-    settings = get_settings()
+    settings = _configured_settings()
     max_attempts = settings.notification_max_send_attempts
 
     # Seed a row already at max_attempts (so the drain's first look sees attempts >= MAX).
@@ -240,7 +256,7 @@ async def test_drain_attempts_incremented_before_send(app_under_test: AnyT) -> N
     email_id = await _seed_email_row(org_id, user_id, salt)
 
     sender = FakeMailSender(fail_with=OSError("connection refused"))
-    settings = get_settings()
+    settings = _configured_settings()
     async with get_sessionmaker()() as session:
         await drain_once(session, sender, settings, now=_T0)
 
@@ -262,7 +278,7 @@ async def test_drain_skips_rows_with_future_next_attempt_at(app_under_test: AnyT
     email_id = await _seed_email_row(org_id, user_id, salt, next_attempt_at=future)
 
     sender = FakeMailSender()
-    settings = get_settings()
+    settings = _configured_settings()
     async with get_sessionmaker()() as session:
         await drain_once(session, sender, settings, now=_T0)
 
@@ -272,3 +288,50 @@ async def test_drain_skips_rows_with_future_next_attempt_at(app_under_test: AnyT
     assert row.attempts == 0
     # The sender should not have been called for this row.
     assert not any(m.to == f"user-{salt}@example.com" for m in sender.sent)
+
+
+# ---------------------------------------------------------------------------
+# Case (f): unconfigured SMTP (smtp_host="") → SUPPRESSED, no attempt, no noise.
+# ---------------------------------------------------------------------------
+
+
+async def test_drain_suppresses_when_smtp_unconfigured(app_under_test: AnyT) -> None:
+    """If smtp_host is empty, drain marks the row SUPPRESSED without incrementing attempts
+    and without emitting a system.email_delivery_failed admin notification."""
+    org_id = await _default_org_id()
+    salt = uuid.uuid4().hex[:8]
+    user_id = await _seed_user(org_id, salt)
+    # Seed an admin so _emit_failure would have a recipient (proves it is NOT called).
+    admin_id = await _seed_admin(org_id, salt)
+    email_id = await _seed_email_row(org_id, user_id, salt)
+
+    sender = FakeMailSender()
+    no_smtp = Settings(smtp_host="")
+    async with get_sessionmaker()() as session:
+        counts = await drain_once(session, sender, no_smtp, now=_T0)
+
+    assert counts["suppressed"] >= 1
+    assert counts["sent"] == 0
+    assert counts["failed"] == 0
+
+    row = await _get_email(email_id)
+    assert row.status == NotificationEmailStatus.SUPPRESSED
+    assert row.attempts == 0, "suppressed rows must not increment attempts"
+    assert sender.sent == [], "no email should be sent when smtp_host is empty"
+
+    # No system.email_delivery_failed notification should have been emitted to the admin.
+    async with get_sessionmaker()() as s:
+        failure_notes = (
+            (
+                await s.execute(
+                    select(Notification).where(
+                        Notification.org_id == org_id,
+                        Notification.recipient_user_id == admin_id,
+                        Notification.event_key == EVENT_EMAIL_DELIVERY_FAILED,
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+    assert failure_notes == [], "no failure notification should be emitted for a suppressed row"

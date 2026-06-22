@@ -282,6 +282,7 @@ async def sweep_mgmt_reviews(session: AsyncSession) -> dict[str, int]:
             due_at=due_at,
         )
         session.add(task)
+        await session.flush()
         from ..notifications.dispatch import enqueue_task_notifications
 
         await enqueue_task_notifications(session, instance, [task])
