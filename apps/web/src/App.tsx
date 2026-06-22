@@ -39,6 +39,8 @@ import { ImprovementRegisterPage } from "./features/improvement/ImprovementRegis
 import { RisksRegisterPage } from "./features/risk/RisksRegisterPage";
 import { ContextRegisterPage } from "./features/context/ContextRegisterPage";
 import { InterestedPartiesRegisterPage } from "./features/interested-parties/InterestedPartiesRegisterPage";
+import { NotificationsPage } from "./features/notifications/NotificationsPage";
+import { NotificationSettingsPage } from "./features/notifications/NotificationSettingsPage";
 import { apiGet } from "./lib/api";
 import { useAuth } from "./lib/auth";
 
@@ -131,6 +133,8 @@ export function App() {
         <Route path="documents/:id" element={<DocumentDetailPage />} />
         <Route path="tasks" element={<TasksInbox />} />
         <Route path="tasks/:id" element={<ReviewApprovePage />} />
+        <Route path="notifications" element={<NotificationsPage />} />
+        <Route path="settings/notifications" element={<NotificationSettingsPage />} />
         <Route path="search" element={<SearchResultsPage />} />
         <Route path="compliance" element={<CompliancePage />} />
         <Route path="capa" element={<CapaLayout />}>
