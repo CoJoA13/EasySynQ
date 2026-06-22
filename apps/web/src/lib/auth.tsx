@@ -1,5 +1,5 @@
 import { InMemoryWebStorage, type User, UserManager, WebStorageStateStore } from "oidc-client-ts";
-import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 
 interface AuthConfig {
@@ -54,6 +54,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [ready, setReady] = useState(false);
   const navigate = useNavigate();
+  const navRef = useRef(navigate);
+  navRef.current = navigate;
 
   useEffect(() => {
     void (async () => {
@@ -64,7 +66,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           const u = await mgr.signinRedirectCallback();
           setUser(u);
           // Restore the path stashed in the OIDC state (also strips ?code&state from the URL).
-          navigate(safeReturnTo((u.state as { returnTo?: string } | undefined)?.returnTo), {
+          navRef.current(safeReturnTo((u.state as { returnTo?: string } | undefined)?.returnTo), {
             replace: true,
           });
         } catch {
@@ -76,7 +78,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
       setReady(true);
     })();
-  }, [navigate]);
+  }, []); // once-on-mount bootstrap: navRef.current is always latest, no navigate identity dep
 
   const value: AuthState = {
     ready,

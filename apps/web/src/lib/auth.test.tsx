@@ -1,6 +1,6 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter, useLocation } from "react-router-dom";
+import { MemoryRouter, useLocation, useNavigate } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, test, vi } from "vitest";
 import { AuthProvider, safeReturnTo, useAuth } from "./auth";
 
@@ -135,4 +135,47 @@ describe("safeReturnTo", () => {
     expect(safeReturnTo("relative/path")).toBe("/");
     expect(safeReturnTo(42)).toBe("/");
   });
+});
+
+it("a failed callback strips the query, falls through to logged-out, and does not navigate", async () => {
+  window.history.pushState({}, "", "/?code=abc&state=xyz");
+  signinRedirectCallback.mockRejectedValue(new Error("bad callback"));
+  render(
+    <MemoryRouter initialEntries={["/"]}>
+      <AuthProvider>
+        <Probe />
+        <LocationProbe />
+      </AuthProvider>
+    </MemoryRouter>,
+  );
+  await waitFor(() => expect(screen.getByText(/ready:true/)).toBeInTheDocument());
+  expect(screen.getByText(/token:none/)).toBeInTheDocument();
+  // location stays at "/" — the catch path must NOT navigate
+  expect(screen.getByTestId("loc")).toHaveTextContent("/");
+  expect(screen.getByTestId("loc")).not.toHaveTextContent("code");
+});
+
+it("the bootstrap effect runs once — an in-app navigation does not re-fetch the user", async () => {
+  function NavButton() {
+    const n = useNavigate();
+    return (
+      <button type="button" onClick={() => n("/other")}>
+        go
+      </button>
+    );
+  }
+  render(
+    <MemoryRouter initialEntries={["/"]}>
+      <AuthProvider>
+        <NavButton />
+        <LocationProbe />
+      </AuthProvider>
+    </MemoryRouter>,
+  );
+  await waitFor(() => expect(getUser).toHaveBeenCalledTimes(1));
+  await userEvent.click(screen.getByRole("button", { name: "go" }));
+  await waitFor(() => expect(screen.getByTestId("loc")).toHaveTextContent("/other"));
+  // flush any pending microtasks so a spurious re-run would have resolved by now
+  await Promise.resolve();
+  expect(getUser).toHaveBeenCalledTimes(1); // effect did NOT re-run on navigation
 });
