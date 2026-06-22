@@ -1,5 +1,6 @@
 import { InMemoryWebStorage, type User, UserManager, WebStorageStateStore } from "oidc-client-ts";
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import { useNavigate } from "react-router-dom";
 
 interface AuthConfig {
   issuer: string;
@@ -52,6 +53,7 @@ export const AuthContext = createContext<AuthState | null>(null);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [ready, setReady] = useState(false);
+  const navigate = useNavigate();
 
   useEffect(() => {
     void (async () => {
@@ -59,23 +61,33 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const params = new URLSearchParams(window.location.search);
       if (params.has("code") && params.has("state")) {
         try {
-          setUser(await mgr.signinRedirectCallback());
+          const u = await mgr.signinRedirectCallback();
+          setUser(u);
+          // Restore the path stashed in the OIDC state (also strips ?code&state from the URL).
+          navigate(safeReturnTo((u.state as { returnTo?: string } | undefined)?.returnTo), {
+            replace: true,
+          });
         } catch {
-          /* invalid/expired callback — fall through to logged-out */
+          // invalid/expired callback — strip the query, fall through to logged-out
+          window.history.replaceState({}, "", window.location.pathname);
         }
-        window.history.replaceState({}, "", window.location.pathname);
       } else {
         setUser(await mgr.getUser());
       }
       setReady(true);
     })();
-  }, []);
+  }, [navigate]);
 
   const value: AuthState = {
     ready,
     user,
     token: user?.access_token ?? null,
-    login: () => void getManager().then((m) => m.signinRedirect()),
+    login: () =>
+      void getManager().then((m) =>
+        m.signinRedirect({
+          state: { returnTo: window.location.pathname + window.location.search },
+        }),
+      ),
     logout: () =>
       void getManager().then(async (m) => {
         await m.removeUser();
