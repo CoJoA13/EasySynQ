@@ -48,8 +48,9 @@ describe("TopBar", () => {
   test("the account menu offers notification settings", async () => {
     server.use(http.get("/api/v1/notifications", () => HttpResponse.json([])));
     renderBar();
-    await userEvent.click(await screen.findByRole("button", { name: "Account" }));
-    expect(screen.getByRole("menuitem", { name: "Notification settings" })).toHaveAttribute(
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Account" }));
+    expect(await screen.findByRole("menuitem", { name: "Notification settings" })).toHaveAttribute(
       "href",
       "/settings/notifications",
     );

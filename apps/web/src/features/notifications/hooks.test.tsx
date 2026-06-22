@@ -81,7 +81,7 @@ describe("notification data layer", () => {
     server.use(
       http.put("/api/v1/me/notification-preferences", async ({ request }) => {
         body = await request.json();
-        return HttpResponse.json(body);
+        return HttpResponse.json(body as Record<string, unknown>);
       }),
     );
     const { result } = renderHook(() => useSetEmailEnabled(), { wrapper });

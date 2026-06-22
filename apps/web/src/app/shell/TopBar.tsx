@@ -51,7 +51,7 @@ export function TopBar({
           <IconTasks />
         </ActionIcon>
         <NotificationBell />
-        <Menu position="bottom-end" transitionProps={{ duration: 0 }}>
+        <Menu position="bottom-end">
           <Menu.Target>
             <ActionIcon variant="subtle" aria-label="Account">
               <IconUser />
