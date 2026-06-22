@@ -6409,15 +6409,18 @@ paths:
     put:
       tags: [notifications]
       operationId: putNotificationPreferences
-      summary: "Upsert the caller's notification preferences (authenticated-self; no permission key)."
+      summary: "Partial-update the caller's notification preferences (authenticated-self; no permission key)."
+      description: >-
+        Partial update — only supplied fields change. quiet_start and quiet_end must be set
+        together (both-or-neither); setting only one returns 422.
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: "#/components/schemas/NotificationPreference" }
+            schema: { $ref: "#/components/schemas/NotificationPreferenceUpdate" }
       responses:
         "200":
-          description: The updated notification preferences.
+          description: The updated notification preferences (full effective view).
           content:
             application/json:
               schema: { $ref: "#/components/schemas/NotificationPreference" }
@@ -7840,6 +7843,11 @@ components:
             S-notify-1 (doc 10 §9, R53): when true the worker sends email notifications via the
             configured SMTP relay. Default OFF (opt-in) — dormant on a fresh install; an admin
             enables it after configuring SMTP env vars.
+        notifications_escalation_pierce_quiet_hours:
+          type: boolean
+          description: >-
+            S-notify-3a: when true (the default), urgent/critical notifications bypass quiet hours
+            and are delivered immediately regardless of user preference.
     OrgConfigUpdate:
       type: object
       additionalProperties: false
@@ -7850,6 +7858,7 @@ components:
         allow_capa_self_verify: { type: [boolean, "null"] }
         leadership_release_requires_top_management_authorization: { type: [boolean, "null"] }
         notifications_email_enabled: { type: [boolean, "null"] }
+        notifications_escalation_pierce_quiet_hours: { type: [boolean, "null"] }
 
     Notification:
       type: object
@@ -7876,10 +7885,15 @@ components:
           format: date-time
           description: When the notification was marked read; null = unread.
 
+    NotificationDigestMode:
+      type: string
+      description: The per-class email delivery cadence (S-notify-3a, spec §2).
+      enum: [immediate, daily, off]
+
     NotificationPreference:
       type: object
       additionalProperties: false
-      required: [email_enabled]
+      required: [email_enabled, digest_modes, digest_hour, timezone, quiet_start, quiet_end]
       properties:
         email_enabled:
           type: boolean
@@ -7887,6 +7901,56 @@ components:
             Whether the caller wants to receive email notifications (when the org's
             notifications_email_enabled toggle is also true). Default true when no preference row
             exists.
+        digest_modes:
+          type: object
+          description: Per-class delivery cadence. NULL columns resolved to code defaults.
+          additionalProperties: false
+          properties:
+            action_required: { $ref: "#/components/schemas/NotificationDigestMode" }
+            awareness: { $ref: "#/components/schemas/NotificationDigestMode" }
+            critical: { $ref: "#/components/schemas/NotificationDigestMode" }
+            admin_ops: { $ref: "#/components/schemas/NotificationDigestMode" }
+        digest_hour:
+          type: integer
+          minimum: 0
+          maximum: 23
+          description: Hour of day (0-23) at which the daily digest is sent (user's timezone).
+        timezone:
+          type: string
+          description: IANA timezone name for scheduling the daily digest window.
+        quiet_start:
+          type: [string, "null"]
+          pattern: '^\d{2}:\d{2}$'
+          description: Start of quiet hours (HH:MM); null = no quiet window configured.
+        quiet_end:
+          type: [string, "null"]
+          pattern: '^\d{2}:\d{2}$'
+          description: End of quiet hours (HH:MM); null = no quiet window configured.
+
+    NotificationPreferenceUpdate:
+      type: object
+      additionalProperties: false
+      description: >-
+        Partial update body for PUT /me/notification-preferences. Only supplied fields change.
+        quiet_start and quiet_end must always be set together (both-or-neither).
+      properties:
+        email_enabled: { type: [boolean, "null"] }
+        digest_modes:
+          type: [object, "null"]
+          additionalProperties: false
+          properties:
+            action_required: { $ref: "#/components/schemas/NotificationDigestMode" }
+            awareness: { $ref: "#/components/schemas/NotificationDigestMode" }
+            critical: { $ref: "#/components/schemas/NotificationDigestMode" }
+            admin_ops: { $ref: "#/components/schemas/NotificationDigestMode" }
+        digest_hour: { type: [integer, "null"], minimum: 0, maximum: 23 }
+        timezone: { type: [string, "null"] }
+        quiet_start:
+          type: [string, "null"]
+          pattern: '^\d{2}:\d{2}$'
+        quiet_end:
+          type: [string, "null"]
+          pattern: '^\d{2}:\d{2}$'
 
     CapaSource:
       type: string

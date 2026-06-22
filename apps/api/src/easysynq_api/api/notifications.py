@@ -9,21 +9,33 @@ from __future__ import annotations
 import datetime
 import uuid
 from typing import Any, cast
+from zoneinfo import available_timezones
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy import select, update
-from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..auth.dependencies import get_current_user
+from ..db.models._notification_enums import NotificationDigestMode
 from ..db.models.app_user import AppUser
 from ..db.models.notification import Notification, NotificationPreference
 from ..db.session import get_session
 from ..problems import ProblemException
+from ..services.notifications.classes import NotificationClass
+from ..services.notifications.preferences import effective_preferences
 
 router = APIRouter(prefix="/api/v1", tags=["notifications"])
+
+_VALID_MODES = {m.value for m in NotificationDigestMode}
+_VALID_CLASSES = {c.value for c in NotificationClass}
+_COLUMN_FOR_CLASS = {
+    "action_required": "digest_mode_action_required",
+    "awareness": "digest_mode_awareness",
+    "critical": "digest_mode_critical",
+    "admin_ops": "digest_mode_admin_ops",
+}
 
 
 def _view(n: Notification) -> dict[str, Any]:
@@ -100,6 +112,46 @@ async def mark_all_read(
 
 class PreferenceView(BaseModel):
     email_enabled: bool
+    digest_modes: dict[str, str]
+    digest_hour: int
+    timezone: str
+    quiet_start: str | None
+    quiet_end: str | None
+
+
+class PreferenceUpdate(BaseModel):
+    email_enabled: bool | None = None
+    digest_modes: dict[str, str] | None = None
+    digest_hour: int | None = None
+    timezone: str | None = None
+    quiet_start: str | None = None
+    quiet_end: str | None = None
+
+
+def _fmt_time(t: datetime.time | None) -> str | None:
+    return t.strftime("%H:%M") if t is not None else None
+
+
+def _parse_time(s: str) -> datetime.time:
+    try:
+        h, m = s.split(":")
+        return datetime.time(int(h), int(m))
+    except Exception as exc:
+        raise ProblemException(
+            status=422, code="invalid_time", title="quiet hours must be 'HH:MM'"
+        ) from exc
+
+
+def _to_view(pref: NotificationPreference | None) -> PreferenceView:
+    eff = effective_preferences(pref)
+    return PreferenceView(
+        email_enabled=eff.email_enabled,
+        digest_modes={c.value: eff.modes[c].value for c in NotificationClass},
+        digest_hour=eff.digest_hour,
+        timezone=eff.timezone,
+        quiet_start=_fmt_time(eff.quiet_start),
+        quiet_end=_fmt_time(eff.quiet_end),
+    )
 
 
 @router.get("/me/notification-preferences")
@@ -108,25 +160,64 @@ async def get_preferences(
     session: AsyncSession = Depends(get_session),
 ) -> PreferenceView:
     pref = await session.get(NotificationPreference, caller.id)
-    return PreferenceView(email_enabled=pref.email_enabled if pref else True)
+    return _to_view(pref)
 
 
 @router.put("/me/notification-preferences")
 async def put_preferences(
-    body: PreferenceView,
+    body: PreferenceUpdate,
     caller: AppUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> PreferenceView:
-    await session.execute(
-        pg_insert(NotificationPreference)
-        .values(user_id=caller.id, email_enabled=body.email_enabled)
-        .on_conflict_do_update(
-            index_elements=["user_id"],
-            set_={
-                "email_enabled": body.email_enabled,
-                "updated_at": datetime.datetime.now(datetime.UTC),
-            },
-        )
-    )
+    provided = body.model_fields_set
+    pref = await session.get(NotificationPreference, caller.id)
+    if pref is None:
+        pref = NotificationPreference(user_id=caller.id, email_enabled=True)
+        session.add(pref)
+
+    if "email_enabled" in provided and body.email_enabled is not None:
+        pref.email_enabled = body.email_enabled
+
+    if "digest_modes" in provided and body.digest_modes is not None:
+        for klass, mode in body.digest_modes.items():
+            if klass not in _VALID_CLASSES:
+                raise ProblemException(
+                    status=422, code="invalid_class", title=f"unknown class {klass}"
+                )
+            if mode not in _VALID_MODES:
+                raise ProblemException(
+                    status=422, code="invalid_mode", title=f"unknown mode {mode}"
+                )
+            setattr(pref, _COLUMN_FOR_CLASS[klass], NotificationDigestMode(mode))
+
+    if "digest_hour" in provided and body.digest_hour is not None:
+        if not (0 <= body.digest_hour <= 23):
+            raise ProblemException(
+                status=422, code="invalid_hour", title="digest_hour must be 0..23"
+            )
+        pref.digest_hour = body.digest_hour
+
+    if "timezone" in provided and body.timezone is not None:
+        if body.timezone not in available_timezones():
+            raise ProblemException(status=422, code="invalid_timezone", title="unknown timezone")
+        pref.timezone = body.timezone
+
+    # quiet hours: both-or-neither
+    if "quiet_start" in provided or "quiet_end" in provided:
+        start_set = "quiet_start" in provided
+        end_set = "quiet_end" in provided
+        start_val = body.quiet_start if start_set else _fmt_time(pref.quiet_start)
+        end_val = body.quiet_end if end_set else _fmt_time(pref.quiet_end)
+        if (start_val is None) != (end_val is None):
+            raise ProblemException(
+                status=422,
+                code="invalid_quiet_hours",
+                title="set both quiet_start and quiet_end, or neither",
+            )
+        pref.quiet_start = _parse_time(start_val) if start_val else None
+        pref.quiet_end = _parse_time(end_val) if end_val else None
+
+    pref.updated_at = datetime.datetime.now(datetime.UTC)
     await session.commit()
-    return body
+    refreshed = await session.get(NotificationPreference, caller.id)
+    return _to_view(refreshed)
