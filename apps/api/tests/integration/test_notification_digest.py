@@ -1,4 +1,5 @@
 """Task 6 — class-aware enqueue: daily/immediate/off + quiet-hours hold + DOC_ACK email on.
+Task 7 — digest sweep: bundle due rows → one NotificationEmail(email_kind=DIGEST); idempotent.
 
 Integration tests for the new dispatch.py behavior (S-notify-3a, spec §4/§5/§6):
 
@@ -11,6 +12,10 @@ Integration tests for the new dispatch.py behavior (S-notify-3a, spec §4/§5/§
 4. Mode OFF: in-app row created, NO email.
 5. DOC_ACK (subject_type=DOC_ACK) with digest_mode_action_required=IMMEDIATE: a NotificationEmail
    IS created (the slice-1 DOC_ACK exclusion is gone).
+6. Sweep bundles a user's daily rows into ONE NotificationEmail(email_kind=DIGEST,
+   notification_id IS NULL, recipient_user_id, item_count=N, PENDING); stamps digested_at.
+7. A second sweep run for the same user is a no-op (idempotent — no new email).
+8. Ineligible user (email_enabled=False between enqueue and sweep): rows stamped, no email.
 """
 
 from __future__ import annotations
@@ -23,9 +28,11 @@ import pytest
 import sqlalchemy as sa
 from sqlalchemy import select
 
+from easysynq_api.config import Settings, get_settings
 from easysynq_api.db.models._notification_enums import (
     NotificationDigestMode,
     NotificationEmailKind,
+    NotificationEmailStatus,
 )
 from easysynq_api.db.models._workflow_enums import TaskState, TaskType, WorkflowSubjectType
 from easysynq_api.db.models.app_user import AppUser, UserStatus
@@ -39,6 +46,7 @@ from easysynq_api.db.models.system_config import SystemConfig
 from easysynq_api.db.models.workflow import Task, WorkflowDefinition, WorkflowInstance
 from easysynq_api.db.session import get_sessionmaker
 from easysynq_api.services.notifications import dispatch
+from easysynq_api.services.notifications.digest import sweep_digests
 from easysynq_api.services.notifications.preferences import effective_preferences
 from easysynq_api.services.notifications.quiet import window_end
 
@@ -59,6 +67,17 @@ _COVERING_END = datetime.time(15, 0)
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _configured_settings() -> Settings:
+    """Return settings with smtp_host set to a non-empty value.
+
+    The testcontainer environment does not set SMTP_HOST so get_settings() returns smtp_host=""
+    which triggers the suppress/skip path in bundle_user_digest. Sweep tests that expect an
+    email to be created must pin this setting (the S-notify-1 test_notification_drain precedent).
+    """
+    base = get_settings()
+    return Settings(**{**base.model_dump(), "smtp_host": "test-smtp.local"})
 
 
 async def _default_org_id() -> uuid.UUID:
@@ -398,4 +417,171 @@ async def test_doc_ack_immediate_creates_email(org_email_on: Any) -> None:
     email_count = await _email_count_for_task(task.id)
     assert email_count == 1, (
         f"Expected 1 email row for DOC_ACK+IMMEDIATE (suppression removed), got {email_count}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Helpers for sweep tests
+# ---------------------------------------------------------------------------
+
+
+async def _seed_daily_notification(
+    org_id: uuid.UUID,
+    user_id: uuid.UUID,
+    *,
+    digest_due_at: datetime.datetime,
+    title: str = "Task: Review SOP-1",
+    deep_link: str = "http://localhost/tasks",
+) -> uuid.UUID:
+    """Insert a Notification row already enrolled in a digest window (digest_due_at set)."""
+    async with get_sessionmaker()() as s:
+        note = Notification(
+            org_id=org_id,
+            recipient_user_id=user_id,
+            event_key="task.assigned",
+            subject_type="DOCUMENT",
+            subject_id=uuid.uuid4(),
+            title=title,
+            body="",
+            deep_link=deep_link,
+            digest_due_at=digest_due_at,
+        )
+        s.add(note)
+        await s.commit()
+        return note.id
+
+
+async def _digest_email_count_for_user(user_id: uuid.UUID) -> int:
+    """Count NotificationEmail rows of kind=DIGEST for this recipient_user_id."""
+    async with get_sessionmaker()() as s:
+        return (
+            await s.execute(
+                sa.select(sa.func.count())
+                .select_from(NotificationEmail)
+                .where(
+                    NotificationEmail.recipient_user_id == user_id,
+                    NotificationEmail.email_kind == NotificationEmailKind.DIGEST,
+                )
+            )
+        ).scalar_one()
+
+
+async def _get_notification(note_id: uuid.UUID) -> Notification | None:
+    async with get_sessionmaker()() as s:
+        return await s.get(Notification, note_id)
+
+
+# ---------------------------------------------------------------------------
+# Test 6: sweep bundles daily rows into ONE DIGEST NotificationEmail
+# ---------------------------------------------------------------------------
+
+# "now" for sweep tests — past enough that digest_due_at is always in the past.
+_SWEEP_NOW = datetime.datetime(2031, 2, 1, 9, 0, 0, tzinfo=datetime.UTC)
+# digest_due_at is set one hour before _SWEEP_NOW so rows are clearly due.
+_DUE_AT = _SWEEP_NOW - datetime.timedelta(hours=1)
+
+
+async def test_sweep_bundles_daily_rows_into_one_digest_email(org_email_on: Any) -> None:
+    """Sweep creates ONE DIGEST NotificationEmail for the user, stamps digested_at on all rows."""
+    org_id = await _default_org_id()
+    user_id = await _seed_user(org_id, email="sweep-bundle@example.com")
+
+    note1_id = await _seed_daily_notification(
+        org_id, user_id, digest_due_at=_DUE_AT, title="Approve SOP-1"
+    )
+    note2_id = await _seed_daily_notification(
+        org_id, user_id, digest_due_at=_DUE_AT, title="Approve POL-2"
+    )
+
+    summary = await sweep_digests(get_sessionmaker(), _configured_settings(), _SWEEP_NOW)
+
+    # At least 1 user processed, at least 1 email created (may be more from other tests,
+    # but this user's rows must be included — assert on the user-specific email count).
+    assert summary["users"] >= 1
+    assert summary["emails"] >= 1
+
+    digest_count = await _digest_email_count_for_user(user_id)
+    assert digest_count == 1, f"Expected exactly 1 DIGEST email for user, got {digest_count}"
+
+    # Check the email fields
+    async with get_sessionmaker()() as s:
+        row = (
+            await s.execute(
+                select(NotificationEmail).where(
+                    NotificationEmail.recipient_user_id == user_id,
+                    NotificationEmail.email_kind == NotificationEmailKind.DIGEST,
+                )
+            )
+        ).scalar_one_or_none()
+    assert row is not None
+    assert row.notification_id is None, "Digest email must have notification_id IS NULL"
+    assert row.item_count == 2, f"Expected item_count=2, got {row.item_count}"
+    assert row.status == NotificationEmailStatus.PENDING  # type: ignore[attr-defined]
+
+    # Both notifications stamped with digested_at
+    n1 = await _get_notification(note1_id)
+    n2 = await _get_notification(note2_id)
+    assert n1 is not None and n1.digested_at is not None, "note1 must have digested_at set"
+    assert n2 is not None and n2.digested_at is not None, "note2 must have digested_at set"
+
+
+# ---------------------------------------------------------------------------
+# Test 7: second sweep run is a no-op (idempotent)
+# ---------------------------------------------------------------------------
+
+
+async def test_sweep_is_idempotent(org_email_on: Any) -> None:
+    """A second sweep for the same user finds no pending rows → no new email created."""
+    org_id = await _default_org_id()
+    user_id = await _seed_user(org_id, email="sweep-idempotent@example.com")
+
+    await _seed_daily_notification(org_id, user_id, digest_due_at=_DUE_AT, title="Approve SOP-3")
+
+    # First sweep
+    summary1 = await sweep_digests(get_sessionmaker(), _configured_settings(), _SWEEP_NOW)
+    assert summary1["emails"] >= 1
+
+    email_count_after_first = await _digest_email_count_for_user(user_id)
+    assert email_count_after_first == 1
+
+    # Second sweep — rows already stamped; no new email
+    summary2 = await sweep_digests(get_sessionmaker(), _configured_settings(), _SWEEP_NOW)
+    _ = summary2  # may be 0 users/emails or include other users; only assert on this user
+
+    email_count_after_second = await _digest_email_count_for_user(user_id)
+    assert email_count_after_second == 1, (
+        f"Second sweep must not create a new digest email; got {email_count_after_second}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Test 8: ineligible user (email_enabled=False) — rows stamped, no email
+# ---------------------------------------------------------------------------
+
+
+async def test_sweep_ineligible_user_stamped_but_no_email(org_email_on: Any) -> None:
+    """When the user has email_enabled=False at sweep time: rows get digested_at but no email."""
+    org_id = await _default_org_id()
+    user_id = await _seed_user(org_id, email="sweep-ineligible@example.com")
+
+    note_id = await _seed_daily_notification(
+        org_id, user_id, digest_due_at=_DUE_AT, title="Approve DOC-5"
+    )
+
+    # Disable email between enqueue and sweep
+    async with get_sessionmaker()() as s:
+        pref = NotificationPreference(user_id=user_id, email_enabled=False)
+        s.add(pref)
+        await s.commit()
+
+    await sweep_digests(get_sessionmaker(), _configured_settings(), _SWEEP_NOW)
+
+    # No digest email for this user
+    digest_count = await _digest_email_count_for_user(user_id)
+    assert digest_count == 0, f"Expected 0 DIGEST emails for ineligible user, got {digest_count}"
+
+    # But the notification row must still be stamped
+    note = await _get_notification(note_id)
+    assert note is not None and note.digested_at is not None, (
+        "digested_at must be set even when user is ineligible"
     )

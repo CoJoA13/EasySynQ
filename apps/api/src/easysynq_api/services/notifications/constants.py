@@ -5,6 +5,7 @@ from __future__ import annotations
 
 EVENT_TASK_ASSIGNED = "task.assigned"
 EVENT_EMAIL_DELIVERY_FAILED = "system.email_delivery_failed"
+EVENT_DIGEST_DAILY = "digest.daily"
 
 SUBJECT_SYSTEM = "SYSTEM"
 
@@ -26,4 +27,5 @@ VARIABLE_WHITELIST: dict[str, frozenset[str]] = {
     EVENT_EMAIL_DELIVERY_FAILED: frozenset(
         {"recipient_email", "attempts", "last_error", "notification_id", "created_at"}
     ),
+    EVENT_DIGEST_DAILY: frozenset({"recipient.first_name", "item_count", "items", "prefs_link"}),
 }
