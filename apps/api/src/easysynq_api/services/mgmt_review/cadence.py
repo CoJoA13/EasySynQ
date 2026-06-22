@@ -282,6 +282,9 @@ async def sweep_mgmt_reviews(session: AsyncSession) -> dict[str, int]:
             due_at=due_at,
         )
         session.add(task)
+        from ..notifications.dispatch import enqueue_task_notifications
+
+        await enqueue_task_notifications(session, instance, [task])
         await session.commit()
         logger.info(
             "mgmt_review_sweep: minted Management Review %s (%s) for owner %s",
