@@ -33,6 +33,7 @@ describe("NotificationBell", () => {
     server.use(http.get("/api/v1/notifications", () => HttpResponse.json(unreadList(100))));
     renderWithProviders(<NotificationBell />);
     expect(await screen.findByText("99+")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Notifications, 100 unread" })).toBeInTheDocument();
   });
 
   it("a failed count shows an indeterminate bell — never a confident 0", async () => {

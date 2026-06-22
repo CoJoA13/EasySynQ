@@ -1,6 +1,7 @@
 // apps/web/src/features/notifications/NotificationSettingsPage.test.tsx
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { axe } from "jest-axe";
 import { http, HttpResponse } from "msw";
 import { describe, expect, it } from "vitest";
 import { server } from "../../test/msw/server";
@@ -14,9 +15,12 @@ describe("NotificationSettingsPage", () => {
         HttpResponse.json({ email_enabled: false }),
       ),
     );
-    renderWithProviders(<NotificationSettingsPage />, { route: "/settings/notifications" });
+    const { container } = renderWithProviders(<NotificationSettingsPage />, {
+      route: "/settings/notifications",
+    });
     const sw = await screen.findByRole("switch", { name: "Email notifications" });
     expect(sw).not.toBeChecked();
+    expect(await axe(container)).toHaveNoViolations();
   });
 
   it("PUTs the new value when toggled and confirms the save", async () => {

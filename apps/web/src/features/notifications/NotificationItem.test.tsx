@@ -2,7 +2,7 @@
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { Notification } from "../../lib/types";
 import { server } from "../../test/msw/server";
 import { renderWithProviders } from "../../test/render";
@@ -57,5 +57,20 @@ describe("NotificationItem", () => {
     renderWithProviders(<NotificationItem notification={unread} />);
     await userEvent.click(screen.getByLabelText("Mark read: Review requested: SOP-001"));
     await waitFor(() => expect(marked).toBe("n1"));
+  });
+
+  it("clicking the row marks read and fires onNavigate", async () => {
+    let marked = "";
+    server.use(
+      http.post("/api/v1/notifications/:id/read", ({ params }) => {
+        marked = String(params.id);
+        return HttpResponse.json({ status: "ok" });
+      }),
+    );
+    const onNavigate = vi.fn();
+    renderWithProviders(<NotificationItem notification={unread} onNavigate={onNavigate} />);
+    await userEvent.click(screen.getByRole("link", { name: /Review requested: SOP-001/ }));
+    await waitFor(() => expect(marked).toBe("n1"));
+    expect(onNavigate).toHaveBeenCalled();
   });
 });

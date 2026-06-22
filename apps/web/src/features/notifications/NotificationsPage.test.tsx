@@ -1,5 +1,6 @@
 // apps/web/src/features/notifications/NotificationsPage.test.tsx
 import { screen } from "@testing-library/react";
+import { axe } from "jest-axe";
 import { http, HttpResponse } from "msw";
 import { describe, expect, it } from "vitest";
 import { server } from "../../test/msw/server";
@@ -8,9 +9,10 @@ import { NotificationsPage } from "./NotificationsPage";
 
 describe("NotificationsPage", () => {
   it("lists notifications", async () => {
-    renderWithProviders(<NotificationsPage />, { route: "/notifications" });
+    const { container } = renderWithProviders(<NotificationsPage />, { route: "/notifications" });
     expect(await screen.findByText("Review requested: SOP-001")).toBeInTheDocument();
     expect(screen.getByText("CAPA assigned: CAPA-002")).toBeInTheDocument();
+    expect(await axe(container)).toHaveNoViolations();
   });
 
   it("shows the empty state when there is nothing", async () => {
