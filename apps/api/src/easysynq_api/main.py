@@ -33,6 +33,7 @@ from .api.improvement import router as improvement_router
 from .api.ingestion import router as ingestion_router
 from .api.interested_parties import router as interested_parties_router
 from .api.mgmt_review import router as mgmt_review_router
+from .api.notifications import router as notifications_router
 from .api.objectives import router as objectives_router
 from .api.pack_share import router as pack_share_router
 from .api.packs import router as packs_router
@@ -175,6 +176,9 @@ def create_app() -> FastAPI:
     # ``/{pack_id}`` route (401). A real UUID pack path never matches the ``shared`` literal.
     app.include_router(pack_share_router)  # S-pack-2: public time-boxed pack delivery (no auth)
     app.include_router(packs_router)  # S-pack-1: evidence packs (preview + build/seal + download)
+    app.include_router(
+        notifications_router
+    )  # S-notify-1: in-app notifications + email prefs (self)
     app.include_router(workflow_router)
     app.include_router(audit_router)
     app.include_router(verify_router)  # S7c: public controlled-rendition verify page (no auth)
