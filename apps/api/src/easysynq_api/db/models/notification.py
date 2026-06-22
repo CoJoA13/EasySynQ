@@ -111,7 +111,7 @@ class NotificationEmail(Base):
     __table_args__ = (Index("ix_notification_email_status_next", "status", "next_attempt_at"),)
     # The partial-unique index uq_notification_email_one_per_notification (WHERE notification_id IS
     # NOT NULL) is created in the migration + excluded in env.py (same IS-NOT-NULL lesson as
-    # uq_notification_dedup_task; declared here it round-trips wrong — 0024/S-notify-3a).
+    # uq_notification_dedup_task; declared here it round-trips wrong — S-notify-3a/0064).
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     org_id: Mapped[uuid.UUID] = mapped_column(

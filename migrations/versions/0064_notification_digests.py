@@ -69,7 +69,7 @@ def upgrade() -> None:
         sa.Column("digest_hour", sa.SmallInteger(), server_default=sa.text("8"), nullable=False),
     )
     op.create_check_constraint(
-        "ck_notification_preference_digest_hour",
+        "digest_hour",
         "notification_preference",
         "digest_hour >= 0 AND digest_hour <= 23",
     )
@@ -177,7 +177,7 @@ def downgrade() -> None:
     op.drop_column("notification_preference", "quiet_start")
     op.drop_column("notification_preference", "timezone")
     op.drop_constraint(
-        "ck_notification_preference_digest_hour", "notification_preference", type_="check"
+        "digest_hour", "notification_preference", type_="check"
     )
     op.drop_column("notification_preference", "digest_hour")
     op.drop_column("notification_preference", "digest_mode_admin_ops")
