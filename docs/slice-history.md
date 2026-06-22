@@ -2,7 +2,100 @@
 
 > The running per-slice changelog + the deep per-slice rationale (this file IS the canonical narrative; it
 > also lives in the squash-merge commits). CLAUDE.md holds only the current head pointer.
-> **Migration head: `0062` (next `0063`).** Code: https://github.com/CoJoA13/EasySynQ (`main` protected, PR + green CI).
+> **Migration head: `0063` (next `0064`).** Code: https://github.com/CoJoA13/EasySynQ (`main` protected, PR + green CI).
+
+## NOTIFICATIONS — the in-app + email notification system (clause-agnostic; doc 10 §9, R53)
+
+> The biggest remaining functional gap after the register arc: the workflow engine + My Tasks created `Task`
+> rows, but **nothing reached users by email**. doc 10 §9 specs the full target (dual in-app + email, a
+> 16-event catalog, versioned templates, a per-user digest matrix, quiet hours, escalation timers, owned
+> bounces) — ~5 slices. **Roadmap:** slice 1 the BE spine + email (this) · **slice 2** the SPA bell/center ·
+> **slice 3** preferences + digests + quiet hours (+ DOC_ACK email + the `/settings/notifications` route) ·
+> **slice 4** escalation timers (`SlaPolicy`/`working_calendar`, R29) · **slice 5** awareness events
+> (`doc.released`/…) + the Health-dashboard delivery-failure panel.
+
+### S-notify-1 — the BE notification spine + email delivery (R53; migration 0063; BE-only; PR #255 squash `766dc55`)
+
+**What shipped — a transactional-outbox notification spine, BE-only (no SPA).** `migration 0063` (head
+`0062→0063`) creates **4 operational/mutable tables** (`notification` in-app durable · `notification_email`
+the email delivery ledger · `notification_template` versioned+seeded · `notification_preference` the
+per-user toggle), a fresh `notification_email_status` enum, the per-org `system_config.notifications_email_enabled`
+opt-in flag, and **2 seeded `en` templates** (`task.assigned` + `system.email_delivery_failed`). A new
+`services/notifications/` package: `render` (a **logic-free, HTML-escaped, whitelisted** renderer — `{{var}}`
++ `{{var|date}}`, **no eval/Jinja**, single `re.sub` pass so an injected value can't re-expand) · `subjects`
+(polymorphic resolver + deep links, 7 subject types + a `/tasks` fallback) · `recipients` · `dispatch` (the
+**SAVEPOINT enqueue**) · `mail` (a `MailSender` protocol + `aiosmtplib` `SmtpMailSender` + a test fake — the
+`LoggingRenderSink`/`GotenbergRenderSink` split: the api never sends) · `drain` (the worker core) · `admins`.
+The `outbox_drain` **Beat task** (120s). Self-scoped `GET /notifications` + mark-read + `read-all` +
+`GET/PUT /me/notification-preferences`; the admin opt-in flag rides the existing `config.update`-gated
+`/admin/config` (audited `CONFIG_UPDATED`). OpenAPI updated. **NO new permission key** (R38; catalog stays
+102 — reads are authenticated-self, the `GET /tasks` posture). **NO WORM touch** (the 4 tables are
+operational like `task` — no hash chain, no `signature_event`, no blob bytes).
+
+**The load-bearing contract (spec §4, the crux).** Enqueue runs **inside the caller's task-creation txn under
+a SAVEPOINT** (`begin_nested()`): atomic-on-success, and ANY failure (missing template, render bug) rolls
+back ONLY the savepoint + logs → the **parent task txn is untouched, so a notification bug can never block a
+workflow transition**. The in-app row inserts via `pg_insert(...).on_conflict_do_nothing(index_elements,
+index_where="task_id IS NOT NULL").returning(id)` (the dedup partial index — the ON CONFLICT needs
+`index_where` to match it); the email row inserts **only if the notification returned a new id** (a dedup hit
+→ no orphan). **Send is the async drain**: it **claims ONE row at a time** (`SELECT … LIMIT 1 FOR UPDATE SKIP
+LOCKED` per iteration — the lock is held until *its own* lease commits, so no sibling-lock-release
+double-send), re-checks eligibility at send (org flag + recipient active + opt-out + `smtp_host` →
+`SUPPRESSED` for a mid-window change), then a **count-before-send lease** (`attempts++` + a `next_attempt_at`
+backoff + commit BEFORE the SMTP call, so a post-send crash can't loop unboundedly); on exhaustion → `FAILED`
+(durable BEFORE the best-effort emit) + a **`system.email_delivery_failed`** in-app notification to admins
+(operational-only body — NO subject title/identifier, since admins hold no `document.read`; R32). **Email is
+opt-in per org (default OFF)** and carries **summary + deep link only — never controlled content** (the
+deep_link resolves back into the vault). **DB-backed versioned templates**; the producing template
+id+version is snapshotted per message.
+
+**`task.assigned` wired at all 6 task-creation sites.** The engine `_materialize_stage` enqueues per-task
+after its flush but **skips `DOC_ACK`/`PERIODIC_REVIEW`** — those two sweeps patch `due_at` AFTER
+materialization, so they re-notify post-patch (else the email shows `Due: (none)`); the 3 direct-add sites
+(`instantiate_approval`, MR cadence, MR-action spawn) enqueue inline. **DOC_ACK email is deferred to slice 3**
+(in-app only now — a `subject_type` gate at the email-enqueue; avoids an onboarding email flood with no
+digest yet). The welded single-stage `test_approval` stayed green (12/12). Recipients = assignee else each
+pool member, **org-scoped + active-only**.
+
+**R53 (binding) recorded** + **doc 10 W2/§156 reconciled** — the in-txn SAVEPOINT outbox **supersedes** the
+older "enqueue side-effects after commit" wording (it closes the commit→enqueue crash gap; still
+non-blocking). Reads add **no new permission key**.
+
+⚠ **Traps a future session must carry.** (1) **`0010`'s `ALTER DEFAULT PRIVILEGES … GRANT … DELETE` grants the
+app role ALL DML on EVERY new table** → an explicit `GRANT` block is a no-op; to enforce the intended posture
+you must **`REVOKE`** (ledgers `REVOKE DELETE`; `notification_template` `REVOKE INSERT,UPDATE,DELETE` →
+SELECT-only). The migration-reviewer "confirmed SELECT-only grants" in the first pass — but that was only the
+explicit grants; the default-privileges override was caught by **Codex**. (2) The empty-`smtp_host` →
+`SUPPRESSED` short-circuit (added so an org that enables email without configuring SMTP doesn't storm FAILED
+rows) **broke 3 `test_notification_e2e` drain tests in CI** (CI has no `SMTP_HOST`) — while a **local `.env`
+with `SMTP_HOST=mailpit` MASKED it** (the e2e tests called `drain_once(…, get_settings(), …)`; the sibling
+`test_notification_drain` had been updated to a `_configured_settings()` helper, the e2e file was missed).
+**Lesson: a settings-dependent test must pin the setting, not read the ambient env; re-run the WHOLE touched
+suite after a fix, and reproduce CI by unsetting the env (`env -u SMTP_HOST`).** (3) The drain's original
+**batch `LIMIT N` claim + per-row commit released sibling `FOR UPDATE` locks** → an overlapping drain
+(runtime > 120s beat) could double-send a sibling — flagged by THREE reviewers (Task-8/opus/Codex) before
+being fixed (claim-one-row). (4) Email **header CR/LF** in a rendered subject raises `ValueError` → the drain
+mis-handles it as transient → false `FAILED` → fold CR/LF (`_header_safe`).
+
+**Process.** Spec-first under `docs/superpowers/specs/` + a **5-lens pre-code refute panel** that killed 6
+design flaws before any migration (unbounded-resend, an admin-metadata leak, the polymorphic-hook scope, the
+post-flush `due_at`, the DOC_ACK flood, the canon-timing reconciliation). **13-task subagent-driven build**
+(`docs/superpowers/plans/`), each spec+quality reviewed; final reviews migration-reviewer + diff-critic +
+opus whole-branch all CLEAN (the opus review's lone "Important" — a `cadence.py` missing flush —
+**empirically refuted** by the diff-critic: SQLAlchemy restores a parent-pending object after a savepoint
+rollback). **Live-smoke** on the rebuilt image: the real `aiosmtplib`→Mailpit delivery verified (`SENT`,
+the rendered email with `|date` + deep link, no controlled content). **2 Codex rounds, 9 findings → 7 fixed
+(both P1s round 1: claim-one-row drain + the REVOKE; round 2: recipients org-scope + the CR/LF fold; +
+inactive filter + at-send opt-out re-check), 2 deferred** (the `prefs_link` `/settings/notifications` route →
+slice 3; objective/MR subtype deep-link routing → a UX refinement, the generic `/documents/{id}` is reachable
+by the approval recipient who holds `document.*`).
+
+**Named residuals (not faked):** slices 2–5 (above); the deferred objective/MR **subtype deep-link routing**;
+the **`prefs_link`** route (slice 3); the informational **INVITED-not-in-`_INACTIVE`** note (a faithful mirror
+of `auth/dependencies.py` — an INVITED account could be emailed; reconciled to ACTIVE on first login).
+
+(S-notify-1, BE-only, migration **0063** [head 0062→0063], api unit **952→956** [+4 mail header-fold tests; +
+notification unit across the slice] + many notification integration/e2e, web unchanged, PR #255 squash `766dc55`.)
 
 ## REGISTER STEWARD ROLE — the reserved role making the three register-steward consoles self-service (R52; migration 0062)
 
