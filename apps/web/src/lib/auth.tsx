@@ -1,9 +1,4 @@
-import {
-  InMemoryWebStorage,
-  type User,
-  UserManager,
-  WebStorageStateStore,
-} from "oidc-client-ts";
+import { InMemoryWebStorage, type User, UserManager, WebStorageStateStore } from "oidc-client-ts";
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 
 interface AuthConfig {
@@ -30,6 +25,18 @@ async function getManager(): Promise<UserManager> {
     userStore: new WebStorageStateStore({ store: new InMemoryWebStorage() }),
   });
   return _manager;
+}
+
+// A logged-out deep-link must survive the Keycloak round-trip: we stash the requested path in the OIDC
+// `state` on signinRedirect and restore it after the callback. `safeReturnTo` is the open-redirect guard —
+// accept ONLY a same-origin absolute PATH (a single leading slash); anything else (protocol-relative
+// "//host", an absolute URL, a "/\" backslash trick, a non-string) falls back to "/". We navigate via
+// react-router (never window.location), so this guard is defense-in-depth.
+export function safeReturnTo(p: unknown): string {
+  if (typeof p !== "string" || !p.startsWith("/") || p.startsWith("//") || p.startsWith("/\\")) {
+    return "/";
+  }
+  return p;
 }
 
 export interface AuthState {
