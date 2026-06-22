@@ -15,6 +15,7 @@ from . import (  # noqa: F401  (registers the Celery tasks)
     lifecycle,
     mgmt_review,
     mirror,
+    notifications,
     packs,
     records,
     review,
