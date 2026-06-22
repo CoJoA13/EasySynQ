@@ -115,6 +115,14 @@ class SystemConfig(Base):
         default=False,
         nullable=False,
     )
+    # S-notify-1 (doc 10 §9, R53): the per-org email-delivery opt-in gate. Default OFF — an admin
+    # configures SMTP env + flips this before any email leaves the install (the cautious posture).
+    notifications_email_enabled: Mapped[bool] = mapped_column(
+        Boolean,
+        server_default=false(),
+        default=False,
+        nullable=False,
+    )
     # S-mr-1: clause-9.3 management-review cadence (coded default; org-tunable later, additive).
     # ``mgmt_review_owner_user_id`` is the owner the cadence sweep assigns the minted Draft MR to;
     # NULL → the sweep degrades to a logged no-op (it can't create an ownerless document).

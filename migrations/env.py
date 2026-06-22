@@ -48,6 +48,7 @@ _MIGRATION_MANAGED_INDEXES = frozenset(
         "uq_import_decision_run_idem",
         "uq_dcr_spawn_idempotency_key",
         "uq_improvement_initiative_spawn",
+        "uq_notification_dedup_task",
     }
 )
 
