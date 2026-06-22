@@ -29,7 +29,7 @@ _INACTIVE = {UserStatus.LOCKED, UserStatus.DISABLED, UserStatus.RETIRED}
 
 def render_digest_items(notes: list[Notification]) -> tuple[str, int]:
     """(items_block, raw_count). Group identical (event_key, subject_id) rows into one line with a
-    xN count; list each distinct item as '* {title} -- {deep_link}'. Plain text (email body)."""
+    xN count; list each distinct item as '• {title} — {deep_link}'. Plain text (email body)."""
     seen: dict[tuple[str, str], list[Notification]] = {}
     order: list[tuple[str, str]] = []
     for n in notes:
@@ -43,7 +43,7 @@ def render_digest_items(notes: list[Notification]) -> tuple[str, int]:
         group = seen[key]
         head = group[0]
         suffix = f" x{len(group)}" if len(group) > 1 else ""
-        lines.append(f"* {head.title}{suffix} -- {head.deep_link}")
+        lines.append(f"• {head.title}{suffix} — {head.deep_link}")
     return "\n".join(lines), len(notes)
 
 

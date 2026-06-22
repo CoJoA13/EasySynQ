@@ -48,4 +48,4 @@ def test_collapses_identical_events() -> None:
         ]
     )
     assert count == 2  # item_count is the raw row count
-    assert "x2" in block or "(2)" in block  # collapsed to one line with a count
+    assert "x2" in block  # collapsed to one line with a count
