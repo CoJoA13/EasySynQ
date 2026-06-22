@@ -12,7 +12,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...config import Settings
 from ...db.models._notification_enums import NotificationEmailStatus
-from ...db.models.notification import Notification, NotificationEmail
+from ...db.models.app_user import AppUser, UserStatus
+from ...db.models.notification import Notification, NotificationEmail, NotificationPreference
+from ...db.models.system_config import SystemConfig
 from .admins import admin_user_ids
 from .constants import EVENT_EMAIL_DELIVERY_FAILED
 from .dispatch import emit_system_notification
@@ -20,9 +22,35 @@ from .mail import MailMessage, MailSender
 
 logger = logging.getLogger("easysynq.notifications.drain")
 
+# Mirror auth/dependencies.py: a notification/email must never reach a deactivated account.
+_INACTIVE = {UserStatus.LOCKED, UserStatus.DISABLED, UserStatus.RETIRED}
+
 
 def _backoff(attempts: int, base: int) -> datetime.timedelta:
     return datetime.timedelta(seconds=base * (2 ** max(0, attempts - 1)))
+
+
+async def _still_eligible(
+    session: AsyncSession, row: NotificationEmail, settings: Settings
+) -> bool:
+    """Re-evaluate at send time (spec §4): an admin may have disabled the org flag, or the user
+    may have opted out / been deactivated, between enqueue and drain. Any of those → suppress.
+    Also folds in the unconfigured-SMTP short-circuit (no deliverable transport)."""
+    if not settings.smtp_host:
+        return False
+    note = await session.get(Notification, row.notification_id)
+    if note is None:
+        return False
+    cfg = await session.get(SystemConfig, note.org_id)
+    if not (cfg and cfg.notifications_email_enabled):
+        return False
+    user = await session.get(AppUser, note.recipient_user_id)
+    if user is None or user.status in _INACTIVE:
+        return False
+    pref = await session.get(NotificationPreference, note.recipient_user_id)
+    if pref is not None and not pref.email_enabled:  # absence ⇒ enabled (spec §3.4)
+        return False
+    return True
 
 
 async def drain_once(
@@ -34,8 +62,13 @@ async def drain_once(
     limit: int = 50,
 ) -> dict[str, int]:
     counts: dict[str, int] = {"sent": 0, "failed": 0, "suppressed": 0, "retried": 0}
-    rows = (
-        (
+
+    # Claim ONE eligible row per iteration: a per-row commit releases the FOR UPDATE lock on ALL
+    # still-unprocessed siblings in a batch, so an overlapping drain could claim+send a sibling this
+    # drain also held → double-send. A single-row claim holds the lock on exactly that row until its
+    # lease commits. Bound the loop to at most `limit` iterations.
+    for _ in range(limit):
+        row = (
             await session.execute(
                 select(NotificationEmail)
                 .where(
@@ -44,17 +77,16 @@ async def drain_once(
                     | (NotificationEmail.next_attempt_at <= now),
                 )
                 .order_by(NotificationEmail.created_at)
-                .limit(limit)
+                .limit(1)
                 .with_for_update(skip_locked=True)
             )
-        )
-        .scalars()
-        .all()
-    )
+        ).scalar_one_or_none()
+        if row is None:
+            break
 
-    for row in rows:
-        # Unconfigured SMTP → suppress cleanly; no attempt increment, no failure notification.
-        if not settings.smtp_host:
+        # Re-check eligibility at send time → suppress if no longer eligible (org-off / no-smtp /
+        # user-inactive / user-opted-out). No attempt increment, no send, no failure emit.
+        if not await _still_eligible(session, row, settings):
             row.status = NotificationEmailStatus.SUPPRESSED
             await session.commit()
             counts["suppressed"] += 1

@@ -222,6 +222,11 @@ def upgrade() -> None:
     )
 
     # 8. App-role grants (operational tables: read/write; templates read-only).
+    #    0010_audit.py:164 set ALTER DEFAULT PRIVILEGES … GRANT SELECT,INSERT,UPDATE,DELETE … TO
+    #    easysynq_app, so every new table inherits FULL DML and the GRANTs below are no-ops on their
+    #    own. REVOKE to enforce the intended posture: the operational ledgers keep no DELETE (append-
+    #    only-ish; rows are state-transitioned, never row-deleted) and notification_template is
+    #    SELECT-only (seed-managed/read-only).
     op.execute(
         f"""
         DO $$
@@ -231,6 +236,11 @@ def upgrade() -> None:
                 EXECUTE 'GRANT SELECT, INSERT, UPDATE ON notification_email TO {_APP_ROLE}';
                 EXECUTE 'GRANT SELECT, INSERT, UPDATE ON notification_preference TO {_APP_ROLE}';
                 EXECUTE 'GRANT SELECT ON notification_template TO {_APP_ROLE}';
+                -- Strip the inherited default DELETE on the ledgers (keep SELECT/INSERT/UPDATE).
+                EXECUTE 'REVOKE DELETE ON notification, notification_email, '
+                        'notification_preference FROM {_APP_ROLE}';
+                -- Templates are seed-managed/read-only → SELECT only.
+                EXECUTE 'REVOKE INSERT, UPDATE, DELETE ON notification_template FROM {_APP_ROLE}';
             END IF;
         END $$;
         """

@@ -9,9 +9,12 @@ import uuid
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ...db.models.app_user import AppUser
+from ...db.models.app_user import AppUser, UserStatus
 from ...db.models.notification import NotificationPreference
 from ...db.models.workflow import Task
+
+# Mirror auth/dependencies.py: a deactivated user must never be a notification recipient.
+_INACTIVE = {UserStatus.LOCKED, UserStatus.DISABLED, UserStatus.RETIRED}
 
 
 @dataclasses.dataclass(frozen=True)
@@ -45,7 +48,15 @@ async def resolve_recipients(session: AsyncSession, task: Task) -> list[Recipien
     ids = _pool_ids(task)
     if not ids:
         return []
-    users = (await session.execute(select(AppUser).where(AppUser.id.in_(ids)))).scalars().all()
+    users = (
+        (
+            await session.execute(
+                select(AppUser).where(AppUser.id.in_(ids), AppUser.status.notin_(_INACTIVE))
+            )
+        )
+        .scalars()
+        .all()
+    )
     pref_rows = (
         await session.execute(
             select(NotificationPreference.user_id, NotificationPreference.email_enabled).where(

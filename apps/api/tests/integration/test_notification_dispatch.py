@@ -27,6 +27,7 @@ from easysynq_api.db.models.system_config import SystemConfig
 from easysynq_api.db.models.workflow import Task, WorkflowDefinition, WorkflowInstance
 from easysynq_api.db.session import get_sessionmaker
 from easysynq_api.services.notifications import dispatch
+from easysynq_api.services.notifications.recipients import resolve_recipients
 
 pytestmark = pytest.mark.integration
 
@@ -246,3 +247,69 @@ async def test_render_error_does_not_block_parent_txn(
     assert task_notif_count == 0, (
         f"Expected 0 task notifications (savepoint rolled back), got {task_notif_count}"
     )
+
+
+async def test_resolve_recipients_excludes_inactive_users(app_under_test: Any) -> None:
+    """resolve_recipients (Fix C / Codex P2) must drop deactivated users from a candidate pool —
+    a LOCKED/DISABLED/RETIRED user must never become a notification/email recipient."""
+    org_id = await _default_org_id()
+    active_id = await _seed_user(org_id, email="active@example.com")
+
+    # Seed a DISABLED user directly.
+    salt = uuid.uuid4().hex[:8]
+    async with get_sessionmaker()() as s:
+        disabled = AppUser(
+            org_id=org_id,
+            keycloak_subject=f"kc-disabled-{salt}",
+            display_name=f"Disabled {salt}",
+            email=f"disabled-{salt}@example.com",
+            status=UserStatus.DISABLED,
+        )
+        s.add(disabled)
+        await s.commit()
+        disabled_id = disabled.id
+
+    # A task with NO assignee but a candidate_pool of [active, disabled].
+    key = f"notify_inactive_{uuid.uuid4().hex[:8]}"
+    async with get_sessionmaker()() as s:
+        defn = WorkflowDefinition(
+            org_id=org_id,
+            key=key,
+            version=1,
+            effective=True,
+            subject_type=WorkflowSubjectType.DOCUMENT,
+            stages={"entry": "approve"},
+        )
+        s.add(defn)
+        await s.flush()
+        instance = WorkflowInstance(
+            org_id=org_id,
+            definition_id=defn.id,
+            definition_version=1,
+            subject_type=WorkflowSubjectType.DOCUMENT,
+            subject_id=uuid.uuid4(),
+            current_state="IN_APPROVAL",
+        )
+        s.add(instance)
+        await s.flush()
+        task = Task(
+            org_id=org_id,
+            instance_id=instance.id,
+            stage_key="approve",
+            assignee_user_id=None,
+            candidate_pool=[str(active_id), str(disabled_id)],
+            type=TaskType.APPROVE,
+            state=TaskState.PENDING,
+        )
+        s.add(task)
+        await s.commit()
+        task_id = task.id
+
+    async with get_sessionmaker()() as s:
+        task2 = await s.get(Task, task_id)
+        assert task2 is not None
+        recipients = await resolve_recipients(s, task2)
+
+    recipient_ids = {r.user_id for r in recipients}
+    assert active_id in recipient_ids, "the active user must be a recipient"
+    assert disabled_id not in recipient_ids, "a DISABLED user must be excluded from recipients"

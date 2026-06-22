@@ -25,7 +25,7 @@ import sqlalchemy as sa
 from httpx import AsyncClient
 from sqlalchemy import select
 
-from easysynq_api.config import get_settings
+from easysynq_api.config import Settings, get_settings
 from easysynq_api.db.models._notification_enums import NotificationEmailStatus
 from easysynq_api.db.models.app_user import AppUser, UserStatus
 from easysynq_api.db.models.notification import Notification, NotificationEmail
@@ -49,6 +49,14 @@ _T0 = datetime.datetime(2030, 6, 1, 12, 0, 0, tzinfo=datetime.UTC)
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
+
+
+def _configured_settings() -> Settings:
+    """Return settings with a non-empty smtp_host so the drain proceeds past the at-send
+    eligibility re-check (the testcontainer env does not set SMTP_HOST, so get_settings()
+    yields smtp_host="" → every row would be SUPPRESSED). Mirrors test_notification_drain.py."""
+    base = get_settings()
+    return Settings(**{**base.model_dump(), "smtp_host": "test-smtp.local"})
 
 
 async def _default_org_id() -> uuid.UUID:
@@ -251,7 +259,7 @@ async def test_e2e_submit_review_enqueues_email_and_drain_sends(
 
     # drain_once → row transitions to SENT; fake records the send.
     sender = FakeMailSender()
-    settings = get_settings()
+    settings = _configured_settings()  # non-empty smtp_host → drain proceeds (CI has no SMTP_HOST)
     async with get_sessionmaker()() as session:
         await drain_once(session, sender, settings, now=_T0)
 
@@ -277,10 +285,11 @@ async def test_skip_locked_no_double_send(app_under_test: Any) -> None:
     """
     org_id = await _default_org_id()
     salt = uuid.uuid4().hex[:8]
-    user_id = await _seed_user_with_email(org_id, salt)
+    user_id = await _seed_user_with_email(org_id, salt)  # ACTIVE, no opt-out row → eligible
     email_id = await _seed_email_row(org_id, user_id, salt)
+    await _set_org_email_flag(org_id, enabled=True)  # org flag ON → passes at-send re-check
 
-    settings = get_settings()
+    settings = _configured_settings()  # non-empty smtp_host → drain proceeds (CI has no SMTP_HOST)
 
     # Two INDEPENDENT sessions/connections — this is the crucial part: separate instances
     # so SKIP LOCKED applies across real connections (not the same in-process session).
@@ -324,10 +333,13 @@ async def test_delivery_failure_emits_admin_notification_without_subject_metadat
     org_id = await _default_org_id()
     salt = uuid.uuid4().hex[:8]
 
-    user_id = await _seed_user_with_email(org_id, salt)
+    user_id = await _seed_user_with_email(org_id, salt)  # ACTIVE, no opt-out row → eligible
     admin_id = await _seed_admin(org_id, salt)
+    # The at-send re-check must pass so the drain reaches the attempts>=MAX → FAILED path
+    # (not SUPPRESSED): org flag ON + configured smtp + active recipient + no opt-out.
+    await _set_org_email_flag(org_id, enabled=True)
 
-    settings = get_settings()
+    settings = _configured_settings()  # non-empty smtp_host → drain proceeds (CI has no SMTP_HOST)
     max_attempts = settings.notification_max_send_attempts
 
     # Seed a row already at MAX (so the very first drain look sees attempts >= MAX).
