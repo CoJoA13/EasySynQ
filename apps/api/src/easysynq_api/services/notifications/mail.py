@@ -23,18 +23,28 @@ class MailSender(Protocol):
     async def send(self, msg: MailMessage) -> None: ...
 
 
+def _header_safe(value: str) -> str:
+    """Fold CR and LF to a single space so header assignment never raises ValueError."""
+    return value.replace("\r", " ").replace("\n", " ")
+
+
 class SmtpMailSender:
     """Async STARTTLS sender. Raises on any SMTP/connection error (the drain owns the retry)."""
 
     def __init__(self, settings: Settings) -> None:
         self._s = settings
 
-    async def send(self, msg: MailMessage) -> None:
+    def _build_message(self, msg: MailMessage) -> EmailMessage:
+        """Construct the EmailMessage with CR/LF-safe headers."""
         email = EmailMessage()
         email["From"] = f"{self._s.smtp_from_name} <{self._s.smtp_from_address}>"
-        email["To"] = msg.to
-        email["Subject"] = msg.subject
+        email["To"] = _header_safe(msg.to)
+        email["Subject"] = _header_safe(msg.subject)
         email.set_content(msg.body)
+        return email
+
+    async def send(self, msg: MailMessage) -> None:
+        email = self._build_message(msg)
         await aiosmtplib.send(
             email,
             hostname=self._s.smtp_host,

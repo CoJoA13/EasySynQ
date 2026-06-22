@@ -51,7 +51,11 @@ async def resolve_recipients(session: AsyncSession, task: Task) -> list[Recipien
     users = (
         (
             await session.execute(
-                select(AppUser).where(AppUser.id.in_(ids), AppUser.status.notin_(_INACTIVE))
+                select(AppUser).where(
+                    AppUser.id.in_(ids),
+                    AppUser.status.notin_(_INACTIVE),
+                    AppUser.org_id == task.org_id,
+                )
             )
         )
         .scalars()
