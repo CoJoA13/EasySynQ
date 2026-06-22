@@ -224,6 +224,16 @@ async def sweep_acks(
                 await session.execute(
                     update(Task).where(Task.instance_id == instance.id).values(due_at=due_at)
                 )
+                ack_tasks = (
+                    (await session.execute(select(Task).where(Task.instance_id == instance.id)))
+                    .scalars()
+                    .all()
+                )
+                from ..notifications.dispatch import enqueue_task_notifications
+
+                await enqueue_task_notifications(
+                    session, instance, list(ack_tasks), due_at_override=due_at
+                )
                 created += 1
 
         # Pass B: open DOC_ACK obligations on docs that are no longer eligible.

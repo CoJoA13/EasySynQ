@@ -171,6 +171,14 @@ tags:
       register.read / register.manage keys (PROCESS scope, own-id-only per R48 — a bound Process Owner
       reaches only their owned-process rows). The controlled-document publish/freeze/release lifecycle
       is the deferred S-risk-1b.
+  - name: notifications
+    description: >-
+      In-app notifications + the per-user email opt-in toggle (S-notify-1, doc 10 §9, R53).
+      Notifications are durable, per-recipient awareness rows (read/unread); no permission key —
+      the GET /tasks posture (authenticated-self only; every query scoped to the caller). The
+      per-org email-delivery toggle (notifications_email_enabled) lives on PATCH /admin/config
+      (config.update, admin-only). The per-user email opt-in lives on /me/notification-preferences
+      (authenticated-self, no permission key).
 
 paths:
   /healthz:
@@ -6318,6 +6326,102 @@ paths:
               schema: { $ref: "#/components/schemas/Problem" }
         "422": { $ref: "#/components/responses/ProblemResponse" }
 
+  /notifications:
+    get:
+      tags: [notifications]
+      operationId: listNotifications
+      summary: "My notifications — self-scoped to the caller; no permission key (the GET /tasks posture)."
+      description: >-
+        Returns the caller's in-app notification rows, newest first. Optionally filter to unread only.
+        Results are always scoped to recipient_user_id = caller.id — no cross-user reads possible.
+        Capped at 200 rows even when limit exceeds 200.
+      parameters:
+        - name: unread_only
+          in: query
+          required: false
+          description: When true, return only notifications with no read_at timestamp.
+          schema: { type: boolean, default: false }
+        - name: limit
+          in: query
+          required: false
+          description: Maximum number of rows to return (server-capped at 200).
+          schema: { type: integer, default: 50 }
+      responses:
+        "200":
+          description: The caller's notifications.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Notification" }
+
+  /notifications/{notification_id}/read:
+    post:
+      tags: [notifications]
+      operationId: markNotificationRead
+      summary: "Mark a single notification as read. 404 when the id is absent or belongs to another user."
+      parameters:
+        - { name: notification_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Acknowledged.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [status]
+                properties:
+                  status: { type: string, example: "ok" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+
+  /notifications/read-all:
+    post:
+      tags: [notifications]
+      operationId: markAllNotificationsRead
+      summary: "Mark every unread notification for the caller as read. Returns the count marked."
+      responses:
+        "200":
+          description: How many notifications were marked read.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [marked]
+                properties:
+                  marked: { type: integer, description: Number of rows updated. }
+
+  /me/notification-preferences:
+    get:
+      tags: [notifications]
+      operationId: getNotificationPreferences
+      summary: "The caller's notification preferences (authenticated-self; no permission key)."
+      description: >-
+        Returns the caller's per-user notification preference. When no preference row exists the
+        default is email_enabled: true.
+      responses:
+        "200":
+          description: The caller's notification preferences.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NotificationPreference" }
+    put:
+      tags: [notifications]
+      operationId: putNotificationPreferences
+      summary: "Upsert the caller's notification preferences (authenticated-self; no permission key)."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/NotificationPreference" }
+      responses:
+        "200":
+          description: The updated notification preferences.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NotificationPreference" }
+
 components:
   securitySchemes:
     keycloak:
@@ -7730,6 +7834,12 @@ components:
             released until a Top-Management member signs a verify authorization on the Approved version.
             Default OFF (opt-in) — dormant on a fresh install; the welded approve/release path is
             unchanged.
+        notifications_email_enabled:
+          type: boolean
+          description: >-
+            S-notify-1 (doc 10 §9, R53): when true the worker sends email notifications via the
+            configured SMTP relay. Default OFF (opt-in) — dormant on a fresh install; an admin
+            enables it after configuring SMTP env vars.
     OrgConfigUpdate:
       type: object
       additionalProperties: false
@@ -7739,6 +7849,44 @@ components:
         allow_self_disposition: { type: [boolean, "null"] }
         allow_capa_self_verify: { type: [boolean, "null"] }
         leadership_release_requires_top_management_authorization: { type: [boolean, "null"] }
+        notifications_email_enabled: { type: [boolean, "null"] }
+
+    Notification:
+      type: object
+      additionalProperties: false
+      required: [id, event_key, subject_type, title, body, deep_link, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        event_key:
+          type: string
+          description: The notification event type key (e.g. task_assigned, document_released).
+        subject_type:
+          type: string
+          description: The entity type this notification refers to (e.g. document, capa, task).
+        subject_id:
+          type: [string, "null"]
+          format: uuid
+          description: The id of the subject entity; null for org-level events.
+        title: { type: string, description: Short notification title (rendered in the bell list). }
+        body: { type: string, description: Longer notification body text. }
+        deep_link: { type: string, description: In-app path the user should navigate to. }
+        created_at: { type: string, format: date-time }
+        read_at:
+          type: [string, "null"]
+          format: date-time
+          description: When the notification was marked read; null = unread.
+
+    NotificationPreference:
+      type: object
+      additionalProperties: false
+      required: [email_enabled]
+      properties:
+        email_enabled:
+          type: boolean
+          description: >-
+            Whether the caller wants to receive email notifications (when the org's
+            notifications_email_enabled toggle is also true). Default true when no preference row
+            exists.
 
     CapaSource:
       type: string

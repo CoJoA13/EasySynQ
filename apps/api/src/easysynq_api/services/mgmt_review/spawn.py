@@ -109,6 +109,9 @@ async def spawn_mr_actions(
         session.add(task)
         await session.flush()  # populate task.id for the spawned_task_id stamp
         output.spawned_task_id = task.id
+        from ..notifications.dispatch import enqueue_task_notifications
+
+        await enqueue_task_notifications(session, instance, [task])
         session.add(
             AuditEvent(
                 org_id=review.org_id,

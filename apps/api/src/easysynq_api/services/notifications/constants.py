@@ -1,0 +1,29 @@
+"""Canonical notification event keys + per-event variable whitelists (TEXT, not PG enums — spec §3.1
+so new events need no migration). The renderer only substitutes whitelisted slots."""
+
+from __future__ import annotations
+
+EVENT_TASK_ASSIGNED = "task.assigned"
+EVENT_EMAIL_DELIVERY_FAILED = "system.email_delivery_failed"
+
+SUBJECT_SYSTEM = "SYSTEM"
+
+# Per-event allowed template variables. system.email_delivery_failed is OPERATIONAL-ONLY — it MUST
+# NOT carry subject.title/identifier (admins hold no document.read; spec §5/§6, refute L3-1).
+VARIABLE_WHITELIST: dict[str, frozenset[str]] = {
+    EVENT_TASK_ASSIGNED: frozenset(
+        {
+            "recipient.first_name",
+            "subject.identifier",
+            "subject.title",
+            "subject.kind",
+            "task.action_expected",
+            "task.due_at",
+            "deep_link",
+            "prefs_link",
+        }
+    ),
+    EVENT_EMAIL_DELIVERY_FAILED: frozenset(
+        {"recipient_email", "attempts", "last_error", "notification_id", "created_at"}
+    ),
+}

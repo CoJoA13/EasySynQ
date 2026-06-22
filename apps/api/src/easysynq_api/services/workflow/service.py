@@ -83,6 +83,9 @@ async def instantiate_approval(
     )
     session.add(task)
     await session.flush()
+    from ..notifications.dispatch import enqueue_task_notifications
+
+    await enqueue_task_notifications(session, instance, [task])
     return instance, task
 
 

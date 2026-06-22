@@ -193,21 +193,29 @@ async def _materialize_stage(
     except ValueError:
         task_type = TaskType.APPROVE
     due = _due_at(stage, default_sla)
+    created: list[Task] = []
     for candidate in pool:
-        session.add(
-            Task(
-                org_id=instance.org_id,
-                instance_id=instance.id,
-                stage_key=stage.key,
-                assignee_user_id=candidate,
-                candidate_pool=[str(candidate)],
-                type=task_type,
-                action_expected=spec.get("action_expected"),
-                state=TaskState.PENDING,
-                due_at=due,
-            )
+        t = Task(
+            org_id=instance.org_id,
+            instance_id=instance.id,
+            stage_key=stage.key,
+            assignee_user_id=candidate,
+            candidate_pool=[str(candidate)],
+            type=task_type,
+            action_expected=spec.get("action_expected"),
+            state=TaskState.PENDING,
+            due_at=due,
         )
+        session.add(t)
+        created.append(t)
     await session.flush()
+    if instance.subject_type not in (
+        WorkflowSubjectType.DOC_ACK,
+        WorkflowSubjectType.PERIODIC_REVIEW,
+    ):
+        from ..notifications.dispatch import enqueue_task_notifications
+
+        await enqueue_task_notifications(session, instance, created)
     return True
 
 

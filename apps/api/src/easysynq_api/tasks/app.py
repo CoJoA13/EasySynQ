@@ -127,6 +127,12 @@ app.conf.update(
             "task": "easysynq.ingestion.reap_stalled_commits",
             "schedule": 600.0,  # every 10 minutes
         },
+        # S-notify-1: the email outbox drain (doc 10 §9). At-least-once send with a
+        # count-before-send lease; ≤2-min latency for awareness email.
+        "notifications-outbox-drain": {
+            "task": "easysynq.notifications.outbox_drain",
+            "schedule": 120.0,  # every 2 minutes
+        },
     },
 )
 

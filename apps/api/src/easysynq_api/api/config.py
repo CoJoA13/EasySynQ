@@ -48,6 +48,9 @@ class OrgConfigUpdate(BaseModel):
     # S-leadership-1 (doc 10 §2.5, R45): require a signed Top-Management release authorization
     # before a leadership artifact (POL/OBJ/MR) may be released. Default OFF — opt-in.
     leadership_release_requires_top_management_authorization: bool | None = None
+    # S-notify-1 (doc 10 §9, R53): the per-org email-delivery opt-in. Default OFF; an admin enables
+    # it after configuring SMTP env. Audited via CONFIG_UPDATED.
+    notifications_email_enabled: bool | None = None
 
 
 def _rid() -> uuid.UUID | None:
@@ -69,6 +72,7 @@ def _config_view(cfg: SystemConfig) -> dict[str, Any]:
         "leadership_release_requires_top_management_authorization": (
             cfg.leadership_release_requires_top_management_authorization
         ),
+        "notifications_email_enabled": cfg.notifications_email_enabled,
     }
 
 
@@ -119,6 +123,10 @@ async def update_config_endpoint(
         after["leadership_release_requires_top_management_authorization"] = (
             body.leadership_release_requires_top_management_authorization
         )
+    if body.notifications_email_enabled is not None:
+        before["notifications_email_enabled"] = cfg.notifications_email_enabled
+        cfg.notifications_email_enabled = body.notifications_email_enabled
+        after["notifications_email_enabled"] = body.notifications_email_enabled
     if after:
         session.add(
             AuditEvent(
