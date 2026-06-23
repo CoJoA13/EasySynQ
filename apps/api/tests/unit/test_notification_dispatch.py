@@ -1,6 +1,8 @@
-"""Email-eligibility gate (spec §4): org-enabled AND user opt-in AND email present AND not DOC_ACK.
+"""Email-eligibility gate (spec §4): org-enabled AND user opt-in AND email present.
 
-DOC_ACK email is deferred to slice 3 — in-app only in slice 1.
+S-notify-3a: DOC_ACK email is now enabled (the slice-1 subject_type suppression is removed).
+The gate is now purely org-flag x email-present x user-opt-in. Per-class digest mode
+(immediate/daily/off) is a separate concern handled in dispatch._enqueue_one.
 """
 
 from __future__ import annotations
@@ -13,33 +15,15 @@ pytestmark = pytest.mark.unit
 
 
 def test_email_eligible_happy() -> None:
-    assert _email_eligible(
-        org_enabled=True, email="a@x.test", user_opt_in=True, subject_type="DOCUMENT"
-    )
+    assert _email_eligible(org_enabled=True, email="a@x.test", user_opt_in=True)
 
 
 @pytest.mark.parametrize(
     "kwargs",
     [
-        {
-            "org_enabled": False,
-            "email": "a@x.test",
-            "user_opt_in": True,
-            "subject_type": "DOCUMENT",
-        },
-        {"org_enabled": True, "email": None, "user_opt_in": True, "subject_type": "DOCUMENT"},
-        {
-            "org_enabled": True,
-            "email": "a@x.test",
-            "user_opt_in": False,
-            "subject_type": "DOCUMENT",
-        },
-        {
-            "org_enabled": True,
-            "email": "a@x.test",
-            "user_opt_in": True,
-            "subject_type": "DOC_ACK",
-        },
+        {"org_enabled": False, "email": "a@x.test", "user_opt_in": True},
+        {"org_enabled": True, "email": None, "user_opt_in": True},
+        {"org_enabled": True, "email": "a@x.test", "user_opt_in": False},
     ],
 )
 def test_email_suppressed(kwargs: dict) -> None:

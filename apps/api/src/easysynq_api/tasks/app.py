@@ -133,6 +133,12 @@ app.conf.update(
             "task": "easysynq.notifications.outbox_drain",
             "schedule": 120.0,  # every 2 minutes
         },
+        # S-notify-3a: the daily-digest bundler. Runs hourly; bundles each user's due rows (those
+        # whose digest_due_at has arrived) into one PENDING digest email for outbox_drain to send.
+        "notifications-digest-sweep": {
+            "task": "easysynq.notifications.digest_sweep",
+            "schedule": 3600.0,  # hourly
+        },
     },
 )
 

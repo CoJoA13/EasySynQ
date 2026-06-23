@@ -51,6 +51,9 @@ class OrgConfigUpdate(BaseModel):
     # S-notify-1 (doc 10 §9, R53): the per-org email-delivery opt-in. Default OFF; an admin enables
     # it after configuring SMTP env. Audited via CONFIG_UPDATED.
     notifications_email_enabled: bool | None = None
+    # S-notify-3a: when True (the default), urgent/critical notifications bypass quiet hours and are
+    # delivered immediately regardless of user preference.
+    notifications_escalation_pierce_quiet_hours: bool | None = None
 
 
 def _rid() -> uuid.UUID | None:
@@ -73,6 +76,9 @@ def _config_view(cfg: SystemConfig) -> dict[str, Any]:
             cfg.leadership_release_requires_top_management_authorization
         ),
         "notifications_email_enabled": cfg.notifications_email_enabled,
+        "notifications_escalation_pierce_quiet_hours": (
+            cfg.notifications_escalation_pierce_quiet_hours
+        ),
     }
 
 
@@ -127,6 +133,16 @@ async def update_config_endpoint(
         before["notifications_email_enabled"] = cfg.notifications_email_enabled
         cfg.notifications_email_enabled = body.notifications_email_enabled
         after["notifications_email_enabled"] = body.notifications_email_enabled
+    if body.notifications_escalation_pierce_quiet_hours is not None:
+        before["notifications_escalation_pierce_quiet_hours"] = (
+            cfg.notifications_escalation_pierce_quiet_hours
+        )
+        cfg.notifications_escalation_pierce_quiet_hours = (
+            body.notifications_escalation_pierce_quiet_hours
+        )
+        after["notifications_escalation_pierce_quiet_hours"] = (
+            body.notifications_escalation_pierce_quiet_hours
+        )
     if after:
         session.add(
             AuditEvent(

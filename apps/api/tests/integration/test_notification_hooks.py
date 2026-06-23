@@ -191,7 +191,7 @@ async def test_submit_review_enqueues_task_assigned_notification(
 
 
 # ---------------------------------------------------------------------------
-# Test 2: DOC_ACK sweep (site 5) — in-app only, no email even with flag ON
+# Test 2: DOC_ACK sweep (site 5) — in-app created, email DEFERRED to daily digest
 # ---------------------------------------------------------------------------
 
 
@@ -200,8 +200,10 @@ async def test_ack_sweep_enqueues_in_app_only_no_email(
     token_factory: Callable[..., str],
     app_under_test: Any,
 ) -> None:
-    """DOC_ACK sweep (site 5): a task.assigned in-app notification is written but NO email row,
-    even with the org email flag ON (D-6: DOC_ACK email deferred to slice 3).
+    """DOC_ACK sweep (site 5): a task.assigned in-app notification is written but NO immediate email
+    row — DOC_ACK email is now ON (S-notify-3a removed the suppression), but the audience user has
+    no preference row so ``action_required`` defaults to ``daily`` digest cadence, which sets
+    ``digest_due_at`` and defers the email to the drain worker, not an immediate send.
     """
     salt = uuid.uuid4().hex[:10]
     author_kc = f"kc-ack-nhook-a-{salt}"
@@ -308,9 +310,34 @@ async def test_ack_sweep_enqueues_in_app_only_no_email(
         f"Expected ≥1 in-app notification for DOC_ACK task {ack_task.id}, got {in_app_count}"
     )
 
-    # Assert: NO email row (D-6 suppression)
+    # Assert: NO email row — DOC_ACK email is now ON (S-notify-3a removed the D-6 suppression)
+    # but the test audience user was created without an email address → _email_eligible is False
+    # → no email row is created at all (neither immediate nor digest-deferred).  The test's job
+    # is to confirm the in-app row exists and that email is absent for the right reason.
     email_count = await _email_count_for_task(ack_task.id)
-    assert email_count == 0, f"Expected 0 email rows for DOC_ACK task (D-6), got {email_count}"
+    assert email_count == 0, (
+        f"Expected 0 email rows for DOC_ACK task (no email address on test user), got {email_count}"
+    )
+
+    # Assert: the in-app Notification row was created (event_key = task.assigned).
+    async with get_sessionmaker()() as s:
+        notif = (
+            (
+                await s.execute(
+                    select(Notification).where(
+                        Notification.task_id == ack_task.id,
+                        Notification.event_key == EVENT_TASK_ASSIGNED,
+                    )
+                )
+            )
+            .scalars()
+            .first()
+        )
+    assert notif is not None, f"Notification row missing for DOC_ACK task {ack_task.id}"
+    # digest_due_at is None because the user has no email (wants_email=False → is_daily=False).
+    assert notif.digest_due_at is None, (
+        f"digest_due_at should be None for a no-email user, got {notif.digest_due_at}"
+    )
 
 
 # ---------------------------------------------------------------------------

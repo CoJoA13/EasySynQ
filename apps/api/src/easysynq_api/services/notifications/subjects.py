@@ -61,13 +61,26 @@ _ROUTES: dict[str, str] = {
 # ---------------------------------------------------------------------------
 
 
-def deep_link_for(subject_type: str, subject_id: uuid.UUID) -> str:
+def deep_link_for(
+    subject_type: str,
+    subject_id: uuid.UUID,
+    *,
+    document_type_code: str | None = None,
+) -> str:
     """Return the absolute SPA deep link for *subject_type*/*subject_id*.
+
+    For subject_type=="DOCUMENT", an optional *document_type_code* reroutes to the
+    dedicated SPA surface: OBJ → /objectives/{id}, MR → /management-reviews/{id}.
+    All other codes (including None) fall through to the generic /documents/{id} route.
 
     Unmapped kinds fall back to /tasks so a future subject type never produces a
     broken link in an email (spec §5 / refute L5-2).
     """
     base = get_settings().app_base_url.rstrip("/")
+    if subject_type == "DOCUMENT" and document_type_code == "OBJ":
+        return f"{base}/objectives/{subject_id}"
+    if subject_type == "DOCUMENT" and document_type_code == "MR":
+        return f"{base}/management-reviews/{subject_id}"
     frag = _ROUTES.get(subject_type)
     if frag is None:
         return f"{base}/tasks"
@@ -96,6 +109,7 @@ async def resolve_subject(
     """
     identifier = str(subject_id)
     title = ""
+    document_type_code: str | None = None
 
     if subject_type in (
         "DOCUMENT",
@@ -112,6 +126,27 @@ async def resolve_subject(
         if row is not None:
             identifier = row.identifier
             title = getattr(row, "title", "") or ""
+            if subject_type == "DOCUMENT" and row.document_type_id is not None:
+                from ...db.models.document_type import DocumentType
+
+                dt = await session.get(DocumentType, row.document_type_id)
+                document_type_code = dt.code if dt is not None else None
+
+                # Probe satellite existence before rerouting: the generic POST /documents path
+                # does NOT block OBJ/MR codes, so a DocumentedInformation row can exist without
+                # its satellite (QualityObjective / ManagementReview).  The dedicated SPA routes
+                # (/objectives/{id}, /management-reviews/{id}) 404 for an orphan — fall back to
+                # /documents/{id} (always works) when the satellite is absent.
+                if document_type_code == "OBJ":
+                    from ...db.models.quality_objective import QualityObjective
+
+                    if await session.get(QualityObjective, subject_id) is None:
+                        document_type_code = None
+                elif document_type_code == "MR":
+                    from ...db.models.management_review import ManagementReview
+
+                    if await session.get(ManagementReview, subject_id) is None:
+                        document_type_code = None
 
     elif subject_type == "DCR":
         from ...db.models.dcr import Dcr
@@ -144,5 +179,5 @@ async def resolve_subject(
         identifier=identifier,
         title=title,
         kind=subject_type,
-        deep_link=deep_link_for(subject_type, subject_id),
+        deep_link=deep_link_for(subject_type, subject_id, document_type_code=document_type_code),
     )

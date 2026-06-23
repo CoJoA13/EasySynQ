@@ -11,7 +11,7 @@ import datetime
 import enum
 import uuid
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Text, false, func, text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Text, false, func, text, true
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -121,6 +121,14 @@ class SystemConfig(Base):
         Boolean,
         server_default=false(),
         default=False,
+        nullable=False,
+    )
+    # S-notify-3a: the per-org escalation pierce flag — when True (the default), urgent/critical
+    # notifications bypass quiet-hours and are delivered immediately regardless of user preference.
+    notifications_escalation_pierce_quiet_hours: Mapped[bool] = mapped_column(
+        Boolean,
+        server_default=true(),
+        default=True,
         nullable=False,
     )
     # S-mr-1: clause-9.3 management-review cadence (coded default; org-tunable later, additive).
