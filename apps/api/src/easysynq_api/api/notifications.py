@@ -14,6 +14,7 @@ from zoneinfo import available_timezones
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy import select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -170,10 +171,16 @@ async def put_preferences(
     session: AsyncSession = Depends(get_session),
 ) -> PreferenceView:
     provided = body.model_fields_set
+    # Ensure the row exists atomically — two concurrent first-time PUTs both see pref is None
+    # without this and race to INSERT the same user_id PK → one 500s.
+    await session.execute(
+        pg_insert(NotificationPreference)
+        .values(user_id=caller.id, email_enabled=True)
+        .on_conflict_do_nothing(index_elements=["user_id"])
+    )
     pref = await session.get(NotificationPreference, caller.id)
-    if pref is None:
-        pref = NotificationPreference(user_id=caller.id, email_enabled=True)
-        session.add(pref)
+    if pref is None:  # pragma: no cover — the upsert guarantees this branch is unreachable
+        raise RuntimeError("notification preference row missing after upsert")
 
     if "email_enabled" in provided and body.email_enabled is not None:
         pref.email_enabled = body.email_enabled
@@ -202,20 +209,16 @@ async def put_preferences(
             raise ProblemException(status=422, code="invalid_timezone", title="unknown timezone")
         pref.timezone = body.timezone
 
-    # quiet hours: both-or-neither
+    # quiet hours: both-or-neither (based on what was PROVIDED, not stored state)
     if "quiet_start" in provided or "quiet_end" in provided:
-        start_set = "quiet_start" in provided
-        end_set = "quiet_end" in provided
-        start_val = body.quiet_start if start_set else _fmt_time(pref.quiet_start)
-        end_val = body.quiet_end if end_set else _fmt_time(pref.quiet_end)
-        if (start_val is None) != (end_val is None):
+        if ("quiet_start" in provided) != ("quiet_end" in provided):
             raise ProblemException(
                 status=422,
                 code="invalid_quiet_hours",
-                title="set both quiet_start and quiet_end, or neither",
+                title="set both quiet_start and quiet_end together, or neither",
             )
-        pref.quiet_start = _parse_time(start_val) if start_val else None
-        pref.quiet_end = _parse_time(end_val) if end_val else None
+        pref.quiet_start = _parse_time(body.quiet_start) if body.quiet_start else None
+        pref.quiet_end = _parse_time(body.quiet_end) if body.quiet_end else None
 
     pref.updated_at = datetime.datetime.now(datetime.UTC)
     await session.commit()

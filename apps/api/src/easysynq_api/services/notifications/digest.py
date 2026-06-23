@@ -112,7 +112,8 @@ async def bundle_user_digest(
     created = False
     if eligible and user is not None and user.email is not None:
         items, count = render_digest_items(list(notes))
-        first_name = (user.display_name or "there").split()[0]
+        _name_parts = (user.display_name or "").split()
+        first_name = _name_parts[0] if _name_parts else "there"
         forms = await render(
             session,
             EVENT_DIGEST_DAILY,
@@ -156,8 +157,16 @@ async def sweep_digests(
     async with sessionmaker() as session:
         users = await due_user_ids(session, now)
     for user_id in users:
-        async with sessionmaker() as session:
-            created = await bundle_user_digest(session, user_id=user_id, settings=settings, now=now)
+        try:
+            async with sessionmaker() as session:
+                created = await bundle_user_digest(
+                    session, user_id=user_id, settings=settings, now=now
+                )
+        except Exception:  # noqa: BLE001 — one user's failure must not wedge the cohort
+            logger.warning(
+                "notifications.digest_user_failed", exc_info=True, extra={"user_id": str(user_id)}
+            )
+            continue
         counts["users"] += 1
         if created:
             counts["emails"] += 1

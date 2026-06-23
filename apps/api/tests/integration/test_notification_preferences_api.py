@@ -221,6 +221,132 @@ async def test_put_only_quiet_start_without_end_returns_422(
     assert r.status_code == 422, r.text
 
 
+async def test_put_only_quiet_start_with_existing_hours_returns_422(
+    app_client: AsyncClient, token_factory: Callable[..., str], app_under_test: Any
+) -> None:
+    """FIX A: a user with EXISTING quiet hours who PUTs only quiet_start → 422.
+
+    Previously the handler read the stored end from pref.quiet_end and validated
+    the pair (start_provided, stored_end) as complete → silently accepted a half-update.
+    Now the check is based purely on what was PROVIDED in the request."""
+    salt = uuid.uuid4().hex[:8]
+    org_id = await _default_org_id()
+    user = await _seed_user(org_id, f"existing-hours-{salt}")
+    h = _auth(token_factory, user.keycloak_subject)
+
+    # First set both quiet hours legitimately.
+    r = await app_client.put(
+        "/api/v1/me/notification-preferences",
+        headers=h,
+        json={"quiet_start": "22:00", "quiet_end": "06:00"},
+    )
+    assert r.status_code == 200, r.text
+
+    # Now attempt to update only quiet_start (the previously-missed case) → must be 422.
+    r2 = await app_client.put(
+        "/api/v1/me/notification-preferences",
+        headers=h,
+        json={"quiet_start": "23:00"},
+    )
+    assert r2.status_code == 422, r2.text
+
+    # GET must still reflect the original values (the half-update was rejected).
+    r3 = await app_client.get("/api/v1/me/notification-preferences", headers=h)
+    assert r3.status_code == 200, r3.text
+    data3 = r3.json()
+    assert data3["quiet_start"] == "22:00"
+    assert data3["quiet_end"] == "06:00"
+
+
+async def test_put_only_quiet_end_with_existing_hours_returns_422(
+    app_client: AsyncClient, token_factory: Callable[..., str], app_under_test: Any
+) -> None:
+    """FIX A (symmetric): PUT only quiet_end on an existing-hours user → 422."""
+    salt = uuid.uuid4().hex[:8]
+    org_id = await _default_org_id()
+    user = await _seed_user(org_id, f"existing-hours-end-{salt}")
+    h = _auth(token_factory, user.keycloak_subject)
+
+    r = await app_client.put(
+        "/api/v1/me/notification-preferences",
+        headers=h,
+        json={"quiet_start": "22:00", "quiet_end": "06:00"},
+    )
+    assert r.status_code == 200, r.text
+
+    r2 = await app_client.put(
+        "/api/v1/me/notification-preferences",
+        headers=h,
+        json={"quiet_end": "07:00"},
+    )
+    assert r2.status_code == 422, r2.text
+
+
+async def test_put_both_quiet_hours_on_existing_user_updates(
+    app_client: AsyncClient, token_factory: Callable[..., str], app_under_test: Any
+) -> None:
+    """FIX A: PUT both quiet_start + quiet_end on an existing-hours user → 200 + updated values."""
+    salt = uuid.uuid4().hex[:8]
+    org_id = await _default_org_id()
+    user = await _seed_user(org_id, f"update-hours-{salt}")
+    h = _auth(token_factory, user.keycloak_subject)
+
+    # Set initial quiet hours.
+    r = await app_client.put(
+        "/api/v1/me/notification-preferences",
+        headers=h,
+        json={"quiet_start": "22:00", "quiet_end": "06:00"},
+    )
+    assert r.status_code == 200, r.text
+
+    # Update both → 200 + new values.
+    r2 = await app_client.put(
+        "/api/v1/me/notification-preferences",
+        headers=h,
+        json={"quiet_start": "23:00", "quiet_end": "07:00"},
+    )
+    assert r2.status_code == 200, r2.text
+    data2 = r2.json()
+    assert data2["quiet_start"] == "23:00"
+    assert data2["quiet_end"] == "07:00"
+
+    r3 = await app_client.get("/api/v1/me/notification-preferences", headers=h)
+    assert r3.json()["quiet_start"] == "23:00"
+    assert r3.json()["quiet_end"] == "07:00"
+
+
+async def test_put_both_quiet_hours_null_clears_existing(
+    app_client: AsyncClient, token_factory: Callable[..., str], app_under_test: Any
+) -> None:
+    """FIX A: PUT {quiet_start: null, quiet_end: null} clears existing quiet hours → 200."""
+    salt = uuid.uuid4().hex[:8]
+    org_id = await _default_org_id()
+    user = await _seed_user(org_id, f"clear-hours-{salt}")
+    h = _auth(token_factory, user.keycloak_subject)
+
+    r = await app_client.put(
+        "/api/v1/me/notification-preferences",
+        headers=h,
+        json={"quiet_start": "22:00", "quiet_end": "06:00"},
+    )
+    assert r.status_code == 200, r.text
+
+    # Clear both by sending null/null → 200.
+    r2 = await app_client.put(
+        "/api/v1/me/notification-preferences",
+        headers=h,
+        json={"quiet_start": None, "quiet_end": None},
+    )
+    assert r2.status_code == 200, r2.text
+    data2 = r2.json()
+    assert data2["quiet_start"] is None
+    assert data2["quiet_end"] is None
+
+    r3 = await app_client.get("/api/v1/me/notification-preferences", headers=h)
+    assert r3.json()["quiet_start"] is None
+    assert r3.json()["quiet_end"] is None
+
+
 async def test_put_email_enabled_false_and_get_reflects(
     app_client: AsyncClient, token_factory: Callable[..., str], app_under_test: Any
 ) -> None:

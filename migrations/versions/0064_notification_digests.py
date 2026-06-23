@@ -98,6 +98,14 @@ def upgrade() -> None:
     op.add_column(
         "notification", sa.Column("digested_at", sa.DateTime(timezone=True), nullable=True)
     )
+    # Partial index backing the hourly digest sweep — only indexes pending-digest rows (a small
+    # subset of the unbounded notification table; migration-managed, excluded from autogenerate).
+    op.create_index(
+        "ix_notification_digest_pending",
+        "notification",
+        ["digest_due_at", "recipient_user_id"],
+        postgresql_where=sa.text("digested_at IS NULL AND digest_due_at IS NOT NULL"),
+    )
 
     # notification_email: digest rows have no single source notification
     op.add_column(
@@ -170,6 +178,7 @@ def downgrade() -> None:
     )
     op.drop_column("notification_email", "recipient_user_id")
     op.drop_column("notification_email", "email_kind")
+    op.drop_index("ix_notification_digest_pending", table_name="notification")
     op.drop_column("notification", "digested_at")
     op.drop_column("notification", "digest_due_at")
     op.drop_column("system_config", "notifications_escalation_pierce_quiet_hours")

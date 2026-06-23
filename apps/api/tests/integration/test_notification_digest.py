@@ -739,3 +739,67 @@ async def test_digest_drain_failure_emits_to_admins(org_email_on: Any) -> None:
     ctx = note.context or {}
     ref = ctx.get("notification_id", "")
     assert ref == f"digest:{email_id}", f"Expected notification_id='digest:{email_id}', got {ref!r}"
+
+
+# ---------------------------------------------------------------------------
+# Test 11 (FIX D): whitespace-only display_name does not raise IndexError
+# ---------------------------------------------------------------------------
+
+
+async def test_sweep_whitespace_display_name_uses_there_fallback(org_email_on: Any) -> None:
+    """FIX D: a user with display_name='   ' (whitespace-only) must not raise IndexError.
+
+    bundle_user_digest renders the digest with first_name='there' and stamps digested_at.
+    The sweep must complete without exception and must create the digest email.
+    """
+    org_id = await _default_org_id()
+    salt = uuid.uuid4().hex[:8]
+
+    # Seed a user with a whitespace-only display_name directly in the DB.
+    async with get_sessionmaker()() as s:
+        user = AppUser(
+            org_id=org_id,
+            keycloak_subject=f"kc-ws-{salt}",
+            display_name="   ",  # whitespace-only — triggers IndexError without the fix
+            email=f"ws-display-{salt}@example.com",
+            status=UserStatus.ACTIVE,
+        )
+        s.add(user)
+        await s.commit()
+        user_id = user.id
+
+    note_id = await _seed_daily_notification(
+        org_id, user_id, digest_due_at=_DUE_AT, title="Review SOP-WS"
+    )
+
+    # sweep_digests must complete without raising.
+    summary = await sweep_digests(get_sessionmaker(), _configured_settings(), _SWEEP_NOW)
+    # At minimum this user's row was processed (summary["users"] includes them).
+    assert summary["users"] >= 1
+
+    # The digest email for this user must have been created.
+    digest_count = await _digest_email_count_for_user(user_id)
+    assert digest_count == 1, (
+        f"Expected 1 DIGEST email for whitespace-display-name user, got {digest_count}"
+    )
+
+    # The notification row must be stamped.
+    note = await _get_notification(note_id)
+    assert note is not None and note.digested_at is not None, (
+        "digested_at must be set for whitespace-display-name user's notification"
+    )
+
+    # Verify the rendered subject/body uses 'there', not an empty or errored string.
+    async with get_sessionmaker()() as s:
+        email_row = (
+            await s.execute(
+                select(NotificationEmail).where(
+                    NotificationEmail.recipient_user_id == user_id,
+                    NotificationEmail.email_kind == NotificationEmailKind.DIGEST,
+                )
+            )
+        ).scalar_one_or_none()
+    assert email_row is not None
+    assert "there" in email_row.body, (
+        f"Expected 'there' in digest body when display_name is whitespace; body={email_row.body!r}"
+    )

@@ -45,6 +45,9 @@ target_metadata = Base.metadata
 #     ``... WHERE task_id IS NOT NULL``; slice S-notify-1).
 #   * ``uq_notification_email_one_per_notification`` — the notification_email one-per-notification
 #     partial UNIQUE (0064, ``... WHERE notification_id IS NOT NULL``; slice S-notify-3a).
+#   * ``ix_notification_digest_pending`` — the partial index backing the hourly digest sweep
+#     (0064, ``(digest_due_at, recipient_user_id) WHERE digested_at IS NULL AND digest_due_at IS NOT
+#     NULL``; slice S-notify-3a Codex P2).
 _MIGRATION_MANAGED_INDEXES = frozenset(
     {
         "ix_documented_information_search_tsv",
@@ -54,6 +57,7 @@ _MIGRATION_MANAGED_INDEXES = frozenset(
         "uq_improvement_initiative_spawn",
         "uq_notification_dedup_task",
         "uq_notification_email_one_per_notification",
+        "ix_notification_digest_pending",
     }
 )
 
