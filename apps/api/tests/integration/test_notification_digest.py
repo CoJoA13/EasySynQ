@@ -20,6 +20,7 @@ Integration tests for the new dispatch.py behavior (S-notify-3a, spec §4/§5/§
 
 from __future__ import annotations
 
+import asyncio
 import datetime
 import uuid
 from typing import Any
@@ -48,7 +49,7 @@ from easysynq_api.db.models.workflow import Task, WorkflowDefinition, WorkflowIn
 from easysynq_api.db.session import get_sessionmaker
 from easysynq_api.services.notifications import dispatch
 from easysynq_api.services.notifications.constants import EVENT_EMAIL_DELIVERY_FAILED
-from easysynq_api.services.notifications.digest import sweep_digests
+from easysynq_api.services.notifications.digest import bundle_user_digest, sweep_digests
 from easysynq_api.services.notifications.drain import drain_once
 from easysynq_api.services.notifications.mail import FakeMailSender
 from easysynq_api.services.notifications.preferences import effective_preferences
@@ -802,4 +803,56 @@ async def test_sweep_whitespace_display_name_uses_there_fallback(org_email_on: A
     assert email_row is not None
     assert "there" in email_row.body, (
         f"Expected 'there' in digest body when display_name is whitespace; body={email_row.body!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Test 12 (R2-3): concurrent bundle_user_digest calls produce exactly ONE digest email
+# ---------------------------------------------------------------------------
+
+
+async def test_concurrent_bundle_user_digest_creates_exactly_one_email(
+    org_email_on: Any,
+) -> None:
+    """R2-3: two concurrent bundle_user_digest calls for the same user produce exactly ONE
+    NotificationEmail(email_kind=DIGEST).
+
+    The per-user pg_advisory_xact_lock acquired at the start of bundle_user_digest serializes
+    the two concurrent transactions: the second blocks on the lock, then re-claims rows already
+    stamped with digested_at by the first, finds nothing pending, and returns False.
+
+    This is a REAL two-session concurrency test using asyncio.gather with two independent
+    AsyncSession instances from the shared sessionmaker.
+    """
+    org_id = await _default_org_id()
+    user_id = await _seed_user(org_id, email="concurrent-digest@example.com")
+
+    # Seed two daily-mode pending notification rows for this user.
+    await _seed_daily_notification(org_id, user_id, digest_due_at=_DUE_AT, title="Approve SOP-C1")
+    await _seed_daily_notification(org_id, user_id, digest_due_at=_DUE_AT, title="Approve SOP-C2")
+
+    settings = _configured_settings()
+    sm = get_sessionmaker()
+
+    async def _run_bundle() -> bool:
+        async with sm() as session:
+            return await bundle_user_digest(
+                session, user_id=user_id, settings=settings, now=_SWEEP_NOW
+            )
+
+    # Launch two concurrent bundle calls for the same user.
+    results = await asyncio.gather(_run_bundle(), _run_bundle())
+
+    # Exactly one must have created an email; the other must have been a no-op.
+    true_count = sum(1 for r in results if r)
+    assert true_count == 1, (
+        f"Expected exactly 1 of the 2 concurrent bundle calls to create a digest email, "
+        f"but got {true_count} (results={results}). "
+        "The advisory lock may not be serializing correctly."
+    )
+
+    digest_count = await _digest_email_count_for_user(user_id)
+    assert digest_count == 1, (
+        f"Expected exactly 1 DIGEST email for user after concurrent bundles, got {digest_count}. "
+        "Concurrent bundle_user_digest must produce exactly one email per window."
     )

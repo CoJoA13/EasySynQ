@@ -9,7 +9,7 @@ import datetime
 import logging
 import uuid
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ...config import Settings
@@ -75,6 +75,9 @@ async def bundle_user_digest(
 ) -> bool:
     """One idempotent txn: claim the user's due rows, re-check eligibility, create the digest email
     (or just stamp if ineligible), stamp digested_at. Returns True iff an email was created."""
+    # Serialize concurrent sweeps for THIS user: the 2nd sweep blocks here until the 1st commits,
+    # then finds the rows already stamped (digested_at) and no-ops — one digest per window.
+    await session.execute(select(func.pg_advisory_xact_lock(func.hashtext(str(user_id)))))
     notes = (
         (
             await session.execute(

@@ -347,6 +347,95 @@ async def test_put_both_quiet_hours_null_clears_existing(
     assert r3.json()["quiet_end"] is None
 
 
+async def test_put_quiet_start_empty_string_end_set_returns_422(
+    app_client: AsyncClient, token_factory: Callable[..., str], app_under_test: Any
+) -> None:
+    """R2-1: {quiet_start: "", quiet_end: "06:00"} is a half-set request → 422.
+
+    The prior fix treated empty-string as falsy (same as None) when assigning pref.quiet_start,
+    so the stored value became NULL while quiet_end was set — a one-sided window in the DB.
+    The new value-level check rejects this case before any assignment.
+    """
+    salt = uuid.uuid4().hex[:8]
+    org_id = await _default_org_id()
+    user = await _seed_user(org_id, f"empty-start-{salt}")
+    h = _auth(token_factory, user.keycloak_subject)
+
+    r = await app_client.put(
+        "/api/v1/me/notification-preferences",
+        headers=h,
+        json={"quiet_start": "", "quiet_end": "06:00"},
+    )
+    assert r.status_code == 422, r.text
+
+
+async def test_put_quiet_end_empty_string_start_set_returns_422(
+    app_client: AsyncClient, token_factory: Callable[..., str], app_under_test: Any
+) -> None:
+    """R2-1 (symmetric): {quiet_start: "22:00", quiet_end: ""} → 422."""
+    salt = uuid.uuid4().hex[:8]
+    org_id = await _default_org_id()
+    user = await _seed_user(org_id, f"empty-end-{salt}")
+    h = _auth(token_factory, user.keycloak_subject)
+
+    r = await app_client.put(
+        "/api/v1/me/notification-preferences",
+        headers=h,
+        json={"quiet_start": "22:00", "quiet_end": ""},
+    )
+    assert r.status_code == 422, r.text
+
+
+async def test_put_both_empty_strings_clears_quiet_hours(
+    app_client: AsyncClient, token_factory: Callable[..., str], app_under_test: Any
+) -> None:
+    """R2-1: {quiet_start: "", quiet_end: ""} is treated as clearing both → 200, null/null in DB."""
+    salt = uuid.uuid4().hex[:8]
+    org_id = await _default_org_id()
+    user = await _seed_user(org_id, f"clear-empty-{salt}")
+    h = _auth(token_factory, user.keycloak_subject)
+
+    # First set both hours legitimately.
+    r = await app_client.put(
+        "/api/v1/me/notification-preferences",
+        headers=h,
+        json={"quiet_start": "22:00", "quiet_end": "06:00"},
+    )
+    assert r.status_code == 200, r.text
+
+    # Clear both with empty strings — should be treated same as null/null → 200.
+    r2 = await app_client.put(
+        "/api/v1/me/notification-preferences",
+        headers=h,
+        json={"quiet_start": "", "quiet_end": ""},
+    )
+    assert r2.status_code == 200, r2.text
+    data2 = r2.json()
+    assert data2["quiet_start"] is None, f"Expected null, got {data2['quiet_start']!r}"
+    assert data2["quiet_end"] is None, f"Expected null, got {data2['quiet_end']!r}"
+
+    r3 = await app_client.get("/api/v1/me/notification-preferences", headers=h)
+    assert r3.json()["quiet_start"] is None
+    assert r3.json()["quiet_end"] is None
+
+
+async def test_put_quiet_start_null_quiet_end_set_returns_422(
+    app_client: AsyncClient, token_factory: Callable[..., str], app_under_test: Any
+) -> None:
+    """R2-1: {quiet_start: null, quiet_end: "06:00"} is a half-set request → 422."""
+    salt = uuid.uuid4().hex[:8]
+    org_id = await _default_org_id()
+    user = await _seed_user(org_id, f"null-start-{salt}")
+    h = _auth(token_factory, user.keycloak_subject)
+
+    r = await app_client.put(
+        "/api/v1/me/notification-preferences",
+        headers=h,
+        json={"quiet_start": None, "quiet_end": "06:00"},
+    )
+    assert r.status_code == 422, r.text
+
+
 async def test_put_email_enabled_false_and_get_reflects(
     app_client: AsyncClient, token_factory: Callable[..., str], app_under_test: Any
 ) -> None:

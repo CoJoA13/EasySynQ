@@ -132,6 +132,22 @@ async def resolve_subject(
                 dt = await session.get(DocumentType, row.document_type_id)
                 document_type_code = dt.code if dt is not None else None
 
+                # Probe satellite existence before rerouting: the generic POST /documents path
+                # does NOT block OBJ/MR codes, so a DocumentedInformation row can exist without
+                # its satellite (QualityObjective / ManagementReview).  The dedicated SPA routes
+                # (/objectives/{id}, /management-reviews/{id}) 404 for an orphan — fall back to
+                # /documents/{id} (always works) when the satellite is absent.
+                if document_type_code == "OBJ":
+                    from ...db.models.quality_objective import QualityObjective
+
+                    if await session.get(QualityObjective, subject_id) is None:
+                        document_type_code = None
+                elif document_type_code == "MR":
+                    from ...db.models.management_review import ManagementReview
+
+                    if await session.get(ManagementReview, subject_id) is None:
+                        document_type_code = None
+
     elif subject_type == "DCR":
         from ...db.models.dcr import Dcr
 

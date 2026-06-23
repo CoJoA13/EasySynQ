@@ -217,8 +217,16 @@ async def put_preferences(
                 code="invalid_quiet_hours",
                 title="set both quiet_start and quiet_end together, or neither",
             )
-        pref.quiet_start = _parse_time(body.quiet_start) if body.quiet_start else None
-        pref.quiet_end = _parse_time(body.quiet_end) if body.quiet_end else None
+        start = body.quiet_start or None  # "" and None both mean "no value"
+        end = body.quiet_end or None
+        if (start is None) != (end is None):
+            raise ProblemException(
+                status=422,
+                code="invalid_quiet_hours",
+                title="quiet_start and quiet_end must both be set, or both cleared",
+            )
+        pref.quiet_start = _parse_time(start) if start else None
+        pref.quiet_end = _parse_time(end) if end else None
 
     pref.updated_at = datetime.datetime.now(datetime.UTC)
     await session.commit()
