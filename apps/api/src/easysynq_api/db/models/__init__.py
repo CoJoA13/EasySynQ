@@ -154,6 +154,7 @@ from .risk_opportunity import RiskOpportunity
 from .role import Role, RoleAssignment, RoleGrant
 from .scope import Scope
 from .signature_event import SignatureEvent
+from .sla_policy import SlaPolicy
 from .sod import SodConstraint
 from .storage_config import StorageConfig
 from .supplier import Supplier
@@ -305,6 +306,7 @@ __all__ = [
     "SignatureMeaning",
     "SignatureMethod",
     "SignedObjectType",
+    "SlaPolicy",
     "SodConstraint",
     "SodSeverity",
     "SodTargetBinding",

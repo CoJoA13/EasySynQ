@@ -462,6 +462,9 @@ class EventType(enum.Enum):
     # from-scratch ``upgrade head`` rebuilds the type from EVENT_TYPE_VALUES, so the member lives
     # here too).
     INTERESTED_PARTY_UPDATED = "INTERESTED_PARTY_UPDATED"
+    # S-notify-4: the timer_sweep escalated an overdue task to the manager/QM; added via
+    # ALTER TYPE in 0065; object_type=workflow_instance.
+    TASK_ESCALATED = "TASK_ESCALATED"
 
 
 class CheckpointSinkKind(enum.Enum):

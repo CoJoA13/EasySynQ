@@ -19,3 +19,12 @@ def test_digest_sweep_registered() -> None:
 def test_digest_sweep_beat_scheduled() -> None:
     entries = {e["task"]: e["schedule"] for e in app.conf.beat_schedule.values()}
     assert entries.get("easysynq.notifications.digest_sweep") == 3600.0
+
+
+def test_timer_sweep_registered() -> None:
+    assert "easysynq.notifications.timer_sweep" in app.tasks
+
+
+def test_timer_sweep_beat_scheduled() -> None:
+    entries = {e["task"]: e["schedule"] for e in app.conf.beat_schedule.values()}
+    assert entries.get("easysynq.notifications.timer_sweep") == 300.0

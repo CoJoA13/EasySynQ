@@ -1,4 +1,5 @@
-"""Celery/Beat tasks for notifications: outbox drain (S-notify-1) + digest sweep (S-notify-3a)."""
+"""Celery/Beat tasks for notifications: outbox drain (S-notify-1), digest sweep (S-notify-3a),
+and timer sweep (S-notify-4 — reminders + overdue + escalate-to-manager)."""
 
 from __future__ import annotations
 
@@ -11,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from ..config import get_settings
 from ..services.notifications.digest import sweep_digests
 from ..services.notifications.drain import drain_once
+from ..services.notifications.escalation import sweep_task_timers
 from ..services.notifications.mail import SmtpMailSender
 from .app import task
 
@@ -57,3 +59,21 @@ async def _run_digest_sweep() -> dict[str, int]:
 def digest_sweep() -> dict[str, int]:
     """Bundle each due user's pending notifications into ONE summary email (hourly)."""
     return asyncio.run(_run_digest_sweep())
+
+
+async def _run_timer_sweep() -> dict[str, int]:
+    settings = get_settings()
+    engine = create_async_engine(settings.database_url)
+    sm: async_sessionmaker[AsyncSession] = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        summary = await sweep_task_timers(sm, datetime.datetime.now(datetime.UTC))
+        logger.info("notifications.timer_sweep", extra={"extra_fields": summary})
+        return summary
+    finally:
+        await engine.dispose()
+
+
+@task(name="easysynq.notifications.timer_sweep")
+def timer_sweep() -> dict[str, int]:
+    """Reminders + overdue + escalate-to-manager off task due dates (every ~5 min)."""
+    return asyncio.run(_run_timer_sweep())

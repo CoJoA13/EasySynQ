@@ -8,6 +8,7 @@ from __future__ import annotations
 import datetime
 import logging
 import uuid
+from typing import Literal
 
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -25,6 +26,12 @@ from .recipients import Recipient, resolve_recipients
 from .render import render
 from .schedule import next_digest_at
 from .subjects import SubjectInfo, prefs_link, resolve_subject
+
+# 3-state outcome for _enqueue_one / emit_task_event:
+#   "created"     - a new Notification row was inserted this call
+#   "deduped"     - the row already existed (ON CONFLICT DO NOTHING); no second email created
+#   "no_template" - render() returned None; the step must NOT be stamped (retry after restore)
+EnqueueOutcome = Literal["created", "deduped", "no_template"]
 
 logger = logging.getLogger("easysynq.notifications.dispatch")
 
@@ -87,7 +94,17 @@ async def _enqueue_one(
     org_pierce: bool,
     now: datetime.datetime,
     event_key: str,
-) -> None:
+) -> EnqueueOutcome:
+    """Return the 3-state outcome for this recipient:
+
+    - ``"created"``     - a new Notification row was inserted this call.
+    - ``"deduped"``     - the row already existed (ON CONFLICT DO NOTHING); no second email.
+    - ``"no_template"`` - render() returned None; step must NOT be stamped (retry after restore).
+
+    Callers MUST stamp timer steps when the outcome is ``"created"`` or ``"deduped"`` (the
+    notification was emitted or already existed) and must NOT stamp on ``"no_template"``
+    (template miss - retry after restore).
+    """
     variables: dict[str, object] = {
         "recipient.first_name": recipient.first_name,
         "subject.identifier": subject.identifier,
@@ -101,7 +118,7 @@ async def _enqueue_one(
     forms = await render(session, event_key, variables)
     if forms is None:
         logger.warning("notification.template_missing", extra={"event_key": event_key})
-        return
+        return "no_template"
 
     # Resolve per-recipient digest class and mode.
     pref = await session.get(NotificationPreference, recipient.user_id)
@@ -146,7 +163,12 @@ async def _enqueue_one(
     )
     new_id = (await session.execute(stmt)).scalar_one_or_none()
     if new_id is None:
-        return  # dedup hit → the email is skipped too (no orphan, spec §4 / refute L2-3)
+        # Dedup hit: the notification row already exists (ON CONFLICT DO NOTHING).
+        # The notification WAS emitted (created in a prior sweep or a downgrade→re-upgrade cycle).
+        # Return "deduped" so the caller stamps the timer step as already-emitted — not as a
+        # delivery miss.  Email creation is correctly skipped (no orphan: spec §4 / refute L2-3).
+        # Only a template miss (checked above, before the insert) returns "no_template".
+        return "deduped"
 
     if wants_email and mode is NotificationDigestMode.IMMEDIATE:
         # _email_eligible guarantees email is truthy here; cast for mypy.
@@ -165,6 +187,7 @@ async def _enqueue_one(
                 next_attempt_at=next_attempt_at,
             )
         )
+    return "created"
 
 
 def variables_as_json(variables: dict[str, object]) -> dict[str, object]:

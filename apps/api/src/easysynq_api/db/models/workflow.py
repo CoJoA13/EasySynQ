@@ -168,6 +168,21 @@ class Task(Base):
         task_state_enum, default=TaskState.PENDING, nullable=False
     )
     due_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # S-notify-4: timer_sweep idempotency guards — set by the sweep when each notification fires,
+    # preventing double-send on re-runs. The partial index ``ix_task_timer_pending`` (migration-
+    # managed, absent from __table_args__) backs the sweep query.
+    remind_1_sent_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    remind_2_sent_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    overdue_notified_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    escalated_1_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     client_token: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 

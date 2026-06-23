@@ -58,6 +58,7 @@ _MIGRATION_MANAGED_INDEXES = frozenset(
         "uq_notification_dedup_task",
         "uq_notification_email_one_per_notification",
         "ix_notification_digest_pending",
+        "ix_task_timer_pending",
     }
 )
 

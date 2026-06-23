@@ -139,6 +139,12 @@ app.conf.update(
             "task": "easysynq.notifications.digest_sweep",
             "schedule": 3600.0,  # hourly
         },
+        # S-notify-4: the task-timer sweep — reminder / overdue / escalate-to-manager off
+        # task.due_at. Every 5 minutes for ≤5-min latency on the CRITICAL escalation path.
+        "notifications-timer-sweep": {
+            "task": "easysynq.notifications.timer_sweep",
+            "schedule": 300.0,  # every 5 minutes
+        },
     },
 )
 
