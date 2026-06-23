@@ -1920,6 +1920,24 @@ export interface Notification {
   read_at: string | null;
 }
 
+export type NotificationDigestMode = "immediate" | "daily" | "off";
+
+export type NotificationClass = "action_required" | "awareness" | "critical" | "admin_ops";
+
 export interface NotificationPreferences {
   email_enabled: boolean;
+  digest_modes: Record<NotificationClass, NotificationDigestMode>;
+  digest_hour: number;
+  timezone: string;
+  quiet_start: string | null;
+  quiet_end: string | null;
+}
+
+export interface NotificationPreferencesUpdate {
+  email_enabled?: boolean;
+  digest_modes?: Partial<Record<NotificationClass, NotificationDigestMode>>;
+  digest_hour?: number;
+  timezone?: string;
+  quiet_start?: string | null;
+  quiet_end?: string | null;
 }

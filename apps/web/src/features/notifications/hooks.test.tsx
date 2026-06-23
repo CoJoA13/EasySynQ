@@ -7,7 +7,7 @@ import { AuthContext } from "../../lib/auth";
 import { server } from "../../test/msw/server";
 import { TEST_AUTH } from "../../test/render";
 import { useNotificationCount, useNotificationPreferences, useNotifications } from "./hooks";
-import { useMarkAllRead, useMarkRead, useSetEmailEnabled } from "./mutations";
+import { useMarkAllRead, useMarkRead, useUpdateNotificationPreferences } from "./mutations";
 
 function wrapper({ children }: { children: ReactNode }) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -76,7 +76,7 @@ describe("notification data layer", () => {
     await waitFor(() => expect(hit).toBe(true));
   });
 
-  it("useSetEmailEnabled PUTs the new value", async () => {
+  it("useUpdateNotificationPreferences PUTs a partial body", async () => {
     let body: unknown = null;
     server.use(
       http.put("/api/v1/me/notification-preferences", async ({ request }) => {
@@ -84,8 +84,8 @@ describe("notification data layer", () => {
         return HttpResponse.json(body as Record<string, unknown>);
       }),
     );
-    const { result } = renderHook(() => useSetEmailEnabled(), { wrapper });
-    result.current.mutate(false);
-    await waitFor(() => expect(body).toEqual({ email_enabled: false }));
+    const { result } = renderHook(() => useUpdateNotificationPreferences(), { wrapper });
+    result.current.mutate({ digest_modes: { awareness: "off" } });
+    await waitFor(() => expect(body).toEqual({ digest_modes: { awareness: "off" } }));
   });
 });

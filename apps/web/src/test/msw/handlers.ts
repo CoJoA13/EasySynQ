@@ -42,6 +42,7 @@ import type {
   MgmtReviewNextDue,
   Ncr,
   Notification,
+  NotificationPreferences,
   Objective,
   ObjectiveCommitment,
   ObjectiveListResponse,
@@ -2663,6 +2664,20 @@ export const notificationFixtures = [
   },
 ] satisfies Notification[];
 
+const DEFAULT_NOTIFICATION_PREFS = {
+  email_enabled: true,
+  digest_modes: {
+    action_required: "daily",
+    awareness: "daily",
+    critical: "immediate",
+    admin_ops: "immediate",
+  },
+  digest_hour: 8,
+  timezone: "UTC",
+  quiet_start: null,
+  quiet_end: null,
+} satisfies NotificationPreferences;
+
 export const handlers = [
   http.get("/api/v1/risks", () => HttpResponse.json(riskListFixture)),
   http.get("/api/v1/risks/summary", () => HttpResponse.json(riskSummaryFixture)),
@@ -3495,8 +3510,16 @@ export const handlers = [
   }),
   http.post("/api/v1/notifications/:id/read", () => HttpResponse.json({ status: "ok" })),
   http.post("/api/v1/notifications/read-all", () => HttpResponse.json({ marked: 1 })),
-  http.get("/api/v1/me/notification-preferences", () => HttpResponse.json({ email_enabled: true })),
-  http.put("/api/v1/me/notification-preferences", async ({ request }) =>
-    HttpResponse.json(await request.json()),
+  http.get("/api/v1/me/notification-preferences", () =>
+    HttpResponse.json(DEFAULT_NOTIFICATION_PREFS as Record<string, unknown>),
   ),
+  http.put("/api/v1/me/notification-preferences", async ({ request }) => {
+    const body = (await request.json()) as Partial<NotificationPreferences>;
+    const merged: NotificationPreferences = {
+      ...DEFAULT_NOTIFICATION_PREFS,
+      ...body,
+      digest_modes: { ...DEFAULT_NOTIFICATION_PREFS.digest_modes, ...(body.digest_modes ?? {}) },
+    };
+    return HttpResponse.json(merged as unknown as Record<string, unknown>);
+  }),
 ];
