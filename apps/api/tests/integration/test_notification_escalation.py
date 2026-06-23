@@ -14,6 +14,7 @@ Three tests:
 
 from __future__ import annotations
 
+import datetime
 import uuid
 from typing import Any
 
@@ -204,8 +205,6 @@ async def test_emit_task_event_creates_notification(app_under_test: Any) -> None
     assignee_id = await _seed_user(org_id, display_name="Assignee for Emit")
     instance, task = await _seed_workflow_objects(org_id, assignee_id)
 
-    import datetime
-
     now = datetime.datetime.now(datetime.UTC)
     recipient = Recipient(
         user_id=recipient_user_id,
@@ -244,3 +243,10 @@ async def test_emit_task_event_creates_notification(app_under_test: Any) -> None
     assert notif.event_key == EVENT_TASK_ESCALATED
     assert notif.recipient_user_id == recipient_user_id
     assert notif.task_id == task.id
+    # Verify that template variables were actually substituted — no unresolved {{ placeholder
+    # remains. _substitute() leaves the literal {{name}} when the name is absent from the
+    # VARIABLE_WHITELIST, so this assertion fails without the whitelist fix.
+    assert "{{" not in notif.title, (
+        f"Unsubstituted placeholder in notification title: {notif.title!r}"
+    )
+    assert "{{" not in notif.body, f"Unsubstituted placeholder in notification body: {notif.body!r}"

@@ -12,21 +12,27 @@ EVENT_DIGEST_DAILY = "digest.daily"
 
 SUBJECT_SYSTEM = "SYSTEM"
 
+# Shared variable set for all task-lifecycle events (assigned / due-soon / overdue / escalated).
+_TASK_EVENT_VARS: frozenset[str] = frozenset(
+    {
+        "recipient.first_name",
+        "subject.identifier",
+        "subject.title",
+        "subject.kind",
+        "task.action_expected",
+        "task.due_at",
+        "deep_link",
+        "prefs_link",
+    }
+)
+
 # Per-event allowed template variables. system.email_delivery_failed is OPERATIONAL-ONLY — it MUST
 # NOT carry subject.title/identifier (admins hold no document.read; spec §5/§6, refute L3-1).
 VARIABLE_WHITELIST: dict[str, frozenset[str]] = {
-    EVENT_TASK_ASSIGNED: frozenset(
-        {
-            "recipient.first_name",
-            "subject.identifier",
-            "subject.title",
-            "subject.kind",
-            "task.action_expected",
-            "task.due_at",
-            "deep_link",
-            "prefs_link",
-        }
-    ),
+    EVENT_TASK_ASSIGNED: _TASK_EVENT_VARS,
+    EVENT_TASK_DUE_SOON: _TASK_EVENT_VARS,
+    EVENT_TASK_OVERDUE: _TASK_EVENT_VARS,
+    EVENT_TASK_ESCALATED: _TASK_EVENT_VARS,
     EVENT_EMAIL_DELIVERY_FAILED: frozenset(
         {"recipient_email", "attempts", "last_error", "notification_id", "created_at"}
     ),
