@@ -12,13 +12,15 @@ const { signinRedirect, signinRedirectCallback, getUser } = vi.hoisted(() => ({
   getUser: vi.fn(async () => null as unknown),
 }));
 vi.mock("oidc-client-ts", () => ({
-  UserManager: vi.fn(() => ({
-    signinRedirect,
-    signinRedirectCallback,
-    getUser,
-    removeUser: vi.fn(),
-    signoutRedirect: vi.fn(),
-  })),
+  // vitest 4: a vi.fn() invoked with `new` must use the `function`/`class` keyword —
+  // an arrow returning an object throws "is not a constructor" (the constructor-mock change).
+  UserManager: vi.fn(function (this: Record<string, unknown>) {
+    this.signinRedirect = signinRedirect;
+    this.signinRedirectCallback = signinRedirectCallback;
+    this.getUser = getUser;
+    this.removeUser = vi.fn();
+    this.signoutRedirect = vi.fn();
+  }),
   InMemoryWebStorage: vi.fn(),
   WebStorageStateStore: vi.fn(),
 }));
