@@ -40,5 +40,11 @@ export function useNotificationPreferences(): UseQueryResult<NotificationPrefere
     queryKey: ["notification-preferences"],
     queryFn: () => api.get<NotificationPreferences>("/api/v1/me/notification-preferences"),
     retry: false,
+    // The settings page seeds a local working copy from this query and diffs it for "dirty". The app's
+    // default QueryClient (main.tsx) leaves refetchOnWindowFocus/Reconnect on, so a focus/reconnect
+    // refetch that returns changed data would re-seed and clobber unsaved edits. Disable those here; the
+    // post-save invalidate still refetches to reset the form (Codex #273 P2).
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
   });
 }

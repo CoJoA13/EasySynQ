@@ -51,6 +51,18 @@ function statefulPrefs(
 }
 
 describe("NotificationSettingsPage — cadence matrix", () => {
+  it("shows a retryable error (not an infinite spinner) when the load fails", async () => {
+    server.use(
+      http.get("/api/v1/me/notification-preferences", () =>
+        HttpResponse.json({ code: "boom", title: "nope" }, { status: 500 }),
+      ),
+    );
+    renderWithProviders(<NotificationSettingsPage />, { route: "/settings/notifications" });
+    expect(await screen.findByText("Couldn't load preferences")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
+    expect(screen.queryByText("Loading preferences")).not.toBeInTheDocument();
+  });
+
   it("reflects the loaded preferences and is accessible", async () => {
     server.use(
       getPrefs({

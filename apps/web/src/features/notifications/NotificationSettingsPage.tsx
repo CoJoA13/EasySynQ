@@ -143,10 +143,10 @@ export function NotificationSettingsPage() {
           </Button>
         </Group>
 
-        {prefs.isLoading || !working ? (
-          <LoadingState label="Loading preferences" />
-        ) : prefs.isError ? (
+        {prefs.isError ? (
           <ErrorState title="Couldn't load preferences" onRetry={() => void prefs.refetch()} />
+        ) : prefs.isLoading || !working ? (
+          <LoadingState label="Loading preferences" />
         ) : (
           <Stack gap="lg">
             <Alert variant="light" color="gray" title="Your in-app bell is always immediate">
