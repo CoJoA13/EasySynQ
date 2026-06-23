@@ -47,15 +47,24 @@ async def resolve_escalation_recipients(session: AsyncSession, task: Task) -> li
     """Return the escalation recipient list for a task.
 
     Priority:
-    1. The assignee's manager (``manager_id``) if set.
+    1. The assignee's manager (``manager_id``) if set AND the manager would yield a valid
+       Recipient (active, has email, not inactive) — consistent with ``_recipient_for_user``.
+       An inactive/no-email manager falls through to the QMS Owner fallback rather than
+       silently delivering to nobody.
     2. All ``QMS Owner`` role-holders in the task's org (fallback).
-    3. Empty list if neither exists.
+    3. Empty list if neither exists (stamp anyway — no valid recipient).
     """
     if task.assignee_user_id is not None:
         assignee = await session.get(AppUser, task.assignee_user_id)
         if assignee is not None and assignee.manager_id is not None:
-            return [assignee.manager_id]
-    # No manager (or pool-only task) → QM fallback (org-scoped).
+            # Only return the manager if _recipient_for_user would accept them.
+            # Criteria (mirror _recipient_for_user exactly): user must exist, status not in
+            # _INACTIVE ({LOCKED, DISABLED, RETIRED}), and must have a non-empty email.
+            manager = await session.get(AppUser, assignee.manager_id)
+            if manager is not None and manager.status not in _INACTIVE and manager.email:
+                return [assignee.manager_id]
+            # Manager is inactive or has no email → fall through to QM fallback.
+    # No manager (or pool-only task, or inactive/no-email manager) → QM fallback (org-scoped).
     return await users_with_roles(session, task.org_id, [_QM_ROLE])
 
 
@@ -218,12 +227,17 @@ async def process_task_timers(
                 )
         else:  # TimerStep.ESCALATE_1
             recipient_ids = await resolve_escalation_recipients(session, task)
+            # Derive the audit `via` label from the actual recipients returned, not from
+            # whether manager_id is set — an inactive/no-email manager falls through to the
+            # QM fallback inside resolve_escalation_recipients, so manager_id being non-NULL
+            # does NOT mean the manager was chosen as the recipient.
             assignee = (
                 await session.get(AppUser, task.assignee_user_id) if task.assignee_user_id else None
             )
+            manager_id_for_task = assignee.manager_id if assignee is not None else None
             via = (
                 "manager"
-                if (assignee is not None and assignee.manager_id is not None)
+                if (manager_id_for_task is not None and recipient_ids == [manager_id_for_task])
                 else "qm_fallback"
             )
             for uid in recipient_ids:

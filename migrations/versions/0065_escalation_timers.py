@@ -213,6 +213,16 @@ def upgrade() -> None:
     _three_days = datetime.timedelta(days=3)
     _one_day = datetime.timedelta(days=1)
 
+    # MVP: one reminder only. remind_2_before=None for all task types (the second pre-due
+    # reminder is deferred — its event-collision with remind_1's task.due_soon dedup made
+    # it deliver nothing). The remind_2_sent_at column + REMIND_2 branch remain as the
+    # deferred-enhancement seam; inert when remind_2_before is NULL.
+    #
+    # Escalation: personal read-&-understood obligations (DOC_ACK / PERIODIC_REVIEW) should
+    # not ping a manager — they get reminders + overdue but NO manager escalation.
+    # All other 10 workflow task types escalate after 1 day overdue.
+    _NO_ESCALATE = {TaskType.DOC_ACK, TaskType.PERIODIC_REVIEW}
+
     if org_id is not None:
         op.bulk_insert(
             sa.table(
@@ -231,8 +241,8 @@ def upgrade() -> None:
                     "org_id": org_id,
                     "task_type": tt.value,
                     "remind_1_before": _three_days,
-                    "remind_2_before": _one_day,
-                    "escalate_1_after": _one_day,
+                    "remind_2_before": None,  # one-reminder MVP; 2nd reminder is a named follow-up
+                    "escalate_1_after": None if tt in _NO_ESCALATE else _one_day,
                     "active": True,
                 }
                 for tt in TaskType
@@ -242,9 +252,15 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     # Reverse in opposite order; enum ADD VALUE is irreversible → no-op comment per 0059.
+    #
+    # Guard the template DELETE: notification.template_id FK is RESTRICT, and a timer
+    # sweep that ran after upgrade will have stamped rows referencing these templates.
+    # A plain DELETE would abort on a populated DB (CI is blind — fresh DB, sweep never
+    # fired). Leave templates in place when children exist (the 0023 NOT-EXISTS precedent).
     op.execute(
-        "DELETE FROM notification_template "
-        "WHERE event_key IN ('task.due_soon', 'task.overdue', 'task.escalated')"
+        "DELETE FROM notification_template t "
+        "WHERE t.event_key IN ('task.due_soon', 'task.overdue', 'task.escalated') "
+        "AND NOT EXISTS (SELECT 1 FROM notification n WHERE n.template_id = t.id)"
     )
     op.execute("DELETE FROM sla_policy")
     op.drop_index("ix_task_timer_pending", table_name="task")

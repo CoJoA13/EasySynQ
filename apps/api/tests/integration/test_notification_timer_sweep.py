@@ -3,8 +3,9 @@
 Integration tests against a real migrated PG16 via testcontainers.
 
 Design note: ``sla_policy`` is SELECT-only for the app role (migration 0065 REVOKE). Tests rely
-on the seeded policy for the default org: remind_1_before=3d, remind_2_before=1d,
-escalate_1_after=1d. Pre-stamp columns we don't want to fire in a given test.
+on the seeded policy for the default org: remind_1_before=3d, remind_2_before=None (one-reminder
+MVP), escalate_1_after=1d (except DOC_ACK/PERIODIC_REVIEW which have escalate_1_after=None).
+Pre-stamp columns we don't want to fire in a given test.
 
 Scenarios:
 1. remind_1 fires once for the assignee when now >= due_at - remind_1_before; re-sweep no-op.
@@ -13,6 +14,8 @@ Scenarios:
 4. No manager + QMS Owner role-holder → holder gets task.escalated.
 5. A DONE task past every threshold → no notifications.
 6. Concurrency: two process_task_timers on the same task via asyncio.gather → escalated once.
+7. DOC_ACK task past escalate threshold → reminders+overdue only; no task.escalated + no audit.
+8. Inactive manager → falls through to QMS Owner fallback.
 """
 
 from __future__ import annotations
@@ -207,22 +210,22 @@ async def _count_audit_events(org_id: uuid.UUID, event_type: EventType, scope_re
 async def test_remind_fires_once(app_under_test: Any) -> None:
     """remind_1 fires when now >= due_at - remind_1_before=3d; re-sweep is a no-op.
 
-    Seeded policy: remind_1_before=3d, remind_2_before=1d, escalate_1_after=1d.
+    Seeded policy (one-reminder MVP): remind_1_before=3d, remind_2_before=None, escalate_1_after=1d.
     Strategy: due_at = _BASE + 2d → remind_1 threshold = due_at - 3d = _BASE - 1d < _BASE → FIRES.
-    remind_2 threshold = due_at - 1d = _BASE + 1d > _BASE → does NOT fire.
+    remind_2 is off (NULL remind_2_before) → no second reminder, no pre-stamp needed.
     overdue/escalate thresholds are in future → don't fire.
-    Pre-stamp remind_2/overdue/escalated so the sweep focuses solely on remind_1.
+    Pre-stamp overdue/escalated to isolate remind_1.
     """
     org_id = await _default_org_id()
     assignee_id = await _seed_user(org_id, display_name="Remind Assignee")
 
-    # due_at = _BASE + 2d: remind_1 fires (threshold _BASE - 1d), remind_2 doesn't (_BASE + 1d)
+    # due_at = _BASE + 2d: remind_1 fires (threshold _BASE - 1d); overdue + escalate in future.
     due_at = _BASE + datetime.timedelta(days=2)
     _, task = await _seed_workflow_objects(
         org_id,
         assignee_id,
         due_at=due_at,
-        remind_2_sent_at=_STAMPED,  # pre-stamp to isolate remind_1
+        # remind_2_before is NULL in seeded policy → no second reminder; no pre-stamp needed.
         overdue_notified_at=_STAMPED,
         escalated_1_at=_STAMPED,
     )
@@ -475,4 +478,133 @@ async def test_concurrency_escalate_once(app_under_test: Any) -> None:
     audit_count = await _count_audit_events(org_id, EventType.TASK_ESCALATED, str(task.id))
     assert audit_count == 1, (
         f"Expected exactly 1 TASK_ESCALATED audit event (advisory lock), got {audit_count}"
+    )
+
+
+async def test_doc_ack_no_escalation(app_under_test: Any) -> None:
+    """DOC_ACK tasks get reminders + overdue but NO manager escalation (escalate_1_after=None).
+
+    Seeded policy for DOC_ACK: remind_1_before=3d, remind_2_before=None, escalate_1_after=None.
+    Strategy: due_at = now - 2d → past overdue AND past the would-be escalate threshold.
+    Pre-stamp remind_1 / overdue; let only the escalate step be eligible — confirm it does NOT fire.
+
+    NOTE: ``now`` is datetime.now(UTC) — AuditEvent partition constraint
+    (see test_escalate_to_manager).
+    """
+    now = datetime.datetime.now(datetime.UTC)
+    org_id = await _default_org_id()
+    manager_id = await _seed_user(org_id, display_name="DocAck Manager")
+    assignee_id = await _seed_user(org_id, display_name="DocAck Assignee", manager_id=manager_id)
+
+    # due_at = now - 2d: past every threshold (remind, overdue, and the would-be escalate).
+    due_at = now - datetime.timedelta(days=2)
+    _, task = await _seed_workflow_objects(
+        org_id,
+        assignee_id,
+        due_at=due_at,
+        task_type=TaskType.DOC_ACK,
+        remind_1_sent_at=_STAMPED,  # pre-stamp remind to isolate the escalate check
+        overdue_notified_at=_STAMPED,
+    )
+
+    # Capture pre-sweep counts (run-scoped).
+    escalated_before = await _count_notifications(manager_id, task.id, EVENT_TASK_ESCALATED)
+    audit_before = await _count_audit_events(org_id, EventType.TASK_ESCALATED, str(task.id))
+
+    sm = get_sessionmaker()
+    await sweep_task_timers(sm, now)
+
+    # escalate step must NOT have fired (escalate_1_after=None for DOC_ACK).
+    escalated_after = await _count_notifications(manager_id, task.id, EVENT_TASK_ESCALATED)
+    assert escalated_after == escalated_before, (
+        f"DOC_ACK task must not trigger task.escalated "
+        f"(got {escalated_after}, was {escalated_before})"
+    )
+
+    audit_after = await _count_audit_events(org_id, EventType.TASK_ESCALATED, str(task.id))
+    assert audit_after == audit_before, (
+        f"DOC_ACK task must not write TASK_ESCALATED audit event "
+        f"(got {audit_after}, was {audit_before})"
+    )
+
+    # Confirm escalated_1_at is still NULL (step not stamped).
+    async with get_sessionmaker()() as s:
+        task_fresh = await s.get(Task, task.id)
+        assert task_fresh is not None
+        assert task_fresh.escalated_1_at is None, "DOC_ACK escalated_1_at must remain NULL"
+
+
+async def test_inactive_manager_falls_through_to_qm(app_under_test: Any) -> None:
+    """An inactive manager is skipped; the QMS Owner fallback receives the escalation instead.
+
+    resolve_escalation_recipients now mirrors _recipient_for_user's skip criteria: it only returns
+    [manager_id] when the manager is active (status not in _INACTIVE) and has a non-empty email.
+    When the manager is LOCKED (inactive), it must fall through to the QMS Owner pool.
+
+    NOTE: ``now`` is datetime.now(UTC) — AuditEvent partition constraint
+    (see test_escalate_to_manager).
+    """
+    now = datetime.datetime.now(datetime.UTC)
+    org_id = await _default_org_id()
+    qm_id = await _seed_user(org_id, display_name="QMS Owner Inactive-Mgr Fallback")
+    await _assign_role(org_id, qm_id, "QMS Owner")
+
+    # Seed an inactive (LOCKED) manager — _recipient_for_user would drop this user.
+    inactive_manager_id = await _seed_user(
+        org_id, display_name="Inactive Manager", email="inactive-mgr@example.com"
+    )
+    # Mark the manager LOCKED (inactive) via a direct DB update.
+    async with get_sessionmaker()() as s:
+        mgr = await s.get(AppUser, inactive_manager_id)
+        assert mgr is not None
+        mgr.status = UserStatus.LOCKED
+        await s.commit()
+
+    assignee_id = await _seed_user(
+        org_id, display_name="Assignee With Inactive Mgr", manager_id=inactive_manager_id
+    )
+
+    due_at = now - datetime.timedelta(days=2)
+    _, task = await _seed_workflow_objects(
+        org_id,
+        assignee_id,
+        due_at=due_at,
+        remind_1_sent_at=_STAMPED,
+        overdue_notified_at=_STAMPED,
+    )
+
+    sm = get_sessionmaker()
+    await sweep_task_timers(sm, now)
+
+    # Inactive manager must NOT receive a notification.
+    count_inactive = await _count_notifications(inactive_manager_id, task.id, EVENT_TASK_ESCALATED)
+    assert count_inactive == 0, (
+        f"Inactive manager must not receive task.escalated (got {count_inactive})"
+    )
+
+    # QMS Owner fallback must receive the notification.
+    count_qm = await _count_notifications(qm_id, task.id, EVENT_TASK_ESCALATED)
+    assert count_qm == 1, (
+        f"QMS Owner fallback must receive task.escalated when manager is inactive (got {count_qm})"
+    )
+
+    # Audit via must be qm_fallback (proves the fallback path was taken).
+    async with get_sessionmaker()() as s:
+        ae = (
+            (
+                await s.execute(
+                    select(AuditEvent).where(
+                        AuditEvent.org_id == org_id,
+                        AuditEvent.event_type == EventType.TASK_ESCALATED,
+                        AuditEvent.scope_ref == str(task.id),
+                    )
+                )
+            )
+            .scalars()
+            .first()
+        )
+    assert ae is not None
+    assert ae.after is not None
+    assert ae.after.get("via") == "qm_fallback", (
+        f"Expected via=qm_fallback when manager is inactive, got {ae.after.get('via')}"
     )
