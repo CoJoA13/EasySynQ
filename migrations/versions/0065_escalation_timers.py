@@ -142,74 +142,71 @@ def upgrade() -> None:
     )
 
     # 6. Seed the 3 notification_template rows for the timer events.
-    op.bulk_insert(
-        sa.table(
-            "notification_template",
-            sa.column("id", postgresql.UUID(as_uuid=True)),
-            sa.column("event_key", sa.Text()),
-            sa.column("locale", sa.Text()),
-            sa.column("version", sa.Integer()),
-            sa.column("is_effective", sa.Boolean()),
-            sa.column("in_app_title", sa.Text()),
-            sa.column("in_app_body", sa.Text()),
-            sa.column("email_subject", sa.Text()),
-            sa.column("email_body", sa.Text()),
-        ),
-        [
+    #    ON CONFLICT DO NOTHING on (event_key, locale) WHERE is_effective: re-upgrade-safe.
+    #    After a downgrade the NOT-EXISTS guard may leave referenced templates in place; a plain
+    #    bulk_insert on re-upgrade would hit the uq_notification_template_one_effective partial
+    #    unique index (event_key, locale WHERE is_effective).  Raw INSERT + conflict target is
+    #    the only way to reference a partial index's WHERE predicate (SQLAlchemy bulk_insert has
+    #    no ON CONFLICT clause).
+    _templates = [
+        {
+            "event_key": "task.due_soon",
+            "in_app_title": "Due soon: {{subject.identifier}}",
+            "in_app_body": (
+                '{{task.action_expected}} {{subject.identifier}} — "{{subject.title}}"'
+                " (due {{task.due_at | date}})"
+            ),
+            "email_subject": "[EasySynQ] Due soon: {{subject.identifier}} {{subject.title}}",
+            "email_body": _DUE_SOON_EMAIL_BODY,
+        },
+        {
+            "event_key": "task.overdue",
+            "in_app_title": "Overdue: {{subject.identifier}}",
+            "in_app_body": (
+                '{{task.action_expected}} {{subject.identifier}} — "{{subject.title}}"'
+                " is now overdue (was due {{task.due_at | date}})"
+            ),
+            "email_subject": "[EasySynQ] Overdue: {{subject.identifier}} {{subject.title}}",
+            "email_body": _OVERDUE_EMAIL_BODY,
+        },
+        {
+            "event_key": "task.escalated",
+            "in_app_title": "Escalated: {{subject.identifier}}",
+            "in_app_body": (
+                'An overdue task on {{subject.identifier}} — "{{subject.title}}"'
+                " has been escalated to you (due {{task.due_at | date}})."
+            ),
+            "email_subject": (
+                "[EasySynQ] Escalated to you: {{subject.identifier}} {{subject.title}}"
+            ),
+            "email_body": _ESCALATED_EMAIL_BODY,
+        },
+    ]
+    for tmpl in _templates:
+        bind.execute(
+            sa.text(
+                "INSERT INTO notification_template"
+                " (id, event_key, locale, version, is_effective,"
+                "  in_app_title, in_app_body, email_subject, email_body)"
+                " VALUES (:id, :event_key, 'en', 1, TRUE,"
+                "         :in_app_title, :in_app_body, :email_subject, :email_body)"
+                " ON CONFLICT (event_key, locale) WHERE is_effective DO NOTHING"
+            ),
             {
                 "id": uuid.uuid4(),
-                "event_key": "task.due_soon",
-                "locale": "en",
-                "version": 1,
-                "is_effective": True,
-                "in_app_title": "Due soon: {{subject.identifier}}",
-                "in_app_body": (
-                    '{{task.action_expected}} {{subject.identifier}} — "{{subject.title}}"'
-                    " (due {{task.due_at | date}})"
-                ),
-                "email_subject": (
-                    "[EasySynQ] Due soon: {{subject.identifier}} {{subject.title}}"
-                ),
-                "email_body": _DUE_SOON_EMAIL_BODY,
+                "event_key": tmpl["event_key"],
+                "in_app_title": tmpl["in_app_title"],
+                "in_app_body": tmpl["in_app_body"],
+                "email_subject": tmpl["email_subject"],
+                "email_body": tmpl["email_body"],
             },
-            {
-                "id": uuid.uuid4(),
-                "event_key": "task.overdue",
-                "locale": "en",
-                "version": 1,
-                "is_effective": True,
-                "in_app_title": "Overdue: {{subject.identifier}}",
-                "in_app_body": (
-                    '{{task.action_expected}} {{subject.identifier}} — "{{subject.title}}"'
-                    " is now overdue (was due {{task.due_at | date}})"
-                ),
-                "email_subject": (
-                    "[EasySynQ] Overdue: {{subject.identifier}} {{subject.title}}"
-                ),
-                "email_body": _OVERDUE_EMAIL_BODY,
-            },
-            {
-                "id": uuid.uuid4(),
-                "event_key": "task.escalated",
-                "locale": "en",
-                "version": 1,
-                "is_effective": True,
-                "in_app_title": "Escalated: {{subject.identifier}}",
-                "in_app_body": (
-                    'An overdue task on {{subject.identifier}} — "{{subject.title}}"'
-                    " has been escalated to you (due {{task.due_at | date}})."
-                ),
-                "email_subject": (
-                    "[EasySynQ] Escalated to you: {{subject.identifier}} {{subject.title}}"
-                ),
-                "email_body": _ESCALATED_EMAIL_BODY,
-            },
-        ],
-    )
+        )
 
-    # 7. Seed one active sla_policy per TaskType for the default org.
-    #    Resilient org lookup (the 0053/0062 precedent — NOT WHERE short_code='DEFAULT').
-    org_id = bind.execute(sa.text("SELECT id FROM organization")).scalar_one_or_none()
+    # 7. Seed one active sla_policy per TaskType for every org in the database.
+    #    Resilient multi-org loop (the 0062 precedent — scalars().all(), NOT scalar_one_or_none()).
+    #    D1 single-org makes this v1-moot, but scalar_one_or_none() raises on a multi-row result
+    #    (SQLAlchemy 2.x), so the migration must be multi-org-safe regardless.
+    org_ids = bind.execute(sa.text("SELECT id FROM organization")).scalars().all()
     _three_days = datetime.timedelta(days=3)
     _one_day = datetime.timedelta(days=1)
 
@@ -223,7 +220,7 @@ def upgrade() -> None:
     # All other 10 workflow task types escalate after 1 day overdue.
     _NO_ESCALATE = {TaskType.DOC_ACK, TaskType.PERIODIC_REVIEW}
 
-    if org_id is not None:
+    if org_ids:
         op.bulk_insert(
             sa.table(
                 "sla_policy",
@@ -238,13 +235,14 @@ def upgrade() -> None:
             [
                 {
                     "id": uuid.uuid4(),
-                    "org_id": org_id,
+                    "org_id": oid,
                     "task_type": tt.value,
                     "remind_1_before": _three_days,
                     "remind_2_before": None,  # one-reminder MVP; 2nd reminder is a named follow-up
                     "escalate_1_after": None if tt in _NO_ESCALATE else _one_day,
                     "active": True,
                 }
+                for oid in org_ids
                 for tt in TaskType
             ],
         )

@@ -87,7 +87,8 @@ async def _enqueue_one(
     org_pierce: bool,
     now: datetime.datetime,
     event_key: str,
-) -> None:
+) -> bool:
+    """Returns True if a new Notification row was created, False on template miss or dedup."""
     variables: dict[str, object] = {
         "recipient.first_name": recipient.first_name,
         "subject.identifier": subject.identifier,
@@ -101,7 +102,7 @@ async def _enqueue_one(
     forms = await render(session, event_key, variables)
     if forms is None:
         logger.warning("notification.template_missing", extra={"event_key": event_key})
-        return
+        return False
 
     # Resolve per-recipient digest class and mode.
     pref = await session.get(NotificationPreference, recipient.user_id)
@@ -146,7 +147,7 @@ async def _enqueue_one(
     )
     new_id = (await session.execute(stmt)).scalar_one_or_none()
     if new_id is None:
-        return  # dedup hit → the email is skipped too (no orphan, spec §4 / refute L2-3)
+        return False  # dedup hit → the email is skipped too (no orphan, spec §4 / refute L2-3)
 
     if wants_email and mode is NotificationDigestMode.IMMEDIATE:
         # _email_eligible guarantees email is truthy here; cast for mypy.
@@ -165,6 +166,7 @@ async def _enqueue_one(
                 next_attempt_at=next_attempt_at,
             )
         )
+    return True
 
 
 def variables_as_json(variables: dict[str, object]) -> dict[str, object]:

@@ -59,11 +59,18 @@ async def resolve_escalation_recipients(session: AsyncSession, task: Task) -> li
         if assignee is not None and assignee.manager_id is not None:
             # Only return the manager if _recipient_for_user would accept them.
             # Criteria (mirror _recipient_for_user exactly): user must exist, status not in
-            # _INACTIVE ({LOCKED, DISABLED, RETIRED}), and must have a non-empty email.
+            # _INACTIVE ({LOCKED, DISABLED, RETIRED}), have a non-empty email,
+            # AND must belong to the same org as the task (cross-org FK is possible via
+            # manager_id self-FK; an out-of-org manager leaks task metadata → fall through).
             manager = await session.get(AppUser, assignee.manager_id)
-            if manager is not None and manager.status not in _INACTIVE and manager.email:
+            if (
+                manager is not None
+                and manager.status not in _INACTIVE
+                and manager.email
+                and manager.org_id == task.org_id
+            ):
                 return [assignee.manager_id]
-            # Manager is inactive or has no email → fall through to QM fallback.
+            # Manager is inactive, has no email, or is cross-org → fall through to QM fallback.
     # No manager (or pool-only task, or inactive/no-email manager) → QM fallback (org-scoped).
     return await users_with_roles(session, task.org_id, [_QM_ROLE])
 
@@ -95,16 +102,21 @@ async def emit_task_event(
     recipient: Recipient,
     event_key: str,
     now: datetime.datetime,
-) -> None:
+) -> bool:
     """Emit a single notification event for one recipient + task.
+
+    Returns True if a Notification row was created; False on template miss or dedup.
 
     NON-swallowing: unlike ``enqueue_task_notifications`` (which wraps in a SAVEPOINT and
     swallows failures), this function propagates any exception so the caller's per-task txn
     rolls back and the step is NOT stamped — it will retry on the next sweep.
+
+    The caller MUST only stamp the timer step when at least one call returns True — a False
+    (template miss) must not be stamped, so the step retries after the template is restored.
     """
     subject = await resolve_subject(session, instance.subject_type.value, instance.subject_id)
     cfg = await session.get(SystemConfig, instance.org_id)
-    await _enqueue_one(
+    return await _enqueue_one(
         session,
         instance=instance,
         task=task,
@@ -211,20 +223,24 @@ async def process_task_timers(
     for step in due_steps(tpolicy, task.due_at, stamps, now):
         if step in (TimerStep.REMIND_1, TimerStep.REMIND_2):
             event_key = EVENT_TASK_DUE_SOON
+            notified = False
             for r in await resolve_recipients(session, task):
-                await emit_task_event(
+                if await emit_task_event(
                     session, instance=instance, task=task, recipient=r, event_key=event_key, now=now
-                )
+                ):
+                    notified = True
         elif step is TimerStep.OVERDUE:
+            notified = False
             for r in await resolve_recipients(session, task):
-                await emit_task_event(
+                if await emit_task_event(
                     session,
                     instance=instance,
                     task=task,
                     recipient=r,
                     event_key=EVENT_TASK_OVERDUE,
                     now=now,
-                )
+                ):
+                    notified = True
         else:  # TimerStep.ESCALATE_1
             recipient_ids = await resolve_escalation_recipients(session, task)
             # Derive the audit `via` label from the actual recipients returned, not from
@@ -240,41 +256,50 @@ async def process_task_timers(
                 if (manager_id_for_task is not None and recipient_ids == [manager_id_for_task])
                 else "qm_fallback"
             )
+            notified_ids: list[uuid.UUID] = []
             for uid in recipient_ids:
                 r_maybe = await _recipient_for_user(session, uid)
                 if r_maybe is not None:
-                    await emit_task_event(
+                    if await emit_task_event(
                         session,
                         instance=instance,
                         task=task,
                         recipient=r_maybe,
                         event_key=EVENT_TASK_ESCALATED,
                         now=now,
+                    ):
+                        notified_ids.append(uid)
+            notified = bool(notified_ids)
+            if notified_ids:
+                # Write one TASK_ESCALATED AuditEvent (system actor, workflow_instance keyed).
+                # escalated_to lists only the users who were actually notified (not the full
+                # resolved pool — some may have been skipped by _recipient_for_user).
+                session.add(
+                    AuditEvent(
+                        org_id=task.org_id,
+                        occurred_at=now,
+                        actor_id=None,
+                        actor_type=ActorType.system,
+                        event_type=EventType.TASK_ESCALATED,
+                        object_type=AuditObjectType.workflow_instance,
+                        object_id=instance.id,
+                        scope_ref=str(task.id),
+                        after={
+                            "task_id": str(task.id),
+                            "escalated_to": [str(u) for u in notified_ids],
+                            "via": via,
+                            "due_at": task.due_at.isoformat(),
+                        },
                     )
-            # Write one TASK_ESCALATED AuditEvent (system actor, workflow_instance keyed).
-            session.add(
-                AuditEvent(
-                    org_id=task.org_id,
-                    occurred_at=now,
-                    actor_id=None,
-                    actor_type=ActorType.system,
-                    event_type=EventType.TASK_ESCALATED,
-                    object_type=AuditObjectType.workflow_instance,
-                    object_id=instance.id,
-                    scope_ref=str(task.id),
-                    after={
-                        "task_id": str(task.id),
-                        "escalated_to": [str(u) for u in recipient_ids],
-                        "via": via,
-                        "due_at": task.due_at.isoformat(),
-                    },
                 )
-            )
 
         # Stamp in the SAME txn as the enqueue/audit — this is the idempotency key.
         # A non-null stamp means "already fired"; due_steps gates on it before firing.
-        setattr(task, _STAMP_COL[step], now)
-        fired += 1
+        # Only stamp when at least one notification was created: a template miss (notified=False)
+        # must NOT be stamped so the step retries after the template is restored.
+        if notified:
+            setattr(task, _STAMP_COL[step], now)
+            fired += 1
 
     await session.commit()
     return fired
