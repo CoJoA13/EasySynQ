@@ -12,7 +12,7 @@ import {
   Title,
 } from "@mantine/core";
 import { useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { ErrorState, LoadingState, MutationErrorState } from "../../lib/states";
 import type {
@@ -123,7 +123,6 @@ export function NotificationSettingsPage() {
       .slice(0, 50);
     return matches.includes(current) ? matches : [current, ...matches];
   }, [tzSearch, detected, working?.timezone]);
-  const tzRef = useRef<HTMLInputElement>(null);
 
   const baseline = prefs.data;
   const body: NotificationPreferencesUpdate =
@@ -247,15 +246,8 @@ export function NotificationSettingsPage() {
                   label="Timezone"
                   description="Type to search all time zones."
                   searchable
-                  ref={tzRef}
                   searchValue={tzSearch}
                   onSearchChange={setTzSearch}
-                  onClick={() => {
-                    // Clear the search on click so typing replaces rather than appends (the
-                    // selected-label pre-fill means userEvent.type in tests would otherwise append).
-                    setTzSearch("");
-                    if (tzRef.current) tzRef.current.value = "";
-                  }}
                   data={tzData}
                   value={working.timezone}
                   onChange={(v) => v && setWorking({ ...working, timezone: v })}

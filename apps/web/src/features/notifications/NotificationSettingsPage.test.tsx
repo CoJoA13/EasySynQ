@@ -137,6 +137,7 @@ describe("NotificationSettingsPage — daily digest timing", () => {
     renderWithProviders(<NotificationSettingsPage />, { route: "/settings/notifications" });
     const tz = await screen.findByLabelText("Timezone");
     await user.click(tz);
+    await user.clear(tz);
     await user.type(tz, "Anchorage");
     await user.click(await screen.findByText("America/Anchorage"));
     await user.click(screen.getByRole("button", { name: "Save changes" }));
