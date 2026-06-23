@@ -21,7 +21,7 @@ dependencies = [
   "rfc8785>=0.1.4",
   # Upper-bounded: stamp_controlled_copy's byte-determinism depends on reportlab invariant mode +
   # pypdf's trailer /ID handling; a major bump could perturb the bytes (breaking content-addressing).
-  "reportlab>=4.2,<5",
+  "reportlab>=5.0.0,<6",
   "pypdf>=6.13.2,<7",
   "segno>=1.6",
   # S-ing-1 ingestion: libmagic content-sniff for mime detection (doc 09 §4.1). The system libmagic1
