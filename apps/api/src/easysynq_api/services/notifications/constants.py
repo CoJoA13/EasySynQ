@@ -4,6 +4,9 @@ so new events need no migration). The renderer only substitutes whitelisted slot
 from __future__ import annotations
 
 EVENT_TASK_ASSIGNED = "task.assigned"
+EVENT_TASK_DUE_SOON = "task.due_soon"
+EVENT_TASK_OVERDUE = "task.overdue"
+EVENT_TASK_ESCALATED = "task.escalated"
 EVENT_EMAIL_DELIVERY_FAILED = "system.email_delivery_failed"
 EVENT_DIGEST_DAILY = "digest.daily"
 
