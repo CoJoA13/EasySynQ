@@ -19,7 +19,7 @@ import uuid
 from typing import Any
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from easysynq_api.db.models._workflow_enums import TaskState, TaskType, WorkflowSubjectType
 from easysynq_api.db.models.app_user import AppUser, UserStatus
@@ -189,13 +189,29 @@ async def test_resolve_escalation_recipients_empty_when_no_manager_no_qm(
     assignee_id = await _seed_user(
         isolated_org_id, display_name="Isolated Assignee", manager_id=None
     )
-    _, task = await _seed_workflow_objects(isolated_org_id, assignee_id)
+    instance, task = await _seed_workflow_objects(isolated_org_id, assignee_id)
 
-    async with get_sessionmaker()() as s:
-        task_fresh = await s.get(Task, task.id)
-        result = await resolve_escalation_recipients(s, task_fresh)  # type: ignore[arg-type]
+    try:
+        async with get_sessionmaker()() as s:
+            task_fresh = await s.get(Task, task.id)
+            result = await resolve_escalation_recipients(s, task_fresh)  # type: ignore[arg-type]
 
-    assert result == [], f"Expected [], got {result}"
+        assert result == [], f"Expected [], got {result}"
+    finally:
+        # Remove the extra org so it doesn't pollute the shared integration DB.
+        # Other tests (e.g. test_restore.py) use scalar_one() on Organization and fail if > 1 row.
+        # This test never dispatches notifications (only resolves recipients), so no notification
+        # rows exist.  The app role has REVOKE DELETE on notification, so we skip it.
+        # FK-safe order: task → workflow_instance → workflow_definition → app_user → organization.
+        async with get_sessionmaker()() as s:
+            await s.execute(delete(Task).where(Task.id == task.id))
+            await s.execute(delete(WorkflowInstance).where(WorkflowInstance.id == instance.id))
+            await s.execute(
+                delete(WorkflowDefinition).where(WorkflowDefinition.org_id == isolated_org_id)
+            )
+            await s.execute(delete(AppUser).where(AppUser.id == assignee_id))
+            await s.execute(delete(Organization).where(Organization.id == isolated_org_id))
+            await s.commit()
 
 
 async def test_emit_task_event_creates_notification(app_under_test: Any) -> None:

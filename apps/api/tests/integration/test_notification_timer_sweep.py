@@ -29,7 +29,7 @@ import uuid
 from typing import Any
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from easysynq_api.db.models._audit_enums import ActorType, AuditObjectType, EventType
 from easysynq_api.db.models._workflow_enums import TaskState, TaskType, WorkflowSubjectType
@@ -765,17 +765,29 @@ async def test_cross_org_qm_fallback_not_notified(app_under_test: Any) -> None:
         overdue_notified_at=_STAMPED,
     )
 
-    sm = get_sessionmaker()
-    await sweep_task_timers(sm, now)
+    try:
+        sm = get_sessionmaker()
+        await sweep_task_timers(sm, now)
 
-    # Cross-org QM must NOT receive an escalation notification.
-    count = await _count_notifications(cross_org_user_id, task.id, EVENT_TASK_ESCALATED)
-    assert count == 0, f"Cross-org QM must not receive task.escalated (got {count})"
+        # Cross-org QM must NOT receive an escalation notification.
+        count = await _count_notifications(cross_org_user_id, task.id, EVENT_TASK_ESCALATED)
+        assert count == 0, f"Cross-org QM must not receive task.escalated (got {count})"
 
-    # The step must be stamped (terminal no-op — org filter produced attempted=0).
-    async with get_sessionmaker()() as s:
-        task_fresh = await s.get(Task, task.id)
-        assert task_fresh is not None
-        assert task_fresh.escalated_1_at is not None, (
-            "escalated_1_at must be stamped when the only QM candidate is cross-org"
-        )
+        # The step must be stamped (terminal no-op — org filter produced attempted=0).
+        async with get_sessionmaker()() as s:
+            task_fresh = await s.get(Task, task.id)
+            assert task_fresh is not None
+            assert task_fresh.escalated_1_at is not None, (
+                "escalated_1_at must be stamped when the only QM candidate is cross-org"
+            )
+    finally:
+        # Remove the extra org (other_org_id) so it doesn't pollute the shared integration DB.
+        # Other tests (e.g. test_restore.py) use scalar_one() on Organization and fail if > 1 row.
+        # FK-safe order: role_assignment → app_user → organization.
+        async with get_sessionmaker()() as s:
+            await s.execute(
+                delete(RoleAssignment).where(RoleAssignment.user_id == cross_org_user_id)
+            )
+            await s.execute(delete(AppUser).where(AppUser.id == cross_org_user_id))
+            await s.execute(delete(Organization).where(Organization.id == other_org_id))
+            await s.commit()
