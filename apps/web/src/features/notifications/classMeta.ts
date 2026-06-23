@@ -2,7 +2,7 @@
 // presentation copy for the /settings/notifications matrix (S-notify-3b). Pure data — kept out of the
 // page JSX so it is unit-testable. The class set is fixed in v1 (services/notifications/classes.py).
 
-export type NotificationClass = "action_required" | "awareness" | "critical" | "admin_ops";
+import type { NotificationClass } from "../../lib/types";
 
 export interface ClassMeta {
   key: NotificationClass;

@@ -1,7 +1,7 @@
 // apps/web/src/features/notifications/mutations.ts
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useApi } from "../../lib/api";
-import type { NotificationPreferences } from "../../lib/types";
+import type { NotificationPreferences, NotificationPreferencesUpdate } from "../../lib/types";
 
 // Mark one read. Self-scoped; a 404 (foreign/already-gone id) is fire-and-forget — `.mutate()` does not
 // throw to the caller and we navigate regardless; the 60 s poll backstops. onSuccess invalidates the
@@ -25,14 +25,12 @@ export function useMarkAllRead() {
   });
 }
 
-export function useSetEmailEnabled() {
+export function useUpdateNotificationPreferences() {
   const api = useApi();
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (email_enabled: boolean) =>
-      api.send<NotificationPreferences>("PUT", "/api/v1/me/notification-preferences", {
-        email_enabled,
-      }),
+    mutationFn: (body: NotificationPreferencesUpdate) =>
+      api.send<NotificationPreferences>("PUT", "/api/v1/me/notification-preferences", body),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["notification-preferences"] }),
   });
 }
