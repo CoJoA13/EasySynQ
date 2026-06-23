@@ -32,7 +32,7 @@ You are an adversarial reviewer for the **EasySynQ web SPA** (React 18 + TypeScr
 
 - **a11y:** a new page test should carry a jest-axe smoke (`expect(await axe(container)).toHaveNoViolations()`) — it catches heading-order regressions. The first content assertion on a card must `waitFor` past the skeleton.
 
-- **The full-run signal:** the parallel `vitest run` can flakily mass-fail ("document is not defined"); a clean signal is `--pool=forks --poolOptions.forks.singleFork=true`. Strict `noUncheckedIndexedAccess` catches array-index nits the per-file run misses.
+- **The full-run signal:** the parallel `vitest run` can flakily mass-fail ("document is not defined"); a clean signal is `--pool=forks --maxWorkers=1` (vitest 4; the old `--poolOptions.forks.singleFork=true` was removed). Strict `noUncheckedIndexedAccess` catches array-index nits the per-file run misses.
 
 ## Output
 

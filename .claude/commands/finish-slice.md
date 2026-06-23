@@ -13,7 +13,7 @@ Record the slice just completed (named in $ARGUMENTS, e.g. "S-dcr-ui-2b"). Keep 
 
 4. **The memory resume note** (`~/.claude/projects/<key>/memory/<track>-resume-point.md`) — if this slice belongs to a track with a resume note (e.g. `s-dcr-ui-resume-point`), UPDATE it (don't duplicate): mark this slice merged (PR + SHA), refresh the as-built anchors, and set the NEXT slice as the resume point with its named scope + any review insights to fold in. Update the one-line pointer in `MEMORY.md`.
 
-5. **Test deltas** — state the before→after counts (e.g. web 779→805; +N api). If you can, confirm them: `cd apps/web && npx vitest run --pool=forks --poolOptions.forks.singleFork=true 2>&1 | tail -3` (the clean-signal full run) and/or the api unit count.
+5. **Test deltas** — state the before→after counts (e.g. web 779→805; +N api). If you can, confirm them: `cd apps/web && npx vitest run --pool=forks --maxWorkers=1 2>&1 | tail -3` (the clean-signal full run; vitest 4 — the old `--poolOptions.forks.singleFork=true` was removed) and/or the api unit count.
 
 Then show a short diff summary of the doc files touched and stop — do NOT commit unless asked (the slice's PR/branch is usually already merged; these doc edits may belong on `main` via a follow-up or were part of the merged PR). If the slice's PR is still open, note that these belong in it.
 

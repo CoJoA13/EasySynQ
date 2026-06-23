@@ -28,7 +28,10 @@ export default defineConfig({
     // "document is not defined" when multiple jsdom environments tear down concurrently.
     // Run the whole suite in a single fork (serial files) for a deterministic signal —
     // correctness over speed for a required CI gate.
+    // vitest 4 pool rework: poolOptions removed, singleFork → maxWorkers: 1 (top-level).
+    // Keep default isolate: true (the old forks.singleFork only serialized files; it did
+    // not drop per-file isolation, which the MSW/cleanup teardown relies on).
     pool: "forks",
-    poolOptions: { forks: { singleFork: true } },
+    maxWorkers: 1,
   },
 });
