@@ -22,6 +22,9 @@ Scenarios:
 12. (R3-1) Self-manager (manager_id == assignee.id) → escalation goes to QMS Owner fallback.
 13. (R3-2) Dedup hit (notification already exists, stamp NULL) → sweep stamps; no double-send.
 14. (R3-2 regression guard) Genuine template miss (attempted>0) → step NOT stamped; retry.
+15. (R4-1) Dedup sweep with existing TASK_ESCALATED audit → stamps but writes NO second audit row.
+16. (R4-1) Genuinely-new escalation → exactly one audit row with escalated_to populated.
+17. (R4-2) Self-manager who is sole QMS Owner → escalation audit via == "qm_fallback".
 """
 
 from __future__ import annotations
@@ -962,11 +965,11 @@ async def test_dedup_hit_stamps_step_not_infinite_retry(app_under_test: Any) -> 
 
 
 async def test_template_miss_does_not_stamp(app_under_test: Any) -> None:
-    """R3-2 regression guard: a genuine template miss (attempted>0, notified=False) must NOT stamp.
+    """R3-2 regression guard: a genuine template miss (attempted>0) must NOT stamp.
 
     Uses a synthetic event_key that has no effective template in the DB so _enqueue_one
-    returns False.  Calls emit_task_event directly (the non-swallowing helper) and verifies
-    the return value, then confirms the task's escalated_1_at is still NULL.
+    returns "no_template".  Calls emit_task_event directly (the non-swallowing helper) and
+    verifies the return value, then confirms the task's escalated_1_at is still NULL.
 
     This guards against regressing R2-2: a delivery miss must stay retryable.
     """
@@ -1001,7 +1004,9 @@ async def test_template_miss_does_not_stamp(app_under_test: Any) -> None:
         )
         await s.commit()
 
-    assert result is False, f"emit_task_event must return False on a template miss, got {result!r}"
+    assert result == "no_template", (
+        f"emit_task_event must return 'no_template' on a template miss, got {result!r}"
+    )
 
     # No notification row must have been created.
     count = await _count_notifications(recipient_id, task.id, bogus_key)
@@ -1032,3 +1037,248 @@ async def _seed_workflow_objects_for_escalation(
         remind_2_sent_at=_STAMPED,
         overdue_notified_at=_STAMPED,
     )
+
+
+# ---------------------------------------------------------------------------
+# R4 tests
+# ---------------------------------------------------------------------------
+
+
+async def test_r4_1_dedup_sweep_does_not_write_second_audit(app_under_test: Any) -> None:
+    """R4-1: a dedup sweep (notification already exists + stamp NULL) stamps the step but
+    must NOT write a second TASK_ESCALATED audit row.
+
+    Simulates the downgrade→re-upgrade state: notification + original TASK_ESCALATED audit
+    survive the downgrade, stamp columns are recreated as NULL.  The next sweep's ON CONFLICT
+    DO NOTHING dedup path returns "deduped" → step is stamped, no new audit appended.
+
+    NOTE: now is datetime.now(UTC) — AuditEvent partition constraint.
+    """
+    now = datetime.datetime.now(datetime.UTC)
+    org_id = await _default_org_id()
+
+    manager_id = await _seed_user(org_id, display_name="Dedup Audit Manager R41")
+    assignee_id = await _seed_user(
+        org_id, display_name="Dedup Audit Assignee R41", manager_id=manager_id
+    )
+
+    # Seed the task with escalated_1_at=NULL (un-stamped) so the sweep considers the step due.
+    due_at = now - datetime.timedelta(days=2)
+    _, task = await _seed_workflow_objects(
+        org_id,
+        assignee_id,
+        due_at=due_at,
+        remind_1_sent_at=_STAMPED,
+        remind_2_sent_at=_STAMPED,
+        overdue_notified_at=_STAMPED,
+        # escalated_1_at=None → step is eligible
+    )
+
+    # Pre-insert both the notification row AND the TASK_ESCALATED audit row, simulating
+    # the state after a downgrade: both rows survive but stamp columns are NULL again.
+    async with get_sessionmaker()() as s:
+        s.add(
+            Notification(
+                org_id=org_id,
+                recipient_user_id=manager_id,
+                event_key=EVENT_TASK_ESCALATED,
+                subject_type="document",
+                subject_id=uuid.uuid4(),  # phantom
+                task_id=task.id,
+                title="Pre-existing escalation R41",
+                body="Pre-existing escalation body R41",
+                deep_link="/tasks",
+                template_id=None,
+                template_version=None,
+                context={},
+            )
+        )
+        s.add(
+            AuditEvent(
+                org_id=org_id,
+                occurred_at=now - datetime.timedelta(days=1),  # originally written before downgrade
+                actor_id=None,
+                actor_type=ActorType.system,
+                event_type=EventType.TASK_ESCALATED,
+                object_type=AuditObjectType.workflow_instance,
+                object_id=uuid.uuid4(),  # phantom instance id — scope_ref is the lookup key
+                scope_ref=str(task.id),
+                after={
+                    "task_id": str(task.id),
+                    "escalated_to": [str(manager_id)],
+                    "via": "manager",
+                    "due_at": due_at.isoformat(),
+                },
+            )
+        )
+        await s.commit()
+
+    audit_before = await _count_audit_events(org_id, EventType.TASK_ESCALATED, str(task.id))
+    assert audit_before == 1, f"Expected 1 pre-existing audit row, got {audit_before}"
+
+    sm = get_sessionmaker()
+
+    # Sweep: hits the dedup (ON CONFLICT DO NOTHING) → must stamp but NOT write a second audit.
+    await sweep_task_timers(sm, now)
+
+    # Step must be stamped.
+    async with get_sessionmaker()() as s:
+        task_fresh = await s.get(Task, task.id)
+        assert task_fresh is not None
+        assert task_fresh.escalated_1_at is not None, (
+            "escalated_1_at must be stamped after a dedup sweep"
+        )
+
+    # Audit count must stay at 1 (no duplicate appended).
+    audit_after = await _count_audit_events(org_id, EventType.TASK_ESCALATED, str(task.id))
+    assert audit_after == 1, (
+        f"TASK_ESCALATED audit count must remain 1 after a dedup sweep (got {audit_after})"
+    )
+
+    # Re-sweep must be a no-op (stamp already set → due_steps returns []).
+    await sweep_task_timers(sm, now)
+    audit_after_resweep = await _count_audit_events(org_id, EventType.TASK_ESCALATED, str(task.id))
+    assert audit_after_resweep == 1, (
+        f"Audit count must remain 1 after re-sweep (got {audit_after_resweep})"
+    )
+
+
+async def test_r4_1_genuine_new_escalation_writes_exactly_one_audit(app_under_test: Any) -> None:
+    """R4-1 positive path: a genuinely-new escalation writes exactly one TASK_ESCALATED audit
+    with escalated_to populated, and a re-sweep does not append a second row.
+
+    NOTE: now is datetime.now(UTC) — AuditEvent partition constraint.
+    """
+    now = datetime.datetime.now(datetime.UTC)
+    org_id = await _default_org_id()
+
+    manager_id = await _seed_user(org_id, display_name="New Esc Manager R41pos")
+    assignee_id = await _seed_user(
+        org_id, display_name="New Esc Assignee R41pos", manager_id=manager_id
+    )
+
+    due_at = now - datetime.timedelta(days=2)
+    _, task = await _seed_workflow_objects(
+        org_id,
+        assignee_id,
+        due_at=due_at,
+        remind_1_sent_at=_STAMPED,
+        remind_2_sent_at=_STAMPED,
+        overdue_notified_at=_STAMPED,
+        # escalated_1_at=None → step is eligible; no pre-existing notification or audit
+    )
+
+    audit_before = await _count_audit_events(org_id, EventType.TASK_ESCALATED, str(task.id))
+    assert audit_before == 0, f"Expected 0 audit rows before sweep, got {audit_before}"
+
+    sm = get_sessionmaker()
+    await sweep_task_timers(sm, now)
+
+    # Exactly one TASK_ESCALATED audit row must exist.
+    audit_after = await _count_audit_events(org_id, EventType.TASK_ESCALATED, str(task.id))
+    assert audit_after == 1, (
+        f"Expected exactly 1 TASK_ESCALATED audit after a new escalation (got {audit_after})"
+    )
+
+    # escalated_to must contain the manager id.
+    async with get_sessionmaker()() as s:
+        ae = (
+            (
+                await s.execute(
+                    select(AuditEvent).where(
+                        AuditEvent.org_id == org_id,
+                        AuditEvent.event_type == EventType.TASK_ESCALATED,
+                        AuditEvent.scope_ref == str(task.id),
+                    )
+                )
+            )
+            .scalars()
+            .first()
+        )
+    assert ae is not None
+    assert ae.after is not None
+    assert str(manager_id) in ae.after.get("escalated_to", []), (
+        f"escalated_to must include the manager id (got {ae.after.get('escalated_to')})"
+    )
+
+    # Re-sweep must not append a second audit row.
+    await sweep_task_timers(sm, now)
+    audit_after_resweep = await _count_audit_events(org_id, EventType.TASK_ESCALATED, str(task.id))
+    assert audit_after_resweep == 1, (
+        f"Re-sweep must not create a second audit row (got {audit_after_resweep})"
+    )
+
+
+async def test_r4_2_self_manager_sole_qm_via_is_qm_fallback(app_under_test: Any) -> None:
+    """R4-2: when the assignee is their own manager AND is the only QMS Owner, the escalation
+    must go to that QM-fallback recipient and the audit via must be 'qm_fallback', NOT 'manager'.
+
+    This is the specific edge-case that R4-2 fixes: manager_id_for_task == assignee.id, so
+    resolve_escalation_recipients falls through to the QM pool (which is [assignee.id]), but
+    the old via computation would label it 'manager' because recipient_ids == [manager_id_for_task].
+
+    NOTE: now is datetime.now(UTC) — AuditEvent partition constraint.
+    """
+    now = datetime.datetime.now(datetime.UTC)
+    org_id = await _default_org_id()
+
+    # Seed the assignee who will also be the sole QMS Owner (self-manager edge case).
+    assignee_id = await _seed_user(org_id, display_name="Self-Mgr Sole-QM Assignee R42")
+
+    # Point manager_id at themselves (self-manager).
+    async with get_sessionmaker()() as s:
+        assignee = await s.get(AppUser, assignee_id)
+        assert assignee is not None
+        assignee.manager_id = assignee.id  # type: ignore[assignment]  # self-FK
+        await s.commit()
+
+    # Assign QMS Owner role to the assignee so they are in the QM fallback pool.
+    await _assign_role(org_id, assignee_id, "QMS Owner")
+
+    due_at = now - datetime.timedelta(days=2)
+    _, task = await _seed_workflow_objects(
+        org_id,
+        assignee_id,
+        due_at=due_at,
+        remind_1_sent_at=_STAMPED,
+        remind_2_sent_at=_STAMPED,
+        overdue_notified_at=_STAMPED,
+    )
+
+    sm = get_sessionmaker()
+    await sweep_task_timers(sm, now)
+
+    # The assignee (sole QM) receives the escalation (QM fallback path).
+    count = await _count_notifications(assignee_id, task.id, EVENT_TASK_ESCALATED)
+    assert count == 1, (
+        f"Sole QM self-manager must receive task.escalated as the QM fallback (got {count})"
+    )
+
+    # Audit via must be 'qm_fallback', not 'manager'.
+    async with get_sessionmaker()() as s:
+        ae = (
+            (
+                await s.execute(
+                    select(AuditEvent).where(
+                        AuditEvent.org_id == org_id,
+                        AuditEvent.event_type == EventType.TASK_ESCALATED,
+                        AuditEvent.scope_ref == str(task.id),
+                    )
+                )
+            )
+            .scalars()
+            .first()
+        )
+    assert ae is not None
+    assert ae.after is not None
+    assert ae.after.get("via") == "qm_fallback", (
+        f"Expected via=qm_fallback for a self-manager sole QM, got {ae.after.get('via')!r}"
+    )
+
+    # escalated_1_at must be stamped.
+    async with get_sessionmaker()() as s:
+        task_fresh = await s.get(Task, task.id)
+        assert task_fresh is not None
+        assert task_fresh.escalated_1_at is not None, (
+            "escalated_1_at must be stamped after QM fallback escalation"
+        )

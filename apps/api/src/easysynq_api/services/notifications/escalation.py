@@ -24,7 +24,7 @@ from ...db.models.system_config import SystemConfig
 from ...db.models.workflow import Task, WorkflowInstance
 from ..workflow.repository import users_with_roles
 from .constants import EVENT_TASK_DUE_SOON, EVENT_TASK_ESCALATED, EVENT_TASK_OVERDUE
-from .dispatch import _enqueue_one
+from .dispatch import EnqueueOutcome, _enqueue_one
 from .recipients import Recipient, _first_name, resolve_recipients
 from .subjects import resolve_subject
 from .timer import TimerPolicy, TimerStamps, TimerStep, due_steps
@@ -106,19 +106,21 @@ async def emit_task_event(
     recipient: Recipient,
     event_key: str,
     now: datetime.datetime,
-) -> bool:
+) -> EnqueueOutcome:
     """Emit a single notification event for one recipient + task.
 
-    Returns True if the Notification row exists after the call (created OR already-present via
-    dedup); False only on a template miss.
+    Returns the 3-state outcome from ``_enqueue_one``:
+    - ``"created"``     - a new Notification row was inserted this call.
+    - ``"deduped"``     - the row already existed; the step is considered already-emitted.
+    - ``"no_template"`` - template miss; the step must NOT be stamped (retry after restore).
 
     NON-swallowing: unlike ``enqueue_task_notifications`` (which wraps in a SAVEPOINT and
     swallows failures), this function propagates any exception so the caller's per-task txn
     rolls back and the step is NOT stamped — it will retry on the next sweep.
 
-    The caller MUST stamp the timer step when at least one call returns True (notification
-    exists — emitted now or in a prior cycle).  A False (template miss) must not be stamped,
-    so the step retries after the template is restored.
+    The caller MUST stamp the timer step when at least one call returns ``"created"`` or
+    ``"deduped"`` (notification exists — emitted now or in a prior cycle).  ``"no_template"``
+    must not be stamped, so the step retries after the template is restored.
     """
     subject = await resolve_subject(session, instance.subject_type.value, instance.subject_id)
     cfg = await session.get(SystemConfig, instance.org_id)
@@ -231,62 +233,82 @@ async def process_task_timers(
             event_key = EVENT_TASK_DUE_SOON
             recipients = await resolve_recipients(session, task)
             attempted = len(recipients)
-            notified = False
+            # "exists" = at least one notification row exists (created OR deduped) after the call.
+            exists = False
             for r in recipients:
-                if await emit_task_event(
+                outcome = await emit_task_event(
                     session, instance=instance, task=task, recipient=r, event_key=event_key, now=now
-                ):
-                    notified = True
+                )
+                if outcome in ("created", "deduped"):
+                    exists = True
         elif step is TimerStep.OVERDUE:
             recipients = await resolve_recipients(session, task)
             attempted = len(recipients)
-            notified = False
+            exists = False
             for r in recipients:
-                if await emit_task_event(
+                outcome = await emit_task_event(
                     session,
                     instance=instance,
                     task=task,
                     recipient=r,
                     event_key=EVENT_TASK_OVERDUE,
                     now=now,
-                ):
-                    notified = True
+                )
+                if outcome in ("created", "deduped"):
+                    exists = True
         else:  # TimerStep.ESCALATE_1
             recipient_ids = await resolve_escalation_recipients(session, task)
             # Derive the audit `via` label from the actual recipients returned, not from
-            # whether manager_id is set — an inactive/cross-org manager falls through to the
-            # QM fallback inside resolve_escalation_recipients, so manager_id being non-NULL
+            # whether manager_id is set — an inactive/cross-org/self-manager falls through to
+            # the QM fallback inside resolve_escalation_recipients, so manager_id being non-NULL
             # does NOT mean the manager was chosen as the recipient.
+            # R4-2: mirror R3-1's self-manager guard — when manager_id == assignee.id the
+            # recipient list is the QM fallback even though manager_id_for_task is non-NULL.
             assignee = (
                 await session.get(AppUser, task.assignee_user_id) if task.assignee_user_id else None
             )
             manager_id_for_task = assignee.manager_id if assignee is not None else None
+            assignee_id_for_task = assignee.id if assignee is not None else None
             via = (
                 "manager"
-                if (manager_id_for_task is not None and recipient_ids == [manager_id_for_task])
+                if (
+                    manager_id_for_task is not None
+                    and manager_id_for_task != assignee_id_for_task  # R4-2: not a self-manager
+                    and recipient_ids == [manager_id_for_task]
+                )
                 else "qm_fallback"
             )
-            notified_ids: list[uuid.UUID] = []
+            # created_ids: recipients for whom a NEW notification row was inserted this sweep.
+            # exists_ids:  recipients whose notification row exists (created OR deduped).
+            # The audit is written only when created_ids is non-empty (R4-1: never on a pure
+            # dedup so the WORM audit log has exactly one TASK_ESCALATED per escalation event).
+            created_ids: list[uuid.UUID] = []
+            exists_ids: list[uuid.UUID] = []
             attempted = 0
             for uid in recipient_ids:
                 # Pass org_id so cross-org role-holders are filtered here too (R2-4).
                 r_maybe = await _recipient_for_user(session, uid, org_id=task.org_id)
                 if r_maybe is not None:
                     attempted += 1
-                    if await emit_task_event(
+                    outcome = await emit_task_event(
                         session,
                         instance=instance,
                         task=task,
                         recipient=r_maybe,
                         event_key=EVENT_TASK_ESCALATED,
                         now=now,
-                    ):
-                        notified_ids.append(uid)
-            notified = bool(notified_ids)
-            if notified_ids:
-                # Write one TASK_ESCALATED AuditEvent (system actor, workflow_instance keyed).
-                # escalated_to lists only the users who were actually notified (not the full
-                # resolved pool — some may have been skipped by _recipient_for_user).
+                    )
+                    if outcome == "created":
+                        created_ids.append(uid)
+                        exists_ids.append(uid)
+                    elif outcome == "deduped":
+                        exists_ids.append(uid)
+            exists = bool(exists_ids)
+            if created_ids:
+                # Write one TASK_ESCALATED AuditEvent only for genuinely-new escalations
+                # (R4-1: a pure dedup sweep must not append a second audit row — the original
+                # TASK_ESCALATED already exists in the WORM log from the first sweep).
+                # escalated_to lists only newly-created recipients (not deduped ones).
                 session.add(
                     AuditEvent(
                         org_id=task.org_id,
@@ -299,7 +321,7 @@ async def process_task_timers(
                         scope_ref=str(task.id),
                         after={
                             "task_id": str(task.id),
-                            "escalated_to": [str(u) for u in notified_ids],
+                            "escalated_to": [str(u) for u in created_ids],
                             "via": via,
                             "due_at": task.due_at.isoformat(),
                         },
@@ -309,15 +331,16 @@ async def process_task_timers(
         # Stamp in the SAME txn as the enqueue/audit — this is the idempotency key.
         # A non-null stamp means "already fired"; due_steps gates on it before firing.
         #
-        # Two distinct cases:
-        #   notified=True           → at least one notification row created → stamp.
-        #   notified=False, attempted=0 → terminal no-op (no valid recipient to attempt,
-        #                               e.g. empty pool, all-inactive, no manager+no QM) →
-        #                               stamp to avoid the sweep re-processing this task
-        #                               on every 5-min cycle forever.
-        #   notified=False, attempted>0 → delivery miss (template absent/deactivated) →
-        #                               do NOT stamp; retry next sweep after template restored.
-        should_stamp = notified or attempted == 0
+        # Three distinct cases:
+        #   exists=True             → at least one notification row exists (created or deduped) →
+        #                             stamp.
+        #   exists=False, attempted=0 → terminal no-op (no valid recipient to attempt,
+        #                             e.g. empty pool, all-inactive, no manager+no QM) →
+        #                             stamp to avoid the sweep re-processing this task
+        #                             on every 5-min cycle forever.
+        #   exists=False, attempted>0 → delivery miss (template absent/deactivated) →
+        #                             do NOT stamp; retry next sweep after template restored.
+        should_stamp = exists or attempted == 0
         if should_stamp:
             setattr(task, _STAMP_COL[step], now)
             fired += 1
