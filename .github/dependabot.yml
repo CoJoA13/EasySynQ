@@ -14,6 +14,12 @@ updates:
     groups:
       python-minor-patch:
         update-types: ["minor", "patch"]
+    ignore:
+      # reportlab is deliberately capped <5 — stamp_controlled_copy's byte-determinism depends on
+      # reportlab invariant mode (apps/api/pyproject.toml); a v5 bump needs a dedicated byte-output
+      # verification, not an auto-merge (closed PR #271). Stay on 4.x minor/patch.
+      - dependency-name: "reportlab"
+        update-types: ["version-update:semver-major"]
 
   # Web SPA
   - package-ecosystem: "npm"
@@ -24,6 +30,12 @@ updates:
     groups:
       web-minor-patch:
         update-types: ["minor", "patch"]
+    ignore:
+      # Mantine majors are a deliberate UI-lib migration (D4 — fixed stack; the SPA targets v7); a v8/v9
+      # jump breaks the build and is its own scoped project, not an auto-bump (closed PR #266). Minor/patch
+      # within v7 still flow via web-minor-patch.
+      - dependency-name: "@mantine/*"
+        update-types: ["version-update:semver-major"]
 
   # CI action pins (keeps astral-sh/setup-uv, actions/*, trivy fresh — supply-chain hygiene)
   - package-ecosystem: "github-actions"
