@@ -16,7 +16,7 @@ jobs:
   contracts:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v6
         with: { node-version: "22" }
       - name: lint OpenAPI
@@ -25,7 +25,7 @@ jobs:
   api:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: install uv
         # exact pin — setup-uv stopped publishing floating major tags at v8
         uses: astral-sh/setup-uv@v8.2.0
@@ -62,7 +62,7 @@ jobs:
       DATABASE_URL_SYNC: postgresql+psycopg://easysynq:easysynq@localhost:5432/easysynq
       DATABASE_URL: postgresql+psycopg://easysynq:easysynq@localhost:5432/easysynq
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v8.2.0
         with:
           enable-cache: true
@@ -91,7 +91,7 @@ jobs:
       matrix:
         group: [1, 2, 3, 4]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v8.2.0
         with:
           enable-cache: true
@@ -133,7 +133,7 @@ jobs:
   web:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v6
         with:
           node-version: "22"
@@ -154,7 +154,7 @@ jobs:
   security:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: install uv
         uses: astral-sh/setup-uv@v8.2.0
         with:
@@ -239,7 +239,7 @@ jobs:
   compose-images-lock:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: every Compose image must be pinned in infra/images.lock
         run: |
           compose=$(grep -hE '^[[:space:]]+image:[[:space:]]' infra/compose/compose.yml infra/compose/compose.*.yml 2>/dev/null | awk '{print $2}' | sort -u)
