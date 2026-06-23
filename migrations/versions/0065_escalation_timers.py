@@ -209,34 +209,35 @@ def upgrade() -> None:
 
     # 7. Seed one active sla_policy per TaskType for the default org.
     #    Resilient org lookup (the 0053/0062 precedent — NOT WHERE short_code='DEFAULT').
-    org_id = bind.execute(sa.text("SELECT id FROM organization")).scalar_one()
+    org_id = bind.execute(sa.text("SELECT id FROM organization")).scalar_one_or_none()
     _three_days = datetime.timedelta(days=3)
     _one_day = datetime.timedelta(days=1)
 
-    op.bulk_insert(
-        sa.table(
-            "sla_policy",
-            sa.column("id", postgresql.UUID(as_uuid=True)),
-            sa.column("org_id", postgresql.UUID(as_uuid=True)),
-            sa.column("task_type", postgresql.ENUM(name="task_type", create_type=False)),
-            sa.column("remind_1_before", sa.Interval()),
-            sa.column("remind_2_before", sa.Interval()),
-            sa.column("escalate_1_after", sa.Interval()),
-            sa.column("active", sa.Boolean()),
-        ),
-        [
-            {
-                "id": uuid.uuid4(),
-                "org_id": org_id,
-                "task_type": tt.value,
-                "remind_1_before": _three_days,
-                "remind_2_before": _one_day,
-                "escalate_1_after": _one_day,
-                "active": True,
-            }
-            for tt in TaskType
-        ],
-    )
+    if org_id is not None:
+        op.bulk_insert(
+            sa.table(
+                "sla_policy",
+                sa.column("id", postgresql.UUID(as_uuid=True)),
+                sa.column("org_id", postgresql.UUID(as_uuid=True)),
+                sa.column("task_type", postgresql.ENUM(name="task_type", create_type=False)),
+                sa.column("remind_1_before", sa.Interval()),
+                sa.column("remind_2_before", sa.Interval()),
+                sa.column("escalate_1_after", sa.Interval()),
+                sa.column("active", sa.Boolean()),
+            ),
+            [
+                {
+                    "id": uuid.uuid4(),
+                    "org_id": org_id,
+                    "task_type": tt.value,
+                    "remind_1_before": _three_days,
+                    "remind_2_before": _one_day,
+                    "escalate_1_after": _one_day,
+                    "active": True,
+                }
+                for tt in TaskType
+            ],
+        )
 
 
 def downgrade() -> None:
