@@ -218,7 +218,14 @@ async def process_task_timers(
                 )
         else:  # TimerStep.ESCALATE_1
             recipient_ids = await resolve_escalation_recipients(session, task)
-            via = "manager" if (task.assignee_user_id and recipient_ids) else "qm_fallback"
+            assignee = (
+                await session.get(AppUser, task.assignee_user_id) if task.assignee_user_id else None
+            )
+            via = (
+                "manager"
+                if (assignee is not None and assignee.manager_id is not None)
+                else "qm_fallback"
+            )
             for uid in recipient_ids:
                 r_maybe = await _recipient_for_user(session, uid)
                 if r_maybe is not None:

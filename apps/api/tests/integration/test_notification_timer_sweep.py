@@ -310,13 +310,13 @@ async def test_escalate_to_manager(app_under_test: Any) -> None:
     sm = get_sessionmaker()
     await sweep_task_timers(sm, now)
 
-    # Manager should have a task.escalated notification
+    # Manager should have exactly one task.escalated notification
     count = await _count_notifications(manager_id, task.id, EVENT_TASK_ESCALATED)
-    assert count >= 1, f"Expected ≥1 escalated notification for manager, got {count}"
+    assert count == 1, f"Expected exactly 1 escalated notification for manager, got {count}"
 
-    # TASK_ESCALATED audit event should exist
+    # TASK_ESCALATED audit event should exist exactly once
     audit_count = await _count_audit_events(org_id, EventType.TASK_ESCALATED, str(task.id))
-    assert audit_count >= 1, f"Expected TASK_ESCALATED audit event, got {audit_count}"
+    assert audit_count == 1, f"Expected exactly 1 TASK_ESCALATED audit event, got {audit_count}"
 
     # Audit event content checks
     async with get_sessionmaker()() as s:
@@ -340,6 +340,7 @@ async def test_escalate_to_manager(app_under_test: Any) -> None:
     assert ae.after is not None
     assert str(task.id) in ae.after.get("task_id", "")
     assert str(manager_id) in ae.after.get("escalated_to", [])
+    assert ae.after.get("via") == "manager"
 
     # escalated_1_at stamped
     async with get_sessionmaker()() as s:
@@ -376,7 +377,26 @@ async def test_escalate_fallback_to_qm(app_under_test: Any) -> None:
     await sweep_task_timers(sm, now)
 
     count = await _count_notifications(qm_id, task.id, EVENT_TASK_ESCALATED)
-    assert count >= 1, f"Expected ≥1 escalated notification for QM fallback, got {count}"
+    assert count == 1, f"Expected exactly 1 escalated notification for QM fallback, got {count}"
+
+    # Audit event via must be qm_fallback (proves Fix 1 for the no-manager case)
+    async with get_sessionmaker()() as s:
+        ae = (
+            (
+                await s.execute(
+                    select(AuditEvent).where(
+                        AuditEvent.org_id == org_id,
+                        AuditEvent.event_type == EventType.TASK_ESCALATED,
+                        AuditEvent.scope_ref == str(task.id),
+                    )
+                )
+            )
+            .scalars()
+            .first()
+        )
+    assert ae is not None
+    assert ae.after is not None
+    assert ae.after.get("via") == "qm_fallback"
 
 
 async def test_done_task_skipped(app_under_test: Any) -> None:
