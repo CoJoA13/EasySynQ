@@ -11,7 +11,6 @@ import {
   TextInput,
   Title,
 } from "@mantine/core";
-import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { ErrorState, LoadingState, MutationErrorState } from "../../lib/states";
@@ -103,7 +102,6 @@ function buildUpdate(w: Working, b: NotificationPreferences): NotificationPrefer
 export function NotificationSettingsPage() {
   const prefs = useNotificationPreferences();
   const update = useUpdateNotificationPreferences();
-  const qc = useQueryClient();
   const [working, setWorking] = useState<Working | null>(null);
 
   // Seed/refresh the working state from the loaded prefs (the only refetch is the post-save
@@ -132,27 +130,7 @@ export function NotificationSettingsPage() {
 
   function save() {
     if (!dirty || quietInvalid || !baseline) return;
-    // Capture a snapshot of baseline + the body we're about to send so we can apply the changes
-    // optimistically into the query cache on success. TanStack Query's structural sharing keeps the
-    // same prefs.data reference when the re-fetch returns structurally identical data, which would
-    // leave the useEffect no-op and dirty=true — hiding the "Saved." confirmation. Writing the
-    // merged result into the cache ensures prefs.data gets a new reference even when the server
-    // round-trip returns the same bytes.
-    const capturedBaseline = baseline;
-    const capturedBody = body;
-    update.mutate(body, {
-      onSuccess: () => {
-        const merged: NotificationPreferences = {
-          ...capturedBaseline,
-          ...capturedBody,
-          digest_modes: {
-            ...capturedBaseline.digest_modes,
-            ...(capturedBody.digest_modes ?? {}),
-          },
-        };
-        qc.setQueryData(["notification-preferences"], merged);
-      },
-    });
+    update.mutate(body);
   }
 
   return (
@@ -248,6 +226,7 @@ export function NotificationSettingsPage() {
                   searchable
                   searchValue={tzSearch}
                   onSearchChange={setTzSearch}
+                  onDropdownOpen={() => setTzSearch("")}
                   data={tzData}
                   value={working.timezone}
                   onChange={(v) => v && setWorking({ ...working, timezone: v })}

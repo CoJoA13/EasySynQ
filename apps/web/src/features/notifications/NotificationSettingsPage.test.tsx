@@ -28,6 +28,28 @@ function getPrefs(overrides: Record<string, unknown> = {}) {
   );
 }
 
+function statefulPrefs(
+  initial: NotificationPreferences = FULL_PREFS,
+  onPut?: (body: unknown) => void,
+) {
+  let current: NotificationPreferences = { ...initial, digest_modes: { ...initial.digest_modes } };
+  return [
+    http.get("/api/v1/me/notification-preferences", () =>
+      HttpResponse.json(current as unknown as Record<string, unknown>),
+    ),
+    http.put("/api/v1/me/notification-preferences", async ({ request }) => {
+      const b = (await request.json()) as Partial<NotificationPreferences>;
+      onPut?.(b);
+      current = {
+        ...current,
+        ...b,
+        digest_modes: { ...current.digest_modes, ...(b.digest_modes ?? {}) },
+      };
+      return HttpResponse.json(current as unknown as Record<string, unknown>);
+    }),
+  ];
+}
+
 describe("NotificationSettingsPage — cadence matrix", () => {
   it("reflects the loaded preferences and is accessible", async () => {
     server.use(
@@ -52,10 +74,8 @@ describe("NotificationSettingsPage — cadence matrix", () => {
   it("saves a changed cadence as a partial PUT", async () => {
     let body: unknown = null;
     server.use(
-      getPrefs(),
-      http.put("/api/v1/me/notification-preferences", async ({ request }) => {
-        body = await request.json();
-        return HttpResponse.json(body as Record<string, unknown>);
+      ...statefulPrefs(FULL_PREFS, (b) => {
+        body = b;
       }),
     );
     const user = userEvent.setup();
@@ -67,15 +87,15 @@ describe("NotificationSettingsPage — cadence matrix", () => {
     await user.click(screen.getByRole("button", { name: "Save changes" }));
     await waitFor(() => expect(body).toEqual({ digest_modes: { action_required: "off" } }));
     expect(await screen.findByText("Saved.")).toBeInTheDocument();
+    // stateful: refetch returns action_required:"off" so the control stays checked
+    expect(within(group).getByRole("radio", { name: "Off" })).toBeChecked();
   });
 
   it("saves the master email toggle as a partial PUT", async () => {
     let body: unknown = null;
     server.use(
-      getPrefs(),
-      http.put("/api/v1/me/notification-preferences", async ({ request }) => {
-        body = await request.json();
-        return HttpResponse.json(body as Record<string, unknown>);
+      ...statefulPrefs(FULL_PREFS, (b) => {
+        body = b;
       }),
     );
     const user = userEvent.setup();
@@ -110,10 +130,8 @@ describe("NotificationSettingsPage — daily digest timing", () => {
   it("saves a changed digest hour", async () => {
     let body: unknown = null;
     server.use(
-      getPrefs(),
-      http.put("/api/v1/me/notification-preferences", async ({ request }) => {
-        body = await request.json();
-        return HttpResponse.json(body as Record<string, unknown>);
+      ...statefulPrefs(FULL_PREFS, (b) => {
+        body = b;
       }),
     );
     const user = userEvent.setup();
@@ -127,10 +145,8 @@ describe("NotificationSettingsPage — daily digest timing", () => {
   it("searches and saves a non-curated timezone", async () => {
     let body: unknown = null;
     server.use(
-      getPrefs(),
-      http.put("/api/v1/me/notification-preferences", async ({ request }) => {
-        body = await request.json();
-        return HttpResponse.json(body as Record<string, unknown>);
+      ...statefulPrefs(FULL_PREFS, (b) => {
+        body = b;
       }),
     );
     const user = userEvent.setup();
@@ -144,13 +160,21 @@ describe("NotificationSettingsPage — daily digest timing", () => {
     await waitFor(() => expect(body).toEqual({ timezone: "America/Anchorage" }));
   });
 
+  it("offers the curated common zones at rest (before typing)", async () => {
+    server.use(getPrefs()); // timezone defaults to "UTC"
+    const user = userEvent.setup();
+    renderWithProviders(<NotificationSettingsPage />, { route: "/settings/notifications" });
+    await user.click(await screen.findByLabelText("Timezone"));
+    // curated zones are offered without any typing
+    expect(await screen.findByText("Europe/London")).toBeInTheDocument();
+    expect(screen.getByText("America/New_York")).toBeInTheDocument();
+  });
+
   it("enabling quiet hours saves both bounds together", async () => {
     let body: unknown = null;
     server.use(
-      getPrefs(),
-      http.put("/api/v1/me/notification-preferences", async ({ request }) => {
-        body = await request.json();
-        return HttpResponse.json(body as Record<string, unknown>);
+      ...statefulPrefs(FULL_PREFS, (b) => {
+        body = b;
       }),
     );
     const user = userEvent.setup();
@@ -163,10 +187,8 @@ describe("NotificationSettingsPage — daily digest timing", () => {
   it("disabling quiet hours clears both bounds", async () => {
     let body: unknown = null;
     server.use(
-      getPrefs({ quiet_start: "22:00", quiet_end: "07:00" }),
-      http.put("/api/v1/me/notification-preferences", async ({ request }) => {
-        body = await request.json();
-        return HttpResponse.json(body as Record<string, unknown>);
+      ...statefulPrefs({ ...FULL_PREFS, quiet_start: "22:00", quiet_end: "07:00" }, (b) => {
+        body = b;
       }),
     );
     const user = userEvent.setup();
