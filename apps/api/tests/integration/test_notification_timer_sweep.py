@@ -16,6 +16,9 @@ Scenarios:
 6. Concurrency: two process_task_timers on the same task via asyncio.gather → escalated once.
 7. DOC_ACK task past escalate threshold → reminders+overdue only; no task.escalated + no audit.
 8. Inactive manager → falls through to QMS Owner fallback.
+9. (R2-3) Active no-email manager → in-app task.escalated created; stamp written.
+10. (R2-2) Escalate with no valid recipient (no manager + no QM) → stamped; re-sweep no-op.
+11. (R2-4) Cross-org QM fallback holder → NOT notified; step stamped (no valid recipient).
 """
 
 from __future__ import annotations
@@ -537,8 +540,7 @@ async def test_doc_ack_no_escalation(app_under_test: Any) -> None:
 async def test_inactive_manager_falls_through_to_qm(app_under_test: Any) -> None:
     """An inactive manager is skipped; the QMS Owner fallback receives the escalation instead.
 
-    resolve_escalation_recipients now mirrors _recipient_for_user's skip criteria: it only returns
-    [manager_id] when the manager is active (status not in _INACTIVE) and has a non-empty email.
+    resolve_escalation_recipients accepts the manager only when active AND in the same org.
     When the manager is LOCKED (inactive), it must fall through to the QMS Owner pool.
 
     NOTE: ``now`` is datetime.now(UTC) — AuditEvent partition constraint
@@ -608,3 +610,172 @@ async def test_inactive_manager_falls_through_to_qm(app_under_test: Any) -> None
     assert ae.after.get("via") == "qm_fallback", (
         f"Expected via=qm_fallback when manager is inactive, got {ae.after.get('via')}"
     )
+
+
+async def test_no_email_manager_gets_inapp_escalation(app_under_test: Any) -> None:
+    """R2-3: an active manager with email=None still receives the in-app task.escalated row.
+
+    _recipient_for_user no longer drops a user for having a NULL email — only email-row
+    creation depends on an address.  The in-app notification row must be created regardless.
+
+    NOTE: ``now`` is datetime.now(UTC) — AuditEvent partition constraint.
+    """
+    now = datetime.datetime.now(datetime.UTC)
+    org_id = await _default_org_id()
+
+    # Seed a manager with no email address (valid: AppUser.email is nullable).
+    no_email_manager_id = await _seed_user(org_id, display_name="No Email Manager", email=None)
+    assignee_id = await _seed_user(
+        org_id, display_name="Assignee No-Email Mgr", manager_id=no_email_manager_id
+    )
+
+    due_at = now - datetime.timedelta(days=2)
+    _, task = await _seed_workflow_objects(
+        org_id,
+        assignee_id,
+        due_at=due_at,
+        remind_1_sent_at=_STAMPED,
+        remind_2_sent_at=_STAMPED,
+        overdue_notified_at=_STAMPED,
+    )
+
+    sm = get_sessionmaker()
+    await sweep_task_timers(sm, now)
+
+    # The in-app notification row must exist for the no-email manager.
+    count = await _count_notifications(no_email_manager_id, task.id, EVENT_TASK_ESCALATED)
+    assert count == 1, f"No-email manager must receive in-app task.escalated row (got {count})"
+
+    # escalated_1_at must be stamped.
+    async with get_sessionmaker()() as s:
+        task_fresh = await s.get(Task, task.id)
+        assert task_fresh is not None
+        assert task_fresh.escalated_1_at is not None, (
+            "escalated_1_at must be stamped when no-email manager is the valid recipient"
+        )
+
+
+async def test_no_recipient_stamps_and_does_not_repeat(app_under_test: Any) -> None:
+    """R2-2: a step with no valid recipient (no manager + no QM in org) is stamped as a
+    terminal no-op.  A second sweep must not reprocess the already-stamped step.
+
+    Distinguishes terminal no-op (attempted=0 → stamp) from a delivery miss
+    (attempted>0, notified=False → don't stamp, retry).
+
+    NOTE: ``now`` is datetime.now(UTC) — AuditEvent partition constraint.
+    """
+    now = datetime.datetime.now(datetime.UTC)
+    org_id = await _default_org_id()
+
+    # Assignee with no manager and no QMS Owner in the org (use a unique assignee
+    # so no pre-existing QMS Owner assignment in this org affects the test).
+    # We don't assign the QMS Owner role to anyone for this task's scope.
+    # Use a unique-enough assignee display name to avoid cross-test collisions.
+    assignee_id = await _seed_user(
+        org_id, display_name="No Recipient Assignee R22", manager_id=None
+    )
+
+    due_at = now - datetime.timedelta(days=2)
+    _, task = await _seed_workflow_objects(
+        org_id,
+        assignee_id,
+        due_at=due_at,
+        remind_1_sent_at=_STAMPED,
+        remind_2_sent_at=_STAMPED,
+        overdue_notified_at=_STAMPED,
+        # escalated_1_at left NULL → step is eligible
+    )
+
+    sm = get_sessionmaker()
+
+    # First sweep: the escalate step fires but has no valid recipient.
+    # It should stamp escalated_1_at (terminal no-op).
+    await sweep_task_timers(sm, now)
+
+    async with get_sessionmaker()() as s:
+        task_after_first = await s.get(Task, task.id)
+        assert task_after_first is not None
+        assert task_after_first.escalated_1_at is not None, (
+            "escalated_1_at must be stamped even when there are no valid recipients "
+            "(terminal no-op must not loop)"
+        )
+
+    # Second sweep: the step is now stamped → due_steps returns [] → 0 steps fired for this task.
+    # We cannot assert result2["steps"] == 0 globally (other tasks in the shared DB may fire),
+    # so we check that the stamp has not moved (still the value from sweep 1).
+    stamp_after_first = task_after_first.escalated_1_at
+    await sweep_task_timers(sm, now)
+    async with get_sessionmaker()() as s:
+        task_after_second = await s.get(Task, task.id)
+        assert task_after_second is not None
+        assert task_after_second.escalated_1_at == stamp_after_first, (
+            "escalated_1_at must not change on a re-sweep (step already stamped)"
+        )
+
+    # No escalation notification must have been created (no recipient to send to).
+    count = await _count_notifications(assignee_id, task.id, EVENT_TASK_ESCALATED)
+    assert count == 0, (
+        f"No task.escalated notification expected when there are no valid recipients (got {count})"
+    )
+
+
+async def test_cross_org_qm_fallback_not_notified(app_under_test: Any) -> None:
+    """R2-4: a QMS Owner role assignment whose app_user belongs to a different org is filtered out
+    by _recipient_for_user's org_id check.  The cross-org user must not receive the escalation.
+
+    The step is stamped as a terminal no-op (attempted=0 after the org filter).
+
+    NOTE: ``now`` is datetime.now(UTC) — AuditEvent partition constraint.
+    """
+    now = datetime.datetime.now(datetime.UTC)
+    org_id = await _default_org_id()
+
+    # Create a second org so we have a cross-org user to assign.
+    salt = uuid.uuid4().hex[:8]
+    async with get_sessionmaker()() as s:
+        other_org = Organization(
+            legal_name=f"Cross Org {salt}",
+            short_code=f"XO{salt[:6].upper()}",
+        )
+        s.add(other_org)
+        await s.commit()
+        other_org_id = other_org.id
+
+    # Seed a user in the OTHER org.
+    cross_org_user_id = await _seed_user(
+        other_org_id,
+        display_name="Cross Org QM",
+        email=f"cross-qm-{salt}@example.com",
+    )
+
+    # Assign the "QMS Owner" role to the cross-org user IN the task's org.
+    # (ops tooling can grant a role to an existing subject without moving the user)
+    await _assign_role(org_id, cross_org_user_id, "QMS Owner")
+
+    # Assignee with no manager in the task org → escalation falls through to QM fallback.
+    assignee_id = await _seed_user(org_id, display_name="Assignee Cross-Org QM", manager_id=None)
+
+    due_at = now - datetime.timedelta(days=2)
+    _, task = await _seed_workflow_objects(
+        org_id,
+        assignee_id,
+        due_at=due_at,
+        remind_1_sent_at=_STAMPED,
+        remind_2_sent_at=_STAMPED,
+        overdue_notified_at=_STAMPED,
+    )
+
+    sm = get_sessionmaker()
+    await sweep_task_timers(sm, now)
+
+    # Cross-org QM must NOT receive an escalation notification.
+    count = await _count_notifications(cross_org_user_id, task.id, EVENT_TASK_ESCALATED)
+    assert count == 0, f"Cross-org QM must not receive task.escalated (got {count})"
+
+    # The step must be stamped (terminal no-op — org filter produced attempted=0).
+    async with get_sessionmaker()() as s:
+        task_fresh = await s.get(Task, task.id)
+        assert task_fresh is not None
+        assert task_fresh.escalated_1_at is not None, (
+            "escalated_1_at must be stamped when the only QM candidate is cross-org"
+        )

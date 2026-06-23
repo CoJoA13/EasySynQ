@@ -47,47 +47,50 @@ async def resolve_escalation_recipients(session: AsyncSession, task: Task) -> li
     """Return the escalation recipient list for a task.
 
     Priority:
-    1. The assignee's manager (``manager_id``) if set AND the manager would yield a valid
-       Recipient (active, has email, not inactive) — consistent with ``_recipient_for_user``.
-       An inactive/no-email manager falls through to the QMS Owner fallback rather than
-       silently delivering to nobody.
+    1. The assignee's manager (``manager_id``) if set, active, and in the same org as the task.
+       A no-email manager is still a valid in-app escalation target (only email-row creation
+       depends on an address — mirror _recipient_for_user / resolve_recipients behaviour).
+       An inactive or cross-org manager falls through to the QMS Owner fallback.
     2. All ``QMS Owner`` role-holders in the task's org (fallback).
     3. Empty list if neither exists (stamp anyway — no valid recipient).
     """
     if task.assignee_user_id is not None:
         assignee = await session.get(AppUser, task.assignee_user_id)
         if assignee is not None and assignee.manager_id is not None:
-            # Only return the manager if _recipient_for_user would accept them.
-            # Criteria (mirror _recipient_for_user exactly): user must exist, status not in
-            # _INACTIVE ({LOCKED, DISABLED, RETIRED}), have a non-empty email,
-            # AND must belong to the same org as the task (cross-org FK is possible via
-            # manager_id self-FK; an out-of-org manager leaks task metadata → fall through).
+            # Accept the manager when: exists + active + same org as task.
+            # Email is NOT required here — a no-email manager still gets the in-app row.
+            # Cross-org manager FK is possible (manager_id is a self-FK with no org constraint);
+            # an out-of-org manager leaks task metadata → fall through to the QM fallback.
             manager = await session.get(AppUser, assignee.manager_id)
             if (
                 manager is not None
                 and manager.status not in _INACTIVE
-                and manager.email
                 and manager.org_id == task.org_id
             ):
                 return [assignee.manager_id]
-            # Manager is inactive, has no email, or is cross-org → fall through to QM fallback.
-    # No manager (or pool-only task, or inactive/no-email manager) → QM fallback (org-scoped).
+            # Manager is inactive or cross-org → fall through to QM fallback.
+    # No manager (or pool-only task, or inactive/cross-org manager) → QM fallback (org-scoped).
     return await users_with_roles(session, task.org_id, [_QM_ROLE])
 
 
-async def _recipient_for_user(session: AsyncSession, user_id: uuid.UUID) -> Recipient | None:
+async def _recipient_for_user(
+    session: AsyncSession, user_id: uuid.UUID, *, org_id: uuid.UUID
+) -> Recipient | None:
     """Build a Recipient from an AppUser id, mirroring recipients.py's construction.
 
-    Returns None if the user is inactive, has no email, or doesn't exist — skip silently.
+    Returns None if the user doesn't exist, is inactive, or belongs to a different org.
+    A NULL email is allowed: the in-app notification row is always created; only the
+    downstream email send depends on an address (mirror resolve_recipients' behaviour).
+    Cross-org users are silently dropped to prevent task metadata leaking out of the org.
     """
     user = await session.get(AppUser, user_id)
-    if user is None or user.status in _INACTIVE or not user.email:
+    if user is None or user.status in _INACTIVE or user.org_id != org_id:
         return None
     pref = await session.get(NotificationPreference, user_id)
     email_enabled = pref.email_enabled if pref is not None else True  # absence ⇒ enabled
     return Recipient(
         user_id=user.id,
-        email=user.email,
+        email=user.email,  # may be None — only email-row creation depends on an address
         display_name=user.display_name or "",
         first_name=_first_name(user.display_name),
         email_enabled=email_enabled,
@@ -223,15 +226,19 @@ async def process_task_timers(
     for step in due_steps(tpolicy, task.due_at, stamps, now):
         if step in (TimerStep.REMIND_1, TimerStep.REMIND_2):
             event_key = EVENT_TASK_DUE_SOON
+            recipients = await resolve_recipients(session, task)
+            attempted = len(recipients)
             notified = False
-            for r in await resolve_recipients(session, task):
+            for r in recipients:
                 if await emit_task_event(
                     session, instance=instance, task=task, recipient=r, event_key=event_key, now=now
                 ):
                     notified = True
         elif step is TimerStep.OVERDUE:
+            recipients = await resolve_recipients(session, task)
+            attempted = len(recipients)
             notified = False
-            for r in await resolve_recipients(session, task):
+            for r in recipients:
                 if await emit_task_event(
                     session,
                     instance=instance,
@@ -244,7 +251,7 @@ async def process_task_timers(
         else:  # TimerStep.ESCALATE_1
             recipient_ids = await resolve_escalation_recipients(session, task)
             # Derive the audit `via` label from the actual recipients returned, not from
-            # whether manager_id is set — an inactive/no-email manager falls through to the
+            # whether manager_id is set — an inactive/cross-org manager falls through to the
             # QM fallback inside resolve_escalation_recipients, so manager_id being non-NULL
             # does NOT mean the manager was chosen as the recipient.
             assignee = (
@@ -257,9 +264,12 @@ async def process_task_timers(
                 else "qm_fallback"
             )
             notified_ids: list[uuid.UUID] = []
+            attempted = 0
             for uid in recipient_ids:
-                r_maybe = await _recipient_for_user(session, uid)
+                # Pass org_id so cross-org role-holders are filtered here too (R2-4).
+                r_maybe = await _recipient_for_user(session, uid, org_id=task.org_id)
                 if r_maybe is not None:
+                    attempted += 1
                     if await emit_task_event(
                         session,
                         instance=instance,
@@ -295,9 +305,17 @@ async def process_task_timers(
 
         # Stamp in the SAME txn as the enqueue/audit — this is the idempotency key.
         # A non-null stamp means "already fired"; due_steps gates on it before firing.
-        # Only stamp when at least one notification was created: a template miss (notified=False)
-        # must NOT be stamped so the step retries after the template is restored.
-        if notified:
+        #
+        # Two distinct cases:
+        #   notified=True           → at least one notification row created → stamp.
+        #   notified=False, attempted=0 → terminal no-op (no valid recipient to attempt,
+        #                               e.g. empty pool, all-inactive, no manager+no QM) →
+        #                               stamp to avoid the sweep re-processing this task
+        #                               on every 5-min cycle forever.
+        #   notified=False, attempted>0 → delivery miss (template absent/deactivated) →
+        #                               do NOT stamp; retry next sweep after template restored.
+        should_stamp = notified or attempted == 0
+        if should_stamp:
             setattr(task, _STAMP_COL[step], now)
             fired += 1
 

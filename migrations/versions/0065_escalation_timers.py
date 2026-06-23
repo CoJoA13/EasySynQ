@@ -30,7 +30,26 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-from easysynq_api.db.models._workflow_enums import TaskType
+# Frozen at 0065: the 12 task_type enum values that exist when this migration runs.
+# Do NOT import the live ORM TaskType here — a later migration may ADD a member via
+# ALTER TYPE before 0065's seed insert runs on a from-scratch replay, causing a
+# "invalid input value for enum task_type" failure (R2-1 / Codex finding).
+_TASK_TYPES_AT_0065 = (
+    "APPROVE",
+    "REVIEW",
+    "PERIODIC_REVIEW",
+    "AUDIT_TASK",
+    "FINDING_ACK",
+    "CAPA_STAGE",
+    "CAPA_ACTION",
+    "VERIFY",
+    "MR_INPUT",
+    "MR_ACTION",
+    "DCR_TRIAGE",
+    "DOC_ACK",
+)
+# Personal read-&-understood obligations — reminders+overdue only, no manager escalation.
+_NO_ESCALATE_AT_0065 = {"DOC_ACK", "PERIODIC_REVIEW"}
 
 revision: str = "0065_escalation_timers"
 down_revision: str | None = "0064_notification_digests"
@@ -202,10 +221,15 @@ def upgrade() -> None:
             },
         )
 
-    # 7. Seed one active sla_policy per TaskType for every org in the database.
+    # 7. Seed one active sla_policy per task type for every org in the database.
     #    Resilient multi-org loop (the 0062 precedent — scalars().all(), NOT scalar_one_or_none()).
     #    D1 single-org makes this v1-moot, but scalar_one_or_none() raises on a multi-row result
     #    (SQLAlchemy 2.x), so the migration must be multi-org-safe regardless.
+    #
+    #    We iterate _TASK_TYPES_AT_0065 (a frozen module-level tuple of string values), NOT the
+    #    live ORM TaskType enum.  A future migration that adds a TaskType via ALTER TYPE would make
+    #    0065 iterate that new member before the DB enum is altered, causing an invalid-enum-value
+    #    insert failure on a from-scratch replay.
     org_ids = bind.execute(sa.text("SELECT id FROM organization")).scalars().all()
     _three_days = datetime.timedelta(days=3)
     _one_day = datetime.timedelta(days=1)
@@ -218,7 +242,6 @@ def upgrade() -> None:
     # Escalation: personal read-&-understood obligations (DOC_ACK / PERIODIC_REVIEW) should
     # not ping a manager — they get reminders + overdue but NO manager escalation.
     # All other 10 workflow task types escalate after 1 day overdue.
-    _NO_ESCALATE = {TaskType.DOC_ACK, TaskType.PERIODIC_REVIEW}
 
     if org_ids:
         op.bulk_insert(
@@ -236,14 +259,14 @@ def upgrade() -> None:
                 {
                     "id": uuid.uuid4(),
                     "org_id": oid,
-                    "task_type": tt.value,
+                    "task_type": tt,
                     "remind_1_before": _three_days,
                     "remind_2_before": None,  # one-reminder MVP; 2nd reminder is a named follow-up
-                    "escalate_1_after": None if tt in _NO_ESCALATE else _one_day,
+                    "escalate_1_after": None if tt in _NO_ESCALATE_AT_0065 else _one_day,
                     "active": True,
                 }
                 for oid in org_ids
-                for tt in TaskType
+                for tt in _TASK_TYPES_AT_0065
             ],
         )
 
