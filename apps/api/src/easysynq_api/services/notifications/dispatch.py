@@ -88,7 +88,12 @@ async def _enqueue_one(
     now: datetime.datetime,
     event_key: str,
 ) -> bool:
-    """Returns True if a new Notification row was created, False on template miss or dedup."""
+    """Return True if a Notification row exists for this recipient after the call (created OR
+    already-present via dedup); False only on a template miss (no template / render returned None).
+
+    Callers MUST stamp timer steps when this returns True (the notification was emitted or already
+    existed) and must NOT stamp when this returns False (template miss — retry after restore).
+    """
     variables: dict[str, object] = {
         "recipient.first_name": recipient.first_name,
         "subject.identifier": subject.identifier,
@@ -147,7 +152,12 @@ async def _enqueue_one(
     )
     new_id = (await session.execute(stmt)).scalar_one_or_none()
     if new_id is None:
-        return False  # dedup hit → the email is skipped too (no orphan, spec §4 / refute L2-3)
+        # Dedup hit: the notification row already exists (ON CONFLICT DO NOTHING).
+        # The notification WAS emitted (created in a prior sweep or a downgrade→re-upgrade cycle).
+        # Return True so the caller stamps the timer step as already-emitted — not as a delivery
+        # miss.  Email creation is correctly skipped (no orphan: spec §4 / refute L2-3).
+        # Only a template miss (checked above, before the insert) returns False.
+        return True
 
     if wants_email and mode is NotificationDigestMode.IMMEDIATE:
         # _email_eligible guarantees email is truthy here; cast for mypy.

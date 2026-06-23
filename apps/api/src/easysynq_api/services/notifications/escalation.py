@@ -66,9 +66,10 @@ async def resolve_escalation_recipients(session: AsyncSession, task: Task) -> li
                 manager is not None
                 and manager.status not in _INACTIVE
                 and manager.org_id == task.org_id
+                and assignee.manager_id != assignee.id  # R3-1: reject self-manager
             ):
                 return [assignee.manager_id]
-            # Manager is inactive or cross-org → fall through to QM fallback.
+            # Manager is inactive, cross-org, or self-manager → fall through to QM fallback.
     # No manager (or pool-only task, or inactive/cross-org manager) → QM fallback (org-scoped).
     return await users_with_roles(session, task.org_id, [_QM_ROLE])
 
@@ -108,14 +109,16 @@ async def emit_task_event(
 ) -> bool:
     """Emit a single notification event for one recipient + task.
 
-    Returns True if a Notification row was created; False on template miss or dedup.
+    Returns True if the Notification row exists after the call (created OR already-present via
+    dedup); False only on a template miss.
 
     NON-swallowing: unlike ``enqueue_task_notifications`` (which wraps in a SAVEPOINT and
     swallows failures), this function propagates any exception so the caller's per-task txn
     rolls back and the step is NOT stamped — it will retry on the next sweep.
 
-    The caller MUST only stamp the timer step when at least one call returns True — a False
-    (template miss) must not be stamped, so the step retries after the template is restored.
+    The caller MUST stamp the timer step when at least one call returns True (notification
+    exists — emitted now or in a prior cycle).  A False (template miss) must not be stamped,
+    so the step retries after the template is restored.
     """
     subject = await resolve_subject(session, instance.subject_type.value, instance.subject_id)
     cfg = await session.get(SystemConfig, instance.org_id)

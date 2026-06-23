@@ -19,6 +19,9 @@ Scenarios:
 9. (R2-3) Active no-email manager → in-app task.escalated created; stamp written.
 10. (R2-2) Escalate with no valid recipient (no manager + no QM) → stamped; re-sweep no-op.
 11. (R2-4) Cross-org QM fallback holder → NOT notified; step stamped (no valid recipient).
+12. (R3-1) Self-manager (manager_id == assignee.id) → escalation goes to QMS Owner fallback.
+13. (R3-2) Dedup hit (notification already exists, stamp NULL) → sweep stamps; no double-send.
+14. (R3-2 regression guard) Genuine template miss (attempted>0) → step NOT stamped; retry.
 """
 
 from __future__ import annotations
@@ -46,7 +49,12 @@ from easysynq_api.services.notifications.constants import (
     EVENT_TASK_ESCALATED,
     EVENT_TASK_OVERDUE,
 )
-from easysynq_api.services.notifications.escalation import process_task_timers, sweep_task_timers
+from easysynq_api.services.notifications.escalation import (
+    emit_task_event,
+    process_task_timers,
+    sweep_task_timers,
+)
+from easysynq_api.services.notifications.recipients import Recipient
 
 pytestmark = pytest.mark.integration
 
@@ -791,3 +799,236 @@ async def test_cross_org_qm_fallback_not_notified(app_under_test: Any) -> None:
             await s.execute(delete(AppUser).where(AppUser.id == cross_org_user_id))
             await s.execute(delete(Organization).where(Organization.id == other_org_id))
             await s.commit()
+
+
+async def test_self_manager_falls_through_to_qm(app_under_test: Any) -> None:
+    """R3-1: when manager_id == assignee.id the manager is treated as missing.
+
+    The self-manager is not an independent owner, so the escalation must go to the QMS Owner
+    fallback (or the empty list) rather than echoing back to the same person.
+    Audit via must be 'qm_fallback', NOT 'manager'.
+
+    NOTE: now is datetime.now(UTC) — AuditEvent partition constraint.
+    """
+    now = datetime.datetime.now(datetime.UTC)
+    org_id = await _default_org_id()
+
+    qm_id = await _seed_user(org_id, display_name="QMS Owner Self-Mgr Fallback R31")
+    await _assign_role(org_id, qm_id, "QMS Owner")
+
+    # Seed an assignee whose manager_id points at themselves (self-manager).
+    # We need the user's own id, so seed without manager_id first, then update.
+    assignee_id = await _seed_user(org_id, display_name="Self-Manager Assignee R31")
+    async with get_sessionmaker()() as s:
+        assignee = await s.get(AppUser, assignee_id)
+        assert assignee is not None
+        assignee.manager_id = assignee.id  # type: ignore[assignment]  # self-FK
+        await s.commit()
+
+    due_at = now - datetime.timedelta(days=2)
+    _, task = await _seed_workflow_objects(
+        org_id,
+        assignee_id,
+        due_at=due_at,
+        remind_1_sent_at=_STAMPED,
+        remind_2_sent_at=_STAMPED,
+        overdue_notified_at=_STAMPED,
+    )
+
+    sm = get_sessionmaker()
+    await sweep_task_timers(sm, now)
+
+    # Self-manager must NOT receive an escalation notification (they are the assignee).
+    count_self = await _count_notifications(assignee_id, task.id, EVENT_TASK_ESCALATED)
+    assert count_self == 0, (
+        f"Self-manager must not receive task.escalated as if they were an independent "
+        f"escalation target (got {count_self})"
+    )
+
+    # QMS Owner fallback must receive the notification.
+    count_qm = await _count_notifications(qm_id, task.id, EVENT_TASK_ESCALATED)
+    assert count_qm == 1, (
+        f"QMS Owner fallback must receive task.escalated when assignee is their own manager "
+        f"(got {count_qm})"
+    )
+
+    # Audit via must be 'qm_fallback' (prove the fallback path was taken, not 'manager').
+    async with get_sessionmaker()() as s:
+        ae = (
+            (
+                await s.execute(
+                    select(AuditEvent).where(
+                        AuditEvent.org_id == org_id,
+                        AuditEvent.event_type == EventType.TASK_ESCALATED,
+                        AuditEvent.scope_ref == str(task.id),
+                    )
+                )
+            )
+            .scalars()
+            .first()
+        )
+    assert ae is not None
+    assert ae.after is not None
+    assert ae.after.get("via") == "qm_fallback", (
+        f"Expected via=qm_fallback for a self-manager, got {ae.after.get('via')!r}"
+    )
+
+    # escalated_1_at must be stamped (QM fallback notified).
+    async with get_sessionmaker()() as s:
+        task_fresh = await s.get(Task, task.id)
+        assert task_fresh is not None
+        assert task_fresh.escalated_1_at is not None, (
+            "escalated_1_at must be stamped after QM fallback escalation"
+        )
+
+
+async def test_dedup_hit_stamps_step_not_infinite_retry(app_under_test: Any) -> None:
+    """R3-2: a step whose notification already exists but whose stamp is NULL is treated as
+    already-emitted.  The sweep must stamp escalated_1_at and a re-sweep must be a no-op.
+
+    Simulates the downgrade→re-upgrade state: the notification row survives the downgrade
+    (no DELETE on notification), the stamp columns are dropped then recreated as NULL, and
+    the next sweep's ON CONFLICT DO NOTHING dedup path now returns True → step is stamped.
+
+    NOTE: now is datetime.now(UTC) — AuditEvent partition constraint.
+    """
+    now = datetime.datetime.now(datetime.UTC)
+    org_id = await _default_org_id()
+
+    manager_id = await _seed_user(org_id, display_name="Dedup Manager R32")
+    assignee_id = await _seed_user(org_id, display_name="Dedup Assignee R32", manager_id=manager_id)
+
+    # Seed the task with escalated_1_at=NULL (un-stamped) so the sweep considers the step due.
+    due_at = now - datetime.timedelta(days=2)
+    _, task = await _seed_workflow_objects(
+        org_id,
+        assignee_id,
+        due_at=due_at,
+        remind_1_sent_at=_STAMPED,
+        remind_2_sent_at=_STAMPED,
+        overdue_notified_at=_STAMPED,
+        # escalated_1_at=None → step is eligible
+    )
+
+    # Pre-insert the notification row directly, simulating the notification that survived
+    # the downgrade.  No stamp on the task yet (escalated_1_at is NULL).
+    async with get_sessionmaker()() as s:
+        s.add(
+            Notification(
+                org_id=org_id,
+                recipient_user_id=manager_id,
+                event_key=EVENT_TASK_ESCALATED,
+                subject_type="document",
+                subject_id=uuid.uuid4(),  # phantom
+                task_id=task.id,
+                title="Pre-existing escalation",
+                body="Pre-existing escalation body",
+                deep_link="/tasks",
+                template_id=None,
+                template_version=None,
+                context={},
+            )
+        )
+        await s.commit()
+
+    sm = get_sessionmaker()
+
+    # First sweep: hits the dedup (ON CONFLICT DO NOTHING) → must now stamp (not loop forever).
+    await sweep_task_timers(sm, now)
+
+    async with get_sessionmaker()() as s:
+        task_after_first = await s.get(Task, task.id)
+        assert task_after_first is not None
+        assert task_after_first.escalated_1_at is not None, (
+            "escalated_1_at must be stamped when the notification already exists (dedup = emitted)"
+        )
+
+    stamp_after_first = task_after_first.escalated_1_at
+
+    # Second sweep: step is now stamped → due_steps returns [] → stamp must not change.
+    await sweep_task_timers(sm, now)
+    async with get_sessionmaker()() as s:
+        task_after_second = await s.get(Task, task.id)
+        assert task_after_second is not None
+        assert task_after_second.escalated_1_at == stamp_after_first, (
+            "escalated_1_at must not change on a re-sweep after dedup-stamp (no infinite retry)"
+        )
+
+    # Exactly one notification row must exist (no duplicate created by the sweep).
+    count = await _count_notifications(manager_id, task.id, EVENT_TASK_ESCALATED)
+    assert count == 1, (
+        f"Sweep must not create a duplicate notification row on a dedup path (got {count})"
+    )
+
+
+async def test_template_miss_does_not_stamp(app_under_test: Any) -> None:
+    """R3-2 regression guard: a genuine template miss (attempted>0, notified=False) must NOT stamp.
+
+    Uses a synthetic event_key that has no effective template in the DB so _enqueue_one
+    returns False.  Calls emit_task_event directly (the non-swallowing helper) and verifies
+    the return value, then confirms the task's escalated_1_at is still NULL.
+
+    This guards against regressing R2-2: a delivery miss must stay retryable.
+    """
+    now = datetime.datetime.now(datetime.UTC)
+    org_id = await _default_org_id()
+
+    recipient_id = await _seed_user(org_id, display_name="Template Miss Recipient R32guard")
+    assignee_id = await _seed_user(org_id, display_name="Template Miss Assignee R32guard")
+    instance, task = await _seed_workflow_objects_for_escalation(org_id, assignee_id, now=now)
+
+    recipient = Recipient(
+        user_id=recipient_id,
+        email="tmiss@example.com",
+        display_name="Template Miss Recipient R32guard",
+        first_name="Template",
+        email_enabled=True,
+    )
+
+    # Use a synthetic event_key that has no effective template — render() returns None.
+    bogus_key = "task.no_such_template_r32guard"
+
+    async with get_sessionmaker()() as s:
+        inst_fresh = await s.get(WorkflowInstance, instance.id)
+        task_fresh = await s.get(Task, task.id)
+        result = await emit_task_event(
+            s,
+            instance=inst_fresh,
+            task=task_fresh,
+            recipient=recipient,
+            event_key=bogus_key,
+            now=now,
+        )
+        await s.commit()
+
+    assert result is False, f"emit_task_event must return False on a template miss, got {result!r}"
+
+    # No notification row must have been created.
+    count = await _count_notifications(recipient_id, task.id, bogus_key)
+    assert count == 0, f"No notification row must exist after a template miss (got {count})"
+
+    # escalated_1_at must still be NULL (the caller would not stamp on False).
+    async with get_sessionmaker()() as s:
+        task_fresh2 = await s.get(Task, task.id)
+        assert task_fresh2 is not None
+        assert task_fresh2.escalated_1_at is None, (
+            "escalated_1_at must remain NULL after a template miss (must not stamp on False)"
+        )
+
+
+async def _seed_workflow_objects_for_escalation(
+    org_id: uuid.UUID,
+    assignee_user_id: uuid.UUID,
+    *,
+    now: datetime.datetime,
+) -> tuple[WorkflowInstance, Task]:
+    """Helper for tests that need a workflow instance + task without timer stamps."""
+    due_at = now - datetime.timedelta(days=2)
+    return await _seed_workflow_objects(
+        org_id,
+        assignee_user_id,
+        due_at=due_at,
+        remind_1_sent_at=_STAMPED,
+        remind_2_sent_at=_STAMPED,
+        overdue_notified_at=_STAMPED,
+    )
