@@ -72,6 +72,10 @@ class Notification(Base):
     event_key: Mapped[str] = mapped_column(Text, nullable=False)
     subject_type: Mapped[str] = mapped_column(Text, nullable=False)
     subject_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    # S-notify-5a: the Effective version id for an awareness row — discriminates the awareness
+    # dedup index so each new Effective version re-notifies (NULL for task rows). No FK (mirror
+    # subject_id); the dedup partial-unique is migration-managed (uq_notification_dedup_awareness).
+    subject_version_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     task_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("task.id", ondelete="RESTRICT", name="fk_notification_task_id_task"),
