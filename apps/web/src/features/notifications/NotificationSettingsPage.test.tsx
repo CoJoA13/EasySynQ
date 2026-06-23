@@ -5,6 +5,7 @@ import { http, HttpResponse } from "msw";
 import { describe, expect, it } from "vitest";
 import { server } from "../../test/msw/server";
 import { renderWithProviders } from "../../test/render";
+import type { NotificationPreferences } from "../../lib/types";
 import { NotificationSettingsPage } from "./NotificationSettingsPage";
 
 const FULL_PREFS = {
@@ -19,7 +20,7 @@ const FULL_PREFS = {
   timezone: "UTC",
   quiet_start: null,
   quiet_end: null,
-};
+} satisfies NotificationPreferences;
 
 function getPrefs(overrides: Record<string, unknown> = {}) {
   return http.get("/api/v1/me/notification-preferences", () =>
@@ -102,5 +103,81 @@ describe("NotificationSettingsPage — cadence matrix", () => {
     server.use(getPrefs());
     renderWithProviders(<NotificationSettingsPage />, { route: "/settings/notifications" });
     expect(await screen.findByRole("button", { name: "Save changes" })).toBeDisabled();
+  });
+});
+
+describe("NotificationSettingsPage — daily digest timing", () => {
+  it("saves a changed digest hour", async () => {
+    let body: unknown = null;
+    server.use(
+      getPrefs(),
+      http.put("/api/v1/me/notification-preferences", async ({ request }) => {
+        body = await request.json();
+        return HttpResponse.json(body as Record<string, unknown>);
+      }),
+    );
+    const user = userEvent.setup();
+    renderWithProviders(<NotificationSettingsPage />, { route: "/settings/notifications" });
+    await user.click(await screen.findByLabelText("Send the daily digest at"));
+    await user.click(await screen.findByText("06:00"));
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(body).toEqual({ digest_hour: 6 }));
+  });
+
+  it("searches and saves a non-curated timezone", async () => {
+    let body: unknown = null;
+    server.use(
+      getPrefs(),
+      http.put("/api/v1/me/notification-preferences", async ({ request }) => {
+        body = await request.json();
+        return HttpResponse.json(body as Record<string, unknown>);
+      }),
+    );
+    const user = userEvent.setup();
+    renderWithProviders(<NotificationSettingsPage />, { route: "/settings/notifications" });
+    const tz = await screen.findByLabelText("Timezone");
+    await user.click(tz);
+    await user.type(tz, "Anchorage");
+    await user.click(await screen.findByText("America/Anchorage"));
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(body).toEqual({ timezone: "America/Anchorage" }));
+  });
+
+  it("enabling quiet hours saves both bounds together", async () => {
+    let body: unknown = null;
+    server.use(
+      getPrefs(),
+      http.put("/api/v1/me/notification-preferences", async ({ request }) => {
+        body = await request.json();
+        return HttpResponse.json(body as Record<string, unknown>);
+      }),
+    );
+    const user = userEvent.setup();
+    renderWithProviders(<NotificationSettingsPage />, { route: "/settings/notifications" });
+    await user.click(await screen.findByRole("switch", { name: "Enable quiet hours" }));
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(body).toEqual({ quiet_start: "22:00", quiet_end: "07:00" }));
+  });
+
+  it("disabling quiet hours clears both bounds", async () => {
+    let body: unknown = null;
+    server.use(
+      getPrefs({ quiet_start: "22:00", quiet_end: "07:00" }),
+      http.put("/api/v1/me/notification-preferences", async ({ request }) => {
+        body = await request.json();
+        return HttpResponse.json(body as Record<string, unknown>);
+      }),
+    );
+    const user = userEvent.setup();
+    renderWithProviders(<NotificationSettingsPage />, { route: "/settings/notifications" });
+    await user.click(await screen.findByRole("switch", { name: "Enable quiet hours" }));
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(body).toEqual({ quiet_start: null, quiet_end: null }));
+  });
+
+  it("warns when the digest hour falls inside quiet hours", async () => {
+    server.use(getPrefs({ digest_hour: 23, quiet_start: "22:00", quiet_end: "07:00" }));
+    renderWithProviders(<NotificationSettingsPage />, { route: "/settings/notifications" });
+    expect(await screen.findByText(/digest hour is within your quiet hours/i)).toBeInTheDocument();
   });
 });

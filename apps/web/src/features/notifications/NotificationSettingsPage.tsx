@@ -4,13 +4,15 @@ import {
   Container,
   Group,
   SegmentedControl,
+  Select,
   Stack,
   Switch,
   Text,
+  TextInput,
   Title,
 } from "@mantine/core";
 import { useQueryClient } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { ErrorState, LoadingState, MutationErrorState } from "../../lib/states";
 import type {
@@ -19,6 +21,7 @@ import type {
   NotificationPreferences,
   NotificationPreferencesUpdate,
 } from "../../lib/types";
+import { allTimeZones, detectTimeZone, restingZones } from "./timezones";
 import { CLASS_META } from "./classMeta";
 import { useNotificationPreferences } from "./hooks";
 import { useUpdateNotificationPreferences } from "./mutations";
@@ -30,6 +33,23 @@ const MODE_DATA: { value: NotificationDigestMode; label: string }[] = [
 ];
 
 const CLASS_KEYS: NotificationClass[] = CLASS_META.map((c) => c.key);
+
+const HOUR_DATA: { value: string; label: string }[] = Array.from({ length: 24 }, (_, h) => ({
+  value: String(h),
+  label: `${String(h).padStart(2, "0")}:00`,
+}));
+
+// Is `hour` (0-23) inside the quiet window [start, end)? Supports wrap-around (22:00–07:00).
+function hourInQuiet(hour: number, start: string, end: string): boolean {
+  const toMin = (s: string) => {
+    const [hh = 0, mm = 0] = s.split(":").map(Number);
+    return hh * 60 + mm;
+  };
+  const h = hour * 60;
+  const s = toMin(start);
+  const e = toMin(end);
+  return s <= e ? h >= s && h < e : h >= s || h < e;
+}
 
 // The page's local working-state — a mutable mirror of the effective preferences. Quiet hours are
 // modelled as an enabled flag + two HH:MM strings so the both-or-neither contract is structural (the FE
@@ -91,6 +111,19 @@ export function NotificationSettingsPage() {
   useEffect(() => {
     if (prefs.data) setWorking(toWorking(prefs.data));
   }, [prefs.data]);
+
+  const detected = useMemo(detectTimeZone, []);
+  const [tzSearch, setTzSearch] = useState("");
+  const tzData = useMemo(() => {
+    const current = working?.timezone ?? "UTC";
+    const q = tzSearch.trim().toLowerCase();
+    if (!q) return restingZones(detected, current);
+    const matches = allTimeZones()
+      .filter((z) => z.toLowerCase().includes(q))
+      .slice(0, 50);
+    return matches.includes(current) ? matches : [current, ...matches];
+  }, [tzSearch, detected, working?.timezone]);
+  const tzRef = useRef<HTMLInputElement>(null);
 
   const baseline = prefs.data;
   const body: NotificationPreferencesUpdate =
@@ -197,7 +230,79 @@ export function NotificationSettingsPage() {
               )}
             </Stack>
 
-            {/* Task 3 inserts the "Daily digest" timing section here. */}
+            <Stack gap="sm">
+              <Title order={2} size="h4">
+                Daily digest
+              </Title>
+              <Group grow align="flex-start">
+                <Select
+                  label="Send the daily digest at"
+                  data={HOUR_DATA}
+                  value={String(working.digest_hour)}
+                  onChange={(v) => v && setWorking({ ...working, digest_hour: Number(v) })}
+                  allowDeselect={false}
+                  comboboxProps={{ keepMounted: false }}
+                />
+                <Select
+                  label="Timezone"
+                  description="Type to search all time zones."
+                  searchable
+                  ref={tzRef}
+                  searchValue={tzSearch}
+                  onSearchChange={setTzSearch}
+                  onClick={() => {
+                    // Clear the search on click so typing replaces rather than appends (the
+                    // selected-label pre-fill means userEvent.type in tests would otherwise append).
+                    setTzSearch("");
+                    if (tzRef.current) tzRef.current.value = "";
+                  }}
+                  data={tzData}
+                  value={working.timezone}
+                  onChange={(v) => v && setWorking({ ...working, timezone: v })}
+                  nothingFoundMessage="No matching zone"
+                  limit={50}
+                  allowDeselect={false}
+                  comboboxProps={{ keepMounted: false }}
+                />
+              </Group>
+
+              <Switch
+                label="Enable quiet hours"
+                aria-label="Enable quiet hours"
+                description="Hold immediate emails until quiet hours end. Your daily digest still sends at the hour above."
+                checked={working.quietEnabled}
+                onChange={(e) => setWorking({ ...working, quietEnabled: e.currentTarget.checked })}
+              />
+              {working.quietEnabled && (
+                <Group grow align="flex-start">
+                  <TextInput
+                    type="time"
+                    label="Quiet hours start"
+                    required
+                    value={working.quietStart}
+                    error={!working.quietStart ? "Required" : undefined}
+                    onChange={(e) => setWorking({ ...working, quietStart: e.currentTarget.value })}
+                  />
+                  <TextInput
+                    type="time"
+                    label="Quiet hours end"
+                    required
+                    value={working.quietEnd}
+                    error={!working.quietEnd ? "Required" : undefined}
+                    onChange={(e) => setWorking({ ...working, quietEnd: e.currentTarget.value })}
+                  />
+                </Group>
+              )}
+              {working.quietEnabled &&
+                working.quietStart &&
+                working.quietEnd &&
+                hourInQuiet(working.digest_hour, working.quietStart, working.quietEnd) && (
+                  <Text size="xs" c="dimmed">
+                    Your digest hour is within your quiet hours; the daily digest still sends at
+                    this time.
+                  </Text>
+                )}
+            </Stack>
 
             <Group>
               <Button onClick={save} disabled={!dirty || quietInvalid} loading={update.isPending}>
