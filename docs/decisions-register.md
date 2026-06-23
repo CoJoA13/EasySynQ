@@ -1,6 +1,6 @@
 # EasySynQ Decisions Register
 
-This document is the **single authoritative source of truth** for the EasySynQ self-hosted ISO 9001:2015 QMS specification. It records the locked foundational decisions, the locked stakeholder decisions, and the normative resolutions (R1–R52) to every finding raised in the gap audit (`17-gaps-and-open-questions.md`); R38 (slice S-rec-4) is the first post-v1 *additive* decision (additive catalog extensibility + SoD-6), R39 (slice family S-aud/S-capa) locks the Audits/Findings/CAPA model + workflow posture, R40 (slice family S-dcr) locks the Revision & change-depth (DCR) family model + the InApproval reject-loop target, and R41 (slice S-drift-3) adds the `drift.read` SYSTEM-domain permission key; R42 (slice S-ack-1) adds the `document.distribute` CONTENT-domain key, and R43 locks the Acknowledgements-family model.
+This document is the **single authoritative source of truth** for the EasySynQ self-hosted ISO 9001:2015 QMS specification. It records the locked foundational decisions, the locked stakeholder decisions, and the normative resolutions (R1–R54) to every finding raised in the gap audit (`17-gaps-and-open-questions.md`); R38 (slice S-rec-4) is the first post-v1 *additive* decision (additive catalog extensibility + SoD-6), R39 (slice family S-aud/S-capa) locks the Audits/Findings/CAPA model + workflow posture, R40 (slice family S-dcr) locks the Revision & change-depth (DCR) family model + the InApproval reject-loop target, and R41 (slice S-drift-3) adds the `drift.read` SYSTEM-domain permission key; R42 (slice S-ack-1) adds the `document.distribute` CONTENT-domain key, and R43 locks the Acknowledgements-family model.
 
 **Precedence:** Where this register conflicts with any text in sections `01`–`15`, **this register supersedes that text.** Section editors MUST back-propagate the changes listed under each resolution's *Back-propagation* note. The exact tokens, enum values, state names, and field names quoted here are **canonical and verbatim** — they must be reproduced character-for-character (case, snake_case, dot-namespacing, and all) wherever the underlying concept appears. Do not soften, rename, abbreviate, or omit any token.
 
@@ -52,7 +52,7 @@ Proceed with the **full reconcile-and-harden pass** — i.e., adopt R1–R37 bel
 
 ---
 
-## Part 3 — Resolutions R1–R52
+## Part 3 — Resolutions R1–R54
 
 Each resolution states the decision, the exact canonical tokens/enums/states/field-names verbatim, and a Back-propagation note listing the section files that change.
 
@@ -1466,6 +1466,41 @@ it). No new permission key (catalog stays 102; R38 additive covers a new role + 
 keys). Supersedes the F-1 deferral named in R49/R50/R51.
 
 Bumps the resolutions range **R1–R51 → R1–R52**.
+
+### R53 — Notification delivery architecture (doc 10 §9; slice family S-notify) — 2026-06-21
+
+The notification subsystem is a **dual-channel** (durable in-app `notification` rows + a
+`notification_email` outbox ledger) **transactional outbox**: enqueue is **atomic-on-success inside the
+domain txn** (a SAVEPOINT — this supersedes doc 10 W2/§156's "enqueue side-effects after commit"
+wording; it closes the commit→enqueue crash gap and still never blocks a transition), and send is an
+async **at-least-once drain** (`FOR UPDATE SKIP LOCKED`, count-before-send lease, retry/backoff).
+**Email is opt-in per org (default OFF)**, **carries summary + deep link only — never controlled
+content**, and a permanent failure is **owned** (`system.email_delivery_failed`, operational-only body,
++ the Health dashboard — R32). Notifications **respect recipient permission scope** (intrinsic for
+`task.assigned`; an explicit read-scope filter for awareness events). Templates are **DB-backed +
+versioned** (`notification_template`), the producing version snapshotted per message. Notifications add
+**no new permission key** (reads are authenticated-self by a `recipient_user_id = caller.id` WHERE
+predicate; R38 unbroken). Back-prop: doc 10 W2/§156 reconciled. (Slice S-notify-1, PR #255 `766dc55` —
+this register entry was recorded retroactively with R54; the binding text is the slice's ratified §13.)
+
+Bumps the resolutions range **R1–R52 → R1–R53**.
+
+### R54 — Notification digest & quiet-hours preference model (doc 10 §9.4; slice S-notify-3a) — 2026-06-22
+
+Email cadence is set **per user, per event-class** (`immediate | daily | off` in v1; `hourly`/`weekly`
+reserved). Events map to **four code-defined classes** — `action_required`, `awareness`, `critical`,
+`admin_ops` — with default cadences `daily`/`daily`/`immediate`/`immediate` (defaults live in code;
+`notification_preference` columns are NULL-as-default, no backfill). **In-app delivery is always
+immediate**; the mode governs **email** only. **Quiet hours** (per-user `quiet_start`/`quiet_end` in the
+user's `timezone`) hold immediate email to the next window; **critical-class** events (`*.overdue`,
+`integrity.alarm`) pierce when the org flag `notifications_escalation_pierce_quiet_hours` (default ON) is
+set. The **daily digest** is a Beat-driven bundler that, per user at their local `digest_hour`, collapses
+pending rows into ONE summary email (summaries + deep links only — never controlled content, R53/D2;
+serialized per user by a `pg_advisory_xact_lock` so overlapping sweeps can't double-send), sent via the
+existing outbox drain. **DOC_ACK email is enabled** (bundled in the digest by default). No new permission
+key (authenticated-self, R38). Migration `0064` (additive, no new table). Extends R53.
+
+Bumps the resolutions range **R1–R53 → R1–R54**.
 
 ---
 
