@@ -2,7 +2,7 @@
 import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
-import { describe, expect, test } from "vitest";
+import { describe, expect, it, test } from "vitest";
 import { server } from "../../test/msw/server";
 import { renderWithProviders } from "../../test/render";
 import { TopBar } from "./TopBar";
@@ -54,5 +54,35 @@ describe("TopBar", () => {
       "href",
       "/settings/notifications",
     );
+  });
+
+  it("shows an Administration link when the caller has config.update", async () => {
+    server.use(http.get("/api/v1/notifications", () => HttpResponse.json([])));
+    server.use(
+      http.get("/api/v1/me/permissions", () =>
+        HttpResponse.json({
+          scope: { level: "SYSTEM", selector: null },
+          permissions: [{ key: "config.update", effect: "ALLOW" }],
+        }),
+      ),
+    );
+    const user = userEvent.setup();
+    renderBar();
+    await user.click(await screen.findByRole("button", { name: "Account" }));
+    expect(await screen.findByRole("menuitem", { name: "Administration" })).toHaveAttribute(
+      "href",
+      "/admin",
+    );
+  });
+
+  it("hides the Administration link without config.update", async () => {
+    server.use(http.get("/api/v1/notifications", () => HttpResponse.json([])));
+    // default /me/permissions handler returns an empty permission set
+    const user = userEvent.setup();
+    renderBar();
+    await user.click(await screen.findByRole("button", { name: "Account" }));
+    // await a stable sibling so the menu is open + the permissions query has settled before asserting absence
+    expect(await screen.findByRole("menuitem", { name: "Sign out" })).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "Administration" })).not.toBeInTheDocument();
   });
 });

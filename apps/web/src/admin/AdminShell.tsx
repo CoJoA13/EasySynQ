@@ -10,7 +10,9 @@ export function AdminShell() {
     ? "roles"
     : pathname.includes("/admin/processes")
       ? "processes"
-      : "users";
+      : pathname.includes("/admin/config")
+        ? "config"
+        : "users";
   return (
     <Container size="lg" py="xl">
       <Stack gap="md">
@@ -25,6 +27,7 @@ export function AdminShell() {
             <Tabs.Tab value="users">Users</Tabs.Tab>
             <Tabs.Tab value="roles">Roles</Tabs.Tab>
             <Tabs.Tab value="processes">Processes</Tabs.Tab>
+            <Tabs.Tab value="config">Config</Tabs.Tab>
           </Tabs.List>
         </Tabs>
         <Outlet />

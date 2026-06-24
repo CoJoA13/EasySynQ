@@ -5,6 +5,7 @@ import { Navigate, Route, Routes } from "react-router-dom";
 import { SetupWizard } from "./SetupWizard";
 import { AppShell } from "./app/shell/AppShell";
 import { AdminShell } from "./admin/AdminShell";
+import { ConfigAdmin } from "./admin/ConfigAdmin";
 import { ProcessesAdmin } from "./admin/ProcessesAdmin";
 import { RolesAdmin } from "./admin/RolesAdmin";
 import { UsersAdmin } from "./admin/UsersAdmin";
@@ -125,6 +126,7 @@ export function App() {
         <Route path="users" element={<UsersAdmin token={token} />} />
         <Route path="roles" element={<RolesAdmin token={token} />} />
         <Route path="processes" element={<ProcessesAdmin token={token} />} />
+        <Route path="config" element={<ConfigAdmin />} />
       </Route>
       <Route path="/" element={operational ? <AppShell /> : <Navigate to="/setup" replace />}>
         <Route index element={<HomePage />} />
