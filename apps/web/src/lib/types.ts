@@ -1941,3 +1941,48 @@ export interface NotificationPreferencesUpdate {
   quiet_start?: string | null;
   quiet_end?: string | null;
 }
+
+// S-notify-5b: the org-config + notification delivery-health admin shapes
+// (pinned to api/config.py::_config_view + services/notifications/health.py::get_delivery_health).
+export interface OrgConfig {
+  org_id: string;
+  capture_pre_release_templates: boolean;
+  allow_self_disposition: boolean;
+  allow_capa_self_verify: boolean;
+  leadership_release_requires_top_management_authorization: boolean;
+  notifications_email_enabled: boolean;
+  notifications_escalation_pierce_quiet_hours: boolean;
+}
+
+export interface OrgConfigUpdate {
+  capture_pre_release_templates?: boolean;
+  allow_self_disposition?: boolean;
+  allow_capa_self_verify?: boolean;
+  leadership_release_requires_top_management_authorization?: boolean;
+  notifications_email_enabled?: boolean;
+  notifications_escalation_pierce_quiet_hours?: boolean;
+}
+
+export interface NotificationEmailFailure {
+  recipient_email: string;
+  last_error: string | null;
+  attempts: number;
+  failed_at: string | null;
+  email_kind: "single" | "digest";
+}
+
+export interface NotificationDeliveryHealth {
+  org_email_enabled: boolean;
+  email: {
+    failed: number;
+    pending_now: number;
+    pending_scheduled: number;
+    suppressed: number;
+    oldest_pending_at: string | null;
+  };
+  recent_failures: NotificationEmailFailure[];
+  awareness: {
+    pending: number;
+    oldest_pending_at: string | null;
+  };
+}
