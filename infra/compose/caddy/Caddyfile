@@ -25,8 +25,18 @@
 		-Server
 	}
 
-	# API surface, health probes, and the SSE stream go to the FastAPI service.
-	@api path /api/* /healthz /readyz /events
+	# The notification SSE stream needs immediate flushing (no response buffering) for a long-lived
+	# connection — its own reverse_proxy with flush_interval -1 (doc 10 §9, S-notify-5c). MUST precede
+	# @api (handle is first-match-wins; this path is a subset of /api/*).
+	@sse path /api/v1/notifications/stream
+	handle @sse {
+		reverse_proxy api:8000 {
+			flush_interval -1
+		}
+	}
+
+	# API surface and health probes go to the FastAPI service.
+	@api path /api/* /healthz /readyz
 	handle @api {
 		reverse_proxy api:8000
 	}
