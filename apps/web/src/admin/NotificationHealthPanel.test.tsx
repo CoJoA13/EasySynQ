@@ -55,4 +55,19 @@ describe("NotificationHealthPanel", () => {
     expect(await screen.findByText("Couldn't load delivery health")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
   });
+
+  it("shows the oldest-pending-email line and awareness backlog count when pending > 0", async () => {
+    health({
+      email: {
+        ...notificationHealthFixture.email,
+        pending_now: 2,
+        pending_scheduled: 0,
+        oldest_pending_at: "2026-06-24T08:00:00Z",
+      },
+      awareness: { pending: 4, oldest_pending_at: null },
+    });
+    renderWithProviders(<NotificationHealthPanel />);
+    expect(await screen.findByText(/Oldest pending email/)).toBeInTheDocument();
+    expect(screen.getByText("4")).toBeInTheDocument();
+  });
 });

@@ -3558,10 +3558,9 @@ export const handlers = [
   http.get("/api/v1/admin/config", () =>
     HttpResponse.json(orgConfigFixture as unknown as Record<string, unknown>),
   ),
-  http.patch("/api/v1/admin/config", async ({ request }) => {
-    const body = (await request.json()) as Partial<OrgConfig>;
-    return HttpResponse.json({ ...orgConfigFixture, ...body } as unknown as Record<string, unknown>);
-  }),
+  http.patch("/api/v1/admin/config", () =>
+    HttpResponse.json(orgConfigFixture as unknown as Record<string, unknown>),
+  ),
   http.get("/api/v1/admin/notifications/health", () =>
     HttpResponse.json(notificationHealthFixture as unknown as Record<string, unknown>),
   ),

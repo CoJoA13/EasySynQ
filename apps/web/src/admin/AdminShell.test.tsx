@@ -6,6 +6,6 @@ import { AdminShell } from "./AdminShell";
 describe("AdminShell", () => {
   it("offers a Config tab", () => {
     renderWithProviders(<AdminShell />, { route: "/admin/config" });
-    expect(screen.getByRole("tab", { name: "Config" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Config", selected: true })).toBeInTheDocument();
   });
 });
