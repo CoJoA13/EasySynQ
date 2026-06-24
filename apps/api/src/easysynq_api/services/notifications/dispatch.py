@@ -5,6 +5,7 @@ transition). The async drain (tasks/notifications.py) does the actual send."""
 
 from __future__ import annotations
 
+import dataclasses
 import datetime
 import logging
 import uuid
@@ -18,7 +19,7 @@ from ...db.models._notification_enums import NotificationDigestMode
 from ...db.models.notification import Notification, NotificationEmail, NotificationPreference
 from ...db.models.system_config import SystemConfig
 from ...db.models.workflow import Task, WorkflowInstance
-from .classes import class_of
+from .classes import NotificationClass, class_of
 from .constants import EVENT_TASK_ASSIGNED, SUBJECT_SYSTEM
 from .preferences import effective_preferences
 from .quiet import in_quiet_window, should_pierce, window_end
@@ -38,6 +39,50 @@ logger = logging.getLogger("easysynq.notifications.dispatch")
 
 def _email_eligible(*, org_enabled: bool, email: str | None, user_opt_in: bool) -> bool:
     return bool(org_enabled and email and user_opt_in)
+
+
+@dataclasses.dataclass(frozen=True)
+class _DeliveryPlan:
+    """The per-recipient delivery resolution shared by _enqueue_one and enqueue_awareness_one."""
+
+    klass: NotificationClass
+    wants_email: bool
+    is_immediate: bool
+    digest_due_at: datetime.datetime | None
+    email_next_attempt_at: datetime.datetime | None
+
+
+async def resolve_delivery(
+    session: AsyncSession,
+    *,
+    recipient: Recipient,
+    event_key: str,
+    org_enabled: bool,
+    org_pierce: bool,
+    now: datetime.datetime,
+) -> _DeliveryPlan:
+    """Resolve class/mode/email-eligibility for one recipient (pure over prefs + flags + clock)."""
+    pref = await session.get(NotificationPreference, recipient.user_id)
+    eff = effective_preferences(pref)
+    klass = class_of(event_key)
+    mode = eff.modes[klass]
+    base_eligible = _email_eligible(
+        org_enabled=org_enabled, email=recipient.email, user_opt_in=eff.email_enabled
+    )
+    wants_email = base_eligible and mode is not NotificationDigestMode.OFF
+    is_daily = wants_email and mode is NotificationDigestMode.DAILY
+    is_immediate = wants_email and mode is NotificationDigestMode.IMMEDIATE
+    digest_due_at = next_digest_at(eff, now) if is_daily else None
+    email_next_attempt_at: datetime.datetime | None = None
+    if is_immediate and in_quiet_window(eff, now) and not should_pierce(klass, org_pierce):
+        email_next_attempt_at = window_end(eff, now)
+    return _DeliveryPlan(
+        klass=klass,
+        wants_email=wants_email,
+        is_immediate=is_immediate,
+        digest_due_at=digest_due_at,
+        email_next_attempt_at=email_next_attempt_at,
+    )
 
 
 async def enqueue_task_notifications(
@@ -120,20 +165,14 @@ async def _enqueue_one(
         logger.warning("notification.template_missing", extra={"event_key": event_key})
         return "no_template"
 
-    # Resolve per-recipient digest class and mode.
-    pref = await session.get(NotificationPreference, recipient.user_id)
-    eff = effective_preferences(pref)
-    klass = class_of(event_key)
-    mode = eff.modes[klass]
-
-    base_eligible = _email_eligible(
+    plan = await resolve_delivery(
+        session,
+        recipient=recipient,
+        event_key=event_key,
         org_enabled=org_enabled,
-        email=recipient.email,
-        user_opt_in=eff.email_enabled,
+        org_pierce=org_pierce,
+        now=now,
     )
-    wants_email = base_eligible and mode is not NotificationDigestMode.OFF
-    is_daily = wants_email and mode is NotificationDigestMode.DAILY
-    digest_due_at = next_digest_at(eff, now) if is_daily else None
 
     # Insert the in-app row; ON CONFLICT DO NOTHING + RETURNING → a dup is a no-op (spec §3.1).
     stmt = (
@@ -151,7 +190,7 @@ async def _enqueue_one(
             template_id=forms.template_id,
             template_version=forms.template_version,
             context=variables_as_json(variables),
-            digest_due_at=digest_due_at,
+            digest_due_at=plan.digest_due_at,
         )
         # The dedup index is a PARTIAL unique index (WHERE task_id IS NOT NULL); PostgreSQL
         # requires the index_where predicate on ON CONFLICT when targeting a partial index.
@@ -170,12 +209,9 @@ async def _enqueue_one(
         # Only a template miss (checked above, before the insert) returns "no_template".
         return "deduped"
 
-    if wants_email and mode is NotificationDigestMode.IMMEDIATE:
+    if plan.wants_email and plan.is_immediate:
         # _email_eligible guarantees email is truthy here; cast for mypy.
         email_addr: str = recipient.email  # type: ignore[assignment]
-        next_attempt_at: datetime.datetime | None = None
-        if in_quiet_window(eff, now) and not should_pierce(klass, org_pierce):
-            next_attempt_at = window_end(eff, now)
         session.add(
             NotificationEmail(
                 org_id=instance.org_id,
@@ -184,7 +220,98 @@ async def _enqueue_one(
                 recipient_email=email_addr,
                 subject=forms.email_subject,
                 body=forms.email_body,
-                next_attempt_at=next_attempt_at,
+                next_attempt_at=plan.email_next_attempt_at,
+            )
+        )
+    return "created"
+
+
+async def enqueue_awareness_one(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    subject: SubjectInfo,
+    subject_id: uuid.UUID,
+    subject_version_id: uuid.UUID | None,
+    recipient: Recipient,
+    event_key: str,
+    context_vars: dict[str, object],
+    now: datetime.datetime,
+    org_enabled: bool,
+    org_pierce: bool,
+) -> EnqueueOutcome:
+    """Enqueue one awareness notification (no task). task_id=NULL; dedup is version-discriminated
+    on (recipient, event_key, subject_type, subject_id, subject_version_id) WHERE task_id IS NULL,
+    so a NEW Effective version re-notifies (spec §5/§7). The in-app row is always created; an email
+    row is added only on IMMEDIATE mode (awareness defaults to DAILY → the digest sweep delivers
+    it)."""
+    variables: dict[str, object] = {
+        "recipient.first_name": recipient.first_name,
+        "subject.identifier": subject.identifier,
+        "subject.title": subject.title,
+        "subject.kind": subject.kind,
+        "deep_link": subject.deep_link,
+        "prefs_link": prefs_link(),
+        **context_vars,
+    }
+    forms = await render(session, event_key, variables)
+    if forms is None:
+        logger.warning("notification.template_missing", extra={"event_key": event_key})
+        return "no_template"
+
+    plan = await resolve_delivery(
+        session,
+        recipient=recipient,
+        event_key=event_key,
+        org_enabled=org_enabled,
+        org_pierce=org_pierce,
+        now=now,
+    )
+    stmt = (
+        pg_insert(Notification)
+        .values(
+            org_id=org_id,
+            recipient_user_id=recipient.user_id,
+            event_key=event_key,
+            subject_type=subject.kind,
+            subject_id=subject_id,
+            subject_version_id=subject_version_id,
+            task_id=None,
+            title=forms.in_app_title,
+            body=forms.in_app_body,
+            deep_link=subject.deep_link,
+            template_id=forms.template_id,
+            template_version=forms.template_version,
+            context=variables_as_json(variables),
+            digest_due_at=plan.digest_due_at,
+        )
+        .on_conflict_do_nothing(
+            index_elements=[
+                "recipient_user_id",
+                "event_key",
+                "subject_type",
+                "subject_id",
+                "subject_version_id",
+            ],
+            index_where=sa.text("task_id IS NULL"),
+        )
+        .returning(Notification.id)
+    )
+    new_id = (await session.execute(stmt)).scalar_one_or_none()
+    if new_id is None:
+        return "deduped"
+
+    if plan.wants_email and plan.is_immediate:
+        email_addr: str = recipient.email  # type: ignore[assignment]
+        session.add(
+            NotificationEmail(
+                org_id=org_id,
+                notification_id=new_id,
+                recipient_user_id=recipient.user_id,
+                recipient_email=email_addr,
+                subject=forms.email_subject,
+                body=forms.email_body,
+                next_attempt_at=plan.email_next_attempt_at,
             )
         )
     return "created"
