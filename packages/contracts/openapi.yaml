@@ -6372,6 +6372,25 @@ paths:
                 type: array
                 items: { $ref: "#/components/schemas/Notification" }
 
+  /notifications/stream:
+    get:
+      tags: [notifications]
+      operationId: notificationStream
+      summary: Server-sent stream of unread-notification nudges (authenticated-self)
+      description: >
+        A long-lived `text/event-stream`. Emits a content-free `event: notify` frame on connect and
+        whenever the caller's unread set changes (the client refetches `GET /notifications`), and a
+        `: ping` heartbeat comment on idle. The bearer rides the Authorization header (no token in the
+        URL). No permission key — scoped to the caller.
+      responses:
+        "200":
+          description: The event stream.
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        "401": { $ref: "#/components/responses/ProblemResponse" }
+
   /notifications/{notification_id}/read:
     post:
       tags: [notifications]

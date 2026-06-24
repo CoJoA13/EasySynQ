@@ -8,6 +8,7 @@ import uuid
 from typing import Any
 
 import pytest
+from httpx import AsyncClient
 from sqlalchemy import select
 
 from easysynq_api.db.models.app_user import AppUser, UserStatus
@@ -165,3 +166,30 @@ async def test_sweep_nudges_txn_start_clock_row_within_lookback(app_under_test: 
         await ps.unsubscribe(channel_for_user(user.id))
         await ps.aclose()
         await sub.aclose()
+
+
+async def test_stream_requires_bearer(app_client: AsyncClient, app_under_test: Any) -> None:
+    r = await app_client.get("/api/v1/notifications/stream")
+    assert r.status_code == 401
+
+
+# Intentionally NO HTTP-level test that reads the 200 stream body: httpx's in-process ASGITransport
+# buffers a response until the ASGI app completes, but the SSE generator is infinite -- so
+# app_client.stream(...) on an authed stream hangs (empirically confirmed, even the status never
+# arrives). The full HTTP stream (real ASGI + Caddy flush_interval -1) is live-smoke-verified.
+# Here we drive the generator directly against the REAL testcontainer Redis to prove the redis-py
+# pubsub API + the on-connect frame + teardown end-to-end.
+class _ConnectedRequest:
+    async def is_disconnected(self) -> bool:
+        return False
+
+
+async def test_event_stream_first_frame_against_real_redis(app_under_test: Any) -> None:
+    from easysynq_api.api._sse import event_stream
+
+    agen = event_stream(_ConnectedRequest(), uuid.uuid4())  # type: ignore[arg-type]
+    try:
+        first = await agen.__anext__()
+        assert first == "event: notify\ndata: \n\n"
+    finally:
+        await agen.aclose()  # real-Redis unsubscribe + aclose teardown (must not raise)
