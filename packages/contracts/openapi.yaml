@@ -3921,6 +3921,23 @@ paths:
               schema: { $ref: "#/components/schemas/OrgConfig" }
         "403": { $ref: "#/components/responses/ProblemResponse" }
 
+  /admin/notifications/health:
+    get:
+      tags: [admin]
+      operationId: getNotificationDeliveryHealth
+      summary: Notification email delivery-health snapshot for the caller's org. Needs config.update (SYSTEM, admin-only).
+      description: >-
+        S-notify-5b (doc 10 §9): a read-only delivery-health snapshot — email failure/backlog/suppressed
+        counts, the recent delivery-failure list (operational-only: recipient + error, never controlled
+        content), and the awareness fan-out backlog. Pure read; no side effects.
+      responses:
+        "200":
+          description: The delivery-health snapshot.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NotificationDeliveryHealth" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+
   /admin/drift/status:
     get:
       tags: [admin]
@@ -7951,6 +7968,61 @@ components:
         quiet_end:
           type: [string, "null"]
           pattern: '^\d{2}:\d{2}$'
+
+    NotificationDeliveryHealth:
+      type: object
+      additionalProperties: false
+      required: [org_email_enabled, email, recent_failures, awareness]
+      properties:
+        org_email_enabled:
+          type: boolean
+          description: The org's notifications_email_enabled flag — echoed so a zero panel is contextualised.
+        email:
+          type: object
+          additionalProperties: false
+          required: [failed, pending_now, pending_scheduled, suppressed, oldest_pending_at]
+          properties:
+            failed: { type: integer }
+            pending_now:
+              type: integer
+              description: PENDING emails claimable now (next_attempt_at null or due) — the drain's real claim set.
+            pending_scheduled:
+              type: integer
+              description: PENDING emails deferred to a future backoff lease (next_attempt_at > now).
+            suppressed: { type: integer }
+            oldest_pending_at:
+              type: [string, "null"]
+              format: date-time
+              description: created_at of the oldest PENDING email; null when none pending.
+        recent_failures:
+          type: array
+          description: The most recent delivery failures (newest first, capped at 10). Operational-only.
+          items: { $ref: "#/components/schemas/NotificationEmailFailure" }
+        awareness:
+          type: object
+          additionalProperties: false
+          required: [pending, oldest_pending_at]
+          properties:
+            pending:
+              type: integer
+              description: awareness_event rows not yet fanned out (fanned_out_at null).
+            oldest_pending_at:
+              type: [string, "null"]
+              format: date-time
+    NotificationEmailFailure:
+      type: object
+      additionalProperties: false
+      required: [recipient_email, last_error, attempts, failed_at, email_kind]
+      properties:
+        recipient_email: { type: string }
+        last_error:
+          type: [string, "null"]
+          description: The truncated SMTP/delivery error (operational-only; no controlled content).
+        attempts: { type: integer }
+        failed_at: { type: [string, "null"], format: date-time }
+        email_kind:
+          type: string
+          enum: [single, digest]
 
     CapaSource:
       type: string
