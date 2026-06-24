@@ -26,7 +26,11 @@ async def test_health_endpoint_returns_snapshot_for_admin(
     body = r.json()
     assert set(body) == {"org_email_enabled", "email", "recent_failures", "awareness"}
     assert set(body["email"]) == {
-        "failed", "pending_now", "pending_scheduled", "suppressed", "oldest_pending_at"
+        "failed",
+        "pending_now",
+        "pending_scheduled",
+        "suppressed",
+        "oldest_pending_at",
     }
     assert isinstance(body["recent_failures"], list)
     assert set(body["awareness"]) == {"pending", "oldest_pending_at"}

@@ -18,7 +18,8 @@ from easysynq_api.services.notifications.health import get_delivery_health
 
 pytestmark = pytest.mark.integration
 
-_SCHED = datetime.datetime(2099, 1, 1, tzinfo=datetime.UTC)  # far future → never claimable + sorts first
+# A far-future sentinel: never claimable as pending, and sorts first in recent_failures.
+_SCHED = datetime.datetime(2099, 1, 1, tzinfo=datetime.UTC)
 
 
 async def _default_org_id() -> uuid.UUID:
@@ -37,28 +38,48 @@ async def test_get_delivery_health_aggregates_and_isolates(app_under_test: objec
         s.add_all(
             [
                 NotificationEmail(
-                    org_id=org_id, recipient_email=f"fail-{salt}@x.test", subject="s", body="b",
-                    status=NotificationEmailStatus.FAILED, attempts=5,
-                    last_error="SMTP 550 mailbox unavailable", failed_at=_SCHED,
+                    org_id=org_id,
+                    recipient_email=f"fail-{salt}@x.test",
+                    subject="s",
+                    body="b",
+                    status=NotificationEmailStatus.FAILED,
+                    attempts=5,
+                    last_error="SMTP 550 mailbox unavailable",
+                    failed_at=_SCHED,
                 ),
                 NotificationEmail(
-                    org_id=org_id, recipient_email=f"now-{salt}@x.test", subject="s", body="b",
-                    status=NotificationEmailStatus.PENDING, next_attempt_at=None,
+                    org_id=org_id,
+                    recipient_email=f"now-{salt}@x.test",
+                    subject="s",
+                    body="b",
+                    status=NotificationEmailStatus.PENDING,
+                    next_attempt_at=None,
                 ),
                 NotificationEmail(
-                    org_id=org_id, recipient_email=f"sched-{salt}@x.test", subject="s", body="b",
-                    status=NotificationEmailStatus.PENDING, next_attempt_at=_SCHED,
+                    org_id=org_id,
+                    recipient_email=f"sched-{salt}@x.test",
+                    subject="s",
+                    body="b",
+                    status=NotificationEmailStatus.PENDING,
+                    next_attempt_at=_SCHED,
                 ),
                 NotificationEmail(
-                    org_id=org_id, recipient_email=f"supp-{salt}@x.test", subject="s", body="b",
+                    org_id=org_id,
+                    recipient_email=f"supp-{salt}@x.test",
+                    subject="s",
+                    body="b",
                     status=NotificationEmailStatus.SUPPRESSED,
                 ),
             ]
         )
         s.add(
             AwarenessEvent(
-                id=aw_id, org_id=org_id, event_key="doc.released", subject_type="DOCUMENT",
-                subject_id=uuid.uuid4(), occurred_at=_SCHED,
+                id=aw_id,
+                org_id=org_id,
+                event_key="doc.released",
+                subject_type="DOCUMENT",
+                subject_id=uuid.uuid4(),
+                occurred_at=_SCHED,
             )
         )
         await s.commit()
