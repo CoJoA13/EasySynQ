@@ -391,3 +391,84 @@ async def test_fanout_org_email_off_creates_in_app_no_email(
     # org email OFF → wants_email=False → digest_due_at=None (corrected — not "is not None")
     assert row.digest_due_at is None  # org email OFF → no email scheduling
     assert emails == []  # org email off → no email row
+
+
+async def test_fanout_template_miss_no_stamp_no_exception(
+    app_under_test: Any, e2e_fixture: SimpleNamespace, dsns: dict[str, str]
+) -> None:
+    """Template missing → no MissingGreenlet, fanned_out_at stays NULL, zero notifications.
+
+    Regression for the S-ing-4 MissingGreenlet trap: the OLD code called
+    ``await session.rollback()`` then accessed ``event.event_key`` on the expired ORM instance,
+    triggering a synchronous lazy-refresh on an async session → MissingGreenlet at pool teardown.
+    The fix captures event attrs into locals before any early-return and removes the rollback.
+
+    The template is deactivated via the owner DSN (notification_template is SELECT-only for the
+    app role per migration 0063) and restored in a finally block so the shared DB is left clean.
+    """
+    from sqlalchemy import func, text
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    from easysynq_api.db.models.awareness_event import AwarenessEvent
+    from easysynq_api.db.models.notification import Notification
+    from easysynq_api.db.session import get_sessionmaker
+    from easysynq_api.services.notifications.fanout import fan_out_awareness
+
+    sm = get_sessionmaker()
+    owner_engine = create_async_engine(dsns["owner"])
+
+    # Deactivate the doc.released template via the owner role (app role is SELECT-only).
+    async with owner_engine.begin() as conn:
+        await conn.execute(
+            text(
+                "UPDATE notification_template SET is_effective = false"
+                " WHERE event_key = 'doc.released'"
+            )
+        )
+
+    try:
+        now = datetime.datetime.now(datetime.UTC)
+        # Should not raise (no MissingGreenlet, no other exception).
+        result = await fan_out_awareness(sm, now)
+
+        # The event must NOT be stamped — fanned_out_at stays NULL so it is re-claimable.
+        async with sm() as s:
+            fanned_out_at = (
+                (
+                    await s.execute(
+                        select(AwarenessEvent.fanned_out_at).where(
+                            AwarenessEvent.subject_id == e2e_fixture.doc_id
+                        )
+                    )
+                )
+                .scalars()
+                .first()
+            )
+            # Zero notifications created for this doc by this sweep.
+            notif_count = (
+                await s.execute(
+                    select(func.count())
+                    .select_from(Notification)
+                    .where(
+                        Notification.subject_id == e2e_fixture.doc_id,
+                        Notification.event_key == "doc.released",
+                    )
+                )
+            ).scalar_one()
+
+        assert fanned_out_at is None, "fanned_out_at must stay NULL on a template miss (re-claim)"
+        assert notif_count == 0, "no notification rows must be created on a template miss"
+        # The sweep counted the event (it was claimed via _pending_event_ids) but returned 0
+        # notifications — either way, no exception is the primary assertion.
+        _ = result  # suppress unused-var; the no-exception guarantee is the gate
+
+    finally:
+        # Restore template so other tests are not affected (FK-ordered / run-scoped per S-notify-4).
+        async with owner_engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "UPDATE notification_template SET is_effective = true"
+                    " WHERE event_key = 'doc.released'"
+                )
+            )
+        await owner_engine.dispose()

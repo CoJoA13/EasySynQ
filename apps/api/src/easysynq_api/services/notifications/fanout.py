@@ -71,34 +71,48 @@ async def process_one_awareness_event(
     if event is None:
         return 0  # already claimed/stamped by a concurrent sweep, or vanished
 
-    subject = await resolve_subject(session, event.subject_type, event.subject_id)
+    # Capture scalar event attributes into locals BEFORE any potential early-return so we
+    # never access an ORM instance after the session context has closed or expired it.
+    # (The S-ing-4 MissingGreenlet trap: accessing an expired ORM attr on an async session
+    # triggers a synchronous lazy-refresh → MissingGreenlet at pool teardown.)
+    event_key = event.event_key
+    event_org_id = event.org_id
+    event_subject_type = event.subject_type
+    event_subject_id = event.subject_id
+    event_subject_version_id = event.subject_version_id
+    event_actor_user_id = event.actor_user_id
+    event_context = event.context
 
-    audience = await resolve_document_readers(session, event.org_id, event.subject_id, now=now)
-    recipients = [uid for uid in audience if uid != event.actor_user_id]
+    subject = await resolve_subject(session, event_subject_type, event_subject_id)
+
+    audience = await resolve_document_readers(session, event_org_id, event_subject_id, now=now)
+    recipients = [uid for uid in audience if uid != event_actor_user_id]
 
     # Template-existence probe ONCE (recipient-independent). Missing → do NOT stamp (retry).
-    if recipients and (await render(session, event.event_key, {})) is None:
-        await session.rollback()
-        logger.warning(
-            "notifications.awareness_template_missing", extra={"event_key": event.event_key}
-        )
+    # No rollback here: only READs have happened so far (resolve_subject,
+    # resolve_document_readers, render probe) plus the FOR UPDATE claim lock, which releases
+    # when the session context exits without commit — fanned_out_at stays NULL → re-claimed.
+    # Rolling back after loading the ORM instance would expire it and cause a synchronous
+    # lazy-refresh on the subsequent attr accesses → MissingGreenlet (S-ing-4 trap).
+    if recipients and (await render(session, event_key, {})) is None:
+        logger.warning("notifications.awareness_template_missing", extra={"event_key": event_key})
         return 0
 
-    org_enabled, org_pierce = await _org_flags(session, event.org_id)
-    context_vars = dict(event.context or {})
+    org_enabled, org_pierce = await _org_flags(session, event_org_id)
+    context_vars = dict(event_context or {})
     created = 0
     for uid in recipients:
-        recipient = await _recipient_for_user(session, uid, org_id=event.org_id)
+        recipient = await _recipient_for_user(session, uid, org_id=event_org_id)
         if recipient is None:
             continue
         outcome = await enqueue_awareness_one(
             session,
-            org_id=event.org_id,
+            org_id=event_org_id,
             subject=subject,
-            subject_id=event.subject_id,
-            subject_version_id=event.subject_version_id,
+            subject_id=event_subject_id,
+            subject_version_id=event_subject_version_id,
             recipient=recipient,
-            event_key=event.event_key,
+            event_key=event_key,
             context_vars=context_vars,
             now=now,
             org_enabled=org_enabled,
