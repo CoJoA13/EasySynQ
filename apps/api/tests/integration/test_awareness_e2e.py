@@ -472,3 +472,79 @@ async def test_fanout_template_miss_no_stamp_no_exception(
                 )
             )
         await owner_engine.dispose()
+
+
+async def test_fanout_per_recipient_template_miss_no_stamp(
+    app_under_test: Any, e2e_fixture: SimpleNamespace
+) -> None:
+    """TOCTOU loop path: template vanishes AFTER the probe but BEFORE the per-recipient enqueue.
+
+    Simulates the per-recipient `no_template` return (Codex P2) by patching dispatch.render to
+    succeed on the first call (the pre-loop probe in process_one_awareness_event) and return None
+    on the second (the call inside enqueue_awareness_one for the first recipient). The event must
+    NOT be stamped and zero notifications must persist — identical guarantee to the probe path.
+    """
+    from unittest.mock import patch
+
+    from sqlalchemy import func
+
+    from easysynq_api.db.models.awareness_event import AwarenessEvent
+    from easysynq_api.db.models.notification import Notification
+    from easysynq_api.db.session import get_sessionmaker
+    from easysynq_api.services.notifications import fanout as fanout_mod
+    from easysynq_api.services.notifications.fanout import fan_out_awareness
+
+    sm = get_sessionmaker()
+
+    # A real RenderedForms-like object for the probe call; None for the per-recipient call.
+    from types import SimpleNamespace as NS
+
+    real_forms = NS(
+        title="Doc Released",
+        body="A document was released.",
+        email_subject="Doc Released",
+        email_body="A document was released.",
+    )
+    render_calls: list[int] = [0]
+
+    async def _fake_render(session: Any, event_key: str, variables: Any) -> Any:
+        render_calls[0] += 1
+        if render_calls[0] == 1:
+            return real_forms  # probe succeeds → enters the recipient loop
+        return None  # per-recipient enqueue → no_template → must NOT stamp
+
+    now = datetime.datetime.now(datetime.UTC)
+
+    with patch.object(fanout_mod, "render", new=_fake_render):
+        # Also patch dispatch.render so enqueue_awareness_one sees the same patched render.
+        import easysynq_api.services.notifications.dispatch as dispatch_mod
+
+        with patch.object(dispatch_mod, "render", new=_fake_render):
+            result = await fan_out_awareness(sm, now)
+
+    async with sm() as s:
+        fanned_out_at = (
+            (
+                await s.execute(
+                    select(AwarenessEvent.fanned_out_at).where(
+                        AwarenessEvent.subject_id == e2e_fixture.doc_id
+                    )
+                )
+            )
+            .scalars()
+            .first()
+        )
+        notif_count = (
+            await s.execute(
+                select(func.count())
+                .select_from(Notification)
+                .where(
+                    Notification.subject_id == e2e_fixture.doc_id,
+                    Notification.event_key == "doc.released",
+                )
+            )
+        ).scalar_one()
+
+    assert fanned_out_at is None, "fanned_out_at must stay NULL when loop path returns no_template"
+    assert notif_count == 0, "no notification rows must persist when loop path returns no_template"
+    _ = result

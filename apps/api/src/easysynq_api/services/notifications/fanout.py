@@ -118,6 +118,15 @@ async def process_one_awareness_event(
             org_enabled=org_enabled,
             org_pierce=org_pierce,
         )
+        if outcome == "no_template":
+            # The template was deactivated/deleted between the probe and now (TOCTOU). Do NOT
+            # stamp — return without committing so the partial inserts roll back on session close
+            # and the event is re-claimed next sweep (retry-after-restore; the dedup index keeps
+            # the eventual full re-fan-out exactly-once). (Codex P2)
+            logger.warning(
+                "notifications.awareness_template_missing", extra={"event_key": event_key}
+            )
+            return 0
         if outcome == "created":
             created += 1
 
