@@ -4,6 +4,7 @@ import { Link } from "react-router-dom";
 import { IconSearch, IconTasks, IconUser } from "../../lib/icons";
 import { useAuth } from "../../lib/auth";
 import { NotificationBell } from "../../features/notifications/NotificationBell";
+import { usePermissions } from "./usePermissions";
 
 // S-notify-fe: the ack-count Indicator is retired — the bell is now the merged NOTIFICATION bell
 // (awareness), and the Tasks icon stays the explicit WORK entry. DOC_ACK assignments flow as
@@ -22,6 +23,7 @@ export function TopBar({
   onOpenSearch: () => void;
 }) {
   const { logout } = useAuth();
+  const perms = usePermissions();
   return (
     <Group h="100%" px="md" justify="space-between" wrap="nowrap">
       <Group gap="sm" wrap="nowrap">
@@ -58,6 +60,11 @@ export function TopBar({
             </ActionIcon>
           </Menu.Target>
           <Menu.Dropdown>
+            {perms.can("config.update") && (
+              <Menu.Item component={Link} to="/admin/config">
+                Administration
+              </Menu.Item>
+            )}
             <Menu.Item component={Link} to="/settings/notifications">
               Notification settings
             </Menu.Item>

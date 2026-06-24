@@ -28,6 +28,7 @@ from ..db.session import get_session
 from ..logging import request_id_var
 from ..problems import ProblemException
 from ..services.authz import require
+from ..services.notifications.health import get_delivery_health
 
 router = APIRouter(prefix="/api/v1", tags=["admin"])
 
@@ -92,6 +93,18 @@ async def get_config_endpoint(
     if cfg is None:  # pragma: no cover - OPERATIONAL implies a system_config row
         raise ProblemException(status=404, code="not_found", title="No system config")
     return _config_view(cfg)
+
+
+@router.get("/admin/notifications/health")
+async def get_notification_health_endpoint(
+    caller: AppUser = Depends(_config_update),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """Notification email delivery-health snapshot for the caller's org (S-notify-5b, doc 10 §9).
+
+    Failure/backlog/suppressed counts + the recent-failure list (operational-only) + the awareness
+    fan-out backlog. Pure read. Needs ``config.update`` (admin-only)."""
+    return await get_delivery_health(session, caller.org_id)
 
 
 @router.patch("/admin/config")

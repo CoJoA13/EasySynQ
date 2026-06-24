@@ -42,7 +42,9 @@ import type {
   MgmtReviewNextDue,
   Ncr,
   Notification,
+  NotificationDeliveryHealth,
   NotificationPreferences,
+  OrgConfig,
   Objective,
   ObjectiveCommitment,
   ObjectiveListResponse,
@@ -2664,6 +2666,37 @@ export const notificationFixtures = [
   },
 ] satisfies Notification[];
 
+export const orgConfigFixture = {
+  org_id: "00000000-0000-0000-0000-000000000001",
+  capture_pre_release_templates: false,
+  allow_self_disposition: false,
+  allow_capa_self_verify: false,
+  leadership_release_requires_top_management_authorization: false,
+  notifications_email_enabled: true,
+  notifications_escalation_pierce_quiet_hours: true,
+} satisfies OrgConfig;
+
+export const notificationHealthFixture = {
+  org_email_enabled: true,
+  email: {
+    failed: 2,
+    pending_now: 1,
+    pending_scheduled: 3,
+    suppressed: 0,
+    oldest_pending_at: "2026-06-24T08:00:00Z",
+  },
+  recent_failures: [
+    {
+      recipient_email: "ops@example.com",
+      last_error: "SMTP 550 mailbox unavailable",
+      attempts: 5,
+      failed_at: "2026-06-24T09:00:00Z",
+      email_kind: "single",
+    },
+  ],
+  awareness: { pending: 0, oldest_pending_at: null },
+} satisfies NotificationDeliveryHealth;
+
 const DEFAULT_NOTIFICATION_PREFS = {
   email_enabled: true,
   digest_modes: {
@@ -3522,4 +3555,13 @@ export const handlers = [
     };
     return HttpResponse.json(merged as unknown as Record<string, unknown>);
   }),
+  http.get("/api/v1/admin/config", () =>
+    HttpResponse.json(orgConfigFixture as unknown as Record<string, unknown>),
+  ),
+  http.patch("/api/v1/admin/config", () =>
+    HttpResponse.json(orgConfigFixture as unknown as Record<string, unknown>),
+  ),
+  http.get("/api/v1/admin/notifications/health", () =>
+    HttpResponse.json(notificationHealthFixture as unknown as Record<string, unknown>),
+  ),
 ];
