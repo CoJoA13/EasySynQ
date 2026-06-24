@@ -29,11 +29,16 @@ def _bearer(request: Request) -> str:
     return token
 
 
-async def get_current_user(
+async def resolve_current_user(
     request: Request,
-    jwks: JWKSCache = Depends(get_jwks_cache),
-    session: AsyncSession = Depends(get_session),
+    jwks: JWKSCache,
+    session: AsyncSession,
 ) -> AppUser:
+    """Validate the bearer, resolve/JIT-provision the AppUser, enforce active + revocation.
+
+    Extracted from get_current_user so a streaming endpoint can authenticate with a short-lived
+    session (closed BEFORE the StreamingResponse body iterates) — S-notify-5c.
+    """
     claims = await authenticate(_bearer(request), jwks)
     sub = str(claims["sub"])
 
@@ -62,8 +67,6 @@ async def get_current_user(
         await session.commit()
         await session.refresh(user)
     elif user.status == UserStatus.INVITED:
-        # An admin-invited user (S8d): the pre-created INVITED row reconciles to a real ACTIVE
-        # account on the subject's first genuine login. One-time write (only while INVITED).
         user.status = UserStatus.ACTIVE
         await session.commit()
         await session.refresh(user)
@@ -77,3 +80,11 @@ async def get_current_user(
         raise ProblemException(status=401, code="token_invalid", title="Session was invalidated")
 
     return user
+
+
+async def get_current_user(
+    request: Request,
+    jwks: JWKSCache = Depends(get_jwks_cache),
+    session: AsyncSession = Depends(get_session),
+) -> AppUser:
+    return await resolve_current_user(request, jwks, session)
