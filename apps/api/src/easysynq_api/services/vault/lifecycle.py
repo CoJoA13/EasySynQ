@@ -570,6 +570,24 @@ async def _cutover(
             identifier=doc.identifier,
         )
 
+    # S-notify-5a: emit the doc.released awareness event (doc 10 §9.2). Best-effort + SERIALIZABLE-
+    # aware (record_awareness_event re-raises a 40001/40P01/23505 so the race-loss path below yields
+    # the clean 409); atomic with the promotion + RELEASED audit → rolls back with a race loser.
+    from ..notifications.awareness import record_awareness_event
+    from ..notifications.constants import EVENT_DOC_RELEASED
+
+    await record_awareness_event(
+        session,
+        org_id=doc.org_id,
+        event_key=EVENT_DOC_RELEASED,
+        subject_type="DOCUMENT",
+        subject_id=doc.id,
+        subject_version_id=version.id,
+        actor_user_id=(actor.id if actor is not None else None),
+        occurred_at=now,
+        context={"version.label": version.revision_label},
+    )
+
     await session.commit()  # INV-1 + SERIALIZABLE adjudicate the race here
     await session.refresh(doc)
     return doc
