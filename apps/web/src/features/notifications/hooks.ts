@@ -1,7 +1,10 @@
 // apps/web/src/features/notifications/hooks.ts
-import { useQuery, type UseQueryResult } from "@tanstack/react-query";
+import { useEffect } from "react";
+import { useQuery, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
 import { useApi } from "../../lib/api";
+import { useAuth } from "../../lib/auth";
 import type { Notification, NotificationPreferences } from "../../lib/types";
+import { openNotificationStream, sleepWithSignal } from "./stream";
 
 // The unread-count badge — the ONLY polled query (60 s). Mirrors useAckCount EXACTLY: it returns the
 // count ALONGSIDE isError/isLoading, so the bell reads `count` only behind the isError guard and renders
@@ -12,7 +15,7 @@ export function useNotificationCount(): { count: number; isError: boolean; isLoa
   const query = useQuery({
     queryKey: ["notifications", "count"],
     queryFn: () => api.get<Notification[]>("/api/v1/notifications?unread_only=true&limit=100"),
-    refetchInterval: 60_000,
+    refetchInterval: 300_000, // 5-min backstop; SSE (useNotificationStream) is the primary signal
     retry: false,
   });
   return { count: query.data?.length ?? 0, isError: query.isError, isLoading: query.isLoading };
@@ -47,4 +50,42 @@ export function useNotificationPreferences(): UseQueryResult<NotificationPrefere
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
   });
+}
+
+const MIN_RECONNECT_MS = 3_000;
+const MAX_BACKOFF_MS = 30_000;
+const HEALTHY_MS = 30_000; // a stream open at least this long is "healthy" → reset the backoff
+
+// Opens the notification SSE stream and invalidates the ["notifications"] query family on each nudge,
+// so the bell refetches its authoritative count. Reconnects with capped backoff; resets the backoff
+// ONLY after a healthy-duration (so an accept-then-close server can't spin a ~1 s reconnect+refetch
+// storm — the on-connect notify fires an invalidate each time). Aborts cleanly on unmount/token change.
+// openImpl is injectable for tests.
+export function useNotificationStream(openImpl = openNotificationStream): void {
+  const { token } = useAuth();
+  const qc = useQueryClient();
+  useEffect(() => {
+    if (!token) return;
+    const ac = new AbortController();
+    let stopped = false;
+    let backoff = MIN_RECONNECT_MS;
+    void (async () => {
+      while (!stopped) {
+        const openedAt = Date.now();
+        try {
+          await openImpl(token, () => void qc.invalidateQueries({ queryKey: ["notifications"] }), ac.signal);
+        } catch {
+          // network/HTTP error — fall through to backoff
+        }
+        if (stopped || ac.signal.aborted) return;
+        backoff = Date.now() - openedAt >= HEALTHY_MS ? MIN_RECONNECT_MS : Math.min(backoff * 2, MAX_BACKOFF_MS);
+        await sleepWithSignal(Math.max(backoff, MIN_RECONNECT_MS), ac.signal);
+        if (stopped || ac.signal.aborted) return;
+      }
+    })();
+    return () => {
+      stopped = true;
+      ac.abort();
+    };
+  }, [token, qc, openImpl]);
 }
