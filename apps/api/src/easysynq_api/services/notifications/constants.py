@@ -9,6 +9,7 @@ EVENT_TASK_OVERDUE = "task.overdue"
 EVENT_TASK_ESCALATED = "task.escalated"
 EVENT_EMAIL_DELIVERY_FAILED = "system.email_delivery_failed"
 EVENT_DIGEST_DAILY = "digest.daily"
+EVENT_DOC_RELEASED = "doc.released"
 
 SUBJECT_SYSTEM = "SYSTEM"
 
@@ -37,4 +38,15 @@ VARIABLE_WHITELIST: dict[str, frozenset[str]] = {
         {"recipient_email", "attempts", "last_error", "notification_id", "created_at"}
     ),
     EVENT_DIGEST_DAILY: frozenset({"recipient.first_name", "item_count", "items", "prefs_link"}),
+    EVENT_DOC_RELEASED: frozenset(
+        {
+            "recipient.first_name",
+            "subject.identifier",
+            "subject.title",
+            "subject.kind",
+            "version.label",
+            "deep_link",
+            "prefs_link",
+        }
+    ),
 }

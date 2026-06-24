@@ -28,3 +28,12 @@ def test_timer_sweep_registered() -> None:
 def test_timer_sweep_beat_scheduled() -> None:
     entries = {e["task"]: e["schedule"] for e in app.conf.beat_schedule.values()}
     assert entries.get("easysynq.notifications.timer_sweep") == 300.0
+
+
+def test_awareness_fanout_registered() -> None:
+    assert "easysynq.notifications.awareness_fanout" in app.tasks
+
+
+def test_awareness_fanout_beat_scheduled() -> None:
+    entries = {e["task"]: e["schedule"] for e in app.conf.beat_schedule.values()}
+    assert entries.get("easysynq.notifications.awareness_fanout") == 120.0

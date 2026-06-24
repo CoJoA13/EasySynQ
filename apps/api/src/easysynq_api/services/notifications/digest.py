@@ -28,12 +28,18 @@ _INACTIVE = {UserStatus.LOCKED, UserStatus.DISABLED, UserStatus.RETIRED}
 
 
 def render_digest_items(notes: list[Notification]) -> tuple[str, int]:
-    """(items_block, raw_count). Group identical (event_key, subject_id) rows into one line with a
-    xN count; list each distinct item as '• {title} — {deep_link}'. Plain text (email body)."""
-    seen: dict[tuple[str, str], list[Notification]] = {}
-    order: list[tuple[str, str]] = []
+    """(items_block, raw_count). Group identical (event_key, subject_id, subject_version_id) rows
+    into one line with a xN count; list each distinct item as '• {title} — {deep_link}'. Plain
+    text (email body). subject_version_id is NULL for task rows (unchanged behaviour) and distinct
+    per version for awareness rows (two releases of the same doc render as two lines)."""
+    seen: dict[tuple[str, str, str | None], list[Notification]] = {}
+    order: list[tuple[str, str, str | None]] = []
     for n in notes:
-        key = (n.event_key, str(n.subject_id))
+        key = (
+            n.event_key,
+            str(n.subject_id),
+            str(n.subject_version_id) if n.subject_version_id is not None else None,
+        )
         if key not in seen:
             seen[key] = []
             order.append(key)

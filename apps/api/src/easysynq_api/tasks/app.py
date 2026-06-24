@@ -145,6 +145,13 @@ app.conf.update(
             "task": "easysynq.notifications.timer_sweep",
             "schedule": 300.0,  # every 5 minutes
         },
+        # S-notify-5a: the awareness fan-out — resolves doc.released's read-scoped audience and
+        # creates per-recipient notification rows. Every 2 minutes (awareness is daily-digest by
+        # default, so ≤2-min in-app latency is ample).
+        "notifications-awareness-fanout": {
+            "task": "easysynq.notifications.awareness_fanout",
+            "schedule": 120.0,
+        },
     },
 )
 

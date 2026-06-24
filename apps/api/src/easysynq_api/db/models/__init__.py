@@ -89,6 +89,7 @@ from .audit_finding import AuditFinding
 from .audit_plan import AuditPlan
 from .audit_program import AuditProgram
 from .authz_grant import PermissionOverride
+from .awareness_event import AwarenessEvent
 from .backup_policy import BackupPolicy
 from .blob import Blob
 from .capa import Capa
@@ -183,6 +184,7 @@ __all__ = [
     "AuditPlan",
     "AuditProgram",
     "AuditState",
+    "AwarenessEvent",
     "BackupPolicy",
     "Blob",
     "Capa",

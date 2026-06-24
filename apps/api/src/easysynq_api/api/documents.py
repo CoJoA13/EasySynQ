@@ -57,6 +57,7 @@ from ..services.ack import queries as ack_queries
 from ..services.ack.sink import get_ack_enqueue_sink
 from ..services.authz import AuthzAuditSink, enforce, gather_grants, get_authz_audit_sink, require
 from ..services.authz.repository import gather_sod_constraints, get_allow_approver_release
+from ..services.authz.resource import build_document_resource_context
 from ..services.dcr import build_where_used
 from ..services.diff import build_version_diff, get_or_create_visual_diff, get_visual_diff
 from ..services.vault import (
@@ -365,26 +366,7 @@ async def _document_scope(request: Request, session: AsyncSession) -> ResourceCo
 
 
 async def _document_scope_by_id(session: AsyncSession, doc_id: uuid.UUID) -> ResourceContext:
-    doc = await session.get(DocumentedInformation, doc_id)
-    if doc is None:
-        return ResourceContext(artifact_id=str(doc_id))
-    level: str | None = None
-    if doc.document_type_id:
-        dt = await session.get(DocumentType, doc.document_type_id)
-        level = dt.document_level.value if dt else None
-    # S-owner-assignment-1 (R28): populate ``process_ids`` from the doc's ProcessLink ids so a
-    # PROCESS-scoped grant (e.g. a bound Process Owner's ``document.*``) authorizes across EVERY
-    # document gate — not just ``document.distribute``. AZ-INV-8-safe: an attribute can only newly
-    # *match* a grant that already targets that exact process; it never widens an
-    # ARTIFACT/FOLDER/DOC_CLASS/SYSTEM match. S-process-scope-1 routes this through the shared
-    # ``vault_repo.process_ids_for_doc`` loader (the same loader search/workflow-reads now use).
-    return ResourceContext(
-        artifact_id=str(doc.id),
-        folder_path=doc.folder_path,
-        document_level=level,
-        lifecycle_state=doc.current_state.value,
-        process_ids=await vault_repo.process_ids_for_doc(session, doc.id),
-    )
+    return await build_document_resource_context(session, doc_id)
 
 
 async def _release_scope(
