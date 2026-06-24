@@ -14,7 +14,7 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import { IconBell } from "../../lib/icons";
 import { InlineState } from "../../lib/states";
-import { useNotificationCount, useNotifications } from "./hooks";
+import { useNotificationCount, useNotifications, useNotificationStream } from "./hooks";
 import { useMarkAllRead } from "./mutations";
 import { NotificationItem } from "./NotificationItem";
 
@@ -23,6 +23,7 @@ import { NotificationItem } from "./NotificationItem";
 // past the cap) / a gray indeterminate dot on a failed count / nothing on a true zero. The Indicator is
 // the OUTER wrapper so its badge overlays the bell while the Popover anchors to the ActionIcon itself.
 export function NotificationBell() {
+  useNotificationStream();
   const [opened, setOpened] = useState(false);
   const { count, isError } = useNotificationCount();
   const list = useNotifications("recent", opened);
