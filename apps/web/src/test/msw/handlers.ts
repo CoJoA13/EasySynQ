@@ -3564,4 +3564,15 @@ export const handlers = [
   http.get("/api/v1/admin/notifications/health", () =>
     HttpResponse.json(notificationHealthFixture as unknown as Record<string, unknown>),
   ),
+  http.get("/api/v1/notifications/stream", () => {
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(": ping\n\n"));
+        controller.close();
+      },
+    });
+    return new HttpResponse(body, {
+      headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" },
+    });
+  }),
 ];

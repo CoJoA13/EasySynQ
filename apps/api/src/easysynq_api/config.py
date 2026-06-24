@@ -104,6 +104,9 @@ class Settings(BaseSettings):
     # S-ack-1 (R43): the informational acknowledgement due window — due_at = mint + N days. RAG
     # display only; no escalation in v1 (the notifications family owns delivery/escalation).
     ack_due_days: int = 14
+    # S-notify-5c: the SSE pubsub-sweep cadence — PUBLISH per-user nudges to Redis so the api SSE
+    # endpoint pushes the bell update in near-real-time. ~10 s is well under the old 60 s poll.
+    notify_stream_sweep_interval_seconds: int = 10
 
     # S8b2 backup: the default filesystem destination for durable archives + the restore-test drill
     # (the per-org backup_policy.destination overrides). A mounted volume / NFS path in MVP

@@ -11,21 +11,24 @@ import uuid
 from typing import Any, cast
 from zoneinfo import available_timezones
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..auth.dependencies import get_current_user
+from ..auth.dependencies import get_current_user, resolve_current_user
+from ..auth.jwks import JWKSCache, get_jwks_cache
 from ..db.models._notification_enums import NotificationDigestMode
 from ..db.models.app_user import AppUser
 from ..db.models.notification import Notification, NotificationPreference
-from ..db.session import get_session
+from ..db.session import get_session, get_sessionmaker
 from ..problems import ProblemException
 from ..services.notifications.classes import NotificationClass
 from ..services.notifications.preferences import effective_preferences
+from ._sse import event_stream
 
 router = APIRouter(prefix="/api/v1", tags=["notifications"])
 
@@ -66,6 +69,33 @@ async def list_notifications(
     stmt = stmt.order_by(Notification.created_at.desc()).limit(min(limit, 200))
     rows = (await session.execute(stmt)).scalars().all()
     return [_view(n) for n in rows]
+
+
+async def _stream_caller(
+    request: Request,
+    jwks: JWKSCache = Depends(get_jwks_cache),
+) -> AppUser:
+    """Authenticate the SSE caller in a SHORT-LIVED session that closes before streaming begins.
+
+    A StreamingResponse keeps a Depends(get_session) yield-dependency open for the whole connection
+    lifetime — that would pin a pooled DB connection per open stream. Opening + closing our own
+    session here (the async with) avoids it; the generator then touches no DB (S-notify-5c §5).
+    """
+    async with get_sessionmaker()() as session:
+        return await resolve_current_user(request, jwks, session)
+
+
+@router.get("/notifications/stream")
+async def notification_stream(
+    request: Request,
+    caller: AppUser = Depends(_stream_caller),
+) -> StreamingResponse:
+    user_id = caller.id  # already loaded — read into a local (detached-safe), no lazy load
+    return StreamingResponse(
+        event_stream(request, user_id),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.post("/notifications/{notification_id}/read")

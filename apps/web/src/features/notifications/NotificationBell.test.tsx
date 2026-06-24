@@ -2,9 +2,18 @@
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { server } from "../../test/msw/server";
 import { renderWithProviders } from "../../test/render";
+
+const { openSpy } = vi.hoisted(() => ({
+  openSpy: vi.fn(() => new Promise<void>(() => {})), // stay open, no reconnect churn
+}));
+vi.mock("./stream", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./stream")>()),
+  openNotificationStream: openSpy,
+}));
+
 import { NotificationBell } from "./NotificationBell";
 
 function unreadList(n: number) {
@@ -77,5 +86,12 @@ describe("NotificationBell", () => {
     await userEvent.click(await screen.findByRole("button", { name: /Notifications/ }));
     await userEvent.click(await screen.findByRole("button", { name: "Mark all read" }));
     await waitFor(() => expect(hit).toBe(true));
+  });
+
+  it("renders the bell and mounts the notification stream", async () => {
+    openSpy.mockClear();
+    renderWithProviders(<NotificationBell />);
+    expect(await screen.findByRole("button", { name: /notifications/i })).toBeInTheDocument();
+    expect(openSpy).toHaveBeenCalledTimes(1);
   });
 });
