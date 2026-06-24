@@ -71,7 +71,7 @@ describe("TopBar", () => {
     await user.click(await screen.findByRole("button", { name: "Account" }));
     expect(await screen.findByRole("menuitem", { name: "Administration" })).toHaveAttribute(
       "href",
-      "/admin",
+      "/admin/config",
     );
   });
 

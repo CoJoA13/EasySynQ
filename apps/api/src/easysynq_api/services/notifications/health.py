@@ -44,7 +44,10 @@ async def get_delivery_health(session: AsyncSession, org_id: uuid.UUID) -> dict[
                 func.count().filter(scheduled),
                 func.count().filter(NotificationEmail.status == st.SUPPRESSED),
                 func.min(NotificationEmail.created_at).filter(pending),
-            ).where(NotificationEmail.org_id == org_id)
+            ).where(
+                NotificationEmail.org_id == org_id,
+                NotificationEmail.status.in_([st.FAILED, st.PENDING, st.SUPPRESSED]),
+            )
         )
     ).one()
 

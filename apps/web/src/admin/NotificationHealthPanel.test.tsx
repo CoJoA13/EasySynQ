@@ -64,10 +64,11 @@ describe("NotificationHealthPanel", () => {
         pending_scheduled: 0,
         oldest_pending_at: "2026-06-24T08:00:00Z",
       },
-      awareness: { pending: 4, oldest_pending_at: null },
+      awareness: { pending: 4, oldest_pending_at: "2026-06-24T07:00:00Z" },
     });
     renderWithProviders(<NotificationHealthPanel />);
     expect(await screen.findByText(/Oldest pending email/)).toBeInTheDocument();
     expect(screen.getByText("4")).toBeInTheDocument();
+    expect(await screen.findByText(/Oldest pending awareness event/)).toBeInTheDocument();
   });
 });

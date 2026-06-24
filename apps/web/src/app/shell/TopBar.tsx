@@ -61,7 +61,7 @@ export function TopBar({
           </Menu.Target>
           <Menu.Dropdown>
             {perms.can("config.update") && (
-              <Menu.Item component={Link} to="/admin">
+              <Menu.Item component={Link} to="/admin/config">
                 Administration
               </Menu.Item>
             )}

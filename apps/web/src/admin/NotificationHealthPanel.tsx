@@ -91,6 +91,11 @@ export function NotificationHealthPanel() {
           Oldest pending email: {relAge(h.email.oldest_pending_at)}
         </Text>
       )}
+      {h.awareness.pending > 0 && (
+        <Text size="sm" c="dimmed">
+          Oldest pending awareness event: {relAge(h.awareness.oldest_pending_at)}
+        </Text>
+      )}
 
       <Stack gap="xs">
         <Title order={4}>Recent failures</Title>
