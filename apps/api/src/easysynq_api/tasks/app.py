@@ -152,6 +152,12 @@ app.conf.update(
             "task": "easysynq.notifications.awareness_fanout",
             "schedule": 120.0,
         },
+        # S-notify-5c: the SSE pubsub sweep — PUBLISH a per-user nudge to Redis for each freshly-
+        # committed notification so the api SSE endpoint can push the bell update in near-real-time.
+        "notifications-pubsub-sweep": {
+            "task": "easysynq.notifications.pubsub_sweep",
+            "schedule": float(_settings.notify_stream_sweep_interval_seconds),
+        },
     },
 )
 

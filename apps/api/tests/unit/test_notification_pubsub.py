@@ -100,3 +100,10 @@ def test_dedup_key_is_per_notification() -> None:
     nid = uuid.uuid4()
     assert dedup_key(nid) == f"notify:pushed:{nid}"
     assert channel_for_user(nid) == f"notify:user:{nid}"
+
+
+def test_pubsub_sweep_task_is_registered() -> None:
+    import easysynq_api.tasks.notifications  # noqa: F401 — ensure the task module is imported
+    from easysynq_api.tasks.app import app as celery_app
+
+    assert "easysynq.notifications.pubsub_sweep" in celery_app.tasks

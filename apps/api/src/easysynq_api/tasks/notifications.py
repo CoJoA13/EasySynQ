@@ -11,11 +11,13 @@ import logging
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from ..config import get_settings
+from ..redis_client import redis_client
 from ..services.notifications.digest import sweep_digests
 from ..services.notifications.drain import drain_once
 from ..services.notifications.escalation import sweep_task_timers
 from ..services.notifications.fanout import fan_out_awareness
 from ..services.notifications.mail import SmtpMailSender
+from ..services.notifications.pubsub import sweep_and_publish
 from .app import task
 
 logger = logging.getLogger("easysynq.notifications.tasks")
@@ -97,3 +99,25 @@ async def _run_awareness_fanout() -> dict[str, int]:
 def awareness_fanout() -> dict[str, int]:
     """Fan out pending awareness events (doc.released) to read-scoped audiences (every ~120 s)."""
     return asyncio.run(_run_awareness_fanout())
+
+
+async def _run_pubsub_sweep() -> dict[str, int]:
+    settings = get_settings()
+    engine = create_async_engine(settings.database_url)
+    sm: async_sessionmaker[AsyncSession] = async_sessionmaker(engine, expire_on_commit=False)
+    redis = redis_client(decode_responses=True)
+    try:
+        async with sm() as session:
+            nudged = await sweep_and_publish(session, redis)
+        summary = {"nudged": nudged}
+        logger.info("notifications.pubsub_sweep", extra={"extra_fields": summary})
+        return summary
+    finally:
+        await redis.aclose()
+        await engine.dispose()
+
+
+@task(name="easysynq.notifications.pubsub_sweep")
+def pubsub_sweep() -> dict[str, int]:
+    """PUBLISH a per-user SSE nudge for each freshly-committed notification (every ~10 s)."""
+    return asyncio.run(_run_pubsub_sweep())
