@@ -146,7 +146,8 @@ async def test_concurrent_release_emits_exactly_one_event_loser_409(
         d.current_state = DocumentCurrentState.Approved
         await session.commit()
 
-    # Race: two concurrent POST /release calls targeting the two distinct Approved versions.
+    # Race: two concurrent POST /release calls targeting the two distinct Approved versions. Pair
+    # each response with the version_id it targeted so the 200 (the winner) ties to a specific id.
     r1, r2 = await asyncio.gather(
         app_client.post(
             f"/api/v1/documents/{did}/release", headers=hb, json={"version_id": v1["id"]}
@@ -156,9 +157,14 @@ async def test_concurrent_release_emits_exactly_one_event_loser_409(
         ),
         return_exceptions=True,
     )
-    statuses = sorted(r.status_code for r in (r1, r2) if isinstance(r, httpx.Response))
+    by_version = ((r1, v1["id"]), (r2, v2["id"]))
+    statuses = sorted(r.status_code for r, _ in by_version if isinstance(r, httpx.Response))
     assert statuses == [200, 409], (
         f"Expected one 200 + one 409 from the concurrent release race, got statuses={statuses}"
+    )
+    # The request that returned 200 is the cutover winner — capture the version id it promoted.
+    winning_version_id = next(
+        vid for r, vid in by_version if isinstance(r, httpx.Response) and r.status_code == 200
     )
 
     # Exactly one awareness_event — the loser's savepoint rolled back with its txn.
@@ -169,3 +175,9 @@ async def test_concurrent_release_emits_exactly_one_event_loser_409(
     ev = rows[0]
     assert ev.subject_type == "DOCUMENT"
     assert ev.fanned_out_at is None
+    # The surviving event must carry the WINNER's version id — a race-win that emitted the wrong
+    # version's awareness row would otherwise pass the count/status assertions above.
+    assert ev.subject_version_id == uuid.UUID(winning_version_id), (
+        f"surviving awareness_event subject_version_id={ev.subject_version_id} must equal the "
+        f"winner's version id {winning_version_id}"
+    )
