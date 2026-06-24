@@ -1,5 +1,6 @@
 """Celery/Beat tasks for notifications: outbox drain (S-notify-1), digest sweep (S-notify-3a),
-and timer sweep (S-notify-4 — reminders + overdue + escalate-to-manager)."""
+timer sweep (S-notify-4 — reminders + overdue + escalate-to-manager), and awareness fan-out
+(S-notify-5a — read-scoped doc.released fan-out)."""
 
 from __future__ import annotations
 
@@ -13,6 +14,7 @@ from ..config import get_settings
 from ..services.notifications.digest import sweep_digests
 from ..services.notifications.drain import drain_once
 from ..services.notifications.escalation import sweep_task_timers
+from ..services.notifications.fanout import fan_out_awareness
 from ..services.notifications.mail import SmtpMailSender
 from .app import task
 
@@ -77,3 +79,21 @@ async def _run_timer_sweep() -> dict[str, int]:
 def timer_sweep() -> dict[str, int]:
     """Reminders + overdue + escalate-to-manager off task due dates (every ~5 min)."""
     return asyncio.run(_run_timer_sweep())
+
+
+async def _run_awareness_fanout() -> dict[str, int]:
+    settings = get_settings()
+    engine = create_async_engine(settings.database_url)
+    sm: async_sessionmaker[AsyncSession] = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        summary = await fan_out_awareness(sm, datetime.datetime.now(datetime.UTC))
+        logger.info("notifications.awareness_fanout", extra={"extra_fields": summary})
+        return summary
+    finally:
+        await engine.dispose()
+
+
+@task(name="easysynq.notifications.awareness_fanout")
+def awareness_fanout() -> dict[str, int]:
+    """Fan out pending awareness events (doc.released) to read-scoped audiences (every ~120 s)."""
+    return asyncio.run(_run_awareness_fanout())
