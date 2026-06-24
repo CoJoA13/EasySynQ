@@ -90,3 +90,28 @@ async def test_event_stream_teardown_on_aclose(monkeypatch: pytest.MonkeyPatch) 
     assert (await agen.__anext__()) == "event: notify\ndata: \n\n"
     await agen.aclose()  # the client vanished mid-stream
     assert pubsub.unsubscribed and pubsub.closed and redis.closed
+
+
+class _UnsubscribeRaisesPubSub(_FakePubSub):
+    """Variant of _FakePubSub whose unsubscribe raises to simulate a broken Redis connection."""
+
+    async def unsubscribe(self, ch: str) -> None:
+        raise RuntimeError("simulated unsubscribe failure")
+
+
+async def test_event_stream_acloses_redis_even_if_unsubscribe_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The inner finally in event_stream must reach redis.aclose() even when unsubscribe throws."""
+    pubsub = _UnsubscribeRaisesPubSub([None] * 100)
+    redis = _FakeRedis(pubsub)
+    monkeypatch.setattr("easysynq_api.api._sse.redis_client", lambda **k: redis)
+    agen = event_stream(_FakeRequest(), uuid.uuid4())
+    assert (await agen.__anext__()) == "event: notify\ndata: \n\n"
+    # aclose() may propagate the unsubscribe exception through the generator teardown;
+    # assert redis.closed regardless — the inner finally MUST reach redis.aclose().
+    try:
+        await agen.aclose()
+    except RuntimeError:
+        pass
+    assert redis.closed, "redis.aclose() must be called even when pubsub.unsubscribe raises"

@@ -67,6 +67,8 @@ async def resolve_current_user(
         await session.commit()
         await session.refresh(user)
     elif user.status == UserStatus.INVITED:
+        # An admin-invited user (S8d): the pre-created INVITED row reconciles to a real ACTIVE
+        # account on the subject's first genuine login. One-time write (only while INVITED).
         user.status = UserStatus.ACTIVE
         await session.commit()
         await session.refresh(user)

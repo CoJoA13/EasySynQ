@@ -78,7 +78,7 @@ async def _drain_subscribe(ps: Any) -> None:
             return
 
 
-async def _await_nudge(ps: Any, *, expect: bool) -> bool:
+async def _await_nudge(ps: Any) -> bool:
     for _ in range(25):
         m = await ps.get_message(ignore_subscribe_messages=True, timeout=0.2)
         if m is not None and m.get("type") == "message":
@@ -103,7 +103,7 @@ async def test_sweep_publishes_nudge_for_recent_unread(app_under_test: Any) -> N
                 await sweep_and_publish(session, pub)
         finally:
             await pub.aclose()
-        assert await _await_nudge(ps, expect=True), "expected a nudge for the recent unread row"
+        assert await _await_nudge(ps), "expected a nudge for the recent unread row"
     finally:
         await ps.unsubscribe(channel_for_user(user.id))
         await ps.aclose()
@@ -131,7 +131,7 @@ async def test_sweep_skips_read_and_old(app_under_test: Any) -> None:
                 await sweep_and_publish(session, pub)
         finally:
             await pub.aclose()
-        assert not await _await_nudge(ps, expect=False), "read/old rows must not nudge"
+        assert not await _await_nudge(ps), "read/old rows must not nudge"
     finally:
         await ps.unsubscribe(channel_for_user(user.id))
         await ps.aclose()
@@ -159,9 +159,7 @@ async def test_sweep_nudges_txn_start_clock_row_within_lookback(app_under_test: 
                 await sweep_and_publish(session, pub)
         finally:
             await pub.aclose()
-        assert await _await_nudge(ps, expect=True), (
-            "a 60s-old (within LOOKBACK) row must still nudge"
-        )
+        assert await _await_nudge(ps), "a 60s-old (within LOOKBACK) row must still nudge"
     finally:
         await ps.unsubscribe(channel_for_user(user.id))
         await ps.aclose()
@@ -182,6 +180,37 @@ async def test_stream_requires_bearer(app_client: AsyncClient, app_under_test: A
 class _ConnectedRequest:
     async def is_disconnected(self) -> bool:
         return False
+
+
+async def test_sweep_does_not_nudge_other_users(app_under_test: Any) -> None:
+    """A nudge for user A must NOT reach user B's channel (cross-user isolation — spec §8)."""
+    org_id = await _default_org_id()
+    user_a = await _seed_user(org_id, uuid.uuid4().hex[:8])
+    user_b = await _seed_user(org_id, uuid.uuid4().hex[:8])
+
+    sub_b = redis_client(decode_responses=True)
+    ps_b = sub_b.pubsub()
+    try:
+        await ps_b.subscribe(channel_for_user(user_b.id))
+        await _drain_subscribe(ps_b)
+
+        # Seed a notification for user A only
+        await _seed_notification(org_id, user_a.id)
+
+        pub = redis_client(decode_responses=True)
+        try:
+            async with get_sessionmaker()() as session:
+                await sweep_and_publish(session, pub)
+        finally:
+            await pub.aclose()
+
+        assert not await _await_nudge(ps_b), (
+            "user B's channel must receive no nudge when only user A has a new notification"
+        )
+    finally:
+        await ps_b.unsubscribe(channel_for_user(user_b.id))
+        await ps_b.aclose()
+        await sub_b.aclose()
 
 
 async def test_event_stream_first_frame_against_real_redis(app_under_test: Any) -> None:
