@@ -379,14 +379,18 @@ async def set_org_profile(
         raise ProblemException(status=404, code="not_found", title="Organization not found")
     org.legal_name = legal_name
     org.short_code = short_code
+    old_tz = org.timezone
     org.timezone = timezone
-    # Keep the org's default working_calendar tz in sync (S-notify-6). The 0067 seed captured the
-    # org tz at MIGRATION time (UTC on a fresh install, before this wizard runs), so without this
-    # update a non-UTC org's business-day SLAs evaluate against UTC (wrong local date / weekend
-    # boundary). No-op if no default calendar exists; the app role holds UPDATE on working_calendar.
+    # Only re-sync a default calendar that was still tracking the org timezone; preserve an
+    # operator-customized calendar tz (the S-notify-7 editor owns it operationally). On first
+    # setup the seed calendar tz == the org's old tz, so the S-notify-6 sync still applies.
     await session.execute(
         update(WorkingCalendar)
-        .where(WorkingCalendar.org_id == actor.org_id, WorkingCalendar.is_default.is_(True))
+        .where(
+            WorkingCalendar.org_id == actor.org_id,
+            WorkingCalendar.is_default.is_(True),
+            WorkingCalendar.timezone == old_tz,
+        )
         .values(timezone=timezone)
     )
     _emit(

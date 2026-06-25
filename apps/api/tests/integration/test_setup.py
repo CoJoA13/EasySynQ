@@ -13,11 +13,12 @@ import shutil
 import tempfile
 import uuid
 from collections.abc import Callable
+from typing import Any
 
 import pytest
 import redis.asyncio as aioredis
 from httpx import AsyncClient
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 
 from easysynq_api.config import get_settings
 from easysynq_api.db.models._audit_enums import EventType
@@ -235,6 +236,105 @@ async def test_org_profile_rejects_default_short_code(
         json={"legal_name": "Acme", "short_code": "DEFAULT", "timezone": "UTC"},
     )
     assert r.status_code == 422
+
+
+async def test_set_org_profile_preserves_customized_calendar_tz(
+    app_under_test: Any,
+) -> None:
+    """Fix 2 (Codex P2): set_org_profile must NOT overwrite a default calendar whose tz has been
+    operator-customized beyond the org tz. Only a calendar that still tracks the org tz
+    (calendar.tz == old org tz) should be updated — preserving an editor-set tz is the invariant.
+
+    Uses the singleton org + a temp actor; restores the original calendar tz + org state in
+    finally so subsequent setup tests see a clean shared org."""
+    # Read current org + calendar state.
+    async with get_sessionmaker()() as s:
+        org = (await s.execute(select(Organization))).scalar_one()
+        org_id = org.id
+        orig_org_tz = org.timezone
+        orig_legal_name = org.legal_name
+        orig_short_code = org.short_code
+        cal = (
+            await s.execute(
+                select(WorkingCalendar).where(
+                    WorkingCalendar.org_id == org_id, WorkingCalendar.is_default.is_(True)
+                )
+            )
+        ).scalar_one_or_none()
+        orig_cal_tz = cal.timezone if cal is not None else None
+
+    if orig_cal_tz is None:
+        pytest.skip("no default calendar seeded for this org — skipping customization test")
+
+    # Create a temp actor on the singleton org.
+    salt = uuid.uuid4().hex[:8]
+    async with get_sessionmaker()() as s:
+        actor = AppUser(
+            org_id=org_id,
+            keycloak_subject=f"kc-ctz-{salt}",
+            display_name="Tz Test",
+            email=None,
+        )
+        s.add(actor)
+        await s.commit()
+        actor_id = actor.id
+
+    try:
+        # Mark the default calendar as "customized" by setting a tz different from the org tz.
+        custom_tz = "Pacific/Auckland"
+        async with get_sessionmaker()() as s:
+            await s.execute(
+                update(WorkingCalendar)
+                .where(WorkingCalendar.org_id == org_id, WorkingCalendar.is_default.is_(True))
+                .values(timezone=custom_tz)
+            )
+            await s.commit()
+
+        # Call set_org_profile with a different org tz.  The customized calendar tz must be
+        # preserved (NOT overwritten to the new org tz).
+        new_org_tz = "America/Denver"
+        valid_code = orig_short_code if orig_short_code != "DEFAULT" else "CTZTEST1"
+        valid_name = orig_legal_name if orig_legal_name else "Test Org Tz"
+        async with get_sessionmaker()() as s:
+            actor = await s.get(AppUser, actor_id)
+            await setup_service.set_org_profile(
+                s, actor, legal_name=valid_name, short_code=valid_code, timezone=new_org_tz
+            )
+            # set_org_profile commits internally.
+
+        # Verify: the calendar tz was NOT changed to new_org_tz (it stays at custom_tz).
+        async with get_sessionmaker()() as s:
+            cal = (
+                await s.execute(
+                    select(WorkingCalendar).where(
+                        WorkingCalendar.org_id == org_id, WorkingCalendar.is_default.is_(True)
+                    )
+                )
+            ).scalar_one_or_none()
+            assert cal is not None
+            assert cal.timezone == custom_tz, (
+                f"customized calendar tz must be preserved; "
+                f"got {cal.timezone!r}, expected {custom_tz!r}"
+            )
+    finally:
+        # Restore calendar tz + org profile. The temp actor is NOT deleted here: set_org_profile
+        # commits an ORG_PROFILE_SET audit_event with actor_id = actor.id, so a DELETE on the
+        # actor violates the fk_audit_event_actor_id_app_user FK. The actor is left in the shared
+        # test DB (harmless — testcontainers recreates the DB each session; existing tests never
+        # assert absolute user counts). This mirrors the no-cleanup-of-grant-users precedent used
+        # throughout this integration suite.
+        async with get_sessionmaker()() as s:
+            org_row = await s.get(Organization, org_id)
+            if org_row is not None:
+                org_row.legal_name = orig_legal_name
+                org_row.short_code = orig_short_code
+                org_row.timezone = orig_org_tz
+            await s.execute(
+                update(WorkingCalendar)
+                .where(WorkingCalendar.org_id == org_id, WorkingCalendar.is_default.is_(True))
+                .values(timezone=orig_cal_tz)
+            )
+            await s.commit()
 
 
 async def test_finalize_blocked_then_operational_lifts_latch(

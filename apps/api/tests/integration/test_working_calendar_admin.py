@@ -243,6 +243,74 @@ async def test_update_insert_audits_even_with_default_values(app_under_test: Any
             await s.commit()
 
 
+async def test_update_audit_before_uses_raw_stored_row(app_under_test: Any) -> None:
+    """Fix 1 (Codex P2): update_working_calendar must record the RAW stored working_days in the
+    CONFIG_UPDATED audit `before`, NOT the sanitized view. A stored [5,1,3] must appear as [5,1,3]
+    in the before dict (not the sorted canonical [1,3,5] that get_working_calendar returns).
+
+    Pattern: fresh org + actor, INSERT the calendar with unsorted working_days in the same session
+    as the service call, rollback → no committed calendar row (app role can't DELETE). The
+    session's auto-flush makes the pending row visible to _load_default's SELECT."""
+    salt = uuid.uuid4().hex[:8]
+    async with get_sessionmaker()() as s:
+        org = Organization(legal_name=f"WCal RAW {salt}", short_code=f"WR{salt[:6].upper()}")
+        s.add(org)
+        await s.commit()
+        org_id = org.id
+        actor = AppUser(
+            org_id=org_id,
+            keycloak_subject=f"kc-wcal-raw-{salt}",
+            display_name="WCal Raw",
+            email=None,
+        )
+        s.add(actor)
+        await s.commit()
+        actor_id = actor.id
+    try:
+        async with get_sessionmaker()() as s:
+            actor = await s.get(AppUser, actor_id)
+            # INSERT a calendar with non-canonical (unsorted) working_days directly.
+            # auto-flush makes it visible to the _load_default SELECT inside the service.
+            cal_row = WorkingCalendar(
+                id=uuid.uuid4(),
+                org_id=org_id,
+                name="Raw Cal",
+                working_days=[5, 1, 3],
+                holidays=[],
+                timezone="UTC",
+                is_default=True,
+            )
+            s.add(cal_row)
+            # Call the service — _load_default will auto-flush then find the pending row.
+            await update_working_calendar(
+                s,
+                actor=actor,
+                name="Clean Cal",
+                working_days=[1, 2, 3, 4, 5],
+                holidays=[],
+                timezone="UTC",
+            )
+            staged_audits = [
+                o
+                for o in s.new
+                if isinstance(o, AuditEvent) and o.event_type == EventType.CONFIG_UPDATED
+            ]
+            assert len(staged_audits) == 1, "must stage exactly one CONFIG_UPDATED audit"
+            before_cal = staged_audits[0].before.get("working_calendar", {})
+            raw_wd = before_cal.get("working_days")
+            assert raw_wd == [5, 1, 3], (
+                f"audit before must reflect the RAW stored value [5,1,3], got {raw_wd!r}"
+            )
+            await s.rollback()  # never commit — leak-free (app role can't DELETE)
+        # Confirm nothing was committed.
+        assert await _read_default(org_id) is None
+    finally:
+        async with get_sessionmaker()() as s:
+            await s.execute(delete(AppUser).where(AppUser.id == actor_id))
+            await s.execute(delete(Organization).where(Organization.id == org_id))
+            await s.commit()
+
+
 async def test_http_put_updates_existing_default_and_audits(
     app_client: AsyncClient, token_factory: Callable[..., str], app_under_test: Any
 ) -> None:

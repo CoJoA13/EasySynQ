@@ -96,7 +96,7 @@ export function WorkingCalendarEditor() {
   const validName = nameError === undefined;
   const hasDay = working.days.length > 0;
   const dirty = isDirty(working, cal.data);
-  const canSave = dirty && validName && hasDay;
+  const canSave = (dirty || !cal.data.exists) && validName && hasDay;
 
   const addHoliday = () => {
     const v = holidayInput; // <input type=date> emits "" when empty/invalid

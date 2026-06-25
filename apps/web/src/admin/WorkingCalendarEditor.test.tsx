@@ -61,6 +61,20 @@ describe("WorkingCalendarEditor", () => {
     expect(save).toBeEnabled(); // re-valid
   });
 
+  it("Save is ENABLED on initial render when calendar does not exist yet (exists:false)", async () => {
+    server.use(...statefulCal({ ...workingCalendarFixture, exists: false }));
+    renderWithProviders(<WorkingCalendarEditor />);
+    const save = await screen.findByRole("button", { name: "Save calendar" });
+    expect(save).toBeEnabled();
+  });
+
+  it("Save is DISABLED on initial render when calendar already exists (exists:true, no edit)", async () => {
+    server.use(...statefulCal());
+    renderWithProviders(<WorkingCalendarEditor />);
+    const save = await screen.findByRole("button", { name: "Save calendar" });
+    expect(save).toBeDisabled();
+  });
+
   it("adds a holiday via the date input and removes it; blank Add is a no-op", async () => {
     server.use(...statefulCal({ ...workingCalendarFixture, holidays: [] }));
     const user = userEvent.setup();

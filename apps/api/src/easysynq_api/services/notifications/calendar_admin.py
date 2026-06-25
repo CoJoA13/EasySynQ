@@ -128,11 +128,16 @@ async def update_working_calendar(
     org_id = actor.org_id
     name, wd, hol, tz = _validate(name, working_days, holidays, timezone)
 
-    before = await get_working_calendar(session, org_id)  # existing row or synthesized default
+    raw_before = await _load_default(session, org_id)
     before_fields = (
         {}
-        if not before["exists"]
-        else {k: before[k] for k in ("name", "working_days", "holidays", "timezone")}
+        if raw_before is None
+        else {
+            "name": raw_before.name,
+            "working_days": raw_before.working_days,
+            "holidays": raw_before.holidays,
+            "timezone": raw_before.timezone,
+        }
     )
     after_fields = {"name": name, "working_days": wd, "holidays": hol, "timezone": tz}
 
