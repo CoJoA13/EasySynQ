@@ -110,12 +110,17 @@ def due_steps(
     """Steps whose threshold has passed AND whose stamp is null, chronological. Reminder/escalate
     thresholds are BUSINESS-DAY offsets against ``calendar`` (skip weekends + holidays); OVERDUE is
     always-on at ``due_at`` with NO business-day shift (D-5 — ``due_at`` itself is raw wall-clock,
-    snapping it is the upstream R39 residual). Reminders/escalate stay gated by a configured
-    (non-null) offset."""
+    snapping it is the upstream un-numbered residual). Reminders/escalate stay gated by a configured
+    (non-null) offset AND only fire when ``now`` is itself a working day — so a sweep DELAYED past
+    the threshold into a non-working day (worker down / template missing over a weekend) defers the
+    ping to the next working day (doc 10 §9.5: timers do not fire on non-working days). OVERDUE is
+    exempt from that gate (it is always-on at ``due_at`` by design)."""
     out: list[TimerStep] = []
+    now_is_working = is_working_day(now.astimezone(calendar.tz).date(), calendar)
     if (
         policy.remind_1_before is not None
         and stamps.remind_1_sent_at is None
+        and now_is_working
         and now
         >= business_threshold(due_at, policy.remind_1_before, ThresholdDirection.BEFORE, calendar)
     ):
@@ -123,6 +128,7 @@ def due_steps(
     if (
         policy.remind_2_before is not None
         and stamps.remind_2_sent_at is None
+        and now_is_working
         and now
         >= business_threshold(due_at, policy.remind_2_before, ThresholdDirection.BEFORE, calendar)
     ):
@@ -132,6 +138,7 @@ def due_steps(
     if (
         policy.escalate_1_after is not None
         and stamps.escalated_1_at is None
+        and now_is_working
         and now
         >= business_threshold(due_at, policy.escalate_1_after, ThresholdDirection.AFTER, calendar)
     ):

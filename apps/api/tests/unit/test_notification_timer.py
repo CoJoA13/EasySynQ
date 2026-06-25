@@ -234,3 +234,41 @@ def test_due_steps_stamp_gating_unchanged_with_calendar():
     assert due_steps(pol, due, stamps, mon, MON_FRI) == [
         TimerStep.OVERDUE
     ]  # ESCALATE_1 not re-fired
+
+
+def test_due_steps_offsets_do_not_fire_on_a_non_working_now():
+    # Delayed sweep: a step's threshold passed but the sweep first runs on a non-working day (worker
+    # down / template missing over a weekend). Reminder/escalation must DEFER to the next working
+    # day; OVERDUE is exempt (always-on at due_at).
+    due = datetime.datetime(2026, 6, 26, 12, 0, tzinfo=UTC)  # Friday
+    pol = TimerPolicy(
+        remind_1_before=timedelta(days=1), remind_2_before=None, escalate_1_after=timedelta(days=1)
+    )
+    # remind_1 threshold = Thu 06-25 12:00 (passed by Saturday); escalate threshold = Mon 06-29.
+    sat = datetime.datetime(2026, 6, 27, 18, 0, tzinfo=UTC)  # Saturday (non-working)
+    # REMIND_1 threshold passed but `now` non-working -> gated OFF; OVERDUE fires (due Fri <= Sat).
+    assert due_steps(pol, due, NONE, sat, MON_FRI) == [TimerStep.OVERDUE]
+    # On Monday: REMIND_1 (threshold passed) + OVERDUE + ESCALATE_1 (threshold = Mon) all fire.
+    mon = datetime.datetime(2026, 6, 29, 12, 0, tzinfo=UTC)
+    assert due_steps(pol, due, NONE, mon, MON_FRI) == [
+        TimerStep.REMIND_1,
+        TimerStep.OVERDUE,
+        TimerStep.ESCALATE_1,
+    ]
+
+
+def test_due_steps_offsets_do_not_fire_on_a_holiday_now():
+    # Same working-day gate for a HOLIDAY `now` (a working weekday that is an org holiday).
+    cal = Calendar(
+        frozenset({1, 2, 3, 4, 5}), frozenset({_D(2026, 6, 24)}), zoneinfo.ZoneInfo("UTC")
+    )
+    due = datetime.datetime(2026, 6, 22, 12, 0, tzinfo=UTC)  # Monday
+    pol = TimerPolicy(
+        remind_1_before=None, remind_2_before=None, escalate_1_after=timedelta(days=1)
+    )
+    # escalate threshold = 1 biz day after Mon 06-22 = Tue 06-23. `now` = Wed 06-24 (a HOLIDAY).
+    wed_holiday = datetime.datetime(2026, 6, 24, 15, 0, tzinfo=UTC)
+    assert due_steps(pol, due, NONE, wed_holiday, cal) == [TimerStep.OVERDUE]  # escalate gated off
+    # Next working day (Thu 06-25): escalate fires.
+    thu = datetime.datetime(2026, 6, 25, 9, 0, tzinfo=UTC)
+    assert due_steps(pol, due, NONE, thu, cal) == [TimerStep.OVERDUE, TimerStep.ESCALATE_1]

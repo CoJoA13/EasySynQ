@@ -187,6 +187,12 @@ async def resolve_working_calendar(session: AsyncSession, org_id: uuid.UUID) -> 
     ).scalar_one_or_none()
     if row is None:
         return DEFAULT_CALENDAR
+    # working_days must be a JSON ARRAY of ISO ints 1..7. A non-list scalar — including a JSON
+    # *string* like "67", which is iterable and would wrongly convert to {6,7} (a weekend-only
+    # calendar that fires on weekends) — is structurally broken → fall back wholesale.
+    if not isinstance(row.working_days, list):
+        logger.warning("notifications.timer_bad_working_days", extra={"org_id": str(org_id)})
+        return DEFAULT_CALENDAR
     try:
         weekdays = frozenset(int(x) for x in row.working_days)
     except (TypeError, ValueError):

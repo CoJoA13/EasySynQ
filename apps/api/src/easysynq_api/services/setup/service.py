@@ -23,7 +23,7 @@ import zoneinfo
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...config import get_settings
@@ -35,6 +35,7 @@ from ...db.models.organization import Organization
 from ...db.models.role import Role, RoleAssignment
 from ...db.models.storage_config import StorageConfig
 from ...db.models.system_config import SetupState, SystemConfig
+from ...db.models.working_calendar import WorkingCalendar
 from ...logging import request_id_var
 from ...problems import ProblemException
 from ...redis_client import redis_client
@@ -379,6 +380,15 @@ async def set_org_profile(
     org.legal_name = legal_name
     org.short_code = short_code
     org.timezone = timezone
+    # Keep the org's default working_calendar tz in sync (S-notify-6). The 0067 seed captured the
+    # org tz at MIGRATION time (UTC on a fresh install, before this wizard runs), so without this
+    # update a non-UTC org's business-day SLAs evaluate against UTC (wrong local date / weekend
+    # boundary). No-op if no default calendar exists; the app role holds UPDATE on working_calendar.
+    await session.execute(
+        update(WorkingCalendar)
+        .where(WorkingCalendar.org_id == actor.org_id, WorkingCalendar.is_default.is_(True))
+        .values(timezone=timezone)
+    )
     _emit(
         session,
         event_type="ORG_PROFILE_SET",

@@ -1404,6 +1404,44 @@ async def test_resolve_working_calendar_malformed_holidays_does_not_crash(
             await s.commit()
 
 
+async def test_resolve_working_calendar_string_working_days_falls_back(
+    app_under_test: Any,
+) -> None:
+    """A non-array `working_days` (a JSON string "67" is iterable → would wrongly become {6,7}) is
+    structurally broken → resolve falls back to DEFAULT_CALENDAR, NOT a weekend-only calendar.
+    UPDATE-AHT-restore (working_calendar keeps UPDATE; the JSONB column accepts a scalar)."""
+    org_id = await _default_org_id()
+    async with get_sessionmaker()() as s:
+        before = (
+            await s.execute(
+                select(WorkingCalendar).where(
+                    WorkingCalendar.org_id == org_id, WorkingCalendar.is_default.is_(True)
+                )
+            )
+        ).scalar_one_or_none()
+    assert before is not None
+    orig_working_days = list(before.working_days)
+    try:
+        async with get_sessionmaker()() as s:
+            await s.execute(
+                update(WorkingCalendar)
+                .where(WorkingCalendar.id == before.id)
+                .values(working_days="67")
+            )
+            await s.commit()
+        async with get_sessionmaker()() as s:
+            cal = await resolve_working_calendar(s, org_id)
+        assert cal == DEFAULT_CALENDAR, "a string working_days must fall back, not become {6,7}"
+    finally:
+        async with get_sessionmaker()() as s:
+            await s.execute(
+                update(WorkingCalendar)
+                .where(WorkingCalendar.id == before.id)
+                .values(working_days=orig_working_days)
+            )
+            await s.commit()
+
+
 async def test_escalation_skips_weekend_business_day(app_under_test: Any) -> None:
     """Wiring proof: escalation fires one BUSINESS day after a Friday due_at — Monday, not Saturday.
 

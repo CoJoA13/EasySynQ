@@ -28,6 +28,7 @@ from easysynq_api.db.models.organization import Organization
 from easysynq_api.db.models.role import Role, RoleAssignment
 from easysynq_api.db.models.storage_config import StorageConfig
 from easysynq_api.db.models.system_config import SetupState, SystemConfig
+from easysynq_api.db.models.working_calendar import WorkingCalendar
 from easysynq_api.db.session import get_sessionmaker
 from easysynq_api.services import backup as backup_service
 from easysynq_api.services.setup import service as setup_service
@@ -208,6 +209,18 @@ async def test_org_profile_requires_admin(
         org = (await s.execute(select(Organization))).scalar_one()
         assert org.short_code == "ACME"
         assert org.timezone == "Europe/London"
+        # S-notify-6: set_org_profile must SYNC the org's default working_calendar tz — else a
+        # non-UTC org's business-day SLAs evaluate against the migration-time UTC seed.
+        cal = (
+            await s.execute(
+                select(WorkingCalendar).where(
+                    WorkingCalendar.org_id == org.id, WorkingCalendar.is_default.is_(True)
+                )
+            )
+        ).scalar_one_or_none()
+        assert cal is not None and cal.timezone == "Europe/London", (
+            "default working_calendar tz must follow the org tz set in setup"
+        )
 
 
 async def test_org_profile_rejects_default_short_code(
