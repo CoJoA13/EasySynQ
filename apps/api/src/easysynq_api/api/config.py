@@ -28,6 +28,7 @@ from ..db.session import get_session
 from ..logging import request_id_var
 from ..problems import ProblemException
 from ..services.authz import require
+from ..services.notifications.calendar_admin import get_working_calendar, update_working_calendar
 from ..services.notifications.health import get_delivery_health
 
 router = APIRouter(prefix="/api/v1", tags=["admin"])
@@ -55,6 +56,16 @@ class OrgConfigUpdate(BaseModel):
     # S-notify-3a: when True (the default), urgent/critical notifications bypass quiet hours and are
     # delivered immediately regardless of user preference.
     notifications_escalation_pierce_quiet_hours: bool | None = None
+
+
+class WorkingCalendarUpdate(BaseModel):
+    # list[Any] (NOT list[int]/list[str]) so EVERY value reaches the strict service parser —
+    # pydantic 2.13.4 lax-coerces [true]/["1"]/[1.0] under list[int], which would make the
+    # parity guarantee false (the strict bool/float/string guards would be dead code).
+    name: str
+    working_days: list[Any]
+    holidays: list[Any]
+    timezone: str
 
 
 def _rid() -> uuid.UUID | None:
@@ -105,6 +116,38 @@ async def get_notification_health_endpoint(
     Failure/backlog/suppressed counts + the recent-failure list (operational-only) + the awareness
     fan-out backlog. Pure read. Needs ``config.update`` (admin-only)."""
     return await get_delivery_health(session, caller.org_id)
+
+
+@router.get("/admin/notifications/working-calendar")
+async def get_working_calendar_endpoint(
+    caller: AppUser = Depends(_config_update),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """The org's default working calendar (synthesized Mon-Fri when none exists).
+
+    Needs config.update (admin-only)."""
+    return await get_working_calendar(session, caller.org_id)
+
+
+@router.put("/admin/notifications/working-calendar")
+async def put_working_calendar_endpoint(
+    body: WorkingCalendarUpdate,
+    caller: AppUser = Depends(_config_update),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """Replace the org's default working calendar (validate → atomic upsert → audit).
+
+    Needs config.update (admin-only)."""
+    view = await update_working_calendar(
+        session,
+        actor=caller,
+        name=body.name,
+        working_days=body.working_days,
+        holidays=body.holidays,
+        timezone=body.timezone,
+    )
+    await session.commit()
+    return view
 
 
 @router.patch("/admin/config")

@@ -61,6 +61,7 @@ import type {
   SupersededCopies,
   Task,
   WorkflowInstance,
+  WorkingCalendar,
 } from "../../lib/types";
 
 export const docFixture = [
@@ -2676,6 +2677,14 @@ export const orgConfigFixture = {
   notifications_escalation_pierce_quiet_hours: true,
 } satisfies OrgConfig;
 
+export const workingCalendarFixture = {
+  name: "Default",
+  working_days: [1, 2, 3, 4, 5],
+  holidays: ["2026-12-25"],
+  timezone: "America/Chicago",
+  exists: true,
+} satisfies WorkingCalendar;
+
 export const notificationHealthFixture = {
   org_email_enabled: true,
   email: {
@@ -3563,6 +3572,16 @@ export const handlers = [
   ),
   http.get("/api/v1/admin/notifications/health", () =>
     HttpResponse.json(notificationHealthFixture as unknown as Record<string, unknown>),
+  ),
+  http.get("/api/v1/admin/notifications/working-calendar", () =>
+    HttpResponse.json(workingCalendarFixture as unknown as Record<string, unknown>),
+  ),
+  http.put("/api/v1/admin/notifications/working-calendar", async ({ request }) =>
+    HttpResponse.json({
+      ...workingCalendarFixture,
+      ...((await request.json()) as Record<string, unknown>),
+      exists: true,
+    } as Record<string, unknown>),
   ),
   http.get("/api/v1/notifications/stream", () => {
     const body = new ReadableStream<Uint8Array>({

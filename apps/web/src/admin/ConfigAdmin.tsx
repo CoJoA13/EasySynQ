@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { ErrorState, LoadingState, MutationErrorState, NoAccessState } from "../lib/states";
 import type { OrgConfig, OrgConfigUpdate } from "../lib/types";
 import { NotificationHealthPanel } from "./NotificationHealthPanel";
+import { WorkingCalendarEditor } from "./WorkingCalendarEditor";
 import { useOrgConfig, useUpdateOrgConfig } from "./hooks";
 
 interface Working {
@@ -95,6 +96,8 @@ export function ConfigAdmin() {
           <MutationErrorState title="Couldn't save configuration" error={update.error} />
         )}
       </Stack>
+
+      <WorkingCalendarEditor />
 
       <NotificationHealthPanel />
     </Stack>

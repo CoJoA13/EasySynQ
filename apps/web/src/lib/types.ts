@@ -1963,6 +1963,21 @@ export interface OrgConfigUpdate {
   notifications_escalation_pierce_quiet_hours?: boolean;
 }
 
+export interface WorkingCalendar {
+  name: string;
+  working_days: number[];
+  holidays: string[];
+  timezone: string;
+  exists: boolean;
+}
+
+export interface WorkingCalendarUpdate {
+  name: string;
+  working_days: number[];
+  holidays: string[];
+  timezone: string;
+}
+
 export interface NotificationEmailFailure {
   recipient_email: string;
   last_error: string | null;

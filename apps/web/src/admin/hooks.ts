@@ -1,6 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ApiError, useApi } from "../lib/api";
-import type { NotificationDeliveryHealth, OrgConfig, OrgConfigUpdate } from "../lib/types";
+import type {
+  NotificationDeliveryHealth,
+  OrgConfig,
+  OrgConfigUpdate,
+  WorkingCalendar,
+  WorkingCalendarUpdate,
+} from "../lib/types";
 
 // S-notify-5b: the admin Config tab consumes the existing GET/PATCH /admin/config (config.update-gated)
 // + the new GET /admin/notifications/health. The config read derives a `forbidden` flag (the data-403 is
@@ -43,4 +49,29 @@ export function useNotificationHealth() {
   });
   const forbidden = query.error instanceof ApiError && query.error.status === 403;
   return { ...query, forbidden };
+}
+
+export function useWorkingCalendar() {
+  const api = useApi();
+  const query = useQuery({
+    queryKey: ["working-calendar"],
+    queryFn: () => api.get<WorkingCalendar>("/api/v1/admin/notifications/working-calendar"),
+    retry: false,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+  });
+  const forbidden = query.error instanceof ApiError && query.error.status === 403;
+  return { ...query, forbidden };
+}
+
+export function useUpdateWorkingCalendar() {
+  const api = useApi();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: WorkingCalendarUpdate) =>
+      api.send<WorkingCalendar>("PUT", "/api/v1/admin/notifications/working-calendar", body),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["working-calendar"] });
+    },
+  });
 }
