@@ -169,14 +169,32 @@ async def _due_task_ids(session: AsyncSession, now: datetime.datetime) -> list[u
     return list(rows)
 
 
+def _parse_working_days(value: object) -> frozenset[int] | None:
+    """Validate a JSONB ``working_days`` value → a frozenset of ISO weekdays, else None if broken
+    broken. Must be a NON-EMPTY JSON array whose every element is a real int 1..7 — NOT a bool
+    (``True``/``False`` are ``int`` subclasses → ``int(True)==1``) and NOT a float (``int(1.9)==1``)
+    and NOT a JSON string (``"67"`` is iterable → would wrongly become ``{6,7}``). Returning None
+    means "fall back to Mon-Fri" (the caller keeps the VALID timezone)."""
+    if not isinstance(value, list) or not value:
+        return None
+    out: set[int] = set()
+    for x in value:
+        if isinstance(x, bool) or not isinstance(x, int) or not (1 <= x <= 7):
+            return None
+        out.add(x)
+    return frozenset(out)
+
+
 async def resolve_working_calendar(session: AsyncSession, org_id: uuid.UUID) -> Calendar:
     """Build the org's business-day ``Calendar`` from its is_default ``working_calendar`` row.
 
-    Fail-safe (the sweep must NEVER crash on calendar data): a missing row, a structurally-broken
-    ``working_days`` (empty / not ISO ints 1..7), or an unknown ``timezone`` falls back to
-    ``DEFAULT_CALENDAR`` (Mon-Fri/UTC) + a warning. Individual unparseable holiday dates are skipped
-    (kept-good) so one bad entry never discards the whole list. (DEFAULT_CALENDAR is itself Mon-Fri,
-    so a fallback never re-enables weekend firing.)
+    Fail-safe + GRANULAR (the sweep must NEVER crash on calendar data, and a fallback must NOT
+    discard a still-valid timezone — else the ``is_working_day(now)`` gate would judge weekends in
+    UTC for a non-UTC org). Order: a missing row → ``DEFAULT_CALENDAR``; otherwise resolve
+    the **timezone first** (unknown → UTC + warn) so every fallback still evaluates working days in
+    the org's local time; a structurally-broken ``working_days`` (not a non-empty array of real ints
+    1..7 — no bool/float/string) → Mon-Fri default + warn, KEEPING the resolved tz + holidays;
+    individual unparseable holiday dates are skipped (kept-good).
     """
     row = (
         await session.execute(
@@ -187,29 +205,21 @@ async def resolve_working_calendar(session: AsyncSession, org_id: uuid.UUID) -> 
     ).scalar_one_or_none()
     if row is None:
         return DEFAULT_CALENDAR
-    # working_days must be a JSON ARRAY of ISO ints 1..7. A non-list scalar — including a JSON
-    # *string* like "67", which is iterable and would wrongly convert to {6,7} (a weekend-only
-    # calendar that fires on weekends) — is structurally broken → fall back wholesale.
-    if not isinstance(row.working_days, list):
-        logger.warning("notifications.timer_bad_working_days", extra={"org_id": str(org_id)})
-        return DEFAULT_CALENDAR
-    try:
-        weekdays = frozenset(int(x) for x in row.working_days)
-    except (TypeError, ValueError):
-        weekdays = frozenset()
-    if not weekdays or not weekdays <= {1, 2, 3, 4, 5, 6, 7}:
-        logger.warning("notifications.timer_bad_working_days", extra={"org_id": str(org_id)})
-        return DEFAULT_CALENDAR
+    # Timezone FIRST — a fallback calendar must still evaluate working days in the org's local time.
     try:
         tz = zoneinfo.ZoneInfo(row.timezone or "UTC")
     except (zoneinfo.ZoneInfoNotFoundError, ValueError):
         logger.warning(
             "notifications.timer_bad_timezone", extra={"org_id": str(org_id), "tz": row.timezone}
         )
-        return DEFAULT_CALENDAR
-    # holidays must be a JSON array; a non-list scalar (5 / true) is structurally broken -> treat as
-    # no holidays (keep the valid week mask + tz), never let `for h in <scalar>` raise and stall the
-    # org's tasks. Individual unparseable entries inside a list are skipped (kept-good).
+        tz = zoneinfo.ZoneInfo("UTC")
+    # working_days: a strictly-validated array of ISO ints 1..7; broken → Mon-Fri default (keep tz).
+    weekdays = _parse_working_days(row.working_days)
+    if weekdays is None:
+        logger.warning("notifications.timer_bad_working_days", extra={"org_id": str(org_id)})
+        weekdays = frozenset({1, 2, 3, 4, 5})
+    # holidays: a non-list scalar (5 / true) → no holidays (never let `for h in <scalar>` raise);
+    # individual unparseable entries inside a list are skipped (kept-good).
     raw_holidays = row.holidays if isinstance(row.holidays, list) else []
     holidays: set[datetime.date] = set()
     for h in raw_holidays:

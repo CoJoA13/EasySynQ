@@ -173,6 +173,23 @@ def test_default_calendar_is_mon_fri_utc():
     assert DEFAULT_CALENDAR.tz == zoneinfo.ZoneInfo("UTC")
 
 
+def test_shift_business_days_exhaustion_returns_far_future_sentinel():
+    # A calendar with NO working days exhausts the bounded search → a far-future sentinel (yr 9999),
+    # NOT an arbitrary date — so a downstream threshold never trips (the timer never fires early).
+    no_work = Calendar(frozenset(), frozenset(), zoneinfo.ZoneInfo("UTC"))
+    assert shift_business_days(_D(2026, 6, 22), 3, ThresholdDirection.AFTER, no_work).year == 9999
+    assert shift_business_days(_D(2026, 6, 22), 3, ThresholdDirection.BEFORE, no_work).year == 9999
+
+
+def test_business_threshold_far_future_no_overflow_westward_tz():
+    # The sentinel is date(9999,1,1), NOT date.max — combining date.max with a westward tz offset
+    # would overflow datetime. A UTC-12 calendar must not raise and yields a far-future instant.
+    no_work = Calendar(frozenset(), frozenset(), zoneinfo.ZoneInfo("Etc/GMT+12"))
+    due = datetime.datetime(2026, 6, 22, 12, 0, tzinfo=UTC)
+    th = business_threshold(due, timedelta(days=1), ThresholdDirection.AFTER, no_work)
+    assert th.year >= 9998  # far future → now >= th never true
+
+
 def test_business_threshold_sub_day_remainder_is_wall_clock():
     # Pins the documented sub-day behavior (no production caller in v1 — seeded offsets are whole
     # days): the whole-day component walks business days; the remainder is raw wall-clock.

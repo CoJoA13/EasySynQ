@@ -37,6 +37,11 @@ DEFAULT_CALENDAR = Calendar(
     tz=zoneinfo.ZoneInfo("UTC"),
 )
 
+# Far-future sentinel for shift_business_days when its bounded search exhausts (a pathological
+# sparse-workweek + long-holiday-span calendar). Year 9999 (NOT date.max) so combining it with a tz
+# offset in business_threshold can't overflow datetime; the resulting threshold never trips.
+_UNREACHABLE_DATE = datetime.date(9999, 1, 1)
+
 
 def is_working_day(d: datetime.date, cal: Calendar) -> bool:
     return d.isoweekday() in cal.working_weekdays and d not in cal.holidays
@@ -47,8 +52,14 @@ def shift_business_days(
 ) -> datetime.date:
     """The date that is ``n`` working days before/after ``anchor`` (the anchor day is NOT counted).
 
-    ``n <= 0`` returns ``anchor`` unchanged. The loop is bounded so a pathological all-non-working
-    calendar can never spin forever (the resolver rejects an empty working set anyway)."""
+    ``n <= 0`` returns ``anchor`` unchanged. The loop is bounded so a pathological calendar (sparse
+    workweek + a holiday span longer than the window) can never spin forever; if it exhausts before
+    counting ``n`` working days, return ``_UNREACHABLE_DATE`` — a FAIL-SAFE far-future sentinel:
+    ``business_threshold`` turns it into a far-future instant, so the step's ``now >= threshold``
+    never trips and the timer never fires EARLY (better a missed reminder/escalation than one sent
+    before ``n`` business days actually elapsed). The resolver rejects an empty working set, so this
+    is an extreme edge. (A year-9999 sentinel, NOT ``date.max`` — combining ``date.max`` with a tz
+    offset can overflow ``datetime`` in ``business_threshold``.)"""
     if n <= 0:
         return anchor
     step = datetime.timedelta(days=1 if direction is ThresholdDirection.AFTER else -1)
@@ -60,7 +71,7 @@ def shift_business_days(
             counted += 1
             if counted == n:
                 return d
-    return d  # pragma: no cover — only an all-non-working calendar reaches here
+    return _UNREACHABLE_DATE  # fail-safe: never resolve to an arbitrary (possibly non-working) date
 
 
 def business_threshold(

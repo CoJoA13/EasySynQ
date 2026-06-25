@@ -1404,12 +1404,12 @@ async def test_resolve_working_calendar_malformed_holidays_does_not_crash(
             await s.commit()
 
 
-async def test_resolve_working_calendar_string_working_days_falls_back(
+async def test_resolve_working_calendar_bad_working_days_falls_back_keeping_tz(
     app_under_test: Any,
 ) -> None:
-    """A non-array `working_days` (a JSON string "67" is iterable → would wrongly become {6,7}) is
-    structurally broken → resolve falls back to DEFAULT_CALENDAR, NOT a weekend-only calendar.
-    UPDATE-AHT-restore (working_calendar keeps UPDATE; the JSONB column accepts a scalar)."""
+    """A structurally-broken `working_days` (a JSON string "67" → would wrongly become {6,7}) falls
+    back to the Mon-Fri DEFAULT WEEKDAYS but KEEPS the row's VALID timezone (Codex round-2) — else
+    the is_working_day(now) gate would judge weekends in UTC for a non-UTC org. UPDATE+restore."""
     org_id = await _default_org_id()
     async with get_sessionmaker()() as s:
         before = (
@@ -1420,24 +1420,23 @@ async def test_resolve_working_calendar_string_working_days_falls_back(
             )
         ).scalar_one_or_none()
     assert before is not None
-    orig_working_days = list(before.working_days)
+    orig = {"working_days": list(before.working_days), "timezone": before.timezone}
     try:
         async with get_sessionmaker()() as s:
             await s.execute(
                 update(WorkingCalendar)
                 .where(WorkingCalendar.id == before.id)
-                .values(working_days="67")
+                .values(working_days="67", timezone="America/New_York")
             )
             await s.commit()
         async with get_sessionmaker()() as s:
             cal = await resolve_working_calendar(s, org_id)
-        assert cal == DEFAULT_CALENDAR, "a string working_days must fall back, not become {6,7}"
+        assert cal.working_weekdays == frozenset({1, 2, 3, 4, 5}), "bad working_days -> Mon-Fri"
+        assert cal.tz == zoneinfo.ZoneInfo("America/New_York"), "the VALID tz must be preserved"
     finally:
         async with get_sessionmaker()() as s:
             await s.execute(
-                update(WorkingCalendar)
-                .where(WorkingCalendar.id == before.id)
-                .values(working_days=orig_working_days)
+                update(WorkingCalendar).where(WorkingCalendar.id == before.id).values(**orig)
             )
             await s.commit()
 
