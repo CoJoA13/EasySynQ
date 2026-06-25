@@ -3938,6 +3938,39 @@ paths:
               schema: { $ref: "#/components/schemas/NotificationDeliveryHealth" }
         "403": { $ref: "#/components/responses/ProblemResponse" }
 
+  /admin/notifications/working-calendar:
+    get:
+      tags: [admin]
+      operationId: getWorkingCalendar
+      summary: The org's default working calendar (week mask + holidays + timezone). Needs config.update (SYSTEM, admin-only).
+      responses:
+        "200":
+          description: The default working calendar (synthesized Mon-Fri default when none exists).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WorkingCalendar" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+    put:
+      tags: [admin]
+      operationId: putWorkingCalendar
+      summary: >-
+        Replace the org's default working calendar — week mask (ISO 1..7), holidays (YYYY-MM-DD),
+        name, timezone. Business-day SLA reminders/escalations resolve against this (R29). Audited
+        CONFIG_UPDATED. Needs config.update (SYSTEM, admin-only).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/WorkingCalendarUpdate" }
+      responses:
+        "200":
+          description: The saved working calendar.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WorkingCalendar" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "422": { $ref: "#/components/responses/ProblemResponse" }
+
   /admin/drift/status:
     get:
       tags: [admin]
@@ -8042,6 +8075,34 @@ components:
         email_kind:
           type: string
           enum: [single, digest]
+
+    WorkingCalendar:
+      type: object
+      required: [name, working_days, holidays, timezone, exists]
+      properties:
+        name: { type: string }
+        working_days:
+          type: array
+          items: { type: integer, minimum: 1, maximum: 7 }
+          description: ISO weekday ints (1=Mon..7=Sun) that are working days, sorted unique.
+        holidays:
+          type: array
+          items: { type: string, format: date }
+          description: Holiday YYYY-MM-DD dates, sorted ascending.
+        timezone: { type: string, description: IANA timezone the business-day calendar is evaluated in. }
+        exists: { type: boolean, description: False when synthesized (no stored default row yet). }
+    WorkingCalendarUpdate:
+      type: object
+      required: [name, working_days, holidays, timezone]
+      properties:
+        name: { type: string, maxLength: 255 }
+        working_days:
+          type: array
+          items: { type: integer, minimum: 1, maximum: 7 }
+        holidays:
+          type: array
+          items: { type: string, format: date }
+        timezone: { type: string }
 
     CapaSource:
       type: string

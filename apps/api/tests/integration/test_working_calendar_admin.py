@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Callable
 from typing import Any
 
 import pytest
+from httpx import AsyncClient
 from sqlalchemy import delete, select
 
 from easysynq_api.db.models._audit_enums import EventType
@@ -19,6 +21,9 @@ from easysynq_api.services.notifications.calendar_admin import (
     get_working_calendar,
     update_working_calendar,
 )
+
+from .test_notification_config import _config_updated_count_for_key, _grant
+from .test_vault import _auth
 
 pytestmark = pytest.mark.integration
 
@@ -236,3 +241,85 @@ async def test_update_insert_audits_even_with_default_values(app_under_test: Any
             await s.execute(delete(AppUser).where(AppUser.id == actor_id))
             await s.execute(delete(Organization).where(Organization.id == org_id))
             await s.commit()
+
+
+async def test_http_put_updates_existing_default_and_audits(
+    app_client: AsyncClient, token_factory: Callable[..., str], app_under_test: Any
+) -> None:
+    """PUT updates AHT's existing default row (UPDATE branch) + writes one CONFIG_UPDATED; GET
+    round-trips. Restores the original calendar in finally (app role can't DELETE the row)."""
+    subject = f"wc-admin-{uuid.uuid4().hex[:8]}"
+    await _grant(subject, ("config.update",))
+    h = _auth(token_factory, subject)
+    org_id = await _default_org_id()
+    before = await _read_default(org_id)
+    assert before is not None
+    orig = (before.name, list(before.working_days), list(before.holidays), before.timezone)
+    try:
+        body = {
+            "name": "Edited calendar",
+            "working_days": [1, 2, 3, 4],
+            "holidays": ["2026-12-25", "2026-01-01"],
+            "timezone": "America/Chicago",
+        }
+        r = await app_client.put(
+            "/api/v1/admin/notifications/working-calendar", headers=h, json=body
+        )
+        assert r.status_code == 200, r.text
+        v = r.json()
+        assert v["working_days"] == [1, 2, 3, 4]
+        assert v["holidays"] == ["2026-01-01", "2026-12-25"]  # sorted
+        assert v["timezone"] == "America/Chicago"
+        assert v["exists"] is True
+        # GET round-trips the persisted row.
+        rg = await app_client.get("/api/v1/admin/notifications/working-calendar", headers=h)
+        assert rg.status_code == 200 and rg.json()["holidays"] == ["2026-01-01", "2026-12-25"]
+        # A no-op PUT (same values) writes NO new audit.
+        c1 = await _config_updated_count_for_key(org_id, "working_calendar")
+        r2 = await app_client.put(
+            "/api/v1/admin/notifications/working-calendar", headers=h, json=body
+        )
+        assert r2.status_code == 200
+        c2 = await _config_updated_count_for_key(org_id, "working_calendar")
+        assert c2 == c1, "no-op PUT must not append a CONFIG_UPDATED row"
+    finally:
+        async with get_sessionmaker()() as s:
+            row = (
+                await s.execute(
+                    select(WorkingCalendar).where(
+                        WorkingCalendar.org_id == org_id, WorkingCalendar.is_default.is_(True)
+                    )
+                )
+            ).scalar_one()
+            row.name, row.working_days, row.holidays, row.timezone = orig
+            await s.commit()
+
+
+async def test_http_put_forbidden_without_config_update(
+    app_client: AsyncClient, token_factory: Callable[..., str], app_under_test: Any
+) -> None:
+    subject = f"wc-noperm-{uuid.uuid4().hex[:8]}"
+    await _grant(subject, ("document.read",))
+    h = _auth(token_factory, subject)
+    r = await app_client.put(
+        "/api/v1/admin/notifications/working-calendar",
+        headers=h,
+        json={"name": "x", "working_days": [1], "holidays": [], "timezone": "UTC"},
+    )
+    assert r.status_code == 403, r.text
+
+
+async def test_http_put_422_on_broken_working_days(
+    app_client: AsyncClient, token_factory: Callable[..., str], app_under_test: Any
+) -> None:
+    """list[Any] body → the bad values reach the SERVICE parser (not Pydantic coercion) → 422."""
+    subject = f"wc-bad-{uuid.uuid4().hex[:8]}"
+    await _grant(subject, ("config.update",))
+    h = _auth(token_factory, subject)
+    for bad in ([], [8], [True], [1.0], ["1"]):
+        r = await app_client.put(
+            "/api/v1/admin/notifications/working-calendar",
+            headers=h,
+            json={"name": "x", "working_days": bad, "holidays": [], "timezone": "UTC"},
+        )
+        assert r.status_code == 422, f"{bad} -> {r.status_code} {r.text}"
