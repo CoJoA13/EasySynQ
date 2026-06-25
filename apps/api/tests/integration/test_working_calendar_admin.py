@@ -1,0 +1,184 @@
+"""S-notify-7: the working-calendar admin editor — service + HTTP integration proofs."""
+
+from __future__ import annotations
+
+import uuid
+from typing import Any
+
+import pytest
+from sqlalchemy import delete, select
+
+from easysynq_api.db.models.app_user import AppUser
+from easysynq_api.db.models.organization import Organization
+from easysynq_api.db.models.working_calendar import WorkingCalendar
+from easysynq_api.db.session import get_sessionmaker
+from easysynq_api.problems import ProblemException
+from easysynq_api.services.notifications.calendar_admin import (
+    get_working_calendar,
+    update_working_calendar,
+)
+
+pytestmark = pytest.mark.integration
+
+
+async def _default_org_id() -> uuid.UUID:
+    """The seeded org that owns the is_default working_calendar (AHT in dev; the 0002 org in CI)."""
+    async with get_sessionmaker()() as s:
+        row = (
+            (await s.execute(select(WorkingCalendar).where(WorkingCalendar.is_default.is_(True))))
+            .scalars()
+            .first()
+        )
+        assert row is not None, "expected a seeded default working_calendar"
+        return row.org_id
+
+
+async def _read_default(org_id: uuid.UUID) -> WorkingCalendar | None:
+    async with get_sessionmaker()() as s:
+        return (
+            await s.execute(
+                select(WorkingCalendar).where(
+                    WorkingCalendar.org_id == org_id, WorkingCalendar.is_default.is_(True)
+                )
+            )
+        ).scalar_one_or_none()
+
+
+async def test_get_synthesizes_default_for_calendar_less_org(app_under_test: Any) -> None:
+    """An org with no default row → the synthesized Mon-Fri default with exists=False, tz=org tz."""
+    salt = uuid.uuid4().hex[:8]
+    async with get_sessionmaker()() as s:
+        org = Organization(legal_name=f"WCal GET {salt}", short_code=f"WG{salt[:6].upper()}")
+        s.add(org)
+        await s.commit()
+        org_id, org_tz = org.id, org.timezone
+    try:
+        async with get_sessionmaker()() as s:
+            view = await get_working_calendar(s, org_id)
+        assert view == {
+            "name": "Default",
+            "working_days": [1, 2, 3, 4, 5],
+            "holidays": [],
+            "timezone": org_tz,
+            "exists": False,
+        }
+    finally:
+        async with get_sessionmaker()() as s:
+            await s.execute(delete(Organization).where(Organization.id == org_id))
+            await s.commit()
+
+
+async def test_update_inserts_for_calendar_less_org_without_commit(app_under_test: Any) -> None:
+    """The INSERT branch: a calendar-less org → update_working_calendar stages an is_default row
+    (tz = body tz). The service does NOT commit; the test rolls back (never commits) so no
+    working_calendar row is left behind (the app role can't DELETE it / the org FK is RESTRICT)."""
+    salt = uuid.uuid4().hex[:8]
+    async with get_sessionmaker()() as s:
+        org = Organization(legal_name=f"WCal INS {salt}", short_code=f"WI{salt[:6].upper()}")
+        s.add(org)
+        await s.commit()
+        org_id = org.id
+        actor = AppUser(
+            org_id=org_id,
+            keycloak_subject=f"kc-wcal-ins-{salt}",
+            display_name="WCal Admin",
+            email=None,
+        )
+        s.add(actor)
+        await s.commit()
+        actor_id = actor.id
+    try:
+        async with get_sessionmaker()() as s:
+            actor = await s.get(AppUser, actor_id)
+            view = await update_working_calendar(
+                s,
+                actor=actor,
+                name="Plant calendar",
+                working_days=[1, 2, 3, 4],
+                holidays=["2026-12-25"],
+                timezone="America/Chicago",
+            )
+            # The pending row exists in this txn before commit.
+            staged = (
+                await s.execute(
+                    select(WorkingCalendar).where(
+                        WorkingCalendar.org_id == org_id, WorkingCalendar.is_default.is_(True)
+                    )
+                )
+            ).scalar_one()
+            assert staged.is_default is True
+            assert staged.timezone == "America/Chicago"
+            assert staged.working_days == [1, 2, 3, 4]
+            await s.rollback()  # never commit — leak-free
+        assert view["exists"] is True
+        assert view["working_days"] == [1, 2, 3, 4]
+        # Confirm nothing was committed.
+        assert await _read_default(org_id) is None
+    finally:
+        async with get_sessionmaker()() as s:
+            await s.execute(delete(AppUser).where(AppUser.id == actor_id))
+            await s.execute(delete(Organization).where(Organization.id == org_id))
+            await s.commit()
+
+
+async def test_update_validation_parity_rejects_what_resolver_degrades(app_under_test: Any) -> None:
+    """Each broken working_days / unknown tz the resolver DEGRADES → the service 422s (parity).
+    A broken holiday the resolver drops → the service 422s (editor is stricter). A duplicate is
+    deduped + ACCEPTED (not 422). Runs against a calendar-less org, never commits."""
+    salt = uuid.uuid4().hex[:8]
+    async with get_sessionmaker()() as s:
+        org = Organization(legal_name=f"WCal VAL {salt}", short_code=f"WV{salt[:6].upper()}")
+        s.add(org)
+        await s.commit()
+        org_id = org.id
+        actor = AppUser(
+            org_id=org_id,
+            keycloak_subject=f"kc-wcal-val-{salt}",
+            display_name="WCal V",
+            email=None,
+        )
+        s.add(actor)
+        await s.commit()
+        actor_id = actor.id
+
+    async def _put(**kw: Any) -> int | None:
+        async with get_sessionmaker()() as s:
+            actor = await s.get(AppUser, actor_id)
+            base = {
+                "name": "C",
+                "working_days": [1, 2, 3, 4, 5],
+                "holidays": [],
+                "timezone": "UTC",
+            }
+            base.update(kw)
+            try:
+                await update_working_calendar(s, actor=actor, **base)  # type: ignore[arg-type]
+                return None
+            except ProblemException as exc:
+                return exc.status
+            finally:
+                await s.rollback()
+
+    try:
+        # working_days the resolver degrades → 422
+        for bad in ([], [0], [8], [True], [1.0], ["1"], "67", [1, 8]):
+            assert await _put(working_days=bad) == 422, bad
+        # unknown tz the resolver degrades → 422
+        assert await _put(timezone="Mars/Phobos") == 422
+        # broken holiday the resolver drops → 422
+        for badh in (["2026-13-01"], ["nope"], [""]):
+            assert await _put(holidays=badh) == 422, badh
+        # bounds
+        assert await _put(working_days=[1] * 32) == 422
+        assert await _put(holidays=[f"2026-01-{(i % 28) + 1:02d}" for i in range(1001)]) == 422
+        # empty / too-long name
+        assert await _put(name="  ") == 422
+        assert await _put(name="x" * 256) == 422
+        # duplicate working_days is ACCEPTED (no 422) — parity with the resolver (proven in
+        # test_calendar_spec.py: parse_working_days([1,1,2,7]) == {1,2,7}).
+        assert await _put(working_days=[1, 1, 5, 5]) is None
+    finally:
+        async with get_sessionmaker()() as s:
+            await s.execute(delete(AppUser).where(AppUser.id == actor_id))
+            await s.execute(delete(Organization).where(Organization.id == org_id))
+            await s.commit()
