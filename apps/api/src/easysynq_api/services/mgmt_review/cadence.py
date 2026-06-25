@@ -44,6 +44,7 @@ from ...db.models.organization import Organization
 from ...db.models.system_config import SystemConfig
 from ...db.models.workflow import Task, WorkflowInstance
 from ..common.pg_locks import LOCK_MGMT_REVIEW_SWEEP, pg_advisory_lock
+from ..notifications.duedate import resolve_calendar, snap_to_working_day
 from ..vault import get_vault_audit_sink
 
 # Re-use the calendar-clamp + org-tz helpers from the S-drift-1 review module (do NOT re-derive the
@@ -265,8 +266,12 @@ async def sweep_mgmt_reviews(session: AsyncSession) -> dict[str, int]:
         session.add(instance)
         await session.flush()  # populate instance.id for the task FK
 
+        # R55/D-5: build at midnight in the working_calendar's tz and snap FORWARD to a working day.
+        cal = await resolve_calendar(session, org_id)
         due_at = (
-            datetime.datetime.combine(due, datetime.time(0, 0), tzinfo=_org_tz())
+            snap_to_working_day(
+                datetime.datetime.combine(due, datetime.time(0, 0), tzinfo=cal.tz), cal
+            )
             if due is not None
             else None
         )

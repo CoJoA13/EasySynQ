@@ -204,6 +204,11 @@ async def sweep_acks(
                 if iid is not None and await _cancel_instance(session, iid):
                     _emit_cancelled(session, doc.org_id, doc.id, iid, doc.identifier, "lapsed")
                     cancelled += 1
+            # R55 (S-duedate-snap): snap the (loop-invariant) raw due_at forward to a working day in
+            # THIS doc's org calendar — a NEW local (never reassign `due_at`, which spans all orgs).
+            from ..notifications.duedate import snap_due_at
+
+            snapped_due_at = await snap_due_at(session, doc.org_id, due_at)
             for user_id in to_mint:
                 instance = await wf_engine.instantiate(
                     session,
@@ -222,7 +227,9 @@ async def sweep_acks(
                 )
                 await session.flush()
                 await session.execute(
-                    update(Task).where(Task.instance_id == instance.id).values(due_at=due_at)
+                    update(Task)
+                    .where(Task.instance_id == instance.id)
+                    .values(due_at=snapped_due_at)
                 )
                 ack_tasks = (
                     (await session.execute(select(Task).where(Task.instance_id == instance.id)))
@@ -232,7 +239,7 @@ async def sweep_acks(
                 from ..notifications.dispatch import enqueue_task_notifications
 
                 await enqueue_task_notifications(
-                    session, instance, list(ack_tasks), due_at_override=due_at
+                    session, instance, list(ack_tasks), due_at_override=snapped_due_at
                 )
                 created += 1
 
