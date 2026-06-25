@@ -129,7 +129,11 @@ async def update_working_calendar(
     name, wd, hol, tz = _validate(name, working_days, holidays, timezone)
 
     before = await get_working_calendar(session, org_id)  # existing row or synthesized default
-    before_fields = {k: before[k] for k in ("name", "working_days", "holidays", "timezone")}
+    before_fields = (
+        {}
+        if not before["exists"]
+        else {k: before[k] for k in ("name", "working_days", "holidays", "timezone")}
+    )
     after_fields = {"name": name, "working_days": wd, "holidays": hol, "timezone": tz}
 
     stmt = (

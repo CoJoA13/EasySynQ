@@ -8,7 +8,9 @@ from typing import Any
 import pytest
 from sqlalchemy import delete, select
 
+from easysynq_api.db.models._audit_enums import EventType
 from easysynq_api.db.models.app_user import AppUser
+from easysynq_api.db.models.audit_event import AuditEvent
 from easysynq_api.db.models.organization import Organization
 from easysynq_api.db.models.working_calendar import WorkingCalendar
 from easysynq_api.db.session import get_sessionmaker
@@ -177,6 +179,58 @@ async def test_update_validation_parity_rejects_what_resolver_degrades(app_under
         # duplicate working_days is ACCEPTED (no 422) — parity with the resolver (proven in
         # test_calendar_spec.py: parse_working_days([1,1,2,7]) == {1,2,7}).
         assert await _put(working_days=[1, 1, 5, 5]) is None
+    finally:
+        async with get_sessionmaker()() as s:
+            await s.execute(delete(AppUser).where(AppUser.id == actor_id))
+            await s.execute(delete(Organization).where(Organization.id == org_id))
+            await s.commit()
+
+
+async def test_update_insert_audits_even_with_default_values(app_under_test: Any) -> None:
+    """INSERT with the synthesized default values still writes a CONFIG_UPDATED audit (before={}).
+
+    Mutation-verify: the OLD code built before_fields from the synthesized default (exists=False),
+    so before_fields == after_fields → no audit staged → len==1 assertion would fail. The fix
+    sets before_fields={} for the no-row case so the INSERT always fires the audit."""
+    salt = uuid.uuid4().hex[:8]
+    async with get_sessionmaker()() as s:
+        org = Organization(legal_name=f"WCal AUD {salt}", short_code=f"WA{salt[:6].upper()}")
+        s.add(org)
+        await s.commit()
+        org_id, org_tz = org.id, org.timezone
+        actor = AppUser(
+            org_id=org_id,
+            display_name="WCal Aud",
+            email=None,
+            keycloak_subject=f"kc-wcal-aud-{salt}",
+        )
+        s.add(actor)
+        await s.commit()
+        actor_id = actor.id
+    try:
+        async with get_sessionmaker()() as s:
+            actor = await s.get(AppUser, actor_id)
+            # Save exactly the synthesized-default values — the OLD code would skip the audit.
+            await update_working_calendar(
+                s,
+                actor=actor,
+                name="Default",
+                working_days=[1, 2, 3, 4, 5],
+                holidays=[],
+                timezone=org_tz,
+            )
+            staged_audits = [
+                o
+                for o in s.new
+                if isinstance(o, AuditEvent) and o.event_type == EventType.CONFIG_UPDATED
+            ]
+            assert len(staged_audits) == 1, (
+                "INSERT with default values must still stage a CONFIG_UPDATED audit"
+            )
+            assert staged_audits[0].before == {"working_calendar": {}}
+            await s.rollback()
+        # Confirm nothing was committed (leak-free).
+        assert await _read_default(org_id) is None
     finally:
         async with get_sessionmaker()() as s:
             await s.execute(delete(AppUser).where(AppUser.id == actor_id))
