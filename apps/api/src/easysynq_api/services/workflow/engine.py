@@ -122,8 +122,9 @@ def _stage_spec(stage: WorkflowStage) -> dict[str, Any]:
 
 
 def _due_at(stage: WorkflowStage, default_sla: dict[str, Any] | None) -> datetime.datetime | None:
-    """Wall-clock SLA: now + ``hours`` from the stage's sla (or the definition default). No working
-    calendar (deferred, R39)."""
+    """Wall-clock SLA: now + ``hours`` from the stage's sla (or the definition default). due_at is
+    NOT snapped to a working day (deferred — S-notify-6 wired the working_calendar into the timer
+    OFFSETS only; snapping due_at itself at materialize is a separate, un-numbered reconcile)."""
     sla = stage.sla or default_sla or {}
     hours = sla.get("hours")
     if not isinstance(hours, (int, float)):

@@ -128,7 +128,7 @@ erDiagram
 | `guest_grant` | `id` PK, `user_id` (guest), `evidence_pack_id` FK, `valid_until`, `ip_allow`, `read_only` (forced) | `06 §7.4`, `07 §5.4`. Time-boxed external auditor — the **heavier** delivery path (a DB-backed guest identity + ABAC). **Deferred to v1.x**: S-pack-2 shipped the lighter Ed25519 signed-token path instead (`pack_share_link`, §5.7). |
 | `org_role` | `id` PK, `org_id`, `name` (e.g. "Process Owner of Purchasing", "Top Management"), `description` | `02 §3.4`. **QMS role ≠ permission role** — RACI/accountability only, drives assignee resolution, not authz. |
 | `org_role_assignment` | `id` PK, `org_role_id` FK, `user_id` FK, `process_id` (nullable) | `02 §3.4`, `10 §2.3`. |
-| `working_calendar` | `id` PK, `org_id`, `name`, `working_days` jsonb (week mask), `holidays` jsonb (org holiday dates), `is_default` bool | Org holidays/working days; **business-day SLAs and notification escalations resolve against this** (reconciled per Decisions Register R29). |
+| `working_calendar` | `id` PK, `org_id`, `name`, `working_days` jsonb (ISO weekday mask 1=Mon..7=Sun), `holidays` jsonb (org holiday `YYYY-MM-DD` dates), **`timezone`** (IANA, default `UTC`, additive — S-notify-6), `is_default` bool, `created_at`/`updated_at` | Org holidays/working days; **business-day SLAs and notification escalations resolve against this** (reconciled per Decisions Register R29; as-built in slice S-notify-6, migration 0067 — at most one `is_default` per org). |
 
 **Constraints:** ADMIN holds no QMS-content permission by default (`07 §2.1`); last-ADMIN revoke rejected; `app_user.username` unique per org; `permission.key` globally unique; `sod_constraint` evaluated against immutable version/audit history (cannot edit-then-approve).
 

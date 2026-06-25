@@ -413,6 +413,8 @@ Doc 10 short form (Raised / Triage / Accepted) **maps onto these**.
 
 **Canonical tokens:** field `manager_id` on entity `app_user`; entity `working_calendar`.
 
+**As-built (slice S-notify-6, migration 0067):** the `working_calendar` entity ships as `id, org_id, name, working_days` (jsonb ISO-weekday mask), `holidays` (jsonb `YYYY-MM-DD` list), **`timezone`** (IANA TEXT default `UTC` — additive to the doc-14 column list, seeded = `organization.timezone`), `is_default` (≤1/org via a partial unique index), `created_at`/`updated_at`; operational config (app role keeps INSERT/SELECT/UPDATE, REVOKE DELETE). The `timer_sweep` now resolves the org's default calendar and evaluates the **reminder + escalation before/after offsets** as business days against it (skip weekends + holidays). **Still deferred (un-numbered, NOT this slice):** snapping `due_at` *itself* to a working day at materialize — `engine._due_at` is raw wall-clock (its docstring's "deferred, R39" is a stale mis-citation; R39 is the Audits/CAPA decision), so an overdue notification can still fire on a non-working day; OVERDUE deliberately stays at `due_at` (no offset). The admin editor (a `config.update`-gated GET/PUT + Config-tab UI) is also deferred.
+
 **Back-propagation:** 10, 14.
 
 ---

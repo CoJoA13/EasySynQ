@@ -262,11 +262,18 @@ business-day correctness concentrates here, where the harness cannot false-PASS:
 
 ## 8 · Named residuals (honest — not faked)
 
-- **R39 — business-day-snap `due_at` at materialize** (the upstream root cause of a weekend-OVERDUE
+> **⚠ Correction (post-implementation): this doc's "R39" label is WRONG.** The register's R39 is the
+> Audits/CAPA decision; `engine._due_at`'s "deferred, R39" docstring (which this spec echoed) is a
+> stale mis-citation. The due_at-snap residual below has **no register number** — it is an un-numbered
+> deferred working-calendar reconcile (its own future register call if ever taken). Every "R39" in
+> §0/§4 of this doc should read "the un-numbered due_at-snap reconcile." The engine docstring + the
+> register R29 as-built note were corrected in this slice.
+
+- **Snap `due_at` itself to a working day at materialize** (the upstream root cause of a weekend-OVERDUE
   ping, D-5/§4): `engine.py::_due_at` is raw wall-clock (`now()+timedelta(hours=…)`), so `due_at` can
   land on a non-working day and OVERDUE fires then. This slice business-day-shifts only the *offsets*;
-  snapping `due_at` itself is the R39 slice (already flagged in the engine docstring). Until then,
-  weekend-OVERDUE is a known, bounded gap (a critical overdue can still pierce — by design).
+  snapping `due_at` itself is a separate, **un-numbered** reconcile. Until then, weekend-OVERDUE is a
+  known, bounded gap (a critical overdue can still pierce — by design).
 - **The `working_calendar` admin editor** (GET/PUT + Config-tab UI; reuses `config.update`) — deferred
   this slice (D-1).
 - **Claim-threshold-filter tautology** (S-notify-4): `remind_2_sent_at IS NULL` is always true (remind_2
