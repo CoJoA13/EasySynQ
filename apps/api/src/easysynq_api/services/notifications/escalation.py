@@ -25,6 +25,7 @@ from ...db.models.system_config import SystemConfig
 from ...db.models.workflow import Task, WorkflowInstance
 from ...db.models.working_calendar import WorkingCalendar
 from ..workflow.repository import users_with_roles
+from .calendar_spec import parse_holiday, parse_working_days
 from .constants import EVENT_TASK_DUE_SOON, EVENT_TASK_ESCALATED, EVENT_TASK_OVERDUE
 from .dispatch import EnqueueOutcome, _enqueue_one
 from .recipients import Recipient, _first_name, resolve_recipients
@@ -169,22 +170,6 @@ async def _due_task_ids(session: AsyncSession, now: datetime.datetime) -> list[u
     return list(rows)
 
 
-def _parse_working_days(value: object) -> frozenset[int] | None:
-    """Validate a JSONB ``working_days`` value → a frozenset of ISO weekdays, else None if broken
-    broken. Must be a NON-EMPTY JSON array whose every element is a real int 1..7 — NOT a bool
-    (``True``/``False`` are ``int`` subclasses → ``int(True)==1``) and NOT a float (``int(1.9)==1``)
-    and NOT a JSON string (``"67"`` is iterable → would wrongly become ``{6,7}``). Returning None
-    means "fall back to Mon-Fri" (the caller keeps the VALID timezone)."""
-    if not isinstance(value, list) or not value:
-        return None
-    out: set[int] = set()
-    for x in value:
-        if isinstance(x, bool) or not isinstance(x, int) or not (1 <= x <= 7):
-            return None
-        out.add(x)
-    return frozenset(out)
-
-
 async def resolve_working_calendar(session: AsyncSession, org_id: uuid.UUID) -> Calendar:
     """Build the org's business-day ``Calendar`` from its is_default ``working_calendar`` row.
 
@@ -214,7 +199,7 @@ async def resolve_working_calendar(session: AsyncSession, org_id: uuid.UUID) -> 
         )
         tz = zoneinfo.ZoneInfo("UTC")
     # working_days: a strictly-validated array of ISO ints 1..7; broken → Mon-Fri default (keep tz).
-    weekdays = _parse_working_days(row.working_days)
+    weekdays = parse_working_days(row.working_days)
     if weekdays is None:
         logger.warning("notifications.timer_bad_working_days", extra={"org_id": str(org_id)})
         weekdays = frozenset({1, 2, 3, 4, 5})
@@ -223,12 +208,13 @@ async def resolve_working_calendar(session: AsyncSession, org_id: uuid.UUID) -> 
     raw_holidays = row.holidays if isinstance(row.holidays, list) else []
     holidays: set[datetime.date] = set()
     for h in raw_holidays:
-        try:
-            holidays.add(datetime.date.fromisoformat(str(h)))
-        except (TypeError, ValueError):
+        parsed = parse_holiday(h)
+        if parsed is None:
             logger.warning(
                 "notifications.timer_bad_holiday", extra={"org_id": str(org_id), "value": str(h)}
             )
+        else:
+            holidays.add(parsed)
     return Calendar(working_weekdays=weekdays, holidays=frozenset(holidays), tz=tz)
 
 
