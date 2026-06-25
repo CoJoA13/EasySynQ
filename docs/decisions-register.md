@@ -52,7 +52,7 @@ Proceed with the **full reconcile-and-harden pass** — i.e., adopt R1–R37 bel
 
 ---
 
-## Part 3 — Resolutions R1–R54
+## Part 3 — Resolutions R1–R55
 
 Each resolution states the decision, the exact canonical tokens/enums/states/field-names verbatim, and a Back-propagation note listing the section files that change.
 
@@ -413,7 +413,7 @@ Doc 10 short form (Raised / Triage / Accepted) **maps onto these**.
 
 **Canonical tokens:** field `manager_id` on entity `app_user`; entity `working_calendar`.
 
-**As-built (slice S-notify-6, migration 0067):** the `working_calendar` entity ships as `id, org_id, name, working_days` (jsonb ISO-weekday mask), `holidays` (jsonb `YYYY-MM-DD` list), **`timezone`** (IANA TEXT default `UTC` — additive to the doc-14 column list, seeded = `organization.timezone`), `is_default` (≤1/org via a partial unique index), `created_at`/`updated_at`; operational config (app role keeps INSERT/SELECT/UPDATE, REVOKE DELETE). The `timer_sweep` now resolves the org's default calendar and evaluates the **reminder + escalation before/after offsets** as business days against it (skip weekends + holidays). **Still deferred (un-numbered, NOT this slice):** snapping `due_at` *itself* to a working day at materialize — `engine._due_at` is raw wall-clock (its docstring's "deferred, R39" is a stale mis-citation; R39 is the Audits/CAPA decision), so an overdue notification can still fire on a non-working day; OVERDUE deliberately stays at `due_at` (no offset). The admin editor (a `config.update`-gated GET/PUT + Config-tab UI) is also deferred.
+**As-built (slice S-notify-6, migration 0067):** the `working_calendar` entity ships as `id, org_id, name, working_days` (jsonb ISO-weekday mask), `holidays` (jsonb `YYYY-MM-DD` list), **`timezone`** (IANA TEXT default `UTC` — additive to the doc-14 column list, seeded = `organization.timezone`), `is_default` (≤1/org via a partial unique index), `created_at`/`updated_at`; operational config (app role keeps INSERT/SELECT/UPDATE, REVOKE DELETE). The `timer_sweep` now resolves the org's default calendar and evaluates the **reminder + escalation before/after offsets** as business days against it (skip weekends + holidays). The admin editor (a `config.update`-gated GET/PUT + Config-tab UI) shipped in **S-notify-7**. The `due_at`-snap deferral named here is now **closed by R55 (S-duedate-snap)** — see below.
 
 **Back-propagation:** 10, 14.
 
@@ -1503,6 +1503,43 @@ existing outbox drain. **DOC_ACK email is enabled** (bundled in the digest by de
 key (authenticated-self, R38). Migration `0064` (additive, no new table). Extends R53.
 
 Bumps the resolutions range **R1–R53 → R1–R54**.
+
+---
+
+### R55 — Snap a task's `due_at` to a working day at materialize (doc 10 §9.5; slice S-duedate-snap) — 2026-06-25
+
+Closes the `due_at`-snap deferral named in R29's as-built note. When a `Task.due_at` is materialized,
+if it lands on a **non-working day** (weekend/holiday per the org's default `working_calendar`,
+**evaluated in the calendar's tz**) it is snapped **FORWARD to the next working day, preserving the
+local time-of-day**; a working-day `due_at` is unchanged. So **OVERDUE** (`now >= due_at`) and every
+business-day offset derived from `due_at` land on a working day **at the source** — the timer's
+`due_steps` needs no OVERDUE special-casing (OVERDUE stays `now >= due_at`, the R29/S-notify-6 D-5
+posture). Applied at **all five materialize sites**: the workflow engine (`_materialize_stage`), the
+DOC_ACK sweep override, the PERIODIC_REVIEW sweep override, MR_ACTION spawn, MR_INPUT cadence.
+
+**D-5 (binding, ratified 2026-06-25):** the three **date-anchored** sites (PERIODIC_REVIEW, MR_ACTION,
+MR_INPUT) now **build `due_at` at midnight in the `working_calendar`'s tz** (resolve the calendar
+first), not the env `easysynq_org_timezone` — so build + snap + the timer all share one business-day
+frame (the S-notify-7 "the calendar owns the business-day tz" authority). Under a correctly-configured
+deployment (env tz == calendar tz) this is a **zero behavior change**; the two **instant** sites
+(`now+hours`, `now+days`) have no calendar-day intent and just snap. **D-3:** PERIODIC_REVIEW's stored
+`next_review_due` is **unchanged** — only the task `due_at` snaps; the derived `review_state` badge
+(env-tz) may lead the working-day notification under a divergent env-vs-calendar tz (accepted).
+**No backfill** (existing open tasks keep their `due_at`). Pure date math in `timer.py`
+(`snap_to_working_day`, idempotent + forward-only + a DST-gap re-check + an exhaustion fail-safe that
+returns the input unchanged, never a never-overdue sentinel); a tiny `services/notifications/duedate.py`
+seam (`resolve_calendar`/`snap_due_at`, lazy-imports the resolver to avoid an `escalation→workflow`
+cycle). **NO migration** (head stays `0067`), **NO new permission key** (engine logic, R38), **NO
+web/openapi**.
+
+*Named residuals (not faked):* OVERDUE can still fire on a non-working day in two narrow edges
+(a sweep delayed across a working→non-working boundary — OVERDUE has no `now_is_working` gate, the
+ratified D-5 weekend-pierce exemption; a post-materialize `working_calendar` edit via the S-notify-7
+editor that turns an already-due date into a holiday); the env `easysynq_org_timezone` and the DB
+`working_calendar.timezone` remain two **un-unified** org-tz sources (unifying `_org_tz()` onto the
+calendar is a deferred cross-cutting slice).
+
+Bumps the resolutions range **R1–R54 → R1–R55**.
 
 ---
 
