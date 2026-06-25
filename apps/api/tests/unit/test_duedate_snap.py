@@ -159,3 +159,32 @@ def test_all_holiday_calendar_returns_input_unchanged():
     cal = Calendar({1, 2, 3, 4, 5}, span, zoneinfo.ZoneInfo("UTC"))
     out = snap_to_working_day(due, cal)
     assert out == due  # fail-safe: unchanged (do NOT assert is_working_day here — there is none)
+
+
+# ---------------------------------------------------------------------------
+# D-5: the MR_ACTION date builder (mgmt_review/spawn._action_due_at) builds at midnight in the
+# CALENDAR's tz (NOT the env easysynq_org_timezone) and snaps — the divergent-tz lock. The
+# review.py / cadence.py date builds use the identical inline combine(date, midnight, cal.tz)+snap
+# pattern (e2e-covered by the PERIODIC_REVIEW integration test).
+# ---------------------------------------------------------------------------
+
+
+def test_action_due_at_builds_in_calendar_tz_not_env():
+    from easysynq_api.services.mgmt_review.spawn import _action_due_at
+
+    tokyo = zoneinfo.ZoneInfo("Asia/Tokyo")
+    cal = Calendar({1, 2, 3, 4, 5}, frozenset(), tokyo)
+    # An operator-set MONDAY (a working day) must NOT be pushed: built at Monday-midnight Tokyo and
+    # left unchanged (regardless of the env tz). Pre-D-5 this built at env-tz midnight.
+    out = _action_due_at(_D(2026, 6, 29), cal)  # Monday
+    assert out == datetime.datetime(2026, 6, 29, 0, 0, tzinfo=tokyo).astimezone(UTC)
+    assert is_working_day(out.astimezone(tokyo).date(), cal)
+
+
+def test_action_due_at_weekend_snaps_and_none_passthrough():
+    from easysynq_api.services.mgmt_review.spawn import _action_due_at
+
+    cal = Calendar({1, 2, 3, 4, 5}, frozenset(), zoneinfo.ZoneInfo("UTC"))
+    out = _action_due_at(_D(2026, 6, 27), cal)  # Saturday → Monday
+    assert out == _dt(2026, 6, 29, 0, 0)
+    assert _action_due_at(None, cal) is None  # open-ended action stays undated
