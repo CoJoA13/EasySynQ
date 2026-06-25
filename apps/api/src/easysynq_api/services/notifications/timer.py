@@ -96,6 +96,40 @@ def business_threshold(
     return threshold.astimezone(datetime.UTC)
 
 
+def snap_to_working_day(due_at: datetime.datetime, cal: Calendar) -> datetime.datetime:
+    """Snap ``due_at`` FORWARD to the next working day (S-duedate-snap, R55).
+
+    Returns ``due_at`` unchanged if its date (in ``cal.tz``) is already a working day; otherwise the
+    next working day forward at the same local (``cal.tz``) time-of-day, as UTC. Working-day-ness is
+    evaluated in ``cal.tz`` — the exact frame the timer (``business_threshold``/``is_working_day``)
+    uses — so a snapped ``due_at`` makes OVERDUE (``now >= due_at``) and every offset land on a
+    working day with no special-casing in ``due_steps`` (doc 10 §9.5).
+
+    Forward-only (never shortens the SLA window); idempotent. The returned instant's ``cal.tz`` date
+    is ALWAYS a working day: a nonexistent (spring-forward gap) wall time can normalize ACROSS
+    midnight onto an adjacent day, so each candidate is RE-CHECKED on the resolved instant and the
+    walk continues if it landed on a non-working day. Fail-safe: a pathological calendar with no
+    reachable working day (the resolver rejects an empty working set, so this needs a holiday span
+    longer than the bound) returns ``due_at`` UNCHANGED — NOT a future sentinel (which would
+    make the task never overdue, fail-OPEN)."""
+    local = due_at.astimezone(cal.tz)
+    if is_working_day(local.date(), cal):
+        return due_at
+    d = local.date()
+    for _ in range(366 + 7):  # bounded; matches shift_business_days' exhaustion guard
+        d = d + datetime.timedelta(days=1)
+        if not is_working_day(d, cal):
+            continue
+        cand = datetime.datetime.combine(d, local.time(), tzinfo=cal.tz).astimezone(datetime.UTC)
+        # A spring-forward gap can push the reconstructed wall time across midnight onto a
+        # non-working day; trust the resolved instant, not the wall-time date, and keep walking.
+        if is_working_day(cand.astimezone(cal.tz).date(), cal):
+            return cand
+    return (
+        due_at  # fail-safe: keep the original instant (never a never-overdue far-future sentinel)
+    )
+
+
 @dataclass(frozen=True)
 class TimerPolicy:
     remind_1_before: datetime.timedelta | None
