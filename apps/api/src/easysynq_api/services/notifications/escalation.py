@@ -11,6 +11,7 @@ from __future__ import annotations
 import datetime
 import logging
 import uuid
+import zoneinfo
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -22,12 +23,13 @@ from ...db.models.notification import NotificationPreference
 from ...db.models.sla_policy import SlaPolicy
 from ...db.models.system_config import SystemConfig
 from ...db.models.workflow import Task, WorkflowInstance
+from ...db.models.working_calendar import WorkingCalendar
 from ..workflow.repository import users_with_roles
 from .constants import EVENT_TASK_DUE_SOON, EVENT_TASK_ESCALATED, EVENT_TASK_OVERDUE
 from .dispatch import EnqueueOutcome, _enqueue_one
 from .recipients import Recipient, _first_name, resolve_recipients
 from .subjects import resolve_subject
-from .timer import TimerPolicy, TimerStamps, TimerStep, due_steps
+from .timer import DEFAULT_CALENDAR, Calendar, TimerPolicy, TimerStamps, TimerStep, due_steps
 
 _QM_ROLE = "QMS Owner"
 _OPEN = ("PENDING", "CLAIMED")
@@ -167,6 +169,49 @@ async def _due_task_ids(session: AsyncSession, now: datetime.datetime) -> list[u
     return list(rows)
 
 
+async def resolve_working_calendar(session: AsyncSession, org_id: uuid.UUID) -> Calendar:
+    """Build the org's business-day ``Calendar`` from its is_default ``working_calendar`` row.
+
+    Fail-safe (the sweep must NEVER crash on calendar data): a missing row, a structurally-broken
+    ``working_days`` (empty / not ISO ints 1..7), or an unknown ``timezone`` falls back to
+    ``DEFAULT_CALENDAR`` (Mon-Fri/UTC) + a warning. Individual unparseable holiday dates are skipped
+    (kept-good) so one bad entry never discards the whole list. (DEFAULT_CALENDAR is itself Mon-Fri,
+    so a fallback never re-enables weekend firing.)
+    """
+    row = (
+        await session.execute(
+            select(WorkingCalendar)
+            .where(WorkingCalendar.org_id == org_id, WorkingCalendar.is_default.is_(True))
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        return DEFAULT_CALENDAR
+    try:
+        weekdays = frozenset(int(x) for x in row.working_days)
+    except (TypeError, ValueError):
+        weekdays = frozenset()
+    if not weekdays or not weekdays <= {1, 2, 3, 4, 5, 6, 7}:
+        logger.warning("notifications.timer_bad_working_days", extra={"org_id": str(org_id)})
+        return DEFAULT_CALENDAR
+    try:
+        tz = zoneinfo.ZoneInfo(row.timezone or "UTC")
+    except (zoneinfo.ZoneInfoNotFoundError, ValueError):
+        logger.warning(
+            "notifications.timer_bad_timezone", extra={"org_id": str(org_id), "tz": row.timezone}
+        )
+        return DEFAULT_CALENDAR
+    holidays: set[datetime.date] = set()
+    for h in row.holidays or []:
+        try:
+            holidays.add(datetime.date.fromisoformat(str(h)))
+        except (TypeError, ValueError):
+            logger.warning(
+                "notifications.timer_bad_holiday", extra={"org_id": str(org_id), "value": str(h)}
+            )
+    return Calendar(working_weekdays=weekdays, holidays=frozenset(holidays), tz=tz)
+
+
 async def process_task_timers(
     session: AsyncSession,
     *,
@@ -215,6 +260,11 @@ async def process_task_timers(
     if instance is None:
         return 0
 
+    # Resolve the org's business-day calendar ONCE per task (one snapshot for all steps). A
+    # non-locking read of a row not in the identity map — no S-drift-1 stale-attr risk, no
+    # lock-order deadlock, no MissingGreenlet (validated by the spec-validation L3 lens).
+    calendar = await resolve_working_calendar(session, task.org_id)
+
     tpolicy = TimerPolicy(
         remind_1_before=policy.remind_1_before,
         remind_2_before=policy.remind_2_before,
@@ -228,7 +278,7 @@ async def process_task_timers(
     )
 
     fired = 0
-    for step in due_steps(tpolicy, task.due_at, stamps, now):
+    for step in due_steps(tpolicy, task.due_at, stamps, now, calendar):
         if step in (TimerStep.REMIND_1, TimerStep.REMIND_2):
             event_key = EVENT_TASK_DUE_SOON
             recipients = await resolve_recipients(session, task)
