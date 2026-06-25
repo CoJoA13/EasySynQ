@@ -168,6 +168,7 @@ from .workflow import (
     WorkflowInstance,
     WorkflowStage,
 )
+from .working_calendar import WorkingCalendar
 from .working_draft import WorkingDraft
 from .worm_destroy_request import WormDestroyRequest
 
@@ -330,6 +331,7 @@ __all__ = [
     "WorkflowStage",
     "WorkflowStageMode",
     "WorkflowSubjectType",
+    "WorkingCalendar",
     "WorkingDraft",
     "WormDestroyRequest",
 ]

@@ -32,10 +32,11 @@ from __future__ import annotations
 import asyncio
 import datetime
 import uuid
+import zoneinfo
 from typing import Any
 
 import pytest
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 
 from easysynq_api.db.models._audit_enums import ActorType, AuditObjectType, EventType
 from easysynq_api.db.models._workflow_enums import TaskState, TaskType, WorkflowSubjectType
@@ -45,6 +46,7 @@ from easysynq_api.db.models.notification import Notification
 from easysynq_api.db.models.organization import Organization
 from easysynq_api.db.models.role import Role, RoleAssignment
 from easysynq_api.db.models.workflow import Task, WorkflowDefinition, WorkflowInstance
+from easysynq_api.db.models.working_calendar import WorkingCalendar
 from easysynq_api.db.session import get_sessionmaker
 from easysynq_api.services.notifications.classes import NotificationClass, class_of
 from easysynq_api.services.notifications.constants import (
@@ -55,20 +57,30 @@ from easysynq_api.services.notifications.constants import (
 from easysynq_api.services.notifications.escalation import (
     emit_task_event,
     process_task_timers,
+    resolve_working_calendar,
     sweep_task_timers,
 )
 from easysynq_api.services.notifications.recipients import Recipient
+from easysynq_api.services.notifications.timer import DEFAULT_CALENDAR
 
 pytestmark = pytest.mark.integration
 
 # ---------------------------------------------------------------------------
-# Fixed reference time: a point in the past with no quiet-window overlap.
-# Seeded SLA policy (migration 0065): remind_1_before=3d, remind_2_before=1d, escalate_1_after=1d.
+# Fixed reference time. MUST be:
+#   - a WEDNESDAY (S-notify-6: the timer now applies the org's Mon-Fri business calendar, so a
+#     real-now anchor would be weekday-flaky; due_at = _BASE - 2d = Monday → business escalate
+#     threshold = Tuesday ≤ _BASE, deterministic regardless of when CI runs); and
+#   - inside an existing audit_event monthly partition. Migration 0010 creates ONLY 2026-06/07/08
+#     at install (the roll_partitions Beat doesn't run in tests), and escalation writes a
+#     TASK_ESCALATED audit at occurred_at = now → that month's partition must exist.
+# 2026-06-24 is a Wednesday in the 2026-06 partition. 10:00 UTC avoids any quiet-window overlap.
+# Seeded SLA policy (migration 0065): remind_1_before=3d, remind_2_before=None, escalate_1_after=1d.
 # ---------------------------------------------------------------------------
-_BASE = datetime.datetime(2032, 3, 10, 10, 0, 0, tzinfo=datetime.UTC)  # 10:00 UTC
+_BASE = datetime.datetime(2026, 6, 24, 10, 0, 0, tzinfo=datetime.UTC)  # Wednesday, 10:00 UTC
 
-# A sentinel "already sent" stamp: used to pre-stamp steps we don't want a test to fire.
-_STAMPED = datetime.datetime(2032, 1, 1, 0, 0, 0, tzinfo=datetime.UTC)
+# A sentinel "already sent" stamp: used to pre-stamp steps we don't want a test to fire (only its
+# non-null-ness matters — due_steps gates on `stamp is None`, never the value).
+_STAMPED = datetime.datetime(2026, 6, 1, 0, 0, 0, tzinfo=datetime.UTC)
 
 
 # ---------------------------------------------------------------------------
@@ -306,7 +318,7 @@ async def test_escalate_to_manager(app_under_test: Any) -> None:
     NOTE: ``now`` is datetime.now(UTC) — not a fixed future date — because AuditEvent is monthly
     RANGE-partitioned and testcontainers only creates partitions for the current month.
     """
-    now = datetime.datetime.now(datetime.UTC)
+    now = _BASE
     org_id = await _default_org_id()
     manager_id = await _seed_user(org_id, display_name="Escalation Manager")
     assignee_id = await _seed_user(
@@ -372,7 +384,7 @@ async def test_escalate_fallback_to_qm(app_under_test: Any) -> None:
     NOTE: ``now`` is datetime.now(UTC) — AuditEvent partition constraint
     (see test_escalate_to_manager).
     """
-    now = datetime.datetime.now(datetime.UTC)
+    now = _BASE
     org_id = await _default_org_id()
     qm_id = await _seed_user(org_id, display_name="QMS Owner Fallback Timer")
     await _assign_role(org_id, qm_id, "QMS Owner")
@@ -454,7 +466,7 @@ async def test_concurrency_escalate_once(app_under_test: Any) -> None:
     NOTE: ``now`` is datetime.now(UTC) — AuditEvent partition constraint
     (see test_escalate_to_manager).
     """
-    now = datetime.datetime.now(datetime.UTC)
+    now = _BASE
     org_id = await _default_org_id()
     manager_id = await _seed_user(org_id, display_name="Concurrency Manager")
     assignee_id = await _seed_user(
@@ -505,7 +517,7 @@ async def test_doc_ack_no_escalation(app_under_test: Any) -> None:
     NOTE: ``now`` is datetime.now(UTC) — AuditEvent partition constraint
     (see test_escalate_to_manager).
     """
-    now = datetime.datetime.now(datetime.UTC)
+    now = _BASE
     org_id = await _default_org_id()
     manager_id = await _seed_user(org_id, display_name="DocAck Manager")
     assignee_id = await _seed_user(org_id, display_name="DocAck Assignee", manager_id=manager_id)
@@ -557,7 +569,7 @@ async def test_inactive_manager_falls_through_to_qm(app_under_test: Any) -> None
     NOTE: ``now`` is datetime.now(UTC) — AuditEvent partition constraint
     (see test_escalate_to_manager).
     """
-    now = datetime.datetime.now(datetime.UTC)
+    now = _BASE
     org_id = await _default_org_id()
     qm_id = await _seed_user(org_id, display_name="QMS Owner Inactive-Mgr Fallback")
     await _assign_role(org_id, qm_id, "QMS Owner")
@@ -631,7 +643,7 @@ async def test_no_email_manager_gets_inapp_escalation(app_under_test: Any) -> No
 
     NOTE: ``now`` is datetime.now(UTC) — AuditEvent partition constraint.
     """
-    now = datetime.datetime.now(datetime.UTC)
+    now = _BASE
     org_id = await _default_org_id()
 
     # Seed a manager with no email address (valid: AppUser.email is nullable).
@@ -675,7 +687,7 @@ async def test_no_recipient_stamps_and_does_not_repeat(app_under_test: Any) -> N
 
     NOTE: ``now`` is datetime.now(UTC) — AuditEvent partition constraint.
     """
-    now = datetime.datetime.now(datetime.UTC)
+    now = _BASE
     org_id = await _default_org_id()
 
     # Assignee with no manager and no QMS Owner in the org (use a unique assignee
@@ -738,7 +750,7 @@ async def test_cross_org_qm_fallback_not_notified(app_under_test: Any) -> None:
 
     NOTE: ``now`` is datetime.now(UTC) — AuditEvent partition constraint.
     """
-    now = datetime.datetime.now(datetime.UTC)
+    now = _BASE
     org_id = await _default_org_id()
 
     # Create a second org so we have a cross-org user to assign.
@@ -813,7 +825,7 @@ async def test_self_manager_falls_through_to_qm(app_under_test: Any) -> None:
 
     NOTE: now is datetime.now(UTC) — AuditEvent partition constraint.
     """
-    now = datetime.datetime.now(datetime.UTC)
+    now = _BASE
     org_id = await _default_org_id()
 
     qm_id = await _seed_user(org_id, display_name="QMS Owner Self-Mgr Fallback R31")
@@ -895,7 +907,7 @@ async def test_dedup_hit_stamps_step_not_infinite_retry(app_under_test: Any) -> 
 
     NOTE: now is datetime.now(UTC) — AuditEvent partition constraint.
     """
-    now = datetime.datetime.now(datetime.UTC)
+    now = _BASE
     org_id = await _default_org_id()
 
     manager_id = await _seed_user(org_id, display_name="Dedup Manager R32")
@@ -973,7 +985,7 @@ async def test_template_miss_does_not_stamp(app_under_test: Any) -> None:
 
     This guards against regressing R2-2: a delivery miss must stay retryable.
     """
-    now = datetime.datetime.now(datetime.UTC)
+    now = _BASE
     org_id = await _default_org_id()
 
     recipient_id = await _seed_user(org_id, display_name="Template Miss Recipient R32guard")
@@ -1054,7 +1066,7 @@ async def test_r4_1_dedup_sweep_does_not_write_second_audit(app_under_test: Any)
 
     NOTE: now is datetime.now(UTC) — AuditEvent partition constraint.
     """
-    now = datetime.datetime.now(datetime.UTC)
+    now = _BASE
     org_id = await _default_org_id()
 
     manager_id = await _seed_user(org_id, display_name="Dedup Audit Manager R41")
@@ -1149,7 +1161,7 @@ async def test_r4_1_genuine_new_escalation_writes_exactly_one_audit(app_under_te
 
     NOTE: now is datetime.now(UTC) — AuditEvent partition constraint.
     """
-    now = datetime.datetime.now(datetime.UTC)
+    now = _BASE
     org_id = await _default_org_id()
 
     manager_id = await _seed_user(org_id, display_name="New Esc Manager R41pos")
@@ -1219,7 +1231,7 @@ async def test_r4_2_self_manager_sole_qm_via_is_qm_fallback(app_under_test: Any)
 
     NOTE: now is datetime.now(UTC) — AuditEvent partition constraint.
     """
-    now = datetime.datetime.now(datetime.UTC)
+    now = _BASE
     org_id = await _default_org_id()
 
     # Seed the assignee who will also be the sole QMS Owner (self-manager edge case).
@@ -1282,3 +1294,222 @@ async def test_r4_2_self_manager_sole_qm_via_is_qm_fallback(app_under_test: Any)
         assert task_fresh.escalated_1_at is not None, (
             "escalated_1_at must be stamped after QM fallback escalation"
         )
+
+
+# ---------------------------------------------------------------------------
+# S-notify-6: working-calendar resolution + business-day escalation wiring.
+# ---------------------------------------------------------------------------
+
+
+async def test_resolve_working_calendar_reads_default_row(app_under_test: Any) -> None:
+    """resolve_working_calendar reflects the org's is_default row (holidays + tz round-trip).
+
+    UPDATE AHT's seeded default in place, assert, then RESTORE in finally (working_calendar keeps
+    UPDATE for the app role; a 2nd is_default would violate uq_working_calendar_one_default, and the
+    row is DELETE-revoked, so update-and-restore is the only safe path)."""
+    org_id = await _default_org_id()
+    async with get_sessionmaker()() as s:
+        before = (
+            await s.execute(
+                select(WorkingCalendar).where(
+                    WorkingCalendar.org_id == org_id, WorkingCalendar.is_default.is_(True)
+                )
+            )
+        ).scalar_one_or_none()
+    assert before is not None, "0067 must seed an is_default calendar for the default org"
+    orig = {
+        "working_days": list(before.working_days),
+        "holidays": list(before.holidays),
+        "timezone": before.timezone,
+    }
+    try:
+        async with get_sessionmaker()() as s:
+            await s.execute(
+                update(WorkingCalendar)
+                .where(WorkingCalendar.id == before.id)
+                .values(
+                    working_days=[1, 2, 3, 4, 5],
+                    holidays=["2026-12-25"],
+                    timezone="America/New_York",
+                )
+            )
+            await s.commit()
+        async with get_sessionmaker()() as s:
+            cal = await resolve_working_calendar(s, org_id)
+        assert cal.working_weekdays == frozenset({1, 2, 3, 4, 5})
+        assert datetime.date(2026, 12, 25) in cal.holidays
+        assert cal.tz == zoneinfo.ZoneInfo("America/New_York")
+    finally:
+        async with get_sessionmaker()() as s:
+            await s.execute(
+                update(WorkingCalendar).where(WorkingCalendar.id == before.id).values(**orig)
+            )
+            await s.commit()
+
+
+async def test_resolve_working_calendar_missing_row_falls_back_to_default(
+    app_under_test: Any,
+) -> None:
+    """An org with no working_calendar row resolves to DEFAULT_CALENDAR (no crash)."""
+    salt = uuid.uuid4().hex[:8]
+    async with get_sessionmaker()() as s:
+        org = Organization(legal_name=f"NoCal Org {salt}", short_code=f"NC{salt[:6].upper()}")
+        s.add(org)
+        await s.commit()
+        no_cal_org_id = org.id
+    try:
+        async with get_sessionmaker()() as s:
+            cal = await resolve_working_calendar(s, no_cal_org_id)
+        assert cal == DEFAULT_CALENDAR
+    finally:
+        async with get_sessionmaker()() as s:
+            await s.execute(delete(Organization).where(Organization.id == no_cal_org_id))
+            await s.commit()
+
+
+async def test_resolve_working_calendar_malformed_holidays_does_not_crash(
+    app_under_test: Any,
+) -> None:
+    """A non-list `holidays` JSONB scalar must not raise (fail-safe) — treated as no holidays, the
+    valid week mask + tz kept. Guards the future-editor robustness contract. UPDATE-AHT-restore."""
+    org_id = await _default_org_id()
+    async with get_sessionmaker()() as s:
+        before = (
+            await s.execute(
+                select(WorkingCalendar).where(
+                    WorkingCalendar.org_id == org_id, WorkingCalendar.is_default.is_(True)
+                )
+            )
+        ).scalar_one_or_none()
+    assert before is not None
+    orig_holidays = list(before.holidays)
+    try:
+        async with get_sessionmaker()() as s:
+            # Write a structurally-broken scalar (5) into the JSONB holidays column.
+            await s.execute(
+                update(WorkingCalendar).where(WorkingCalendar.id == before.id).values(holidays=5)
+            )
+            await s.commit()
+        async with get_sessionmaker()() as s:
+            cal = await resolve_working_calendar(s, org_id)  # must NOT raise
+        assert cal.holidays == frozenset(), "a non-list holidays scalar -> no holidays (kept-safe)"
+        assert cal.working_weekdays == frozenset({1, 2, 3, 4, 5}), "valid week mask kept"
+    finally:
+        async with get_sessionmaker()() as s:
+            await s.execute(
+                update(WorkingCalendar)
+                .where(WorkingCalendar.id == before.id)
+                .values(holidays=orig_holidays)
+            )
+            await s.commit()
+
+
+async def test_resolve_working_calendar_bad_working_days_falls_back_keeping_tz(
+    app_under_test: Any,
+) -> None:
+    """A structurally-broken `working_days` (a JSON string "67" → would wrongly become {6,7}) falls
+    back to the Mon-Fri DEFAULT WEEKDAYS but KEEPS the row's VALID timezone (Codex round-2) — else
+    the is_working_day(now) gate would judge weekends in UTC for a non-UTC org. UPDATE+restore."""
+    org_id = await _default_org_id()
+    async with get_sessionmaker()() as s:
+        before = (
+            await s.execute(
+                select(WorkingCalendar).where(
+                    WorkingCalendar.org_id == org_id, WorkingCalendar.is_default.is_(True)
+                )
+            )
+        ).scalar_one_or_none()
+    assert before is not None
+    orig = {"working_days": list(before.working_days), "timezone": before.timezone}
+    try:
+        async with get_sessionmaker()() as s:
+            await s.execute(
+                update(WorkingCalendar)
+                .where(WorkingCalendar.id == before.id)
+                .values(working_days="67", timezone="America/New_York")
+            )
+            await s.commit()
+        async with get_sessionmaker()() as s:
+            cal = await resolve_working_calendar(s, org_id)
+        assert cal.working_weekdays == frozenset({1, 2, 3, 4, 5}), "bad working_days -> Mon-Fri"
+        assert cal.tz == zoneinfo.ZoneInfo("America/New_York"), "the VALID tz must be preserved"
+    finally:
+        async with get_sessionmaker()() as s:
+            await s.execute(
+                update(WorkingCalendar).where(WorkingCalendar.id == before.id).values(**orig)
+            )
+            await s.commit()
+
+
+async def test_escalation_skips_weekend_business_day(app_under_test: Any) -> None:
+    """Wiring proof: escalation fires one BUSINESS day after a Friday due_at — Monday, not Saturday.
+
+    Uses AHT's seeded Mon-Fri calendar (or the DEFAULT_CALENDAR fallback — both Mon-Fri) AS-IS,
+    no mutation, no holiday. Anti-tautology: Test A FAILS against the old raw-wall-clock timer.py
+    (which escalates on Saturday). Pre-stamp remind+overdue to isolate ESCALATE_1. Dates are built
+    in the resolved calendar's own tz so the test is correct for any seeded tz (the weekday of a
+    calendar date is tz-independent)."""
+    org_id = await _default_org_id()
+    manager_id = await _seed_user(org_id, display_name="Weekend Escalation Manager")
+    assignee_id = await _seed_user(
+        org_id, display_name="Weekend Escalation Assignee", manager_id=manager_id
+    )
+    async with get_sessionmaker()() as s:
+        cal = await resolve_working_calendar(s, org_id)
+    tz = cal.tz
+    # due_at = Fri 2026-06-26 10:00 local; raw escalate = Sat 06-27, business escalate = Mon 06-29.
+    due_at = datetime.datetime(2026, 6, 26, 10, 0, tzinfo=tz)
+    _, task = await _seed_workflow_objects(
+        org_id,
+        assignee_id,
+        due_at=due_at,
+        remind_1_sent_at=_STAMPED,
+        remind_2_sent_at=_STAMPED,
+        overdue_notified_at=_STAMPED,
+    )
+    sm = get_sessionmaker()
+
+    # Test A: now = Sat 06-27 18:00 local — past raw due+1d, BEFORE the business Monday threshold.
+    now_sat = datetime.datetime(2026, 6, 27, 18, 0, tzinfo=tz)
+    await sweep_task_timers(sm, now_sat)
+    async with get_sessionmaker()() as s:
+        t = await s.get(Task, task.id)
+        assert t is not None and t.escalated_1_at is None, (
+            "must NOT escalate on a Saturday (business-day)"
+        )
+        esc = (
+            (
+                await s.execute(
+                    select(Notification).where(
+                        Notification.task_id == task.id,
+                        Notification.event_key == EVENT_TASK_ESCALATED,
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert esc == [], "no task.escalated notification before the business threshold"
+
+    # Test B: now = Monday 06-29 12:00 local — the business escalate threshold has passed.
+    now_mon = datetime.datetime(2026, 6, 29, 12, 0, tzinfo=tz)
+    await sweep_task_timers(sm, now_mon)
+    async with get_sessionmaker()() as s:
+        t = await s.get(Task, task.id)
+        assert t is not None and t.escalated_1_at is not None, (
+            "must escalate on Monday (business-day)"
+        )
+        esc = (
+            (
+                await s.execute(
+                    select(Notification).where(
+                        Notification.recipient_user_id == manager_id,
+                        Notification.task_id == task.id,
+                        Notification.event_key == EVENT_TASK_ESCALATED,
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert len(esc) == 1, "exactly one escalation notification to the manager on Monday"

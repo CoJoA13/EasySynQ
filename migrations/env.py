@@ -61,6 +61,7 @@ _MIGRATION_MANAGED_INDEXES = frozenset(
         "ix_task_timer_pending",
         "ix_awareness_event_pending",          # S-notify-5a claim scan
         "uq_notification_dedup_awareness",     # S-notify-5a version-discriminated dedup
+        "uq_working_calendar_one_default",     # S-notify-6 at-most-one-default-per-org
     }
 )
 

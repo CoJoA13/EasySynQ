@@ -11,6 +11,7 @@ from __future__ import annotations
 import datetime
 import logging
 import uuid
+import zoneinfo
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -22,12 +23,13 @@ from ...db.models.notification import NotificationPreference
 from ...db.models.sla_policy import SlaPolicy
 from ...db.models.system_config import SystemConfig
 from ...db.models.workflow import Task, WorkflowInstance
+from ...db.models.working_calendar import WorkingCalendar
 from ..workflow.repository import users_with_roles
 from .constants import EVENT_TASK_DUE_SOON, EVENT_TASK_ESCALATED, EVENT_TASK_OVERDUE
 from .dispatch import EnqueueOutcome, _enqueue_one
 from .recipients import Recipient, _first_name, resolve_recipients
 from .subjects import resolve_subject
-from .timer import TimerPolicy, TimerStamps, TimerStep, due_steps
+from .timer import DEFAULT_CALENDAR, Calendar, TimerPolicy, TimerStamps, TimerStep, due_steps
 
 _QM_ROLE = "QMS Owner"
 _OPEN = ("PENDING", "CLAIMED")
@@ -167,6 +169,69 @@ async def _due_task_ids(session: AsyncSession, now: datetime.datetime) -> list[u
     return list(rows)
 
 
+def _parse_working_days(value: object) -> frozenset[int] | None:
+    """Validate a JSONB ``working_days`` value → a frozenset of ISO weekdays, else None if broken
+    broken. Must be a NON-EMPTY JSON array whose every element is a real int 1..7 — NOT a bool
+    (``True``/``False`` are ``int`` subclasses → ``int(True)==1``) and NOT a float (``int(1.9)==1``)
+    and NOT a JSON string (``"67"`` is iterable → would wrongly become ``{6,7}``). Returning None
+    means "fall back to Mon-Fri" (the caller keeps the VALID timezone)."""
+    if not isinstance(value, list) or not value:
+        return None
+    out: set[int] = set()
+    for x in value:
+        if isinstance(x, bool) or not isinstance(x, int) or not (1 <= x <= 7):
+            return None
+        out.add(x)
+    return frozenset(out)
+
+
+async def resolve_working_calendar(session: AsyncSession, org_id: uuid.UUID) -> Calendar:
+    """Build the org's business-day ``Calendar`` from its is_default ``working_calendar`` row.
+
+    Fail-safe + GRANULAR (the sweep must NEVER crash on calendar data, and a fallback must NOT
+    discard a still-valid timezone — else the ``is_working_day(now)`` gate would judge weekends in
+    UTC for a non-UTC org). Order: a missing row → ``DEFAULT_CALENDAR``; otherwise resolve
+    the **timezone first** (unknown → UTC + warn) so every fallback still evaluates working days in
+    the org's local time; a structurally-broken ``working_days`` (not a non-empty array of real ints
+    1..7 — no bool/float/string) → Mon-Fri default + warn, KEEPING the resolved tz + holidays;
+    individual unparseable holiday dates are skipped (kept-good).
+    """
+    row = (
+        await session.execute(
+            select(WorkingCalendar)
+            .where(WorkingCalendar.org_id == org_id, WorkingCalendar.is_default.is_(True))
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        return DEFAULT_CALENDAR
+    # Timezone FIRST — a fallback calendar must still evaluate working days in the org's local time.
+    try:
+        tz = zoneinfo.ZoneInfo(row.timezone or "UTC")
+    except (zoneinfo.ZoneInfoNotFoundError, ValueError):
+        logger.warning(
+            "notifications.timer_bad_timezone", extra={"org_id": str(org_id), "tz": row.timezone}
+        )
+        tz = zoneinfo.ZoneInfo("UTC")
+    # working_days: a strictly-validated array of ISO ints 1..7; broken → Mon-Fri default (keep tz).
+    weekdays = _parse_working_days(row.working_days)
+    if weekdays is None:
+        logger.warning("notifications.timer_bad_working_days", extra={"org_id": str(org_id)})
+        weekdays = frozenset({1, 2, 3, 4, 5})
+    # holidays: a non-list scalar (5 / true) → no holidays (never let `for h in <scalar>` raise);
+    # individual unparseable entries inside a list are skipped (kept-good).
+    raw_holidays = row.holidays if isinstance(row.holidays, list) else []
+    holidays: set[datetime.date] = set()
+    for h in raw_holidays:
+        try:
+            holidays.add(datetime.date.fromisoformat(str(h)))
+        except (TypeError, ValueError):
+            logger.warning(
+                "notifications.timer_bad_holiday", extra={"org_id": str(org_id), "value": str(h)}
+            )
+    return Calendar(working_weekdays=weekdays, holidays=frozenset(holidays), tz=tz)
+
+
 async def process_task_timers(
     session: AsyncSession,
     *,
@@ -215,6 +280,11 @@ async def process_task_timers(
     if instance is None:
         return 0
 
+    # Resolve the org's business-day calendar ONCE per task (one snapshot for all steps). A
+    # non-locking read of a row not in the identity map — no S-drift-1 stale-attr risk, no
+    # lock-order deadlock, no MissingGreenlet (validated by the spec-validation L3 lens).
+    calendar = await resolve_working_calendar(session, task.org_id)
+
     tpolicy = TimerPolicy(
         remind_1_before=policy.remind_1_before,
         remind_2_before=policy.remind_2_before,
@@ -228,7 +298,7 @@ async def process_task_timers(
     )
 
     fired = 0
-    for step in due_steps(tpolicy, task.due_at, stamps, now):
+    for step in due_steps(tpolicy, task.due_at, stamps, now, calendar):
         if step in (TimerStep.REMIND_1, TimerStep.REMIND_2):
             event_key = EVENT_TASK_DUE_SOON
             recipients = await resolve_recipients(session, task)

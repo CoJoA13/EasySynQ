@@ -5,6 +5,7 @@ must fire — in chronological order, never re-firing an already-stamped step.""
 
 import datetime
 import enum
+import zoneinfo
 from dataclasses import dataclass
 
 
@@ -13,6 +14,86 @@ class TimerStep(enum.StrEnum):
     REMIND_2 = "remind_2"
     OVERDUE = "overdue"
     ESCALATE_1 = "escalate_1"
+
+
+class ThresholdDirection(enum.Enum):
+    BEFORE = "before"  # reminders: N business days BEFORE due_at
+    AFTER = "after"  # escalation: N business days AFTER due_at
+
+
+@dataclass(frozen=True)
+class Calendar:
+    """A pure business-day calendar. ``working_weekdays`` uses ISO weekday ints (1=Mon..7=Sun)."""
+
+    working_weekdays: frozenset[int]
+    holidays: frozenset[datetime.date]
+    tz: zoneinfo.ZoneInfo
+
+
+# Fail-safe default the resolver falls back to: Mon-Fri, no holidays, UTC.
+DEFAULT_CALENDAR = Calendar(
+    working_weekdays=frozenset({1, 2, 3, 4, 5}),
+    holidays=frozenset(),
+    tz=zoneinfo.ZoneInfo("UTC"),
+)
+
+# Far-future sentinel for shift_business_days when its bounded search exhausts (a pathological
+# sparse-workweek + long-holiday-span calendar). Year 9999 (NOT date.max) so combining it with a tz
+# offset in business_threshold can't overflow datetime; the resulting threshold never trips.
+_UNREACHABLE_DATE = datetime.date(9999, 1, 1)
+
+
+def is_working_day(d: datetime.date, cal: Calendar) -> bool:
+    return d.isoweekday() in cal.working_weekdays and d not in cal.holidays
+
+
+def shift_business_days(
+    anchor: datetime.date, n: int, direction: ThresholdDirection, cal: Calendar
+) -> datetime.date:
+    """The date that is ``n`` working days before/after ``anchor`` (the anchor day is NOT counted).
+
+    ``n <= 0`` returns ``anchor`` unchanged. The loop is bounded so a pathological calendar (sparse
+    workweek + a holiday span longer than the window) can never spin forever; if it exhausts before
+    counting ``n`` working days, return ``_UNREACHABLE_DATE`` — a FAIL-SAFE far-future sentinel:
+    ``business_threshold`` turns it into a far-future instant, so the step's ``now >= threshold``
+    never trips and the timer never fires EARLY (better a missed reminder/escalation than one sent
+    before ``n`` business days actually elapsed). The resolver rejects an empty working set, so this
+    is an extreme edge. (A year-9999 sentinel, NOT ``date.max`` — combining ``date.max`` with a tz
+    offset can overflow ``datetime`` in ``business_threshold``.)"""
+    if n <= 0:
+        return anchor
+    step = datetime.timedelta(days=1 if direction is ThresholdDirection.AFTER else -1)
+    d = anchor
+    counted = 0
+    for _ in range(n * 7 + 366):
+        d = d + step
+        if is_working_day(d, cal):
+            counted += 1
+            if counted == n:
+                return d
+    return _UNREACHABLE_DATE  # fail-safe: never resolve to an arbitrary (possibly non-working) date
+
+
+def business_threshold(
+    due_at: datetime.datetime,
+    offset: datetime.timedelta,
+    direction: ThresholdDirection,
+    cal: Calendar,
+) -> datetime.datetime:
+    """The UTC instant ``offset`` BUSINESS days before/after ``due_at``, evaluated against ``cal``.
+
+    The whole-day component walks working days; any sub-day remainder is applied as wall-clock.
+    Preserves ``due_at``'s local (``cal.tz``) time-of-day on the shifted date. (DST-ambiguous wall
+    times default to ``fold=0`` — within tolerance for a 5-minute-granularity sweep.)"""
+    local = due_at.astimezone(cal.tz)
+    whole = offset.days  # timedelta normalizes a positive offset: days >= 0, remainder >= 0
+    remainder = offset - datetime.timedelta(days=whole)
+    target_date = shift_business_days(local.date(), whole, direction, cal)
+    threshold = datetime.datetime.combine(target_date, local.time(), tzinfo=cal.tz)
+    threshold = (
+        threshold - remainder if direction is ThresholdDirection.BEFORE else threshold + remainder
+    )
+    return threshold.astimezone(datetime.UTC)
 
 
 @dataclass(frozen=True)
@@ -35,20 +116,32 @@ def due_steps(
     due_at: datetime.datetime,
     stamps: TimerStamps,
     now: datetime.datetime,
+    calendar: Calendar,
 ) -> list[TimerStep]:
-    """Steps whose threshold has passed AND whose stamp is null, chronological. OVERDUE is always-on
-    (at due_at); reminders/escalate are gated by a configured (non-null) offset."""
+    """Steps whose threshold has passed AND whose stamp is null, chronological. Reminder/escalate
+    thresholds are BUSINESS-DAY offsets against ``calendar`` (skip weekends + holidays); OVERDUE is
+    always-on at ``due_at`` with NO business-day shift (D-5 — ``due_at`` itself is raw wall-clock,
+    snapping it is the upstream un-numbered residual). Reminders/escalate stay gated by a configured
+    (non-null) offset AND only fire when ``now`` is itself a working day — so a sweep DELAYED past
+    the threshold into a non-working day (worker down / template missing over a weekend) defers the
+    ping to the next working day (doc 10 §9.5: timers do not fire on non-working days). OVERDUE is
+    exempt from that gate (it is always-on at ``due_at`` by design)."""
     out: list[TimerStep] = []
+    now_is_working = is_working_day(now.astimezone(calendar.tz).date(), calendar)
     if (
         policy.remind_1_before is not None
         and stamps.remind_1_sent_at is None
-        and now >= due_at - policy.remind_1_before
+        and now_is_working
+        and now
+        >= business_threshold(due_at, policy.remind_1_before, ThresholdDirection.BEFORE, calendar)
     ):
         out.append(TimerStep.REMIND_1)
     if (
         policy.remind_2_before is not None
         and stamps.remind_2_sent_at is None
-        and now >= due_at - policy.remind_2_before
+        and now_is_working
+        and now
+        >= business_threshold(due_at, policy.remind_2_before, ThresholdDirection.BEFORE, calendar)
     ):
         out.append(TimerStep.REMIND_2)
     if stamps.overdue_notified_at is None and now >= due_at:
@@ -56,7 +149,9 @@ def due_steps(
     if (
         policy.escalate_1_after is not None
         and stamps.escalated_1_at is None
-        and now >= due_at + policy.escalate_1_after
+        and now_is_working
+        and now
+        >= business_threshold(due_at, policy.escalate_1_after, ThresholdDirection.AFTER, calendar)
     ):
         out.append(TimerStep.ESCALATE_1)
     return out
