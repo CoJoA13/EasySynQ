@@ -255,6 +255,7 @@ async def test_http_put_updates_existing_default_and_audits(
     before = await _read_default(org_id)
     assert before is not None
     orig = (before.name, list(before.working_days), list(before.holidays), before.timezone)
+    c0 = await _config_updated_count_for_key(org_id, "working_calendar")
     try:
         body = {
             "name": "Edited calendar",
@@ -276,6 +277,7 @@ async def test_http_put_updates_existing_default_and_audits(
         assert rg.status_code == 200 and rg.json()["holidays"] == ["2026-01-01", "2026-12-25"]
         # A no-op PUT (same values) writes NO new audit.
         c1 = await _config_updated_count_for_key(org_id, "working_calendar")
+        assert c1 == c0 + 1, "the real-diff PUT must write exactly one CONFIG_UPDATED audit"
         r2 = await app_client.put(
             "/api/v1/admin/notifications/working-calendar", headers=h, json=body
         )

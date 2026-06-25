@@ -86,7 +86,14 @@ export function WorkingCalendarEditor() {
     return <LoadingState label="Loading working calendar" />;
   }
 
-  const validName = working.name.trim().length > 0 && working.name.length <= 255;
+  const trimmedName = working.name.trim();
+  const nameError =
+    trimmedName.length === 0
+      ? "A name is required"
+      : trimmedName.length > 255
+        ? "Name must be 255 characters or fewer"
+        : undefined;
+  const validName = nameError === undefined;
   const hasDay = working.days.length > 0;
   const dirty = isDirty(working, cal.data);
   const canSave = dirty && validName && hasDay;
@@ -122,7 +129,7 @@ export function WorkingCalendarEditor() {
       <TextInput
         label="Calendar name"
         value={working.name}
-        error={!validName ? "A name is required" : undefined}
+        error={nameError}
         onChange={(e) => setWorking({ ...working, name: e.currentTarget.value })}
       />
 
