@@ -173,6 +173,24 @@ def test_default_calendar_is_mon_fri_utc():
     assert DEFAULT_CALENDAR.tz == zoneinfo.ZoneInfo("UTC")
 
 
+def test_business_threshold_sub_day_remainder_is_wall_clock():
+    # Pins the documented sub-day behavior (no production caller in v1 — seeded offsets are whole
+    # days): the whole-day component walks business days; the remainder is raw wall-clock.
+    # 1.5 biz days BEFORE Monday 06-29 12:00 = (1 biz day back = Friday 06-26 12:00) - 12h
+    # = Friday 06-26 00:00. The remainder can legitimately land on a non-working time-of-day.
+    due = datetime.datetime(2026, 6, 29, 12, 0, tzinfo=UTC)  # Monday
+    got = business_threshold(due, timedelta(days=1, hours=12), ThresholdDirection.BEFORE, MON_FRI)
+    assert got == datetime.datetime(2026, 6, 26, 0, 0, tzinfo=UTC)
+    # AFTER: 1.5 biz days after Fri 06-26 12:00 = (1 biz day = Mon 06-29 12:00) + 12h = Tue 00:00.
+    got2 = business_threshold(
+        datetime.datetime(2026, 6, 26, 12, 0, tzinfo=UTC),
+        timedelta(days=1, hours=12),
+        ThresholdDirection.AFTER,
+        MON_FRI,
+    )
+    assert got2 == datetime.datetime(2026, 6, 30, 0, 0, tzinfo=UTC)
+
+
 # ---------------------------------------------------------------------------
 # due_steps with a Mon-Fri calendar (business-day timing).
 # ---------------------------------------------------------------------------

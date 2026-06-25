@@ -201,8 +201,12 @@ async def resolve_working_calendar(session: AsyncSession, org_id: uuid.UUID) -> 
             "notifications.timer_bad_timezone", extra={"org_id": str(org_id), "tz": row.timezone}
         )
         return DEFAULT_CALENDAR
+    # holidays must be a JSON array; a non-list scalar (5 / true) is structurally broken -> treat as
+    # no holidays (keep the valid week mask + tz), never let `for h in <scalar>` raise and stall the
+    # org's tasks. Individual unparseable entries inside a list are skipped (kept-good).
+    raw_holidays = row.holidays if isinstance(row.holidays, list) else []
     holidays: set[datetime.date] = set()
-    for h in row.holidays or []:
+    for h in raw_holidays:
         try:
             holidays.add(datetime.date.fromisoformat(str(h)))
         except (TypeError, ValueError):

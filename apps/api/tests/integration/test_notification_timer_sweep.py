@@ -1367,6 +1367,43 @@ async def test_resolve_working_calendar_missing_row_falls_back_to_default(
             await s.commit()
 
 
+async def test_resolve_working_calendar_malformed_holidays_does_not_crash(
+    app_under_test: Any,
+) -> None:
+    """A non-list `holidays` JSONB scalar must not raise (fail-safe) — treated as no holidays, the
+    valid week mask + tz kept. Guards the future-editor robustness contract. UPDATE-AHT-restore."""
+    org_id = await _default_org_id()
+    async with get_sessionmaker()() as s:
+        before = (
+            await s.execute(
+                select(WorkingCalendar).where(
+                    WorkingCalendar.org_id == org_id, WorkingCalendar.is_default.is_(True)
+                )
+            )
+        ).scalar_one_or_none()
+    assert before is not None
+    orig_holidays = list(before.holidays)
+    try:
+        async with get_sessionmaker()() as s:
+            # Write a structurally-broken scalar (5) into the JSONB holidays column.
+            await s.execute(
+                update(WorkingCalendar).where(WorkingCalendar.id == before.id).values(holidays=5)
+            )
+            await s.commit()
+        async with get_sessionmaker()() as s:
+            cal = await resolve_working_calendar(s, org_id)  # must NOT raise
+        assert cal.holidays == frozenset(), "a non-list holidays scalar -> no holidays (kept-safe)"
+        assert cal.working_weekdays == frozenset({1, 2, 3, 4, 5}), "valid week mask kept"
+    finally:
+        async with get_sessionmaker()() as s:
+            await s.execute(
+                update(WorkingCalendar)
+                .where(WorkingCalendar.id == before.id)
+                .values(holidays=orig_holidays)
+            )
+            await s.commit()
+
+
 async def test_escalation_skips_weekend_business_day(app_under_test: Any) -> None:
     """Wiring proof: escalation fires one BUSINESS day after a Friday due_at — Monday, not Saturday.
 
