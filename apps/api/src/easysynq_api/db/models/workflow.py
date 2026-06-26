@@ -183,6 +183,9 @@ class Task(Base):
     escalated_1_at: Mapped[datetime.datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    escalated_2_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     client_token: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 

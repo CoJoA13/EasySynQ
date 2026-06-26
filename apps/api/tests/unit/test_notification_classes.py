@@ -32,6 +32,20 @@ def test_unknown_event_falls_back_to_action_required():
     assert class_of("totally.unknown") is NotificationClass.ACTION_REQUIRED
 
 
+def test_escalated_final_is_critical():
+    assert class_of("task.escalated_final") is NotificationClass.CRITICAL
+
+
+def test_escalated_final_in_variable_whitelist():
+    from easysynq_api.services.notifications.constants import (
+        EVENT_TASK_ESCALATED_FINAL,
+        VARIABLE_WHITELIST,
+    )
+
+    assert EVENT_TASK_ESCALATED_FINAL == "task.escalated_final"
+    assert "task.due_at" in VARIABLE_WHITELIST[EVENT_TASK_ESCALATED_FINAL]
+
+
 def test_default_modes():
     assert default_mode(NotificationClass.ACTION_REQUIRED) is NotificationDigestMode.DAILY
     assert default_mode(NotificationClass.AWARENESS) is NotificationDigestMode.DAILY

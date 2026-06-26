@@ -55,6 +55,7 @@ from easysynq_api.services.notifications.constants import (
     EVENT_TASK_DUE_FINAL,
     EVENT_TASK_DUE_SOON,
     EVENT_TASK_ESCALATED,
+    EVENT_TASK_ESCALATED_FINAL,
     EVENT_TASK_OVERDUE,
 )
 from easysynq_api.services.notifications.escalation import (
@@ -146,6 +147,7 @@ async def _seed_workflow_objects(
     remind_2_sent_at: datetime.datetime | None = None,
     overdue_notified_at: datetime.datetime | None = None,
     escalated_1_at: datetime.datetime | None = None,
+    escalated_2_at: datetime.datetime | None = None,
 ) -> tuple[WorkflowInstance, Task]:
     key = f"timer_test_{uuid.uuid4().hex[:8]}"
     async with get_sessionmaker()() as s:
@@ -183,6 +185,7 @@ async def _seed_workflow_objects(
             remind_2_sent_at=remind_2_sent_at,
             overdue_notified_at=overdue_notified_at,
             escalated_1_at=escalated_1_at,
+            escalated_2_at=escalated_2_at,
         )
         s.add(task)
         await s.commit()
@@ -1527,11 +1530,10 @@ async def test_escalation_skips_weekend_business_day(app_under_test: Any) -> Non
 
 
 async def test_due_task_ids_excludes_fully_fired_escalate_enabled(app_under_test: Any) -> None:
-    """A fully-fired OPEN APPROVE task is NOT re-claimed (all configured steps stamped).
+    """A fully-fired OPEN APPROVE task is NOT re-claimed (all FIVE configured steps stamped).
 
-    Post-S-remind2 remind_2 is a real configured step (remind_2_before=1d), so a fully-fired task
-    stamps all four steps. This is now a plain fully-fired regression guard for the policy-aware
-    claim (the original remind_2 tautology no longer exists for APPROVE — remind_2 is real).
+    Post-S-escalate2, APPROVE has remind_1 + remind_2 + escalate_1 + escalate_2 configured (plus the
+    always-on OVERDUE). A fully-fired task stamps all five; the policy-aware claim must exclude it.
     """
     org_id = await _default_org_id()
     assignee_id = await _seed_user(org_id, display_name="Claim Fully Fired APPROVE")
@@ -1545,13 +1547,14 @@ async def test_due_task_ids_excludes_fully_fired_escalate_enabled(app_under_test
         remind_2_sent_at=_STAMPED,
         overdue_notified_at=_STAMPED,
         escalated_1_at=_STAMPED,
+        escalated_2_at=_STAMPED,
     )
 
     async with get_sessionmaker()() as s:
         ids = await _due_task_ids(s, _BASE)
 
     assert task.id not in ids, (
-        "fully-fired APPROVE task must NOT be re-claimed (all four configured steps stamped)"
+        "fully-fired APPROVE task must NOT be re-claimed (all five configured steps stamped)"
     )
 
 
@@ -1653,6 +1656,33 @@ async def test_due_task_ids_still_claims_pending_steps(app_under_test: Any) -> N
     assert task_doc_ack.id in ids, "pending-overdue DOC_ACK must be claimed (policy join resolves)"
 
 
+async def test_due_task_ids_claims_pending_escalate2(app_under_test: Any) -> None:
+    """Over-tightening guard: only escalate_2 unstamped (1-4 stamped) → still claimed.
+
+    Proves the new policy-gated disjunct (escalate_2_after IS NOT NULL AND escalated_2_at IS NULL)
+    selects an APPROVE task whose other four steps are all stamped — i.e. the tier-2 claim works.
+    """
+    org_id = await _default_org_id()
+    assignee_id = await _seed_user(org_id, display_name="Claim Pending Escalate2")
+    _, task = await _seed_workflow_objects(
+        org_id,
+        assignee_id,
+        due_at=_BASE - datetime.timedelta(days=2),
+        task_type=TaskType.APPROVE,
+        task_state=TaskState.PENDING,
+        remind_1_sent_at=_STAMPED,
+        remind_2_sent_at=_STAMPED,
+        overdue_notified_at=_STAMPED,
+        escalated_1_at=_STAMPED,
+        # escalated_2_at NULL → claimable via the new escalate_2 disjunct.
+    )
+
+    async with get_sessionmaker()() as s:
+        ids = await _due_task_ids(s, _BASE)
+
+    assert task.id in ids, "task with only escalate_2 pending must be claimed (tier-2 disjunct)"
+
+
 async def test_remind_2_distinct_final_reminder(app_under_test: Any) -> None:
     """REMIND_2 fires under a DISTINCT event key (task.due_final) → a real second reminder.
 
@@ -1689,3 +1719,230 @@ async def test_remind_2_distinct_final_reminder(app_under_test: Any) -> None:
         assert task_fresh is not None
         assert task_fresh.remind_1_sent_at is not None, "remind_1 must be stamped"
         assert task_fresh.remind_2_sent_at is not None, "remind_2 must be stamped"
+
+
+async def test_escalate_2_to_top_management(app_under_test: Any) -> None:
+    """Tier-2 (escalate_2) fires task.escalated_final to Top Management at +3 business days.
+
+    due_at = Monday (_BASE-2d); now = Friday (_BASE+2d) so the +3 business-day threshold (Thursday)
+    has passed. Pre-stamp the four earlier steps so ONLY escalate_2 fires. Assert delivery to the
+    Top Management role-holder, the escalated_2_at stamp, and a TASK_ESCALATED tier:2 audit
+    (via=top_management). Mutation-distinguishing: FAILS against the pre-S-escalate2 code
+    (no tier-2).
+
+    ⚠ The Top Management RoleAssignment is removed in a `finally` so it does not LEAK into
+    test_escalate_2_qm_fallback (same file / shared session DB): a leaked holder would make the
+    fallback test resolve top_management instead of the QM floor.
+    """
+    org_id = await _default_org_id()
+    assignee_id = await _seed_user(org_id, display_name="Escalate2 Assignee")
+    tm_id = await _seed_user(org_id, display_name="Top Mgmt Member", email="topmgmt@example.com")
+    await _assign_role(org_id, tm_id, "Top Management")
+    try:
+        now = datetime.datetime(2026, 6, 26, 10, 0, 0, tzinfo=datetime.UTC)  # Friday — +3bd passed
+        _, task = await _seed_workflow_objects(
+            org_id,
+            assignee_id,
+            due_at=_BASE - datetime.timedelta(days=2),  # Monday
+            task_type=TaskType.APPROVE,
+            task_state=TaskState.PENDING,
+            remind_1_sent_at=_STAMPED,
+            remind_2_sent_at=_STAMPED,
+            overdue_notified_at=_STAMPED,
+            escalated_1_at=_STAMPED,
+        )
+
+        await sweep_task_timers(get_sessionmaker(), now)
+
+        count = await _count_notifications(tm_id, task.id, EVENT_TASK_ESCALATED_FINAL)
+        assert count == 1, (
+            f"expected exactly one task.escalated_final to Top Management, got {count}"
+        )
+
+        async with get_sessionmaker()() as s:
+            task_fresh = await s.get(Task, task.id)
+            assert task_fresh is not None
+            assert task_fresh.escalated_2_at is not None, "escalated_2_at must be stamped"
+
+        async with get_sessionmaker()() as s:
+            rows = (
+                (
+                    await s.execute(
+                        select(AuditEvent).where(
+                            AuditEvent.org_id == org_id,
+                            AuditEvent.event_type == EventType.TASK_ESCALATED,
+                            AuditEvent.scope_ref == str(task.id),
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        tier2 = [e for e in rows if (e.after or {}).get("tier") == 2]
+        assert len(tier2) == 1, (
+            f"expected exactly one tier-2 TASK_ESCALATED audit, got {len(tier2)}"
+        )
+        assert str(tm_id) in tier2[0].after.get("escalated_to", [])
+        assert tier2[0].after.get("via") == "top_management"
+    finally:
+        # Remove the Top Management assignment so it can't leak into the QM-fallback test.
+        async with get_sessionmaker()() as s:
+            await s.execute(delete(RoleAssignment).where(RoleAssignment.user_id == tm_id))
+            await s.commit()
+
+
+async def test_escalate_2_qm_fallback(app_under_test: Any) -> None:
+    """Tier-2 falls back to QMS Owner when no Top Management role-holder exists.
+
+    via=qm_fallback when the Top Management role has no members in the org.
+    """
+    org_id = await _default_org_id()
+    # Self-provide the precondition: the tier-2 resolver returns Top Management FIRST, so the QM
+    # floor is reached only when the org has NO Top Management holder. Other integration files
+    # (test_capa / *_authorization) leak un-cleaned SYSTEM-scoped Top Management assignments into
+    # this shared default org, and shard composition is .test_durations-driven — so clear any leaked
+    # holders here rather than assume a clean shared DB (engineering-patterns: self-provide every
+    # precondition).
+    async with get_sessionmaker()() as s:
+        tm_role = (
+            await s.execute(
+                select(Role).where(Role.org_id == org_id, Role.name == "Top Management")
+            )
+        ).scalar_one_or_none()
+        if tm_role is not None:
+            await s.execute(delete(RoleAssignment).where(RoleAssignment.role_id == tm_role.id))
+            await s.commit()
+    assignee_id = await _seed_user(org_id, display_name="Escalate2 NoTM Assignee")
+    qm_id = await _seed_user(org_id, display_name="QM Member E2", email="qm-e2@example.com")
+    await _assign_role(org_id, qm_id, "QMS Owner")
+    # No Top Management holder seeded for THIS task's recipients → falls to the QM floor.
+
+    now = datetime.datetime(2026, 6, 26, 10, 0, 0, tzinfo=datetime.UTC)  # Friday
+    _, task = await _seed_workflow_objects(
+        org_id,
+        assignee_id,
+        due_at=_BASE - datetime.timedelta(days=2),
+        task_type=TaskType.APPROVE,
+        task_state=TaskState.PENDING,
+        remind_1_sent_at=_STAMPED,
+        remind_2_sent_at=_STAMPED,
+        overdue_notified_at=_STAMPED,
+        escalated_1_at=_STAMPED,
+    )
+
+    await sweep_task_timers(get_sessionmaker(), now)
+
+    count = await _count_notifications(qm_id, task.id, EVENT_TASK_ESCALATED_FINAL)
+    assert count == 1, f"expected one task.escalated_final to the QM fallback, got {count}"
+
+    async with get_sessionmaker()() as s:
+        rows = (
+            (
+                await s.execute(
+                    select(AuditEvent).where(
+                        AuditEvent.org_id == org_id,
+                        AuditEvent.event_type == EventType.TASK_ESCALATED,
+                        AuditEvent.scope_ref == str(task.id),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+    tier2 = [e for e in rows if (e.after or {}).get("tier") == 2]
+    assert len(tier2) == 1
+    assert tier2[0].after.get("via") == "qm_fallback"
+
+
+async def test_escalate_2_falls_to_qm_when_top_management_inactive(app_under_test: Any) -> None:
+    """Tier-2 falls to the QMS Owner floor when Top Management has members but NONE are valid.
+
+    If the Top Management role holds only inactive/cross-org users, ``users_with_roles`` still
+    returns their ids; the resolver must fall through to the QM floor (mirroring tier-1's
+    invalid-manager→QM fallthrough and the spec's "always delivers" intent) rather than return the
+    invalid holders — which would make the dispatch loop drop them all (attempted == 0) and stamp
+    escalated_2_at as a terminal no-op, silently never escalating even with an active QMS Owner.
+    Mutation-distinguishing: on the pre-fix ``if top:`` resolver the QM is never consulted
+    (count_qm == 0); the fixed resolver delivers to the active QM. (Codex P1.)
+    """
+    org_id = await _default_org_id()
+    # Clear any leaked Top Management holders, then seed exactly one INACTIVE Top Management member.
+    async with get_sessionmaker()() as s:
+        tm_role = (
+            await s.execute(
+                select(Role).where(Role.org_id == org_id, Role.name == "Top Management")
+            )
+        ).scalar_one_or_none()
+        if tm_role is not None:
+            await s.execute(delete(RoleAssignment).where(RoleAssignment.role_id == tm_role.id))
+            await s.commit()
+
+    inactive_tm_id = await _seed_user(
+        org_id, display_name="Inactive Top Mgmt", email="inactive-tm@example.com"
+    )
+    await _assign_role(org_id, inactive_tm_id, "Top Management")
+    async with get_sessionmaker()() as s:
+        tm = await s.get(AppUser, inactive_tm_id)
+        assert tm is not None
+        tm.status = UserStatus.LOCKED
+        await s.commit()
+
+    qm_id = await _seed_user(
+        org_id, display_name="QM Floor InactiveTM", email="qm-floor@example.com"
+    )
+    await _assign_role(org_id, qm_id, "QMS Owner")
+    assignee_id = await _seed_user(org_id, display_name="Escalate2 InactiveTM Assignee")
+    try:
+        now = datetime.datetime(2026, 6, 26, 10, 0, 0, tzinfo=datetime.UTC)  # Friday — +3bd passed
+        _, task = await _seed_workflow_objects(
+            org_id,
+            assignee_id,
+            due_at=_BASE - datetime.timedelta(days=2),
+            task_type=TaskType.APPROVE,
+            task_state=TaskState.PENDING,
+            remind_1_sent_at=_STAMPED,
+            remind_2_sent_at=_STAMPED,
+            overdue_notified_at=_STAMPED,
+            escalated_1_at=_STAMPED,
+        )
+
+        await sweep_task_timers(get_sessionmaker(), now)
+
+        # The inactive Top Management member must NOT receive it.
+        count_tm = await _count_notifications(inactive_tm_id, task.id, EVENT_TASK_ESCALATED_FINAL)
+        assert count_tm == 0, (
+            f"inactive Top Management member must not receive task.escalated_final (got {count_tm})"
+        )
+        # The active QMS Owner floor MUST receive it (the fix: fall through on no valid TM).
+        count_qm = await _count_notifications(qm_id, task.id, EVENT_TASK_ESCALATED_FINAL)
+        assert count_qm == 1, (
+            f"QMS Owner floor must receive task.escalated_final when Top Management is all-inactive"
+            f" (got {count_qm})"
+        )
+
+        async with get_sessionmaker()() as s:
+            task_fresh = await s.get(Task, task.id)
+            assert task_fresh is not None
+            assert task_fresh.escalated_2_at is not None, "escalated_2_at must be stamped"
+
+        async with get_sessionmaker()() as s:
+            rows = (
+                (
+                    await s.execute(
+                        select(AuditEvent).where(
+                            AuditEvent.org_id == org_id,
+                            AuditEvent.event_type == EventType.TASK_ESCALATED,
+                            AuditEvent.scope_ref == str(task.id),
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        tier2 = [e for e in rows if (e.after or {}).get("tier") == 2]
+        assert len(tier2) == 1
+        assert tier2[0].after.get("via") == "qm_fallback"
+    finally:
+        async with get_sessionmaker()() as s:
+            await s.execute(delete(RoleAssignment).where(RoleAssignment.user_id == inactive_tm_id))
+            await s.commit()

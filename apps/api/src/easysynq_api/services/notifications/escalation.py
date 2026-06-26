@@ -31,6 +31,7 @@ from .constants import (
     EVENT_TASK_DUE_FINAL,
     EVENT_TASK_DUE_SOON,
     EVENT_TASK_ESCALATED,
+    EVENT_TASK_ESCALATED_FINAL,
     EVENT_TASK_OVERDUE,
 )
 from .dispatch import EnqueueOutcome, _enqueue_one
@@ -39,12 +40,14 @@ from .subjects import resolve_subject
 from .timer import Calendar, TimerPolicy, TimerStamps, TimerStep, due_steps
 
 _QM_ROLE = "QMS Owner"
+_TOP_MGMT_ROLE = "Top Management"  # the seeded second-tier leadership role (0038, resolved by name)
 _OPEN = ("PENDING", "CLAIMED")
 _STAMP_COL: dict[TimerStep, str] = {
     TimerStep.REMIND_1: "remind_1_sent_at",
     TimerStep.REMIND_2: "remind_2_sent_at",
     TimerStep.OVERDUE: "overdue_notified_at",
     TimerStep.ESCALATE_1: "escalated_1_at",
+    TimerStep.ESCALATE_2: "escalated_2_at",
 }
 # Mirror recipients.py: a deactivated user must never be a notification recipient.
 _INACTIVE = {UserStatus.LOCKED, UserStatus.DISABLED, UserStatus.RETIRED}
@@ -81,6 +84,29 @@ async def resolve_escalation_recipients(session: AsyncSession, task: Task) -> li
             # Manager is inactive, cross-org, or self-manager → fall through to QM fallback.
     # No manager (or pool-only task, or inactive/cross-org manager) → QM fallback (org-scoped).
     return await users_with_roles(session, task.org_id, [_QM_ROLE])
+
+
+async def resolve_escalation_2_recipients(
+    session: AsyncSession, task: Task
+) -> tuple[list[uuid.UUID], str]:
+    """Return the tier-2 (final) escalation recipients + the audit ``via`` label.
+
+    Priority: the ``Top Management`` role-holders in the task's org (the seeded second-tier
+    leadership role, R39) — but only when at least one is a VALID recipient (exists + active +
+    same-org); otherwise the ``QMS Owner`` floor, so a tier-2 always reaches a real recipient.
+    Falling through on "no VALID Top Management recipient" (not merely "empty role") mirrors the
+    tier-1 manager→QM fallthrough on an inactive/cross-org manager and honors the spec's "always
+    delivers" intent: without it, an org whose Top Management holders are all inactive/cross-org
+    would have ``_recipient_for_user`` drop them all (``attempted == 0``), stamp ``escalated_2_at``
+    as a terminal no-op, and silently never escalate — even with an active QMS Owner (Codex P1).
+    Returns (ids, via) so the caller needs no second query; the dispatch loop re-filters each id via
+    ``_recipient_for_user``.
+    """
+    top = await users_with_roles(session, task.org_id, [_TOP_MGMT_ROLE])
+    for uid in top:
+        if await _recipient_for_user(session, uid, org_id=task.org_id) is not None:
+            return top, "top_management"
+    return await users_with_roles(session, task.org_id, [_QM_ROLE]), "qm_fallback"
 
 
 async def _recipient_for_user(
@@ -160,12 +186,15 @@ async def _due_task_ids(session: AsyncSession, now: datetime.datetime) -> list[u
     (seed ``escalate_1_after=None`` → ESCALATE_1 never fires). OVERDUE has no policy offset (it
     fires at ``due_at``), so it is gated on its stamp alone.
 
-    ⚠ The claim and ``due_steps`` are intentionally symmetric — a future tier (escalate_2) must
-    teach both together. ``remind_2`` is now LIVE (S-remind2 / migration 0068 set
+    ⚠ The claim and ``due_steps`` are intentionally symmetric — both must be taught together when
+    a new tier is added. ``remind_2`` is LIVE (S-remind2 / migration 0068 set
     ``remind_2_before`` non-NULL), so its policy-gated disjunct (``remind_2_before IS NOT NULL
-    AND remind_2_sent_at IS NULL``) is a real second-reminder claim, not a tautology — the
-    S-claim-filter seam re-activated it with no claim-code change. The DOC_ACK/PERIODIC_REVIEW
-    ``escalated_1_at`` tautology stays closed by the ``escalate_1_after IS NOT NULL`` gate.
+    AND remind_2_sent_at IS NULL``) is a real second-reminder claim. ``escalate_2`` is now LIVE
+    (S-escalate2 / migration 0069 set ``escalate_2_after`` non-NULL for escalate-enabled types),
+    so its policy-gated disjunct (``escalate_2_after IS NOT NULL AND escalated_2_at IS NULL``) is
+    a real tier-2 escalation claim — taught in both the claim and ``due_steps``. The
+    DOC_ACK/PERIODIC_REVIEW ``escalated_1_at`` tautology stays closed by the
+    ``escalate_1_after IS NOT NULL`` gate.
 
     This is the COARSE pre-filter only — the precise business-day thresholds stay
     ``due_steps``' job inside the locked per-task txn, so over-claiming (e.g. a pre-due OVERDUE
@@ -187,6 +216,7 @@ async def _due_task_ids(session: AsyncSession, now: datetime.datetime) -> list[u
                         | (SlaPolicy.remind_2_before.is_not(None) & Task.remind_2_sent_at.is_(None))
                         | Task.overdue_notified_at.is_(None)
                         | (SlaPolicy.escalate_1_after.is_not(None) & Task.escalated_1_at.is_(None))
+                        | (SlaPolicy.escalate_2_after.is_not(None) & Task.escalated_2_at.is_(None))
                     ),
                 )
             )
@@ -302,12 +332,14 @@ async def process_task_timers(
         remind_1_before=policy.remind_1_before,
         remind_2_before=policy.remind_2_before,
         escalate_1_after=policy.escalate_1_after,
+        escalate_2_after=policy.escalate_2_after,
     )
     stamps = TimerStamps(
         remind_1_sent_at=task.remind_1_sent_at,
         remind_2_sent_at=task.remind_2_sent_at,
         overdue_notified_at=task.overdue_notified_at,
         escalated_1_at=task.escalated_1_at,
+        escalated_2_at=task.escalated_2_at,
     )
 
     # Set the org tz as the context for the render calls inside emit_task_event → _fmt_date
@@ -353,7 +385,7 @@ async def process_task_timers(
                     )
                     if outcome in ("created", "deduped"):
                         exists = True
-            else:  # TimerStep.ESCALATE_1
+            elif step is TimerStep.ESCALATE_1:
                 recipient_ids = await resolve_escalation_recipients(session, task)
                 # Derive the audit `via` label from the actual recipients returned, not from
                 # whether manager_id is set — an inactive/cross-org/self-manager falls through to
@@ -423,6 +455,51 @@ async def process_task_timers(
                                 "escalated_to": [str(u) for u in created_ids],
                                 "via": via,
                                 "due_at": task.due_at.isoformat(),
+                                "tier": 1,
+                            },
+                        )
+                    )
+            else:  # TimerStep.ESCALATE_2
+                recipient_ids, via = await resolve_escalation_2_recipients(session, task)
+                created_ids = []
+                exists_ids = []
+                attempted = 0
+                for uid in recipient_ids:
+                    r_maybe = await _recipient_for_user(session, uid, org_id=task.org_id)
+                    if r_maybe is not None:
+                        attempted += 1
+                        outcome = await emit_task_event(
+                            session,
+                            instance=instance,
+                            task=task,
+                            recipient=r_maybe,
+                            event_key=EVENT_TASK_ESCALATED_FINAL,
+                            now=now,
+                        )
+                        if outcome == "created":
+                            created_ids.append(uid)
+                            exists_ids.append(uid)
+                        elif outcome == "deduped":
+                            exists_ids.append(uid)
+                exists = bool(exists_ids)
+                if created_ids:
+                    # One TASK_ESCALATED (tier 2) audit only on a genuinely-new escalation (R4-1).
+                    session.add(
+                        AuditEvent(
+                            org_id=task.org_id,
+                            occurred_at=now,
+                            actor_id=None,
+                            actor_type=ActorType.system,
+                            event_type=EventType.TASK_ESCALATED,
+                            object_type=AuditObjectType.workflow_instance,
+                            object_id=instance.id,
+                            scope_ref=str(task.id),
+                            after={
+                                "task_id": str(task.id),
+                                "escalated_to": [str(u) for u in created_ids],
+                                "via": via,
+                                "due_at": task.due_at.isoformat(),
+                                "tier": 2,
                             },
                         )
                     )

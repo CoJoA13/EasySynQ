@@ -23,6 +23,12 @@ POLICY = TimerPolicy(
     escalate_1_after=timedelta(days=1),
 )
 NONE = TimerStamps(None, None, None, None)
+POLICY_E2 = TimerPolicy(
+    remind_1_before=timedelta(days=3),
+    remind_2_before=timedelta(days=1),
+    escalate_1_after=timedelta(days=1),
+    escalate_2_after=timedelta(days=3),
+)
 
 MON_FRI = Calendar(
     working_weekdays=frozenset({1, 2, 3, 4, 5}), holidays=frozenset(), tz=zoneinfo.ZoneInfo("UTC")
@@ -312,3 +318,61 @@ def test_overdue_suppressed_on_non_working_day():
     # Monday now → working day → OVERDUE fires.
     mon = datetime.datetime(2026, 6, 29, 9, 0, tzinfo=datetime.UTC)
     assert TimerStep.OVERDUE in due_steps(policy, due, stamps, mon, monfri)
+
+
+# ---------------------------------------------------------------------------
+# ESCALATE_2 tests (S-escalate2).
+# ---------------------------------------------------------------------------
+
+
+def test_past_escalate2_fires_all_five_in_order():
+    # ALL_DAYS → business-day math degenerates to raw; +3d is the escalate_2 threshold.
+    assert due_steps(POLICY_E2, DUE, NONE, _at(days=4), ALL_DAYS) == [
+        TimerStep.REMIND_1,
+        TimerStep.REMIND_2,
+        TimerStep.OVERDUE,
+        TimerStep.ESCALATE_1,
+        TimerStep.ESCALATE_2,
+    ]
+
+
+def test_escalate2_not_yet_due_at_plus_two_days():
+    # At +2d (raw) the +3d escalate_2 threshold has not passed → no ESCALATE_2.
+    assert TimerStep.ESCALATE_2 not in due_steps(POLICY_E2, DUE, NONE, _at(days=2), ALL_DAYS)
+
+
+def test_escalate2_stamped_does_not_refire():
+    stamps = TimerStamps(
+        remind_1_sent_at=DUE,
+        remind_2_sent_at=DUE,
+        overdue_notified_at=DUE,
+        escalated_1_at=DUE,
+        escalated_2_at=DUE,
+    )
+    assert due_steps(POLICY_E2, DUE, stamps, _at(days=4), ALL_DAYS) == []
+
+
+def test_escalate2_null_offset_disables_the_step():
+    # escalate_2_after = None (default) → ESCALATE_2 never returned even well past due.
+    pol = TimerPolicy(
+        remind_1_before=timedelta(days=3),
+        remind_2_before=timedelta(days=1),
+        escalate_1_after=timedelta(days=1),
+    )
+    assert TimerStep.ESCALATE_2 not in due_steps(pol, DUE, NONE, _at(days=10), ALL_DAYS)
+
+
+def test_escalate2_business_day_threshold_mon_fri():
+    # DUE = Tue 2026-06-23 12:00 UTC. +3 business days (MON_FRI) = Fri 2026-06-26 12:00.
+    due_tue = datetime.datetime(2026, 6, 23, 12, 0, tzinfo=UTC)
+    just_before = datetime.datetime(2026, 6, 26, 11, 0, tzinfo=UTC)  # Fri, before threshold time
+    at_threshold = datetime.datetime(2026, 6, 26, 12, 0, tzinfo=UTC)  # Fri, at threshold
+    assert TimerStep.ESCALATE_2 not in due_steps(POLICY_E2, due_tue, NONE, just_before, MON_FRI)
+    assert TimerStep.ESCALATE_2 in due_steps(POLICY_E2, due_tue, NONE, at_threshold, MON_FRI)
+
+
+def test_escalate2_suppressed_on_non_working_now():
+    # now on a Saturday → now_is_working False → ESCALATE_2 (and every step) suppressed.
+    due_tue = datetime.datetime(2026, 6, 23, 12, 0, tzinfo=UTC)
+    sat = datetime.datetime(2026, 6, 27, 12, 0, tzinfo=UTC)  # Saturday, well past +3bd
+    assert due_steps(POLICY_E2, due_tue, NONE, sat, MON_FRI) == []

@@ -40,6 +40,7 @@ class SlaPolicy(Base):
     remind_1_before: Mapped[datetime.timedelta | None] = mapped_column(Interval, nullable=True)
     remind_2_before: Mapped[datetime.timedelta | None] = mapped_column(Interval, nullable=True)
     escalate_1_after: Mapped[datetime.timedelta | None] = mapped_column(Interval, nullable=True)
+    escalate_2_after: Mapped[datetime.timedelta | None] = mapped_column(Interval, nullable=True)
     active: Mapped[bool] = mapped_column(Boolean, server_default=true(), nullable=False)
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
