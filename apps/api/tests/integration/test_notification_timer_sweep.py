@@ -56,6 +56,7 @@ from easysynq_api.services.notifications.constants import (
     EVENT_TASK_OVERDUE,
 )
 from easysynq_api.services.notifications.escalation import (
+    _due_task_ids,
     emit_task_event,
     process_task_timers,
     resolve_working_calendar,
@@ -1517,3 +1518,116 @@ async def test_escalation_skips_weekend_business_day(app_under_test: Any) -> Non
             .all()
         )
         assert len(esc) == 1, "exactly one escalation notification to the manager on Monday"
+
+
+async def test_due_task_ids_excludes_fully_fired_escalate_enabled(app_under_test: Any) -> None:
+    """A fully-fired OPEN APPROVE task is NOT re-claimed (the headline remind_2 tautology).
+
+    APPROVE is escalate-enabled (seed escalate_1_after=1d). With remind_1 + overdue + escalate_1
+    all stamped, the ONLY NULL stamp is remind_2_sent_at — and remind_2_before is NULL in the
+    seed, so remind_2 is not a claimable step. The OLD 4-way claim (`remind_2_sent_at IS NULL`)
+    re-selected this task on every sweep forever; the policy-aware claim must drop it. (This case
+    = the spec's "fully-fired escalate-enabled" AND "remind_2-only-NULL" scenarios — they are the
+    same task shape: remind_2 is the sole tautology that would have claimed it.)
+    """
+    org_id = await _default_org_id()
+    assignee_id = await _seed_user(org_id, display_name="Claim Fully Fired APPROVE")
+    _, task = await _seed_workflow_objects(
+        org_id,
+        assignee_id,
+        due_at=_BASE - datetime.timedelta(days=2),  # well past due; OPEN (PENDING)
+        task_type=TaskType.APPROVE,
+        task_state=TaskState.PENDING,
+        remind_1_sent_at=_STAMPED,
+        overdue_notified_at=_STAMPED,
+        escalated_1_at=_STAMPED,
+        # remind_2_sent_at stays NULL — but remind_2_before is NULL → not a claimable step.
+    )
+
+    async with get_sessionmaker()() as s:
+        ids = await _due_task_ids(s, _BASE)
+
+    assert task.id not in ids, (
+        "fully-fired APPROVE task must NOT be re-claimed (remind_2 tautology closed)"
+    )
+
+
+async def test_due_task_ids_excludes_fully_fired_doc_ack(app_under_test: Any) -> None:
+    """A fully-fired OPEN DOC_ACK task is NOT re-claimed (remind_2 + escalate tautologies).
+
+    DOC_ACK is escalate-exempt (seed escalate_1_after=None) → ESCALATE_1 never fires, so
+    escalated_1_at stays NULL forever. Its only fireable steps are remind_1 + overdue; with both
+    stamped the task is fully fired. The OLD claim re-selected it via BOTH `remind_2_sent_at IS
+    NULL` AND `escalated_1_at IS NULL`; the policy-aware claim gates the escalate clause on
+    escalate_1_after IS NOT NULL (false for DOC_ACK) and drops the remind_2 clause unless
+    remind_2_before is configured → not claimed.
+    """
+    org_id = await _default_org_id()
+    assignee_id = await _seed_user(org_id, display_name="Claim Fully Fired DOC_ACK")
+    _, task = await _seed_workflow_objects(
+        org_id,
+        assignee_id,
+        due_at=_BASE - datetime.timedelta(days=2),  # well past due; OPEN (PENDING)
+        task_type=TaskType.DOC_ACK,
+        task_state=TaskState.PENDING,
+        remind_1_sent_at=_STAMPED,
+        overdue_notified_at=_STAMPED,
+        # escalated_1_at stays NULL (escalate never fires for DOC_ACK); remind_2_sent_at stays NULL.
+    )
+
+    async with get_sessionmaker()() as s:
+        ids = await _due_task_ids(s, _BASE)
+
+    assert task.id not in ids, (
+        "fully-fired DOC_ACK task must NOT be re-claimed (remind_2 + escalate tautologies closed)"
+    )
+
+
+async def test_due_task_ids_still_claims_pending_steps(app_under_test: Any) -> None:
+    """Over-tightening guard: a task with ANY configured, unstamped step IS still claimed.
+
+    Three positive controls on escalate-enabled APPROVE tasks (each isolates one claim reason).
+    These pass on BOTH the old and new query — they prove the policy-aware predicate did not drop
+    a task that genuinely has a fireable step.
+    """
+    org_id = await _default_org_id()
+    assignee_id = await _seed_user(org_id, display_name="Claim Pending Steps")
+    past_due = _BASE - datetime.timedelta(days=2)
+
+    # (a) pending remind_1: only remind_1_sent_at is NULL (remind_1_before=3d → claimable).
+    _, task_remind = await _seed_workflow_objects(
+        org_id,
+        assignee_id,
+        due_at=past_due,
+        task_type=TaskType.APPROVE,
+        task_state=TaskState.PENDING,
+        overdue_notified_at=_STAMPED,
+        escalated_1_at=_STAMPED,
+    )
+    # (b) pending overdue: only overdue_notified_at is NULL (always-on step → claimable).
+    _, task_overdue = await _seed_workflow_objects(
+        org_id,
+        assignee_id,
+        due_at=past_due,
+        task_type=TaskType.APPROVE,
+        task_state=TaskState.PENDING,
+        remind_1_sent_at=_STAMPED,
+        escalated_1_at=_STAMPED,
+    )
+    # (c) pending escalate: only escalated_1_at is NULL (APPROVE escalate_1_after=1d → claimable).
+    _, task_escalate = await _seed_workflow_objects(
+        org_id,
+        assignee_id,
+        due_at=past_due,
+        task_type=TaskType.APPROVE,
+        task_state=TaskState.PENDING,
+        remind_1_sent_at=_STAMPED,
+        overdue_notified_at=_STAMPED,
+    )
+
+    async with get_sessionmaker()() as s:
+        ids = await _due_task_ids(s, _BASE)
+
+    assert task_remind.id in ids, "pending remind_1 task must still be claimed"
+    assert task_overdue.id in ids, "pending overdue task must still be claimed"
+    assert task_escalate.id in ids, "pending escalate task must still be claimed"
