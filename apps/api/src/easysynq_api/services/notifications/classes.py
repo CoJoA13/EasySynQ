@@ -42,6 +42,7 @@ _EVENT_CLASS: dict[str, NotificationClass] = {
     # critical (pierce set)
     "task.overdue": NotificationClass.CRITICAL,
     "task.escalated": NotificationClass.CRITICAL,
+    "task.escalated_final": NotificationClass.CRITICAL,
     "capa.overdue": NotificationClass.CRITICAL,
     "integrity.alarm": NotificationClass.CRITICAL,
     # admin_ops
