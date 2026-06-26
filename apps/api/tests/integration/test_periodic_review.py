@@ -1422,3 +1422,115 @@ async def test_document_serializer_carries_review_fields(
     assert row.get("next_review_due") == yesterday.isoformat()
     assert row.get("review_state") == "overdue"
     assert row.get("last_reviewed_at") is None  # never confirmed — all four fields on the list row
+
+
+@pytest.mark.integration
+async def test_sweep_review_notification_date_in_calendar_tz(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    subj: SimpleNamespace,
+    app_under_test: object,
+) -> None:
+    """S-orgtz-unify: sweep_reviews notification body renders due date in the working_calendar tz.
+
+    Under Asia/Tokyo (UTC+9), a snapped midnight Monday in Tokyo (00:00+09:00) is 15:00 UTC the
+    previous Sunday. With the using_org_tz(cal.tz) wrap in sweep_reviews, _fmt_date converts the
+    aware instant to Tokyo before .date() and shows the Monday date. Without the wrap,
+    current_org_tz() falls back to UTC → shows the Sunday date (the UTC previous day).
+
+    Mutation-distinguishing: assertion fails when the using_org_tz wrap is removed.
+    """
+    import zoneinfo
+
+    from sqlalchemy import update
+
+    from easysynq_api.db.models._workflow_enums import WorkflowSubjectType
+    from easysynq_api.db.models.notification import Notification
+    from easysynq_api.db.models.working_calendar import WorkingCalendar
+    from easysynq_api.services.vault.review import sweep_reviews
+
+    await s5.grant_lifecycle(subj.a)
+    await s5.grant_lifecycle(subj.b)
+    await s5.set_approver_release(await s5.default_org_id(), True)
+    ha = _auth(token_factory, subj.a)
+    hb = _auth(token_factory, subj.b)
+    type_id = await s5.type_id("SOP")
+    content = f"orgtz-sweep-notif-{subj.a}".encode()
+    did, _ = await _release_doc(app_client, ha, hb, type_id, content)
+    doc_uuid = uuid.UUID(did)
+
+    # Pick the next Monday at least 1 day away, computed in Tokyo time (UTC+9, no DST).
+    # Tokyo midnight Monday (00:00+09:00) = UTC Sunday 15:00 — the off-by-one day the fix closes.
+    tokyo = zoneinfo.ZoneInfo("Asia/Tokyo")
+    today_tok = datetime.datetime.now(tokyo).date()
+    days_to_mon = (7 - today_tok.isoweekday()) % 7 or 7  # 1..7; 7 if today IS Monday
+    mon = today_tok + datetime.timedelta(days=days_to_mon)
+    # With the fix: body shows the Tokyo date (Monday).
+    expected_date_str = mon.isoformat()
+    # Without the fix: body would show the UTC previous day (Sunday).
+    wrong_date_str = (mon - datetime.timedelta(days=1)).isoformat()
+
+    # Read the org_id and original calendar tz (restore in finally — REVOKE DELETE).
+    async with get_sessionmaker()() as s:
+        cal_row = (
+            await s.execute(
+                select(WorkingCalendar.org_id, WorkingCalendar.timezone).where(
+                    WorkingCalendar.is_default.is_(True)
+                )
+            )
+        ).one()
+        org_id = cal_row[0]
+        original_tz = cal_row[1]
+
+    try:
+        # Set calendar tz to Asia/Tokyo and aim the doc's next_review_due at the Monday we chose.
+        async with get_sessionmaker()() as s:
+            await s.execute(
+                update(WorkingCalendar)
+                .where(WorkingCalendar.org_id == org_id, WorkingCalendar.is_default.is_(True))
+                .values(timezone="Asia/Tokyo")
+            )
+            await s.execute(
+                text("UPDATE documented_information SET next_review_due = :d WHERE id = :id"),
+                {"d": mon, "id": doc_uuid},
+            )
+            await s.commit()
+
+        async with get_sessionmaker()() as session:
+            result = await sweep_reviews(session)
+        assert result["tasks_created"] >= 1
+
+        # The minted task.assigned notification body must contain the Tokyo-local date.
+        async with get_sessionmaker()() as s:
+            notif = (
+                (
+                    await s.execute(
+                        select(Notification).where(
+                            Notification.event_key == "task.assigned",
+                            Notification.subject_type == WorkflowSubjectType.PERIODIC_REVIEW.value,
+                            Notification.subject_id == doc_uuid,
+                        )
+                    )
+                )
+                .scalars()
+                .first()
+            )
+        assert notif is not None, "no task.assigned notification minted for PERIODIC_REVIEW"
+        # With fix: body contains the Tokyo date, e.g. "…(due 2026-06-29)".
+        assert expected_date_str in notif.body, (
+            f"expected Tokyo date {expected_date_str!r} in body {notif.body!r}"
+        )
+        # Mutation-distinguishing: the UTC-previous-day date must NOT appear instead.
+        assert wrong_date_str not in notif.body, (
+            f"body shows UTC-previous-day {wrong_date_str!r} — "
+            "using_org_tz wrap missing in sweep_reviews"
+        )
+    finally:
+        # Restore calendar tz (working_calendar has REVOKE DELETE — UPDATE-restore, never delete).
+        async with get_sessionmaker()() as s:
+            await s.execute(
+                update(WorkingCalendar)
+                .where(WorkingCalendar.org_id == org_id, WorkingCalendar.is_default.is_(True))
+                .values(timezone=original_tz)
+            )
+            await s.commit()

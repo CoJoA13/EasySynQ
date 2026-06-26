@@ -29,7 +29,7 @@ from ...db.models.signature_event import SignatureEvent as SignatureEventRow
 from ...db.models.workflow import Task, WorkflowInstance
 from ...logging import request_id_var
 from ...problems import ProblemException
-from ..common.org_clock import current_org_tz, resolve_default_org_tz
+from ..common.org_clock import current_org_tz, resolve_default_org_tz, using_org_tz
 from ..common.pg_locks import LOCK_REVIEW_SWEEP, pg_advisory_lock
 from ..workflow import engine as wf_engine
 from ..workflow import repository as wf_repo
@@ -199,9 +199,10 @@ async def sweep_reviews(session: AsyncSession) -> dict[str, int]:
             )
             from ..notifications.dispatch import enqueue_task_notifications
 
-            await enqueue_task_notifications(
-                session, instance, list(review_tasks), due_at_override=due_at
-            )
+            with using_org_tz(cal.tz):
+                await enqueue_task_notifications(
+                    session, instance, list(review_tasks), due_at_override=due_at
+                )
             created += 1
 
         overdue_rows = (

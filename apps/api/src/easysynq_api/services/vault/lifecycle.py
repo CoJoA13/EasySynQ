@@ -38,7 +38,7 @@ from ...domain.vault import Action, IllegalTransition, allowed_actions, apply_tr
 from ...logging import request_id_var
 from ...problems import ProblemException
 from ..ack.sink import get_ack_enqueue_sink
-from ..common.org_clock import current_org_tz
+from ..common.org_clock import resolve_org_tz
 from . import locks, repository
 from .audit import VaultAuditEvent, VaultAuditSink, get_vault_audit_sink
 from .mirror_sink import get_mirror_enqueue_sink
@@ -541,7 +541,10 @@ async def _cutover(
     if actor is not None:
         doc.updated_by = actor.id
     doc.next_review_due = compute_next_review_due(
-        doc.review_period_months, doc.last_reviewed_at, eff_from, current_org_tz()
+        doc.review_period_months,
+        doc.last_reviewed_at,
+        eff_from,
+        await resolve_org_tz(session, doc.org_id),
     )
 
     # T6: append the release signature + the RELEASED/SUPERSEDED audit rows INSIDE the cutover txn

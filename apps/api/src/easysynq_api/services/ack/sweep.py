@@ -28,6 +28,7 @@ from ...db.models.audit_event import AuditEvent
 from ...db.models.documented_information import DocumentedInformation
 from ...db.models.workflow import Task, WorkflowInstance
 from ...domain.ack.rules import plan_obligations
+from ..common.org_clock import resolve_org_tz, using_org_tz
 from ..common.pg_locks import LOCK_ACK_SWEEP, pg_advisory_lock
 from ..workflow import engine as wf_engine
 from ..workflow import repository as wf_repo
@@ -209,6 +210,7 @@ async def sweep_acks(
             from ..notifications.duedate import snap_due_at
 
             snapped_due_at = await snap_due_at(session, doc.org_id, due_at)
+            org_tz = await resolve_org_tz(session, doc.org_id)
             for user_id in to_mint:
                 instance = await wf_engine.instantiate(
                     session,
@@ -238,9 +240,10 @@ async def sweep_acks(
                 )
                 from ..notifications.dispatch import enqueue_task_notifications
 
-                await enqueue_task_notifications(
-                    session, instance, list(ack_tasks), due_at_override=snapped_due_at
-                )
+                with using_org_tz(org_tz):
+                    await enqueue_task_notifications(
+                        session, instance, list(ack_tasks), due_at_override=snapped_due_at
+                    )
                 created += 1
 
         # Pass B: open DOC_ACK obligations on docs that are no longer eligible.

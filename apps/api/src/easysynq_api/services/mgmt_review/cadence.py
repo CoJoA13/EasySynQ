@@ -44,7 +44,7 @@ from ...db.models.management_review import ManagementReview
 from ...db.models.organization import Organization
 from ...db.models.system_config import SystemConfig
 from ...db.models.workflow import Task, WorkflowInstance
-from ..common.org_clock import resolve_org_tz
+from ..common.org_clock import resolve_org_tz, using_org_tz
 from ..common.pg_locks import LOCK_MGMT_REVIEW_SWEEP, pg_advisory_lock
 from ..notifications.duedate import resolve_calendar, snap_to_working_day
 from ..vault import get_vault_audit_sink
@@ -296,7 +296,8 @@ async def sweep_mgmt_reviews(session: AsyncSession) -> dict[str, int]:
         await session.flush()
         from ..notifications.dispatch import enqueue_task_notifications
 
-        await enqueue_task_notifications(session, instance, [task])
+        with using_org_tz(cal.tz):
+            await enqueue_task_notifications(session, instance, [task])
         await session.commit()
         logger.info(
             "mgmt_review_sweep: minted Management Review %s (%s) for owner %s",
