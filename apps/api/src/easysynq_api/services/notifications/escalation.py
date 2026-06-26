@@ -91,14 +91,21 @@ async def resolve_escalation_2_recipients(
 ) -> tuple[list[uuid.UUID], str]:
     """Return the tier-2 (final) escalation recipients + the audit ``via`` label.
 
-    Priority: all ``Top Management`` role-holders in the task's org (the seeded second-tier
-    leadership role, R39) → else the ``QMS Owner`` fallback floor, so a tier-2 always has a target.
-    Returns (ids, via) so the caller needs no second query; each id is re-filtered for
-    existence/active/same-org at emit time by ``_recipient_for_user``.
+    Priority: the ``Top Management`` role-holders in the task's org (the seeded second-tier
+    leadership role, R39) — but only when at least one is a VALID recipient (exists + active +
+    same-org); otherwise the ``QMS Owner`` floor, so a tier-2 always reaches a real recipient.
+    Falling through on "no VALID Top Management recipient" (not merely "empty role") mirrors the
+    tier-1 manager→QM fallthrough on an inactive/cross-org manager and honors the spec's "always
+    delivers" intent: without it, an org whose Top Management holders are all inactive/cross-org
+    would have ``_recipient_for_user`` drop them all (``attempted == 0``), stamp ``escalated_2_at``
+    as a terminal no-op, and silently never escalate — even with an active QMS Owner (Codex P1).
+    Returns (ids, via) so the caller needs no second query; the dispatch loop re-filters each id via
+    ``_recipient_for_user``.
     """
     top = await users_with_roles(session, task.org_id, [_TOP_MGMT_ROLE])
-    if top:
-        return top, "top_management"
+    for uid in top:
+        if await _recipient_for_user(session, uid, org_id=task.org_id) is not None:
+            return top, "top_management"
     return await users_with_roles(session, task.org_id, [_QM_ROLE]), "qm_fallback"
 
 

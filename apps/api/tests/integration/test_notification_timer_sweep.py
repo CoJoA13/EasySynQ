@@ -1852,3 +1852,97 @@ async def test_escalate_2_qm_fallback(app_under_test: Any) -> None:
     tier2 = [e for e in rows if (e.after or {}).get("tier") == 2]
     assert len(tier2) == 1
     assert tier2[0].after.get("via") == "qm_fallback"
+
+
+async def test_escalate_2_falls_to_qm_when_top_management_inactive(app_under_test: Any) -> None:
+    """Tier-2 falls to the QMS Owner floor when Top Management has members but NONE are valid.
+
+    If the Top Management role holds only inactive/cross-org users, ``users_with_roles`` still
+    returns their ids; the resolver must fall through to the QM floor (mirroring tier-1's
+    invalid-manager→QM fallthrough and the spec's "always delivers" intent) rather than return the
+    invalid holders — which would make the dispatch loop drop them all (attempted == 0) and stamp
+    escalated_2_at as a terminal no-op, silently never escalating even with an active QMS Owner.
+    Mutation-distinguishing: on the pre-fix ``if top:`` resolver the QM is never consulted
+    (count_qm == 0); the fixed resolver delivers to the active QM. (Codex P1.)
+    """
+    org_id = await _default_org_id()
+    # Clear any leaked Top Management holders, then seed exactly one INACTIVE Top Management member.
+    async with get_sessionmaker()() as s:
+        tm_role = (
+            await s.execute(
+                select(Role).where(Role.org_id == org_id, Role.name == "Top Management")
+            )
+        ).scalar_one_or_none()
+        if tm_role is not None:
+            await s.execute(delete(RoleAssignment).where(RoleAssignment.role_id == tm_role.id))
+            await s.commit()
+
+    inactive_tm_id = await _seed_user(
+        org_id, display_name="Inactive Top Mgmt", email="inactive-tm@example.com"
+    )
+    await _assign_role(org_id, inactive_tm_id, "Top Management")
+    async with get_sessionmaker()() as s:
+        tm = await s.get(AppUser, inactive_tm_id)
+        assert tm is not None
+        tm.status = UserStatus.LOCKED
+        await s.commit()
+
+    qm_id = await _seed_user(
+        org_id, display_name="QM Floor InactiveTM", email="qm-floor@example.com"
+    )
+    await _assign_role(org_id, qm_id, "QMS Owner")
+    assignee_id = await _seed_user(org_id, display_name="Escalate2 InactiveTM Assignee")
+    try:
+        now = datetime.datetime(2026, 6, 26, 10, 0, 0, tzinfo=datetime.UTC)  # Friday — +3bd passed
+        _, task = await _seed_workflow_objects(
+            org_id,
+            assignee_id,
+            due_at=_BASE - datetime.timedelta(days=2),
+            task_type=TaskType.APPROVE,
+            task_state=TaskState.PENDING,
+            remind_1_sent_at=_STAMPED,
+            remind_2_sent_at=_STAMPED,
+            overdue_notified_at=_STAMPED,
+            escalated_1_at=_STAMPED,
+        )
+
+        await sweep_task_timers(get_sessionmaker(), now)
+
+        # The inactive Top Management member must NOT receive it.
+        count_tm = await _count_notifications(inactive_tm_id, task.id, EVENT_TASK_ESCALATED_FINAL)
+        assert count_tm == 0, (
+            f"inactive Top Management member must not receive task.escalated_final (got {count_tm})"
+        )
+        # The active QMS Owner floor MUST receive it (the fix: fall through on no valid TM).
+        count_qm = await _count_notifications(qm_id, task.id, EVENT_TASK_ESCALATED_FINAL)
+        assert count_qm == 1, (
+            f"QMS Owner floor must receive task.escalated_final when Top Management is all-inactive"
+            f" (got {count_qm})"
+        )
+
+        async with get_sessionmaker()() as s:
+            task_fresh = await s.get(Task, task.id)
+            assert task_fresh is not None
+            assert task_fresh.escalated_2_at is not None, "escalated_2_at must be stamped"
+
+        async with get_sessionmaker()() as s:
+            rows = (
+                (
+                    await s.execute(
+                        select(AuditEvent).where(
+                            AuditEvent.org_id == org_id,
+                            AuditEvent.event_type == EventType.TASK_ESCALATED,
+                            AuditEvent.scope_ref == str(task.id),
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        tier2 = [e for e in rows if (e.after or {}).get("tier") == 2]
+        assert len(tier2) == 1
+        assert tier2[0].after.get("via") == "qm_fallback"
+    finally:
+        async with get_sessionmaker()() as s:
+            await s.execute(delete(RoleAssignment).where(RoleAssignment.user_id == inactive_tm_id))
+            await s.commit()
