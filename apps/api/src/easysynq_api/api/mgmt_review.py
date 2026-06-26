@@ -45,6 +45,7 @@ from ..services.authz import (
     require,
 )
 from ..services.authz.repository import gather_sod_constraints, get_allow_approver_release
+from ..services.common.org_clock import resolve_org_tz
 from ..services.mgmt_review import (
     add_output,
     build_minutes_pdf,
@@ -343,7 +344,7 @@ async def next_due_endpoint(
 ) -> dict[str, Any]:
     # The cadence read backing the Home "next review in N days" widget. mgmtReview.read-gated.
     # Declared BEFORE /{review_id} so the literal isn't shadowed by the str-convertor (S-pack-2).
-    cad = await read_cadence(session, caller.org_id)
+    cad = await read_cadence(session, caller.org_id, await resolve_org_tz(session, caller.org_id))
     if cad is None:  # pragma: no cover — system_config is seeded at setup; never 500 a dashboard
         return {
             "cadence_months": 12,

@@ -29,7 +29,7 @@ from ...db.models.signature_event import SignatureEvent as SignatureEventRow
 from ...db.models.workflow import Task, WorkflowInstance
 from ...logging import request_id_var
 from ...problems import ProblemException
-from ..common.org_clock import current_org_tz
+from ..common.org_clock import current_org_tz, resolve_default_org_tz
 from ..common.pg_locks import LOCK_REVIEW_SWEEP, pg_advisory_lock
 from ..workflow import engine as wf_engine
 from ..workflow import repository as wf_repo
@@ -124,7 +124,7 @@ async def sweep_reviews(session: AsyncSession) -> dict[str, int]:
             logger.info("review_sweep: another sweep holds the lock; skipping this tick")
             return {"tasks_created": 0, "escalated": 0, "skipped_lock_held": 1}
 
-        today = today_org()
+        today = datetime.datetime.now(await resolve_default_org_tz(session)).date()
         horizon = today + datetime.timedelta(days=REVIEW_LEAD_DAYS)
         created = escalated = 0
 

@@ -15,7 +15,7 @@ when the org's cadence horizon is reached (mirrors the S-drift-1 ``sweep_reviews
      the MR we'd mint is the Draft doc itself — it does not exist yet, so a per-SUBJECT
      ``find_nonterminal_instance`` is impossible; org-scoped ``open_review_exists`` is the guard).
   6. Anchor on the last RELEASED MR's ``effective_from`` → ``next_mr_due``. No prior released MR →
-     mint the first one now. Else mint iff ``next_due <= today_org()``.
+     mint the first one now. Else mint iff ``next_due <= datetime.datetime.now(org_tz).date()``.
   7. Mint: ``create_review`` under the configured owner (it commits the base doc internally — the
      sweep is a TWO-commit shape; the ``open_review_exists`` check before create is the idempotency
      guard), then a fresh ``MGMT_REVIEW`` instance + ONE ``MR_INPUT`` task on the prepare stage (the
@@ -29,6 +29,7 @@ import dataclasses
 import datetime
 import logging
 import uuid
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -43,13 +44,15 @@ from ...db.models.management_review import ManagementReview
 from ...db.models.organization import Organization
 from ...db.models.system_config import SystemConfig
 from ...db.models.workflow import Task, WorkflowInstance
+from ..common.org_clock import resolve_org_tz
 from ..common.pg_locks import LOCK_MGMT_REVIEW_SWEEP, pg_advisory_lock
 from ..notifications.duedate import resolve_calendar, snap_to_working_day
 from ..vault import get_vault_audit_sink
 
-# Re-use the calendar-clamp + org-tz helpers from the S-drift-1 review module (do NOT re-derive the
-# month-add / org-tz logic — the engineering-patterns rule).
-from ..vault.review import _org_tz, add_months, today_org
+# Re-use the calendar month-add helper from the S-drift-1 review module (do NOT re-derive the
+# month-add logic — the engineering-patterns rule). org-tz is now resolved explicitly via
+# resolve_org_tz (S-orgtz-unify R56) rather than reading the env contextvar.
+from ..vault.review import add_months
 from ..workflow import repository as wf_repo
 from . import repository as repo
 from . import service
@@ -85,7 +88,9 @@ class CadenceStatus:
     next_review_due: datetime.date | None
 
 
-async def read_cadence(session: AsyncSession, org_id: uuid.UUID) -> CadenceStatus | None:
+async def read_cadence(
+    session: AsyncSession, org_id: uuid.UUID, org_tz: ZoneInfo
+) -> CadenceStatus | None:
     """The one cadence rule shared by the daily sweep AND the GET /management-reviews/next-due read
     (so the widget and the sweep can't desync). None when no system_config row exists for the org
     (seeded at setup → unreachable operationally; the caller degrades, never 500s)."""
@@ -94,7 +99,7 @@ async def read_cadence(session: AsyncSession, org_id: uuid.UUID) -> CadenceStatu
     ).scalar_one_or_none()
     if config is None:
         return None
-    anchor = await _last_released_effective_from(session, org_id)
+    anchor = await _last_released_effective_from(session, org_id, org_tz)
     return CadenceStatus(
         cadence_months=config.mgmt_review_cadence_months,
         owner_user_id=config.mgmt_review_owner_user_id,
@@ -126,7 +131,7 @@ async def _resolve_org_id(session: AsyncSession) -> uuid.UUID | None:
 
 
 async def _last_released_effective_from(
-    session: AsyncSession, org_id: uuid.UUID
+    session: AsyncSession, org_id: uuid.UUID, org_tz: ZoneInfo
 ) -> datetime.date | None:
     """The ``effective_from`` DATE (org-tz) of the most recently released Management Review — the
     cadence anchor. Reads the governing Effective version of the newest Effective MR document.
@@ -153,8 +158,8 @@ async def _last_released_effective_from(
     ).scalar_one_or_none()
     if row is None:
         return None
-    # effective_from is a tz-aware datetime; date it in the org timezone (R8: org-tz dates).
-    return row.astimezone(_org_tz()).date()
+    # effective_from is a tz-aware datetime; date it in the org timezone (R8: org-tz dates, R56).
+    return row.astimezone(org_tz).date()
 
 
 def _period_label(due: datetime.date) -> str:
@@ -176,7 +181,8 @@ async def sweep_mgmt_reviews(session: AsyncSession) -> dict[str, int]:
             logger.error("mgmt_review_sweep: no organization row — cannot sweep")
             return {**_ZERO_SUMMARY, "skipped_lock_held": 0}
 
-        cad = await read_cadence(session, org_id)
+        org_tz = await resolve_org_tz(session, org_id)
+        cad = await read_cadence(session, org_id, org_tz)
         if cad is None:  # pragma: no cover — system_config is seeded at setup
             logger.error("mgmt_review_sweep: no system_config row — cannot sweep")
             return {**_ZERO_SUMMARY, "skipped_lock_held": 0}
@@ -213,7 +219,7 @@ async def sweep_mgmt_reviews(session: AsyncSession) -> dict[str, int]:
         # No prior released MR (anchor None → due None) → mint the first one NOW. Else mint iff the
         # cadence horizon has arrived (<= today, org-tz; a small lead window is optional — v1 keeps
         # it simple).
-        today = today_org()
+        today = datetime.datetime.now(org_tz).date()
         if due is not None and due > today:
             logger.info(
                 "mgmt_review_sweep: next review not yet due (due %s > today %s) — skipping",
