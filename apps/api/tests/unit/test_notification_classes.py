@@ -10,6 +10,10 @@ def test_task_assigned_is_action_required():
     assert class_of("task.assigned") is NotificationClass.ACTION_REQUIRED
 
 
+def test_due_final_is_action_required():
+    assert class_of("task.due_final") is NotificationClass.ACTION_REQUIRED
+
+
 def test_overdue_is_critical():
     assert class_of("task.overdue") is NotificationClass.CRITICAL
     assert class_of("capa.overdue") is NotificationClass.CRITICAL

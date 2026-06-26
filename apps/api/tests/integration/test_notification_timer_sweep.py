@@ -3,8 +3,9 @@
 Integration tests against a real migrated PG16 via testcontainers.
 
 Design note: ``sla_policy`` is SELECT-only for the app role (migration 0065 REVOKE). Tests rely
-on the seeded policy for the default org: remind_1_before=3d, remind_2_before=None (one-reminder
-MVP), escalate_1_after=1d (except DOC_ACK/PERIODIC_REVIEW which have escalate_1_after=None).
+on the seeded policy for the default org: remind_1_before=3d, remind_2_before=1d (S-remind2 /
+migration 0068 — second reminder fires under the distinct key ``task.due_final``),
+escalate_1_after=1d (except DOC_ACK/PERIODIC_REVIEW which have escalate_1_after=None).
 Pre-stamp columns we don't want to fire in a given test.
 
 Scenarios:
@@ -51,6 +52,7 @@ from easysynq_api.db.session import get_sessionmaker
 from easysynq_api.services.common.org_clock import resolve_org_tz
 from easysynq_api.services.notifications.classes import NotificationClass, class_of
 from easysynq_api.services.notifications.constants import (
+    EVENT_TASK_DUE_FINAL,
     EVENT_TASK_DUE_SOON,
     EVENT_TASK_ESCALATED,
     EVENT_TASK_OVERDUE,
@@ -75,7 +77,8 @@ pytestmark = pytest.mark.integration
 #     at install (the roll_partitions Beat doesn't run in tests), and escalation writes a
 #     TASK_ESCALATED audit at occurred_at = now → that month's partition must exist.
 # 2026-06-24 is a Wednesday in the 2026-06 partition. 10:00 UTC avoids any quiet-window overlap.
-# Seeded SLA policy (migration 0065): remind_1_before=3d, remind_2_before=None, escalate_1_after=1d.
+# Seeded SLA policy (migrations 0065/0068): remind_1_before=3d, remind_2_before=1d,
+# escalate_1_after=1d (except DOC_ACK/PERIODIC_REVIEW: escalate_1_after=None).
 # ---------------------------------------------------------------------------
 _BASE = datetime.datetime(2026, 6, 24, 10, 0, 0, tzinfo=datetime.UTC)  # Wednesday, 10:00 UTC
 
@@ -237,9 +240,10 @@ async def _count_audit_events(org_id: uuid.UUID, event_type: EventType, scope_re
 async def test_remind_fires_once(app_under_test: Any) -> None:
     """remind_1 fires when now >= due_at - remind_1_before=3d; re-sweep is a no-op.
 
-    Seeded policy (one-reminder MVP): remind_1_before=3d, remind_2_before=None, escalate_1_after=1d.
+    Seeded policy: remind_1_before=3d, remind_2_before=1d, escalate_1_after=1d.
     Strategy: due_at = _BASE + 2d → remind_1 threshold = due_at - 3d = _BASE - 1d < _BASE → FIRES.
-    remind_2 is off (NULL remind_2_before) → no second reminder, no pre-stamp needed.
+    remind_2 (remind_2_before=1d) does NOT fire here: its threshold (due - 1bd, with
+    due = _BASE + 2d) is in the future at _BASE → no second reminder, no pre-stamp needed.
     overdue/escalate thresholds are in future → don't fire.
     Pre-stamp overdue/escalated to isolate remind_1.
     """
@@ -511,7 +515,7 @@ async def test_concurrency_escalate_once(app_under_test: Any) -> None:
 async def test_doc_ack_no_escalation(app_under_test: Any) -> None:
     """DOC_ACK tasks get reminders + overdue but NO manager escalation (escalate_1_after=None).
 
-    Seeded policy for DOC_ACK: remind_1_before=3d, remind_2_before=None, escalate_1_after=None.
+    Seeded policy for DOC_ACK: remind_1_before=3d, remind_2_before=1d, escalate_1_after=None.
     Strategy: due_at = now - 2d → past overdue AND past the would-be escalate threshold.
     Pre-stamp remind_1 / overdue; let only the escalate step be eligible — confirm it does NOT fire.
 
@@ -531,6 +535,7 @@ async def test_doc_ack_no_escalation(app_under_test: Any) -> None:
         due_at=due_at,
         task_type=TaskType.DOC_ACK,
         remind_1_sent_at=_STAMPED,  # pre-stamp remind to isolate the escalate check
+        remind_2_sent_at=_STAMPED,
         overdue_notified_at=_STAMPED,
     )
 
@@ -596,6 +601,7 @@ async def test_inactive_manager_falls_through_to_qm(app_under_test: Any) -> None
         assignee_id,
         due_at=due_at,
         remind_1_sent_at=_STAMPED,
+        remind_2_sent_at=_STAMPED,
         overdue_notified_at=_STAMPED,
     )
 
@@ -1521,14 +1527,11 @@ async def test_escalation_skips_weekend_business_day(app_under_test: Any) -> Non
 
 
 async def test_due_task_ids_excludes_fully_fired_escalate_enabled(app_under_test: Any) -> None:
-    """A fully-fired OPEN APPROVE task is NOT re-claimed (the headline remind_2 tautology).
+    """A fully-fired OPEN APPROVE task is NOT re-claimed (all configured steps stamped).
 
-    APPROVE is escalate-enabled (seed escalate_1_after=1d). With remind_1 + overdue + escalate_1
-    all stamped, the ONLY NULL stamp is remind_2_sent_at — and remind_2_before is NULL in the
-    seed, so remind_2 is not a claimable step. The OLD 4-way claim (`remind_2_sent_at IS NULL`)
-    re-selected this task on every sweep forever; the policy-aware claim must drop it. (This case
-    = the spec's "fully-fired escalate-enabled" AND "remind_2-only-NULL" scenarios — they are the
-    same task shape: remind_2 is the sole tautology that would have claimed it.)
+    Post-S-remind2 remind_2 is a real configured step (remind_2_before=1d), so a fully-fired task
+    stamps all four steps. This is now a plain fully-fired regression guard for the policy-aware
+    claim (the original remind_2 tautology no longer exists for APPROVE — remind_2 is real).
     """
     org_id = await _default_org_id()
     assignee_id = await _seed_user(org_id, display_name="Claim Fully Fired APPROVE")
@@ -1539,28 +1542,26 @@ async def test_due_task_ids_excludes_fully_fired_escalate_enabled(app_under_test
         task_type=TaskType.APPROVE,
         task_state=TaskState.PENDING,
         remind_1_sent_at=_STAMPED,
+        remind_2_sent_at=_STAMPED,
         overdue_notified_at=_STAMPED,
         escalated_1_at=_STAMPED,
-        # remind_2_sent_at stays NULL — but remind_2_before is NULL → not a claimable step.
     )
 
     async with get_sessionmaker()() as s:
         ids = await _due_task_ids(s, _BASE)
 
     assert task.id not in ids, (
-        "fully-fired APPROVE task must NOT be re-claimed (remind_2 tautology closed)"
+        "fully-fired APPROVE task must NOT be re-claimed (all four configured steps stamped)"
     )
 
 
 async def test_due_task_ids_excludes_fully_fired_doc_ack(app_under_test: Any) -> None:
-    """A fully-fired OPEN DOC_ACK task is NOT re-claimed (remind_2 + escalate tautologies).
+    """A fully-fired OPEN DOC_ACK task is NOT re-claimed (mutation-distinguishing via escalate).
 
-    DOC_ACK is escalate-exempt (seed escalate_1_after=None) → ESCALATE_1 never fires, so
-    escalated_1_at stays NULL forever. Its only fireable steps are remind_1 + overdue; with both
-    stamped the task is fully fired. The OLD claim re-selected it via BOTH `remind_2_sent_at IS
-    NULL` AND `escalated_1_at IS NULL`; the policy-aware claim gates the escalate clause on
-    escalate_1_after IS NOT NULL (false for DOC_ACK) and drops the remind_2 clause unless
-    remind_2_before is configured → not claimed.
+    DOC_ACK is escalate-exempt (escalate_1_after=None) → escalated_1_at stays NULL forever. With
+    remind_1 + remind_2 + overdue stamped, the new policy-aware claim gates the escalate clause on
+    escalate_1_after IS NOT NULL (false for DOC_ACK) → not claimed; the OLD 4-way claim re-selected
+    it via `escalated_1_at IS NULL` → this case remains RED-on-old / GREEN-on-new.
     """
     org_id = await _default_org_id()
     assignee_id = await _seed_user(org_id, display_name="Claim Fully Fired DOC_ACK")
@@ -1571,15 +1572,17 @@ async def test_due_task_ids_excludes_fully_fired_doc_ack(app_under_test: Any) ->
         task_type=TaskType.DOC_ACK,
         task_state=TaskState.PENDING,
         remind_1_sent_at=_STAMPED,
+        remind_2_sent_at=_STAMPED,
         overdue_notified_at=_STAMPED,
-        # escalated_1_at stays NULL (escalate never fires for DOC_ACK); remind_2_sent_at stays NULL.
+        # escalated_1_at stays NULL (escalate never fires for DOC_ACK — escalate_1_after=None).
     )
 
     async with get_sessionmaker()() as s:
         ids = await _due_task_ids(s, _BASE)
 
     assert task.id not in ids, (
-        "fully-fired DOC_ACK task must NOT be re-claimed (remind_2 + escalate tautologies closed)"
+        "fully-fired DOC_ACK task must NOT be re-claimed"
+        " (escalate tautology — escalate_1_after=None for DOC_ACK)"
     )
 
 
@@ -1596,7 +1599,7 @@ async def test_due_task_ids_still_claims_pending_steps(app_under_test: Any) -> N
     past_due = _BASE - datetime.timedelta(days=2)
 
     # (a) pending remind_1: remind_1_sent_at NULL → claimable
-    # (remind_2_sent_at also NULL but inert).
+    # (remind_2_sent_at also NULL — live disjunct post-S-remind2; named step is isolation target).
     _, task_remind = await _seed_workflow_objects(
         org_id,
         assignee_id,
@@ -1607,7 +1610,7 @@ async def test_due_task_ids_still_claims_pending_steps(app_under_test: Any) -> N
         escalated_1_at=_STAMPED,
     )
     # (b) pending overdue: overdue_notified_at NULL → claimable via always-on step
-    # (remind_2_sent_at also NULL but inert).
+    # (remind_2_sent_at also NULL — live disjunct post-S-remind2; named step is isolation target).
     _, task_overdue = await _seed_workflow_objects(
         org_id,
         assignee_id,
@@ -1618,7 +1621,7 @@ async def test_due_task_ids_still_claims_pending_steps(app_under_test: Any) -> N
         escalated_1_at=_STAMPED,
     )
     # (c) pending escalate: escalated_1_at NULL → claimable (APPROVE escalate_1_after=1d;
-    # remind_2_sent_at also NULL but inert).
+    # remind_2_sent_at also NULL — live disjunct post-S-remind2; named step is isolation target).
     _, task_escalate = await _seed_workflow_objects(
         org_id,
         assignee_id,
@@ -1648,3 +1651,41 @@ async def test_due_task_ids_still_claims_pending_steps(app_under_test: Any) -> N
     assert task_overdue.id in ids, "pending overdue task must still be claimed"
     assert task_escalate.id in ids, "pending escalate task must still be claimed"
     assert task_doc_ack.id in ids, "pending-overdue DOC_ACK must be claimed (policy join resolves)"
+
+
+async def test_remind_2_distinct_final_reminder(app_under_test: Any) -> None:
+    """REMIND_2 fires under a DISTINCT event key (task.due_final) → a real second reminder.
+
+    S-remind2: migration 0068 sets sla_policy.remind_2_before = 1 day. A task whose `now` is past
+    BOTH reminder thresholds (with overdue + escalate pre-stamped to isolate the reminders) produces
+    TWO distinct notifications — exactly one task.due_soon AND exactly one task.due_final — for the
+    assignee. Under the OLD shared-key path the second insert hit the (recipient,
+    task_id, event_key) dedup and delivered nothing (only one notification).
+    """
+    org_id = await _default_org_id()
+    assignee_id = await _seed_user(org_id, display_name="Remind2 Final Assignee")
+
+    # due_at = _BASE - 2d (Mon): remind_1 threshold (due-3bd) AND remind_2 threshold (due-1bd) are
+    # both <= _BASE. Pre-stamp overdue + escalate so ONLY the two reminders can fire.
+    _, task = await _seed_workflow_objects(
+        org_id,
+        assignee_id,
+        due_at=_BASE - datetime.timedelta(days=2),
+        task_type=TaskType.APPROVE,
+        task_state=TaskState.PENDING,
+        overdue_notified_at=_STAMPED,
+        escalated_1_at=_STAMPED,
+    )
+
+    await sweep_task_timers(get_sessionmaker(), _BASE)
+
+    due_soon = await _count_notifications(assignee_id, task.id, EVENT_TASK_DUE_SOON)
+    due_final = await _count_notifications(assignee_id, task.id, EVENT_TASK_DUE_FINAL)
+    assert due_soon == 1, f"expected exactly one task.due_soon, got {due_soon}"
+    assert due_final == 1, f"expected exactly one task.due_final, got {due_final}"
+
+    async with get_sessionmaker()() as s:
+        task_fresh = await s.get(Task, task.id)
+        assert task_fresh is not None
+        assert task_fresh.remind_1_sent_at is not None, "remind_1 must be stamped"
+        assert task_fresh.remind_2_sent_at is not None, "remind_2 must be stamped"
