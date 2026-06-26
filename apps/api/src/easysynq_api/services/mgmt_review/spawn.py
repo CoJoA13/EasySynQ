@@ -19,11 +19,9 @@ from __future__ import annotations
 
 import datetime
 from collections.abc import Sequence
-from zoneinfo import ZoneInfo
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ...config import get_settings
 from ...db.models._audit_enums import ActorType, AuditObjectType, EventType
 from ...db.models._mgmt_review_enums import ManagementReviewCloseState, ReviewOutputType
 from ...db.models._workflow_enums import TaskState, TaskType, WorkflowSubjectType
@@ -34,21 +32,22 @@ from ...db.models.management_review import ManagementReview
 from ...db.models.review_output import ReviewOutput
 from ...db.models.workflow import Task, WorkflowInstance
 from ...problems import ProblemException
+from ..notifications.duedate import Calendar, resolve_calendar, snap_to_working_day
 from ..workflow import repository as wf_repo
 
 _DEF_KEY = "management_review"
 _ACTION_STAGE_KEY = "action"
 
 
-def _action_due_at(due_date: datetime.date | None) -> datetime.datetime | None:
-    """Org-local midnight of the action's ``due_date`` (the review.py:180 recipe) — NOT now+hours.
-    A due_date is operator-set in org-tz dates (R8); anchoring on org-midnight keeps the due signal
-    consistent with the org-tz day boundary. None ``due_date`` → None ``due_at`` (acceptable: an
-    open-ended action is undated, never wall-clock-now)."""
+def _action_due_at(due_date: datetime.date | None, cal: Calendar) -> datetime.datetime | None:
+    """Midnight of the ``due_date`` in the working_calendar's tz (R55/D-5), snapped FORWARD to a
+    working day. A due_date is operator-set (R8); building + snapping in the calendar's tz keeps
+    the due on a business day in the timer's frame so OVERDUE never fires on a weekend.
+    None ``due_date`` → None ``due_at`` (an open-ended action is undated, never wall-clock-now)."""
     if due_date is None:
         return None
-    tz = ZoneInfo(get_settings().easysynq_org_timezone)
-    return datetime.datetime.combine(due_date, datetime.time(0, 0), tzinfo=tz)
+    raw = datetime.datetime.combine(due_date, datetime.time(0, 0), tzinfo=cal.tz)
+    return snap_to_working_day(raw, cal)
 
 
 async def spawn_mr_actions(
@@ -87,6 +86,7 @@ async def spawn_mr_actions(
     await session.flush()  # populate instance.id for each task's FK
 
     spawned: list[Task] = []
+    cal = await resolve_calendar(session, review.org_id)  # R55/D-5: one frame for all action dues
     for output in outputs:
         if output.output_type is not ReviewOutputType.ACTION or output.owner_user_id is None:
             continue
@@ -104,7 +104,7 @@ async def spawn_mr_actions(
             candidate_pool=[str(output.owner_user_id)],
             action_expected="complete",
             state=TaskState.PENDING,
-            due_at=_action_due_at(output.due_date),
+            due_at=_action_due_at(output.due_date, cal),
         )
         session.add(task)
         await session.flush()  # populate task.id for the spawned_task_id stamp

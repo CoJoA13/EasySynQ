@@ -18,6 +18,7 @@ from httpx import AsyncClient
 from sqlalchemy import select, text
 
 from easysynq_api.db.session import get_sessionmaker
+from easysynq_api.services.notifications.duedate import resolve_calendar, snap_to_working_day
 from easysynq_api.services.vault.review import REVIEW_PERIOD_DEFAULT_MONTHS, _org_tz, add_months
 
 from . import s5_helpers as s5
@@ -296,9 +297,16 @@ async def test_sweep_creates_one_task_idempotently(
         # The owner is the creator (subj.a was the author who created the doc).
         assert owner_row.keycloak_subject == subj.a
 
-        # due_at must be org-tz midnight on the horizon_date we set.
+        # due_at anchors on next_review_due, built at midnight in the working_calendar's tz and
+        # snapped FORWARD to a working day (R55/D-5). horizon_date = today+30 can be a weekend, so
+        # assert against the production-snapped value (NOT horizon_date itself — that was
+        # weekday-flaky once the snap landed). The stored next_review_due is unchanged.
         assert task.due_at is not None
-        assert task.due_at.date() == horizon_date
+        cal = await resolve_calendar(s, instance.org_id)
+        expected_due = snap_to_working_day(
+            datetime.datetime.combine(horizon_date, datetime.time(0, 0), tzinfo=cal.tz), cal
+        )
+        assert task.due_at == expected_due
 
     # Second sweep — still exactly ONE non-terminal instance (idempotency).
     async with get_sessionmaker()() as session:
@@ -316,6 +324,75 @@ async def test_sweep_creates_one_task_idempotently(
     assert len(rows) == 1, (
         f"expected exactly 1 non-terminal instance after 2 sweeps, got {len(rows)}"
     )
+
+
+async def test_sweep_snaps_weekend_review_due_to_working_day(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    subj: SimpleNamespace,
+    app_under_test: object,
+) -> None:
+    """R55/D-5: a PERIODIC_REVIEW whose next_review_due lands on a weekend mints a task whose due_at
+    is SNAPPED forward to a working day (built in the working_calendar's tz), while the STORED
+    next_review_due is UNCHANGED (D-3). Mutation-distinguishing via is_working_day on the resolved
+    calendar (pre-slice the raw weekend instant is stored)."""
+    from easysynq_api.db.models._workflow_enums import TaskState, WorkflowSubjectType
+    from easysynq_api.db.models.documented_information import DocumentedInformation
+    from easysynq_api.db.models.workflow import Task, WorkflowInstance
+    from easysynq_api.services.notifications.timer import is_working_day
+    from easysynq_api.services.vault.review import sweep_reviews
+
+    await s5.grant_lifecycle(subj.a)
+    await s5.grant_lifecycle(subj.b)
+    await s5.set_approver_release(await s5.default_org_id(), True)
+    ha = _auth(token_factory, subj.a)
+    hb = _auth(token_factory, subj.b)
+    type_id = await s5.type_id("SOP")
+    did, _ = await _release_doc(app_client, ha, hb, type_id, f"drift-snap-{subj.a}".encode())
+    doc_uuid = uuid.UUID(did)
+
+    # The NEXT Saturday from today (isoweekday 6): always a weekend within the 30-day lead horizon,
+    # for any run date/weekday — deterministic + not weekday-flaky.
+    today = datetime.datetime.now(_org_tz()).date()
+    sat = today + datetime.timedelta(days=(6 - today.isoweekday()) % 7)
+    async with get_sessionmaker()() as s:
+        await s.execute(
+            text("UPDATE documented_information SET next_review_due = :d WHERE id = :id"),
+            {"d": sat, "id": doc_uuid},
+        )
+        await s.commit()
+
+    async with get_sessionmaker()() as session:
+        assert (await sweep_reviews(session))["tasks_created"] >= 1
+
+    async with get_sessionmaker()() as s:
+        instance = (
+            await s.execute(
+                select(WorkflowInstance).where(
+                    WorkflowInstance.subject_type == WorkflowSubjectType.PERIODIC_REVIEW,
+                    WorkflowInstance.subject_id == doc_uuid,
+                    WorkflowInstance.current_state.not_in(
+                        ("COMPLETED", "REJECTED", "NEEDS_ATTENTION")
+                    ),
+                )
+            )
+        ).scalar_one()
+        task = (
+            await s.execute(
+                select(Task).where(Task.instance_id == instance.id, Task.state == TaskState.PENDING)
+            )
+        ).scalar_one()
+        assert task.due_at is not None
+        cal = await resolve_calendar(s, instance.org_id)
+        expected = snap_to_working_day(
+            datetime.datetime.combine(sat, datetime.time(0, 0), tzinfo=cal.tz), cal
+        )
+        # The task due_at is snapped onto a working day (§9.5) — NOT the raw weekend instant.
+        assert task.due_at == expected
+        assert is_working_day(task.due_at.astimezone(cal.tz).date(), cal)
+        # D-3: the STORED next_review_due is unchanged (only the task due_at is snapped).
+        doc = await s.get(DocumentedInformation, doc_uuid)
+        assert doc is not None and doc.next_review_due == sat
 
 
 async def test_sweep_skips_non_effective_and_unscheduled(

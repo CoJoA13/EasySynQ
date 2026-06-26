@@ -122,9 +122,9 @@ def _stage_spec(stage: WorkflowStage) -> dict[str, Any]:
 
 
 def _due_at(stage: WorkflowStage, default_sla: dict[str, Any] | None) -> datetime.datetime | None:
-    """Wall-clock SLA: now + ``hours`` from the stage's sla (or the definition default). due_at is
-    NOT snapped to a working day (deferred — S-notify-6 wired the working_calendar into the timer
-    OFFSETS only; snapping due_at itself at materialize is a separate, un-numbered reconcile)."""
+    """Wall-clock SLA: now + ``hours`` from the stage's sla (or the definition default). The raw
+    instant is snapped FORWARD to a working day at ``_materialize_stage`` via ``snap_due_at`` (R55,
+    S-duedate-snap) so OVERDUE never fires on a weekend — this returns the un-snapped value."""
     sla = stage.sla or default_sla or {}
     hours = sla.get("hours")
     if not isinstance(hours, (int, float)):
@@ -194,6 +194,9 @@ async def _materialize_stage(
     except ValueError:
         task_type = TaskType.APPROVE
     due = _due_at(stage, default_sla)
+    from ..notifications.duedate import snap_due_at
+
+    due = await snap_due_at(session, instance.org_id, due)
     created: list[Task] = []
     for candidate in pool:
         t = Task(

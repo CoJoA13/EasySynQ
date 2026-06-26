@@ -172,13 +172,20 @@ async def sweep_reviews(session: AsyncSession) -> dict[str, int]:
                 actor=None,
             )
             await session.flush()
-            # Org-local midnight (NOT UTC): review_state flips overdue at org-tz midnight, so due_at
-            # must anchor on the same instant or the two signals disagree by the UTC offset.
+            # R55 (S-duedate-snap, D-5): build at midnight in the working_calendar's tz (the timer's
+            # business-day frame) and snap FORWARD to a working day, so OVERDUE never fires on a
+            # weekend. NB: next_review_due is unchanged and review_state still flips at env-tz
+            # midnight (today_org) — under a divergent env-tz vs calendar-tz the badge may lead this
+            # snapped notification (D-3/D-6, accepted).
             # next_review_due is filtered is_not(None) above; guard for mypy.
             if doc.next_review_due is None:
                 continue  # unreachable; the WHERE clause guarantees it
-            due_at = datetime.datetime.combine(
-                doc.next_review_due, datetime.time(0, 0), tzinfo=_org_tz()
+            from ..notifications.duedate import resolve_calendar, snap_to_working_day
+
+            cal = await resolve_calendar(session, doc.org_id)
+            due_at = snap_to_working_day(
+                datetime.datetime.combine(doc.next_review_due, datetime.time(0, 0), tzinfo=cal.tz),
+                cal,
             )
             await session.execute(
                 update(Task).where(Task.instance_id == instance.id).values(due_at=due_at)
