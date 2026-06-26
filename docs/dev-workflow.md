@@ -15,6 +15,7 @@ admin-bypass on for the solo owner.
 
 `uv` + a managed **Python 3.12** at `~/.local/bin/uv` (system `python3` is 3.14; `pip` needs `--break-system-packages`). Node 22 + npm. Docker v29.x. Lockfiles committed (`uv.lock`, `package-lock.json`); CI uses `uv sync --frozen` / `npm ci`.
 - **Docker socket (Linux host):** the user is in the `docker` group, so a fresh login session should use Docker directly. If a shell still gets "permission denied", re-run `sudo chmod 666 /var/run/docker.sock` (personal, non-shared device).
+- **Fresh-clone `just setup` gotcha (Linux):** `just setup` → `just contracts` runs `datamodel-codegen`, which does NOT create the gitignored `apps/api/src/easysynq_api/_generated/` + `apps/web/src/api/_generated/` dirs → the first run dies `FileNotFoundError … /_generated`. `mkdir -p` both before `just setup` (or `just contracts`). The generated **python** `_generated/models.py` then fails `just check`'s `mypy src` on 2 datamodel-codegen enum-default `[assignment]` errors — CI never hits this (the contract is redocly-lint-only; `models.py` is imported by nothing), so just `rm` it; the web `schema.d.ts` is the only consumed artifact.
 
 ## Local loops (fast; no commit needed to iterate)
 
