@@ -1586,7 +1586,8 @@ async def test_due_task_ids_excludes_fully_fired_doc_ack(app_under_test: Any) ->
 async def test_due_task_ids_still_claims_pending_steps(app_under_test: Any) -> None:
     """Over-tightening guard: a task with ANY configured, unstamped step IS still claimed.
 
-    Three positive controls on escalate-enabled APPROVE tasks (each isolates one claim reason).
+    Four positive controls: three on escalate-enabled APPROVE tasks (each isolates one claim
+    reason) and one on DOC_ACK to prove the policy JOIN resolves for that type.
     These pass on BOTH the old and new query — they prove the policy-aware predicate did not drop
     a task that genuinely has a fireable step.
     """
@@ -1594,7 +1595,8 @@ async def test_due_task_ids_still_claims_pending_steps(app_under_test: Any) -> N
     assignee_id = await _seed_user(org_id, display_name="Claim Pending Steps")
     past_due = _BASE - datetime.timedelta(days=2)
 
-    # (a) pending remind_1: only remind_1_sent_at is NULL (remind_1_before=3d → claimable).
+    # (a) pending remind_1: remind_1_sent_at NULL → claimable
+    # (remind_2_sent_at also NULL but inert).
     _, task_remind = await _seed_workflow_objects(
         org_id,
         assignee_id,
@@ -1604,7 +1606,8 @@ async def test_due_task_ids_still_claims_pending_steps(app_under_test: Any) -> N
         overdue_notified_at=_STAMPED,
         escalated_1_at=_STAMPED,
     )
-    # (b) pending overdue: only overdue_notified_at is NULL (always-on step → claimable).
+    # (b) pending overdue: overdue_notified_at NULL → claimable via always-on step
+    # (remind_2_sent_at also NULL but inert).
     _, task_overdue = await _seed_workflow_objects(
         org_id,
         assignee_id,
@@ -1614,7 +1617,8 @@ async def test_due_task_ids_still_claims_pending_steps(app_under_test: Any) -> N
         remind_1_sent_at=_STAMPED,
         escalated_1_at=_STAMPED,
     )
-    # (c) pending escalate: only escalated_1_at is NULL (APPROVE escalate_1_after=1d → claimable).
+    # (c) pending escalate: escalated_1_at NULL → claimable (APPROVE escalate_1_after=1d;
+    # remind_2_sent_at also NULL but inert).
     _, task_escalate = await _seed_workflow_objects(
         org_id,
         assignee_id,
@@ -1624,6 +1628,18 @@ async def test_due_task_ids_still_claims_pending_steps(app_under_test: Any) -> N
         remind_1_sent_at=_STAMPED,
         overdue_notified_at=_STAMPED,
     )
+    # (d) DOC_ACK pending overdue: proves the DOC_ACK policy JOIN resolves, so the DOC_ACK
+    # EXCLUSION test (test_due_task_ids_excludes_fully_fired_doc_ack) is genuinely
+    # mutation-distinguishing and not a silent pass-for-wrong-reason if the seed ever changes.
+    _, task_doc_ack = await _seed_workflow_objects(
+        org_id,
+        assignee_id,
+        due_at=past_due,
+        task_type=TaskType.DOC_ACK,
+        task_state=TaskState.PENDING,
+        remind_1_sent_at=_STAMPED,
+        # overdue_notified_at NULL → claimed via the always-on OVERDUE disjunct.
+    )
 
     async with get_sessionmaker()() as s:
         ids = await _due_task_ids(s, _BASE)
@@ -1631,3 +1647,4 @@ async def test_due_task_ids_still_claims_pending_steps(app_under_test: Any) -> N
     assert task_remind.id in ids, "pending remind_1 task must still be claimed"
     assert task_overdue.id in ids, "pending overdue task must still be claimed"
     assert task_escalate.id in ids, "pending escalate task must still be claimed"
+    assert task_doc_ack.id in ids, "pending-overdue DOC_ACK must be claimed (policy join resolves)"
