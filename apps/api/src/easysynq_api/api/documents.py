@@ -58,6 +58,7 @@ from ..services.ack.sink import get_ack_enqueue_sink
 from ..services.authz import AuthzAuditSink, enforce, gather_grants, get_authz_audit_sink, require
 from ..services.authz.repository import gather_sod_constraints, get_allow_approver_release
 from ..services.authz.resource import build_document_resource_context
+from ..services.common.org_clock import current_org_tz
 from ..services.dcr import build_where_used
 from ..services.diff import build_version_diff, get_or_create_visual_diff, get_visual_diff
 from ..services.vault import (
@@ -893,7 +894,7 @@ async def update_metadata_endpoint(
             ver = await session.get(DocumentVersion, doc.current_effective_version_id)
             eff_from = ver.effective_from if ver is not None else None
         doc.next_review_due = compute_next_review_due(
-            doc.review_period_months, doc.last_reviewed_at, eff_from
+            doc.review_period_months, doc.last_reviewed_at, eff_from, current_org_tz()
         )
     doc.updated_by = caller.id
     await session.commit()

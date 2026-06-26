@@ -167,12 +167,13 @@ def due_steps(
 ) -> list[TimerStep]:
     """Steps whose threshold has passed AND whose stamp is null, chronological. Reminder/escalate
     thresholds are BUSINESS-DAY offsets against ``calendar`` (skip weekends + holidays); OVERDUE is
-    always-on at ``due_at`` with NO business-day shift (D-5 — ``due_at`` itself is raw wall-clock,
-    snapping it is the upstream un-numbered residual). Reminders/escalate stay gated by a configured
-    (non-null) offset AND only fire when ``now`` is itself a working day — so a sweep DELAYED past
-    the threshold into a non-working day (worker down / template missing over a weekend) defers the
-    ping to the next working day (doc 10 §9.5: timers do not fire on non-working days). OVERDUE is
-    exempt from that gate (it is always-on at ``due_at`` by design)."""
+    always-on at ``due_at`` with NO business-day shift (D-5 — ``due_at`` itself is snapped to a
+    working day at materialize, R55). Reminders/escalate stay gated by a configured (non-null)
+    offset AND only fire when ``now`` is itself a working day — so a sweep DELAYED past the
+    threshold into a non-working day (worker down / template missing over a weekend) defers the
+    ping to the next working day (doc 10 §9.5: timers do not fire on non-working days). OVERDUE
+    is ALSO gated on ``now_is_working`` (S-orgtz-unify, closing R55 D-5's weekend-pierce
+    exemption) — a weekend/holiday overdue notice defers to the next working day (doc 10 §9.5)."""
     out: list[TimerStep] = []
     now_is_working = is_working_day(now.astimezone(calendar.tz).date(), calendar)
     if (
@@ -191,7 +192,7 @@ def due_steps(
         >= business_threshold(due_at, policy.remind_2_before, ThresholdDirection.BEFORE, calendar)
     ):
         out.append(TimerStep.REMIND_2)
-    if stamps.overdue_notified_at is None and now >= due_at:
+    if stamps.overdue_notified_at is None and now_is_working and now >= due_at:
         out.append(TimerStep.OVERDUE)
     if (
         policy.escalate_1_after is not None

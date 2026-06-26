@@ -17,7 +17,6 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ...config import get_settings
 from ...db.models._audit_enums import ActorType, AuditObjectType, EventType
 from ...db.models._signature_enums import SignatureMeaning, SignedObjectType
 from ...db.models._vault_enums import DocumentCurrentState, DocumentKind
@@ -30,6 +29,7 @@ from ...db.models.signature_event import SignatureEvent as SignatureEventRow
 from ...db.models.workflow import Task, WorkflowInstance
 from ...logging import request_id_var
 from ...problems import ProblemException
+from ..common.org_clock import current_org_tz, resolve_default_org_tz, using_org_tz
 from ..common.pg_locks import LOCK_REVIEW_SWEEP, pg_advisory_lock
 from ..workflow import engine as wf_engine
 from ..workflow import repository as wf_repo
@@ -48,7 +48,7 @@ def add_months(day: datetime.date, months: int) -> datetime.date:
 
 
 def _org_tz() -> ZoneInfo:
-    return ZoneInfo(get_settings().easysynq_org_timezone)
+    return current_org_tz()
 
 
 def today_org() -> datetime.date:
@@ -60,8 +60,10 @@ def compute_next_review_due(
     review_period_months: int | None,
     last_reviewed_at: datetime.datetime | None,
     effective_from: datetime.datetime | None,
+    org_tz: ZoneInfo,
 ) -> datetime.date | None:
-    """anchor = the LATER of (last_reviewed_at, effective_from); + period months, org-tz dated.
+    """anchor = the LATER of (last_reviewed_at, effective_from); + period months, dated in
+    ``org_tz`` (the resolved canonical org tz — S-orgtz-unify R56).
 
     One rule, three triggers (release / review-confirm / PATCH): a re-release after a confirm
     anchors on the newer effective_from, a confirm after a release anchors on the newer review
@@ -71,7 +73,7 @@ def compute_next_review_due(
     anchors = [a for a in (last_reviewed_at, effective_from) if a is not None]
     if not anchors:
         return None
-    return add_months(max(anchors).astimezone(_org_tz()).date(), review_period_months)
+    return add_months(max(anchors).astimezone(org_tz).date(), review_period_months)
 
 
 def review_state(next_review_due: datetime.date | None, today: datetime.date) -> str | None:
@@ -122,7 +124,7 @@ async def sweep_reviews(session: AsyncSession) -> dict[str, int]:
             logger.info("review_sweep: another sweep holds the lock; skipping this tick")
             return {"tasks_created": 0, "escalated": 0, "skipped_lock_held": 1}
 
-        today = today_org()
+        today = datetime.datetime.now(await resolve_default_org_tz(session)).date()
         horizon = today + datetime.timedelta(days=REVIEW_LEAD_DAYS)
         created = escalated = 0
 
@@ -197,9 +199,10 @@ async def sweep_reviews(session: AsyncSession) -> dict[str, int]:
             )
             from ..notifications.dispatch import enqueue_task_notifications
 
-            await enqueue_task_notifications(
-                session, instance, list(review_tasks), due_at_override=due_at
-            )
+            with using_org_tz(cal.tz):
+                await enqueue_task_notifications(
+                    session, instance, list(review_tasks), due_at_override=due_at
+                )
             created += 1
 
         overdue_rows = (
@@ -367,7 +370,7 @@ async def decide_periodic_review(
         now = _now()
         doc.last_reviewed_at = now
         doc.next_review_due = compute_next_review_due(
-            doc.review_period_months, now, version.effective_from
+            doc.review_period_months, now, version.effective_from, current_org_tz()
         )
         session.add(
             AuditEvent(

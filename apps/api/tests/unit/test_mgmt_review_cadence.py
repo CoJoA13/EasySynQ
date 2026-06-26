@@ -44,3 +44,9 @@ def test_next_mr_due_clamps_the_day_to_the_target_month_length() -> None:
 def test_next_mr_due_none_history_is_the_mint_now_sentinel() -> None:
     # No prior released MR → None: the caller (sweep) treats None as "mint the first review now".
     assert next_mr_due(None, 12) is None
+
+
+def test_next_mr_due_is_pure_month_add() -> None:
+    # next_mr_due is a tz-free pure date helper — org_tz threading does not touch it.
+    assert next_mr_due(datetime.date(2026, 1, 31), 12) == datetime.date(2027, 1, 31)
+    assert next_mr_due(None, 12) is None

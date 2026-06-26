@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import datetime
+import zoneinfo
 
 import pytest
 
-from easysynq_api.services.notifications.render import _substitute
+from easysynq_api.services.common.org_clock import using_org_tz
+from easysynq_api.services.notifications.render import _fmt_date, _substitute
 
 pytestmark = pytest.mark.unit
 
@@ -42,3 +44,21 @@ def test_date_filter_formats_datetime() -> None:
 def test_date_filter_null_is_dash() -> None:
     out = _substitute("Due {{task.due_at | date}}", {"task.due_at": None}, _ALLOWED)
     assert out == "Due —"
+
+
+# --- _fmt_date tz-reconvert tests (S-orgtz-unify) ---
+
+
+def test_fmt_date_reconverts_aware_datetime_to_org_tz() -> None:
+    # 2026-06-29 00:00 in Asia/Tokyo (UTC+9) is 2026-06-28 15:00 UTC. Rendering the UTC instant
+    # under the org tz must show 2026-06-29 (the local date), NOT 2026-06-28 (the UTC date).
+    utc_instant = datetime.datetime(2026, 6, 28, 15, 0, tzinfo=datetime.UTC)
+    with using_org_tz(zoneinfo.ZoneInfo("Asia/Tokyo")):
+        assert _fmt_date(utc_instant) == "2026-06-29"
+    # Unset context (UTC fallback) → the UTC date.
+    assert _fmt_date(utc_instant) == "2026-06-28"
+
+
+def test_fmt_date_passes_naive_and_date_through() -> None:
+    assert _fmt_date(datetime.datetime(2026, 6, 28, 15, 0)) == "2026-06-28"  # naive: no convert
+    assert _fmt_date(datetime.date(2026, 6, 28)) == "2026-06-28"

@@ -11,7 +11,6 @@ from __future__ import annotations
 import datetime
 import logging
 import uuid
-import zoneinfo
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -20,17 +19,19 @@ from ...db.models._audit_enums import ActorType, AuditObjectType, EventType
 from ...db.models.app_user import AppUser, UserStatus
 from ...db.models.audit_event import AuditEvent
 from ...db.models.notification import NotificationPreference
+from ...db.models.organization import Organization
 from ...db.models.sla_policy import SlaPolicy
 from ...db.models.system_config import SystemConfig
 from ...db.models.workflow import Task, WorkflowInstance
 from ...db.models.working_calendar import WorkingCalendar
+from ..common.org_clock import pick_tz, using_org_tz
 from ..workflow.repository import users_with_roles
 from .calendar_spec import parse_holiday, parse_working_days
 from .constants import EVENT_TASK_DUE_SOON, EVENT_TASK_ESCALATED, EVENT_TASK_OVERDUE
 from .dispatch import EnqueueOutcome, _enqueue_one
 from .recipients import Recipient, _first_name, resolve_recipients
 from .subjects import resolve_subject
-from .timer import DEFAULT_CALENDAR, Calendar, TimerPolicy, TimerStamps, TimerStep, due_steps
+from .timer import Calendar, TimerPolicy, TimerStamps, TimerStep, due_steps
 
 _QM_ROLE = "QMS Owner"
 _OPEN = ("PENDING", "CLAIMED")
@@ -175,11 +176,15 @@ async def resolve_working_calendar(session: AsyncSession, org_id: uuid.UUID) -> 
 
     Fail-safe + GRANULAR (the sweep must NEVER crash on calendar data, and a fallback must NOT
     discard a still-valid timezone — else the ``is_working_day(now)`` gate would judge weekends in
-    UTC for a non-UTC org). Order: a missing row → ``DEFAULT_CALENDAR``; otherwise resolve
-    the **timezone first** (unknown → UTC + warn) so every fallback still evaluates working days in
-    the org's local time; a structurally-broken ``working_days`` (not a non-empty array of real ints
-    1..7 — no bool/float/string) → Mon-Fri default + warn, KEEPING the resolved tz + holidays;
-    individual unparseable holiday dates are skipped (kept-good).
+    UTC for a non-UTC org). The timezone is resolved by the SHARED ``pick_tz`` chain
+    (``cal.timezone → organization.timezone → env → UTC``, each fail-safe) so it is identical to
+    ``org_clock.resolve_org_tz`` — parity by construction (S-orgtz-unify). A missing row → a Mon-Fri
+    default Calendar in that resolved tz (NOT the UTC ``DEFAULT_CALENDAR`` constant); a bad
+    ``cal.timezone`` falls through ``pick_tz`` SILENTLY to org/env/UTC (the S-notify-7 editor
+    validates tz fail-loud, so a bad stored value is near-unreachable). A structurally-broken
+    ``working_days`` (not a non-empty array of real ints 1..7 — no bool/float/string) → Mon-Fri
+    default + warn, KEEPING the resolved tz + holidays; individual unparseable holiday dates are
+    skipped (kept-good).
     """
     row = (
         await session.execute(
@@ -188,23 +193,19 @@ async def resolve_working_calendar(session: AsyncSession, org_id: uuid.UUID) -> 
             .limit(1)
         )
     ).scalar_one_or_none()
+    org_tz = (
+        await session.execute(select(Organization.timezone).where(Organization.id == org_id))
+    ).scalar_one_or_none()
+    # ONE tz decision shared with resolve_org_tz (parity by construction): cal → org → env → UTC.
+    tz = pick_tz(row.timezone if row is not None else None, org_tz)
     if row is None:
-        return DEFAULT_CALENDAR
-    # Timezone FIRST — a fallback calendar must still evaluate working days in the org's local time.
-    try:
-        tz = zoneinfo.ZoneInfo(row.timezone or "UTC")
-    except (zoneinfo.ZoneInfoNotFoundError, ValueError):
-        logger.warning(
-            "notifications.timer_bad_timezone", extra={"org_id": str(org_id), "tz": row.timezone}
-        )
-        tz = zoneinfo.ZoneInfo("UTC")
-    # working_days: a strictly-validated array of ISO ints 1..7; broken → Mon-Fri default (keep tz).
+        # No calendar row (a new org pre-editor): Mon-Fri default, but in the org's resolved tz
+        # (NOT UTC) so the is_working_day(now) gate judges weekends in local time.
+        return Calendar(working_weekdays=frozenset({1, 2, 3, 4, 5}), holidays=frozenset(), tz=tz)
     weekdays = parse_working_days(row.working_days)
     if weekdays is None:
         logger.warning("notifications.timer_bad_working_days", extra={"org_id": str(org_id)})
         weekdays = frozenset({1, 2, 3, 4, 5})
-    # holidays: a non-list scalar (5 / true) → no holidays (never let `for h in <scalar>` raise);
-    # individual unparseable entries inside a list are skipped (kept-good).
     raw_holidays = row.holidays if isinstance(row.holidays, list) else []
     holidays: set[datetime.date] = set()
     for h in raw_holidays:
@@ -283,123 +284,135 @@ async def process_task_timers(
         escalated_1_at=task.escalated_1_at,
     )
 
-    fired = 0
-    for step in due_steps(tpolicy, task.due_at, stamps, now, calendar):
-        if step in (TimerStep.REMIND_1, TimerStep.REMIND_2):
-            event_key = EVENT_TASK_DUE_SOON
-            recipients = await resolve_recipients(session, task)
-            attempted = len(recipients)
-            # "exists" = at least one notification row exists (created OR deduped) after the call.
-            exists = False
-            for r in recipients:
-                outcome = await emit_task_event(
-                    session, instance=instance, task=task, recipient=r, event_key=event_key, now=now
-                )
-                if outcome in ("created", "deduped"):
-                    exists = True
-        elif step is TimerStep.OVERDUE:
-            recipients = await resolve_recipients(session, task)
-            attempted = len(recipients)
-            exists = False
-            for r in recipients:
-                outcome = await emit_task_event(
-                    session,
-                    instance=instance,
-                    task=task,
-                    recipient=r,
-                    event_key=EVENT_TASK_OVERDUE,
-                    now=now,
-                )
-                if outcome in ("created", "deduped"):
-                    exists = True
-        else:  # TimerStep.ESCALATE_1
-            recipient_ids = await resolve_escalation_recipients(session, task)
-            # Derive the audit `via` label from the actual recipients returned, not from
-            # whether manager_id is set — an inactive/cross-org/self-manager falls through to
-            # the QM fallback inside resolve_escalation_recipients, so manager_id being non-NULL
-            # does NOT mean the manager was chosen as the recipient.
-            # R4-2: mirror R3-1's self-manager guard — when manager_id == assignee.id the
-            # recipient list is the QM fallback even though manager_id_for_task is non-NULL.
-            assignee = (
-                await session.get(AppUser, task.assignee_user_id) if task.assignee_user_id else None
-            )
-            manager_id_for_task = assignee.manager_id if assignee is not None else None
-            assignee_id_for_task = assignee.id if assignee is not None else None
-            via = (
-                "manager"
-                if (
-                    manager_id_for_task is not None
-                    and manager_id_for_task != assignee_id_for_task  # R4-2: not a self-manager
-                    and recipient_ids == [manager_id_for_task]
-                )
-                else "qm_fallback"
-            )
-            # created_ids: recipients for whom a NEW notification row was inserted this sweep.
-            # exists_ids:  recipients whose notification row exists (created OR deduped).
-            # The audit is written only when created_ids is non-empty (R4-1: never on a pure
-            # dedup so the WORM audit log has exactly one TASK_ESCALATED per escalation event).
-            created_ids: list[uuid.UUID] = []
-            exists_ids: list[uuid.UUID] = []
-            attempted = 0
-            for uid in recipient_ids:
-                # Pass org_id so cross-org role-holders are filtered here too (R2-4).
-                r_maybe = await _recipient_for_user(session, uid, org_id=task.org_id)
-                if r_maybe is not None:
-                    attempted += 1
+    # Set the org tz as the context for the render calls inside emit_task_event → _fmt_date
+    # (S-orgtz-unify): an aware due_at read from PG is UTC; without this wrap, _fmt_date's
+    # .date() shows the UTC date — wrong for an east-of-UTC org. calendar.tz equals
+    # resolve_org_tz by construction (parity from pick_tz), so no second DB round-trip needed.
+    with using_org_tz(calendar.tz):
+        fired = 0
+        for step in due_steps(tpolicy, task.due_at, stamps, now, calendar):
+            if step in (TimerStep.REMIND_1, TimerStep.REMIND_2):
+                event_key = EVENT_TASK_DUE_SOON
+                recipients = await resolve_recipients(session, task)
+                attempted = len(recipients)
+                # "exists" = at least one notification row exists (created OR deduped).
+                exists = False
+                for r in recipients:
                     outcome = await emit_task_event(
                         session,
                         instance=instance,
                         task=task,
-                        recipient=r_maybe,
-                        event_key=EVENT_TASK_ESCALATED,
+                        recipient=r,
+                        event_key=event_key,
                         now=now,
                     )
-                    if outcome == "created":
-                        created_ids.append(uid)
-                        exists_ids.append(uid)
-                    elif outcome == "deduped":
-                        exists_ids.append(uid)
-            exists = bool(exists_ids)
-            if created_ids:
-                # Write one TASK_ESCALATED AuditEvent only for genuinely-new escalations
-                # (R4-1: a pure dedup sweep must not append a second audit row — the original
-                # TASK_ESCALATED already exists in the WORM log from the first sweep).
-                # escalated_to lists only newly-created recipients (not deduped ones).
-                session.add(
-                    AuditEvent(
-                        org_id=task.org_id,
-                        occurred_at=now,
-                        actor_id=None,
-                        actor_type=ActorType.system,
-                        event_type=EventType.TASK_ESCALATED,
-                        object_type=AuditObjectType.workflow_instance,
-                        object_id=instance.id,
-                        scope_ref=str(task.id),
-                        after={
-                            "task_id": str(task.id),
-                            "escalated_to": [str(u) for u in created_ids],
-                            "via": via,
-                            "due_at": task.due_at.isoformat(),
-                        },
+                    if outcome in ("created", "deduped"):
+                        exists = True
+            elif step is TimerStep.OVERDUE:
+                recipients = await resolve_recipients(session, task)
+                attempted = len(recipients)
+                exists = False
+                for r in recipients:
+                    outcome = await emit_task_event(
+                        session,
+                        instance=instance,
+                        task=task,
+                        recipient=r,
+                        event_key=EVENT_TASK_OVERDUE,
+                        now=now,
                     )
+                    if outcome in ("created", "deduped"):
+                        exists = True
+            else:  # TimerStep.ESCALATE_1
+                recipient_ids = await resolve_escalation_recipients(session, task)
+                # Derive the audit `via` label from the actual recipients returned, not from
+                # whether manager_id is set — an inactive/cross-org/self-manager falls through to
+                # the QM fallback inside resolve_escalation_recipients, so manager_id being non-NULL
+                # does NOT mean the manager was chosen as the recipient.
+                # R4-2: mirror R3-1's self-manager guard — when manager_id == assignee.id the
+                # recipient list is the QM fallback even though manager_id_for_task is non-NULL.
+                assignee = (
+                    await session.get(AppUser, task.assignee_user_id)
+                    if task.assignee_user_id
+                    else None
                 )
+                manager_id_for_task = assignee.manager_id if assignee is not None else None
+                assignee_id_for_task = assignee.id if assignee is not None else None
+                via = (
+                    "manager"
+                    if (
+                        manager_id_for_task is not None
+                        and manager_id_for_task != assignee_id_for_task  # R4-2: not a self-manager
+                        and recipient_ids == [manager_id_for_task]
+                    )
+                    else "qm_fallback"
+                )
+                # created_ids: recipients for whom a NEW notification row was inserted this sweep.
+                # exists_ids:  recipients whose notification row exists (created OR deduped).
+                # The audit is written only when created_ids is non-empty (R4-1: never on a pure
+                # dedup so the WORM audit log has exactly one TASK_ESCALATED per escalation event).
+                created_ids: list[uuid.UUID] = []
+                exists_ids: list[uuid.UUID] = []
+                attempted = 0
+                for uid in recipient_ids:
+                    # Pass org_id so cross-org role-holders are filtered here too (R2-4).
+                    r_maybe = await _recipient_for_user(session, uid, org_id=task.org_id)
+                    if r_maybe is not None:
+                        attempted += 1
+                        outcome = await emit_task_event(
+                            session,
+                            instance=instance,
+                            task=task,
+                            recipient=r_maybe,
+                            event_key=EVENT_TASK_ESCALATED,
+                            now=now,
+                        )
+                        if outcome == "created":
+                            created_ids.append(uid)
+                            exists_ids.append(uid)
+                        elif outcome == "deduped":
+                            exists_ids.append(uid)
+                exists = bool(exists_ids)
+                if created_ids:
+                    # Write one TASK_ESCALATED AuditEvent only for genuinely-new escalations
+                    # (R4-1: a pure dedup sweep must not append a second audit row — the original
+                    # TASK_ESCALATED already exists in the WORM log from the first sweep).
+                    # escalated_to lists only newly-created recipients (not deduped ones).
+                    session.add(
+                        AuditEvent(
+                            org_id=task.org_id,
+                            occurred_at=now,
+                            actor_id=None,
+                            actor_type=ActorType.system,
+                            event_type=EventType.TASK_ESCALATED,
+                            object_type=AuditObjectType.workflow_instance,
+                            object_id=instance.id,
+                            scope_ref=str(task.id),
+                            after={
+                                "task_id": str(task.id),
+                                "escalated_to": [str(u) for u in created_ids],
+                                "via": via,
+                                "due_at": task.due_at.isoformat(),
+                            },
+                        )
+                    )
 
-        # Stamp in the SAME txn as the enqueue/audit — this is the idempotency key.
-        # A non-null stamp means "already fired"; due_steps gates on it before firing.
-        #
-        # Three distinct cases:
-        #   exists=True             → at least one notification row exists (created or deduped) →
-        #                             stamp.
-        #   exists=False, attempted=0 → terminal no-op (no valid recipient to attempt,
-        #                             e.g. empty pool, all-inactive, no manager+no QM) →
-        #                             stamp to avoid the sweep re-processing this task
-        #                             on every 5-min cycle forever.
-        #   exists=False, attempted>0 → delivery miss (template absent/deactivated) →
-        #                             do NOT stamp; retry next sweep after template restored.
-        should_stamp = exists or attempted == 0
-        if should_stamp:
-            setattr(task, _STAMP_COL[step], now)
-            fired += 1
+            # Stamp in the SAME txn as the enqueue/audit — this is the idempotency key.
+            # A non-null stamp means "already fired"; due_steps gates on it before firing.
+            #
+            # Three distinct cases:
+            #   exists=True             → a notification row exists (created or deduped) →
+            #                             stamp.
+            #   exists=False, attempted=0 → terminal no-op (no valid recipient to attempt,
+            #                             e.g. empty pool, all-inactive, no manager+no QM) →
+            #                             stamp to avoid the sweep re-processing this task
+            #                             on every 5-min cycle forever.
+            #   exists=False, attempted>0 → delivery miss (template absent/deactivated) →
+            #                             do NOT stamp; retry next sweep after template restored.
+            should_stamp = exists or attempted == 0
+            if should_stamp:
+                setattr(task, _STAMP_COL[step], now)
+                fired += 1
 
     await session.commit()
     return fired

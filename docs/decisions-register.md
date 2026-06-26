@@ -193,6 +193,8 @@ The **`DOC_CLASS`** authorization scope in doc 07 is defined as matching on `doc
 
 **Back-propagation:** 04, 05, 08 (org tz), 14.
 
+**Amended by R56 (2026-06-26):** the org tz for date display/derivation is the resolved canonical tz (calendar-first); effective-date cutover is unchanged (UTC-clock-authoritative).
+
 ---
 
 ### R9 — Lock loss / break-lock
@@ -1540,6 +1542,26 @@ editor that turns an already-due date into a holiday); the env `easysynq_org_tim
 calendar is a deferred cross-cutting slice).
 
 Bumps the resolutions range **R1–R54 → R1–R55**.
+
+**Amended by R56 (2026-06-26):** OVERDUE is now `now_is_working`-gated (the weekend-pierce exemption is closed); a weekend/holiday overdue notice defers to the next working day (doc 10 §9.5).
+
+---
+
+### R56 — Org-timezone unification (single canonical tz; slice S-orgtz-unify) — 2026-06-26
+
+The org's display/derivation timezone is resolved from the DB, not the env: the chain is
+**is_default `working_calendar.timezone` → `organization.timezone` → env `easysynq_org_timezone`
+→ UTC** (`services/common/org_clock.py::resolve_org_tz`/`pick_tz`, fail-safe). `resolve_working_calendar`
+sources its tz from the same `pick_tz`, so the timer/calendar frame and the review/date frame cannot
+diverge (parity by construction). `today_org()` reads a request/sweep-scoped contextvar (set at the
+auth boundary in `get_current_user`, and around the escalation render); compute functions
+(`compute_next_review_due`, `read_cadence`) take an explicit `org_tz`. **R8 cutover is unchanged** —
+only date-level display/derivation moves to the canonical tz; effective-date cutover stays
+UTC-clock-authoritative. The env var is retained as the bottom fallback; `organization.timezone` and
+`working_calendar.timezone` remain independently editable (cal-canonical-with-fallback — no
+S-notify-7 regression). OVERDUE is now `now_is_working`-gated (closing R55 D-5's weekend-pierce
+exemption). A one-time idempotent CLI (`cli/backfill_review_dates.py`) recomputes stored
+`next_review_due` into the canonical tz (MR next-due is derived, no backfill).
 
 ---
 
