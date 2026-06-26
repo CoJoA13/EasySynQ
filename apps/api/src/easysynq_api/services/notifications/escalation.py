@@ -27,7 +27,12 @@ from ...db.models.working_calendar import WorkingCalendar
 from ..common.org_clock import pick_tz, using_org_tz
 from ..workflow.repository import users_with_roles
 from .calendar_spec import parse_holiday, parse_working_days
-from .constants import EVENT_TASK_DUE_SOON, EVENT_TASK_ESCALATED, EVENT_TASK_OVERDUE
+from .constants import (
+    EVENT_TASK_DUE_FINAL,
+    EVENT_TASK_DUE_SOON,
+    EVENT_TASK_ESCALATED,
+    EVENT_TASK_OVERDUE,
+)
 from .dispatch import EnqueueOutcome, _enqueue_one
 from .recipients import Recipient, _first_name, resolve_recipients
 from .subjects import resolve_subject
@@ -312,7 +317,11 @@ async def process_task_timers(
         fired = 0
         for step in due_steps(tpolicy, task.due_at, stamps, now, calendar):
             if step in (TimerStep.REMIND_1, TimerStep.REMIND_2):
-                event_key = EVENT_TASK_DUE_SOON
+                # REMIND_2 emits under a DISTINCT event key so the (recipient, task_id, event_key)
+                # dedup does not collapse it onto REMIND_1's row (S-remind2; the S-notify-4 defer).
+                event_key = (
+                    EVENT_TASK_DUE_SOON if step is TimerStep.REMIND_1 else EVENT_TASK_DUE_FINAL
+                )
                 recipients = await resolve_recipients(session, task)
                 attempted = len(recipients)
                 # "exists" = at least one notification row exists (created OR deduped).

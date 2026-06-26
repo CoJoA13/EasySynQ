@@ -23,6 +23,7 @@ _EVENT_CLASS: dict[str, NotificationClass] = {
     # action_required
     "task.assigned": NotificationClass.ACTION_REQUIRED,
     "task.due_soon": NotificationClass.ACTION_REQUIRED,
+    "task.due_final": NotificationClass.ACTION_REQUIRED,
     "doc.review_requested": NotificationClass.ACTION_REQUIRED,
     "doc.changes_requested": NotificationClass.ACTION_REQUIRED,
     "review.due": NotificationClass.ACTION_REQUIRED,
