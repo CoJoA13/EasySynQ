@@ -14,6 +14,7 @@ class TimerStep(enum.StrEnum):
     REMIND_2 = "remind_2"
     OVERDUE = "overdue"
     ESCALATE_1 = "escalate_1"
+    ESCALATE_2 = "escalate_2"
 
 
 class ThresholdDirection(enum.Enum):
@@ -148,6 +149,7 @@ class TimerPolicy:
     remind_1_before: datetime.timedelta | None
     remind_2_before: datetime.timedelta | None
     escalate_1_after: datetime.timedelta | None
+    escalate_2_after: datetime.timedelta | None = None
 
 
 @dataclass(frozen=True)
@@ -156,6 +158,7 @@ class TimerStamps:
     remind_2_sent_at: datetime.datetime | None
     overdue_notified_at: datetime.datetime | None
     escalated_1_at: datetime.datetime | None
+    escalated_2_at: datetime.datetime | None = None
 
 
 def due_steps(
@@ -173,7 +176,9 @@ def due_steps(
     threshold into a non-working day (worker down / template missing over a weekend) defers the
     ping to the next working day (doc 10 §9.5: timers do not fire on non-working days). OVERDUE
     is ALSO gated on ``now_is_working`` (S-orgtz-unify, closing R55 D-5's weekend-pierce
-    exemption) — a weekend/holiday overdue notice defers to the next working day (doc 10 §9.5)."""
+    exemption) — a weekend/holiday overdue notice defers to the next working day (doc 10 §9.5).
+    Steps in chronological order: REMIND_1 → REMIND_2 → OVERDUE → ESCALATE_1 then ESCALATE_2
+    (a second, later escalation tier — S-escalate2)."""
     out: list[TimerStep] = []
     now_is_working = is_working_day(now.astimezone(calendar.tz).date(), calendar)
     if (
@@ -202,4 +207,12 @@ def due_steps(
         >= business_threshold(due_at, policy.escalate_1_after, ThresholdDirection.AFTER, calendar)
     ):
         out.append(TimerStep.ESCALATE_1)
+    if (
+        policy.escalate_2_after is not None
+        and stamps.escalated_2_at is None
+        and now_is_working
+        and now
+        >= business_threshold(due_at, policy.escalate_2_after, ThresholdDirection.AFTER, calendar)
+    ):
+        out.append(TimerStep.ESCALATE_2)
     return out
