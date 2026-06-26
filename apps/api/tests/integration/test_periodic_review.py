@@ -1463,7 +1463,10 @@ async def test_sweep_review_notification_date_in_calendar_tz(
     # Tokyo midnight Monday (00:00+09:00) = UTC Sunday 15:00 — the off-by-one day the fix closes.
     tokyo = zoneinfo.ZoneInfo("Asia/Tokyo")
     today_tok = datetime.datetime.now(tokyo).date()
-    days_to_mon = (7 - today_tok.isoweekday()) % 7 or 7  # 1..7; 7 if today IS Monday
+    # days to the next MONDAY (isoweekday 1) — a Tokyo working day, so due_at midnight-Tokyo is NOT
+    # snapped and renders as that Monday. (7 if today IS Monday.) NB: (1 - isoweekday) % 7, NOT
+    # (7 - isoweekday) which lands on Sunday → snapped forward → the date mismatches the assertion.
+    days_to_mon = (1 - today_tok.isoweekday()) % 7 or 7
     mon = today_tok + datetime.timedelta(days=days_to_mon)
     # With the fix: body shows the Tokyo date (Monday).
     expected_date_str = mon.isoformat()
