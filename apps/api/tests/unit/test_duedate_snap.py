@@ -119,6 +119,22 @@ def test_eastward_tz_local_saturday_snaps():
     assert local.date() == _D(2026, 6, 29)  # Monday in Tokyo
     assert local.hour == 8 and local.minute == 0  # time-of-day preserved in cal.tz
     assert is_working_day(local.date(), cal)
+    # Codex #291 P2: the result is returned IN cal.tz, so its naive .date() is the working-calendar
+    # date (Monday) — NOT the UTC date (Sunday 2026-06-28). A notification _fmt_date(value.date())
+    # therefore shows the snapped working day. Mutation-distinguishing: an `.astimezone(UTC)` return
+    # would make out.date() == 2026-06-28.
+    assert out.date() == _D(2026, 6, 29)
+
+
+def test_snapped_value_renders_calendar_date_not_utc():
+    """The notification renderer (_fmt_date → value.date()) must show the working-calendar date for
+    an east-of-UTC snapped due (Codex #291 P2)."""
+    from easysynq_api.services.notifications.render import _fmt_date
+
+    tokyo = zoneinfo.ZoneInfo("Asia/Tokyo")
+    cal = Calendar({1, 2, 3, 4, 5}, frozenset(), tokyo)
+    out = snap_to_working_day(_dt(2026, 6, 26, 23, 0), cal)  # → Monday 2026-06-29 in Tokyo
+    assert _fmt_date(out) == "2026-06-29"  # NOT "2026-06-28" (the UTC day)
 
 
 def test_westward_tz_local_friday_does_not_snap():

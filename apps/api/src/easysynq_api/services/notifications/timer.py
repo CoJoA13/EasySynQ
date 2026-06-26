@@ -100,10 +100,18 @@ def snap_to_working_day(due_at: datetime.datetime, cal: Calendar) -> datetime.da
     """Snap ``due_at`` FORWARD to the next working day (S-duedate-snap, R55).
 
     Returns ``due_at`` unchanged if its date (in ``cal.tz``) is already a working day; otherwise the
-    next working day forward at the same local (``cal.tz``) time-of-day, as UTC. Working-day-ness is
-    evaluated in ``cal.tz`` — the exact frame the timer (``business_threshold``/``is_working_day``)
-    uses — so a snapped ``due_at`` makes OVERDUE (``now >= due_at``) and every offset land on a
-    working day with no special-casing in ``due_steps`` (doc 10 §9.5).
+    next working day forward at the same local time-of-day, **expressed in ``cal.tz``**.
+    Working-day-ness is evaluated in ``cal.tz`` — the exact frame the timer
+    (``business_threshold``/``is_working_day``) uses — so a snapped ``due_at`` makes OVERDUE
+    (``now >= due_at``) and every offset land on a working day with no special-casing in
+    ``due_steps`` (doc 10 §9.5).
+
+    ⚠ The snapped result is returned in ``cal.tz`` (NOT UTC) so an IN-TRANSACTION render —
+    ``notifications/render._fmt_date`` formats ``value.date()`` without re-converting — shows the
+    snapped working DATE, not a tz-shifted one (an east-of-UTC calendar's local Monday midnight is
+    the previous UTC day). The INSTANT is identical either way, so persistence (timestamptz → UTC)
+    and every ``now``/offset comparison are unaffected — only the in-memory ``.date()`` aligns.
+    (Codex #291 P2.)
 
     Forward-only (never shortens the SLA window); idempotent. The returned instant's ``cal.tz`` date
     is ALWAYS a working day: a nonexistent (spring-forward gap) wall time can normalize ACROSS
@@ -120,10 +128,15 @@ def snap_to_working_day(due_at: datetime.datetime, cal: Calendar) -> datetime.da
         d = d + datetime.timedelta(days=1)
         if not is_working_day(d, cal):
             continue
-        cand = datetime.datetime.combine(d, local.time(), tzinfo=cal.tz).astimezone(datetime.UTC)
-        # A spring-forward gap can push the reconstructed wall time across midnight onto a
-        # non-working day; trust the resolved instant, not the wall-time date, and keep walking.
-        if is_working_day(cand.astimezone(cal.tz).date(), cal):
+        # Resolve the candidate's true instant (a spring-forward gap can push the reconstructed wall
+        # time across midnight), then express it back in cal.tz: re-check on the resolved date and
+        # RETURN in cal.tz so an in-transaction render shows the working-calendar date (Codex P2).
+        cand = (
+            datetime.datetime.combine(d, local.time(), tzinfo=cal.tz)
+            .astimezone(datetime.UTC)
+            .astimezone(cal.tz)
+        )
+        if is_working_day(cand.date(), cal):
             return cand
     return (
         due_at  # fail-safe: keep the original instant (never a never-overdue far-future sentinel)
