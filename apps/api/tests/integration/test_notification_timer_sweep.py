@@ -48,6 +48,7 @@ from easysynq_api.db.models.role import Role, RoleAssignment
 from easysynq_api.db.models.workflow import Task, WorkflowDefinition, WorkflowInstance
 from easysynq_api.db.models.working_calendar import WorkingCalendar
 from easysynq_api.db.session import get_sessionmaker
+from easysynq_api.services.common.org_clock import resolve_org_tz
 from easysynq_api.services.notifications.classes import NotificationClass, class_of
 from easysynq_api.services.notifications.constants import (
     EVENT_TASK_DUE_SOON,
@@ -61,7 +62,6 @@ from easysynq_api.services.notifications.escalation import (
     sweep_task_timers,
 )
 from easysynq_api.services.notifications.recipients import Recipient
-from easysynq_api.services.notifications.timer import DEFAULT_CALENDAR
 
 pytestmark = pytest.mark.integration
 
@@ -1350,7 +1350,9 @@ async def test_resolve_working_calendar_reads_default_row(app_under_test: Any) -
 async def test_resolve_working_calendar_missing_row_falls_back_to_default(
     app_under_test: Any,
 ) -> None:
-    """An org with no working_calendar row resolves to DEFAULT_CALENDAR (no crash)."""
+    """An org with no working_calendar row resolves to a Mon-Fri default in the org's resolved tz
+    (NOT a crash). Post S-orgtz-unify the fallback tz is pick_tz(None, organization.timezone), which
+    equals resolve_org_tz — assert structure + tz parity, not the UTC DEFAULT_CALENDAR constant."""
     salt = uuid.uuid4().hex[:8]
     async with get_sessionmaker()() as s:
         org = Organization(legal_name=f"NoCal Org {salt}", short_code=f"NC{salt[:6].upper()}")
@@ -1360,7 +1362,9 @@ async def test_resolve_working_calendar_missing_row_falls_back_to_default(
     try:
         async with get_sessionmaker()() as s:
             cal = await resolve_working_calendar(s, no_cal_org_id)
-        assert cal == DEFAULT_CALENDAR
+            assert cal.working_weekdays == frozenset({1, 2, 3, 4, 5})
+            assert cal.holidays == frozenset()
+            assert cal.tz == await resolve_org_tz(s, no_cal_org_id)  # parity by construction
     finally:
         async with get_sessionmaker()() as s:
             await s.execute(delete(Organization).where(Organization.id == no_cal_org_id))

@@ -176,11 +176,15 @@ async def resolve_working_calendar(session: AsyncSession, org_id: uuid.UUID) -> 
 
     Fail-safe + GRANULAR (the sweep must NEVER crash on calendar data, and a fallback must NOT
     discard a still-valid timezone — else the ``is_working_day(now)`` gate would judge weekends in
-    UTC for a non-UTC org). Order: a missing row → ``DEFAULT_CALENDAR``; otherwise resolve
-    the **timezone first** (unknown → UTC + warn) so every fallback still evaluates working days in
-    the org's local time; a structurally-broken ``working_days`` (not a non-empty array of real ints
-    1..7 — no bool/float/string) → Mon-Fri default + warn, KEEPING the resolved tz + holidays;
-    individual unparseable holiday dates are skipped (kept-good).
+    UTC for a non-UTC org). The timezone is resolved by the SHARED ``pick_tz`` chain
+    (``cal.timezone → organization.timezone → env → UTC``, each fail-safe) so it is identical to
+    ``org_clock.resolve_org_tz`` — parity by construction (S-orgtz-unify). A missing row → a Mon-Fri
+    default Calendar in that resolved tz (NOT the UTC ``DEFAULT_CALENDAR`` constant); a bad
+    ``cal.timezone`` falls through ``pick_tz`` SILENTLY to org/env/UTC (the S-notify-7 editor
+    validates tz fail-loud, so a bad stored value is near-unreachable). A structurally-broken
+    ``working_days`` (not a non-empty array of real ints 1..7 — no bool/float/string) → Mon-Fri
+    default + warn, KEEPING the resolved tz + holidays; individual unparseable holiday dates are
+    skipped (kept-good).
     """
     row = (
         await session.execute(
