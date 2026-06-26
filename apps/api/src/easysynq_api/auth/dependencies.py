@@ -16,6 +16,7 @@ from ..db.models.app_user import AppUser, UserStatus
 from ..db.models.organization import Organization
 from ..db.session import get_session
 from ..problems import ProblemException
+from ..services.common.org_clock import resolve_org_tz, set_request_org_tz
 from .jwks import JWKSCache, get_jwks_cache
 from .tokens import authenticate
 
@@ -89,4 +90,9 @@ async def get_current_user(
     jwks: JWKSCache = Depends(get_jwks_cache),
     session: AsyncSession = Depends(get_session),
 ) -> AppUser:
-    return await resolve_current_user(request, jwks, session)
+    user = await resolve_current_user(request, jwks, session)
+    # S-orgtz-unify: pin the caller's canonical org tz for this request task so today_org() /
+    # _document review_state / _fmt_date judge dates in the org's frame. Isolated to this request
+    # (its context copy is discarded at task end) — no reset needed.
+    set_request_org_tz(await resolve_org_tz(session, user.org_id))
+    return user
