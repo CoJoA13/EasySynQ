@@ -143,7 +143,27 @@ async def emit_task_event(
 
 
 async def _due_task_ids(session: AsyncSession, now: datetime.datetime) -> list[uuid.UUID]:
-    """Fetch ids of open tasks with an active SLA policy and at least one unstamped timer step."""
+    """Fetch ids of open tasks with an active SLA policy and at least one CONFIGURED, unstamped
+    timer step.
+
+    Policy-aware claim (S-claim-filter): a step is claimable only when its policy offset is
+    configured (non-NULL) AND its stamp is NULL — mirroring ``timer.due_steps``'
+    ``policy.<offset> is not None and stamps.<stamp> is None`` gating. This closes the recurring
+    tautology where an UNCONFIGURED step's perpetually-NULL stamp re-claimed every open task on
+    every sweep forever: ``remind_2_sent_at`` (the seed sets ``remind_2_before=None`` for all
+    types, so REMIND_2 never fires/stamps) and, for DOC_ACK/PERIODIC_REVIEW,
+    ``escalated_1_at`` (seed ``escalate_1_after=None`` → ESCALATE_1 never fires). OVERDUE has
+    no policy offset (it fires at ``due_at``), so it is gated on its stamp alone.
+
+    ⚠ If a future slice activates remind_2 / escalate_2, BOTH this claim AND ``due_steps`` must
+    learn the new step together (they are intentionally symmetric). ``remind_2`` is kept here
+    policy-gated and inert — ``remind_2_before IS NOT NULL`` is false for every seeded policy,
+    so it is NOT a tautology (unlike the old bare ``remind_2_sent_at IS NULL``); the future
+    "distinct remind_2" slice just sets ``remind_2_before`` non-NULL with no claim change.
+
+    This is the COARSE pre-filter only — the precise business-day thresholds stay
+    ``due_steps``' job inside the locked per-task txn, so over-claiming (e.g. a pre-due OVERDUE
+    row) is harmless. ``now`` is unused (the seam for the deferred Option-C threshold-gate)."""
     rows = (
         (
             await session.execute(
@@ -157,10 +177,10 @@ async def _due_task_ids(session: AsyncSession, now: datetime.datetime) -> list[u
                     Task.due_at.is_not(None),
                     SlaPolicy.active.is_(True),
                     (
-                        Task.remind_1_sent_at.is_(None)
-                        | Task.remind_2_sent_at.is_(None)
+                        (SlaPolicy.remind_1_before.is_not(None) & Task.remind_1_sent_at.is_(None))
+                        | (SlaPolicy.remind_2_before.is_not(None) & Task.remind_2_sent_at.is_(None))
                         | Task.overdue_notified_at.is_(None)
-                        | Task.escalated_1_at.is_(None)
+                        | (SlaPolicy.escalate_1_after.is_not(None) & Task.escalated_1_at.is_(None))
                     ),
                 )
             )
