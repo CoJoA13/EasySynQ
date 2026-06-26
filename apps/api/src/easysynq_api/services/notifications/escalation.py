@@ -31,6 +31,7 @@ from .constants import (
     EVENT_TASK_DUE_FINAL,
     EVENT_TASK_DUE_SOON,
     EVENT_TASK_ESCALATED,
+    EVENT_TASK_ESCALATED_FINAL,
     EVENT_TASK_OVERDUE,
 )
 from .dispatch import EnqueueOutcome, _enqueue_one
@@ -39,12 +40,14 @@ from .subjects import resolve_subject
 from .timer import Calendar, TimerPolicy, TimerStamps, TimerStep, due_steps
 
 _QM_ROLE = "QMS Owner"
+_TOP_MGMT_ROLE = "Top Management"  # the seeded second-tier leadership role (0038, resolved by name)
 _OPEN = ("PENDING", "CLAIMED")
 _STAMP_COL: dict[TimerStep, str] = {
     TimerStep.REMIND_1: "remind_1_sent_at",
     TimerStep.REMIND_2: "remind_2_sent_at",
     TimerStep.OVERDUE: "overdue_notified_at",
     TimerStep.ESCALATE_1: "escalated_1_at",
+    TimerStep.ESCALATE_2: "escalated_2_at",
 }
 # Mirror recipients.py: a deactivated user must never be a notification recipient.
 _INACTIVE = {UserStatus.LOCKED, UserStatus.DISABLED, UserStatus.RETIRED}
@@ -81,6 +84,22 @@ async def resolve_escalation_recipients(session: AsyncSession, task: Task) -> li
             # Manager is inactive, cross-org, or self-manager → fall through to QM fallback.
     # No manager (or pool-only task, or inactive/cross-org manager) → QM fallback (org-scoped).
     return await users_with_roles(session, task.org_id, [_QM_ROLE])
+
+
+async def resolve_escalation_2_recipients(
+    session: AsyncSession, task: Task
+) -> tuple[list[uuid.UUID], str]:
+    """Return the tier-2 (final) escalation recipients + the audit ``via`` label.
+
+    Priority: all ``Top Management`` role-holders in the task's org (the seeded second-tier
+    leadership role, R39) → else the ``QMS Owner`` fallback floor, so a tier-2 always has a target.
+    Returns (ids, via) so the caller needs no second query; each id is re-filtered for
+    existence/active/same-org at emit time by ``_recipient_for_user``.
+    """
+    top = await users_with_roles(session, task.org_id, [_TOP_MGMT_ROLE])
+    if top:
+        return top, "top_management"
+    return await users_with_roles(session, task.org_id, [_QM_ROLE]), "qm_fallback"
 
 
 async def _recipient_for_user(
@@ -306,12 +325,14 @@ async def process_task_timers(
         remind_1_before=policy.remind_1_before,
         remind_2_before=policy.remind_2_before,
         escalate_1_after=policy.escalate_1_after,
+        escalate_2_after=policy.escalate_2_after,
     )
     stamps = TimerStamps(
         remind_1_sent_at=task.remind_1_sent_at,
         remind_2_sent_at=task.remind_2_sent_at,
         overdue_notified_at=task.overdue_notified_at,
         escalated_1_at=task.escalated_1_at,
+        escalated_2_at=task.escalated_2_at,
     )
 
     # Set the org tz as the context for the render calls inside emit_task_event → _fmt_date
@@ -357,7 +378,7 @@ async def process_task_timers(
                     )
                     if outcome in ("created", "deduped"):
                         exists = True
-            else:  # TimerStep.ESCALATE_1
+            elif step is TimerStep.ESCALATE_1:
                 recipient_ids = await resolve_escalation_recipients(session, task)
                 # Derive the audit `via` label from the actual recipients returned, not from
                 # whether manager_id is set — an inactive/cross-org/self-manager falls through to
@@ -427,6 +448,51 @@ async def process_task_timers(
                                 "escalated_to": [str(u) for u in created_ids],
                                 "via": via,
                                 "due_at": task.due_at.isoformat(),
+                                "tier": 1,
+                            },
+                        )
+                    )
+            else:  # TimerStep.ESCALATE_2
+                recipient_ids, via = await resolve_escalation_2_recipients(session, task)
+                created_ids = []
+                exists_ids = []
+                attempted = 0
+                for uid in recipient_ids:
+                    r_maybe = await _recipient_for_user(session, uid, org_id=task.org_id)
+                    if r_maybe is not None:
+                        attempted += 1
+                        outcome = await emit_task_event(
+                            session,
+                            instance=instance,
+                            task=task,
+                            recipient=r_maybe,
+                            event_key=EVENT_TASK_ESCALATED_FINAL,
+                            now=now,
+                        )
+                        if outcome == "created":
+                            created_ids.append(uid)
+                            exists_ids.append(uid)
+                        elif outcome == "deduped":
+                            exists_ids.append(uid)
+                exists = bool(exists_ids)
+                if created_ids:
+                    # One TASK_ESCALATED (tier 2) audit only on a genuinely-new escalation (R4-1).
+                    session.add(
+                        AuditEvent(
+                            org_id=task.org_id,
+                            occurred_at=now,
+                            actor_id=None,
+                            actor_type=ActorType.system,
+                            event_type=EventType.TASK_ESCALATED,
+                            object_type=AuditObjectType.workflow_instance,
+                            object_id=instance.id,
+                            scope_ref=str(task.id),
+                            after={
+                                "task_id": str(task.id),
+                                "escalated_to": [str(u) for u in created_ids],
+                                "via": via,
+                                "due_at": task.due_at.isoformat(),
+                                "tier": 2,
                             },
                         )
                     )
