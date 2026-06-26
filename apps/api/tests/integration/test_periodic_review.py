@@ -19,12 +19,24 @@ from sqlalchemy import select, text
 
 from easysynq_api.db.session import get_sessionmaker
 from easysynq_api.services.notifications.duedate import resolve_calendar, snap_to_working_day
-from easysynq_api.services.vault.review import REVIEW_PERIOD_DEFAULT_MONTHS, _org_tz, add_months
+from easysynq_api.services.vault.review import REVIEW_PERIOD_DEFAULT_MONTHS, add_months
 
 from . import s5_helpers as s5
 from .test_vault import _auth, _checkin, _create, _map_clause, _upload
 
 pytestmark = pytest.mark.integration
+
+
+async def _canonical_tz():
+    """Resolve the org's canonical tz from the DB (matches the server's resolve_org_tz).
+
+    This replaces the old _org_tz() (env-tz fallback) so that expected dates are computed in the
+    same frame the server uses — making tests robust under a divergent calendar.timezone.
+    """
+    from easysynq_api.services.common.org_clock import resolve_default_org_tz
+
+    async with get_sessionmaker()() as s:
+        return await resolve_default_org_tz(s)
 
 
 @pytest.fixture
@@ -103,9 +115,7 @@ async def test_release_computes_next_review_due(
     eff_from_str = body.get("effective_from")
     assert eff_from_str is not None
     eff_from_dt = datetime.datetime.fromisoformat(eff_from_str)
-    from easysynq_api.services.vault.review import _org_tz
-
-    eff_from_date = eff_from_dt.astimezone(_org_tz()).date()
+    eff_from_date = eff_from_dt.astimezone(await _canonical_tz()).date()
     expected_due = add_months(eff_from_date, REVIEW_PERIOD_DEFAULT_MONTHS)
 
     assert body.get("review_period_months") == REVIEW_PERIOD_DEFAULT_MONTHS
@@ -131,9 +141,7 @@ async def test_patch_review_period_recomputes_and_null_clears(
     eff_from_str = body.get("effective_from")
     assert eff_from_str is not None
     eff_from_dt = datetime.datetime.fromisoformat(eff_from_str)
-    from easysynq_api.services.vault.review import _org_tz
-
-    eff_from_date = eff_from_dt.astimezone(_org_tz()).date()
+    eff_from_date = eff_from_dt.astimezone(await _canonical_tz()).date()
 
     # PATCH review_period_months=12 → recomputes next_review_due to eff_from + 12 months.
     r1 = await app_client.patch(
@@ -244,7 +252,7 @@ async def test_sweep_creates_one_task_idempotently(
     doc_uuid = uuid.UUID(did)
 
     # SET next_review_due to today + 30 days exactly (horizon boundary: <=, not <).
-    today_date = datetime.datetime.now(_org_tz()).date()
+    today_date = datetime.datetime.now(await _canonical_tz()).date()
     horizon_date = today_date + datetime.timedelta(days=30)
     async with get_sessionmaker()() as s:
         await s.execute(
@@ -353,7 +361,7 @@ async def test_sweep_snaps_weekend_review_due_to_working_day(
 
     # The NEXT Saturday from today (isoweekday 6): always a weekend within the 30-day lead horizon,
     # for any run date/weekday — deterministic + not weekday-flaky.
-    today = datetime.datetime.now(_org_tz()).date()
+    today = datetime.datetime.now(await _canonical_tz()).date()
     sat = today + datetime.timedelta(days=(6 - today.isoweekday()) % 7)
     async with get_sessionmaker()() as s:
         await s.execute(
@@ -414,7 +422,7 @@ async def test_sweep_skips_non_effective_and_unscheduled(
     ha = _auth(token_factory, subj.a)
     hb = _auth(token_factory, subj.b)
     type_id = await s5.type_id("SOP")
-    today_date = datetime.datetime.now(_org_tz()).date()
+    today_date = datetime.datetime.now(await _canonical_tz()).date()
 
     # --- Draft leg: a Draft doc with next_review_due = today (inside the horizon) ---
     draft_doc = await _create(app_client, ha, type_id)
@@ -509,7 +517,7 @@ async def test_sweep_escalates_overdue_once(
     identifier = body.get("identifier")
 
     # Backdate next_review_due to 40 days ago so the doc is overdue AND inside the lead window.
-    today_date = datetime.datetime.now(_org_tz()).date()
+    today_date = datetime.datetime.now(await _canonical_tz()).date()
     overdue_date = today_date - datetime.timedelta(days=40)
     async with get_sessionmaker()() as s:
         await s.execute(
@@ -695,7 +703,7 @@ async def _due_released_doc(
 
     did, _body = await _release_doc(app_client, ha, hb, type_id, content)
     doc_uuid = uuid.UUID(did)
-    today_date = datetime.datetime.now(_org_tz()).date()
+    today_date = datetime.datetime.now(await _canonical_tz()).date()
     async with get_sessionmaker()() as s:
         di = await s.get(DocumentedInformation, doc_uuid)
         assert di is not None
@@ -844,9 +852,10 @@ async def test_decide_complete_confirms_review(
 
         # The anchor proof: next_review_due == add_months(last_reviewed_at date, 24)
         # and must differ from add_months(backdated effective_from date, 24).
-        last_reviewed_date = di.last_reviewed_at.astimezone(_org_tz()).date()
+        _tz = await _canonical_tz()
+        last_reviewed_date = di.last_reviewed_at.astimezone(_tz).date()
         from_review_date = add_months(last_reviewed_date, 24)
-        backdated_eff_date = backdated_eff_from.astimezone(_org_tz()).date()
+        backdated_eff_date = backdated_eff_from.astimezone(_tz).date()
         from_eff_date = add_months(backdated_eff_date, 24)
         assert di.next_review_due == from_review_date, (
             f"next_review_due {di.next_review_due} != "
@@ -1385,7 +1394,7 @@ async def test_document_serializer_carries_review_fields(
     assert body.get("review_state") == "current"
 
     # Step 2: backdate next_review_due to yesterday → overdue.
-    today_date = datetime.datetime.now(_org_tz()).date()
+    today_date = datetime.datetime.now(await _canonical_tz()).date()
     yesterday = today_date - datetime.timedelta(days=1)
     async with get_sessionmaker()() as s:
         await s.execute(

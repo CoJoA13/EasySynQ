@@ -28,6 +28,15 @@ from .test_vault import _auth, _create, _ensure_user
 
 pytestmark = pytest.mark.integration
 
+
+async def _canonical_tz():
+    """Resolve the org's canonical tz from the DB (matches the server's resolve_org_tz)."""
+    from easysynq_api.services.common.org_clock import resolve_default_org_tz
+
+    async with get_sessionmaker()() as s:
+        return await resolve_default_org_tz(s)
+
+
 _CHECKLIST = "/api/v1/reports/compliance-checklist"
 
 
@@ -180,9 +189,6 @@ async def test_checklist_overdue_review_leg(
 
     from sqlalchemy import text
 
-    from easysynq_api.db.session import get_sessionmaker
-    from easysynq_api.services.vault.review import _org_tz
-
     await s5.grant_lifecycle(subj.a)
     await s5.grant_lifecycle(subj.b)
     await _grant(subj.a, ("report.compliance_checklist.read",))
@@ -201,7 +207,7 @@ async def test_checklist_overdue_review_leg(
     doc_id = eff["id"]
     await _map(app_client, ha, doc_id, clause_84)
 
-    today_date = datetime.datetime.now(_org_tz()).date()
+    today_date = datetime.datetime.now(await _canonical_tz()).date()
     yesterday = today_date - datetime.timedelta(days=1)
 
     doc_uuid = uuid.UUID(doc_id)
