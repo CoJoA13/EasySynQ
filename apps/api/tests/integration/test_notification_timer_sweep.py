@@ -146,6 +146,7 @@ async def _seed_workflow_objects(
     remind_2_sent_at: datetime.datetime | None = None,
     overdue_notified_at: datetime.datetime | None = None,
     escalated_1_at: datetime.datetime | None = None,
+    escalated_2_at: datetime.datetime | None = None,
 ) -> tuple[WorkflowInstance, Task]:
     key = f"timer_test_{uuid.uuid4().hex[:8]}"
     async with get_sessionmaker()() as s:
@@ -183,6 +184,7 @@ async def _seed_workflow_objects(
             remind_2_sent_at=remind_2_sent_at,
             overdue_notified_at=overdue_notified_at,
             escalated_1_at=escalated_1_at,
+            escalated_2_at=escalated_2_at,
         )
         s.add(task)
         await s.commit()
@@ -1527,11 +1529,10 @@ async def test_escalation_skips_weekend_business_day(app_under_test: Any) -> Non
 
 
 async def test_due_task_ids_excludes_fully_fired_escalate_enabled(app_under_test: Any) -> None:
-    """A fully-fired OPEN APPROVE task is NOT re-claimed (all configured steps stamped).
+    """A fully-fired OPEN APPROVE task is NOT re-claimed (all FIVE configured steps stamped).
 
-    Post-S-remind2 remind_2 is a real configured step (remind_2_before=1d), so a fully-fired task
-    stamps all four steps. This is now a plain fully-fired regression guard for the policy-aware
-    claim (the original remind_2 tautology no longer exists for APPROVE — remind_2 is real).
+    Post-S-escalate2, APPROVE has remind_1 + remind_2 + escalate_1 + escalate_2 configured (plus the
+    always-on OVERDUE). A fully-fired task stamps all five; the policy-aware claim must exclude it.
     """
     org_id = await _default_org_id()
     assignee_id = await _seed_user(org_id, display_name="Claim Fully Fired APPROVE")
@@ -1545,13 +1546,14 @@ async def test_due_task_ids_excludes_fully_fired_escalate_enabled(app_under_test
         remind_2_sent_at=_STAMPED,
         overdue_notified_at=_STAMPED,
         escalated_1_at=_STAMPED,
+        escalated_2_at=_STAMPED,
     )
 
     async with get_sessionmaker()() as s:
         ids = await _due_task_ids(s, _BASE)
 
     assert task.id not in ids, (
-        "fully-fired APPROVE task must NOT be re-claimed (all four configured steps stamped)"
+        "fully-fired APPROVE task must NOT be re-claimed (all five configured steps stamped)"
     )
 
 
@@ -1651,6 +1653,33 @@ async def test_due_task_ids_still_claims_pending_steps(app_under_test: Any) -> N
     assert task_overdue.id in ids, "pending overdue task must still be claimed"
     assert task_escalate.id in ids, "pending escalate task must still be claimed"
     assert task_doc_ack.id in ids, "pending-overdue DOC_ACK must be claimed (policy join resolves)"
+
+
+async def test_due_task_ids_claims_pending_escalate2(app_under_test: Any) -> None:
+    """Over-tightening guard: only escalate_2 unstamped (1-4 stamped) → still claimed.
+
+    Proves the new policy-gated disjunct (escalate_2_after IS NOT NULL AND escalated_2_at IS NULL)
+    selects an APPROVE task whose other four steps are all stamped — i.e. the tier-2 claim works.
+    """
+    org_id = await _default_org_id()
+    assignee_id = await _seed_user(org_id, display_name="Claim Pending Escalate2")
+    _, task = await _seed_workflow_objects(
+        org_id,
+        assignee_id,
+        due_at=_BASE - datetime.timedelta(days=2),
+        task_type=TaskType.APPROVE,
+        task_state=TaskState.PENDING,
+        remind_1_sent_at=_STAMPED,
+        remind_2_sent_at=_STAMPED,
+        overdue_notified_at=_STAMPED,
+        escalated_1_at=_STAMPED,
+        # escalated_2_at NULL → claimable via the new escalate_2 disjunct.
+    )
+
+    async with get_sessionmaker()() as s:
+        ids = await _due_task_ids(s, _BASE)
+
+    assert task.id in ids, "task with only escalate_2 pending must be claimed (tier-2 disjunct)"
 
 
 async def test_remind_2_distinct_final_reminder(app_under_test: Any) -> None:

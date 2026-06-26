@@ -160,12 +160,15 @@ async def _due_task_ids(session: AsyncSession, now: datetime.datetime) -> list[u
     (seed ``escalate_1_after=None`` → ESCALATE_1 never fires). OVERDUE has no policy offset (it
     fires at ``due_at``), so it is gated on its stamp alone.
 
-    ⚠ The claim and ``due_steps`` are intentionally symmetric — a future tier (escalate_2) must
-    teach both together. ``remind_2`` is now LIVE (S-remind2 / migration 0068 set
+    ⚠ The claim and ``due_steps`` are intentionally symmetric — both must be taught together when
+    a new tier is added. ``remind_2`` is LIVE (S-remind2 / migration 0068 set
     ``remind_2_before`` non-NULL), so its policy-gated disjunct (``remind_2_before IS NOT NULL
-    AND remind_2_sent_at IS NULL``) is a real second-reminder claim, not a tautology — the
-    S-claim-filter seam re-activated it with no claim-code change. The DOC_ACK/PERIODIC_REVIEW
-    ``escalated_1_at`` tautology stays closed by the ``escalate_1_after IS NOT NULL`` gate.
+    AND remind_2_sent_at IS NULL``) is a real second-reminder claim. ``escalate_2`` is now LIVE
+    (S-escalate2 / migration 0069 set ``escalate_2_after`` non-NULL for escalate-enabled types),
+    so its policy-gated disjunct (``escalate_2_after IS NOT NULL AND escalated_2_at IS NULL``) is
+    a real tier-2 escalation claim — taught in both the claim and ``due_steps``. The
+    DOC_ACK/PERIODIC_REVIEW ``escalated_1_at`` tautology stays closed by the
+    ``escalate_1_after IS NOT NULL`` gate.
 
     This is the COARSE pre-filter only — the precise business-day thresholds stay
     ``due_steps``' job inside the locked per-task txn, so over-claiming (e.g. a pre-due OVERDUE
@@ -187,6 +190,7 @@ async def _due_task_ids(session: AsyncSession, now: datetime.datetime) -> list[u
                         | (SlaPolicy.remind_2_before.is_not(None) & Task.remind_2_sent_at.is_(None))
                         | Task.overdue_notified_at.is_(None)
                         | (SlaPolicy.escalate_1_after.is_not(None) & Task.escalated_1_at.is_(None))
+                        | (SlaPolicy.escalate_2_after.is_not(None) & Task.escalated_2_at.is_(None))
                     ),
                 )
             )
