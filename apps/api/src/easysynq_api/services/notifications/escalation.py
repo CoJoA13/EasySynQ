@@ -11,7 +11,6 @@ from __future__ import annotations
 import datetime
 import logging
 import uuid
-import zoneinfo
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -20,17 +19,19 @@ from ...db.models._audit_enums import ActorType, AuditObjectType, EventType
 from ...db.models.app_user import AppUser, UserStatus
 from ...db.models.audit_event import AuditEvent
 from ...db.models.notification import NotificationPreference
+from ...db.models.organization import Organization
 from ...db.models.sla_policy import SlaPolicy
 from ...db.models.system_config import SystemConfig
 from ...db.models.workflow import Task, WorkflowInstance
 from ...db.models.working_calendar import WorkingCalendar
+from ..common.org_clock import pick_tz
 from ..workflow.repository import users_with_roles
 from .calendar_spec import parse_holiday, parse_working_days
 from .constants import EVENT_TASK_DUE_SOON, EVENT_TASK_ESCALATED, EVENT_TASK_OVERDUE
 from .dispatch import EnqueueOutcome, _enqueue_one
 from .recipients import Recipient, _first_name, resolve_recipients
 from .subjects import resolve_subject
-from .timer import DEFAULT_CALENDAR, Calendar, TimerPolicy, TimerStamps, TimerStep, due_steps
+from .timer import Calendar, TimerPolicy, TimerStamps, TimerStep, due_steps
 
 _QM_ROLE = "QMS Owner"
 _OPEN = ("PENDING", "CLAIMED")
@@ -188,23 +189,19 @@ async def resolve_working_calendar(session: AsyncSession, org_id: uuid.UUID) -> 
             .limit(1)
         )
     ).scalar_one_or_none()
+    org_tz = (
+        await session.execute(select(Organization.timezone).where(Organization.id == org_id))
+    ).scalar_one_or_none()
+    # ONE tz decision shared with resolve_org_tz (parity by construction): cal → org → env → UTC.
+    tz = pick_tz(row.timezone if row is not None else None, org_tz)
     if row is None:
-        return DEFAULT_CALENDAR
-    # Timezone FIRST — a fallback calendar must still evaluate working days in the org's local time.
-    try:
-        tz = zoneinfo.ZoneInfo(row.timezone or "UTC")
-    except (zoneinfo.ZoneInfoNotFoundError, ValueError):
-        logger.warning(
-            "notifications.timer_bad_timezone", extra={"org_id": str(org_id), "tz": row.timezone}
-        )
-        tz = zoneinfo.ZoneInfo("UTC")
-    # working_days: a strictly-validated array of ISO ints 1..7; broken → Mon-Fri default (keep tz).
+        # No calendar row (a new org pre-editor): Mon-Fri default, but in the org's resolved tz
+        # (NOT UTC) so the is_working_day(now) gate judges weekends in local time.
+        return Calendar(working_weekdays=frozenset({1, 2, 3, 4, 5}), holidays=frozenset(), tz=tz)
     weekdays = parse_working_days(row.working_days)
     if weekdays is None:
         logger.warning("notifications.timer_bad_working_days", extra={"org_id": str(org_id)})
         weekdays = frozenset({1, 2, 3, 4, 5})
-    # holidays: a non-list scalar (5 / true) → no holidays (never let `for h in <scalar>` raise);
-    # individual unparseable entries inside a list are skipped (kept-good).
     raw_holidays = row.holidays if isinstance(row.holidays, list) else []
     holidays: set[datetime.date] = set()
     for h in raw_holidays:

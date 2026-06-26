@@ -17,7 +17,6 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ...config import get_settings
 from ...db.models._audit_enums import ActorType, AuditObjectType, EventType
 from ...db.models._signature_enums import SignatureMeaning, SignedObjectType
 from ...db.models._vault_enums import DocumentCurrentState, DocumentKind
@@ -30,6 +29,7 @@ from ...db.models.signature_event import SignatureEvent as SignatureEventRow
 from ...db.models.workflow import Task, WorkflowInstance
 from ...logging import request_id_var
 from ...problems import ProblemException
+from ..common.org_clock import current_org_tz
 from ..common.pg_locks import LOCK_REVIEW_SWEEP, pg_advisory_lock
 from ..workflow import engine as wf_engine
 from ..workflow import repository as wf_repo
@@ -48,7 +48,7 @@ def add_months(day: datetime.date, months: int) -> datetime.date:
 
 
 def _org_tz() -> ZoneInfo:
-    return ZoneInfo(get_settings().easysynq_org_timezone)
+    return current_org_tz()
 
 
 def today_org() -> datetime.date:
