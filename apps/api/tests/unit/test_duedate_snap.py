@@ -127,14 +127,19 @@ def test_eastward_tz_local_saturday_snaps():
 
 
 def test_snapped_value_renders_calendar_date_not_utc():
-    """The notification renderer (_fmt_date → value.date()) must show the working-calendar date for
-    an east-of-UTC snapped due (Codex #291 P2)."""
+    """The notification renderer must show the working-calendar date for an east-of-UTC snapped
+    due (Codex #291 P2). Post S-orgtz-unify, _fmt_date re-converts an aware datetime via
+    current_org_tz() and the materialize/sweep render runs INSIDE using_org_tz(cal.tz) — so model
+    that context. Still mutation-distinguishing: without the wrap the contextvar is UTC and the
+    rendered date would be 06-28."""
+    from easysynq_api.services.common.org_clock import using_org_tz
     from easysynq_api.services.notifications.render import _fmt_date
 
     tokyo = zoneinfo.ZoneInfo("Asia/Tokyo")
     cal = Calendar({1, 2, 3, 4, 5}, frozenset(), tokyo)
     out = snap_to_working_day(_dt(2026, 6, 26, 23, 0), cal)  # → Monday 2026-06-29 in Tokyo
-    assert _fmt_date(out) == "2026-06-29"  # NOT "2026-06-28" (the UTC day)
+    with using_org_tz(tokyo):
+        assert _fmt_date(out) == "2026-06-29"  # NOT "2026-06-28" (the UTC day)
 
 
 def test_westward_tz_local_friday_does_not_snap():
