@@ -16,6 +16,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...db.models.notification import NotificationTemplate
+from ..common.org_clock import current_org_tz
 from .constants import VARIABLE_WHITELIST
 
 # {{ name }} or {{ name | date }} — name is dotted word chars; nothing else is a slot.
@@ -35,6 +36,12 @@ class RenderedForms:
 
 def _fmt_date(value: object) -> str:
     if isinstance(value, datetime.datetime):
+        if value.tzinfo is not None:
+            # Re-convert an aware instant to the org's tz before dating it (S-orgtz-unify): a
+            # due_at read back from PG is UTC-aware, so .date() would show the UTC date — off by a
+            # day for an east-of-UTC org. current_org_tz() is set at the auth boundary (request
+            # renders) and in process_task_timers (sweep renders).
+            return value.astimezone(current_org_tz()).date().isoformat()
         return value.date().isoformat()
     if isinstance(value, datetime.date):
         return value.isoformat()
