@@ -1797,6 +1797,21 @@ async def test_escalate_2_qm_fallback(app_under_test: Any) -> None:
     via=qm_fallback when the Top Management role has no members in the org.
     """
     org_id = await _default_org_id()
+    # Self-provide the precondition: the tier-2 resolver returns Top Management FIRST, so the QM
+    # floor is reached only when the org has NO Top Management holder. Other integration files
+    # (test_capa / *_authorization) leak un-cleaned SYSTEM-scoped Top Management assignments into
+    # this shared default org, and shard composition is .test_durations-driven — so clear any leaked
+    # holders here rather than assume a clean shared DB (engineering-patterns: self-provide every
+    # precondition).
+    async with get_sessionmaker()() as s:
+        tm_role = (
+            await s.execute(
+                select(Role).where(Role.org_id == org_id, Role.name == "Top Management")
+            )
+        ).scalar_one_or_none()
+        if tm_role is not None:
+            await s.execute(delete(RoleAssignment).where(RoleAssignment.role_id == tm_role.id))
+            await s.commit()
     assignee_id = await _seed_user(org_id, display_name="Escalate2 NoTM Assignee")
     qm_id = await _seed_user(org_id, display_name="QM Member E2", email="qm-e2@example.com")
     await _assign_role(org_id, qm_id, "QMS Owner")

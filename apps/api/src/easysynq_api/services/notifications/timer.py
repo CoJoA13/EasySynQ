@@ -149,6 +149,9 @@ class TimerPolicy:
     remind_1_before: datetime.timedelta | None
     remind_2_before: datetime.timedelta | None
     escalate_1_after: datetime.timedelta | None
+    # = None so existing constructors stay valid; production sites (escalation.py) wire it by
+    # keyword. A forgotten future construction site would silently disable tier-2 — covered by the
+    # integration wiring test (test_escalate_2_to_top_management).
     escalate_2_after: datetime.timedelta | None = None
 
 
