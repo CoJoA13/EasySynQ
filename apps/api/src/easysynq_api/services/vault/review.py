@@ -60,8 +60,10 @@ def compute_next_review_due(
     review_period_months: int | None,
     last_reviewed_at: datetime.datetime | None,
     effective_from: datetime.datetime | None,
+    org_tz: ZoneInfo,
 ) -> datetime.date | None:
-    """anchor = the LATER of (last_reviewed_at, effective_from); + period months, org-tz dated.
+    """anchor = the LATER of (last_reviewed_at, effective_from); + period months, dated in
+    ``org_tz`` (the resolved canonical org tz — S-orgtz-unify R56).
 
     One rule, three triggers (release / review-confirm / PATCH): a re-release after a confirm
     anchors on the newer effective_from, a confirm after a release anchors on the newer review
@@ -71,7 +73,7 @@ def compute_next_review_due(
     anchors = [a for a in (last_reviewed_at, effective_from) if a is not None]
     if not anchors:
         return None
-    return add_months(max(anchors).astimezone(_org_tz()).date(), review_period_months)
+    return add_months(max(anchors).astimezone(org_tz).date(), review_period_months)
 
 
 def review_state(next_review_due: datetime.date | None, today: datetime.date) -> str | None:
@@ -367,7 +369,7 @@ async def decide_periodic_review(
         now = _now()
         doc.last_reviewed_at = now
         doc.next_review_due = compute_next_review_due(
-            doc.review_period_months, now, version.effective_from
+            doc.review_period_months, now, version.effective_from, current_org_tz()
         )
         session.add(
             AuditEvent(

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -38,26 +39,26 @@ def test_add_months_year_rollover() -> None:
 
 def test_compute_none_when_period_null() -> None:
     eff = datetime.datetime(2026, 1, 1, tzinfo=UTC)
-    assert compute_next_review_due(None, None, eff) is None
+    assert compute_next_review_due(None, None, eff, ZoneInfo("UTC")) is None
 
 
 def test_compute_none_when_no_anchor() -> None:
-    assert compute_next_review_due(24, None, None) is None
+    assert compute_next_review_due(24, None, None, ZoneInfo("UTC")) is None
 
 
 def test_compute_anchors_on_effective_from() -> None:
     eff = datetime.datetime(2026, 1, 10, 12, 0, tzinfo=UTC)
-    assert compute_next_review_due(24, None, eff) == datetime.date(2028, 1, 10)
+    assert compute_next_review_due(24, None, eff, ZoneInfo("UTC")) == datetime.date(2028, 1, 10)
 
 
 def test_compute_anchor_is_the_later_timestamp() -> None:
     eff = datetime.datetime(2026, 1, 10, tzinfo=UTC)
     reviewed = datetime.datetime(2026, 6, 1, tzinfo=UTC)
     # confirm after release → anchors on the review date
-    assert compute_next_review_due(12, reviewed, eff) == datetime.date(2027, 6, 1)
+    assert compute_next_review_due(12, reviewed, eff, ZoneInfo("UTC")) == datetime.date(2027, 6, 1)
     # re-release after a confirm → anchors on the newer effective_from
     eff2 = datetime.datetime(2026, 9, 1, tzinfo=UTC)
-    assert compute_next_review_due(12, reviewed, eff2) == datetime.date(2027, 9, 1)
+    assert compute_next_review_due(12, reviewed, eff2, ZoneInfo("UTC")) == datetime.date(2027, 9, 1)
 
 
 def test_review_state_projection_boundaries() -> None:
@@ -71,14 +72,12 @@ def test_review_state_projection_boundaries() -> None:
     assert review_state(due, due + datetime.timedelta(days=30)) == "overdue"
 
 
-def test_compute_converts_anchor_to_org_timezone(monkeypatch: pytest.MonkeyPatch) -> None:
-    # The org-tz conversion must be load-bearing, not identity (the default tz is UTC, so without
-    # this test deleting .astimezone(_org_tz()) passes the whole suite).
-    from zoneinfo import ZoneInfo
-
-    import easysynq_api.services.vault.review as review_mod
-
-    monkeypatch.setattr(review_mod, "_org_tz", lambda: ZoneInfo("Pacific/Auckland"))
-    # 23:00 UTC Jan 10 is already Jan 11 in Auckland (UTC+13 in January) → anchors on Jan 11.
-    eff = datetime.datetime(2026, 1, 10, 23, 0, tzinfo=UTC)
-    assert review_mod.compute_next_review_due(12, None, eff) == datetime.date(2027, 1, 11)
+def test_compute_converts_anchor_to_org_timezone() -> None:
+    # The org-tz conversion must be load-bearing, not identity: the SAME UTC timestamp yields
+    # a different date in Auckland vs UTC, so the explicit org_tz param is actually used.
+    # 2026-01-31 11:00 UTC is 2026-02-01 00:00 Auckland (UTC+13 in January) → anchors on Feb 1.
+    eff = datetime.datetime(2026, 1, 31, 11, 0, tzinfo=UTC)
+    out = compute_next_review_due(12, None, eff, ZoneInfo("Pacific/Auckland"))
+    assert out == datetime.date(2027, 2, 1)
+    out_utc = compute_next_review_due(12, None, eff, ZoneInfo("UTC"))
+    assert out_utc == datetime.date(2027, 1, 31)
