@@ -4162,6 +4162,28 @@ paths:
               schema: { $ref: "#/components/schemas/Capa" }
         "403": { $ref: "#/components/responses/ProblemResponse" }
         "404": { $ref: "#/components/responses/ProblemResponse" }
+    patch:
+      tags: [capa]
+      operationId: setCapaTargetDate
+      summary: >-
+        Set/clear the CAPA's target-completion date (gate capa.update). Clears overdue_notified_at
+        to re-arm the sweep. 409 capa_terminal on a Closed/Rejected CAPA.
+      parameters:
+        - { name: capa_id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CapaTargetDate" }
+      responses:
+        "200":
+          description: The updated CAPA (target_completion_date + overdue recomputed server-side).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Capa" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409": { $ref: "#/components/responses/ProblemResponse" }
   /capas/{capa_id}/containment:
     post:
       tags: [capa]
@@ -8160,7 +8182,7 @@ components:
     Capa:
       type: object
       additionalProperties: false
-      required: [id, identifier, source, severity, close_state, cycle_marker]
+      required: [id, identifier, source, severity, close_state, cycle_marker, overdue]
       properties:
         id: { type: string, format: uuid }
         identifier: { type: [string, "null"] }
@@ -8176,10 +8198,29 @@ components:
         title: { type: [string, "null"] }
         created_at: { type: [string, "null"], format: date-time }
         raised_by: { type: [string, "null"], format: uuid }
+        target_completion_date:
+          type: [string, "null"]
+          format: date
+          description: >-
+            The auditor-checked target-completion deadline (severity-defaulted at raise, editable via
+            PATCH). Null means no deadline set.
+        overdue:
+          type: boolean
+          description: >-
+            Server-computed: true iff target_completion_date is set, the CAPA is not terminal
+            (Closed/Rejected), and today (org timezone) is past the deadline.
         stages:
           type: array
           items: { $ref: "#/components/schemas/CapaStage" }
           description: The sealed stage trail (present on a single read, omitted on the list).
+    CapaTargetDate:
+      type: object
+      additionalProperties: false
+      properties:
+        target_completion_date:
+          type: [string, "null"]
+          format: date
+          description: The new target-completion date (ISO 8601 date), or null to clear it.
     CapaRaise:
       type: object
       additionalProperties: false

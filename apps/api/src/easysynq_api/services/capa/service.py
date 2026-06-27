@@ -1023,6 +1023,41 @@ async def record_ncr_disposition(
 _TERMINAL_CAPA_STATES = (CapaCloseState.Closed, CapaCloseState.Rejected)
 
 
+async def set_capa_target_date(
+    session: AsyncSession,
+    actor: AppUser,
+    capa_id: uuid.UUID,
+    *,
+    target_completion_date: datetime.date | None,
+) -> Capa:
+    """Set/clear a CAPA's target-completion date (gate capa.update). 409 on a terminal CAPA.
+    Clears overdue_notified_at to re-arm the sweep, and writes a CAPA_TARGET_DATE_SET audit
+    (the WORM record of who moved a mutable compliance deadline)."""
+    capa = await repo.get_capa(session, capa_id, for_update=True)
+    if capa is None or capa.org_id != actor.org_id:
+        raise _not_found("CAPA")
+    if capa.close_state in _TERMINAL_CAPA_STATES:
+        raise _conflict("capa_terminal", f"a {capa.close_state.value} CAPA has no live target date")
+    before = capa.target_completion_date
+    capa.target_completion_date = target_completion_date
+    capa.overdue_notified_at = None  # re-arm: a new/cleared date re-opens the breach claim
+    emit_record_event(
+        session,
+        actor,
+        EventType.CAPA_TARGET_DATE_SET,
+        capa.id,
+        before={"target_completion_date": before.isoformat() if before else None},
+        after={
+            "target_completion_date": (
+                target_completion_date.isoformat() if target_completion_date else None
+            )
+        },
+    )
+    await session.commit()
+    await session.refresh(capa)
+    return capa
+
+
 async def _find_spawned_dcr(
     session: AsyncSession, org_id: uuid.UUID, capa_id: uuid.UUID, idempotency_key: str | None
 ) -> Dcr | None:

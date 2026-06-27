@@ -15,6 +15,7 @@ from .service import (
     raise_capa,
     raise_dcr_from_capa,
     record_ncr_disposition,
+    set_capa_target_date,
     spawn_capa_from_complaint,
     verify_capa,
 )
@@ -32,6 +33,7 @@ __all__ = [
     "raise_capa",
     "raise_dcr_from_capa",
     "record_ncr_disposition",
+    "set_capa_target_date",
     "spawn_capa_from_complaint",
     "verify_capa",
 ]

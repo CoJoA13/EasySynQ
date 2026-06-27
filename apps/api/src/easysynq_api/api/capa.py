@@ -30,7 +30,13 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..auth.dependencies import get_current_user
-from ..db.models._capa_enums import CapaSource, NcrDisposition, NcrSource, NcSeverity
+from ..db.models._capa_enums import (
+    CapaCloseState,
+    CapaSource,
+    NcrDisposition,
+    NcrSource,
+    NcSeverity,
+)
 from ..db.models._workflow_enums import WorkflowSubjectType
 from ..db.models.app_user import AppUser
 from ..db.models.capa import Capa
@@ -52,10 +58,12 @@ from ..services.capa import (
     propose_action_plan,
     raise_capa,
     record_ncr_disposition,
+    set_capa_target_date,
     spawn_capa_from_complaint,
     verify_capa,
 )
 from ..services.capa import repository as capa_repo
+from ..services.common.org_clock import current_org_tz
 from ..services.vault import SignatureEventSink, get_vault_signature_sink
 from ..services.workflow import repository as wf_repo
 
@@ -127,6 +135,10 @@ class NcrDispositionBody(BaseModel):
     notes: str | None = Field(default=None, max_length=2000)
 
 
+class CapaTargetDate(BaseModel):
+    target_completion_date: datetime.date | None = None
+
+
 # --- serializers ------------------------------------------------------------------------------
 
 
@@ -165,6 +177,14 @@ def _capa(
         "origin_finding_id": str(c.origin_finding_id) if c.origin_finding_id else None,
         "raised_by": raised_by,
         "created_at": created_at.isoformat() if created_at else None,
+        "target_completion_date": (
+            c.target_completion_date.isoformat() if c.target_completion_date else None
+        ),
+        "overdue": (
+            c.target_completion_date is not None
+            and c.close_state not in (CapaCloseState.Closed, CapaCloseState.Rejected)
+            and datetime.datetime.now(current_org_tz()).date() > c.target_completion_date
+        ),
     }
     if stages is not None:
         out["stages"] = stages
@@ -390,6 +410,21 @@ async def get_capa_endpoint(
     evidence = await capa_repo.list_stage_evidence(session, [s.id for s in stage_rows])
     stages = [_stage(s, evidence_links=evidence.get(s.id, [])) for s in stage_rows]
     return await _capa_full(session, capa, stages=stages)
+
+
+@router.patch("/capas/{capa_id}")
+async def set_capa_target_date_endpoint(
+    capa_id: uuid.UUID,
+    body: CapaTargetDate,
+    caller: AppUser = Depends(_capa_update),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """Set/clear the CAPA's target-completion date (gate ``capa.update``). 409 on a terminal CAPA;
+    clears the overdue stamp to re-arm the sweep."""
+    capa = await set_capa_target_date(
+        session, caller, capa_id, target_completion_date=body.target_completion_date
+    )
+    return await _capa_full(session, capa)
 
 
 @router.get("/capas/{capa_id}/approval")
