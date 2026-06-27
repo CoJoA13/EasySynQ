@@ -12,6 +12,7 @@ EVENT_TASK_ESCALATED_FINAL = "task.escalated_final"
 EVENT_EMAIL_DELIVERY_FAILED = "system.email_delivery_failed"
 EVENT_DIGEST_DAILY = "digest.daily"
 EVENT_DOC_RELEASED = "doc.released"
+EVENT_CAPA_OVERDUE = "capa.overdue"
 
 SUBJECT_SYSTEM = "SYSTEM"
 
@@ -51,6 +52,17 @@ VARIABLE_WHITELIST: dict[str, frozenset[str]] = {
             "version.label",
             "deep_link",
             "prefs_link",
+        }
+    ),
+    EVENT_CAPA_OVERDUE: frozenset(
+        {
+            "recipient.first_name",
+            "subject.identifier",
+            "subject.title",
+            "subject.kind",
+            "deep_link",
+            "prefs_link",
+            "target_completion_date",
         }
     ),
 }
