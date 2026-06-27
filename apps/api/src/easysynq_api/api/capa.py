@@ -136,7 +136,7 @@ class NcrDispositionBody(BaseModel):
 
 
 class CapaTargetDate(BaseModel):
-    target_completion_date: datetime.date | None = None
+    target_completion_date: datetime.date | None
 
 
 # --- serializers ------------------------------------------------------------------------------

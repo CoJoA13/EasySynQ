@@ -207,6 +207,26 @@ async def test_patch_terminal_capa_is_409(
     assert r2.json()["code"] == "capa_terminal"
 
 
+async def test_patch_empty_body_is_422(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+) -> None:
+    """PATCH with an empty body {} → 422 (field is required-but-nullable; omitting it must not
+    silently clear an existing deadline)."""
+    subject = _subject("empty")
+    await _grant(subject, _UPDATE_KEYS)
+    h = _auth(token_factory, subject)
+
+    capa_id = (
+        await app_client.post(
+            "/api/v1/capas", headers=h, json={"title": "Empty body test", "severity": "Minor"}
+        )
+    ).json()["id"]
+
+    r = await app_client.patch(f"/api/v1/capas/{capa_id}", headers=h, json={})
+    assert r.status_code == 422, r.text
+
+
 async def test_patch_target_date_requires_capa_update(
     app_client: AsyncClient,
     token_factory: Callable[..., str],

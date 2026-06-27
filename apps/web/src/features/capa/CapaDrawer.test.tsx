@@ -105,7 +105,7 @@ describe("Target completion / overdue", () => {
     server.use(
       http.get("/api/v1/me/permissions", () =>
         HttpResponse.json({
-          scope: { level: "SYSTEM", selector: null },
+          scope: { level: "PROCESS", selector: null },
           permissions: [{ key: "capa.update", effect: "ALLOW", source: null }],
         }),
       ),
@@ -142,7 +142,7 @@ describe("Target completion / overdue", () => {
     server.use(
       http.get("/api/v1/me/permissions", () =>
         HttpResponse.json({
-          scope: { level: "SYSTEM", selector: null },
+          scope: { level: "PROCESS", selector: null },
           permissions: [{ key: "capa.update", effect: "ALLOW", source: null }],
         }),
       ),

@@ -8216,6 +8216,7 @@ components:
     CapaTargetDate:
       type: object
       additionalProperties: false
+      required: [target_completion_date]
       properties:
         target_completion_date:
           type: [string, "null"]

@@ -18,7 +18,10 @@ import { useCapaSetTargetDate } from "./mutations";
 export function CapaDrawer({ capaId, onClose }: { capaId: string | null; onClose: () => void }) {
   const { data: capa, isLoading, isError, refetch } = useCapa(capaId);
   const { data: directory } = useUserDirectory();
-  const { can } = usePermissions();
+  const scope: { level: string; id?: string } = capa?.process_id
+    ? { level: "PROCESS", id: capa.process_id }
+    : { level: "SYSTEM" };
+  const { can } = usePermissions(scope);
   const raiseDcr = useRaiseDcrFromCapa(capaId ?? "");
   const setTargetDate = useCapaSetTargetDate(capaId ?? "");
   const [raisingDcr, setRaisingDcr] = useState(false);
