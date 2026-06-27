@@ -110,10 +110,13 @@ async def _process_one(
         context_vars: dict[str, object] = {"target_completion_date": target.isoformat()}
 
         created = 0
+        deduped = 0
+        attempted = 0
         for uid in recipient_ids:
             recipient = await _recipient_for_user(session, uid, org_id=org_id)
             if recipient is None:
                 continue
+            attempted += 1
             outcome = await enqueue_awareness_one(
                 session,
                 org_id=org_id,
@@ -128,30 +131,45 @@ async def _process_one(
                 org_pierce=org_pierce,
             )
             if outcome == "no_template":
-                # Template vanished (TOCTOU) — do NOT stamp so the CAPA is re-claimed next sweep.
+                # Template vanished (TOCTOU) — do NOT stamp; roll back so the CAPA is re-claimed.
                 logger.warning("capa.overdue_template_missing", extra={"capa_id": str(capa.id)})
                 return 0
             if outcome == "created":
                 created += 1
+            elif outcome == "deduped":
+                deduped += 1
+
+        if created == 0 and deduped == 0:
+            # No valid QMS-Owner recipient (attempted == 0): the role has no holders, or every
+            # holder is inactive/cross-org. Do NOT stamp — leave overdue_notified_at NULL so the
+            # CAPA re-fires next sweep once a QMS Owner is assigned (must-not-silently-drop,
+            # owner-decided). No audit.
+            logger.warning(
+                "capa.overdue_no_valid_recipients",
+                extra={"capa_id": str(capa.id), "org_id": str(org_id)},
+            )
+            return 0
 
         capa.overdue_notified_at = now
-        session.add(
-            AuditEvent(
-                org_id=org_id,
-                occurred_at=now,
-                actor_id=None,
-                actor_type=ActorType.system,
-                event_type=EventType.CAPA_OVERDUE,
-                object_type=AuditObjectType.record,  # capa.id IS a record id (per capa.py)
-                object_id=capa.id,
-                scope_ref=str(capa.id),
-                after={
-                    "capa_id": str(capa.id),
-                    "target_completion_date": target.isoformat(),
-                    "severity": capa.severity.value,
-                },
+        if created > 0:  # R4-1: one CAPA_OVERDUE audit only per genuinely-new notification batch
+            session.add(
+                AuditEvent(
+                    org_id=org_id,
+                    occurred_at=now,
+                    actor_id=None,
+                    actor_type=ActorType.system,
+                    event_type=EventType.CAPA_OVERDUE,
+                    object_type=AuditObjectType.record,  # capa.id IS a record id (per capa.py)
+                    object_id=capa.id,
+                    scope_ref=str(capa.id),
+                    after={
+                        "capa_id": str(capa.id),
+                        "target_completion_date": target.isoformat(),
+                        "severity": capa.severity.value,
+                        "notified_count": created,
+                    },
+                )
             )
-        )
         await session.commit()
         return created
 

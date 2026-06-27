@@ -59,6 +59,12 @@ pytestmark = pytest.mark.integration
 # ---------------------------------------------------------------------------
 _BASE = datetime.datetime(2026, 6, 24, 10, 0, 0, tzinfo=datetime.UTC)
 _OVERDUE_DATE = datetime.date(2026, 6, 23)  # day before _BASE → past-due
+
+# Inactive status that causes _recipient_for_user to return None (mirrors escalation._INACTIVE).
+_INACTIVE_STATUS = UserStatus.LOCKED
+
+# Saturday 2026-06-27 10:00 UTC — not a working day in the default Mon-Fri calendar.
+_SATURDAY = datetime.datetime(2026, 6, 27, 10, 0, 0, tzinfo=datetime.UTC)
 _FUTURE_DATE = datetime.date(2026, 9, 24)  # far future → not yet due
 
 # Minimal CAPA-create permission set (SYSTEM-scoped ALLOW overrides, as in test_capa.py).
@@ -329,4 +335,185 @@ async def test_rearm_fires_distinct_notification(
         f"Re-arm should produce a SECOND distinct notification row "
         f"(got {count_2} total, expected {count_1 + 1}). "
         "If this fails, subject_version_id is constant — the dedup index collapses both sweeps."
+    )
+
+
+async def test_no_stamp_when_no_active_qm_owner(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """Finding 2+3 regression: no valid QMS-Owner recipient → do NOT stamp overdue_notified_at.
+
+    Self-provides the precondition: temporarily LOCKS all currently-active QMS Owner holders so
+    every _recipient_for_user call returns None (attempted == 0, created == 0, deduped == 0).
+    Restores them in a finally block.
+
+    Mutation-verify: against the pre-fix code (unconditional stamp), the first sweep would set
+    overdue_notified_at even though no notification was created → the first assert FAILS.
+    Against the fix (stamp only when created > 0 or deduped > 0), it PASSES.
+    """
+    org_id = await _default_org_id()
+
+    # --- Seed overdue CAPA ---
+    subject = f"kc-capa-nr-{uuid.uuid4().hex[:8]}"
+    await _grant(subject, _CAPA_CREATE_KEYS)
+    h = _auth(token_factory, subject)
+    r = await app_client.post(
+        "/api/v1/capas", headers=h, json={"title": "No Recipient CAPA", "severity": "Major"}
+    )
+    assert r.status_code == 201, r.text
+    capa_id = uuid.UUID(r.json()["id"])
+
+    async with get_sessionmaker()() as s:
+        await s.execute(
+            update(Capa)
+            .where(Capa.id == capa_id)
+            .values(target_completion_date=_OVERDUE_DATE, overdue_notified_at=None)
+        )
+        await s.commit()
+
+    # --- Self-provide: find and temporarily LOCK all currently-active QMS Owner holders ---
+    # This prevents them from being valid recipients so the sweep has no one to notify.
+    locked_ids: list[uuid.UUID] = []
+    async with get_sessionmaker()() as s:
+        # Get all users assigned the QMS Owner role for this org.
+        role_holder_rows = (
+            (
+                await s.execute(
+                    select(RoleAssignment.user_id)
+                    .join(Role, Role.id == RoleAssignment.role_id)
+                    .where(RoleAssignment.org_id == org_id, Role.name == "QMS Owner")
+                )
+            )
+            .scalars()
+            .all()
+        )
+        # Only lock the ACTIVE ones (don't touch already-inactive users).
+        if role_holder_rows:
+            active_rows = (
+                (
+                    await s.execute(
+                        select(AppUser.id).where(
+                            AppUser.id.in_(role_holder_rows),
+                            AppUser.status == UserStatus.ACTIVE,
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            locked_ids = list(active_rows)
+            if locked_ids:
+                await s.execute(
+                    update(AppUser)
+                    .where(AppUser.id.in_(locked_ids))
+                    .values(status=_INACTIVE_STATUS)
+                )
+        await s.commit()
+
+    # Create a LOCKED QMS Owner (inactive → _recipient_for_user returns None).
+    locked_qm_id = await _seed_user(org_id, display_name="Inactive QMS Owner No-Stamp")
+    async with get_sessionmaker()() as s:
+        await s.execute(
+            update(AppUser).where(AppUser.id == locked_qm_id).values(status=_INACTIVE_STATUS)
+        )
+        await s.commit()
+    await _assign_role(org_id, locked_qm_id, "QMS Owner")
+
+    sm = get_sessionmaker()
+
+    try:
+        before_audits = await _count_capa_overdue_audits(org_id, capa_id)
+
+        # Sweep with ALL QMS Owners inactive → must NOT stamp and must NOT write audit.
+        await sweep_capa_overdue(sm, _BASE)
+
+        stamp_no_recipient = await _get_overdue_notified_at(capa_id)
+        audits_no_recipient = await _count_capa_overdue_audits(org_id, capa_id)
+
+        assert stamp_no_recipient is None, (
+            "overdue_notified_at must NOT be stamped when no valid QMS Owner recipient exists "
+            "(Finding 2: must-not-silently-drop; pre-fix code stamps unconditionally → RED)"
+        )
+        assert audits_no_recipient == before_audits, (
+            "No CAPA_OVERDUE audit must be written when no valid recipient "
+            "(Finding 1/R4-1: pre-fix code writes audit unconditionally → RED)"
+        )
+
+        # Re-activate the locked QMS Owner → a re-sweep must NOW stamp and write 1 audit.
+        async with get_sessionmaker()() as s:
+            await s.execute(
+                update(AppUser).where(AppUser.id == locked_qm_id).values(status=UserStatus.ACTIVE)
+            )
+            await s.commit()
+
+        await sweep_capa_overdue(sm, _BASE)
+
+        stamp_after_active = await _get_overdue_notified_at(capa_id)
+        audits_after_active = await _count_capa_overdue_audits(org_id, capa_id)
+
+        assert stamp_after_active is not None, (
+            "overdue_notified_at MUST be stamped after re-activating the QMS Owner"
+        )
+        assert audits_after_active == before_audits + 1, (
+            f"Exactly 1 new CAPA_OVERDUE audit must be written after delivery, "
+            f"got {audits_after_active - before_audits} new"
+        )
+
+    finally:
+        # Restore all temporarily-locked active holders back to ACTIVE.
+        if locked_ids:
+            async with get_sessionmaker()() as s:
+                await s.execute(
+                    update(AppUser)
+                    .where(AppUser.id.in_(locked_ids))
+                    .values(status=UserStatus.ACTIVE)
+                )
+                await s.commit()
+
+
+async def test_sweep_skips_on_nonworking_day(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """Finding 4: the now_is_working gate — a non-working day (Saturday) returns capas==0.
+
+    Passes _SATURDAY (2026-06-27) to sweep_capa_overdue. The sweep must short-circuit
+    (skipped_non_working=1, capas=0) and must NOT stamp an overdue CAPA.
+    """
+    org_id = await _default_org_id()
+
+    # Self-provide a QMS Owner holder (so the sweep would process the CAPA on a working day).
+    qm_id = await _seed_user(org_id, display_name="Weekend Gate QM Holder")
+    await _assign_role(org_id, qm_id, "QMS Owner")
+
+    # Seed an overdue CAPA.
+    subject = f"kc-capa-wg-{uuid.uuid4().hex[:8]}"
+    await _grant(subject, _CAPA_CREATE_KEYS)
+    h = _auth(token_factory, subject)
+    r = await app_client.post(
+        "/api/v1/capas", headers=h, json={"title": "Weekend Gate CAPA", "severity": "Minor"}
+    )
+    assert r.status_code == 201, r.text
+    capa_id = uuid.UUID(r.json()["id"])
+
+    async with get_sessionmaker()() as s:
+        await s.execute(
+            update(Capa)
+            .where(Capa.id == capa_id)
+            .values(target_completion_date=_OVERDUE_DATE, overdue_notified_at=None)
+        )
+        await s.commit()
+
+    sm = get_sessionmaker()
+    result = await sweep_capa_overdue(sm, _SATURDAY)
+
+    # The sweep must short-circuit on a non-working day.
+    assert result["capas"] == 0, f"Weekend sweep must process 0 CAPAs, got {result['capas']}"
+    assert result["skipped_non_working"] == 1, (
+        f"Weekend sweep must set skipped_non_working=1, got {result['skipped_non_working']}"
+    )
+
+    # The CAPA must NOT be stamped.
+    stamp = await _get_overdue_notified_at(capa_id)
+    assert stamp is None, (
+        "overdue_notified_at must NOT be stamped when the sweep is skipped on a non-working day"
     )
