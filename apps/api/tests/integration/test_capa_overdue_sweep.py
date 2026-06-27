@@ -42,7 +42,7 @@ from easysynq_api.db.models.notification import Notification
 from easysynq_api.db.models.organization import Organization
 from easysynq_api.db.models.role import Role, RoleAssignment
 from easysynq_api.db.session import get_sessionmaker
-from easysynq_api.services.capa.overdue import sweep_capa_overdue
+from easysynq_api.services.capa.overdue import _process_one, sweep_capa_overdue
 from easysynq_api.services.notifications.constants import EVENT_CAPA_OVERDUE
 
 from .test_capa import _grant
@@ -469,6 +469,17 @@ async def test_no_stamp_when_no_active_qm_owner(
                     .values(status=UserStatus.ACTIVE)
                 )
                 await s.commit()
+        # Remove the RoleAssignment for the user seeded by this test (cross-file pollution guard
+        # — the S-escalate2 leak class: a live RoleAssignment leaks a QMS Owner into the shared
+        # DB). We do NOT delete the AppUser: the second sweep creates a notification row that
+        # references locked_qm_id via a RESTRICT FK, so deleting the user would raise
+        # ForeignKeyViolation. Removing the RoleAssignment is sufficient to stop the pollution
+        # (no QMS Owner grant → never re-claimed as a recipient in other tests).
+        async with get_sessionmaker()() as s:
+            await s.execute(
+                RoleAssignment.__table__.delete().where(RoleAssignment.user_id == locked_qm_id)
+            )
+            await s.commit()
 
 
 async def test_sweep_skips_on_nonworking_day(
@@ -516,4 +527,71 @@ async def test_sweep_skips_on_nonworking_day(
     stamp = await _get_overdue_notified_at(capa_id)
     assert stamp is None, (
         "overdue_notified_at must NOT be stamped when the sweep is skipped on a non-working day"
+    )
+
+
+async def test_future_dated_capa_not_fired_by_process_one(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """Fix 1 mutation-verify: _process_one must NOT fire when target_completion_date is FUTURE.
+
+    Simulates the race: a CAPA is claimed as overdue, but by the time _process_one locks it the
+    admin extended target_completion_date to a future date (and cleared the stamp). The re-check
+    MUST see the future date and return 0 without stamping or writing a notification/audit.
+
+    Mutation-verify: against the pre-fix _process_one (no ``target < today`` predicate), this
+    call returns 1 and stamps overdue_notified_at → the assertions FAIL (RED). With the fix the
+    WHERE clause skips the future-dated CAPA → returns 0, stamp stays None → GREEN.
+    """
+    org_id = await _default_org_id()
+
+    # Self-provide a QMS Owner so _process_one would have a valid recipient if it did fire.
+    qm_id = await _seed_user(org_id, display_name="Future Date Race QM Holder")
+    await _assign_role(org_id, qm_id, "QMS Owner")
+
+    subject = f"kc-capa-fd-{uuid.uuid4().hex[:8]}"
+    await _grant(subject, _CAPA_CREATE_KEYS)
+    h = _auth(token_factory, subject)
+    r = await app_client.post(
+        "/api/v1/capas",
+        headers=h,
+        json={"title": "Future Date Race CAPA", "severity": "Major"},
+    )
+    assert r.status_code == 201, r.text
+    capa_id = uuid.UUID(r.json()["id"])
+
+    # Set target_completion_date to a FUTURE date (well after _BASE.date()) with a clear stamp.
+    _FUTURE_TARGET = datetime.date(2026, 9, 30)  # future relative to _BASE (2026-06-24)
+    async with get_sessionmaker()() as s:
+        await s.execute(
+            update(Capa)
+            .where(Capa.id == capa_id)
+            .values(target_completion_date=_FUTURE_TARGET, overdue_notified_at=None)
+        )
+        await s.commit()
+
+    before_notifs = await _count_notifications_for(capa_id, EVENT_CAPA_OVERDUE, qm_id)
+    before_audits = await _count_capa_overdue_audits(org_id, capa_id)
+
+    # Call _process_one directly (bypassing the coarse claim scan) with today = _BASE.date().
+    # The future target must cause the locked WHERE to return no row → result == 0.
+    sm = get_sessionmaker()
+    result = await _process_one(sm, capa_id, _BASE, _BASE.date())
+
+    assert result == 0, (
+        f"_process_one must return 0 for a future-dated CAPA, got {result}. "
+        "Pre-fix code (missing target < today) would return 1 here (mutation-verify FAIL→PASS)."
+    )
+    stamp = await _get_overdue_notified_at(capa_id)
+    assert stamp is None, (
+        "overdue_notified_at must NOT be stamped for a future-dated CAPA "
+        "(pre-fix code stamps unconditionally when a recipient exists → RED)"
+    )
+    after_notifs = await _count_notifications_for(capa_id, EVENT_CAPA_OVERDUE, qm_id)
+    assert after_notifs == before_notifs, (
+        "No capa.overdue notification must be created for a future-dated CAPA"
+    )
+    after_audits = await _count_capa_overdue_audits(org_id, capa_id)
+    assert after_audits == before_audits, (
+        "No CAPA_OVERDUE audit must be written for a future-dated CAPA"
     )

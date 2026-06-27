@@ -1310,6 +1310,9 @@ async def test_target_completion_date_defaulted_at_raise(
 
     Asserts on the ORM row directly (the HTTP serializer does not yet expose the field).
     Resolves the org tz the same way the service does to get the raise_date in the right frame.
+
+    Tests BOTH Critical (+30) and Major (+60) so a hardcoded-Critical mutation at the
+    build_capa/spawn call site is mutation-distinguishing (Fix 3 severity-threading coverage).
     """
     subject = _subject("capa-tgt")
     await _grant(subject, _CAPA_KEYS)
@@ -1321,11 +1324,12 @@ async def test_target_completion_date_defaulted_at_raise(
         org_id = user.org_id
         target_tz = await resolve_org_tz(s, org_id)
 
+    # --- Critical (+30 d) ---
     raise_date_before = datetime.datetime.now(target_tz).date()
     r = await app_client.post(
         "/api/v1/capas",
         headers=h,
-        json={"title": "TCD test", "severity": "Critical", "problem": "test"},
+        json={"title": "TCD test Critical", "severity": "Critical", "problem": "test"},
     )
     raise_date_after = datetime.datetime.now(target_tz).date()
     assert r.status_code == 201, r.text
@@ -1341,4 +1345,26 @@ async def test_target_completion_date_defaulted_at_raise(
         default_target_date(NcSeverity.Critical, raise_date_before),
         default_target_date(NcSeverity.Critical, raise_date_after),
     }
-    assert tcd in expected, f"expected one of {expected}, got {tcd}"
+    assert tcd in expected, f"Critical: expected one of {expected}, got {tcd}"
+
+    # --- Major (+60 d) — mutation-distinguishing: hardcoded-Critical returns +30, not +60 ---
+    raise_date_before = datetime.datetime.now(target_tz).date()
+    r2 = await app_client.post(
+        "/api/v1/capas",
+        headers=h,
+        json={"title": "TCD test Major", "severity": "Major", "problem": "test"},
+    )
+    raise_date_after = datetime.datetime.now(target_tz).date()
+    assert r2.status_code == 201, r2.text
+    capa_id_major = uuid.UUID(r2.json()["id"])
+
+    async with get_sessionmaker()() as s:
+        capa_major = (await s.execute(select(Capa).where(Capa.id == capa_id_major))).scalar_one()
+        tcd_major = capa_major.target_completion_date
+
+    assert tcd_major is not None
+    expected_major = {
+        default_target_date(NcSeverity.Major, raise_date_before),
+        default_target_date(NcSeverity.Major, raise_date_after),
+    }
+    assert tcd_major in expected_major, f"Major: expected one of {expected_major}, got {tcd_major}"

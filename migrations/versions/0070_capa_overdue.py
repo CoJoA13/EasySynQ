@@ -41,7 +41,7 @@ def upgrade() -> None:
     op.add_column(
         "capa", sa.Column("overdue_notified_at", sa.DateTime(timezone=True), nullable=True)
     )
-    # Additive enum values — each in its own autocommit block (ADD VALUE cannot run in a txn block);
+    # Additive enum values — both in a single autocommit block (ADD VALUE cannot run in a txn block);
     # IF NOT EXISTS so a from-scratch upgrade head (which already has them via the ORM) is a no-op.
     with op.get_context().autocommit_block():
         op.execute("ALTER TYPE event_type ADD VALUE IF NOT EXISTS 'CAPA_OVERDUE'")

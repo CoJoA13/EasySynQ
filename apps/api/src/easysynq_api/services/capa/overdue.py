@@ -73,6 +73,7 @@ async def _process_one(
     sessionmaker: async_sessionmaker[AsyncSession],
     capa_id: uuid.UUID,
     now: datetime.datetime,
+    today: datetime.date,
 ) -> int:
     """Notify QMS Owner for ONE overdue CAPA. Returns the count of newly-created notifications.
 
@@ -80,6 +81,10 @@ async def _process_one(
     populate_existing ensures we see the latest stamped state after waiting for the lock.
     Stamps overdue_notified_at + writes one CAPA_OVERDUE audit_event in the SAME commit.
     A template miss does NOT stamp (retry on next sweep — the fan_out_awareness rule).
+
+    ``today`` re-asserts the claim's past-due gate: a CAPA extended to a future date between the
+    coarse claim and this locked re-check must NOT fire (race between the claim scan and an admin
+    PATCH that extends the target + clears the stamp).
     """
     async with sessionmaker() as session:
         capa = (
@@ -89,6 +94,7 @@ async def _process_one(
                     Capa.id == capa_id,
                     Capa.overdue_notified_at.is_(None),
                     Capa.target_completion_date.is_not(None),
+                    Capa.target_completion_date < today,
                     Capa.close_state.notin_([CapaCloseState.Closed, CapaCloseState.Rejected]),
                 )
                 .with_for_update(skip_locked=True)
@@ -96,7 +102,7 @@ async def _process_one(
             )
         ).scalar_one_or_none()
         if capa is None:
-            return 0  # claimed/stamped by a concurrent tick or no longer eligible
+            return 0  # claimed/stamped by a concurrent tick, future-dated, or no longer eligible
 
         org_id = capa.org_id
         target = capa.target_completion_date
@@ -111,12 +117,10 @@ async def _process_one(
 
         created = 0
         deduped = 0
-        attempted = 0
         for uid in recipient_ids:
             recipient = await _recipient_for_user(session, uid, org_id=org_id)
             if recipient is None:
                 continue
-            attempted += 1
             outcome = await enqueue_awareness_one(
                 session,
                 org_id=org_id,
@@ -206,7 +210,7 @@ async def sweep_capa_overdue(
 
     for capa_id in ids:
         try:
-            n = await _process_one(sessionmaker, capa_id, now)
+            n = await _process_one(sessionmaker, capa_id, now, today)
         except Exception:  # noqa: BLE001 — one CAPA's failure must not wedge the sweep
             logger.warning(
                 "capa.overdue_failed",
