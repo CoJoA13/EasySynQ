@@ -556,7 +556,7 @@ export const capaListFixture = {
       origin_finding_id: null,
       raised_by: null,
       created_at: "2026-05-20T09:00:00+00:00",
-      target_completion_date: "2026-06-30",
+      target_completion_date: "2026-06-01",
       overdue: true,
     },
     {

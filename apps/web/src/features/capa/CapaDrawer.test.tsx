@@ -1,4 +1,4 @@
-import { screen } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 import { axe } from "jest-axe";
 import { http, HttpResponse } from "msw";
 import { describe, expect, it, test, vi } from "vitest";
@@ -98,6 +98,46 @@ describe("Target completion / overdue", () => {
     expect(screen.queryByLabelText("CAPA: Overdue")).toBeNull();
   });
 
+  it("seeds the date input from the CAPA's target_completion_date and resets when capaId changes", async () => {
+    const capaId1 = "ca000001-0001-0001-0001-000000000001";
+    const capaId2 = "ca000004-0004-0004-0004-000000000004";
+
+    server.use(
+      http.get("/api/v1/me/permissions", () =>
+        HttpResponse.json({
+          scope: { level: "SYSTEM", selector: null },
+          permissions: [{ key: "capa.update", effect: "ALLOW", source: null }],
+        }),
+      ),
+      http.get("/api/v1/capas/:id", ({ params }) =>
+        HttpResponse.json(
+          params.id === capaId2
+            ? {
+                ...capaDetailFixture,
+                id: capaId2,
+                target_completion_date: "2026-08-30",
+                overdue: false,
+              }
+            : {
+                ...capaDetailFixture,
+                id: capaId1,
+                target_completion_date: "2026-07-15",
+                overdue: false,
+              },
+        ),
+      ),
+    );
+
+    const { rerender } = renderWithProviders(<CapaDrawer capaId={capaId1} onClose={vi.fn()} />);
+    // First CAPA: input should be seeded with its date
+    await screen.findByText("Target completion");
+    expect(screen.getByLabelText("Set target date")).toHaveValue("2026-07-15");
+
+    // Switch to second CAPA: input must reset to the second CAPA's date (not stay stale)
+    rerender(<CapaDrawer capaId={capaId2} onClose={vi.fn()} />);
+    await waitFor(() => expect(screen.getByLabelText("Set target date")).toHaveValue("2026-08-30"));
+  });
+
   it("shows the date edit field when the caller holds capa.update", async () => {
     server.use(
       http.get("/api/v1/me/permissions", () =>
@@ -158,6 +198,8 @@ test("renders the Advance panel form for the caller's permitted stage", async ()
         origin_finding_id: null,
         raised_by: "bbbb1111-1111-1111-1111-111111111111",
         created_at: "2026-05-28T09:00:00+00:00",
+        target_completion_date: null,
+        overdue: false,
         stages: [
           {
             id: "s1",

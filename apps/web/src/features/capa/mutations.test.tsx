@@ -1,9 +1,12 @@
 // apps/web/src/features/capa/mutations.test.tsx
 import { renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { http, HttpResponse } from "msw";
 import type { ReactNode } from "react";
 import { expect, test } from "vitest";
 import { AuthContext } from "../../lib/auth";
+import { capaDetailFixture } from "../../test/msw/handlers";
+import { server } from "../../test/msw/server";
 import { TEST_AUTH } from "../../test/render";
 import {
   useCapaClose,
@@ -95,6 +98,13 @@ test("useNcrDisposition PATCHes the NCR's disposition path", async () => {
 
 // S-capa-overdue
 test("useCapaSetTargetDate PATCHes /api/v1/capas/{id} with the date and resolves the CAPA", async () => {
+  let captured: unknown;
+  server.use(
+    http.patch("/api/v1/capas/:id", async ({ request }) => {
+      captured = await request.json();
+      return HttpResponse.json({ ...capaDetailFixture });
+    }),
+  );
   const { result } = renderHook(
     () => useCapaSetTargetDate("ca000001-0001-0001-0001-000000000001"),
     { wrapper },
@@ -102,6 +112,7 @@ test("useCapaSetTargetDate PATCHes /api/v1/capas/{id} with the date and resolves
   const capa = await result.current.mutateAsync("2026-09-30");
   await waitFor(() => expect(result.current.isSuccess).toBe(true));
   expect(capa.id).toBeDefined();
+  expect(captured).toEqual({ target_completion_date: "2026-09-30" });
 });
 
 test("useCapaSetTargetDate accepts null to clear the date", async () => {

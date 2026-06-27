@@ -1,5 +1,5 @@
 import { Badge, Button, Group, Stack, Text, TextInput, Title } from "@mantine/core";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { DetailDrawer } from "../../app/shell/DetailDrawer";
 import { usePermissions } from "../../app/shell/usePermissions";
 import { useUserDirectory } from "../../app/shell/useUserDirectory";
@@ -23,6 +23,10 @@ export function CapaDrawer({ capaId, onClose }: { capaId: string | null; onClose
   const setTargetDate = useCapaSetTargetDate(capaId ?? "");
   const [raisingDcr, setRaisingDcr] = useState(false);
   const [targetDate, setTargetDateInput] = useState("");
+
+  useEffect(() => {
+    setTargetDateInput(capa?.target_completion_date ?? "");
+  }, [capaId, capa?.target_completion_date]);
 
   return (
     <DetailDrawer
