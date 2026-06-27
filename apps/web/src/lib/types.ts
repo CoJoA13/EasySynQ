@@ -833,6 +833,8 @@ export interface Capa {
   origin_finding_id: string | null; // NULL in v1
   raised_by: string | null; // detail-only (the Raised stage's actor); null on list rows
   created_at: string | null;
+  target_completion_date: string | null; // S-capa-overdue: operator-set target; null if unset
+  overdue: boolean; // S-capa-overdue: server-computed (target_completion_date < today)
   stages?: CapaStage[]; // detail-only
 }
 

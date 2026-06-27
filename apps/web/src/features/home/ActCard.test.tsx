@@ -49,6 +49,8 @@ const capas: CapaList = {
       origin_finding_id: null,
       raised_by: null,
       created_at: null,
+      target_completion_date: null,
+      overdue: false,
     },
     {
       id: "c2",
@@ -62,6 +64,8 @@ const capas: CapaList = {
       origin_finding_id: null,
       raised_by: null,
       created_at: null,
+      target_completion_date: null,
+      overdue: false,
     },
   ],
 };

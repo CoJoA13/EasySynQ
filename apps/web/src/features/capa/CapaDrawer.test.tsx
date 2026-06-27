@@ -1,8 +1,9 @@
 import { screen } from "@testing-library/react";
 import { axe } from "jest-axe";
 import { http, HttpResponse } from "msw";
-import { expect, test, vi } from "vitest";
+import { describe, expect, it, test, vi } from "vitest";
 import { TONE_GLYPH } from "../../lib/status";
+import { capaDetailFixture } from "../../test/msw/handlers";
 import { server } from "../../test/msw/server";
 import { renderWithProviders } from "../../test/render";
 import { CapaDrawer } from "./CapaDrawer";
@@ -56,6 +57,81 @@ test("no axe violations when open", async () => {
   );
   await screen.findByText(/Supplier re-evaluation overdue/);
   expect(await axe(container)).toHaveNoViolations();
+});
+
+// ---- S-capa-overdue: target completion date + overdue badge + inline edit ----
+
+describe("Target completion / overdue", () => {
+  it("shows the Overdue badge when overdue:true", async () => {
+    server.use(
+      http.get("/api/v1/capas/:id", () =>
+        HttpResponse.json({
+          ...capaDetailFixture,
+          overdue: true,
+          target_completion_date: "2026-06-01",
+        }),
+      ),
+    );
+    renderWithProviders(
+      <CapaDrawer capaId="ca000001-0001-0001-0001-000000000001" onClose={vi.fn()} />,
+    );
+    // Badge renders with the canonical kind:label accessible name
+    expect(await screen.findByLabelText("CAPA: Overdue")).toBeInTheDocument();
+    // The date value is also displayed
+    expect(screen.getByText("2026-06-01")).toBeInTheDocument();
+  });
+
+  it("does NOT show the Overdue badge when overdue:false", async () => {
+    server.use(
+      http.get("/api/v1/capas/:id", () =>
+        HttpResponse.json({
+          ...capaDetailFixture,
+          overdue: false,
+          target_completion_date: "2026-09-01",
+        }),
+      ),
+    );
+    renderWithProviders(
+      <CapaDrawer capaId="ca000001-0001-0001-0001-000000000001" onClose={vi.fn()} />,
+    );
+    await screen.findByText("2026-09-01");
+    expect(screen.queryByLabelText("CAPA: Overdue")).toBeNull();
+  });
+
+  it("shows the date edit field when the caller holds capa.update", async () => {
+    server.use(
+      http.get("/api/v1/me/permissions", () =>
+        HttpResponse.json({
+          scope: { level: "SYSTEM", selector: null },
+          permissions: [{ key: "capa.update", effect: "ALLOW", source: null }],
+        }),
+      ),
+      http.get("/api/v1/capas/:id", () =>
+        HttpResponse.json({ ...capaDetailFixture, overdue: false, target_completion_date: null }),
+      ),
+    );
+    renderWithProviders(
+      <CapaDrawer capaId="ca000001-0001-0001-0001-000000000001" onClose={vi.fn()} />,
+    );
+    await screen.findByText("Target completion");
+    // The TextInput for setting the date and a Save button must appear
+    expect(screen.getByLabelText("Set target date")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Save/ })).toBeInTheDocument();
+  });
+
+  it("does NOT show the date edit field without capa.update", async () => {
+    // Default permissions handler returns [] — no capa.update
+    server.use(
+      http.get("/api/v1/capas/:id", () =>
+        HttpResponse.json({ ...capaDetailFixture, overdue: false, target_completion_date: null }),
+      ),
+    );
+    renderWithProviders(
+      <CapaDrawer capaId="ca000001-0001-0001-0001-000000000001" onClose={vi.fn()} />,
+    );
+    await screen.findByText("Target completion");
+    expect(screen.queryByLabelText("Set target date")).toBeNull();
+  });
 });
 
 test("renders the Advance panel form for the caller's permitted stage", async () => {

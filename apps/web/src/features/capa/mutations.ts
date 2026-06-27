@@ -69,6 +69,17 @@ export function useCapaClose(capaId: string) {
   });
 }
 
+// S-capa-overdue: set (or clear) the target completion date. Gated on capa.update in the UI.
+export function useCapaSetTargetDate(capaId: string) {
+  const api = useApi();
+  const invalidate = useCapaInvalidator(capaId);
+  return useMutation({
+    mutationFn: (target_completion_date: string | null) =>
+      api.send<Capa>("PATCH", `/api/v1/capas/${capaId}`, { target_completion_date }),
+    onSuccess: invalidate,
+  });
+}
+
 // --- S-web-7c complaint + NCR intake writes -------------------------------------------------
 
 export function useCreateComplaint() {
@@ -88,11 +99,9 @@ export function useSpawnCapa() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ complaintId, severity }: { complaintId: string; severity?: NcSeverity }) =>
-      api.send<Capa>(
-        "POST",
-        `/api/v1/complaints/${complaintId}/spawn-capa`,
-        { severity } satisfies SpawnCapaBody,
-      ),
+      api.send<Capa>("POST", `/api/v1/complaints/${complaintId}/spawn-capa`, {
+        severity,
+      } satisfies SpawnCapaBody),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["complaints"] });
       void qc.invalidateQueries({ queryKey: ["capas"] });
