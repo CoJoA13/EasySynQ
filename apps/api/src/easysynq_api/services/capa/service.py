@@ -59,12 +59,14 @@ from ...domain.capa import (
     adjudicate_capa_closure,
     allowed_targets,
     capa_self_verify_blocked,
+    default_target_date,
     derive_implementer_ids,
     transition_allowed,
 )
 from ...domain.vault import format_identifier
 from ...logging import request_id_var
 from ...problems import ProblemException
+from ..common.org_clock import resolve_org_tz
 from ..dcr import raise_dcr
 from ..records.service import capture_record, emit_record_event
 from ..vault import repository as vault_repo
@@ -260,6 +262,10 @@ async def spawn_capa_from_complaint(
         process_id=process_id,
         close_state=CapaCloseState.Raised,
         cycle_marker=0,
+        target_completion_date=default_target_date(
+            resolved_severity,
+            datetime.datetime.now(await resolve_org_tz(session, actor.org_id)).date(),
+        ),
     )
     session.add(capa)
     await session.flush()
@@ -319,6 +325,7 @@ async def build_capa(
     ``audit_finding.auto_capa_id`` + emits the finding events + commits once). ``origin_finding_id``
     is the reverse half of the auto-link -- NULL for a directly-raised CAPA (the R39 invariant)."""
     record = await capture_record(session, actor, record_type="CAPA", title=title, _commit=False)
+    target_tz = await resolve_org_tz(session, actor.org_id)
     capa = Capa(
         id=record.id,
         org_id=actor.org_id,
@@ -328,6 +335,9 @@ async def build_capa(
         process_id=process_id,
         close_state=CapaCloseState.Raised,
         cycle_marker=0,
+        target_completion_date=default_target_date(
+            severity, datetime.datetime.now(target_tz).date()
+        ),
     )
     session.add(capa)
     await session.flush()
@@ -1011,6 +1021,41 @@ async def record_ncr_disposition(
 # --- CAPA → DCR loop (S-dcr-5; doc 02 Cl 10.2 / doc 05 §5.1, the §10→§7.5 closed loop) ---------
 
 _TERMINAL_CAPA_STATES = (CapaCloseState.Closed, CapaCloseState.Rejected)
+
+
+async def set_capa_target_date(
+    session: AsyncSession,
+    actor: AppUser,
+    capa_id: uuid.UUID,
+    *,
+    target_completion_date: datetime.date | None,
+) -> Capa:
+    """Set/clear a CAPA's target-completion date (gate capa.update). 409 on a terminal CAPA.
+    Clears overdue_notified_at to re-arm the sweep, and writes a CAPA_TARGET_DATE_SET audit
+    (the WORM record of who moved a mutable compliance deadline)."""
+    capa = await repo.get_capa(session, capa_id, for_update=True)
+    if capa is None or capa.org_id != actor.org_id:
+        raise _not_found("CAPA")
+    if capa.close_state in _TERMINAL_CAPA_STATES:
+        raise _conflict("capa_terminal", f"a {capa.close_state.value} CAPA has no live target date")
+    before = capa.target_completion_date
+    capa.target_completion_date = target_completion_date
+    capa.overdue_notified_at = None  # re-arm: a new/cleared date re-opens the breach claim
+    emit_record_event(
+        session,
+        actor,
+        EventType.CAPA_TARGET_DATE_SET,
+        capa.id,
+        before={"target_completion_date": before.isoformat() if before else None},
+        after={
+            "target_completion_date": (
+                target_completion_date.isoformat() if target_completion_date else None
+            )
+        },
+    )
+    await session.commit()
+    await session.refresh(capa)
+    return capa
 
 
 async def _find_spawned_dcr(

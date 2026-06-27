@@ -20,9 +20,10 @@ Forward seams (left clean for later slices):
 
 from __future__ import annotations
 
+import datetime
 import uuid
 
-from sqlalchemy import ForeignKey, Integer, text
+from sqlalchemy import Date, DateTime, ForeignKey, Integer, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -81,4 +82,12 @@ class Capa(Base):
     # stage trail by loop iteration (S-capa-3 wires the bump).
     cycle_marker: Mapped[int] = mapped_column(
         Integer, server_default=text("0"), default=0, nullable=False
+    )
+    # S-capa-overdue: the auditor-checked target-completion deadline (severity-defaulted at raise,
+    # editable via capa.update). Overdue ⟺ today(org_tz) > this AND close_state not terminal.
+    target_completion_date: Mapped[datetime.date | None] = mapped_column(Date, nullable=True)
+    # The capa-overdue Beat sweep's claim-filter + once-per-breach stamp (the
+    # task.overdue_notified_at mirror); cleared on a date edit to re-arm. No server_default.
+    overdue_notified_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
     )

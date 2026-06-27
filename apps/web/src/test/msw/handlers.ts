@@ -556,6 +556,8 @@ export const capaListFixture = {
       origin_finding_id: null,
       raised_by: null,
       created_at: "2026-05-20T09:00:00+00:00",
+      target_completion_date: "2026-06-01",
+      overdue: true,
     },
     {
       id: "ca000002-0002-0002-0002-000000000002",
@@ -569,6 +571,8 @@ export const capaListFixture = {
       origin_finding_id: null,
       raised_by: null,
       created_at: "2026-05-28T09:00:00+00:00",
+      target_completion_date: null,
+      overdue: false,
     },
     {
       id: "ca000003-0003-0003-0003-000000000003",
@@ -582,6 +586,8 @@ export const capaListFixture = {
       origin_finding_id: null,
       raised_by: null,
       created_at: "2026-06-01T09:00:00+00:00",
+      target_completion_date: null,
+      overdue: false,
     },
     {
       id: "ca000004-0004-0004-0004-000000000004",
@@ -595,6 +601,8 @@ export const capaListFixture = {
       origin_finding_id: null,
       raised_by: null,
       created_at: "2026-05-15T09:00:00+00:00",
+      target_completion_date: null,
+      overdue: false,
     },
     {
       id: "ca000005-0005-0005-0005-000000000005",
@@ -608,6 +616,8 @@ export const capaListFixture = {
       origin_finding_id: null,
       raised_by: null,
       created_at: "2026-05-10T09:00:00+00:00",
+      target_completion_date: null,
+      overdue: false,
     },
     {
       id: "ca000006-0006-0006-0006-000000000006",
@@ -621,6 +631,8 @@ export const capaListFixture = {
       origin_finding_id: null,
       raised_by: null,
       created_at: "2026-04-30T09:00:00+00:00",
+      target_completion_date: null,
+      overdue: false,
     },
     {
       id: "ca000007-0007-0007-0007-000000000007",
@@ -634,6 +646,8 @@ export const capaListFixture = {
       origin_finding_id: null,
       raised_by: null,
       created_at: "2026-04-20T09:00:00+00:00",
+      target_completion_date: null,
+      overdue: false,
     },
   ],
 } satisfies { data: Capa[] };
@@ -745,6 +759,8 @@ export const capaCloseReadyFixture = {
   origin_finding_id: null,
   raised_by: "bbbb1111-1111-1111-1111-111111111111",
   created_at: "2026-05-25T09:00:00+00:00",
+  target_completion_date: null,
+  overdue: false,
   stages: [
     {
       id: "cr000001-0001-0001-0001-000000000001",
@@ -2467,6 +2483,8 @@ export const riskSpawnedCapaFixture = {
   origin_finding_id: null,
   raised_by: null,
   created_at: "2026-06-20T10:00:00+00:00",
+  target_completion_date: null,
+  overdue: false,
 } satisfies Capa;
 
 // ---- S-context-fe Context register fixtures (pinned to api/context.py _context_issue /
@@ -3212,6 +3230,10 @@ export const handlers = [
   ),
   http.post("/api/v1/capas/:id/close", ({ params }) =>
     HttpResponse.json({ ...capaDetailFixture, id: String(params.id), close_state: "Closed" }),
+  ),
+  // S-capa-overdue: PATCH /api/v1/capas/{id} — set target_completion_date (base handler; per-test override ok).
+  http.patch("/api/v1/capas/:id", ({ params }) =>
+    HttpResponse.json({ ...capaDetailFixture, id: String(params.id) }),
   ),
   http.get("/api/v1/capas/:id/approval", () => HttpResponse.json(null)),
   http.get("/api/v1/records", () => HttpResponse.json(recordsFixture)),

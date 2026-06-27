@@ -31,6 +31,8 @@ const capa = (over: Partial<Capa> = {}): Capa => ({
   origin_finding_id: null,
   raised_by: null,
   created_at: null,
+  target_completion_date: null,
+  overdue: false,
   stages: [],
   ...over,
 });

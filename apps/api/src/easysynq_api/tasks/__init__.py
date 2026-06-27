@@ -11,6 +11,7 @@ from . import (  # noqa: F401  (registers the Celery tasks)
     audit,
     backup,
     blob_verify,
+    capa,
     ingestion,
     lifecycle,
     mgmt_review,

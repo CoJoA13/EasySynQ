@@ -312,6 +312,11 @@ class EventType(enum.Enum):
     # the members live here too).
     CAPA_RAISED = "CAPA_RAISED"
     CAPA_TRANSITIONED = "CAPA_TRANSITIONED"
+    # S-capa-overdue: the Beat-sweep breach audit (a CAPA past its target_completion_date) and the
+    # deadline-edit audit (who moved a mutable compliance deadline). Both additive via ALTER TYPE
+    # ADD VALUE in 0070 (a from-scratch upgrade head rebuilds the type from EVENT_TYPE_VALUES).
+    CAPA_OVERDUE = "CAPA_OVERDUE"
+    CAPA_TARGET_DATE_SET = "CAPA_TARGET_DATE_SET"
     COMPLAINT_CAPTURED = "COMPLAINT_CAPTURED"
     COMPLAINT_SPAWNED_CAPA = "COMPLAINT_SPAWNED_CAPA"
     NCR_CREATED = "NCR_CREATED"

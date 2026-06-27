@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Sequence
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 from sqlalchemy import select
@@ -192,3 +192,19 @@ async def list_ncrs(session: AsyncSession, org_id: uuid.UUID) -> Sequence[Ncr]:
         .scalars()
         .all()
     )
+
+
+async def list_overdue_capa_ids(session: AsyncSession, today: date) -> list[uuid.UUID]:
+    """CAPA ids past their target date, still open, not yet notified — the sweep's claim
+    candidates. Excludes terminal close_states (Closed, Rejected) and already-stamped rows."""
+    from ...db.models._capa_enums import CapaCloseState
+
+    rows = await session.execute(
+        select(Capa.id).where(
+            Capa.target_completion_date.is_not(None),
+            Capa.target_completion_date < today,
+            Capa.close_state.notin_([CapaCloseState.Closed, CapaCloseState.Rejected]),
+            Capa.overdue_notified_at.is_(None),
+        )
+    )
+    return list(rows.scalars().all())

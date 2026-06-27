@@ -12,8 +12,10 @@ from .closure import (
 )
 from .fsm import CAPA_TRANSITIONS, allowed_targets, is_terminal, transition_allowed
 from .sod import capa_self_verify_blocked, derive_implementer_ids
+from .targets import CAPA_TARGET_DAYS, default_target_date
 
 __all__ = [
+    "CAPA_TARGET_DAYS",
     "CAPA_TRANSITIONS",
     "VERIFIER_DECISIONS",
     "VERIFIER_EFFECTIVE",
@@ -22,6 +24,7 @@ __all__ = [
     "adjudicate_capa_closure",
     "allowed_targets",
     "capa_self_verify_blocked",
+    "default_target_date",
     "derive_implementer_ids",
     "is_terminal",
     "transition_allowed",

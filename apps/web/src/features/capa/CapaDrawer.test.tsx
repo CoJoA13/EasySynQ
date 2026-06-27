@@ -1,8 +1,10 @@
-import { screen } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { http, HttpResponse } from "msw";
-import { expect, test, vi } from "vitest";
+import { describe, expect, it, test, vi } from "vitest";
 import { TONE_GLYPH } from "../../lib/status";
+import { capaDetailFixture } from "../../test/msw/handlers";
 import { server } from "../../test/msw/server";
 import { renderWithProviders } from "../../test/render";
 import { CapaDrawer } from "./CapaDrawer";
@@ -58,6 +60,169 @@ test("no axe violations when open", async () => {
   expect(await axe(container)).toHaveNoViolations();
 });
 
+// ---- S-capa-overdue: target completion date + overdue badge + inline edit ----
+
+describe("Target completion / overdue", () => {
+  it("shows the Overdue badge when overdue:true", async () => {
+    server.use(
+      http.get("/api/v1/capas/:id", () =>
+        HttpResponse.json({
+          ...capaDetailFixture,
+          overdue: true,
+          target_completion_date: "2026-06-01",
+        }),
+      ),
+    );
+    renderWithProviders(
+      <CapaDrawer capaId="ca000001-0001-0001-0001-000000000001" onClose={vi.fn()} />,
+    );
+    // Badge renders with the canonical kind:label accessible name
+    expect(await screen.findByLabelText("CAPA: Overdue")).toBeInTheDocument();
+    // The date value is also displayed
+    expect(screen.getByText("2026-06-01")).toBeInTheDocument();
+  });
+
+  it("does NOT show the Overdue badge when overdue:false", async () => {
+    server.use(
+      http.get("/api/v1/capas/:id", () =>
+        HttpResponse.json({
+          ...capaDetailFixture,
+          overdue: false,
+          target_completion_date: "2026-09-01",
+        }),
+      ),
+    );
+    renderWithProviders(
+      <CapaDrawer capaId="ca000001-0001-0001-0001-000000000001" onClose={vi.fn()} />,
+    );
+    await screen.findByText("2026-09-01");
+    expect(screen.queryByLabelText("CAPA: Overdue")).toBeNull();
+  });
+
+  it("seeds the date input from the CAPA's target_completion_date and resets when capaId changes", async () => {
+    const capaId1 = "ca000001-0001-0001-0001-000000000001";
+    const capaId2 = "ca000004-0004-0004-0004-000000000004";
+
+    server.use(
+      http.get("/api/v1/me/permissions", () =>
+        HttpResponse.json({
+          scope: { level: "PROCESS", selector: null },
+          permissions: [{ key: "capa.update", effect: "ALLOW", source: null }],
+        }),
+      ),
+      http.get("/api/v1/capas/:id", ({ params }) =>
+        HttpResponse.json(
+          params.id === capaId2
+            ? {
+                ...capaDetailFixture,
+                id: capaId2,
+                target_completion_date: "2026-08-30",
+                overdue: false,
+              }
+            : {
+                ...capaDetailFixture,
+                id: capaId1,
+                target_completion_date: "2026-07-15",
+                overdue: false,
+              },
+        ),
+      ),
+    );
+
+    const { rerender } = renderWithProviders(<CapaDrawer capaId={capaId1} onClose={vi.fn()} />);
+    // First CAPA: input should be seeded with its date
+    await screen.findByText("Target completion");
+    expect(screen.getByLabelText("Set target date")).toHaveValue("2026-07-15");
+
+    // Switch to second CAPA: input must reset to the second CAPA's date (not stay stale)
+    rerender(<CapaDrawer capaId={capaId2} onClose={vi.fn()} />);
+    await waitFor(() => expect(screen.getByLabelText("Set target date")).toHaveValue("2026-08-30"));
+  });
+
+  it("shows the date edit field when the caller holds capa.update", async () => {
+    server.use(
+      http.get("/api/v1/me/permissions", () =>
+        HttpResponse.json({
+          scope: { level: "PROCESS", selector: null },
+          permissions: [{ key: "capa.update", effect: "ALLOW", source: null }],
+        }),
+      ),
+      http.get("/api/v1/capas/:id", () =>
+        HttpResponse.json({ ...capaDetailFixture, overdue: false, target_completion_date: null }),
+      ),
+    );
+    renderWithProviders(
+      <CapaDrawer capaId="ca000001-0001-0001-0001-000000000001" onClose={vi.fn()} />,
+    );
+    await screen.findByText("Target completion");
+    // The TextInput for setting the date and a Save button must appear
+    expect(screen.getByLabelText("Set target date")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Save/ })).toBeInTheDocument();
+  });
+
+  it("does NOT show the date edit field without capa.update", async () => {
+    // Default permissions handler returns [] — no capa.update
+    server.use(
+      http.get("/api/v1/capas/:id", () =>
+        HttpResponse.json({ ...capaDetailFixture, overdue: false, target_completion_date: null }),
+      ),
+    );
+    renderWithProviders(
+      <CapaDrawer capaId="ca000001-0001-0001-0001-000000000001" onClose={vi.fn()} />,
+    );
+    await screen.findByText("Target completion");
+    expect(screen.queryByLabelText("Set target date")).toBeNull();
+  });
+
+  it("keeps the date input value after saving the same (unchanged) date", async () => {
+    // Fix C regression guard: the old Save handler had onSuccess: () => setTargetDateInput(""),
+    // which blanked the input on success. When the save didn't change the target
+    // (same date as current), the query refetch returned an identical value so the
+    // useEffect dep [capaId, capa?.target_completion_date] did NOT change → the effect did
+    // NOT re-run → the input stayed blank → a second Save would send null (clearing the date).
+    // After the fix (no onSuccess blank), the input keeps its value.
+    const DATE = "2026-07-20";
+    server.use(
+      http.get("/api/v1/me/permissions", () =>
+        HttpResponse.json({
+          scope: { level: "PROCESS", selector: null },
+          permissions: [{ key: "capa.update", effect: "ALLOW", source: null }],
+        }),
+      ),
+      http.get("/api/v1/capas/:id", () =>
+        HttpResponse.json({
+          ...capaDetailFixture,
+          target_completion_date: DATE,
+          overdue: false,
+        }),
+      ),
+      http.patch("/api/v1/capas/:id", () =>
+        HttpResponse.json({
+          ...capaDetailFixture,
+          target_completion_date: DATE,
+          overdue: false,
+        }),
+      ),
+    );
+
+    const u = userEvent.setup();
+    renderWithProviders(
+      <CapaDrawer capaId="ca000001-0001-0001-0001-000000000001" onClose={vi.fn()} />,
+    );
+
+    // Wait for the input to be seeded with the CAPA's current target date.
+    await screen.findByText("Target completion");
+    expect(screen.getByLabelText("Set target date")).toHaveValue(DATE);
+
+    // Save with the unchanged date. With the old code, onSuccess blanked the input here.
+    await u.click(screen.getByRole("button", { name: /Save/ }));
+
+    // The refetch returns the same target_completion_date → useEffect dep unchanged → no re-seed.
+    // The input must retain DATE (not blank). A second Save would send DATE, not null.
+    await waitFor(() => expect(screen.getByLabelText("Set target date")).toHaveValue(DATE));
+  });
+});
+
 test("renders the Advance panel form for the caller's permitted stage", async () => {
   server.use(
     http.get("/api/v1/me/permissions", () =>
@@ -82,6 +247,8 @@ test("renders the Advance panel form for the caller's permitted stage", async ()
         origin_finding_id: null,
         raised_by: "bbbb1111-1111-1111-1111-111111111111",
         created_at: "2026-05-28T09:00:00+00:00",
+        target_completion_date: null,
+        overdue: false,
         stages: [
           {
             id: "s1",

@@ -1,8 +1,9 @@
-import { Badge, Button, Group, Stack, Text, Title } from "@mantine/core";
-import { useState } from "react";
+import { Badge, Button, Group, Stack, Text, TextInput, Title } from "@mantine/core";
+import { useEffect, useState } from "react";
 import { DetailDrawer } from "../../app/shell/DetailDrawer";
 import { usePermissions } from "../../app/shell/usePermissions";
 import { useUserDirectory } from "../../app/shell/useUserDirectory";
+import { StatusBadge } from "../../lib/StatusBadge";
 import { ErrorState, LoadingState } from "../../lib/states";
 import { SpawnDcrModal } from "../dcr/SpawnDcrModal";
 import { useRaiseDcrFromCapa } from "../dcr/mutations";
@@ -12,13 +13,23 @@ import { CapaTimeline } from "./CapaTimeline";
 import { CloseGateStepper } from "./CloseGateStepper";
 import { SeverityBadge } from "./SeverityBadge";
 import { useCapa } from "./hooks";
+import { useCapaSetTargetDate } from "./mutations";
 
 export function CapaDrawer({ capaId, onClose }: { capaId: string | null; onClose: () => void }) {
   const { data: capa, isLoading, isError, refetch } = useCapa(capaId);
   const { data: directory } = useUserDirectory();
-  const { can } = usePermissions();
+  const scope: { level: string; id?: string } = capa?.process_id
+    ? { level: "PROCESS", id: capa.process_id }
+    : { level: "SYSTEM" };
+  const { can } = usePermissions(scope);
   const raiseDcr = useRaiseDcrFromCapa(capaId ?? "");
+  const setTargetDate = useCapaSetTargetDate(capaId ?? "");
   const [raisingDcr, setRaisingDcr] = useState(false);
+  const [targetDate, setTargetDateInput] = useState("");
+
+  useEffect(() => {
+    setTargetDateInput(capa?.target_completion_date ?? "");
+  }, [capaId, capa?.target_completion_date]);
 
   return (
     <DetailDrawer
@@ -82,6 +93,35 @@ export function CapaDrawer({ capaId, onClose }: { capaId: string | null; onClose
               Close gate
             </Title>
             <CloseGateStepper stages={capa.stages ?? []} cycleMarker={capa.cycle_marker} />
+          </div>
+
+          {/* S-capa-overdue: target completion date + overdue badge + inline edit (capa.update) */}
+          <div>
+            <Title order={5} mb="sm">
+              Target completion
+            </Title>
+            <Group gap="xs" mb={can("capa.update") ? "xs" : undefined}>
+              <Text size="sm">{capa.target_completion_date ?? "—"}</Text>
+              {capa.overdue && <StatusBadge tone="danger" label="Overdue" kind="CAPA" />}
+            </Group>
+            {can("capa.update") && (
+              <Group gap="xs" align="flex-end">
+                <TextInput
+                  type="date"
+                  label="Set target date"
+                  value={targetDate}
+                  onChange={(e) => setTargetDateInput(e.currentTarget.value)}
+                  size="xs"
+                />
+                <Button
+                  size="xs"
+                  loading={setTargetDate.isPending}
+                  onClick={() => setTargetDate.mutate(targetDate || null)}
+                >
+                  Save
+                </Button>
+              </Group>
+            )}
           </div>
 
           <div>

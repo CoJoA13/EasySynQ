@@ -1,13 +1,17 @@
 // apps/web/src/features/capa/mutations.test.tsx
 import { renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { http, HttpResponse } from "msw";
 import type { ReactNode } from "react";
 import { expect, test } from "vitest";
 import { AuthContext } from "../../lib/auth";
+import { capaDetailFixture } from "../../test/msw/handlers";
+import { server } from "../../test/msw/server";
 import { TEST_AUTH } from "../../test/render";
 import {
   useCapaClose,
   useCapaContainment,
+  useCapaSetTargetDate,
   useCreateComplaint,
   useCreateNcr,
   useLinkEvidence,
@@ -40,13 +44,17 @@ test("useCapaContainment POSTs the content_block for a CAPA", async () => {
 });
 
 test("useCapaClose POSTs with no body", async () => {
-  const { result } = renderHook(() => useCapaClose("ca000008-0008-0008-0008-000000000008"), { wrapper });
+  const { result } = renderHook(() => useCapaClose("ca000008-0008-0008-0008-000000000008"), {
+    wrapper,
+  });
   await result.current.mutateAsync();
   await waitFor(() => expect(result.current.isSuccess).toBe(true));
 });
 
 test("useLinkEvidence POSTs an evidence-link to a capa_stage", async () => {
-  const { result } = renderHook(() => useLinkEvidence("ca000008-0008-0008-0008-000000000008"), { wrapper });
+  const { result } = renderHook(() => useLinkEvidence("ca000008-0008-0008-0008-000000000008"), {
+    wrapper,
+  });
   await result.current.mutateAsync({
     recordId: "re000001-0001-0001-0001-000000000001",
     targetId: "cr000002-0002-0002-0002-000000000002",
@@ -72,15 +80,46 @@ test("useSpawnCapa POSTs to the complaint's spawn-capa path", async () => {
 
 test("useCreateNcr POSTs /ncrs", async () => {
   const { result } = renderHook(() => useCreateNcr(), { wrapper });
-  const n = await result.current.mutateAsync({ source: "process", description: "out of spec", severity: "Major" });
+  const n = await result.current.mutateAsync({
+    source: "process",
+    description: "out of spec",
+    severity: "Major",
+  });
   expect(n.id).toBeDefined();
 });
 
 test("useNcrDisposition PATCHes the NCR's disposition path", async () => {
+  const { result } = renderHook(() => useNcrDisposition("nc000001-0001-0001-0001-000000000001"), {
+    wrapper,
+  });
+  await result.current.mutateAsync({ disposition: "rework", notes: "re-inspected" });
+  await waitFor(() => expect(result.current.isSuccess).toBe(true));
+});
+
+// S-capa-overdue
+test("useCapaSetTargetDate PATCHes /api/v1/capas/{id} with the date and resolves the CAPA", async () => {
+  let captured: unknown;
+  server.use(
+    http.patch("/api/v1/capas/:id", async ({ request }) => {
+      captured = await request.json();
+      return HttpResponse.json({ ...capaDetailFixture });
+    }),
+  );
   const { result } = renderHook(
-    () => useNcrDisposition("nc000001-0001-0001-0001-000000000001"),
+    () => useCapaSetTargetDate("ca000001-0001-0001-0001-000000000001"),
     { wrapper },
   );
-  await result.current.mutateAsync({ disposition: "rework", notes: "re-inspected" });
+  const capa = await result.current.mutateAsync("2026-09-30");
+  await waitFor(() => expect(result.current.isSuccess).toBe(true));
+  expect(capa.id).toBeDefined();
+  expect(captured).toEqual({ target_completion_date: "2026-09-30" });
+});
+
+test("useCapaSetTargetDate accepts null to clear the date", async () => {
+  const { result } = renderHook(
+    () => useCapaSetTargetDate("ca000001-0001-0001-0001-000000000001"),
+    { wrapper },
+  );
+  await result.current.mutateAsync(null);
   await waitFor(() => expect(result.current.isSuccess).toBe(true));
 });
