@@ -19,7 +19,7 @@ import datetime
 import logging
 import uuid
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ...db.models._audit_enums import ActorType, AuditObjectType, EventType
@@ -59,14 +59,15 @@ async def _org_flags(session: AsyncSession, org_id: uuid.UUID) -> tuple[bool, bo
     return (cfg.notifications_email_enabled, cfg.notifications_escalation_pierce_quiet_hours)
 
 
-def _version_id(capa_id: uuid.UUID, target: datetime.date) -> uuid.UUID:
-    """A per-(capa, target-date) dedup discriminator.
+def _version_id(capa_id: uuid.UUID, target: datetime.date, rearm_seq: int) -> uuid.UUID:
+    """Per-(capa, target-date, re-arm) dedup discriminator.
 
-    A NEW target date re-arms the notification: uuid5 varies with the date, so a clear +
-    new date produces a DISTINCT subject_version_id that passes the dedup index. A constant
-    value would collapse a re-armed breach (ON CONFLICT DO NOTHING → second row never created).
+    The re-arm seq (count of CAPA_TARGET_DATE_SET audits for this CAPA) makes a
+    clear→reset-to-the-SAME-date sequence produce a DISTINCT subject_version_id, so the
+    re-armed overdue is not dedup-collapsed against the stale row. A NEW target date also
+    produces a distinct id (via the date component), so the common case is unaffected.
     """
-    return uuid.uuid5(_NS, f"{capa_id}:{target.isoformat()}")
+    return uuid.uuid5(_NS, f"{capa_id}:{target.isoformat()}:{rearm_seq}")
 
 
 async def _process_one(
@@ -112,7 +113,23 @@ async def _process_one(
         subject = await resolve_subject(session, "CAPA", capa.id)
         org_enabled, org_pierce = await _org_flags(session, org_id)
         recipient_ids = await users_with_roles(session, org_id, [_QMS_OWNER_ROLE])
-        version_id = _version_id(capa.id, target)
+
+        # Count CAPA_TARGET_DATE_SET audits to form a monotonic re-arm discriminator.
+        # Each set_capa_target_date call emits one such audit, so a clear→re-set-to-the-SAME-date
+        # sequence produces a strictly higher seq → distinct subject_version_id → dedup allows the
+        # resend. Queried inside the FOR UPDATE txn so no concurrent edit can change it mid-flight.
+        rearm_seq = (
+            await session.execute(
+                select(func.count())
+                .select_from(AuditEvent)
+                .where(
+                    AuditEvent.event_type == EventType.CAPA_TARGET_DATE_SET,
+                    AuditEvent.object_type == AuditObjectType.record,
+                    AuditEvent.object_id == capa.id,
+                )
+            )
+        ).scalar_one()
+        version_id = _version_id(capa.id, target, rearm_seq)
         context_vars: dict[str, object] = {"target_completion_date": target.isoformat()}
 
         created = 0

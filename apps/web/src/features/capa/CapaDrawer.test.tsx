@@ -1,4 +1,5 @@
 import { screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { http, HttpResponse } from "msw";
 import { describe, expect, it, test, vi } from "vitest";
@@ -171,6 +172,54 @@ describe("Target completion / overdue", () => {
     );
     await screen.findByText("Target completion");
     expect(screen.queryByLabelText("Set target date")).toBeNull();
+  });
+
+  it("keeps the date input value after saving the same (unchanged) date", async () => {
+    // Fix C regression guard: the old Save handler had onSuccess: () => setTargetDateInput(""),
+    // which blanked the input on success. When the save didn't change the target
+    // (same date as current), the query refetch returned an identical value so the
+    // useEffect dep [capaId, capa?.target_completion_date] did NOT change → the effect did
+    // NOT re-run → the input stayed blank → a second Save would send null (clearing the date).
+    // After the fix (no onSuccess blank), the input keeps its value.
+    const DATE = "2026-07-20";
+    server.use(
+      http.get("/api/v1/me/permissions", () =>
+        HttpResponse.json({
+          scope: { level: "PROCESS", selector: null },
+          permissions: [{ key: "capa.update", effect: "ALLOW", source: null }],
+        }),
+      ),
+      http.get("/api/v1/capas/:id", () =>
+        HttpResponse.json({
+          ...capaDetailFixture,
+          target_completion_date: DATE,
+          overdue: false,
+        }),
+      ),
+      http.patch("/api/v1/capas/:id", () =>
+        HttpResponse.json({
+          ...capaDetailFixture,
+          target_completion_date: DATE,
+          overdue: false,
+        }),
+      ),
+    );
+
+    const u = userEvent.setup();
+    renderWithProviders(
+      <CapaDrawer capaId="ca000001-0001-0001-0001-000000000001" onClose={vi.fn()} />,
+    );
+
+    // Wait for the input to be seeded with the CAPA's current target date.
+    await screen.findByText("Target completion");
+    expect(screen.getByLabelText("Set target date")).toHaveValue(DATE);
+
+    // Save with the unchanged date. With the old code, onSuccess blanked the input here.
+    await u.click(screen.getByRole("button", { name: /Save/ }));
+
+    // The refetch returns the same target_completion_date → useEffect dep unchanged → no re-seed.
+    // The input must retain DATE (not blank). A second Save would send DATE, not null.
+    await waitFor(() => expect(screen.getByLabelText("Set target date")).toHaveValue(DATE));
   });
 });
 

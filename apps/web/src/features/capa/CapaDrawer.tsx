@@ -116,11 +116,7 @@ export function CapaDrawer({ capaId, onClose }: { capaId: string | null; onClose
                 <Button
                   size="xs"
                   loading={setTargetDate.isPending}
-                  onClick={() =>
-                    setTargetDate.mutate(targetDate || null, {
-                      onSuccess: () => setTargetDateInput(""),
-                    })
-                  }
+                  onClick={() => setTargetDate.mutate(targetDate || null)}
                 >
                   Save
                 </Button>

@@ -43,6 +43,7 @@ from easysynq_api.db.models.organization import Organization
 from easysynq_api.db.models.role import Role, RoleAssignment
 from easysynq_api.db.session import get_sessionmaker
 from easysynq_api.services.capa.overdue import _process_one, sweep_capa_overdue
+from easysynq_api.services.capa.service import set_capa_target_date
 from easysynq_api.services.notifications.constants import EVENT_CAPA_OVERDUE
 
 from .test_capa import _grant
@@ -594,4 +595,86 @@ async def test_future_dated_capa_not_fired_by_process_one(
     after_audits = await _count_capa_overdue_audits(org_id, capa_id)
     assert after_audits == before_audits, (
         "No CAPA_OVERDUE audit must be written for a future-dated CAPA"
+    )
+
+
+async def test_same_date_rearm_fires_distinct_notification(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """Fix D mutation-verify: same-date re-arm → SECOND distinct capa.overdue notification.
+
+    Scenario: CAPA overdue+notified for date D (stamp set, rearm_seq=0). QM clears the target
+    (set_capa_target_date→None; emits audit #1), then re-sets to the SAME date D
+    (set_capa_target_date→D; emits audit #2). Now overdue_notified_at=NULL + target=D + seq=2.
+
+    With the OLD _version_id (no rearm_seq):
+        version_id = uuid5(NS, f"{capa_id}:{D}") — SAME for both sweeps
+        → dedup index collapses the resend → no new row → count stays 1 → assert count==2 FAILS.
+
+    With the FIX (rearm_seq = count of CAPA_TARGET_DATE_SET audits):
+        sweep 1: version_id = uuid5(NS, f"{capa_id}:{D}:0")
+        sweep 2: version_id = uuid5(NS, f"{capa_id}:{D}:2") — DISTINCT
+        → dedup allows new row → count==2 PASSES.
+    """
+    org_id = await _default_org_id()
+
+    # Self-provide a fresh QMS Owner holder so counts start at 0 for this test.
+    qm_id = await _seed_user(org_id, display_name="Same-date Rearm QM Holder")
+    await _assign_role(org_id, qm_id, "QMS Owner")
+
+    # Seed a plain org-member actor for the set_capa_target_date service calls.
+    # No elevated permissions needed — the service layer doesn't check authz (the route does).
+    actor_id = await _seed_user(org_id, display_name="Same-date Rearm Actor", email=None)
+
+    subject = f"kc-capa-sr-{uuid.uuid4().hex[:8]}"
+    await _grant(subject, _CAPA_CREATE_KEYS)
+    h = _auth(token_factory, subject)
+
+    r = await app_client.post(
+        "/api/v1/capas",
+        headers=h,
+        json={"title": "Same-date Rearm CAPA", "severity": "Major"},
+    )
+    assert r.status_code == 201, r.text
+    capa_id = uuid.UUID(r.json()["id"])
+
+    # Set target via direct UPDATE (no audit emitted → rearm_seq=0 at first sweep).
+    _TARGET = _OVERDUE_DATE  # 2026-06-23 < _BASE.date() → triggers the overdue claim
+    async with get_sessionmaker()() as s:
+        await s.execute(
+            update(Capa)
+            .where(Capa.id == capa_id)
+            .values(target_completion_date=_TARGET, overdue_notified_at=None)
+        )
+        await s.commit()
+
+    sm = get_sessionmaker()
+
+    # First sweep: rearm_seq=0 → version_id = uuid5(NS, f"{capa_id}:{_TARGET}:0") → 1 notification.
+    await sweep_capa_overdue(sm, _BASE)
+    count_1 = await _count_notifications_for(capa_id, EVENT_CAPA_OVERDUE, qm_id)
+    assert count_1 == 1, f"First sweep must create exactly 1 notification, got {count_1}"
+    stamp_1 = await _get_overdue_notified_at(capa_id)
+    assert stamp_1 is not None, "overdue_notified_at must be stamped after first sweep"
+
+    # RE-ARM via set_capa_target_date: clear (→ None) then re-set to the SAME date D.
+    # Each call emits a CAPA_TARGET_DATE_SET audit and clears overdue_notified_at.
+    # After both calls: rearm_seq=2, target=_TARGET, overdue_notified_at=None.
+    async with get_sessionmaker()() as s:
+        actor = (await s.execute(select(AppUser).where(AppUser.id == actor_id))).scalar_one()
+        await set_capa_target_date(s, actor, capa_id, target_completion_date=None)
+
+    async with get_sessionmaker()() as s:
+        actor = (await s.execute(select(AppUser).where(AppUser.id == actor_id))).scalar_one()
+        await set_capa_target_date(s, actor, capa_id, target_completion_date=_TARGET)
+
+    # Second sweep: rearm_seq=2 → version_id = uuid5(NS, f"{capa_id}:{_TARGET}:2") ≠ sweep-1 id
+    # → dedup index allows a NEW notification row → count=2.
+    await sweep_capa_overdue(sm, _BASE)
+    count_2 = await _count_notifications_for(capa_id, EVENT_CAPA_OVERDUE, qm_id)
+    assert count_2 == count_1 + 1, (
+        f"Same-date re-arm must produce a SECOND distinct notification row "
+        f"(got {count_2} total, expected {count_1 + 1}). "
+        "Mutation-verify: with old _version_id (no rearm_seq), same date → same uuid5 key "
+        "→ dedup index collapses the second send → count stays 1 → this assert FAILS."
     )
