@@ -92,6 +92,11 @@ app.conf.update(
             "task": "easysynq.ack.sweep",
             "schedule": 86400.0,  # daily
         },
+        # S-capa-overdue: daily scan for CAPAs past their target_completion_date → notify QMS Owner.
+        "capa-overdue-sweep": {
+            "task": "easysynq.capa.overdue_sweep",
+            "schedule": 86400.0,  # daily
+        },
         # S-drift-2: the D2+D3 mirror integrity scan (doc 05 §9.2.1 / R11 — the accepted drift
         # window equals this interval; default hourly, configurable via
         # MIRROR_SCAN_INTERVAL_SECONDS). The nightly mirror-sync also scans (scan-first pipeline).
