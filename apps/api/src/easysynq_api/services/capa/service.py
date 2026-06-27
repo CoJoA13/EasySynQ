@@ -59,12 +59,14 @@ from ...domain.capa import (
     adjudicate_capa_closure,
     allowed_targets,
     capa_self_verify_blocked,
+    default_target_date,
     derive_implementer_ids,
     transition_allowed,
 )
 from ...domain.vault import format_identifier
 from ...logging import request_id_var
 from ...problems import ProblemException
+from ..common.org_clock import resolve_org_tz
 from ..dcr import raise_dcr
 from ..records.service import capture_record, emit_record_event
 from ..vault import repository as vault_repo
@@ -260,6 +262,10 @@ async def spawn_capa_from_complaint(
         process_id=process_id,
         close_state=CapaCloseState.Raised,
         cycle_marker=0,
+        target_completion_date=default_target_date(
+            resolved_severity,
+            datetime.datetime.now(await resolve_org_tz(session, actor.org_id)).date(),
+        ),
     )
     session.add(capa)
     await session.flush()
@@ -319,6 +325,7 @@ async def build_capa(
     ``audit_finding.auto_capa_id`` + emits the finding events + commits once). ``origin_finding_id``
     is the reverse half of the auto-link -- NULL for a directly-raised CAPA (the R39 invariant)."""
     record = await capture_record(session, actor, record_type="CAPA", title=title, _commit=False)
+    target_tz = await resolve_org_tz(session, actor.org_id)
     capa = Capa(
         id=record.id,
         org_id=actor.org_id,
@@ -328,6 +335,9 @@ async def build_capa(
         process_id=process_id,
         close_state=CapaCloseState.Raised,
         cycle_marker=0,
+        target_completion_date=default_target_date(
+            severity, datetime.datetime.now(target_tz).date()
+        ),
     )
     session.add(capa)
     await session.flush()

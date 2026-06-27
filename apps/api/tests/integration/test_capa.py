@@ -10,6 +10,7 @@ integration suite shares one session DB across files, so absolute counts are nev
 
 from __future__ import annotations
 
+import datetime
 import uuid
 from collections.abc import Callable
 
@@ -19,9 +20,11 @@ from sqlalchemy import func, select, text
 from sqlalchemy.exc import DBAPIError
 
 from easysynq_api.db.models._audit_enums import AuditObjectType, EventType
+from easysynq_api.db.models._capa_enums import NcSeverity
 from easysynq_api.db.models.app_user import AppUser
 from easysynq_api.db.models.audit_event import AuditEvent
 from easysynq_api.db.models.authz_grant import PermissionOverride
+from easysynq_api.db.models.capa import Capa
 from easysynq_api.db.models.capa_stage import CapaStage
 from easysynq_api.db.models.permission import Permission
 from easysynq_api.db.models.role import Role, RoleAssignment
@@ -29,8 +32,10 @@ from easysynq_api.db.models.scope import Scope
 from easysynq_api.db.models.signature_event import SignatureEvent
 from easysynq_api.db.session import get_sessionmaker
 from easysynq_api.domain.authz.types import Effect, ScopeLevel
+from easysynq_api.domain.capa import default_target_date
 from easysynq_api.problems import ProblemException
 from easysynq_api.services.capa import advance_capa_to_containment
+from easysynq_api.services.common.org_clock import resolve_org_tz
 
 from .test_vault import _auth, _ensure_user
 
@@ -1293,3 +1298,47 @@ async def test_capa_approval_read_null_then_pending(
     assert approval is not None
     assert approval["instance"]["subject_id"] == cid
     assert approval["proposed_action_plan"] == {"action_items": ["fix it"]}
+
+
+# --- S-capa-overdue: target_completion_date defaulted at raise --------------------------------
+
+
+async def test_target_completion_date_defaulted_at_raise(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """A raised CAPA carries target_completion_date = raise_date + severity offset (30/60/90 d).
+
+    Asserts on the ORM row directly (the HTTP serializer does not yet expose the field).
+    Resolves the org tz the same way the service does to get the raise_date in the right frame.
+    """
+    subject = _subject("capa-tgt")
+    await _grant(subject, _CAPA_KEYS)
+    h = _auth(token_factory, subject)
+
+    # Resolve org tz via the same path the service uses (calendar.tz → org.tz → env → UTC).
+    async with get_sessionmaker()() as s:
+        user = await _ensure_user(s, subject)
+        org_id = user.org_id
+        target_tz = await resolve_org_tz(s, org_id)
+
+    raise_date_before = datetime.datetime.now(target_tz).date()
+    r = await app_client.post(
+        "/api/v1/capas",
+        headers=h,
+        json={"title": "TCD test", "severity": "Critical", "problem": "test"},
+    )
+    raise_date_after = datetime.datetime.now(target_tz).date()
+    assert r.status_code == 201, r.text
+    capa_id = uuid.UUID(r.json()["id"])
+
+    async with get_sessionmaker()() as s:
+        capa = (await s.execute(select(Capa).where(Capa.id == capa_id))).scalar_one()
+        tcd = capa.target_completion_date
+
+    assert tcd is not None
+    # Permit raise_date to straddle midnight (normally instantaneous; makes the test robust).
+    expected = {
+        default_target_date(NcSeverity.Critical, raise_date_before),
+        default_target_date(NcSeverity.Critical, raise_date_after),
+    }
+    assert tcd in expected, f"expected one of {expected}, got {tcd}"
