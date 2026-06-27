@@ -918,10 +918,20 @@ async def test_decide_changes_requested_keeps_clock_and_renag(
     # Backdate 40 days past due.
     _did, doc_uuid = await _due_released_doc(app_client, ha, hb, type_id, content, backdate_days=40)
 
-    # Capture the original next_review_due so we can assert it's unchanged.
+    # Pin next_review_due to a clearly-PAST date, then capture it as the "unchanged" baseline.
+    # _due_released_doc sets next_review_due = today, but the re-nag task's due_at is
+    # snap_to_working_day(next_review_due): on a WEEKEND run, today snaps FORWARD to the next
+    # working day (a future date), so the new task is NOT overdue and the REVIEW_OVERDUE pass
+    # correctly does not fire (S-duedate-snap) — making this test weekend-broken. A past date keeps
+    # the snapped due_at in the past for any run weekday, so the re-nag overdue assertion is robust.
     async with get_sessionmaker()() as s:
         di = await s.get(DocumentedInformation, doc_uuid)
         assert di is not None
+        di.next_review_due = datetime.datetime.now(
+            await _canonical_tz()
+        ).date() - datetime.timedelta(days=30)
+        await s.commit()
+        await s.refresh(di)
         original_next_review_due = di.next_review_due
         ver_id = di.current_effective_version_id
 
