@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 677 200" width="677" height="200">
+  <g transform="translate(7.25 29.2) scale(0.3)"><circle cx="236" cy="236" r="140" fill="none" stroke="#0EA394" stroke-width="48"/>
+  <path d="M250 300 L296 352 L430 300" fill="none" stroke="#1565C0" stroke-width="46" stroke-linecap="round" stroke-linejoin="round"/></g>
+  <text x="176" y="131" font-family="Inter, 'Segoe UI', 'Helvetica Neue', 'DejaVu Sans', Arial, sans-serif" font-weight="700" font-size="86" letter-spacing="-2"><tspan fill="#16202A">EasySyn</tspan><tspan fill="#0B8175">Q</tspan></text>
+</svg>

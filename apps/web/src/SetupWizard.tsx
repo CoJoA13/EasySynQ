@@ -184,6 +184,14 @@ export function SetupWizard({
     <Container size="sm" py="xl">
       <Stack gap="lg">
         <Stack gap={4}>
+          <img
+            src="/easysynq-mark.svg"
+            alt=""
+            aria-hidden="true"
+            width={44}
+            height={44}
+            style={{ marginBottom: 4 }}
+          />
           <Title order={1}>Welcome to EasySynQ</Title>
           <Text c="dimmed">First-run setup — stand up your controlled QMS.</Text>
         </Stack>
@@ -232,7 +240,9 @@ export function SetupWizard({
 
           <Stepper.Step label="Organization" description="Profile">
             <Stack gap="md" mt="md">
-              <Text size="sm">Your organization profile. The timezone is authoritative for effective dates.</Text>
+              <Text size="sm">
+                Your organization profile. The timezone is authoritative for effective dates.
+              </Text>
               <TextInput
                 label="Legal name"
                 value={legalName}
@@ -293,9 +303,9 @@ export function SetupWizard({
             <Stack gap="md" mt="md">
               <Text size="sm">
                 Configure admin-controlled backups, then prove a restore actually works. The drill
-                backs up, restores into an isolated scratch namespace, and verifies integrity
-                (row counts, blob SHA-256 re-hash, FK checks). Setup cannot finalize until it passes
-                — a configured-but-unverified backup is treated as no backup.
+                backs up, restores into an isolated scratch namespace, and verifies integrity (row
+                counts, blob SHA-256 re-hash, FK checks). Setup cannot finalize until it passes — a
+                configured-but-unverified backup is treated as no backup.
               </Text>
               <TextInput
                 label="Backup destination"

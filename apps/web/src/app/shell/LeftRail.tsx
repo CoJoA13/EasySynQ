@@ -1,4 +1,5 @@
 import { Box, NavLink, Stack, Text } from "@mantine/core";
+import { useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { GlyphLegend } from "../../lib/GlyphLegend";
 import type { PdcaPhase } from "../../lib/types";
@@ -44,7 +45,7 @@ const NAV: Record<PdcaPhase, NavItem[]> = {
   ],
   DO: [
     { to: "/library", label: "Library", prefix: "/library" },
-    { to: "/tasks", label: "Review & Approve", prefix: "/tasks" },
+    { to: "/tasks", label: "Review and approve", prefix: "/tasks" },
     { to: "/ingestion", label: "Import", prefix: "/ingestion", gate: "import.review" },
   ],
   CHECK: [
@@ -54,7 +55,7 @@ const NAV: Record<PdcaPhase, NavItem[]> = {
       prefix: "/compliance",
       gate: "report.compliance_checklist.read",
     },
-    { to: "/audits", label: "Internal Audit", prefix: "/audits" },
+    { to: "/audits", label: "Internal audit", prefix: "/audits" },
     {
       to: "/management-reviews",
       label: "Management reviews",
@@ -64,19 +65,32 @@ const NAV: Record<PdcaPhase, NavItem[]> = {
     { to: "/drift", label: "Drift", prefix: "/drift", gate: "drift.read" },
   ],
   ACT: [
-    { to: "/capa", label: "Nonconformity & CAPA", prefix: "/capa" },
+    { to: "/capa", label: "Nonconformity and CAPA", prefix: "/capa" },
     { to: "/improvement", label: "Improvement", prefix: "/improvement", gate: "improvement.read" },
     { to: "/dcrs", label: "Change requests", prefix: "/dcrs", gate: "changeRequest.read" },
   ],
 };
 
+// One compact row height for every rail entry (Mantine NavLink's default block padding reads
+// airy at 256px width; 5px keeps the full PDCA grouping on a laptop viewport without a scroll).
+const railLink = { root: { paddingBlock: 5 } } as const;
+
 export function LeftRail() {
-  const { pathname } = useLocation();
+  const { pathname, search } = useLocation();
   const { data: clauses } = useClauses();
   const { can } = usePermissions();
+  // Controlled disclosure state: Mantine's uncontrolled NavLink emits only data-expanded (a styling
+  // hook — invisible to AT) and its collapsed panel is aria-hidden+inert, so without an explicit
+  // aria-expanded a screen reader hears a stateless button and can never discover the clause links
+  // (WCAG 4.1.2; axe/eslint are both blind to this). An untouched phase defaults open when the
+  // CURRENT Library clause filter lives under it, so a deep link / reload never hides its own filter.
+  const [openedPhases, setOpenedPhases] = useState<Partial<Record<PdcaPhase, boolean>>>({});
+  const activeClauseTop = pathname.startsWith("/library")
+    ? (new URLSearchParams(search).get("clause") ?? "").split(".")[0]
+    : "";
   return (
-    <Stack gap="xs" p="sm">
-      <NavLink component={Link} to="/" label="Home" active={pathname === "/"} />
+    <Stack gap={4} p="sm">
+      <NavLink styles={railLink} component={Link} to="/" label="Home" active={pathname === "/"} />
 
       {PHASES.map((phase) => {
         const items = NAV[phase].filter((it) => !it.gate || can(it.gate));
@@ -86,12 +100,13 @@ export function LeftRail() {
         // Drop a phase entirely when the caller can see neither a feature link nor a clause under it.
         if (items.length === 0 && topClauses.length === 0) return null;
         return (
-          <Box key={phase} mt="sm" role="group" aria-label={`${phase} section`}>
-            <Text size="xs" fw={700} c="dimmed" tt="uppercase" px="xs">
+          <Box key={phase} mt={8} role="group" aria-label={`${phase} section`}>
+            <Text size="xs" fw={700} c="dimmed" tt="uppercase" px="xs" mb={2}>
               {phase} · {PHASE_CLAUSES[phase]}
             </Text>
             {items.map((it) => (
               <NavLink
+                styles={railLink}
                 key={it.to}
                 component={Link}
                 to={it.to}
@@ -99,22 +114,38 @@ export function LeftRail() {
                 active={pathname.startsWith(it.prefix)}
               />
             ))}
-            {topClauses.length > 0 && (
-              <>
-                <Text size="0.625rem" fw={600} c="dimmed" tt="uppercase" px="xs" mt={6}>
-                  Clauses
-                </Text>
-                {topClauses.map((c) => (
-                  // S-web-2: a clause link filters the Library by that exact clause number.
+            {topClauses.length > 0 &&
+              (() => {
+                const opened =
+                  openedPhases[phase] ?? topClauses.some((c) => c.number === activeClauseTop);
+                return (
+                  // The clause-browse links are Library FILTERS, not registers — one collapsed
+                  // disclosure per phase keeps them a click away without out-crowding the registers
+                  // (they were ~40% of the rail's rows) or re-raising the numbered-vs-unnumbered clash.
                   <NavLink
-                    key={c.id}
-                    component={Link}
-                    to={`/library?clause=${encodeURIComponent(c.number)}`}
-                    label={`${c.number} ${c.title}`}
-                  />
-                ))}
-              </>
-            )}
+                    styles={railLink}
+                    component="button"
+                    type="button"
+                    label={`Clauses ${PHASE_CLAUSES[phase].replace(/^Cl /, "")}`}
+                    childrenOffset={12}
+                    opened={opened}
+                    onChange={(o) => setOpenedPhases((s) => ({ ...s, [phase]: o }))}
+                    aria-expanded={opened}
+                  >
+                    {topClauses.map((c) => (
+                      // S-web-2: a clause link filters the Library by that exact clause number.
+                      <NavLink
+                        styles={railLink}
+                        key={c.id}
+                        component={Link}
+                        to={`/library?clause=${encodeURIComponent(c.number)}`}
+                        label={`${c.number} ${c.title}`}
+                        active={c.number === activeClauseTop}
+                      />
+                    ))}
+                  </NavLink>
+                );
+              })()}
           </Box>
         );
       })}

@@ -86,6 +86,7 @@ export function App() {
     return (
       <Container size="sm" py="xl">
         <Stack align="center" gap="md">
+          <img src="/easysynq-mark.svg" alt="" aria-hidden="true" width={48} height={48} />
           <Loader />
           <Text c="dimmed">Signing in…</Text>
           <Button

@@ -34,6 +34,7 @@ export function TopBar({
           size="sm"
           aria-label="Toggle navigation"
         />
+        <img src="/easysynq-mark-simple.svg" alt="" aria-hidden="true" width={22} height={22} />
         <Text fw={700}>EasySynQ</Text>
       </Group>
       <Button

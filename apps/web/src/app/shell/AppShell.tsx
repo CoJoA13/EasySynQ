@@ -1,4 +1,4 @@
-import { AppShell as MantineAppShell } from "@mantine/core";
+import { AppShell as MantineAppShell, ScrollArea } from "@mantine/core";
 import { useDisclosure, useHotkeys } from "@mantine/hooks";
 import { Outlet } from "react-router-dom";
 import { CommandPalette } from "../../features/search/CommandPalette";
@@ -42,7 +42,11 @@ export function AppShell() {
         <TopBar navOpened={navOpened} onToggleNav={toggleNav} onOpenSearch={openSearch} />
       </MantineAppShell.Header>
       <MantineAppShell.Navbar>
-        <LeftRail />
+        {/* The rail outgrew short viewports (nav items accrue per register slice) — without a
+            scrollable section the overflow is simply clipped and unreachable. */}
+        <MantineAppShell.Section grow component={ScrollArea}>
+          <LeftRail />
+        </MantineAppShell.Section>
       </MantineAppShell.Navbar>
       <MantineAppShell.Main id="main-content">
         <Breadcrumb />

@@ -109,7 +109,7 @@ export function ReviewApprovePage() {
     // The CAPA subject id is on the task (no document.read-gated instance read) → always present here.
     return (
       <Stack gap="lg">
-        <Title order={2}>Review &amp; Approve — Action plan</Title>
+        <Title order={2}>Review and approve — Action plan</Title>
         <Grid gutter="lg" align="flex-start">
           <Grid.Col span={{ base: 12, md: 7 }}>
             <CapaApprovalContext capaId={task.subject_id!} />
@@ -237,7 +237,7 @@ export function ReviewApprovePage() {
     // so the card shows whenever the task is PENDING.
     return (
       <Stack gap="lg">
-        <Title order={2}>Review &amp; Approve — Change request</Title>
+        <Title order={2}>Review and approve — Change request</Title>
         <Grid gutter="lg" align="flex-start">
           <Grid.Col span={{ base: 12, md: 7 }}>
             <DcrApprovalContext dcrId={task.subject_id!} />
@@ -317,7 +317,7 @@ export function ReviewApprovePage() {
 
   return (
     <Stack gap="lg">
-      <Title order={2}>Review &amp; Approve{doc ? ` — ${doc.identifier}` : ""}</Title>
+      <Title order={2}>Review and approve{doc ? ` — ${doc.identifier}` : ""}</Title>
       <Grid gutter="lg" align="flex-start">
         <Grid.Col span={{ base: 12, md: 7 }}>
           <Stack gap="md">
