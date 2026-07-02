@@ -10,7 +10,7 @@ const LABELS: Record<string, string> = {
   documents: "Document",
   tasks: "Task",
   compliance: "Compliance",
-  capa: "Nonconformity & CAPA",
+  capa: "Nonconformity and CAPA",
   complaints: "Complaints",
   ncrs: "NCRs",
   audits: "Internal audit",

@@ -1,4 +1,5 @@
 import { screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { expect, it, test } from "vitest";
 import { server } from "../../test/msw/server";
@@ -35,14 +36,14 @@ test("LeftRail shows Home + the four PDCA phase headings (with clause ranges)", 
   expect(screen.getByText(/ACT ·/)).toBeInTheDocument();
 });
 
-test("Library + Review & Approve sit under the DO section", () => {
+test("Library + Review and approve sit under the DO section", () => {
   renderWithProviders(<LeftRail />, { route: "/library" });
   const doSection = screen.getByRole("group", { name: "DO section" });
   expect(within(doSection).getByRole("link", { name: "Library" })).toHaveAttribute(
     "href",
     "/library",
   );
-  expect(within(doSection).getByRole("link", { name: "Review & Approve" })).toHaveAttribute(
+  expect(within(doSection).getByRole("link", { name: "Review and approve" })).toHaveAttribute(
     "href",
     "/tasks",
   );
@@ -56,7 +57,7 @@ test("Change requests (DCR) sits under the ACT section, beside CAPA + Improvemen
   expect(dcr).toHaveAttribute("href", "/dcrs");
   const act = screen.getByRole("group", { name: "ACT section" });
   expect(act).toContainElement(dcr);
-  expect(within(act).getByRole("link", { name: "Nonconformity & CAPA" })).toBeInTheDocument();
+  expect(within(act).getByRole("link", { name: "Nonconformity and CAPA" })).toBeInTheDocument();
   expect(within(act).getByRole("link", { name: "Improvement" })).toBeInTheDocument();
 });
 
@@ -69,12 +70,21 @@ test("Objectives sits under the PLAN section (gated on objective.read)", async (
   expect(plan).toContainElement(objectives);
 });
 
-test("each phase's clause-filter links nest under that phase heading", async () => {
+test("each phase's clause-filter links nest under a collapsed per-phase disclosure", async () => {
   renderWithProviders(<LeftRail />, { route: "/library" });
   const plan = await screen.findByRole("group", { name: "PLAN section" });
-  // a PLAN clause (4/5/6) renders as a Library filter link inside the PLAN group. The PLAN section now
-  // renders eagerly (the ungated Risk-register link), so await the async clauses sub-heading.
-  expect(await within(plan).findByText("Clauses")).toBeInTheDocument();
+  // The clause-browse links live behind one collapsed "Clauses 4–6" disclosure per phase (they are
+  // Library filters, not registers). Collapsed → no clause link is exposed to the a11y tree, and the
+  // toggle MUST announce its state (Mantine emits only data-expanded — a styling hook AT can't hear).
+  const toggle = await within(plan).findByRole("button", { name: /Clauses 4–6/ });
+  expect(toggle).toHaveAttribute("aria-expanded", "false");
+  expect(
+    within(plan)
+      .queryAllByRole("link")
+      .some((a) => a.getAttribute("href")?.startsWith("/library?clause=")),
+  ).toBe(false);
+  await userEvent.click(toggle);
+  expect(toggle).toHaveAttribute("aria-expanded", "true");
   expect(
     within(plan)
       .getAllByRole("link")
@@ -82,9 +92,23 @@ test("each phase's clause-filter links nest under that phase heading", async () 
   ).toBe(true);
 });
 
-test("the Nonconformity & CAPA entry is always shown (discoverable; page handles 403)", async () => {
+test("a deep link to a clause filter auto-opens the owning phase's disclosure", async () => {
+  // Landing directly on /library?clause=4.1 (CompliancePage/search links do this) must not hide the
+  // applied filter's own rail link behind a collapsed disclosure.
+  renderWithProviders(<LeftRail />, { route: "/library?clause=4.1" });
+  const plan = await screen.findByRole("group", { name: "PLAN section" });
+  const toggle = await within(plan).findByRole("button", { name: /Clauses 4–6/ });
+  expect(toggle).toHaveAttribute("aria-expanded", "true");
+  expect(
+    within(plan)
+      .getAllByRole("link")
+      .some((a) => a.getAttribute("href")?.startsWith("/library?clause=4")),
+  ).toBe(true);
+});
+
+test("the Nonconformity and CAPA entry is always shown (discoverable; page handles 403)", async () => {
   renderWithProviders(<LeftRail />, { route: "/" });
-  expect(await screen.findByText("Nonconformity & CAPA")).toBeInTheDocument();
+  expect(await screen.findByText("Nonconformity and CAPA")).toBeInTheDocument();
 });
 
 test("hides the Compliance entry when the caller lacks report.compliance_checklist.read", async () => {
@@ -127,9 +151,9 @@ test("shows the gated Import entry when the caller holds import.review", async (
   expect(link).toHaveAttribute("href", "/ingestion");
 });
 
-test("Internal Audit entry is unconditional (the CAPA precedent — calm-403 lives on the page)", async () => {
+test("Internal audit entry is unconditional (the CAPA precedent — calm-403 lives on the page)", async () => {
   renderWithProviders(<LeftRail />);
-  expect(await screen.findByRole("link", { name: "Internal Audit" })).toHaveAttribute(
+  expect(await screen.findByRole("link", { name: "Internal audit" })).toHaveAttribute(
     "href",
     "/audits",
   );

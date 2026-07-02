@@ -96,6 +96,8 @@ Celery workers · Keycloak (auth) · Gotenberg/LibreOffice (rendering) · Caddy 
   generic Bootstrap admin. **A11y bar:** WCAG 2.2 AA + colour-safe RAG + reduced-motion.
 - **Design system:** `apps/web/src/theme/tokens.css` (one token source for Mantine + Tailwind; calm
   indigo `#4f5bd5`, layered surfaces, PDCA hues, light+dark, system-font stack — air-gap-safe).
+  Brand assets (favicon/mark/logo from the owner's kit, teal/blue — logo colours, NOT UI palette;
+  owner ratified keeping the indigo UI) live in `apps/web/public/`; a vitest guards their existence.
 - Impeccable live mode is pre-wired (`.impeccable/live/config.json` → `apps/web/index.html`).
 
 ## Recent learnings  <!-- ONE line per entry; cap ~8, newest first. Full per-slice narrative → docs/slice-history.md; recurring traps → .claude/rules/engineering-patterns.md. -->

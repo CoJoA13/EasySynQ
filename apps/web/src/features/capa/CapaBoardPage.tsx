@@ -99,7 +99,7 @@ export function CapaBoardPage() {
     return (
       <Container size="md" py="md">
         <Title order={2} mb="md">
-          Nonconformity &amp; CAPA
+          Nonconformity and CAPA
         </Title>
         <NoAccessState
           message={
@@ -123,7 +123,7 @@ export function CapaBoardPage() {
     return (
       <Container size="md" py="md">
         <Title order={2} mb="md">
-          Nonconformity &amp; CAPA
+          Nonconformity and CAPA
         </Title>
         <ErrorState title="Couldn't load CAPAs" onRetry={() => refetch()} />
       </Container>
@@ -138,7 +138,7 @@ export function CapaBoardPage() {
   return (
     <Container size="xl" py="md">
       <Group justify="space-between" mb="md">
-        <Title order={2}>Nonconformity &amp; CAPA</Title>
+        <Title order={2}>Nonconformity and CAPA</Title>
         <Group gap="sm">
           {canRaiseCapa && <Button onClick={() => setRaiseOpen(true)}>＋ Raise CAPA</Button>}
           <SegmentedControl

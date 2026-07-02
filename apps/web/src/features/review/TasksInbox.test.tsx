@@ -54,7 +54,7 @@ describe("TasksInbox routing", () => {
 
   test("no type param renders the default review queue", async () => {
     renderWithProviders(<TasksInbox />, { route: "/tasks" });
-    expect(await screen.findByText("Review & Approve")).toBeInTheDocument();
+    expect(await screen.findByText("Review and approve")).toBeInTheDocument();
   });
 
   // Regression: `/tasks` and `/tasks?type=DOC_ACK` are the SAME route element, so the bell→inbox
@@ -75,11 +75,11 @@ describe("TasksInbox routing", () => {
     }
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     renderWithProviders(<TransitionHarness />, { route: "/tasks" });
-    expect(await screen.findByText("Review & Approve")).toBeInTheDocument();
+    expect(await screen.findByText("Review and approve")).toBeInTheDocument();
     await userEvent.click(screen.getByText("to-ack"));
     expect(await screen.findByRole("heading", { name: "Acknowledgements" })).toBeInTheDocument();
     await userEvent.click(screen.getByText("to-general"));
-    expect(await screen.findByText("Review & Approve")).toBeInTheDocument();
+    expect(await screen.findByText("Review and approve")).toBeInTheDocument();
     expect(errSpy.mock.calls.flat().join(" ")).not.toMatch(/Rendered (fewer|more) hooks/);
     errSpy.mockRestore();
   });
