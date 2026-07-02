@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# Appliance health at a glance (+ --remint to reissue the one-time bootstrap secret).
+set -euo pipefail
+
+HOST="$(grep -m1 '^SITE_ADDRESS=' /opt/easysynq/.env | cut -d= -f2- | sed 's|https\?://||')"
+HOST="${HOST:-easysynq.local}"
+
+if [ "${1:-}" = "--remint" ]; then
+  echo "Minting a fresh one-time bootstrap secret (invalidates any prior one):"
+  easysynq-compose exec -T api uv run python -m easysynq_api.cli.setup mint-bootstrap
+  exit 0
+fi
+
+# Print the Caddy internal root CA (PEM) — for the workstation/GPO trust rollout. The cloud
+# image ships no SSH password auth, so console copy/paste (or redirect to a share) is the path.
+if [ "${1:-}" = "--ca" ]; then
+  easysynq-compose exec -T proxy cat /data/caddy/pki/authorities/local/root.crt
+  exit 0
+fi
+
+echo "== EasySynQ appliance status =="
+[ -f /var/lib/easysynq/provisioned ] && echo "provisioned: yes ($(cat /var/lib/easysynq/version.txt 2>/dev/null || echo '?'))" \
+  || echo "provisioned: NO — check: journalctl -u easysynq-provision -e"
+echo "url: https://${HOST}"
+echo
+easysynq-compose ps --format 'table {{.Name}}\t{{.Status}}'
+echo
+if curl -fsk --resolve "${HOST}:443:127.0.0.1" "https://${HOST}/readyz" 2>/dev/null; then
+  echo " <- /readyz"
+else
+  echo "/readyz: NOT READY"
+fi

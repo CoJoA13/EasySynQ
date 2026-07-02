@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# Re-point the appliance at a real DNS name (e.g. an AD A-record) instead of mDNS easysynq.local.
+#
+#   easysynq-reconfigure --host easysynq.corp.example.com
+#
+# Rewrites the browser-facing URLs in .env (site, MinIO presign host, OIDC issuer), adds the new
+# redirect URIs to the Keycloak web client, and recreates the affected containers. The issuer
+# change means everyone signs in again (tokens from the old issuer stop validating) — run this
+# before real usage starts, not after.
+set -euo pipefail
+[ "$(id -u)" -eq 0 ] || { echo "run with sudo" >&2; exit 1; }
+
+HOST=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --host) HOST="$2"; shift 2 ;;
+    *) echo "unknown arg: $1" >&2; exit 2 ;;
+  esac
+done
+[ -n "$HOST" ] || { echo "usage: easysynq-reconfigure --host <fqdn>" >&2; exit 2; }
+
+ENV=/opt/easysynq/.env
+set_kv() {
+  if grep -qE "^$1=" "$ENV"; then sed -i "s|^$1=.*|$1=$2|" "$ENV"; else printf '%s=%s\n' "$1" "$2" >>"$ENV"; fi
+}
+
+set_kv SITE_ADDRESS "https://${HOST}"
+set_kv MINIO_SITE_ADDRESS "https://${HOST}:9443"
+set_kv S3_PUBLIC_ENDPOINT "https://${HOST}:9443"
+set_kv OIDC_ISSUER "https://${HOST}/realms/easysynq"
+
+# Keycloak: allow the new host on the web client (keeps the existing localhost/easysynq.local URIs).
+ADMIN_PW="$(grep -m1 '^KEYCLOAK_ADMIN_PASSWORD=' "$ENV" | cut -d= -f2- \
+  | sed -E 's/[[:space:]]+#.*$//; s/^[[:space:]]*//; s/[[:space:]]*$//')"
+kc() { easysynq-compose exec -T keycloak /opt/keycloak/bin/kcadm.sh "$@" </dev/null; }
+kc config credentials --server http://localhost:8080 --realm master --user admin --password "$ADMIN_PW" >/dev/null
+CID="$(kc get clients -r easysynq -q clientId=easysynq-web --fields id --format csv --noquotes | head -1)"
+[ -n "$CID" ] || { echo "easysynq-web client not found" >&2; exit 1; }
+kc update "clients/${CID}" -r easysynq \
+  -s "redirectUris=[\"http://localhost/*\",\"https://localhost/*\",\"http://easysynq.local/*\",\"https://easysynq.local/*\",\"https://${HOST}/*\"]"
+
+echo "recreating proxy + api with the new host..."
+easysynq-compose up -d proxy api worker beat
+
+echo "done — the app now lives at https://${HOST}"
+echo "Reminder: create the DNS A record for ${HOST}, and distribute the Caddy internal CA"
+echo "(easysynq-status shows readiness; the runbook's GPO section covers the CA rollout)."

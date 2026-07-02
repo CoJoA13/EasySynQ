@@ -1,0 +1,3 @@
+# Build outputs + image cache (the dirty-tree guard consults git status — these must be ignored).
+dist/
+.cache/

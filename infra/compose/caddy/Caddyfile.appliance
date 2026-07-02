@@ -1,0 +1,11 @@
+# Appliance entry Caddyfile: the base config verbatim (import splices tokens, so the base's
+# global options block stays first) + the browser-facing MinIO TLS site. Mounted over
+# /etc/caddy/Caddyfile by compose.appliance.yml; the base is mounted at Caddyfile.base.
+import /etc/caddy/Caddyfile.base
+
+# Presigned S3 traffic from the SPA. Same internal CA as the app site; the Host header is
+# preserved by default so MinIO's SigV4 signature check sees the host the URL was signed for.
+{$MINIO_SITE_ADDRESS:https://easysynq.local:9443} {
+	tls internal
+	reverse_proxy minio:9000
+}

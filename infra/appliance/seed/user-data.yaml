@@ -1,0 +1,42 @@
+#cloud-config
+# EasySynQ appliance first boot. Deliberately THIN: everything substantive lives in the
+# provision bundle on this same seed ISO (auditable, retryable via systemd) — user-data only
+# creates the console user, installs base packages, and hands off.
+hostname: easysynq
+preserve_hostname: false
+
+users:
+  - name: easysynq
+    gecos: EasySynQ Appliance Admin
+    groups: [sudo]
+    shell: /bin/bash
+    lock_passwd: false
+    sudo: "ALL=(ALL:ALL) ALL"
+
+# Documented initial console password — forced change at first login (expire: true).
+chpasswd:
+  expire: true
+  users:
+    - name: easysynq
+      password: EasySynQ-Setup-1
+      type: text
+
+package_update: true
+packages:
+  - docker.io
+  - docker-compose-v2
+  - cifs-utils
+  - avahi-daemon
+  - curl
+  # Hyper-V guest KVP daemon — without it the VM never reports its IP to Hyper-V Manager /
+  # Get-VMNetworkAdapter (harmless no-op under QEMU/other hypervisors).
+  - linux-cloud-tools-virtual
+
+runcmd:
+  # The seed ISO doubles as the payload carrier; NoCloud only reads user-data/meta-data from it,
+  # so re-mount it by label to fetch the provision + repo bundles.
+  - mkdir -p /run/easysynq-seed
+  - mount -o ro /dev/disk/by-label/cidata /run/easysynq-seed || true
+  - tar -C /opt -xzf /run/easysynq-seed/easysynq-provision.tar.gz
+  - install -m 0755 /opt/provision/easysynq-provision.sh /usr/local/sbin/easysynq-provision
+  - /usr/local/sbin/easysynq-provision bootstrap

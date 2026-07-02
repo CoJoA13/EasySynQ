@@ -1,0 +1,25 @@
+# Appliance overlay (stacked ON TOP of compose.yml + compose.<profile>.yml + compose.airgap.yml).
+#
+# Adds the browser-facing MinIO TLS front: presigned upload/download URLs are fetched by the SPA
+# from an https:// page, so a plain http://host:9000 object-store origin is blocked as mixed
+# content (the Caddyfile CSP even carries upgrade-insecure-requests). Caddy terminates TLS on
+# :9443 with the same internal CA and proxies to MinIO PRESERVING the Host header — SigV4 signs
+# the host, so the signature validates only because MinIO sees the exact host the browser used
+# (S3_PUBLIC_ENDPOINT must equal this site address; the engineering-patterns presign rule).
+services:
+  # compose.s.yml publishes MinIO's plaintext :9000 for DEV presign; on a LAN appliance that is
+  # an unencrypted second door beside the TLS 9443 front — reset it (browsers use 9443 only;
+  # in-cluster clients reach minio:9000 over the compose network regardless of published ports).
+  minio:
+    ports: !reset []
+
+  proxy:
+    ports:
+      - "9443:9443"
+    environment:
+      MINIO_SITE_ADDRESS: ${MINIO_SITE_ADDRESS:-https://easysynq.local:9443}
+    volumes:
+      # The entry Caddyfile becomes the thin appliance one, which imports the base verbatim —
+      # ONE source of truth for the app site; only the MinIO site block is appliance-specific.
+      - ./caddy/Caddyfile.appliance:/etc/caddy/Caddyfile:ro
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile.base:ro
