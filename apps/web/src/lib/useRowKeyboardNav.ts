@@ -8,7 +8,7 @@ import type { KeyboardEvent, RefObject } from "react";
 import { useCallback, useRef } from "react";
 
 export function useRowKeyboardNav<E extends HTMLElement = HTMLTableSectionElement>(): {
-  ref: RefObject<E>;
+  ref: RefObject<E | null>;
   onKeyDown: (e: KeyboardEvent<E>) => void;
 } {
   const ref = useRef<E>(null);
