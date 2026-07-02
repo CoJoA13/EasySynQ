@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# Mount the org's existing QMS SMB share READ-ONLY at the appliance's fixed import root.
+#
+#   easysynq-mount-qms //server/QMS [username]
+#
+# Prompts for the password (never on the command line / in shell history), persists a root-only
+# credentials file + an fstab automount, mounts now, and restarts the containers that bind the
+# import root (a bind mount does NOT see a filesystem mounted over it after container start).
+# Import is read-only by construction: `ro` here AND the worker's own :ro bind (compose.yml).
+set -euo pipefail
+[ "$(id -u)" -eq 0 ] || { echo "run with sudo" >&2; exit 1; }
+
+UNC="${1:?usage: easysynq-mount-qms //server/share [username]}"
+SMB_USER="${2:-}"
+MNT=/srv/easysynq/import
+CRED=/etc/easysynq/qms-cifs.cred
+
+case "$UNC" in //*/*) ;; *) echo "share must look like //server/share" >&2; exit 2 ;; esac
+
+mkdir -p "$MNT" /etc/easysynq
+if [ -n "$SMB_USER" ]; then
+  printf 'Password for %s: ' "$SMB_USER" >&2
+  read -rs SMB_PW; echo >&2
+  umask 077
+  printf 'username=%s\npassword=%s\n' "$SMB_USER" "$SMB_PW" >"$CRED"
+  OPTS="ro,credentials=${CRED},vers=3.0,_netdev,x-systemd.automount,nofail"
+else
+  OPTS="ro,guest,vers=3.0,_netdev,x-systemd.automount,nofail"
+fi
+
+# Replace any prior entry for the mount point, then append the new one.
+sed -i "\|[[:space:]]${MNT}[[:space:]]|d" /etc/fstab
+printf '%s %s cifs %s 0 0\n' "$UNC" "$MNT" "$OPTS" >>/etc/fstab
+systemctl daemon-reload
+mountpoint -q "$MNT" && umount "$MNT"
+mount "$MNT"
+
+echo "mounted: $UNC -> $MNT (read-only)"
+echo "restarting api + worker so their bind mounts pick up the share..."
+easysynq-compose restart api worker
+echo "done — start an import run from the app (Import section) with source root: /"

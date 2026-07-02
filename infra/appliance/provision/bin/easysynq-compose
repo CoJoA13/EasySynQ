@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# docker compose with the appliance's full overlay set — the ONE compose invocation every helper
+# and operator command must use (base + S profile + internal-TLS + appliance MinIO site).
+set -euo pipefail
+cd /opt/easysynq
+exec docker compose --env-file .env \
+  -f infra/compose/compose.yml \
+  -f infra/compose/compose.s.yml \
+  -f infra/compose/compose.airgap.yml \
+  -f infra/compose/compose.appliance.yml "$@"

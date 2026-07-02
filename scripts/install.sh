@@ -33,6 +33,8 @@ if [ ! -f "$ENV_FILE" ]; then
   cp "$ROOT/.env.example" "$ENV_FILE"
 
   PG_PW="$(gen_secret)"
+  APP_PW="$(gen_secret)"
+  LINKER_PW="$(gen_secret)"
   S3_KEY="$(gen_secret)"
   S3_SECRET="$(gen_secret)"
   KEK="$(gen_secret)"
@@ -42,8 +44,13 @@ if [ ! -f "$ENV_FILE" ]; then
   set_kv POSTGRES_USER easysynq
   set_kv POSTGRES_PASSWORD "$PG_PW"
   set_kv POSTGRES_DB easysynq
-  set_kv DATABASE_URL "postgresql+psycopg://easysynq:${PG_PW}@postgres:5432/easysynq"
+  # Role separation (S6): the app runs as the NON-owner easysynq_app role (append-only audit is
+  # structurally enforced by REVOKEs); only alembic/backup use the owner DSN (DATABASE_URL_SYNC).
+  set_kv DATABASE_URL "postgresql+psycopg://easysynq_app:${APP_PW}@postgres:5432/easysynq"
   set_kv DATABASE_URL_SYNC "postgresql+psycopg://easysynq:${PG_PW}@postgres:5432/easysynq"
+  set_kv AUDIT_LINKER_DATABASE_URL "postgresql+psycopg://easysynq_linker:${LINKER_PW}@postgres:5432/easysynq"
+  set_kv APP_DB_PASSWORD "$APP_PW"
+  set_kv LINKER_DB_PASSWORD "$LINKER_PW"
   set_kv S3_ACCESS_KEY "$S3_KEY"
   set_kv S3_SECRET_KEY "$S3_SECRET"
   set_kv APP_MASTER_KEK "$KEK"
@@ -59,6 +66,13 @@ if [ ! -f "$ENV_FILE" ]; then
   echo "install:      cannot reach, also set OIDC_DISCOVERY_URL (see .env.example)."
 else
   echo "install: $ENV_FILE already exists — leaving it untouched."
+fi
+
+# Env-only mode (the appliance provisioner): generate/keep the .env, skip the stack startup —
+# the caller composes its own overlay set (internal TLS, appliance MinIO site) before `up`.
+if [ "${EASYSYNQ_ENV_ONLY:-0}" = "1" ]; then
+  echo "install: EASYSYNQ_ENV_ONLY=1 — env ready; skipping stack startup."
+  exit 0
 fi
 
 echo "install: starting the stack (profile: $PROFILE)..."

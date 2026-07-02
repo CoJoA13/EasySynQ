@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# Create (or reset) a Keycloak sign-in account on the appliance realm.
+#
+#   easysynq-create-user <username> [--temporary-password <pw>]
+#
+# With --temporary-password the user MUST change it at first sign-in. Without it, a random
+# temporary password is generated and printed. App-side permissions are separate — grant roles
+# in EasySynQ itself (the first admin comes from the setup wizard's bootstrap secret).
+set -euo pipefail
+
+USERNAME="${1:?usage: easysynq-create-user <username> [--temporary-password <pw>]}"
+shift
+PW=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --temporary-password) PW="$2"; shift 2 ;;
+    *) echo "unknown arg: $1" >&2; exit 2 ;;
+  esac
+done
+# Finite-input generation (the scripts/install.sh gen_secret shape) — piping the INFINITE
+# /dev/urandom through tr|head dies of SIGPIPE under pipefail (tr exits 141 → set -e aborts).
+[ -n "$PW" ] || PW="$(openssl rand -base64 48 | tr -dc 'A-Za-z0-9' | head -c 16)-1"
+
+# Admin password exactly as docker compose parses .env (the scripts/demo-user.sh pattern).
+ADMIN_PW="$(grep -m1 '^KEYCLOAK_ADMIN_PASSWORD=' /opt/easysynq/.env | cut -d= -f2- \
+  | sed -E 's/[[:space:]]+#.*$//; s/^[[:space:]]*//; s/[[:space:]]*$//')"
+
+kc() { easysynq-compose exec -T keycloak /opt/keycloak/bin/kcadm.sh "$@" </dev/null; }
+kc config credentials --server http://localhost:8080 --realm master --user admin --password "$ADMIN_PW" >/dev/null
+kc create users -r easysynq -s "username=${USERNAME}" -s enabled=true 2>/dev/null || true
+kc set-password -r easysynq --username "$USERNAME" --new-password "$PW" --temporary
+
+echo "user ready: ${USERNAME} / ${PW}  (temporary — must be changed at first sign-in)"
+echo "NOTE: Keycloak state lives in the keycloak container; if it is ever recreated, re-run this."
