@@ -1,11 +1,11 @@
 """S-cleanup-bundle #6: an admin ops-recovery action — reset this org's FAILED notification-email
 rows to PENDING so the outbox drain retries them. Structured-log only (email is advisory; the
-/tasks inbox is authoritative) — no audit_event, no WORM touch. Does NOT commit (the route
-commits)."""
+/tasks inbox is authoritative) — no audit_event, no WORM touch. Does NOT commit, and does NOT log:
+the route owns both, so the ``notifications.requeued`` record fires only AFTER a successful commit
+(a rolled-back requeue must not leave a false success in the sole record of the action)."""
 
 from __future__ import annotations
 
-import logging
 import uuid
 from typing import Any, cast
 
@@ -16,12 +16,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ...db.models._notification_enums import NotificationEmailStatus
 from ...db.models.notification import NotificationEmail
 
-logger = logging.getLogger("easysynq.notifications.requeue")
 
-
-async def requeue_failed(session: AsyncSession, org_id: uuid.UUID, *, actor_id: uuid.UUID) -> int:
+async def requeue_failed(session: AsyncSession, org_id: uuid.UUID) -> int:
     """Reset org's FAILED delivery rows → PENDING (attempts=0 so the drain actually re-sends rather
-    than immediately re-failing an already-exhausted row). Returns the number of rows requeued."""
+    than immediately re-failing an already-exhausted row). Returns the number of rows requeued.
+
+    Caller must have already established the org's email delivery is ON — requeuing while it is off
+    would only let the next drain terminally SUPPRESS the rows (drain._still_eligible)."""
     result = cast(
         CursorResult[Any],
         await session.execute(
@@ -39,12 +40,4 @@ async def requeue_failed(session: AsyncSession, org_id: uuid.UUID, *, actor_id: 
             )
         ),
     )
-    count = result.rowcount
-    logger.info(
-        "notifications.requeued",
-        # JsonFormatter only emits keys nested under ``extra_fields`` (logging.py) — passing them
-        # flat in ``extra`` silently drops them, and this log is the sole record of the requeue
-        # (no audit_event by design). See the checkpoint.py / backup service call sites.
-        extra={"extra_fields": {"count": count, "org_id": str(org_id), "actor_id": str(actor_id)}},
-    )
-    return count
+    return result.rowcount

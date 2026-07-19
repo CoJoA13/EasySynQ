@@ -19,6 +19,7 @@ from easysynq_api.db.models._notification_enums import (
 from easysynq_api.db.models.app_user import AppUser
 from easysynq_api.db.models.notification import NotificationEmail
 from easysynq_api.db.models.organization import Organization
+from easysynq_api.db.models.system_config import SystemConfig
 from easysynq_api.db.session import get_sessionmaker
 from easysynq_api.services.notifications.requeue import requeue_failed
 
@@ -44,15 +45,31 @@ def _email(org_id: uuid.UUID, status: NotificationEmailStatus, **over: Any) -> N
     )
 
 
+async def _set_email_enabled(org_id: uuid.UUID, value: bool) -> bool:
+    """Set the org's email-delivery flag (the route guards requeue on it); return the prior value so
+    the caller can restore the shared org's config in a finally."""
+    async with get_sessionmaker()() as s:
+        cfg = await s.get(SystemConfig, org_id)
+        assert cfg is not None
+        prev = cfg.notifications_email_enabled
+        cfg.notifications_email_enabled = value
+        await s.commit()
+        return prev
+
+
+async def _caller_org(user_id: uuid.UUID) -> uuid.UUID:
+    async with get_sessionmaker()() as s:
+        caller = await s.get(AppUser, user_id)
+        assert caller is not None
+        return caller.org_id
+
+
 async def test_requeue_resets_failed_and_leaves_other_statuses(
     app_client: AsyncClient, token_factory: Callable[..., str]
 ) -> None:
     subject = f"rq-admin-{uuid.uuid4().hex[:8]}"
     user_id = await _grant(subject, ("config.update",))
-    async with get_sessionmaker()() as s:
-        caller = await s.get(AppUser, user_id)
-        assert caller is not None
-        org_id = caller.org_id
+    org_id = await _caller_org(user_id)
 
     now = datetime.datetime.now(datetime.UTC)
     async with get_sessionmaker()() as s:
@@ -63,11 +80,17 @@ async def test_requeue_resets_failed_and_leaves_other_statuses(
         await s.commit()
         failed_id, sent_id, suppressed_id = failed.id, sent.id, suppressed.id
 
-    resp = await app_client.post(
-        "/api/v1/admin/notifications/requeue-failed", headers=_auth(token_factory, subject)
-    )
-    assert resp.status_code == 200, resp.text
-    assert resp.json()["requeued"] >= 1
+    prev = await _set_email_enabled(
+        org_id, True
+    )  # requeue only proceeds while email delivery is on
+    try:
+        resp = await app_client.post(
+            "/api/v1/admin/notifications/requeue-failed", headers=_auth(token_factory, subject)
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["requeued"] >= 1
+    finally:
+        await _set_email_enabled(org_id, prev)
 
     async with get_sessionmaker()() as s:
         row = (
@@ -85,6 +108,40 @@ async def test_requeue_resets_failed_and_leaves_other_statuses(
         ).scalar_one()
         assert sent_row.status == NotificationEmailStatus.SENT
         assert supp_row.status == NotificationEmailStatus.SUPPRESSED
+
+
+async def test_requeue_noop_when_email_disabled(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """With email delivery OFF, requeue must leave FAILED rows untouched — requeuing them would only
+    let the next drain terminally SUPPRESS them (unrecoverable once email is re-enabled)."""
+    subject = f"rq-off-{uuid.uuid4().hex[:8]}"
+    user_id = await _grant(subject, ("config.update",))
+    org_id = await _caller_org(user_id)
+
+    now = datetime.datetime.now(datetime.UTC)
+    async with get_sessionmaker()() as s:
+        failed = _email(org_id, NotificationEmailStatus.FAILED, failed_at=now, attempts=5)
+        s.add(failed)
+        await s.commit()
+        failed_id = failed.id
+
+    prev = await _set_email_enabled(org_id, False)
+    try:
+        resp = await app_client.post(
+            "/api/v1/admin/notifications/requeue-failed", headers=_auth(token_factory, subject)
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["requeued"] == 0
+    finally:
+        await _set_email_enabled(org_id, prev)
+
+    async with get_sessionmaker()() as s:
+        row = (
+            await s.execute(select(NotificationEmail).where(NotificationEmail.id == failed_id))
+        ).scalar_one()
+        assert row.status == NotificationEmailStatus.FAILED  # untouched: email delivery is off
+        assert row.attempts == 5
 
 
 async def test_requeue_forbidden_without_config_update(
@@ -118,7 +175,7 @@ async def test_requeue_is_org_scoped(app_under_test: object) -> None:
         await s.flush()
         a_id, b_id = a.id, b.id
 
-        count = await requeue_failed(s, org_a.id, actor_id=uuid.uuid4())
+        count = await requeue_failed(s, org_a.id)
         await s.flush()
 
         a_after = (
@@ -141,27 +198,31 @@ async def test_requeue_is_org_scoped(app_under_test: object) -> None:
         await s.rollback()  # never commit the throwaway orgs → leak-free
 
 
-async def test_requeue_logs_structured_fields(
-    app_under_test: object, caplog: pytest.LogCaptureFixture
+async def test_requeue_logs_structured_fields_after_commit(
+    app_client: AsyncClient, token_factory: Callable[..., str], caplog: pytest.LogCaptureFixture
 ) -> None:
-    """The requeue log is the SOLE record of the action (no audit_event by design), so its
-    identifying fields must survive JsonFormatter — which emits ONLY keys nested under
-    ``extra_fields``. Mutation-distinguishing: pass them flat in ``extra`` and this fails because
-    ``record.extra_fields`` is then absent."""
-    async with get_sessionmaker()() as s:
-        org = Organization(
-            legal_name="Requeue Log", short_code=f"RQL{uuid.uuid4().hex[:6].upper()}"
-        )
-        s.add(org)
-        await s.flush()
-        now = datetime.datetime.now(datetime.UTC)
-        s.add(_email(org.id, NotificationEmailStatus.FAILED, failed_at=now))
-        await s.flush()
-        actor = uuid.uuid4()
+    """The requeue log is the SOLE record of the action (no audit_event by design). It must fire
+    from the ROUTE after commit, with its fields nested under ``extra_fields`` — the JsonFormatter
+    emits ONLY those (flat ``extra`` is dropped). Mutation-distinguishing on both: flat extra ⇒
+    ``record.extra_fields`` absent; a pre-commit emit would move it back into the service."""
+    subject = f"rq-log-{uuid.uuid4().hex[:8]}"
+    user_id = await _grant(subject, ("config.update",))
+    org_id = await _caller_org(user_id)
 
+    now = datetime.datetime.now(datetime.UTC)
+    async with get_sessionmaker()() as s:
+        s.add(_email(org_id, NotificationEmailStatus.FAILED, failed_at=now))
+        await s.commit()
+
+    prev = await _set_email_enabled(org_id, True)
+    try:
         with caplog.at_level(logging.INFO, logger="easysynq.notifications.requeue"):
-            count = await requeue_failed(s, org.id, actor_id=actor)
-        await s.rollback()  # never commit the throwaway org
+            resp = await app_client.post(
+                "/api/v1/admin/notifications/requeue-failed", headers=_auth(token_factory, subject)
+            )
+        assert resp.status_code == 200, resp.text
+    finally:
+        await _set_email_enabled(org_id, prev)
 
     recs = [r for r in caplog.records if r.getMessage() == "notifications.requeued"]
     assert recs, "expected a notifications.requeued log record"
@@ -169,6 +230,6 @@ async def test_requeue_logs_structured_fields(
     assert fields is not None, (
         "requeue fields must nest under extra_fields (JsonFormatter drops flat extra)"
     )
-    assert fields["count"] == count == 1
-    assert fields["org_id"] == str(org.id)
-    assert fields["actor_id"] == str(actor)
+    assert fields["count"] >= 1
+    assert fields["org_id"] == str(org_id)
+    assert fields["actor_id"] == str(user_id)

@@ -80,6 +80,12 @@ describe("NotificationHealthPanel", () => {
     expect(screen.queryByRole("button", { name: "Requeue failed" })).not.toBeInTheDocument();
   });
 
+  it("disables requeue while org email delivery is off", async () => {
+    health({ org_email_enabled: false, email: { ...notificationHealthFixture.email, failed: 3 } });
+    renderWithProviders(<NotificationHealthPanel />);
+    expect(await screen.findByRole("button", { name: "Requeue failed" })).toBeDisabled();
+  });
+
   it("requeues failed emails after confirmation", async () => {
     const user = userEvent.setup();
     let posted = false;

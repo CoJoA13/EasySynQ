@@ -48,7 +48,15 @@ export function NotificationHealthPanel() {
         <Group gap="sm">
           <AsOf at={health.dataUpdatedAt} prefix="Checked" />
           {failed > 0 && (
-            <Button variant="light" size="compact-sm" onClick={confirm.open}>
+            <Button
+              variant="light"
+              size="compact-sm"
+              onClick={confirm.open}
+              // Requeuing while email delivery is off would only let the next drain terminally
+              // suppress the rows, so block it until email is re-enabled.
+              disabled={!h.org_email_enabled}
+              title={h.org_email_enabled ? undefined : "Enable email delivery before requeuing"}
+            >
               Requeue failed
             </Button>
           )}

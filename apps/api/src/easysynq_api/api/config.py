@@ -13,6 +13,7 @@ on the closed ``config`` object type)."""
 from __future__ import annotations
 
 import datetime
+import logging
 import uuid
 from typing import Any
 
@@ -36,6 +37,8 @@ router = APIRouter(prefix="/api/v1", tags=["admin"])
 
 # config.update is SYSTEM-domain / admin-only (doc 07 §3.9, R35) — NOT a content key, NOT no-gate.
 _config_update = require("config.update")
+
+logger = logging.getLogger("easysynq.notifications.requeue")
 
 
 class OrgConfigUpdate(BaseModel):
@@ -127,8 +130,26 @@ async def requeue_failed_endpoint(
     """Requeue this org's FAILED notification emails → PENDING so the outbox drain retries them.
 
     Ops-recovery action (structured-log only; email is advisory). Needs ``config.update``."""
-    count = await requeue_failed(session, caller.org_id, actor_id=caller.id)
+    cfg = await session.get(SystemConfig, caller.org_id)
+    if cfg is None or not cfg.notifications_email_enabled:
+        # Email delivery is off → leave FAILED rows untouched. Requeuing them would only let the
+        # next drain terminally SUPPRESS them (drain._still_eligible), making them unrecoverable
+        # once email is re-enabled. The FE also disables the action while email is off.
+        return {"requeued": 0}
+    count = await requeue_failed(session, caller.org_id)
     await session.commit()
+    # Emit the record AFTER the commit — this structured log is the sole trace of the action (no
+    # audit_event by design), so a rolled-back requeue must not leave a false "requeued N".
+    logger.info(
+        "notifications.requeued",
+        extra={
+            "extra_fields": {
+                "count": count,
+                "org_id": str(caller.org_id),
+                "actor_id": str(caller.id),
+            }
+        },
+    )
     return {"requeued": count}
 
 
