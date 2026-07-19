@@ -34,6 +34,24 @@ describe("useRouteChrome", () => {
     expect(document.activeElement).toBe(document.getElementById("main-content"));
   });
 
+  it("gives the dashboard root route its own title (not the bare app name)", () => {
+    render(
+      <MemoryRouter initialEntries={["/"]}>
+        <Harness />
+      </MemoryRouter>,
+    );
+    expect(document.title).toBe("EasySynQ — Dashboard");
+  });
+
+  it("does not let the root '/' entry shadow a deeper route", () => {
+    render(
+      <MemoryRouter initialEntries={["/library"]}>
+        <Harness />
+      </MemoryRouter>,
+    );
+    expect(document.title).toBe("EasySynQ — Library");
+  });
+
   it("falls back to the bare app name for an unmapped route", () => {
     render(
       <MemoryRouter initialEntries={["/totally-unknown"]}>

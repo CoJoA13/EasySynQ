@@ -42,6 +42,9 @@ async def requeue_failed(session: AsyncSession, org_id: uuid.UUID, *, actor_id: 
     count = result.rowcount
     logger.info(
         "notifications.requeued",
-        extra={"count": count, "org_id": str(org_id), "actor_id": str(actor_id)},
+        # JsonFormatter only emits keys nested under ``extra_fields`` (logging.py) — passing them
+        # flat in ``extra`` silently drops them, and this log is the sole record of the requeue
+        # (no audit_event by design). See the checkpoint.py / backup service call sites.
+        extra={"extra_fields": {"count": count, "org_id": str(org_id), "actor_id": str(actor_id)}},
     )
     return count

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime
+import logging
 import uuid
 from collections.abc import Callable
 from typing import Any
@@ -138,3 +139,36 @@ async def test_requeue_is_org_scoped(app_under_test: object) -> None:
         assert b_after.status == NotificationEmailStatus.FAILED  # untouched: different org
         assert count == 1
         await s.rollback()  # never commit the throwaway orgs → leak-free
+
+
+async def test_requeue_logs_structured_fields(
+    app_under_test: object, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The requeue log is the SOLE record of the action (no audit_event by design), so its
+    identifying fields must survive JsonFormatter — which emits ONLY keys nested under
+    ``extra_fields``. Mutation-distinguishing: pass them flat in ``extra`` and this fails because
+    ``record.extra_fields`` is then absent."""
+    async with get_sessionmaker()() as s:
+        org = Organization(
+            legal_name="Requeue Log", short_code=f"RQL{uuid.uuid4().hex[:6].upper()}"
+        )
+        s.add(org)
+        await s.flush()
+        now = datetime.datetime.now(datetime.UTC)
+        s.add(_email(org.id, NotificationEmailStatus.FAILED, failed_at=now))
+        await s.flush()
+        actor = uuid.uuid4()
+
+        with caplog.at_level(logging.INFO, logger="easysynq.notifications.requeue"):
+            count = await requeue_failed(s, org.id, actor_id=actor)
+        await s.rollback()  # never commit the throwaway org
+
+    recs = [r for r in caplog.records if r.getMessage() == "notifications.requeued"]
+    assert recs, "expected a notifications.requeued log record"
+    fields = getattr(recs[-1], "extra_fields", None)
+    assert fields is not None, (
+        "requeue fields must nest under extra_fields (JsonFormatter drops flat extra)"
+    )
+    assert fields["count"] == count == 1
+    assert fields["org_id"] == str(org.id)
+    assert fields["actor_id"] == str(actor)

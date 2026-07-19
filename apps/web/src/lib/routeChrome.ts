@@ -3,7 +3,10 @@ import { useLocation } from "react-router-dom";
 
 // path-prefix → tab-title. Longest prefix wins (sorted below), so a child path like
 // /settings/notifications resolves before a shorter sibling. Unmapped → the bare app name.
+// "/" is the dashboard: it sorts LAST (shortest) and its `prefix + "/"` guard is "//" (never a real
+// path), so it matches the root route exactly and can never shadow a deeper route.
 const TITLES: readonly (readonly [string, string])[] = [
+  ["/", "Dashboard"],
   ["/admin", "Administration"],
   ["/setup", "Setup"],
   ["/library", "Library"],
