@@ -48,7 +48,7 @@ export function AppShell() {
           <LeftRail />
         </MantineAppShell.Section>
       </MantineAppShell.Navbar>
-      <MantineAppShell.Main id="main-content">
+      <MantineAppShell.Main id="main-content" tabIndex={-1}>
         <Breadcrumb />
         <Outlet />
       </MantineAppShell.Main>

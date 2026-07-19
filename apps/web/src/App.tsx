@@ -44,8 +44,10 @@ import { NotificationsPage } from "./features/notifications/NotificationsPage";
 import { NotificationSettingsPage } from "./features/notifications/NotificationSettingsPage";
 import { apiGet } from "./lib/api";
 import { useAuth } from "./lib/auth";
+import { useRouteChrome } from "./lib/routeChrome";
 
 export function App() {
+  useRouteChrome();
   const { ready, token, login } = useAuth();
 
   // The public setup-state probe decides wizard-vs-shell (S8a). The latch (423) protects the API
