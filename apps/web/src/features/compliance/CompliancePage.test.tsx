@@ -42,6 +42,12 @@ test("has no axe violations (rows + 403)", async () => {
   expect(await axe(forbidden.container)).toHaveNoViolations();
 });
 
+test("gives register headers a column scope (a11y)", async () => {
+  renderWithProviders(<CompliancePage />, { route: "/compliance" });
+  const header = await screen.findByRole("columnheader", { name: "Clause" });
+  expect(header).toHaveAttribute("scope", "col");
+});
+
 describe("overdue-review leg (S-web-8)", () => {
   test("rollup shows the overdue-review counter", async () => {
     renderWithProviders(<CompliancePage />, { route: "/compliance" });

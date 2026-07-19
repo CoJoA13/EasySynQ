@@ -62,46 +62,48 @@ export function CompliancePage() {
         <Text>✕ Gap: {rollup.gap}</Text>
         <Text>⏰ Review overdue: {rollup.overdue_review}</Text>
       </Group>
-      <Table striped highlightOnHover>
-        <Table.Thead>
-          <Table.Tr>
-            <Table.Th>Clause</Table.Th>
-            <Table.Th>Title</Table.Th>
-            <Table.Th>Phase</Table.Th>
-            <Table.Th>Mapped</Table.Th>
-            <Table.Th>Effective</Table.Th>
-            <Table.Th>Status</Table.Th>
-            <Table.Th>Review</Table.Th>
-          </Table.Tr>
-        </Table.Thead>
-        <Table.Tbody>
-          {rows.map((r) => (
-            <Table.Tr key={r.clause_id}>
-              <Table.Td>
-                <Anchor component={Link} to={`/library?clause=${encodeURIComponent(r.number)}`}>
-                  ★ {r.number}
-                </Anchor>
-              </Table.Td>
-              <Table.Td>{r.title}</Table.Td>
-              <Table.Td>{r.pdca_phase}</Table.Td>
-              <Table.Td>{r.mapped_count}</Table.Td>
-              <Table.Td>{r.effective_count}</Table.Td>
-              <Table.Td>
-                <CoverageBadge status={r.status} />
-              </Table.Td>
-              <Table.Td>
-                {r.overdue_review ? (
-                  <StatusBadge tone="danger" label="Overdue" kind="Review" />
-                ) : (
-                  <Text c="dimmed" size="sm">
-                    —
-                  </Text>
-                )}
-              </Table.Td>
+      <Table.ScrollContainer minWidth={720}>
+        <Table striped highlightOnHover>
+          <Table.Thead>
+            <Table.Tr>
+              <Table.Th scope="col">Clause</Table.Th>
+              <Table.Th scope="col">Title</Table.Th>
+              <Table.Th scope="col">Phase</Table.Th>
+              <Table.Th scope="col">Mapped</Table.Th>
+              <Table.Th scope="col">Effective</Table.Th>
+              <Table.Th scope="col">Status</Table.Th>
+              <Table.Th scope="col">Review</Table.Th>
             </Table.Tr>
-          ))}
-        </Table.Tbody>
-      </Table>
+          </Table.Thead>
+          <Table.Tbody>
+            {rows.map((r) => (
+              <Table.Tr key={r.clause_id}>
+                <Table.Td>
+                  <Anchor component={Link} to={`/library?clause=${encodeURIComponent(r.number)}`}>
+                    ★ {r.number}
+                  </Anchor>
+                </Table.Td>
+                <Table.Td>{r.title}</Table.Td>
+                <Table.Td>{r.pdca_phase}</Table.Td>
+                <Table.Td>{r.mapped_count}</Table.Td>
+                <Table.Td>{r.effective_count}</Table.Td>
+                <Table.Td>
+                  <CoverageBadge status={r.status} />
+                </Table.Td>
+                <Table.Td>
+                  {r.overdue_review ? (
+                    <StatusBadge tone="danger" label="Overdue" kind="Review" />
+                  ) : (
+                    <Text c="dimmed" size="sm">
+                      —
+                    </Text>
+                  )}
+                </Table.Td>
+              </Table.Tr>
+            ))}
+          </Table.Tbody>
+        </Table>
+      </Table.ScrollContainer>
     </Container>
   );
 }

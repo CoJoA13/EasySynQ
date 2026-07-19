@@ -155,68 +155,70 @@ export function LibraryPage() {
             )}
 
             {!isLoading && !isError && rows.length > 0 && (
-              <Table
-                highlightOnHover
-                stickyHeader
-                verticalSpacing={density === "compact" ? "xs" : "sm"}
-                aria-label="Documents"
-              >
-                <Table.Thead>
-                  <Table.Tr>
-                    <Table.Th>Identifier</Table.Th>
-                    <Table.Th>Title</Table.Th>
-                    <Table.Th>Type</Table.Th>
-                    <Table.Th>Owner</Table.Th>
-                    <Table.Th>Clause</Table.Th>
-                    <Table.Th>State</Table.Th>
-                    <Table.Th>Effective</Table.Th>
-                  </Table.Tr>
-                </Table.Thead>
-                <Table.Tbody>
-                  {rows.map((d) => (
-                    <Table.Tr
-                      key={d.id}
-                      style={{ cursor: "pointer" }}
-                      onClick={() => openDetail(d.id)}
-                      tabIndex={0}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter" || e.key === " ") {
-                          e.preventDefault();
-                          openDetail(d.id);
-                        }
-                      }}
-                    >
-                      <Table.Td>
-                        <Text ff="monospace" size="sm">
-                          {d.identifier}
-                        </Text>
-                      </Table.Td>
-                      <Table.Td>{d.title}</Table.Td>
-                      <Table.Td>
-                        {d.document_type_id ? (typeMap.get(d.document_type_id) ?? "—") : "—"}
-                      </Table.Td>
-                      <Table.Td>{ownerMap.get(d.owner_user_id) ?? "—"}</Table.Td>
-                      <Table.Td>
-                        <Group gap={4}>
-                          {(d.clause_refs ?? []).map((c) => (
-                            <Badge key={c} variant="outline" color="var(--es-accent)">
-                              {c}
-                            </Badge>
-                          ))}
-                        </Group>
-                      </Table.Td>
-                      <Table.Td>
-                        <StateBadge state={d.current_state} />
-                      </Table.Td>
-                      <Table.Td>
-                        <Text size="sm">
-                          {d.effective_from ? d.effective_from.slice(0, 10) : "—"}
-                        </Text>
-                      </Table.Td>
+              <Table.ScrollContainer minWidth={720}>
+                <Table
+                  highlightOnHover
+                  stickyHeader
+                  verticalSpacing={density === "compact" ? "xs" : "sm"}
+                  aria-label="Documents"
+                >
+                  <Table.Thead>
+                    <Table.Tr>
+                      <Table.Th scope="col">Identifier</Table.Th>
+                      <Table.Th scope="col">Title</Table.Th>
+                      <Table.Th scope="col">Type</Table.Th>
+                      <Table.Th scope="col">Owner</Table.Th>
+                      <Table.Th scope="col">Clause</Table.Th>
+                      <Table.Th scope="col">State</Table.Th>
+                      <Table.Th scope="col">Effective</Table.Th>
                     </Table.Tr>
-                  ))}
-                </Table.Tbody>
-              </Table>
+                  </Table.Thead>
+                  <Table.Tbody>
+                    {rows.map((d) => (
+                      <Table.Tr
+                        key={d.id}
+                        style={{ cursor: "pointer" }}
+                        onClick={() => openDetail(d.id)}
+                        tabIndex={0}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
+                            openDetail(d.id);
+                          }
+                        }}
+                      >
+                        <Table.Td>
+                          <Text ff="monospace" size="sm">
+                            {d.identifier}
+                          </Text>
+                        </Table.Td>
+                        <Table.Td>{d.title}</Table.Td>
+                        <Table.Td>
+                          {d.document_type_id ? (typeMap.get(d.document_type_id) ?? "—") : "—"}
+                        </Table.Td>
+                        <Table.Td>{ownerMap.get(d.owner_user_id) ?? "—"}</Table.Td>
+                        <Table.Td>
+                          <Group gap={4}>
+                            {(d.clause_refs ?? []).map((c) => (
+                              <Badge key={c} variant="outline" color="var(--es-accent)">
+                                {c}
+                              </Badge>
+                            ))}
+                          </Group>
+                        </Table.Td>
+                        <Table.Td>
+                          <StateBadge state={d.current_state} />
+                        </Table.Td>
+                        <Table.Td>
+                          <Text size="sm">
+                            {d.effective_from ? d.effective_from.slice(0, 10) : "—"}
+                          </Text>
+                        </Table.Td>
+                      </Table.Tr>
+                    ))}
+                  </Table.Tbody>
+                </Table>
+              </Table.ScrollContainer>
             )}
 
             {!isLoading && !isError && rows.length > 0 && (
