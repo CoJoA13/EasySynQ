@@ -1,4 +1,5 @@
-import { screen } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { http, HttpResponse } from "msw";
 import { describe, expect, it } from "vitest";
@@ -70,5 +71,30 @@ describe("NotificationHealthPanel", () => {
     expect(await screen.findByText(/Oldest pending email/)).toBeInTheDocument();
     expect(screen.getByText("4")).toBeInTheDocument();
     expect(await screen.findByText(/Oldest pending awareness event/)).toBeInTheDocument();
+  });
+
+  it("hides the requeue action when there are no failures", async () => {
+    health({ email: { ...notificationHealthFixture.email, failed: 0 }, recent_failures: [] });
+    renderWithProviders(<NotificationHealthPanel />);
+    await screen.findByLabelText("Email delivery failures: 0");
+    expect(screen.queryByRole("button", { name: "Requeue failed" })).not.toBeInTheDocument();
+  });
+
+  it("requeues failed emails after confirmation", async () => {
+    const user = userEvent.setup();
+    let posted = false;
+    health({ email: { ...notificationHealthFixture.email, failed: 3 } });
+    server.use(
+      http.post("/api/v1/admin/notifications/requeue-failed", () => {
+        posted = true;
+        return HttpResponse.json({ requeued: 3 });
+      }),
+    );
+    renderWithProviders(<NotificationHealthPanel />);
+    await user.click(await screen.findByRole("button", { name: "Requeue failed" }));
+    // confirm modal
+    expect(await screen.findByText(/Requeue 3 failed email/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Requeue" }));
+    await waitFor(() => expect(posted).toBe(true));
   });
 });
