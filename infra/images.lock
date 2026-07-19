@@ -10,7 +10,7 @@ postgres    postgres:16
 minio       minio/minio:RELEASE.2024-09-13T20-26-02Z
 mc          minio/mc:RELEASE.2025-08-13T08-35-41Z         # minio-init one-shot (was :latest)
 redis       redis:7
-keycloak    quay.io/keycloak/keycloak:26.6
+keycloak    quay.io/keycloak/keycloak:26.7
 caddy       caddy:2
 renderer    gotenberg/gotenberg:8.34
 tika        apache/tika:3.3.1.0-full
