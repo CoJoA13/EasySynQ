@@ -2,9 +2,8 @@
    reset does not clobber Mantine component styles (doc 18 §2 ordering caveat). */
 @import "./theme/tokens.css";
 
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+@config "../tailwind.config.ts";
 
 body {
   margin: 0;
@@ -20,7 +19,9 @@ body {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after {
+  *,
+  *::before,
+  *::after {
     animation-duration: 0.01ms !important;
     transition-duration: 0.01ms !important;
   }
