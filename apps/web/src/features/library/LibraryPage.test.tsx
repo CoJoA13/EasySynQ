@@ -60,7 +60,9 @@ test("drawer tabs lazy-load History and Where-used", async () => {
     route: "/library?detail=11111111-1111-1111-1111-111111111111",
   });
   await waitFor(() =>
-    expect(screen.getByRole("heading", { name: "Supplier Selection & Evaluation" })).toBeInTheDocument(),
+    expect(
+      screen.getByRole("heading", { name: "Supplier Selection & Evaluation" }),
+    ).toBeInTheDocument(),
   );
 
   await userEvent.click(screen.getByRole("tab", { name: "History" }));
@@ -77,4 +79,10 @@ test("empty-with-filters shows a clear-filters affordance", async () => {
     expect(screen.getByText("No documents match these filters.")).toBeInTheDocument(),
   );
   expect(within(document.body).getByRole("button", { name: "Clear filters" })).toBeInTheDocument();
+});
+
+test("gives register headers a column scope (a11y)", async () => {
+  renderWithProviders(<LibraryPage />, { route: "/library" });
+  const header = await screen.findByRole("columnheader", { name: "Identifier" });
+  expect(header).toHaveAttribute("scope", "col");
 });

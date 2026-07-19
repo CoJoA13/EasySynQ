@@ -1,9 +1,21 @@
-import { Alert, Button, Card, Group, SimpleGrid, Stack, Table, Text, Title } from "@mantine/core";
+import {
+  Alert,
+  Button,
+  Card,
+  Group,
+  Modal,
+  SimpleGrid,
+  Stack,
+  Table,
+  Text,
+  Title,
+} from "@mantine/core";
+import { useDisclosure } from "@mantine/hooks";
 import { AsOf } from "../lib/AsOf";
-import { EmptyState, ErrorState, LoadingState } from "../lib/states";
+import { EmptyState, ErrorState, LoadingState, MutationErrorState } from "../lib/states";
 import { TONE_GLYPH } from "../lib/status";
 import { formatRelativeTime } from "../lib/time";
-import { useNotificationHealth } from "./hooks";
+import { useNotificationHealth, useRequeueFailed } from "./hooks";
 
 function relAge(iso: string | null): string {
   return iso ? formatRelativeTime(new Date(iso).getTime()) : "—";
@@ -11,6 +23,8 @@ function relAge(iso: string | null): string {
 
 export function NotificationHealthPanel() {
   const health = useNotificationHealth();
+  const [confirmOpen, confirm] = useDisclosure(false);
+  const requeue = useRequeueFailed();
   if (health.isError) {
     return (
       <ErrorState title="Couldn't load delivery health" onRetry={() => void health.refetch()} />
@@ -22,12 +36,30 @@ export function NotificationHealthPanel() {
   const h = health.data;
   const failed = h.email.failed;
   const hasPending = h.email.pending_now + h.email.pending_scheduled > 0;
+  const doRequeue = () => requeue.mutate(undefined, { onSuccess: () => confirm.close() });
+  const closeConfirm = () => {
+    requeue.reset();
+    confirm.close();
+  };
   return (
     <Stack gap="md">
       <Group justify="space-between" align="center">
         <Title order={3}>Email delivery health</Title>
         <Group gap="sm">
           <AsOf at={health.dataUpdatedAt} prefix="Checked" />
+          {failed > 0 && (
+            <Button
+              variant="light"
+              size="compact-sm"
+              onClick={confirm.open}
+              // Requeuing while email delivery is off would only let the next drain terminally
+              // suppress the rows, so block it until email is re-enabled.
+              disabled={!h.org_email_enabled}
+              title={h.org_email_enabled ? undefined : "Enable email delivery before requeuing"}
+            >
+              Requeue failed
+            </Button>
+          )}
           <Button
             variant="subtle"
             size="compact-sm"
@@ -41,8 +73,8 @@ export function NotificationHealthPanel() {
 
       {!h.org_email_enabled && (
         <Alert variant="light" color="gray" title="Email delivery is off">
-          Email delivery is off for the organisation — no emails are being sent. The counts below stay
-          at zero until you enable email above.
+          Email delivery is off for the organisation — no emails are being sent. The counts below
+          stay at zero until you enable email above.
         </Alert>
       )}
 
@@ -124,6 +156,24 @@ export function NotificationHealthPanel() {
           </Table>
         )}
       </Stack>
+
+      <Modal opened={confirmOpen} onClose={closeConfirm} title="Requeue failed emails">
+        <Stack gap="md">
+          <Text size="sm">
+            Requeue {failed} failed email{failed === 1 ? "" : "s"}? They&apos;ll be retried on the
+            next delivery drain.
+          </Text>
+          {requeue.isError && <MutationErrorState title="Couldn't requeue" error={requeue.error} />}
+          <Group justify="flex-end">
+            <Button variant="default" size="sm" onClick={closeConfirm}>
+              Cancel
+            </Button>
+            <Button size="sm" onClick={doRequeue} loading={requeue.isPending}>
+              Requeue
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
     </Stack>
   );
 }

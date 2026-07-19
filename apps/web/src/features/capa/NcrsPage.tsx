@@ -71,61 +71,63 @@ export function NcrsPage() {
       {rows.length === 0 ? (
         <EmptyState message="No NCRs raised yet." />
       ) : (
-        <Table striped highlightOnHover>
-          <Table.Thead>
-            <Table.Tr>
-              <Table.Th>Identifier</Table.Th>
-              <Table.Th>Source</Table.Th>
-              <Table.Th>Severity</Table.Th>
-              <Table.Th>Description</Table.Th>
-              <Table.Th>Disposition</Table.Th>
-            </Table.Tr>
-          </Table.Thead>
-          <Table.Tbody>
-            {rows.map((n) => (
-              <Table.Tr key={n.id}>
-                <Table.Td>{n.identifier}</Table.Td>
-                <Table.Td>{NCR_SOURCE_LABEL[n.source]}</Table.Td>
-                <Table.Td>{SEVERITY_LABEL[n.severity]}</Table.Td>
-                <Table.Td>
-                  <Text lineClamp={2}>{n.description}</Text>
-                </Table.Td>
-                <Table.Td>
-                  {n.disposition ? (
-                    <Stack gap={2}>
-                      <Group gap="xs">
-                        <Badge variant="light" color="gray">
-                          {DISPOSITION_LABEL[n.disposition]}
-                        </Badge>
-                        {n.disposition_notes && (
-                          <Text size="sm" c="dimmed">
-                            {n.disposition_notes}
+        <Table.ScrollContainer minWidth={640}>
+          <Table striped highlightOnHover>
+            <Table.Thead>
+              <Table.Tr>
+                <Table.Th scope="col">Identifier</Table.Th>
+                <Table.Th scope="col">Source</Table.Th>
+                <Table.Th scope="col">Severity</Table.Th>
+                <Table.Th scope="col">Description</Table.Th>
+                <Table.Th scope="col">Disposition</Table.Th>
+              </Table.Tr>
+            </Table.Thead>
+            <Table.Tbody>
+              {rows.map((n) => (
+                <Table.Tr key={n.id}>
+                  <Table.Td>{n.identifier}</Table.Td>
+                  <Table.Td>{NCR_SOURCE_LABEL[n.source]}</Table.Td>
+                  <Table.Td>{SEVERITY_LABEL[n.severity]}</Table.Td>
+                  <Table.Td>
+                    <Text lineClamp={2}>{n.description}</Text>
+                  </Table.Td>
+                  <Table.Td>
+                    {n.disposition ? (
+                      <Stack gap={2}>
+                        <Group gap="xs">
+                          <Badge variant="light" color="gray">
+                            {DISPOSITION_LABEL[n.disposition]}
+                          </Badge>
+                          {n.disposition_notes && (
+                            <Text size="sm" c="dimmed">
+                              {n.disposition_notes}
+                            </Text>
+                          )}
+                        </Group>
+                        {(n.disposition_authorized_by || n.disposed_at) && (
+                          <Text size="xs" c="dimmed">
+                            {n.disposition_authorized_by &&
+                              `by ${actorLabel(n.disposition_authorized_by, directory ?? [])}`}
+                            {n.disposition_authorized_by && n.disposed_at && " · "}
+                            {n.disposed_at && new Date(n.disposed_at).toISOString().slice(0, 10)}
                           </Text>
                         )}
-                      </Group>
-                      {(n.disposition_authorized_by || n.disposed_at) && (
-                        <Text size="xs" c="dimmed">
-                          {n.disposition_authorized_by &&
-                            `by ${actorLabel(n.disposition_authorized_by, directory ?? [])}`}
-                          {n.disposition_authorized_by && n.disposed_at && " · "}
-                          {n.disposed_at && new Date(n.disposed_at).toISOString().slice(0, 10)}
-                        </Text>
-                      )}
-                    </Stack>
-                  ) : can("ncr.record_correction") ? (
-                    <Button size="xs" variant="light" onClick={() => setDisposeNcr(n)}>
-                      Record disposition
-                    </Button>
-                  ) : (
-                    <Text c="dimmed" size="sm">
-                      Pending
-                    </Text>
-                  )}
-                </Table.Td>
-              </Table.Tr>
-            ))}
-          </Table.Tbody>
-        </Table>
+                      </Stack>
+                    ) : can("ncr.record_correction") ? (
+                      <Button size="xs" variant="light" onClick={() => setDisposeNcr(n)}>
+                        Record disposition
+                      </Button>
+                    ) : (
+                      <Text c="dimmed" size="sm">
+                        Pending
+                      </Text>
+                    )}
+                  </Table.Td>
+                </Table.Tr>
+              ))}
+            </Table.Tbody>
+          </Table>
+        </Table.ScrollContainer>
       )}
       <NcrForm opened={formOpen} onClose={() => setFormOpen(false)} />
       {disposeNcr && (

@@ -3938,6 +3938,28 @@ paths:
               schema: { $ref: "#/components/schemas/NotificationDeliveryHealth" }
         "403": { $ref: "#/components/responses/ProblemResponse" }
 
+  /admin/notifications/requeue-failed:
+    post:
+      tags: [admin]
+      operationId: requeueFailedNotifications
+      summary: Requeue this org's FAILED notification emails. Needs config.update (SYSTEM, admin-only).
+      description: >-
+        Resets the caller org's FAILED delivery-ledger rows to PENDING (attempts=0) so the outbox
+        drain retries them. Ops-recovery action (structured-log only; email is advisory — no
+        audit_event, no WORM touch).
+      responses:
+        "200":
+          description: The number of delivery rows requeued.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [requeued]
+                properties:
+                  requeued:
+                    type: integer
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+
   /admin/notifications/working-calendar:
     get:
       tags: [admin]

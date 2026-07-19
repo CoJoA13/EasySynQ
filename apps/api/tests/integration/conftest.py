@@ -198,13 +198,23 @@ async def app_under_test(
     # The S8a latch (423 until OPERATIONAL) would otherwise lock every non-setup test out of the
     # shared, session-scoped DB. Default it OPEN here so existing tests behave as before; the setup
     # tests reset setup_state to UNINITIALIZED themselves (test_setup.py).
+
+    import datetime as _dt
+
     import sqlalchemy as _sa
+
+    from easysynq_api.services.audit.partitions import upcoming_month_starts
 
     _owner = _sa.create_engine(_pg)
     with _owner.begin() as conn:
         conn.execute(
             _sa.text("UPDATE system_config SET setup_state='OPERATIONAL', finalized_at=now()")
         )
+        # Keep the audit_event partition runway current (Beat doesn't run in tests; migration
+        # 0010 only seeds a fixed 2026-06/07/08). Idempotent; the owner role may call the
+        # SECURITY-DEFINER function directly.
+        for _start in upcoming_month_starts(_dt.datetime.now(_dt.UTC).date()):
+            conn.execute(_sa.text("SELECT easysynq_create_audit_partition(:s)"), {"s": _start})
     _owner.dispose()
 
     app = create_app()

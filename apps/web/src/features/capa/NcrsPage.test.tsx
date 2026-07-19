@@ -56,9 +56,16 @@ test("records a disposition (PATCH) for an undisposed NCR", async () => {
     http.patch("/api/v1/ncrs/:id/disposition", () => {
       patched = true;
       return HttpResponse.json({
-        id: "nc000001-0001-0001-0001-000000000001", identifier: "NCR-000052", source: "process",
-        description: "x", severity: "Major", process_id: null, disposition: "scrap",
-        disposition_authorized_by: null, disposition_notes: null, disposed_at: "2026-06-09T00:00:00+00:00",
+        id: "nc000001-0001-0001-0001-000000000001",
+        identifier: "NCR-000052",
+        source: "process",
+        description: "x",
+        severity: "Major",
+        process_id: null,
+        disposition: "scrap",
+        disposition_authorized_by: null,
+        disposition_notes: null,
+        disposed_at: "2026-06-09T00:00:00+00:00",
         created_at: "2026-06-03T09:00:00+00:00",
       });
     }),
@@ -79,7 +86,10 @@ test("a one-shot 409 (already dispositioned) is surfaced calmly", async () => {
   grant(["ncr.record_correction"]);
   server.use(
     http.patch("/api/v1/ncrs/:id/disposition", () =>
-      HttpResponse.json({ code: "ncr_already_dispositioned", title: "Already dispositioned" }, { status: 409 }),
+      HttpResponse.json(
+        { code: "ncr_already_dispositioned", title: "Already dispositioned" },
+        { status: 409 },
+      ),
     ),
   );
   const u = userEvent.setup();
@@ -101,13 +111,28 @@ test("a 409 race refetches the list so the row flips to its disposed read-only s
     http.get("/api/v1/ncrs", () =>
       HttpResponse.json({
         data: [
-          { id: "nc000001-0001-0001-0001-000000000001", identifier: "NCR-000052", source: "process", description: "Torque out of spec", severity: "Major", process_id: null, disposition: raced ? "scrap" : null, disposition_authorized_by: null, disposition_notes: null, disposed_at: raced ? "2026-06-09T00:00:00+00:00" : null, created_at: "2026-06-03T09:00:00+00:00" },
+          {
+            id: "nc000001-0001-0001-0001-000000000001",
+            identifier: "NCR-000052",
+            source: "process",
+            description: "Torque out of spec",
+            severity: "Major",
+            process_id: null,
+            disposition: raced ? "scrap" : null,
+            disposition_authorized_by: null,
+            disposition_notes: null,
+            disposed_at: raced ? "2026-06-09T00:00:00+00:00" : null,
+            created_at: "2026-06-03T09:00:00+00:00",
+          },
         ],
       }),
     ),
     http.patch("/api/v1/ncrs/:id/disposition", () => {
       raced = true;
-      return HttpResponse.json({ code: "ncr_already_dispositioned", title: "Already dispositioned" }, { status: 409 });
+      return HttpResponse.json(
+        { code: "ncr_already_dispositioned", title: "Already dispositioned" },
+        { status: 409 },
+      );
     }),
   );
   const u = userEvent.setup();
@@ -146,4 +171,10 @@ test("no axe violations", async () => {
   const { container } = renderWithProviders(<NcrsPage />, { route: "/capa/ncrs" });
   await screen.findByText("NCR-000052");
   expect(await axe(container)).toHaveNoViolations();
+});
+
+test("gives register headers a column scope (a11y)", async () => {
+  renderWithProviders(<NcrsPage />, { route: "/capa/ncrs" });
+  const header = await screen.findByRole("columnheader", { name: "Identifier" });
+  expect(header).toHaveAttribute("scope", "col");
 });

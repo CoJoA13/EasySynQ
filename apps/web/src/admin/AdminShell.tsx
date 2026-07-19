@@ -14,7 +14,10 @@ export function AdminShell() {
         ? "config"
         : "users";
   return (
-    <Container size="lg" py="xl">
+    // `component="main" id="main-content"` makes this the route's main landmark AND the focus
+    // target useRouteChrome moves to on navigation (this shell renders outside AppShell, so it needs
+    // its own #main-content; /admin and / never render together, so the id is never duplicated).
+    <Container component="main" id="main-content" tabIndex={-1} size="lg" py="xl">
       <Stack gap="md">
         <Group justify="space-between">
           <Title order={1}>Administration</Title>

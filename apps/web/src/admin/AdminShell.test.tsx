@@ -8,4 +8,11 @@ describe("AdminShell", () => {
     renderWithProviders(<AdminShell />, { route: "/admin/config" });
     expect(screen.getByRole("tab", { name: "Config", selected: true })).toBeInTheDocument();
   });
+
+  it("exposes a #main-content main landmark as the route-change focus target", () => {
+    renderWithProviders(<AdminShell />, { route: "/admin/config" });
+    const main = screen.getByRole("main");
+    expect(main).toHaveAttribute("id", "main-content");
+    expect(main).toHaveAttribute("tabindex", "-1");
+  });
 });

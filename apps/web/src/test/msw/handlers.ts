@@ -3595,6 +3595,7 @@ export const handlers = [
   http.get("/api/v1/admin/notifications/health", () =>
     HttpResponse.json(notificationHealthFixture as unknown as Record<string, unknown>),
   ),
+  http.post("/api/v1/admin/notifications/requeue-failed", () => HttpResponse.json({ requeued: 0 })),
   http.get("/api/v1/admin/notifications/working-calendar", () =>
     HttpResponse.json(workingCalendarFixture as unknown as Record<string, unknown>),
   ),

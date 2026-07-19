@@ -13,6 +13,7 @@ on the closed ``config`` object type)."""
 from __future__ import annotations
 
 import datetime
+import logging
 import uuid
 from typing import Any
 
@@ -30,11 +31,14 @@ from ..problems import ProblemException
 from ..services.authz import require
 from ..services.notifications.calendar_admin import get_working_calendar, update_working_calendar
 from ..services.notifications.health import get_delivery_health
+from ..services.notifications.requeue import requeue_failed
 
 router = APIRouter(prefix="/api/v1", tags=["admin"])
 
 # config.update is SYSTEM-domain / admin-only (doc 07 §3.9, R35) — NOT a content key, NOT no-gate.
 _config_update = require("config.update")
+
+logger = logging.getLogger("easysynq.notifications.requeue")
 
 
 class OrgConfigUpdate(BaseModel):
@@ -116,6 +120,37 @@ async def get_notification_health_endpoint(
     Failure/backlog/suppressed counts + the recent-failure list (operational-only) + the awareness
     fan-out backlog. Pure read. Needs ``config.update`` (admin-only)."""
     return await get_delivery_health(session, caller.org_id)
+
+
+@router.post("/admin/notifications/requeue-failed")
+async def requeue_failed_endpoint(
+    caller: AppUser = Depends(_config_update),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, int]:
+    """Requeue this org's FAILED notification emails → PENDING so the outbox drain retries them.
+
+    Ops-recovery action (structured-log only; email is advisory). Needs ``config.update``."""
+    cfg = await session.get(SystemConfig, caller.org_id)
+    if cfg is None or not cfg.notifications_email_enabled:
+        # Email delivery is off → leave FAILED rows untouched. Requeuing them would only let the
+        # next drain terminally SUPPRESS them (drain._still_eligible), making them unrecoverable
+        # once email is re-enabled. The FE also disables the action while email is off.
+        return {"requeued": 0}
+    count = await requeue_failed(session, caller.org_id)
+    await session.commit()
+    # Emit the record AFTER the commit — this structured log is the sole trace of the action (no
+    # audit_event by design), so a rolled-back requeue must not leave a false "requeued N".
+    logger.info(
+        "notifications.requeued",
+        extra={
+            "extra_fields": {
+                "count": count,
+                "org_id": str(caller.org_id),
+                "actor_id": str(caller.id),
+            }
+        },
+    )
+    return {"requeued": count}
 
 
 @router.get("/admin/notifications/working-calendar")

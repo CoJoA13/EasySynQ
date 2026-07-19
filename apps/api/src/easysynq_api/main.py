@@ -7,6 +7,7 @@ task, audit, and search routers under /api/v1.
 
 from __future__ import annotations
 
+import logging
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -52,7 +53,10 @@ from .db.models.system_config import SetupState
 from .db.session import dispose_engine, get_sessionmaker
 from .logging import configure_logging, request_id_var
 from .problems import problem_response, register_exception_handlers
+from .services.audit.partitions import ensure_partitions
 from .services.setup import get_setup_state
+
+logger = logging.getLogger("easysynq.startup")
 
 # Paths reachable while the setup latch is closed (setup_state != OPERATIONAL): the wizard itself,
 # the auth config + identity it needs to load, and the public verify page + dev docs. Everything
@@ -89,6 +93,15 @@ def _latch_exempt(path: str) -> bool:
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    # Best-effort: keep the audit_event partition runway current on boot so a fresh install after
+    # Aug 2026 has a covering month before first-run setup writes audit events. Compose orders the
+    # API after `migrate` completes, so the SECURITY-DEFINER function exists. Never block startup —
+    # the daily roll_partitions Beat is the steady-state backstop.
+    try:
+        async with get_sessionmaker()() as _session:
+            await ensure_partitions(_session)
+    except Exception:  # noqa: BLE001 - best-effort startup hook; a DB hiccup must not block boot
+        logger.warning("audit.ensure_partitions_on_startup_failed", exc_info=True)
     yield
     await dispose_engine()
 

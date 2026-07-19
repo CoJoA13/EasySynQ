@@ -75,3 +75,15 @@ export function useUpdateWorkingCalendar() {
     },
   });
 }
+
+export function useRequeueFailed() {
+  const api = useApi();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      api.send<{ requeued: number }>("POST", "/api/v1/admin/notifications/requeue-failed"),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["notification-health"] });
+    },
+  });
+}

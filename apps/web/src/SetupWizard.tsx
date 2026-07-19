@@ -181,7 +181,9 @@ export function SetupWizard({
     run(() => apiSend("POST", "/api/v1/setup/finalize", token, {}), onFinalized);
 
   return (
-    <Container size="sm" py="xl">
+    // Main landmark + useRouteChrome focus target for the pre-operational /setup route (rendered
+    // outside AppShell; /setup and / never render together, so #main-content is never duplicated).
+    <Container component="main" id="main-content" tabIndex={-1} size="sm" py="xl">
       <Stack gap="lg">
         <Stack gap={4}>
           <img
