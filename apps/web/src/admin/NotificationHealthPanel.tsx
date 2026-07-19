@@ -37,6 +37,10 @@ export function NotificationHealthPanel() {
   const failed = h.email.failed;
   const hasPending = h.email.pending_now + h.email.pending_scheduled > 0;
   const doRequeue = () => requeue.mutate(undefined, { onSuccess: () => confirm.close() });
+  const closeConfirm = () => {
+    requeue.reset();
+    confirm.close();
+  };
   return (
     <Stack gap="md">
       <Group justify="space-between" align="center">
@@ -145,7 +149,7 @@ export function NotificationHealthPanel() {
         )}
       </Stack>
 
-      <Modal opened={confirmOpen} onClose={confirm.close} title="Requeue failed emails">
+      <Modal opened={confirmOpen} onClose={closeConfirm} title="Requeue failed emails">
         <Stack gap="md">
           <Text size="sm">
             Requeue {failed} failed email{failed === 1 ? "" : "s"}? They&apos;ll be retried on the
@@ -153,7 +157,7 @@ export function NotificationHealthPanel() {
           </Text>
           {requeue.isError && <MutationErrorState title="Couldn't requeue" error={requeue.error} />}
           <Group justify="flex-end">
-            <Button variant="default" size="sm" onClick={confirm.close}>
+            <Button variant="default" size="sm" onClick={closeConfirm}>
               Cancel
             </Button>
             <Button size="sm" onClick={doRequeue} loading={requeue.isPending}>

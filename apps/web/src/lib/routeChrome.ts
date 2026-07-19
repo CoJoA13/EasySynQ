@@ -37,14 +37,15 @@ function labelFor(pathname: string): string {
 
 export function useRouteChrome(): void {
   const { pathname } = useLocation();
-  const firstRun = useRef(true);
+  const prevPathname = useRef<string | null>(null);
   useEffect(() => {
     const label = labelFor(pathname);
     document.title = label ? `EasySynQ — ${label}` : "EasySynQ";
-    if (firstRun.current) {
-      firstRun.current = false;
-      return; // don't steal focus from the skip-link on the first load
+    // Focus the main region only on a genuine route CHANGE — not on the initial mount, and not on
+    // React StrictMode's dev-only double-invoke of the mount effect (same pathname → no focus).
+    if (prevPathname.current !== null && prevPathname.current !== pathname) {
+      document.getElementById("main-content")?.focus();
     }
-    document.getElementById("main-content")?.focus();
+    prevPathname.current = pathname;
   }, [pathname]);
 }

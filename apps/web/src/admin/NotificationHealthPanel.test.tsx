@@ -97,4 +97,22 @@ describe("NotificationHealthPanel", () => {
     await user.click(screen.getByRole("button", { name: "Requeue" }));
     await waitFor(() => expect(posted).toBe(true));
   });
+
+  it("clears a prior requeue error when the confirm modal is reopened", async () => {
+    const user = userEvent.setup();
+    health({ email: { ...notificationHealthFixture.email, failed: 2 } });
+    server.use(
+      http.post("/api/v1/admin/notifications/requeue-failed", () =>
+        HttpResponse.json({ code: "boom", title: "nope" }, { status: 500 }),
+      ),
+    );
+    renderWithProviders(<NotificationHealthPanel />);
+    await user.click(await screen.findByRole("button", { name: "Requeue failed" }));
+    await user.click(await screen.findByRole("button", { name: "Requeue" }));
+    expect(await screen.findByText("Couldn't requeue")).toBeInTheDocument();
+    // Cancel and reopen → the stale error must be gone
+    await user.click(await screen.findByRole("button", { name: "Cancel" }));
+    await user.click(await screen.findByRole("button", { name: "Requeue failed" }));
+    expect(screen.queryByText("Couldn't requeue")).not.toBeInTheDocument();
+  });
 });
