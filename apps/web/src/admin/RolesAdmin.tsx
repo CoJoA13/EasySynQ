@@ -1,6 +1,7 @@
-import { Accordion, Alert, Badge, Group, Loader, Stack, Table, Text } from "@mantine/core";
+import { Accordion, Badge, Group, Loader, Stack, Table, Text } from "@mantine/core";
 import { useQuery } from "@tanstack/react-query";
 import { apiGet } from "../lib/api";
+import { ErrorState, LoadingState } from "../lib/states";
 
 interface Role {
   id: string;
@@ -21,15 +22,15 @@ export function RolesAdmin({ token }: { token: string | null }) {
     enabled: !!token,
   });
 
-  if (roles.isLoading) return <Loader />;
+  if (roles.isLoading) return <LoadingState label="Loading roles" />;
   if (roles.isError)
-    return <Alert color="red" title="Could not load roles">{String(roles.error)}</Alert>;
+    return <ErrorState title="Couldn't load roles" onRetry={() => void roles.refetch()} />;
 
   return (
     <Stack gap="md">
       <Text c="dimmed" size="sm">
-        The seeded role bundles. Assign them to users on the Users tab. Custom roles arrive in a later
-        release.
+        The seeded role bundles. Assign them to users on the Users tab. Custom roles arrive in a
+        later release.
       </Text>
       <Accordion variant="separated">
         {(roles.data ?? []).map((r) => (

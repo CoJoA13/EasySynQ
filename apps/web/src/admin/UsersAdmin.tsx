@@ -5,7 +5,6 @@ import {
   Button,
   Drawer,
   Group,
-  Loader,
   Modal,
   SegmentedControl,
   Select,
@@ -18,6 +17,7 @@ import {
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { ApiError, apiGet, apiSend } from "../lib/api";
+import { ErrorState, LoadingState } from "../lib/states";
 
 interface User {
   id: string;
@@ -67,7 +67,8 @@ export function UsersAdmin({ token }: { token: string | null }) {
     enabled: !!token,
   });
 
-  const onErr = (e: unknown) => setError(e instanceof ApiError ? `${e.code}: ${e.message}` : String(e));
+  const onErr = (e: unknown) =>
+    setError(e instanceof ApiError ? `${e.code}: ${e.message}` : String(e));
   const refresh = () => {
     setError(null);
     void qc.invalidateQueries({ queryKey: ["users"] });
@@ -90,9 +91,9 @@ export function UsersAdmin({ token }: { token: string | null }) {
     onSuccess: refresh,
   });
 
-  if (users.isLoading) return <Loader />;
+  if (users.isLoading) return <LoadingState label="Loading users" />;
   if (users.isError)
-    return <Alert color="red" title="Could not load users">{String(users.error)}</Alert>;
+    return <ErrorState title="Couldn't load users" onRetry={() => void users.refetch()} />;
 
   return (
     <Stack gap="md">
@@ -204,7 +205,9 @@ export function UsersAdmin({ token }: { token: string | null }) {
         onClose={() => setManage(null)}
         position="right"
         size="lg"
-        title={manage ? `Manage — ${manage.display_name ?? manage.email ?? manage.keycloak_subject}` : ""}
+        title={
+          manage ? `Manage — ${manage.display_name ?? manage.email ?? manage.keycloak_subject}` : ""
+        }
       >
         {manage && <ManageUser user={manage} token={token} onError={onErr} onChange={refresh} />}
       </Drawer>
@@ -316,7 +319,11 @@ function ManageUser({
             searchable
             style={{ flex: 1 }}
           />
-          <Button onClick={() => assignMut.mutate()} loading={assignMut.isPending} disabled={!roleId}>
+          <Button
+            onClick={() => assignMut.mutate()}
+            loading={assignMut.isPending}
+            disabled={!roleId}
+          >
             Assign
           </Button>
         </Group>
@@ -325,7 +332,8 @@ function ManageUser({
       <Stack gap="xs">
         <Title order={4}>Permission overrides</Title>
         <Text size="xs" c="dimmed">
-          System-scoped overrides; finer scoping is available via the API. The two-tier guard applies.
+          System-scoped overrides; finer scoping is available via the API. The two-tier guard
+          applies.
         </Text>
         {overrides.data?.length ? (
           overrides.data.map((o) => (

@@ -4,7 +4,7 @@ import { Link } from "react-router-dom";
 import { DetailDrawer } from "../../app/shell/DetailDrawer";
 import { useDocumentTypes } from "../../app/shell/useDocumentTypes";
 import { useUserDirectory } from "../../app/shell/useUserDirectory";
-import { LoadingState } from "../../lib/states";
+import { ErrorState, LoadingState } from "../../lib/states";
 import type { DocumentSummary } from "../../lib/types";
 import { AuthorActions } from "../authoring/AuthorActions";
 import { ArtifactHeader } from "./ArtifactHeader";
@@ -26,7 +26,12 @@ export function DocumentDrawer({
   onClose: () => void;
 }) {
   const opened = documentId !== null;
-  const { data: doc, isLoading } = useDocument(documentId, { enabled: opened, seed });
+  const {
+    data: doc,
+    isLoading,
+    isError,
+    refetch,
+  } = useDocument(documentId, { enabled: opened, seed });
   const { data: types } = useDocumentTypes();
   const { data: directory } = useUserDirectory();
   const [tab, setTab] = useState<string>("overview");
@@ -44,6 +49,9 @@ export function DocumentDrawer({
   return (
     <DetailDrawer opened={opened} onClose={onClose} title={doc?.identifier ?? "Document"}>
       {isLoading && !doc && <LoadingState label="Loading document" />}
+      {isError && !doc && (
+        <ErrorState title="Couldn't load this document" onRetry={() => void refetch()} />
+      )}
       {doc && (
         <>
           <ArtifactHeader doc={doc} typeName={typeName} ownerName={ownerName} />

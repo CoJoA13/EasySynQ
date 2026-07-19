@@ -16,6 +16,7 @@ import { useState } from "react";
 import { usePermissions } from "../app/shell/usePermissions";
 import { useUserDirectory } from "../app/shell/useUserDirectory";
 import { ApiError, apiGet, apiSend } from "../lib/api";
+import { ErrorState, LoadingState, NoAccessState } from "../lib/states";
 import type { ProcessRow } from "../lib/types";
 
 interface ProcessOwner {
@@ -45,16 +46,13 @@ export function ProcessesAdmin({ token }: { token: string | null }) {
     retry: false,
   });
 
-  if (processes.isLoading) return <Loader />;
+  if (processes.isLoading) return <LoadingState label="Loading processes" />;
   if (processes.isError) {
     const forbidden = processes.error instanceof ApiError && processes.error.status === 403;
-    return (
-      <Alert
-        color={forbidden ? "gray" : "red"}
-        title={forbidden ? "No access" : "Could not load processes"}
-      >
-        {forbidden ? "You need process.read to manage process owners." : String(processes.error)}
-      </Alert>
+    return forbidden ? (
+      <NoAccessState message="You need process.read to manage process owners." />
+    ) : (
+      <ErrorState title="Could not load processes" onRetry={() => void processes.refetch()} />
     );
   }
 
