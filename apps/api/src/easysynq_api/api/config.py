@@ -30,6 +30,7 @@ from ..problems import ProblemException
 from ..services.authz import require
 from ..services.notifications.calendar_admin import get_working_calendar, update_working_calendar
 from ..services.notifications.health import get_delivery_health
+from ..services.notifications.requeue import requeue_failed
 
 router = APIRouter(prefix="/api/v1", tags=["admin"])
 
@@ -116,6 +117,19 @@ async def get_notification_health_endpoint(
     Failure/backlog/suppressed counts + the recent-failure list (operational-only) + the awareness
     fan-out backlog. Pure read. Needs ``config.update`` (admin-only)."""
     return await get_delivery_health(session, caller.org_id)
+
+
+@router.post("/admin/notifications/requeue-failed")
+async def requeue_failed_endpoint(
+    caller: AppUser = Depends(_config_update),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, int]:
+    """Requeue this org's FAILED notification emails → PENDING so the outbox drain retries them.
+
+    Ops-recovery action (structured-log only; email is advisory). Needs ``config.update``."""
+    count = await requeue_failed(session, caller.org_id, actor_id=caller.id)
+    await session.commit()
+    return {"requeued": count}
 
 
 @router.get("/admin/notifications/working-calendar")
