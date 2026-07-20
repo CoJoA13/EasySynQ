@@ -50,11 +50,15 @@ async def compliance_checklist_endpoint(
 
 # report.read is seeded at SYSTEM scope (QMS Owner/Internal Auditor) AND at PROCESS scope (the
 # built-in Process Owner — migrations/versions/0004_seed_authz.py _PROCESS_OWNER_KEYS). The
-# register is an org-level surface, so the SURFACE gate here is a presence check: admit any
-# report.read ALLOW at SYSTEM or PROCESS scope (an ARTIFACT-scoped guest grant stays excluded — the
-# spec keeps guests on Evidence Packs; a plain Employee with no report.read grant is refused here).
-# Rows are then filtered per-row by document.read inside the service (doc 13 §6.1 "all Documents
-# the requester may see") — a Process Owner admitted here still only sees their linked-process docs.
+# register is an org-level surface, so the SURFACE gate here admits any report.read ALLOW at
+# SYSTEM or PROCESS scope (an ARTIFACT-scoped guest grant stays excluded — the spec keeps guests
+# on Evidence Packs; a plain Employee with no report.read grant is refused here) UNLESS a
+# report.read DENY also exists at one of those levels — deny-always-wins (R3 / AZ-INV-2) must hold
+# at the surface gate too, not just the per-row filter below (a narrow lower-scope DENY outside
+# _SURFACE_LEVELS is out of scope for this check; the per-row filter remains the data boundary for
+# it). Rows are then filtered per-row by document.read inside the service (doc 13 §6.1 "all
+# Documents the requester may see") — a Process Owner admitted here still only sees their
+# linked-process docs.
 _SURFACE_LEVELS = frozenset({ScopeLevel.SYSTEM, ScopeLevel.PROCESS})
 
 
@@ -74,7 +78,10 @@ async def document_control_register_endpoint(
     pagination); facet filters via the shared ``filter[field][op]`` grammar. Read-only (no
     audit_event)."""
     report_grants = await gather_grants(session, caller.id, caller.org_id, "report.read")
-    if not any(g.effect == Effect.ALLOW and g.level in _SURFACE_LEVELS for g in report_grants):
+    surface_grants = [g for g in report_grants if g.level in _SURFACE_LEVELS]
+    if not any(g.effect == Effect.ALLOW for g in surface_grants) or any(
+        g.effect == Effect.DENY for g in surface_grants
+    ):
         raise ProblemException(status=403, code="forbidden", title="report.read required")
     filters = _parse_document_filters(request)
     source_ip = request.client.host if request.client else None

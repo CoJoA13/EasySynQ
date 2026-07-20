@@ -410,6 +410,25 @@ async def test_process_scoped_report_read_admitted_at_surface_gate(
     assert doc_out["identifier"] not in ids
 
 
+# --- Deny-always-wins at the SURFACE gate (not just the per-row filter) --------------------
+
+
+async def test_surface_gate_honors_system_report_read_deny(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    """Deny-always-wins (R3 / AZ-INV-2) must hold at the SURFACE gate too, not just the per-row
+    document.read filter (see ``test_lifecycle_predicated_deny_wins_over_broad_system_allow``
+    above). A caller with a SYSTEM report.read ALLOW *and* a SYSTEM report.read DENY override
+    (the canonical admin revocation shape) must be refused — before the fix, the gate only checked
+    ``any(ALLOW)`` and never inspected DENY, so the override was silently ignored and the caller
+    was still admitted."""
+    await _grant(subj.a, ("report.read",))  # the SYSTEM ALLOW
+    await _add_override(subj.a, "report.read", Effect.DENY, ScopeLevel.SYSTEM)  # the revocation
+
+    resp = await app_client.get(_ROUTE, headers=_auth(token_factory, subj.a))
+    assert resp.status_code == 403, resp.text
+
+
 # --- FIX 7 (P1): lifecycle_state populated in the per-row ResourceContext ------------------
 
 
