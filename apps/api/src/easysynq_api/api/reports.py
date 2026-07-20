@@ -9,15 +9,25 @@ backfill) Internal Auditor.
 
 from __future__ import annotations
 
+import datetime
+import uuid
 from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..config import get_settings
 from ..db.models.app_user import AppUser
+from ..db.models.organization import Organization
 from ..db.session import get_session
 from ..services.authz import require
+from ..services.common.org_clock import current_org_tz
 from ..services.reports import compute_checklist
+from ..services.reports.document_control import (
+    build_provenance,
+    compute_document_control_register,
+)
+from .documents import _parse_document_filters
 
 router = APIRouter(prefix="/api/v1", tags=["reports"])
 
@@ -33,3 +43,45 @@ async def compliance_checklist_endpoint(
 ) -> dict[str, Any]:
     """The ★ mandatory-clause coverage view: per-clause COVERED/PARTIAL/GAP + a rollup RAG."""
     return await compute_checklist(session, caller.org_id)
+
+
+# report.read is PROCESS-finest but the register is an org-level surface → gate at the default
+# SYSTEM scope (the checklist require(...) precedent). Rows are then filtered per-row by
+# document.read inside the service (doc 13 §6.1 "all Documents the requester may see"). A guest
+# (ARTIFACT report.read) or an Employee (no report.read) is refused here.
+_report_read = require("report.read")
+
+
+async def _org_short_code(session: AsyncSession, org_id: uuid.UUID) -> str:
+    org = await session.get(Organization, org_id)
+    return org.short_code if org else str(org_id)
+
+
+@router.get("/reports/document-control")
+async def document_control_register_endpoint(
+    request: Request,
+    caller: AppUser = Depends(_report_read),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """The Controlled Document Register (ISO 9001 §7.5.3 master list) — a provenance-stamped,
+    content-hashed master list of every controlled Document the caller may read. Full set (no
+    pagination); facet filters via the shared ``filter[field][op]`` grammar. Read-only (no
+    audit_event)."""
+    filters = _parse_document_filters(request)
+    source_ip = request.client.host if request.client else None
+    result = await compute_document_control_register(
+        session, caller, filters=filters, source_ip=source_ip
+    )
+    # echo the applied filter[...] params (for hash reproducibility) — only the filter[...] keys.
+    applied = {k: v for k, v in request.query_params.items() if k.startswith("filter[")}
+    generated_at = datetime.datetime.now(current_org_tz())
+    provenance = build_provenance(
+        generated_by=(caller.display_name or caller.email or str(caller.id)),
+        generated_at=generated_at,
+        scope=f"org:{await _org_short_code(session, caller.org_id)}",
+        app_version=get_settings().version,
+        filters=applied,
+        row_count=result.row_count,
+        content_hash=result.content_hash,
+    )
+    return {"provenance": provenance, "rows": result.rows}

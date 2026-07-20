@@ -3788,6 +3788,77 @@ paths:
               schema: { $ref: "#/components/schemas/ComplianceChecklist" }
         "403": { $ref: "#/components/responses/ProblemResponse" }
 
+  /reports/document-control:
+    get:
+      tags: [reports]
+      operationId: getDocumentControlRegister
+      summary: >-
+        Controlled Document Register — the ISO 9001 §7.5.3 master list. Needs report.read (SYSTEM);
+        rows filtered per-row by document.read.
+      description: >-
+        A provenance-stamped, content-hashed full register (no pagination — the content hash must
+        cover the complete as-of set) of every controlled Document the caller may read. Two-layer
+        gate: the surface require(report.read) at the default SYSTEM scope refuses a caller with no
+        report.read grant before any query; the visible set is then filtered per row by
+        document.read (doc 13 §6.1). The bracketed filter[field][op] grammar (doc 15 §3.2, shared
+        with GET /documents) narrows the candidate set before the row-filter; an unrecognised
+        field/op → 400 unknown_filter, a bad enum/uuid/timestamp value → 422. The applied
+        filter[...] params are echoed in provenance.filters for hash reproducibility. Read-only (no
+        audit_event).
+      parameters:
+        - name: "filter[clause_refs][has]"
+          in: query
+          required: false
+          schema: { type: string }
+          description: Only documents mapped to this exact clause number (e.g. 8.4). No subtree rollup.
+        - name: "filter[current_state][eq]"
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [Draft, InReview, Approved, Effective, UnderRevision, Superseded, Obsolete]
+        - { name: "filter[document_type][eq]", in: query, required: false, schema: { type: string, format: uuid } }
+        - { name: "filter[owner_user_id][eq]", in: query, required: false, schema: { type: string, format: uuid } }
+        - name: "filter[classification][eq]"
+          in: query
+          required: false
+          schema: { type: string, enum: [Public, Internal, Confidential, Restricted] }
+        - name: "filter[effective_from][gte]"
+          in: query
+          required: false
+          schema: { type: string, format: date-time }
+          description: >-
+            Documents whose CURRENT effective version's effective_from is ≥ this ISO timestamp.
+            Docs with no effective version are excluded.
+        - name: "filter[effective_from][lte]"
+          in: query
+          required: false
+          schema: { type: string, format: date-time }
+          description: As effective_from][gte] but an upper bound (≤).
+        - name: "filter[has_effective_version][eq]"
+          in: query
+          required: false
+          schema: { type: string, enum: ["true", "false"] }
+          description: >-
+            Narrows to documents that have (true) / do not have (false) a current effective version
+            (never-released).
+        - name: "filter[managed_subtype][eq]"
+          in: query
+          required: false
+          schema: { type: string, enum: ["true", "false"] }
+          description: >-
+            Includes only (true) / excludes (false) managed document subtypes (Quality Objectives,
+            Management Reviews).
+      responses:
+        "200":
+          description: The Controlled Document Register — provenance header + the full row set.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DocumentControlRegister" }
+        "400": { $ref: "#/components/responses/ProblemResponse" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
+        "422": { $ref: "#/components/responses/ProblemResponse" }
+
   /audit-events:
     get:
       tags: [audit]
@@ -7793,6 +7864,84 @@ components:
         framework: { type: string, example: "iso9001:2015" }
         rollup: { $ref: "#/components/schemas/ChecklistRollup" }
         rows: { type: array, items: { $ref: "#/components/schemas/ChecklistRow" } }
+
+    RegisterProvenance:
+      type: object
+      additionalProperties: false
+      description: >-
+        The audit-defensibility header (doc 13 §6) — who/when/what-scope generated the register,
+        plus a content_hash over the row data (order-independent, filter-sensitive) reproducible
+        via a recompute over the returned rows.
+      required: [report_name, generated_by, generated_at, as_of, scope, app_version, filters, row_count, content_hash]
+      properties:
+        report_name: { type: string, example: "Controlled Document Register" }
+        generated_by: { type: string, description: The caller's display name / email / id. }
+        generated_at: { type: string, format: date-time }
+        as_of: { type: string, format: date-time, description: Mirrors generated_at — the instant the register was materialized. }
+        scope: { type: string, example: "org:AHT", description: "org:<short_code>." }
+        app_version: { type: string }
+        filters:
+          type: object
+          additionalProperties: { type: string }
+          description: The applied filter[field][op] query params, echoed for hash reproducibility.
+        row_count: { type: integer }
+        content_hash: { type: string, example: "sha256:…", description: Deterministic sha256 over the row data. }
+
+    DocumentControlRegisterClauseRef:
+      type: object
+      additionalProperties: false
+      required: [clause, starred]
+      properties:
+        clause: { type: string, example: "8.4" }
+        starred: { type: boolean, description: "The ★ mandatory-clause flag (doc 02 §2.1 / R30)." }
+
+    DocumentControlRegisterRow:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - identifier
+        - title
+        - current_state
+        - owner_user_id
+        - clause_refs
+        - process_links
+      properties:
+        id: { type: string, format: uuid }
+        identifier: { type: string, example: SOP-PUR-014 }
+        title: { type: string }
+        document_type_id: { type: [string, "null"], format: uuid }
+        document_type: { type: [string, "null"] }
+        current_state:
+          type: string
+          enum: [Draft, InReview, Approved, Effective, UnderRevision, Superseded, Obsolete]
+        owner_user_id: { type: string, format: uuid }
+        owner_display: { type: [string, "null"] }
+        effective_revision_label: { type: [string, "null"] }
+        effective_from: { type: [string, "null"], format: date-time }
+        blob_sha256: { type: [string, "null"] }
+        clause_refs:
+          type: array
+          items: { $ref: "#/components/schemas/DocumentControlRegisterClauseRef" }
+        process_links:
+          type: array
+          items: { type: string, format: uuid }
+        approved_by: { type: [string, "null"] }
+        approved_on: { type: [string, "null"], format: date-time }
+        next_review_due: { type: [string, "null"], format: date }
+        review_state:
+          type: [string, "null"]
+          enum: [current, due_soon, overdue, null]
+
+    DocumentControlRegister:
+      type: object
+      additionalProperties: false
+      required: [provenance, rows]
+      properties:
+        provenance: { $ref: "#/components/schemas/RegisterProvenance" }
+        rows:
+          type: array
+          items: { $ref: "#/components/schemas/DocumentControlRegisterRow" }
 
     RecordType:
       type: string
