@@ -179,7 +179,9 @@ async def compute_document_control_register(
                 {"clause": number, "starred": bool(starred)}
             )
 
-    # approval/release signature on the effective version → approver + date (latest wins).
+    # approval signature on the effective version → approver + date (latest wins; excludes a
+    # voided signature). An imported-baseline version carries only import_baseline (not
+    # approval), so it correctly reports approved_by/approved_on = None (doc 13 §6.1).
     approval_by_version: dict[uuid.UUID, SignatureEvent] = {}
     if eff_ids:
         for sig in (
@@ -189,9 +191,8 @@ async def compute_document_control_register(
                     .where(
                         SignatureEvent.signed_object_type == SignedObjectType.document_version,
                         SignatureEvent.signed_object_id.in_(eff_ids),
-                        SignatureEvent.meaning.in_(
-                            [SignatureMeaning.approval, SignatureMeaning.release]
-                        ),
+                        SignatureEvent.meaning == SignatureMeaning.approval,
+                        SignatureEvent.voided_by.is_(None),
                     )
                     .order_by(SignatureEvent.created_at)
                 )

@@ -16,13 +16,14 @@ from httpx import AsyncClient
 from sqlalchemy import select
 
 from easysynq_api.db.models.authz_grant import PermissionOverride
+from easysynq_api.db.models.clause import Clause
 from easysynq_api.db.models.permission import Permission
 from easysynq_api.db.models.scope import Scope
 from easysynq_api.db.session import get_sessionmaker
 from easysynq_api.domain.authz.types import Effect, ScopeLevel
 
 from . import s5_helpers as s5
-from .test_vault import _auth, _create, _ensure_user
+from .test_vault import _auth, _checkin, _create, _ensure_user, _upload
 
 pytestmark = pytest.mark.integration
 
@@ -32,7 +33,7 @@ _ROUTE = "/api/v1/reports/document-control"
 @pytest.fixture
 def subj() -> SimpleNamespace:
     salt = uuid.uuid4().hex[:10]
-    return SimpleNamespace(a=f"kc-reg-a-{salt}", b=f"kc-reg-b-{salt}")
+    return SimpleNamespace(a=f"kc-reg-a-{salt}", b=f"kc-reg-b-{salt}", c=f"kc-reg-c-{salt}")
 
 
 async def test_register_includes_a_new_effective_document_and_hash_changes(
@@ -83,6 +84,93 @@ async def test_register_includes_a_new_effective_document_and_hash_changes(
     assert row["effective_revision_label"]  # a released doc has a revision label
     assert isinstance(row["clause_refs"], list)
     assert isinstance(row["process_links"], list)
+
+
+async def test_approved_by_reflects_the_approval_signature_not_the_release(
+    app_client: AsyncClient,
+    app_under_test: object,
+    token_factory: Callable[..., str],
+    subj: SimpleNamespace,
+) -> None:
+    """MAJOR regression guard: ``approved_by``/``approved_on`` must reflect the APPROVAL
+    signature, never the later RELEASE signature. SoD-2's enforced default (an approver may not
+    also release unless the org opts in — see the previous test's ``set_approver_release``) means
+    a released document normally has a DISTINCT releaser, and release always postdates approval.
+    A query that folds both ``approval`` and ``release`` meanings ordered by ``created_at`` with
+    "latest wins" therefore reports the RELEASER as the document's approver on every ordinarily
+    released document — wrong per doc 13 §6.1 (the column is the approval record).
+
+    Mutation-distinguishing: with a distinct approver (subj.b) and releaser (subj.c) — the
+    default SoD-2 path, no ``set_approver_release`` override — this asserts the APPROVER's
+    display name. Against the pre-fix query (meaning IN [approval, release], latest wins) the
+    releaser's signature is always later, so this assertion fails; the fix (meaning ==
+    approval only) makes it pass."""
+    from easysynq_api.services.reports.document_control import (
+        compute_document_control_register,
+    )
+
+    await s5.grant_lifecycle(subj.a)  # author
+    await s5.grant_lifecycle(subj.b)  # approver
+    await s5.grant_lifecycle(subj.c)  # releaser — DISTINCT from both author and approver
+    h_author = _auth(token_factory, subj.a)
+    h_approver = _auth(token_factory, subj.b)
+    h_releaser = _auth(token_factory, subj.c)
+    type_id = await s5.type_id("SOP")
+
+    sm = get_sessionmaker()
+    async with sm() as session:
+        approver_user = await _ensure_user(session, subj.b)
+        approver_name = approver_user.display_name or approver_user.email or str(approver_user.id)
+        releaser_user = await _ensure_user(session, subj.c)
+        releaser_name = releaser_user.display_name or releaser_user.email or str(releaser_user.id)
+    assert approver_name != releaser_name  # else the assertion below can't distinguish anything
+
+    # Map a ★-mandatory clause (satisfies the S9 submit-review >=1-clause_mapping gate AND
+    # exercises the clause_refs ★ enrichment the base test doesn't check).
+    async with sm() as session:
+        star_id, star_number = (
+            await session.execute(
+                select(Clause.id, Clause.number).where(Clause.is_mandatory_star.is_(True)).limit(1)
+            )
+        ).one()
+
+    doc = await _create(app_client, h_author, type_id)
+    did = doc["id"]
+    cm = await app_client.post(
+        f"/api/v1/documents/{did}/clause-mappings",
+        headers=h_author,
+        json={"clause_id": str(star_id)},
+    )
+    assert cm.status_code == 201, cm.text
+    co = await app_client.post(f"/api/v1/documents/{did}/checkout", headers=h_author)
+    assert co.status_code == 200, co.text
+    sha = await _upload(app_client, h_author, did, b"approver-vs-releaser-regression")
+    ci = await _checkin(
+        app_client, h_author, did, sha, change_reason="v1", change_significance="MAJOR"
+    )
+    assert ci.status_code == 201, ci.text
+    sr = await app_client.post(f"/api/v1/documents/{did}/submit-review", headers=h_author)
+    assert sr.status_code == 200, sr.text
+    task_id = await s5.task_for_doc(did)
+    dec = await app_client.post(
+        f"/api/v1/tasks/{task_id}/decision", headers=h_approver, json={"outcome": "approve"}
+    )
+    assert dec.status_code == 200, dec.text
+    rel = await app_client.post(f"/api/v1/documents/{did}/release", headers=h_releaser, json={})
+    assert rel.status_code == 200, rel.text
+    identifier = rel.json()["identifier"]
+
+    async with sm() as session:
+        caller = await _ensure_user(session, subj.a)
+        result = await compute_document_control_register(
+            session, caller, filters=[], source_ip=None
+        )
+
+    row = next(r for r in result.rows if r["identifier"] == identifier)
+    assert row["approved_by"] == approver_name
+    assert row["approved_by"] != releaser_name
+    assert row["approved_on"] is not None
+    assert {"clause": star_number, "starred": True} in row["clause_refs"]
 
 
 # --- Task 3: the HTTP route's two-layer gate ------------------------------------------------
