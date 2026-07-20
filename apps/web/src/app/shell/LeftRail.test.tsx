@@ -130,6 +130,26 @@ test("shows the gated Compliance entry when the caller holds the key", async () 
   expect(await screen.findByText("Compliance")).toBeInTheDocument();
 });
 
+test("hides the Document register entry when the caller lacks report.read", async () => {
+  renderWithProviders(<LeftRail />, { route: "/" });
+  await screen.findByText("Library");
+  expect(screen.queryByText("Document register")).not.toBeInTheDocument();
+});
+
+test("shows the gated Document register entry when the caller holds report.read", async () => {
+  server.use(
+    http.get("/api/v1/me/permissions", () =>
+      HttpResponse.json({
+        scope: { level: "SYSTEM", selector: null },
+        permissions: [{ key: "report.read", effect: "ALLOW", source: "role" }],
+      }),
+    ),
+  );
+  renderWithProviders(<LeftRail />, { route: "/" });
+  const link = await screen.findByRole("link", { name: "Document register" });
+  expect(link).toHaveAttribute("href", "/reports/document-control");
+});
+
 test("hides the Import entry when the caller lacks import.review", async () => {
   // default MSW /me/permissions returns no key → the admin-only Import entry is hidden
   renderWithProviders(<LeftRail />, { route: "/" });

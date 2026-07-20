@@ -63,6 +63,12 @@ const NAV: Record<PdcaPhase, NavItem[]> = {
       gate: "mgmtReview.read",
     },
     { to: "/drift", label: "Drift", prefix: "/drift", gate: "drift.read" },
+    {
+      to: "/reports/document-control",
+      label: "Document register",
+      prefix: "/reports/document-control",
+      gate: "report.read",
+    },
   ],
   ACT: [
     { to: "/capa", label: "Nonconformity and CAPA", prefix: "/capa" },
