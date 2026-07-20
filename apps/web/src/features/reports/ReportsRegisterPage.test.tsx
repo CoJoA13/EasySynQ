@@ -37,8 +37,8 @@ const REG: DocumentControlRegister = {
       process_links: [],
       approved_by: "Ken",
       approved_on: "2026-06-01T00:00:00+00:00",
-      next_review_due: "2027-06-01",
-      review_state: "OK",
+      next_review_due: "2026-06-01",
+      review_state: "overdue",
     },
     {
       id: "2",
@@ -73,6 +73,8 @@ describe("ReportsRegisterPage", () => {
     expect(screen.getByText("Rev A")).toBeInTheDocument();
     expect(screen.getByText(/7\.5\.3/)).toBeInTheDocument();
     expect(screen.getByText("WI-QA-002")).toBeInTheDocument();
+    // RAG signal: the review-state badge renders next to the next-review date (never colour alone).
+    expect(screen.getByText("Overdue")).toBeInTheDocument();
   });
 
   it("shows a calm no-access panel on 403", async () => {

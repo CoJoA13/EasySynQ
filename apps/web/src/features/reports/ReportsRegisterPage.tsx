@@ -1,12 +1,13 @@
 import { Card, Container, Group, Stack, Table, Text, Title } from "@mantine/core";
 import { useMemo } from "react";
 import { useDocumentControlRegister } from "./useDocumentControlRegister";
-import type { DocumentCurrentState, RegisterProvenance, RegisterRow } from "../../lib/types";
+import type { RegisterProvenance, RegisterRow } from "../../lib/types";
 import { AsOf } from "../../lib/AsOf";
 import { ErrorState, LoadingState, NoAccessState, EmptyState } from "../../lib/states";
 import { RegisterToolbar, SortableTh } from "../../lib/RegisterToolbar";
 import { sortRows, useDebouncedSearch, useTableSort } from "../../lib/registerControls";
 import { StateBadge } from "../document/StateBadge";
+import { ReviewStateBadge } from "../document/ReviewStateBadge";
 
 const SORT_KEYS = ["identifier", "title", "type", "state", "review"] as const;
 type SortKey = (typeof SORT_KEYS)[number];
@@ -133,7 +134,7 @@ export function ReportsRegisterPage() {
                         <Table.Td>{r.document_type ?? "—"}</Table.Td>
                         <Table.Td>{r.effective_revision_label ?? "—"}</Table.Td>
                         <Table.Td>
-                          <StateBadge state={r.current_state as DocumentCurrentState} />
+                          <StateBadge state={r.current_state} />
                         </Table.Td>
                         <Table.Td>{r.owner_display ?? "—"}</Table.Td>
                         <Table.Td>
@@ -150,7 +151,12 @@ export function ReportsRegisterPage() {
                             </Group>
                           )}
                         </Table.Td>
-                        <Table.Td>{r.next_review_due ?? "—"}</Table.Td>
+                        <Table.Td>
+                          <Group gap="xs" wrap="nowrap">
+                            <Text size="sm">{r.next_review_due ?? "—"}</Text>
+                            <ReviewStateBadge state={r.review_state} />
+                          </Group>
+                        </Table.Td>
                       </Table.Tr>
                     ))}
                   </Table.Tbody>

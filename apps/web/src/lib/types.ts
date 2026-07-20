@@ -1995,7 +1995,7 @@ export interface RegisterRow {
   title: string;
   document_type_id: string | null;
   document_type: string | null;
-  current_state: string;
+  current_state: DocumentCurrentState;
   owner_user_id: string;
   owner_display: string | null;
   effective_revision_label: string | null;
@@ -2006,7 +2006,7 @@ export interface RegisterRow {
   approved_by: string | null;
   approved_on: string | null;
   next_review_due: string | null;
-  review_state: string | null;
+  review_state: ReviewState | null;
 }
 
 export interface RegisterProvenance {
