@@ -8,13 +8,14 @@ OUR doc(s), never an absolute row count.
 
 from __future__ import annotations
 
+import datetime
 import uuid
 from collections.abc import Callable
 from types import SimpleNamespace
 
 import pytest
 from httpx import AsyncClient
-from sqlalchemy import select
+from sqlalchemy import select, text, update
 
 from easysynq_api.db.models._clause_enums import PdcaPhase
 from easysynq_api.db.models.authz_grant import PermissionOverride
@@ -23,6 +24,7 @@ from easysynq_api.db.models.permission import Permission
 from easysynq_api.db.models.process import Process
 from easysynq_api.db.models.process_link import ProcessLink
 from easysynq_api.db.models.scope import Scope
+from easysynq_api.db.models.working_calendar import WorkingCalendar
 from easysynq_api.db.session import get_sessionmaker
 from easysynq_api.domain.authz.types import Effect, ScopeLevel
 
@@ -644,3 +646,170 @@ async def test_process_id_filter_rejects_a_non_uuid_value() -> None:
     with pytest.raises(ProblemException) as exc_info:
         _filter_condition("process_id", "eq", "not-a-uuid")
     assert exc_info.value.status == 422
+
+
+# --- R3-2 (P2, Codex round 3): review_state's "today" comes from the snapshot, not the wall clock -
+
+
+async def test_review_state_derives_today_from_snapshot_not_wall_clock(
+    app_client: AsyncClient,
+    app_under_test: object,
+    token_factory: Callable[..., str],
+    subj: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """review_state's "today" must come from ``snapshot_at`` (the ``SELECT now()`` captured
+    inside the register's own REPEATABLE READ transaction), never a fresh wall-clock read taken
+    at call time — else generation crossing org-tz midnight could label a document
+    overdue/due_soon on a day its own provenance ``as_of`` never claims, and the content hash
+    would seal that inconsistency.
+
+    Mutation-distinguishing: monkeypatches ``today_org`` on the ``document_control`` MODULE
+    itself (not ``vault.review``, where ``from x import y`` would bind a copy the patch can't
+    reach) to a date ~1000 days in the future, with ``raising=False`` so it's a no-op attribute
+    add under the FIX (which no longer imports/calls ``today_org`` at all) but WOULD be invoked
+    under the pre-fix ``today = today_org()``. ``next_review_due`` is pinned 60 days out — well
+    past REVIEW_LEAD_DAYS (30) from the real snapshot date, so the fix reports "current"; the
+    patched far-future wall-clock date would blow past it and report "overdue"."""
+    from easysynq_api.services.reports import document_control
+    from easysynq_api.services.reports.document_control import (
+        compute_document_control_register,
+    )
+    from easysynq_api.services.vault.review import today_org
+
+    real_today = today_org()
+    monkeypatch.setattr(
+        document_control,
+        "today_org",
+        lambda: real_today + datetime.timedelta(days=1000),
+        raising=False,
+    )
+
+    await s5.grant_lifecycle(subj.a)
+    await s5.grant_lifecycle(subj.b)
+    await s5.set_approver_release(await s5.default_org_id(), True)
+    ha, hb = _auth(token_factory, subj.a), _auth(token_factory, subj.b)
+    type_id = await s5.type_id("SOP")
+
+    eff = await s5.drive_to_effective(app_client, ha, hb, hb, type_id, b"snapshot-today-guard")
+    did = eff["id"]
+    identifier = eff["identifier"]
+
+    far_future_due = real_today + datetime.timedelta(days=60)  # outside REVIEW_LEAD_DAYS (30)
+    sm = get_sessionmaker()
+    async with sm() as session:
+        await session.execute(
+            text("UPDATE documented_information SET next_review_due = :d WHERE id = :id"),
+            {"d": far_future_due, "id": uuid.UUID(did)},
+        )
+        await session.commit()
+        caller = await _ensure_user(session, subj.a)
+
+    result = await compute_document_control_register(
+        user_id=caller.id, org_id=caller.org_id, filters=[], source_ip=None
+    )
+    row = next(r for r in result.rows if r["identifier"] == identifier)
+    assert row["review_state"] == "current", (
+        f"review_state={row['review_state']!r}; next_review_due is 60 days out — if this reads "
+        "'overdue' the patched today_org() (a wall-clock read) is still driving review_state "
+        "instead of the snapshot instant."
+    )
+
+
+# --- R3-3 (P2, Codex round 3): effective_from renders in the org timezone, not naive UTC -------
+
+
+async def test_effective_from_renders_in_the_org_timezone(
+    app_client: AsyncClient,
+    app_under_test: object,
+    token_factory: Callable[..., str],
+    subj: SimpleNamespace,
+) -> None:
+    """``effective_from`` must render in the ORG timezone (R8 effectivity rule), not a naive UTC
+    ``.isoformat()`` — else an org east of UTC sees the wrong calendar date (an org-local instant
+    can land on the PREVIOUS UTC calendar day). Sets the org's default calendar to
+    Pacific/Kiritimati (UTC+14) and pins the effective version's ``effective_from`` to a UTC
+    instant whose UTC calendar date and Pacific/Kiritimati calendar date deliberately DIFFER, so a
+    correct org-tz render and a naive UTC slice produce two different date strings —
+    mutation-distinguishing.
+
+    ``compute_document_control_register`` is called directly here (as the file's other tests do),
+    not via an authenticated HTTP round-trip — each ``app_client`` request runs its own ASGI
+    handling with its own context-var scope (``set_request_org_tz`` doesn't leak back into this
+    test's task), so the org-tz contextvar is set directly, exactly as the real
+    ``get_current_user`` auth-boundary dependency would set it from the SAME resolved calendar
+    row this test mutates."""
+    import zoneinfo
+
+    from easysynq_api.services.common.org_clock import set_request_org_tz
+    from easysynq_api.services.reports.document_control import (
+        compute_document_control_register,
+    )
+
+    _CAL_TZ = "Pacific/Kiritimati"  # UTC+14 — maximises the tz-sensitive window
+    sm = get_sessionmaker()
+    org_id = await s5.default_org_id()
+    async with sm() as session:
+        tz_before = (
+            await session.execute(
+                select(WorkingCalendar.timezone).where(
+                    WorkingCalendar.org_id == org_id, WorkingCalendar.is_default.is_(True)
+                )
+            )
+        ).scalar_one()
+
+    try:
+        async with sm() as session:
+            await session.execute(
+                update(WorkingCalendar)
+                .where(WorkingCalendar.org_id == org_id, WorkingCalendar.is_default.is_(True))
+                .values(timezone=_CAL_TZ)
+            )
+            await session.commit()
+
+        await s5.grant_lifecycle(subj.a)
+        await s5.grant_lifecycle(subj.b)
+        await s5.set_approver_release(org_id, True)
+        ha, hb = _auth(token_factory, subj.a), _auth(token_factory, subj.b)
+        type_id = await s5.type_id("SOP")
+
+        eff = await s5.drive_to_effective(app_client, ha, hb, hb, type_id, b"org-tz-effective")
+        identifier = eff["identifier"]
+        version_id = eff["current_effective_version_id"]
+        assert version_id is not None
+
+        # 2026-01-01T22:00:00+00:00 UTC == 2026-01-02T12:00:00+14:00 Pacific/Kiritimati — the UTC
+        # and org-tz calendar dates deliberately differ.
+        pinned_utc = datetime.datetime(2026, 1, 1, 22, 0, tzinfo=datetime.UTC)
+        expected_org_date = "2026-01-02"
+        wrong_utc_date = "2026-01-01"
+
+        async with sm() as session:
+            await session.execute(
+                text("UPDATE document_version SET effective_from = :v WHERE id = :id"),
+                {"v": pinned_utc, "id": uuid.UUID(version_id)},
+            )
+            await session.commit()
+            caller = await _ensure_user(session, subj.a)
+
+        # Set the contextvar the way the real auth-boundary would (from the SAME calendar row).
+        set_request_org_tz(zoneinfo.ZoneInfo(_CAL_TZ))
+        result = await compute_document_control_register(
+            user_id=caller.id, org_id=caller.org_id, filters=[], source_ip=None
+        )
+        row = next(r for r in result.rows if r["identifier"] == identifier)
+        assert row["effective_from"] is not None
+        assert row["effective_from"][:10] == expected_org_date, (
+            f"effective_from={row['effective_from']!r}; expected the Pacific/Kiritimati "
+            f"({_CAL_TZ}) calendar date {expected_org_date}, not the naive UTC date "
+            f"{wrong_utc_date}."
+        )
+        assert row["effective_from"][:10] != wrong_utc_date
+    finally:
+        async with sm() as session:
+            await session.execute(
+                update(WorkingCalendar)
+                .where(WorkingCalendar.org_id == org_id, WorkingCalendar.is_default.is_(True))
+                .values(timezone=tz_before)
+            )
+            await session.commit()

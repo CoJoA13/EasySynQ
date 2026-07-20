@@ -34,8 +34,9 @@ from ...db.models.signature_event import SignatureEvent
 from ...db.session import get_sessionmaker
 from ...domain.authz import RequestContext, ResourceContext, authorize
 from ..authz import gather_grants
+from ..common.org_clock import current_org_tz
 from ..vault import repository as vault_repo
-from ..vault.review import review_state, today_org
+from ..vault.review import review_state
 
 _REPORT_NAME = "Controlled Document Register"
 
@@ -311,7 +312,12 @@ async def compute_document_control_register(
             ):
                 users[u.id] = u
 
-        today = today_org()
+        # R3-2 (P2, Codex round 3): derive "today" from THIS snapshot's instant, not the wall
+        # clock — ``today_org()`` reads ``datetime.now()`` at call time, so if generation crosses
+        # org-tz midnight after ``snapshot_at`` was captured, review_state could be computed
+        # against a different day than the one the provenance ``as_of``/content hash attest to.
+        org_tz = current_org_tz()
+        today = snapshot_at.astimezone(org_tz).date()
         rows: list[dict[str, Any]] = []
         for d in visible:
             # FIX F: fall back to the formerly-effective Obsolete version when there is no current
@@ -335,7 +341,10 @@ async def compute_document_control_register(
                     "owner_user_id": str(d.owner_user_id),
                     "owner_display": _display(users.get(d.owner_user_id)),
                     "effective_revision_label": ev.revision_label if ev else None,
-                    "effective_from": ev.effective_from.isoformat()
+                    # R3-3 (P2, Codex round 3): render in the org tz (R8 effectivity rule) — a UTC
+                    # isoformat slice would misreport the date for an org east of UTC (e.g. an
+                    # org-local-midnight effective instant lands on the PREVIOUS UTC calendar day).
+                    "effective_from": ev.effective_from.astimezone(org_tz).isoformat()
                     if ev and ev.effective_from
                     else None,
                     "blob_sha256": ev.source_blob_sha256 if ev else None,
@@ -344,7 +353,9 @@ async def compute_document_control_register(
                     "approved_by": _display(users.get(approval_sig.signer_user_id))
                     if approval_sig and approval_sig.signer_user_id
                     else None,
-                    "approved_on": approval_sig.created_at.isoformat() if approval_sig else None,
+                    "approved_on": approval_sig.created_at.astimezone(org_tz).isoformat()
+                    if approval_sig
+                    else None,
                     "next_review_due": d.next_review_due.isoformat() if d.next_review_due else None,
                     "review_state": review_state(d.next_review_due, today),
                 }

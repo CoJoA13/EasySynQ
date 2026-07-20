@@ -65,7 +65,9 @@ export function toDocumentFilters(uf: UrlFilters): DocumentFilters {
   if (uf.clause) f.clause = uf.clause;
   const gte = bucketToGte(uf.eff);
   if (gte) f.effective_from_gte = gte;
-  if (uf.process) f.process_id = uf.process;
+  // The `process` facet is register-only (S-report-doc-control fix wave R3-1) — the Library's
+  // FILTER_KEYS/FacetBar/hasFilters/clearFilters don't know about it, so mapping it here would
+  // silently narrow the Library by a hidden, uncleared filter. The register maps it itself.
   return f;
 }
 

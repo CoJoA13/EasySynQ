@@ -58,6 +58,10 @@ export function ReportsRegisterPage() {
   // serialization), not by reference, so this still refetches on a real facet change and NOT on
   // every unrelated re-render.
   const filters = toDocumentFilters(uf);
+  // The register-only process facet (R3-1): the shared `toDocumentFilters` no longer maps it (the
+  // Library doesn't know about `process`), so the register maps it itself — it owns the
+  // ProcessSelect + this file's FILTER_KEYS/hasFilters/clearFilters bookkeeping for it.
+  if (uf.process) filters.process_id = uf.process;
 
   const { data, isLoading, isError, forbidden, dataUpdatedAt, refetch } =
     useDocumentControlRegister(filters);
