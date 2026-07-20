@@ -523,6 +523,57 @@ async def test_surface_gate_denies_an_expired_report_read_grant(
     assert resp.status_code == 403, resp.text
 
 
+async def test_surface_gate_admits_despite_an_expired_report_read_deny(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    """The flip side of ``test_surface_gate_denies_an_expired_report_read_grant``: predicate
+    evaluation applies to DENY overrides too, not just ALLOW. A caller with a valid SYSTEM
+    report.read ALLOW *and* a SYSTEM report.read DENY whose ``valid_until`` is long past must be
+    ADMITTED (200) — the expired DENY is filtered out of the ``active`` set by
+    ``_predicates_pass`` before the deny-wins check runs, so it can no longer block. Contrast with
+    ``test_surface_gate_honors_system_report_read_deny`` (a non-expired DENY still 403s).
+    Mutation-distinguishing: a gate that (re-)admits every DENY regardless of its predicates —
+    i.e. drops the ``_predicates_pass`` filter on the DENY side, or never evaluates predicates at
+    all — would see this expired-but-present DENY, treat it as still-active, and refuse (403)
+    instead of 200."""
+    await _grant(subj.a, ("report.read",))  # the SYSTEM ALLOW, no predicates — always active
+    await _add_override(
+        subj.a,
+        "report.read",
+        Effect.DENY,
+        ScopeLevel.SYSTEM,
+        predicates={"valid_until": "2020-01-01T00:00:00+00:00"},  # long expired
+    )
+
+    resp = await app_client.get(_ROUTE, headers=_auth(token_factory, subj.a))
+    assert resp.status_code == 200, resp.text
+
+
+async def test_surface_gate_denies_a_report_read_allow_outside_its_ip_allow(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    """An ``ip_allow`` predicate is honored at the surface gate: a caller whose ONLY SYSTEM
+    report.read ALLOW carries an ``ip_allow`` list that does not include the request's source IP
+    must be refused (403) — the ALLOW is dropped by ``_predicates_pass`` before the effect+level
+    check, leaving no admitting grant (deny-by-default). The value ``10.99.99.99`` is chosen so
+    the predicate fails regardless of what the test client's actual source IP resolves to (per
+    ``pdp._predicates_pass``, ``context.source_ip is None`` also fails the predicate — an
+    ASGI test transport with no ``request.client`` fails exactly the same way as a mismatched IP).
+    Mutation-distinguishing: a gate that never evaluates predicates on the ALLOW side (the
+    pre-fix ``any(effect==ALLOW)`` over level-matched grants only) would admit this grant and
+    return 200 instead of 403."""
+    await _add_override(
+        subj.a,
+        "report.read",
+        Effect.ALLOW,
+        ScopeLevel.SYSTEM,
+        predicates={"ip_allow": ["10.99.99.99"]},  # never matches the real test client source IP
+    )
+
+    resp = await app_client.get(_ROUTE, headers=_auth(token_factory, subj.a))
+    assert resp.status_code == 403, resp.text
+
+
 # --- FIX 7 (P1): lifecycle_state populated in the per-row ResourceContext ------------------
 
 
