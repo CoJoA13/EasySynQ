@@ -961,6 +961,11 @@ paths:
           description: >-
             Includes only (true) / excludes (false) managed document subtypes (Quality Objectives,
             Management Reviews).
+        - name: "filter[process_id][eq]"
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+          description: Only documents linked (process-link) to this process id.
       responses:
         "200":
           description: A page of documents (each row with clause_refs) plus pagination metadata.

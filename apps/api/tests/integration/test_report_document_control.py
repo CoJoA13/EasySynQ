@@ -64,7 +64,9 @@ async def test_register_includes_a_new_effective_document_and_hash_changes(
     sm = get_sessionmaker()
     async with sm() as session:
         caller = await _ensure_user(session, subj.a)  # the SYSTEM document.read holder
-    before = await compute_document_control_register(caller, filters=[], source_ip=None)
+    before = await compute_document_control_register(
+        user_id=caller.id, org_id=caller.org_id, filters=[], source_ip=None
+    )
 
     # Drive a brand-new document to Effective — its atomically-allocated identifier
     # (SOP-PUR-NNN, sequence-unique) is our run-scoped membership marker.
@@ -73,7 +75,9 @@ async def test_register_includes_a_new_effective_document_and_hash_changes(
     )
     identifier = eff["identifier"]
 
-    after = await compute_document_control_register(caller, filters=[], source_ip=None)
+    after = await compute_document_control_register(
+        user_id=caller.id, org_id=caller.org_id, filters=[], source_ip=None
+    )
 
     ids = {r["identifier"] for r in after.rows}
     assert identifier in ids
@@ -162,13 +166,78 @@ async def test_approved_by_reflects_the_approval_signature_not_the_release(
 
     async with sm() as session:
         caller = await _ensure_user(session, subj.a)
-    result = await compute_document_control_register(caller, filters=[], source_ip=None)
+    result = await compute_document_control_register(
+        user_id=caller.id, org_id=caller.org_id, filters=[], source_ip=None
+    )
 
     row = next(r for r in result.rows if r["identifier"] == identifier)
     assert row["approved_by"] == approver_name
     assert row["approved_by"] != releaser_name
     assert row["approved_on"] is not None
     assert {"clause": star_number, "starred": True} in row["clause_refs"]
+
+
+# --- FIX F (P2): an Obsolete document retains its formerly-effective version's evidence -----
+
+
+async def test_obsolete_document_retains_formerly_effective_version_evidence(
+    app_client: AsyncClient,
+    app_under_test: object,
+    token_factory: Callable[..., str],
+    subj: SimpleNamespace,
+) -> None:
+    """Obsoleting a document (T11) clears ``current_effective_version_id`` — but the retired
+    version + its approval history still exist (``services/vault/lifecycle.py::obsolete`` only
+    flips the version's ``version_state`` to Obsolete; it never touches ``effective_from``/
+    ``revision_label``/``source_blob_sha256``, and the approval ``signature_event`` is untouched).
+    The register row must still surface that evidence — never null it out just because the doc is
+    now Obsolete. Mutation-distinguishing: before the fix, ``eff_ids`` is built from
+    ``current_effective_version_id`` only, which is None for an Obsolete doc, so
+    ``effective_revision_label``/``blob_sha256``/``approved_by``/``approved_on`` all come back
+    None; after the fix they resolve from the formerly-effective (latest Obsolete) version.
+    Drives a doc Effective then Obsolete via the existing lifecycle helpers (mirrors
+    test_lifecycle.py's ``test_obsolete_clears_effective_pointer_and_signs``)."""
+    from easysynq_api.services.reports.document_control import (
+        compute_document_control_register,
+    )
+
+    await s5.grant_lifecycle(subj.a)  # author + the obsoleter
+    await s5.grant_lifecycle(subj.b)  # approver, also the releaser (SoD-2 relaxed below)
+    await s5.set_approver_release(await s5.default_org_id(), True)
+    ha, hb = _auth(token_factory, subj.a), _auth(token_factory, subj.b)
+    type_id = await s5.type_id("SOP")
+
+    sm = get_sessionmaker()
+    async with sm() as session:
+        approver_user = await _ensure_user(session, subj.b)
+        approver_name = approver_user.display_name or approver_user.email or str(approver_user.id)
+
+    eff = await s5.drive_to_effective(app_client, ha, hb, hb, type_id, b"obsolete-evidence")
+    did = eff["id"]
+    identifier = eff["identifier"]
+    pre_revision = eff["current_effective_version_id"]
+    assert pre_revision is not None
+
+    ob = await app_client.post(
+        f"/api/v1/documents/{did}/obsolete", headers=ha, json={"reason": "withdrawn"}
+    )
+    assert ob.status_code == 200, ob.text
+    assert ob.json()["current_state"] == "Obsolete"
+    assert ob.json()["current_effective_version_id"] is None  # T11 clears the pointer
+
+    async with sm() as session:
+        caller = await _ensure_user(session, subj.a)
+    result = await compute_document_control_register(
+        user_id=caller.id, org_id=caller.org_id, filters=[], source_ip=None
+    )
+
+    row = next(r for r in result.rows if r["identifier"] == identifier)
+    assert row["current_state"] == "Obsolete"
+    assert row["effective_revision_label"]  # NOT null despite the cleared pointer
+    assert row["blob_sha256"]
+    assert row["effective_from"] is not None
+    assert row["approved_by"] == approver_name
+    assert row["approved_on"] is not None
 
 
 # --- Task 3: the HTTP route's two-layer gate ------------------------------------------------
@@ -424,6 +493,31 @@ async def test_surface_gate_honors_system_report_read_deny(
     was still admitted."""
     await _grant(subj.a, ("report.read",))  # the SYSTEM ALLOW
     await _add_override(subj.a, "report.read", Effect.DENY, ScopeLevel.SYSTEM)  # the revocation
+
+    resp = await app_client.get(_ROUTE, headers=_auth(token_factory, subj.a))
+    assert resp.status_code == 403, resp.text
+
+
+# --- FIX A (P1, Codex round 2): the surface gate must evaluate grant PREDICATES ------------
+
+
+async def test_surface_gate_denies_an_expired_report_read_grant(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    """The surface gate is a raw effect+level check that never evaluated grant PREDICATES — an
+    expired (``valid_until`` in the past) SYSTEM report.read ALLOW still admitted. Reusing the PDP's
+    own ``_predicates_pass`` at the gate closes this: a time-boxed grant past its ``valid_until``
+    must be refused, same as if it had no report.read grant at all. Mutation-distinguishing: RED
+    against the pre-fix gate (a bare ``any(effect==ALLOW)``/``any(effect==DENY)`` over level-matched
+    grants, no predicate evaluation whatsoever) — that gate admits (200) any ALLOW regardless of
+    time-box; the fix refuses (403)."""
+    await _add_override(
+        subj.a,
+        "report.read",
+        Effect.ALLOW,
+        ScopeLevel.SYSTEM,
+        predicates={"valid_until": "2020-01-01T00:00:00+00:00"},  # long expired
+    )
 
     resp = await app_client.get(_ROUTE, headers=_auth(token_factory, subj.a))
     assert resp.status_code == 403, resp.text

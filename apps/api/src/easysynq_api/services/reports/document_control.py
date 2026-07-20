@@ -18,17 +18,18 @@ import uuid
 from dataclasses import dataclass
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.sql.elements import ColumnElement
 
 from ...db.models._signature_enums import SignatureMeaning, SignedObjectType
-from ...db.models._vault_enums import DocumentKind
+from ...db.models._vault_enums import DocumentCurrentState, DocumentKind, VersionState
 from ...db.models.app_user import AppUser
 from ...db.models.clause import Clause
 from ...db.models.clause_mapping import ClauseMapping
 from ...db.models.document_type import DocumentType
 from ...db.models.document_version import DocumentVersion
 from ...db.models.documented_information import DocumentedInformation
+from ...db.models.organization import Organization
 from ...db.models.signature_event import SignatureEvent
 from ...db.session import get_sessionmaker
 from ...domain.authz import RequestContext, ResourceContext, authorize
@@ -37,6 +38,12 @@ from ..vault import repository as vault_repo
 from ..vault.review import review_state, today_org
 
 _REPORT_NAME = "Controlled Document Register"
+
+# FIX F floor value: an Obsolete version with no ``effective_from`` (shouldn't happen in practice —
+# a version only ever reaches Obsolete via a prior Effective/Superseded state, both of which set
+# effective_from at cutover — but a defensive floor keeps the "latest by effective_from, fallback
+# created_at" comparator total).
+_EPOCH = datetime.datetime.min.replace(tzinfo=datetime.UTC)
 
 
 def register_content_hash(rows: list[dict[str, Any]]) -> str:
@@ -86,6 +93,13 @@ class RegisterResult:
     rows: list[dict[str, Any]]
     content_hash: str
     row_count: int
+    # FIX B: the snapshot instant, captured via ``SELECT now()`` from INSIDE the REPEATABLE READ
+    # transaction — the route uses this for BOTH provenance.generated_at and provenance.as_of
+    # instead of a wall-clock read taken after the transaction (and its connection) already closed.
+    snapshot_at: datetime.datetime
+    # FIX C: resolved inside the same snapshot session (see the function docstring) so the route
+    # needs no further request-session DB access to build provenance.scope.
+    org_short_code: str
 
 
 def _display(user: AppUser | None) -> str | None:
@@ -95,10 +109,11 @@ def _display(user: AppUser | None) -> str | None:
 
 
 async def compute_document_control_register(
-    caller: AppUser,
     *,
-    filters: list[ColumnElement[bool]],
+    user_id: uuid.UUID,
+    org_id: uuid.UUID,
     source_ip: str | None,
+    filters: list[ColumnElement[bool]],
 ) -> RegisterResult:
     """The permission-filtered master list. Scans ALL org DOCUMENT rows matching ``filters`` (no
     cap — the register is complete), row-filters by ``document.read`` (the ``list_documents`` loop),
@@ -110,19 +125,39 @@ async def compute_document_control_register(
     release / clause-mapping edit mid-request could yield a row whose base fields are pre-change
     while its enrichment (versions/clauses/signatures) is post-change — a row that never existed at
     any single instant, even though ``provenance.as_of`` claims one timestamp and the content hash
-    is presented as audit evidence."""
+    is presented as audit evidence.
+
+    Identity is threaded as plain values (``user_id``/``org_id``), never an ORM ``AppUser`` bound to
+    a different (possibly already-rolled-back) session (FIX C) — the surface ``report.read`` gate
+    itself stays in the route (api/reports.py), which releases its own request-session connection
+    before calling this function, so at most ONE DB connection is checked out during
+    materialization."""
     sm = get_sessionmaker()
     async with sm() as session:
         # Raise isolation before any statement opens the transaction (the release()/_cutover
         # SERIALIZABLE precedent, services/vault/lifecycle.py).
         await session.connection(execution_options={"isolation_level": "REPEATABLE READ"})
 
+        # FIX B: capture the snapshot instant from INSIDE this transaction. PostgreSQL's ``now()``
+        # == ``transaction_timestamp()`` == the txn/snapshot start, constant for every statement in
+        # this REPEATABLE READ transaction — so this is exactly the instant every row below is
+        # read "as of".
+        snapshot_at = (await session.execute(select(func.now()))).scalar_one()
+        if snapshot_at.tzinfo is None:
+            snapshot_at = snapshot_at.replace(tzinfo=datetime.UTC)
+
+        # FIX C: the org short_code lookup moves into this same snapshot session (previously a
+        # separate request-session query in api/reports.py) — no second connection needed to build
+        # provenance.scope.
+        org = await session.get(Organization, org_id)
+        org_short_code = org.short_code if org else str(org_id)
+
         docs = (
             (
                 await session.execute(
                     select(DocumentedInformation)
                     .where(
-                        DocumentedInformation.org_id == caller.org_id,
+                        DocumentedInformation.org_id == org_id,
                         DocumentedInformation.kind == DocumentKind.DOCUMENT,
                         *filters,
                     )
@@ -152,9 +187,9 @@ async def compute_document_control_register(
         process_ids_by_doc = await vault_repo.process_ids_for_docs(session, [d.id for d in docs])
 
         # the document.read row filter — part of the same consistent read (not the surface gate's
-        # report.read check, which stays on the caller's request session in api/reports.py).
-        grants = await gather_grants(session, caller.id, caller.org_id, "document.read")
-        ctx = RequestContext(now=datetime.datetime.now(datetime.UTC), source_ip=source_ip)
+        # report.read check, which lives in api/reports.py, ahead of the request-session rollback).
+        grants = await gather_grants(session, user_id, org_id, "document.read")
+        ctx = RequestContext(now=snapshot_at, source_ip=source_ip)
         visible: list[DocumentedInformation] = []
         for d in docs:
             resource = ResourceContext(
@@ -184,6 +219,41 @@ async def compute_document_control_register(
             ):
                 versions[v.id] = v
 
+        # FIX F: an Obsolete document (T11 clears current_effective_version_id) still has a
+        # formerly-effective version — obsoletion sets that version's version_state to Obsolete
+        # without touching its effective_from/revision_label/source_blob_sha256/approval signature
+        # (services/vault/lifecycle.py obsolete()). Without this, an Obsolete row's revision/
+        # effective-date/blob-hash/approver/approval-date all report null even though the retired
+        # version + its approval history still exist — losing the control + integrity evidence the
+        # master list exists to preserve. Resolve, per Obsolete doc with no effective version, the
+        # LATEST (by effective_from, fallback created_at) version whose version_state is Obsolete.
+        obsolete_doc_ids = [
+            d.id
+            for d in visible
+            if d.current_effective_version_id is None
+            and d.current_state is DocumentCurrentState.Obsolete
+        ]
+        obsolete_version_by_doc: dict[uuid.UUID, DocumentVersion] = {}
+        if obsolete_doc_ids:
+            grouped: dict[uuid.UUID, list[DocumentVersion]] = {}
+            for v in (
+                (
+                    await session.execute(
+                        select(DocumentVersion).where(
+                            DocumentVersion.document_id.in_(obsolete_doc_ids),
+                            DocumentVersion.version_state == VersionState.Obsolete,
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            ):
+                grouped.setdefault(v.document_id, []).append(v)
+            obsolete_version_by_doc = {
+                doc_id: max(vs, key=lambda v: (v.effective_from or _EPOCH, v.created_at))
+                for doc_id, vs in grouped.items()
+            }
+
         # clause refs WITH the ★ mandatory flag (clause.is_mandatory_star) — the register's own
         # loader (vault_repo.clause_numbers_for_docs returns numbers only, no star).
         clause_by_doc: dict[uuid.UUID, list[dict[str, Any]]] = {}
@@ -204,18 +274,20 @@ async def compute_document_control_register(
                     {"clause": number, "starred": bool(starred)}
                 )
 
-        # approval signature on the effective version → approver + date (latest wins; excludes a
-        # voided signature). An imported-baseline version carries only import_baseline (not
-        # approval), so it correctly reports approved_by/approved_on = None (doc 13 §6.1).
+        # approval signature on the effective (or, for Obsolete docs, formerly-effective — FIX F)
+        # version → approver + date (latest wins; excludes a voided signature). An imported-baseline
+        # version carries only import_baseline (not approval), so it correctly reports
+        # approved_by/approved_on = None (doc 13 §6.1).
+        sig_ids = list({*eff_ids, *(v.id for v in obsolete_version_by_doc.values())})
         approval_by_version: dict[uuid.UUID, SignatureEvent] = {}
-        if eff_ids:
+        if sig_ids:
             for sig in (
                 (
                     await session.execute(
                         select(SignatureEvent)
                         .where(
                             SignatureEvent.signed_object_type == SignedObjectType.document_version,
-                            SignatureEvent.signed_object_id.in_(eff_ids),
+                            SignatureEvent.signed_object_id.in_(sig_ids),
                             SignatureEvent.meaning == SignatureMeaning.approval,
                             SignatureEvent.voided_by.is_(None),
                         )
@@ -242,16 +314,14 @@ async def compute_document_control_register(
         today = today_org()
         rows: list[dict[str, Any]] = []
         for d in visible:
+            # FIX F: fall back to the formerly-effective Obsolete version when there is no current
+            # effective version.
             ev = (
                 versions.get(d.current_effective_version_id)
                 if d.current_effective_version_id
                 else None
-            )
-            approval_sig = (
-                approval_by_version.get(d.current_effective_version_id)
-                if d.current_effective_version_id
-                else None
-            )
+            ) or obsolete_version_by_doc.get(d.id)
+            approval_sig = approval_by_version.get(ev.id) if ev else None
             rows.append(
                 {
                     "id": str(d.id),
@@ -281,4 +351,10 @@ async def compute_document_control_register(
             )
 
     content_hash = register_content_hash(rows)
-    return RegisterResult(rows=rows, content_hash=content_hash, row_count=len(rows))
+    return RegisterResult(
+        rows=rows,
+        content_hash=content_hash,
+        row_count=len(rows),
+        snapshot_at=snapshot_at,
+        org_short_code=org_short_code,
+    )
