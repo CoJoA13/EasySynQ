@@ -121,11 +121,13 @@ export function ReportsRegisterPage() {
             <ProvenanceBanner provenance={data.provenance} />
             <Group align="flex-end" gap="sm" wrap="wrap">
               <FacetBar value={uf} onChange={patchFilters} onClear={clearFilters} />
-              <ProcessSelect
-                processes={processes ?? []}
-                value={uf.process}
-                onChange={(v) => patchFilters({ process: v })}
-              />
+              {(processes?.length ?? 0) > 0 && (
+                <ProcessSelect
+                  processes={processes ?? []}
+                  value={uf.process}
+                  onChange={(v) => patchFilters({ process: v })}
+                />
+              )}
             </Group>
             <RegisterToolbar
               q={q}

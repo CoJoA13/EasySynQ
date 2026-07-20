@@ -176,4 +176,25 @@ describe("ReportsRegisterPage", () => {
       ),
     );
   });
+
+  // Codex round 4 (P2): a reader with report.read + scoped document.read but WITHOUT process.read
+  // gets an empty GET /processes — rendering the Select anyway would offer an unusable empty facet.
+  // Mutation-distinguishing: if ProcessSelect rendered unconditionally, the "not present" assertion
+  // below would fail (the empty Select would still render, just with no options).
+  it("hides the Process facet when useProcesses() has no options", async () => {
+    server.use(
+      http.get("/api/v1/reports/document-control", () => HttpResponse.json(REG)),
+      http.get("/api/v1/processes", () => HttpResponse.json([])),
+    );
+    renderWithProviders(<ReportsRegisterPage />);
+    await screen.findByText("SOP-QA-001");
+    expect(screen.queryByRole("textbox", { name: "Process" })).not.toBeInTheDocument();
+  });
+
+  it("shows the Process facet when useProcesses() has options", async () => {
+    server.use(http.get("/api/v1/reports/document-control", () => HttpResponse.json(REG)));
+    renderWithProviders(<ReportsRegisterPage />);
+    await screen.findByText("SOP-QA-001");
+    expect(await screen.findByRole("textbox", { name: "Process" })).toBeInTheDocument();
+  });
 });

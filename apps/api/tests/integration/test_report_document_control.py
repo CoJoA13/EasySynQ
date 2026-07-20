@@ -610,6 +610,45 @@ async def test_lifecycle_predicated_deny_wins_over_broad_system_allow(
     assert doc["identifier"] not in ids
 
 
+# --- Codex round 4 (P1): framework_id populated in the per-row ResourceContext -------------
+
+
+async def test_framework_scoped_deny_wins_over_broad_system_allow(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    """Deny-always-wins (R3) for a FRAMEWORK-scoped DENY, mirroring the lifecycle_state case
+    above: FRAMEWORK is a structural *scope* level (``_matches_scope``, not a predicate) matched
+    on ``resource.framework_id == selector["framework_id"]``. Before the fix, the register's
+    per-row ResourceContext left ``framework_id`` unset (always None) — a FRAMEWORK-scoped DENY
+    could never structurally match (``None != selector["framework_id"]``), so it was silently
+    dropped and the broad SYSTEM ALLOW won, leaving the document visible. After the fix,
+    framework_id is populated from the document's own ``framework_id`` and the DENY wins. The
+    surface report.read gate stays admitting (200) throughout — it's the per-row filter, not the
+    surface gate, that excludes this document."""
+    await s5.grant_lifecycle(subj.a)  # creator
+    ha = _auth(token_factory, subj.a)
+    type_id = await s5.type_id("SOP")
+    doc = await _create(app_client, ha, type_id)
+    framework_id = doc["framework_id"]
+
+    await _grant(
+        subj.b, ("report.read", "document.read")
+    )  # broad SYSTEM ALLOW (both surface + row)
+    await _add_override(
+        subj.b,
+        "document.read",
+        Effect.DENY,
+        ScopeLevel.FRAMEWORK,
+        selector={"framework_id": framework_id},
+    )
+    hb = _auth(token_factory, subj.b)
+
+    resp = await app_client.get(_ROUTE, headers=hb)
+    assert resp.status_code == 200, resp.text  # the surface gate still admits...
+    ids = {r["identifier"] for r in resp.json()["rows"]}
+    assert doc["identifier"] not in ids  # ...but the row filter excludes the framework-denied doc
+
+
 # --- FIX 4-backend (P2): a process_id filter key on the shared allow-list -------------------
 
 

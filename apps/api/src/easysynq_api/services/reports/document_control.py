@@ -199,6 +199,7 @@ async def compute_document_control_register(
                 document_level=type_level.get(d.document_type_id) if d.document_type_id else None,
                 process_ids=process_ids_by_doc.get(d.id, frozenset()),
                 lifecycle_state=d.current_state.value,
+                framework_id=str(d.framework_id),
             )
             if authorize(grants, "document.read", resource, ctx).allow:
                 visible.append(d)
