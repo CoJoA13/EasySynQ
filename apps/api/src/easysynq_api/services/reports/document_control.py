@@ -6,7 +6,7 @@ Documents — permission-filtered by ``document.read`` (the ``list_documents`` r
 audit-defensible provenance header + a content hash over the full as-of set. Read-only: NO
 audit_event, NO WORM write, NO migration. The pure helpers (hash + provenance) are DB-free and
 unit-tested; ``compute_document_control_register`` does the query + authz filter + batched
-enrichment.
+enrichment, materialized under a single REPEATABLE READ snapshot (see its docstring).
 """
 
 from __future__ import annotations
@@ -19,7 +19,6 @@ from dataclasses import dataclass
 from typing import Any
 
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import ColumnElement
 
 from ...db.models._signature_enums import SignatureMeaning, SignedObjectType
@@ -31,6 +30,7 @@ from ...db.models.document_type import DocumentType
 from ...db.models.document_version import DocumentVersion
 from ...db.models.documented_information import DocumentedInformation
 from ...db.models.signature_event import SignatureEvent
+from ...db.session import get_sessionmaker
 from ...domain.authz import RequestContext, ResourceContext, authorize
 from ..authz import gather_grants
 from ..vault import repository as vault_repo
@@ -58,13 +58,15 @@ def build_provenance(
     generated_at: datetime.datetime,
     scope: str,
     app_version: str,
-    filters: dict[str, str],
+    filters: dict[str, list[str]],
     row_count: int,
     content_hash: str,
 ) -> dict[str, Any]:
     """The audit-defensibility header block (doc 13 §6). ``as_of`` mirrors ``generated_at`` (the
-    instant the register was materialized). ``filters`` echoes the applied ``filter[...]`` params so
-    the content hash is reproducible."""
+    instant the register was materialized). ``filters`` echoes the applied ``filter[...]`` params,
+    grouped per key so a REPEATED ``filter[...]`` query param (e.g. two ``filter[clause_refs][has]``
+    values, ANDed by the parser) is represented faithfully rather than collapsed to its last value —
+    the content hash must be reproducible from this block."""
     stamp = generated_at.isoformat()
     return {
         "report_name": _REPORT_NAME,
@@ -93,7 +95,6 @@ def _display(user: AppUser | None) -> str | None:
 
 
 async def compute_document_control_register(
-    session: AsyncSession,
     caller: AppUser,
     *,
     filters: list[ColumnElement[bool]],
@@ -101,153 +102,183 @@ async def compute_document_control_register(
 ) -> RegisterResult:
     """The permission-filtered master list. Scans ALL org DOCUMENT rows matching ``filters`` (no
     cap — the register is complete), row-filters by ``document.read`` (the ``list_documents`` loop),
-    then batch-enriches the visible set. No N+1; no audit_event."""
-    docs = (
-        (
-            await session.execute(
-                select(DocumentedInformation)
-                .where(
-                    DocumentedInformation.org_id == caller.org_id,
-                    DocumentedInformation.kind == DocumentKind.DOCUMENT,
-                    *filters,
-                )
-                # deterministic candidate order; the final rows re-sort by identifier in the hash.
-                .order_by(DocumentedInformation.identifier)
-            )
-        )
-        .scalars()
-        .all()
-    )
+    then batch-enriches the visible set. No N+1; no audit_event.
 
-    # document_level per doc-type (needed for the document.read ResourceContext) — the
-    # list_documents ``levels`` map.
-    type_ids = {d.document_type_id for d in docs if d.document_type_id}
-    type_level: dict[uuid.UUID, str] = {}
-    type_name: dict[uuid.UUID, str] = {}
-    if type_ids:
-        for dt in (
-            (await session.execute(select(DocumentType).where(DocumentType.id.in_(type_ids))))
-            .scalars()
-            .all()
-        ):
-            type_level[dt.id] = dt.document_level.value
-            type_name[dt.id] = dt.name
+    Materializes under ONE REPEATABLE READ snapshot: opens a FRESH sessionmaker-backed session,
+    independent of the caller's per-request session (which is READ COMMITTED — a fresh snapshot per
+    statement), and runs every SELECT in this function against it. Without this, a concurrent
+    release / clause-mapping edit mid-request could yield a row whose base fields are pre-change
+    while its enrichment (versions/clauses/signatures) is post-change — a row that never existed at
+    any single instant, even though ``provenance.as_of`` claims one timestamp and the content hash
+    is presented as audit evidence."""
+    sm = get_sessionmaker()
+    async with sm() as session:
+        # Raise isolation before any statement opens the transaction (the release()/_cutover
+        # SERIALIZABLE precedent, services/vault/lifecycle.py).
+        await session.connection(execution_options={"isolation_level": "REPEATABLE READ"})
 
-    process_ids_by_doc = await vault_repo.process_ids_for_docs(session, [d.id for d in docs])
-
-    grants = await gather_grants(session, caller.id, caller.org_id, "document.read")
-    ctx = RequestContext(now=datetime.datetime.now(datetime.UTC), source_ip=source_ip)
-    visible: list[DocumentedInformation] = []
-    for d in docs:
-        resource = ResourceContext(
-            artifact_id=str(d.id),
-            folder_path=d.folder_path,
-            document_level=type_level.get(d.document_type_id) if d.document_type_id else None,
-            process_ids=process_ids_by_doc.get(d.id, frozenset()),
-        )
-        if authorize(grants, "document.read", resource, ctx).allow:
-            visible.append(d)
-
-    # --- batched enrichment over the visible set only ---
-    eff_ids = [d.current_effective_version_id for d in visible if d.current_effective_version_id]
-    versions: dict[uuid.UUID, DocumentVersion] = {}
-    if eff_ids:
-        for v in (
-            (await session.execute(select(DocumentVersion).where(DocumentVersion.id.in_(eff_ids))))
-            .scalars()
-            .all()
-        ):
-            versions[v.id] = v
-
-    # clause refs WITH the ★ mandatory flag (clause.is_mandatory_star) — the register's own loader
-    # (vault_repo.clause_numbers_for_docs returns numbers only, no star).
-    clause_by_doc: dict[uuid.UUID, list[dict[str, Any]]] = {}
-    if visible:
-        for doc_id, number, starred in (
-            await session.execute(
-                select(
-                    ClauseMapping.documented_information_id,
-                    Clause.number,
-                    Clause.is_mandatory_star,
-                )
-                .join(Clause, ClauseMapping.clause_id == Clause.id)
-                .where(ClauseMapping.documented_information_id.in_([d.id for d in visible]))
-                .order_by(Clause.number)
-            )
-        ).all():
-            clause_by_doc.setdefault(doc_id, []).append(
-                {"clause": number, "starred": bool(starred)}
-            )
-
-    # approval signature on the effective version → approver + date (latest wins; excludes a
-    # voided signature). An imported-baseline version carries only import_baseline (not
-    # approval), so it correctly reports approved_by/approved_on = None (doc 13 §6.1).
-    approval_by_version: dict[uuid.UUID, SignatureEvent] = {}
-    if eff_ids:
-        for sig in (
+        docs = (
             (
                 await session.execute(
-                    select(SignatureEvent)
+                    select(DocumentedInformation)
                     .where(
-                        SignatureEvent.signed_object_type == SignedObjectType.document_version,
-                        SignatureEvent.signed_object_id.in_(eff_ids),
-                        SignatureEvent.meaning == SignatureMeaning.approval,
-                        SignatureEvent.voided_by.is_(None),
+                        DocumentedInformation.org_id == caller.org_id,
+                        DocumentedInformation.kind == DocumentKind.DOCUMENT,
+                        *filters,
                     )
-                    .order_by(SignatureEvent.created_at)
+                    # deterministic candidate order; the final rows re-sort by identifier in the
+                    # hash.
+                    .order_by(DocumentedInformation.identifier)
                 )
             )
             .scalars()
             .all()
-        ):
-            approval_by_version[sig.signed_object_id] = sig  # last (latest) wins
+        )
 
-    # display names for owners + signers.
-    user_ids: set[uuid.UUID] = {d.owner_user_id for d in visible}
-    user_ids |= {s.signer_user_id for s in approval_by_version.values() if s.signer_user_id}
-    users: dict[uuid.UUID, AppUser] = {}
-    if user_ids:
-        for u in (
-            (await session.execute(select(AppUser).where(AppUser.id.in_(user_ids)))).scalars().all()
-        ):
-            users[u.id] = u
+        # document_level per doc-type (needed for the document.read ResourceContext) — the
+        # list_documents ``levels`` map.
+        type_ids = {d.document_type_id for d in docs if d.document_type_id}
+        type_level: dict[uuid.UUID, str] = {}
+        type_name: dict[uuid.UUID, str] = {}
+        if type_ids:
+            for dt in (
+                (await session.execute(select(DocumentType).where(DocumentType.id.in_(type_ids))))
+                .scalars()
+                .all()
+            ):
+                type_level[dt.id] = dt.document_level.value
+                type_name[dt.id] = dt.name
 
-    today = today_org()
-    rows: list[dict[str, Any]] = []
-    for d in visible:
-        ev = (
-            versions.get(d.current_effective_version_id) if d.current_effective_version_id else None
-        )
-        approval_sig = (
-            approval_by_version.get(d.current_effective_version_id)
-            if d.current_effective_version_id
-            else None
-        )
-        rows.append(
-            {
-                "id": str(d.id),
-                "identifier": d.identifier,
-                "title": d.title,
-                "document_type_id": str(d.document_type_id) if d.document_type_id else None,
-                "document_type": type_name.get(d.document_type_id) if d.document_type_id else None,
-                "current_state": d.current_state.value,
-                "owner_user_id": str(d.owner_user_id),
-                "owner_display": _display(users.get(d.owner_user_id)),
-                "effective_revision_label": ev.revision_label if ev else None,
-                "effective_from": ev.effective_from.isoformat()
-                if ev and ev.effective_from
-                else None,
-                "blob_sha256": ev.source_blob_sha256 if ev else None,
-                "clause_refs": clause_by_doc.get(d.id, []),
-                "process_links": sorted(process_ids_by_doc.get(d.id, frozenset())),
-                "approved_by": _display(users.get(approval_sig.signer_user_id))
-                if approval_sig and approval_sig.signer_user_id
-                else None,
-                "approved_on": approval_sig.created_at.isoformat() if approval_sig else None,
-                "next_review_due": d.next_review_due.isoformat() if d.next_review_due else None,
-                "review_state": review_state(d.next_review_due, today),
-            }
-        )
+        process_ids_by_doc = await vault_repo.process_ids_for_docs(session, [d.id for d in docs])
+
+        # the document.read row filter — part of the same consistent read (not the surface gate's
+        # report.read check, which stays on the caller's request session in api/reports.py).
+        grants = await gather_grants(session, caller.id, caller.org_id, "document.read")
+        ctx = RequestContext(now=datetime.datetime.now(datetime.UTC), source_ip=source_ip)
+        visible: list[DocumentedInformation] = []
+        for d in docs:
+            resource = ResourceContext(
+                artifact_id=str(d.id),
+                folder_path=d.folder_path,
+                document_level=type_level.get(d.document_type_id) if d.document_type_id else None,
+                process_ids=process_ids_by_doc.get(d.id, frozenset()),
+                lifecycle_state=d.current_state.value,
+            )
+            if authorize(grants, "document.read", resource, ctx).allow:
+                visible.append(d)
+
+        # --- batched enrichment over the visible set only ---
+        eff_ids = [
+            d.current_effective_version_id for d in visible if d.current_effective_version_id
+        ]
+        versions: dict[uuid.UUID, DocumentVersion] = {}
+        if eff_ids:
+            for v in (
+                (
+                    await session.execute(
+                        select(DocumentVersion).where(DocumentVersion.id.in_(eff_ids))
+                    )
+                )
+                .scalars()
+                .all()
+            ):
+                versions[v.id] = v
+
+        # clause refs WITH the ★ mandatory flag (clause.is_mandatory_star) — the register's own
+        # loader (vault_repo.clause_numbers_for_docs returns numbers only, no star).
+        clause_by_doc: dict[uuid.UUID, list[dict[str, Any]]] = {}
+        if visible:
+            for doc_id, number, starred in (
+                await session.execute(
+                    select(
+                        ClauseMapping.documented_information_id,
+                        Clause.number,
+                        Clause.is_mandatory_star,
+                    )
+                    .join(Clause, ClauseMapping.clause_id == Clause.id)
+                    .where(ClauseMapping.documented_information_id.in_([d.id for d in visible]))
+                    .order_by(Clause.number)
+                )
+            ).all():
+                clause_by_doc.setdefault(doc_id, []).append(
+                    {"clause": number, "starred": bool(starred)}
+                )
+
+        # approval signature on the effective version → approver + date (latest wins; excludes a
+        # voided signature). An imported-baseline version carries only import_baseline (not
+        # approval), so it correctly reports approved_by/approved_on = None (doc 13 §6.1).
+        approval_by_version: dict[uuid.UUID, SignatureEvent] = {}
+        if eff_ids:
+            for sig in (
+                (
+                    await session.execute(
+                        select(SignatureEvent)
+                        .where(
+                            SignatureEvent.signed_object_type == SignedObjectType.document_version,
+                            SignatureEvent.signed_object_id.in_(eff_ids),
+                            SignatureEvent.meaning == SignatureMeaning.approval,
+                            SignatureEvent.voided_by.is_(None),
+                        )
+                        .order_by(SignatureEvent.created_at)
+                    )
+                )
+                .scalars()
+                .all()
+            ):
+                approval_by_version[sig.signed_object_id] = sig  # last (latest) wins
+
+        # display names for owners + signers.
+        user_ids: set[uuid.UUID] = {d.owner_user_id for d in visible}
+        user_ids |= {s.signer_user_id for s in approval_by_version.values() if s.signer_user_id}
+        users: dict[uuid.UUID, AppUser] = {}
+        if user_ids:
+            for u in (
+                (await session.execute(select(AppUser).where(AppUser.id.in_(user_ids))))
+                .scalars()
+                .all()
+            ):
+                users[u.id] = u
+
+        today = today_org()
+        rows: list[dict[str, Any]] = []
+        for d in visible:
+            ev = (
+                versions.get(d.current_effective_version_id)
+                if d.current_effective_version_id
+                else None
+            )
+            approval_sig = (
+                approval_by_version.get(d.current_effective_version_id)
+                if d.current_effective_version_id
+                else None
+            )
+            rows.append(
+                {
+                    "id": str(d.id),
+                    "identifier": d.identifier,
+                    "title": d.title,
+                    "document_type_id": str(d.document_type_id) if d.document_type_id else None,
+                    "document_type": type_name.get(d.document_type_id)
+                    if d.document_type_id
+                    else None,
+                    "current_state": d.current_state.value,
+                    "owner_user_id": str(d.owner_user_id),
+                    "owner_display": _display(users.get(d.owner_user_id)),
+                    "effective_revision_label": ev.revision_label if ev else None,
+                    "effective_from": ev.effective_from.isoformat()
+                    if ev and ev.effective_from
+                    else None,
+                    "blob_sha256": ev.source_blob_sha256 if ev else None,
+                    "clause_refs": clause_by_doc.get(d.id, []),
+                    "process_links": sorted(process_ids_by_doc.get(d.id, frozenset())),
+                    "approved_by": _display(users.get(approval_sig.signer_user_id))
+                    if approval_sig and approval_sig.signer_user_id
+                    else None,
+                    "approved_on": approval_sig.created_at.isoformat() if approval_sig else None,
+                    "next_review_due": d.next_review_due.isoformat() if d.next_review_due else None,
+                    "review_state": review_state(d.next_review_due, today),
+                }
+            )
 
     content_hash = register_content_hash(rows)
     return RegisterResult(rows=rows, content_hash=content_hash, row_count=len(rows))

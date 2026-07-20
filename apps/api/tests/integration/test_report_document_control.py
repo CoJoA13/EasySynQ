@@ -1,8 +1,9 @@
 """Task 2 — the Controlled Document Register SERVICE (services/reports/document_control.py):
 authz-filtered query + batched enrichment, exercised over a real testcontainer DB (doc 13 §6.1,
-doc 15 §8.15). Task 3 adds the HTTP route's two-layer gate (surface require(report.read) SYSTEM +
-the per-row document.read filter). Run-scoped: the shared DB carries other tests' documents /
-organizations, so we assert deltas / membership for OUR doc(s), never an absolute row count.
+doc 15 §8.15). Task 3 adds the HTTP route's two-layer gate (surface report.read at SYSTEM or
+PROCESS scope + the per-row document.read filter, incl. its lifecycle_state predicate). Run-scoped:
+the shared DB carries other tests' documents / organizations, so we assert deltas / membership for
+OUR doc(s), never an absolute row count.
 """
 
 from __future__ import annotations
@@ -15,9 +16,12 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
 
+from easysynq_api.db.models._clause_enums import PdcaPhase
 from easysynq_api.db.models.authz_grant import PermissionOverride
 from easysynq_api.db.models.clause import Clause
 from easysynq_api.db.models.permission import Permission
+from easysynq_api.db.models.process import Process
+from easysynq_api.db.models.process_link import ProcessLink
 from easysynq_api.db.models.scope import Scope
 from easysynq_api.db.session import get_sessionmaker
 from easysynq_api.domain.authz.types import Effect, ScopeLevel
@@ -60,9 +64,7 @@ async def test_register_includes_a_new_effective_document_and_hash_changes(
     sm = get_sessionmaker()
     async with sm() as session:
         caller = await _ensure_user(session, subj.a)  # the SYSTEM document.read holder
-        before = await compute_document_control_register(
-            session, caller, filters=[], source_ip=None
-        )
+    before = await compute_document_control_register(caller, filters=[], source_ip=None)
 
     # Drive a brand-new document to Effective — its atomically-allocated identifier
     # (SOP-PUR-NNN, sequence-unique) is our run-scoped membership marker.
@@ -71,9 +73,7 @@ async def test_register_includes_a_new_effective_document_and_hash_changes(
     )
     identifier = eff["identifier"]
 
-    async with sm() as session:
-        caller = await _ensure_user(session, subj.a)
-        after = await compute_document_control_register(session, caller, filters=[], source_ip=None)
+    after = await compute_document_control_register(caller, filters=[], source_ip=None)
 
     ids = {r["identifier"] for r in after.rows}
     assert identifier in ids
@@ -162,9 +162,7 @@ async def test_approved_by_reflects_the_approval_signature_not_the_release(
 
     async with sm() as session:
         caller = await _ensure_user(session, subj.a)
-        result = await compute_document_control_register(
-            session, caller, filters=[], source_ip=None
-        )
+    result = await compute_document_control_register(caller, filters=[], source_ip=None)
 
     row = next(r for r in result.rows if r["identifier"] == identifier)
     assert row["approved_by"] == approver_name
@@ -222,6 +220,62 @@ async def _grant_read_folder(subject: str, folder_path: str) -> None:
         await s.commit()
 
 
+async def _grant_process(subject: str, key: str, process_id: str) -> None:
+    """Grant ``key`` at PROCESS scope over a single process id (test_records_process_scope.py's
+    ``_grant_process`` precedent) — the built-in Process Owner's actual grant shape
+    (migrations/versions/0004_seed_authz.py ``_PROCESS_SCOPE for k in _PROCESS_OWNER_KEYS``)."""
+    async with get_sessionmaker()() as s:
+        user = await _ensure_user(s, subject)
+        perm = (await s.execute(select(Permission).where(Permission.key == key))).scalar_one()
+        scope = Scope(
+            org_id=user.org_id, level=ScopeLevel.PROCESS, selector={"process_ids": [process_id]}
+        )
+        s.add(scope)
+        await s.flush()
+        s.add(
+            PermissionOverride(
+                org_id=user.org_id,
+                user_id=user.id,
+                permission_id=perm.id,
+                effect=Effect.ALLOW,
+                scope_id=scope.id,
+            )
+        )
+        await s.commit()
+
+
+async def _add_override(
+    subject: str,
+    permission_key: str,
+    effect: Effect,
+    level: ScopeLevel,
+    *,
+    selector: dict[str, object] | None = None,
+    predicates: dict[str, object] | None = None,
+) -> None:
+    """A generic override-builder (test_authz.py's ``_add_override`` precedent) — used here to seed
+    a DENY override carrying a ``lifecycle_state`` predicate (FIX 7), which none of this file's
+    other helpers support."""
+    async with get_sessionmaker()() as s:
+        user = await _ensure_user(s, subject)
+        perm = (
+            await s.execute(select(Permission).where(Permission.key == permission_key))
+        ).scalar_one()
+        scope = Scope(org_id=user.org_id, level=level, selector=selector, predicates=predicates)
+        s.add(scope)
+        await s.flush()
+        s.add(
+            PermissionOverride(
+                org_id=user.org_id,
+                user_id=user.id,
+                permission_id=perm.id,
+                effect=effect,
+                scope_id=scope.id,
+            )
+        )
+        await s.commit()
+
+
 async def _create_in_folder(
     client: AsyncClient, h: dict[str, str], type_id: str, folder_path: str
 ) -> dict:
@@ -239,11 +293,37 @@ async def _create_in_folder(
     return r.json()
 
 
+async def _create_process_linked_to(subject: str, org_id: uuid.UUID, doc_id: str) -> str:
+    """Direct-ORM Process + ProcessLink seed (test_acknowledgements.py's precedent) — avoids
+    needing extra process.create/document.manage_metadata grants just to set up a fixture. Returns
+    the new process id (str)."""
+    async with get_sessionmaker()() as s:
+        creator = await _ensure_user(s, subject)
+        proc = Process(
+            org_id=org_id,
+            name=f"RegTest-Proc-{uuid.uuid4().hex[:10]}",
+            pdca_phase=PdcaPhase.DO,
+            created_by=creator.id,
+        )
+        s.add(proc)
+        await s.flush()
+        s.add(
+            ProcessLink(
+                org_id=org_id,
+                process_id=proc.id,
+                documented_information_id=uuid.UUID(doc_id),
+                created_by=creator.id,
+            )
+        )
+        await s.commit()
+        return str(proc.id)
+
+
 async def test_endpoint_403s_without_report_read(
     app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
 ) -> None:
-    """The surface gate: a caller holding document.read but NOT SYSTEM report.read is refused
-    before any query."""
+    """The surface gate: a caller holding document.read but NO report.read grant at all (neither
+    SYSTEM nor PROCESS) is refused before any query."""
     await _grant(subj.a, ("document.read",))
     resp = await app_client.get(_ROUTE, headers=_auth(token_factory, subj.a))
     assert resp.status_code == 403, resp.text
@@ -294,3 +374,109 @@ async def test_row_filter_excludes_out_of_scope_document(
     ids = {r["identifier"] for r in resp.json()["rows"]}
     assert doc_in["identifier"] in ids
     assert doc_out["identifier"] not in ids
+
+
+# --- FIX 1 (P1): admit PROCESS-scoped report.read, not just SYSTEM -------------------------
+
+
+async def test_process_scoped_report_read_admitted_at_surface_gate(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    """The built-in Process Owner holds ``report.read`` at PROCESS scope, not SYSTEM
+    (migrations/versions/0004_seed_authz.py ``_PROCESS_SCOPE for k in _PROCESS_OWNER_KEYS``). The
+    surface gate must admit a PROCESS-scoped report.read ALLOW (not just SYSTEM) — while the
+    per-row document.read filter still confines them to their linked-process document(s). Before
+    the fix this 403s (the old gate required SYSTEM); after the fix it's 200 with the in-scope doc
+    present and the out-of-scope doc absent — a mutation-distinguishing membership assertion, not
+    just a status-code check."""
+    await s5.grant_lifecycle(subj.a)  # creator: SYSTEM document.read + create/checkin etc.
+    ha = _auth(token_factory, subj.a)
+    type_id = await s5.type_id("SOP")
+
+    doc_in = await _create(app_client, ha, type_id)
+    doc_out = await _create(app_client, ha, type_id)
+
+    org_id = await s5.default_org_id()
+    process_id = await _create_process_linked_to(subj.a, org_id, doc_in["id"])
+
+    await _grant_process(subj.b, "report.read", process_id)  # the PROCESS-scoped surface grant
+    await _grant_process(subj.b, "document.read", process_id)  # the per-row filter, same scope
+    hb = _auth(token_factory, subj.b)
+
+    resp = await app_client.get(_ROUTE, headers=hb)
+    assert resp.status_code == 200, resp.text
+    ids = {r["identifier"] for r in resp.json()["rows"]}
+    assert doc_in["identifier"] in ids
+    assert doc_out["identifier"] not in ids
+
+
+# --- FIX 7 (P1): lifecycle_state populated in the per-row ResourceContext ------------------
+
+
+async def test_lifecycle_predicated_deny_wins_over_broad_system_allow(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    """Deny-always-wins (R3): a caller with a broad SYSTEM document.read ALLOW but an explicit
+    DENY predicated on the document's OWN lifecycle_state must NOT see that document. A
+    freshly-created document is ``Draft``. Before the fix, the register's per-row ResourceContext
+    omitted ``lifecycle_state`` (always None) — the predicate ``resource.lifecycle_state not in
+    ["Draft"]`` compared None (never in the allow-list) and always evaluated True, so the DENY's
+    predicate silently failed to match and the broader ALLOW won, leaving the document visible.
+    After the fix, lifecycle_state="Draft" matches the predicate and the DENY wins."""
+    await s5.grant_lifecycle(subj.a)  # creator
+    ha = _auth(token_factory, subj.a)
+    type_id = await s5.type_id("SOP")
+    doc = await _create(app_client, ha, type_id)  # current_state == Draft
+
+    await _grant(subj.b, ("report.read", "document.read"))  # broad SYSTEM ALLOW
+    await _add_override(
+        subj.b,
+        "document.read",
+        Effect.DENY,
+        ScopeLevel.SYSTEM,
+        predicates={"lifecycle_state": ["Draft"]},
+    )
+    hb = _auth(token_factory, subj.b)
+
+    resp = await app_client.get(_ROUTE, headers=hb)
+    assert resp.status_code == 200, resp.text
+    ids = {r["identifier"] for r in resp.json()["rows"]}
+    assert doc["identifier"] not in ids
+
+
+# --- FIX 4-backend (P2): a process_id filter key on the shared allow-list -------------------
+
+
+async def test_process_id_filter_narrows_register_to_linked_documents(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    """``filter[process_id][eq]=<pid>`` narrows the register to documents linked to that
+    process — the register's promised "process" facet."""
+    await s5.grant_lifecycle(subj.a)
+    ha = _auth(token_factory, subj.a)
+    type_id = await s5.type_id("SOP")
+
+    doc_in = await _create(app_client, ha, type_id)
+    doc_out = await _create(app_client, ha, type_id)
+
+    org_id = await s5.default_org_id()
+    process_id = await _create_process_linked_to(subj.a, org_id, doc_in["id"])
+
+    await _grant(subj.a, ("report.read",))
+    resp = await app_client.get(f"{_ROUTE}?filter[process_id][eq]={process_id}", headers=ha)
+    assert resp.status_code == 200, resp.text
+    ids = {r["identifier"] for r in resp.json()["rows"]}
+    assert doc_in["identifier"] in ids
+    assert doc_out["identifier"] not in ids
+
+
+async def test_process_id_filter_rejects_a_non_uuid_value() -> None:
+    """A malformed ``filter[process_id][eq]`` value is a 422, mirroring the other UUID-valued
+    filters (document_type/owner_user_id) — exercised directly on the pure builder, no HTTP
+    round-trip needed."""
+    from easysynq_api.api.documents import _filter_condition
+    from easysynq_api.problems import ProblemException
+
+    with pytest.raises(ProblemException) as exc_info:
+        _filter_condition("process_id", "eq", "not-a-uuid")
+    assert exc_info.value.status == 422

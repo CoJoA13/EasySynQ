@@ -3793,18 +3793,21 @@ paths:
       tags: [reports]
       operationId: getDocumentControlRegister
       summary: >-
-        Controlled Document Register — the ISO 9001 §7.5.3 master list. Needs report.read (SYSTEM);
-        rows filtered per-row by document.read.
+        Controlled Document Register — the ISO 9001 §7.5.3 master list. Needs report.read (SYSTEM
+        or PROCESS scope); rows filtered per-row by document.read.
       description: >-
         A provenance-stamped, content-hashed full register (no pagination — the content hash must
         cover the complete as-of set) of every controlled Document the caller may read. Two-layer
-        gate: the surface require(report.read) at the default SYSTEM scope refuses a caller with no
-        report.read grant before any query; the visible set is then filtered per row by
-        document.read (doc 13 §6.1). The bracketed filter[field][op] grammar (doc 15 §3.2, shared
-        with GET /documents) narrows the candidate set before the row-filter; an unrecognised
-        field/op → 400 unknown_filter, a bad enum/uuid/timestamp value → 422. The applied
-        filter[...] params are echoed in provenance.filters for hash reproducibility. Read-only (no
-        audit_event).
+        gate: the surface check admits a report.read ALLOW at SYSTEM or PROCESS scope (the
+        built-in Process Owner is seeded at PROCESS scope) and refuses a caller with no such grant
+        before any query; the visible set is then filtered per row by document.read (doc 13 §6.1),
+        so a PROCESS-scoped caller still only sees their linked-process documents. Materialized
+        under one REPEATABLE READ snapshot so every row reflects a single consistent instant. The
+        bracketed filter[field][op] grammar (doc 15 §3.2, shared with GET /documents) narrows the
+        candidate set before the row-filter; an unrecognised field/op → 400 unknown_filter, a bad
+        enum/uuid/timestamp value → 422. The applied filter[...] params are echoed in
+        provenance.filters (grouped per key, preserving repeated values) for hash reproducibility.
+        Read-only (no audit_event).
       parameters:
         - name: "filter[clause_refs][has]"
           in: query
@@ -3849,6 +3852,11 @@ paths:
           description: >-
             Includes only (true) / excludes (false) managed document subtypes (Quality Objectives,
             Management Reviews).
+        - name: "filter[process_id][eq]"
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+          description: Only documents linked (process-link) to this process id.
       responses:
         "200":
           description: The Controlled Document Register — provenance header + the full row set.
@@ -7882,8 +7890,11 @@ components:
         app_version: { type: string }
         filters:
           type: object
-          additionalProperties: { type: string }
-          description: The applied filter[field][op] query params, echoed for hash reproducibility.
+          additionalProperties: { type: array, items: { type: string } }
+          description: >-
+            The applied filter[field][op] query params, echoed for hash reproducibility — values
+            grouped per key so a REPEATED query param (e.g. two filter[clause_refs][has] values,
+            ANDed by the parser) is represented faithfully rather than collapsed to its last value.
         row_count: { type: integer }
         content_hash: { type: string, example: "sha256:…", description: Deterministic sha256 over the row data. }
 
@@ -7902,10 +7913,20 @@ components:
         - id
         - identifier
         - title
+        - document_type_id
+        - document_type
         - current_state
         - owner_user_id
+        - owner_display
+        - effective_revision_label
+        - effective_from
+        - blob_sha256
         - clause_refs
         - process_links
+        - approved_by
+        - approved_on
+        - next_review_due
+        - review_state
       properties:
         id: { type: string, format: uuid }
         identifier: { type: string, example: SOP-PUR-014 }

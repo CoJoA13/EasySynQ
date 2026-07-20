@@ -42,7 +42,7 @@ def test_build_provenance_shape_excludes_hash_from_its_own_input():
         generated_at=now,
         scope="org:DEFAULT",
         app_version="0.1.0",
-        filters={"filter[current_state][eq]": "Effective"},
+        filters={"filter[current_state][eq]": ["Effective"]},
         row_count=2,
         content_hash="sha256:abc",
     )
@@ -53,5 +53,22 @@ def test_build_provenance_shape_excludes_hash_from_its_own_input():
     assert prov["app_version"] == "0.1.0"
     assert prov["row_count"] == 2
     assert prov["content_hash"] == "sha256:abc"
-    assert prov["filters"] == {"filter[current_state][eq]": "Effective"}
+    assert prov["filters"] == {"filter[current_state][eq]": ["Effective"]}
     assert prov["generated_by"] == "Mara Quality"
+
+
+def test_build_provenance_shape_preserves_repeated_filter_values():
+    """FIX 2: a repeated ``filter[...]`` query param (e.g. two ``filter[clause_refs][has]``
+    values, ANDed by the parser) must be represented as a list, not collapsed to its last value —
+    else ``provenance.filters`` misrepresents the applied query and can't reproduce the row set."""
+    now = datetime.datetime(2026, 7, 19, 12, 0, tzinfo=datetime.UTC)
+    prov = build_provenance(
+        generated_by="Mara Quality",
+        generated_at=now,
+        scope="org:DEFAULT",
+        app_version="0.1.0",
+        filters={"filter[clause_refs][has]": ["8.4", "8.5"]},
+        row_count=1,
+        content_hash="sha256:abc",
+    )
+    assert prov["filters"] == {"filter[clause_refs][has]": ["8.4", "8.5"]}

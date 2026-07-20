@@ -520,6 +520,8 @@ _FILTER_ALLOW: frozenset[tuple[str, str]] = frozenset(
         ("document_type", "eq"),
         ("owner_user_id", "eq"),
         ("classification", "eq"),
+        # S-report-doc-control fix wave: the register's process facet — docs linked to a process.
+        ("process_id", "eq"),
         # S-doc-filters: the CREATE-implement picker narrows server-side (default-off).
         ("has_effective_version", "eq"),
         ("managed_subtype", "eq"),
@@ -612,6 +614,22 @@ def _filter_condition(field: str, op: str, value: str) -> ColumnElement[bool]:
                 ClauseMapping.documented_information_id == DocumentedInformation.id,
                 Clause.framework_id == DocumentedInformation.framework_id,
                 Clause.number == value,
+            )
+            .exists()
+        )
+    if field == "process_id":  # filter[process_id][eq]=<uuid> — docs linked to this process
+        try:
+            process_id = uuid.UUID(value)
+        except ValueError as exc:
+            raise ProblemException(
+                status=422, code="validation_error", title="Invalid process_id filter value"
+            ) from exc
+        return (
+            select(1)
+            .select_from(ProcessLink)
+            .where(
+                ProcessLink.documented_information_id == DocumentedInformation.id,
+                ProcessLink.process_id == process_id,
             )
             .exists()
         )

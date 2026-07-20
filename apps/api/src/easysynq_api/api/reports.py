@@ -16,11 +16,14 @@ from typing import Any
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..auth.dependencies import get_current_user
 from ..config import get_settings
 from ..db.models.app_user import AppUser
 from ..db.models.organization import Organization
 from ..db.session import get_session
-from ..services.authz import require
+from ..domain.authz import Effect, ScopeLevel
+from ..problems import ProblemException
+from ..services.authz import gather_grants, require
 from ..services.common.org_clock import current_org_tz
 from ..services.reports import compute_checklist
 from ..services.reports.document_control import (
@@ -45,11 +48,14 @@ async def compliance_checklist_endpoint(
     return await compute_checklist(session, caller.org_id)
 
 
-# report.read is PROCESS-finest but the register is an org-level surface → gate at the default
-# SYSTEM scope (the checklist require(...) precedent). Rows are then filtered per-row by
-# document.read inside the service (doc 13 §6.1 "all Documents the requester may see"). A guest
-# (ARTIFACT report.read) or an Employee (no report.read) is refused here.
-_report_read = require("report.read")
+# report.read is seeded at SYSTEM scope (QMS Owner/Internal Auditor) AND at PROCESS scope (the
+# built-in Process Owner — migrations/versions/0004_seed_authz.py _PROCESS_OWNER_KEYS). The
+# register is an org-level surface, so the SURFACE gate here is a presence check: admit any
+# report.read ALLOW at SYSTEM or PROCESS scope (an ARTIFACT-scoped guest grant stays excluded — the
+# spec keeps guests on Evidence Packs; a plain Employee with no report.read grant is refused here).
+# Rows are then filtered per-row by document.read inside the service (doc 13 §6.1 "all Documents
+# the requester may see") — a Process Owner admitted here still only sees their linked-process docs.
+_SURFACE_LEVELS = frozenset({ScopeLevel.SYSTEM, ScopeLevel.PROCESS})
 
 
 async def _org_short_code(session: AsyncSession, org_id: uuid.UUID) -> str:
@@ -60,20 +66,27 @@ async def _org_short_code(session: AsyncSession, org_id: uuid.UUID) -> str:
 @router.get("/reports/document-control")
 async def document_control_register_endpoint(
     request: Request,
-    caller: AppUser = Depends(_report_read),
+    caller: AppUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
     """The Controlled Document Register (ISO 9001 §7.5.3 master list) — a provenance-stamped,
     content-hashed master list of every controlled Document the caller may read. Full set (no
     pagination); facet filters via the shared ``filter[field][op]`` grammar. Read-only (no
     audit_event)."""
+    report_grants = await gather_grants(session, caller.id, caller.org_id, "report.read")
+    if not any(g.effect == Effect.ALLOW and g.level in _SURFACE_LEVELS for g in report_grants):
+        raise ProblemException(status=403, code="forbidden", title="report.read required")
     filters = _parse_document_filters(request)
     source_ip = request.client.host if request.client else None
-    result = await compute_document_control_register(
-        session, caller, filters=filters, source_ip=source_ip
-    )
-    # echo the applied filter[...] params (for hash reproducibility) — only the filter[...] keys.
-    applied = {k: v for k, v in request.query_params.items() if k.startswith("filter[")}
+    result = await compute_document_control_register(caller, filters=filters, source_ip=source_ip)
+    # echo the applied filter[...] params (for hash reproducibility) — only the filter[...] keys,
+    # grouping repeated values per key (a repeated filter[clause_refs][has] is treated as AND by
+    # the parser, so collapsing to the last value via plain .items() would misrepresent the applied
+    # query and break hash reproducibility).
+    applied: dict[str, list[str]] = {}
+    for k, v in request.query_params.multi_items():
+        if k.startswith("filter["):
+            applied.setdefault(k, []).append(v)
     generated_at = datetime.datetime.now(current_org_tz())
     provenance = build_provenance(
         generated_by=(caller.display_name or caller.email or str(caller.id)),
