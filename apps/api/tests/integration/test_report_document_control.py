@@ -57,6 +57,9 @@ async def test_register_includes_a_new_effective_document_and_hash_changes(
 
     await s5.grant_lifecycle(subj.a)  # author: full lifecycle perms incl. document.read (SYSTEM)
     await s5.grant_lifecycle(subj.b)  # approver/releaser: same, SoD gates self-approval not read
+    # FIX 1 (Codex round 5): the per-row filter now ALSO requires report.read — the direct
+    # service caller here must hold it too (a SYSTEM grant, matching every row).
+    await _grant(subj.a, ("report.read",))
     org_id = await s5.default_org_id()
     await s5.set_approver_release(org_id, True)  # SoD-2: approver may also release
     h_author = _auth(token_factory, subj.a)
@@ -118,6 +121,9 @@ async def test_approved_by_reflects_the_approval_signature_not_the_release(
     await s5.grant_lifecycle(subj.a)  # author
     await s5.grant_lifecycle(subj.b)  # approver
     await s5.grant_lifecycle(subj.c)  # releaser — DISTINCT from both author and approver
+    # FIX 1 (Codex round 5): the per-row filter now ALSO requires report.read — the direct
+    # service caller here must hold it too (a SYSTEM grant, matching every row).
+    await _grant(subj.a, ("report.read",))
     h_author = _auth(token_factory, subj.a)
     h_approver = _auth(token_factory, subj.b)
     h_releaser = _auth(token_factory, subj.c)
@@ -205,6 +211,9 @@ async def test_obsolete_document_retains_formerly_effective_version_evidence(
 
     await s5.grant_lifecycle(subj.a)  # author + the obsoleter
     await s5.grant_lifecycle(subj.b)  # approver, also the releaser (SoD-2 relaxed below)
+    # FIX 1 (Codex round 5): the per-row filter now ALSO requires report.read — the direct
+    # service caller here must hold it too (a SYSTEM grant, matching every row).
+    await _grant(subj.a, ("report.read",))
     await s5.set_approver_release(await s5.default_org_id(), True)
     ha, hb = _auth(token_factory, subj.a), _auth(token_factory, subj.b)
     type_id = await s5.type_id("SOP")
@@ -481,6 +490,48 @@ async def test_process_scoped_report_read_admitted_at_surface_gate(
     assert doc_out["identifier"] not in ids
 
 
+# --- FIX 1 (Codex round 5, P1): the per-row filter must ALSO honor report.read's PROCESS scope -
+
+
+async def test_process_scoped_report_read_confines_rows_despite_broad_system_document_read(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    """The round-4 surface gate admits a report.read ALLOW by *level* (SYSTEM/PROCESS) but the
+    round-4 per-row filter checked document.read ONLY — so a caller with report.read scoped to a
+    single process (process A) but a broader SYSTEM document.read grant (e.g. an Internal Auditor
+    role that also happens to hold org-wide document.read) was admitted to see EVERY document,
+    including ones linked to an unrelated process B, never process A. report.read is documented as
+    PROCESS-scoped (the built-in Process Owner) — the register must confine such a caller to their
+    linked-process document(s), the same boundary ``test_row_filter_excludes_out_of_scope_document``
+    already proves for a narrow document.read grant.
+
+    Mutation-distinguishing / RED-verified: with only ``document.read`` gathered in the per-row
+    filter (the pre-fix code), doc_b (linked to process B, NOT process A) is visible — this
+    assertion fails. After the fix (also gathering + authorizing report_grants against the same
+    per-row ResourceContext), doc_b is excluded while doc_a (linked to process A) remains visible.
+    Run-scoped: only asserts membership for OUR two docs."""
+    await s5.grant_lifecycle(subj.a)  # creator: SYSTEM document.read + create/checkin etc.
+    ha = _auth(token_factory, subj.a)
+    type_id = await s5.type_id("SOP")
+
+    doc_a = await _create(app_client, ha, type_id)
+    doc_b = await _create(app_client, ha, type_id)
+
+    org_id = await s5.default_org_id()
+    process_a = await _create_process_linked_to(subj.a, org_id, doc_a["id"])
+    await _create_process_linked_to(subj.a, org_id, doc_b["id"])  # process B — doc_b's own link
+
+    await _grant_process(subj.b, "report.read", process_a)  # PROCESS-A-scoped report.read
+    await _grant(subj.b, ("document.read",))  # broad SYSTEM document.read
+    hb = _auth(token_factory, subj.b)
+
+    resp = await app_client.get(_ROUTE, headers=hb)
+    assert resp.status_code == 200, resp.text
+    ids = {r["identifier"] for r in resp.json()["rows"]}
+    assert doc_a["identifier"] in ids
+    assert doc_b["identifier"] not in ids
+
+
 # --- Deny-always-wins at the SURFACE gate (not just the per-row filter) --------------------
 
 
@@ -726,6 +777,9 @@ async def test_review_state_derives_today_from_snapshot_not_wall_clock(
 
     await s5.grant_lifecycle(subj.a)
     await s5.grant_lifecycle(subj.b)
+    # FIX 1 (Codex round 5): the per-row filter now ALSO requires report.read — the direct
+    # service caller here must hold it too (a SYSTEM grant, matching every row).
+    await _grant(subj.a, ("report.read",))
     await s5.set_approver_release(await s5.default_org_id(), True)
     ha, hb = _auth(token_factory, subj.a), _auth(token_factory, subj.b)
     type_id = await s5.type_id("SOP")
@@ -808,6 +862,9 @@ async def test_effective_from_renders_in_the_org_timezone(
 
         await s5.grant_lifecycle(subj.a)
         await s5.grant_lifecycle(subj.b)
+        # FIX 1 (Codex round 5): the per-row filter now ALSO requires report.read — the direct
+        # service caller here must hold it too (a SYSTEM grant, matching every row).
+        await _grant(subj.a, ("report.read",))
         await s5.set_approver_release(org_id, True)
         ha, hb = _auth(token_factory, subj.a), _auth(token_factory, subj.b)
         type_id = await s5.type_id("SOP")

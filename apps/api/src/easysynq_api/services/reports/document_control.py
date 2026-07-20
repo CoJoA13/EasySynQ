@@ -189,7 +189,19 @@ async def compute_document_control_register(
 
         # the document.read row filter — part of the same consistent read (not the surface gate's
         # report.read check, which lives in api/reports.py, ahead of the request-session rollback).
+        #
+        # FIX 1 (Codex round 5, P1): the surface gate (api/reports.py) admits any report.read ALLOW
+        # at SYSTEM or PROCESS scope but then discards that grant's PROCESS selector — so a caller
+        # with report.read scoped to a single process but a broader SYSTEM document.read grant was
+        # admitted to the whole org's rows (document.read alone doesn't confine them). report.read
+        # is a documented PROCESS-scoped permission (the built-in Process Owner), so the per-row
+        # filter must also gather + apply it: a row is visible only if BOTH document.read AND
+        # report.read authorize it against the SAME ResourceContext (whose process_ids already
+        # drives the PROCESS-scope match). A SYSTEM report.read grant (QMS Owner/Internal Auditor)
+        # matches every row exactly as before — process_ids is irrelevant to a SYSTEM-level grant —
+        # so this adds no new exclusion for the existing SYSTEM-scoped callers.
         grants = await gather_grants(session, user_id, org_id, "document.read")
+        report_grants = await gather_grants(session, user_id, org_id, "report.read")
         ctx = RequestContext(now=snapshot_at, source_ip=source_ip)
         visible: list[DocumentedInformation] = []
         for d in docs:
@@ -201,7 +213,10 @@ async def compute_document_control_register(
                 lifecycle_state=d.current_state.value,
                 framework_id=str(d.framework_id),
             )
-            if authorize(grants, "document.read", resource, ctx).allow:
+            if (
+                authorize(grants, "document.read", resource, ctx).allow
+                and authorize(report_grants, "report.read", resource, ctx).allow
+            ):
                 visible.append(d)
 
         # --- batched enrichment over the visible set only ---

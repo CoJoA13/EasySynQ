@@ -197,4 +197,64 @@ describe("ReportsRegisterPage", () => {
     await screen.findByText("SOP-QA-001");
     expect(await screen.findByRole("textbox", { name: "Process" })).toBeInTheDocument();
   });
+
+  // FIX 2 (Codex round 5, P2): the provenance banner must render `generated_at` in the ORG
+  // timezone/offset carried by the string itself, never browser-tz-converted. +14:00 is chosen so
+  // no real browser timezone coincides with it — a `new Date(...).toLocaleString()` render would
+  // shift the calendar date/time away from the org-local wall clock the string encodes.
+  // Mutation-distinguishing: fails if the banner routes through browser-tz Date conversion.
+  it("renders the provenance generated_at in the organization timezone, not the browser's (FIX 2)", async () => {
+    const reg: DocumentControlRegister = {
+      ...REG,
+      provenance: { ...REG.provenance, generated_at: "2026-06-20T00:00:00+14:00" },
+    };
+    server.use(http.get("/api/v1/reports/document-control", () => HttpResponse.json(reg)));
+    renderWithProviders(<ReportsRegisterPage />);
+    await screen.findByText("SOP-QA-001");
+    expect(screen.getByText(/2026-06-20 00:00 \(UTC\+14:00\)/)).toBeInTheDocument();
+    // Never the browser-shifted calendar date a naive `Date` conversion would produce.
+    expect(screen.queryByText(/2026-06-19/)).not.toBeInTheDocument();
+  });
+
+  // FIX 3 (Codex round 5, P2): a bookmarked/copied `?process=` URL must not silently narrow the
+  // register when the process facet is un-representable (useProcesses() returned no options) —
+  // the round-4 fix already hides the ProcessSelect control in that case, but the URL value was
+  // still being applied to the outbound request with no visible control to see or clear it.
+  // Mutation-distinguishing: fails if `filters.process_id` is set unconditionally from the URL.
+  it("does not apply a stale ?process= URL filter when the process facet is unavailable (FIX 3)", async () => {
+    const seenUrls: string[] = [];
+    server.use(
+      http.get("/api/v1/reports/document-control", ({ request }) => {
+        seenUrls.push(request.url);
+        return HttpResponse.json(REG);
+      }),
+      http.get("/api/v1/processes", () => HttpResponse.json([])),
+    );
+    renderWithProviders(<ReportsRegisterPage />, {
+      route: "/?process=pr000001-0001-0001-0001-000000000001",
+    });
+    await screen.findByText("SOP-QA-001");
+    expect(seenUrls.at(-1)).not.toContain("filter%5Bprocess_id%5D");
+  });
+
+  // The flip side: with processes present, a `?process=` URL value IS applied (keeps the existing
+  // facet-change test's contract intact for a pre-set URL, not just an interactive click).
+  it("applies a ?process= URL filter when the process facet is available", async () => {
+    const seenUrls: string[] = [];
+    server.use(
+      http.get("/api/v1/reports/document-control", ({ request }) => {
+        seenUrls.push(request.url);
+        return HttpResponse.json(REG);
+      }),
+    );
+    renderWithProviders(<ReportsRegisterPage />, {
+      route: "/?process=pr000001-0001-0001-0001-000000000001",
+    });
+    await screen.findByText("SOP-QA-001");
+    await waitFor(() =>
+      expect(seenUrls.at(-1)).toContain(
+        "filter%5Bprocess_id%5D%5Beq%5D=pr000001-0001-0001-0001-000000000001",
+      ),
+    );
+  });
 });
