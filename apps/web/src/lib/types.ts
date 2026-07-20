@@ -1,11 +1,5 @@
 export type DocumentCurrentState =
-  | "Draft"
-  | "InReview"
-  | "Approved"
-  | "Effective"
-  | "UnderRevision"
-  | "Superseded"
-  | "Obsolete";
+  "Draft" | "InReview" | "Approved" | "Effective" | "UnderRevision" | "Superseded" | "Obsolete";
 
 export type ReviewState = "current" | "due_soon" | "overdue";
 
@@ -350,11 +344,7 @@ export interface Task {
 
 // current_state is free-form Text server-side — keep it an open string, do NOT enum-validate.
 export type WorkflowInstanceState =
-  | "IN_APPROVAL"
-  | "APPROVED"
-  | "REJECTED_TO_DRAFT"
-  | "NEEDS_ATTENTION"
-  | (string & {});
+  "IN_APPROVAL" | "APPROVED" | "REJECTED_TO_DRAFT" | "NEEDS_ATTENTION" | (string & {});
 
 // GET /documents/{id}/approval · GET /workflow-instances/{id}.
 export interface WorkflowInstance {
@@ -968,13 +958,7 @@ export interface NcrDispositionBody {
 
 // ---- S-web-7d audits & findings (pinned to api/audits.py _program/_plan/_audit/_finding) ----
 export type AuditState =
-  | "Scheduled"
-  | "Planned"
-  | "InProgress"
-  | "FindingsDraft"
-  | "Reported"
-  | "Closing"
-  | "Closed";
+  "Scheduled" | "Planned" | "InProgress" | "FindingsDraft" | "Reported" | "Closing" | "Closed";
 export type FindingType = "NC" | "OBSERVATION" | "OFI";
 
 export interface AuditProgram {
@@ -1825,13 +1809,7 @@ export interface ContextUpdateBody {
 // ORDERED relevance axis; party_name is the anchor identifier + needs_expectations the body (two text
 // fields, vs context's single description).
 export type InterestedPartyType =
-  | "customer"
-  | "regulator"
-  | "supplier"
-  | "employee"
-  | "owner"
-  | "community"
-  | "partner";
+  "customer" | "regulator" | "supplier" | "employee" | "owner" | "community" | "partner";
 export type InterestedPartyInfluence = "low" | "medium" | "high";
 export type InterestedPartyStatus = "active" | "closed";
 // The IPR head is a kind=DOCUMENT subtype → its lifecycle state is the 7-state document one.
@@ -2002,4 +1980,48 @@ export interface NotificationDeliveryHealth {
     pending: number;
     oldest_pending_at: string | null;
   };
+}
+
+// GET /reports/document-control — the Controlled Document Register (hard-gated report.read SYSTEM;
+// 403 for callers without the key).
+export interface ClauseRef {
+  clause: string;
+  starred: boolean;
+}
+
+export interface RegisterRow {
+  id: string;
+  identifier: string;
+  title: string;
+  document_type_id: string | null;
+  document_type: string | null;
+  current_state: string;
+  owner_user_id: string;
+  owner_display: string | null;
+  effective_revision_label: string | null;
+  effective_from: string | null;
+  blob_sha256: string | null;
+  clause_refs: ClauseRef[];
+  process_links: string[];
+  approved_by: string | null;
+  approved_on: string | null;
+  next_review_due: string | null;
+  review_state: string | null;
+}
+
+export interface RegisterProvenance {
+  report_name: string;
+  generated_by: string;
+  generated_at: string;
+  as_of: string;
+  scope: string;
+  app_version: string;
+  filters: Record<string, string>;
+  row_count: number;
+  content_hash: string;
+}
+
+export interface DocumentControlRegister {
+  provenance: RegisterProvenance;
+  rows: RegisterRow[];
 }
