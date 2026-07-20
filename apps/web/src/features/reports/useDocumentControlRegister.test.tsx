@@ -70,3 +70,29 @@ test("flags forbidden on a 403 (caller lacks report.read)", async () => {
   const { result } = renderHook(() => useDocumentControlRegister(), { wrapper });
   await waitFor(() => expect(result.current.forbidden).toBe(true));
 });
+
+// FIX 4: filters serialize with the SAME `filter[field][op]` grammar useDocuments uses (buildFilterParams
+// is shared) and a new filters object triggers a refetch (the query key is value-hashed, not reference).
+test("serializes filters onto the request URL and refetches on a facet change", async () => {
+  const seenUrls: string[] = [];
+  server.use(
+    http.get("/api/v1/reports/document-control", ({ request }) => {
+      seenUrls.push(request.url);
+      return HttpResponse.json(SAMPLE);
+    }),
+  );
+  const { result, rerender } = renderHook(
+    ({ filters }: { filters: Parameters<typeof useDocumentControlRegister>[0] }) =>
+      useDocumentControlRegister(filters),
+    { wrapper, initialProps: { filters: { current_state: "Effective" } } },
+  );
+  await waitFor(() => expect(result.current.isSuccess).toBe(true));
+  expect(seenUrls[0]).toContain("filter%5Bcurrent_state%5D%5Beq%5D=Effective");
+
+  rerender({ filters: { process_id: "pr000001-0001-0001-0001-000000000001" } });
+  await waitFor(() =>
+    expect(seenUrls.at(-1)).toContain(
+      "filter%5Bprocess_id%5D%5Beq%5D=pr000001-0001-0001-0001-000000000001",
+    ),
+  );
+});

@@ -9,6 +9,9 @@ export interface UrlFilters {
   owner?: string;
   clause?: string;
   eff?: string;
+  // S-report-doc-control fix wave: the register's process facet (a process id). Library ignores it
+  // (not in its FILTER_KEYS) — parsing it here is harmless for callers that never render it.
+  process?: string;
 }
 
 export const STATES: DocumentCurrentState[] = [
@@ -42,6 +45,8 @@ export function parseUrlFilters(p: URLSearchParams): UrlFilters {
   if (clause) out.clause = clause;
   const eff = p.get("eff");
   if (eff) out.eff = eff;
+  const process = p.get("process");
+  if (process) out.process = process;
   return out;
 }
 
@@ -60,6 +65,7 @@ export function toDocumentFilters(uf: UrlFilters): DocumentFilters {
   if (uf.clause) f.clause = uf.clause;
   const gte = bucketToGte(uf.eff);
   if (gte) f.effective_from_gte = gte;
+  if (uf.process) f.process_id = uf.process;
   return f;
 }
 

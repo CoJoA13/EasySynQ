@@ -137,6 +137,9 @@ export interface DocumentFilters {
   owner_user_id?: string;
   clause?: string; // a clause number, e.g. "8.4"
   effective_from_gte?: string; // ISO timestamp (the relative date bucket's lower bound)
+  // S-report-doc-control fix wave: the register's process facet — docs linked to this process
+  // (filter[process_id][eq]). Omitted by default; only the register sets it today.
+  process_id?: string;
   // S-doc-filters (CREATE-picker): two opt-in server-side narrowing filters. false → never-released /
   // non-managed-subtype. Omitted (undefined) by default — only the CREATE picker sets them.
   has_effective_version?: boolean;
@@ -2016,7 +2019,10 @@ export interface RegisterProvenance {
   as_of: string;
   scope: string;
   app_version: string;
-  filters: Record<string, string>;
+  // S-report-doc-control fix wave: the backend groups repeated `filter[...]` query params per key
+  // (build_provenance in services/reports/document_control.py) rather than collapsing to the last
+  // value, so a REPEATED filter (e.g. two clause_refs[has] values) is represented faithfully.
+  filters: Record<string, string[]>;
   row_count: number;
   content_hash: string;
 }
