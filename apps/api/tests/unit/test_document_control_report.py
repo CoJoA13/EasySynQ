@@ -3,10 +3,45 @@ from __future__ import annotations
 
 import datetime
 
+from easysynq_api.db.models._vault_enums import DocumentCurrentState
+from easysynq_api.domain.authz.types import Effect, ResolvedGrant, ScopeLevel
 from easysynq_api.services.reports.document_control import (
     build_provenance,
     register_content_hash,
+    report_read_resource_satisfiable,
 )
+
+_EFFECTIVE = DocumentCurrentState.Effective.value
+
+
+def _mk_grant(**predicates: object) -> ResolvedGrant:
+    return ResolvedGrant(
+        effect=Effect.ALLOW,
+        level=ScopeLevel.SYSTEM,
+        selector={},
+        predicates=predicates,
+        source="test",
+    )
+
+
+def test_report_read_resource_satisfiable_matrix():
+    """#347: the surface admits a report.read ALLOW only if its resource predicates can match ≥1
+    real document. lifecycle_state + requirement_source are the only two resource predicates, so
+    validating both closes the admission class (no more misleading 200-empty registers)."""
+    # no resource predicates → satisfiable
+    assert report_read_resource_satisfiable(_mk_grant()) is True
+    # lifecycle_state intersecting a real state → satisfiable (list, scalar, or unknown mixed in)
+    assert report_read_resource_satisfiable(_mk_grant(lifecycle_state=[_EFFECTIVE])) is True
+    assert report_read_resource_satisfiable(_mk_grant(lifecycle_state=_EFFECTIVE)) is True
+    assert (
+        report_read_resource_satisfiable(_mk_grant(lifecycle_state=[_EFFECTIVE, "Bogus"])) is True
+    )
+    # lifecycle_state that matches nothing → NOT satisfiable (empty list / only-unknown states)
+    assert report_read_resource_satisfiable(_mk_grant(lifecycle_state=[])) is False
+    assert report_read_resource_satisfiable(_mk_grant(lifecycle_state=["Bogus"])) is False
+    # requirement_source is v1-unimplemented → any PRESENT value (incl. falsy "") → NOT satisfiable
+    assert report_read_resource_satisfiable(_mk_grant(requirement_source="iso_mandatory")) is False
+    assert report_read_resource_satisfiable(_mk_grant(requirement_source="")) is False
 
 
 def _rows() -> list[dict]:

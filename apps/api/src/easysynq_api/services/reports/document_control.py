@@ -36,6 +36,7 @@ from ...db.models.signature_event import SignatureEvent
 from ...db.session import get_sessionmaker
 from ...domain.authz import Effect, RequestContext, ResourceContext, ScopeLevel, authorize
 from ...domain.authz.pdp import _as_set, _context_predicates_pass, _predicates_pass
+from ...domain.authz.types import ResolvedGrant
 from ..authz import gather_grants
 from ..authz.resource import resource_from_doc
 from ..common.org_clock import resolve_org_tz
@@ -170,6 +171,34 @@ async def _resolve_process_names(
     )
 
 
+_VALID_DOC_STATES: frozenset[str] = frozenset(s.value for s in DocumentCurrentState)
+
+
+def report_read_resource_satisfiable(grant: ResolvedGrant) -> bool:
+    """Whether a report.read grant's RESOURCE predicates can match ≥1 real document — the surface
+    admits an ALLOW (and the provenance counts it toward the boundary) only if so, else the per-row
+    ``authorize()`` rejects every row and the endpoint returns a misleading 200-empty register.
+
+    ``lifecycle_state`` and ``requirement_source`` are the ONLY two resource predicates
+    ``_predicates_pass`` applies, so validating both makes surface admission complete (#347 Codex):
+      * ``requirement_source`` is v1-unimplemented (no ``documented_information`` column / producer;
+        ``resource.requirement_source`` is always None), so a grant narrowed by it never matches.
+      * ``lifecycle_state`` must be a non-empty set intersecting the real ``DocumentCurrentState``
+        values — an empty list or only-unknown states (both accepted by the unrestricted
+        ``ScopeInput.predicates``) can match no row.
+    Rejection is by PRESENCE (``is not None``), matching ``_predicates_pass``'s own checks (a
+    falsy-but-present ``requirement_source`` / an empty ``lifecycle_state`` list still counts)."""
+    p = grant.predicates or {}
+    if p.get("requirement_source") is not None:
+        return False
+    lifecycle = p.get("lifecycle_state")
+    if lifecycle is not None:
+        allowed = lifecycle if isinstance(lifecycle, (list, tuple, set)) else [lifecycle]
+        if not (set(map(str, allowed)) & _VALID_DOC_STATES):
+            return False
+    return True
+
+
 async def compute_document_control_register(
     *,
     user_id: uuid.UUID,
@@ -282,10 +311,11 @@ async def compute_document_control_register(
             if g.effect == Effect.ALLOW
             and g.level in (ScopeLevel.SYSTEM, ScopeLevel.PROCESS)
             and _context_predicates_pass(g, ctx, "report.read")
-            # requirement_source is v1-unimplemented (no producer — see reports.py / #347): a grant
-            # narrowed by it matches no row, so it doesn't contribute to the ALLOW boundary either.
-            # Reject by PRESENCE (is not None) to match _predicates_pass (a falsy "" still counts).
-            and (g.predicates or {}).get("requirement_source") is None
+            # A resource-predicated grant that can't match any row (unimplemented
+            # requirement_source, or an empty/unknown lifecycle_state set) doesn't contribute to the
+            # ALLOW boundary — the per-row gate excludes every row it would match (#347; same check
+            # as the surface).
+            and report_read_resource_satisfiable(g)
         ]
         has_system_allow = any(g.level == ScopeLevel.SYSTEM for g in allow_grants)
         authorization_scope: list[dict[str, str]] | None

@@ -1132,6 +1132,42 @@ async def test_surface_gate_rejects_a_requirement_source_predicated_report_read_
     )  # not surface-admitted (truthiness guard would 200-empty here)
 
 
+async def test_surface_gate_rejects_an_unmatchable_lifecycle_predicated_report_read_allow(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """#347 round-4 (Codex P2): a report.read ALLOW narrowed by a lifecycle_state predicate that can
+    match NO document — an empty list, or only-unknown states (both accepted by the unrestricted
+    predicates dict) — must NOT be surface-admitted, else the caller gets a misleading 200-empty
+    register. (A lifecycle_state intersecting real states, e.g. ["Effective"], IS admitted — the
+    fix-2 admit test above.) This closes the admission class: lifecycle_state + requirement_source
+    are the only two resource predicates, so validating both makes surface admission complete."""
+    # empty allow-list → intersects no DocumentCurrentState → matches nothing → 403
+    empty = f"kc-lc-empty-{uuid.uuid4().hex[:8]}"
+    await _add_override(
+        empty,
+        "report.read",
+        Effect.ALLOW,
+        ScopeLevel.SYSTEM,
+        predicates={"lifecycle_state": []},
+    )
+    await _grant(empty, ("document.read",))
+    r1 = await app_client.get(_ROUTE, headers=_auth(token_factory, empty))
+    assert r1.status_code == 403, r1.text
+
+    # only-unknown state → intersects no real state → matches nothing → 403
+    unknown = f"kc-lc-bogus-{uuid.uuid4().hex[:8]}"
+    await _add_override(
+        unknown,
+        "report.read",
+        Effect.ALLOW,
+        ScopeLevel.SYSTEM,
+        predicates={"lifecycle_state": ["NotARealState"]},
+    )
+    await _grant(unknown, ("document.read",))
+    r2 = await app_client.get(_ROUTE, headers=_auth(token_factory, unknown))
+    assert r2.status_code == 403, r2.text
+
+
 async def test_resolve_process_names_is_org_scoped(
     app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
 ) -> None:
