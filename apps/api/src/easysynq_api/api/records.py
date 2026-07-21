@@ -340,12 +340,16 @@ async def _capture_scope(
     doc = await session.get(DocumentedInformation, source_document_id)
     if doc is None or doc.org_id != caller.org_id:
         return ResourceContext.system()  # the service raises the real 404/422
-    links = await vault_repo.list_process_links(session, doc.id)
+    # #346: process_ids via the canonical satellite-aware loader (NOT list_process_links) so a
+    # record captured against an objective source inherits its quality_objective.process_id
+    # binding, and a PROCESS-scoped record.create DENY on that process participates (identical to
+    # before for a form-template source — an objective binds its process on the satellite, not a
+    # ProcessLink).
     return ResourceContext(
         kind="RECORD",
         folder_path=doc.folder_path,
         framework_id=str(doc.framework_id),
-        process_ids=frozenset(str(p.id) for _link, p in links),
+        process_ids=await vault_repo.process_ids_for_doc(session, doc.id),
     )
 
 
@@ -620,10 +624,10 @@ async def correction_endpoint(
         if effective_source is not None:
             source_doc = await session.get(DocumentedInformation, effective_source)
             if source_doc is not None and source_doc.org_id == caller.org_id:
-                source_processes = frozenset(
-                    str(p.id)
-                    for _link, p in await vault_repo.list_process_links(session, source_doc.id)
-                )
+                # #346: canonical satellite-aware loader so an objective source contributes its
+                # quality_objective.process_id to the deny-broader floor (identical for a normal
+                # source — an objective binds its process on the satellite, not a ProcessLink).
+                source_processes = await vault_repo.process_ids_for_doc(session, source_doc.id)
         inherited = source_processes | frozenset(
             await records_repo.record_process_ids_effective(session, original)
         )

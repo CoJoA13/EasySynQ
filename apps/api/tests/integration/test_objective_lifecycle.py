@@ -24,6 +24,7 @@ from easysynq_api.db.models.scope import Scope
 from easysynq_api.db.models.signature_event import SignatureEvent as SignatureEventRow
 from easysynq_api.db.session import get_sessionmaker
 from easysynq_api.domain.authz.types import Effect, ScopeLevel
+from easysynq_api.services.vault import repository as vault_repo
 
 from . import s5_helpers as s5
 from .test_quality_objectives import _grant
@@ -393,3 +394,43 @@ async def test_release_framework_allow_process_deny_denies_the_objective(
     rel = await app_client.post(f"/api/v1/objectives/{oid}/release", headers=hrl)
     assert rel.status_code == 403, rel.text  # the PROCESS DENY wins over the framework ALLOW
     assert rel.json()["code"] == "permission_denied"  # deny-wins, NOT a SoD violation
+
+
+async def test_process_ids_for_doc_unions_objective_satellite(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """#346: the canonical ``process_ids_for_doc(s)`` loader UNIONs the objective's satellite
+    (``quality_objective.process_id``). Every document authz scope built from it — release, the
+    approve/review decision, instance/approval read, search, the DCR target scope, and the record
+    source/correction scopes — therefore sees a bound-process objective's process, so a
+    PROCESS-scoped DENY participates (deny-always-wins). A process-less objective yields the empty
+    set (proving it's the satellite value, not a phantom); pre-#346 the bound objective also
+    yielded empty."""
+    salt = uuid.uuid4().hex[:8]
+    owner = f"obj-pid-{salt}"
+    ho = _auth(token_factory, owner)
+    await _grant(owner, _OBJ_KEYS)
+    proc_id = await _seed_process(owner)
+
+    bound = await app_client.post(
+        "/api/v1/objectives",
+        headers=ho,
+        json={
+            "title": f"Bound objective {salt}",
+            "target_value": "98",
+            "unit": "%",
+            "direction": "HIGHER_IS_BETTER",
+            "due_date": "2026-12-31",
+            "at_risk_threshold": "95",
+            "baseline_value": "90",
+            "process_id": proc_id,
+        },
+    )
+    assert bound.status_code == 201, bound.text
+    unbound = await _create_objective(app_client, ho, f"Unbound objective {salt}")  # no process_id
+
+    async with get_sessionmaker()() as s:
+        bound_pids = await vault_repo.process_ids_for_doc(s, uuid.UUID(bound.json()["id"]))
+        unbound_pids = await vault_repo.process_ids_for_doc(s, uuid.UUID(unbound))
+    assert bound_pids == frozenset({proc_id})  # satellite unioned (empty pre-#346)
+    assert unbound_pids == frozenset()  # a process-less objective has no phantom process

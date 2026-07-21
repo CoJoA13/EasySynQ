@@ -194,13 +194,16 @@ async def _dcr_doc_scope(session: AsyncSession, doc_id: uuid.UUID | None) -> Res
     if doc.document_type_id:
         dt = await session.get(DocumentType, doc.document_type_id)
         level = dt.document_level.value if dt else None
-    links = await vault_repo.list_process_links(session, doc.id)
-    # #333: full scope tuple via the shared helper (adds kind; framework_id/process_ids/lifecycle
-    # were already inline) so a kind-scoped changeRequest DENY at DOC_CLASS scope isn't dropped.
+    # #333/#346: full scope tuple via the shared helper (adds kind; framework_id/lifecycle were
+    # already inline). process_ids come from the canonical satellite-aware loader (NOT
+    # list_process_links) so a DCR targeting an objective includes its quality_objective.process_id
+    # binding — else a PROCESS-scoped changeRequest/document.release DENY on that bound process is
+    # dropped while the #333 kind completion lets a DOC_CLASS changeRequest ALLOW match (an
+    # objective binds its process on the satellite, not a ProcessLink).
     return resource_from_doc(
         doc,
         document_level=level,
-        process_ids=frozenset(str(p.id) for _link, p in links),
+        process_ids=await vault_repo.process_ids_for_doc(session, doc.id),
     )
 
 
