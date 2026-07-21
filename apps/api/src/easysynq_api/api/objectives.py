@@ -350,8 +350,10 @@ async def _objective_release_scope(
         dt = await session.get(DocumentType, doc.document_type_id)
         level = dt.document_level.value if dt else None
     # #333: full scope tuple via the shared helper (adds framework_id + kind so a FRAMEWORK- or
-    # kind-scoped release DENY isn't dropped), INCLUDING process_ids so a PROCESS-scoped DENY on a
-    # linked process participates too (#346 review), then fold SoD inputs.
+    # kind-scoped release DENY isn't dropped), INCLUDING process_ids so a PROCESS-scoped DENY on the
+    # objective's bound process participates too (#346 review — process_ids_for_doc unions the
+    # quality_objective satellite; an objective binds its process there, not a ProcessLink), then
+    # fold SoD inputs.
     base = resource_from_doc(
         doc, document_level=level, process_ids=await vault_repo.process_ids_for_doc(session, doc.id)
     )
