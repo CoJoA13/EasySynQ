@@ -30,9 +30,11 @@ from ...db.models.document_type import DocumentType
 from ...db.models.document_version import DocumentVersion
 from ...db.models.documented_information import DocumentedInformation
 from ...db.models.organization import Organization
+from ...db.models.process import Process
 from ...db.models.signature_event import SignatureEvent
 from ...db.session import get_sessionmaker
-from ...domain.authz import RequestContext, ResourceContext, authorize
+from ...domain.authz import Effect, RequestContext, ResourceContext, ScopeLevel, authorize
+from ...domain.authz.pdp import _as_set, _predicates_pass
 from ..authz import gather_grants
 from ..common.org_clock import current_org_tz
 from ..vault import repository as vault_repo
@@ -69,12 +71,18 @@ def build_provenance(
     filters: dict[str, list[str]],
     row_count: int,
     content_hash: str,
+    process_scope: list[dict[str, str]] | None,
 ) -> dict[str, Any]:
     """The audit-defensibility header block (doc 13 §6). ``as_of`` mirrors ``generated_at`` (the
     instant the register was materialized). ``filters`` echoes the applied ``filter[...]`` params,
     grouped per key so a REPEATED ``filter[...]`` query param (e.g. two ``filter[clause_refs][has]``
     values, ANDed by the parser) is represented faithfully rather than collapsed to its last value —
-    the content hash must be reproducible from this block."""
+    the content hash must be reproducible from this block. FIX 2 (Codex round 6, P2):
+    ``process_scope`` records the caller's effective report.read authorization boundary — null when
+    org-wide, else the process(es) a PROCESS-scoped report.read grant confines them to — so a
+    process-limited register can't be mistaken for the org-wide one ``scope`` alone implies. This
+    describes the CALLER's authorization, not row data, so it is deliberately NOT part of the
+    content hash input (``register_content_hash`` stays row-data-only)."""
     stamp = generated_at.isoformat()
     return {
         "report_name": _REPORT_NAME,
@@ -86,6 +94,7 @@ def build_provenance(
         "filters": filters,
         "row_count": row_count,
         "content_hash": content_hash,
+        "process_scope": process_scope,
     }
 
 
@@ -101,6 +110,12 @@ class RegisterResult:
     # FIX C: resolved inside the same snapshot session (see the function docstring) so the route
     # needs no further request-session DB access to build provenance.scope.
     org_short_code: str
+    # FIX 2 (Codex round 6, P2): the caller's effective report.read authorization boundary — None
+    # when a predicate-passing SYSTEM report.read ALLOW admitted them (org-wide), else the
+    # name-resolved, sorted set of processes their PROCESS-scoped report.read ALLOW grant(s)
+    # confine them to. Distinct from org_short_code/scope so a PROCESS-limited register can't be
+    # mistaken for the org-wide one (provenance.scope stays "org:<short_code>" either way).
+    authorization_scope: list[dict[str, str]] | None
 
 
 def _display(user: AppUser | None) -> str | None:
@@ -203,6 +218,47 @@ async def compute_document_control_register(
         grants = await gather_grants(session, user_id, org_id, "document.read")
         report_grants = await gather_grants(session, user_id, org_id, "report.read")
         ctx = RequestContext(now=snapshot_at, source_ip=source_ip)
+
+        # FIX 2 (Codex round 6, P2): the effective report.read authorization boundary for
+        # provenance. Mirrors the route's surface gate (api/reports.py _SURFACE_LEVELS +
+        # _predicates_pass), but evaluated here against the SAME snapshot_at-anchored ctx the
+        # per-row filter above uses (not the route's separate wall-clock read) — consistency: the
+        # scope this reports reflects the SAME instant the rows were materialized as-of. A
+        # predicate-passing SYSTEM ALLOW means org-wide (authorization_scope=None); otherwise the
+        # caller is confined to the union of their predicate-passing PROCESS ALLOW grants'
+        # process ids (the same selector shape ``_matches_scope`` reads: "process_id" singular
+        # falling back to "process_ids" plural).
+        active_report_grants = [
+            g
+            for g in report_grants
+            if g.level in (ScopeLevel.SYSTEM, ScopeLevel.PROCESS)
+            and _predicates_pass(g, ResourceContext.system(), ctx, "report.read")
+        ]
+        has_system_allow = any(
+            g.effect == Effect.ALLOW and g.level == ScopeLevel.SYSTEM for g in active_report_grants
+        )
+        authorization_scope: list[dict[str, str]] | None
+        if has_system_allow:
+            authorization_scope = None
+        else:
+            scoped_process_ids: set[str] = set()
+            for g in active_report_grants:
+                if g.effect == Effect.ALLOW and g.level == ScopeLevel.PROCESS:
+                    sel = g.selector or {}
+                    scoped_process_ids |= _as_set(sel.get("process_id") or sel.get("process_ids"))
+            authorization_scope = []
+            if scoped_process_ids:
+                process_uuids = {uuid.UUID(pid) for pid in scoped_process_ids}
+                processes = (
+                    await session.execute(
+                        select(Process.id, Process.name).where(Process.id.in_(process_uuids))
+                    )
+                ).all()
+                authorization_scope = sorted(
+                    ({"id": str(pid), "name": name} for pid, name in processes),
+                    key=lambda p: p["name"],
+                )
+
         visible: list[DocumentedInformation] = []
         for d in docs:
             resource = ResourceContext(
@@ -384,4 +440,5 @@ async def compute_document_control_register(
         row_count=len(rows),
         snapshot_at=snapshot_at,
         org_short_code=org_short_code,
+        authorization_scope=authorization_scope,
     )

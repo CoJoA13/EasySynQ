@@ -45,6 +45,7 @@ def test_build_provenance_shape_excludes_hash_from_its_own_input():
         filters={"filter[current_state][eq]": ["Effective"]},
         row_count=2,
         content_hash="sha256:abc",
+        process_scope=None,
     )
     assert prov["report_name"] == "Controlled Document Register"
     assert prov["generated_at"] == now.isoformat()
@@ -55,6 +56,7 @@ def test_build_provenance_shape_excludes_hash_from_its_own_input():
     assert prov["content_hash"] == "sha256:abc"
     assert prov["filters"] == {"filter[current_state][eq]": ["Effective"]}
     assert prov["generated_by"] == "Mara Quality"
+    assert prov["process_scope"] is None
 
 
 def test_build_provenance_shape_preserves_repeated_filter_values():
@@ -70,5 +72,26 @@ def test_build_provenance_shape_preserves_repeated_filter_values():
         filters={"filter[clause_refs][has]": ["8.4", "8.5"]},
         row_count=1,
         content_hash="sha256:abc",
+        process_scope=None,
     )
     assert prov["filters"] == {"filter[clause_refs][has]": ["8.4", "8.5"]}
+
+
+def test_build_provenance_shape_records_process_scope_when_process_limited():
+    """FIX 2 (Codex round 6, P2): when the caller's report.read is PROCESS-scoped (not org-wide),
+    ``process_scope`` carries the name-resolved process(es) the register is confined to — never
+    silently dropped/omitted — so an auditor reading the block can't mistake a process-limited
+    register for the org-wide one."""
+    now = datetime.datetime(2026, 7, 19, 12, 0, tzinfo=datetime.UTC)
+    scope = [{"id": "11111111-1111-1111-1111-111111111111", "name": "Purchasing"}]
+    prov = build_provenance(
+        generated_by="Diego Process",
+        generated_at=now,
+        scope="org:DEFAULT",
+        app_version="0.1.0",
+        filters={},
+        row_count=1,
+        content_hash="sha256:abc",
+        process_scope=scope,
+    )
+    assert prov["process_scope"] == scope

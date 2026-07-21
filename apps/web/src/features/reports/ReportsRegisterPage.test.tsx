@@ -19,6 +19,7 @@ const REG: DocumentControlRegister = {
     filters: {},
     row_count: 2,
     content_hash: "sha256:abc123",
+    process_scope: null,
   },
   rows: [
     {
@@ -256,5 +257,33 @@ describe("ReportsRegisterPage", () => {
         "filter%5Bprocess_id%5D%5Beq%5D=pr000001-0001-0001-0001-000000000001",
       ),
     );
+  });
+
+  // Codex round 6 FIX 2: `scope` alone (always `org:<short_code>`) can't distinguish an org-wide
+  // register from a PROCESS-scoped one — the banner must call it out explicitly when
+  // `process_scope` is populated.
+  it("shows the process-limited scope line when provenance.process_scope is populated", async () => {
+    const reg: DocumentControlRegister = {
+      ...REG,
+      provenance: {
+        ...REG.provenance,
+        process_scope: [
+          { id: "pr000001-0001-0001-0001-000000000001", name: "Purchasing" },
+          { id: "pr000002-0002-0002-0002-000000000002", name: "Design" },
+        ],
+      },
+    };
+    server.use(http.get("/api/v1/reports/document-control", () => HttpResponse.json(reg)));
+    renderWithProviders(<ReportsRegisterPage />);
+    await screen.findByText("SOP-QA-001");
+    expect(screen.getByText("Scope limited to processes: Purchasing, Design")).toBeInTheDocument();
+  });
+
+  // The flip side: an org-wide reader (process_scope: null, REG's default) sees no such line.
+  it("does not show the process-limited scope line when provenance.process_scope is null", async () => {
+    server.use(http.get("/api/v1/reports/document-control", () => HttpResponse.json(REG)));
+    renderWithProviders(<ReportsRegisterPage />);
+    await screen.findByText("SOP-QA-001");
+    expect(screen.queryByText(/Scope limited to processes/)).not.toBeInTheDocument();
   });
 });

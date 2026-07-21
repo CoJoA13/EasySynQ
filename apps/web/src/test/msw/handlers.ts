@@ -555,6 +555,7 @@ export const documentControlRegisterFixture = {
     filters: {},
     row_count: 0,
     content_hash: "sha256:0",
+    process_scope: null,
   },
   rows: [],
 } satisfies DocumentControlRegister;

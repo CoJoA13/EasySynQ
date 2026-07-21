@@ -7885,7 +7885,7 @@ components:
         The audit-defensibility header (doc 13 §6) — who/when/what-scope generated the register,
         plus a content_hash over the row data (order-independent, filter-sensitive) reproducible
         via a recompute over the returned rows.
-      required: [report_name, generated_by, generated_at, as_of, scope, app_version, filters, row_count, content_hash]
+      required: [report_name, generated_by, generated_at, as_of, scope, app_version, filters, row_count, content_hash, process_scope]
       properties:
         report_name: { type: string, example: "Controlled Document Register" }
         generated_by: { type: string, description: The caller's display name / email / id. }
@@ -7902,6 +7902,21 @@ components:
             ANDed by the parser) is represented faithfully rather than collapsed to its last value.
         row_count: { type: integer }
         content_hash: { type: string, example: "sha256:…", description: Deterministic sha256 over the row data. }
+        process_scope:
+          type: [array, "null"]
+          description: >-
+            The caller's effective report.read authorization boundary — null when an org-wide
+            (predicate-passing SYSTEM report.read ALLOW) grant admitted them, else the
+            (deduplicated, name-sorted) set of processes their PROCESS-scoped report.read ALLOW
+            grant(s) confine the register to. Distinct from scope (always org:<short_code>) so an
+            auditor can't mistake a process-limited register for the org-wide one.
+          items:
+            type: object
+            additionalProperties: false
+            required: [id, name]
+            properties:
+              id: { type: string, format: uuid }
+              name: { type: string }
 
     DocumentControlRegisterClauseRef:
       type: object

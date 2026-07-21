@@ -2025,6 +2025,11 @@ export interface RegisterProvenance {
   filters: Record<string, string[]>;
   row_count: number;
   content_hash: string;
+  // Codex round 6 FIX 2: the caller's effective report.read authorization boundary — null when
+  // org-wide (a predicate-passing SYSTEM report.read ALLOW), else the process(es) a PROCESS-scoped
+  // report.read grant confines the register to. Distinct from `scope` (always `org:<short_code>`)
+  // so a process-limited register can't be mistaken for the org-wide one.
+  process_scope: { id: string; name: string }[] | null;
 }
 
 export interface DocumentControlRegister {

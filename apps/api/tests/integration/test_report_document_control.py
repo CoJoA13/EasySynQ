@@ -909,3 +909,101 @@ async def test_effective_from_renders_in_the_org_timezone(
                 .values(timezone=tz_before)
             )
             await session.commit()
+
+
+# --- FIX 1 (Codex round 6, P2): a PROCESS-scoped report.read DENY is row-scoped, not org-wide ----
+
+
+async def test_process_scoped_report_read_deny_does_not_revoke_the_whole_surface(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    """A PROCESS-scoped report.read DENY must NOT 403 the whole surface — only a SYSTEM-scoped
+    DENY is an org-wide revocation (see ``test_surface_gate_honors_system_report_read_deny``); a
+    PROCESS-scoped DENY is row-scoped, already enforced by the round-5 per-row
+    ``authorize(report_grants, "report.read", resource, ctx)`` filter. A caller with report.read
+    ALLOW(process A) + DENY(process B) + a broad SYSTEM document.read must see A's document while
+    B's is excluded — not be refused entirely.
+
+    Mutation-distinguishing / RED-verified: the pre-fix gate (``any(effect==DENY for g in active)``
+    over BOTH SYSTEM and PROCESS levels) treats the PROCESS-B DENY as a surface-wide revocation and
+    403s this caller outright — this assertion (status_code == 200) fails against it. The fix
+    (``has_system_deny`` scoped to ``ScopeLevel.SYSTEM`` only) admits the caller; the per-row
+    filter then excludes B exactly as
+    ``test_process_scoped_report_read_confines_rows_despite_broad_system_document_read`` already
+    proves for a plain ALLOW-only PROCESS grant."""
+    await s5.grant_lifecycle(subj.a)  # creator: SYSTEM document.read + create/checkin etc.
+    ha = _auth(token_factory, subj.a)
+    type_id = await s5.type_id("SOP")
+
+    doc_a = await _create(app_client, ha, type_id)
+    doc_b = await _create(app_client, ha, type_id)
+
+    org_id = await s5.default_org_id()
+    process_a = await _create_process_linked_to(subj.a, org_id, doc_a["id"])
+    process_b = await _create_process_linked_to(subj.a, org_id, doc_b["id"])
+
+    await _grant_process(subj.b, "report.read", process_a)  # PROCESS-A report.read ALLOW
+    await _add_override(
+        subj.b,
+        "report.read",
+        Effect.DENY,
+        ScopeLevel.PROCESS,
+        selector={"process_ids": [process_b]},
+    )  # PROCESS-B report.read DENY — must stay row-scoped, not revoke the whole surface
+    await _grant(subj.b, ("document.read",))  # broad SYSTEM document.read — sees both docs
+    hb = _auth(token_factory, subj.b)
+
+    resp = await app_client.get(_ROUTE, headers=hb)
+    assert resp.status_code == 200, resp.text
+    ids = {r["identifier"] for r in resp.json()["rows"]}
+    assert doc_a["identifier"] in ids
+    assert doc_b["identifier"] not in ids
+
+
+# --- FIX 2 (Codex round 6, P2): provenance records the effective process authorization boundary --
+
+
+async def test_provenance_process_scope_is_null_for_a_system_scoped_reader(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    """A SYSTEM report.read holder's register is org-wide — ``provenance.process_scope`` must be
+    null (present, not omitted — the openapi schema marks it required+nullable), never an empty
+    list or a stale value from a different resolution path."""
+    await _grant(subj.a, ("report.read",))
+    resp = await app_client.get(_ROUTE, headers=_auth(token_factory, subj.a))
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert "process_scope" in body["provenance"]
+    assert body["provenance"]["process_scope"] is None
+
+
+async def test_provenance_process_scope_records_the_process_for_a_process_scoped_reader(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    """A PROCESS-scoped-only report.read holder's register LOOKS org-wide by ``provenance.scope``
+    alone (still ``org:<short_code>``) but is actually confined to their linked process(es) — an
+    auditor could mistake the partial register for the org-wide one. ``process_scope`` must record
+    the effective boundary: the resolved id + name of every process the caller's PROCESS-scoped
+    report.read ALLOW confines them to."""
+    await s5.grant_lifecycle(subj.a)  # creator: SYSTEM document.read + create/checkin etc.
+    ha = _auth(token_factory, subj.a)
+    type_id = await s5.type_id("SOP")
+    doc = await _create(app_client, ha, type_id)
+
+    org_id = await s5.default_org_id()
+    process_id = await _create_process_linked_to(subj.a, org_id, doc["id"])
+
+    await _grant_process(subj.b, "report.read", process_id)  # PROCESS-scoped only — no SYSTEM ALLOW
+    await _grant_process(subj.b, "document.read", process_id)
+    hb = _auth(token_factory, subj.b)
+
+    sm = get_sessionmaker()
+    async with sm() as session:
+        process_name = (
+            await session.execute(select(Process.name).where(Process.id == uuid.UUID(process_id)))
+        ).scalar_one()
+
+    resp = await app_client.get(_ROUTE, headers=hb)
+    assert resp.status_code == 200, resp.text
+    scope = resp.json()["provenance"]["process_scope"]
+    assert scope == [{"id": process_id, "name": process_name}]

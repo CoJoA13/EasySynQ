@@ -72,6 +72,13 @@ async def compliance_checklist_endpoint(
 # such a predicate fails safe (drops the grant) rather than raising, which is acceptable here.
 _SURFACE_LEVELS = frozenset({ScopeLevel.SYSTEM, ScopeLevel.PROCESS})
 
+# FIX 1 (Codex round 6, P2): only a SYSTEM-scoped report.read DENY revokes the whole surface. A
+# PROCESS-scoped DENY is row-scoped — the round-5 per-row ``authorize(report_grants, ...)`` in
+# ``compute_document_control_register`` already excludes that process's rows — so treating it as an
+# org-wide revocation here (the old ``any(effect==DENY)`` over BOTH levels) wrongly 403s a caller
+# who holds report.read ALLOW(process A) + DENY(process B): they should still see A's rows with B's
+# rows excluded, not be refused entirely.
+
 
 @router.get("/reports/document-control")
 async def document_control_register_endpoint(
@@ -110,9 +117,9 @@ async def document_control_register_endpoint(
         if g.level in _SURFACE_LEVELS
         and _predicates_pass(g, ResourceContext.system(), gate_ctx, "report.read")
     ]
-    if not any(g.effect == Effect.ALLOW for g in active) or any(
-        g.effect == Effect.DENY for g in active
-    ):
+    has_allow = any(g.effect == Effect.ALLOW for g in active)
+    has_system_deny = any(g.effect == Effect.DENY and g.level == ScopeLevel.SYSTEM for g in active)
+    if not has_allow or has_system_deny:
         raise ProblemException(status=403, code="forbidden", title="report.read required")
 
     # FIX D: echo only the filter[...] keys the parser actually accepted (matched the bracket
@@ -140,5 +147,6 @@ async def document_control_register_endpoint(
         filters=applied,
         row_count=result.row_count,
         content_hash=result.content_hash,
+        process_scope=result.authorization_scope,
     )
     return {"provenance": provenance, "rows": result.rows}
