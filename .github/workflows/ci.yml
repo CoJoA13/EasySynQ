@@ -17,7 +17,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with: { node-version: "22" }
       - name: lint OpenAPI
         run: npx --yes @redocly/cli lint --config packages/contracts/redocly.yaml packages/contracts/openapi.yaml
@@ -134,7 +134,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: npm
@@ -175,7 +175,7 @@ jobs:
           fi
           echo "pip-audit ran. Vulnerable locked dependencies (if any):"
           jq -r '(.dependencies // [])[] | select((.vulns // []) | length > 0) | "  \(.name) \(.version): \([.vulns[].id] | join(", "))"' "$RUNNER_TEMP/pip-audit.json"
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: npm
