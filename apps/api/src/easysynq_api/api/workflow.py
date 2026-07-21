@@ -143,9 +143,12 @@ async def _decision_scope(session: AsyncSession, task: Task) -> ResourceContext:
         level = dt.document_level.value if dt else None
     # #333: full scope tuple via the shared helper (adds framework_id + kind so a FRAMEWORK- or
     # kind-scoped review/approve/release DENY isn't dropped at the decision gate — the most
-    # security-sensitive document surface), then fold the SoD inputs (the version under decision +
-    # its immutable author). process_ids stays empty, unchanged here.
-    base = resource_from_doc(doc, document_level=level, process_ids=frozenset())
+    # security-sensitive document surface) INCLUDING process_ids, so a PROCESS-scoped DENY on a
+    # linked process participates too — else the new framework ALLOW would beat a dropped PROCESS
+    # DENY (#346 review). Then fold the SoD inputs (the version under decision + its author).
+    base = resource_from_doc(
+        doc, document_level=level, process_ids=await vault_repo.process_ids_for_doc(session, doc.id)
+    )
     return dataclasses.replace(
         base,
         version_id=str(version.id) if version else None,
