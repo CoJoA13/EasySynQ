@@ -1112,19 +1112,24 @@ async def test_surface_gate_rejects_a_requirement_source_predicated_report_read_
     concrete_type/#345). A report.read ALLOW narrowed by it matches NO row per-row, so the surface
     must NOT admit it — else the caller gets a misleading 200 + empty register instead of the honest
     403. (lifecycle_state, which IS materialized, stays admitted — the test above; only the
-    unimplemented predicate is rejected here.)"""
+    unimplemented predicate is rejected here.)
+
+    Uses the falsy-but-PRESENT value ``""``: the guard rejects by presence (is not None), matching
+    ``_predicates_pass`` — a truthiness guard would wrongly treat ``""`` as absent and re-admit it
+    (the #347 round-2 P2). ``iso_mandatory`` (truthy) would 403 either way, so ``""`` is the strict
+    mutation-distinguishing case."""
     await _add_override(
         subj.a,
         "report.read",
         Effect.ALLOW,
         ScopeLevel.SYSTEM,
-        predicates={"requirement_source": "iso_mandatory"},
+        predicates={"requirement_source": ""},
     )
     await _grant(subj.a, ("document.read",))
     resp = await app_client.get(_ROUTE, headers=_auth(token_factory, subj.a))
     assert resp.status_code == 403, (
         resp.text
-    )  # not surface-admitted (un-guarded #335 gave 200-empty)
+    )  # not surface-admitted (truthiness guard would 200-empty here)
 
 
 async def test_resolve_process_names_is_org_scoped(

@@ -127,7 +127,9 @@ async def document_control_register_endpoint(
         g.effect == Effect.ALLOW
         and g.level in _SURFACE_LEVELS
         and _context_predicates_pass(g, gate_ctx, "report.read")
-        and not (g.predicates or {}).get("requirement_source")
+        # reject by PRESENCE (is not None), matching _predicates_pass's own requirement_source
+        # check — a falsy-but-present value like "" must still be rejected, not admitted (#347 P2).
+        and (g.predicates or {}).get("requirement_source") is None
         for g in report_grants
     )
     # A SYSTEM report.read DENY revokes the whole surface only when it applies unconditionally on
