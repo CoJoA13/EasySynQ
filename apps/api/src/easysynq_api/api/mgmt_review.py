@@ -75,6 +75,7 @@ from ..services.vault import (
     get_vault_audit_sink,
     get_vault_signature_sink,
 )
+from ..services.vault import repository as vault_repo
 from ..services.vault.release_scope import enrich_release_sod_scope
 from ..services.vault.review import today_org
 from ..services.workflow import repository as wf_repo
@@ -243,8 +244,11 @@ async def _release_scope(session: AsyncSession, doc: DocumentedInformation) -> R
         dt = await session.get(DocumentType, doc.document_type_id)
         level = dt.document_level.value if dt else None
     # #333: full scope tuple via the shared helper (adds framework_id + kind so a FRAMEWORK/kind-
-    # scoped release DENY isn't dropped); process_ids stays empty as before, then fold SoD inputs.
-    base = resource_from_doc(doc, document_level=level, process_ids=frozenset())
+    # scoped release DENY isn't dropped), INCLUDING process_ids so a PROCESS-scoped DENY on a
+    # linked process participates too (#346 review), then fold SoD inputs.
+    base = resource_from_doc(
+        doc, document_level=level, process_ids=await vault_repo.process_ids_for_doc(session, doc.id)
+    )
     return await enrich_release_sod_scope(session, base, doc.id, None)
 
 
