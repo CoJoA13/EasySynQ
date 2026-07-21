@@ -20,6 +20,7 @@ const REG: DocumentControlRegister = {
     row_count: 2,
     content_hash: "sha256:abc123",
     process_scope: null,
+    excluded_processes: null,
   },
   rows: [
     {
@@ -285,5 +286,31 @@ describe("ReportsRegisterPage", () => {
     renderWithProviders(<ReportsRegisterPage />);
     await screen.findByText("SOP-QA-001");
     expect(screen.queryByText(/Scope limited to processes/)).not.toBeInTheDocument();
+  });
+
+  // #335 fix 1: a SYSTEM report.read ALLOW + PROCESS DENY keeps process_scope null (org-wide) but
+  // records the denied process in excluded_processes — the banner must surface it so a restricted
+  // register can't be mistaken for the org-wide one.
+  it("shows the excluded-processes line when provenance.excluded_processes is populated", async () => {
+    const reg: DocumentControlRegister = {
+      ...REG,
+      provenance: {
+        ...REG.provenance,
+        process_scope: null, // org-wide by the SYSTEM ALLOW
+        excluded_processes: [{ id: "pr000003-0003-0003-0003-000000000003", name: "Logistics" }],
+      },
+    };
+    server.use(http.get("/api/v1/reports/document-control", () => HttpResponse.json(reg)));
+    renderWithProviders(<ReportsRegisterPage />);
+    await screen.findByText("SOP-QA-001");
+    expect(screen.getByText("Excludes processes: Logistics")).toBeInTheDocument();
+  });
+
+  // The flip side: no exclusions (REG's default) → no excludes line.
+  it("does not show the excluded-processes line when provenance.excluded_processes is null", async () => {
+    server.use(http.get("/api/v1/reports/document-control", () => HttpResponse.json(REG)));
+    renderWithProviders(<ReportsRegisterPage />);
+    await screen.findByText("SOP-QA-001");
+    expect(screen.queryByText(/Excludes processes/)).not.toBeInTheDocument();
   });
 });

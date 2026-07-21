@@ -30,6 +30,7 @@ const SAMPLE = {
     row_count: 1,
     content_hash: "sha256:abc",
     process_scope: null,
+    excluded_processes: null,
   },
   rows: [
     {

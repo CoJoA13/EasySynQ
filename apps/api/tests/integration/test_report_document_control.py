@@ -1104,6 +1104,29 @@ async def test_surface_gate_admits_a_lifecycle_predicated_report_read_allow(
     assert all(r["current_state"] == "Effective" for r in rows)
 
 
+async def test_surface_gate_rejects_a_requirement_source_predicated_report_read_allow(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    """#347 (Codex P2): requirement_source is a documented-but-v1-unimplemented ABAC predicate (no
+    documented_information.requirement_source column; resource_from_doc never sets it — like
+    concrete_type/#345). A report.read ALLOW narrowed by it matches NO row per-row, so the surface
+    must NOT admit it — else the caller gets a misleading 200 + empty register instead of the honest
+    403. (lifecycle_state, which IS materialized, stays admitted — the test above; only the
+    unimplemented predicate is rejected here.)"""
+    await _add_override(
+        subj.a,
+        "report.read",
+        Effect.ALLOW,
+        ScopeLevel.SYSTEM,
+        predicates={"requirement_source": "iso_mandatory"},
+    )
+    await _grant(subj.a, ("document.read",))
+    resp = await app_client.get(_ROUTE, headers=_auth(token_factory, subj.a))
+    assert resp.status_code == 403, (
+        resp.text
+    )  # not surface-admitted (un-guarded #335 gave 200-empty)
+
+
 async def test_resolve_process_names_is_org_scoped(
     app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
 ) -> None:

@@ -64,14 +64,17 @@ async def compliance_checklist_endpoint(
 # does not block forever). It reuses the PDP's own evaluator so this gate matches the semantics
 # ``authorize()`` would apply.
 #
-# FIX 2 (#335, P2): the surface deliberately does NOT evaluate the RESOURCE predicates
-# (lifecycle_state/requirement_source) for ADMISSION. A report.read ALLOW narrowed by e.g.
+# FIX 2 (#335, P2): the surface defers the MATERIALIZED resource predicate ``lifecycle_state`` to
+# the per-row gate rather than evaluating it for ADMISSION. A report.read ALLOW narrowed by e.g.
 # ``lifecycle_state=["Effective"]`` is a legitimate grant that admits the caller to the Effective
 # rows, so it must be admitted here and narrowed by the per-row ``authorize(report.read, row)`` gate
 # — evaluating it against ``ResourceContext.system()`` (all-None) wrongly dropped it and 403'd the
-# caller. A SYSTEM report.read DENY still revokes the whole surface only when it applies
-# unconditionally on the resource plane, so it IS evaluated against ``ResourceContext.system()``
-# with the full ``_predicates_pass``: a resource-scoped SYSTEM DENY is row-scoped, left per-row.
+# caller. ``requirement_source`` is the OTHER documented resource predicate but is v1-unimplemented
+# (no producer populates ``resource.requirement_source``), so a grant narrowed by it is NOT admitted
+# (the per-row gate rejects it everywhere → an empty register; #347 Codex P2). A SYSTEM report.read
+# DENY still revokes the whole surface only when it applies unconditionally on the resource plane,
+# so it IS evaluated against ``ResourceContext.system()`` with the full ``_predicates_pass``: a
+# resource-scoped SYSTEM DENY is row-scoped, left per-row.
 _SURFACE_LEVELS = frozenset({ScopeLevel.SYSTEM, ScopeLevel.PROCESS})
 
 # FIX 1 (Codex round 6, P2): only a SYSTEM-scoped report.read DENY revokes the whole surface. A
@@ -114,12 +117,17 @@ async def document_control_register_endpoint(
     report_grants = await gather_grants(session, uid, org_id, "report.read")
     gate_ctx = RequestContext(now=datetime.datetime.now(datetime.UTC), source_ip=source_ip)
     # ADMIT on any report.read ALLOW at a surface level whose REQUEST-CONTEXT predicates pass; a
-    # grant narrowed by a RESOURCE predicate (lifecycle_state/requirement_source) is admitted here
-    # and narrowed by the per-row authorize() gate below (#335 fix 2 — see the block comment).
+    # grant narrowed by lifecycle_state is admitted here and narrowed by the per-row authorize()
+    # gate below (#335 fix 2 — see the block comment). A grant narrowed by requirement_source is
+    # NOT admitted: that ABAC predicate has no producer in v1 (no documented_information
+    # .requirement_source column; resource_from_doc never sets it — like concrete_type/#345), so the
+    # per-row gate rejects it for EVERY row → admitting it would return a misleading empty register
+    # instead of a subset, worse than the honest 403 (#347 Codex P2).
     has_allow = any(
         g.effect == Effect.ALLOW
         and g.level in _SURFACE_LEVELS
         and _context_predicates_pass(g, gate_ctx, "report.read")
+        and not (g.predicates or {}).get("requirement_source")
         for g in report_grants
     )
     # A SYSTEM report.read DENY revokes the whole surface only when it applies unconditionally on

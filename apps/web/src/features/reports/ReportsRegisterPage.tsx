@@ -314,6 +314,10 @@ function ProvenanceBanner({ provenance }: { provenance: RegisterProvenance }) {
   // explicitly, as plain text (never dangerouslySetInnerHTML), so an auditor can't mistake a
   // process-limited register for the org-wide one.
   const processScope = p.process_scope;
+  // #335 fix 1: a PROCESS report.read DENY removes that process's documents per-row, so the register
+  // is "{process_scope, or org-wide} EXCEPT excluded_processes". Surface the exclusions as plain
+  // text (never dangerouslySetInnerHTML) so a restricted register can't read as the org-wide one.
+  const excludedProcesses = p.excluded_processes;
   return (
     <Card withBorder padding="sm">
       <Stack gap={4}>
@@ -325,6 +329,11 @@ function ProvenanceBanner({ provenance }: { provenance: RegisterProvenance }) {
         {processScope && processScope.length > 0 && (
           <Text size="sm" c="dimmed">
             Scope limited to processes: {processScope.map((proc) => proc.name).join(", ")}
+          </Text>
+        )}
+        {excludedProcesses && excludedProcesses.length > 0 && (
+          <Text size="sm" c="dimmed">
+            Excludes processes: {excludedProcesses.map((proc) => proc.name).join(", ")}
           </Text>
         )}
         <Text size="xs" c="dimmed" style={{ fontFamily: "monospace" }}>

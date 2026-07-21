@@ -282,6 +282,9 @@ async def compute_document_control_register(
             if g.effect == Effect.ALLOW
             and g.level in (ScopeLevel.SYSTEM, ScopeLevel.PROCESS)
             and _context_predicates_pass(g, ctx, "report.read")
+            # requirement_source is v1-unimplemented (no producer — see reports.py / #347): a grant
+            # narrowed by it matches no row, so it doesn't contribute to the ALLOW boundary either.
+            and not (g.predicates or {}).get("requirement_source")
         ]
         has_system_allow = any(g.level == ScopeLevel.SYSTEM for g in allow_grants)
         authorization_scope: list[dict[str, str]] | None
