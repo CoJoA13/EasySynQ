@@ -54,12 +54,12 @@ The interface flows the way ISO 9001 itself flows — the clause spine, the proc
 
 **Integrity & access control**
 - **Append-only, hash-chained, monthly-partitioned audit trail**, structurally enforced by database role separation
-- Append-only **e-signature** events (architected for 21 CFR Part 11)
+- Append-only approval **signature events** — the reserved 21 CFR Part 11 e-signature hook (full e-signatures are architected, not yet built)
 - Off-host tamper-evidence checkpoint anchor plus chain verification
 - **Hybrid RBAC + ABAC** authorization — deny-by-default, deny-always-wins, scoped to system/process/folder/document with per-user overrides
 
 **Deployment & operations**
-- **Self-hosted** on a single Linux host via Docker Compose (S/M/L sizing profiles) — air-gap friendly, no phone-home
+- **Self-hosted** on a single Linux host via Docker Compose (S/M sizing profiles) — air-gap friendly, no phone-home
 - Guided **first-run setup** with blocking trust gates (bootstrap → WORM verify → backup/restore drill → auth → users & roles)
 - Encrypted backups (AES-256-GCM), **WORM-aware restore-to-verified-target**, health-gated upgrades
 - **Ingestion engine** to import an existing QMS file tree (scan → classify → dedup → review → commit)
@@ -73,7 +73,7 @@ A small, role-segmented quality team inside one organization. EasySynQ models ei
 - **Quality Manager** — owns the QMS: objectives, audits, CAPA, the compliance checklist
 - **Process Owner** — accountable for a slice of the process map
 - **Author** — drafts and revises controlled documents
-- **Approver** — reviews and approves/releases (the separation-of-duties counterparty)
+- **Approver** — reviews and approves documents (the separation-of-duties counterparty; release is a separate hand)
 - **Internal Auditor** — plans audits, raises findings, drives them to CAPA
 - **Employee** — reads effective documents and acknowledges assignments
 - **External Auditor** — read-only, time-boxed; verifies currency and traceability
