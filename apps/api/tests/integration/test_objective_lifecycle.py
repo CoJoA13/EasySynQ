@@ -11,16 +11,24 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy import func, select
 
+from easysynq_api.db.models._clause_enums import PdcaPhase
+from easysynq_api.db.models._process_enums import ProcessState
 from easysynq_api.db.models._signature_enums import SignatureMeaning
 from easysynq_api.db.models._vault_enums import DocumentCurrentState, VersionState
+from easysynq_api.db.models.authz_grant import PermissionOverride
 from easysynq_api.db.models.document_version import DocumentVersion
 from easysynq_api.db.models.documented_information import DocumentedInformation
+from easysynq_api.db.models.permission import Permission
+from easysynq_api.db.models.process import Process
+from easysynq_api.db.models.scope import Scope
 from easysynq_api.db.models.signature_event import SignatureEvent as SignatureEventRow
 from easysynq_api.db.session import get_sessionmaker
+from easysynq_api.domain.authz.types import Effect, ScopeLevel
+from easysynq_api.services.vault import repository as vault_repo
 
 from . import s5_helpers as s5
 from .test_quality_objectives import _grant
-from .test_vault import _auth
+from .test_vault import _auth, _ensure_user
 
 pytestmark = pytest.mark.integration
 
@@ -266,3 +274,163 @@ async def test_policy_endpoint_requires_objective_read(
     r = await app_client.get("/api/v1/objectives/policy", headers=h)
     assert r.status_code == 403, r.text
     assert r.json()["code"] == "permission_denied"
+
+
+async def _add_override(
+    subject: str,
+    permission_key: str,
+    effect: Effect,
+    level: ScopeLevel,
+    *,
+    selector: dict[str, object] | None = None,
+) -> None:
+    """Seed a scoped permission override for ``subject`` (the test_search/test_authz precedent) —
+    used here to seed a FRAMEWORK-scoped ALLOW + a PROCESS-scoped DENY for ``document.release``."""
+    async with get_sessionmaker()() as s:
+        user = await _ensure_user(s, subject)
+        perm = (
+            await s.execute(select(Permission).where(Permission.key == permission_key))
+        ).scalar_one()
+        scope = Scope(org_id=user.org_id, level=level, selector=selector)
+        s.add(scope)
+        await s.flush()
+        s.add(
+            PermissionOverride(
+                org_id=user.org_id,
+                user_id=user.id,
+                permission_id=perm.id,
+                effect=effect,
+                scope_id=scope.id,
+            )
+        )
+        await s.commit()
+
+
+async def _seed_process(subject: str) -> str:
+    """Insert an ACTIVE Process in the subject's org; return its id (str)."""
+    async with get_sessionmaker()() as s:
+        user = await _ensure_user(s, subject)
+        proc = Process(
+            org_id=user.org_id,
+            name=f"OBJ-P-{uuid.uuid4().hex[:8]}",
+            pdca_phase=PdcaPhase.DO,
+            state=ProcessState.ACTIVE,
+            created_by=user.id,
+        )
+        s.add(proc)
+        await s.commit()
+        return str(proc.id)
+
+
+async def test_release_framework_allow_process_deny_denies_the_objective(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """#346: an objective binds its process on ``quality_objective.process_id`` (a satellite), NOT a
+    ``ProcessLink`` — so the release scope must UNION that satellite process (the shared
+    ``process_ids_for_docs`` loader now does). A third-party releaser with a FRAMEWORK-scoped
+    ``document.release`` ALLOW + a PROCESS-scoped ``document.release`` DENY on the objective's bound
+    process must be DENIED (deny-always-wins). Pre-#346 the satellite process was dropped from the
+    scope, the DENY didn't match, and the newly-#333-matching framework ALLOW released it (200)."""
+    salt = uuid.uuid4().hex[:8]
+    submitter, approver, releaser = f"obj-fd-sm-{salt}", f"obj-fd-ap-{salt}", f"obj-fd-rl-{salt}"
+    hs, hap = _auth(token_factory, submitter), _auth(token_factory, approver)
+    await _grant(submitter, _OBJ_KEYS)
+    await s5.grant_role(approver, "Approver")
+
+    proc_id = await _seed_process(submitter)
+    # create the objective BOUND to the process (satellite process_id, deliberately no ProcessLink)
+    r = await app_client.post(
+        "/api/v1/objectives",
+        headers=hs,
+        json={
+            "title": f"FwDeny objective {salt}",
+            "target_value": "98",
+            "unit": "%",
+            "direction": "HIGHER_IS_BETTER",
+            "due_date": "2026-12-31",
+            "at_risk_threshold": "95",
+            "baseline_value": "90",
+            "process_id": proc_id,
+        },
+    )
+    assert r.status_code == 201, r.text
+    oid = r.json()["id"]
+
+    # drive to Approved (submitter authors + submits, approver approves)
+    submitted = await app_client.post(f"/api/v1/objectives/{oid}/submit-review", headers=hs)
+    assert submitted.status_code == 200, submitted.text
+    task_id = await s5.task_for_doc(oid)
+    dec = await app_client.post(
+        f"/api/v1/tasks/{task_id}/decision", headers=hap, json={"outcome": "approve"}
+    )
+    assert dec.status_code == 200, dec.text
+
+    # the objective's framework (the single seeded framework) — read straight from the row
+    async with get_sessionmaker()() as s:
+        di = await s.get(DocumentedInformation, uuid.UUID(oid))
+        assert di is not None
+        framework_id = str(di.framework_id)
+
+    # releaser = a SoD-2-clean third party: a broad FRAMEWORK document.release ALLOW, but a
+    # PROCESS-scoped document.release DENY on the objective's bound process (+ SYSTEM read so the
+    # only blocker is the release gate). Deny-always-wins → a 403, not a SoD violation.
+    await _add_override(
+        releaser,
+        "document.release",
+        Effect.ALLOW,
+        ScopeLevel.FRAMEWORK,
+        selector={"framework_id": framework_id},
+    )
+    await _add_override(
+        releaser,
+        "document.release",
+        Effect.DENY,
+        ScopeLevel.PROCESS,
+        selector={"process_id": proc_id},
+    )
+    await _add_override(releaser, "document.read", Effect.ALLOW, ScopeLevel.SYSTEM)
+    hrl = _auth(token_factory, releaser)
+
+    rel = await app_client.post(f"/api/v1/objectives/{oid}/release", headers=hrl)
+    assert rel.status_code == 403, rel.text  # the PROCESS DENY wins over the framework ALLOW
+    assert rel.json()["code"] == "permission_denied"  # deny-wins, NOT a SoD violation
+
+
+async def test_process_ids_for_doc_unions_objective_satellite(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """#346: the canonical ``process_ids_for_doc(s)`` loader UNIONs the objective's satellite
+    (``quality_objective.process_id``). Every document authz scope built from it — release, the
+    approve/review decision, instance/approval read, search, the DCR target scope, and the record
+    source/correction scopes — therefore sees a bound-process objective's process, so a
+    PROCESS-scoped DENY participates (deny-always-wins). A process-less objective yields the empty
+    set (proving it's the satellite value, not a phantom); pre-#346 the bound objective also
+    yielded empty."""
+    salt = uuid.uuid4().hex[:8]
+    owner = f"obj-pid-{salt}"
+    ho = _auth(token_factory, owner)
+    await _grant(owner, _OBJ_KEYS)
+    proc_id = await _seed_process(owner)
+
+    bound = await app_client.post(
+        "/api/v1/objectives",
+        headers=ho,
+        json={
+            "title": f"Bound objective {salt}",
+            "target_value": "98",
+            "unit": "%",
+            "direction": "HIGHER_IS_BETTER",
+            "due_date": "2026-12-31",
+            "at_risk_threshold": "95",
+            "baseline_value": "90",
+            "process_id": proc_id,
+        },
+    )
+    assert bound.status_code == 201, bound.text
+    unbound = await _create_objective(app_client, ho, f"Unbound objective {salt}")  # no process_id
+
+    async with get_sessionmaker()() as s:
+        bound_pids = await vault_repo.process_ids_for_doc(s, uuid.UUID(bound.json()["id"]))
+        unbound_pids = await vault_repo.process_ids_for_doc(s, uuid.UUID(unbound))
+    assert bound_pids == frozenset({proc_id})  # satellite unioned (empty pre-#346)
+    assert unbound_pids == frozenset()  # a process-less objective has no phantom process

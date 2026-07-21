@@ -24,10 +24,17 @@ from types import SimpleNamespace
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import select
+
+from easysynq_api.db.models.authz_grant import PermissionOverride
+from easysynq_api.db.models.permission import Permission
+from easysynq_api.db.models.scope import Scope
+from easysynq_api.db.session import get_sessionmaker
+from easysynq_api.domain.authz.types import Effect, ScopeLevel
 
 from . import s5_helpers as s5
 from .test_processes import _create_process, _grant, _link_doc_to_process, _user_id
-from .test_vault import _auth
+from .test_vault import _auth, _create, _ensure_user
 
 pytestmark = pytest.mark.integration
 
@@ -390,3 +397,69 @@ async def test_process_owner_search_sees_only_linked_effective_docs(
     assert linked["id"] in found_ids
     assert unlinked["id"] not in found_ids
     assert body["hidden_by_scope"] >= 1
+
+
+async def _add_override(
+    subject: str,
+    permission_key: str,
+    effect: Effect,
+    level: ScopeLevel,
+    *,
+    selector: dict[str, object] | None = None,
+) -> None:
+    """Seed a scoped permission override for ``subject`` (the register ``_add_override`` precedent)
+    — used here to seed a FRAMEWORK-scoped ``document.read`` DENY."""
+    async with get_sessionmaker()() as s:
+        user = await _ensure_user(s, subject)
+        perm = (
+            await s.execute(select(Permission).where(Permission.key == permission_key))
+        ).scalar_one()
+        scope = Scope(org_id=user.org_id, level=level, selector=selector)
+        s.add(scope)
+        await s.flush()
+        s.add(
+            PermissionOverride(
+                org_id=user.org_id,
+                user_id=user.id,
+                permission_id=perm.id,
+                effect=effect,
+                scope_id=scope.id,
+            )
+        )
+        await s.commit()
+
+
+async def test_framework_scoped_document_read_deny_wins_on_detail_and_list(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    """#333: a FRAMEWORK-scoped ``document.read`` DENY + a broad SYSTEM ALLOW -> 403 on the detail
+    gate ``GET /documents/{id}`` (scope resolved via the canonical builder) AND the row is excluded
+    from the Library list (the same shared ``resource_from_doc`` builder). Before #333 both surfaces
+    left ``framework_id`` unset, so the FRAMEWORK DENY could never match and the SYSTEM ALLOW won
+    (200 / visible) — the deny-always-wins gap this closes. ``subj.a`` (SYSTEM ``document.read``, no
+    deny) proves the document is otherwise readable, isolating the deny as the cause of the 403."""
+    await s5.grant_lifecycle(subj.a)  # creator + a plain SYSTEM document.read holder (control)
+    ha = _auth(token_factory, subj.a)
+    doc = await _create(app_client, ha, await s5.type_id("SOP"))
+
+    await _add_override(subj.b, "document.read", Effect.ALLOW, ScopeLevel.SYSTEM)
+    await _add_override(
+        subj.b,
+        "document.read",
+        Effect.DENY,
+        ScopeLevel.FRAMEWORK,
+        selector={"framework_id": doc["framework_id"]},
+    )
+    hb = _auth(token_factory, subj.b)
+
+    # Control: the creator (SYSTEM document.read, no framework deny) reads it fine.
+    assert (await app_client.get(f"/api/v1/documents/{doc['id']}", headers=ha)).status_code == 200
+
+    # Detail gate (canonical builder): the FRAMEWORK DENY wins over the broad SYSTEM ALLOW.
+    denied = await app_client.get(f"/api/v1/documents/{doc['id']}", headers=hb)
+    assert denied.status_code == 403, denied.text
+
+    # List surface (shared row-filter): the framework-denied doc is excluded, not surfaced.
+    listed = await app_client.get("/api/v1/documents", headers=hb)
+    assert listed.status_code == 200, listed.text
+    assert doc["id"] not in {r["id"] for r in listed.json()["data"]}

@@ -10,6 +10,7 @@ closed 96-key catalog has no ``task.*``/``workflow.*`` keys, so listing is self-
 
 from __future__ import annotations
 
+import dataclasses
 import datetime
 import uuid
 from typing import Any
@@ -19,6 +20,7 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..auth.dependencies import get_current_user
+from ..db.models._vault_enums import DocumentKind
 from ..db.models._workflow_enums import TaskState, TaskType, WorkflowSubjectType
 from ..db.models.app_user import AppUser
 from ..db.models.document_type import DocumentType
@@ -28,6 +30,7 @@ from ..domain.authz import ResourceContext
 from ..problems import ProblemException
 from ..services.ack.decide import decide_doc_ack
 from ..services.authz import AuthzAuditSink, enforce, get_authz_audit_sink
+from ..services.authz.resource import resource_from_doc
 from ..services.capa import decide_capa_action_plan
 from ..services.dcr import decide_dcr_approval
 from ..services.improvement import decide_initiative_authorization
@@ -138,11 +141,16 @@ async def _decision_scope(session: AsyncSession, task: Task) -> ResourceContext:
     if doc.document_type_id:
         dt = await session.get(DocumentType, doc.document_type_id)
         level = dt.document_level.value if dt else None
-    return ResourceContext(
-        artifact_id=str(doc.id),
-        folder_path=doc.folder_path,
-        document_level=level,
-        lifecycle_state=doc.current_state.value,
+    # #333: full scope tuple via the shared helper (adds framework_id + kind so a FRAMEWORK- or
+    # kind-scoped review/approve/release DENY isn't dropped at the decision gate — the most
+    # security-sensitive document surface) INCLUDING process_ids, so a PROCESS-scoped DENY on a
+    # linked process participates too — else the new framework ALLOW would beat a dropped PROCESS
+    # DENY (#346 review). Then fold the SoD inputs (the version under decision + its author).
+    base = resource_from_doc(
+        doc, document_level=level, process_ids=await vault_repo.process_ids_for_doc(session, doc.id)
+    )
+    return dataclasses.replace(
+        base,
         version_id=str(version.id) if version else None,
         author_user_id=str(version.author_user_id) if version else None,
     )
@@ -382,21 +390,31 @@ async def get_instance_endpoint(
         raise ProblemException(status=404, code="not_found", title="Workflow instance not found")
     # Gate on the subject document's read permission (no task.*/workflow.* catalog key exists).
     doc = await vault_repo.get_document(session, instance.subject_id)
-    level: str | None = None
-    folder: str | None = None
-    if doc is not None:
-        folder = doc.folder_path
-        if doc.document_type_id:
-            dt = await session.get(DocumentType, doc.document_type_id)
-            level = dt.document_level.value if dt else None
     # S-process-scope-1: carry the subject doc's process_ids so a bound Process Owner's
     # PROCESS-scoped document.read authorizes this read (mirrors the detail _document_scope).
-    resource = ResourceContext(
-        artifact_id=str(instance.subject_id),
-        folder_path=folder,
-        document_level=level,
-        process_ids=await vault_repo.process_ids_for_doc(session, instance.subject_id),
-    )
+    process_ids = await vault_repo.process_ids_for_doc(session, instance.subject_id)
+    level: str | None = None
+    if doc is not None and doc.document_type_id:
+        dt = await session.get(DocumentType, doc.document_type_id)
+        level = dt.document_level.value if dt else None
+    if doc is not None and doc.kind is DocumentKind.DOCUMENT:
+        # #333: a genuine DOCUMENT subject gets the FULL scope tuple, so a FRAMEWORK- or kind-scoped
+        # document.read DENY isn't dropped (and lifecycle predicates narrow, consistent with the
+        # detail read).
+        resource = resource_from_doc(doc, document_level=level, process_ids=process_ids)
+    else:
+        # A non-document subject: no documented_information row, OR a RECORD-backed one — a CAPA/
+        # audit/MR subject_id resolves to the shared documented_information row (record.id ->
+        # documented_information.id, kind=RECORD). This gate is a v1 document.read kludge, so do NOT
+        # extend DOCUMENT framework/kind scoping to a record (a framework-scoped document.read would
+        # otherwise reach a record's instance — #346 review). Keep only artifact + folder +
+        # doc-class + process, exactly as before #333.
+        resource = ResourceContext(
+            artifact_id=str(instance.subject_id),
+            folder_path=doc.folder_path if doc is not None else None,
+            document_level=level,
+            process_ids=process_ids,
+        )
     await enforce(session, authz_sink, request, caller, "document.read", resource)
     tasks = await wf_repo.list_instance_tasks(session, instance.id) if expand == "tasks" else None
     return _instance(instance, tasks)
@@ -422,12 +440,19 @@ async def get_document_approval_endpoint(
         dt = await session.get(DocumentType, doc.document_type_id)
         level = dt.document_level.value if dt else None
     # S-process-scope-1: process_ids so a bound Process Owner's PROCESS document.read matches.
-    resource = ResourceContext(
-        artifact_id=str(doc.id),
-        folder_path=doc.folder_path,
-        document_level=level,
-        process_ids=await vault_repo.process_ids_for_doc(session, doc.id),
-    )
+    process_ids = await vault_repo.process_ids_for_doc(session, doc.id)
+    if doc.kind is DocumentKind.DOCUMENT:
+        resource = resource_from_doc(doc, document_level=level, process_ids=process_ids)
+    else:
+        # A RECORD-backed id (records share documented_information via record.id): don't extend
+        # DOCUMENT framework/kind scoping to a record on this document.read gate (#346 review); a
+        # record has no DOCUMENT-type approval cycle anyway (the lookup below filters on DOCUMENT).
+        resource = ResourceContext(
+            artifact_id=str(doc.id),
+            folder_path=doc.folder_path,
+            document_level=level,
+            process_ids=process_ids,
+        )
     await enforce(session, authz_sink, request, caller, "document.read", resource)
     instance = await wf_repo.latest_instance_for_subject(
         session, caller.org_id, WorkflowSubjectType.DOCUMENT, doc.id

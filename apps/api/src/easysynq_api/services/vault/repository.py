@@ -29,6 +29,7 @@ from ...db.models.org_role import OrgRole
 from ...db.models.process import Process
 from ...db.models.process_edge import ProcessEdge
 from ...db.models.process_link import ProcessLink
+from ...db.models.quality_objective import QualityObjective
 from ...db.models.supplier import Supplier
 from ...db.models.system_config import SystemConfig
 from ...db.models.working_draft import WorkingDraft
@@ -330,11 +331,22 @@ async def list_process_links(
 async def process_ids_for_docs(
     session: AsyncSession, doc_ids: Sequence[uuid.UUID]
 ) -> dict[uuid.UUID, frozenset[str]]:
-    """Map each ``documented_information`` id → the frozenset of its ``ProcessLink`` process ids (as
-    strings). Ids with no link are absent (callers default to ``frozenset()``). The single shared
-    loader behind every document-scope ``ResourceContext.process_ids`` — so the S-owner-assignment-1
-    R28 enrichment (a bound Process Owner's PROCESS grant authorizing across the document gates)
-    stays consistent everywhere a doc's authz scope resolves (detail/list/search/workflow-read)."""
+    """Map each ``documented_information`` id → the frozenset of its process ids (as strings).
+    Ids with no process are absent (callers default to ``frozenset()``). The single shared
+    loader behind every document-scope ``ResourceContext.process_ids`` — so the
+    S-owner-assignment-1 R28 enrichment (a bound Process Owner's PROCESS grant authorizing
+    across the document gates) stays consistent everywhere a doc's authz scope resolves
+    (detail/list/search/workflow-read).
+
+    A doc's process scope = its ``ProcessLink`` rows UNION any satellite-bound process. A
+    quality objective (6.2) stores its bound process on ``quality_objective.process_id`` —
+    each objective IS its own ``documented_information`` (``QualityObjective.id == doc.id``),
+    NOT a ``ProcessLink`` (only ``vault/service.py`` creates those). Without this union a
+    PROCESS-scoped ``document.read``/``approve``/``release`` DENY on the objective's bound
+    process is dropped once #333 populates the FRAMEWORK selector: the framework ALLOW then
+    matches while the PROCESS DENY can't (deny-always-wins violated, #346). Risk/opportunity
+    is a register-HEAD model — its satellite ``process_id`` sits on rows keyed by their own
+    id, never a document id — so no union is needed there."""
     if not doc_ids:
         return {}
     grouped: dict[uuid.UUID, set[str]] = {}
@@ -346,6 +358,17 @@ async def process_ids_for_docs(
         )
     ).all():
         grouped.setdefault(di_id, set()).add(str(p_id))
+    # Objective satellite: QualityObjective.id == the OBJ document's id; its process_id (absent from
+    # ProcessLink) is the objective's bound process — union it so a PROCESS-scoped DENY still fires.
+    for oid, p_id in (
+        await session.execute(
+            select(QualityObjective.id, QualityObjective.process_id).where(
+                QualityObjective.id.in_(doc_ids),
+                QualityObjective.process_id.is_not(None),
+            )
+        )
+    ).all():
+        grouped.setdefault(oid, set()).add(str(p_id))
     return {k: frozenset(v) for k, v in grouped.items()}
 
 

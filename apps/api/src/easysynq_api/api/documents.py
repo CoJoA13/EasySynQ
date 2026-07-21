@@ -57,7 +57,7 @@ from ..services.ack import queries as ack_queries
 from ..services.ack.sink import get_ack_enqueue_sink
 from ..services.authz import AuthzAuditSink, enforce, gather_grants, get_authz_audit_sink, require
 from ..services.authz.repository import gather_sod_constraints, get_allow_approver_release
-from ..services.authz.resource import build_document_resource_context
+from ..services.authz.resource import build_document_resource_context, resource_from_doc
 from ..services.common.org_clock import current_org_tz
 from ..services.dcr import build_where_used
 from ..services.diff import build_version_diff, get_or_create_visual_diff, get_visual_diff
@@ -760,9 +760,12 @@ async def list_documents(
     ctx = RequestContext(now=datetime.datetime.now(datetime.UTC))
     visible: list[DocumentedInformation] = []
     for d in docs:
-        resource = ResourceContext(
-            artifact_id=str(d.id),
-            folder_path=d.folder_path,
+        # #333: full scope tuple via the shared helper so the list row-filter can't drift from the
+        # canonical builder — adds framework_id + kind (a FRAMEWORK- or kind-scoped document.read
+        # DENY now structurally matches instead of being silently dropped) + lifecycle_state (a
+        # lifecycle-predicated read narrows here, consistent with the detail gate + the register).
+        resource = resource_from_doc(
+            d,
             document_level=levels.get(d.document_type_id) if d.document_type_id else None,
             process_ids=process_ids_by_doc.get(d.id, frozenset()),
         )

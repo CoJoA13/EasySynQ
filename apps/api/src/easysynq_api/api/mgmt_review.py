@@ -45,6 +45,7 @@ from ..services.authz import (
     require,
 )
 from ..services.authz.repository import gather_sod_constraints, get_allow_approver_release
+from ..services.authz.resource import resource_from_doc
 from ..services.common.org_clock import resolve_org_tz
 from ..services.mgmt_review import (
     add_output,
@@ -74,6 +75,7 @@ from ..services.vault import (
     get_vault_audit_sink,
     get_vault_signature_sink,
 )
+from ..services.vault import repository as vault_repo
 from ..services.vault.release_scope import enrich_release_sod_scope
 from ..services.vault.review import today_org
 from ..services.workflow import repository as wf_repo
@@ -241,11 +243,11 @@ async def _release_scope(session: AsyncSession, doc: DocumentedInformation) -> R
     if doc.document_type_id:
         dt = await session.get(DocumentType, doc.document_type_id)
         level = dt.document_level.value if dt else None
-    base = ResourceContext(
-        artifact_id=str(doc.id),
-        folder_path=doc.folder_path,
-        document_level=level,
-        lifecycle_state=doc.current_state.value,
+    # #333: full scope tuple via the shared helper (adds framework_id + kind so a FRAMEWORK/kind-
+    # scoped release DENY isn't dropped), INCLUDING process_ids so a PROCESS-scoped DENY on a
+    # linked process participates too (#346 review), then fold SoD inputs.
+    base = resource_from_doc(
+        doc, document_level=level, process_ids=await vault_repo.process_ids_for_doc(session, doc.id)
     )
     return await enrich_release_sod_scope(session, base, doc.id, None)
 

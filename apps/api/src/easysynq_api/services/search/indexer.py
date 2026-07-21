@@ -38,6 +38,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 _SEARCH_SQL = sa.text(
     """
     SELECT documented_information.id AS id,
+           documented_information.framework_id AS framework_id,
            identifier AS identifier,
            title AS title,
            documented_information.current_state AS current_state,
@@ -74,6 +75,7 @@ _SEARCH_SQL = sa.text(
 _SUGGEST_SQL = sa.text(
     """
     SELECT documented_information.id AS id,
+           documented_information.framework_id AS framework_id,
            identifier AS identifier,
            title AS title,
            documented_information.folder_path AS folder_path,
@@ -97,6 +99,7 @@ class SearchHit:
     denormalize the same fields)."""
 
     doc_id: uuid.UUID
+    framework_id: str
     identifier: str
     title: str
     current_state: str
@@ -109,6 +112,7 @@ class SearchHit:
 @dataclasses.dataclass(frozen=True, slots=True)
 class Suggestion:
     doc_id: uuid.UUID
+    framework_id: str
     identifier: str
     title: str
     folder_path: str | None
@@ -142,6 +146,7 @@ class PostgresFtsIndexer:
         return [
             SearchHit(
                 doc_id=r["id"],
+                framework_id=str(r["framework_id"]),
                 identifier=r["identifier"],
                 title=r["title"],
                 current_state=r["current_state"],
@@ -169,6 +174,7 @@ class PostgresFtsIndexer:
         return [
             Suggestion(
                 doc_id=r["id"],
+                framework_id=str(r["framework_id"]),
                 identifier=r["identifier"],
                 title=r["title"],
                 folder_path=r["folder_path"],

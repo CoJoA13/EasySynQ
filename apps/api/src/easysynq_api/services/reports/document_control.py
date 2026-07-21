@@ -36,6 +36,7 @@ from ...db.session import get_sessionmaker
 from ...domain.authz import Effect, RequestContext, ResourceContext, ScopeLevel, authorize
 from ...domain.authz.pdp import _as_set, _predicates_pass
 from ..authz import gather_grants
+from ..authz.resource import resource_from_doc
 from ..common.org_clock import current_org_tz
 from ..vault import repository as vault_repo
 from ..vault.review import review_state
@@ -272,13 +273,13 @@ async def compute_document_control_register(
 
         visible: list[DocumentedInformation] = []
         for d in docs:
-            resource = ResourceContext(
-                artifact_id=str(d.id),
-                folder_path=d.folder_path,
+            # #333: build the FULL scope tuple via the shared completion helper so this batched
+            # builder can't drift from the canonical build_document_resource_context on which
+            # selectors it populates (adds kind; framework_id/lifecycle were already inline).
+            resource = resource_from_doc(
+                d,
                 document_level=type_level.get(d.document_type_id) if d.document_type_id else None,
                 process_ids=process_ids_by_doc.get(d.id, frozenset()),
-                lifecycle_state=d.current_state.value,
-                framework_id=str(d.framework_id),
             )
             if (
                 authorize(grants, "document.read", resource, ctx).allow
