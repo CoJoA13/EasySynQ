@@ -28,7 +28,7 @@ jobs:
       - uses: actions/checkout@v7
       - name: install uv
         # exact pin — setup-uv stopped publishing floating major tags at v8
-        uses: astral-sh/setup-uv@v8.3.0
+        uses: astral-sh/setup-uv@v8.3.2
         with:
           enable-cache: true
           cache-dependency-glob: "apps/api/uv.lock"
@@ -63,7 +63,7 @@ jobs:
       DATABASE_URL: postgresql+psycopg://easysynq:easysynq@localhost:5432/easysynq
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v8.3.0
+      - uses: astral-sh/setup-uv@v8.3.2
         with:
           enable-cache: true
           cache-dependency-glob: "apps/api/uv.lock"
@@ -92,7 +92,7 @@ jobs:
         group: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v8.3.0
+      - uses: astral-sh/setup-uv@v8.3.2
         with:
           enable-cache: true
           cache-dependency-glob: "apps/api/uv.lock"
@@ -156,7 +156,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: install uv
-        uses: astral-sh/setup-uv@v8.3.0
+        uses: astral-sh/setup-uv@v8.3.2
         with:
           enable-cache: true
           cache-dependency-glob: "apps/api/uv.lock"
