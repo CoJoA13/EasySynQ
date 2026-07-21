@@ -21,7 +21,7 @@ The interface flows the way ISO 9001 itself flows — the clause spine, the proc
 **Controlled documents**
 - Master copy of every document held in the vault; check-out → upload → **immutable check-in** under a lock
 - Canonical **7-state lifecycle** (Draft → InReview → Approved → Effective → UnderRevision → Superseded → Obsolete)
-- Exactly **one Effective version** per document, database-enforced, with atomic scheduled go-live
+- **At most one Effective version** per document at any time, database-enforced, with atomic scheduled go-live
 - **Document Change Requests** with redline/diff, annotations, and where-used impact
 - Periodic-review scheduling and controlled obsolescence
 
@@ -33,10 +33,10 @@ The interface flows the way ISO 9001 itself flows — the clause spine, the proc
 - Drift detection: mirror re-hash and auto-correct, stale-revision alerts, scheduled re-review
 
 **Records, evidence & traceability**
-- Immutable records **pinned to the exact document version** in force at capture
+- Immutable records; those captured under a controlled document are **pinned to the exact version** in force at capture
 - Retention schedules with **controlled disposition** (never a silent delete)
 - **Evidence Packs** generated on demand, with revocable external share links
-- Full requirement → process → document → record → evidence traceability chain
+- Clause- and process-scoped traceability from controlled documents to the records that evidence them — the basis for Evidence Packs
 
 **ISO 9001:2015 alignment**
 - Seeded **83-clause catalog** plus the 20 ★ mandatory documented-information items
@@ -67,7 +67,7 @@ The interface flows the way ISO 9001 itself flows — the clause spine, the proc
 
 ## Who it's for
 
-A small, role-segmented quality team inside one organization. EasySynQ models eight canonical roles:
+A small, role-segmented quality team inside one organization. EasySynQ is built around eight canonical personas (the seeded permission catalog adds a handful of governance roles beyond these):
 
 - **System Administrator** — runs the server, users, backups; sits *outside* the QMS (holds no document permissions)
 - **Quality Manager** — owns the QMS: objectives, audits, CAPA, the compliance checklist
