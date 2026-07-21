@@ -219,7 +219,7 @@ services:
 
   # Dev-only SMTP catcher (email is best-effort in MVP). Enable with --profile dev.
   mailpit:
-    image: axllent/mailpit:v1.30.4
+    image: axllent/mailpit:v1.30.5
     profiles: [dev]
     networks: [internal]
 
