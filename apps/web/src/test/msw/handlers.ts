@@ -17,6 +17,7 @@ import type {
   DcrList,
   DcrPatchBody,
   DistributionPayload,
+  DocumentControlRegister,
   DocumentVersion,
   DriftStatus,
   EffectivePolicy,
@@ -540,6 +541,24 @@ export const complianceFixture = {
     },
   ],
 };
+
+// S-report-doc-control: default empty register (any page mounting the hook must not error under
+// onUnhandledRequest:"error"; per-test overrides supply populated rows/403).
+export const documentControlRegisterFixture = {
+  provenance: {
+    report_name: "Controlled Document Register",
+    generated_by: "test",
+    generated_at: "2026-07-19T12:00:00+00:00",
+    as_of: "2026-07-19T12:00:00+00:00",
+    scope: "org:DEFAULT",
+    app_version: "0.1.0",
+    filters: {},
+    row_count: 0,
+    content_hash: "sha256:0",
+    process_scope: null,
+  },
+  rows: [],
+} satisfies DocumentControlRegister;
 
 // ---- S-web-7 CAPA fixtures -------------------------------------------------------
 export const capaListFixture = {
@@ -3415,6 +3434,9 @@ export const handlers = [
   http.get("/api/v1/search", () => HttpResponse.json(searchFixture)),
   http.get("/api/v1/search/suggest", () => HttpResponse.json(suggestFixture)),
   http.get("/api/v1/reports/compliance-checklist", () => HttpResponse.json(complianceFixture)),
+  http.get("/api/v1/reports/document-control", () =>
+    HttpResponse.json(documentControlRegisterFixture),
+  ),
   // ---- S-ack-2 acknowledgements (default happy-path; per-test overrides for 403/409/null-coverage) ----
   http.get("/api/v1/documents/:id/distribution", () => HttpResponse.json(distributionFixture)),
   http.post("/api/v1/documents/:id/distribution", () => HttpResponse.json(distributionFixture)),

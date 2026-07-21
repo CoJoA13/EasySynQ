@@ -63,6 +63,16 @@ const NAV: Record<PdcaPhase, NavItem[]> = {
       gate: "mgmtReview.read",
     },
     { to: "/drift", label: "Drift", prefix: "/drift", gate: "drift.read" },
+    // Ungated (the Risk/Context precedent): GET /reports/document-control admits a PROCESS-scoped
+    // report.read holder (the Process Owner) too — the SYSTEM-scoped `can()` here can't see that
+    // grant, so gating on it hid the link from a Process Owner who could otherwise open the page by
+    // URL (Codex P2). GET is filter-not-403 for document.read but the SURFACE gate itself can still
+    // 403 a no-grant caller — the page's own calm NoAccessState handles that.
+    {
+      to: "/reports/document-control",
+      label: "Document register",
+      prefix: "/reports/document-control",
+    },
   ],
   ACT: [
     { to: "/capa", label: "Nonconformity and CAPA", prefix: "/capa" },

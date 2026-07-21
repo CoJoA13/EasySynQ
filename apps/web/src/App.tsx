@@ -31,6 +31,7 @@ import { DriftLayout } from "./features/drift/DriftLayout";
 import { DriftStatusPage } from "./features/drift/DriftStatusPage";
 import { SupersededCopiesPage } from "./features/drift/SupersededCopiesPage";
 import { ObjectivesRegisterPage } from "./features/objectives/ObjectivesRegisterPage";
+import { ReportsRegisterPage } from "./features/reports/ReportsRegisterPage";
 import { ObjectiveDetailPage } from "./features/objectives/ObjectiveDetailPage";
 import { ManagementReviewsRegisterPage } from "./features/management-review/ManagementReviewsRegisterPage";
 import { ManagementReviewDetailPage } from "./features/management-review/ManagementReviewDetailPage";
@@ -142,6 +143,7 @@ export function App() {
         <Route path="settings/notifications" element={<NotificationSettingsPage />} />
         <Route path="search" element={<SearchResultsPage />} />
         <Route path="compliance" element={<CompliancePage />} />
+        <Route path="reports/document-control" element={<ReportsRegisterPage />} />
         <Route path="capa" element={<CapaLayout />}>
           <Route index element={<CapaBoardPage />} />
           <Route path="complaints" element={<ComplaintsPage />} />

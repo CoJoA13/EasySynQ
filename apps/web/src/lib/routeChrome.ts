@@ -27,6 +27,7 @@ const TITLES: readonly (readonly [string, string])[] = [
   ["/risks", "Risks"],
   ["/context", "Context"],
   ["/interested-parties", "Interested parties"],
+  ["/reports/document-control", "Document register"],
 ];
 
 const SORTED = [...TITLES].sort((a, b) => b[0].length - a[0].length);

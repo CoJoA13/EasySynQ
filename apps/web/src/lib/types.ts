@@ -1,11 +1,5 @@
 export type DocumentCurrentState =
-  | "Draft"
-  | "InReview"
-  | "Approved"
-  | "Effective"
-  | "UnderRevision"
-  | "Superseded"
-  | "Obsolete";
+  "Draft" | "InReview" | "Approved" | "Effective" | "UnderRevision" | "Superseded" | "Obsolete";
 
 export type ReviewState = "current" | "due_soon" | "overdue";
 
@@ -143,6 +137,9 @@ export interface DocumentFilters {
   owner_user_id?: string;
   clause?: string; // a clause number, e.g. "8.4"
   effective_from_gte?: string; // ISO timestamp (the relative date bucket's lower bound)
+  // S-report-doc-control fix wave: the register's process facet — docs linked to this process
+  // (filter[process_id][eq]). Omitted by default; only the register sets it today.
+  process_id?: string;
   // S-doc-filters (CREATE-picker): two opt-in server-side narrowing filters. false → never-released /
   // non-managed-subtype. Omitted (undefined) by default — only the CREATE picker sets them.
   has_effective_version?: boolean;
@@ -350,11 +347,7 @@ export interface Task {
 
 // current_state is free-form Text server-side — keep it an open string, do NOT enum-validate.
 export type WorkflowInstanceState =
-  | "IN_APPROVAL"
-  | "APPROVED"
-  | "REJECTED_TO_DRAFT"
-  | "NEEDS_ATTENTION"
-  | (string & {});
+  "IN_APPROVAL" | "APPROVED" | "REJECTED_TO_DRAFT" | "NEEDS_ATTENTION" | (string & {});
 
 // GET /documents/{id}/approval · GET /workflow-instances/{id}.
 export interface WorkflowInstance {
@@ -968,13 +961,7 @@ export interface NcrDispositionBody {
 
 // ---- S-web-7d audits & findings (pinned to api/audits.py _program/_plan/_audit/_finding) ----
 export type AuditState =
-  | "Scheduled"
-  | "Planned"
-  | "InProgress"
-  | "FindingsDraft"
-  | "Reported"
-  | "Closing"
-  | "Closed";
+  "Scheduled" | "Planned" | "InProgress" | "FindingsDraft" | "Reported" | "Closing" | "Closed";
 export type FindingType = "NC" | "OBSERVATION" | "OFI";
 
 export interface AuditProgram {
@@ -1825,13 +1812,7 @@ export interface ContextUpdateBody {
 // ORDERED relevance axis; party_name is the anchor identifier + needs_expectations the body (two text
 // fields, vs context's single description).
 export type InterestedPartyType =
-  | "customer"
-  | "regulator"
-  | "supplier"
-  | "employee"
-  | "owner"
-  | "community"
-  | "partner";
+  "customer" | "regulator" | "supplier" | "employee" | "owner" | "community" | "partner";
 export type InterestedPartyInfluence = "low" | "medium" | "high";
 export type InterestedPartyStatus = "active" | "closed";
 // The IPR head is a kind=DOCUMENT subtype → its lifecycle state is the 7-state document one.
@@ -2002,4 +1983,56 @@ export interface NotificationDeliveryHealth {
     pending: number;
     oldest_pending_at: string | null;
   };
+}
+
+// GET /reports/document-control — the Controlled Document Register (hard-gated report.read SYSTEM;
+// 403 for callers without the key).
+export interface ClauseRef {
+  clause: string;
+  starred: boolean;
+}
+
+export interface RegisterRow {
+  id: string;
+  identifier: string;
+  title: string;
+  document_type_id: string | null;
+  document_type: string | null;
+  current_state: DocumentCurrentState;
+  owner_user_id: string;
+  owner_display: string | null;
+  effective_revision_label: string | null;
+  effective_from: string | null;
+  blob_sha256: string | null;
+  clause_refs: ClauseRef[];
+  process_links: string[];
+  approved_by: string | null;
+  approved_on: string | null;
+  next_review_due: string | null;
+  review_state: ReviewState | null;
+}
+
+export interface RegisterProvenance {
+  report_name: string;
+  generated_by: string;
+  generated_at: string;
+  as_of: string;
+  scope: string;
+  app_version: string;
+  // S-report-doc-control fix wave: the backend groups repeated `filter[...]` query params per key
+  // (build_provenance in services/reports/document_control.py) rather than collapsing to the last
+  // value, so a REPEATED filter (e.g. two clause_refs[has] values) is represented faithfully.
+  filters: Record<string, string[]>;
+  row_count: number;
+  content_hash: string;
+  // Codex round 6 FIX 2: the caller's effective report.read authorization boundary — null when
+  // org-wide (a predicate-passing SYSTEM report.read ALLOW), else the process(es) a PROCESS-scoped
+  // report.read grant confines the register to. Distinct from `scope` (always `org:<short_code>`)
+  // so a process-limited register can't be mistaken for the org-wide one.
+  process_scope: { id: string; name: string }[] | null;
+}
+
+export interface DocumentControlRegister {
+  provenance: RegisterProvenance;
+  rows: RegisterRow[];
 }

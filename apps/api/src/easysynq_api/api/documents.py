@@ -520,6 +520,8 @@ _FILTER_ALLOW: frozenset[tuple[str, str]] = frozenset(
         ("document_type", "eq"),
         ("owner_user_id", "eq"),
         ("classification", "eq"),
+        # S-report-doc-control fix wave: the register's process facet — docs linked to a process.
+        ("process_id", "eq"),
         # S-doc-filters: the CREATE-implement picker narrows server-side (default-off).
         ("has_effective_version", "eq"),
         ("managed_subtype", "eq"),
@@ -615,6 +617,22 @@ def _filter_condition(field: str, op: str, value: str) -> ColumnElement[bool]:
             )
             .exists()
         )
+    if field == "process_id":  # filter[process_id][eq]=<uuid> — docs linked to this process
+        try:
+            process_id = uuid.UUID(value)
+        except ValueError as exc:
+            raise ProblemException(
+                status=422, code="validation_error", title="Invalid process_id filter value"
+            ) from exc
+        return (
+            select(1)
+            .select_from(ProcessLink)
+            .where(
+                ProcessLink.documented_information_id == DocumentedInformation.id,
+                ProcessLink.process_id == process_id,
+            )
+            .exists()
+        )
     if field == "current_state":
         try:
             return DocumentedInformation.current_state == DocumentCurrentState(value)
@@ -643,8 +661,19 @@ def _filter_condition(field: str, op: str, value: str) -> ColumnElement[bool]:
         ) from exc
 
 
-def _parse_document_filters(request: Request) -> list[ColumnElement[bool]]:
+def parse_document_filters_with_applied(
+    request: Request,
+) -> tuple[list[ColumnElement[bool]], dict[str, list[str]]]:
+    """As ``_parse_document_filters``, but also returns the ACCEPTED ``filter[...]`` params,
+    grouped per raw key (a repeated key — e.g. two ``filter[clause_refs][has]`` values, ANDed —
+    is preserved as a list, not collapsed to its last value).
+
+    Used by the document-control register's provenance echo (FIX D): only keys that matched the
+    bracket grammar AND are in ``_FILTER_ALLOW`` are included, so a malformed key (e.g.
+    ``filter[process_id][eq`` — missing its closing bracket) that this parser silently ignores is
+    never echoed in ``provenance.filters`` as if it had narrowed the row set."""
     conditions: list[ColumnElement[bool]] = []
+    applied: dict[str, list[str]] = {}
     for raw_key, value in request.query_params.multi_items():
         match = _FILTER_KEY_RE.match(raw_key)
         if match is None:
@@ -655,6 +684,12 @@ def _parse_document_filters(request: Request) -> list[ColumnElement[bool]]:
                 status=400, code="unknown_filter", title=f"Unknown filter: {raw_key}"
             )
         conditions.append(_filter_condition(field, op, value))
+        applied.setdefault(raw_key, []).append(value)
+    return conditions, applied
+
+
+def _parse_document_filters(request: Request) -> list[ColumnElement[bool]]:
+    conditions, _applied = parse_document_filters_with_applied(request)
     return conditions
 
 
