@@ -426,9 +426,8 @@ async def get_document_approval_endpoint(
         dt = await session.get(DocumentType, doc.document_type_id)
         level = dt.document_level.value if dt else None
     # S-process-scope-1: process_ids so a bound Process Owner's PROCESS document.read matches.
-    resource = ResourceContext(
-        artifact_id=str(doc.id),
-        folder_path=doc.folder_path,
+    resource = resource_from_doc(
+        doc,
         document_level=level,
         process_ids=await vault_repo.process_ids_for_doc(session, doc.id),
     )

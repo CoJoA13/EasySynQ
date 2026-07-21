@@ -14,8 +14,13 @@ from types import SimpleNamespace
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import select
 
+from easysynq_api.db.models.authz_grant import PermissionOverride
+from easysynq_api.db.models.permission import Permission
+from easysynq_api.db.models.scope import Scope
 from easysynq_api.db.session import get_sessionmaker
+from easysynq_api.domain.authz.types import Effect, ScopeLevel
 
 from . import s5_helpers as s5
 from .test_vault import _auth, _ensure_user
@@ -140,3 +145,67 @@ async def test_suggest_prefix(
     assert r.status_code == 200, r.text
     ids = [s["id"] for s in r.json()["suggestions"]]
     assert doc["id"] in ids
+
+
+async def _add_override(
+    subject: str,
+    permission_key: str,
+    effect: Effect,
+    level: ScopeLevel,
+    *,
+    selector: dict[str, object] | None = None,
+) -> None:
+    """Seed a scoped permission override for ``subject`` (the register/test_authz precedent) — used
+    here to seed a FRAMEWORK-scoped ``document.read`` DENY."""
+    async with get_sessionmaker()() as s:
+        user = await _ensure_user(s, subject)
+        perm = (
+            await s.execute(select(Permission).where(Permission.key == permission_key))
+        ).scalar_one()
+        scope = Scope(org_id=user.org_id, level=level, selector=selector)
+        s.add(scope)
+        await s.flush()
+        s.add(
+            PermissionOverride(
+                org_id=user.org_id,
+                user_id=user.id,
+                permission_id=perm.id,
+                effect=effect,
+                scope_id=scope.id,
+            )
+        )
+        await s.commit()
+
+
+async def test_framework_scoped_document_read_deny_hides_search_hit(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    """#333: a caller with a broad SYSTEM document.read ALLOW + a FRAMEWORK-scoped document.read
+    DENY must NOT see the framework-denied Effective doc in /search. The per-hit filter now sets the
+    hit's framework_id (from the indexer projection), so the DENY wins and the doc is counted in
+    hidden_by_scope. Pre-#333 the hit omitted framework_id, the DENY was dropped, and it leaked."""
+    await s5.grant_lifecycle(subj.a)
+    await s5.grant_lifecycle(subj.b)
+    await s5.set_approver_release(await s5.default_org_id(), True)
+    ha, hb = _auth(token_factory, subj.a), _auth(token_factory, subj.b)
+    token = uuid.uuid4().hex[:12]
+    doc = await _effective_titled(app_client, ha, hb, f"FwDeny {token}")
+
+    denier = f"kc-fwdeny-{uuid.uuid4().hex[:8]}"
+    await _add_override(denier, "document.read", Effect.ALLOW, ScopeLevel.SYSTEM)
+    await _add_override(
+        denier,
+        "document.read",
+        Effect.DENY,
+        ScopeLevel.FRAMEWORK,
+        selector={"framework_id": doc["framework_id"]},
+    )
+    hc = _auth(token_factory, denier)
+
+    body = (await app_client.get(f"/api/v1/search?q={token}", headers=hc)).json()
+    assert doc["id"] not in {h["id"] for h in body["results"]}  # framework DENY wins
+    assert body["hidden_by_scope"] >= 1  # counted as scope-hidden, not state-excluded
+
+    # The same completion applies on the suggest path (prefix over identifier/title).
+    sg = (await app_client.get("/api/v1/search/suggest?q=FwDeny", headers=hc)).json()
+    assert doc["id"] not in {s["id"] for s in sg["suggestions"]}

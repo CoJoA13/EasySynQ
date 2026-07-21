@@ -30,10 +30,10 @@ from ...db.models.document_version import DocumentVersion
 from ...db.models.documented_information import DocumentedInformation
 from ...db.models.process_link import ProcessLink
 from ...db.models.workflow import Task, WorkflowInstance
-from ...domain.authz import ResourceContext
 from ...logging import request_id_var
 from ...problems import ProblemException
 from ..authz import AuthzAuditSink, enforce
+from ..authz.resource import resource_from_doc
 from ..workflow import engine as wf_engine
 from . import queries
 
@@ -169,12 +169,12 @@ async def decide_doc_ack(
     ).scalars()
     # R28: the FULL context — the seeded Employee grant is PROCESS-scoped; without process_ids
     # the PDP can never match it (Codex P1).
-    resource = ResourceContext(
-        artifact_id=str(doc.id),
-        folder_path=doc.folder_path,
+    # #333: full scope tuple via the shared helper (adds framework_id + kind so a FRAMEWORK/kind-
+    # scoped document.acknowledge DENY isn't dropped).
+    resource = resource_from_doc(
+        doc,
         document_level=level,
         process_ids=frozenset(str(p) for p in process_ids),
-        lifecycle_state=doc.current_state.value,
     )
     await enforce(session, authz_sink, request, actor, "document.acknowledge", resource)
 

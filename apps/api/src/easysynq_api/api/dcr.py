@@ -41,6 +41,7 @@ from ..domain.authz import RequestContext, ResourceContext, authorize
 from ..problems import ProblemException
 from ..services.authz import AuthzAuditSink, enforce, gather_grants, get_authz_audit_sink, require
 from ..services.authz.repository import gather_sod_constraints, get_allow_approver_release
+from ..services.authz.resource import resource_from_doc
 from ..services.capa import raise_dcr_from_capa
 from ..services.dcr import (
     annotate_impact,
@@ -194,13 +195,12 @@ async def _dcr_doc_scope(session: AsyncSession, doc_id: uuid.UUID | None) -> Res
         dt = await session.get(DocumentType, doc.document_type_id)
         level = dt.document_level.value if dt else None
     links = await vault_repo.list_process_links(session, doc.id)
-    return ResourceContext(
-        artifact_id=str(doc.id),
-        folder_path=doc.folder_path,
+    # #333: full scope tuple via the shared helper (adds kind; framework_id/process_ids/lifecycle
+    # were already inline) so a kind-scoped changeRequest DENY at DOC_CLASS scope isn't dropped.
+    return resource_from_doc(
+        doc,
         document_level=level,
-        framework_id=str(doc.framework_id),
         process_ids=frozenset(str(p.id) for _link, p in links),
-        lifecycle_state=doc.current_state.value,
     )
 
 

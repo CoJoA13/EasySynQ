@@ -46,10 +46,16 @@ async def _readable_hits(
     process_ids_by_doc = await vault_repo.process_ids_for_docs(session, [h.doc_id for h in hits])
     visible: list[SearchHit] = []
     for h in hits:
+        # #333: complete the scope tuple so a FRAMEWORK- or kind-scoped document.read DENY isn't
+        # dropped. kind is a query invariant (indexer WHERE kind='DOCUMENT'); lifecycle_state is the
+        # hit's own current_state (indexer WHERE current_state='Effective').
         resource = ResourceContext(
             artifact_id=str(h.doc_id),
             folder_path=h.folder_path,
             document_level=h.document_level,
+            framework_id=h.framework_id,
+            kind="DOCUMENT",
+            lifecycle_state=h.current_state,
             process_ids=process_ids_by_doc.get(h.doc_id, frozenset()),
         )
         if authorize(grants, "document.read", resource, ctx).allow:
@@ -102,10 +108,15 @@ async def suggest_endpoint(
     process_ids_by_doc = await vault_repo.process_ids_for_docs(session, [s.doc_id for s in raw])
     out: list[dict[str, str]] = []
     for s in raw:
+        # #333: complete the scope tuple (see /search). Suggestions are Effective DOCUMENTs by the
+        # indexer WHERE, so kind/lifecycle_state are constants.
         resource = ResourceContext(
             artifact_id=str(s.doc_id),
             folder_path=s.folder_path,
             document_level=s.document_level,
+            framework_id=s.framework_id,
+            kind="DOCUMENT",
+            lifecycle_state="Effective",
             process_ids=process_ids_by_doc.get(s.doc_id, frozenset()),
         )
         if authorize(grants, "document.read", resource, ctx).allow:
