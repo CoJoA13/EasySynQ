@@ -20,10 +20,9 @@ from ..config import get_settings
 from ..db.models.app_user import AppUser
 from ..db.session import get_session
 from ..domain.authz import Effect, RequestContext, ResourceContext, ScopeLevel
-from ..domain.authz.pdp import _predicates_pass
+from ..domain.authz.pdp import _context_predicates_pass, _predicates_pass
 from ..problems import ProblemException
 from ..services.authz import gather_grants, require
-from ..services.common.org_clock import current_org_tz
 from ..services.reports import compute_checklist
 from ..services.reports.document_control import (
     build_provenance,
@@ -59,17 +58,20 @@ async def compliance_checklist_endpoint(
 # Documents the requester may see") — a Process Owner admitted here still only sees their
 # linked-process docs.
 #
-# FIX A (Codex round 2, P1): the surface gate must also evaluate each candidate grant's ABAC
-# predicates (valid_from/valid_until/ip_allow) BEFORE the effect+level check — otherwise an
-# expired/not-yet-valid/wrong-IP report.read ALLOW still admits (and an expired/future DENY blocks
-# forever). Reuses the PDP's own predicate evaluator (``_predicates_pass``) so this gate matches
-# the exact semantics ``authorize()`` would apply, rather than re-implementing a parallel (and
-# potentially divergent) check. ``ResourceContext.system()`` is the right resource to evaluate
-# against: report.read is an org-level surface permission with no artifact/folder/process-bound
-# target, and ``_predicates_pass`` only reads context-only predicates (valid_from/until, ip_allow,
-# read_only) plus resource-bound ones (lifecycle_state, requirement_source) that are nonsensical on
-# a report.read grant — those simply never match ``ResourceContext.system()``'s all-None fields, so
-# such a predicate fails safe (drops the grant) rather than raising, which is acceptable here.
+# FIX A (Codex round 2, P1): the surface gate evaluates each candidate grant's REQUEST-CONTEXT ABAC
+# predicates (valid_from/valid_until/ip_allow/read_only) via ``_context_predicates_pass`` — so an
+# expired/not-yet-valid/wrong-IP report.read ALLOW does not admit (and an expired/future SYSTEM DENY
+# does not block forever). It reuses the PDP's own evaluator so this gate matches the semantics
+# ``authorize()`` would apply.
+#
+# FIX 2 (#335, P2): the surface deliberately does NOT evaluate the RESOURCE predicates
+# (lifecycle_state/requirement_source) for ADMISSION. A report.read ALLOW narrowed by e.g.
+# ``lifecycle_state=["Effective"]`` is a legitimate grant that admits the caller to the Effective
+# rows, so it must be admitted here and narrowed by the per-row ``authorize(report.read, row)`` gate
+# — evaluating it against ``ResourceContext.system()`` (all-None) wrongly dropped it and 403'd the
+# caller. A SYSTEM report.read DENY still revokes the whole surface only when it applies
+# unconditionally on the resource plane, so it IS evaluated against ``ResourceContext.system()``
+# with the full ``_predicates_pass``: a resource-scoped SYSTEM DENY is row-scoped, left per-row.
 _SURFACE_LEVELS = frozenset({ScopeLevel.SYSTEM, ScopeLevel.PROCESS})
 
 # FIX 1 (Codex round 6, P2): only a SYSTEM-scoped report.read DENY revokes the whole surface. A
@@ -111,14 +113,24 @@ async def document_control_register_endpoint(
     # --- surface gate (FIX A) — still on connection #1, before it's released ---
     report_grants = await gather_grants(session, uid, org_id, "report.read")
     gate_ctx = RequestContext(now=datetime.datetime.now(datetime.UTC), source_ip=source_ip)
-    active = [
-        g
+    # ADMIT on any report.read ALLOW at a surface level whose REQUEST-CONTEXT predicates pass; a
+    # grant narrowed by a RESOURCE predicate (lifecycle_state/requirement_source) is admitted here
+    # and narrowed by the per-row authorize() gate below (#335 fix 2 — see the block comment).
+    has_allow = any(
+        g.effect == Effect.ALLOW
+        and g.level in _SURFACE_LEVELS
+        and _context_predicates_pass(g, gate_ctx, "report.read")
         for g in report_grants
-        if g.level in _SURFACE_LEVELS
+    )
+    # A SYSTEM report.read DENY revokes the whole surface only when it applies unconditionally on
+    # the resource plane — so it stays evaluated against ResourceContext.system() (full
+    # _predicates_pass): a resource-scoped SYSTEM DENY is row-scoped, left per-row (PROCESS too).
+    has_system_deny = any(
+        g.effect == Effect.DENY
+        and g.level == ScopeLevel.SYSTEM
         and _predicates_pass(g, ResourceContext.system(), gate_ctx, "report.read")
-    ]
-    has_allow = any(g.effect == Effect.ALLOW for g in active)
-    has_system_deny = any(g.effect == Effect.DENY and g.level == ScopeLevel.SYSTEM for g in active)
+        for g in report_grants
+    )
     if not has_allow or has_system_deny:
         raise ProblemException(status=403, code="forbidden", title="report.read required")
 
@@ -137,8 +149,10 @@ async def document_control_register_endpoint(
     )
     # FIX B: generated_at/as_of are the snapshot instant CAPTURED INSIDE the service's REPEATABLE
     # READ transaction (a ``SELECT now()`` there == the txn/snapshot start), not a later wall-clock
-    # read taken after that transaction (and its connection) already closed.
-    generated_at = result.snapshot_at.astimezone(current_org_tz())
+    # read taken after that transaction (and its connection) already closed. FIX 4 (#335): format it
+    # in the org tz the service resolved from INSIDE that same snapshot (result.org_tz), not the
+    # request contextvar — so generated_at/as_of share the tz every row timestamp was projected in.
+    generated_at = result.snapshot_at.astimezone(result.org_tz)
     provenance = build_provenance(
         generated_by=display,
         generated_at=generated_at,
@@ -148,5 +162,6 @@ async def document_control_register_endpoint(
         row_count=result.row_count,
         content_hash=result.content_hash,
         process_scope=result.authorization_scope,
+        excluded_processes=result.excluded_processes,
     )
     return {"provenance": provenance, "rows": result.rows}

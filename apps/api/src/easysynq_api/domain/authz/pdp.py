@@ -101,14 +101,17 @@ def _matches_scope(grant: ResolvedGrant, resource: ResourceContext) -> bool:
     return False
 
 
-def _predicates_pass(
+def _context_predicates_pass(
     grant: ResolvedGrant,
-    resource: ResourceContext,
     context: RequestContext,
     permission_key: str,
 ) -> bool:
-    """ABAC predicate gate — narrowing only (AZ-INV-8). A predicate can never widen a
-    grant; failing any predicate drops the grant from the matching set (doc 07 §5.1/§5.4)."""
+    """The REQUEST-CONTEXT half of the ABAC predicate gate — the predicates that depend only on
+    the request (``valid_from``/``valid_until``/``read_only``/``ip_allow``), never on the resource.
+    Split out so a SURFACE gate over an org-level permission (``report.read``) can ADMIT a grant
+    narrowed by a RESOURCE predicate (``lifecycle_state``/``requirement_source``) and leave that
+    narrowing to the per-row ``authorize()`` — rather than dropping it wholesale against a
+    resource-less ``ResourceContext.system()`` (#335 fix 2). Still narrowing-only (AZ-INV-8)."""
     p = grant.predicates or {}
 
     valid_from = _as_dt(p.get("valid_from"))
@@ -121,6 +124,28 @@ def _predicates_pass(
     if p.get("read_only") and not _is_read_action(permission_key):
         return False
 
+    ip_allow = p.get("ip_allow")
+    if ip_allow and (context.source_ip is None or context.source_ip not in set(ip_allow)):
+        return False
+
+    return True
+
+
+def _predicates_pass(
+    grant: ResolvedGrant,
+    resource: ResourceContext,
+    context: RequestContext,
+    permission_key: str,
+) -> bool:
+    """ABAC predicate gate — narrowing only (AZ-INV-8). A predicate can never widen a
+    grant; failing any predicate drops the grant from the matching set (doc 07 §5.1/§5.4). The
+    request-context predicates are factored into ``_context_predicates_pass``; this adds the
+    RESOURCE-bound predicates (``lifecycle_state``/``requirement_source``)."""
+    if not _context_predicates_pass(grant, context, permission_key):
+        return False
+
+    p = grant.predicates or {}
+
     lifecycle = p.get("lifecycle_state")
     if lifecycle is not None:
         allowed = lifecycle if isinstance(lifecycle, (list, tuple, set)) else [lifecycle]
@@ -129,10 +154,6 @@ def _predicates_pass(
 
     requirement_source = p.get("requirement_source")
     if requirement_source is not None and resource.requirement_source != requirement_source:
-        return False
-
-    ip_allow = p.get("ip_allow")
-    if ip_allow and (context.source_ip is None or context.source_ip not in set(ip_allow)):
         return False
 
     return True

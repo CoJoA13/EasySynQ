@@ -46,6 +46,7 @@ def test_build_provenance_shape_excludes_hash_from_its_own_input():
         row_count=2,
         content_hash="sha256:abc",
         process_scope=None,
+        excluded_processes=None,
     )
     assert prov["report_name"] == "Controlled Document Register"
     assert prov["generated_at"] == now.isoformat()
@@ -57,6 +58,7 @@ def test_build_provenance_shape_excludes_hash_from_its_own_input():
     assert prov["filters"] == {"filter[current_state][eq]": ["Effective"]}
     assert prov["generated_by"] == "Mara Quality"
     assert prov["process_scope"] is None
+    assert prov["excluded_processes"] is None
 
 
 def test_build_provenance_shape_preserves_repeated_filter_values():
@@ -73,6 +75,7 @@ def test_build_provenance_shape_preserves_repeated_filter_values():
         row_count=1,
         content_hash="sha256:abc",
         process_scope=None,
+        excluded_processes=None,
     )
     assert prov["filters"] == {"filter[clause_refs][has]": ["8.4", "8.5"]}
 
@@ -93,5 +96,27 @@ def test_build_provenance_shape_records_process_scope_when_process_limited():
         row_count=1,
         content_hash="sha256:abc",
         process_scope=scope,
+        excluded_processes=None,
     )
     assert prov["process_scope"] == scope
+
+
+def test_build_provenance_shape_records_excluded_processes():
+    """#335 fix 1: an unconditional PROCESS report.read DENY on an org-wide (SYSTEM ALLOW) reader
+    keeps ``process_scope`` null but records the denied process(es) in ``excluded_processes`` — so
+    the register reads honestly as org-wide MINUS those, never mistaken for the full set."""
+    now = datetime.datetime(2026, 7, 19, 12, 0, tzinfo=datetime.UTC)
+    excluded = [{"id": "22222222-2222-2222-2222-222222222222", "name": "Logistics"}]
+    prov = build_provenance(
+        generated_by="Mara Quality",
+        generated_at=now,
+        scope="org:DEFAULT",
+        app_version="0.1.0",
+        filters={},
+        row_count=3,
+        content_hash="sha256:abc",
+        process_scope=None,
+        excluded_processes=excluded,
+    )
+    assert prov["process_scope"] is None  # org-wide by the SYSTEM ALLOW
+    assert prov["excluded_processes"] == excluded
