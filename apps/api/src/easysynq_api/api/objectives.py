@@ -43,6 +43,7 @@ from ..services.authz import (
     require,
 )
 from ..services.authz.repository import gather_sod_constraints, get_allow_approver_release
+from ..services.authz.resource import resource_from_doc
 from ..services.objectives import (
     add_objective_plan,
     compute_scorecard,
@@ -347,12 +348,10 @@ async def _objective_release_scope(
     if doc.document_type_id:
         dt = await session.get(DocumentType, doc.document_type_id)
         level = dt.document_level.value if dt else None
-    base = ResourceContext(
-        artifact_id=str(doc.id),
-        folder_path=doc.folder_path,
-        document_level=level,
-        lifecycle_state=doc.current_state.value,
-    )
+    # #333: full scope tuple via the shared helper (adds framework_id + kind so a FRAMEWORK- or
+    # kind-scoped release DENY isn't dropped). process_ids stays empty — the objective release scope
+    # never carried process links, and that is unchanged here.
+    base = resource_from_doc(doc, document_level=level, process_ids=frozenset())
     return await enrich_release_sod_scope(session, base, doc.id, None)
 
 

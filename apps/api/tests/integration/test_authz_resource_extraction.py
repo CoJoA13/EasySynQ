@@ -49,11 +49,14 @@ async def seeded_document(app_under_test: object, token_factory: Callable[..., s
 async def test_build_document_resource_context_matches_delegate(
     app_under_test: object, seeded_document: object
 ) -> None:
-    """The extracted builder returns artifact_id == the doc's id and a non-None lifecycle_state."""
+    """The extracted builder returns the full scope tuple: artifact_id, a non-None lifecycle_state,
+    and (#333) framework_id + kind, so a FRAMEWORK/kind-scoped DENY is not dropped on any gate."""
     async with get_sessionmaker()() as session:
         rc = await build_document_resource_context(session, seeded_document.id)  # type: ignore[attr-defined]
     assert rc.artifact_id == str(seeded_document.id)  # type: ignore[attr-defined]
     assert rc.lifecycle_state is not None  # the doc's current_state.value
+    assert rc.framework_id is not None  # #333: FRAMEWORK-scope selector
+    assert rc.kind == "DOCUMENT"  # #333: DOC_CLASS kind selector
 
 
 async def test_build_document_resource_context_missing_doc_degrades(

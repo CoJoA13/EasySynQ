@@ -10,6 +10,7 @@ closed 96-key catalog has no ``task.*``/``workflow.*`` keys, so listing is self-
 
 from __future__ import annotations
 
+import dataclasses
 import datetime
 import uuid
 from typing import Any
@@ -28,6 +29,7 @@ from ..domain.authz import ResourceContext
 from ..problems import ProblemException
 from ..services.ack.decide import decide_doc_ack
 from ..services.authz import AuthzAuditSink, enforce, get_authz_audit_sink
+from ..services.authz.resource import resource_from_doc
 from ..services.capa import decide_capa_action_plan
 from ..services.dcr import decide_dcr_approval
 from ..services.improvement import decide_initiative_authorization
@@ -138,11 +140,13 @@ async def _decision_scope(session: AsyncSession, task: Task) -> ResourceContext:
     if doc.document_type_id:
         dt = await session.get(DocumentType, doc.document_type_id)
         level = dt.document_level.value if dt else None
-    return ResourceContext(
-        artifact_id=str(doc.id),
-        folder_path=doc.folder_path,
-        document_level=level,
-        lifecycle_state=doc.current_state.value,
+    # #333: full scope tuple via the shared helper (adds framework_id + kind so a FRAMEWORK- or
+    # kind-scoped review/approve/release DENY isn't dropped at the decision gate — the most
+    # security-sensitive document surface), then fold the SoD inputs (the version under decision +
+    # its immutable author). process_ids stays empty, unchanged here.
+    base = resource_from_doc(doc, document_level=level, process_ids=frozenset())
+    return dataclasses.replace(
+        base,
         version_id=str(version.id) if version else None,
         author_user_id=str(version.author_user_id) if version else None,
     )
@@ -382,21 +386,21 @@ async def get_instance_endpoint(
         raise ProblemException(status=404, code="not_found", title="Workflow instance not found")
     # Gate on the subject document's read permission (no task.*/workflow.* catalog key exists).
     doc = await vault_repo.get_document(session, instance.subject_id)
-    level: str | None = None
-    folder: str | None = None
+    # S-process-scope-1: carry the subject doc's process_ids so a bound Process Owner's
+    # PROCESS-scoped document.read authorizes this read (mirrors the detail _document_scope).
+    process_ids = await vault_repo.process_ids_for_doc(session, instance.subject_id)
     if doc is not None:
-        folder = doc.folder_path
+        # #333: a document subject gets the FULL scope tuple via the shared helper, so a FRAMEWORK-
+        # or kind-scoped document.read DENY isn't dropped (and lifecycle predicates narrow,
+        # consistent with the detail read). A non-document subject (e.g. a CAPA) has no framework/
+        # kind and keeps the minimal artifact+process context.
+        level: str | None = None
         if doc.document_type_id:
             dt = await session.get(DocumentType, doc.document_type_id)
             level = dt.document_level.value if dt else None
-    # S-process-scope-1: carry the subject doc's process_ids so a bound Process Owner's
-    # PROCESS-scoped document.read authorizes this read (mirrors the detail _document_scope).
-    resource = ResourceContext(
-        artifact_id=str(instance.subject_id),
-        folder_path=folder,
-        document_level=level,
-        process_ids=await vault_repo.process_ids_for_doc(session, instance.subject_id),
-    )
+        resource = resource_from_doc(doc, document_level=level, process_ids=process_ids)
+    else:
+        resource = ResourceContext(artifact_id=str(instance.subject_id), process_ids=process_ids)
     await enforce(session, authz_sink, request, caller, "document.read", resource)
     tasks = await wf_repo.list_instance_tasks(session, instance.id) if expand == "tasks" else None
     return _instance(instance, tasks)
