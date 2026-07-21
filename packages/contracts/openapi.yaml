@@ -7885,7 +7885,7 @@ components:
         The audit-defensibility header (doc 13 §6) — who/when/what-scope generated the register,
         plus a content_hash over the row data (order-independent, filter-sensitive) reproducible
         via a recompute over the returned rows.
-      required: [report_name, generated_by, generated_at, as_of, scope, app_version, filters, row_count, content_hash, process_scope]
+      required: [report_name, generated_by, generated_at, as_of, scope, app_version, filters, row_count, content_hash, process_scope, excluded_processes]
       properties:
         report_name: { type: string, example: "Controlled Document Register" }
         generated_by: { type: string, description: The caller's display name / email / id. }
@@ -7910,6 +7910,21 @@ components:
             (deduplicated, name-sorted) set of processes their PROCESS-scoped report.read ALLOW
             grant(s) confine the register to. Distinct from scope (always org:<short_code>) so an
             auditor can't mistake a process-limited register for the org-wide one.
+          items:
+            type: object
+            additionalProperties: false
+            required: [id, name]
+            properties:
+              id: { type: string, format: uuid }
+              name: { type: string }
+        excluded_processes:
+          type: [array, "null"]
+          description: >-
+            Processes wholly EXCLUDED from the register by an unconditional PROCESS-scoped
+            report.read DENY (deny-always-wins) — null when there are none. The register reads as
+            "{process_scope, or org-wide} EXCEPT excluded_processes", so a SYSTEM-ALLOW +
+            PROCESS-DENY register can't be mistaken for the full org-wide set. Describes the caller's
+            authorization, not row data, so (like process_scope) it is not part of content_hash.
           items:
             type: object
             additionalProperties: false

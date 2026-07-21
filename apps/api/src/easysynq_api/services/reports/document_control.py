@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import ColumnElement
 
 from ...db.models._signature_enums import SignatureMeaning, SignedObjectType
@@ -34,10 +35,11 @@ from ...db.models.process import Process
 from ...db.models.signature_event import SignatureEvent
 from ...db.session import get_sessionmaker
 from ...domain.authz import Effect, RequestContext, ResourceContext, ScopeLevel, authorize
-from ...domain.authz.pdp import _as_set, _predicates_pass
+from ...domain.authz.pdp import _as_set, _context_predicates_pass, _predicates_pass
+from ...domain.authz.types import ResolvedGrant
 from ..authz import gather_grants
 from ..authz.resource import resource_from_doc
-from ..common.org_clock import current_org_tz
+from ..common.org_clock import resolve_org_tz
 from ..vault import repository as vault_repo
 from ..vault.review import review_state
 
@@ -73,17 +75,20 @@ def build_provenance(
     row_count: int,
     content_hash: str,
     process_scope: list[dict[str, str]] | None,
+    excluded_processes: list[dict[str, str]] | None,
 ) -> dict[str, Any]:
     """The audit-defensibility header block (doc 13 §6). ``as_of`` mirrors ``generated_at`` (the
     instant the register was materialized). ``filters`` echoes the applied ``filter[...]`` params,
     grouped per key so a REPEATED ``filter[...]`` query param (e.g. two ``filter[clause_refs][has]``
     values, ANDed by the parser) is represented faithfully rather than collapsed to its last value —
     the content hash must be reproducible from this block. FIX 2 (Codex round 6, P2):
-    ``process_scope`` records the caller's effective report.read authorization boundary — null when
-    org-wide, else the process(es) a PROCESS-scoped report.read grant confines them to — so a
-    process-limited register can't be mistaken for the org-wide one ``scope`` alone implies. This
-    describes the CALLER's authorization, not row data, so it is deliberately NOT part of the
-    content hash input (``register_content_hash`` stays row-data-only)."""
+    ``process_scope`` records the caller's effective report.read authorization boundary — null
+    when org-wide, else the process(es) a PROCESS-scoped report.read grant confines them to. FIX 1
+    (#335): ``excluded_processes`` records the process(es) an unconditional PROCESS report.read DENY
+    wholly removed — so the register reads as "{process_scope, or org-wide} EXCEPT
+    excluded_processes" and a SYSTEM-ALLOW + PROCESS-DENY register isn't mistaken for the full
+    org-wide set. Both describe the CALLER's authorization, not row data, so they are deliberately
+    NOT part of the content hash input (``register_content_hash`` stays row-data-only)."""
     stamp = generated_at.isoformat()
     return {
         "report_name": _REPORT_NAME,
@@ -96,6 +101,7 @@ def build_provenance(
         "row_count": row_count,
         "content_hash": content_hash,
         "process_scope": process_scope,
+        "excluded_processes": excluded_processes,
     }
 
 
@@ -117,12 +123,80 @@ class RegisterResult:
     # confine them to. Distinct from org_short_code/scope so a PROCESS-limited register can't be
     # mistaken for the org-wide one (provenance.scope stays "org:<short_code>" either way).
     authorization_scope: list[dict[str, str]] | None
+    # FIX 1 (#335, P2): processes wholly EXCLUDED by an unconditional PROCESS report.read DENY (the
+    # register is authorization_scope/org-wide MINUS these) — None when there are no such denies, so
+    # a SYSTEM-ALLOW + PROCESS-DENY register isn't advertised as the full org-wide set.
+    excluded_processes: list[dict[str, str]] | None
+    # FIX 4 (#335, P2): the canonical org tz resolved INSIDE the snapshot session (not the request
+    # contextvar pinned before the txn) — the route formats generated_at/as_of with it so every
+    # projected timestamp shares the one tz the snapshot's config attests to.
+    org_tz: datetime.tzinfo
 
 
 def _display(user: AppUser | None) -> str | None:
     if user is None:
         return None
     return user.display_name or user.email or str(user.id)
+
+
+async def _resolve_process_names(
+    session: AsyncSession, process_id_strs: set[str], org_id: uuid.UUID
+) -> list[dict[str, str]]:
+    """Resolve process-id selector strings → a sorted ``[{id, name}]``, ORG-SCOPED (#335 fix 3: a
+    malformed/hostile selector carrying a cross-org process UUID must not leak that process's name).
+
+    A selector value is unvalidated (``api/authz.py`` accepts ``selector: dict[str, Any]``), so an
+    un-parseable id is skipped rather than raised — the per-row PDP path tolerates the same garbage
+    (``_matches_scope`` compares strings, never parses), and a dropped id is consistent with it."""
+    if not process_id_strs:
+        return []
+    process_uuids: set[uuid.UUID] = set()
+    for pid in process_id_strs:
+        try:
+            process_uuids.add(uuid.UUID(pid))
+        except (ValueError, TypeError):
+            continue
+    if not process_uuids:
+        return []
+    rows = (
+        await session.execute(
+            select(Process.id, Process.name).where(
+                Process.id.in_(process_uuids), Process.org_id == org_id
+            )
+        )
+    ).all()
+    return sorted(
+        ({"id": str(pid), "name": name} for pid, name in rows),
+        key=lambda p: p["name"],
+    )
+
+
+_VALID_DOC_STATES: frozenset[str] = frozenset(s.value for s in DocumentCurrentState)
+
+
+def report_read_resource_satisfiable(grant: ResolvedGrant) -> bool:
+    """Whether a report.read grant's RESOURCE predicates can match ≥1 real document — the surface
+    admits an ALLOW (and the provenance counts it toward the boundary) only if so, else the per-row
+    ``authorize()`` rejects every row and the endpoint returns a misleading 200-empty register.
+
+    ``lifecycle_state`` and ``requirement_source`` are the ONLY two resource predicates
+    ``_predicates_pass`` applies, so validating both makes surface admission complete (#347 Codex):
+      * ``requirement_source`` is v1-unimplemented (no ``documented_information`` column / producer;
+        ``resource.requirement_source`` is always None), so a grant narrowed by it never matches.
+      * ``lifecycle_state`` must be a non-empty set intersecting the real ``DocumentCurrentState``
+        values — an empty list or only-unknown states (both accepted by the unrestricted
+        ``ScopeInput.predicates``) can match no row.
+    Rejection is by PRESENCE (``is not None``), matching ``_predicates_pass``'s own checks (a
+    falsy-but-present ``requirement_source`` / an empty ``lifecycle_state`` list still counts)."""
+    p = grant.predicates or {}
+    if p.get("requirement_source") is not None:
+        return False
+    lifecycle = p.get("lifecycle_state")
+    if lifecycle is not None:
+        allowed = lifecycle if isinstance(lifecycle, (list, tuple, set)) else [lifecycle]
+        if not (set(map(str, allowed)) & _VALID_DOC_STATES):
+            return False
+    return True
 
 
 async def compute_document_control_register(
@@ -220,56 +294,58 @@ async def compute_document_control_register(
         report_grants = await gather_grants(session, user_id, org_id, "report.read")
         ctx = RequestContext(now=snapshot_at, source_ip=source_ip)
 
-        # FIX 2 (Codex round 6, P2): the effective report.read authorization boundary for
-        # provenance. Mirrors the route's surface gate (api/reports.py _SURFACE_LEVELS +
-        # _predicates_pass), but evaluated here against the SAME snapshot_at-anchored ctx the
-        # per-row filter above uses (not the route's separate wall-clock read) — consistency: the
-        # scope this reports reflects the SAME instant the rows were materialized as-of. A
-        # predicate-passing SYSTEM ALLOW means org-wide (authorization_scope=None); otherwise the
-        # caller is confined to the union of their predicate-passing PROCESS ALLOW grants'
-        # process ids (the same selector shape ``_matches_scope`` reads: "process_id" singular
-        # falling back to "process_ids" plural).
-        active_report_grants = [
+        # The effective report.read authorization boundary recorded in provenance, evaluated
+        # against the SAME snapshot_at-anchored ctx the per-row filter uses (not the route's
+        # separate wall-clock read) — so the scope reflects the SAME instant the rows were
+        # materialized as-of.
+        #
+        # FIX 2 (#335, P2): ADMIT the ALLOW boundary on CONTEXT predicates only (a report.read
+        # ALLOW narrowed by a RESOURCE predicate — e.g. lifecycle_state — still confines the caller
+        # to its process; the per-row gate narrows which rows), mirroring the surface gate. A
+        # predicate-passing SYSTEM ALLOW means org-wide (process_scope=None); otherwise the caller
+        # is confined to the union of their PROCESS ALLOW selectors ("process_id" singular, falling
+        # back to "process_ids" plural).
+        allow_grants = [
             g
             for g in report_grants
-            if g.level in (ScopeLevel.SYSTEM, ScopeLevel.PROCESS)
-            and _predicates_pass(g, ResourceContext.system(), ctx, "report.read")
+            if g.effect == Effect.ALLOW
+            and g.level in (ScopeLevel.SYSTEM, ScopeLevel.PROCESS)
+            and _context_predicates_pass(g, ctx, "report.read")
+            # A resource-predicated grant that can't match any row (unimplemented
+            # requirement_source, or an empty/unknown lifecycle_state set) doesn't contribute to the
+            # ALLOW boundary — the per-row gate excludes every row it would match (#347; same check
+            # as the surface).
+            and report_read_resource_satisfiable(g)
         ]
-        has_system_allow = any(
-            g.effect == Effect.ALLOW and g.level == ScopeLevel.SYSTEM for g in active_report_grants
-        )
+        has_system_allow = any(g.level == ScopeLevel.SYSTEM for g in allow_grants)
         authorization_scope: list[dict[str, str]] | None
         if has_system_allow:
             authorization_scope = None
         else:
             scoped_process_ids: set[str] = set()
-            for g in active_report_grants:
-                if g.effect == Effect.ALLOW and g.level == ScopeLevel.PROCESS:
+            for g in allow_grants:
+                if g.level == ScopeLevel.PROCESS:
                     sel = g.selector or {}
                     scoped_process_ids |= _as_set(sel.get("process_id") or sel.get("process_ids"))
-            authorization_scope = []
-            if scoped_process_ids:
-                # A selector value is unvalidated (api/authz.py accepts ``selector: dict[str,
-                # Any]``), so a malformed PROCESS grant (e.g. a non-UUID process id from a bad
-                # admin edit) must not 500 this route — the per-row PDP path tolerates the same
-                # garbage (``_matches_scope`` does a plain string comparison, never parses), so
-                # skip an un-parseable id here too rather than raising. A dropped id is consistent
-                # with the per-row filter, which already ignores such a grant.
-                process_uuids: set[uuid.UUID] = set()
-                for pid in scoped_process_ids:
-                    try:
-                        process_uuids.add(uuid.UUID(pid))
-                    except (ValueError, TypeError):
-                        continue
-                processes = (
-                    await session.execute(
-                        select(Process.id, Process.name).where(Process.id.in_(process_uuids))
-                    )
-                ).all()
-                authorization_scope = sorted(
-                    ({"id": str(pid), "name": name} for pid, name in processes),
-                    key=lambda p: p["name"],
-                )
+            authorization_scope = await _resolve_process_names(session, scoped_process_ids, org_id)
+
+        # FIX 1 (#335, P2): a PROCESS report.read DENY that applies UNCONDITIONALLY on the resource
+        # plane wholly removes that process's rows in the per-row gate (deny-always-wins), so the
+        # register is really "{process_scope, or org-wide} MINUS these". Record them so the scope
+        # (or its org-wide null) can't be mistaken for the full set. Evaluated against
+        # ResourceContext.system() (FULL predicates) so a RESOURCE-scoped DENY — which removes
+        # only *some* of that process's rows — is NOT advertised as a whole-process exclusion (left
+        # to the per-row gate). A SYSTEM report.read DENY 403s at the surface, so only PROCESS hits.
+        deny_process_ids: set[str] = set()
+        for g in report_grants:
+            if (
+                g.effect == Effect.DENY
+                and g.level == ScopeLevel.PROCESS
+                and _predicates_pass(g, ResourceContext.system(), ctx, "report.read")
+            ):
+                sel = g.selector or {}
+                deny_process_ids |= _as_set(sel.get("process_id") or sel.get("process_ids"))
+        excluded_processes = await _resolve_process_names(session, deny_process_ids, org_id) or None
 
         visible: list[DocumentedInformation] = []
         for d in docs:
@@ -400,7 +476,14 @@ async def compute_document_control_register(
         # clock — ``today_org()`` reads ``datetime.now()`` at call time, so if generation crosses
         # org-tz midnight after ``snapshot_at`` was captured, review_state could be computed
         # against a different day than the one the provenance ``as_of``/content hash attest to.
-        org_tz = current_org_tz()
+        #
+        # FIX 4 (#335, P2): resolve the canonical org tz from INSIDE this snapshot session, not the
+        # request-context ``current_org_tz()`` (pinned by get_current_user BEFORE this REPEATABLE
+        # READ txn opened). If an admin changed the org/working-calendar tz in that window the
+        # pinned value is stale versus the config this snapshot holds; ``resolve_org_tz`` reads it
+        # consistently here. Returned in RegisterResult so the route formats generated_at/as_of in
+        # the SAME tz.
+        org_tz = await resolve_org_tz(session, org_id)
         today = snapshot_at.astimezone(org_tz).date()
         rows: list[dict[str, Any]] = []
         for d in visible:
@@ -453,4 +536,6 @@ async def compute_document_control_register(
         snapshot_at=snapshot_at,
         org_short_code=org_short_code,
         authorization_scope=authorization_scope,
+        excluded_processes=excluded_processes,
+        org_tz=org_tz,
     )

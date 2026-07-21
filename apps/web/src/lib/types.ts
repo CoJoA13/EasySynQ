@@ -2030,6 +2030,10 @@ export interface RegisterProvenance {
   // report.read grant confines the register to. Distinct from `scope` (always `org:<short_code>`)
   // so a process-limited register can't be mistaken for the org-wide one.
   process_scope: { id: string; name: string }[] | null;
+  // #335 fix 1: processes wholly EXCLUDED by an unconditional PROCESS report.read DENY — null when
+  // none. The register reads as "{process_scope, or org-wide} EXCEPT excluded_processes", so a
+  // SYSTEM-ALLOW + PROCESS-DENY register can't be mistaken for the full org-wide one.
+  excluded_processes: { id: string; name: string }[] | null;
 }
 
 export interface DocumentControlRegister {

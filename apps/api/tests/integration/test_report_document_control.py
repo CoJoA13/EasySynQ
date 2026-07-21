@@ -1040,3 +1040,188 @@ async def test_provenance_process_scope_tolerates_a_malformed_process_selector(
     resp = await app_client.get(_ROUTE, headers=ha)
     assert resp.status_code == 200, resp.text
     assert resp.json()["provenance"]["process_scope"] == []
+
+
+# --- #335: register report.read scope / provenance / tz edge-hardening ---------------------
+
+
+async def test_provenance_excluded_processes_reflects_a_process_read_deny(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    """#335 fix 1: a caller with a SYSTEM report.read ALLOW (org-wide) PLUS an unconditional
+    PROCESS-B report.read DENY has B's rows removed per-row (deny-always-wins) — provenance must say
+    so honestly. process_scope stays null (org-wide by the ALLOW) and the new excluded_processes
+    lists B. Pre-fix excluded_processes didn't exist and the register read as fully org-wide."""
+    await s5.grant_lifecycle(subj.a)  # creator (SYSTEM document.read)
+    ha = _auth(token_factory, subj.a)
+    type_id = await s5.type_id("SOP")
+    doc = await _create(app_client, ha, type_id)
+    org_id = await s5.default_org_id()
+    process_b = await _create_process_linked_to(subj.a, org_id, doc["id"])
+
+    await _grant(subj.b, ("report.read", "document.read"))  # broad SYSTEM ALLOW
+    await _add_override(
+        subj.b,
+        "report.read",
+        Effect.DENY,
+        ScopeLevel.PROCESS,
+        selector={"process_id": process_b},
+    )
+    body = (await app_client.get(_ROUTE, headers=_auth(token_factory, subj.b))).json()
+    prov = body["provenance"]
+    assert prov["process_scope"] is None  # org-wide by the SYSTEM ALLOW
+    assert process_b in {p["id"] for p in (prov["excluded_processes"] or [])}
+    # the exclusion is REAL, not just advertised — B's linked doc is gone from the rows
+    assert doc["identifier"] not in {r["identifier"] for r in body["rows"]}
+
+
+async def test_surface_gate_admits_a_lifecycle_predicated_report_read_allow(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    """#335 fix 2: a caller whose ONLY report.read ALLOW is narrowed by a RESOURCE predicate
+    (lifecycle_state=["Effective"]) must be ADMITTED at the surface — the per-row gate then narrows
+    to Effective rows — not 403'd. Pre-fix the surface evaluated the grant against
+    ResourceContext.system() (lifecycle_state=None), the predicate failed, and the grant dropped."""
+    # a creator seeds a Draft the reader CAN document.read (org-wide SYSTEM) — the report.read
+    # lifecycle=Effective predicate must exclude it per-row (the non-vacuous row-narrowing proof).
+    await s5.grant_lifecycle(subj.b)
+    draft = await _create(app_client, _auth(token_factory, subj.b), await s5.type_id("SOP"))
+
+    await _add_override(
+        subj.a,
+        "report.read",
+        Effect.ALLOW,
+        ScopeLevel.SYSTEM,
+        predicates={"lifecycle_state": ["Effective"]},
+    )
+    await _grant(subj.a, ("document.read",))  # per-row filter, org-wide
+    resp = await app_client.get(_ROUTE, headers=_auth(token_factory, subj.a))
+    assert resp.status_code == 200, resp.text  # admitted (pre-fix: 403)
+    rows = resp.json()["rows"]
+    # the report.read lifecycle predicate narrows per-row: the document.read-visible Draft is
+    # report.read-excluded, and every remaining visible row is Effective.
+    assert draft["identifier"] not in {r["identifier"] for r in rows}
+    assert all(r["current_state"] == "Effective" for r in rows)
+
+
+async def test_surface_gate_rejects_a_requirement_source_predicated_report_read_allow(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    """#347 (Codex P2): requirement_source is a documented-but-v1-unimplemented ABAC predicate (no
+    documented_information.requirement_source column; resource_from_doc never sets it — like
+    concrete_type/#345). A report.read ALLOW narrowed by it matches NO row per-row, so the surface
+    must NOT admit it — else the caller gets a misleading 200 + empty register instead of the honest
+    403. (lifecycle_state, which IS materialized, stays admitted — the test above; only the
+    unimplemented predicate is rejected here.)
+
+    Uses the falsy-but-PRESENT value ``""``: the guard rejects by presence (is not None), matching
+    ``_predicates_pass`` — a truthiness guard would wrongly treat ``""`` as absent and re-admit it
+    (the #347 round-2 P2). ``iso_mandatory`` (truthy) would 403 either way, so ``""`` is the strict
+    mutation-distinguishing case."""
+    await _add_override(
+        subj.a,
+        "report.read",
+        Effect.ALLOW,
+        ScopeLevel.SYSTEM,
+        predicates={"requirement_source": ""},
+    )
+    await _grant(subj.a, ("document.read",))
+    resp = await app_client.get(_ROUTE, headers=_auth(token_factory, subj.a))
+    assert resp.status_code == 403, (
+        resp.text
+    )  # not surface-admitted (truthiness guard would 200-empty here)
+
+
+async def test_surface_gate_rejects_an_unmatchable_lifecycle_predicated_report_read_allow(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """#347 round-4 (Codex P2): a report.read ALLOW narrowed by a lifecycle_state predicate that can
+    match NO document — an empty list, or only-unknown states (both accepted by the unrestricted
+    predicates dict) — must NOT be surface-admitted, else the caller gets a misleading 200-empty
+    register. (A lifecycle_state intersecting real states, e.g. ["Effective"], IS admitted — the
+    fix-2 admit test above.) This closes the admission class: lifecycle_state + requirement_source
+    are the only two resource predicates, so validating both makes surface admission complete."""
+    # empty allow-list → intersects no DocumentCurrentState → matches nothing → 403
+    empty = f"kc-lc-empty-{uuid.uuid4().hex[:8]}"
+    await _add_override(
+        empty,
+        "report.read",
+        Effect.ALLOW,
+        ScopeLevel.SYSTEM,
+        predicates={"lifecycle_state": []},
+    )
+    await _grant(empty, ("document.read",))
+    r1 = await app_client.get(_ROUTE, headers=_auth(token_factory, empty))
+    assert r1.status_code == 403, r1.text
+
+    # only-unknown state → intersects no real state → matches nothing → 403
+    unknown = f"kc-lc-bogus-{uuid.uuid4().hex[:8]}"
+    await _add_override(
+        unknown,
+        "report.read",
+        Effect.ALLOW,
+        ScopeLevel.SYSTEM,
+        predicates={"lifecycle_state": ["NotARealState"]},
+    )
+    await _grant(unknown, ("document.read",))
+    r2 = await app_client.get(_ROUTE, headers=_auth(token_factory, unknown))
+    assert r2.status_code == 403, r2.text
+
+
+async def test_resolve_process_names_is_org_scoped(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    """#335 fix 3: the provenance process-name resolution filters by org_id, so a malformed/hostile
+    PROCESS selector carrying a CROSS-ORG process UUID can't leak that process's name. A lookup with
+    the WRONG org_id resolves to nothing; neutering the org filter would leak the name (pre-fix)."""
+    from easysynq_api.services.reports.document_control import _resolve_process_names
+
+    org_id = await s5.default_org_id()
+    async with get_sessionmaker()() as s:
+        creator = await _ensure_user(s, subj.a)
+        proc = Process(
+            org_id=org_id,
+            name=f"OrgScoped-{uuid.uuid4().hex[:8]}",
+            pdca_phase=PdcaPhase.DO,
+            created_by=creator.id,
+        )
+        s.add(proc)
+        await s.commit()
+        proc_id = str(proc.id)
+
+    async with get_sessionmaker()() as s:
+        same = await _resolve_process_names(s, {proc_id}, org_id)
+        assert [p["id"] for p in same] == [proc_id]  # same org → resolved
+        assert (
+            await _resolve_process_names(s, {proc_id}, uuid.uuid4()) == []
+        )  # wrong org → filtered
+
+
+async def test_register_resolves_org_tz_inside_the_snapshot_not_the_contextvar(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    """#335 fix 4: compute_document_control_register resolves the org tz from INSIDE its snapshot
+    session (resolve_org_tz), not the request contextvar pinned BEFORE the txn. Forcing the
+    contextvar to a different tz must NOT change result.org_tz — it tracks the DB config the
+    snapshot attests to, so generated_at/as_of + row timestamps stay consistent. Pre-fix the code
+    read current_org_tz() (the contextvar) and RegisterResult had no org_tz."""
+    import zoneinfo
+
+    from easysynq_api.services.common.org_clock import resolve_org_tz, using_org_tz
+    from easysynq_api.services.reports.document_control import compute_document_control_register
+
+    org_id = await s5.default_org_id()
+    await _grant(subj.a, ("report.read", "document.read"))
+    async with get_sessionmaker()() as s:
+        user_id = (await _ensure_user(s, subj.a)).id
+        db_tz = await resolve_org_tz(s, org_id)  # the DB truth (Y)
+    # a zone guaranteed to differ from the DB truth (X != Y)
+    wrong = (
+        zoneinfo.ZoneInfo("UTC") if str(db_tz) == "Asia/Tokyo" else zoneinfo.ZoneInfo("Asia/Tokyo")
+    )
+    with using_org_tz(wrong):  # the request contextvar now holds the WRONG tz
+        result = await compute_document_control_register(
+            user_id=user_id, org_id=org_id, source_ip=None, filters=[]
+        )
+    assert str(result.org_tz) == str(db_tz)  # DB-resolved, NOT the contextvar
+    assert str(result.org_tz) != str(wrong)
