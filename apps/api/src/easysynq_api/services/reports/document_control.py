@@ -248,7 +248,18 @@ async def compute_document_control_register(
                     scoped_process_ids |= _as_set(sel.get("process_id") or sel.get("process_ids"))
             authorization_scope = []
             if scoped_process_ids:
-                process_uuids = {uuid.UUID(pid) for pid in scoped_process_ids}
+                # A selector value is unvalidated (api/authz.py accepts ``selector: dict[str,
+                # Any]``), so a malformed PROCESS grant (e.g. a non-UUID process id from a bad
+                # admin edit) must not 500 this route — the per-row PDP path tolerates the same
+                # garbage (``_matches_scope`` does a plain string comparison, never parses), so
+                # skip an un-parseable id here too rather than raising. A dropped id is consistent
+                # with the per-row filter, which already ignores such a grant.
+                process_uuids: set[uuid.UUID] = set()
+                for pid in scoped_process_ids:
+                    try:
+                        process_uuids.add(uuid.UUID(pid))
+                    except (ValueError, TypeError):
+                        continue
                 processes = (
                     await session.execute(
                         select(Process.id, Process.name).where(Process.id.in_(process_uuids))

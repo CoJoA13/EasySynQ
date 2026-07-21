@@ -1007,3 +1007,36 @@ async def test_provenance_process_scope_records_the_process_for_a_process_scoped
     assert resp.status_code == 200, resp.text
     scope = resp.json()["provenance"]["process_scope"]
     assert scope == [{"id": process_id, "name": process_name}]
+
+
+# --- a malformed PROCESS report.read selector must not 500 the provenance computation ------
+
+
+async def test_provenance_process_scope_tolerates_a_malformed_process_selector(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    """``selector`` is unvalidated at grant-time (``api/authz.py`` accepts ``selector: dict[str,
+    Any]``), so a PROCESS report.read ALLOW with a non-UUID process id (a benign misconfiguration,
+    e.g. a bad admin edit) must not crash the provenance computation with an uncaught
+    ``ValueError`` from ``uuid.UUID(...)``. The per-row PDP path already tolerates the same
+    garbage (``_matches_scope`` does a plain string comparison, never parses) — the provenance
+    computation must degrade the same way: drop the un-parseable id rather than raising.
+
+    Mutation-distinguishing / RED-verified: against the pre-fix set-comprehension
+    (``{uuid.UUID(pid) for pid in scoped_process_ids}``), this 500s with an uncaught
+    ``ValueError``. After the fix, the malformed id is skipped, the caller still gets their
+    register (they hold a broad SYSTEM document.read too, so they'd otherwise see rows), and
+    ``provenance.process_scope`` reports the empty list (no valid process survived)."""
+    await _add_override(
+        subj.a,
+        "report.read",
+        Effect.ALLOW,
+        ScopeLevel.PROCESS,
+        selector={"process_ids": ["not-a-uuid"]},
+    )
+    await _grant(subj.a, ("document.read",))  # broad SYSTEM — would otherwise see rows
+    ha = _auth(token_factory, subj.a)
+
+    resp = await app_client.get(_ROUTE, headers=ha)
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["provenance"]["process_scope"] == []
