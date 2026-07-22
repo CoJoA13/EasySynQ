@@ -177,7 +177,17 @@ async def test_ac6b_linker_chains_verify_matches_and_tamper_is_first_broken_link
 
     linked = await _link_as_linker(dsns)
     assert linked >= len(_EXPECTED_STEPS)
-    assert await _link_as_linker(dsns) == 0  # idempotent: nothing left unchained
+    # CR-2 safe-prefix watermark: a rollback gap in the shared DB's id sequence (any earlier test's
+    # rolled-back INSERT burns an IDENTITY value) is provably skipped only on the NEXT tick — the
+    # two-snapshot rollback proof is fundamental — so a single link call need not chain the whole
+    # backlog. Drain to the fixed point; a call returning 0 IS the idempotency proof (the linker
+    # never re-links a chained row). A rollback-gap batch clears in <=2 ticks, so 10 is ample.
+    drained = False
+    for _ in range(10):
+        if await _link_as_linker(dsns) == 0:
+            drained = True
+            break
+    assert drained, "linker never reached a fixed point (idempotent no-op)"
 
     async with get_sessionmaker()() as s:
         rows = (
@@ -299,3 +309,155 @@ async def test_ac6b_checkpoint_push_and_soft_gate(
         sink.connection = {"bucket": "audit-checkpoints", "off_host": True}
         await s.commit()
         assert await tamper_evidence_attested(s, org_id) is True
+
+
+async def test_ac6b_linker_safe_prefix_never_reorders_across_an_open_txn(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    subj: SimpleNamespace,
+    dsns: dict[str, str],
+) -> None:
+    """[CR-2] A lower id sitting uncommitted in an open transaction must NOT let a higher, already-
+    committed id be linked ahead of it — that reorder permanently breaks verify_chain's id-order
+    walk. The linker holds the watermark below the uncommitted row until it commits, then links
+    in id order. (The pure watermark algorithm is exhaustively unit-tested; this proves the wiring +
+    the live race.)"""
+    import datetime
+
+    from easysynq_api.db.models._audit_enums import ActorType, AuditObjectType, EventType
+
+    async with get_sessionmaker()() as s:
+        org_id = (
+            await s.execute(text("SELECT id FROM organization ORDER BY created_at LIMIT 1"))
+        ).scalar_one()
+
+    def _row() -> AuditEvent:
+        return AuditEvent(
+            org_id=org_id,
+            occurred_at=datetime.datetime.now(datetime.UTC),
+            actor_type=ActorType.system,
+            event_type=EventType.STAGE_ADVANCED,
+            object_type=AuditObjectType.workflow_instance,
+        )
+
+    # Settle the watermark at the current frontier first: else a pre-existing FRESH rollback gap
+    # below id_low would stall the linker below it, so `high_chained is None` (below) could pass
+    # without the linker ever reaching id_low's gap — the CR-2 hold-back must be proven AT id_low.
+    for _ in range(10):
+        if await _link_as_linker(dsns) == 0:
+            break
+
+    engine = create_async_engine(dsns["owner"])
+    low_session = async_sessionmaker(engine, expire_on_commit=False)()
+    try:
+        # A: insert the LOW row and hold the txn OPEN (uncommitted → invisible to the linker).
+        low = _row()
+        low_session.add(low)
+        await low_session.flush()
+        id_low = low.id
+
+        # Session B: insert the HIGH row after it and COMMIT (id_high > id_low, and it is visible).
+        async with async_sessionmaker(engine, expire_on_commit=False)() as high_session:
+            high = _row()
+            high_session.add(high)
+            await high_session.commit()
+            id_high = high.id
+        assert id_high > id_low
+
+        # Link while id_low is uncommitted: the linker must NOT chain id_high ahead of the gap.
+        await _link_as_linker(dsns)
+        async with get_sessionmaker()() as s:
+            high_chained = (
+                await s.execute(
+                    text("SELECT chained_at FROM audit_event WHERE id = :id"), {"id": id_high}
+                )
+            ).scalar_one()
+        assert high_chained is None, "linked a higher id ahead of a lower uncommitted one (CR-2)"
+
+        # Commit id_low; now both are visible + contiguous → the linker links them in id order.
+        await low_session.commit()
+    finally:
+        await low_session.close()
+        await engine.dispose()
+
+    for _ in range(3):
+        await _link_as_linker(dsns)
+    async with get_sessionmaker()() as s:
+        chained = dict(
+            (
+                await s.execute(
+                    text("SELECT id, chained_at FROM audit_event WHERE id IN (:a, :b)"),
+                    {"a": id_low, "b": id_high},
+                )
+            ).all()
+        )
+    assert chained[id_low] is not None and chained[id_high] is not None, "not linked after commit"
+
+    # The whole chain still verifies — no reorder break was introduced.
+    await _grant_audit_read(subj.a)
+    verify = await app_client.get(
+        "/api/v1/audit-events/verify-chain", headers=_auth(token_factory, subj.a)
+    )
+    assert verify.json()["verified"] is True, verify.text
+
+
+async def test_ac6b_linker_drains_multiple_windows_in_one_tick(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    subj: SimpleNamespace,
+    dsns: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """[CR-2 review, P2] A gap-free backlog larger than one _ID_WINDOW drains in a SINGLE linker
+    tick, not one window per tick. Drain the shared backlog first, add a contiguous committed run,
+    then force a tiny window so the run spans several windows; one link_all call must still take
+    the whole run (proving the within-tick multi-window drain)."""
+    import datetime
+
+    from easysynq_api.db.models._audit_enums import ActorType, AuditObjectType, EventType
+    from easysynq_api.services.audit import linker as linker_mod
+
+    # Settle the watermark at the current frontier (a rollback gap needs a second tick, so loop).
+    for _ in range(10):
+        if await _link_as_linker(dsns) == 0:
+            break
+
+    async with get_sessionmaker()() as s:
+        org_id = (
+            await s.execute(text("SELECT id FROM organization ORDER BY created_at LIMIT 1"))
+        ).scalar_one()
+
+    n = 8
+    async with get_sessionmaker()() as s:
+        for _ in range(n):
+            s.add(
+                AuditEvent(
+                    org_id=org_id,
+                    occurred_at=datetime.datetime.now(datetime.UTC),
+                    actor_type=ActorType.system,
+                    event_type=EventType.STAGE_ADVANCED,
+                    object_type=AuditObjectType.workflow_instance,
+                )
+            )
+        await s.commit()
+
+    # Force several windows across the n-row run; one tick must still drain the whole gap-free run.
+    monkeypatch.setattr(linker_mod, "_ID_WINDOW", 2)
+    per_call = []
+    for _ in range(50):
+        c = await _link_as_linker(dsns)
+        per_call.append(c)
+        if c == 0:
+            break
+    assert max(per_call) >= n, f"no single tick drained the {n}-row gap-free run: {per_call}"
+
+    async with get_sessionmaker()() as s:
+        pending = (
+            await s.execute(
+                select(func.count()).select_from(AuditEvent).where(AuditEvent.chained_at.is_(None))
+            )
+        ).scalar_one()
+    # An absolute (not delta) assertion is legal ONLY because this test settles the whole table
+    # itself — the leading drain loop + the drain-to-fixed-point above leave nothing pending. Keep
+    # that leading settle if editing, else this turns flaky under the shared-DB backlog.
+    assert pending == 0, "gap-free backlog not fully drained"
