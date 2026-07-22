@@ -340,6 +340,13 @@ async def test_ac6b_linker_safe_prefix_never_reorders_across_an_open_txn(
             object_type=AuditObjectType.workflow_instance,
         )
 
+    # Settle the watermark at the current frontier first: else a pre-existing FRESH rollback gap
+    # below id_low would stall the linker below it, so `high_chained is None` (below) could pass
+    # without the linker ever reaching id_low's gap — the CR-2 hold-back must be proven AT id_low.
+    for _ in range(10):
+        if await _link_as_linker(dsns) == 0:
+            break
+
     engine = create_async_engine(dsns["owner"])
     low_session = async_sessionmaker(engine, expire_on_commit=False)()
     try:
@@ -392,3 +399,65 @@ async def test_ac6b_linker_safe_prefix_never_reorders_across_an_open_txn(
         "/api/v1/audit-events/verify-chain", headers=_auth(token_factory, subj.a)
     )
     assert verify.json()["verified"] is True, verify.text
+
+
+async def test_ac6b_linker_drains_multiple_windows_in_one_tick(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    subj: SimpleNamespace,
+    dsns: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """[CR-2 review, P2] A gap-free backlog larger than one _ID_WINDOW drains in a SINGLE linker
+    tick, not one window per tick. Drain the shared backlog first, add a contiguous committed run,
+    then force a tiny window so the run spans several windows; one link_all call must still take
+    the whole run (proving the within-tick multi-window drain)."""
+    import datetime
+
+    from easysynq_api.db.models._audit_enums import ActorType, AuditObjectType, EventType
+    from easysynq_api.services.audit import linker as linker_mod
+
+    # Settle the watermark at the current frontier (a rollback gap needs a second tick, so loop).
+    for _ in range(10):
+        if await _link_as_linker(dsns) == 0:
+            break
+
+    async with get_sessionmaker()() as s:
+        org_id = (
+            await s.execute(text("SELECT id FROM organization ORDER BY created_at LIMIT 1"))
+        ).scalar_one()
+
+    n = 8
+    async with get_sessionmaker()() as s:
+        for _ in range(n):
+            s.add(
+                AuditEvent(
+                    org_id=org_id,
+                    occurred_at=datetime.datetime.now(datetime.UTC),
+                    actor_type=ActorType.system,
+                    event_type=EventType.STAGE_ADVANCED,
+                    object_type=AuditObjectType.workflow_instance,
+                )
+            )
+        await s.commit()
+
+    # Force several windows across the n-row run; one tick must still drain the whole gap-free run.
+    monkeypatch.setattr(linker_mod, "_ID_WINDOW", 2)
+    per_call = []
+    for _ in range(50):
+        c = await _link_as_linker(dsns)
+        per_call.append(c)
+        if c == 0:
+            break
+    assert max(per_call) >= n, f"no single tick drained the {n}-row gap-free run: {per_call}"
+
+    async with get_sessionmaker()() as s:
+        pending = (
+            await s.execute(
+                select(func.count()).select_from(AuditEvent).where(AuditEvent.chained_at.is_(None))
+            )
+        ).scalar_one()
+    # An absolute (not delta) assertion is legal ONLY because this test settles the whole table
+    # itself — the leading drain loop + the drain-to-fixed-point above leave nothing pending. Keep
+    # that leading settle if editing, else this turns flaky under the shared-DB backlog.
+    assert pending == 0, "gap-free backlog not fully drained"

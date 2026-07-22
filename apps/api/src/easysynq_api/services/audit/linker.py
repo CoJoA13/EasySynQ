@@ -30,7 +30,10 @@ from .watermark import WatermarkState, advance_watermark
 logger = logging.getLogger("easysynq.audit.linker")
 
 _BATCH = 500
-_ID_WINDOW = 5000  # visible ids fetched above the watermark per tick (bounds the per-tick scan)
+_ID_WINDOW = 5000  # visible ids fetched above the watermark per window (bounds each scan)
+_MAX_WINDOWS = (
+    10_000  # per-tick window-drain backstop (a pure infinite-loop guard, never a real cap)
+)
 
 
 def _now() -> datetime.datetime:
@@ -160,37 +163,55 @@ async def _save_cursor(session: AsyncSession, state: WatermarkState) -> None:
 
 
 async def link_all(session: AsyncSession) -> LinkResult:
-    """Link every org's chain up to the PROVEN safe-prefix watermark, then evaluate the bounded-lag
-    alarm (doc 12 §4.4). The watermark (services/audit/watermark) advances only over a contiguous
-    id-prefix whose members are all decided, so a higher id is never linked ahead of a lower one
-    still uncommitted in a long sweep — the reorder that permanently breaks verify_chain (CR-2)."""
+    """Link every org's chain up to the PROVEN safe-prefix watermark, draining as many safe id
+    windows as are ready this tick, then evaluate the bounded-lag alarm (doc 12 §4.4). The watermark
+    (services/audit/watermark) advances only over a contiguous id-prefix whose members are all
+    decided, so a higher id is never linked ahead of a lower one still uncommitted in a long sweep —
+    the reorder that permanently breaks verify_chain (CR-2)."""
+    org_ids = (await session.execute(select(Organization.id))).scalars().all()
     prior = await _load_cursor(session)
-    # The id window above the watermark AND the snapshot bounds, read in ONE statement so the
-    # ids' visibility and the xmin/xmax share ONE snapshot (the rollback proof depends on a
-    # gap's absence and the snapshot xids being mutually consistent).
-    rows = (
-        await session.execute(
-            text(
-                "SELECT a.id AS id,"
-                " pg_snapshot_xmin(pg_current_snapshot())::text AS xmin,"
-                " pg_snapshot_xmax(pg_current_snapshot())::text AS xmax"
-                " FROM audit_event a WHERE a.id > :w ORDER BY a.id ASC LIMIT :lim"
-            ),
-            {"w": prior.watermark, "lim": _ID_WINDOW},
-        )
-    ).all()
-    if rows:
+    linked = 0
+    # Drain every SAFE window this tick, not just one. A dense run or an already-proven rollback
+    # gap advances the watermark and is linked at once, then we re-fetch above it; the loop stops
+    # only at a FRESH unproven gap (which waits for a later tick's snapshot to prove it) or once
+    # caught up. This stops a large gap-free backlog being throttled to one _ID_WINDOW per ~30 s
+    # tick (CR-2 review, P2); the per-window rollback proof below is unchanged. _MAX_WINDOWS is a
+    # pure infinite-loop backstop; the `not advanced` guard makes each pass strictly progress, so a
+    # real backlog exits long before it.
+    for _ in range(_MAX_WINDOWS):
+        # The id window above the watermark AND the snapshot bounds, read in ONE statement so the
+        # ids' visibility and xmin/xmax share ONE snapshot (the rollback proof needs the gap's
+        # absence and the snapshot xids to be mutually consistent).
+        rows = (
+            await session.execute(
+                text(
+                    "SELECT a.id AS id,"
+                    " pg_snapshot_xmin(pg_current_snapshot())::text AS xmin,"
+                    " pg_snapshot_xmax(pg_current_snapshot())::text AS xmax"
+                    " FROM audit_event a WHERE a.id > :w ORDER BY a.id ASC LIMIT :lim"
+                ),
+                {"w": prior.watermark, "lim": _ID_WINDOW},
+            )
+        ).all()
+        if not rows:
+            # Nothing visible above the watermark → clear any pending stall to a clean state, stop.
+            prior = advance_watermark(prior, ids_above=[], snap_xmin=0, snap_xmax=0).state
+            break
         ids_above = [int(r.id) for r in rows]
         snap_xmin, snap_xmax = int(rows[0].xmin), int(rows[0].xmax)
-    else:
-        ids_above, snap_xmin, snap_xmax = [], 0, 0
-    step = advance_watermark(prior, ids_above=ids_above, snap_xmin=snap_xmin, snap_xmax=snap_xmax)
-
-    org_ids = (await session.execute(select(Organization.id))).scalars().all()
-    linked = 0
-    for org_id in org_ids:
-        linked += await link_org_chain(session, org_id, step.link_up_to)
-    await _save_cursor(session, step.state)
+        step = advance_watermark(
+            prior, ids_above=ids_above, snap_xmin=snap_xmin, snap_xmax=snap_xmax
+        )
+        advanced = step.link_up_to > prior.watermark
+        if advanced:
+            for org_id in org_ids:
+                linked += await link_org_chain(session, org_id, step.link_up_to)
+        prior = step.state
+        # Stop at a pending (unproven) gap, at no progress, or once a short window shows every
+        # visible row is seen (nothing left to drain this tick).
+        if step.state.stall_xmax is not None or not advanced or len(rows) < _ID_WINDOW:
+            break
+    await _save_cursor(session, prior)
     await session.commit()
 
     lag = await _lag_seconds(session)
