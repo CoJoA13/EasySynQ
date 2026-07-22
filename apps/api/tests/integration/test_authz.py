@@ -367,6 +367,65 @@ async def test_two_tier_violation(
     assert ok.json()["role_name"] == "Author"
 
 
+async def _add_permission_grant_override(
+    subject: str, *, valid_until: datetime.datetime | None
+) -> None:
+    """Give ``subject`` a non-``content_only`` SYSTEM ``permission.grant`` override (the would-be
+    system-tier grant). ``valid_until`` in the past makes it lapsed; None makes it live."""
+    async with get_sessionmaker()() as s:
+        user = await _ensure_user(s, subject)
+        perm = (
+            await s.execute(select(Permission).where(Permission.key == "permission.grant"))
+        ).scalar_one()
+        scope = Scope(org_id=user.org_id, level=ScopeLevel.SYSTEM)  # no content_only → system tier
+        s.add(scope)
+        await s.flush()
+        s.add(
+            PermissionOverride(
+                org_id=user.org_id,
+                user_id=user.id,
+                permission_id=perm.id,
+                effect=Effect.ALLOW,
+                scope_id=scope.id,
+                valid_until=valid_until,
+            )
+        )
+        await s.commit()
+
+
+async def test_two_tier_lapsed_system_override_does_not_elevate(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    """CR-3: a LAPSED (or not-yet-valid) non-``content_only`` ``permission.grant`` override must NOT
+    confer system-tier authority. The old raw ``any(effect is ALLOW and not content_only)`` scan
+    counted the expired ALLOW — permanently elevating a content-tier grantor across the R35
+    ADMIN/QMS boundary; running the grant through the PDP drops it on ``valid_until``."""
+    # Grantor = QMS Owner (a LIVE content_only permission.grant → passes require())
+    # PLUS a LAPSED non-content_only permission.grant SYSTEM override (the wrongly-counted grant).
+    await _assign_role(subj.qms, "QMS Owner")
+    await _add_permission_grant_override(
+        subj.qms, valid_until=datetime.datetime.now(datetime.UTC) - datetime.timedelta(days=1)
+    )
+    sam_id = await _ensure_user_id(subj.sam)
+    qms_h = _auth(token_factory, subj.qms)
+    system_grant = {"permission_key": "user.read", "effect": "ALLOW", "scope": {"level": "SYSTEM"}}
+
+    # The lapsed override confers no system tier → the two-tier guard still refuses a SYSTEM grant.
+    blocked = await app_client.post(
+        f"/api/v1/users/{sam_id}/overrides", headers=qms_h, json=system_grant
+    )
+    assert blocked.status_code == 422, blocked.text
+    assert blocked.json()["code"] == "two_tier_violation"
+
+    # Positive control (no over-restriction): a LIVE non-content_only override makes
+    # the grantor genuinely system-tier, so the same SYSTEM grant now succeeds.
+    await _add_permission_grant_override(subj.qms, valid_until=None)
+    ok = await app_client.post(
+        f"/api/v1/users/{sam_id}/overrides", headers=qms_h, json=system_grant
+    )
+    assert ok.status_code == 201, ok.text
+
+
 # --- override round-trip reflected in effective-permissions (deny-wins) ------------------
 
 
