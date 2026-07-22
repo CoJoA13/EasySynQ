@@ -22,7 +22,7 @@ from ...auth.dependencies import get_current_user
 from ...db.models.app_user import AppUser
 from ...db.session import get_session
 from ...domain.authz import RequestContext, ResourceContext, authorize
-from ...domain.authz.types import Decision, Effect
+from ...domain.authz.types import Decision
 from ...logging import request_id_var
 from ...problems import ProblemException
 from ...redis_client import redis_client
@@ -189,12 +189,35 @@ def require(
 
 
 async def _is_system_tier(session: AsyncSession, granter: AppUser) -> bool:
-    """True if the grantor holds a system-tier ``permission.grant`` (an Admin) rather than a
-    content-only one (the QMS Owner, whose grant carries the ``content_only`` marker)."""
+    """True iff the grantor holds an EFFECTIVE system-tier ``permission.grant`` — a
+    non-``content_only`` ALLOW that survives the FULL PDP (scope + ABAC predicates + deny-wins)
+    against ``ResourceContext.system()``. The QMS Owner's grant carries ``content_only`` (content
+    tier); an Admin's does not (system tier).
+
+    CR-3: the old raw ``any(effect is ALLOW and not content_only)`` scan checked neither predicates
+    nor scope, so an EXPIRED (``valid_until`` past), not-yet-valid, or non-SYSTEM-scoped
+    ``permission.grant`` override still classified the caller as system-tier — a permanent elevation
+    across the R35 ADMIN/QMS boundary (expired overrides are never GC'd). The PDP fixes both:
+    ``_context_predicates_pass`` drops a lapsed/premature override, and ``_matches_scope`` drops a
+    PROCESS/FOLDER/…-scoped one (only a SYSTEM grant matches ``system()``).
+
+    Evaluated over the non-``content_only`` grants ONLY, so a surviving ALLOW is provably a
+    system-tier one — sidestepping the tie-winner nondeterminism when a principal holds BOTH a
+    system-tier and a content-tier ``permission.grant`` (``gather_grants`` returns them unordered,
+    the PDP ranks both SYSTEM grants alike). ``source_ip`` is None (the two-tier callers hold no
+    request); ``ip_allow`` on a ``permission.grant`` is v1-deferred (no carrier), and fail-closed
+    (an ip-restricted grant conferring no system tier without a matching IP) is the safe call."""
     grants = await gather_grants(session, granter.id, granter.org_id, "permission.grant")
-    return any(
-        g.effect is Effect.ALLOW and not (g.predicates or {}).get("content_only") for g in grants
+    system_grants = [g for g in grants if not (g.predicates or {}).get("content_only")]
+    if not system_grants:
+        return False
+    decision = authorize(
+        system_grants,
+        "permission.grant",
+        ResourceContext.system(),
+        RequestContext(now=_now()),
     )
+    return decision.allow
 
 
 async def _two_tier_deny(
