@@ -20,6 +20,7 @@ from ...db.models._record_enums import RecordDispositionState
 from ...db.models._retention_enums import DispositionAction, RetentionBasis
 from ...db.models.blob import Blob
 from ...db.models.disposition_event import DispositionEvent
+from ...db.models.document_version import DocumentVersion
 from ...db.models.documented_information import DocumentedInformation
 from ...db.models.evidence_blob import EvidenceBlob
 from ...db.models.evidence_for_link import EvidenceForLink
@@ -431,11 +432,21 @@ async def delete_blob_and_links(session: AsyncSession, blob_sha256: str) -> None
 async def blob_needed_by_other_live_record(
     session: AsyncSession, blob_sha256: str, exclude_record_id: uuid.UUID
 ) -> bool:
-    """``True`` if some OTHER non-``DISPOSED`` record still attaches this blob — so destroying its
-    bytes would orphan a live record's evidence. Records may share a records-bucket WORM blob (the
-    S-rec-1 dedup), so a DESTROY purges bytes only when this is ``False``; the disposed record keeps
-    its ``evidence_blob`` tombstone row regardless (the bytes simply 404 once gone)."""
-    count = await session.scalar(
+    """``True`` if destroying this blob's bytes would orphan a still-live reference — so a DESTROY
+    purges the bytes only when this is ``False`` (the disposed record keeps its ``evidence_blob``
+    tombstone row regardless; the bytes simply 404 once gone).
+
+    Two legs:
+    1. Some OTHER non-``DISPOSED`` record still attaches this blob (records may share a
+       records-bucket WORM blob — the S-rec-1 dedup).
+    2. A ``document_version`` references this sha as ``source_blob_sha256`` /
+       ``rendition_blob_sha256`` (both RESTRICT FKs onto ``blob.sha256``). CR-1 defense-in-depth:
+       the check-in guard (``_assert_documents_worm_blob``) makes this cross-kind sharing
+       UNREACHABLE for new check-ins, but this leg stops a record disposition from physically
+       destroying bytes a controlled document still needs — the D2 data-loss AND the
+       ``delete_blob_and_links`` RESTRICT-FK IntegrityError that would otherwise crash-loop the
+       retention sweep."""
+    record_leg = await session.scalar(
         select(func.count())
         .select_from(EvidenceBlob)
         .join(Record, EvidenceBlob.record_id == Record.id)
@@ -445,7 +456,19 @@ async def blob_needed_by_other_live_record(
             Record.disposition_state != RecordDispositionState.DISPOSED,
         )
     )
-    return bool(count)
+    if record_leg:
+        return True
+    version_leg = await session.scalar(
+        select(func.count())
+        .select_from(DocumentVersion)
+        .where(
+            or_(
+                DocumentVersion.source_blob_sha256 == blob_sha256,
+                DocumentVersion.rendition_blob_sha256 == blob_sha256,
+            )
+        )
+    )
+    return bool(version_leg)
 
 
 async def list_disposition_events(

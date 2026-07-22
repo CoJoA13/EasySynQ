@@ -405,3 +405,80 @@ async def test_checkin_audit_row_carries_the_version_object_id(
             )
         ).scalar_one()
         assert row.object_id == version_id
+
+
+# --- CR-1: check-in ↔ records WORM/blob cross-bucket guard -------------------------------
+
+
+async def test_checkin_refuses_foreign_bucket_source_blob(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    """CR-1: a check-in must fail closed (423) when the content-addressed sha already resolves to a
+    blob OUTSIDE the WORM ``documents`` bucket (here a records-bucket evidence blob). Reusing that
+    row would point an immutable ``document_version`` at records-domain bytes a later record
+    disposition could physically destroy — the D2 / blob-row-iff-bytes data-loss chain."""
+    await _grant_doc_perms(subj.a)
+    h = _auth(token_factory, subj.a)
+    doc = await _create(app_client, h, await _sop_type_id())
+    did = doc["id"]
+    await app_client.post(f"/api/v1/documents/{did}/checkout", headers=h)
+
+    # These exact bytes were previously captured as RECORD evidence → a records-bucket WORM blob.
+    content = f"cross-bucket-{subj.a}".encode()
+    sha = hashlib.sha256(content).hexdigest()
+    async with get_sessionmaker()() as s:
+        org_id = (
+            await s.execute(select(Organization.id).order_by(Organization.created_at).limit(1))
+        ).scalar_one()
+        s.add(
+            Blob(
+                sha256=sha,
+                org_id=org_id,
+                size_bytes=len(content),
+                mime_type="application/pdf",
+                bucket="records",  # NOT the documents bucket
+                object_key=sha,
+                worm_locked=True,
+            )
+        )
+        await s.commit()
+
+    # init-upload must NOT dedup a foreign-bucket blob (dedup:true would tell the client "already
+    # vaulted, skip the upload" and check-in would then mint a version over records-domain bytes).
+    init = await app_client.post(
+        f"/api/v1/documents/{did}/versions:init-upload",
+        headers=h,
+        json={"sha256": sha, "content_type": "application/pdf"},
+    )
+    assert init.status_code == 200, init.text
+    assert init.json()["dedup"] is False
+
+    # check-in fails closed with the cross-kind-collision reason (mirrors ingestion-commit +
+    # records-capture); no version is created.
+    ci = await _checkin(app_client, h, did, sha, change_reason="r", change_significance="MAJOR")
+    assert ci.status_code == 423, ci.text
+    assert ci.json()["code"] == "source_bytes_in_foreign_bucket"
+
+
+async def test_blob_needed_by_other_live_record_document_version_leg(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    """CR-1 defense-in-depth: ``blob_needed_by_other_live_record`` reports a sha as needed when
+    a ``document_version`` references it — so a record disposition never purges bytes a controlled
+    document still needs (which would data-loss AND trip the ``delete_blob_and_links`` RESTRICT FK,
+    crash-looping the retention sweep)."""
+    from easysynq_api.services.records import repository as records_repo
+
+    await _grant_doc_perms(subj.a)
+    h = _auth(token_factory, subj.a)
+    doc = await _create(app_client, h, await _sop_type_id())
+    did = doc["id"]
+    await app_client.post(f"/api/v1/documents/{did}/checkout", headers=h)
+    sha = await _upload(app_client, h, did, f"docver-leg-{subj.a}".encode())
+    ci = await _checkin(app_client, h, did, sha, change_reason="r", change_significance="MAJOR")
+    assert ci.status_code == 201, ci.text
+
+    # No record references this documents-bucket sha, but a document_version does → "needed".
+    async with get_sessionmaker()() as s:
+        needed = await records_repo.blob_needed_by_other_live_record(s, sha, uuid.uuid4())
+    assert needed is True
