@@ -177,7 +177,17 @@ async def test_ac6b_linker_chains_verify_matches_and_tamper_is_first_broken_link
 
     linked = await _link_as_linker(dsns)
     assert linked >= len(_EXPECTED_STEPS)
-    assert await _link_as_linker(dsns) == 0  # idempotent: nothing left unchained
+    # CR-2 safe-prefix watermark: a rollback gap in the shared DB's id sequence (any earlier test's
+    # rolled-back INSERT burns an IDENTITY value) is provably skipped only on the NEXT tick — the
+    # two-snapshot rollback proof is fundamental — so a single link call need not chain the whole
+    # backlog. Drain to the fixed point; a call returning 0 IS the idempotency proof (the linker
+    # never re-links a chained row). A rollback-gap batch clears in <=2 ticks, so 10 is ample.
+    drained = False
+    for _ in range(10):
+        if await _link_as_linker(dsns) == 0:
+            drained = True
+            break
+    assert drained, "linker never reached a fixed point (idempotent no-op)"
 
     async with get_sessionmaker()() as s:
         rows = (
