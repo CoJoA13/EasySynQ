@@ -429,6 +429,35 @@ async def checkout(
     return wd
 
 
+async def _assert_documents_worm_blob(
+    session: AsyncSession, sha256: str, *, object_label: str
+) -> None:
+    """FAIL CLOSED (423) unless ``sha256`` resolves to a WORM blob in the ``documents`` bucket — the
+    guard a controlled version's SOURCE bytes require (CR-1, the check-in leg of the WORM/blob
+    data-loss chain).
+
+    Re-reads the authoritative ``blob`` row by PK, so a CONCURRENT first insert of the same sha
+    (e.g. a record-evidence capture of byte-identical content) that WON the ON CONFLICT insert
+    can't leave this caller trusting the ``documents``-bucket row it *tried* to write — it validates
+    whatever row actually committed. Rejects a cross-kind sha collision where the bytes are already
+    vaulted as record evidence / a rendition / staging: reusing such a row would point an immutable
+    ``document_version`` at foreign-domain bytes a later record disposition could physically destroy
+    (the D2 / blob-row-iff-bytes break). Mirrors the symmetric guards ingestion-commit
+    (``source_bytes_in_foreign_bucket``) and records-capture (``_attach_evidence``) apply."""
+    settings = get_settings()
+    blob = await repository.get_blob(session, sha256)
+    if blob is None or blob.bucket != settings.s3_bucket_documents or not blob.worm_locked:
+        raise ProblemException(
+            status=423,
+            code="source_bytes_in_foreign_bucket",
+            title=f"{object_label} bytes are already vaulted outside the WORM documents bucket",
+            detail=(
+                "These exact bytes exist in another storage domain and cannot back a controlled "
+                "document version; upload fresh content, or reference the existing document."
+            ),
+        )
+
+
 async def init_upload(
     session: AsyncSession,
     actor: AppUser,
@@ -442,8 +471,16 @@ async def init_upload(
         wd.scratch_blob_ref = sha256
         await session.commit()
     existing = await repository.get_blob(session, sha256)
-    if existing is not None:
-        # storage-level dedup: the bytes are already vaulted, no upload needed.
+    settings = get_settings()
+    if (
+        existing is not None
+        and existing.bucket == settings.s3_bucket_documents
+        and existing.worm_locked
+    ):
+        # storage-level dedup: the bytes are already WORM-vaulted in the documents bucket, no upload
+        # needed. CR-1: a blob in ANOTHER bucket (records evidence / a rendition) must NOT dedup
+        # — a controlled version's source bytes belong in the WORM documents bucket, and checkin
+        # fail-closes (423) on a foreign-bucket row anyway, so force a fresh staging upload.
         return {"dedup": True, "object_key": existing.object_key, "upload_url": None}
     url = await storage.presign_put(sha256, content_type)
     return {"dedup": False, "object_key": sha256, "upload_url": url}
@@ -532,6 +569,14 @@ async def checkin(
             .on_conflict_do_nothing(index_elements=["sha256"])
         )
         await session.flush()
+
+    # CR-1: the source bytes of a controlled version MUST be a WORM documents-bucket blob. Re-read
+    # the authoritative row (a concurrent first-insert — e.g. a record-evidence capture of identical
+    # bytes — may have won the ON CONFLICT with a foreign-bucket row) and fail closed on any
+    # non-documents / non-WORM blob, so an immutable ``document_version`` can never point at
+    # records/renditions-bucket bytes a later record disposition would physically destroy. Symmetric
+    # to the ingestion-commit + records-capture guards.
+    await _assert_documents_worm_blob(session, sha256, object_label="Source object")
 
     # version_seq is allocated under the per-document check-out lock (the normal serializer);
     # UNIQUE(document_id, version_seq) is the hard backstop if a lapsed-and-retaken lock ever
@@ -782,6 +827,11 @@ async def checkin_form_schema(
         )
         await session.flush()
 
+    # CR-1: fail closed unless the source sha resolves to a WORM ``documents``-bucket blob (re-reads
+    # the authoritative row, so a concurrent first-insert that lost the ON CONFLICT can't leave this
+    # server-generated version referencing foreign-bucket bytes). Like the main-checkin guard.
+    await _assert_documents_worm_blob(session, sha, object_label="Source object")
+
     seq = await repository.next_version_seq(session, doc.id)
     dist_snap = await _distribution_snapshot(session, doc.id)
     version = DocumentVersionModel(
@@ -879,6 +929,11 @@ async def checkin_objective_commitment(
             .on_conflict_do_nothing(index_elements=["sha256"])
         )
         await session.flush()
+
+    # CR-1: fail closed unless the source sha resolves to a WORM ``documents``-bucket blob (re-reads
+    # the authoritative row, so a concurrent first-insert that lost the ON CONFLICT can't leave this
+    # server-generated version referencing foreign-bucket bytes). Like the main-checkin guard.
+    await _assert_documents_worm_blob(session, sha, object_label="Source object")
 
     seq = await repository.next_version_seq(session, doc.id)
     dist_snap = await _distribution_snapshot(session, doc.id)
@@ -979,6 +1034,11 @@ async def checkin_risk_register(
         )
         await session.flush()
 
+    # CR-1: fail closed unless the source sha resolves to a WORM ``documents``-bucket blob (re-reads
+    # the authoritative row, so a concurrent first-insert that lost the ON CONFLICT can't leave this
+    # server-generated version referencing foreign-bucket bytes). Like the main-checkin guard.
+    await _assert_documents_worm_blob(session, sha, object_label="Source object")
+
     seq = await repository.next_version_seq(session, doc.id)
     dist_snap = await _distribution_snapshot(session, doc.id)
     version = DocumentVersionModel(
@@ -1077,6 +1137,11 @@ async def checkin_context_register(
             .on_conflict_do_nothing(index_elements=["sha256"])
         )
         await session.flush()
+
+    # CR-1: fail closed unless the source sha resolves to a WORM ``documents``-bucket blob (re-reads
+    # the authoritative row, so a concurrent first-insert that lost the ON CONFLICT can't leave this
+    # server-generated version referencing foreign-bucket bytes). Like the main-checkin guard.
+    await _assert_documents_worm_blob(session, sha, object_label="Source object")
 
     seq = await repository.next_version_seq(session, doc.id)
     dist_snap = await _distribution_snapshot(session, doc.id)
@@ -1178,6 +1243,11 @@ async def checkin_interested_party_register(
         )
         await session.flush()
 
+    # CR-1: fail closed unless the source sha resolves to a WORM ``documents``-bucket blob (re-reads
+    # the authoritative row, so a concurrent first-insert that lost the ON CONFLICT can't leave this
+    # server-generated version referencing foreign-bucket bytes). Like the main-checkin guard.
+    await _assert_documents_worm_blob(session, sha, object_label="Source object")
+
     seq = await repository.next_version_seq(session, doc.id)
     dist_snap = await _distribution_snapshot(session, doc.id)
     version = DocumentVersionModel(
@@ -1278,6 +1348,11 @@ async def checkin_mgmt_review_minutes(
             .on_conflict_do_nothing(index_elements=["sha256"])
         )
         await session.flush()
+
+    # CR-1: fail closed unless the source sha resolves to a WORM ``documents``-bucket blob (re-reads
+    # the authoritative row, so a concurrent first-insert that lost the ON CONFLICT can't leave this
+    # server-generated version referencing foreign-bucket bytes). Like the main-checkin guard.
+    await _assert_documents_worm_blob(session, sha, object_label="Source object")
 
     seq = await repository.next_version_seq(session, doc.id)
     dist_snap = await _distribution_snapshot(session, doc.id)
