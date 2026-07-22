@@ -82,6 +82,7 @@ from ._workflow_enums import (
 from .acknowledgement import Acknowledgement
 from .app_user import AppUser, UserStatus
 from .audit import Audit
+from .audit_chain_cursor import AuditChainCursor
 from .audit_checkpoint import AuditCheckpoint
 from .audit_checkpoint_sink import AuditCheckpointSink
 from .audit_event import AuditEvent
@@ -177,6 +178,7 @@ __all__ = [
     "ActorType",
     "AppUser",
     "Audit",
+    "AuditChainCursor",
     "AuditCheckpoint",
     "AuditCheckpointSink",
     "AuditEvent",

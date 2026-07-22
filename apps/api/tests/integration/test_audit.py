@@ -299,3 +299,86 @@ async def test_ac6b_checkpoint_push_and_soft_gate(
         sink.connection = {"bucket": "audit-checkpoints", "off_host": True}
         await s.commit()
         assert await tamper_evidence_attested(s, org_id) is True
+
+
+async def test_ac6b_linker_safe_prefix_never_reorders_across_an_open_txn(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    subj: SimpleNamespace,
+    dsns: dict[str, str],
+) -> None:
+    """[CR-2] A lower id sitting uncommitted in an open transaction must NOT let a higher, already-
+    committed id be linked ahead of it — that reorder permanently breaks verify_chain's id-order
+    walk. The linker holds the watermark below the uncommitted row until it commits, then links
+    in id order. (The pure watermark algorithm is exhaustively unit-tested; this proves the wiring +
+    the live race.)"""
+    import datetime
+
+    from easysynq_api.db.models._audit_enums import ActorType, AuditObjectType, EventType
+
+    async with get_sessionmaker()() as s:
+        org_id = (
+            await s.execute(text("SELECT id FROM organization ORDER BY created_at LIMIT 1"))
+        ).scalar_one()
+
+    def _row() -> AuditEvent:
+        return AuditEvent(
+            org_id=org_id,
+            occurred_at=datetime.datetime.now(datetime.UTC),
+            actor_type=ActorType.system,
+            event_type=EventType.STAGE_ADVANCED,
+            object_type=AuditObjectType.workflow_instance,
+        )
+
+    engine = create_async_engine(dsns["owner"])
+    low_session = async_sessionmaker(engine, expire_on_commit=False)()
+    try:
+        # A: insert the LOW row and hold the txn OPEN (uncommitted → invisible to the linker).
+        low = _row()
+        low_session.add(low)
+        await low_session.flush()
+        id_low = low.id
+
+        # Session B: insert the HIGH row after it and COMMIT (id_high > id_low, and it is visible).
+        async with async_sessionmaker(engine, expire_on_commit=False)() as high_session:
+            high = _row()
+            high_session.add(high)
+            await high_session.commit()
+            id_high = high.id
+        assert id_high > id_low
+
+        # Link while id_low is uncommitted: the linker must NOT chain id_high ahead of the gap.
+        await _link_as_linker(dsns)
+        async with get_sessionmaker()() as s:
+            high_chained = (
+                await s.execute(
+                    text("SELECT chained_at FROM audit_event WHERE id = :id"), {"id": id_high}
+                )
+            ).scalar_one()
+        assert high_chained is None, "linked a higher id ahead of a lower uncommitted one (CR-2)"
+
+        # Commit id_low; now both are visible + contiguous → the linker links them in id order.
+        await low_session.commit()
+    finally:
+        await low_session.close()
+        await engine.dispose()
+
+    for _ in range(3):
+        await _link_as_linker(dsns)
+    async with get_sessionmaker()() as s:
+        chained = dict(
+            (
+                await s.execute(
+                    text("SELECT id, chained_at FROM audit_event WHERE id IN (:a, :b)"),
+                    {"a": id_low, "b": id_high},
+                )
+            ).all()
+        )
+    assert chained[id_low] is not None and chained[id_high] is not None, "not linked after commit"
+
+    # The whole chain still verifies — no reorder break was introduced.
+    await _grant_audit_read(subj.a)
+    verify = await app_client.get(
+        "/api/v1/audit-events/verify-chain", headers=_auth(token_factory, subj.a)
+    )
+    assert verify.json()["verified"] is True, verify.text
