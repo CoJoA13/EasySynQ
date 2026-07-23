@@ -62,7 +62,7 @@ Fix pattern: `.execution_options(populate_existing=True)` on each `for_update` b
 
 Sibling of merged #346: a write/dispose gate that builds a partial `ResourceContext` silently drops a FRAMEWORK/kind-scoped DENY (deny-always-wins / R3, unsafe direction).
 
-- [ ] `api/records.py:234` — `_record_scope` (all five `record.dispose` gates) omits kind + framework_id → framework-scoped dispose DENY dropped `[C]`
+- [ ] `api/records.py:234` — `_record_scope` (all five `record.dispose` gates) builds a partial tuple → FRAMEWORK / kind / **PROCESS**-scoped dispose DENYs dropped; populate kind + framework_id **and process_ids** (via `_record_process_scope`) unless the S-records-W DENY-direction rationale is re-affirmed and documented (review doc 114-117) `[C]`
 - [ ] `api/documents.py:819` — `POST /documents` builds `document.create` + per-link `manage_metadata` scopes without kind/framework_id → create-surface DENY dropped `[C]`
 
 ### ☐ Batch 3 — System-tier authz guards
@@ -89,7 +89,7 @@ Sibling of merged #346: a write/dispose gate that builds a partial `ResourceCont
 A create-gated (or token-gated) endpoint returns a resource body the caller cannot actually read.
 
 - [ ] `api/capa.py:614` — spawn-capa idempotent replay returns another process's CAPA header to a caller gated only on a caller-chosen `capa.create` scope; re-authorize the returned CAPA with `capa.read` at its own scope `[C]`
-- [ ] `services/packs/build.py:304` — pack FINDING/CAPA subjects bypass R28 classification (authorized with `record.read`, not `capa.read`/`finding.read`) `[f]`
+- [ ] `services/packs/build.py:304` — pack FINDING/CAPA subjects are serialized with NO subject read-check (`record.read` gates only the evidence candidates) → R28 bypass; ADD a per-subject `capa.read`/`finding.read` gate at the subject's own scope (not via the evidence classifier) and refuse/exclude when unreadable `[f]`
 - [ ] `services/packs/service.py:620` — public pack share survives a WORM destroy (cached portfolio PDF keeps serving); disposition must invalidate share tokens + purge derived artifacts + fail-closed on disposition state `[f]`
 
 ### ☐ Batch 7 — Audit signed-checkpoint verification
@@ -124,7 +124,7 @@ A create-gated (or token-gated) endpoint returns a resource body the caller cann
 ### ☐ Batch 11 — Notifications & operator alerting
 `branch: fix/major-notify-and-alerting` · backend (+ small test updates)
 
-- [ ] `services/notifications/render.py:61` — HTML-escaped substitution feeds two plain-text sinks → titles with `& ' < >` garbled in every email + double-escaped in the SPA; escape at the sink, not the renderer `[C]`
+- [ ] `services/notifications/render.py:61` — `html.escape` in `_substitute` feeds two PLAIN-TEXT sinks → titles with `& ' < >` garbled in email + double-escaped in the SPA; **drop the escape** (both sinks are plain text; the whitelist regex already blocks slot injection), reserving sink-level escaping only for a future HTML sink `[C]`
 - [ ] `services/backup/service.py:110` — nightly backup failures + chain-verify breaks never notify admins (`system.backup_failed` / `integrity.alarm` class-mapped, no emitter); wire the in-DB path AND an out-of-band operator channel (SMTP/syslog/webhook) for the DB-down mode `[C]`
 
 ---
