@@ -249,6 +249,11 @@ async def _record_process_scope(request: Any, session: AsyncSession) -> Resource
         folder_path=base.folder_path,
         framework_id=str(base.framework_id),
         process_ids=frozenset(process_ids),
+        # A record's base is captured at Effective and never transitions (its FSM lives on the
+        # Record retention row, not documented_information.current_state), so this is always
+        # "Effective". Carrying it lets a lifecycle_state-predicated record.* DENY match, instead of
+        # being dropped when resource.lifecycle_state stays None (deny-always-wins / R3).
+        lifecycle_state=base.current_state.value,
     )
 
 
@@ -359,12 +364,14 @@ _create_scoped = require(  # per-record binding-minting writes (correction + evi
 )
 # Disposition / legal-hold / dual-control destroy all gate on record.dispose (SoD-sensitive; doc 06
 # §5.3, doc 15 §8.9). Resolve the FULL process-aware `_record_process_scope` (#335 Batch 2): the old
-# partial scope carried only artifact_id + folder_path, so a kind / FRAMEWORK / PROCESS-scoped
-# record.dispose DENY was silently dropped (deny-always-wins / R3 violated). The full tuple is both
-# deny-wins-complete AND safe — record.dispose has NO process-scoped ALLOW (SYSTEM-override-only
-# in v1), so including process_ids only ADDS DENY matches, never a new grant; and disposition mints
-# no binding, so the S-records-W escalation channel (a writer minting a binding to gain access) does
-# not exist on this path. SoD dual-control is unchanged.
+# partial scope carried only artifact_id + folder_path, so a FRAMEWORK- or PROCESS-scoped (or a
+# lifecycle_state-predicated) record.dispose DENY was silently dropped (deny-always-wins / R3
+# violated). (A DOC_CLASS/kind DENY is moot on a record — DOC_CLASS matches on document_level, which
+# a RECORD-kind base never carries — so completing `kind` is inert here, not a recovered DENY.) The
+# full tuple is both deny-wins-complete AND safe — record.dispose has NO process-scoped ALLOW
+# (SYSTEM-override-only in v1), so including process_ids only ADDS DENY matches, never a new grant;
+# and disposition mints no binding, so the S-records-W escalation channel (a writer minting a
+# binding to gain access) does not exist on this path. SoD dual-control is unchanged.
 _dispose = require("record.dispose", async_scope_resolver=_record_process_scope)
 
 

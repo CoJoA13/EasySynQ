@@ -43,8 +43,14 @@ async def _add_override(
     level: ScopeLevel,
     *,
     selector: dict[str, object],
+    predicates: dict[str, object] | None = None,
 ) -> None:
-    """Add a scoped PermissionOverride for ``subject`` (the report_document_control pattern)."""
+    """Add a scoped PermissionOverride for ``subject`` (the report_document_control pattern).
+
+    ``predicates`` attach the ABAC narrowing (e.g. ``{"lifecycle_state": "Draft"}``) to the
+    override — ``_grant_from_override`` folds them into the resolved grant, so the DENY only
+    participates when the resource context carries the matching ``lifecycle_state``.
+    """
     async with get_sessionmaker()() as s:
         user = await _ensure_user(s, subject)
         perm = (
@@ -60,6 +66,7 @@ async def _add_override(
                 permission_id=perm.id,
                 effect=effect,
                 scope_id=scope.id,
+                predicates=predicates,
             )
         )
         await s.commit()
@@ -121,6 +128,32 @@ async def test_document_create_doc_class_kind_deny_wins(
         "/api/v1/documents",
         headers=h,
         json={"title": "kind-deny", "document_type_id": type_id, "area_code": "PUR"},
+    )
+    assert r.status_code == 403, r.text
+
+
+async def test_document_create_lifecycle_deny_wins(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """A lifecycle_state-predicated document.create DENY (lifecycle_state=Draft) beats the SYSTEM
+    ALLOW. Pre-fix the base create scope left lifecycle_state=None, so the predicate failed and the
+    DENY was dropped (201); the new doc is always created Draft, so post-fix the predicate hits."""
+    subject = _subject("doc-lc-deny")
+    await _grant(subject, ("document.create",))
+    h = _auth(token_factory, subject)
+    type_id = await s5.type_id("SOP")
+    await _add_override(
+        subject,
+        "document.create",
+        Effect.DENY,
+        ScopeLevel.SYSTEM,
+        selector={},
+        predicates={"lifecycle_state": "Draft"},
+    )
+    r = await app_client.post(
+        "/api/v1/documents",
+        headers=h,
+        json={"title": "lc-deny", "document_type_id": type_id, "area_code": "PUR"},
     )
     assert r.status_code == 403, r.text
 
@@ -220,4 +253,48 @@ async def test_record_dispose_process_deny_wins(
                     delete(EvidenceForLink).where(EvidenceForLink.record_id == uuid.UUID(rid))
                 )
                 await s.commit()
+        await _cleanup(policy_id)
+
+
+async def test_record_dispose_lifecycle_deny_wins(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """A lifecycle_state-predicated record.dispose DENY (lifecycle_state=Effective) beats the SYSTEM
+    ALLOW. Pre-fix _record_process_scope left lifecycle_state=None, so the predicate failed and the
+    DENY was dropped (200); a record's base is captured Effective and never transitions, so post-fix
+    the predicate matches. No evidence-link here, so _cleanup(policy_id) alone tears down."""
+    capturer = _subject("disp-cap")
+    user_id = await _grant(capturer, _DISPOSITION_PERMS)
+    org_id = await _org_id(user_id)
+    h = _auth(token_factory, capturer)
+    disposer = _subject("disp-lc-deny")
+    await _grant(disposer, _DISPOSITION_PERMS)  # SYSTEM record.dispose ALLOW
+    hb = _auth(token_factory, disposer)
+    policy_id = await _seed_policy(
+        org_id, action=DispositionAction.ARCHIVE_COLD, review_required=False
+    )
+    try:
+        rid = (
+            await _capture(
+                app_client,
+                h,
+                record_type="COMPETENCE",
+                title="c",
+                retention_policy_id=str(policy_id),
+            )
+        ).json()["id"]
+        await _to_due(app_client, h, rid)
+        await _add_override(
+            disposer,
+            "record.dispose",
+            Effect.DENY,
+            ScopeLevel.SYSTEM,
+            selector={},
+            predicates={"lifecycle_state": "Effective"},
+        )
+        denied = await app_client.patch(
+            f"/api/v1/records/{rid}/disposition", headers=hb, json={"to_state": "DISPOSED"}
+        )
+        assert denied.status_code == 403, denied.text
+    finally:
         await _cleanup(policy_id)
