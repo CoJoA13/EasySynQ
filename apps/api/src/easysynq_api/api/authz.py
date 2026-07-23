@@ -31,10 +31,13 @@ from ..problems import ProblemException
 from ..services.authz import (
     AuthzAuditSink,
     assert_can_assign_role,
+    assert_can_delete_override,
     assert_can_grant,
+    assert_can_revoke_role,
     get_authz_audit_sink,
     invalidate_user_permissions,
     require,
+    revoke_removes_last_admin,
 )
 from ..services.authz.effective import compute_effective_permissions
 
@@ -311,6 +314,7 @@ async def revoke_user_role(
     assignment_id: uuid.UUID,
     granter: AppUser = Depends(_permission_grant),
     session: AsyncSession = Depends(get_session),
+    sink: AuthzAuditSink = Depends(get_authz_audit_sink),
 ) -> Response:
     assignment = await session.get(RoleAssignment, assignment_id)
     if assignment is None or assignment.user_id != user_id or assignment.org_id != granter.org_id:
@@ -323,6 +327,19 @@ async def revoke_user_role(
             code="conflict",
             title="This grant is managed by owner-assignment; revoke it via "
             "DELETE /processes/{process_id}/owner/{user_id}",
+        )
+    # Two-tier guard (R35), revoke side: stripping a role that bundles a system-domain permission
+    # is a system-tier act — a content-tier permission.grant holder may not tear down admin grants.
+    # The denial is AUDITED (the outer require() already logged an ALLOW).
+    await assert_can_revoke_role(session, sink, granter, assignment.role_id)
+    # Break-glass (doc 08 §9.1): never revoke the org's last active System Administrator. The check
+    # and the delete run under one org-scoped lock (shared with the user-deactivation path) so a
+    # concurrent disable+revoke cannot each see the other admin active and both commit → lockout.
+    if await revoke_removes_last_admin(session, assignment):
+        raise ProblemException(
+            status=409,
+            code="last_admin",
+            title="Cannot revoke the only active System Administrator",
         )
     _audit_authz_change(
         session,
@@ -429,10 +446,18 @@ async def delete_user_override(
     override_id: uuid.UUID,
     granter: AppUser = Depends(_permission_grant),
     session: AsyncSession = Depends(get_session),
+    sink: AuthzAuditSink = Depends(get_authz_audit_sink),
 ) -> Response:
     override = await session.get(PermissionOverride, override_id)
     if override is None or override.user_id != user_id or override.org_id != granter.org_id:
         raise ProblemException(status=404, code="not_found", title="Override not found")
+    # Two-tier guard (R35), delete side: removing a system-domain override re-widens or strips
+    # system access (deleting a containing DENY hands its ALLOW back), so it requires a system-tier
+    # grantor. The denial is AUDITED (the outer require() already logged an ALLOW).
+    permission = await session.get(Permission, override.permission_id)
+    if permission is None:  # RESTRICT FK guarantees a row exists — defensive for mypy/integrity.
+        raise ProblemException(status=404, code="not_found", title="Override not found")
+    await assert_can_delete_override(session, sink, granter, permission)
     scope_id = override.scope_id
     _audit_authz_change(
         session,

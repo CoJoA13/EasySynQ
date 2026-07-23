@@ -22,7 +22,7 @@
 |---|-------|------|:--------:|--------|----|
 | 1 | Stale FOR-UPDATE reads (`populate_existing`) | 1 | 4 | ☑ in PR | [#354](https://github.com/CoJoA13/EasySynQ/pull/354) |
 | 2 | Deny-wins scope-tuple completeness | 1 | 2 | ☑ in PR | [#355](https://github.com/CoJoA13/EasySynQ/pull/355) |
-| 3 | System-tier authz guards (last-admin / revoke-side) | 1 | 2 | ☐ not started | — |
+| 3 | System-tier authz guards (last-admin / revoke-side) | 1 | 2 | ☑ in PR | [#356](https://github.com/CoJoA13/EasySynQ/pull/356) |
 | 4 | WORM erasure completeness | 1 | 2 | ☐ not started | — |
 | 5 | Disposition txn / locking integrity | 1 | 2 | ☐ not started | — |
 | 6 | Read-authorization on returned bodies | 1 | 3 | ☐ not started | — |
@@ -65,11 +65,11 @@ Sibling of merged #346: a write/dispose gate that builds a partial `ResourceCont
 - [x] `api/records.py:234` — `_record_scope` (all five `record.dispose` gates) builds a partial tuple → FRAMEWORK / kind / **PROCESS**-scoped dispose DENYs dropped; populate kind + framework_id **and process_ids** (via `_record_process_scope`) unless the S-records-W DENY-direction rationale is re-affirmed and documented (review doc 114-117) `[C]`
 - [x] `api/documents.py:819` — `POST /documents` builds `document.create` + per-link `manage_metadata` scopes without kind/framework_id → create-surface DENY dropped `[C]`
 
-### ☐ Batch 3 — System-tier authz guards
+### ☑ Batch 3 — System-tier authz guards — [#356](https://github.com/CoJoA13/EasySynQ/pull/356)
 `branch: fix/major-authz-system-tier-guards` · backend + integration
 
-- [ ] `api/authz.py:309` — `revoke_user_role` has no last-System-Administrator constraint → self-hosted lockout; serialize the count+mutation under ONE org-scoped lock spanning revoke AND user-deactivation `[C]`
-- [ ] `api/authz.py:427` — `delete_user_override` / `revoke_user_role` apply no two-tier guard → a content-tier grantor can re-enable/strip system-domain access; route the denial through the AUDITED `_two_tier_deny` `[C]`
+- [x] `api/authz.py:309` — `revoke_user_role` has no last-System-Administrator constraint → self-hosted lockout; serialize the count+mutation under ONE org-scoped lock spanning revoke AND user-deactivation `[C]`
+- [x] `api/authz.py:427` — `delete_user_override` / `revoke_user_role` apply no two-tier guard → a content-tier grantor can re-enable/strip system-domain access; route the denial through the AUDITED `_two_tier_deny` `[C]`
 
 ### ☐ Batch 4 — WORM erasure completeness
 `branch: fix/major-worm-erasure-completeness` · backend + migration

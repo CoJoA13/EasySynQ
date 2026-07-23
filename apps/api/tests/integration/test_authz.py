@@ -9,6 +9,7 @@ read-only seed (permissions + roles) is shared.
 
 from __future__ import annotations
 
+import asyncio
 import datetime
 import uuid
 from collections.abc import Callable
@@ -16,9 +17,11 @@ from types import SimpleNamespace
 
 import pytest
 from httpx import AsyncClient
-from sqlalchemy import select
+from sqlalchemy import func, select
 
+from easysynq_api.db.models._audit_enums import EventType
 from easysynq_api.db.models.app_user import AppUser, UserStatus
+from easysynq_api.db.models.audit_event import AuditEvent
 from easysynq_api.db.models.authz_grant import PermissionOverride
 from easysynq_api.db.models.organization import Organization
 from easysynq_api.db.models.permission import Permission
@@ -27,7 +30,11 @@ from easysynq_api.db.models.scope import Scope
 from easysynq_api.db.session import get_sessionmaker
 from easysynq_api.domain.authz import RequestContext, ResourceContext, authorize
 from easysynq_api.domain.authz.types import Effect, ScopeLevel
-from easysynq_api.services.authz import gather_grants
+from easysynq_api.services.authz import (
+    disable_removes_last_admin,
+    gather_grants,
+    revoke_removes_last_admin,
+)
 
 pytestmark = pytest.mark.integration
 
@@ -487,3 +494,154 @@ async def test_audit_hook_on_allow_and_deny(
     assert deny.reason == "deny_by_default"
     assert allow.actor_id and allow.org_id
     assert deny.actor_id and deny.org_id
+
+
+# --- two-tier REVOKE guard (R35, revoke side) --------------------------------------------
+
+
+async def test_two_tier_revoke_role_and_delete_override(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    """Revoke-side R35: a content-tier grantor must not revoke a system-domain role NOR delete a
+    system-domain override (both re-shape system access), and the denial must be AUDITED — a bare
+    check+422 would leave the trail showing only the outer require()'s ALLOW. Pre-fix both revokes
+    had no two-tier guard, so the content-tier QMS Owner succeeded (204). Positive control: the
+    Admin (system-tier) may do both."""
+    qms_id = await _assign_role(subj.qms, "QMS Owner")  # content-tier permission.grant
+    await _assign_role(subj.admin, "System Administrator")  # system-tier permission.grant
+    sam_id = await _assign_role(subj.sam, "System Administrator")  # target: a system-domain role
+    await _add_override(
+        subj.sam, "user.read", "ALLOW", "SYSTEM"
+    )  # target: a system-domain override
+    mara_h = _auth(token_factory, subj.qms)
+    avery_h = _auth(token_factory, subj.admin)
+
+    sam_roles = (await app_client.get(f"/api/v1/users/{sam_id}/roles", headers=avery_h)).json()
+    sa_assignment = next(r["id"] for r in sam_roles if r["role_name"] == "System Administrator")
+    sam_ovrs = (await app_client.get(f"/api/v1/users/{sam_id}/overrides", headers=avery_h)).json()
+    sys_override = next(o["id"] for o in sam_ovrs if o["permission_key"] == "user.read")
+
+    # Content-tier QMS Owner: BOTH revokes are refused with 422 two_tier_violation...
+    r_role = await app_client.delete(
+        f"/api/v1/users/{sam_id}/roles/{sa_assignment}", headers=mara_h
+    )
+    assert r_role.status_code == 422, r_role.text
+    assert r_role.json()["code"] == "two_tier_violation"
+    r_ovr = await app_client.delete(
+        f"/api/v1/users/{sam_id}/overrides/{sys_override}", headers=mara_h
+    )
+    assert r_ovr.status_code == 422, r_ovr.text
+    assert r_ovr.json()["code"] == "two_tier_violation"
+
+    # ...and each denial is durably AUDITED (DbAuthzAuditSink commits on its own session, so the row
+    # survives the request's ProblemException rollback) — TWO_TIER_VIOLATION, actor = the grantor.
+    async with get_sessionmaker()() as s:
+        denies = await s.scalar(
+            select(func.count())
+            .select_from(AuditEvent)
+            .where(
+                AuditEvent.event_type == EventType.TWO_TIER_VIOLATION,
+                AuditEvent.actor_id == qms_id,
+            )
+        )
+    assert denies is not None and denies >= 2
+
+    # Positive control (no over-restriction): the Admin (system-tier) may revoke + delete.
+    ok_role = await app_client.delete(
+        f"/api/v1/users/{sam_id}/roles/{sa_assignment}", headers=avery_h
+    )
+    assert ok_role.status_code == 204, ok_role.text
+    ok_ovr = await app_client.delete(
+        f"/api/v1/users/{sam_id}/overrides/{sys_override}", headers=avery_h
+    )
+    assert ok_ovr.status_code == 204, ok_ovr.text
+
+
+# --- last-admin serialisation across the two removal paths --------------------------------
+
+
+async def test_admin_removal_paths_serialise_under_one_lock(
+    app_under_test: object, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    """Finding-1 hardening: the disable and role-revoke paths take ONE org-scoped transaction lock,
+    so two CONCURRENT removals of the last two admins can't both win (→ self-hosted lockout). With
+    the lock the second op reads the freshly-committed set and is refused; without it both read the
+    peer as still-active before either commits and both proceed (the set is emptied)."""
+    a_id = await _assign_role(subj.admin, "System Administrator")
+    b_id = await _assign_role(subj.sam, "System Administrator")
+    async with get_sessionmaker()() as s:
+        org_id = (await s.execute(select(AppUser.org_id).where(AppUser.id == a_id))).scalar_one()
+        b_assignment_id = (
+            await s.execute(
+                select(RoleAssignment.id)
+                .join(Role, Role.id == RoleAssignment.role_id)
+                .where(RoleAssignment.user_id == b_id, Role.name == "System Administrator")
+            )
+        ).scalar_one()
+        # Make A and B the ONLY active admins in the org so both racing ops target the last two.
+        others = (
+            (
+                await s.execute(
+                    select(AppUser.id)
+                    .join(RoleAssignment, RoleAssignment.user_id == AppUser.id)
+                    .join(Role, Role.id == RoleAssignment.role_id)
+                    .where(
+                        AppUser.org_id == org_id,
+                        Role.name == "System Administrator",
+                        AppUser.status == UserStatus.ACTIVE,
+                        AppUser.id.notin_([a_id, b_id]),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        for uid in set(others):
+            u = await s.get(AppUser, uid)
+            if u is not None:
+                u.status = UserStatus.DISABLED
+        await s.commit()
+
+    async def do_disable_a() -> bool:
+        async with get_sessionmaker()() as s:
+            refused = await disable_removes_last_admin(s, org_id, a_id)
+            if not refused:
+                u = await s.get(AppUser, a_id)
+                assert u is not None
+                u.status = UserStatus.DISABLED
+                await s.commit()
+            return refused
+
+    async def do_revoke_b() -> bool:
+        async with get_sessionmaker()() as s:
+            assignment = await s.get(RoleAssignment, b_assignment_id)
+            assert assignment is not None
+            refused = await revoke_removes_last_admin(s, assignment)
+            if not refused:
+                await s.delete(assignment)
+                await s.commit()
+            return refused
+
+    refusals = await asyncio.gather(do_disable_a(), do_revoke_b())
+    # Exactly ONE op is refused → the admin set is never emptied (no lock → both proceed → sum 0).
+    assert sum(refusals) == 1, refusals
+    # And exactly one of the last two admins survives (A still active, or B still holding the role).
+    async with get_sessionmaker()() as s:
+        remaining = (
+            (
+                await s.execute(
+                    select(AppUser.id)
+                    .join(RoleAssignment, RoleAssignment.user_id == AppUser.id)
+                    .join(Role, Role.id == RoleAssignment.role_id)
+                    .where(
+                        AppUser.org_id == org_id,
+                        Role.name == "System Administrator",
+                        AppUser.status == UserStatus.ACTIVE,
+                        AppUser.id.in_([a_id, b_id]),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+    assert len(set(remaining)) == 1, remaining
