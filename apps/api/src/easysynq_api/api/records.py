@@ -219,21 +219,6 @@ def _record(
 # --- helpers + gates --------------------------------------------------------------------
 
 
-async def _record_scope(request: Any, session: AsyncSession) -> ResourceContext:
-    """Resolve a record's ARTIFACT authz scope from the path id (SYSTEM grants always match)."""
-    raw = request.path_params.get("record_id")
-    if not raw:
-        return ResourceContext.system()
-    try:
-        record_id = uuid.UUID(str(raw))
-    except ValueError:
-        return ResourceContext.system()
-    base = await session.get(DocumentedInformation, record_id)
-    if base is None:
-        return ResourceContext(artifact_id=str(record_id))
-    return ResourceContext(artifact_id=str(base.id), folder_path=base.folder_path)
-
-
 async def _record_process_scope(request: Any, session: AsyncSession) -> ResourceContext:
     """A record's FULL process-aware scope (S-records-R/W) — its context INCLUDING its process
     bindings (``record_process_ids`` leg A + leg B + the R3-1 correction fallback). Used by the
@@ -264,6 +249,11 @@ async def _record_process_scope(request: Any, session: AsyncSession) -> Resource
         folder_path=base.folder_path,
         framework_id=str(base.framework_id),
         process_ids=frozenset(process_ids),
+        # A record's base is captured at Effective and never transitions (its FSM lives on the
+        # Record retention row, not documented_information.current_state), so this is always
+        # "Effective". Carrying it lets a lifecycle_state-predicated record.* DENY match, instead of
+        # being dropped when resource.lifecycle_state stays None (deny-always-wins / R3).
+        lifecycle_state=base.current_state.value,
     )
 
 
@@ -366,16 +356,23 @@ async def _load(
 # S-records-W: BOTH the READ gate and the per-record binding-MINTING WRITE gate (correction +
 # evidence-link add/remove) resolve the process-aware `_record_process_scope`, so a bound
 # Process-Owner can read AND author records bound to their process; the writes additionally re-auth
-# the TARGET process in-handler (`_enforce_target_process_record`). `_dispose` stays on the
-# process-BLIND `_record_scope` (disposition mints no process binding; SoD dual-control unchanged).
+# the TARGET process in-handler (`_enforce_target_process_record`).
 _read = require("record.read", async_scope_resolver=_record_process_scope)
 _create = require("record.create")  # SYSTEM scope (create/init-upload — no path id)
 _create_scoped = require(  # per-record binding-minting writes (correction + evidence-link)
     "record.create", async_scope_resolver=_record_process_scope
 )
 # Disposition / legal-hold / dual-control destroy all gate on record.dispose (SoD-sensitive; doc 06
-# §5.3, doc 15 §8.9). Per-record scope from the path id (SYSTEM grants always match).
-_dispose = require("record.dispose", async_scope_resolver=_record_scope)
+# §5.3, doc 15 §8.9). Resolve the FULL process-aware `_record_process_scope` (#335 Batch 2): the old
+# partial scope carried only artifact_id + folder_path, so a FRAMEWORK- or PROCESS-scoped (or a
+# lifecycle_state-predicated) record.dispose DENY was silently dropped (deny-always-wins / R3
+# violated). (A DOC_CLASS/kind DENY is moot on a record — DOC_CLASS matches on document_level, which
+# a RECORD-kind base never carries — so completing `kind` is inert here, not a recovered DENY.) The
+# full tuple is both deny-wins-complete AND safe — record.dispose has NO process-scoped ALLOW
+# (SYSTEM-override-only in v1), so including process_ids only ADDS DENY matches, never a new grant;
+# and disposition mints no binding, so the S-records-W escalation channel (a writer minting a
+# binding to gain access) does not exist on this path. SoD dual-control is unchanged.
+_dispose = require("record.dispose", async_scope_resolver=_record_process_scope)
 
 
 async def _retention_until_for(session: AsyncSession, record: Record) -> datetime.date | None:

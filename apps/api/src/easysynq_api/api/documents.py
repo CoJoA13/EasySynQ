@@ -815,11 +815,23 @@ async def create_document_endpoint(
     # the ProcessLink UNIQUE on create.
     declared: list[uuid.UUID] = list(dict.fromkeys(body.process_ids))
     # The base create gate carries the declared process_ids so a PROCESS-scoped document.create
-    # grant (a bound Process Owner) matches; a FOLDER/DOC_CLASS/SYSTEM holder matches as before.
+    # grant (a bound Process Owner) matches; a FOLDER/DOC_CLASS/SYSTEM holder matches as before. It
+    # ALSO carries the kind + framework_id + lifecycle_state the row will land with (create_document
+    # assigns kind=DocumentKind.DOCUMENT + the org iso9001 framework, at current_state=Draft), or a
+    # kind/FRAMEWORK/lifecycle-predicated document.create DENY is silently dropped at creation
+    # (deny-always-wins / R3) — the pre-create sibling of the merged resource_from_doc completion
+    # (#333/#346), covering every READ/decision builder but not this create builder (no row to read
+    # yet). All three are exactly what the row carries the instant after create, so a scope DENY
+    # evaluates identically pre/post-create.
+    framework = await vault_repo.get_framework(session, caller.org_id)
+    framework_id = str(framework.id) if framework is not None else None
     resource = ResourceContext(
         folder_path=body.folder_path,
         document_level=level,
+        kind=DocumentKind.DOCUMENT.value,
         process_ids=frozenset(str(p) for p in declared),
+        framework_id=framework_id,
+        lifecycle_state=DocumentCurrentState.Draft.value,
     )
     await enforce(session, authz_sink, request, caller, "document.create", resource)
     # Validate + per-process authorize each declared link BEFORE creating anything. The per-process
@@ -847,10 +859,12 @@ async def create_document_endpoint(
         link_scope = ResourceContext(
             folder_path=body.folder_path,
             document_level=level,
+            kind=DocumentKind.DOCUMENT.value,
             process_ids=frozenset({str(process.id)}),
             # The new doc is always created Draft — mirror the standalone _enforce_target_process
             # scope so a lifecycle_state-predicated manage_metadata grant evaluates identically.
             lifecycle_state=DocumentCurrentState.Draft.value,
+            framework_id=framework_id,
         )
         await enforce(session, authz_sink, request, caller, "document.manage_metadata", link_scope)
         processes.append(process)
