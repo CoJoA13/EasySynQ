@@ -23,7 +23,7 @@
 | 1 | Stale FOR-UPDATE reads (`populate_existing`) | 1 | 4 | ☑ in PR | [#354](https://github.com/CoJoA13/EasySynQ/pull/354) |
 | 2 | Deny-wins scope-tuple completeness | 1 | 2 | ☑ in PR | [#355](https://github.com/CoJoA13/EasySynQ/pull/355) |
 | 3 | System-tier authz guards (last-admin / revoke-side) | 1 | 2 | ☑ in PR | [#356](https://github.com/CoJoA13/EasySynQ/pull/356) |
-| 4 | WORM erasure completeness | 1 | 2 | ☐ not started | — |
+| 4 | WORM erasure completeness | 1 | 2 | ☑ in PR | [#357](https://github.com/CoJoA13/EasySynQ/pull/357) |
 | 5 | Disposition txn / locking integrity | 1 | 2 | ☐ not started | — |
 | 6 | Read-authorization on returned bodies | 1 | 3 | ☐ not started | — |
 | 7 | Audit signed-checkpoint verification | 1 | 1 | ☐ not started | — |
@@ -71,11 +71,11 @@ Sibling of merged #346: a write/dispose gate that builds a partial `ResourceCont
 - [x] `api/authz.py:309` — `revoke_user_role` has no last-System-Administrator constraint → self-hosted lockout; serialize the count+mutation under ONE org-scoped lock spanning revoke AND user-deactivation `[C]`
 - [x] `api/authz.py:427` — `delete_user_override` / `revoke_user_role` apply no two-tier guard → a content-tier grantor can re-enable/strip system-domain access; route the denial through the AUDITED `_two_tier_deny` `[C]`
 
-### ☐ Batch 4 — WORM erasure completeness
+### ☑ Batch 4 — WORM erasure completeness — [#357](https://github.com/CoJoA13/EasySynQ/pull/357)
 `branch: fix/major-worm-erasure-completeness` · backend + migration
 
-- [ ] `services/records/disposition.py:128` — DESTROY / R27 WORM-destroy never nulls `form_field_values` → structured record content survives legal erasure `[C]`
-- [ ] `migrations/versions/0024_records_disposition.py:179` — `disposition_event` is UPDATE/DELETE-able by the app role → REVOKE UPDATE,DELETE to match the sibling append-only tables `[f]`
+- [x] `services/records/disposition.py:128` — DESTROY / R27 WORM-destroy never nulls `form_field_values` → structured record content survives legal erasure `[C]`
+- [x] `migrations/versions/0024_records_disposition.py:179` — `disposition_event` is UPDATE/DELETE-able by the app role → REVOKE UPDATE,DELETE to match the sibling append-only tables `[f]` (fixed in new migration **0072**)
 
 ### ☐ Batch 5 — Disposition txn / locking integrity
 `branch: fix/major-disposition-txn-integrity` · backend + integration

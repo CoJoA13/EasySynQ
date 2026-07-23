@@ -43,6 +43,7 @@ from easysynq_api.domain.authz.types import Effect, ScopeLevel
 from easysynq_api.services.packs import build
 from easysynq_api.services.packs import repository as packs_repo
 
+from ._owner_db import owner_delete_disposition_events
 from .test_records import _capture, _grant, _subject, _upload_evidence
 from .test_vault import _auth
 
@@ -143,7 +144,8 @@ async def _teardown(
             await s.execute(delete(EvidencePack).where(EvidencePack.id == pack_id))
         if recs:
             await s.execute(delete(EvidenceForLink).where(EvidenceForLink.record_id.in_(recs)))
-            await s.execute(delete(DispositionEvent).where(DispositionEvent.record_id.in_(recs)))
+            # disposition_event is append-only for the app role (0072) → delete it as the OWNER.
+            await owner_delete_disposition_events(recs)
             shas = list(
                 (
                     await s.execute(
