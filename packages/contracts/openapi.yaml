@@ -745,7 +745,7 @@ paths:
     delete:
       tags: [authz]
       operationId: revokeUserRole
-      summary: Revoke a role assignment. Needs permission.grant.
+      summary: Revoke a role assignment. Needs permission.grant (system-tier for a system-domain role).
       parameters:
         - name: user_id
           in: path
@@ -760,6 +760,18 @@ paths:
           description: Assignment revoked.
         "403": { $ref: "#/components/responses/ProblemResponse" }
         "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409":
+          description: >-
+            conflict (an owner-assignment-managed grant — revoke it via the process-owner endpoint)
+            or last_admin (would revoke the only active System Administrator's role → lockout).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "422":
+          description: two_tier_violation (revoking a system-domain role needs a system-tier grantor).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
 
   /users/{user_id}/overrides:
     get:
@@ -813,7 +825,7 @@ paths:
     delete:
       tags: [authz]
       operationId: deleteUserOverride
-      summary: Remove a direct override. Needs permission.grant.
+      summary: Remove a direct override. Needs permission.grant (system-tier for a system-domain override).
       parameters:
         - name: user_id
           in: path
@@ -828,6 +840,11 @@ paths:
           description: Override removed.
         "403": { $ref: "#/components/responses/ProblemResponse" }
         "404": { $ref: "#/components/responses/ProblemResponse" }
+        "422":
+          description: two_tier_violation (removing a system-domain override needs a system-tier grantor).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
 
   /users/{user_id}/effective-permissions:
     get:

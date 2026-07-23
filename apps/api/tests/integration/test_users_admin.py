@@ -170,6 +170,35 @@ async def test_cannot_disable_sole_active_admin(
     assert blocked.json()["code"] == "last_admin"
 
 
+async def test_cannot_revoke_sole_active_admin_role(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """Break-glass on the ROLE-REVOKE path: pre-fix ``revoke_user_role`` had no last-admin guard at
+    all, so the sole System Administrator's role could be revoked → 204 lockout. Now it's 409
+    ``last_admin`` (serialised with the disable path under one org lock)."""
+    h_admin, admin_sub = await _admin(token_factory)
+    roster = (await app_client.get("/api/v1/users", headers=h_admin)).json()
+    me = next(u for u in roster if u["keycloak_subject"] == admin_sub)
+    # Make `me` the sole active admin (disable every OTHER active admin — the disable-test pattern).
+    for u in roster:
+        if u["id"] != me["id"] and _ADMIN in u["roles"] and u["status"] == "ACTIVE":
+            resp = await app_client.patch(
+                f"/api/v1/users/{u['id']}", headers=h_admin, json={"status": "DISABLED"}
+            )
+            assert resp.status_code == 200, resp.text
+
+    my_roles = (await app_client.get(f"/api/v1/users/{me['id']}/roles", headers=h_admin)).json()
+    sa_assignment = next(r["id"] for r in my_roles if r["role_name"] == _ADMIN)
+    blocked = await app_client.delete(
+        f"/api/v1/users/{me['id']}/roles/{sa_assignment}", headers=h_admin
+    )
+    assert blocked.status_code == 409, blocked.text
+    assert blocked.json()["code"] == "last_admin"
+    # The assignment survives the refused revoke — `me` is still an admin.
+    still = (await app_client.get(f"/api/v1/users/{me['id']}/roles", headers=h_admin)).json()
+    assert any(r["id"] == sa_assignment for r in still)
+
+
 async def test_admin_assigns_seeded_role_visible_in_roster(
     app_client: AsyncClient, token_factory: Callable[..., str]
 ) -> None:

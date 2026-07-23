@@ -29,7 +29,7 @@ from ..db.models.role import Role, RoleAssignment
 from ..db.session import get_session
 from ..logging import request_id_var
 from ..problems import ProblemException
-from ..services.authz import invalidate_user_permissions, require
+from ..services.authz import disable_removes_last_admin, invalidate_user_permissions, require
 
 router = APIRouter(prefix="/api/v1", tags=["users"])
 
@@ -37,8 +37,6 @@ router = APIRouter(prefix="/api/v1", tags=["users"])
 _user_read = require("user.read")
 _user_create = require("user.create")
 _user_deactivate = require("user.deactivate")
-
-SYSTEM_ADMIN_ROLE = "System Administrator"
 
 
 def _rid() -> uuid.UUID | None:
@@ -219,7 +217,10 @@ async def update_user_status(
         names = await _role_names_by_user(session, caller.org_id, [target.id])
         return _represent(target, names.get(target.id, []))
 
-    if new_status == UserStatus.DISABLED and await _is_sole_active_admin(
+    # Break-glass (doc 08 §9.1): never disable the org's last active System Administrator. The check
+    # and the status write run under one org-scoped lock (shared with the role-revocation path via
+    # ``disable_removes_last_admin``) so a concurrent revoke+disable can't both win → lockout.
+    if new_status == UserStatus.DISABLED and await disable_removes_last_admin(
         session, caller.org_id, target.id
     ):
         raise ProblemException(
@@ -244,35 +245,3 @@ async def update_user_status(
     await session.refresh(target)
     names = await _role_names_by_user(session, caller.org_id, [target.id])
     return _represent(target, names.get(target.id, []))
-
-
-async def _is_sole_active_admin(
-    session: AsyncSession, org_id: uuid.UUID, target_id: uuid.UUID
-) -> bool:
-    """True iff ``target`` holds System Administrator and NO other ACTIVE user in the org does."""
-    other_active_admin = await session.scalar(
-        select(RoleAssignment.id)
-        .join(Role, Role.id == RoleAssignment.role_id)
-        .join(AppUser, AppUser.id == RoleAssignment.user_id)
-        .where(
-            RoleAssignment.org_id == org_id,
-            Role.name == SYSTEM_ADMIN_ROLE,
-            RoleAssignment.user_id != target_id,
-            AppUser.status == UserStatus.ACTIVE,
-        )
-        .limit(1)
-    )
-    if other_active_admin is not None:
-        return False
-    # No other active admin — is the target itself an admin? (If not, disabling them is harmless.)
-    target_is_admin = await session.scalar(
-        select(RoleAssignment.id)
-        .join(Role, Role.id == RoleAssignment.role_id)
-        .where(
-            RoleAssignment.org_id == org_id,
-            Role.name == SYSTEM_ADMIN_ROLE,
-            RoleAssignment.user_id == target_id,
-        )
-        .limit(1)
-    )
-    return target_is_admin is not None

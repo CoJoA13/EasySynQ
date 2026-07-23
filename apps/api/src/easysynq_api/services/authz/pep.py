@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...auth.dependencies import get_current_user
 from ...db.models.app_user import AppUser
+from ...db.models.permission import Permission
 from ...db.session import get_session
 from ...domain.authz import RequestContext, ResourceContext, authorize
 from ...domain.authz.types import Decision
@@ -289,6 +290,48 @@ async def assert_can_assign_role(
             f"role:{role_id}",
             "role bundles system-administration permissions "
             f"({', '.join(sorted(system_keys))}) and requires a system-tier grantor",
+        )
+
+
+async def assert_can_revoke_role(
+    session: AsyncSession, sink: AuthzAuditSink, granter: AppUser, role_id: uuid.UUID
+) -> None:
+    """Two-tier guard (R35) for role REVOCATION — the symmetric partner of
+    ``assert_can_assign_role``. Stripping a role that bundles a system-domain permission changes
+    system-tier access, so a content-tier ``permission.grant`` holder (e.g. the QMS Owner) must not
+    revoke it; the outer ``require("permission.grant")`` already passed, so without this a
+    content-tier actor could tear down System-Administrator grants. Denials are AUDITED via
+    ``_two_tier_deny`` (that outer ALLOW is already logged, so a bare check+422 would leave no
+    record of the blocked privilege change)."""
+    system_keys = await role_system_domain_keys(session, role_id)
+    if not system_keys:
+        return
+    if not await _is_system_tier(session, granter):
+        await _two_tier_deny(
+            sink,
+            granter,
+            f"role:{role_id}",
+            "role bundles system-administration permissions "
+            f"({', '.join(sorted(system_keys))}) and requires a system-tier grantor to revoke",
+        )
+
+
+async def assert_can_delete_override(
+    session: AsyncSession, sink: AuthzAuditSink, granter: AppUser, permission: Permission
+) -> None:
+    """Two-tier guard (R35) for override DELETION — the symmetric partner of ``assert_can_grant``.
+    Deleting a system-domain override re-widens or strips system access (e.g. removing a DENY that
+    was containing a compromised deputy hands its ALLOW back), so it requires a system-tier grantor.
+    Denials are AUDITED via ``_two_tier_deny`` for the same reason as ``assert_can_revoke_role``."""
+    if not permission.is_system_domain:
+        return  # CONTENT override — any permission.grant holder may delete it.
+    if not await _is_system_tier(session, granter):
+        await _two_tier_deny(
+            sink,
+            granter,
+            f"target:{permission.key}",
+            f"{permission.key} is a system-administration permission and its override "
+            "cannot be removed by a content-tier grantor",
         )
 
 
