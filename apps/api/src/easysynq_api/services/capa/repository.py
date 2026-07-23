@@ -27,8 +27,17 @@ async def get_capa(
     session: AsyncSession, capa_id: uuid.UUID, *, for_update: bool = False
 ) -> Capa | None:
     if for_update:
+        # populate_existing: the authz resolver already session.get-loaded the row into the request
+        # session's identity map, so a plain locked load returns the STALE cached attributes (the
+        # S-drift-1 trap — the FSM/one-shot guards would then re-check pre-lock state). Force a
+        # re-read under the lock (the improvement/workflow repo precedent).
         return (
-            await session.execute(select(Capa).where(Capa.id == capa_id).with_for_update())
+            await session.execute(
+                select(Capa)
+                .where(Capa.id == capa_id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
         ).scalar_one_or_none()
     return await session.get(Capa, capa_id)
 
@@ -37,9 +46,14 @@ async def get_complaint(
     session: AsyncSession, complaint_id: uuid.UUID, *, for_update: bool = False
 ) -> Complaint | None:
     if for_update:
+        # populate_existing — force a re-read under the lock, not the stale identity-map row
+        # (the S-drift-1 trap; see get_capa).
         return (
             await session.execute(
-                select(Complaint).where(Complaint.id == complaint_id).with_for_update()
+                select(Complaint)
+                .where(Complaint.id == complaint_id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
             )
         ).scalar_one_or_none()
     return await session.get(Complaint, complaint_id)
@@ -49,8 +63,15 @@ async def get_ncr(
     session: AsyncSession, ncr_id: uuid.UUID, *, for_update: bool = False
 ) -> Ncr | None:
     if for_update:
+        # populate_existing — force a re-read under the lock, not the stale identity-map row (the
+        # S-drift-1 trap; see get_capa). Without it the one-shot 8.7 disposition gate is defeated.
         return (
-            await session.execute(select(Ncr).where(Ncr.id == ncr_id).with_for_update())
+            await session.execute(
+                select(Ncr)
+                .where(Ncr.id == ncr_id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
         ).scalar_one_or_none()
     return await session.get(Ncr, ncr_id)
 

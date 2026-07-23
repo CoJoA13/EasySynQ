@@ -33,8 +33,17 @@ async def get_audit(
     session: AsyncSession, audit_id: uuid.UUID, *, for_update: bool = False
 ) -> Audit | None:
     if for_update:
+        # populate_existing: the authz resolver already session.get-loaded the row into the request
+        # session's identity map, so a plain locked load returns the STALE cached attributes (the
+        # S-drift-1 trap) — a racing close would then be validated against pre-lock state. Force a
+        # re-read under the lock (the improvement/workflow repo precedent).
         return (
-            await session.execute(select(Audit).where(Audit.id == audit_id).with_for_update())
+            await session.execute(
+                select(Audit)
+                .where(Audit.id == audit_id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
         ).scalar_one_or_none()
     return await session.get(Audit, audit_id)
 
@@ -126,9 +135,14 @@ async def get_finding(
     session: AsyncSession, finding_id: uuid.UUID, *, for_update: bool = False
 ) -> AuditFinding | None:
     if for_update:
+        # populate_existing — force a re-read under the lock, not the stale identity-map row (the
+        # S-drift-1 trap; see get_audit).
         return (
             await session.execute(
-                select(AuditFinding).where(AuditFinding.id == finding_id).with_for_update()
+                select(AuditFinding)
+                .where(AuditFinding.id == finding_id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
             )
         ).scalar_one_or_none()
     return await session.get(AuditFinding, finding_id)
