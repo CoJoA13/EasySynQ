@@ -24,7 +24,7 @@ from __future__ import annotations
 
 from alembic import op
 
-revision: str = "0072_disposition_event_append_only"
+revision: str = "0072_disposition_append_only"
 down_revision: str | None = "0071_audit_chain_cursor"
 branch_labels: str | None = None
 depends_on: str | None = None
