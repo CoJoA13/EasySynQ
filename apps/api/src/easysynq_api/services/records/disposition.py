@@ -124,8 +124,20 @@ def _write_tombstone(
     is_worm_destroy: bool = False,
     legal_basis: str | None = None,
 ) -> None:
-    """Flip the record to DISPOSED + append the immutable ``disposition_event`` tombstone."""
+    """Flip the record to DISPOSED + append the immutable ``disposition_event`` tombstone.
+
+    On a DESTROY — the schedule-driven ``DispositionAction.DESTROY`` sweep/human path AND the R27
+    WORM-destroy hatch (which also passes ``action=DESTROY``) — also NULL the record's structured
+    ``form_field_values`` in the same transaction as the tombstone. A Mode-B structured record's
+    personal data (names, assessment comments) must NOT survive a 'physical destruction' / legal
+    erasure order: the evidence bytes + the derived structured-PDF rendition are already gone
+    (``_purge_record_evidence`` runs on every DESTROY path before this), so nulling the JSONB
+    content completes the erasure. ``content_hash`` is deliberately preserved as the tombstone's
+    verification anchor. ARCHIVE/TRANSFER dispositions keep their content — a change of custody, not
+    an erasure."""
     record.disposition_state = RecordDispositionState.DISPOSED
+    if action is DispositionAction.DESTROY:
+        record.form_field_values = None
     session.add(
         DispositionEvent(
             org_id=record.org_id,

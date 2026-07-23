@@ -16,7 +16,6 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy import delete, update
 
-from easysynq_api.db.models.disposition_event import DispositionEvent
 from easysynq_api.db.models.documented_information import DocumentedInformation
 from easysynq_api.db.models.evidence_blob import EvidenceBlob
 from easysynq_api.db.models.record import Record
@@ -24,6 +23,7 @@ from easysynq_api.db.models.retention_policy import RetentionPolicy
 from easysynq_api.db.session import get_sessionmaker
 from easysynq_api.services.records import sweep_due_records
 
+from ._owner_db import owner_delete_disposition_events
 from .test_records import _capture, _grant, _subject
 from .test_vault import _auth
 
@@ -47,9 +47,10 @@ async def _delete_records(ids: list[str]) -> None:
     if not ids:
         return
     uids = [uuid.UUID(i) for i in ids]
+    # disposition_event is append-only for the app role (0072 REVOKE UPDATE,DELETE) → delete the
+    # FK-RESTRICT tombstone as the OWNER first; the rest of the chain stays on the app session.
+    await owner_delete_disposition_events(uids)
     async with get_sessionmaker()() as s:
-        # Drop the FK-RESTRICT satellites first (a swept record carries a disposition_event row).
-        await s.execute(delete(DispositionEvent).where(DispositionEvent.record_id.in_(uids)))
         await s.execute(delete(EvidenceBlob).where(EvidenceBlob.record_id.in_(uids)))
         await s.execute(delete(Record).where(Record.id.in_(uids)))
         await s.execute(delete(DocumentedInformation).where(DocumentedInformation.id.in_(uids)))

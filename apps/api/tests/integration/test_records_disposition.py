@@ -18,7 +18,9 @@ from collections.abc import Callable
 
 import pytest
 from httpx import AsyncClient
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete, func, select, text, update
+from sqlalchemy.exc import DBAPIError
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from easysynq_api.db.models._audit_enums import EventType
 from easysynq_api.db.models._retention_enums import DispositionAction, RetentionBasis
@@ -37,6 +39,7 @@ from easysynq_api.db.session import get_sessionmaker
 from easysynq_api.services.records import sweep_due_records
 from easysynq_api.services.vault import storage
 
+from ._owner_db import owner_delete_disposition_events
 from .test_records import _capture, _grant, _subject, _upload_evidence
 from .test_vault import _auth
 
@@ -157,10 +160,12 @@ async def _cleanup(policy_id: uuid.UUID) -> None:
             .all()
         )
         if pinned:
+            # disposition_event is append-only for the app role (0072 REVOKE UPDATE,DELETE) → its
+            # teardown DELETE must run as the OWNER, not the app role this session connects as.
+            await owner_delete_disposition_events(pinned)
             await s.execute(
                 delete(WormDestroyRequest).where(WormDestroyRequest.record_id.in_(pinned))
             )
-            await s.execute(delete(DispositionEvent).where(DispositionEvent.record_id.in_(pinned)))
             await s.execute(delete(EvidenceBlob).where(EvidenceBlob.record_id.in_(pinned)))
             await s.execute(delete(Record).where(Record.id.in_(pinned)))
             await s.execute(
@@ -438,6 +443,15 @@ async def test_dual_control_destroy_happy_path_and_same_actor_block(
         # Sanity: the WORM object exists in the records bucket before destruction.
         head_before = await storage.head(sha, bucket=storage._records_bucket())
         assert head_before.exists
+        # R27 legal-erasure headline case: the record also carries Mode-B structured content, which
+        # the WORM-destroy must erase alongside the bytes (content_hash stays the anchor).
+        async with get_sessionmaker()() as s:
+            await s.execute(
+                update(Record)
+                .where(Record.id == uuid.UUID(rid))
+                .values(form_field_values={"subject": "Jane Doe"}, content_hash="sha256:anchor")
+            )
+            await s.commit()
 
         req = await app_client.post(
             f"/api/v1/records/{rid}/worm-destroy-requests",
@@ -468,6 +482,12 @@ async def test_dual_control_destroy_happy_path_and_same_actor_block(
         # does — so backup/restore never tries to copy a destroyed blob).
         async with get_sessionmaker()() as s:
             assert await s.get(Blob, sha) is None
+            # ...and the structured content is erased in the same txn as the tombstone, while
+            # content_hash survives as the verification anchor (the finding-A fix on the R27 path).
+            destroyed = await s.get(Record, uuid.UUID(rid))
+            assert destroyed is not None
+            assert destroyed.form_field_values is None
+            assert destroyed.content_hash == "sha256:anchor"
 
         events = await _disposition_events(rid)
         assert len(events) == 1
@@ -905,3 +925,103 @@ async def test_get_disposition_reports_retention_until(
         assert body["open_worm_destroy_request"] is None
     finally:
         await _cleanup(policy_id)
+
+
+# --- Batch 4: WORM-erasure completeness --------------------------------------------------
+
+
+async def test_destroy_nulls_form_field_values_while_archive_preserves(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """[Batch 4] A DESTROY erases the record's structured ``form_field_values`` in the same txn as
+    the tombstone — a Mode-B record's personal data must not survive a legal-erasure order — while
+    ``content_hash`` stays the verification anchor. ARCHIVE_COLD preserves the content (a custody
+    change, not an erasure). Pre-fix the DESTROY left every field value in the DB + served by the
+    API."""
+    subject = _subject("ffv-destroy")
+    user_id = await _grant(subject, _DISPOSITION_PERMS)
+    org_id = await _org_id(user_id)
+    h = _auth(token_factory, subject)
+    destroy_pol = await _seed_policy(
+        org_id, action=DispositionAction.DESTROY, review_required=False
+    )
+    archive_pol = await _seed_policy(
+        org_id, action=DispositionAction.ARCHIVE_COLD, review_required=False
+    )
+    content = {"name": "Jane Doe", "assessment": "sensitive comment"}
+    try:
+        rd = (
+            await _capture(
+                app_client,
+                h,
+                record_type="COMPETENCE",
+                title="d",
+                retention_policy_id=str(destroy_pol),
+            )
+        ).json()["id"]
+        ra = (
+            await _capture(
+                app_client,
+                h,
+                record_type="COMPETENCE",
+                title="a",
+                retention_policy_id=str(archive_pol),
+            )
+        ).json()["id"]
+        # Simulate a Mode-B structured record: stamp the JSONB content + a content_hash anchor.
+        async with get_sessionmaker()() as s:
+            for rid in (rd, ra):
+                await s.execute(
+                    update(Record)
+                    .where(Record.id == uuid.UUID(rid))
+                    .values(form_field_values=content, content_hash="sha256:anchor")
+                )
+            await s.commit()
+        await _backdate(rd, days=400)
+        await _backdate(ra, days=400)
+        summary = await _run_sweep()
+        assert summary["disposed"] >= 2, summary
+
+        async with get_sessionmaker()() as s:
+            recd = await s.get(Record, uuid.UUID(rd))
+            reca = await s.get(Record, uuid.UUID(ra))
+            assert recd is not None and reca is not None
+            # DESTROY: structured content erased, hash anchor preserved.
+            assert recd.disposition_state.value == "DISPOSED"
+            assert recd.form_field_values is None
+            assert recd.content_hash == "sha256:anchor"
+            # ARCHIVE_COLD: content preserved (custody change, not erasure).
+            assert reca.disposition_state.value == "DISPOSED"
+            assert reca.form_field_values == content
+        # The API no longer serves the destroyed structured content.
+        got = await app_client.get(f"/api/v1/records/{rd}", headers=h)
+        assert got.status_code == 200
+        assert got.json()["form_field_values"] is None
+    finally:
+        await _cleanup(destroy_pol)
+        await _cleanup(archive_pol)
+
+
+async def test_disposition_event_append_only_for_app_role(
+    app_under_test: object, dsns: dict[str, str]
+) -> None:
+    """[Batch 4 / AC#6a] The running app (the non-owner ``easysynq_app`` role) is structurally
+    denied UPDATE and DELETE on the append-only ``disposition_event`` tombstone (SQLSTATE 42501,
+    migration 0072) — so the R27 legal-erasure proof (``legal_basis`` + the dual-control approvers)
+    cannot be altered or erased by an app-role compromise. Mirrors the audit_event/signature_event
+    AC#6a proof. PostgreSQL checks the table privilege before row matching, so an empty table still
+    42501s."""
+    engine = create_async_engine(dsns["app"])
+    try:
+        async with async_sessionmaker(engine, expire_on_commit=False)() as session:
+            for stmt in (
+                "UPDATE disposition_event SET legal_basis = 'forged'",
+                "DELETE FROM disposition_event",
+            ):
+                with pytest.raises(DBAPIError) as exc:
+                    await session.execute(text(stmt))
+                    await session.commit()
+                assert getattr(exc.value.orig, "sqlstate", None) == "42501", stmt
+                await session.rollback()
+    finally:
+        await engine.dispose()
