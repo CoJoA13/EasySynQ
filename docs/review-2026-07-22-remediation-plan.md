@@ -20,7 +20,7 @@
 
 | # | Batch | Tier | Findings | Status | PR |
 |---|-------|------|:--------:|--------|----|
-| 1 | Stale FOR-UPDATE reads (`populate_existing`) | 1 | 4 | ☐ not started | — |
+| 1 | Stale FOR-UPDATE reads (`populate_existing`) | 1 | 4 | ☑ in PR | [#354](https://github.com/CoJoA13/EasySynQ/pull/354) |
 | 2 | Deny-wins scope-tuple completeness | 1 | 2 | ☐ not started | — |
 | 3 | System-tier authz guards (last-admin / revoke-side) | 1 | 2 | ☐ not started | — |
 | 4 | WORM erasure completeness | 1 | 2 | ☐ not started | — |
@@ -44,16 +44,16 @@
 
 ## Tier 1 — Security · WORM · authz · data integrity
 
-### ☐ Batch 1 — Stale FOR-UPDATE reads (`populate_existing`)
+### ☑ Batch 1 — Stale FOR-UPDATE reads (`populate_existing`) — [#354](https://github.com/CoJoA13/EasySynQ/pull/354)
 `branch: fix/major-forupdate-populate-existing` · backend + integration race tests
 
 The recurring S-drift-1 trap: a locking load on a row already in the request session's identity map
 takes the lock but returns the **stale** cached attributes, defeating FSM/one-shot guards under a race.
 
-- [ ] `services/capa/repository.py:31` — `get_capa(for_update=True)` omits `populate_existing` → duplicate signed CAPA stages / duplicate signature_events `[C]`
-- [ ] `services/capa/repository.py:53` — `get_ncr(for_update=True)` omits `populate_existing` → one-shot 8.7 disposition gate defeated `[C]`
-- [ ] `services/audits/repository.py:37` — audit FSM `get_audit`/`get_finding` lack `populate_existing` → finding added to a Closed audit `[f]`
-- [ ] `services/mgmt_review/compile.py:257` — `compile_inputs` uses `session.get` (no lock) → inputs replaced under the submit-freeze; lock both compile + submit paths `[C]`
+- [x] `services/capa/repository.py:31` — `get_capa(for_update=True)` omits `populate_existing` → duplicate signed CAPA stages / duplicate signature_events `[C]`
+- [x] `services/capa/repository.py:53` — `get_ncr(for_update=True)` omits `populate_existing` → one-shot 8.7 disposition gate defeated `[C]`
+- [x] `services/audits/repository.py:37` — audit FSM `get_audit`/`get_finding` lack `populate_existing` → finding added to a Closed audit `[f]`
+- [x] `services/mgmt_review/compile.py:257` — `compile_inputs` uses `session.get` (no lock) → inputs replaced under the submit-freeze; lock both compile + submit paths `[C]`
 
 Fix pattern: `.execution_options(populate_existing=True)` on each `for_update` branch; prove each with a two-session race test (prime via `session.get` on session A, commit a change via session B, locked-load on A, assert fresh state).
 
