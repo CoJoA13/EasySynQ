@@ -254,7 +254,20 @@ async def compile_inputs(
 
     ``owner`` gates the sourced READS (F3 determinism); ``caller`` is the person who TRIGGERED the
     compile and is the audit actor — they differ when a delegate preparer recompiles."""
-    doc = await session.get(DocumentedInformation, review.id)
+    # Lock the base document row (FOR UPDATE + populate_existing) so this compile serializes with a
+    # concurrent submit-freeze — which takes the SAME doc-row lock (the submit route + the
+    # get_review_doc(for_update=True) helper). An unlocked session.get would pass the Draft guard on
+    # a state the submit is about to freeze, then land the delete-then-insert AFTER the freeze,
+    # leaving the frozen minutes referencing a review_input set the approvers no longer see
+    # (Codex #3 / S-drift-1). populate_existing re-reads under the lock, not the stale mapped row.
+    doc = (
+        await session.execute(
+            select(DocumentedInformation)
+            .where(DocumentedInformation.id == review.id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one_or_none()
     if doc is None:  # pragma: no cover — the satellite exists, so the base must too
         raise ProblemException(status=404, code="not_found", title="Management Review not found")
     if doc.current_state is not DocumentCurrentState.Draft:
