@@ -21,7 +21,7 @@
 | # | Batch | Tier | Findings | Status | PR |
 |---|-------|------|:--------:|--------|----|
 | 1 | Stale FOR-UPDATE reads (`populate_existing`) | 1 | 4 | ☑ in PR | [#354](https://github.com/CoJoA13/EasySynQ/pull/354) |
-| 2 | Deny-wins scope-tuple completeness | 1 | 2 | ☐ not started | — |
+| 2 | Deny-wins scope-tuple completeness | 1 | 2 | ☑ in PR | [#355](https://github.com/CoJoA13/EasySynQ/pull/355) |
 | 3 | System-tier authz guards (last-admin / revoke-side) | 1 | 2 | ☐ not started | — |
 | 4 | WORM erasure completeness | 1 | 2 | ☐ not started | — |
 | 5 | Disposition txn / locking integrity | 1 | 2 | ☐ not started | — |
@@ -57,13 +57,13 @@ takes the lock but returns the **stale** cached attributes, defeating FSM/one-sh
 
 Fix pattern: `.execution_options(populate_existing=True)` on each `for_update` branch; prove each with a two-session race test (prime via `session.get` on session A, commit a change via session B, locked-load on A, assert fresh state).
 
-### ☐ Batch 2 — Deny-wins scope-tuple completeness
+### ☑ Batch 2 — Deny-wins scope-tuple completeness — [#355](https://github.com/CoJoA13/EasySynQ/pull/355)
 `branch: fix/major-scope-tuple-write-surfaces` · backend + integration
 
 Sibling of merged #346: a write/dispose gate that builds a partial `ResourceContext` silently drops a FRAMEWORK/kind-scoped DENY (deny-always-wins / R3, unsafe direction).
 
-- [ ] `api/records.py:234` — `_record_scope` (all five `record.dispose` gates) builds a partial tuple → FRAMEWORK / kind / **PROCESS**-scoped dispose DENYs dropped; populate kind + framework_id **and process_ids** (via `_record_process_scope`) unless the S-records-W DENY-direction rationale is re-affirmed and documented (review doc 114-117) `[C]`
-- [ ] `api/documents.py:819` — `POST /documents` builds `document.create` + per-link `manage_metadata` scopes without kind/framework_id → create-surface DENY dropped `[C]`
+- [x] `api/records.py:234` — `_record_scope` (all five `record.dispose` gates) builds a partial tuple → FRAMEWORK / kind / **PROCESS**-scoped dispose DENYs dropped; populate kind + framework_id **and process_ids** (via `_record_process_scope`) unless the S-records-W DENY-direction rationale is re-affirmed and documented (review doc 114-117) `[C]`
+- [x] `api/documents.py:819` — `POST /documents` builds `document.create` + per-link `manage_metadata` scopes without kind/framework_id → create-surface DENY dropped `[C]`
 
 ### ☐ Batch 3 — System-tier authz guards
 `branch: fix/major-authz-system-tier-guards` · backend + integration
