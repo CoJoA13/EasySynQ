@@ -15,10 +15,11 @@ from collections.abc import Callable
 
 import pytest
 from httpx import AsyncClient
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from easysynq_api.db.models._retention_enums import DispositionAction
 from easysynq_api.db.models.authz_grant import PermissionOverride
+from easysynq_api.db.models.evidence_for_link import EvidenceForLink
 from easysynq_api.db.models.permission import Permission
 from easysynq_api.db.models.scope import Scope
 from easysynq_api.db.session import get_sessionmaker
@@ -186,6 +187,7 @@ async def test_record_dispose_process_deny_wins(
     policy_id = await _seed_policy(
         org_id, action=DispositionAction.ARCHIVE_COLD, review_required=False
     )
+    rid = ""
     try:
         rid = (
             await _capture(
@@ -210,4 +212,12 @@ async def test_record_dispose_process_deny_wins(
         )
         assert denied.status_code == 403, denied.text
     finally:
+        # Drop the process evidence-link before _cleanup deletes the record — the leg-A link's
+        # record_id FK (fk_evidence_for_link_record_id_record) would otherwise block the delete.
+        if rid:
+            async with get_sessionmaker()() as s:
+                await s.execute(
+                    delete(EvidenceForLink).where(EvidenceForLink.record_id == uuid.UUID(rid))
+                )
+                await s.commit()
         await _cleanup(policy_id)
