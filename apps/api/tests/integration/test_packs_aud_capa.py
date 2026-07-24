@@ -328,7 +328,9 @@ async def test_sealed_pack_serve_guard_covers_embedded_records(
     the finding dossier embeds its linked auto-CAPA, and every sealed pack carries its own
     registered EVIDENCE record (pack_record) — none are pack_item rows. Repo-level matrix: each pack
     is False at seal and True once its OWN embedded record gets a DESTROY tombstone
-    (mutation-distinguishing — dropping each branch flips its assertion); two 409s prove wiring."""
+    (mutation-distinguishing — dropping each branch flips its assertion). The three DRAFT packs are
+    checked at the repo level (the download endpoint 409s on unsealed BEFORE the destroyed-member
+    check); pk_record is sealed, so its endpoint 409 proves the (scope-agnostic) serve wiring."""
     owner = _subject("embedded")
     await _grant(owner, (*_AUDIT_KEYS, "finding.create", "finding.read", "capa.read", *_PACK_KEYS))
     h = _auth(token_factory, owner)
@@ -393,9 +395,6 @@ async def test_sealed_pack_serve_guard_covers_embedded_records(
         # New-2: a CAPA pack's origin finding destroyed (subject CAPA c1 intact).
         await _destroy(uuid.UUID(f1))
         assert await _guard(pk_origin) is True
-        dl = await app_client.get(f"/api/v1/evidence-packs/{pk_origin}/download", headers=h)
-        assert dl.status_code == 409, dl.text
-        assert dl.json()["code"] == "pack_evidence_destroyed"
 
         # CAPA-subject branch: the CAPA subject itself destroyed (origin finding f2 intact).
         await _destroy(uuid.UUID(c2))
