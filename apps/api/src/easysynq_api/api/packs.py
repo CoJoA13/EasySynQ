@@ -27,7 +27,7 @@ from ..db.models.pack_item import PackItem
 from ..db.models.pack_share_link import PackShareLink
 from ..db.session import get_session
 from ..problems import ProblemException
-from ..services.authz import require
+from ..services.authz import AuthzAuditSink, get_authz_audit_sink, require
 from ..services.packs import (
     create_pack_with_preview,
     create_share_link,
@@ -153,18 +153,20 @@ async def create_pack_endpoint(
     request: Request,
     caller: AppUser = Depends(_generate),
     session: AsyncSession = Depends(get_session),
+    authz_sink: AuthzAuditSink = Depends(get_authz_audit_sink),
 ) -> dict[str, Any]:
     """Create a pack (DRAFT) + compute its preview synchronously (resolve + R28-classify candidates,
     gap/exclusion summaries). The preview is advisory — generate seals it."""
     pack = await create_pack_with_preview(
         session,
+        authz_sink,
+        request,
         caller,
         title=body.title,
         scope_kind=body.scope_kind,
         scope_selector=body.scope_selector(),
         period_start=body.period_start,
         period_end=body.period_end,
-        source_ip=request.client.host if request.client else None,
     )
     items = await packs_repo.list_pack_items(session, pack.id)
     return {**_pack(pack), "items": [_pack_item(i) for i in items]}
@@ -199,13 +201,12 @@ async def generate_pack_endpoint(
     request: Request,
     caller: AppUser = Depends(_generate),
     session: AsyncSession = Depends(get_session),
+    authz_sink: AuthzAuditSink = Depends(get_authz_audit_sink),
 ) -> dict[str, Any]:
     """Enqueue the immutable build/seal (DRAFT/FAILED → BUILDING). Poll ``GET /evidence-packs/{id}``
     for SEALED. 409 if already sealed or a build is in progress; 403 if the generator can no longer
     read a FINDING/CAPA subject (re-checked here so a revoked grant can't seal it)."""
-    pack = await generate_pack(
-        session, caller, pack_id, source_ip=request.client.host if request.client else None
-    )
+    pack = await generate_pack(session, authz_sink, request, caller, pack_id)
     return _pack(pack)
 
 
@@ -221,9 +222,10 @@ async def download_pack_endpoint(
         raise ProblemException(
             status=409, code="conflict", title="Pack is not sealed yet", detail=pack.status.value
         )
-    if await packs_repo.pack_has_destroyed_member(session, pack.id):
-        # A record INCLUDED in this pack was physically destroyed after sealing (DESTROY / R27
-        # WORM-destroy) — fail-closed so the cached ZIP no longer serves the erased evidence.
+    if await packs_repo.pack_has_destroyed_member(session, pack):
+        # A record INCLUDED in this pack (or its FINDING/CAPA subject) was physically destroyed
+        # after sealing (DESTROY / R27 WORM-destroy) — fail-closed so the cached ZIP no longer
+        # serves the erased evidence / dossier narrative.
         raise ProblemException(
             status=409,
             code="pack_evidence_destroyed",

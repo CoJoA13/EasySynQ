@@ -26,6 +26,7 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy import delete, select
 
+from easysynq_api.db.models._retention_enums import DispositionAction
 from easysynq_api.db.models.blob import Blob
 from easysynq_api.db.models.documented_information import DocumentedInformation
 from easysynq_api.db.models.evidence_blob import EvidenceBlob
@@ -35,7 +36,9 @@ from easysynq_api.db.models.pack_item import PackItem
 from easysynq_api.db.models.record import Record
 from easysynq_api.db.session import get_sessionmaker
 from easysynq_api.services.packs import build_and_cache_portfolio
+from easysynq_api.services.records import disposition
 
+from ._owner_db import owner_delete_disposition_events
 from .test_audits import _new_audit, _walk
 from .test_capa import _ACTION_PLAN, _assign_seeded_role, _latest_stage_id, _my_pending_task
 from .test_packs import _seal
@@ -182,6 +185,91 @@ async def test_finding_scope_pack_bundles_dossier(
             blob = zf.read(dossier_names[0]).decode()
             assert '"email"' not in blob and '"keycloak_subject"' not in blob
     finally:
+        await _teardown([ev_id], pack_uuid)
+
+
+async def test_sealed_finding_pack_refuses_serving_after_subject_destroyed(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """Ti85C (R27/R28): a FINDING/CAPA pack's SUBJECT is a *dossier* subject, NOT a pack_item — but
+    it IS a record (``audit_finding``/``capa`` are shared-PK RECORD subtypes), so it can be
+    DESTROYed. When the subject is destroyed after sealing, the cached ZIP still carries its
+    narrative, so every serve path must fail-closed on the SUBJECT tombstone too (not only on
+    destroyed evidence MEMBERS). The linked evidence stays INTACT here, so only the subject-destroy
+    can trip the gate. Mutation-verify: without the subject branch in ``pack_has_destroyed_member``
+    the paths keep serving the destroyed finding narrative (the member count is 0, the intact
+    evidence never trips it)."""
+    subject = _subject("subjdestroy")
+    keys = (*_AUDIT_KEYS, "finding.create", "finding.read", "capa.read", *_PACK_KEYS)
+    await _grant(subject, keys)
+    h = _auth(token_factory, subject)
+
+    audit_id = await _new_audit(app_client, h)
+    await _walk(app_client, h, audit_id, "plan", "conduct")
+    finding_id = (
+        await app_client.post(
+            f"/api/v1/audits/{audit_id}/findings",
+            headers=h,
+            json={"finding_type": "NC", "severity": "Major", "clause_ref": "8.4"},
+        )
+    ).json()["id"]
+    ev_id = await _evidence_record(app_client, h, "intact evidence")
+    await _link(app_client, h, ev_id, "finding", finding_id)
+
+    pack_uuid: uuid.UUID | None = None
+    try:
+        created = await app_client.post(
+            "/api/v1/evidence-packs",
+            headers=h,
+            json={"title": "NC pack", "scope_kind": "FINDING", "finding_ids": [finding_id]},
+        )
+        assert created.status_code == 201, created.text
+        pack_uuid = uuid.UUID(created.json()["id"])
+        await _seal(pack_uuid)
+
+        token = (
+            await app_client.post(
+                f"/api/v1/evidence-packs/{pack_uuid}/share",
+                headers=h,
+                json={"recipient": "auditor"},
+            )
+        ).json()["token"]
+        # BEFORE the subject destroy both the public landing and the authenticated download serve.
+        assert (
+            await app_client.get("/api/v1/evidence-packs/shared", params={"t": token})
+        ).status_code == 200
+        assert (
+            await app_client.get(f"/api/v1/evidence-packs/{pack_uuid}/download", headers=h)
+        ).status_code == 200
+
+        # DESTROY the SUBJECT finding (its shared-PK record), leaving the linked evidence intact.
+        async with get_sessionmaker()() as s:
+            finding_rec = await s.get(Record, uuid.UUID(finding_id))
+            assert finding_rec is not None
+            disposition._write_tombstone(
+                s, finding_rec, action=DispositionAction.DESTROY, policy_id=None, approved_by=None
+            )
+            await s.commit()
+
+        # AFTER: the public paths fail-closed (403); the authenticated download 409s; minting a new
+        # share is refused before it commits a dead token.
+        assert (
+            await app_client.get("/api/v1/evidence-packs/shared", params={"t": token})
+        ).status_code == 403
+        pub = await app_client.get(
+            "/api/v1/evidence-packs/shared/download", params={"t": token, "format": "zip"}
+        )
+        assert pub.status_code == 403, pub.text
+        auth = await app_client.get(f"/api/v1/evidence-packs/{pack_uuid}/download", headers=h)
+        assert auth.status_code == 409, auth.text
+        assert auth.json()["code"] == "pack_evidence_destroyed"
+        mint = await app_client.post(
+            f"/api/v1/evidence-packs/{pack_uuid}/share", headers=h, json={"recipient": "auditor2"}
+        )
+        assert mint.status_code == 409, mint.text
+        assert mint.json()["code"] == "pack_evidence_destroyed"
+    finally:
+        await owner_delete_disposition_events([uuid.UUID(finding_id)])
         await _teardown([ev_id], pack_uuid)
 
 

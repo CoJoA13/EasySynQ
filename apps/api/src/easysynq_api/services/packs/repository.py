@@ -16,7 +16,7 @@ from sqlalchemy import Date, asc, cast, delete, desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...db.models._evidence_enums import EvidenceForTargetType
-from ...db.models._pack_enums import PackInclusionStatus, PackItemType
+from ...db.models._pack_enums import PackInclusionStatus, PackItemType, PackScopeKind
 from ...db.models._retention_enums import DispositionAction
 from ...db.models._signature_enums import SignedObjectType
 from ...db.models.app_user import AppUser
@@ -304,18 +304,48 @@ async def has_destroy_tombstone(session: AsyncSession, record_id: uuid.UUID) -> 
     return bool(count)
 
 
-async def pack_has_destroyed_member(session: AsyncSession, pack_id: uuid.UUID) -> bool:
-    """``True`` if ANY record INCLUDED in this sealed pack was LATER physically destroyed (a DESTROY
-    / WORM-destroy disposition tombstone). Serve paths use this to fail-closed AFTER the seal — a
-    record destroyed post-seal must not stay reachable via the pack's cached ZIP / portfolio (their
-    bytes are baked into the sealed artifacts, so delivery is gated here). Records destroyed BEFORE
-    the seal are already EXCLUDED_ABSENCE at build time, so only INCLUDED RECORD members matter."""
-    count = await session.scalar(
+def _pack_subject_record_ids(pack: EvidencePack) -> list[uuid.UUID]:
+    """The FINDING/CAPA subject ids of a pack — which ARE record ids (``audit_finding``/``capa`` are
+    shared-PK RECORD subtypes), so a destroyed subject is a disposition tombstone on that record id.
+    Read from ``scope_selector``: the subject is a *dossier* subject, never materialised as a
+    ``pack_item`` row (``services/packs/build.py``). CLAUSE/PROCESS packs carry no subject dossier →
+    no subject records. Keys mirror ``service._SCOPE_SELECTOR_KEY`` (which this lower layer cannot
+    import without a cycle)."""
+    if pack.scope_kind is PackScopeKind.FINDING:
+        key = "finding_ids"
+    elif pack.scope_kind is PackScopeKind.CAPA:
+        key = "capa_ids"
+    else:
+        return []
+    raw = pack.scope_selector.get(key) if isinstance(pack.scope_selector, dict) else None
+    ids: list[uuid.UUID] = []
+    for value in raw if isinstance(raw, list) else []:
+        try:
+            ids.append(uuid.UUID(str(value)))
+        except (ValueError, TypeError):  # pragma: no cover - validated at create time
+            continue
+    return ids
+
+
+async def pack_has_destroyed_member(session: AsyncSession, pack: EvidencePack) -> bool:
+    """``True`` if ANY record whose bytes/narrative are baked into this sealed pack was LATER
+    physically destroyed (a DESTROY / WORM-destroy disposition tombstone). Two populations:
+
+    * INCLUDED ``pack_item`` RECORD members — the evidence bytes in the ZIP / portfolio, and
+    * the FINDING/CAPA **subject(s)** — NOT ``pack_item`` rows (the dossier narrative / CAPA stage
+      trail lives in the manifest), but the subject IS a record (shared-PK), so a destroyed subject
+      must fail-close too.
+
+    Serve paths use this to fail-closed AFTER the seal — a record destroyed post-seal must not stay
+    reachable via the pack's cached ZIP / portfolio (their bytes/narrative are baked into the sealed
+    artifacts, so delivery is gated here). Records destroyed BEFORE the seal are already
+    EXCLUDED_ABSENCE / refused at build time, so only INCLUDED members + the subjects matter."""
+    member_count = await session.scalar(
         select(func.count())
         .select_from(PackItem)
         .join(DispositionEvent, DispositionEvent.record_id == PackItem.record_id)
         .where(
-            PackItem.pack_id == pack_id,
+            PackItem.pack_id == pack.id,
             PackItem.item_type == PackItemType.RECORD,
             PackItem.inclusion_status == PackInclusionStatus.INCLUDED,
             or_(
@@ -324,7 +354,23 @@ async def pack_has_destroyed_member(session: AsyncSession, pack_id: uuid.UUID) -
             ),
         )
     )
-    return bool(count)
+    if member_count:
+        return True
+    subject_ids = _pack_subject_record_ids(pack)
+    if not subject_ids:
+        return False
+    subject_count = await session.scalar(
+        select(func.count())
+        .select_from(DispositionEvent)
+        .where(
+            DispositionEvent.record_id.in_(subject_ids),
+            or_(
+                DispositionEvent.is_worm_destroy.is_(True),
+                DispositionEvent.action == DispositionAction.DESTROY,
+            ),
+        )
+    )
+    return bool(subject_count)
 
 
 async def process_clause_ids(

@@ -26,6 +26,7 @@ import hmac
 import uuid
 from typing import Any, Literal
 
+from fastapi import Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -42,7 +43,7 @@ from ...db.models.record import Record
 from ...domain.authz import RequestContext, ResourceContext, authorize
 from ...logging import request_id_var
 from ...problems import ProblemException
-from ..authz import gather_grants
+from ..authz import AuthzAuditSink, enforce, gather_grants
 from ..records import repository as records_repo
 from ..reports.checklist import compute_checklist
 from ..vault import repository as vault_repo
@@ -288,26 +289,13 @@ async def _validate_scope(
     return ids
 
 
-def _subject_forbidden(kind: str, subject_id: uuid.UUID | None) -> ProblemException:
-    return ProblemException(
-        status=403,
-        code="forbidden",
-        title=f"Not entitled to read the {kind} subject",
-        detail=(
-            f"You cannot read this {kind}"
-            + (f" ({subject_id})" if subject_id is not None else "")
-            + " — an evidence pack must not bundle a subject you are not authorized to read."
-        ),
-    )
-
-
 async def _authorize_pack_subjects(
     session: AsyncSession,
+    authz_sink: AuthzAuditSink,
+    request: Request,
     caller: AppUser,
     scope_kind: str,
     scope_ids: list[uuid.UUID],
-    *,
-    source_ip: str | None = None,
 ) -> None:
     """Refuse (403) creating a FINDING/CAPA pack over a subject the caller cannot READ at its own
     scope. The build serializes the finding/CAPA SUBJECT dossier (its narrative + the CAPA stage
@@ -319,16 +307,18 @@ async def _authorize_pack_subjects(
     ``finding.read`` at SYSTEM (GET /findings/{id}), ``capa.read`` at the CAPA's PROCESS scope
     (GET /capas/{id}). Refuse-ANY — the subject IS the whole pack, so one unreadable subject fails
     (excluding it would leave an empty pack). CLAUSE/PROCESS packs carry no subject dossier.
-    ``source_ip`` is threaded so an ``ip_allow`` read grant evaluates as the subject's own GET does
-    (the PDP rejects an ``ip_allow`` grant when ``source_ip`` is None)."""
-    ctx = RequestContext(now=_now(), source_ip=source_ip)
+
+    Routed through the ``enforce`` PEP (not a bare ``authorize``) so the subject-read decision —
+    ALLOW **and** DENY — lands in the ``AuthzAuditSink`` durable authz trail (the PEP's audit
+    invariant; a denied attempt must not be invisible), and the request source IP is threaded so an
+    ``ip_allow`` read grant evaluates exactly as the subject's own GET does."""
     if scope_kind == "FINDING":
-        grants = await gather_grants(session, caller.id, caller.org_id, "finding.read")
         # finding.read is SYSTEM-enforced (GET /findings/{id}) → one check gates every subject.
-        if scope_ids and not authorize(grants, "finding.read", ResourceContext.system(), ctx).allow:
-            raise _subject_forbidden("finding", scope_ids[0])
+        if scope_ids:
+            await enforce(
+                session, authz_sink, request, caller, "finding.read", ResourceContext.system()
+            )
     elif scope_kind == "CAPA":
-        grants = await gather_grants(session, caller.id, caller.org_id, "capa.read")
         for cid in scope_ids:
             capa = await repo.get_capa(session, cid)
             if capa is None:  # pragma: no cover - _validate_scope already 404'd a missing subject
@@ -338,8 +328,7 @@ async def _authorize_pack_subjects(
                 if capa.process_id is not None
                 else ResourceContext.system()
             )
-            if not authorize(grants, "capa.read", resource, ctx).allow:
-                raise _subject_forbidden("capa", cid)
+            await enforce(session, authz_sink, request, caller, "capa.read", resource)
 
 
 def _build_items(
@@ -387,6 +376,8 @@ def _build_items(
 
 async def create_pack_with_preview(
     session: AsyncSession,
+    authz_sink: AuthzAuditSink,
+    request: Request,
     caller: AppUser,
     *,
     title: str,
@@ -394,7 +385,6 @@ async def create_pack_with_preview(
     scope_selector: dict[str, Any],
     period_start: datetime.date | None = None,
     period_end: datetime.date | None = None,
-    source_ip: str | None = None,
 ) -> EvidencePack:
     """Create a pack (DRAFT) and compute its preview synchronously: resolve + classify candidates,
     persist the membership + gap/exclusion summaries. One commit."""
@@ -414,7 +404,7 @@ async def create_pack_with_preview(
     scope_ids = await _validate_scope(session, caller.org_id, kind.value, scope_selector)
     # R28: a FINDING/CAPA pack must not bundle a subject the caller cannot read (the subject dossier
     # is built worker-side with no caller, so the read gate lives here at create).
-    await _authorize_pack_subjects(session, caller, kind.value, scope_ids, source_ip=source_ip)
+    await _authorize_pack_subjects(session, authz_sink, request, caller, kind.value, scope_ids)
 
     pack = EvidencePack(
         org_id=caller.org_id,
@@ -452,7 +442,11 @@ async def create_pack_with_preview(
 
 
 async def generate_pack(
-    session: AsyncSession, caller: AppUser, pack_id: uuid.UUID, *, source_ip: str | None = None
+    session: AsyncSession,
+    authz_sink: AuthzAuditSink,
+    request: Request,
+    caller: AppUser,
+    pack_id: uuid.UUID,
 ) -> EvidencePack:
     """Flip a DRAFT/FAILED pack → BUILDING and enqueue the worker build (after commit). Idempotent
     re-trigger from FAILED; a SEALED pack is terminal (409); a BUILDING pack is already in flight
@@ -472,7 +466,7 @@ async def generate_pack(
         session, pack.org_id, pack.scope_kind.value, pack.scope_selector
     )
     await _authorize_pack_subjects(
-        session, caller, pack.scope_kind.value, scope_ids, source_ip=source_ip
+        session, authz_sink, request, caller, pack.scope_kind.value, scope_ids
     )
     pack.status = PackStatus.BUILDING
     pack.build_started_at = _now()
@@ -581,10 +575,10 @@ async def create_share_link(
         raise ProblemException(
             status=409, code="conflict", title="Pack must be sealed before sharing"
         )
-    if await repo.pack_has_destroyed_member(session, pack.id):
-        # A record INCLUDED in this pack was destroyed after sealing — refuse BEFORE minting so we
-        # don't emit a misleading PACK_SHARED audit + a dead token the serve gate rejects on its
-        # first use (the resolver's fail-closed UNAVAILABLE check).
+    if await repo.pack_has_destroyed_member(session, pack):
+        # A record INCLUDED in this pack (or its FINDING/CAPA subject) was destroyed after sealing —
+        # refuse BEFORE minting so we don't emit a misleading PACK_SHARED audit + a dead token the
+        # serve gate rejects on its first use (the resolver's fail-closed UNAVAILABLE check).
         raise ProblemException(
             status=409,
             code="pack_evidence_destroyed",
@@ -699,11 +693,12 @@ async def resolve_share_token(
     pack = await repo.get_pack(session, link.pack_id)
     if pack is None or pack.status is not PackStatus.SEALED or pack.zip_blob_sha256 is None:
         return ShareResolution("UNAVAILABLE", link=link)
-    if await repo.pack_has_destroyed_member(session, pack.id):
-        # Fail-closed AFTER the seal: a record INCLUDED in this pack was physically destroyed
-        # (DESTROY / R27 WORM-destroy), so the cached ZIP / portfolio must not keep serving erased
-        # evidence via this public link. Physically purging the derived artifacts on disposition is
-        # a heavier R27 policy decision tracked as a fast-follow — this closes the reachability now.
+    if await repo.pack_has_destroyed_member(session, pack):
+        # Fail-closed AFTER the seal: a record INCLUDED in this pack (or its FINDING/CAPA subject)
+        # was physically destroyed (DESTROY / R27 WORM-destroy), so the cached ZIP / portfolio must
+        # not keep serving erased evidence / dossier narrative via this public link. Physically
+        # purging the derived artifacts on disposition is a heavier R27 policy decision tracked as a
+        # fast-follow — this closes the reachability now.
         return ShareResolution("UNAVAILABLE", link=link)
     return ShareResolution("OK", link=link, pack=pack)
 
