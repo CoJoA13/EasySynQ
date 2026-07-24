@@ -24,6 +24,7 @@ from ..db.models._audit_enums import ActorType, AuditObjectType, EventType
 from ..db.models.audit_event import AuditEvent
 from ..db.models.organization import Organization
 from ..services.audit.checkpoint import (
+    OffHostCheckpointResult,
     anchor_checkpoint,
     load_signing_key,
     load_verify_key,
@@ -36,6 +37,20 @@ from ..services.common.pg_locks import LOCK_CHAIN_LINK, pg_advisory_lock
 from .app import task
 
 logger = logging.getLogger("easysynq.audit.tasks")
+
+
+def _should_alarm_offhost(offhost: OffHostCheckpointResult) -> bool:
+    """Decide whether the INDEPENDENT off-host witness should raise CHAIN_VERIFY_FAIL. Alarm only
+    when a witness is CONFIGURED and did not attest AND it actually had something to say — an object
+    was read back and rejected (tamper / stale / a wipe leaving a chain-less object → sinks_read>0),
+    or the read itself failed (an unreachable witness → read_failed). A configured-but-not-yet-
+    producing witness (a fresh org with no object, sinks_read==0) stays quiet and defers to the R13
+    soft-gate's persistent 'NOT tamper-evident' warning, so a new org never false-alarms."""
+    return (
+        offhost.offhost_configured
+        and not offhost.verified
+        and (offhost.sinks_read > 0 or offhost.read_failed)
+    )
 
 
 def _emit_chain_verify_fail(
@@ -102,21 +117,20 @@ async def _run_verify_chain() -> int:
             for org_id in org_ids:
                 result = await verify_chain(session, org_id, verify_key=verify_key)
                 total_breaks += len(result.breaks)
-                # The INDEPENDENT off-host read-back runs whenever the chain has any verified rows
-                # (checked > 0) — deliberately NOT gated on an in-DB checkpoint existing, since a
-                # privileged DB owner can DELETE every in-DB audit_checkpoint row and the off-host
-                # copy is then the only surviving witness. A CONFIGURED-but-failing witness alarms;
-                # a MISSING witness is the R13 soft-gate's persistent 'NOT tamper-evident' warning
-                # (surfaced in the UI), never a nightly CHAIN_VERIFY_FAIL.
+                # The INDEPENDENT off-host read-back runs whenever a verify key is held — NOT gated
+                # on local chain/checkpoint state, since a privileged DB owner can DELETE every
+                # audit_event AND audit_checkpoint row (a full wipe → checked==0, verified==True)
+                # while the unreachable off-host copy still holds the signed checkpoint that exposes
+                # the deletion. Gating on the wiped chain would suppress the only surviving witness.
                 offhost_reasons: list[str] = []
                 alarm_offhost = False
-                if verify_key is not None and result.checked > 0:
+                if verify_key is not None:
                     offhost = await verify_offhost_checkpoint(
                         session, org_id, verify_key=verify_key
                     )
-                    if offhost.offhost_configured:
+                    alarm_offhost = _should_alarm_offhost(offhost)
+                    if alarm_offhost:
                         offhost_reasons = offhost.reasons
-                        alarm_offhost = not offhost.verified
                 if not result.verified or alarm_offhost:
                     logger.error(
                         "audit.verify_chain.broken",

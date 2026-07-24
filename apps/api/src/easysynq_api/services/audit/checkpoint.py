@@ -271,12 +271,16 @@ class OffHostCheckpointResult:
     True only when a genuinely OFF-HOST sink returned a fresh, signature-valid checkpoint matching
     the live chain. ``offhost_configured`` is True iff ≥1 enabled ``off_host`` sink exists — the
     beat alarms only when a CONFIGURED witness fails; a MISSING witness is the R13 soft-gate's
-    persistent 'NOT tamper-evident' warning, not a nightly alarm."""
+    persistent 'NOT tamper-evident' warning, not a nightly alarm. ``sinks_read`` counts sinks that
+    returned an object (a wipe leaves a readable object → sinks_read>0 → the failure alarms);
+    ``read_failed`` is True when a sink's read threw (unreachable witness) so it can fail closed
+    even though nothing was read back."""
 
     offhost_configured: bool
     sinks_read: int
     verified: bool
     reasons: list[str]
+    read_failed: bool = False
 
 
 async def _attest_offhost_doc(
@@ -368,6 +372,7 @@ async def verify_offhost_checkpoint(
         )
     reasons: list[str] = []
     read = 0
+    read_failed = False
     for sink in offhost:
         try:
             doc = await asyncio.to_thread(
@@ -375,6 +380,7 @@ async def verify_offhost_checkpoint(
             )
         except Exception as exc:  # noqa: BLE001 - ANY read failure must alarm, never attest
             reasons.append(f"sink {sink.id}: off-host read failed ({exc})")
+            read_failed = True
             continue
         if doc is None:
             reasons.append(f"sink {sink.id}: no off-host checkpoint object found")
@@ -383,4 +389,4 @@ async def verify_offhost_checkpoint(
         reason = await _attest_offhost_doc(session, org_id, verify_key, doc, now=now)
         if reason is not None:
             reasons.append(f"sink {sink.id}: {reason}")
-    return OffHostCheckpointResult(True, read, not reasons, reasons)
+    return OffHostCheckpointResult(True, read, not reasons, reasons, read_failed=read_failed)

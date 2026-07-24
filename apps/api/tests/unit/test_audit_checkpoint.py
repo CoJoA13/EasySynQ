@@ -125,6 +125,28 @@ def test_load_verify_key_none_when_neither_available(tmp_path: Any, monkeypatch:
     assert cp.load_verify_key() is None  # an api/CLI process with no key → walk-only, cannot attest
 
 
+def test_should_alarm_offhost_decision_table() -> None:
+    """The nightly beat's off-host alarm decision (the fail-open diff-critic caught): a wipe leaves
+    a readable off-host object that fails attestation (sinks_read>0, not verified) → ALARM, while a
+    fresh org with a configured-but-empty witness (sinks_read==0) stays quiet. Gating on local chain
+    state (the old ``checked>0``) would suppress the wipe alarm — this pins the correct decision."""
+    from easysynq_api.services.audit.checkpoint import OffHostCheckpointResult as R
+    from easysynq_api.tasks.audit import _should_alarm_offhost
+
+    # No off-host witness configured → defer to the R13 soft-gate, never a nightly alarm.
+    assert _should_alarm_offhost(R(False, 0, False, ["unavailable"])) is False
+    # Configured + attested → healthy.
+    assert _should_alarm_offhost(R(True, 1, True, [])) is False
+    # Configured but nothing anchored yet (fresh org) → quiet, defers to the soft-gate.
+    assert _should_alarm_offhost(R(True, 0, False, ["no object found"])) is False
+    # THE WIPE: an object was read back and rejected (references a now-missing chain row) → ALARM.
+    assert (
+        _should_alarm_offhost(R(True, 1, False, ["missing/unchained chain row (deletion)"])) is True
+    )
+    # A read failure (unreachable witness) → fail-closed ALARM even though nothing was read back.
+    assert _should_alarm_offhost(R(True, 0, False, ["read failed"], read_failed=True)) is True
+
+
 def test_load_signing_key_exports_the_public_half(tmp_path: Any, monkeypatch: Any) -> None:
     priv_path = tmp_path / "priv.pem"
     pub_path = tmp_path / "pub.pem"

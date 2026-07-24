@@ -350,6 +350,36 @@ async def test_ac6b_checkpoint_push_and_soft_gate(
     assert stale.verified is False
     assert any("stale" in r for r in stale.reasons), stale.reasons
 
+    # THE DB-OWNER WIPE (doc 12 §4.4): a privileged owner deletes chain rows but cannot reach the
+    # off-host copy, which still holds a signed checkpoint for a now-missing chain row. Simulate it
+    # by pushing a validly-signed object at a latest_id ABOVE the live head: its signature+freshness
+    # pass, but the referenced chain row does not exist → verified=False, sinks_read==1 (an ALARM
+    # verdict) even though the local walk is self-consistent. This is what the nightly beat now
+    # consults UNCONDITIONALLY — the fail-open was gating this read-back on the wiped chain itself.
+    import base64
+    import json
+
+    from easysynq_api.services.audit import checkpoint as cp
+    from easysynq_api.services.audit.sink import push_checkpoint
+
+    ghost_id = 10_000_000
+    ghost_ts = datetime.datetime.now(datetime.UTC)
+    ghost_payload = cp._payload(org_id, ghost_id, b"\x11" * 32, ghost_ts)
+    ghost_sig = load_signing_key().sign(ghost_payload)
+    ghost_body = json.dumps(
+        {"checkpoint": json.loads(ghost_payload), "signature": base64.b64encode(ghost_sig).decode()}
+    ).encode()
+    ghost_key = f"checkpoints/{org_id}/{ghost_id}-{ghost_ts.strftime('%Y%m%dT%H%M%S%fZ')}.json"
+    push_checkpoint(
+        "worm_bucket", {"bucket": "audit-checkpoints", "off_host": True}, ghost_key, ghost_body
+    )
+    async with get_sessionmaker()() as s:
+        wiped = await verify_offhost_checkpoint(s, org_id, verify_key=verify_key)
+    assert wiped.offhost_configured is True
+    assert wiped.sinks_read == 1
+    assert wiped.verified is False
+    assert any("missing" in r or "deletion" in r for r in wiped.reasons), wiped.reasons
+
 
 async def test_ac6b_linker_safe_prefix_never_reorders_across_an_open_txn(
     app_client: AsyncClient,
