@@ -1728,7 +1728,13 @@ async def release_endpoint(
     # Enforce imperatively (not via a path-only dependency): the SoD-2 scope must resolve for the
     # SAME version the cutover will promote (body.version_id, else the latest Approved). The cutover
     # then re-reads the document authoritatively under a row lock in its own SERIALIZABLE session.
-    await _load_document(session, caller, document_id)  # 404 + org guard
+    doc = await _load_document(session, caller, document_id)  # 404 + org guard
+    # Batch 8: a managed subtype (OBJ/MR/registers) must NOT be released via the generic endpoint —
+    # that skips its post-release chain (a generically-released MR becomes permanently unclosable;
+    # the OBJ unit-reset is missed). It must go through its own /management-reviews / /objectives
+    # release (which calls the release() service directly). reject_objective_byte_path 422s the
+    # managed subtypes here, mirroring the submit-review endpoint's guard.
+    await reject_objective_byte_path(session, doc)
     resource = await _release_scope(session, document_id, body.version_id)
     await enforce(session, authz_sink, request, caller, "document.release", resource, sig_hook=True)
     doc = await release(caller, document_id, vault_sink, sig_sink, version_id=body.version_id)

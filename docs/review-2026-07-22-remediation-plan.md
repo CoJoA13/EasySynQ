@@ -27,7 +27,7 @@
 | 5 | Disposition txn / locking integrity | 1 | 2 | ☑ in PR | [#358](https://github.com/CoJoA13/EasySynQ/pull/358) |
 | 6 | Read-authorization on returned bodies | 1 | 3 | ☑ in PR | [#362](https://github.com/CoJoA13/EasySynQ/pull/362) |
 | 7 | Audit signed-checkpoint verification | 1 | 1 | ☑ in PR | [#364](https://github.com/CoJoA13/EasySynQ/pull/364) |
-| 8 | Document lifecycle FSM gates | 2 | 2 | ☐ not started | — |
+| 8 | Document lifecycle FSM gates | 2 | 2 | ☑ in PR | [#365](https://github.com/CoJoA13/EasySynQ/pull/365) |
 | 9 | Workflow approval correctness | 2 | 3 | ☐ not started | — |
 | 10 | Ingestion pipeline correctness | 2 | 3 | ☐ not started | — |
 | 11 | Notifications & operator alerting | 2 | 2 | ☐ not started | — |
@@ -101,11 +101,11 @@ A create-gated (or token-gated) endpoint returns a resource body the caller cann
 
 ## Tier 2 — Correctness · lifecycle · workflow
 
-### ☐ Batch 8 — Document lifecycle FSM gates
+### ☑ Batch 8 — Document lifecycle FSM gates — [#365](https://github.com/CoJoA13/EasySynQ/pull/365)
 `branch: fix/major-doc-lifecycle-gates` · backend + integration
 
-- [ ] `services/vault/service.py:396` — `checkout`/`checkin` are not FSM-gated → a check-in during InReview permanently bricks the doc + its approval task; gate on `current_state in {Draft, UnderRevision}` `[C]`
-- [ ] `api/documents.py:1703` — generic `POST /documents/{id}/release` skips the managed-subtype hooks → a generically-released MR is permanently unclosable (and OBJ unit-reset skipped); route managed subtypes through their post-release chain `[C]`
+- [x] `services/vault/service.py:396` — `checkout`/`checkin` are not FSM-gated → a check-in during InReview permanently bricks the doc + its approval task; gate on `current_state in {Draft, UnderRevision}` `[C]` (fixed: `_require_editable_state(doc)` gates the generic `checkout()`/`checkin()` on `_EDITABLE_STATES` = {Draft, UnderRevision} → 409 `not_editable`, after `reject_objective_byte_path` so managed subtypes 422 first)
+- [x] `api/documents.py:1703` — generic `POST /documents/{id}/release` skips the managed-subtype hooks → a generically-released MR is permanently unclosable (and OBJ unit-reset skipped); route managed subtypes through their post-release chain `[C]` (fixed: `release_endpoint` now calls `reject_objective_byte_path(session, doc)` → a managed subtype 422s toward its own `/management-reviews` / `/objectives` release, which runs the post-release chain [MR `spawn_mr_actions` + `close_state=ActionsTracked`])
 
 ### ☐ Batch 9 — Workflow approval correctness
 `branch: fix/major-workflow-approval-correctness` · backend + integration

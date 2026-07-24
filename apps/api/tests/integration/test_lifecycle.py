@@ -363,3 +363,33 @@ async def test_approval_emits_signature(
             )
         ).scalar_one()
     assert await _signature_count(version_id, SignatureMeaning.approval) == 1
+
+
+# --- Batch 8: the generic byte path is FSM-gated -----------------------------------------
+
+
+async def test_byte_path_is_fsm_gated_when_not_editable(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    """[Batch 8] The generic byte path is FSM-gated: checkout / check-in on a NON-editable document
+    (here Effective; likewise InReview/Approved/Obsolete) is refused 409 ``not_editable`` instead of
+    minting a working draft / advancing a version AROUND the FSM and bricking the doc + its task.
+    Mutation-distinguishing: without the gate, checkout returns 200 (the brick setup) and check-in
+    returns 409 ``lock_conflict`` (the wrong code)."""
+    await s5.grant_lifecycle(subj.a)
+    await s5.grant_lifecycle(subj.b)
+    await s5.set_approver_release(await s5.default_org_id(), True)  # b approves AND releases
+    ha, hb = _auth(token_factory, subj.a), _auth(token_factory, subj.b)
+    doc = await s5.drive_to_effective(
+        app_client, ha, hb, hb, await s5.type_id("SOP"), f"b8-{subj.a}".encode()
+    )
+    did = doc["id"]
+    assert doc["current_state"] == "Effective"
+
+    co = await app_client.post(f"/api/v1/documents/{did}/checkout", headers=ha)
+    assert co.status_code == 409, co.text
+    assert co.json()["code"] == "not_editable"
+
+    ci = await _checkin(app_client, ha, did, "0" * 64)
+    assert ci.status_code == 409, ci.text
+    assert ci.json()["code"] == "not_editable"
