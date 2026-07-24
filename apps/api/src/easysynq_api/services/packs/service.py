@@ -305,7 +305,8 @@ async def _authorize_pack_subjects(
     ``report.evidence_pack.generate`` (independent of finding/capa read) could bundle a finding/CAPA
     they cannot read. Mirrors each subject's own single-read surface (no new authority):
     ``finding.read`` at SYSTEM (GET /findings/{id}), ``capa.read`` at the CAPA's PROCESS scope
-    (GET /capas/{id}). Refuse-ANY — the subject IS the whole pack, so one unreadable subject fails
+    (GET /capas/{id}) — plus ``finding.read`` for a CAPA's ORIGIN finding, whose metadata the CAPA
+    dossier embeds. Refuse-ANY — the subject IS the whole pack, so one unreadable subject fails
     (excluding it would leave an empty pack). CLAUSE/PROCESS packs carry no subject dossier.
 
     Routed through the ``enforce`` PEP (not a bare ``authorize``) so the subject-read decision —
@@ -329,6 +330,14 @@ async def _authorize_pack_subjects(
                 else ResourceContext.system()
             )
             await enforce(session, authz_sink, request, caller, "capa.read", resource)
+            if capa.origin_finding_id is not None:
+                # The CAPA dossier embeds the origin finding's type/severity/summary/identifier
+                # (dossier._capa_subject) — content GET /capas/{id} does NOT expose — so bundling
+                # this CAPA also requires reading that finding (finding.read is SYSTEM-enforced,
+                # GET /findings/{id}); else a capa.read-only holder harvests the finding data.
+                await enforce(
+                    session, authz_sink, request, caller, "finding.read", ResourceContext.system()
+                )
 
 
 def _build_items(

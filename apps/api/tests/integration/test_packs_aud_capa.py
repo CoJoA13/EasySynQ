@@ -33,9 +33,11 @@ from easysynq_api.db.models.evidence_blob import EvidenceBlob
 from easysynq_api.db.models.evidence_for_link import EvidenceForLink
 from easysynq_api.db.models.evidence_pack import EvidencePack
 from easysynq_api.db.models.pack_item import PackItem
+from easysynq_api.db.models.pack_share_link import PackShareLink
 from easysynq_api.db.models.record import Record
 from easysynq_api.db.session import get_sessionmaker
 from easysynq_api.services.packs import build_and_cache_portfolio
+from easysynq_api.services.packs import repository as packs_repo
 from easysynq_api.services.records import disposition
 
 from ._owner_db import owner_delete_disposition_events
@@ -95,6 +97,8 @@ async def _teardown(record_ids: list[str], pack_id: uuid.UUID | None) -> None:
                 if pack.pack_record_id is not None:
                     recs.append(pack.pack_record_id)
                 portfolio_sha = pack.portfolio_blob_sha256
+            # share-links → evidence_pack is RESTRICT, so drop the links before the pack.
+            await s.execute(delete(PackShareLink).where(PackShareLink.pack_id == pack_id))
             await s.execute(delete(PackItem).where(PackItem.pack_id == pack_id))
             await s.execute(delete(EvidencePack).where(EvidencePack.id == pack_id))
             if portfolio_sha is not None:
@@ -271,6 +275,154 @@ async def test_sealed_finding_pack_refuses_serving_after_subject_destroyed(
     finally:
         await owner_delete_disposition_events([uuid.UUID(finding_id)])
         await _teardown([ev_id], pack_uuid)
+
+
+async def test_capa_pack_create_requires_origin_finding_read(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """New-1 (R28): a CAPA pack whose CAPA has an ORIGIN finding must ALSO re-authorize finding.read
+    — the CAPA dossier embeds the origin finding's type/severity/summary/identifier (content the
+    CAPA API does NOT expose), so a caller with capa.read but WITHOUT finding.read is REFUSED (403)
+    at create. Mutation-verify: without the origin gate the capa.read-only caller gets 201."""
+    owner = _subject("origin-owner")
+    await _grant(owner, (*_AUDIT_KEYS, "finding.create", "finding.read", "capa.read", *_PACK_KEYS))
+    ho = _auth(token_factory, owner)
+    audit_id = await _new_audit(app_client, ho)
+    await _walk(app_client, ho, audit_id, "plan", "conduct")
+    capa_id = (
+        await app_client.post(
+            f"/api/v1/audits/{audit_id}/findings",
+            headers=ho,
+            json={"finding_type": "NC", "severity": "Major", "clause_ref": "8.4"},
+        )
+    ).json()["auto_capa_id"]
+
+    # Attacker: capa.read (the CAPA subject, granted SYSTEM so the process scope passes) + the pack
+    # keys, but NOT finding.read (the embedded origin).
+    attacker = _subject("origin-attacker")
+    await _grant(attacker, ("capa.read", "report.evidence_pack.generate", "report.export"))
+    ha = _auth(token_factory, attacker)
+    refused = await app_client.post(
+        "/api/v1/evidence-packs",
+        headers=ha,
+        json={"title": "C", "scope_kind": "CAPA", "capa_ids": [capa_id]},
+    )
+    assert refused.status_code == 403, refused.text
+
+    # The owner (WITH finding.read for the origin) still creates the pack — the gate keeps the path.
+    ok = await app_client.post(
+        "/api/v1/evidence-packs",
+        headers=ho,
+        json={"title": "C-ok", "scope_kind": "CAPA", "capa_ids": [capa_id]},
+    )
+    assert ok.status_code == 201, ok.text
+    await _teardown([], uuid.UUID(ok.json()["id"]))
+
+
+async def test_sealed_pack_serve_guard_covers_embedded_records(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """New-2 / New-3 + the FINDING→auto_capa mirror + the CAPA-subject branch: the serve guard
+    (``pack_has_destroyed_member``) fails-closed when ANY dossier-embedded / derived record is
+    destroyed — not only an INCLUDED pack_item member. The CAPA dossier embeds its origin finding,
+    the finding dossier embeds its linked auto-CAPA, and every sealed pack carries its own
+    registered EVIDENCE record (pack_record) — none are pack_item rows. Repo-level matrix: each pack
+    is False at seal and True once its OWN embedded record gets a DESTROY tombstone
+    (mutation-distinguishing — dropping each branch flips its assertion); two 409s prove wiring."""
+    owner = _subject("embedded")
+    await _grant(owner, (*_AUDIT_KEYS, "finding.create", "finding.read", "capa.read", *_PACK_KEYS))
+    h = _auth(token_factory, owner)
+    audit_id = await _new_audit(app_client, h)
+    await _walk(app_client, h, audit_id, "plan", "conduct")
+
+    async def _nc() -> tuple[str, str]:
+        f = (
+            await app_client.post(
+                f"/api/v1/audits/{audit_id}/findings",
+                headers=h,
+                json={"finding_type": "NC", "severity": "Major"},
+            )
+        ).json()
+        return f["id"], f["auto_capa_id"]
+
+    async def _create(scope: str, key: str, sid: str) -> uuid.UUID:
+        created = await app_client.post(
+            "/api/v1/evidence-packs",
+            headers=h,
+            json={"title": scope, "scope_kind": scope, key: [sid]},
+        )
+        assert created.status_code == 201, created.text
+        return uuid.UUID(created.json()["id"])
+
+    async def _guard(pid: uuid.UUID) -> bool:
+        async with get_sessionmaker()() as s:
+            pack = await s.get(EvidencePack, pid)
+            assert pack is not None
+            return await packs_repo.pack_has_destroyed_member(s, pack)
+
+    async def _destroy(rid: uuid.UUID) -> None:
+        async with get_sessionmaker()() as s:
+            rec = await s.get(Record, rid)
+            assert rec is not None
+            disposition._write_tombstone(
+                s, rec, action=DispositionAction.DESTROY, policy_id=None, approved_by=None
+            )
+            await s.commit()
+
+    f1, c1 = await _nc()
+    _f2, c2 = await _nc()
+    f3, c3 = await _nc()
+    f4, _c4 = await _nc()
+    # The subject / origin / linked-CAPA branches read scope_selector + cross-refs (populated at
+    # create), so those three packs are asserted at the repo level while DRAFT; only New-3 needs a
+    # pack_record, so pk_record is sealed — with an evidence member, so no dossier-only seal is
+    # assumed. The existing subject test covers the sealed download path end-to-end.
+    pk_origin = await _create("CAPA", "capa_ids", c1)  # → destroy c1's ORIGIN finding f1  (New-2)
+    pk_subject = await _create("CAPA", "capa_ids", c2)  # → destroy the CAPA SUBJECT c2
+    pk_mirror = await _create("FINDING", "finding_ids", f3)  # → destroy f3's LINKED capa (mirror)
+    ev4 = await _evidence_record(app_client, h, "pk-record evidence")
+    await _link(app_client, h, ev4, "finding", f4)
+    pk_record = await _create("FINDING", "finding_ids", f4)  # → destroy the PACK_RECORD   (New-3)
+    await _seal(pk_record)
+    packs = [pk_origin, pk_subject, pk_mirror, pk_record]
+    pr4: uuid.UUID | None = None
+    try:
+        for pid in packs:
+            assert await _guard(pid) is False, pid
+
+        # New-2: a CAPA pack's origin finding destroyed (subject CAPA c1 intact).
+        await _destroy(uuid.UUID(f1))
+        assert await _guard(pk_origin) is True
+        dl = await app_client.get(f"/api/v1/evidence-packs/{pk_origin}/download", headers=h)
+        assert dl.status_code == 409, dl.text
+        assert dl.json()["code"] == "pack_evidence_destroyed"
+
+        # CAPA-subject branch: the CAPA subject itself destroyed (origin finding f2 intact).
+        await _destroy(uuid.UUID(c2))
+        assert await _guard(pk_subject) is True
+
+        # Mirror: a FINDING pack's linked auto-CAPA destroyed (subject finding f3 intact).
+        await _destroy(uuid.UUID(c3))
+        assert await _guard(pk_mirror) is True
+
+        # New-3: the pack's own registered EVIDENCE record (the sealed ZIP-as-record) destroyed.
+        async with get_sessionmaker()() as s:
+            p4 = await s.get(EvidencePack, pk_record)
+            assert p4 is not None and p4.pack_record_id is not None
+            pr4 = p4.pack_record_id
+        await _destroy(pr4)
+        assert await _guard(pk_record) is True
+        dl4 = await app_client.get(f"/api/v1/evidence-packs/{pk_record}/download", headers=h)
+        assert dl4.status_code == 409, dl4.text
+        assert dl4.json()["code"] == "pack_evidence_destroyed"
+    finally:
+        tombstoned = [uuid.UUID(f1), uuid.UUID(c2), uuid.UUID(c3)]
+        if pr4 is not None:
+            tombstoned.append(pr4)
+        await owner_delete_disposition_events(tombstoned)
+        for pid in (pk_origin, pk_subject, pk_mirror):
+            await _teardown([], pid)
+        await _teardown([ev4], pk_record)
 
 
 async def test_finding_capa_pack_create_requires_subject_read(
