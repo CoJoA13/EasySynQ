@@ -13,21 +13,72 @@ the app DSN.
 from __future__ import annotations
 
 import asyncio
+import datetime
 import logging
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from ..config import get_settings
+from ..db.models._audit_enums import ActorType, AuditObjectType, EventType
+from ..db.models.audit_event import AuditEvent
 from ..db.models.organization import Organization
-from ..services.audit.checkpoint import anchor_checkpoint, load_signing_key
+from ..services.audit.checkpoint import (
+    OffHostCheckpointResult,
+    anchor_checkpoint,
+    load_signing_key,
+    load_verify_key,
+    verify_offhost_checkpoint,
+)
 from ..services.audit.linker import link_all
 from ..services.audit.partitions import ensure_partitions
-from ..services.audit.verify import verify_chain
+from ..services.audit.verify import VerifyResult, verify_chain
 from ..services.common.pg_locks import LOCK_CHAIN_LINK, pg_advisory_lock
 from .app import task
 
 logger = logging.getLogger("easysynq.audit.tasks")
+
+
+def _should_alarm_offhost(offhost: OffHostCheckpointResult) -> bool:
+    """Decide whether the INDEPENDENT off-host witness should raise CHAIN_VERIFY_FAIL. Alarm only
+    when a CONFIGURED witness produced a genuine failure — an object was read back and REJECTED
+    (tamper / stale / a wipe leaving a chain-less object → attest_failures>0), or a read itself
+    failed (an unreachable witness → read_failed). A not-yet-anchored empty sink is NOT a failure
+    (keyed on attest_failures, not the global sinks_read, so a fresh second witness alongside a
+    healthy one never false-alarms); a fresh org with no witness likewise stays quiet and defers to
+    the R13 soft-gate's persistent 'NOT tamper-evident' warning."""
+    return offhost.offhost_configured and (offhost.attest_failures > 0 or offhost.read_failed)
+
+
+def _emit_chain_verify_fail(
+    session: AsyncSession, org_id: object, result: VerifyResult, offhost_reasons: list[str]
+) -> None:
+    """Append a CHAIN_VERIFY_FAIL audit row (system actor, object_type ``audit``) so a detected
+    tamper — whether from the in-DB walk/checkpoint or the INDEPENDENT off-host read — leaves a
+    durable in-DB alarm alongside the structured log. The high-severity operator NOTIFICATION
+    (``integrity.alarm``) + the out-of-band channel are wired in Batch 11 on top of this signal;
+    hashes stay NULL until the chain-linker fills them (R12)."""
+    reasons = sorted({b.reason for b in result.breaks} | set(offhost_reasons))
+    session.add(
+        AuditEvent(
+            org_id=org_id,
+            occurred_at=datetime.datetime.now(datetime.UTC),
+            actor_id=None,
+            actor_type=ActorType.system,
+            event_type=EventType.CHAIN_VERIFY_FAIL,
+            object_type=AuditObjectType.audit,
+            object_id=org_id,
+            after={
+                "first_break_at_id": result.breaks[0].at_id if result.breaks else None,
+                "break_count": len(result.breaks),
+                "reasons": reasons,
+                "checkpoint_reason": (
+                    result.checkpoint.reason if result.checkpoint is not None else None
+                ),
+                "offhost_reasons": offhost_reasons,
+            },
+        )
+    )
 
 
 async def _run_chain_link() -> int:
@@ -51,25 +102,76 @@ async def _run_verify_chain() -> int:
     sessionmaker: async_sessionmaker[AsyncSession] = async_sessionmaker(
         engine, expire_on_commit=False
     )
+    # The nightly verify is the AUTHORITATIVE detection control (doc 12 §4.4): it holds the
+    # beat-only signing key, so load_verify_key() always resolves (derives the public key) here and
+    # the signed-checkpoint attestation runs — unlike the api/CLI, which may only walk.
+    verify_key = load_verify_key()
+    if verify_key is None:
+        # A None key here means the beat holds no persistent signing key (a non-writable path fell
+        # back to an ephemeral key, or the secret is unmounted) — the authoritative detector then
+        # only walks the self-consistent chain, with BOTH the signed-checkpoint and off-host
+        # attestations DISABLED. Surface it loudly rather than silently no-opping; the durable
+        # audit-row alarm + operator NOTIFICATION for this misconfiguration is Batch 11.
+        logger.error(
+            "audit.verify_chain.no_verify_key",
+            extra={
+                "extra_fields": {
+                    "detail": "no checkpoint verify key — signed-checkpoint + off-host "
+                    "attestation DISABLED; nightly verify degraded to a chain walk only"
+                }
+            },
+        )
     total_breaks = 0
+    offhost_alarms = 0
+    emitted = False
     try:
         async with sessionmaker() as session:
             org_ids = (await session.execute(select(Organization.id))).scalars().all()
             for org_id in org_ids:
-                result = await verify_chain(session, org_id)
+                result = await verify_chain(session, org_id, verify_key=verify_key)
                 total_breaks += len(result.breaks)
-                if not result.verified:
+                # The INDEPENDENT off-host read-back runs whenever a verify key is held — NOT gated
+                # on local chain/checkpoint state, since a privileged DB owner can DELETE every
+                # audit_event AND audit_checkpoint row (a full wipe → checked==0, verified==True)
+                # while the unreachable off-host copy still holds the signed checkpoint that exposes
+                # the deletion. Gating on the wiped chain would suppress the only surviving witness.
+                offhost_reasons: list[str] = []
+                alarm_offhost = False
+                if verify_key is not None:
+                    offhost = await verify_offhost_checkpoint(
+                        session, org_id, verify_key=verify_key
+                    )
+                    alarm_offhost = _should_alarm_offhost(offhost)
+                    if alarm_offhost:
+                        offhost_reasons = offhost.reasons
+                        offhost_alarms += 1
+                if not result.verified or alarm_offhost:
                     logger.error(
                         "audit.verify_chain.broken",
                         extra={
                             "extra_fields": {
                                 "org_id": str(org_id),
-                                "first_break_at_id": result.breaks[0].at_id,
+                                "first_break_at_id": (
+                                    result.breaks[0].at_id if result.breaks else None
+                                ),
                                 "break_count": len(result.breaks),
+                                "checkpoint_reason": (
+                                    result.checkpoint.reason
+                                    if result.checkpoint is not None
+                                    else None
+                                ),
+                                "offhost_reasons": offhost_reasons,
                             }
                         },
                     )
-        return total_breaks
+                    _emit_chain_verify_fail(session, org_id, result, offhost_reasons)
+                    emitted = True
+            if emitted:
+                await session.commit()
+        # Return chain breaks PLUS off-host alarms so an off-host-only failure (walk clean but the
+        # independent witness is stale/corrupt/unreachable/rewritten) is never reported as 0=intact
+        # to the Redis result backend — any detected integrity failure yields a non-zero result.
+        return total_breaks + offhost_alarms
     finally:
         await engine.dispose()
 
@@ -112,7 +214,8 @@ def chain_link() -> int:
 
 @task(name="easysynq.audit.verify_chain")
 def verify_chain_task() -> int:
-    """Re-walk + verify the chain; returns the number of broken links (0 = intact)."""
+    """Re-walk + verify the chain; returns the count of detected integrity findings — chain breaks
+    PLUS independent off-host witness alarms (0 = intact)."""
     return asyncio.run(_run_verify_chain())
 
 

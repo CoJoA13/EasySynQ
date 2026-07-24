@@ -38,7 +38,9 @@ from easysynq_api.domain.authz.types import Effect, ScopeLevel
 from easysynq_api.services.audit.checkpoint import (
     anchor_checkpoint,
     load_signing_key,
+    load_verify_key,
     tamper_evidence_attested,
+    verify_offhost_checkpoint,
 )
 from easysynq_api.services.audit.linker import link_all
 
@@ -205,7 +207,13 @@ async def test_ac6b_linker_chains_verify_matches_and_tamper_is_first_broken_link
 
     ok = await app_client.get("/api/v1/audit-events/verify-chain", headers=headers)
     assert ok.status_code == 200, ok.text
-    assert ok.json() == {"verified": True, "checked": len(rows), "pending": 0, "breaks": []}
+    # Field assertions (not an exact-dict match) — the response now also carries the Batch-7
+    # ``checkpoint`` attestation (None here with no verify key configured, or a status if a prior
+    # test persisted a signing key), orthogonal to this linker/walk proof.
+    ok_body = ok.json()
+    assert ok_body["verified"] is True
+    assert ok_body["checked"] == len(rows)
+    assert ok_body["pending"] == 0 and ok_body["breaks"] == []
 
     # A privileged operator (the OWNER role) mutates a row out-of-band — bypassing the app grant.
     victim = rows[len(rows) // 2]
@@ -284,6 +292,17 @@ async def test_ac6b_checkpoint_push_and_soft_gate(
         attested_same_host = await tamper_evidence_attested(s, org_id)
     assert attested_same_host is False  # same-host bucket must NOT attest tamper-evidence (R13)
 
+    # FAIL-CLOSED (doc 12 §4.4): with only a SAME-host sink the INDEPENDENT read-back is UNAVAILABLE
+    # — it must report offhost_configured=False + verified=False (never a vacuous "verified" pass),
+    # so the nightly beat defers to the R13 soft-gate rather than alarming on a missing witness.
+    verify_key = load_verify_key()
+    assert verify_key is not None
+    async with get_sessionmaker()() as s:
+        unavailable = await verify_offhost_checkpoint(s, org_id, verify_key=verify_key)
+    assert unavailable.offhost_configured is False
+    assert unavailable.verified is False
+    assert unavailable.sinks_read == 0
+
     # The signed object actually landed in the off-host bucket.
     settings = get_settings()
     client = boto3.client(
@@ -309,6 +328,57 @@ async def test_ac6b_checkpoint_push_and_soft_gate(
         sink.connection = {"bucket": "audit-checkpoints", "off_host": True}
         await s.commit()
         assert await tamper_evidence_attested(s, org_id) is True
+
+    # Now that a genuine off-host witness exists, the INDEPENDENT read-back reads the pushed object
+    # back with the SEPARATE read creds, verifies its Ed25519 signature + freshness, and matches it
+    # against the live chain — the witness the in-DB walk cannot be (a DB owner cannot reach it).
+    async with get_sessionmaker()() as s:
+        attested = await verify_offhost_checkpoint(s, org_id, verify_key=verify_key)
+    assert attested.offhost_configured is True
+    assert attested.sinks_read == 1
+    assert attested.verified is True, attested.reasons
+
+    # The freshness gate: a witness that stopped advancing cannot attest rows anchored after it.
+    # Re-evaluating the SAME fresh object at a far-future `now` makes it stale → verified False,
+    # so a stalled off-host push is caught rather than silently trusted.
+    import datetime
+
+    future = datetime.datetime.now(datetime.UTC) + datetime.timedelta(seconds=6000)
+    async with get_sessionmaker()() as s:
+        stale = await verify_offhost_checkpoint(s, org_id, verify_key=verify_key, now=future)
+    assert stale.offhost_configured is True
+    assert stale.verified is False
+    assert any("stale" in r for r in stale.reasons), stale.reasons
+
+    # THE DB-OWNER WIPE (doc 12 §4.4): a privileged owner deletes chain rows but cannot reach the
+    # off-host copy, which still holds a signed checkpoint for a now-missing chain row. Simulate it
+    # by pushing a validly-signed object at a latest_id ABOVE the live head: its signature+freshness
+    # pass, but the referenced chain row does not exist → verified=False, sinks_read==1 (an ALARM
+    # verdict) even though the local walk is self-consistent. This is what the nightly beat now
+    # consults UNCONDITIONALLY — the fail-open was gating this read-back on the wiped chain itself.
+    import base64
+    import json
+
+    from easysynq_api.services.audit import checkpoint as cp
+    from easysynq_api.services.audit.sink import push_checkpoint
+
+    ghost_id = 10_000_000
+    ghost_ts = datetime.datetime.now(datetime.UTC)
+    ghost_payload = cp._payload(org_id, ghost_id, b"\x11" * 32, ghost_ts)
+    ghost_sig = load_signing_key().sign(ghost_payload)
+    ghost_body = json.dumps(
+        {"checkpoint": json.loads(ghost_payload), "signature": base64.b64encode(ghost_sig).decode()}
+    ).encode()
+    ghost_key = f"checkpoints/{org_id}/{ghost_id}-{ghost_ts.strftime('%Y%m%dT%H%M%S%fZ')}.json"
+    push_checkpoint(
+        "worm_bucket", {"bucket": "audit-checkpoints", "off_host": True}, ghost_key, ghost_body
+    )
+    async with get_sessionmaker()() as s:
+        wiped = await verify_offhost_checkpoint(s, org_id, verify_key=verify_key)
+    assert wiped.offhost_configured is True
+    assert wiped.sinks_read == 1
+    assert wiped.verified is False
+    assert any("missing" in r or "deletion" in r for r in wiped.reasons), wiped.reasons
 
 
 async def test_ac6b_linker_safe_prefix_never_reorders_across_an_open_txn(
@@ -461,3 +531,105 @@ async def test_ac6b_linker_drains_multiple_windows_in_one_tick(
     # itself — the leading drain loop + the drain-to-fixed-point above leave nothing pending. Keep
     # that leading settle if editing, else this turns flaky under the shared-DB backlog.
     assert pending == 0, "gap-free backlog not fully drained"
+
+
+async def test_checkpoint_signature_catches_consistent_chain_rewrite(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    subj: SimpleNamespace,
+    dsns: dict[str, str],
+) -> None:
+    """Batch 7 (doc 12 §4.4) — the headline detection control. A privileged DB OWNER who rewrites an
+    audit row AND recomputes its row_hash yields a SELF-CONSISTENT chain the walk passes clean; only
+    the Ed25519 signature on the checkpoint (which the owner cannot forge over the rewritten
+    latest_row_hash) exposes it. Mutation-distinguishing: verify_chain WITHOUT the verify key passes
+    the rewrite; WITH the key it breaks on the checkpoint↔chain hash mismatch."""
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    from sqlalchemy import delete
+
+    from easysynq_api.services.audit.canonical import (
+        GENESIS_HASH,
+        audit_row_from_orm,
+        compute_row_hash,
+    )
+    from easysynq_api.services.audit.checkpoint import anchor_checkpoint
+    from easysynq_api.services.audit.verify import verify_chain
+
+    await _drive_to_effective(app_client, token_factory, subj)
+    await _grant_audit_read(subj.a)
+    await _link_as_linker(dsns)
+    org_id = await s5.default_org_id()
+
+    owner_engine = create_async_engine(dsns["owner"])
+    orig_reason: str | None = None
+    orig_hash = b""
+    head_id = 0
+    captured = False  # RELEASED events have reason=None, so track capture separately from the value
+    try:
+        # Clean slate: as OWNER, drop any checkpoint another test left (it would be signed by a
+        # DIFFERENT key and fail against my verify key), so mine is the sole/newest one.
+        async with async_sessionmaker(owner_engine, expire_on_commit=False)() as s:
+            await s.execute(delete(AuditCheckpoint).where(AuditCheckpoint.org_id == org_id))
+            await s.commit()
+
+        key = Ed25519PrivateKey.generate()
+        async with get_sessionmaker()() as s:
+            cp = await anchor_checkpoint(s, org_id, signing_key=key, push=False)
+        assert cp is not None
+        head_id = cp.latest_id
+
+        # Baseline: the chain + its signed checkpoint attest clean.
+        async with get_sessionmaker()() as s:
+            good = await verify_chain(s, org_id, verify_key=key.public_key())
+        assert good.verified is True
+        assert good.checkpoint is not None
+        assert good.checkpoint.signature_ok is True and good.checkpoint.hash_match is True
+
+        # The OWNER rewrites the head row's payload AND recomputes its row_hash so the WALK stays
+        # self-consistent (the exact finding threat) — capture the originals to restore the chain.
+        async with async_sessionmaker(owner_engine, expire_on_commit=False)() as s:
+            row = (await s.execute(select(AuditEvent).where(AuditEvent.id == head_id))).scalar_one()
+            orig_reason, orig_hash = row.reason, bytes(row.row_hash)
+            captured = True
+            row.reason = "OWNER-REWRITE"
+            row.row_hash = compute_row_hash(
+                audit_row_from_orm(row), row.prev_hash or GENESIS_HASH, version=1
+            )
+            await s.commit()
+
+        # The self-consistent walk is fooled (mutation-distinguishing) ...
+        async with get_sessionmaker()() as s:
+            walk_only = await verify_chain(s, org_id)
+        assert walk_only.verified is True, "the walk alone must NOT see a consistent rewrite"
+
+        # ... but the signed checkpoint's latest_row_hash no longer matches → caught.
+        async with get_sessionmaker()() as s:
+            caught = await verify_chain(s, org_id, verify_key=key.public_key())
+        assert caught.verified is False
+        assert caught.checkpoint is not None and caught.checkpoint.hash_match is False
+        assert any("latest_row_hash mismatch" in b.reason for b in caught.breaks)
+
+        # And a FORGED checkpoint (owner rewrites the checkpoint's own latest_row_hash to match the
+        # rewritten chain) fails the SIGNATURE — the owner cannot re-sign the new payload.
+        async with async_sessionmaker(owner_engine, expire_on_commit=False)() as s:
+            await s.execute(
+                text("UPDATE audit_checkpoint SET latest_row_hash = :h WHERE org_id = :o"),
+                {"h": row.row_hash, "o": org_id},
+            )
+            await s.commit()
+        async with get_sessionmaker()() as s:
+            forged = await verify_chain(s, org_id, verify_key=key.public_key())
+        assert forged.verified is False
+        assert forged.checkpoint is not None and forged.checkpoint.signature_ok is False
+    finally:
+        async with async_sessionmaker(owner_engine, expire_on_commit=False)() as s:
+            if captured:  # restore even when the original reason was legitimately None (RELEASED)
+                restore = (
+                    await s.execute(select(AuditEvent).where(AuditEvent.id == head_id))
+                ).scalar_one_or_none()
+                if restore is not None:
+                    restore.reason = orig_reason
+                    restore.row_hash = orig_hash
+            await s.execute(delete(AuditCheckpoint).where(AuditCheckpoint.org_id == org_id))
+            await s.commit()
+        await owner_engine.dispose()

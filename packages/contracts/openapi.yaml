@@ -7800,6 +7800,20 @@ components:
             properties:
               at_id: { type: integer, format: int64 }
               reason: { type: string }
+        checkpoint:
+          type: [object, "null"]
+          description: >-
+            The signed-checkpoint attestation (doc 12 §4.4), present only on a full walk when the
+            verify (public) key is available to this process; null otherwise. A false signature_ok
+            or hash_match is a tamper the self-consistent chain walk alone cannot surface.
+          additionalProperties: false
+          required: [present, signature_ok, hash_match, latest_id, reason]
+          properties:
+            present: { type: boolean, description: "A checkpoint has been anchored for this org." }
+            signature_ok: { type: [boolean, "null"], description: "Ed25519 signature valid." }
+            hash_match: { type: [boolean, "null"], description: "Signed latest_row_hash == chain." }
+            latest_id: { type: [integer, "null"], format: int64 }
+            reason: { type: [string, "null"], description: "Failure detail; null when attested." }
 
     AuditExportJob:
       type: object

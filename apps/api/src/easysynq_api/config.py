@@ -68,6 +68,17 @@ class Settings(BaseSettings):
     # Ed25519 private key (PEM) that signs checkpoints — a beat-only secret (dev-grade; the
     # Part-11 crypto path stays reserved). Generated + persisted here on first use if absent.
     audit_checkpoint_signing_key_path: str = "/run/secrets/audit_ckpt_key"
+    # Ed25519 PUBLIC key (PEM) used to VERIFY checkpoint signatures (doc 12 §4.4). Distinct from the
+    # beat-only private key so api/CLI/off-host verifiers attest a checkpoint without the signing
+    # secret — the whole point of the detection control (a DB owner can't forge a signature).
+    # The anchor (beat) exports the public half here on first use; empty/absent → the beat verify
+    # derives it from the private key (dev), and the api/CLI fall back to walk-only (can't attest).
+    audit_checkpoint_public_key_path: str = "/run/secrets/audit_ckpt_pub"
+    # SEPARATE read-only creds for the INDEPENDENT off-host checkpoint read-back (doc 12 §4.4): the
+    # sink is write-only (custody separation), so verifying the off-host copy needs a distinct
+    # read principal. Empty → fall back to the vault s3 creds (dev only — NOT honest separation).
+    audit_sink_read_access_key: str = ""
+    audit_sink_read_secret_key: str = ""
     # Configurable-verbosity knob (doc 12 §4.1): also persist routine authz ALLOW decisions.
     # Off in v1 — only denies + state-changes persist (avoids an audit row per read request).
     audit_persist_allows: bool = False

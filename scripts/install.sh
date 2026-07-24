@@ -40,6 +40,8 @@ if [ ! -f "$ENV_FILE" ]; then
   KEK="$(gen_secret)"
   BK="$(gen_secret)"
   KC_ADMIN_PW="$(gen_secret)"
+  AUDIT_SINK_SECRET="$(gen_secret)"
+  AUDIT_SINK_READ_SECRET="$(gen_secret)"
 
   set_kv POSTGRES_USER easysynq
   set_kv POSTGRES_PASSWORD "$PG_PW"
@@ -57,6 +59,14 @@ if [ ! -f "$ENV_FILE" ]; then
   set_kv BACKUP_ENCRYPTION_KEY "$BK"          # S11: seals the durable backup archive (AES-256-GCM)
   set_kv KEYCLOAK_ADMIN_USER admin
   set_kv KEYCLOAK_ADMIN_PASSWORD "$KC_ADMIN_PW"  # S11: also the worker's realm-export admin creds
+  # Off-host audit-checkpoint sink creds (doc 12 §4.4): GENERATE the secrets so a fresh install never
+  # provisions the minio-init sink users with the repo-known .env.example placeholders (the S profile
+  # publishes MinIO on :9000; the read user can list/download checkpoint objects). Usernames are
+  # non-secret; an operator pointing a sink at an EXTERNAL host replaces these with that host's creds.
+  set_kv AUDIT_SINK_ACCESS_KEY audit-sink
+  set_kv AUDIT_SINK_SECRET_KEY "$AUDIT_SINK_SECRET"
+  set_kv AUDIT_SINK_READ_ACCESS_KEY audit-sink-read
+  set_kv AUDIT_SINK_READ_SECRET_KEY "$AUDIT_SINK_READ_SECRET"
   set_kv EASYSYNQ_PROFILE "$PROFILE"
 
   chmod 600 "$ENV_FILE"

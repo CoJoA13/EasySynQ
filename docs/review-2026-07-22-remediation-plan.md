@@ -26,7 +26,7 @@
 | 4 | WORM erasure completeness | 1 | 2 | ☑ in PR | [#357](https://github.com/CoJoA13/EasySynQ/pull/357) |
 | 5 | Disposition txn / locking integrity | 1 | 2 | ☑ in PR | [#358](https://github.com/CoJoA13/EasySynQ/pull/358) |
 | 6 | Read-authorization on returned bodies | 1 | 3 | ☑ in PR | [#362](https://github.com/CoJoA13/EasySynQ/pull/362) |
-| 7 | Audit signed-checkpoint verification | 1 | 1 | ☐ not started | — |
+| 7 | Audit signed-checkpoint verification | 1 | 1 | ☑ in PR | [#364](https://github.com/CoJoA13/EasySynQ/pull/364) |
 | 8 | Document lifecycle FSM gates | 2 | 2 | ☐ not started | — |
 | 9 | Workflow approval correctness | 2 | 3 | ☐ not started | — |
 | 10 | Ingestion pipeline correctness | 2 | 3 | ☐ not started | — |
@@ -92,10 +92,10 @@ A create-gated (or token-gated) endpoint returns a resource body the caller cann
 - [x] `services/packs/build.py:304` — pack FINDING/CAPA subjects are serialized with NO subject read-check (`record.read` gates only the evidence candidates) → R28 bypass; ADD a per-subject `capa.read`/`finding.read` gate at the subject's own scope (not via the evidence classifier) and refuse/exclude when unreadable `[f]` (fixed: `_authorize_pack_subjects` refuse-any 403 at create — build is worker-async — mirroring each subject's own read surface)
 - [x] `services/packs/service.py:620` — public pack share survives a WORM destroy (cached portfolio PDF keeps serving); disposition must invalidate share tokens + purge derived artifacts + fail-closed on disposition state `[f]` (fixed: serve-time `pack_has_destroyed_member` fail-closed on `resolve_share_token` [public 403] + the authenticated download [409]; the **physical purge / share-token invalidation** of the derived ZIP/portfolio artifacts is a genuine R27-vs-doc-06-§7.4 policy call deferred to fast-follow **[#361](https://github.com/CoJoA13/EasySynQ/issues/361)**)
 
-### ☐ Batch 7 — Audit signed-checkpoint verification
+### ☑ Batch 7 — Audit signed-checkpoint verification — [#364](https://github.com/CoJoA13/EasySynQ/pull/364)
 `branch: fix/major-audit-checkpoint-verify` · backend + integration · **heaviest of the tier**
 
-- [ ] `tasks/audit.py:59` — nightly/on-demand `verify_chain` never verifies the Ed25519 signature on the checkpoint nor does an independent off-host read → a privileged DB owner who rewrites both the chain and the checkpoint row is undetected; verify signature first (separately-trusted key), add an out-of-band off-host verifier, extend the restore drill `[C]`
+- [x] `tasks/audit.py:59` — nightly/on-demand `verify_chain` never verifies the Ed25519 signature on the checkpoint nor does an independent off-host read → a privileged DB owner who rewrites both the chain and the checkpoint row is undetected; verify signature first (separately-trusted key), add an out-of-band off-host verifier, extend the restore drill `[C]` (fixed: `verify_chain(verify_key=…)` Ed25519-verifies the newest checkpoint + compares `latest_row_hash`; the anchor exports a separately-trusted public key; `verify_offhost_checkpoint` reads the off-host copy back with **separate read creds** [beat + a `verify-offhost` CLI]; the restore drill attests the bundled checkpoint's signature+hash. The `integrity.alarm` **notification** emitter stays Batch 11 on top of this `CHAIN_VERIFY_FAIL` detection signal — owner decision)
 
 ---
 

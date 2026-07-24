@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from ..config import get_settings
 from ..db.models.organization import Organization
+from ..services.audit.checkpoint import load_verify_key, verify_offhost_checkpoint
 from ..services.audit.partitions import ensure_partitions
 from ..services.audit.verify import verify_chain
 
@@ -37,13 +38,16 @@ async def _verify_chain() -> tuple[bool, int, int, list[tuple[int, str]]]:
     """Verify every org's chain (the chain is per-org). Aggregates the result."""
     engine = create_async_engine(get_settings().database_url)
     sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
+    # Attest the signed checkpoint too when the verify (public) key is available to this process;
+    # else the chain is walked only (a checkpoint/signature break folds into ``breaks``).
+    verify_key = load_verify_key()
     verified, checked, pending = True, 0, 0
     breaks: list[tuple[int, str]] = []
     try:
         async with sessionmaker() as session:
             org_ids = (await session.execute(select(Organization.id))).scalars().all()
             for org_id in org_ids:
-                result = await verify_chain(session, org_id)
+                result = await verify_chain(session, org_id, verify_key=verify_key)
                 verified = verified and result.verified
                 checked += result.checked
                 pending += result.pending
@@ -53,17 +57,61 @@ async def _verify_chain() -> tuple[bool, int, int, list[tuple[int, str]]]:
         await engine.dispose()
 
 
+async def _verify_offhost() -> tuple[bool, int, list[tuple[str, list[str]]]]:
+    """The INDEPENDENT off-host read-back (doc 12 §4.4) — run this OUT-OF-BAND from a separate host
+    with the read creds + the public key to attest that the off-host anchor still matches the live
+    chain. Self-contained: it RE-WALKS the chain (recomputing hashes from the audit payloads) AND
+    verifies the in-DB + off-host signed checkpoints, so an earlier row edited while its hash
+    columns are left intact is still caught — not just an off-host↔latest_id hash compare. Returns
+    (ok, sinks_read, [(org_id, reasons)])."""
+    verify_key = load_verify_key()
+    if verify_key is None:
+        return (
+            False,
+            0,
+            [("", ["no verify (public) key available — cannot attest the off-host copy"])],
+        )
+    engine = create_async_engine(get_settings().database_url)
+    sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
+    ok, read = True, 0
+    org_reasons: list[tuple[str, list[str]]] = []
+    try:
+        async with sessionmaker() as session:
+            org_ids = (await session.execute(select(Organization.id))).scalars().all()
+            for org_id in org_ids:
+                walk = await verify_chain(session, org_id, verify_key=verify_key)
+                res = await verify_offhost_checkpoint(session, org_id, verify_key=verify_key)
+                read += res.sinks_read
+                ok = ok and res.verified and walk.verified
+                reasons = list(res.reasons)
+                reasons.extend(f"chain break at id={b.at_id}: {b.reason}" for b in walk.breaks)
+                if reasons:
+                    org_reasons.append((str(org_id), reasons))
+        return ok, read, org_reasons
+    finally:
+        await engine.dispose()
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="easysynq-audit", description="Audit-trail operator CLI.")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("ensure-partitions", help="create the rolling monthly audit_event partitions")
-    sub.add_parser("verify-chain", help="re-walk + verify the hash chain")
+    sub.add_parser("verify-chain", help="re-walk + verify the hash chain (+ signed checkpoint)")
+    sub.add_parser("verify-offhost", help="independent off-host checkpoint read-back (out-of-band)")
     args = parser.parse_args(argv)
 
     if args.command == "ensure-partitions":
         ensured = asyncio.run(_ensure_partitions())
         print(f"ensured partitions: {', '.join(ensured)}")
         return 0
+
+    if args.command == "verify-offhost":
+        ok, read, org_reasons = asyncio.run(_verify_offhost())
+        print(f"offhost_verified={ok} sinks_read={read}")
+        for org_id, reasons in org_reasons:
+            for reason in reasons:
+                print(f"  MISMATCH org={org_id}: {reason}")
+        return 0 if ok else 1
 
     verified, checked, pending, breaks = asyncio.run(_verify_chain())
     print(f"verified={verified} checked={checked} pending={pending}")

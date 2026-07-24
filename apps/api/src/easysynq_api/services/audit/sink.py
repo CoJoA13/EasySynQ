@@ -10,6 +10,7 @@ so an org cannot be left ``enabled`` with no real off-host mirror.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from ...config import get_settings
@@ -19,24 +20,51 @@ class SinkPushError(Exception):
     """A configured sink kind is not implemented, or its push failed."""
 
 
-def _audit_sink_client() -> Any:
+class SinkReadError(Exception):
+    """The independent off-host read failed (kind unimplemented, or an access/transport error). The
+    verifier must ALARM on this rather than silently treat the off-host anchor as attested."""
+
+
+def _audit_sink_client(connection: dict[str, Any] | None = None) -> Any:
     import boto3
 
     s = get_settings()
-    # DISTINCT credentials from the vault root (D-8). Empty creds fall back to the vault creds —
-    # dev-only convenience that does NOT honour custody separation (off_host stays false).
+    # Honor the sink's documented non-secret connection: ``endpoint``/``region`` select the
+    # genuinely separate host (falling back to the vault settings only when unset), while the
+    # DISTINCT credentials come from the D-8 secret (empty → vault creds, dev-only convenience that
+    # does NOT honour custody separation). Without honoring the endpoint an off_host sink would
+    # silently write to local MinIO, defeating the independent-witness guarantee.
+    conn = connection or {}
     return boto3.client(
         "s3",
-        endpoint_url=s.s3_endpoint,
+        endpoint_url=conn.get("endpoint") or s.s3_endpoint,
         aws_access_key_id=s.audit_sink_access_key or s.s3_access_key,
         aws_secret_access_key=s.audit_sink_secret_key or s.s3_secret_key,
-        region_name=s.s3_region,
+        region_name=conn.get("region") or s.s3_region,
+    )
+
+
+def _audit_sink_read_client(connection: dict[str, Any] | None = None) -> Any:
+    import boto3
+
+    s = get_settings()
+    # SEPARATE read-only credentials (doc 12 §4.4): the independent off-host read-back must NOT use
+    # the write-only sink creds (minio-init grants no GetObject) — a distinct read principal is the
+    # custody-separated witness. Endpoint/region come from the sink's connection (same separate host
+    # the writer targets), so a verifier does not silently read back from local MinIO.
+    conn = connection or {}
+    return boto3.client(
+        "s3",
+        endpoint_url=conn.get("endpoint") or s.s3_endpoint,
+        aws_access_key_id=s.audit_sink_read_access_key or s.s3_access_key,
+        aws_secret_access_key=s.audit_sink_read_secret_key or s.s3_secret_key,
+        region_name=conn.get("region") or s.s3_region,
     )
 
 
 def _push_worm_bucket(connection: dict[str, Any], key: str, body: bytes) -> None:
     bucket = connection.get("bucket") or get_settings().s3_bucket_audit_checkpoints
-    client = _audit_sink_client()
+    client = _audit_sink_client(connection)
     # Write-once: a new object per checkpoint as the chain advances; never overwrite.
     client.put_object(Bucket=bucket, Key=key, Body=body, ContentType="application/json")
 
@@ -51,3 +79,44 @@ def push_checkpoint(kind: str, connection: dict[str, Any] | None, key: str, body
     if pusher is None:
         raise SinkPushError(f"checkpoint sink kind '{kind}' is not implemented in v1")
     pusher(connection or {}, key, body)
+
+
+def fetch_latest_offhost_checkpoint(
+    kind: str, connection: dict[str, Any] | None, org_id: Any
+) -> dict[str, Any] | None:
+    """Read the NEWEST signed checkpoint object BACK from the off-host sink (doc 12 §4.4), using the
+    SEPARATE read credentials — a genuine independent witness, not the write path re-read. Returns
+    the parsed ``{"checkpoint": {...}, "signature": "<b64>"}`` body, or ``None`` when the sink holds
+    no checkpoint for the org. Raises :class:`SinkReadError` for an unimplemented kind — a
+    verifier fails closed rather than silently treating a non-read-back sink as attested.
+
+    The newest object is chosen by the ``latest_id`` in the write-once key name
+    (``checkpoints/{org_id}/{latest_id}-{ts}.json``), then its body is read."""
+    if kind != "worm_bucket":
+        raise SinkReadError(f"off-host read-back is not implemented for sink kind '{kind}'")
+    bucket = (connection or {}).get("bucket") or get_settings().s3_bucket_audit_checkpoints
+    client = _audit_sink_read_client(connection)
+    prefix = f"checkpoints/{org_id}/"
+    best_key: str | None = None
+    best: tuple[int, str] | None = None
+    for page in client.get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=prefix):
+        for obj in page.get("Contents", []):
+            name = str(obj["Key"]).rsplit("/", 1)[-1]
+            head = name.split("-", 1)[0]
+            if not head.isdigit():
+                continue
+            # Order by (latest_id, name): equal latest_id ties break on the sortable ts suffix
+            # (%Y%m%dT…Z) so the FRESHEST object wins, independent of S3 list order.
+            cand = (int(head), name)
+            if best is None or cand > best:
+                best, best_key = cand, obj["Key"]
+    if best_key is None:
+        return None
+    body = client.get_object(Bucket=bucket, Key=best_key)["Body"].read()
+    parsed = json.loads(body)
+    if not isinstance(parsed, dict):
+        # A syntactically-valid but non-object body (``[]``/``null``/scalar) is a CORRUPT newest
+        # WORM object — fail closed (the verifier's ``except`` marks read_failed → alarm) rather
+        # than returning None, which the caller would treat as a benign fresh-empty witness.
+        raise SinkReadError(f"off-host checkpoint object {best_key} is not a JSON object (corrupt)")
+    return parsed
