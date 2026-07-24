@@ -108,4 +108,9 @@ def fetch_latest_offhost_checkpoint(
         return None
     body = client.get_object(Bucket=bucket, Key=best_key)["Body"].read()
     parsed = json.loads(body)
-    return parsed if isinstance(parsed, dict) else None
+    if not isinstance(parsed, dict):
+        # A syntactically-valid but non-object body (``[]``/``null``/scalar) is a CORRUPT newest
+        # WORM object — fail closed (the verifier's ``except`` marks read_failed → alarm) rather
+        # than returning None, which the caller would treat as a benign fresh-empty witness.
+        raise SinkReadError(f"off-host checkpoint object {best_key} is not a JSON object (corrupt)")
+    return parsed

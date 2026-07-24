@@ -109,6 +109,21 @@ async def _run_verify_chain() -> int:
     # beat-only signing key, so load_verify_key() always resolves (derives the public key) here and
     # the signed-checkpoint attestation runs — unlike the api/CLI, which may only walk.
     verify_key = load_verify_key()
+    if verify_key is None:
+        # A None key here means the beat holds no persistent signing key (a non-writable path fell
+        # back to an ephemeral key, or the secret is unmounted) — the authoritative detector then
+        # only walks the self-consistent chain, with BOTH the signed-checkpoint and off-host
+        # attestations DISABLED. Surface it loudly rather than silently no-opping; the durable
+        # audit-row alarm + operator NOTIFICATION for this misconfiguration is Batch 11.
+        logger.error(
+            "audit.verify_chain.no_verify_key",
+            extra={
+                "extra_fields": {
+                    "detail": "no checkpoint verify key — signed-checkpoint + off-host "
+                    "attestation DISABLED; nightly verify degraded to a chain walk only"
+                }
+            },
+        )
     total_breaks = 0
     emitted = False
     try:

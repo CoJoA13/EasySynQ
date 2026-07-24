@@ -60,7 +60,10 @@ async def _verify_chain() -> tuple[bool, int, int, list[tuple[int, str]]]:
 async def _verify_offhost() -> tuple[bool, int, list[tuple[str, list[str]]]]:
     """The INDEPENDENT off-host read-back (doc 12 §4.4) — run this OUT-OF-BAND from a separate host
     with the read creds + the public key to attest that the off-host anchor still matches the live
-    chain. Returns (ok, sinks_read, [(org_id, reasons)])."""
+    chain. Self-contained: it RE-WALKS the chain (recomputing hashes from the audit payloads) AND
+    verifies the in-DB + off-host signed checkpoints, so an earlier row edited while its hash
+    columns are left intact is still caught — not just an off-host↔latest_id hash compare. Returns
+    (ok, sinks_read, [(org_id, reasons)])."""
     verify_key = load_verify_key()
     if verify_key is None:
         return (
@@ -76,11 +79,14 @@ async def _verify_offhost() -> tuple[bool, int, list[tuple[str, list[str]]]]:
         async with sessionmaker() as session:
             org_ids = (await session.execute(select(Organization.id))).scalars().all()
             for org_id in org_ids:
+                walk = await verify_chain(session, org_id, verify_key=verify_key)
                 res = await verify_offhost_checkpoint(session, org_id, verify_key=verify_key)
                 read += res.sinks_read
-                ok = ok and res.verified
-                if res.reasons:
-                    org_reasons.append((str(org_id), res.reasons))
+                ok = ok and res.verified and walk.verified
+                reasons = list(res.reasons)
+                reasons.extend(f"chain break at id={b.at_id}: {b.reason}" for b in walk.breaks)
+                if reasons:
+                    org_reasons.append((str(org_id), reasons))
         return ok, read, org_reasons
     finally:
         await engine.dispose()
