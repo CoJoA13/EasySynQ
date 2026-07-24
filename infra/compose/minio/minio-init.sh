@@ -54,4 +54,25 @@ EOF
 mc admin policy create local audit-sink-writeonly /tmp/audit-sink-writeonly.json || true
 mc admin policy attach local audit-sink-writeonly --user "$AUDIT_SINK_KEY" || true
 
+# Batch 7 (doc 12 §4.4): a SEPARATE READ-only credential for the INDEPENDENT off-host checkpoint
+# read-back verifier — distinct from the write-only sink cred above (which has NO GetObject), so the
+# verifier is a custody-separated witness rather than the write path re-reading itself.
+AUDIT_SINK_READ_KEY="${AUDIT_SINK_READ_ACCESS_KEY:-audit-sink-read}"
+AUDIT_SINK_READ_SECRET="${AUDIT_SINK_READ_SECRET_KEY:-audit-sink-read-secret-change-me}"
+mc admin user add local "$AUDIT_SINK_READ_KEY" "$AUDIT_SINK_READ_SECRET" || true
+cat > /tmp/audit-sink-readonly.json <<'EOF'
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": ["s3:GetObject", "s3:GetBucketLocation", "s3:ListBucket"],
+      "Resource": ["arn:aws:s3:::audit-checkpoints", "arn:aws:s3:::audit-checkpoints/*"]
+    }
+  ]
+}
+EOF
+mc admin policy create local audit-sink-readonly /tmp/audit-sink-readonly.json || true
+mc admin policy attach local audit-sink-readonly --user "$AUDIT_SINK_READ_KEY" || true
+
 echo "minio-init: buckets ready (documents, records [WORM/${RETENTION}], renditions, staging, restore-scratch, import-staging, audit-checkpoints)"

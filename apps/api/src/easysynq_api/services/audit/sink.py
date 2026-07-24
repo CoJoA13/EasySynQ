@@ -10,6 +10,7 @@ so an org cannot be left ``enabled`` with no real off-host mirror.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from ...config import get_settings
@@ -17,6 +18,11 @@ from ...config import get_settings
 
 class SinkPushError(Exception):
     """A configured sink kind is not implemented, or its push failed."""
+
+
+class SinkReadError(Exception):
+    """The independent off-host read failed (kind unimplemented, or an access/transport error). The
+    verifier must ALARM on this rather than silently treat the off-host anchor as attested."""
 
 
 def _audit_sink_client() -> Any:
@@ -30,6 +36,22 @@ def _audit_sink_client() -> Any:
         endpoint_url=s.s3_endpoint,
         aws_access_key_id=s.audit_sink_access_key or s.s3_access_key,
         aws_secret_access_key=s.audit_sink_secret_key or s.s3_secret_key,
+        region_name=s.s3_region,
+    )
+
+
+def _audit_sink_read_client() -> Any:
+    import boto3
+
+    s = get_settings()
+    # SEPARATE read-only credentials (doc 12 §4.4): the independent off-host read-back must NOT use
+    # the write-only sink creds (minio-init grants no GetObject) — a distinct read principal is
+    # the custody-separated witness. Empty → the vault creds (dev only, NOT honest separation).
+    return boto3.client(
+        "s3",
+        endpoint_url=s.s3_endpoint,
+        aws_access_key_id=s.audit_sink_read_access_key or s.s3_access_key,
+        aws_secret_access_key=s.audit_sink_read_secret_key or s.s3_secret_key,
         region_name=s.s3_region,
     )
 
@@ -51,3 +73,34 @@ def push_checkpoint(kind: str, connection: dict[str, Any] | None, key: str, body
     if pusher is None:
         raise SinkPushError(f"checkpoint sink kind '{kind}' is not implemented in v1")
     pusher(connection or {}, key, body)
+
+
+def fetch_latest_offhost_checkpoint(
+    kind: str, connection: dict[str, Any] | None, org_id: Any
+) -> dict[str, Any] | None:
+    """Read the NEWEST signed checkpoint object BACK from the off-host sink (doc 12 §4.4), using the
+    SEPARATE read credentials — a genuine independent witness, not the write path re-read. Returns
+    the parsed ``{"checkpoint": {...}, "signature": "<b64>"}`` body, or ``None`` when the sink holds
+    no checkpoint for the org. Raises :class:`SinkReadError` for an unimplemented kind — a
+    verifier fails closed rather than silently treating a non-read-back sink as attested.
+
+    The newest object is chosen by the ``latest_id`` in the write-once key name
+    (``checkpoints/{org_id}/{latest_id}-{ts}.json``), then its body is read."""
+    if kind != "worm_bucket":
+        raise SinkReadError(f"off-host read-back is not implemented for sink kind '{kind}'")
+    bucket = (connection or {}).get("bucket") or get_settings().s3_bucket_audit_checkpoints
+    client = _audit_sink_read_client()
+    prefix = f"checkpoints/{org_id}/"
+    best_key: str | None = None
+    best_id = -1
+    for page in client.get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=prefix):
+        for obj in page.get("Contents", []):
+            name = str(obj["Key"]).rsplit("/", 1)[-1]
+            head = name.split("-", 1)[0]
+            if head.isdigit() and int(head) > best_id:
+                best_id, best_key = int(head), obj["Key"]
+    if best_key is None:
+        return None
+    body = client.get_object(Bucket=bucket, Key=best_key)["Body"].read()
+    parsed = json.loads(body)
+    return parsed if isinstance(parsed, dict) else None

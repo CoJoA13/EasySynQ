@@ -223,20 +223,32 @@ def _restored_org_id(owner_dsn: str, scratch_db: str) -> uuid.UUID | None:
 
 def _reverify_chain(owner_dsn: str, scratch_db: str, version: int) -> dict[str, Any]:
     """Re-walk the restored audit chain with the frozen ``verify_chain`` (over an owner session on
-    the scratch DB), per org. Pending (unlinked) tail is reported, not a break. Returns a summary.
-    """
+    the scratch DB), per org. Pending (unlinked) tail is reported, not a break.
+
+    Beyond the walk (self-consistent by construction), this ATTESTS the restored checkpoint against
+    the trusted public key (doc 12 §4.4): ``verify_key`` makes ``verify_chain`` verify its signature
+    + ``latest_row_hash`` against the restored chain — so a backup of a DB-owner-rewritten chain
+    (self-consistent, but the bundled checkpoint isn't re-signable) FAILs the drill, not just the
+    ``checkpoint_verdict`` latest_id not-ahead check.
+
+    It does NOT run the LIVE off-host read-back here: the bundled checkpoint is ≤ the restored head,
+    but the live off-host head runs AHEAD of an older backup, so it would false-FAIL every normal
+    restore (that ackable case is already the ``checkpoint_verdict`` FLAG; the off-host read-back is
+    the LIVE beat/CLI verifier)."""
     import asyncio
 
     from sqlalchemy import text
     from sqlalchemy.engine import make_url
     from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+    from ..audit.checkpoint import load_verify_key
     from ..audit.verify import verify_chain
 
     async def _run() -> dict[str, Any]:
         url = make_url(owner_dsn).set(database=scratch_db)
         engine = create_async_engine(url)
         sm = async_sessionmaker(engine, expire_on_commit=False)
+        verify_key = load_verify_key()
         try:
             async with sm() as session:
                 org_ids = (
@@ -246,7 +258,9 @@ def _reverify_chain(owner_dsn: str, scratch_db: str, version: int) -> dict[str, 
                 checked = pending = 0
                 breaks: list[dict[str, Any]] = []
                 for (org_id,) in org_ids:
-                    result = await verify_chain(session, org_id, version=version)
+                    result = await verify_chain(
+                        session, org_id, version=version, verify_key=verify_key
+                    )
                     verified = verified and result.verified
                     checked += result.checked
                     pending += result.pending

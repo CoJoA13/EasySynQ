@@ -17,11 +17,14 @@ from __future__ import annotations
 import dataclasses
 import uuid
 
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ...db.models.audit_checkpoint import AuditCheckpoint
 from ...db.models.audit_event import AuditEvent
 from .canonical import GENESIS_HASH, audit_row_from_orm, compute_row_hash
+from .checkpoint import verify_checkpoint_signature
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -31,11 +34,27 @@ class ChainBreak:
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
+class CheckpointStatus:
+    """The signed-checkpoint attestation outcome for a full-chain verify (doc 12 §4.4). ``present``
+    is False when nothing is anchored yet (not a tamper — the off-host read catches a wholesale
+    deletion). When present, ``signature_ok`` (Ed25519 over the payload) and ``hash_match`` (signed
+    ``latest_row_hash`` == the chain's stored hash at ``latest_id``) must both hold; either being
+    False is a tamper the self-consistent chain walk alone cannot see."""
+
+    present: bool
+    signature_ok: bool | None
+    hash_match: bool | None
+    latest_id: int | None
+    reason: str | None
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
 class VerifyResult:
     verified: bool
     checked: int
     pending: int
     breaks: list[ChainBreak]
+    checkpoint: CheckpointStatus | None = None
 
 
 async def verify_chain(
@@ -45,13 +64,20 @@ async def verify_chain(
     from_id: int | None = None,
     to_id: int | None = None,
     version: int = 1,
+    verify_key: Ed25519PublicKey | None = None,
 ) -> VerifyResult:
     """Verify ``org_id``'s linked chain (optionally bounded to ``[from_id, to_id]``). Reports every
     broken link found, the first being the root cause (a mutated/deleted/reordered row).
 
     ``version`` selects the canonical_serialize spec version to recompute against; the S11 restore
     re-verify reads it from the RESTORED ``system_config.canonical_serialize_version`` rather than
-    hardcoding 1, so a future v2 chain verifies under its own spec (R12/D-4)."""
+    hardcoding 1, so a future v2 chain verifies under its own spec (R12/D-4).
+
+    ``verify_key`` enables the signed-checkpoint attestation (doc 12 §4.4) on a FULL walk: the walk
+    alone is self-consistent, so a privileged DB owner who rewrites the payloads AND recomputes the
+    hashes passes clean — only the Ed25519 signature (which the attacker cannot forge) on the latest
+    checkpoint exposes the rewrite. When a key is supplied (``load_verify_key``) and the walk is
+    unbounded, a bad signature or a checkpoint↔chain hash mismatch is appended as a break."""
     stmt = (
         select(AuditEvent)
         .where(AuditEvent.org_id == org_id, AuditEvent.chained_at.is_not(None))
@@ -97,6 +123,14 @@ async def verify_chain(
             )
         prev = stored
 
+    # Signed-checkpoint attestation (doc 12 §4.4) — only on a full walk (a bounded window has no
+    # meaningful global-checkpoint compare). A bad signature or a checkpoint↔chain hash mismatch is
+    # a break the self-consistent walk above cannot surface.
+    checkpoint_status: CheckpointStatus | None = None
+    if verify_key is not None and from_id is None and to_id is None:
+        checkpoint_status, cp_breaks = await _check_checkpoint(session, org_id, verify_key)
+        breaks.extend(cp_breaks)
+
     pending = (
         await session.execute(
             select(func.count())
@@ -105,4 +139,72 @@ async def verify_chain(
         )
     ).scalar_one()
 
-    return VerifyResult(verified=not breaks, checked=len(rows), pending=int(pending), breaks=breaks)
+    return VerifyResult(
+        verified=not breaks,
+        checked=len(rows),
+        pending=int(pending),
+        breaks=breaks,
+        checkpoint=checkpoint_status,
+    )
+
+
+async def _check_checkpoint(
+    session: AsyncSession, org_id: uuid.UUID, verify_key: Ed25519PublicKey
+) -> tuple[CheckpointStatus, list[ChainBreak]]:
+    """Attest the newest signed ``audit_checkpoint`` against ``verify_key`` + the live chain.
+    Returns the status plus any breaks (empty when it attests)."""
+    cp = (
+        (
+            await session.execute(
+                select(AuditCheckpoint)
+                .where(AuditCheckpoint.org_id == org_id)
+                .order_by(AuditCheckpoint.latest_id.desc())
+                .limit(1)
+            )
+        )
+        .scalars()
+        .first()
+    )
+    if cp is None:
+        # Nothing anchored yet — NOT a tamper (a wholesale in-DB checkpoint deletion is caught by
+        # the INDEPENDENT off-host read-back, which the DB owner cannot reach). R13 soft-gate warns.
+        return (
+            CheckpointStatus(False, None, None, None, "no checkpoint anchored yet"),
+            [],
+        )
+    sig_ok = verify_checkpoint_signature(
+        verify_key,
+        org_id=cp.org_id,
+        latest_id=cp.latest_id,
+        latest_row_hash=bytes(cp.latest_row_hash),
+        timestamp=cp.timestamp,
+        signature=None if cp.app_signature is None else bytes(cp.app_signature),
+    )
+    if not sig_ok:
+        reason = "checkpoint signature invalid (forged/rewritten checkpoint)"
+        return (
+            CheckpointStatus(True, False, None, cp.latest_id, reason),
+            [ChainBreak(at_id=cp.latest_id, reason=reason)],
+        )
+    stored = (
+        await session.execute(
+            select(AuditEvent.row_hash).where(
+                AuditEvent.org_id == org_id,
+                AuditEvent.id == cp.latest_id,
+                AuditEvent.chained_at.is_not(None),
+            )
+        )
+    ).scalar_one_or_none()
+    if stored is None:
+        reason = "checkpoint references a missing/unchained row (deletion)"
+        return (
+            CheckpointStatus(True, True, False, cp.latest_id, reason),
+            [ChainBreak(at_id=cp.latest_id, reason=reason)],
+        )
+    if bytes(stored) != bytes(cp.latest_row_hash):
+        reason = "checkpoint latest_row_hash mismatch (chain rewritten since last authentic anchor)"
+        return (
+            CheckpointStatus(True, True, False, cp.latest_id, reason),
+            [ChainBreak(at_id=cp.latest_id, reason=reason)],
+        )
+    return CheckpointStatus(True, True, True, cp.latest_id, None), []

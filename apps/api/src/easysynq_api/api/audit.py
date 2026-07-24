@@ -26,7 +26,7 @@ from ..db.models.audit_event import AuditEvent
 from ..db.models.documented_information import DocumentedInformation
 from ..db.session import get_session
 from ..problems import ProblemException
-from ..services.audit.checkpoint import tamper_evidence_attested
+from ..services.audit.checkpoint import load_verify_key, tamper_evidence_attested
 from ..services.audit.verify import verify_chain
 from ..services.authz import require
 
@@ -122,13 +122,29 @@ async def verify_chain_endpoint(
     to_id: int | None = Query(None, alias="to"),
 ) -> dict[str, Any]:
     """On-demand hash-chain verification (tamper-evidence). The nightly Beat job runs this too.
-    Scoped to the caller's org (the chain is per-org — doc 12 §4.3)."""
-    result = await verify_chain(session, caller.org_id, from_id=from_id, to_id=to_id)
+    Scoped to the caller's org (the chain is per-org — doc 12 §4.3). On a FULL walk (no from/to) the
+    signed-checkpoint attestation runs when the verify (public) key is available to this process —
+    else it degrades to a walk only (``checkpoint`` null); the nightly Beat job is authoritative."""
+    result = await verify_chain(
+        session, caller.org_id, from_id=from_id, to_id=to_id, verify_key=load_verify_key()
+    )
+    cp = result.checkpoint
     return {
         "verified": result.verified,
         "checked": result.checked,
         "pending": result.pending,
         "breaks": [{"at_id": b.at_id, "reason": b.reason} for b in result.breaks],
+        "checkpoint": (
+            None
+            if cp is None
+            else {
+                "present": cp.present,
+                "signature_ok": cp.signature_ok,
+                "hash_match": cp.hash_match,
+                "latest_id": cp.latest_id,
+                "reason": cp.reason,
+            }
+        ),
     }
 
 

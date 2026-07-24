@@ -461,3 +461,103 @@ async def test_ac6b_linker_drains_multiple_windows_in_one_tick(
     # itself — the leading drain loop + the drain-to-fixed-point above leave nothing pending. Keep
     # that leading settle if editing, else this turns flaky under the shared-DB backlog.
     assert pending == 0, "gap-free backlog not fully drained"
+
+
+async def test_checkpoint_signature_catches_consistent_chain_rewrite(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    subj: SimpleNamespace,
+    dsns: dict[str, str],
+) -> None:
+    """Batch 7 (doc 12 §4.4) — the headline detection control. A privileged DB OWNER who rewrites an
+    audit row AND recomputes its row_hash yields a SELF-CONSISTENT chain the walk passes clean; only
+    the Ed25519 signature on the checkpoint (which the owner cannot forge over the rewritten
+    latest_row_hash) exposes it. Mutation-distinguishing: verify_chain WITHOUT the verify key passes
+    the rewrite; WITH the key it breaks on the checkpoint↔chain hash mismatch."""
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    from sqlalchemy import delete
+
+    from easysynq_api.services.audit.canonical import (
+        GENESIS_HASH,
+        audit_row_from_orm,
+        compute_row_hash,
+    )
+    from easysynq_api.services.audit.checkpoint import anchor_checkpoint
+    from easysynq_api.services.audit.verify import verify_chain
+
+    await _drive_to_effective(app_client, token_factory, subj)
+    await _grant_audit_read(subj.a)
+    await _link_as_linker(dsns)
+    org_id = await s5.default_org_id()
+
+    owner_engine = create_async_engine(dsns["owner"])
+    orig_reason: str | None = None
+    orig_hash = b""
+    head_id = 0
+    try:
+        # Clean slate: as OWNER, drop any checkpoint another test left (it would be signed by a
+        # DIFFERENT key and fail against my verify key), so mine is the sole/newest one.
+        async with async_sessionmaker(owner_engine, expire_on_commit=False)() as s:
+            await s.execute(delete(AuditCheckpoint).where(AuditCheckpoint.org_id == org_id))
+            await s.commit()
+
+        key = Ed25519PrivateKey.generate()
+        async with get_sessionmaker()() as s:
+            cp = await anchor_checkpoint(s, org_id, signing_key=key, push=False)
+        assert cp is not None
+        head_id = cp.latest_id
+
+        # Baseline: the chain + its signed checkpoint attest clean.
+        async with get_sessionmaker()() as s:
+            good = await verify_chain(s, org_id, verify_key=key.public_key())
+        assert good.verified is True
+        assert good.checkpoint is not None
+        assert good.checkpoint.signature_ok is True and good.checkpoint.hash_match is True
+
+        # The OWNER rewrites the head row's payload AND recomputes its row_hash so the WALK stays
+        # self-consistent (the exact finding threat) — capture the originals to restore the chain.
+        async with async_sessionmaker(owner_engine, expire_on_commit=False)() as s:
+            row = (await s.execute(select(AuditEvent).where(AuditEvent.id == head_id))).scalar_one()
+            orig_reason, orig_hash = row.reason, bytes(row.row_hash)
+            row.reason = "OWNER-REWRITE"
+            row.row_hash = compute_row_hash(
+                audit_row_from_orm(row), row.prev_hash or GENESIS_HASH, version=1
+            )
+            await s.commit()
+
+        # The self-consistent walk is fooled (mutation-distinguishing) ...
+        async with get_sessionmaker()() as s:
+            walk_only = await verify_chain(s, org_id)
+        assert walk_only.verified is True, "the walk alone must NOT see a consistent rewrite"
+
+        # ... but the signed checkpoint's latest_row_hash no longer matches → caught.
+        async with get_sessionmaker()() as s:
+            caught = await verify_chain(s, org_id, verify_key=key.public_key())
+        assert caught.verified is False
+        assert caught.checkpoint is not None and caught.checkpoint.hash_match is False
+        assert any("latest_row_hash mismatch" in b.reason for b in caught.breaks)
+
+        # And a FORGED checkpoint (owner rewrites the checkpoint's own latest_row_hash to match the
+        # rewritten chain) fails the SIGNATURE — the owner cannot re-sign the new payload.
+        async with async_sessionmaker(owner_engine, expire_on_commit=False)() as s:
+            await s.execute(
+                text("UPDATE audit_checkpoint SET latest_row_hash = :h WHERE org_id = :o"),
+                {"h": row.row_hash, "o": org_id},
+            )
+            await s.commit()
+        async with get_sessionmaker()() as s:
+            forged = await verify_chain(s, org_id, verify_key=key.public_key())
+        assert forged.verified is False
+        assert forged.checkpoint is not None and forged.checkpoint.signature_ok is False
+    finally:
+        async with async_sessionmaker(owner_engine, expire_on_commit=False)() as s:
+            if orig_reason is not None:
+                restore = (
+                    await s.execute(select(AuditEvent).where(AuditEvent.id == head_id))
+                ).scalar_one_or_none()
+                if restore is not None:
+                    restore.reason = orig_reason
+                    restore.row_hash = orig_hash
+            await s.execute(delete(AuditCheckpoint).where(AuditCheckpoint.org_id == org_id))
+            await s.commit()
+        await owner_engine.dispose()
