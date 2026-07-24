@@ -254,6 +254,13 @@ async def test_sealed_pack_refuses_serving_after_member_destroyed(
         auth = await app_client.get(f"/api/v1/evidence-packs/{pack_uuid}/download", headers=h)
         assert auth.status_code == 409, auth.text
         assert auth.json()["code"] == "pack_evidence_destroyed"
+        # Minting a NEW share for the now-tainted pack is refused BEFORE it commits a dead token
+        # (else PACK_SHARED audits a link the serve gate would reject on first use).
+        mint = await app_client.post(
+            f"/api/v1/evidence-packs/{pack_uuid}/share", headers=h, json={"recipient": "auditor2"}
+        )
+        assert mint.status_code == 409, mint.text
+        assert mint.json()["code"] == "pack_evidence_destroyed"
     finally:
         await owner_delete_disposition_events([uuid.UUID(rid)] if rid else [])
         await _delivery_teardown(

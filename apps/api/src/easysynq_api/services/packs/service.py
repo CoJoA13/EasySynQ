@@ -302,7 +302,12 @@ def _subject_forbidden(kind: str, subject_id: uuid.UUID | None) -> ProblemExcept
 
 
 async def _authorize_pack_subjects(
-    session: AsyncSession, caller: AppUser, scope_kind: str, scope_ids: list[uuid.UUID]
+    session: AsyncSession,
+    caller: AppUser,
+    scope_kind: str,
+    scope_ids: list[uuid.UUID],
+    *,
+    source_ip: str | None = None,
 ) -> None:
     """Refuse (403) creating a FINDING/CAPA pack over a subject the caller cannot READ at its own
     scope. The build serializes the finding/CAPA SUBJECT dossier (its narrative + the CAPA stage
@@ -313,8 +318,10 @@ async def _authorize_pack_subjects(
     they cannot read. Mirrors each subject's own single-read surface (no new authority):
     ``finding.read`` at SYSTEM (GET /findings/{id}), ``capa.read`` at the CAPA's PROCESS scope
     (GET /capas/{id}). Refuse-ANY — the subject IS the whole pack, so one unreadable subject fails
-    (excluding it would leave an empty pack). CLAUSE/PROCESS packs carry no subject dossier."""
-    ctx = RequestContext(now=_now())
+    (excluding it would leave an empty pack). CLAUSE/PROCESS packs carry no subject dossier.
+    ``source_ip`` is threaded so an ``ip_allow`` read grant evaluates as the subject's own GET does
+    (the PDP rejects an ``ip_allow`` grant when ``source_ip`` is None)."""
+    ctx = RequestContext(now=_now(), source_ip=source_ip)
     if scope_kind == "FINDING":
         grants = await gather_grants(session, caller.id, caller.org_id, "finding.read")
         # finding.read is SYSTEM-enforced (GET /findings/{id}) → one check gates every subject.
@@ -387,6 +394,7 @@ async def create_pack_with_preview(
     scope_selector: dict[str, Any],
     period_start: datetime.date | None = None,
     period_end: datetime.date | None = None,
+    source_ip: str | None = None,
 ) -> EvidencePack:
     """Create a pack (DRAFT) and compute its preview synchronously: resolve + classify candidates,
     persist the membership + gap/exclusion summaries. One commit."""
@@ -406,7 +414,7 @@ async def create_pack_with_preview(
     scope_ids = await _validate_scope(session, caller.org_id, kind.value, scope_selector)
     # R28: a FINDING/CAPA pack must not bundle a subject the caller cannot read (the subject dossier
     # is built worker-side with no caller, so the read gate lives here at create).
-    await _authorize_pack_subjects(session, caller, kind.value, scope_ids)
+    await _authorize_pack_subjects(session, caller, kind.value, scope_ids, source_ip=source_ip)
 
     pack = EvidencePack(
         org_id=caller.org_id,
@@ -443,7 +451,9 @@ async def create_pack_with_preview(
     return pack
 
 
-async def generate_pack(session: AsyncSession, caller: AppUser, pack_id: uuid.UUID) -> EvidencePack:
+async def generate_pack(
+    session: AsyncSession, caller: AppUser, pack_id: uuid.UUID, *, source_ip: str | None = None
+) -> EvidencePack:
     """Flip a DRAFT/FAILED pack → BUILDING and enqueue the worker build (after commit). Idempotent
     re-trigger from FAILED; a SEALED pack is terminal (409); a BUILDING pack is already in flight
     (409) — the reaper recovers a stalled build."""
@@ -454,6 +464,16 @@ async def generate_pack(session: AsyncSession, caller: AppUser, pack_id: uuid.UU
         raise ProblemException(status=409, code="conflict", title="Pack is already sealed")
     if pack.status is PackStatus.BUILDING:
         raise ProblemException(status=409, code="conflict", title="Pack build already in progress")
+    # Re-authorize the FINDING/CAPA subject at generate (request-aware): the create-time gate is
+    # stale if the generator's finding.read/capa.read was revoked before this seal — including a
+    # retry from FAILED long after create. Mirrors the evidence's seal-time re-check; closes the
+    # create→seal read-authz TOCTOU (the worker build itself has no caller to re-check).
+    scope_ids = await _validate_scope(
+        session, pack.org_id, pack.scope_kind.value, pack.scope_selector
+    )
+    await _authorize_pack_subjects(
+        session, caller, pack.scope_kind.value, scope_ids, source_ip=source_ip
+    )
     pack.status = PackStatus.BUILDING
     pack.build_started_at = _now()
     pack.error = None
@@ -560,6 +580,16 @@ async def create_share_link(
     if pack.status is not PackStatus.SEALED:
         raise ProblemException(
             status=409, code="conflict", title="Pack must be sealed before sharing"
+        )
+    if await repo.pack_has_destroyed_member(session, pack.id):
+        # A record INCLUDED in this pack was destroyed after sealing — refuse BEFORE minting so we
+        # don't emit a misleading PACK_SHARED audit + a dead token the serve gate rejects on its
+        # first use (the resolver's fail-closed UNAVAILABLE check).
+        raise ProblemException(
+            status=409,
+            code="pack_evidence_destroyed",
+            title="Pack contains evidence destroyed after sealing",
+            detail="A record in this pack was destroyed (disposition); it can no longer be shared.",
         )
 
     now = _now()

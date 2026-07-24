@@ -15,7 +15,7 @@ import datetime
 import uuid
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Request, status
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -150,6 +150,7 @@ async def _load(session: AsyncSession, caller: AppUser, pack_id: uuid.UUID) -> E
 @router.post("/evidence-packs", status_code=status.HTTP_201_CREATED)
 async def create_pack_endpoint(
     body: PackCreate,
+    request: Request,
     caller: AppUser = Depends(_generate),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
@@ -163,6 +164,7 @@ async def create_pack_endpoint(
         scope_selector=body.scope_selector(),
         period_start=body.period_start,
         period_end=body.period_end,
+        source_ip=request.client.host if request.client else None,
     )
     items = await packs_repo.list_pack_items(session, pack.id)
     return {**_pack(pack), "items": [_pack_item(i) for i in items]}
@@ -194,12 +196,16 @@ async def get_pack_endpoint(
 @router.post("/evidence-packs/{pack_id}/generate", status_code=status.HTTP_202_ACCEPTED)
 async def generate_pack_endpoint(
     pack_id: uuid.UUID,
+    request: Request,
     caller: AppUser = Depends(_generate),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
     """Enqueue the immutable build/seal (DRAFT/FAILED → BUILDING). Poll ``GET /evidence-packs/{id}``
-    for SEALED. 409 if already sealed or a build is in progress."""
-    pack = await generate_pack(session, caller, pack_id)
+    for SEALED. 409 if already sealed or a build is in progress; 403 if the generator can no longer
+    read a FINDING/CAPA subject (re-checked here so a revoked grant can't seal it)."""
+    pack = await generate_pack(
+        session, caller, pack_id, source_ip=request.client.host if request.client else None
+    )
     return _pack(pack)
 
 

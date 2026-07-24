@@ -235,6 +235,50 @@ async def test_finding_capa_pack_create_requires_subject_read(
     await _teardown([], uuid.UUID(op.json()["id"]))
 
 
+async def test_generate_pack_rechecks_subject_read(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """Batch 6 (finding-2 hardening, IijIP): the FINDING/CAPA subject read is re-authorized at
+    GENERATE (request-aware), not just at create — so a generator who cannot read the subject can't
+    seal the pack (a revoked grant, or a different generator, between create and seal). The worker
+    build has no caller, so the last request-time gate is generate. Mutation-verify: without the
+    generate re-check the seal is enqueued (202)."""
+    owner = _subject("regen-owner")
+    await _grant(owner, (*_AUDIT_KEYS, "finding.create", "finding.read", "capa.read", *_PACK_KEYS))
+    ho = _auth(token_factory, owner)
+    audit_id = await _new_audit(app_client, ho)
+    await _walk(app_client, ho, audit_id, "plan", "conduct")
+    finding_id = (
+        await app_client.post(
+            f"/api/v1/audits/{audit_id}/findings",
+            headers=ho,
+            json={"finding_type": "NC", "severity": "Major", "clause_ref": "8.4"},
+        )
+    ).json()["id"]
+    pack_uuid: uuid.UUID | None = None
+    try:
+        created = await app_client.post(
+            "/api/v1/evidence-packs",
+            headers=ho,
+            json={"title": "F", "scope_kind": "FINDING", "finding_ids": [finding_id]},
+        )
+        assert created.status_code == 201, created.text
+        pack_uuid = uuid.UUID(created.json()["id"])
+        # A generator holding report.evidence_pack.generate but NOT finding.read cannot seal it.
+        gen_only = _subject("regen-genonly")
+        await _grant(gen_only, ("report.evidence_pack.generate",))
+        hg = _auth(token_factory, gen_only)
+        gen = await app_client.post(f"/api/v1/evidence-packs/{pack_uuid}/generate", headers=hg)
+        assert gen.status_code == 403, gen.text
+        # The ALLOW direction is NOT asserted through the endpoint here: a 202 fires the real
+        # build_evidence_pack.delay(), which the integration env has no Celery result backend for
+        # (the other seals drive build() directly via _seal). It's covered transitively — the shared
+        # _authorize_pack_subjects allow is proven by the create-time owner→201 test, and this
+        # generate-time wiring reaching it is proven by the 403 above.
+    finally:
+        await _teardown([], pack_uuid)
+
+
 async def test_capa_scope_pack_proves_closed_effectively(
     app_client: AsyncClient, token_factory: Callable[..., str]
 ) -> None:
