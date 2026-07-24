@@ -26,6 +26,7 @@ import hmac
 import uuid
 from typing import Any, Literal
 
+from fastapi import Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -42,7 +43,7 @@ from ...db.models.record import Record
 from ...domain.authz import RequestContext, ResourceContext, authorize
 from ...logging import request_id_var
 from ...problems import ProblemException
-from ..authz import gather_grants
+from ..authz import AuthzAuditSink, enforce, gather_grants
 from ..records import repository as records_repo
 from ..reports.checklist import compute_checklist
 from ..vault import repository as vault_repo
@@ -288,6 +289,87 @@ async def _validate_scope(
     return ids
 
 
+async def _authorize_pack_subjects(
+    session: AsyncSession,
+    authz_sink: AuthzAuditSink,
+    request: Request,
+    caller: AppUser,
+    scope_kind: str,
+    scope_ids: list[uuid.UUID],
+) -> None:
+    """Refuse (403) creating a FINDING/CAPA pack over a subject the caller cannot READ at its own
+    scope. The build serializes the finding/CAPA SUBJECT dossier (its narrative + the CAPA stage
+    trail + e-signatures) — that IS the deliverable — but the build is worker-async with no request
+    caller, so the read gate lives HERE, at create. ``classify_candidates`` R28-filters the evidence
+    CANDIDATES, but the subject is excluded from that set, so without this gate a holder of
+    ``report.evidence_pack.generate`` (independent of finding/capa read) could bundle a finding/CAPA
+    they cannot read. Mirrors each subject's own single-read surface (no new authority):
+    ``finding.read`` at SYSTEM (GET /findings/{id}), ``capa.read`` at the CAPA's PROCESS scope
+    (GET /capas/{id}). The finding↔CAPA pair is gated in BOTH directions — a CAPA pack also needs
+    ``finding.read`` for its ORIGIN finding, a FINDING pack ``capa.read`` for its LINKED auto-CAPA —
+    since each dossier embeds the other's metadata. Refuse-ANY — the subject IS the whole pack, so
+    one unreadable subject fails (excluding it leaves an empty pack). CLAUSE/PROCESS packs carry no
+    subject dossier. A finding dossier also embeds its SOURCE AUDIT's identifier — now gated via
+    ``audit.read`` (SYSTEM, GET /audits/{id}) — completing the immediate-neighbour read-gate. The
+    correction-chain *identifiers* stay a deferred owner transitive-read-closure decision (bare
+    references, already serve-guarded on destroy) — see the PR.
+
+    Routed through the ``enforce`` PEP (not a bare ``authorize``) so the subject-read decision —
+    ALLOW **and** DENY — lands in the ``AuthzAuditSink`` durable authz trail (the PEP's audit
+    invariant; a denied attempt must not be invisible), and the request source IP is threaded so an
+    ``ip_allow`` read grant evaluates exactly as the subject's own GET does."""
+    if scope_kind == "FINDING":
+        # finding.read is SYSTEM-enforced (GET /findings/{id}) → one check gates every subject.
+        if scope_ids:
+            await enforce(
+                session, authz_sink, request, caller, "finding.read", ResourceContext.system()
+            )
+        for fid in scope_ids:
+            finding = await repo.get_finding(session, fid)
+            if finding is None:  # pragma: no cover - already 404'd by _validate_scope
+                continue
+            # The finding dossier embeds its SOURCE AUDIT's id + identifier; GET /audits/{id} gates
+            # that behind audit.read (SYSTEM), so bundling the finding also requires reading its
+            # source audit — else a finding.read-only holder harvests the audit identifier.
+            await enforce(
+                session, authz_sink, request, caller, "audit.read", ResourceContext.system()
+            )
+            if finding.auto_capa_id is None:
+                continue
+            capa = await repo.get_capa(session, finding.auto_capa_id)
+            if capa is None:  # pragma: no cover - the bidirectional link is created in one txn
+                continue
+            resource = (
+                ResourceContext(process_ids=frozenset({str(capa.process_id)}))
+                if capa.process_id is not None
+                else ResourceContext.system()
+            )
+            # The finding dossier embeds the linked auto-CAPA's identifier + close_state
+            # (dossier._finding_subject) — data GET /findings/{id} does NOT expose — so this finding
+            # also requires reading its paired CAPA (the symmetric partner of the CAPA pack's
+            # origin-finding gate); else a finding.read-only holder harvests the CAPA data.
+            await enforce(session, authz_sink, request, caller, "capa.read", resource)
+    elif scope_kind == "CAPA":
+        for cid in scope_ids:
+            capa = await repo.get_capa(session, cid)
+            if capa is None:  # pragma: no cover - _validate_scope already 404'd a missing subject
+                continue
+            resource = (
+                ResourceContext(process_ids=frozenset({str(capa.process_id)}))
+                if capa.process_id is not None
+                else ResourceContext.system()
+            )
+            await enforce(session, authz_sink, request, caller, "capa.read", resource)
+            if capa.origin_finding_id is not None:
+                # The CAPA dossier embeds the origin finding's type/severity/summary/identifier
+                # (dossier._capa_subject) — content GET /capas/{id} does NOT expose — so bundling
+                # this CAPA also requires reading that finding (finding.read is SYSTEM-enforced,
+                # GET /findings/{id}); else a capa.read-only holder harvests the finding data.
+                await enforce(
+                    session, authz_sink, request, caller, "finding.read", ResourceContext.system()
+                )
+
+
 def _build_items(
     org_id: uuid.UUID,
     pack_id: uuid.UUID,
@@ -333,6 +415,8 @@ def _build_items(
 
 async def create_pack_with_preview(
     session: AsyncSession,
+    authz_sink: AuthzAuditSink,
+    request: Request,
     caller: AppUser,
     *,
     title: str,
@@ -357,6 +441,9 @@ async def create_pack_with_preview(
     if framework is None:
         raise ProblemException(status=422, code="validation_error", title="No framework configured")
     scope_ids = await _validate_scope(session, caller.org_id, kind.value, scope_selector)
+    # R28: a FINDING/CAPA pack must not bundle a subject the caller cannot read (the subject dossier
+    # is built worker-side with no caller, so the read gate lives here at create).
+    await _authorize_pack_subjects(session, authz_sink, request, caller, kind.value, scope_ids)
 
     pack = EvidencePack(
         org_id=caller.org_id,
@@ -393,7 +480,13 @@ async def create_pack_with_preview(
     return pack
 
 
-async def generate_pack(session: AsyncSession, caller: AppUser, pack_id: uuid.UUID) -> EvidencePack:
+async def generate_pack(
+    session: AsyncSession,
+    authz_sink: AuthzAuditSink,
+    request: Request,
+    caller: AppUser,
+    pack_id: uuid.UUID,
+) -> EvidencePack:
     """Flip a DRAFT/FAILED pack → BUILDING and enqueue the worker build (after commit). Idempotent
     re-trigger from FAILED; a SEALED pack is terminal (409); a BUILDING pack is already in flight
     (409) — the reaper recovers a stalled build."""
@@ -404,6 +497,16 @@ async def generate_pack(session: AsyncSession, caller: AppUser, pack_id: uuid.UU
         raise ProblemException(status=409, code="conflict", title="Pack is already sealed")
     if pack.status is PackStatus.BUILDING:
         raise ProblemException(status=409, code="conflict", title="Pack build already in progress")
+    # Re-authorize the FINDING/CAPA subject at generate (request-aware): the create-time gate is
+    # stale if the generator's finding.read/capa.read was revoked before this seal — including a
+    # retry from FAILED long after create. Mirrors the evidence's seal-time re-check; closes the
+    # create→seal read-authz TOCTOU (the worker build itself has no caller to re-check).
+    scope_ids = await _validate_scope(
+        session, pack.org_id, pack.scope_kind.value, pack.scope_selector
+    )
+    await _authorize_pack_subjects(
+        session, authz_sink, request, caller, pack.scope_kind.value, scope_ids
+    )
     pack.status = PackStatus.BUILDING
     pack.build_started_at = _now()
     pack.error = None
@@ -510,6 +613,16 @@ async def create_share_link(
     if pack.status is not PackStatus.SEALED:
         raise ProblemException(
             status=409, code="conflict", title="Pack must be sealed before sharing"
+        )
+    if await repo.pack_has_destroyed_member(session, pack):
+        # A record INCLUDED in this pack (or its FINDING/CAPA subject) was destroyed after sealing —
+        # refuse BEFORE minting so we don't emit a misleading PACK_SHARED audit + a dead token the
+        # serve gate rejects on its first use (the resolver's fail-closed UNAVAILABLE check).
+        raise ProblemException(
+            status=409,
+            code="pack_evidence_destroyed",
+            title="Pack contains evidence destroyed after sealing",
+            detail="A record in this pack was destroyed (disposition); it can no longer be shared.",
         )
 
     now = _now()
@@ -618,6 +731,13 @@ async def resolve_share_token(
         return ShareResolution("EXPIRED", link=link)
     pack = await repo.get_pack(session, link.pack_id)
     if pack is None or pack.status is not PackStatus.SEALED or pack.zip_blob_sha256 is None:
+        return ShareResolution("UNAVAILABLE", link=link)
+    if await repo.pack_has_destroyed_member(session, pack):
+        # Fail-closed AFTER the seal: a record INCLUDED in this pack (or its FINDING/CAPA subject)
+        # was physically destroyed (DESTROY / R27 WORM-destroy), so the cached ZIP / portfolio must
+        # not keep serving erased evidence / dossier narrative via this public link. Physically
+        # purging the derived artifacts on disposition is a heavier R27 policy decision tracked as a
+        # fast-follow — this closes the reachability now.
         return ShareResolution("UNAVAILABLE", link=link)
     return ShareResolution("OK", link=link, pack=pack)
 

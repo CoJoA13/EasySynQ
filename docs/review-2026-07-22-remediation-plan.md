@@ -25,7 +25,7 @@
 | 3 | System-tier authz guards (last-admin / revoke-side) | 1 | 2 | ☑ in PR | [#356](https://github.com/CoJoA13/EasySynQ/pull/356) |
 | 4 | WORM erasure completeness | 1 | 2 | ☑ in PR | [#357](https://github.com/CoJoA13/EasySynQ/pull/357) |
 | 5 | Disposition txn / locking integrity | 1 | 2 | ☑ in PR | [#358](https://github.com/CoJoA13/EasySynQ/pull/358) |
-| 6 | Read-authorization on returned bodies | 1 | 3 | ☐ not started | — |
+| 6 | Read-authorization on returned bodies | 1 | 3 | ☑ in PR | [#362](https://github.com/CoJoA13/EasySynQ/pull/362) |
 | 7 | Audit signed-checkpoint verification | 1 | 1 | ☐ not started | — |
 | 8 | Document lifecycle FSM gates | 2 | 2 | ☐ not started | — |
 | 9 | Workflow approval correctness | 2 | 3 | ☐ not started | — |
@@ -83,14 +83,14 @@ Sibling of merged #346: a write/dispose gate that builds a partial `ResourceCont
 - [x] `services/records/disposition.py:92` — two concurrent dispositions of records sharing one blob each see the peer live → shared bytes never purged; lock `blob.sha256` before the liveness check `[C]`
 - [x] `services/records/disposition.py:94` — purge deletes S3 bytes before the single end-of-run commit → a failed commit orphans bytes for the whole run; purge-LAST (commit tombstone + blob-row-delete + a `pending_blob_purge` marker FIRST, then purge idempotently) + a reaper (marker table = migration **0073**; owner chose the faithful marker+reaper over the leaner no-migration variant) `[C]`
 
-### ☐ Batch 6 — Read-authorization on returned bodies
+### ☑ Batch 6 — Read-authorization on returned bodies — [#362](https://github.com/CoJoA13/EasySynQ/pull/362)
 `branch: fix/major-read-auth-returned-bodies` · backend + integration
 
 A create-gated (or token-gated) endpoint returns a resource body the caller cannot actually read.
 
-- [ ] `api/capa.py:614` — spawn-capa idempotent replay returns another process's CAPA header to a caller gated only on a caller-chosen `capa.create` scope; re-authorize the returned CAPA with `capa.read` at its own scope `[C]`
-- [ ] `services/packs/build.py:304` — pack FINDING/CAPA subjects are serialized with NO subject read-check (`record.read` gates only the evidence candidates) → R28 bypass; ADD a per-subject `capa.read`/`finding.read` gate at the subject's own scope (not via the evidence classifier) and refuse/exclude when unreadable `[f]`
-- [ ] `services/packs/service.py:620` — public pack share survives a WORM destroy (cached portfolio PDF keeps serving); disposition must invalidate share tokens + purge derived artifacts + fail-closed on disposition state `[f]`
+- [x] `api/capa.py:614` — spawn-capa idempotent replay returns another process's CAPA header to a caller gated only on a caller-chosen `capa.create` scope; re-authorize the returned CAPA with `capa.read` at its own scope `[C]` (fixed: `capa.read` enforce on the `created=False` replay branch at the CAPA's own PROCESS scope)
+- [x] `services/packs/build.py:304` — pack FINDING/CAPA subjects are serialized with NO subject read-check (`record.read` gates only the evidence candidates) → R28 bypass; ADD a per-subject `capa.read`/`finding.read` gate at the subject's own scope (not via the evidence classifier) and refuse/exclude when unreadable `[f]` (fixed: `_authorize_pack_subjects` refuse-any 403 at create — build is worker-async — mirroring each subject's own read surface)
+- [x] `services/packs/service.py:620` — public pack share survives a WORM destroy (cached portfolio PDF keeps serving); disposition must invalidate share tokens + purge derived artifacts + fail-closed on disposition state `[f]` (fixed: serve-time `pack_has_destroyed_member` fail-closed on `resolve_share_token` [public 403] + the authenticated download [409]; the **physical purge / share-token invalidation** of the derived ZIP/portfolio artifacts is a genuine R27-vs-doc-06-§7.4 policy call deferred to fast-follow **[#361](https://github.com/CoJoA13/EasySynQ/issues/361)**)
 
 ### ☐ Batch 7 — Audit signed-checkpoint verification
 `branch: fix/major-audit-checkpoint-verify` · backend + integration · **heaviest of the tier**

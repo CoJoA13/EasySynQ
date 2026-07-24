@@ -301,8 +301,20 @@ async def build(session: AsyncSession, pack_id: uuid.UUID) -> None:
         dossier: DossierBuild | None = None
         dossier_digest: str | None = None
         if pack.scope_kind in (PackScopeKind.FINDING, PackScopeKind.CAPA):
+            # Refuse to bake a DESTROYED subject into a new RETAIN_PERMANENT pack. A FINDING/CAPA
+            # subject (or an embedded origin-finding / linked-CAPA / source-audit cross-reference)
+            # is a shared-PK record; if any was physically destroyed before this seal its narrative
+            # was legally erased, so fail the build rather than copy it forward (the serve guard
+            # would only withhold the sealed pack afterwards — this stops the born-dead copy).
+            if await repo.pack_subjects_destroyed(session, pack):
+                await _fail(session, pack_id, "a finding/CAPA subject was destroyed before sealing")
+                return
             dossier = await build_dossier(
-                session, pack.org_id, scope_kind=pack.scope_kind.value, scope_ids=scope_ids
+                session,
+                pack.org_id,
+                scope_kind=pack.scope_kind.value,
+                scope_ids=scope_ids,
+                included_record_ids=frozenset(c.record.id for c in included),
             )
             files.extend(dossier.files)
             dossier_digest = dossier.digest

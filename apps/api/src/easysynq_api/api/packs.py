@@ -15,7 +15,7 @@ import datetime
 import uuid
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Request, status
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -27,7 +27,7 @@ from ..db.models.pack_item import PackItem
 from ..db.models.pack_share_link import PackShareLink
 from ..db.session import get_session
 from ..problems import ProblemException
-from ..services.authz import require
+from ..services.authz import AuthzAuditSink, get_authz_audit_sink, require
 from ..services.packs import (
     create_pack_with_preview,
     create_share_link,
@@ -150,13 +150,17 @@ async def _load(session: AsyncSession, caller: AppUser, pack_id: uuid.UUID) -> E
 @router.post("/evidence-packs", status_code=status.HTTP_201_CREATED)
 async def create_pack_endpoint(
     body: PackCreate,
+    request: Request,
     caller: AppUser = Depends(_generate),
     session: AsyncSession = Depends(get_session),
+    authz_sink: AuthzAuditSink = Depends(get_authz_audit_sink),
 ) -> dict[str, Any]:
     """Create a pack (DRAFT) + compute its preview synchronously (resolve + R28-classify candidates,
     gap/exclusion summaries). The preview is advisory — generate seals it."""
     pack = await create_pack_with_preview(
         session,
+        authz_sink,
+        request,
         caller,
         title=body.title,
         scope_kind=body.scope_kind,
@@ -194,12 +198,15 @@ async def get_pack_endpoint(
 @router.post("/evidence-packs/{pack_id}/generate", status_code=status.HTTP_202_ACCEPTED)
 async def generate_pack_endpoint(
     pack_id: uuid.UUID,
+    request: Request,
     caller: AppUser = Depends(_generate),
     session: AsyncSession = Depends(get_session),
+    authz_sink: AuthzAuditSink = Depends(get_authz_audit_sink),
 ) -> dict[str, Any]:
     """Enqueue the immutable build/seal (DRAFT/FAILED → BUILDING). Poll ``GET /evidence-packs/{id}``
-    for SEALED. 409 if already sealed or a build is in progress."""
-    pack = await generate_pack(session, caller, pack_id)
+    for SEALED. 409 if already sealed or a build is in progress; 403 if the generator can no longer
+    read a FINDING/CAPA subject (re-checked here so a revoked grant can't seal it)."""
+    pack = await generate_pack(session, authz_sink, request, caller, pack_id)
     return _pack(pack)
 
 
@@ -214,6 +221,16 @@ async def download_pack_endpoint(
     if pack.status is not PackStatus.SEALED or pack.zip_blob_sha256 is None:
         raise ProblemException(
             status=409, code="conflict", title="Pack is not sealed yet", detail=pack.status.value
+        )
+    if await packs_repo.pack_has_destroyed_member(session, pack):
+        # A record INCLUDED in this pack (or its FINDING/CAPA subject) was physically destroyed
+        # after sealing (DESTROY / R27 WORM-destroy) — fail-closed so the cached ZIP no longer
+        # serves the erased evidence / dossier narrative.
+        raise ProblemException(
+            status=409,
+            code="pack_evidence_destroyed",
+            title="Pack contains evidence destroyed after sealing",
+            detail="A record in this pack was destroyed (disposition); download refused.",
         )
     blob = await vault_repo.get_blob(session, pack.zip_blob_sha256)
     if blob is None:  # pragma: no cover - defensive (the seal wrote the blob row)

@@ -16,6 +16,7 @@ from sqlalchemy import Date, asc, cast, delete, desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...db.models._evidence_enums import EvidenceForTargetType
+from ...db.models._pack_enums import PackInclusionStatus, PackItemType, PackScopeKind
 from ...db.models._retention_enums import DispositionAction
 from ...db.models._signature_enums import SignedObjectType
 from ...db.models.app_user import AppUser
@@ -301,6 +302,166 @@ async def has_destroy_tombstone(session: AsyncSession, record_id: uuid.UUID) -> 
         )
     )
     return bool(count)
+
+
+def _pack_subject_record_ids(pack: EvidencePack) -> list[uuid.UUID]:
+    """The FINDING/CAPA subject ids of a pack — which ARE record ids (``audit_finding``/``capa`` are
+    shared-PK RECORD subtypes), so a destroyed subject is a disposition tombstone on that record id.
+    Read from ``scope_selector``: the subject is a *dossier* subject, never materialised as a
+    ``pack_item`` row (``services/packs/build.py``). CLAUSE/PROCESS packs carry no subject dossier →
+    no subject records. Keys mirror ``service._SCOPE_SELECTOR_KEY`` (which this lower layer cannot
+    import without a cycle)."""
+    if pack.scope_kind is PackScopeKind.FINDING:
+        key = "finding_ids"
+    elif pack.scope_kind is PackScopeKind.CAPA:
+        key = "capa_ids"
+    else:
+        return []
+    raw = pack.scope_selector.get(key) if isinstance(pack.scope_selector, dict) else None
+    ids: list[uuid.UUID] = []
+    for value in raw if isinstance(raw, list) else []:
+        try:
+            ids.append(uuid.UUID(str(value)))
+        except (ValueError, TypeError):  # pragma: no cover - validated at create time
+            continue
+    return ids
+
+
+async def _capa_origin_finding_ids(
+    session: AsyncSession, capa_ids: list[uuid.UUID]
+) -> list[uuid.UUID]:
+    """The non-null origin-finding ids of the given CAPAs. A CAPA dossier embeds its origin
+    finding's type/severity/summary/identifier (``dossier._capa_subject``), and the origin finding
+    is a shared-PK record, so a DESTROY on it must fail-close the serve gate too."""
+    if not capa_ids:
+        return []
+    rows = await session.scalars(
+        select(Capa.origin_finding_id).where(
+            Capa.id.in_(capa_ids), Capa.origin_finding_id.is_not(None)
+        )
+    )
+    return [r for r in rows.all() if r is not None]
+
+
+async def _finding_linked_capa_ids(
+    session: AsyncSession, finding_ids: list[uuid.UUID]
+) -> list[uuid.UUID]:
+    """The non-null auto-CAPA ids of the given findings — the mirror of
+    ``_capa_origin_finding_ids``: a finding dossier embeds its linked auto-CAPA's identifier +
+    close_state (``dossier._finding_subject``), also a shared-PK record."""
+    if not finding_ids:
+        return []
+    rows = await session.scalars(
+        select(AuditFinding.auto_capa_id).where(
+            AuditFinding.id.in_(finding_ids), AuditFinding.auto_capa_id.is_not(None)
+        )
+    )
+    return [r for r in rows.all() if r is not None]
+
+
+async def _finding_audit_ids(
+    session: AsyncSession, finding_ids: list[uuid.UUID]
+) -> list[uuid.UUID]:
+    """The source-audit ids of the given findings — a finding dossier embeds its audit's id +
+    identifier (``dossier._finding_subject``), and ``audit`` is a shared-PK record, so a destroyed
+    source audit must fail-close the serve gate too."""
+    if not finding_ids:
+        return []
+    rows = await session.scalars(
+        select(AuditFinding.audit_id).where(AuditFinding.id.in_(finding_ids))
+    )
+    return [r for r in rows.all() if r is not None]
+
+
+async def _pack_embedded_record_ids(session: AsyncSession, pack: EvidencePack) -> list[uuid.UUID]:
+    """Every record whose metadata/narrative is baked into the sealed pack but is NOT an INCLUDED
+    ``pack_item`` member — so a DESTROY tombstone on any must also fail-close the serve gate:
+
+    * the FINDING/CAPA scope **subjects** (dossier subjects; shared-PK records),
+    * a CAPA subject's **origin finding** / a FINDING subject's **linked auto-CAPA** + **source
+      audit** — the cross-references each dossier embeds (all shared-PK records), and
+    * the pack's own registered EVIDENCE **record** (``pack_record_id`` — the sealed ZIP-as-record;
+      an R27 destroy of it purges the ZIP blob but leaves the portfolio serving).
+
+    The CAPA-stage / finding evidence records ARE INCLUDED ``pack_item`` members (the member join
+    covers them). A finding/CAPA correction-chain identifier is also dossier-embedded but a rarer
+    lineage; the uniform closer for that deep graph is the #361 physical purge."""
+    subject_ids = _pack_subject_record_ids(pack)
+    ids: list[uuid.UUID] = list(subject_ids)
+    if subject_ids:
+        if pack.scope_kind is PackScopeKind.CAPA:
+            ids.extend(await _capa_origin_finding_ids(session, subject_ids))
+        elif pack.scope_kind is PackScopeKind.FINDING:
+            ids.extend(await _finding_linked_capa_ids(session, subject_ids))
+            ids.extend(await _finding_audit_ids(session, subject_ids))
+    if pack.pack_record_id is not None:
+        ids.append(pack.pack_record_id)
+    return ids
+
+
+async def _count_destroy_tombstones(session: AsyncSession, record_ids: list[uuid.UUID]) -> int:
+    """Count DESTROY / WORM-destroy disposition tombstones over a set of record ids."""
+    if not record_ids:
+        return 0
+    return int(
+        await session.scalar(
+            select(func.count())
+            .select_from(DispositionEvent)
+            .where(
+                DispositionEvent.record_id.in_(record_ids),
+                or_(
+                    DispositionEvent.is_worm_destroy.is_(True),
+                    DispositionEvent.action == DispositionAction.DESTROY,
+                ),
+            )
+        )
+        or 0
+    )
+
+
+async def pack_has_destroyed_member(session: AsyncSession, pack: EvidencePack) -> bool:
+    """``True`` if ANY record whose bytes/metadata are baked into this sealed pack was LATER
+    physically destroyed (a DESTROY / WORM-destroy disposition tombstone). Two populations:
+
+    * INCLUDED ``pack_item`` RECORD members — the evidence bytes in the ZIP / portfolio, and
+    * every dossier-embedded / derived record (``_pack_embedded_record_ids``): the FINDING/CAPA
+      subjects, their embedded origin-finding / linked-CAPA cross-reference, and the pack's own
+      registered EVIDENCE record — none of which are ``pack_item`` rows.
+
+    Serve paths use this to fail-closed AFTER the seal — a record destroyed post-seal must not stay
+    reachable via the pack's cached ZIP / portfolio (their bytes/narrative are baked into the sealed
+    artifacts, so delivery is gated here). Records destroyed BEFORE the seal are already
+    EXCLUDED_ABSENCE / refused at build time, so only INCLUDED members + the embedded set matter."""
+    member_count = await session.scalar(
+        select(func.count())
+        .select_from(PackItem)
+        .join(DispositionEvent, DispositionEvent.record_id == PackItem.record_id)
+        .where(
+            PackItem.pack_id == pack.id,
+            PackItem.item_type == PackItemType.RECORD,
+            PackItem.inclusion_status == PackInclusionStatus.INCLUDED,
+            or_(
+                DispositionEvent.is_worm_destroy.is_(True),
+                DispositionEvent.action == DispositionAction.DESTROY,
+            ),
+        )
+    )
+    if member_count:
+        return True
+    embedded_ids = await _pack_embedded_record_ids(session, pack)
+    return await _count_destroy_tombstones(session, embedded_ids) > 0
+
+
+async def pack_subjects_destroyed(session: AsyncSession, pack: EvidencePack) -> bool:
+    """``True`` if any FINDING/CAPA dossier SUBJECT — or an embedded origin-finding / linked-CAPA /
+    source-audit cross-reference (all shared-PK records) — already carries a DESTROY / WORM-destroy
+    tombstone. The build calls this BEFORE constructing the dossier so a destroyed subject's
+    narrative is never copied forward into a new sealed RETAIN_PERMANENT pack (the serve guard would
+    withhold such a pack post-seal — this refuses to bake the erased content at all). At build
+    time ``pack.pack_record_id`` is still NULL, so ``_pack_embedded_record_ids`` yields exactly the
+    subjects + their cross-references (no member/pack-record noise)."""
+    embedded_ids = await _pack_embedded_record_ids(session, pack)
+    return await _count_destroy_tombstones(session, embedded_ids) > 0
 
 
 async def process_clause_ids(

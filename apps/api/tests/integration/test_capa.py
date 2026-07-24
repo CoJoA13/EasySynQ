@@ -251,6 +251,46 @@ async def test_complaint_capture_and_idempotent_spawn(
     assert await _event_count(complaint_id, EventType.COMPLAINT_CAPTURED) == 1
 
 
+async def test_spawn_capa_replay_reauthorizes_read_at_capa_scope(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """Batch 6 (read-authz on returned bodies): the idempotent spawn-capa REPLAY must re-authorize
+    capa.read at the returned CAPA's OWN scope. A caller holding capa.create (which only gates the
+    create side, at a caller-CHOSEN process) but NOT capa.read must not harvest a pre-existing
+    (cross-process) CAPA's header via replay. Mutation-verify: without the read re-check the
+    replay returns 200 + the CAPA body."""
+    # Owner (full CAPA keys) captures a complaint and spawns its CAPA.
+    owner = _subject("spawn-owner")
+    await _grant(owner, _CAPA_KEYS)
+    ho = _auth(token_factory, owner)
+    complaint_id = (
+        await app_client.post(
+            "/api/v1/complaints", headers=ho, json={"description": "late", "severity": "Minor"}
+        )
+    ).json()["id"]
+    r1 = await app_client.post(f"/api/v1/complaints/{complaint_id}/spawn-capa", headers=ho, json={})
+    assert r1.status_code == 201, r1.text
+    capa_id = r1.json()["id"]
+
+    # Attacker holds capa.create (passes the create gate) but NOT capa.read.
+    attacker = _subject("spawn-attacker")
+    await _grant(attacker, ("capa.create",))
+    ha = _auth(token_factory, attacker)
+    # Replaying spawn-capa on the same complaint returns the existing CAPA → read re-check at the
+    # CAPA's own scope denies (the attacker has no capa.read) → 403, header NOT leaked.
+    r2 = await app_client.post(f"/api/v1/complaints/{complaint_id}/spawn-capa", headers=ha, json={})
+    assert r2.status_code == 403, r2.text
+    assert capa_id not in r2.text  # the CAPA header/body must not leak in the denial
+
+    # A caller WITH capa.read still gets the idempotent 200 + body (the fix keeps the happy path).
+    reader = _subject("spawn-reader")
+    await _grant(reader, ("capa.create", "capa.read"))
+    hr = _auth(token_factory, reader)
+    r3 = await app_client.post(f"/api/v1/complaints/{complaint_id}/spawn-capa", headers=hr, json={})
+    assert r3.status_code == 200, r3.text
+    assert r3.json()["id"] == capa_id
+
+
 async def test_spawn_requires_severity(
     app_client: AsyncClient, token_factory: Callable[..., str]
 ) -> None:

@@ -12,7 +12,9 @@ It runs inside the build's single transaction, READ-only; the dossier reflects t
 build time** (the cover's ``generated_at`` anchors it — a concurrent FSM advance is captured as-is,
 not a defect: the pack is a frozen build-time snapshot, doc 06 §7.4). Subjects are NOT pack_item
 records (a finding/CAPA carries no evidence_blob → no ZIP bytes); their content_hash + narrative
-live here, sealed via ``dossier_digest``.
+live here, sealed via ``dossier_digest``. Each subject's linked-evidence identifiers are filtered to
+the build's R28-INCLUDED record set — the dossier never leaks an identifier the pack itself withheld
+(permission / period / destroyed-absence).
 """
 
 from __future__ import annotations
@@ -53,12 +55,23 @@ async def _identifier(session: AsyncSession, record_id: uuid.UUID | None) -> str
     return base.identifier if base is not None else None
 
 
+def _filter_included(
+    evidence: list[tuple[uuid.UUID, str | None]], included: frozenset[uuid.UUID]
+) -> list[tuple[uuid.UUID, str | None]]:
+    """Drop evidence links whose record the build did NOT include (R28: excluded by permission,
+    outside the pack period, or destroyed-absence). ``evidence_records_for_targets`` reloads every
+    linked record with no such filter, so without this the dossier would serialize identifiers for
+    records the pack deliberately withheld — a read-authz leak into the shareable ZIP."""
+    return [pair for pair in evidence if pair[0] in included]
+
+
 async def _finding_subject(
     session: AsyncSession,
     org_id: uuid.UUID,
     finding_id: uuid.UUID,
     record: Record,
     base: DocumentedInformation,
+    included: frozenset[uuid.UUID],
 ) -> dict[str, Any]:
     finding = await repo.get_finding(session, finding_id)
     if finding is None:  # pragma: no cover - validated at scope time (shared-PK subtype exists)
@@ -76,11 +89,14 @@ async def _finding_subject(
                 "identifier": await _identifier(session, capa.id),
                 "close_state": capa.close_state.value,
             }
-    ev = (
-        await repo.evidence_records_for_targets(
-            session, org_id, EvidenceForTargetType.FINDING, [finding_id]
-        )
-    ).get(finding_id, [])
+    ev = _filter_included(
+        (
+            await repo.evidence_records_for_targets(
+                session, org_id, EvidenceForTargetType.FINDING, [finding_id]
+            )
+        ).get(finding_id, []),
+        included,
+    )
     captured_by = await session.get(AppUser, record.captured_by)
     return pure.serialize_finding_dossier(
         finding_id=str(finding.id),
@@ -107,6 +123,7 @@ async def _capa_subject(
     capa_id: uuid.UUID,
     record: Record,
     base: DocumentedInformation,
+    included: frozenset[uuid.UUID],
 ) -> dict[str, Any]:
     capa = await repo.get_capa(session, capa_id)
     if capa is None:  # pragma: no cover - validated at scope time (shared-PK subtype exists)
@@ -159,7 +176,7 @@ async def _capa_subject(
                 created_by=_user_ref(users.get(s.created_by)),
                 content_block=s.content_block,
                 signature=signature,
-                evidence_records=evidence_by_stage.get(s.id, []),
+                evidence_records=_filter_included(evidence_by_stage.get(s.id, []), included),
             )
         )
 
@@ -181,9 +198,18 @@ async def _capa_subject(
 
 
 async def build_dossier(
-    session: AsyncSession, org_id: uuid.UUID, *, scope_kind: str, scope_ids: list[uuid.UUID]
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    *,
+    scope_kind: str,
+    scope_ids: list[uuid.UUID],
+    included_record_ids: frozenset[uuid.UUID],
 ) -> DossierBuild:
-    """Assemble the per-subject dossier files + the sealed digest for a FINDING/CAPA pack."""
+    """Assemble the per-subject dossier files + the sealed digest for a FINDING/CAPA pack.
+
+    ``included_record_ids`` is the build's R28-INCLUDED evidence record set (the same classification
+    that decides ``pack_item`` membership); each subject's linked-evidence identifiers are filtered
+    to it so the dossier never surfaces a record the pack itself excluded."""
     kind = "finding" if scope_kind == "FINDING" else "capa"
     subjects_with_base = {
         rec.id: (rec, base) for rec, base in await repo.get_records_with_base(session, scope_ids)
@@ -199,9 +225,9 @@ async def build_dossier(
             continue
         record, base = pair
         if kind == "finding":
-            obj = await _finding_subject(session, org_id, sid, record, base)
+            obj = await _finding_subject(session, org_id, sid, record, base, included_record_ids)
         else:
-            obj = await _capa_subject(session, org_id, sid, record, base)
+            obj = await _capa_subject(session, org_id, sid, record, base, included_record_ids)
         path = pure.dossier_filename(kind, base.identifier, str(sid))
         data = pure.canonical_dossier_bytes(obj)
         sha = hashlib.sha256(data).hexdigest()
