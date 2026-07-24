@@ -205,7 +205,13 @@ async def test_ac6b_linker_chains_verify_matches_and_tamper_is_first_broken_link
 
     ok = await app_client.get("/api/v1/audit-events/verify-chain", headers=headers)
     assert ok.status_code == 200, ok.text
-    assert ok.json() == {"verified": True, "checked": len(rows), "pending": 0, "breaks": []}
+    # Field assertions (not an exact-dict match) — the response now also carries the Batch-7
+    # ``checkpoint`` attestation (None here with no verify key configured, or a status if a prior
+    # test persisted a signing key), orthogonal to this linker/walk proof.
+    ok_body = ok.json()
+    assert ok_body["verified"] is True
+    assert ok_body["checked"] == len(rows)
+    assert ok_body["pending"] == 0 and ok_body["breaks"] == []
 
     # A privileged operator (the OWNER role) mutates a row out-of-band — bypassing the app grant.
     victim = rows[len(rows) // 2]
@@ -494,6 +500,7 @@ async def test_checkpoint_signature_catches_consistent_chain_rewrite(
     orig_reason: str | None = None
     orig_hash = b""
     head_id = 0
+    captured = False  # RELEASED events have reason=None, so track capture separately from the value
     try:
         # Clean slate: as OWNER, drop any checkpoint another test left (it would be signed by a
         # DIFFERENT key and fail against my verify key), so mine is the sole/newest one.
@@ -519,6 +526,7 @@ async def test_checkpoint_signature_catches_consistent_chain_rewrite(
         async with async_sessionmaker(owner_engine, expire_on_commit=False)() as s:
             row = (await s.execute(select(AuditEvent).where(AuditEvent.id == head_id))).scalar_one()
             orig_reason, orig_hash = row.reason, bytes(row.row_hash)
+            captured = True
             row.reason = "OWNER-REWRITE"
             row.row_hash = compute_row_hash(
                 audit_row_from_orm(row), row.prev_hash or GENESIS_HASH, version=1
@@ -551,7 +559,7 @@ async def test_checkpoint_signature_catches_consistent_chain_rewrite(
         assert forged.checkpoint is not None and forged.checkpoint.signature_ok is False
     finally:
         async with async_sessionmaker(owner_engine, expire_on_commit=False)() as s:
-            if orig_reason is not None:
+            if captured:  # restore even when the original reason was legitimately None (RELEASED)
                 restore = (
                     await s.execute(select(AuditEvent).where(AuditEvent.id == head_id))
                 ).scalar_one_or_none()
