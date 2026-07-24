@@ -35,7 +35,10 @@ async def _run_retention_sweep() -> dict[str, int]:
     )
     try:
         async with sessionmaker() as session:
-            summary = await sweep_due_records(session)
+            # Pass the task's loop-scoped sessionmaker so the post-commit purge opens its fresh
+            # sessions on THIS engine/loop — not the process-global pool (cross-loop RuntimeError
+            # across the task's per-invocation asyncio.run).
+            summary = await sweep_due_records(session, purge_sessionmaker=sessionmaker)
             logger.info("records.retention_sweep", extra={"extra_fields": summary})
             return summary
     finally:

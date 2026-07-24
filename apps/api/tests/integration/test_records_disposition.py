@@ -1096,7 +1096,7 @@ async def test_shared_blob_concurrent_disposition_purges_once(
                     s, record, action=DispositionAction.DESTROY, policy_id=None, approved_by=None
                 )
                 await s.commit()
-                await disposition._purge_marked(specs)
+                await disposition._purge_marked(specs, sessionmaker=get_sessionmaker())
 
         await asyncio.gather(dispose(rids[0]), dispose(rids[1]))
 
@@ -1112,6 +1112,31 @@ async def test_shared_blob_concurrent_disposition_purges_once(
             assert markers == 0  # the immediate post-commit purge cleared the marker
     finally:
         await _cleanup(pol)
+
+
+async def test_sweep_forwards_loop_scoped_sessionmaker_to_purge(
+    app_client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Batch 5 cross-loop guard: the sweep must hand ``_purge_marked`` the sessionmaker it was
+    passed (the Celery task's loop-scoped one), never fall back to the process-global pool — reusing
+    the global engine across the task's per-invocation ``asyncio.run`` loop raises a cross-loop
+    ``RuntimeError`` (NOT a ``SQLAlchemyError``, so it would escape the reaper deferral and fail the
+    retention task). Pins the injection wiring the single-loop suite can't otherwise exercise."""
+
+    async def _no_due(*_a: object, **_k: object) -> list[object]:
+        return []  # no records to process → the sweep still calls _purge_marked([], sessionmaker=…)
+
+    captured: dict[str, object] = {}
+
+    async def _capture(_specs: object, *, sessionmaker: object) -> None:
+        captured["sessionmaker"] = sessionmaker
+
+    monkeypatch.setattr(disposition.repo, "due_active_records", _no_due)
+    monkeypatch.setattr(disposition, "_purge_marked", _capture)
+    sentinel: object = object()  # distinct from the global sessionmaker; never used (purge stubbed)
+    async with get_sessionmaker()() as s:
+        await disposition.sweep_due_records(s, purge_sessionmaker=sentinel)  # type: ignore[arg-type]
+    assert captured["sessionmaker"] is sentinel  # forwarded through, NOT the global fallback
 
 
 async def test_reaper_completes_stranded_purge(

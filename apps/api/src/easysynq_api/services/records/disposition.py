@@ -34,7 +34,7 @@ import uuid
 
 from botocore.exceptions import BotoCoreError, ClientError
 from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ...config import get_settings
 from ...db.models._audit_enums import EventType
@@ -142,21 +142,27 @@ async def _mark_record_evidence_for_purge(
     return specs
 
 
-async def _purge_marked(specs: list[_PurgeSpec]) -> None:
+async def _purge_marked(
+    specs: list[_PurgeSpec], *, sessionmaker: async_sessionmaker[AsyncSession]
+) -> None:
     """The S3 phase — call AFTER the caller COMMITs the tombstone + blob-row deletes + markers.
     Physically purge each blob's bytes (idempotent) and drop its marker on success. Runs in a FRESH
-    session PER marker (NOT the request session): the disposition is committed, so a post-commit
-    failure here — a storage outage OR a DB blip — must never disturb the request transaction or
-    expire its ORM objects (a shared-session ``rollback`` would, then the handler's attribute
-    reads raise ``MissingGreenlet``). Either failure just leaves the marker for
-    ``reap_pending_blob_purges`` to finish (the record stays disposed either way). Skips the
-    purge (and drops the marker) only if a ``blob`` row now OWNS this exact object again (same sha +
-    bucket + object_key) — a re-capture into the SAME location re-owns the bytes, so a stale marker
-    must not erase them; a matching sha in a DIFFERENT bucket is a physically distinct object and
-    does NOT cancel the purge (``blob_owns_object``)."""
+    session PER marker, opened from the CALLER's ``sessionmaker`` (NOT the request session and NOT
+    the process-global one): the disposition is committed, so a post-commit failure here — a storage
+    outage OR a DB blip — must never disturb the request transaction or expire its ORM objects (a
+    shared-session ``rollback`` would, then the handler's reads raise ``MissingGreenlet``).
+    The sessionmaker must be bound to the CALLER's engine + event loop — the FastAPI request loop
+    for the API paths (``get_sessionmaker()``), the Celery task's own ``asyncio.run`` loop + local
+    engine for the sweep — since reusing the process-global pool across a task's per-invocation loop
+    raises a cross-loop ``RuntimeError`` (not a ``SQLAlchemyError``, so it would escape the deferral
+    below). Either failure just leaves the marker for ``reap_pending_blob_purges`` to finish (the
+    record stays disposed either way). Skips the purge (and drops the marker) only if a ``blob`` row
+    now OWNS this exact object again (same sha + bucket + object_key) — a re-capture into the SAME
+    location re-owns the bytes, so a stale marker must not erase them; a matching sha in a DIFFERENT
+    bucket is a physically distinct object and does NOT cancel the purge (``blob_owns_object``)."""
     for spec in specs:
         try:
-            async with get_sessionmaker()() as s:
+            async with sessionmaker() as s:
                 if not await repo.blob_owns_object(
                     s, sha256=spec.sha256, bucket=spec.bucket, object_key=spec.object_key
                 ):
@@ -300,7 +306,7 @@ async def advance_disposition(
     # mark).
     specs = await _dispose_now(session, actor, record, reason=reason)
     await session.commit()
-    await _purge_marked(specs)
+    await _purge_marked(specs, sessionmaker=get_sessionmaker())
     await session.refresh(record)
     return record
 
@@ -550,7 +556,7 @@ async def approve_worm_destroy(
         },
     )
     await session.commit()
-    await _purge_marked(specs)
+    await _purge_marked(specs, sessionmaker=get_sessionmaker())
     await session.refresh(record)
     return record
 
@@ -586,7 +592,10 @@ async def cancel_worm_destroy(
 
 
 async def sweep_due_records(
-    session: AsyncSession, *, now: datetime.datetime | None = None
+    session: AsyncSession,
+    *,
+    now: datetime.datetime | None = None,
+    purge_sessionmaker: async_sessionmaker[AsyncSession] | None = None,
 ) -> dict[str, int]:
     """Flip due ``ACTIVE`` records to ``DUE_FOR_REVIEW`` (+ the ``RECORD_DISPOSITION_DUE`` system
     event — the v1 'notify owning org_role' surrogate) and auto-execute disposition for low-risk
@@ -658,7 +667,10 @@ async def sweep_due_records(
                 )
 
     await session.commit()  # durable FIRST — a failure here purges nothing (specs untouched)
-    await _purge_marked(specs)  # THEN physically erase the bytes (reaper-backstopped)
+    # Purge from the CALLER's engine/loop: the sweep's task passes its loop-scoped sessionmaker
+    # (the process-global pool would be cross-loop from the task's asyncio.run); tests/direct calls
+    # fall back to the global one (single loop).
+    await _purge_marked(specs, sessionmaker=purge_sessionmaker or get_sessionmaker())
     return summary
 
 
