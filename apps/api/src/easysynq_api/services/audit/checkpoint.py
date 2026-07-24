@@ -267,21 +267,30 @@ async def tamper_evidence_attested(session: AsyncSession, org_id: Any) -> bool:
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class OffHostCheckpointResult:
-    """Outcome of the INDEPENDENT off-host checkpoint read-back (doc 12 §4.4). ``sinks_read`` counts
-    enabled sinks that returned a checkpoint object; ``verified`` is False when ANY enabled sink's
-    newest object is missing, unreadable, fails its signature, or disagrees with the live chain."""
+    """Outcome of the INDEPENDENT off-host read-back (doc 12 §4.4). FAIL-CLOSED: ``verified`` is
+    True only when a genuinely OFF-HOST sink returned a fresh, signature-valid checkpoint matching
+    the live chain. ``offhost_configured`` is True iff ≥1 enabled ``off_host`` sink exists — the
+    beat alarms only when a CONFIGURED witness fails; a MISSING witness is the R13 soft-gate's
+    persistent 'NOT tamper-evident' warning, not a nightly alarm."""
 
+    offhost_configured: bool
     sinks_read: int
     verified: bool
     reasons: list[str]
 
 
 async def _attest_offhost_doc(
-    session: AsyncSession, org_id: Any, verify_key: Ed25519PublicKey, doc: dict[str, Any]
+    session: AsyncSession,
+    org_id: Any,
+    verify_key: Ed25519PublicKey,
+    doc: dict[str, Any],
+    *,
+    now: datetime.datetime,
 ) -> str | None:
-    """Attest one off-host ``{checkpoint, signature}`` object: parse it, verify the sig, then
-    compare its signed ``latest_row_hash`` against the chain's stored hash at ``latest_id``. Returns
-    ``None`` when it attests, else a human reason."""
+    """Attest one off-host ``{checkpoint, signature}`` object: parse it, verify the sig, confirm it
+    is FRESH (a witness that stopped advancing cannot attest rows anchored after it), then compare
+    its signed ``latest_row_hash`` against the stored hash at ``latest_id``. ``None`` when it
+    attests, else a human reason."""
     ckpt = doc.get("checkpoint")
     sig_b64 = doc.get("signature")
     if not isinstance(ckpt, dict) or not isinstance(sig_b64, str):
@@ -294,6 +303,8 @@ async def _attest_offhost_doc(
         signature = base64.b64decode(sig_b64)
     except (KeyError, ValueError, TypeError):
         return "malformed off-host checkpoint payload"
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=datetime.UTC)
     if doc_org != str(org_id):
         return "off-host checkpoint org mismatch"
     if not verify_checkpoint_signature(
@@ -305,6 +316,9 @@ async def _attest_offhost_doc(
         signature=signature,
     ):
         return "off-host checkpoint signature invalid (forged/corrupt)"
+    age = (now - ts).total_seconds()
+    if age > _FRESHNESS_SECONDS:
+        return f"off-host checkpoint is stale ({int(age)}s old) — pushes may have stopped"
     stored = (
         await session.execute(
             select(AuditEvent.row_hash).where(
@@ -322,13 +336,19 @@ async def _attest_offhost_doc(
 
 
 async def verify_offhost_checkpoint(
-    session: AsyncSession, org_id: Any, *, verify_key: Ed25519PublicKey
+    session: AsyncSession,
+    org_id: Any,
+    *,
+    verify_key: Ed25519PublicKey,
+    now: datetime.datetime | None = None,
 ) -> OffHostCheckpointResult:
-    """Read every enabled sink's NEWEST signed checkpoint back with the SEPARATE read creds, verify
-    the Ed25519 signature, and compare it against the live chain (doc 12 §4.4). This is the
-    independent witness the in-DB check cannot be: even a DB owner who rewrites BOTH the chain and
-    the in-DB checkpoint — or deletes the checkpoint rows — cannot reach the off-host copy, so a
-    divergence (or an unreadable/absent object on an enabled sink) here exposes the rewrite."""
+    """Read every enabled OFF-HOST sink's NEWEST signed checkpoint back with the SEPARATE read
+    creds, verify the Ed25519 signature + freshness, and compare it against the live chain (doc 12
+    §4.4). This is the independent witness the in-DB check cannot be: even a DB owner who rewrites
+    BOTH the chain and the in-DB checkpoint — or deletes the rows — cannot reach the off-host copy.
+    FAIL-CLOSED: only genuinely ``off_host`` sinks count (a same-host bucket is not an independent
+    witness — R13), and 'no off-host sink' is UNAVAILABLE (verified=False), never a vacuous pass."""
+    now = now or _now()
     sinks = (
         (
             await session.execute(
@@ -341,9 +361,14 @@ async def verify_offhost_checkpoint(
         .scalars()
         .all()
     )
+    offhost = [s for s in sinks if bool((s.connection or {}).get("off_host"))]
+    if not offhost:
+        return OffHostCheckpointResult(
+            False, 0, False, ["no off-host sink configured — independent attestation unavailable"]
+        )
     reasons: list[str] = []
     read = 0
-    for sink in sinks:
+    for sink in offhost:
         try:
             doc = await asyncio.to_thread(
                 fetch_latest_offhost_checkpoint, sink.kind.value, sink.connection, org_id
@@ -355,7 +380,7 @@ async def verify_offhost_checkpoint(
             reasons.append(f"sink {sink.id}: no off-host checkpoint object found")
             continue
         read += 1
-        reason = await _attest_offhost_doc(session, org_id, verify_key, doc)
+        reason = await _attest_offhost_doc(session, org_id, verify_key, doc, now=now)
         if reason is not None:
             reasons.append(f"sink {sink.id}: {reason}")
-    return OffHostCheckpointResult(read, not reasons, reasons)
+    return OffHostCheckpointResult(True, read, not reasons, reasons)

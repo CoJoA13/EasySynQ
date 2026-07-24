@@ -234,7 +234,13 @@ def _reverify_chain(owner_dsn: str, scratch_db: str, version: int) -> dict[str, 
     It does NOT run the LIVE off-host read-back here: the bundled checkpoint is ≤ the restored head,
     but the live off-host head runs AHEAD of an older backup, so it would false-FAIL every normal
     restore (that ackable case is already the ``checkpoint_verdict`` FLAG; the off-host read-back is
-    the LIVE beat/CLI verifier)."""
+    the LIVE beat/CLI verifier).
+
+    The returned ``attested`` flag is honest about coverage: when this process holds no verify key
+    (``load_verify_key`` → None), the signed-checkpoint tamper-detection is SKIPPED and the result
+    is a self-consistent walk only — ``attested`` is then False so the drill report never implies an
+    attestation that did not run. In the real deployment the drill runs in the key-holding
+    worker/beat (it derives the key from the private signing key), so ``attested`` is True."""
     import asyncio
 
     from sqlalchemy import text
@@ -248,6 +254,10 @@ def _reverify_chain(owner_dsn: str, scratch_db: str, version: int) -> dict[str, 
         url = make_url(owner_dsn).set(database=scratch_db)
         engine = create_async_engine(url)
         sm = async_sessionmaker(engine, expire_on_commit=False)
+        # v1 is single-key with no rotation, so a bundled checkpoint always verifies against the
+        # current key. Restoring a pre-rotation backup after a future key rotation would need a key
+        # HISTORY/keyring to attest under the signing-era key — deferred to v1.x (no rotation path
+        # exists in v1); the walk still self-verifies, and checkpoint_verdict FLAGs the ackable one.
         verify_key = load_verify_key()
         try:
             async with sm() as session:
@@ -270,6 +280,7 @@ def _reverify_chain(owner_dsn: str, scratch_db: str, version: int) -> dict[str, 
                     "checked": checked,
                     "pending": pending,
                     "breaks": breaks[:20],
+                    "attested": verify_key is not None,
                 }
         finally:
             await engine.dispose()
@@ -414,6 +425,22 @@ def run_restore(
                 return RestoreResult(
                     "FAIL",
                     "restored audit chain re-verify failed",
+                    restored_head_id=head,
+                    checkpoint_check=ckpt_detail,
+                    chain_verify=chain,
+                    triad=triad_detail,
+                )
+
+            # 7b. A bundled signed checkpoint we could NOT attest (no verify key mounted — e.g. a
+            # bare DR host) is UNVERIFIABLE, never a clean PASS: attesting that checkpoint IS what
+            # the batch-7 restore leg exists to do, so a self-consistent walk alone must not certify
+            # the restore. Surface it as FLAGGED (ackable), mirroring the missing-off-host verdict.
+            if bundled is not None and not chain["attested"] and not audit_checkpoint_ack:
+                return RestoreResult(
+                    "FLAGGED",
+                    "restored chain bundles a signed checkpoint but no verify key is available to "
+                    "attest it — mount the checkpoint public key, or re-run with "
+                    "--audit-checkpoint-ack to proceed (the acknowledgement is audited)",
                     restored_head_id=head,
                     checkpoint_check=ckpt_detail,
                     chain_verify=chain,

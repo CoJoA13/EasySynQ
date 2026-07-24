@@ -102,19 +102,22 @@ async def _run_verify_chain() -> int:
             for org_id in org_ids:
                 result = await verify_chain(session, org_id, verify_key=verify_key)
                 total_breaks += len(result.breaks)
-                # The INDEPENDENT off-host read-back — only once anchoring is active (an in-DB
-                # checkpoint exists), so a brand-new org with no activity never false-alarms.
+                # The INDEPENDENT off-host read-back runs whenever the chain has any verified rows
+                # (checked > 0) — deliberately NOT gated on an in-DB checkpoint existing, since a
+                # privileged DB owner can DELETE every in-DB audit_checkpoint row and the off-host
+                # copy is then the only surviving witness. A CONFIGURED-but-failing witness alarms;
+                # a MISSING witness is the R13 soft-gate's persistent 'NOT tamper-evident' warning
+                # (surfaced in the UI), never a nightly CHAIN_VERIFY_FAIL.
                 offhost_reasons: list[str] = []
-                if (
-                    verify_key is not None
-                    and result.checkpoint is not None
-                    and result.checkpoint.present
-                ):
+                alarm_offhost = False
+                if verify_key is not None and result.checked > 0:
                     offhost = await verify_offhost_checkpoint(
                         session, org_id, verify_key=verify_key
                     )
-                    offhost_reasons = offhost.reasons
-                if not result.verified or offhost_reasons:
+                    if offhost.offhost_configured:
+                        offhost_reasons = offhost.reasons
+                        alarm_offhost = not offhost.verified
+                if not result.verified or alarm_offhost:
                     logger.error(
                         "audit.verify_chain.broken",
                         extra={

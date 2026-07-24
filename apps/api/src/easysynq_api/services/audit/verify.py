@@ -158,7 +158,7 @@ async def _check_checkpoint(
             await session.execute(
                 select(AuditCheckpoint)
                 .where(AuditCheckpoint.org_id == org_id)
-                .order_by(AuditCheckpoint.latest_id.desc())
+                .order_by(AuditCheckpoint.latest_id.desc(), AuditCheckpoint.timestamp.desc())
                 .limit(1)
             )
         )

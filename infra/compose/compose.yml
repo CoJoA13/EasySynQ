@@ -63,6 +63,14 @@ services:
     entrypoint: ["/bin/sh", "/init/minio-init.sh"]
     environment:
       MC_HOST_local: http://${S3_ACCESS_KEY:-easysynq}:${S3_SECRET_KEY:-easysynqsecret}@minio:9000
+      # Provision the sink users with the SAME creds the app authenticates with (loaded from .env via
+      # env_file). Without these passthroughs the users get the script defaults, so a custom
+      # AUDIT_SINK_* in .env would mismatch — the write push fails, and the read-back verifier (which
+      # is fail-closed) would false-alarm CHAIN_VERIFY_FAIL. Defaults mirror minio-init.sh.
+      AUDIT_SINK_ACCESS_KEY: ${AUDIT_SINK_ACCESS_KEY:-audit-sink}
+      AUDIT_SINK_SECRET_KEY: ${AUDIT_SINK_SECRET_KEY:-audit-sink-secret-change-me}
+      AUDIT_SINK_READ_ACCESS_KEY: ${AUDIT_SINK_READ_ACCESS_KEY:-audit-sink-read}
+      AUDIT_SINK_READ_SECRET_KEY: ${AUDIT_SINK_READ_SECRET_KEY:-audit-sink-read-secret-change-me}
     volumes:
       - ./minio:/init:ro
     networks: [internal]

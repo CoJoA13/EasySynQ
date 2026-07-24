@@ -92,13 +92,18 @@ def fetch_latest_offhost_checkpoint(
     client = _audit_sink_read_client()
     prefix = f"checkpoints/{org_id}/"
     best_key: str | None = None
-    best_id = -1
+    best: tuple[int, str] | None = None
     for page in client.get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=prefix):
         for obj in page.get("Contents", []):
             name = str(obj["Key"]).rsplit("/", 1)[-1]
             head = name.split("-", 1)[0]
-            if head.isdigit() and int(head) > best_id:
-                best_id, best_key = int(head), obj["Key"]
+            if not head.isdigit():
+                continue
+            # Order by (latest_id, name): equal latest_id ties break on the sortable ts suffix
+            # (%Y%m%dT…Z) so the FRESHEST object wins, independent of S3 list order.
+            cand = (int(head), name)
+            if best is None or cand > best:
+                best, best_key = cand, obj["Key"]
     if best_key is None:
         return None
     body = client.get_object(Bucket=bucket, Key=best_key)["Body"].read()

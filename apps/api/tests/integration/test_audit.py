@@ -38,7 +38,9 @@ from easysynq_api.domain.authz.types import Effect, ScopeLevel
 from easysynq_api.services.audit.checkpoint import (
     anchor_checkpoint,
     load_signing_key,
+    load_verify_key,
     tamper_evidence_attested,
+    verify_offhost_checkpoint,
 )
 from easysynq_api.services.audit.linker import link_all
 
@@ -290,6 +292,17 @@ async def test_ac6b_checkpoint_push_and_soft_gate(
         attested_same_host = await tamper_evidence_attested(s, org_id)
     assert attested_same_host is False  # same-host bucket must NOT attest tamper-evidence (R13)
 
+    # FAIL-CLOSED (doc 12 §4.4): with only a SAME-host sink the INDEPENDENT read-back is UNAVAILABLE
+    # — it must report offhost_configured=False + verified=False (never a vacuous "verified" pass),
+    # so the nightly beat defers to the R13 soft-gate rather than alarming on a missing witness.
+    verify_key = load_verify_key()
+    assert verify_key is not None
+    async with get_sessionmaker()() as s:
+        unavailable = await verify_offhost_checkpoint(s, org_id, verify_key=verify_key)
+    assert unavailable.offhost_configured is False
+    assert unavailable.verified is False
+    assert unavailable.sinks_read == 0
+
     # The signed object actually landed in the off-host bucket.
     settings = get_settings()
     client = boto3.client(
@@ -315,6 +328,27 @@ async def test_ac6b_checkpoint_push_and_soft_gate(
         sink.connection = {"bucket": "audit-checkpoints", "off_host": True}
         await s.commit()
         assert await tamper_evidence_attested(s, org_id) is True
+
+    # Now that a genuine off-host witness exists, the INDEPENDENT read-back reads the pushed object
+    # back with the SEPARATE read creds, verifies its Ed25519 signature + freshness, and matches it
+    # against the live chain — the witness the in-DB walk cannot be (a DB owner cannot reach it).
+    async with get_sessionmaker()() as s:
+        attested = await verify_offhost_checkpoint(s, org_id, verify_key=verify_key)
+    assert attested.offhost_configured is True
+    assert attested.sinks_read == 1
+    assert attested.verified is True, attested.reasons
+
+    # The freshness gate: a witness that stopped advancing cannot attest rows anchored after it.
+    # Re-evaluating the SAME fresh object at a far-future `now` makes it stale → verified False,
+    # so a stalled off-host push is caught rather than silently trusted.
+    import datetime
+
+    future = datetime.datetime.now(datetime.UTC) + datetime.timedelta(seconds=6000)
+    async with get_sessionmaker()() as s:
+        stale = await verify_offhost_checkpoint(s, org_id, verify_key=verify_key, now=future)
+    assert stale.offhost_configured is True
+    assert stale.verified is False
+    assert any("stale" in r for r in stale.reasons), stale.reasons
 
 
 async def test_ac6b_linker_safe_prefix_never_reorders_across_an_open_txn(
