@@ -309,8 +309,10 @@ async def _authorize_pack_subjects(
     ``finding.read`` for its ORIGIN finding, a FINDING pack ``capa.read`` for its LINKED auto-CAPA —
     since each dossier embeds the other's metadata. Refuse-ANY — the subject IS the whole pack, so
     one unreadable subject fails (excluding it leaves an empty pack). CLAUSE/PROCESS packs carry no
-    subject dossier. (A finding dossier also embeds its source audit + correction-chain
-    *identifiers*; read-gating that ancestry/lineage is a deferred owner decision — see the PR.)
+    subject dossier. A finding dossier also embeds its SOURCE AUDIT's identifier — now gated via
+    ``audit.read`` (SYSTEM, GET /audits/{id}) — completing the immediate-neighbour read-gate. The
+    correction-chain *identifiers* stay a deferred owner transitive-read-closure decision (bare
+    references, already serve-guarded on destroy) — see the PR.
 
     Routed through the ``enforce`` PEP (not a bare ``authorize``) so the subject-read decision —
     ALLOW **and** DENY — lands in the ``AuthzAuditSink`` durable authz trail (the PEP's audit
@@ -324,7 +326,15 @@ async def _authorize_pack_subjects(
             )
         for fid in scope_ids:
             finding = await repo.get_finding(session, fid)
-            if finding is None or finding.auto_capa_id is None:
+            if finding is None:  # pragma: no cover - already 404'd by _validate_scope
+                continue
+            # The finding dossier embeds its SOURCE AUDIT's id + identifier; GET /audits/{id} gates
+            # that behind audit.read (SYSTEM), so bundling the finding also requires reading its
+            # source audit — else a finding.read-only holder harvests the audit identifier.
+            await enforce(
+                session, authz_sink, request, caller, "audit.read", ResourceContext.system()
+            )
+            if finding.auto_capa_id is None:
                 continue
             capa = await repo.get_capa(session, finding.auto_capa_id)
             if capa is None:  # pragma: no cover - the bidirectional link is created in one txn

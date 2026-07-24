@@ -446,9 +446,12 @@ async def test_finding_pack_create_requires_linked_capa_read(
         )
     ).json()["id"]
 
-    # Attacker: finding.read (the subject, granted SYSTEM) + the pack keys, but NOT capa.read.
+    # Attacker: finding.read + audit.read (so capa.read is the ONLY missing embed-neighbour key) +
+    # the pack keys, but NOT capa.read.
     attacker = _subject("linked-attacker")
-    await _grant(attacker, ("finding.read", "report.evidence_pack.generate", "report.export"))
+    await _grant(
+        attacker, ("finding.read", "audit.read", "report.evidence_pack.generate", "report.export")
+    )
     ha = _auth(token_factory, attacker)
     refused = await app_client.post(
         "/api/v1/evidence-packs",
@@ -890,3 +893,47 @@ async def test_dossier_omits_r28_excluded_evidence_identifier(
     finally:
         await owner_delete_disposition_events([uuid.UUID(ev_drop)])
         await _teardown([ev_keep, ev_drop], pack_uuid)
+
+
+async def test_finding_pack_create_requires_source_audit_read(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """Round-6 P1 (R28): a FINDING pack's dossier embeds its SOURCE AUDIT's id + identifier; GET
+    /audits/{id} gates that behind audit.read (SYSTEM), so creating the pack must ALSO re-authorize
+    audit.read — a caller with finding.read + capa.read but WITHOUT audit.read is REFUSED (403) at
+    create. Completes the immediate-neighbour read-gate (subject + linked CAPA + source audit).
+    Mutation-verify: without the audit.read gate the finding.read+capa.read caller gets 201."""
+    owner = _subject("srcaudit-owner")
+    await _grant(owner, (*_AUDIT_KEYS, "finding.create", "finding.read", "capa.read", *_PACK_KEYS))
+    ho = _auth(token_factory, owner)
+    audit_id = await _new_audit(app_client, ho)
+    await _walk(app_client, ho, audit_id, "plan", "conduct")
+    finding_id = (
+        await app_client.post(
+            f"/api/v1/audits/{audit_id}/findings",
+            headers=ho,
+            json={"finding_type": "NC", "severity": "Major"},
+        )
+    ).json()["id"]
+
+    # Attacker: finding.read + capa.read (so audit.read is the ONLY missing key) + the pack keys,
+    # but NOT audit.read.
+    attacker = _subject("srcaudit-attacker")
+    await _grant(
+        attacker, ("finding.read", "capa.read", "report.evidence_pack.generate", "report.export")
+    )
+    ha = _auth(token_factory, attacker)
+    refused = await app_client.post(
+        "/api/v1/evidence-packs",
+        headers=ha,
+        json={"title": "F", "scope_kind": "FINDING", "finding_ids": [finding_id]},
+    )
+    assert refused.status_code == 403, refused.text
+
+    ok = await app_client.post(
+        "/api/v1/evidence-packs",
+        headers=ho,
+        json={"title": "F-ok", "scope_kind": "FINDING", "finding_ids": [finding_id]},
+    )
+    assert ok.status_code == 201, ok.text
+    await _teardown([], uuid.UUID(ok.json()["id"]))
