@@ -505,12 +505,29 @@ async def insert_pending_purge(
     return marker.id
 
 
-async def blob_exists(session: AsyncSession, blob_sha256: str) -> bool:
-    """True if a ``blob`` row for this sha exists NOW. The purge path checks this before erasing a
-    marker's bytes: because ``object_key`` is the content hash, a re-capture of the same content
+async def blob_owns_object(
+    session: AsyncSession, *, sha256: str, bucket: str, object_key: str
+) -> bool:
+    """True if a live ``blob`` row now owns THIS EXACT object — same sha AND bucket AND object_key.
+    The purge path checks this before erasing a marker's bytes: a re-capture of the same content
     after the marker was written re-creates the ``blob`` row over the still-present (not-yet-purged)
-    object — the bytes are live again, so the stale marker must be dropped, not replayed."""
-    return (await session.scalar(select(Blob.sha256).where(Blob.sha256 == blob_sha256))) is not None
+    object, so the bytes are live again and the stale marker must be dropped, not replayed.
+
+    ⚠ Matching the sha ALONE is wrong: ``blob.sha256`` is a GLOBAL content-addressed PK, so the
+    identical bytes can be re-owned by a blob row in a DIFFERENT bucket — e.g. a document check-in
+    lands the sha in the ``documents`` bucket while a records-evidence marker still targets the
+    ``records`` bucket (both objects physically distinct). A sha-only match would then cancel the
+    marker WITHOUT erasing the orphaned records object, leaking a disposed record's evidence. Keying
+    on (sha, bucket, object_key) cancels only when the marker's OWN object was re-created."""
+    return (
+        await session.scalar(
+            select(Blob.sha256).where(
+                Blob.sha256 == sha256,
+                Blob.bucket == bucket,
+                Blob.object_key == object_key,
+            )
+        )
+    ) is not None
 
 
 async def list_pending_purges(

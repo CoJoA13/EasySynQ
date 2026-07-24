@@ -33,6 +33,7 @@ import logging
 import uuid
 
 from botocore.exceptions import BotoCoreError, ClientError
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...config import get_settings
@@ -142,28 +143,43 @@ async def _mark_record_evidence_for_purge(
 
 async def _purge_marked(session: AsyncSession, specs: list[_PurgeSpec]) -> None:
     """The S3 phase — call AFTER the caller COMMITs the tombstone + blob-row deletes + markers.
-    Physically purge each blob's bytes (idempotent) and drop its marker on success. NEVER raises —
-    the disposition already committed, so a storage failure just leaves the marker for
-    ``reap_pending_blob_purges`` to retry (the record stays legally disposed either way). Skips the
-    purge (and drops the marker) if a ``blob`` row for the sha exists again — a re-capture of the
-    same content re-owns the object, so the stale marker must not erase its live bytes."""
+    Physically purge each blob's bytes (idempotent) and drop its marker on success. NEVER raises:
+    the disposition already committed, so NEITHER a storage failure NOR a post-commit DB blip may
+    turn the completed operation into an error — both just leave the marker for
+    ``reap_pending_blob_purges`` to finish (the record stays legally disposed either way). Skips the
+    purge (and drops the marker) only if a ``blob`` row now OWNS this exact object again (same sha +
+    bucket + object_key) — a re-capture of the same content into the SAME location re-owns the
+    bytes, so the stale marker must not erase them; a matching sha in a DIFFERENT bucket is a
+    physically distinct object and does NOT cancel the purge (``blob_owns_object``)."""
     for spec in specs:
-        if await repo.blob_exists(session, spec.sha256):
+        try:
+            superseded = await repo.blob_owns_object(
+                session, sha256=spec.sha256, bucket=spec.bucket, object_key=spec.object_key
+            )
+            if not superseded:
+                try:
+                    await storage.purge_object(
+                        spec.object_key, bucket=spec.bucket, bypass_governance=spec.bypass
+                    )
+                except (ClientError, BotoCoreError):
+                    logger.warning(
+                        "records.purge.deferred_to_reaper",
+                        extra={"extra_fields": {"sha256": spec.sha256, "bucket": spec.bucket}},
+                    )
+                    continue  # storage outage — leave the marker; try the next spec
             await repo.delete_pending_purge(session, spec.purge_id)
             await session.commit()
-            continue
-        try:
-            await storage.purge_object(
-                spec.object_key, bucket=spec.bucket, bypass_governance=spec.bypass
-            )
-        except (ClientError, BotoCoreError):
+        except SQLAlchemyError:
+            # A post-commit DB blip (disconnect) in the re-check / marker-delete / commit. The
+            # disposition is ALREADY durably committed, so roll back and defer the remaining markers
+            # to reap_pending_blob_purges rather than surface a 500 for an operation that succeeded.
+            # Any bytes already purged above are re-checked idempotently by the reaper.
+            await session.rollback()
             logger.warning(
-                "records.purge.deferred_to_reaper",
+                "records.purge.db_deferred_to_reaper",
                 extra={"extra_fields": {"sha256": spec.sha256, "bucket": spec.bucket}},
             )
-            continue
-        await repo.delete_pending_purge(session, spec.purge_id)
-        await session.commit()
+            return
 
 
 def _write_tombstone(
@@ -686,9 +702,10 @@ async def reap_pending_blob_purges(session: AsyncSession) -> dict[str, int]:
     drop the marker, committing per marker so a mid-run crash re-does at most one. Fields are
     snapshotted per batch so a per-marker commit can't expire an ORM row we read. LOOPS in
     ``exclude_ids`` batches so a persistent-failure cohort in the oldest rows can't starve newer
-    purgeable markers within a run. SKIPs the purge (and drops the marker) when a ``blob`` row for
-    the sha exists again — a re-capture of the same content re-owns the object. Returns
-    ``{reaped}``."""
+    purgeable markers within a run. SKIPs the purge (and drops the marker) when a ``blob`` row now
+    OWNS this exact object again (same sha + bucket + object_key) — a re-capture of the same content
+    into the SAME location re-owns the bytes; a matching sha in a different bucket is a distinct
+    object and does NOT cancel the purge. Returns ``{reaped}``."""
     reaped = 0
     handled: set[uuid.UUID] = set()
     while True:
@@ -700,7 +717,9 @@ async def reap_pending_blob_purges(session: AsyncSession) -> dict[str, int]:
             purge_id for purge_id, *_ in todo
         )  # skip this cohort on the next batch fetch
         for purge_id, sha256, bucket, object_key, bypass in todo:
-            if await repo.blob_exists(session, sha256):
+            if await repo.blob_owns_object(
+                session, sha256=sha256, bucket=bucket, object_key=object_key
+            ):
                 await repo.delete_pending_purge(session, purge_id)
                 await session.commit()
                 reaped += 1

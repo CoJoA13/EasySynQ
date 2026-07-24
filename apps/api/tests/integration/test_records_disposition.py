@@ -21,7 +21,7 @@ import pytest
 from botocore.exceptions import ClientError
 from httpx import AsyncClient
 from sqlalchemy import delete, func, select, text, update
-from sqlalchemy.exc import DBAPIError
+from sqlalchemy.exc import DBAPIError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from easysynq_api.db.models._audit_enums import EventType
@@ -1238,5 +1238,154 @@ async def test_recapture_before_purge_cancels_stale_marker(
                 .where(PendingBlobPurge.sha256 == sha)
             )
             assert pending == 0  # the stale marker was dropped, not replayed
+    finally:
+        await _cleanup(pol)
+
+
+async def test_recapture_into_other_bucket_still_purges_records_object(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """Batch 5 finding-1 follow-up (cross-bucket): ``blob.sha256`` is a GLOBAL content-addressed PK,
+    so identical bytes can be re-owned by a blob row in a DIFFERENT bucket (a doc check-in lands
+    the sha in the ``documents`` bucket) while a records-evidence marker still targets the
+    ``records`` bucket — two physically distinct objects. The purge re-check keys on
+    (sha, bucket, object_key), so it must STILL erase the orphaned records object and drop the
+    marker, leaving the documents blob untouched. Mutation-verify: a sha-only re-check would treat
+    the documents blob as a re-owner, cancel the marker, and leak the disposed record's evidence."""
+    subject = _subject("xbucket")
+    user_id = await _grant(subject, _DISPOSITION_PERMS)
+    org_id = await _org_id(user_id)
+    h = _auth(token_factory, subject)
+    pol = await _seed_policy(org_id, action=DispositionAction.DESTROY, review_required=True)
+    doc_blob_sha: str | None = None
+    try:
+        content = f"xbucket-{uuid.uuid4().hex}".encode()
+        sha = await _upload_evidence(app_client, h, content)
+        rid = (
+            await _capture(
+                app_client,
+                h,
+                record_type="CALIBRATION",
+                title="xb",
+                retention_policy_id=str(pol),
+                evidence=[{"sha256": sha, "content_type": "application/pdf"}],
+            )
+        ).json()["id"]
+        # Dispose (crash sim): blob row deleted, records-bucket marker written; bytes remain.
+        async with get_sessionmaker()() as s:
+            record = await s.get(Record, uuid.UUID(rid))
+            assert record is not None
+            await disposition._mark_record_evidence_for_purge(s, record, bypass=True)
+            disposition._write_tombstone(
+                s, record, action=DispositionAction.DESTROY, policy_id=None, approved_by=None
+            )
+            await s.commit()
+        # Simulate a DOCUMENT check-in re-owning the identical content in a DIFFERENT bucket: the
+        # global blob PK re-appears, but pointing at documents/<sha>, NOT the records object.
+        async with get_sessionmaker()() as s:
+            s.add(
+                Blob(
+                    sha256=sha,
+                    org_id=org_id,
+                    size_bytes=len(content),
+                    mime_type="application/pdf",
+                    bucket=storage._doc_bucket(),
+                    object_key=sha,
+                    worm_locked=True,
+                )
+            )
+            await s.commit()
+            doc_blob_sha = sha
+        # The reaper must NOT be fooled by the cross-bucket blob row — it purges records/<sha>.
+        async with get_sessionmaker()() as s:
+            await disposition.reap_pending_blob_purges(s)
+        assert not (await storage.head(sha, bucket=storage._records_bucket())).exists  # purged
+        async with get_sessionmaker()() as s:
+            pending = await s.scalar(
+                select(func.count())
+                .select_from(PendingBlobPurge)
+                .where(PendingBlobPurge.sha256 == sha)
+            )
+            assert pending == 0  # marker dropped only AFTER the real purge
+            assert await s.get(Blob, sha) is not None  # the documents blob row is untouched
+    finally:
+        if doc_blob_sha is not None:
+            async with get_sessionmaker()() as s:
+                await s.execute(delete(Blob).where(Blob.sha256 == doc_blob_sha))
+                await s.commit()
+        await _cleanup(pol)
+
+
+async def test_purge_post_commit_db_error_defers_to_reaper(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Batch 5 finding-2 follow-up: once the disposition commits, the record is durably DISPOSED
+    and its purge marker is durable, so a transient DB blip in the post-commit purge phase
+    (``blob_owns_object`` / marker-delete / commit) must NOT surface as a 500 for an operation that
+    already succeeded — it is rolled back and deferred to the reaper. Mutation-verify: without the
+    deferral the injected DB error would propagate out of the approve handler as a 500."""
+    a_subject = _subject("dbdefa")
+    b_subject = _subject("dbdefb")
+    user_a = await _grant(a_subject, _DISPOSITION_PERMS)
+    org_id = await _org_id(user_a)
+    await _grant(b_subject, _DISPOSITION_PERMS)
+    ha = _auth(token_factory, a_subject)
+    hb = _auth(token_factory, b_subject)
+    pol = await _seed_policy(org_id, action=DispositionAction.DESTROY, review_required=True)
+    try:
+        sha = await _upload_evidence(app_client, ha, f"dbdef-{uuid.uuid4().hex}".encode())
+        rid = (
+            await _capture(
+                app_client,
+                ha,
+                record_type="CALIBRATION",
+                title="cal",
+                retention_policy_id=str(pol),
+                evidence=[{"sha256": sha, "content_type": "application/pdf"}],
+            )
+        ).json()["id"]
+        req_id = (
+            await app_client.post(
+                f"/api/v1/records/{rid}/worm-destroy-requests",
+                headers=ha,
+                json={"legal_basis": "order"},
+            )
+        ).json()["id"]
+
+        async def _db_boom(*_a: object, **_k: object) -> None:
+            raise SQLAlchemyError("simulated post-commit db blip")
+
+        # The marker-delete (a DB op) fails AFTER the disposition commit + the byte purge; the
+        # approve must STILL succeed (deferred to the reaper), never a 500.
+        monkeypatch.setattr(disposition.repo, "delete_pending_purge", _db_boom)
+        ok = await app_client.post(
+            f"/api/v1/records/{rid}/worm-destroy-requests/{req_id}/approve", headers=hb, json={}
+        )
+        assert ok.status_code == 200, ok.text
+        state, _ = await _state(rid)
+        assert state == "DISPOSED"
+        assert len(await _disposition_events(rid)) == 1
+        # The marker survived the rolled-back delete and awaits the reaper.
+        async with get_sessionmaker()() as s:
+            pending = await s.scalar(
+                select(func.count())
+                .select_from(PendingBlobPurge)
+                .where(PendingBlobPurge.sha256 == sha)
+            )
+            assert pending == 1
+        # Restore the real delete; the reaper drops the marker (bytes were already purged — the
+        # re-purge is an idempotent no-op).
+        monkeypatch.undo()
+        async with get_sessionmaker()() as s:
+            await disposition.reap_pending_blob_purges(s)
+        async with get_sessionmaker()() as s:
+            pending = await s.scalar(
+                select(func.count())
+                .select_from(PendingBlobPurge)
+                .where(PendingBlobPurge.sha256 == sha)
+            )
+            assert pending == 0
     finally:
         await _cleanup(pol)
