@@ -386,10 +386,22 @@ async def verify_offhost_checkpoint(
             read_failed = True
             continue
         if doc is None:
-            # A not-yet-anchored sink is benign (like a single fresh sink) — NOT an attestation
-            # failure, so it never alarms even when read alongside a healthy sibling. It still lands
-            # in ``reasons`` (verified=False) so the CLI reports the witness isn't producing yet.
-            reasons.append(f"sink {sink.id}: no off-host checkpoint object found")
+            if sink.last_anchored_at is not None:
+                # A sink that HAS anchored before but now returns NO object — its WORM objects were
+                # deleted, the bucket was replaced, or reads point at the wrong bucket. A witness
+                # that was producing has gone dark: an attestation FAILURE, not the benign
+                # not-yet-anchored case. (last_anchored_at is DB state a determined owner could
+                # null; the trusted-lineage closure of that residual is the sink.py:106 thread.)
+                reasons.append(
+                    f"sink {sink.id}: previously-anchored witness now returns no object "
+                    "(WORM objects deleted / bucket replaced?)"
+                )
+                attest_failures += 1
+            else:
+                # Never anchored (a genuinely fresh sink) — benign, like a single fresh sink; NOT an
+                # attestation failure, so it never alarms even read alongside a healthy sibling. It
+                # still lands in ``reasons`` (verified=False) so the CLI reports it isn't producing.
+                reasons.append(f"sink {sink.id}: no off-host checkpoint object found")
             continue
         read += 1
         reason = await _attest_offhost_doc(session, org_id, verify_key, doc, now=now)
