@@ -25,40 +25,46 @@ class SinkReadError(Exception):
     verifier must ALARM on this rather than silently treat the off-host anchor as attested."""
 
 
-def _audit_sink_client() -> Any:
+def _audit_sink_client(connection: dict[str, Any] | None = None) -> Any:
     import boto3
 
     s = get_settings()
-    # DISTINCT credentials from the vault root (D-8). Empty creds fall back to the vault creds —
-    # dev-only convenience that does NOT honour custody separation (off_host stays false).
+    # Honor the sink's documented non-secret connection: ``endpoint``/``region`` select the
+    # genuinely separate host (falling back to the vault settings only when unset), while the
+    # DISTINCT credentials come from the D-8 secret (empty → vault creds, dev-only convenience that
+    # does NOT honour custody separation). Without honoring the endpoint an off_host sink would
+    # silently write to local MinIO, defeating the independent-witness guarantee.
+    conn = connection or {}
     return boto3.client(
         "s3",
-        endpoint_url=s.s3_endpoint,
+        endpoint_url=conn.get("endpoint") or s.s3_endpoint,
         aws_access_key_id=s.audit_sink_access_key or s.s3_access_key,
         aws_secret_access_key=s.audit_sink_secret_key or s.s3_secret_key,
-        region_name=s.s3_region,
+        region_name=conn.get("region") or s.s3_region,
     )
 
 
-def _audit_sink_read_client() -> Any:
+def _audit_sink_read_client(connection: dict[str, Any] | None = None) -> Any:
     import boto3
 
     s = get_settings()
     # SEPARATE read-only credentials (doc 12 §4.4): the independent off-host read-back must NOT use
-    # the write-only sink creds (minio-init grants no GetObject) — a distinct read principal is
-    # the custody-separated witness. Empty → the vault creds (dev only, NOT honest separation).
+    # the write-only sink creds (minio-init grants no GetObject) — a distinct read principal is the
+    # custody-separated witness. Endpoint/region come from the sink's connection (same separate host
+    # the writer targets), so a verifier does not silently read back from local MinIO.
+    conn = connection or {}
     return boto3.client(
         "s3",
-        endpoint_url=s.s3_endpoint,
+        endpoint_url=conn.get("endpoint") or s.s3_endpoint,
         aws_access_key_id=s.audit_sink_read_access_key or s.s3_access_key,
         aws_secret_access_key=s.audit_sink_read_secret_key or s.s3_secret_key,
-        region_name=s.s3_region,
+        region_name=conn.get("region") or s.s3_region,
     )
 
 
 def _push_worm_bucket(connection: dict[str, Any], key: str, body: bytes) -> None:
     bucket = connection.get("bucket") or get_settings().s3_bucket_audit_checkpoints
-    client = _audit_sink_client()
+    client = _audit_sink_client(connection)
     # Write-once: a new object per checkpoint as the chain advances; never overwrite.
     client.put_object(Bucket=bucket, Key=key, Body=body, ContentType="application/json")
 
@@ -89,7 +95,7 @@ def fetch_latest_offhost_checkpoint(
     if kind != "worm_bucket":
         raise SinkReadError(f"off-host read-back is not implemented for sink kind '{kind}'")
     bucket = (connection or {}).get("bucket") or get_settings().s3_bucket_audit_checkpoints
-    client = _audit_sink_read_client()
+    client = _audit_sink_read_client(connection)
     prefix = f"checkpoints/{org_id}/"
     best_key: str | None = None
     best: tuple[int, str] | None = None

@@ -266,6 +266,7 @@ def _reverify_chain(owner_dsn: str, scratch_db: str, version: int) -> dict[str, 
                 ).all()
                 verified = True
                 checked = pending = 0
+                attested = verify_key is not None
                 breaks: list[dict[str, Any]] = []
                 for (org_id,) in org_ids:
                     result = await verify_chain(
@@ -275,12 +276,20 @@ def _reverify_chain(owner_dsn: str, scratch_db: str, version: int) -> dict[str, 
                     checked += result.checked
                     pending += result.pending
                     breaks.extend({"at_id": b.at_id, "reason": b.reason} for b in result.breaks)
+                    # Honest attestation: a POPULATED chain must carry a PRESENT, hash-matching
+                    # checkpoint to count as attested. verify_chain already breaks on a bad
+                    # checkpoint (→ verified False → the drill FAILs), but a MISSING checkpoint on a
+                    # populated chain (an owner wiped audit_checkpoint pre-backup) is UNVERIFIABLE —
+                    # so attested drops to False, not vacuously True just because a key is mounted.
+                    cp = result.checkpoint
+                    if result.checked > 0 and not (cp is not None and cp.present and cp.hash_match):
+                        attested = False
                 return {
                     "verified": verified,
                     "checked": checked,
                     "pending": pending,
                     "breaks": breaks[:20],
-                    "attested": verify_key is not None,
+                    "attested": attested,
                 }
         finally:
             await engine.dispose()
