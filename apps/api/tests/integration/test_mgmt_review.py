@@ -896,3 +896,23 @@ async def test_submit_resolves_pending_mr_input_task(
             .all()
         )
         assert post and all(t.state is TaskState.DONE for t in post)
+
+
+async def test_generic_document_release_rejects_management_review(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """[Batch 8] A Management Review must NOT be released via the generic ``/documents/{id}``
+    release — it skips the MR post-release chain (spawn_mr_actions + close_state=ActionsTracked),
+    leaving it permanently unclosable. The generic endpoint 422s a managed subtype toward its own
+    ``/management-reviews`` release. Mutation-distinguishing: without the guard the request
+    proceeds past reject_objective_byte_path into the release cutover."""
+    subject = f"mr-genrel-{uuid.uuid4()}"
+    h = _auth(token_factory, subject)
+    # document.release too, so the caller PASSES the authz enforce and it is the managed-subtype
+    # guard (not a 403) that rejects — proving the guard runs after authz, not a subtype leak.
+    await _grant(subject, (*_MR_KEYS, "document.release"))
+    rid = await _create_review(app_client, h, "Batch 8 generic-release guard")
+
+    r = await app_client.post(f"/api/v1/documents/{rid}/release", headers=h, json={})
+    assert r.status_code == 422, r.text
+    assert r.json()["errors"][0]["code"] == "management_review_managed_via_reviews"

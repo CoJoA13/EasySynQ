@@ -393,10 +393,25 @@ async def reject_objective_byte_path(session: AsyncSession, doc: DocumentedInfor
         )
 
 
+def _require_editable_state(doc: DocumentedInformation) -> None:
+    """Batch 8 (doc-lifecycle FSM gate): the generic byte path (checkout/check-in) is legal only
+    while the document is EDITABLE (Draft/UnderRevision). A check-in on an InReview/Approved/
+    Effective/Obsolete document would advance a version AROUND the FSM and permanently brick the doc
+    + its open approval task; mirrors the form-schema path's ``must_be_editable`` 409."""
+    if doc.current_state not in _EDITABLE_STATES:
+        raise ProblemException(
+            status=409,
+            code="not_editable",
+            title="Check out / check in only while Draft or UnderRevision",
+            detail="This document is not in an editable state — start a revision to reopen it.",
+        )
+
+
 async def checkout(
     session: AsyncSession, sink: VaultAuditSink, actor: AppUser, doc: DocumentedInformation
 ) -> WorkingDraft:
     await reject_objective_byte_path(session, doc)  # S-obj-4 O-5 — before the lock, deterministic
+    _require_editable_state(doc)  # Batch 8: gate the byte path on Draft/UnderRevision
     token = await locks.acquire(doc.id)
     if token is None:
         existing = await repository.get_working_draft(session, doc.id)
@@ -498,6 +513,7 @@ async def checkin(
     mime_type: str = "application/octet-stream",
 ) -> tuple[DocumentVersionModel, bool]:
     await reject_objective_byte_path(session, doc)  # S-obj-4 O-5 — before WD check, deterministic
+    _require_editable_state(doc)  # Batch 8: gate the byte path on Draft/UnderRevision
     wd = await repository.get_working_draft(session, doc.id)
     if wd is None or wd.checked_out_by != actor.id:
         raise ProblemException(

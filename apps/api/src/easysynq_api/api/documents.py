@@ -1627,7 +1627,10 @@ async def checkout_endpoint(
     session: AsyncSession = Depends(get_session),
     vault_sink: VaultAuditSink = Depends(get_vault_audit_sink),
 ) -> dict[str, Any]:
-    doc = await _load_document(session, caller, document_id)
+    # Batch 8: FOR UPDATE + populate_existing so the checkout FSM gate reads the COMMITTED state
+    # under a row lock — serializing with a concurrent submit-review (which also locks the row) so a
+    # checkout can't pass a stale Draft read while the doc is being flipped to InReview.
+    doc = await _load_document(session, caller, document_id, for_update=True)
     wd = await checkout(session, vault_sink, caller, doc)
     return _working_draft(wd)
 
@@ -1651,7 +1654,10 @@ async def checkin_endpoint(
     session: AsyncSession = Depends(get_session),
     vault_sink: VaultAuditSink = Depends(get_vault_audit_sink),
 ) -> dict[str, Any]:
-    doc = await _load_document(session, caller, document_id)
+    # Batch 8: FOR UPDATE + populate_existing so the check-in FSM gate reads the COMMITTED state
+    # under a row lock — serializing with a concurrent submit-review so a check-in cannot pass a
+    # stale Draft read and append a version while the doc was flipped to InReview (bricking it).
+    doc = await _load_document(session, caller, document_id, for_update=True)
     version, change_detected = await checkin(
         session,
         vault_sink,
@@ -1728,9 +1734,16 @@ async def release_endpoint(
     # Enforce imperatively (not via a path-only dependency): the SoD-2 scope must resolve for the
     # SAME version the cutover will promote (body.version_id, else the latest Approved). The cutover
     # then re-reads the document authoritatively under a row lock in its own SERIALIZABLE session.
-    await _load_document(session, caller, document_id)  # 404 + org guard
+    doc = await _load_document(session, caller, document_id)  # 404 + org guard
     resource = await _release_scope(session, document_id, body.version_id)
     await enforce(session, authz_sink, request, caller, "document.release", resource, sig_hook=True)
+    # Batch 8: AFTER the authz enforce (so an unauthorized same-org caller gets an audited 403, not
+    # a subtype-revealing 422) — a managed subtype (OBJ/MR/registers) must NOT be released via the
+    # generic endpoint: that skips its post-release chain (a generically-released MR becomes
+    # permanently unclosable; the OBJ unit-reset is missed). It must go through its own
+    # /management-reviews / /objectives release (which calls release() directly). enforce audits the
+    # decision but emits no signature (that is in release()), so a 422 here leaves nothing dangling.
+    await reject_objective_byte_path(session, doc)
     doc = await release(caller, document_id, vault_sink, sig_sink, version_id=body.version_id)
     return _document(doc)
 
