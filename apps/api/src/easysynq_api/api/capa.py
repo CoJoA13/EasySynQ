@@ -617,6 +617,15 @@ async def spawn_capa_endpoint(
     capa, created = await spawn_capa_from_complaint(
         session, caller, complaint_id, severity=body.severity, process_id=body.process_id
     )
+    if not created:
+        # Idempotent replay: the complaint already spawned this CAPA — possibly into a DIFFERENT
+        # process than the caller-chosen process_id (which only gated capa.create). Re-authorize
+        # capa.read at the CAPA's OWN process scope before returning its header, so a caller holding
+        # capa.create in any process can't read a cross-process CAPA's body via replay (the create
+        # gate must not double-serve as read-authorization for a pre-existing resource).
+        await enforce(
+            session, authz_sink, request, caller, "capa.read", _process_scope(capa.process_id)
+        )
     return JSONResponse(
         status_code=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
         content=await _capa_full(session, capa),

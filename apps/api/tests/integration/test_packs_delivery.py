@@ -21,14 +21,18 @@ from sqlalchemy import delete, func, select
 
 from easysynq_api.db.models._audit_enums import EventType
 from easysynq_api.db.models._pack_enums import PackStatus
+from easysynq_api.db.models._retention_enums import DispositionAction
 from easysynq_api.db.models.audit_event import AuditEvent
 from easysynq_api.db.models.blob import Blob
 from easysynq_api.db.models.evidence_pack import EvidencePack
 from easysynq_api.db.models.pack_share_link import PackShareLink
+from easysynq_api.db.models.record import Record
 from easysynq_api.db.session import get_sessionmaker
 from easysynq_api.services.packs import build, build_and_cache_portfolio
 from easysynq_api.services.packs import repository as packs_repo
+from easysynq_api.services.records import disposition
 
+from ._owner_db import owner_delete_disposition_events
 from .test_packs import _PACK_PERMS, _link_process, _make_process, _teardown
 from .test_records import _capture, _grant, _subject, _upload_evidence
 from .test_vault import _auth
@@ -195,6 +199,63 @@ async def test_pack_share_full_delivery_flow(
         )
         assert rv2.status_code == 409
     finally:
+        await _delivery_teardown(
+            record_ids=[rid] if rid else [], pack_id=pack_uuid, process_id=process_id
+        )
+
+
+async def test_sealed_pack_refuses_serving_after_member_destroyed(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """Batch 6 (R27/R28): a record DESTROYED after a pack is sealed must not stay reachable via the
+    pack's cached ZIP/portfolio. The public share (landing + download) fails-closed to 403 and the
+    authenticated download 409s. Mutation-verify: without the serve-time destroy re-check both keep
+    serving the erased evidence. Purging the derived artifacts is a tracked fast-follow."""
+    subject = _subject("destroy-serve")
+    user_id = await _grant(subject, _PACK_PERMS)
+    h = _auth(token_factory, subject)
+    process_id = await _make_process(user_id, f"Proc-{uuid.uuid4().hex[:8]}")
+    pack_uuid: uuid.UUID | None = None
+    rid = ""
+    try:
+        pack_uuid, rid = await _make_sealed_pack(app_client, h, process_id)
+        token = (
+            await app_client.post(
+                f"/api/v1/evidence-packs/{pack_uuid}/share",
+                headers=h,
+                json={"recipient": "auditor"},
+            )
+        ).json()["token"]
+        # BEFORE the destroy both serve normally.
+        assert (
+            await app_client.get("/api/v1/evidence-packs/shared", params={"t": token})
+        ).status_code == 200
+        assert (
+            await app_client.get(f"/api/v1/evidence-packs/{pack_uuid}/download", headers=h)
+        ).status_code == 200
+
+        # WORM-destroy the INCLUDED record (write its DESTROY disposition tombstone).
+        async with get_sessionmaker()() as s:
+            record = await s.get(Record, uuid.UUID(rid))
+            assert record is not None
+            disposition._write_tombstone(
+                s, record, action=DispositionAction.DESTROY, policy_id=None, approved_by=None
+            )
+            await s.commit()
+
+        # AFTER: the public paths fail-closed (403 UNAVAILABLE); the authenticated download 409s.
+        assert (
+            await app_client.get("/api/v1/evidence-packs/shared", params={"t": token})
+        ).status_code == 403
+        pub = await app_client.get(
+            "/api/v1/evidence-packs/shared/download", params={"t": token, "format": "zip"}
+        )
+        assert pub.status_code == 403, pub.text
+        auth = await app_client.get(f"/api/v1/evidence-packs/{pack_uuid}/download", headers=h)
+        assert auth.status_code == 409, auth.text
+        assert auth.json()["code"] == "pack_evidence_destroyed"
+    finally:
+        await owner_delete_disposition_events([uuid.UUID(rid)] if rid else [])
         await _delivery_teardown(
             record_ids=[rid] if rid else [], pack_id=pack_uuid, process_id=process_id
         )

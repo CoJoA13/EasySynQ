@@ -215,6 +215,15 @@ async def download_pack_endpoint(
         raise ProblemException(
             status=409, code="conflict", title="Pack is not sealed yet", detail=pack.status.value
         )
+    if await packs_repo.pack_has_destroyed_member(session, pack.id):
+        # A record INCLUDED in this pack was physically destroyed after sealing (DESTROY / R27
+        # WORM-destroy) — fail-closed so the cached ZIP no longer serves the erased evidence.
+        raise ProblemException(
+            status=409,
+            code="pack_evidence_destroyed",
+            title="Pack contains evidence destroyed after sealing",
+            detail="A record in this pack was destroyed (disposition); download refused.",
+        )
     blob = await vault_repo.get_blob(session, pack.zip_blob_sha256)
     if blob is None:  # pragma: no cover - defensive (the seal wrote the blob row)
         raise ProblemException(status=404, code="not_found", title="Pack artifact not found")

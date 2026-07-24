@@ -185,6 +185,56 @@ async def test_finding_scope_pack_bundles_dossier(
         await _teardown([ev_id], pack_uuid)
 
 
+async def test_finding_capa_pack_create_requires_subject_read(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """Batch 6 (R28): creating a FINDING/CAPA pack must re-authorize the SUBJECT's read at its own
+    scope — a holder of report.evidence_pack.generate who can't finding.read/capa.read the subject
+    is REFUSED (403), never handed the subject dossier the worker would serialize. The evidence
+    candidates are already R28-filtered, but the subject is excluded from that candidate set.
+    Mutation-verify: without the create-time subject gate the create returns 201."""
+    # Owner (full keys) raises an audit finding (which auto-spawns a CAPA).
+    owner = _subject("subjread-owner")
+    await _grant(owner, (*_AUDIT_KEYS, "finding.create", "finding.read", "capa.read", *_PACK_KEYS))
+    ho = _auth(token_factory, owner)
+    audit_id = await _new_audit(app_client, ho)
+    await _walk(app_client, ho, audit_id, "plan", "conduct")
+    f = (
+        await app_client.post(
+            f"/api/v1/audits/{audit_id}/findings",
+            headers=ho,
+            json={"finding_type": "NC", "severity": "Major", "clause_ref": "8.4"},
+        )
+    ).json()
+    finding_id, capa_id = f["id"], f["auto_capa_id"]
+
+    # Attacker holds the pack-generate authority but NOT finding.read / capa.read.
+    attacker = _subject("subjread-attacker")
+    await _grant(attacker, ("report.evidence_pack.generate", "report.export"))
+    ha = _auth(token_factory, attacker)
+    fp = await app_client.post(
+        "/api/v1/evidence-packs",
+        headers=ha,
+        json={"title": "F", "scope_kind": "FINDING", "finding_ids": [finding_id]},
+    )
+    assert fp.status_code == 403, fp.text
+    cp = await app_client.post(
+        "/api/v1/evidence-packs",
+        headers=ha,
+        json={"title": "C", "scope_kind": "CAPA", "capa_ids": [capa_id]},
+    )
+    assert cp.status_code == 403, cp.text
+
+    # The owner (WITH subject read) still creates the pack — the gate keeps the happy path.
+    op = await app_client.post(
+        "/api/v1/evidence-packs",
+        headers=ho,
+        json={"title": "F-ok", "scope_kind": "FINDING", "finding_ids": [finding_id]},
+    )
+    assert op.status_code == 201, op.text
+    await _teardown([], uuid.UUID(op.json()["id"]))
+
+
 async def test_capa_scope_pack_proves_closed_effectively(
     app_client: AsyncClient, token_factory: Callable[..., str]
 ) -> None:

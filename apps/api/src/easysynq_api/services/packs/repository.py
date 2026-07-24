@@ -16,6 +16,7 @@ from sqlalchemy import Date, asc, cast, delete, desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...db.models._evidence_enums import EvidenceForTargetType
+from ...db.models._pack_enums import PackInclusionStatus, PackItemType
 from ...db.models._retention_enums import DispositionAction
 from ...db.models._signature_enums import SignedObjectType
 from ...db.models.app_user import AppUser
@@ -294,6 +295,29 @@ async def has_destroy_tombstone(session: AsyncSession, record_id: uuid.UUID) -> 
         .select_from(DispositionEvent)
         .where(
             DispositionEvent.record_id == record_id,
+            or_(
+                DispositionEvent.is_worm_destroy.is_(True),
+                DispositionEvent.action == DispositionAction.DESTROY,
+            ),
+        )
+    )
+    return bool(count)
+
+
+async def pack_has_destroyed_member(session: AsyncSession, pack_id: uuid.UUID) -> bool:
+    """``True`` if ANY record INCLUDED in this sealed pack was LATER physically destroyed (a DESTROY
+    / WORM-destroy disposition tombstone). Serve paths use this to fail-closed AFTER the seal — a
+    record destroyed post-seal must not stay reachable via the pack's cached ZIP / portfolio (their
+    bytes are baked into the sealed artifacts, so delivery is gated here). Records destroyed BEFORE
+    the seal are already EXCLUDED_ABSENCE at build time, so only INCLUDED RECORD members matter."""
+    count = await session.scalar(
+        select(func.count())
+        .select_from(PackItem)
+        .join(DispositionEvent, DispositionEvent.record_id == PackItem.record_id)
+        .where(
+            PackItem.pack_id == pack_id,
+            PackItem.item_type == PackItemType.RECORD,
+            PackItem.inclusion_status == PackInclusionStatus.INCLUDED,
             or_(
                 DispositionEvent.is_worm_destroy.is_(True),
                 DispositionEvent.action == DispositionAction.DESTROY,
