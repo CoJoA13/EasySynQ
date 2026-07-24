@@ -272,15 +272,17 @@ class OffHostCheckpointResult:
     the live chain. ``offhost_configured`` is True iff ≥1 enabled ``off_host`` sink exists — the
     beat alarms only when a CONFIGURED witness fails; a MISSING witness is the R13 soft-gate's
     persistent 'NOT tamper-evident' warning, not a nightly alarm. ``sinks_read`` counts sinks that
-    returned an object (a wipe leaves a readable object → sinks_read>0 → the failure alarms);
-    ``read_failed`` is True when a sink's read threw (unreachable witness) so it can fail closed
-    even though nothing was read back."""
+    returned an object; ``attest_failures`` counts those whose object FAILED attestation
+    (tamper/stale/wipe); ``read_failed`` is True when a sink's read threw (unreachable witness). The
+    beat alarms on ``attest_failures`` or ``read_failed`` — NOT on a mere not-yet-anchored empty
+    sink — so a freshly added second witness alongside a healthy one never false-alarms."""
 
     offhost_configured: bool
     sinks_read: int
     verified: bool
     reasons: list[str]
     read_failed: bool = False
+    attest_failures: int = 0
 
 
 async def _attest_offhost_doc(
@@ -373,6 +375,7 @@ async def verify_offhost_checkpoint(
     reasons: list[str] = []
     read = 0
     read_failed = False
+    attest_failures = 0
     for sink in offhost:
         try:
             doc = await asyncio.to_thread(
@@ -383,10 +386,16 @@ async def verify_offhost_checkpoint(
             read_failed = True
             continue
         if doc is None:
+            # A not-yet-anchored sink is benign (like a single fresh sink) — NOT an attestation
+            # failure, so it never alarms even when read alongside a healthy sibling. It still lands
+            # in ``reasons`` (verified=False) so the CLI reports the witness isn't producing yet.
             reasons.append(f"sink {sink.id}: no off-host checkpoint object found")
             continue
         read += 1
         reason = await _attest_offhost_doc(session, org_id, verify_key, doc, now=now)
         if reason is not None:
             reasons.append(f"sink {sink.id}: {reason}")
-    return OffHostCheckpointResult(True, read, not reasons, reasons, read_failed=read_failed)
+            attest_failures += 1
+    return OffHostCheckpointResult(
+        True, read, not reasons, reasons, read_failed=read_failed, attest_failures=attest_failures
+    )

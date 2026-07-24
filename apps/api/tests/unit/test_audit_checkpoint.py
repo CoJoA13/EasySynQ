@@ -126,10 +126,11 @@ def test_load_verify_key_none_when_neither_available(tmp_path: Any, monkeypatch:
 
 
 def test_should_alarm_offhost_decision_table() -> None:
-    """The nightly beat's off-host alarm decision (the fail-open diff-critic caught): a wipe leaves
-    a readable off-host object that fails attestation (sinks_read>0, not verified) → ALARM, while a
-    fresh org with a configured-but-empty witness (sinks_read==0) stays quiet. Gating on local chain
-    state (the old ``checked>0``) would suppress the wipe alarm — this pins the correct decision."""
+    """The nightly beat's off-host alarm decision. A wipe leaves a readable off-host object that
+    FAILS attestation (attest_failures>0) → ALARM; a read failure (unreachable witness) → ALARM;
+    but a not-yet-anchored empty sink — even alongside a healthy one (sinks_read>0) — stays quiet,
+    since the decision is keyed on real attestation failures, not the global read count. Pins both
+    the wipe alarm (the fail-open diff-critic caught) and the multi-sink false-positive fix."""
     from easysynq_api.services.audit.checkpoint import OffHostCheckpointResult as R
     from easysynq_api.tasks.audit import _should_alarm_offhost
 
@@ -139,10 +140,12 @@ def test_should_alarm_offhost_decision_table() -> None:
     assert _should_alarm_offhost(R(True, 1, True, [])) is False
     # Configured but nothing anchored yet (fresh org) → quiet, defers to the soft-gate.
     assert _should_alarm_offhost(R(True, 0, False, ["no object found"])) is False
-    # THE WIPE: an object was read back and rejected (references a now-missing chain row) → ALARM.
-    assert (
-        _should_alarm_offhost(R(True, 1, False, ["missing/unchained chain row (deletion)"])) is True
-    )
+    # A healthy sink PLUS a freshly-added empty sibling (read=1 for the healthy one, a "no object"
+    # reason for the new one, NO attestation failure) must NOT alarm — keyed on attest_failures,
+    # not the global sinks_read, so a second witness added before its first anchor stays quiet.
+    assert _should_alarm_offhost(R(True, 1, False, ["sink B: no object found"])) is False
+    # THE WIPE: an object was read back and REJECTED (references a now-missing chain row) → ALARM.
+    assert _should_alarm_offhost(R(True, 1, False, ["deletion"], attest_failures=1)) is True
     # A read failure (unreachable witness) → fail-closed ALARM even though nothing was read back.
     assert _should_alarm_offhost(R(True, 0, False, ["read failed"], read_failed=True)) is True
 

@@ -41,16 +41,13 @@ logger = logging.getLogger("easysynq.audit.tasks")
 
 def _should_alarm_offhost(offhost: OffHostCheckpointResult) -> bool:
     """Decide whether the INDEPENDENT off-host witness should raise CHAIN_VERIFY_FAIL. Alarm only
-    when a witness is CONFIGURED and did not attest AND it actually had something to say — an object
-    was read back and rejected (tamper / stale / a wipe leaving a chain-less object → sinks_read>0),
-    or the read itself failed (an unreachable witness → read_failed). A configured-but-not-yet-
-    producing witness (a fresh org with no object, sinks_read==0) stays quiet and defers to the R13
-    soft-gate's persistent 'NOT tamper-evident' warning, so a new org never false-alarms."""
-    return (
-        offhost.offhost_configured
-        and not offhost.verified
-        and (offhost.sinks_read > 0 or offhost.read_failed)
-    )
+    when a CONFIGURED witness produced a genuine failure — an object was read back and REJECTED
+    (tamper / stale / a wipe leaving a chain-less object → attest_failures>0), or a read itself
+    failed (an unreachable witness → read_failed). A not-yet-anchored empty sink is NOT a failure
+    (keyed on attest_failures, not the global sinks_read, so a fresh second witness alongside a
+    healthy one never false-alarms); a fresh org with no witness likewise stays quiet and defers to
+    the R13 soft-gate's persistent 'NOT tamper-evident' warning."""
+    return offhost.offhost_configured and (offhost.attest_failures > 0 or offhost.read_failed)
 
 
 def _emit_chain_verify_fail(
