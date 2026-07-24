@@ -45,6 +45,7 @@ from ...db.models.disposition_event import DispositionEvent
 from ...db.models.record import Record
 from ...db.models.retention_policy import RetentionPolicy
 from ...db.models.worm_destroy_request import WormDestroyRequest
+from ...db.session import get_sessionmaker
 from ...domain.records.disposition import legal_disposition_transition, self_disposition_blocked
 from ...domain.records.retention import retention_until
 from ...problems import ProblemException
@@ -141,45 +142,45 @@ async def _mark_record_evidence_for_purge(
     return specs
 
 
-async def _purge_marked(session: AsyncSession, specs: list[_PurgeSpec]) -> None:
+async def _purge_marked(specs: list[_PurgeSpec]) -> None:
     """The S3 phase — call AFTER the caller COMMITs the tombstone + blob-row deletes + markers.
-    Physically purge each blob's bytes (idempotent) and drop its marker on success. NEVER raises:
-    the disposition already committed, so NEITHER a storage failure NOR a post-commit DB blip may
-    turn the completed operation into an error — both just leave the marker for
-    ``reap_pending_blob_purges`` to finish (the record stays legally disposed either way). Skips the
+    Physically purge each blob's bytes (idempotent) and drop its marker on success. Runs in a FRESH
+    session PER marker (NOT the request session): the disposition is committed, so a post-commit
+    failure here — a storage outage OR a DB blip — must never disturb the request transaction or
+    expire its ORM objects (a shared-session ``rollback`` would, then the handler's attribute
+    reads raise ``MissingGreenlet``). Either failure just leaves the marker for
+    ``reap_pending_blob_purges`` to finish (the record stays disposed either way). Skips the
     purge (and drops the marker) only if a ``blob`` row now OWNS this exact object again (same sha +
-    bucket + object_key) — a re-capture of the same content into the SAME location re-owns the
-    bytes, so the stale marker must not erase them; a matching sha in a DIFFERENT bucket is a
-    physically distinct object and does NOT cancel the purge (``blob_owns_object``)."""
+    bucket + object_key) — a re-capture into the SAME location re-owns the bytes, so a stale marker
+    must not erase them; a matching sha in a DIFFERENT bucket is a physically distinct object and
+    does NOT cancel the purge (``blob_owns_object``)."""
     for spec in specs:
         try:
-            superseded = await repo.blob_owns_object(
-                session, sha256=spec.sha256, bucket=spec.bucket, object_key=spec.object_key
-            )
-            if not superseded:
-                try:
-                    await storage.purge_object(
-                        spec.object_key, bucket=spec.bucket, bypass_governance=spec.bypass
-                    )
-                except (ClientError, BotoCoreError):
-                    logger.warning(
-                        "records.purge.deferred_to_reaper",
-                        extra={"extra_fields": {"sha256": spec.sha256, "bucket": spec.bucket}},
-                    )
-                    continue  # storage outage — leave the marker; try the next spec
-            await repo.delete_pending_purge(session, spec.purge_id)
-            await session.commit()
+            async with get_sessionmaker()() as s:
+                if not await repo.blob_owns_object(
+                    s, sha256=spec.sha256, bucket=spec.bucket, object_key=spec.object_key
+                ):
+                    try:
+                        await storage.purge_object(
+                            spec.object_key, bucket=spec.bucket, bypass_governance=spec.bypass
+                        )
+                    except (ClientError, BotoCoreError):
+                        logger.warning(
+                            "records.purge.deferred_to_reaper",
+                            extra={"extra_fields": {"sha256": spec.sha256, "bucket": spec.bucket}},
+                        )
+                        continue  # storage outage — leave the marker; try the next spec
+                await repo.delete_pending_purge(s, spec.purge_id)
+                await s.commit()
         except SQLAlchemyError:
-            # A post-commit DB blip (disconnect) in the re-check / marker-delete / commit. The
-            # disposition is ALREADY durably committed, so roll back and defer the remaining markers
-            # to reap_pending_blob_purges rather than surface a 500 for an operation that succeeded.
-            # Any bytes already purged above are re-checked idempotently by the reaper.
-            await session.rollback()
+            # A post-commit DB blip in the re-check / marker-delete / commit. The fresh session's
+            # context manager already rolled it back and the request transaction is untouched, so
+            # just defer this marker to reap_pending_blob_purges rather than fail a done operation.
             logger.warning(
                 "records.purge.db_deferred_to_reaper",
                 extra={"extra_fields": {"sha256": spec.sha256, "bucket": spec.bucket}},
             )
-            return
+            continue
 
 
 def _write_tombstone(
@@ -299,7 +300,7 @@ async def advance_disposition(
     # mark).
     specs = await _dispose_now(session, actor, record, reason=reason)
     await session.commit()
-    await _purge_marked(session, specs)
+    await _purge_marked(specs)
     await session.refresh(record)
     return record
 
@@ -549,7 +550,7 @@ async def approve_worm_destroy(
         },
     )
     await session.commit()
-    await _purge_marked(session, specs)
+    await _purge_marked(specs)
     await session.refresh(record)
     return record
 
@@ -657,7 +658,7 @@ async def sweep_due_records(
                 )
 
     await session.commit()  # durable FIRST — a failure here purges nothing (specs untouched)
-    await _purge_marked(session, specs)  # THEN physically erase the bytes (reaper-backstopped)
+    await _purge_marked(specs)  # THEN physically erase the bytes (reaper-backstopped)
     return summary
 
 

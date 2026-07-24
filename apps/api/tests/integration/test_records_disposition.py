@@ -1096,7 +1096,7 @@ async def test_shared_blob_concurrent_disposition_purges_once(
                     s, record, action=DispositionAction.DESTROY, policy_id=None, approved_by=None
                 )
                 await s.commit()
-                await disposition._purge_marked(s, specs)
+                await disposition._purge_marked(specs)
 
         await asyncio.gather(dispose(rids[0]), dispose(rids[1]))
 
