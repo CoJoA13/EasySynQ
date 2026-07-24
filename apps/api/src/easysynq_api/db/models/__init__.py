@@ -143,6 +143,7 @@ from .org_role_assignment import OrgRoleAssignment
 from .organization import Organization
 from .pack_item import PackItem
 from .pack_share_link import PackShareLink
+from .pending_blob_purge import PendingBlobPurge
 from .permission import Permission
 from .process import Process
 from .process_edge import ProcessEdge
@@ -283,6 +284,7 @@ __all__ = [
     "PackShareLink",
     "PackStatus",
     "PdcaPhase",
+    "PendingBlobPurge",
     "Permission",
     "PermissionOverride",
     "Process",

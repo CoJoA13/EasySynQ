@@ -351,8 +351,16 @@ def _purge_object_sync(object_key: str, bucket: str, bypass_governance: bool) ->
 async def purge_object(object_key: str, *, bucket: str, bypass_governance: bool = False) -> int:
     """Physically destroy a record's WORM evidence (slice S-rec-2, doc 06 §5.3). Removes every
     version + delete-marker of ``object_key`` in ``bucket``; returns the count removed. Idempotent
-    (re-purging an already-gone object is a no-op) and **fail-closed** — raises on any real storage
-    failure so the caller never writes a DISPOSED tombstone over still-present bytes.
+    (re-purging an already-gone object is a no-op) and **fail-closed at the storage layer** — raises
+    on any real storage failure.
+
+    ⚠ Since the Batch-5 review (2026-07-22) the disposition callers COMMIT the ``DISPOSED``
+    tombstone + the blob-row delete + a ``pending_blob_purge`` marker BEFORE calling this, and
+    treat a raise as a *deferral* signal — ``_purge_marked`` / ``reap_pending_blob_purges`` catch
+    it and leave the marker for the hourly reaper. So a raise here NO LONGER rolls back a
+    disposition (the earlier 'never a tombstone over present bytes' guarantee is now a brief,
+    reaper-recoverable window); blob-row-iff-bytes is instead preserved by deleting the ``blob``
+    row at that commit.
 
     ``bypass_governance=True`` (the R27 dual-control destroy-under-legal-order hatch) overrides an
     *unexpired* GOVERNANCE object-lock; it is denied under COMPLIANCE mode (an honest

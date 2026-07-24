@@ -12,6 +12,15 @@ def test_structured_pdf_task_is_registered() -> None:
     assert "easysynq.records.build_structured_pdf" in app.tasks
 
 
+def test_reap_pending_blob_purges_task_is_registered_and_beat_scheduled() -> None:
+    # Batch 5 crash backstop: if the reaper task is not registered, its Beat entry publishes to a
+    # name no worker handles → every stranded WORM-erasure marker silently accumulates (leaked bytes
+    # never erased). Guard both the registration and the schedule.
+    assert "easysynq.records.reap_pending_blob_purges" in app.tasks
+    tasks = {entry["task"] for entry in app.conf.beat_schedule.values()}
+    assert "easysynq.records.reap_pending_blob_purges" in tasks
+
+
 def test_structured_pdf_is_not_beat_scheduled() -> None:
     # The rendition build is .delay-triggered after capture, NOT Beat-scheduled (best-effort, no
     # reaper — it is derived + rebuildable; GET /records/{id}/rendition 409s until it lands).

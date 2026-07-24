@@ -3,11 +3,15 @@
 Drives the disposition state machine, legal-hold, the Beat retention sweep, and the R27 dual-control
 WORM-destroy-under-legal-order escape hatch. The load-bearing correctness rules:
 
-* **Fail-closed, purge-FIRST** — a DESTROY physically removes the MinIO bytes *before* the DB flips
-  to DISPOSED + writes the tombstone, and only on success. So a storage failure rolls the txn
-  back (record stays ``DUE_FOR_REVIEW``/``ACTIVE``; ``purge_object`` is idempotent so a retry
-  self-heals) — never a DISPOSED tombstone over still-present bytes, never deleted bytes without a
-  tombstone.
+* **Purge-AFTER-commit (Batch 5)** — a DESTROY MARKS its evidence (deletes the ``blob`` row +
+  ``evidence_blob`` links and records a ``pending_blob_purge`` marker), COMMITs the DISPOSED
+  tombstone + those deletes FIRST, and only THEN physically removes the MinIO bytes (idempotent).
+  A storage failure after the commit leaves the record DISPOSED + a committed marker that
+  ``reap_pending_blob_purges`` completes — never *deleted bytes with a rolled-back DB* (which would
+  strand a ``blob`` row over missing bytes and silently break backups). It trades toward a brief
+  'tombstone before bytes gone' window (safe + reaper-recoverable: a backup iterates ``blob`` rows,
+  so it never references the transiently-orphaned bytes — the S-rec-2 blob-row-iff-bytes invariant,
+  in the safe direction).
 * **Pre-purge refusal (GDPR, R27)** — a DESTROY blocked by an unexpired WORM lock, an active
   legal_hold, or COMPLIANCE mode is *logged-as-refused-with-reason* (``RECORD_ERASURE_REFUSED``,
   committed) then 409 — never silently swallowed.
@@ -23,12 +27,14 @@ Disposition is the *only* post-capture write to a record besides the S-rec-1 cor
 
 from __future__ import annotations
 
+import dataclasses
 import datetime
 import logging
 import uuid
 
 from botocore.exceptions import BotoCoreError, ClientError
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ...config import get_settings
 from ...db.models._audit_enums import EventType
@@ -39,6 +45,7 @@ from ...db.models.disposition_event import DispositionEvent
 from ...db.models.record import Record
 from ...db.models.retention_policy import RetentionPolicy
 from ...db.models.worm_destroy_request import WormDestroyRequest
+from ...db.session import get_sessionmaker
 from ...domain.records.disposition import legal_disposition_transition, self_disposition_blocked
 from ...domain.records.retention import retention_until
 from ...problems import ProblemException
@@ -71,46 +78,115 @@ async def _max_worm_retain_until(
     return latest
 
 
-async def _purge_record_evidence(session: AsyncSession, record: Record, *, bypass: bool) -> int:
-    """Physically destroy the record's evidence bytes (fail-closed; raises on any storage error). A
-    blob still attached to another non-disposed record is left intact (its bytes survive for that
-    live record); the disposed record keeps its ``evidence_blob`` rows as a tombstone regardless.
+@dataclasses.dataclass(frozen=True, slots=True)
+class _PurgeSpec:
+    """A blob whose ``blob`` row + ``evidence_blob`` links are deleted this txn; its bytes are
+    purged AFTER the commit (idempotent), then the ``pending_blob_purge`` marker (``purge_id``) is
+    dropped on success."""
 
-    Also purges the record's structured-PDF rendition (S-rec-3) — it is a non-evidence_blob ``blob``
-    row reachable ONLY via ``record.structured_pdf_blob_sha256``, so the evidence loop never visits
-    it. Centralised here so ALL THREE destroy paths (``_dispose_now``, the sweep ``_auto_dispose``,
-    and the R27 ``approve_worm_destroy``) drop it — else the backup manifest / restore drill iterate
-    every ``blob`` row and crash NoSuchKey on the dead rendition (the blob-row-iff-bytes invariant;
-    the S-rec-2 lesson, re-armed). The rendition is per-record (its bytes fold in the record id), so
-    no liveness guard is needed; it is non-WORM, so no governance bypass is needed."""
-    purged = 0
-    seen: set[str] = set()
-    for _eb, blob in await repo.list_evidence_blobs(session, record.id):
-        if blob.sha256 in seen:
+    purge_id: uuid.UUID
+    sha256: str
+    bucket: str
+    object_key: str
+    bypass: bool
+
+
+async def _mark_record_evidence_for_purge(
+    session: AsyncSession, record: Record, *, bypass: bool
+) -> list[_PurgeSpec]:
+    """The DB phase of a DESTROY erasure (NO S3 call, NO commit). For each evidence blob this record
+    is the LAST live referencer of, drop the ``blob`` row + ``evidence_blob`` links and record a
+    ``pending_blob_purge`` marker — so the caller COMMITs the DISPOSED tombstone + these deletes
+    FIRST, then physically purges the bytes as a separate idempotent step (``_purge_marked``). That
+    ordering is the fix: a crash leaves a committed, reaper-recoverable marker — never bytes-gone-
+    with-the-DB-rolled-back (which would strand a ``blob`` row over dead bytes, breaking backups).
+
+    Each shared blob is row-locked ``FOR UPDATE`` (in sha256 order — deadlock-safe) BEFORE the
+    liveness re-check, so two concurrent shared-blob dispositions serialise and the last referencer
+    purges, instead of both observing the peer live and orphaning the bytes.
+
+    Also handles the structured-PDF rendition (S-rec-3) — a per-record non-evidence blob reachable
+    only via ``record.structured_pdf_blob_sha256`` (no liveness guard; non-WORM, no bypass)."""
+    specs: list[_PurgeSpec] = []
+    blobs = {b.sha256: b for _eb, b in await repo.list_evidence_blobs(session, record.id)}
+    for sha in sorted(blobs):  # consistent lock order across concurrent dispositions
+        blob = blobs[sha]
+        await repo.lock_blob_for_update(session, sha)
+        if await repo.blob_needed_by_other_live_record(session, sha, record.id):
+            continue  # another live record (or a document_version) still needs the bytes
+        purge_id = await repo.insert_pending_purge(
+            session,
+            org_id=record.org_id,
+            sha256=sha,
+            bucket=blob.bucket,
+            object_key=blob.object_key,
+            bypass_governance=bypass,
+        )
+        await repo.delete_blob_and_links(session, sha)
+        specs.append(_PurgeSpec(purge_id, sha, blob.bucket, blob.object_key, bypass))
+    rendition_sha = record.structured_pdf_blob_sha256
+    if rendition_sha is not None:
+        bucket = get_settings().s3_bucket_renditions
+        await repo.lock_blob_for_update(session, rendition_sha)
+        purge_id = await repo.insert_pending_purge(
+            session,
+            org_id=record.org_id,
+            sha256=rendition_sha,
+            bucket=bucket,
+            object_key=rendition_sha,
+            bypass_governance=False,
+        )
+        await repo.delete_blob_and_links(session, rendition_sha)
+        record.structured_pdf_blob_sha256 = None
+        specs.append(_PurgeSpec(purge_id, rendition_sha, bucket, rendition_sha, False))
+    return specs
+
+
+async def _purge_marked(
+    specs: list[_PurgeSpec], *, sessionmaker: async_sessionmaker[AsyncSession]
+) -> None:
+    """The S3 phase — call AFTER the caller COMMITs the tombstone + blob-row deletes + markers.
+    Physically purge each blob's bytes (idempotent) and drop its marker on success. Runs in a FRESH
+    session PER marker, opened from the CALLER's ``sessionmaker`` (NOT the request session and NOT
+    the process-global one): the disposition is committed, so a post-commit failure here — a storage
+    outage OR a DB blip — must never disturb the request transaction or expire its ORM objects (a
+    shared-session ``rollback`` would, then the handler's reads raise ``MissingGreenlet``).
+    The sessionmaker must be bound to the CALLER's engine + event loop — the FastAPI request loop
+    for the API paths (``get_sessionmaker()``), the Celery task's own ``asyncio.run`` loop + local
+    engine for the sweep — since reusing the process-global pool across a task's per-invocation loop
+    raises a cross-loop ``RuntimeError`` (not a ``SQLAlchemyError``, so it would escape the deferral
+    below). Either failure just leaves the marker for ``reap_pending_blob_purges`` to finish (the
+    record stays disposed either way). Skips the purge (and drops the marker) only if a ``blob`` row
+    now OWNS this exact object again (same sha + bucket + object_key) — a re-capture into the SAME
+    location re-owns the bytes, so a stale marker must not erase them; a matching sha in a DIFFERENT
+    bucket is a physically distinct object and does NOT cancel the purge (``blob_owns_object``)."""
+    for spec in specs:
+        try:
+            async with sessionmaker() as s:
+                if not await repo.blob_owns_object(
+                    s, sha256=spec.sha256, bucket=spec.bucket, object_key=spec.object_key
+                ):
+                    try:
+                        await storage.purge_object(
+                            spec.object_key, bucket=spec.bucket, bypass_governance=spec.bypass
+                        )
+                    except (ClientError, BotoCoreError):
+                        logger.warning(
+                            "records.purge.deferred_to_reaper",
+                            extra={"extra_fields": {"sha256": spec.sha256, "bucket": spec.bucket}},
+                        )
+                        continue  # storage outage — leave the marker; try the next spec
+                await repo.delete_pending_purge(s, spec.purge_id)
+                await s.commit()
+        except SQLAlchemyError:
+            # A post-commit DB blip in the re-check / marker-delete / commit. The fresh session's
+            # context manager already rolled it back and the request transaction is untouched, so
+            # just defer this marker to reap_pending_blob_purges rather than fail a done operation.
+            logger.warning(
+                "records.purge.db_deferred_to_reaper",
+                extra={"extra_fields": {"sha256": spec.sha256, "bucket": spec.bucket}},
+            )
             continue
-        seen.add(blob.sha256)
-        if await repo.blob_needed_by_other_live_record(session, blob.sha256, record.id):
-            continue
-        await storage.purge_object(blob.object_key, bucket=blob.bucket, bypass_governance=bypass)
-        # The object is gone → drop the now-false blob row + its evidence_blob links so the
-        # invariant "a blob row exists iff its object exists" holds (backup won't copy a dead one).
-        await repo.delete_blob_and_links(session, blob.sha256)
-        purged += 1
-    await _purge_record_rendition(session, record)
-    return purged
-
-
-async def _purge_record_rendition(session: AsyncSession, record: Record) -> None:
-    """Drop the record's structured-PDF rendition object + its ``blob`` row (non-WORM renditions
-    bucket; no bypass) and NULL the pointer, so blob-row-iff-bytes holds after a destroy/dispose."""
-    sha = record.structured_pdf_blob_sha256
-    if sha is None:
-        return
-    await storage.purge_object(
-        sha, bucket=get_settings().s3_bucket_renditions, bypass_governance=False
-    )
-    await repo.delete_blob_and_links(session, sha)
-    record.structured_pdf_blob_sha256 = None
 
 
 def _write_tombstone(
@@ -130,11 +206,12 @@ def _write_tombstone(
     WORM-destroy hatch (which also passes ``action=DESTROY``) — also NULL the record's structured
     ``form_field_values`` in the same transaction as the tombstone. A Mode-B structured record's
     personal data (names, assessment comments) must NOT survive a 'physical destruction' / legal
-    erasure order: the evidence bytes + the derived structured-PDF rendition are already gone
-    (``_purge_record_evidence`` runs on every DESTROY path before this), so nulling the JSONB
-    content completes the erasure. ``content_hash`` is deliberately preserved as the tombstone's
-    verification anchor. ARCHIVE/TRANSFER dispositions keep their content — a change of custody, not
-    an erasure."""
+    erasure order. The evidence bytes + the derived structured-PDF rendition are MARKED for purge by
+    ``_mark_record_evidence_for_purge`` (the ``blob`` rows are deleted here; the bytes are erased by
+    ``_purge_marked`` right after the commit), so nulling this JSONB content in the same txn as the
+    tombstone completes the DB-side erasure. ``content_hash`` is deliberately preserved as the
+    tombstone's verification anchor. ARCHIVE/TRANSFER dispositions keep their content — a change of
+    custody, not an erasure."""
     record.disposition_state = RecordDispositionState.DISPOSED
     if action is DispositionAction.DESTROY:
         record.form_field_values = None
@@ -223,17 +300,23 @@ async def advance_disposition(
     ):
         await _refuse_self_disposition(session, actor, record)
 
-    # execute the disposition per the record's snapshotted policy.
-    await _dispose_now(session, actor, record, reason=reason)
+    # execute the disposition per the record's snapshotted policy: MARK evidence for purge, COMMIT
+    # the DISPOSED tombstone + blob-row deletes + purge markers, THEN physically purge the bytes (so
+    # a crash can never leave bytes-gone-with-the-DB-rolled-back — the reaper finishes a stranded
+    # mark).
+    specs = await _dispose_now(session, actor, record, reason=reason)
     await session.commit()
+    await _purge_marked(specs, sessionmaker=get_sessionmaker())
     await session.refresh(record)
     return record
 
 
 async def _dispose_now(
     session: AsyncSession, actor: AppUser, record: Record, *, reason: str | None
-) -> None:
-    """The human-approved DUE_FOR_REVIEW → DISPOSED execution (no commit — the caller commits)."""
+) -> list[_PurgeSpec]:
+    """The human-approved DUE_FOR_REVIEW → DISPOSED execution (no commit — the caller commits). For
+    a DESTROY it MARKS evidence for purge and returns the specs; the caller commits, then calls
+    ``_purge_marked`` to physically erase the bytes. Non-DESTROY actions return ``[]``."""
     policy = await repo.get_policy(session, record.retention_policy_id, record.org_id)
     if policy is None:  # pragma: no cover — NOT-NULL FK guarantees it
         raise ProblemException(
@@ -247,9 +330,10 @@ async def _dispose_now(
             "A RETAIN_PERMANENT record is never disposed on schedule; use the destroy hatch",
         )
 
+    specs: list[_PurgeSpec] = []
     if action is DispositionAction.DESTROY:
         await _guard_or_refuse_destroy(session, actor, record, bypass=False)
-        await _purge_record_evidence(session, record, bypass=False)
+        specs = await _mark_record_evidence_for_purge(session, record, bypass=False)
 
     _write_tombstone(session, record, action=action, policy_id=policy.id, approved_by=actor.id)
     emit_record_event(
@@ -265,6 +349,7 @@ async def _dispose_now(
             "reason": reason,
         },
     )
+    return specs
 
 
 async def _refuse_self_disposition(session: AsyncSession, actor: AppUser, record: Record) -> None:
@@ -441,7 +526,9 @@ async def approve_worm_destroy(
     # Pre-purge guard: only COMPLIANCE mode is refused (bypass overrides an unexpired lock + hold).
     await _guard_or_refuse_destroy(session, actor, record, bypass=True)
 
-    await _purge_record_evidence(session, record, bypass=True)
+    # MARK the evidence for purge (blob-row deletes + markers); the physical S3 purge is the
+    # post-commit ``_purge_marked`` step below (reaper-backstopped).
+    specs = await _mark_record_evidence_for_purge(session, record, bypass=True)
 
     req.approved_by = actor.id
     req.executed_at = _now()
@@ -469,6 +556,7 @@ async def approve_worm_destroy(
         },
     )
     await session.commit()
+    await _purge_marked(specs, sessionmaker=get_sessionmaker())
     await session.refresh(record)
     return record
 
@@ -504,17 +592,29 @@ async def cancel_worm_destroy(
 
 
 async def sweep_due_records(
-    session: AsyncSession, *, now: datetime.datetime | None = None
+    session: AsyncSession,
+    *,
+    now: datetime.datetime | None = None,
+    purge_sessionmaker: async_sessionmaker[AsyncSession] | None = None,
 ) -> dict[str, int]:
     """Flip due ``ACTIVE`` records to ``DUE_FOR_REVIEW`` (+ the ``RECORD_DISPOSITION_DUE`` system
     event — the v1 'notify owning org_role' surrogate) and auto-execute disposition for low-risk
     (``review_required=false``) policies once the WORM lock allows. ``review_required=true`` records
-    stop at DUE_FOR_REVIEW for human approval. One commit at the end; per-record SAVEPOINTs isolate
-    a transient storage failure (that record is left for the next sweep — ``purge_object`` is
-    idempotent). Returns ``{flipped, disposed, skipped}``."""
+    stop at DUE_FOR_REVIEW for human approval. Returns ``{flipped, disposed, skipped}``.
+
+    Ordering (the Batch-5 fix): each record's disposition only MARKS its evidence for purge (DB-only
+    — blob-row deletes + ``pending_blob_purge`` markers) inside a per-record SAVEPOINT; the sweep
+    COMMITs ONCE, THEN physically purges the marked bytes (``_purge_marked``, idempotent, reaper-
+    backstopped). Because the S3 purge is strictly AFTER the commit, a commit failure purges NOTHING
+    — it can no longer strand deleted bytes over a rolled-back DB (the amplification is gone
+    regardless of commit granularity). Per-record commits are NOT used here: the batch is
+    reserved by one ``FOR UPDATE SKIP LOCKED`` for the whole sweep, so committing mid-loop would
+    release the tail's row locks, letting a concurrent sweep / manual disposition double-process;
+    the SAVEPOINTs already give per-record failure isolation."""
     now = now or _now()
     today = now.date()
     summary = {"flipped": 0, "disposed": 0, "skipped": 0}
+    specs: list[_PurgeSpec] = []
 
     for record, policy in await repo.due_active_records(session, for_update=True):
         try:
@@ -555,31 +655,39 @@ async def sweep_due_records(
         ):
             try:
                 async with session.begin_nested():
-                    did = await _auto_dispose(session, record, policy, now)
-                if did:
+                    marks = await _auto_dispose(session, record, policy, now)
+                if marks is not None:
+                    specs.extend(marks)
                     summary["disposed"] += 1
-            except (ClientError, BotoCoreError):
+            except Exception:  # noqa: BLE001 — per-record isolation: one bad record must not sink
+                # the whole sweep (the savepoint rolled back; the record is retried next sweep).
                 logger.warning(
-                    "records.sweep.purge_failed",
+                    "records.sweep.dispose_failed",
                     extra={"extra_fields": {"record_id": str(record.id)}},
                 )
 
-    await session.commit()
+    await session.commit()  # durable FIRST — a failure here purges nothing (specs untouched)
+    # Purge from the CALLER's engine/loop: the sweep's task passes its loop-scoped sessionmaker
+    # (the process-global pool would be cross-loop from the task's asyncio.run); tests/direct calls
+    # fall back to the global one (single loop).
+    await _purge_marked(specs, sessionmaker=purge_sessionmaker or get_sessionmaker())
     return summary
 
 
 async def _auto_dispose(
     session: AsyncSession, record: Record, policy: RetentionPolicy, now: datetime.datetime
-) -> bool:
-    """Execute a system (Beat) disposition. Returns ``False`` (no change) when a DESTROY's WORM lock
-    is not yet expired (leave at DUE_FOR_REVIEW; retried next sweep). Raises on a storage failure
-    (the caller's SAVEPOINT rolls back, the record stays DUE_FOR_REVIEW)."""
+) -> list[_PurgeSpec] | None:
+    """Execute a system (Beat) disposition — MARK evidence for purge (no S3), flip DISPOSED, and
+    return the purge specs; the sweep COMMITs, then physically purges the marked bytes. Returns
+    ``None`` (no change) when a DESTROY's WORM lock is not yet expired (leave at DUE_FOR_REVIEW;
+    retried next sweep); ``[]`` when a non-DESTROY / evidence-free record is disposed."""
     action = policy.disposition_action
+    specs: list[_PurgeSpec] = []
     if action is DispositionAction.DESTROY:
         retain_until = await _max_worm_retain_until(session, record.id)
         if retain_until is not None and retain_until > now:
-            return False  # WORM lock not yet expired — no bypass in the sweep; wait
-        await _purge_record_evidence(session, record, bypass=False)
+            return None  # WORM lock not yet expired — no bypass in the sweep; wait
+        specs = await _mark_record_evidence_for_purge(session, record, bypass=False)
     _write_tombstone(session, record, action=action, policy_id=policy.id, approved_by=None)
     emit_record_event_system(
         session,
@@ -594,4 +702,50 @@ async def _auto_dispose(
             "trigger": "sweep",
         },
     )
-    return True
+    return specs
+
+
+# --- the pending-purge reaper (Batch 5 crash-recovery) -----------------------------------
+
+
+async def reap_pending_blob_purges(session: AsyncSession) -> dict[str, int]:
+    """Crash-recovery for the post-commit purge. A ``pending_blob_purge`` marker survives only when
+    the immediate ``_purge_marked`` didn't finish (a crash or storage outage between the disposition
+    commit and the physical erase); this backstop completes it — idempotently purge the bytes then
+    drop the marker, committing per marker so a mid-run crash re-does at most one. Fields are
+    snapshotted per batch so a per-marker commit can't expire an ORM row we read. LOOPS in
+    ``exclude_ids`` batches so a persistent-failure cohort in the oldest rows can't starve newer
+    purgeable markers within a run. SKIPs the purge (and drops the marker) when a ``blob`` row now
+    OWNS this exact object again (same sha + bucket + object_key) — a re-capture of the same content
+    into the SAME location re-owns the bytes; a matching sha in a different bucket is a distinct
+    object and does NOT cancel the purge. Returns ``{reaped}``."""
+    reaped = 0
+    handled: set[uuid.UUID] = set()
+    while True:
+        markers = await repo.list_pending_purges(session, exclude_ids=handled)
+        if not markers:
+            break
+        todo = [(m.id, m.sha256, m.bucket, m.object_key, m.bypass_governance) for m in markers]
+        handled.update(
+            purge_id for purge_id, *_ in todo
+        )  # skip this cohort on the next batch fetch
+        for purge_id, sha256, bucket, object_key, bypass in todo:
+            if await repo.blob_owns_object(
+                session, sha256=sha256, bucket=bucket, object_key=object_key
+            ):
+                await repo.delete_pending_purge(session, purge_id)
+                await session.commit()
+                reaped += 1
+                continue
+            try:
+                await storage.purge_object(object_key, bucket=bucket, bypass_governance=bypass)
+            except (ClientError, BotoCoreError):
+                logger.warning(
+                    "records.reap_purge.failed",
+                    extra={"extra_fields": {"sha256": sha256, "bucket": bucket}},
+                )
+                continue  # leave the marker; retried on the NEXT run (skipped this run via handled)
+            await repo.delete_pending_purge(session, purge_id)
+            await session.commit()
+            reaped += 1
+    return {"reaped": reaped}
