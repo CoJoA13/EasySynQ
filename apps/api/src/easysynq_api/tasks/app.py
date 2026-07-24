@@ -75,6 +75,12 @@ app.conf.update(
             "task": "easysynq.records.retention_sweep",
             "schedule": 86400.0,  # daily
         },
+        # Batch 5: hourly crash-recovery for the post-commit blob purge — completes any
+        # pending_blob_purge marker the immediate erase left behind (a crash/storage outage).
+        "records-reap-pending-blob-purges": {
+            "task": "easysynq.records.reap_pending_blob_purges",
+            "schedule": 3600.0,  # hourly
+        },
         # S-drift-1: daily D5 periodic re-review sweep (doc 04 §9.1)
         "documents-review-sweep": {
             "task": "easysynq.documents.review_sweep",

@@ -24,6 +24,7 @@ from ...db.models.document_version import DocumentVersion
 from ...db.models.documented_information import DocumentedInformation
 from ...db.models.evidence_blob import EvidenceBlob
 from ...db.models.evidence_for_link import EvidenceForLink
+from ...db.models.pending_blob_purge import PendingBlobPurge
 from ...db.models.process_link import ProcessLink
 from ...db.models.record import Record
 from ...db.models.retention_policy import RetentionPolicy
@@ -469,6 +470,70 @@ async def blob_needed_by_other_live_record(
         )
     )
     return bool(version_leg)
+
+
+async def lock_blob_for_update(session: AsyncSession, blob_sha256: str) -> None:
+    """Row-lock the ``blob`` (``SELECT … FOR UPDATE``) so a shared-blob disposition serialises: two
+    records sharing one blob must not both read the liveness check while the peer's disposition is
+    uncommitted and then both skip the purge, orphaning the bytes. Held until the caller commits, so
+    the second disposer re-reads liveness AFTER the first's committed DISPOSED flip and purges as
+    the last referencer. A no-op if the row is already gone (nothing to lock)."""
+    await session.execute(select(Blob.sha256).where(Blob.sha256 == blob_sha256).with_for_update())
+
+
+async def insert_pending_purge(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    sha256: str,
+    bucket: str,
+    object_key: str,
+    bypass_governance: bool,
+) -> uuid.UUID:
+    """Record a to-be-purged marker — the reaper-recoverable follow-up committed alongside the
+    blob-row delete, so a crash between that commit and the physical S3 purge never loses the bytes.
+    Returns the marker id so the immediate post-commit purge can delete exactly this row."""
+    marker = PendingBlobPurge(
+        org_id=org_id,
+        sha256=sha256,
+        bucket=bucket,
+        object_key=object_key,
+        bypass_governance=bypass_governance,
+    )
+    session.add(marker)
+    await session.flush()
+    return marker.id
+
+
+async def blob_exists(session: AsyncSession, blob_sha256: str) -> bool:
+    """True if a ``blob`` row for this sha exists NOW. The purge path checks this before erasing a
+    marker's bytes: because ``object_key`` is the content hash, a re-capture of the same content
+    after the marker was written re-creates the ``blob`` row over the still-present (not-yet-purged)
+    object — the bytes are live again, so the stale marker must be dropped, not replayed."""
+    return (await session.scalar(select(Blob.sha256).where(Blob.sha256 == blob_sha256))) is not None
+
+
+async def list_pending_purges(
+    session: AsyncSession, *, limit: int = 200, exclude_ids: set[uuid.UUID] | None = None
+) -> list[PendingBlobPurge]:
+    """Claim a batch of pending purge markers, oldest first (``FOR UPDATE SKIP LOCKED`` so two
+    overlapping reaper runs don't double-process the same marker). ``exclude_ids`` lets one reaper
+    run loop PAST a set of markers it already handled this pass (so a persistent-failure cohort in
+    the oldest rows can't starve newer, purgeable markers — the per-run rotation)."""
+    stmt = select(PendingBlobPurge)
+    if exclude_ids:
+        stmt = stmt.where(PendingBlobPurge.id.notin_(exclude_ids))
+    stmt = (
+        stmt.order_by(asc(PendingBlobPurge.created_at))
+        .limit(limit)
+        .with_for_update(skip_locked=True)
+    )
+    return list((await session.execute(stmt)).scalars().all())
+
+
+async def delete_pending_purge(session: AsyncSession, purge_id: uuid.UUID) -> None:
+    """Drop a purge marker once its bytes are confirmed gone (purge_object is idempotent)."""
+    await session.execute(delete(PendingBlobPurge).where(PendingBlobPurge.id == purge_id))
 
 
 async def list_disposition_events(

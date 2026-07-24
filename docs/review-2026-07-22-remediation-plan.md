@@ -24,7 +24,7 @@
 | 2 | Deny-wins scope-tuple completeness | 1 | 2 | ☑ in PR | [#355](https://github.com/CoJoA13/EasySynQ/pull/355) |
 | 3 | System-tier authz guards (last-admin / revoke-side) | 1 | 2 | ☑ in PR | [#356](https://github.com/CoJoA13/EasySynQ/pull/356) |
 | 4 | WORM erasure completeness | 1 | 2 | ☑ in PR | [#357](https://github.com/CoJoA13/EasySynQ/pull/357) |
-| 5 | Disposition txn / locking integrity | 1 | 2 | ☐ not started | — |
+| 5 | Disposition txn / locking integrity | 1 | 2 | ☑ in PR | [#358](https://github.com/CoJoA13/EasySynQ/pull/358) |
 | 6 | Read-authorization on returned bodies | 1 | 3 | ☐ not started | — |
 | 7 | Audit signed-checkpoint verification | 1 | 1 | ☐ not started | — |
 | 8 | Document lifecycle FSM gates | 2 | 2 | ☐ not started | — |
@@ -77,11 +77,11 @@ Sibling of merged #346: a write/dispose gate that builds a partial `ResourceCont
 - [x] `services/records/disposition.py:128` — DESTROY / R27 WORM-destroy never nulls `form_field_values` → structured record content survives legal erasure `[C]`
 - [x] `migrations/versions/0024_records_disposition.py:179` — `disposition_event` is UPDATE/DELETE-able by the app role → REVOKE UPDATE,DELETE to match the sibling append-only tables `[f]` (fixed in new migration **0072**)
 
-### ☐ Batch 5 — Disposition txn / locking integrity
-`branch: fix/major-disposition-txn-integrity` · backend + integration
+### ☑ Batch 5 — Disposition txn / locking integrity — [#358](https://github.com/CoJoA13/EasySynQ/pull/358)
+`branch: fix/major-disposition-txn-integrity` · backend + migration + integration
 
-- [ ] `services/records/disposition.py:92` — two concurrent dispositions of records sharing one blob each see the peer live → shared bytes never purged; lock `blob.sha256` before the liveness check `[C]`
-- [ ] `services/records/disposition.py:94` — purge deletes S3 bytes before the single end-of-run commit → a failed commit orphans bytes for the whole run; commit-per-record + purge-last, reaper-driven `[C]`
+- [x] `services/records/disposition.py:92` — two concurrent dispositions of records sharing one blob each see the peer live → shared bytes never purged; lock `blob.sha256` before the liveness check `[C]`
+- [x] `services/records/disposition.py:94` — purge deletes S3 bytes before the single end-of-run commit → a failed commit orphans bytes for the whole run; purge-LAST (commit tombstone + blob-row-delete + a `pending_blob_purge` marker FIRST, then purge idempotently) + a reaper (marker table = migration **0073**; owner chose the faithful marker+reaper over the leaner no-migration variant) `[C]`
 
 ### ☐ Batch 6 — Read-authorization on returned bodies
 `branch: fix/major-read-auth-returned-bodies` · backend + integration
