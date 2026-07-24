@@ -122,6 +122,7 @@ async def _run_verify_chain() -> int:
             },
         )
     total_breaks = 0
+    offhost_alarms = 0
     emitted = False
     try:
         async with sessionmaker() as session:
@@ -143,6 +144,7 @@ async def _run_verify_chain() -> int:
                     alarm_offhost = _should_alarm_offhost(offhost)
                     if alarm_offhost:
                         offhost_reasons = offhost.reasons
+                        offhost_alarms += 1
                 if not result.verified or alarm_offhost:
                     logger.error(
                         "audit.verify_chain.broken",
@@ -166,7 +168,10 @@ async def _run_verify_chain() -> int:
                     emitted = True
             if emitted:
                 await session.commit()
-        return total_breaks
+        # Return chain breaks PLUS off-host alarms so an off-host-only failure (walk clean but the
+        # independent witness is stale/corrupt/unreachable/rewritten) is never reported as 0=intact
+        # to the Redis result backend — any detected integrity failure yields a non-zero result.
+        return total_breaks + offhost_alarms
     finally:
         await engine.dispose()
 
@@ -209,7 +214,8 @@ def chain_link() -> int:
 
 @task(name="easysynq.audit.verify_chain")
 def verify_chain_task() -> int:
-    """Re-walk + verify the chain; returns the number of broken links (0 = intact)."""
+    """Re-walk + verify the chain; returns the count of detected integrity findings — chain breaks
+    PLUS independent off-host witness alarms (0 = intact)."""
     return asyncio.run(_run_verify_chain())
 
 

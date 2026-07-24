@@ -125,6 +125,22 @@ def test_load_verify_key_none_when_neither_available(tmp_path: Any, monkeypatch:
     assert cp.load_verify_key() is None  # an api/CLI process with no key → walk-only, cannot attest
 
 
+def test_load_verify_key_fails_closed_on_malformed_public(tmp_path: Any, monkeypatch: Any) -> None:
+    # A truncated / invalid exported PEM must FAIL CLOSED to None (degrade the verify to a walk),
+    # never raise — a raise would abort the nightly detection task and 500 the API verify endpoint.
+    pub_path = tmp_path / "pub.pem"
+    pub_path.write_bytes(b"-----BEGIN PUBLIC KEY-----\nnot-a-valid-pem\n-----END PUBLIC KEY-----\n")
+    _patch_settings(monkeypatch, public=str(pub_path), private=str(tmp_path / "absent.pem"))
+    assert cp.load_verify_key() is None
+
+
+def test_load_verify_key_fails_closed_on_malformed_private(tmp_path: Any, monkeypatch: Any) -> None:
+    priv_path = tmp_path / "priv.pem"
+    priv_path.write_bytes(b"-----BEGIN PRIVATE KEY-----\ngarbage\n-----END PRIVATE KEY-----\n")
+    _patch_settings(monkeypatch, public=str(tmp_path / "absent_pub.pem"), private=str(priv_path))
+    assert cp.load_verify_key() is None
+
+
 def test_should_alarm_offhost_decision_table() -> None:
     """The nightly beat's off-host alarm decision. A wipe leaves a readable off-host object that
     FAILS attestation (attest_failures>0) → ALARM; a read failure (unreachable witness) → ALARM;

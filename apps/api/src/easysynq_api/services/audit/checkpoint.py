@@ -69,7 +69,11 @@ def _export_public_key(public_key: Ed25519PublicKey) -> None:
         return
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(public_key.public_bytes(Encoding.PEM, PublicFormat.SubjectPublicKeyInfo))
+        # Write atomically (temp + rename) so a concurrent verifier never reads a half-written PEM —
+        # a truncated file would make load_verify_key raise instead of failing closed.
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        tmp.write_bytes(public_key.public_bytes(Encoding.PEM, PublicFormat.SubjectPublicKeyInfo))
+        tmp.replace(path)
     except OSError:
         logger.warning("audit checkpoint public key path not writable; verifiers must derive it")
 
@@ -102,17 +106,23 @@ def load_verify_key() -> Ed25519PublicKey | None:
     PUBLIC key (the api/CLI/off-host verifier, which lacks the secret); else ``None`` — the caller
     then walks the chain only and cannot attest the checkpoint."""
     settings = get_settings()
-    priv_path = Path(settings.audit_checkpoint_signing_key_path)
-    if priv_path.exists():
-        loaded_priv = load_pem_private_key(priv_path.read_bytes(), password=None)
-        if isinstance(loaded_priv, Ed25519PrivateKey):
-            return loaded_priv.public_key()
-    raw_pub = settings.audit_checkpoint_public_key_path
-    if raw_pub and Path(raw_pub).exists():
-        loaded = load_pem_public_key(Path(raw_pub).read_bytes())
-        if isinstance(loaded, Ed25519PublicKey):
-            return loaded
-        logger.warning("audit checkpoint public key is not Ed25519; ignoring")  # pragma: no cover
+    try:
+        priv_path = Path(settings.audit_checkpoint_signing_key_path)
+        if priv_path.exists():
+            loaded_priv = load_pem_private_key(priv_path.read_bytes(), password=None)
+            if isinstance(loaded_priv, Ed25519PrivateKey):
+                return loaded_priv.public_key()
+        raw_pub = settings.audit_checkpoint_public_key_path
+        if raw_pub and Path(raw_pub).exists():
+            loaded = load_pem_public_key(Path(raw_pub).read_bytes())
+            if isinstance(loaded, Ed25519PublicKey):
+                return loaded
+            logger.warning("audit checkpoint public key is not Ed25519; ignoring")
+    except Exception:  # noqa: BLE001 - a malformed/truncated/unreadable key FAILS CLOSED (→ None)
+        # Returning None degrades the nightly verify to a walk-only pass (which then logs the
+        # no-verify-key warning) instead of raising — a truncated exported PEM or an unreadable file
+        # must not abort the detection control or 500 the API verify endpoint.
+        logger.warning("audit checkpoint verify key unreadable/malformed; treating as unavailable")
     return None
 
 
