@@ -908,7 +908,9 @@ async def test_generic_document_release_rejects_management_review(
     proceeds past reject_objective_byte_path into the release cutover."""
     subject = f"mr-genrel-{uuid.uuid4()}"
     h = _auth(token_factory, subject)
-    await _grant(subject, _MR_KEYS)
+    # document.release too, so the caller PASSES the authz enforce and it is the managed-subtype
+    # guard (not a 403) that rejects — proving the guard runs after authz, not a subtype leak.
+    await _grant(subject, (*_MR_KEYS, "document.release"))
     rid = await _create_review(app_client, h, "Batch 8 generic-release guard")
 
     r = await app_client.post(f"/api/v1/documents/{rid}/release", headers=h, json={})
