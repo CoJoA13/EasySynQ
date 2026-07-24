@@ -452,6 +452,18 @@ async def pack_has_destroyed_member(session: AsyncSession, pack: EvidencePack) -
     return await _count_destroy_tombstones(session, embedded_ids) > 0
 
 
+async def pack_subjects_destroyed(session: AsyncSession, pack: EvidencePack) -> bool:
+    """``True`` if any FINDING/CAPA dossier SUBJECT — or an embedded origin-finding / linked-CAPA /
+    source-audit cross-reference (all shared-PK records) — already carries a DESTROY / WORM-destroy
+    tombstone. The build calls this BEFORE constructing the dossier so a destroyed subject's
+    narrative is never copied forward into a new sealed RETAIN_PERMANENT pack (the serve guard would
+    withhold such a pack post-seal — this refuses to bake the erased content at all). At build
+    time ``pack.pack_record_id`` is still NULL, so ``_pack_embedded_record_ids`` yields exactly the
+    subjects + their cross-references (no member/pack-record noise)."""
+    embedded_ids = await _pack_embedded_record_ids(session, pack)
+    return await _count_destroy_tombstones(session, embedded_ids) > 0
+
+
 async def process_clause_ids(
     session: AsyncSession, org_id: uuid.UUID, process_ids: list[uuid.UUID]
 ) -> set[str]:

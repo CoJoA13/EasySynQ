@@ -26,6 +26,7 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy import delete, select
 
+from easysynq_api.db.models._pack_enums import PackStatus
 from easysynq_api.db.models._retention_enums import DispositionAction
 from easysynq_api.db.models.blob import Blob
 from easysynq_api.db.models.documented_information import DocumentedInformation
@@ -764,3 +765,128 @@ async def test_finding_capa_scope_validation(
         json={"title": "bad", "scope_kind": "FINDING", "finding_ids": []},
     )
     assert empty.status_code == 422, empty.text
+
+
+async def test_build_refuses_destroyed_finding_subject_before_seal(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """Round-5 P1 (Codex): a FINDING/CAPA subject is a shared-PK record and can be DESTROYed. If the
+    subject carries a DESTROY tombstone BEFORE the seal, the worker build must REFUSE — never copy a
+    legally-erased narrative forward into a new sealed RETAIN_PERMANENT pack (the serve guard would
+    only withhold it afterwards; this stops the born-dead copy from ever sealing). The pack flips to
+    FAILED with no pack_record and no zip. Mutation-verify: without the build-time subject-tombstone
+    check the pack SEALS with the destroyed finding's narrative baked into the ZIP."""
+    subject = _subject("subjbuild")
+    keys = (*_AUDIT_KEYS, "finding.create", "finding.read", "capa.read", *_PACK_KEYS)
+    await _grant(subject, keys)
+    h = _auth(token_factory, subject)
+
+    audit_id = await _new_audit(app_client, h)
+    await _walk(app_client, h, audit_id, "plan", "conduct")
+    finding_id = (
+        await app_client.post(
+            f"/api/v1/audits/{audit_id}/findings",
+            headers=h,
+            json={"finding_type": "NC", "severity": "Major", "clause_ref": "8.4"},
+        )
+    ).json()["id"]
+
+    pack_uuid: uuid.UUID | None = None
+    try:
+        created = await app_client.post(
+            "/api/v1/evidence-packs",
+            headers=h,
+            json={"title": "NC pack", "scope_kind": "FINDING", "finding_ids": [finding_id]},
+        )
+        assert created.status_code == 201, created.text
+        pack_uuid = uuid.UUID(created.json()["id"])
+
+        # DESTROY the SUBJECT finding (its shared-PK record) BEFORE the seal.
+        async with get_sessionmaker()() as s:
+            finding_rec = await s.get(Record, uuid.UUID(finding_id))
+            assert finding_rec is not None
+            disposition._write_tombstone(
+                s, finding_rec, action=DispositionAction.DESTROY, policy_id=None, approved_by=None
+            )
+            await s.commit()
+
+        await _seal(pack_uuid)  # drives build() → the subject-tombstone check → _fail (no raise)
+
+        async with get_sessionmaker()() as s:
+            built = await s.get(EvidencePack, pack_uuid)
+            assert built is not None
+            assert built.status is PackStatus.FAILED, built.status
+            assert built.pack_record_id is None  # nothing sealed → no ZIP-as-record registered
+            assert built.zip_blob_sha256 is None
+            assert "destroyed" in (built.error or "")
+    finally:
+        await owner_delete_disposition_events([uuid.UUID(finding_id)])
+        await _teardown([], pack_uuid)
+
+
+async def test_dossier_omits_r28_excluded_evidence_identifier(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """Round-5 P1 (Codex): the dossier's per-subject evidence list is filtered to the build's
+    R28-INCLUDED record set. ``evidence_records_for_targets`` reloads every linked record with NO
+    permission / period / absence filter, so without the filter the shareable dossier would leak an
+    identifier for a record the pack itself excluded. Two evidence records are linked to a finding;
+    one is DESTROYed before the seal (→ EXCLUDED_ABSENCE, one of the three R28 exclusion reasons all
+    funnelling through the same INCLUDED set the filter keys on). The sealed dossier's
+    evidence_records must carry ONLY the intact record's id, never the excluded one's identifier.
+    Mutation-verify: without the filter the dossier lists BOTH identifiers."""
+    subject = _subject("dossierfilter")
+    keys = (*_AUDIT_KEYS, "finding.create", "finding.read", "capa.read", *_PACK_KEYS)
+    await _grant(subject, keys)
+    h = _auth(token_factory, subject)
+
+    audit_id = await _new_audit(app_client, h)
+    await _walk(app_client, h, audit_id, "plan", "conduct")
+    finding_id = (
+        await app_client.post(
+            f"/api/v1/audits/{audit_id}/findings",
+            headers=h,
+            json={"finding_type": "NC", "severity": "Major", "clause_ref": "8.4"},
+        )
+    ).json()["id"]
+
+    ev_keep = await _evidence_record(app_client, h, "kept evidence")
+    ev_drop = await _evidence_record(app_client, h, "excluded evidence")
+    await _link(app_client, h, ev_keep, "finding", finding_id)
+    await _link(app_client, h, ev_drop, "finding", finding_id)
+
+    pack_uuid: uuid.UUID | None = None
+    try:
+        created = await app_client.post(
+            "/api/v1/evidence-packs",
+            headers=h,
+            json={"title": "NC pack", "scope_kind": "FINDING", "finding_ids": [finding_id]},
+        )
+        assert created.status_code == 201, created.text
+        pack_uuid = uuid.UUID(created.json()["id"])
+
+        # DESTROY ev_drop before sealing → the build re-classifies it EXCLUDED_ABSENCE, so it is not
+        # in the INCLUDED set the dossier filters to. The finding SUBJECT + ev_keep stay intact, so
+        # the build seals and the serve guard does not trip — only the excluded evidence is dropped.
+        async with get_sessionmaker()() as s:
+            drop_rec = await s.get(Record, uuid.UUID(ev_drop))
+            assert drop_rec is not None
+            disposition._write_tombstone(
+                s, drop_rec, action=DispositionAction.DESTROY, policy_id=None, approved_by=None
+            )
+            await s.commit()
+
+        await _seal(pack_uuid)
+        sealed = (await app_client.get(f"/api/v1/evidence-packs/{pack_uuid}", headers=h)).json()
+        assert sealed["status"] == "SEALED", sealed
+
+        with zipfile.ZipFile(io.BytesIO(await _download_zip(app_client, h, pack_uuid))) as zf:
+            dossier_names = [n for n in zf.namelist() if n.startswith("findings/")]
+            assert len(dossier_names) == 1
+            d = json.loads(zf.read(dossier_names[0]))
+            ev_ids = {e["record_id"] for e in d["evidence_records"]}
+            assert ev_keep in ev_ids  # the INCLUDED evidence is serialized
+            assert ev_drop not in ev_ids  # the R28-excluded evidence identifier is filtered out
+    finally:
+        await owner_delete_disposition_events([uuid.UUID(ev_drop)])
+        await _teardown([ev_keep, ev_drop], pack_uuid)

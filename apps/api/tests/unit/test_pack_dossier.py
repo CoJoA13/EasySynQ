@@ -6,6 +6,7 @@ sanitization, deterministic serialization, cycle grouping, and signature project
 from __future__ import annotations
 
 import json
+import uuid
 
 from easysynq_api.domain.packs.dossier import (
     DOSSIER_PREAMBLE,
@@ -156,3 +157,16 @@ def test_serialize_capa_dossier_cycle_grouping_and_signature() -> None:
     assert d["stages"][0]["signature"] is None  # RootCause is unsigned
     blob = canonical_dossier_bytes(d).decode()
     assert "email" not in blob and "keycloak" not in blob
+
+
+def test_filter_included_drops_r28_excluded_evidence() -> None:
+    # The service-layer filter that keeps each subject's dossier evidence in step with the pack's
+    # R28-INCLUDED set (a read-authz leak guard — ``evidence_records_for_targets`` is unfiltered, so
+    # without this a permission/period/absence-excluded record's identifier would reach the ZIP).
+    from easysynq_api.services.packs.dossier import _filter_included
+
+    keep, drop = uuid.uuid4(), uuid.uuid4()
+    evidence = [(keep, "REC-1"), (drop, "REC-2")]
+    assert _filter_included(evidence, frozenset({keep})) == [(keep, "REC-1")]
+    assert _filter_included(evidence, frozenset()) == []  # nothing included → nothing serialized
+    assert _filter_included([], frozenset({keep})) == []
