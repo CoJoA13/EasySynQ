@@ -424,6 +424,96 @@ async def test_sealed_pack_serve_guard_covers_embedded_records(
         await _teardown([ev4], pk_record)
 
 
+async def test_finding_pack_create_requires_linked_capa_read(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """New-4 (R28): a FINDING pack whose finding has a LINKED auto-CAPA must ALSO re-authorize
+    capa.read — the finding dossier embeds the linked CAPA's identifier + close_state (data GET
+    /findings/{id} does NOT expose), so a caller with finding.read but WITHOUT capa.read is REFUSED
+    (403) at create (the symmetric partner of the CAPA-pack origin-finding gate). Mutation-verify:
+    without the linked-CAPA gate the finding.read-only caller gets 201."""
+    owner = _subject("linked-owner")
+    await _grant(owner, (*_AUDIT_KEYS, "finding.create", "finding.read", "capa.read", *_PACK_KEYS))
+    ho = _auth(token_factory, owner)
+    audit_id = await _new_audit(app_client, ho)
+    await _walk(app_client, ho, audit_id, "plan", "conduct")
+    finding_id = (
+        await app_client.post(
+            f"/api/v1/audits/{audit_id}/findings",
+            headers=ho,
+            json={"finding_type": "NC", "severity": "Major"},
+        )
+    ).json()["id"]
+
+    # Attacker: finding.read (the subject, granted SYSTEM) + the pack keys, but NOT capa.read.
+    attacker = _subject("linked-attacker")
+    await _grant(attacker, ("finding.read", "report.evidence_pack.generate", "report.export"))
+    ha = _auth(token_factory, attacker)
+    refused = await app_client.post(
+        "/api/v1/evidence-packs",
+        headers=ha,
+        json={"title": "F", "scope_kind": "FINDING", "finding_ids": [finding_id]},
+    )
+    assert refused.status_code == 403, refused.text
+
+    ok = await app_client.post(
+        "/api/v1/evidence-packs",
+        headers=ho,
+        json={"title": "F-ok", "scope_kind": "FINDING", "finding_ids": [finding_id]},
+    )
+    assert ok.status_code == 201, ok.text
+    await _teardown([], uuid.UUID(ok.json()["id"]))
+
+
+async def test_finding_pack_serve_guard_covers_source_audit(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """New-5: a FINDING pack's dossier embeds its SOURCE AUDIT's id + identifier, and ``audit`` is a
+    shared-PK record — so a destroyed source audit must fail-close the serve guard (its narrative is
+    baked into the sealed ZIP). Mutation-verify: without the audit branch in the embedded-id set the
+    guard stays False (the finding + its CAPA are intact, so only the audit-destroy can trip it)."""
+    owner = _subject("audit-serve")
+    await _grant(owner, (*_AUDIT_KEYS, "finding.create", "finding.read", "capa.read", *_PACK_KEYS))
+    h = _auth(token_factory, owner)
+    audit_id = await _new_audit(app_client, h)
+    await _walk(app_client, h, audit_id, "plan", "conduct")
+    finding_id = (
+        await app_client.post(
+            f"/api/v1/audits/{audit_id}/findings",
+            headers=h,
+            json={"finding_type": "NC", "severity": "Major"},
+        )
+    ).json()["id"]
+    created = await app_client.post(
+        "/api/v1/evidence-packs",
+        headers=h,
+        json={"title": "F", "scope_kind": "FINDING", "finding_ids": [finding_id]},
+    )
+    assert created.status_code == 201, created.text
+    pid = uuid.UUID(created.json()["id"])
+
+    async def _guard() -> bool:
+        async with get_sessionmaker()() as s:
+            pack = await s.get(EvidencePack, pid)
+            assert pack is not None
+            return await packs_repo.pack_has_destroyed_member(s, pack)
+
+    try:
+        assert await _guard() is False
+        # Destroy the SOURCE AUDIT (a shared-PK record); the finding + its CAPA stay intact.
+        async with get_sessionmaker()() as s:
+            audit_rec = await s.get(Record, uuid.UUID(audit_id))
+            assert audit_rec is not None
+            disposition._write_tombstone(
+                s, audit_rec, action=DispositionAction.DESTROY, policy_id=None, approved_by=None
+            )
+            await s.commit()
+        assert await _guard() is True
+    finally:
+        await owner_delete_disposition_events([uuid.UUID(audit_id)])
+        await _teardown([], pid)
+
+
 async def test_finding_capa_pack_create_requires_subject_read(
     app_client: AsyncClient, token_factory: Callable[..., str]
 ) -> None:

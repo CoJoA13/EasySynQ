@@ -305,9 +305,12 @@ async def _authorize_pack_subjects(
     ``report.evidence_pack.generate`` (independent of finding/capa read) could bundle a finding/CAPA
     they cannot read. Mirrors each subject's own single-read surface (no new authority):
     ``finding.read`` at SYSTEM (GET /findings/{id}), ``capa.read`` at the CAPA's PROCESS scope
-    (GET /capas/{id}) — plus ``finding.read`` for a CAPA's ORIGIN finding, whose metadata the CAPA
-    dossier embeds. Refuse-ANY — the subject IS the whole pack, so one unreadable subject fails
-    (excluding it would leave an empty pack). CLAUSE/PROCESS packs carry no subject dossier.
+    (GET /capas/{id}). The finding↔CAPA pair is gated in BOTH directions — a CAPA pack also needs
+    ``finding.read`` for its ORIGIN finding, a FINDING pack ``capa.read`` for its LINKED auto-CAPA —
+    since each dossier embeds the other's metadata. Refuse-ANY — the subject IS the whole pack, so
+    one unreadable subject fails (excluding it leaves an empty pack). CLAUSE/PROCESS packs carry no
+    subject dossier. (A finding dossier also embeds its source audit + correction-chain
+    *identifiers*; read-gating that ancestry/lineage is a deferred owner decision — see the PR.)
 
     Routed through the ``enforce`` PEP (not a bare ``authorize``) so the subject-read decision —
     ALLOW **and** DENY — lands in the ``AuthzAuditSink`` durable authz trail (the PEP's audit
@@ -319,6 +322,23 @@ async def _authorize_pack_subjects(
             await enforce(
                 session, authz_sink, request, caller, "finding.read", ResourceContext.system()
             )
+        for fid in scope_ids:
+            finding = await repo.get_finding(session, fid)
+            if finding is None or finding.auto_capa_id is None:
+                continue
+            capa = await repo.get_capa(session, finding.auto_capa_id)
+            if capa is None:  # pragma: no cover - the bidirectional link is created in one txn
+                continue
+            resource = (
+                ResourceContext(process_ids=frozenset({str(capa.process_id)}))
+                if capa.process_id is not None
+                else ResourceContext.system()
+            )
+            # The finding dossier embeds the linked auto-CAPA's identifier + close_state
+            # (dossier._finding_subject) — data GET /findings/{id} does NOT expose — so this finding
+            # also requires reading its paired CAPA (the symmetric partner of the CAPA pack's
+            # origin-finding gate); else a finding.read-only holder harvests the CAPA data.
+            await enforce(session, authz_sink, request, caller, "capa.read", resource)
     elif scope_kind == "CAPA":
         for cid in scope_ids:
             capa = await repo.get_capa(session, cid)

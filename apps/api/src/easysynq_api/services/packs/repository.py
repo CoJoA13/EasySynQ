@@ -359,26 +359,43 @@ async def _finding_linked_capa_ids(
     return [r for r in rows.all() if r is not None]
 
 
+async def _finding_audit_ids(
+    session: AsyncSession, finding_ids: list[uuid.UUID]
+) -> list[uuid.UUID]:
+    """The source-audit ids of the given findings — a finding dossier embeds its audit's id +
+    identifier (``dossier._finding_subject``), and ``audit`` is a shared-PK record, so a destroyed
+    source audit must fail-close the serve gate too."""
+    if not finding_ids:
+        return []
+    rows = await session.scalars(
+        select(AuditFinding.audit_id).where(AuditFinding.id.in_(finding_ids))
+    )
+    return [r for r in rows.all() if r is not None]
+
+
 async def _pack_embedded_record_ids(session: AsyncSession, pack: EvidencePack) -> list[uuid.UUID]:
     """Every record whose metadata/narrative is baked into the sealed pack but is NOT an INCLUDED
     ``pack_item`` member — so a DESTROY tombstone on any must also fail-close the serve gate:
 
     * the FINDING/CAPA scope **subjects** (dossier subjects; shared-PK records),
-    * a CAPA subject's **origin finding** / a FINDING subject's **linked auto-CAPA** — the
-      cross-reference each dossier embeds (also shared-PK records), and
+    * a CAPA subject's **origin finding** / a FINDING subject's **linked auto-CAPA** + **source
+      audit** — the cross-references each dossier embeds (all shared-PK records), and
     * the pack's own registered EVIDENCE **record** (``pack_record_id`` — the sealed ZIP-as-record;
       an R27 destroy of it purges the ZIP blob but leaves the portfolio serving).
 
     The CAPA-stage / finding evidence records ARE INCLUDED ``pack_item`` members (the member join
-    covers them), so they are not repeated here."""
-    ids = _pack_subject_record_ids(pack)
-    if ids:
+    covers them). A finding/CAPA correction-chain identifier is also dossier-embedded but a rarer
+    lineage; the uniform closer for that deep graph is the #361 physical purge."""
+    subject_ids = _pack_subject_record_ids(pack)
+    ids: list[uuid.UUID] = list(subject_ids)
+    if subject_ids:
         if pack.scope_kind is PackScopeKind.CAPA:
-            ids = ids + await _capa_origin_finding_ids(session, ids)
+            ids.extend(await _capa_origin_finding_ids(session, subject_ids))
         elif pack.scope_kind is PackScopeKind.FINDING:
-            ids = ids + await _finding_linked_capa_ids(session, ids)
+            ids.extend(await _finding_linked_capa_ids(session, subject_ids))
+            ids.extend(await _finding_audit_ids(session, subject_ids))
     if pack.pack_record_id is not None:
-        ids = [*ids, pack.pack_record_id]
+        ids.append(pack.pack_record_id)
     return ids
 
 
