@@ -653,6 +653,46 @@ async def test_minor_action_plan_qm_approval_writes_signature(
         assert stage.signed_event_id == sig.id  # mutual reference, set at INSERT (no UPDATE)
 
 
+async def test_action_plan_decision_rejects_an_unsupported_outcome(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """[Batch 9] A CAPA action-plan approval accepts ONLY approve / reject / changes_requested.
+    ``verify`` is a legal TaskOutcomeKind the engine's ANY quorum treats as POSITIVE, so without the
+    allow-list it drove the quorum to MET and minted a WORM
+    ``signature_event(meaning='approval')`` over a decision that was never an approval — sealing a
+    FALSE signature of record into the append-only capa_stage. It must 422 and write nothing."""
+    qm_subj = _subject("qm-badoutcome")
+    await _assign_seeded_role(qm_subj, "QMS Owner")
+    ha = _auth(token_factory, qm_subj)
+    proposer_subj = _subject("ap-badoutcome")
+    await _grant(proposer_subj, _PROPOSE_KEYS)
+    hp = _auth(token_factory, proposer_subj)
+    capa_id = await _drive_to_root_cause(app_client, hp, severity="Minor", title="Bad outcome AP")
+
+    pr = await app_client.post(
+        f"/api/v1/capas/{capa_id}/action-plan", headers=hp, json={"content_block": _ACTION_PLAN}
+    )
+    assert pr.status_code == 200, pr.text
+    iid = pr.json()["approval_instance"]["id"]
+    task_id = await _my_pending_task(app_client, ha, iid)
+
+    bad = await app_client.post(
+        f"/api/v1/tasks/{task_id}/decision", headers=ha, json={"outcome": "verify"}
+    )
+    assert bad.status_code == 422, bad.text
+    assert bad.json()["errors"][0]["code"] == "unsupported_outcome"
+
+    # No false signature, no stage, no close_state flip — and the task is still decidable.
+    detail = (await app_client.get(f"/api/v1/capas/{capa_id}", headers=hp)).json()
+    assert detail["close_state"] == "RootCause"
+    assert not [s for s in detail["stages"] if s["stage"] == "ActionPlan"]
+    good = await app_client.post(
+        f"/api/v1/tasks/{task_id}/decision", headers=ha, json={"outcome": "approve"}
+    )
+    assert good.status_code == 200, good.text
+    assert good.json()["capa_close_state"] == "ActionPlan"
+
+
 async def test_critical_action_plan_two_tier_approval(
     app_client: AsyncClient, token_factory: Callable[..., str]
 ) -> None:

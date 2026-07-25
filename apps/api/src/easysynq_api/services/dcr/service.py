@@ -123,6 +123,12 @@ def _emit_dcr(
     )
 
 
+# The ONLY outcomes a DCR approval task accepts (doc 05 §5.4): approve / reject / changes_requested
+# — the three the FSM mapping below handles. Any other legal TaskOutcomeKind (complete / verify /
+# acknowledge) would complete the engine quorum while matching no branch, bricking the DCR.
+_ALLOWED_DCR_OUTCOMES = frozenset({"approve", "reject", "changes_requested"})
+
+
 def _not_found(what: str) -> ProblemException:
     return ProblemException(status=404, code="not_found", title=f"{what} not found")
 
@@ -596,6 +602,18 @@ async def decide_dcr_approval(
         raise _not_found("Workflow instance")
     await _assert_dcr_approver(session, actor, task, instance)
 
+    # Batch 9: accept ONLY the three outcomes documented above. The engine validates that `outcome`
+    # is a legal TaskOutcomeKind but NOT that it is meaningful for THIS task, and it treats every
+    # positive kind (approve/complete/verify/acknowledge) as satisfying the ANY quorum — so a
+    # `verify` here would complete the instance while matching NEITHER branch below, leaving the DCR
+    # stuck InApproval with no live approval instance: permanently bricked.
+    if outcome not in _ALLOWED_DCR_OUTCOMES:
+        raise _validation_error(
+            "outcome",
+            "unsupported_outcome",
+            "outcome must be one of: " + ", ".join(sorted(_ALLOWED_DCR_OUTCOMES)),
+        )
+
     result = await engine.decide(
         session,
         task,
@@ -710,7 +728,8 @@ async def decide_dcr_approval(
             before={"state": DcrState.InApproval.value},
             after={"state": target.value},
         )
-    # (any other outcome was already rejected by the engine's TaskOutcomeKind validation → 422)
+    # (any other outcome was rejected by the _ALLOWED_DCR_OUTCOMES allow-list above → 422; the
+    # engine's TaskOutcomeKind check alone does NOT cover it — `verify` is a legal kind)
 
     await session.commit()
     result["dcr_state"] = dcr.state.value

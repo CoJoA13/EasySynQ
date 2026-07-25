@@ -135,6 +135,13 @@ def _emit_ncr(
     )
 
 
+# The ONLY outcomes the CAPA action-plan approval accepts (doc 10 §6.2): ``approve`` (the positive
+# that seals the signed ActionPlan stage) plus the two negatives the engine fails the quorum on.
+# NEVER a generic positive (complete/verify/acknowledge) — the ANY-quorum engine would treat those
+# as completing and mint a WORM approval signature over a non-approval decision.
+_ALLOWED_CAPA_OUTCOMES = frozenset({"approve", "reject", "changes_requested"})
+
+
 def _not_found(what: str) -> ProblemException:
     return ProblemException(status=404, code="not_found", title=f"{what} not found")
 
@@ -637,6 +644,20 @@ async def decide_capa_action_plan(
     if instance is None or instance.org_id != actor.org_id:
         raise _not_found("Workflow instance")
     await _assert_capa_approver(session, actor, task, instance)
+
+    # Batch 9: accept ONLY the three outcomes this action-plan approval defines. The generic engine
+    # treats EVERY positive TaskOutcomeKind (approve/complete/verify/acknowledge) as satisfying the
+    # ANY quorum, so without this allow-list a candidate could POST `verify` (or complete /
+    # acknowledge) and still drive the quorum to MET — minting the WORM
+    # signature_event(meaning='approval') below over a decision that was never an approval, i.e. a
+    # FALSE signature of record sealed into the append-only capa_stage (the ack / improvement /
+    # periodic-review allow-list precedent).
+    if outcome not in _ALLOWED_CAPA_OUTCOMES:
+        raise _validation_error(
+            "outcome",
+            "unsupported_outcome",
+            "outcome must be one of: " + ", ".join(sorted(_ALLOWED_CAPA_OUTCOMES)),
+        )
 
     result = await engine.decide(
         session,
