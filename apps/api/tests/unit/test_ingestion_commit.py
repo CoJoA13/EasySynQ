@@ -180,7 +180,10 @@ def test_import_report_declares_deferred_revision_chain_reconstruction() -> None
     revision history had been imported when every member landed as its own Effective document."""
     md = render_import_report(_report_data(deferred_revision_chain_families=["SOP-PUR-014", "QM"]))
     assert "## Deferred — revision-chain reconstruction (R10)" in md
-    assert "does **not**" in md
+    assert "**not** materialize" in md
+    # It must state the ACTUAL outcome: only the effective member is imported, the rest excluded
+    # (rebuild_proposals drops every non-effective member from the keep set).
+    assert "effective member" in md and "**excluded**" in md
     assert "SOP-PUR-014" in md and "QM" in md
 
 
