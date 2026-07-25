@@ -407,12 +407,16 @@ async def start_import_commit(
     if run is None or run.org_id != caller.org_id:
         raise ProblemException(status=404, code="not_found", title="Import run not found")
 
-    # R10 honesty gate — applies to a START **and** a RESUME. This version does NOT materialize
-    # revision-chain reconstruction, so refuse BEFORE any (irreversible, WORM) commit rather than
-    # accept the run under a promise we do not keep. A run left PartiallyCommitted by an older build
-    # that silently accepted the opt-in must not slip its remaining writes through the resume path:
-    # the reviewer clears the per-family opt-in and re-commits, having been told what will happen.
-    if run.status in _COMMIT_START or run.status in _COMMIT_RESUME:
+    # R10 honesty gate — START ONLY, deliberately. This version does NOT materialize revision-chain
+    # reconstruction, so refuse BEFORE the first (irreversible, WORM) commit rather than accept the
+    # run under a promise we do not keep; the reviewer clears the per-family opt-in via merge/split
+    # (both need a REVIEWABLE run) and commits on stated terms.
+    # ⚠ Do NOT extend this to _COMMIT_RESUME. A PartiallyCommitted run cannot reach merge/split
+    # (409, not REVIEWABLE) or cancel (409, _CANCEL_BLOCKED), so a resume-side 422 closes EVERY exit
+    # and strands the run forever — while protecting nothing: by then rebuild_proposals has already
+    # dropped the non-effective members and the effective member is already in the vault, so the
+    # remaining items are unrelated. It would also violate doc 09 §11.2 resume / §11.4 no-rollback.
+    if run.status in _COMMIT_START:
         deferred = [
             f.family_key
             for f in await repo.list_version_families(session, run_id)

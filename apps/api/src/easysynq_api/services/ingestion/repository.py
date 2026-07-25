@@ -1100,10 +1100,14 @@ async def max_stage_progress(session: AsyncSession, run_id: uuid.UUID) -> Any:
     import legitimately runs longer than the stall window, and anchoring on the start time FAILs it
     mid-flight (and force-frees its lock) no matter how much progress it is making.
 
-    Covers EVERY ``_IN_PROGRESS`` stage, since each writes its own row type and a stage that writes
-    none of them would fall back to the start time and be falsely reaped: ``import_file`` (scan),
-    ``import_extract`` (extract), ``import_classification`` (classify), ``import_dupe_cluster``
-    (dedup), ``import_proposal_node`` (propose)."""
+    ⚠ Only scan/extract/classify are INCREMENTAL: ``import_file`` (scan), ``import_extract`` and
+    ``import_classification`` are written per batch, so a long run in those stages keeps advancing
+    this anchor. ``import_dupe_cluster`` and ``import_proposal_node`` are written ONCE at stage
+    COMPLETION (``replace_dedup_groups`` / ``replace_proposals``), so they mark a stage finishing —
+    they do NOT protect a long-running Deduping/Proposing computation, which still rides the last
+    classify row. The ~30-minute source-root lock TTL is the effective liveness signal there;
+    covering those stages properly needs a heartbeat-written progress stamp, not a completion
+    marker (deferred — see the PR discussion)."""
     stamps = []
     for column, model in (
         (ImportFile.created_at, ImportFile),
