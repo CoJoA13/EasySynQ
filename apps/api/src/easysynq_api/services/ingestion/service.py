@@ -413,8 +413,8 @@ async def start_import_commit(
     # (both need a REVIEWABLE run) and commits on stated terms.
     # ⚠ Do NOT extend this to _COMMIT_RESUME. A PartiallyCommitted run cannot reach merge/split
     # (409, not REVIEWABLE) or cancel (409, _CANCEL_BLOCKED), so a resume-side 422 closes EVERY exit
-    # and strands the run forever, violating doc 09 §11.2 resume / §11.4 no-rollback. Gating resumes
-    # needs a partial-state clear/acknowledge operation FIRST (a new endpoint + a review-state call).
+    # and strands the run forever, violating doc 09 §11.2 resume / §11.4 no-rollback. Gating a
+    # resume needs a partial-state clear/ack op FIRST (a new endpoint + a review-state call).
     # ⚠ This does leave a real hole: a run can be PartiallyCommitted BECAUSE the effective member
     # failed (`claim_commit_result` lets a failed ledger row later succeed, and `_finalize` marks
     # partial on ANY item failure), so a resume can commit it without honouring the opt-in. Named in
