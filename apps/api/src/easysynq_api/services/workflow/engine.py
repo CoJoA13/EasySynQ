@@ -38,7 +38,13 @@ from ...db.models._signature_enums import SignatureMeaning
 from ...db.models._workflow_enums import TaskOutcomeKind, TaskState, TaskType, WorkflowSubjectType
 from ...db.models.app_user import AppUser
 from ...db.models.audit_event import AuditEvent
-from ...db.models.workflow import Task, TaskOutcome, WorkflowInstance, WorkflowStage
+from ...db.models.workflow import (
+    Task,
+    TaskOutcome,
+    WorkflowDefinition,
+    WorkflowInstance,
+    WorkflowStage,
+)
 from ...domain.workflow import (
     evaluate_condition,
     quorum_state,
@@ -505,7 +511,14 @@ async def decide(
                 t.client_token = _QUORUM_SKIP
         signature_spec = stage.signature  # threaded only; no signature_event row this slice
         target = _transition_target(stage, _SUCCESS_ON) or COMPLETED
-        instance.current_state = await _enter_stage(session, instance, stages, target, None, set())
+        # Batch 9: thread the definition's default_sla, exactly as `instantiate` does. Passing None
+        # here gave every SECOND-tier stage's tasks due_at=null whenever the stage declares no sla
+        # of its own — so a MAJOR DCR's QMS-Owner task (definition default_sla 120h) got no due
+        # date and the R29/R55 machinery (reminders, OVERDUE, escalation) never fired for it.
+        definition = await session.get(WorkflowDefinition, instance.definition_id)
+        instance.current_state = await _enter_stage(
+            session, instance, stages, target, definition.default_sla if definition else None, set()
+        )
         _emit(
             session,
             instance,

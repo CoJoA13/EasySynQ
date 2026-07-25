@@ -17,6 +17,7 @@ from httpx import AsyncClient
 from sqlalchemy import func, select
 
 from easysynq_api.db.models.signature_event import SignatureEvent
+from easysynq_api.db.models.workflow import Task
 from easysynq_api.db.session import get_sessionmaker
 
 from .test_capa import _assign_seeded_role, _my_pending_task
@@ -199,6 +200,85 @@ async def test_major_dcr_two_stage_two_signatures(
     assert d2.json()["dcr_state"] == "Approved"
     # doc 05 §5.4: EACH approval signs → MAJOR = two signature_events.
     assert await _approval_sig_count(dcr_id) == 2
+
+
+async def test_second_tier_task_inherits_the_definition_default_sla(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """[Batch 9] A stage-advance must thread the definition's ``default_sla`` (migration 0043 sets
+    120h for dcr_approval), so the SECOND-tier QMS-Owner task gets a real ``due_at``. Without it the
+    task was created with due_at=NULL → no due-soon reminder, never OVERDUE, never escalated, and
+    the DCR sat InApproval forever while the org believed the R29/R55 SLA machinery covered it.
+    Mutation-distinguishing: this asserts due_at IS NOT NULL, which fails on the old `None` arg."""
+    req = _subject("dcr-sla-major")
+    await _grant(req, _ROUTE_PERMS)
+    hr = _auth(token_factory, req)
+    proc = _subject("dcr-sla-proc")
+    await _assign_seeded_role(proc, "Process Owner")
+    hp = _auth(token_factory, proc)
+    qm = _subject("dcr-sla-qms")
+    await _assign_seeded_role(qm, "QMS Owner")
+    hq = _auth(token_factory, qm)
+
+    dcr_id = await _open_assessed_dcr(app_client, hr, "MAJOR")
+    iid = (await app_client.post(f"/api/v1/dcrs/{dcr_id}/route", headers=hr)).json()[
+        "approval_instance"
+    ]["id"]
+
+    # Stage 1 (Process Owner) already carries a due date from the same default_sla at instantiate.
+    t1 = await _my_pending_task(app_client, hp, iid)
+    async with get_sessionmaker()() as s:
+        due1 = (await s.execute(select(Task.due_at).where(Task.id == uuid.UUID(t1)))).scalar_one()
+    assert due1 is not None, "stage-1 task should carry the definition default_sla due date"
+
+    # Advance to stage 2 — the task the ADVANCE materializes must also carry a due date.
+    assert (
+        await app_client.post(
+            f"/api/v1/tasks/{t1}/decision", headers=hp, json={"outcome": "approve"}
+        )
+    ).status_code == 200
+    t2 = await _my_pending_task(app_client, hq, iid)
+    async with get_sessionmaker()() as s:
+        due2 = (await s.execute(select(Task.due_at).where(Task.id == uuid.UUID(t2)))).scalar_one()
+    assert due2 is not None, "second-tier task lost the definition default_sla (due_at is NULL)"
+
+
+async def test_dcr_decision_rejects_an_unsupported_outcome(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """[Batch 9] A DCR approval accepts ONLY approve / reject / changes_requested. ``verify`` is a
+    legal TaskOutcomeKind the engine's ANY quorum treats as POSITIVE, so without the allow-list it
+    completed the instance while matching neither DCR branch — leaving the DCR stuck InApproval with
+    no live approval instance (permanently bricked). It must 422 and change nothing."""
+    req = _subject("dcr-badoutcome")
+    await _grant(req, _ROUTE_PERMS)
+    hr = _auth(token_factory, req)
+    qm = _subject("dcr-badoutcome-qms")
+    await _assign_seeded_role(qm, "QMS Owner")
+    hq = _auth(token_factory, qm)
+
+    dcr_id = await _open_assessed_dcr(app_client, hr, "MINOR")
+    iid = (await app_client.post(f"/api/v1/dcrs/{dcr_id}/route", headers=hr)).json()[
+        "approval_instance"
+    ]["id"]
+    task_id = await _my_pending_task(app_client, hq, iid)
+
+    bad = await app_client.post(
+        f"/api/v1/tasks/{task_id}/decision", headers=hq, json={"outcome": "verify"}
+    )
+    assert bad.status_code == 422, bad.text
+    assert bad.json()["errors"][0]["code"] == "unsupported_outcome"
+
+    # The DCR is untouched and still decidable — the task remains open for a real decision.
+    assert (await app_client.get(f"/api/v1/dcrs/{dcr_id}", headers=hr)).json()["state"] == (
+        "InApproval"
+    )
+    assert await _approval_sig_count(dcr_id) == 0
+    good = await app_client.post(
+        f"/api/v1/tasks/{task_id}/decision", headers=hq, json={"outcome": "approve"}
+    )
+    assert good.status_code == 200, good.text
+    assert good.json()["dcr_state"] == "Approved"
 
 
 async def test_changes_requested_loops_to_open(

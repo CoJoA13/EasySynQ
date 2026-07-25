@@ -28,7 +28,7 @@
 | 6 | Read-authorization on returned bodies | 1 | 3 | ☑ in PR | [#362](https://github.com/CoJoA13/EasySynQ/pull/362) |
 | 7 | Audit signed-checkpoint verification | 1 | 1 | ☑ in PR | [#364](https://github.com/CoJoA13/EasySynQ/pull/364) |
 | 8 | Document lifecycle FSM gates | 2 | 2 | ☑ in PR | [#365](https://github.com/CoJoA13/EasySynQ/pull/365) |
-| 9 | Workflow approval correctness | 2 | 3 | ☐ not started | — |
+| 9 | Workflow approval correctness | 2 | 3 | ☑ in PR | [#366](https://github.com/CoJoA13/EasySynQ/pull/366) |
 | 10 | Ingestion pipeline correctness | 2 | 3 | ☐ not started | — |
 | 11 | Notifications & operator alerting | 2 | 2 | ☐ not started | — |
 | 12 | Contract & schema housekeeping | 3 | 4 | ☐ not started | — |
@@ -107,12 +107,12 @@ A create-gated (or token-gated) endpoint returns a resource body the caller cann
 - [x] `services/vault/service.py:396` — `checkout`/`checkin` are not FSM-gated → a check-in during InReview permanently bricks the doc + its approval task; gate on `current_state in {Draft, UnderRevision}` `[C]` (fixed: `_require_editable_state(doc)` gates the generic `checkout()`/`checkin()` on `_EDITABLE_STATES` = {Draft, UnderRevision} → 409 `not_editable`, after `reject_objective_byte_path` so managed subtypes 422 first)
 - [x] `api/documents.py:1703` — generic `POST /documents/{id}/release` skips the managed-subtype hooks → a generically-released MR is permanently unclosable (and OBJ unit-reset skipped); route managed subtypes through their post-release chain `[C]` (fixed: `release_endpoint` now calls `reject_objective_byte_path(session, doc)` → a managed subtype 422s toward its own `/management-reviews` / `/objectives` release, which runs the post-release chain [MR `spawn_mr_actions` + `close_state=ActionsTracked`])
 
-### ☐ Batch 9 — Workflow approval correctness
+### ☑ Batch 9 — Workflow approval correctness — [#366](https://github.com/CoJoA13/EasySynQ/pull/366)
 `branch: fix/major-workflow-approval-correctness` · backend + integration
 
-- [ ] `services/capa/service.py:641` — `decide_capa_action_plan` has no outcome allow-list → a non-`approve` positive outcome mints a false WORM `signature_event(meaning='approval')`; add `_ALLOWED_CAPA_OUTCOMES` + 422 before `engine.decide` `[C]`
-- [ ] `services/dcr/service.py:713` — `decide_dcr_approval` passes non-approve positive outcomes through → permanently bricks the DCR; add `_ALLOWED_DCR_OUTCOMES` + 422 `[C]`
-- [ ] `services/workflow/engine.py:508` — stage advance drops the definition `default_sla` → 2nd-tier approval tasks get `due_at=null` (no reminders/overdue/escalation); load the definition and pass `default_sla` to `_enter_stage` `[C]`
+- [x] `services/capa/service.py:641` — `decide_capa_action_plan` has no outcome allow-list → a non-`approve` positive outcome mints a false WORM `signature_event(meaning='approval')`; add `_ALLOWED_CAPA_OUTCOMES` + 422 before `engine.decide` `[C]` (fixed: `_ALLOWED_CAPA_OUTCOMES = {approve, reject, changes_requested}` + a 422 `unsupported_outcome` before `engine.decide`, so `verify`/`complete`/`acknowledge` can no longer drive the ANY quorum to MET and seal a false approval signature into the append-only `capa_stage`)
+- [x] `services/dcr/service.py:713` — `decide_dcr_approval` passes non-approve positive outcomes through → permanently bricks the DCR; add `_ALLOWED_DCR_OUTCOMES` + 422 `[C]` (fixed: same allow-list shape; the stale comment claiming the engine's `TaskOutcomeKind` check covered this is corrected — `verify` IS a legal kind, so it completed the instance while matching neither FSM branch and left the DCR stuck `InApproval`)
+- [x] `services/workflow/engine.py:508` — stage advance drops the definition `default_sla` → 2nd-tier approval tasks get `due_at=null` (no reminders/overdue/escalation); load the definition and pass `default_sla` to `_enter_stage` `[C]` (fixed: `decide` loads `WorkflowDefinition` by `instance.definition_id` and threads `default_sla` into `_enter_stage`, matching `instantiate`; a MAJOR DCR's 2nd-tier QMS-Owner task now inherits the definition's 120h SLA)
 
 ### ☐ Batch 10 — Ingestion pipeline correctness
 `branch: fix/major-ingestion-correctness` · backend + integration
