@@ -80,8 +80,8 @@ export function MergeMenu({
               </Stack>
             </Radio.Group>
             <Checkbox
-              label="Reconstruct revision chain"
-              description="Opt-in (off by default). Materializes the prior versions as a revision history."
+              label="Reconstruct revision chain (not available yet)"
+              description="Not implemented in this version — leave off. Turning it on blocks this run's commit until it is cleared. Only the family's effective member is imported; the other members are excluded."
               checked={reconstruct}
               onChange={(e) => setReconstruct(e.currentTarget.checked)}
             />

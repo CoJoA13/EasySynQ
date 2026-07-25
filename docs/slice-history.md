@@ -4,6 +4,59 @@
 > also lives in the squash-merge commits). CLAUDE.md holds only the current head pointer.
 > **Migration head: `0070` (next `0071`).** Code: https://github.com/CoJoA13/EasySynQ (`main` protected, PR + green CI).
 
+## ⚠ OPEN RESIDUALS — named, owner-acknowledged, NOT yet done
+
+> Deferred work that is deliberately **not** silently dropped. Each names why it was deferred and what
+> closing it needs. Clear an entry only when the work actually ships (link its PR).
+
+- **Ingestion reaper — long dedup/propose stages have no incremental progress signal** (Batch 10, PR
+  [#367](https://github.com/CoJoA13/EasySynQ/pull/367)). `reap_stalled_runs`' backstop is anchored on
+  `repo.max_stage_progress`, but only `import_file` (scan) / `import_extract` / `import_classification`
+  are written **per batch**. `import_dupe_cluster` and `import_proposal_node` are written **once at stage
+  completion** (`replace_dedup_groups` / `replace_proposals`), so a long-running `Deduping`/`Proposing`
+  computation still rides the last classify row and could in principle be reaped while alive. Bounded in
+  practice: the ~30-minute source-root lock TTL is the effective liveness signal against a 6-hour
+  backstop, so lock-liveness protects a genuinely live worker first. **Closing it needs** a
+  heartbeat-written progress stamp (a new column or a per-batch row write) + a migration — a slice, not a
+  remediation fix. Raised by both Codex and diff-critic on #367; documented at `max_stage_progress`.
+  ⚠ Same root cause, also unclosed: a **re-delivered `Scanning` run** re-walks existing paths via
+  `upsert_file`, whose conflict-update does NOT touch `created_at`, so the anchor does not advance on a
+  replay either. Every one of these needs the same fix — a timestamp that advances per BATCH, not per
+  first-insert or per stage-completion.
+- **Resuming a PartiallyCommitted run can retry a FAILED opted-in family member** (Batch 10, PR #367).
+  The R10 commit gate is start-only (gating resumes strands the run — see the R10 amendment), so if a run
+  went `PartiallyCommitted` *because the effective member itself failed*, a resume retries and commits it
+  without honoring the opt-in. Note this corrects the in-code rationale's assumption that the effective
+  member is always already in the vault by then (`claim_commit_result` lets a failed ledger row later
+  succeed, and `_finalize` marks PartiallyCommitted on ANY item failure). **Closing it needs** the same
+  partial-state clear/acknowledge operation the resume gate would require — a new endpoint + a
+  review-state decision. Raised by Codex on #367.
+- **Revision-chain reconstruction (R10) is unimplemented and now refused at commit** (Batch 10, PR #367;
+  R10 amended 2026-07-25, owner-approved). The per-family opt-in is still accepted and stored, but a run
+  carrying one is refused with `422 revision_chain_reconstruction_unsupported`. **Closing it needs** the
+  actual provenance materialization slice; until then the amendment, the contract and the SPA must keep
+  saying so.
+- **CAPA `reject`/`changes_requested` are untested, and a multi-approver stage wedges on a single reject**
+  (surfaced in Batch 9, PR [#366](https://github.com/CoJoA13/EasySynQ/pull/366)). An ANY quorum only FAILs
+  once no candidate remains undecided, so one reject leaves the instance PENDING and the CAPA in
+  `RootCause` with a live approval instance — which blocks re-propose until every approver rejects.
+  `decide_dcr_approval` force-terminates on a negative; `decide_capa_action_plan` does not. **Closing it
+  needs** an owner decision on whether CAPA should mirror DCR's decisive-negative behaviour, plus the
+  missing tests.
+- **Audit checkpoint lineage — only the NEWEST off-host checkpoint is verified** (Batch 7, PR
+  [#364](https://github.com/CoJoA13/EasySynQ/pull/364)). A DB owner who rewrites the chain and lets the
+  15-minute beat re-anchor over the rewritten head passes verification, while the older immutable objects
+  that would expose it are never read. **Closing it needs** a Merkle-chained anchor lineage (each
+  checkpoint commits to the prior anchor's hash) — a checkpoint payload/format change + a register entry.
+- **Audit integrity alarm policy** (Batch 7 → Batch 11). A witness that *disappears* from the DB, and a
+  missing verify key, are currently passive signals (the R13 soft-gate flips to "NOT tamper-evident"; the
+  beat logs loudly) rather than active alarms. **Closing it needs** the `integrity.alarm` operator
+  notification wiring, plus an out-of-DB "witness required" declaration and a never-anchored-sink grace
+  window (a `audit_checkpoint_sink` enable-timestamp migration).
+- **Audit checkpoint key rotation** (Batch 7, PR #364). v1 is single-key; restoring a pre-rotation backup
+  after a future rotation would verify the historical signature against the current key. **Closing it
+  needs** a key-id on the checkpoint + a retained public-key history.
+
 ## POST-GA HARDENING — the systemic-issue backlog (deny-wins scope completeness + register-report provenance/tz edges; no migration, head stays `0070`)
 
 > Two hardening slices from the open GitHub-issue backlog worked after the ISO 9001 spine + the web track went feature-complete. Both are cross-cutting authz/reporting edge-closes — no new capability, no migration, no new permission key.

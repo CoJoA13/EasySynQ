@@ -72,7 +72,7 @@ Celery workers · Keycloak (auth) · Gotenberg/LibreOffice (rendering) · Caddy 
 - Section docs `00`–`17` + operator runbooks in `docs/runbooks/`. Web-UI design specs/plans in `docs/superpowers/{specs,plans}/`.
 - **`.claude/rules/engineering-patterns.md`** — recurring-patterns catalog (migrations · blob/WORM · workers · workflow engine · authz · testing). Read before touching those.
 - **`.claude/rules/windows-dev.md`** — this owner's native Windows 11 + Git Bash box (Docker Desktop, localhost-only auth, `just up s`/`demo-user`; no WSL). Read when on this machine.
-- **`docs/slice-history.md`** — the shipped-slice changelog (MVP S0–S11 + the v1 families + the web track).
+- **`docs/slice-history.md`** — the shipped-slice changelog (MVP S0–S11 + the v1 families + the web track). **Its FIRST section is `⚠ OPEN RESIDUALS`** — named, owner-acknowledged work that is deliberately deferred (unimplemented R10 reconstruction, the audit checkpoint-lineage gap, the CAPA reject-quorum wedge, …). **Read it before planning new work, and clear an entry only when the work actually ships.**
 - **`docs/dev-workflow.md`** — operator/`.env` detail + the per-feature API quick-reference.
 
 ## Working preferences
