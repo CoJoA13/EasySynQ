@@ -413,9 +413,12 @@ async def start_import_commit(
     # (both need a REVIEWABLE run) and commits on stated terms.
     # ⚠ Do NOT extend this to _COMMIT_RESUME. A PartiallyCommitted run cannot reach merge/split
     # (409, not REVIEWABLE) or cancel (409, _CANCEL_BLOCKED), so a resume-side 422 closes EVERY exit
-    # and strands the run forever — while protecting nothing: by then rebuild_proposals has already
-    # dropped the non-effective members and the effective member is already in the vault, so the
-    # remaining items are unrelated. It would also violate doc 09 §11.2 resume / §11.4 no-rollback.
+    # and strands the run forever, violating doc 09 §11.2 resume / §11.4 no-rollback. Gating resumes
+    # needs a partial-state clear/acknowledge operation FIRST (a new endpoint + a review-state call).
+    # ⚠ This does leave a real hole: a run can be PartiallyCommitted BECAUSE the effective member
+    # failed (`claim_commit_result` lets a failed ledger row later succeed, and `_finalize` marks
+    # partial on ANY item failure), so a resume can commit it without honouring the opt-in. Named in
+    # docs/slice-history.md "OPEN RESIDUALS" — do not assume the member is always already vaulted.
     if run.status in _COMMIT_START:
         deferred = [
             f.family_key
