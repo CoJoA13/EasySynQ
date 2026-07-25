@@ -478,6 +478,114 @@ async def test_reaper_fails_run_with_dead_lock(
     assert got["status"] == "Failed" and got["error"] == "stage_timeout"
 
 
+async def test_commit_never_persists_the_new_identifier_sentinel_as_legacy(
+    app_client: AsyncClient, token_factory: Callable[..., str], _stub_tika: None
+) -> None:
+    """[Batch 10] A freshly-ALLOCATED imported document must not carry the ``"{TYPE}-<new>"``
+    sentinel as ``legacy_identifier``. The sentinel is not a real legacy code: it was indexed into
+    search (weight C), polluted provenance, and could collide across imports via
+    ``vault_identifier_collisions``. Only a REAL source code is preserved.
+    Mutation-distinguishing: on the old code legacy_identifier == the sentinel."""
+    admin = _subject("avery-legacy")
+    await _assign_role(admin, "System Administrator")
+    h = _auth(token_factory, admin)
+    run_id, by_name = await _proposed_classifiable(app_client, h, _stub_tika)
+    # The audit report has NO doc code in its name/header, so propose suggested the sentinel.
+    audit = by_name["Internal Audit Report Q2 2023.pdf"]
+    proposed = audit["review"]["identifier"]
+    assert proposed is not None and proposed.endswith("-<new>"), (
+        f"precondition: expected the suggested_default sentinel, got {proposed!r}"
+    )
+    assert audit["review"]["identifier_source"] == "suggested_default"
+
+    sop = by_name["SOP-PUR-002 Purchasing.docx"]["id"]
+    tag = uuid.uuid4().hex[:6].upper()
+    # Confirm the sentinel-carrying file as a DOCUMENT *without* overriding its identifier, so it
+    # keeps identifier_source=suggested_default and commit must ALLOCATE a fresh code for it.
+    await _confirm_for_commit(
+        app_client,
+        h,
+        run_id,
+        sop,
+        audit["id"],
+        doc_identifier=f"SOP-{tag}-001",
+        audit_after={"kind": "DOCUMENT", "clause_numbers": ["9.2"]},
+    )
+    assert (
+        await app_client.post(f"/api/v1/admin/imports/{run_id}/commit", headers=h)
+    ).status_code == 202
+    await _drive_commit(uuid.UUID(run_id))
+
+    async with get_sessionmaker()() as s:
+        allocated = (
+            await s.execute(
+                select(DocumentedInformation).where(
+                    DocumentedInformation.import_provenance["run_id"].astext == run_id,
+                    DocumentedInformation.identifier != f"SOP-{tag}-001",
+                )
+            )
+        ).scalar_one()
+        assert allocated.legacy_identifier is None, (
+            f"the {proposed!r} sentinel must never be persisted as legacy_identifier"
+        )
+        assert "<new>" not in allocated.identifier
+
+
+async def test_reaper_spares_a_long_but_progressing_run(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """[Batch 10] The absolute backstop must be anchored on STAGE PROGRESS, not the pipeline-start
+    ``scan_started_at``. A large OCR import legitimately runs past the stall window: with a live
+    lock AND a fresh ``import_extract`` row it is progressing and must be SPARED. Anchoring on the
+    start time FAILed it mid-flight (and force-freed its lock), so such a run could never complete.
+    Mutation-distinguishing: on the old code `too_old` is True and the run is reaped → FAILED."""
+    from easysynq_api.services.ingestion.service import reap_stalled_runs
+
+    admin = _subject("avery-progress")
+    await _assign_role(admin, "System Administrator")
+    h = _auth(token_factory, admin)
+    _seed_classifiable()
+    run_id = (
+        await app_client.post("/api/v1/admin/imports", headers=h, json={"source_root": "."})
+    ).json()["id"]
+    rid = uuid.UUID(run_id)
+    async with get_sessionmaker()() as s:
+        await run_scan(s, rid)  # → Scanned, lock HELD (a live worker)
+
+    async with get_sessionmaker()() as s:
+        # Backdate the pipeline start well past the window, then record FRESH stage progress — the
+        # exact shape of a long-running OCR import that is still working through its files.
+        await s.execute(
+            sa.text(
+                "UPDATE import_run SET status='Extracting', "
+                "scan_started_at = now() - interval '10 hours' WHERE id = :i"
+            ),
+            {"i": rid},
+        )
+        file_id = (
+            await s.execute(
+                sa.text("SELECT id FROM import_file WHERE run_id = :i LIMIT 1"), {"i": rid}
+            )
+        ).scalar_one()
+        org_id = (
+            await s.execute(sa.text("SELECT org_id FROM import_run WHERE id = :i"), {"i": rid})
+        ).scalar_one()
+        await s.execute(
+            sa.text(
+                "INSERT INTO import_extract (id, org_id, run_id, file_id, status, created_at) "
+                "VALUES (:eid, :org, :run, :fid, 'extracted', now())"
+            ),
+            {"eid": uuid.uuid4(), "org": org_id, "run": rid, "fid": file_id},
+        )
+        await s.commit()
+
+    async with get_sessionmaker()() as s:
+        await reap_stalled_runs(s, max_age_seconds=3600)  # a 1h window vs a 10h-old start
+    got = (await app_client.get(f"/api/v1/admin/imports/{run_id}", headers=h)).json()
+    assert got["status"] == "Extracting", "a progressing run must not be reaped"
+    assert got["error"] is None
+
+
 async def test_gate_split_execute_vs_review(
     app_client: AsyncClient, token_factory: Callable[..., str]
 ) -> None:

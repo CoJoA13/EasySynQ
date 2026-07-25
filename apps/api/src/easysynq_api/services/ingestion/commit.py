@@ -157,6 +157,22 @@ async def run_commit(sm: async_sessionmaker[AsyncSession], run_id: uuid.UUID) ->
             await _finalize_run(sm, run_id, committed=0, failed=0, error="commit_preconditions")
             return
         framework_id = framework.id
+        # R10 honesty: this version does NOT materialize revision-chain reconstruction. Say so at
+        # commit start (and again in the import report) rather than silently dropping the opt-in —
+        # every member commits as its own Effective document, NOT an approved revision history.
+        deferred = await _deferred_chain_families(pre, run_id)
+        if deferred:
+            logger.warning(
+                "ingestion.commit.revision_chain_reconstruction_deferred",
+                extra={
+                    "extra_fields": {
+                        "run_id": str(run_id),
+                        "families": deferred,
+                        "detail": "reconstruct_revision_chain is recorded but not materialized in "
+                        "this version; members import as individual Effective documents",
+                    }
+                },
+            )
 
     # Single-flight is the per-item ledger CLAIM (see claim_commit_result), not a lock — concurrent
     # workers are de-duplicated atomically per item.
@@ -292,8 +308,19 @@ async def _commit_document(
         area = "GEN"
         seq = await vault_repo.allocate_seq(session, org_id, dt.code, area)
         identifier = format_identifier(dt.code, seq, area)
-        # Preserve the original source code (if any) as provenance when we had to allocate.
-        if st.identifier is not None and st.identifier != identifier:
+        # Preserve the original source code as provenance when we had to allocate — but ONLY a REAL
+        # code. Reaching this branch means the identifier was not collidable, so the only non-null
+        # ``st.identifier`` here is the ``"{TYPE}-<new>"`` sentinel (``suggested_default``);
+        # ``identifier_source is None`` implies ``identifier is None``. Persisting the sentinel put
+        # garbage on documented_information.legacy_identifier — indexed into search (weight C) and
+        # matched by vault_identifier_collisions, so it polluted provenance and could collide
+        # across imports. The guard keeps the branch honest if a future non-collidable-but-real
+        # source is ever added.
+        if (
+            st.identifier is not None
+            and st.identifier != identifier
+            and st.identifier_source not in (None, "suggested_default")
+        ):
             legacy_identifier = st.identifier
 
     # Promote the staged bytes into the documents WORM bucket (one server-side copy). Reuse an
@@ -629,6 +656,16 @@ async def _finalize_run(
         await session.commit()
 
 
+async def _deferred_chain_families(session: AsyncSession, run_id: uuid.UUID) -> list[str]:
+    """Family keys that opted into the R10 ``reconstruct_revision_chain`` — which v1 does NOT
+    materialize at commit. Surfaced in the import report (and logged at commit start) so the
+    deferral is HONEST: the opt-in is stored on ``import_version_family`` for a future slice, while
+    every member is imported as its own Effective document (the current-version-only default).
+    Silently ignoring the flag would let an operator believe an approved revision history exists."""
+    families = await repo.list_version_families(session, run_id)
+    return [f.family_key for f in families if f.reconstruct_revision_chain]
+
+
 async def _capture_report(
     session: AsyncSession,
     run: Any,
@@ -681,6 +718,7 @@ async def _capture_report(
             committed=committed_items,
             failed=failed_items,
             star_coverage=star if isinstance(star, dict) else None,
+            deferred_revision_chain_families=await _deferred_chain_families(session, run.id),
         )
     )
     md_bytes = md.encode("utf-8")

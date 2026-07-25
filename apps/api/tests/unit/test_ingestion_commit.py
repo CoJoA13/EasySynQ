@@ -174,6 +174,21 @@ def test_import_report_render_contains_sections_and_items() -> None:
     assert "rule-heuristic-1" in md
 
 
+def test_import_report_declares_deferred_revision_chain_reconstruction() -> None:
+    """[Batch 10] The R10 ``reconstruct_revision_chain`` opt-in is recorded but NOT materialized in
+    v1. The report must say so plainly — silently dropping it let an operator believe an approved
+    revision history had been imported when every member landed as its own Effective document."""
+    md = render_import_report(_report_data(deferred_revision_chain_families=["SOP-PUR-014", "QM"]))
+    assert "## Deferred — revision-chain reconstruction (R10)" in md
+    assert "does **not**" in md
+    assert "SOP-PUR-014" in md and "QM" in md
+
+
+def test_import_report_omits_the_deferral_section_when_nothing_opted_in() -> None:
+    md = render_import_report(_report_data())
+    assert "Deferred — revision-chain reconstruction" not in md
+
+
 def test_import_report_render_handles_empty_sets() -> None:
     md = render_import_report(_report_data(committed=[], failed=[], star_coverage=None))
     assert "_(nothing committed)_" in md

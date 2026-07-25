@@ -29,7 +29,7 @@
 | 7 | Audit signed-checkpoint verification | 1 | 1 | ☑ in PR | [#364](https://github.com/CoJoA13/EasySynQ/pull/364) |
 | 8 | Document lifecycle FSM gates | 2 | 2 | ☑ in PR | [#365](https://github.com/CoJoA13/EasySynQ/pull/365) |
 | 9 | Workflow approval correctness | 2 | 3 | ☑ in PR | [#366](https://github.com/CoJoA13/EasySynQ/pull/366) |
-| 10 | Ingestion pipeline correctness | 2 | 3 | ☐ not started | — |
+| 10 | Ingestion pipeline correctness | 2 | 3 | ☑ in PR | [#367](https://github.com/CoJoA13/EasySynQ/pull/367) |
 | 11 | Notifications & operator alerting | 2 | 2 | ☐ not started | — |
 | 12 | Contract & schema housekeeping | 3 | 4 | ☐ not started | — |
 | 13 | Infra / deploy hardening | 3 | 3 | ☐ not started | — |
@@ -114,12 +114,12 @@ A create-gated (or token-gated) endpoint returns a resource body the caller cann
 - [x] `services/dcr/service.py:713` — `decide_dcr_approval` passes non-approve positive outcomes through → permanently bricks the DCR; add `_ALLOWED_DCR_OUTCOMES` + 422 `[C]` (fixed: same allow-list shape; the stale comment claiming the engine's `TaskOutcomeKind` check covered this is corrected — `verify` IS a legal kind, so it completed the instance while matching neither FSM branch and left the DCR stuck `InApproval`)
 - [x] `services/workflow/engine.py:508` — stage advance drops the definition `default_sla` → 2nd-tier approval tasks get `due_at=null` (no reminders/overdue/escalation); load the definition and pass `default_sla` to `_enter_stage` `[C]` (fixed: `decide` loads `WorkflowDefinition` by `instance.definition_id` and threads `default_sla` into `_enter_stage`, matching `instantiate`; a MAJOR DCR's 2nd-tier QMS-Owner task now inherits the definition's 120h SLA)
 
-### ☐ Batch 10 — Ingestion pipeline correctness
+### ☑ Batch 10 — Ingestion pipeline correctness — [#367](https://github.com/CoJoA13/EasySynQ/pull/367)
 `branch: fix/major-ingestion-correctness` · backend + integration
 
-- [ ] `services/ingestion/commit.py:185` — `reconstruct_revision_chain` opt-in (R10) never consumed at commit → silently ignored; implement or reject/warn honestly `[C]`
-- [ ] `services/ingestion/commit.py:296` — `{TYPE}-<new>` sentinel persisted as `legacy_identifier` on freshly-allocated imports → search pollution + collisions; guard on `identifier_source` `[C]`
-- [ ] `services/ingestion/service.py:673` — `reap_stalled_runs` FAILs a live, heartbeating pipeline after 6h → large OCR import can never complete; anchor the backstop on stage progress `[C]`
+- [x] `services/ingestion/commit.py:185` — `reconstruct_revision_chain` opt-in (R10) never consumed at commit → silently ignored; implement or reject/warn honestly `[C]` (fixed **honestly, not implemented**: commit logs a structured warning naming the opted-in families and the §12.1 Import Report grows a "Deferred — revision-chain reconstruction (R10)" section stating plainly that members imported as individual Effective documents. Materialization stays a future slice; the opt-in remains recorded on `import_version_family`)
+- [x] `services/ingestion/commit.py:296` — `{TYPE}-<new>` sentinel persisted as `legacy_identifier` on freshly-allocated imports → search pollution + collisions; guard on `identifier_source` `[C]` (fixed: the preservation is guarded on `identifier_source not in (None, "suggested_default")`. Reaching that branch means the identifier was non-collidable, and `identifier_source is None ⟹ identifier is None`, so the sentinel was the ONLY value it ever wrote)
+- [x] `services/ingestion/service.py:673` — `reap_stalled_runs` FAILs a live, heartbeating pipeline after 6h → large OCR import can never complete; anchor the backstop on stage progress `[C]` (fixed: new `repo.max_stage_progress` (newest `import_extract`/`import_classification` row) anchors the backstop, taking the GREATEST of it and `scan_started_at` — mirroring `reap_stalled_commits`' progress-liveness. Also corrects the docstring that named only 4 of the reaped states)
 
 ### ☐ Batch 11 — Notifications & operator alerting
 `branch: fix/major-notify-and-alerting` · backend (+ small test updates)

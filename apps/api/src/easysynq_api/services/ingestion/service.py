@@ -642,13 +642,18 @@ async def reap_stalled_runs(
     now: datetime.datetime | None = None,
     max_age_seconds: int | None = None,
 ) -> dict[str, int]:
-    """Flip wedged in-progress runs (Scanning/Scanned/Extracting/Classifying) → FAILED + force-free
-    the source-root lock, so a crashed worker never wedges the root. S-ing-2 primary signal:
+    """Flip wedged in-progress runs (every ``_IN_PROGRESS`` state) → FAILED + force-free the
+    source-root lock, so a crashed worker never wedges the root. S-ing-2 primary signal:
     **lock-liveness** — the lock is held continuously + heartbeated per batch, so a missing lock on
     an in-progress run means the worker died (the TTL lapsed with no heartbeat). A generous absolute
-    ``import_run_stall_seconds`` backstop on ``scan_started_at`` (the whole-pipeline anchor) covers
-    the rare alive-but-wedged case. ``FOR UPDATE SKIP LOCKED`` avoids racing a live worker; a Beat
-    job drives this, tests call it directly."""
+    ``import_run_stall_seconds`` backstop covers the rare alive-but-wedged case.
+
+    That backstop is anchored on STAGE PROGRESS (the newest ``import_extract`` /
+    ``import_classification`` row, else ``scan_started_at`` for a run that has produced none yet),
+    mirroring ``reap_stalled_commits``' progress-liveness — NOT on the pipeline-start
+    ``scan_started_at``, which FAILed a large, actively-progressing OCR import the moment it ran
+    past the window and made such a run impossible to ever complete. ``FOR UPDATE SKIP LOCKED``
+    avoids racing a live worker; a Beat job drives this, tests call it directly."""
     from sqlalchemy import select
 
     settings = get_settings()
@@ -669,7 +674,13 @@ async def reap_stalled_runs(
     hashes: list[str] = []
     for run in candidates:
         lock_alive = await locks.is_alive(run.source_root_hash)
-        too_old = run.scan_started_at is not None and run.scan_started_at < cutoff
+        # Progress-liveness backstop: the GREATEST of the newest stage row and scan_started_at (a
+        # run that has not yet produced a stage row is only as old as its start). A run still
+        # emitting extract/classification rows is progressing, however long it has been running.
+        progress = await repo.max_stage_progress(session, run.id)
+        anchors = [s for s in (progress, run.scan_started_at) if s is not None]
+        anchor = max(anchors) if anchors else None
+        too_old = anchor is not None and anchor < cutoff
         if lock_alive and not too_old:
             continue  # progressing (heartbeat keeps the lock alive)
         run.status = ImportRunStatus.FAILED
