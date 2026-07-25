@@ -489,28 +489,40 @@ async def test_commit_never_persists_the_new_identifier_sentinel_as_legacy(
     admin = _subject("avery-legacy")
     await _assign_role(admin, "System Administrator")
     h = _auth(token_factory, admin)
-    run_id, by_name = await _proposed_classifiable(app_client, h, _stub_tika)
-    # The audit report has NO doc code in its name/header, so propose suggested the sentinel.
-    audit = by_name["Internal Audit Report Q2 2023.pdf"]
-    proposed = audit["review"]["identifier"]
+
+    # An OWN source subtree (never the shared corpus — an extra file there would shift the exact
+    # commit counts other tests assert) holding ONE procedure with NO doc code in its name/header,
+    # so propose suggests the "{TYPE}-<new>" sentinel and commit must allocate a fresh identifier.
+    sub = f"batch10-{uuid.uuid4().hex[:8]}"
+    folder = Path(get_settings().import_source_root) / sub / "Procedures"
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "purchasing procedure.docx").write_text(
+        "Standard Operating Procedure Purchasing. supplier and purchasing process steps and "
+        "responsibilities. Revision History. Approved by J Smith"
+    )
+    run_id = (
+        await app_client.post("/api/v1/admin/imports", headers=h, json={"source_root": sub})
+    ).json()["id"]
+    await _drive(uuid.UUID(run_id))
+    files = (await app_client.get(f"/api/v1/admin/imports/{run_id}/files", headers=h)).json()[
+        "files"
+    ]
+    target = next(f for f in files if f["filename"] == "purchasing procedure.docx")
+    proposed = target["review"]["identifier"]
     assert proposed is not None and proposed.endswith("-<new>"), (
         f"precondition: expected the suggested_default sentinel, got {proposed!r}"
     )
-    assert audit["review"]["identifier_source"] == "suggested_default"
+    assert target["review"]["identifier_source"] == "suggested_default"
 
-    sop = by_name["SOP-PUR-002 Purchasing.docx"]["id"]
-    tag = uuid.uuid4().hex[:6].upper()
-    # Confirm the sentinel-carrying file as a DOCUMENT *without* overriding its identifier, so it
-    # keeps identifier_source=suggested_default and commit must ALLOCATE a fresh code for it.
-    await _confirm_for_commit(
-        app_client,
-        h,
-        run_id,
-        sop,
-        audit["id"],
-        doc_identifier=f"SOP-{tag}-001",
-        audit_after={"kind": "DOCUMENT", "clause_numbers": ["9.2"]},
-    )
+    # Confirm it as a DOCUMENT *without* overriding the identifier, so identifier_source stays
+    # suggested_default and commit takes the ALLOCATE branch (the one that wrote the sentinel).
+    assert (
+        await app_client.post(
+            f"/api/v1/admin/imports/{run_id}/files/{target['id']}/decision",
+            headers=h,
+            json={"action": "correct", "after": {"kind": "DOCUMENT", "clause_numbers": ["8.4"]}},
+        )
+    ).status_code == 200
     assert (
         await app_client.post(f"/api/v1/admin/imports/{run_id}/commit", headers=h)
     ).status_code == 202
@@ -520,8 +532,7 @@ async def test_commit_never_persists_the_new_identifier_sentinel_as_legacy(
         allocated = (
             await s.execute(
                 select(DocumentedInformation).where(
-                    DocumentedInformation.import_provenance["run_id"].astext == run_id,
-                    DocumentedInformation.identifier != f"SOP-{tag}-001",
+                    DocumentedInformation.import_provenance["run_id"].astext == run_id
                 )
             )
         ).scalar_one()

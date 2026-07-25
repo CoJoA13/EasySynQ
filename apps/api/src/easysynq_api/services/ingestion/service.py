@@ -419,6 +419,28 @@ async def start_import_commit(
                 title="Resolve the blocking conflicts before committing",
                 members={"blocking": checklist["blocking"]},
             )
+        # R10 honesty gate: this version does NOT materialize revision-chain reconstruction. Refuse
+        # BEFORE any (irreversible, WORM) commit rather than accepting the run under a promise we do
+        # not keep — the reviewer clears the per-family opt-in and re-commits, having been told
+        # exactly what will happen (only the effective member is imported).
+        deferred = [
+            f.family_key
+            for f in await repo.list_version_families(session, run_id)
+            if f.reconstruct_revision_chain
+        ]
+        if deferred:
+            raise ProblemException(
+                status=422,
+                code="revision_chain_reconstruction_unsupported",
+                title="Revision-chain reconstruction is not available in this version",
+                detail=(
+                    "These families opted into reconstruct_revision_chain, which this version does "
+                    "not materialize: only each family's effective member is imported (as its own "
+                    "Effective document) and the other members are excluded. Clear the opt-in on "
+                    "the listed families to commit on those terms."
+                ),
+                members={"families": sorted(deferred)},
+            )
         prev = run.status.value
     elif run.status in _COMMIT_RESUME:
         prev = run.status.value

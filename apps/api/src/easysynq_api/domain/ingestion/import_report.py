@@ -115,10 +115,10 @@ def render_import_report(data: ImportReportData) -> str:
             "",
             "## Deferred — revision-chain reconstruction (R10)",
             "",
-            "These families opted into `reconstruct_revision_chain`, but this version does **not**",
-            "reconstruct revision history: every member was imported as its own Effective document",
-            "(current-version-only, the stakeholder-locked import default). The opt-in is recorded",
-            "on the run for a future migration — no approved revision chain was created here.",
+            "These families opted into `reconstruct_revision_chain`, which this version does",
+            "**not** materialize. Only each family's **effective member** was imported (as its own",
+            "Effective document); the family's other members were **excluded** from the import and",
+            "no approved revision chain was created. Import them separately if they are needed.",
             "",
         ]
         lines += _table(["Family"], [[k] for k in sorted(data.deferred_revision_chain_families)])

@@ -157,9 +157,9 @@ async def run_commit(sm: async_sessionmaker[AsyncSession], run_id: uuid.UUID) ->
             await _finalize_run(sm, run_id, committed=0, failed=0, error="commit_preconditions")
             return
         framework_id = framework.id
-        # R10 honesty: this version does NOT materialize revision-chain reconstruction. Say so at
-        # commit start (and again in the import report) rather than silently dropping the opt-in —
-        # every member commits as its own Effective document, NOT an approved revision history.
+        # R10: the caller-visible gate lives in start_import_commit (422 BEFORE any WORM write —
+        # never accept a run under a promise this version does not keep). A flag set out-of-band
+        # after that gate still reaches here, so log it and let the report record it.
         deferred = await _deferred_chain_families(pre, run_id)
         if deferred:
             logger.warning(
@@ -169,7 +169,7 @@ async def run_commit(sm: async_sessionmaker[AsyncSession], run_id: uuid.UUID) ->
                         "run_id": str(run_id),
                         "families": deferred,
                         "detail": "reconstruct_revision_chain is recorded but not materialized in "
-                        "this version; members import as individual Effective documents",
+                        "this version; only each family's effective member is imported",
                     }
                 },
             )
