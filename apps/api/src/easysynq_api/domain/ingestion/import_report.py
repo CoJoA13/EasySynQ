@@ -40,6 +40,11 @@ class ImportReportData:
     committed: list[CommittedItem]
     failed: list[FailedItem]
     star_coverage: dict[str, object] | None
+    # Family keys that opted into the R10 ``reconstruct_revision_chain`` provenance reconstruction.
+    # v1 does NOT materialize it, so the report must say so plainly rather than let the operator
+    # believe an approved revision history was imported (each member landed as its own Effective
+    # document; the opt-in is recorded on import_version_family for a future slice).
+    deferred_revision_chain_families: list[str] = dataclasses.field(default_factory=list)
 
 
 def _table(headers: list[str], rows: list[list[str]]) -> list[str]:
@@ -105,6 +110,18 @@ def render_import_report(data: ImportReportData) -> str:
         )
     else:
         lines.append("_(no failures)_")
+    if data.deferred_revision_chain_families:
+        lines += [
+            "",
+            "## Deferred — revision-chain reconstruction (R10)",
+            "",
+            "These families opted into `reconstruct_revision_chain`, which this version does",
+            "**not** materialize. Only each family's **effective member** was imported (as its own",
+            "Effective document); the family's other members were **excluded** from the import and",
+            "no approved revision chain was created. Import them separately if they are needed.",
+            "",
+        ]
+        lines += _table(["Family"], [[k] for k in sorted(data.deferred_revision_chain_families)])
     lines += ["", "## Mandatory ★ coverage (advisory)", ""]
     if data.star_coverage:
         sc = data.star_coverage

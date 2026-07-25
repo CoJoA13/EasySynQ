@@ -213,6 +213,18 @@ The **`DOC_CLASS`** authorization scope in doc 07 is defined as matching on `doc
 
 **Decision:** The import default is **current/latest-only as the controlled baseline + archive older copies as provenance** (**NOT** approved revision history). **Revision-chain reconstruction is opt-in per family with explicit Mara confirmation**, captured as **provenance metadata**. The **Document-vs-Record `kind` classification is ALWAYS human-confirmed regardless of confidence.**
 
+**⚠ Amendment (2026-07-25, owner-approved — Batch 10 of the 2026-07-22 review):** the
+**revision-chain reconstruction opt-in is NOT IMPLEMENTED** and the engine has never materialized
+it — the flag was accepted, stored on `import_version_family`, and then silently ignored at commit,
+so an operator could believe an approved revision history had been imported when only the family's
+effective member was (the rest are dropped from the keep set by `rebuild_proposals` and never
+imported at all). Rather than keep promising it, a run carrying an opted-in family is now **refused
+at commit start** with `422 revision_chain_reconstruction_unsupported`; the reviewer clears the
+opt-in (re-merge without it) and commits on the default terms above. The import DEFAULT is
+unchanged, and the opt-in remains recorded for a future slice that implements it. **The gate is
+start-only:** a `PartiallyCommitted` run must still resume (§11.2 resume / §11.4 no-rollback), and
+gating resumes would strand it — merge/split/cancel are all unavailable in that state.
+
 **Additional requirements:**
 - State a **measured expected auto-classification accuracy band** and **how it is validated**.
 - The **review UI MUST scale to thousands of low-confidence items** (bulk triage).

@@ -3419,7 +3419,13 @@ paths:
         "422":
           description: >-
             commit_blocked — the §9.3 pre-commit checklist has unresolved blocking conflicts
-            (members.blocking lists them).
+            (members.blocking lists them). OR revision_chain_reconstruction_unsupported — one or
+            more version families opted into reconstruct_revision_chain, which this version does
+            NOT materialize (members.families lists their family_key); only a family's effective
+            member would be imported and the rest excluded, so the commit is refused rather than
+            accepted under that promise. Clear the opt-in (re-merge without it) to commit on the
+            default current-version-only terms. Raised on a commit START only — a
+            PartiallyCommitted run always resumes (§11.2 resume / §11.4 no-rollback).
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Problem" }
@@ -9941,7 +9947,7 @@ components:
       properties:
         file_ids: { type: array, minItems: 2, items: { type: string, format: uuid } }
         effective_file_id: { type: [string, "null"], format: uuid, description: "The §7.2 human override of the effective member; else the deterministic pick." }
-        reconstruct_revision_chain: { type: [boolean, "null"], description: "The per-family R10 opt-in; set when present, else preserved/false." }
+        reconstruct_revision_chain: { type: [boolean, "null"], description: "The per-family R10 opt-in; set when present, else preserved/false. NOT IMPLEMENTED in this version — setting it true makes the run's commit fail 422 revision_chain_reconstruction_unsupported until the opt-in is cleared (R10 amendment, 2026-07-25)." }
         reason: { type: [string, "null"], maxLength: 2000 }
     ImportSplitRequest:
       type: object

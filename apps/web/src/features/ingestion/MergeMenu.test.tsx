@@ -30,7 +30,11 @@ test("submitting posts file_ids + the chosen effective member + reconstruct flag
   await user.click(screen.getByRole("button", { name: "Merge" }));
   // default effective member is the first id; choose the second instead.
   await user.click(await screen.findByRole("radio", { name: `Effective: ${B}` }));
-  await user.click(screen.getByRole("checkbox", { name: "Reconstruct revision chain" }));
+  // The label carries the "(not available yet)" suffix — R10 reconstruction is unimplemented and an
+  // opted-in run is refused at commit, so the control warns before it is ticked.
+  await user.click(
+    screen.getByRole("checkbox", { name: /Reconstruct revision chain \(not available yet\)/ }),
+  );
   await user.click(screen.getByRole("button", { name: "Merge into one family" }));
   await waitFor(() => expect(onDone).toHaveBeenCalledTimes(1));
   expect(body).toEqual({
