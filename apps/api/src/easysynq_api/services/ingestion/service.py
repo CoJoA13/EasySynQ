@@ -407,22 +407,12 @@ async def start_import_commit(
     if run is None or run.org_id != caller.org_id:
         raise ProblemException(status=404, code="not_found", title="Import run not found")
 
-    if run.status in _COMMIT_START:
-        # Lazy import to avoid the service↔review module cycle (review imports from service).
-        from .review import compute_review_checklist
-
-        checklist = await compute_review_checklist(session, caller, run_id)
-        if not checklist["ready"]:
-            raise ProblemException(
-                status=422,
-                code="commit_blocked",
-                title="Resolve the blocking conflicts before committing",
-                members={"blocking": checklist["blocking"]},
-            )
-        # R10 honesty gate: this version does NOT materialize revision-chain reconstruction. Refuse
-        # BEFORE any (irreversible, WORM) commit rather than accepting the run under a promise we do
-        # not keep — the reviewer clears the per-family opt-in and re-commits, having been told
-        # exactly what will happen (only the effective member is imported).
+    # R10 honesty gate — applies to a START **and** a RESUME. This version does NOT materialize
+    # revision-chain reconstruction, so refuse BEFORE any (irreversible, WORM) commit rather than
+    # accept the run under a promise we do not keep. A run left PartiallyCommitted by an older build
+    # that silently accepted the opt-in must not slip its remaining writes through the resume path:
+    # the reviewer clears the per-family opt-in and re-commits, having been told what will happen.
+    if run.status in _COMMIT_START or run.status in _COMMIT_RESUME:
         deferred = [
             f.family_key
             for f in await repo.list_version_families(session, run_id)
@@ -440,6 +430,19 @@ async def start_import_commit(
                     "the listed families to commit on those terms."
                 ),
                 members={"families": sorted(deferred)},
+            )
+
+    if run.status in _COMMIT_START:
+        # Lazy import to avoid the service↔review module cycle (review imports from service).
+        from .review import compute_review_checklist
+
+        checklist = await compute_review_checklist(session, caller, run_id)
+        if not checklist["ready"]:
+            raise ProblemException(
+                status=422,
+                code="commit_blocked",
+                title="Resolve the blocking conflicts before committing",
+                members={"blocking": checklist["blocking"]},
             )
         prev = run.status.value
     elif run.status in _COMMIT_RESUME:

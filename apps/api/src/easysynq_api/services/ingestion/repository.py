@@ -1093,24 +1093,28 @@ async def max_commit_progress(session: AsyncSession, run_id: uuid.UUID) -> Any:
 
 
 async def max_stage_progress(session: AsyncSession, run_id: uuid.UUID) -> Any:
-    """The newest per-file STAGE row time for a run (``MAX`` over ``import_extract.created_at`` and
-    ``import_classification.created_at``), or None before any stage row lands — the scan/extract/
-    classify reaper's progress-liveness signal, mirroring ``max_commit_progress``.
+    """The newest STAGE row time for a run, or None before any stage row lands — the in-progress
+    reaper's progress-liveness signal, mirroring ``max_commit_progress``.
 
     The absolute backstop must NOT be anchored on the pipeline-start ``scan_started_at``: a large
-    OCR import legitimately runs longer than the stall window, and anchoring on the start time
-    FAILs it mid-flight (and force-frees its lock) no matter how much progress it is making."""
-    extract_at = (
-        await session.execute(
-            select(func.max(ImportExtract.created_at)).where(ImportExtract.run_id == run_id)
-        )
-    ).scalar_one_or_none()
-    classify_at = (
-        await session.execute(
-            select(func.max(ImportClassification.created_at)).where(
-                ImportClassification.run_id == run_id
-            )
-        )
-    ).scalar_one_or_none()
-    stamps = [s for s in (extract_at, classify_at) if s is not None]
+    import legitimately runs longer than the stall window, and anchoring on the start time FAILs it
+    mid-flight (and force-frees its lock) no matter how much progress it is making.
+
+    Covers EVERY ``_IN_PROGRESS`` stage, since each writes its own row type and a stage that writes
+    none of them would fall back to the start time and be falsely reaped: ``import_file`` (scan),
+    ``import_extract`` (extract), ``import_classification`` (classify), ``import_dupe_cluster``
+    (dedup), ``import_proposal_node`` (propose)."""
+    stamps = []
+    for column, model in (
+        (ImportFile.created_at, ImportFile),
+        (ImportExtract.created_at, ImportExtract),
+        (ImportClassification.created_at, ImportClassification),
+        (ImportDupeCluster.created_at, ImportDupeCluster),
+        (ImportProposalNode.created_at, ImportProposalNode),
+    ):
+        at = (
+            await session.execute(select(func.max(column)).where(model.run_id == run_id))
+        ).scalar_one_or_none()
+        if at is not None:
+            stamps.append(at)
     return max(stamps) if stamps else None
