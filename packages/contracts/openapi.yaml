@@ -3709,7 +3709,10 @@ paths:
         acknowledge — membership 404-collapses, document.acknowledge is enforced at the document's
         scope (403), and the decision writes the immutable acknowledgement row + a DOCUMENT_ACKNOWLEDGED
         audit event (never a signature_event; 409 ack_superseded when a newer MAJOR replaced the task,
-        409 ack_obligation_lapsed when the obligation no longer stands).
+        409 ack_obligation_lapsed when the obligation no longer stands). For CAPA and DCR approval
+        subjects the accepted outcomes are approve, reject and changes_requested — any other outcome
+        (complete/verify/acknowledge) is refused 422 validation_error (code unsupported_outcome),
+        since the engine would otherwise treat those positives as satisfying the approval quorum.
       parameters:
         - { name: task_id, in: path, required: true, schema: { type: string, format: uuid } }
         - name: Idempotency-Key

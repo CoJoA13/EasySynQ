@@ -136,9 +136,13 @@ def _emit_ncr(
 
 
 # The ONLY outcomes the CAPA action-plan approval accepts (doc 10 §6.2): ``approve`` (the positive
-# that seals the signed ActionPlan stage) plus the two negatives the engine fails the quorum on.
-# NEVER a generic positive (complete/verify/acknowledge) — the ANY-quorum engine would treat those
-# as completing and mint a WORM approval signature over a non-approval decision.
+# that seals the signed ActionPlan stage) plus the two negatives. NEVER a generic positive
+# (complete/verify/acknowledge) — the ANY-quorum engine would treat those as completing and mint a
+# WORM approval signature over a non-approval decision.
+# ⚠ A negative only FAILS an ANY quorum once no candidate remains undecided, so on a multi-approver
+# stage a single reject leaves the instance PENDING (the CAPA stays RootCause with a live approval
+# instance, which blocks re-propose). Unlike ``decide_dcr_approval``, this service does NOT
+# force-terminate on a negative — pre-existing behaviour, not something this allow-list changes.
 _ALLOWED_CAPA_OUTCOMES = frozenset({"approve", "reject", "changes_requested"})
 
 
