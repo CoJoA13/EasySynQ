@@ -174,7 +174,9 @@ A create-gated (or token-gated) endpoint returns a resource body the caller cann
 > **P2 — `capa_close_state` / `dcr_state` should `$ref` the existing `CapaCloseState` / `DcrState` enums** instead of being bare nullable strings, so drift cannot validate and generated clients keep state-union exhaustiveness. Real but non-breaking (permissive superset) → tracked on [#370](https://github.com/CoJoA13/EasySynQ/issues/370) alongside the `outcome`-required fix, since it is the same schema and the same pass; closed together in Batch 12.5.
 
 ### ☑ Batch 12.5 — Close the gates that never ran (INSERTED between 12 and 13, owner-scheduled)
-`branch: feat/contract-response-validation` · tests + contract + CI only (no migration, no new key)
+`branch: feat/contract-response-validation` ·
+[PR #371](https://github.com/CoJoA13/EasySynQ/pull/371) · tests + contract + CI only
+(no migration, no new key)
 
 Two separate gates are **declared but never invoked**. Both are the same failure shape, and it is the
 shape that produced Batch 12 in the first place: a check that does not run reads exactly like a check

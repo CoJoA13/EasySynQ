@@ -70,9 +70,10 @@
   orchestrator harness (inject the sessionmaker, or a settings override the task honours) — a slice,
   not a remediation fix. Raised and named by Codex + this batch's own review on #368.
 - **The advisory response-contract baseline has eight pre-existing violations** (Batch 12.5,
-  `feat/contract-response-validation`). The gate now genuinely runs all 282 operations through an
-  authenticated, OPERATIONAL, disposable testcontainers app and rejects a 401/423 wall, so these are
-  server/contract findings rather than harness failures: (1) `Problem.code` omits
+  [PR #371](https://github.com/CoJoA13/EasySynQ/pull/371)). The gate now genuinely runs all 282
+  operations through an authenticated, OPERATIONAL, disposable testcontainers app and rejects a
+  401/423 wall, so these are server/contract findings rather than harness failures:
+  (1) `Problem.code` omits
   `backup_not_configured` and `auth_unavailable`, emitted by the restore-test and auth-configuration
   setup paths; (2) `POST /records:init-upload` permits an empty SHA under the request schema, then
   lets botocore's invalid-empty-key exception escape instead of returning a response; (3) static
