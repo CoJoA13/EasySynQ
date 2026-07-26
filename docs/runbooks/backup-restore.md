@@ -101,3 +101,33 @@ Discard an unused target with `easysynq restore --discard <scratch_db>`.
 and audits `UPGRADE_STARTED`/`UPGRADE_COMPLETED`/`UPGRADE_FAILED`. The pre-backup archive is the
 disaster safety net (named in `UPGRADE_FAILED.after`): a failed migration auto-rolls-back its own
 transaction; if the health-gate fails, recover with `easysynq restore <pre-backup>` + cutover.
+
+### ⚠ Stop the writers first when a revision builds an index on `audit_event`
+
+`easysynq upgrade` runs on a **one-off worker while api/worker/beat stay up**, so any migration that
+locks a hot table contends with live traffic. This is unlike a fresh boot, where the compose
+`migrate` one-shot completes *before* those services start.
+
+`0075_audit_scope_ref_index` is the first such revision. Building an index on `audit_event` takes
+`ShareLock` on the parent and every partition: **reads keep serving, writes block.** Because nearly
+every mutating request writes an `audit_event` in the same transaction, the whole write path convoys
+behind it — and since no `lock_timeout` is configured and `migrations/env.py` wraps the run in ONE
+transaction, a build queued behind an open writer holds everything until the entire `upgrade head`
+commits. Budget roughly **50 MB of index per million audit rows**, with build time to match.
+
+```bash
+docker compose -f infra/compose/compose.yml stop api worker beat
+easysynq upgrade --confirm
+docker compose -f infra/compose/compose.yml start api worker beat
+```
+
+Check the size of what you are about to index first — on a small install this is seconds and the
+window is academic:
+
+```bash
+docker compose -f infra/compose/compose.yml exec -T postgres psql -U easysynq -d easysynq -c "SELECT count(*) FROM audit_event;"
+```
+
+`roll_partitions` / `ensure_partitions` also block during the build, but both are best-effort with a
+daily retry, so they self-heal. Downgrading (`DROP INDEX`) takes a stricter `AccessExclusiveLock`
+that blocks reads too, but it is catalog-only and effectively instant.

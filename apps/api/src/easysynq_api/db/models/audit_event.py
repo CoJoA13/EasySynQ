@@ -54,6 +54,20 @@ class AuditEvent(Base):
         Index("ix_audit_event_object_id", "object_id"),
         Index("ix_audit_event_actor_id", "actor_id"),
         Index("ix_audit_event_event_type", "event_type"),
+        # The per-document history access path (``GET /documents/{id}/audit-events``,
+        # api/audit.py::document_audit_events): ``WHERE org_id = ? AND scope_ref = ? AND id <
+        # cursor ORDER BY id DESC``. Two equality columns then ``id``, which serves BOTH the keyset
+        # range and the ordering — so a matching child index answers the page without a sort.
+        # Created on the PARTITIONED PARENT (migration 0075), so PG propagates it to every existing
+        # partition and to each future one the ``roll_partitions`` Beat adds via ``CREATE TABLE …
+        # PARTITION OF``. Those auto-named children (``audit_event_YYYY_MM_*_idx``) are already
+        # excluded from autogenerate by ``env.py::_include_object``'s ``audit_event_`` prefix rule;
+        # this parent index is NOT (it is ``ix_``-prefixed), so it must stay modelled here or
+        # ``alembic check`` phantom-DROPs it. Name follows NAMING_CONVENTION["ix"] (db/base.py) —
+        # all three columns, so it cannot be misread as a bare ``scope_ref`` index (org_id leads).
+        # ⚠ Building it blocks WRITES (ShareLock) but not reads — see migration 0075's operator note
+        # before running an in-place upgrade against a live stack.
+        Index("ix_audit_event_org_id_scope_ref_id", "org_id", "scope_ref", "id"),
     )
 
     # Single shared sequence across all partitions → globally monotonic; gap = tamper signal.

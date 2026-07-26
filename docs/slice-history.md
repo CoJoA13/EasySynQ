@@ -2,9 +2,10 @@
 
 > The running per-slice changelog + the deep per-slice rationale (this file IS the canonical narrative; it
 > also lives in the squash-merge commits). CLAUDE.md holds only the current head pointer.
-> **Migration head: `0074` (next `0075`).** Code: https://github.com/CoJoA13/EasySynQ (`main` protected, PR + green CI).
+> **Migration head: `0075` (next `0076`).** Code: https://github.com/CoJoA13/EasySynQ (`main` protected, PR + green CI).
 > (The pointer had gone stale at `0070` — the 2026-07-22 remediation batches added `0071` audit-chain
-> cursor, `0072` disposition append-only, `0073` pending-blob-purge and `0074` operator alarms.)
+> cursor, `0072` disposition append-only, `0073` pending-blob-purge, `0074` operator alarms and
+> `0075` the audit `scope_ref` index.)
 
 ## ⚠ OPEN RESIDUALS — named, owner-acknowledged, NOT yet done
 

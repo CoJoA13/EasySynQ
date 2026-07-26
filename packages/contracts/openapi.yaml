@@ -7753,6 +7753,12 @@ components:
         current_state: { type: [string, "null"] }
         signature_spec: { type: [object, "null"] }
         replayed: { type: [boolean, "null"] }
+        # The same additionalProperties:false gap, for the two domain-specific fields the CAPA and
+        # DCR decision paths re-derive onto the result: capa_close_state (services/capa/service.py,
+        # services/dcr/repository.py — null when the CAPA has no close state) and dcr_state
+        # (services/dcr/service.py). Absent on decisions of other subject types.
+        capa_close_state: { type: [string, "null"] }
+        dcr_state: { type: [string, "null"] }
 
     AuditEvent:
       type: object
@@ -7766,7 +7772,17 @@ components:
         actor_id: { type: [string, "null"], format: uuid, description: "Null for system/Beat jobs." }
         actor_type: { type: string, enum: [user, system, external_auditor, admin] }
         event_type: { type: string, description: "Extensible enum (clients tolerate unknown values)." }
-        object_type: { type: string, enum: [document, version, record, permission, user, session, config, audit] }
+        object_type:
+          type: string
+          description: >-
+            Closed set (doc 12 §4.2), grown additively via ``ALTER TYPE audit_object_type ADD
+            VALUE`` (0019/0025/0028/0029/0035/0036/0040/0052). Kept in lockstep with
+            ``AuditObjectType`` (db/models/_audit_enums.py) — see the parity guard in
+            tests/unit/test_openapi_enum_parity.py.
+          enum:
+            [document, version, record, permission, user, session, config, audit, process,
+             evidence_pack, retention_policy, import_run, workflow_instance, ncr, dcr,
+             improvement_initiative]
         object_id: { type: [string, "null"], format: uuid }
         scope_ref: { type: [string, "null"] }
         reason: { type: [string, "null"], description: "Mandatory Change Reason for content-changing events." }
@@ -9879,11 +9895,15 @@ components:
       description: >-
         The import-run state machine. The pipeline auto-chains Created → Scanning → Scanned →
         Extracting → Classifying → Classified → Deduping → Proposing → Proposed (the resting
-        checkpoint awaiting review) (+ Failed/Cancelled); later slices add the commit/complete stages
-        additively. S-ing-3: Classified is no longer terminal (it chains to dedup); Proposed is.
+        checkpoint awaiting review) (+ Failed/Cancelled). S-ing-3: Classified is no longer terminal
+        (it chains to dedup); Proposed is. S-ing-4 adds Reviewing (a lock-free, human-paced rest
+        state — decisions are accepted in {Proposed, Reviewing}); S-ing-5 commit transitions
+        Reviewing → Committing → Completed, or PartiallyCommitted when some items failed.
+        Kept in lockstep with ``ImportRunStatus`` (db/models/_ingestion_enums.py) — see the parity
+        guard in tests/unit/test_openapi_enum_parity.py.
       enum:
         [Created, Scanning, Scanned, Extracting, Classifying, Classified, Deduping, Proposing,
-         Proposed, Failed, Cancelled]
+         Proposed, Reviewing, Committing, Completed, PartiallyCommitted, Failed, Cancelled]
     ImportKind:
       type: string
       description: >-
