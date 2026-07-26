@@ -7725,12 +7725,23 @@ components:
     DecisionResult:
       type: object
       additionalProperties: false
-      required: [task_id, instance_id, stage_key, outcome, decided_at, decided_by]
+      # ⚠ outcome / decided_at / decided_by are deliberately NOT required, and `outcome` is nullable.
+      # engine.decide() has a benign no-op branch (services/workflow/engine.py, the `_QUORUM_SKIP`
+      # arm returning stage_state "ALREADY_SATISFIED"): once a quorum stage has closed, every
+      # sibling approver's task is SKIPPED, but their task is still listed and still theirs, so a
+      # POST /tasks/{id}/decision returns 200 with `outcome: null` and NO decided_* fields — no
+      # decision was recorded, so inventing them would be dishonest. Requiring them made that
+      # reachable 200 an `additionalProperties:false` contract violation. Do not tighten this back
+      # without first changing that branch.
+      required: [task_id, instance_id, stage_key]
       properties:
         task_id: { type: string, format: uuid }
         instance_id: { type: string, format: uuid }
         stage_key: { type: string }
-        outcome: { type: string, enum: [approve, changes_requested, reject, complete, acknowledge, verify] }
+        outcome:
+          # OpenAPI 3.1: a nullable `type` does NOT exempt the enum — null must be listed in it too.
+          type: [string, "null"]
+          enum: [approve, changes_requested, reject, complete, acknowledge, verify, null]
         decided_at: { type: [string, "null"], format: date-time }
         decided_by: { type: string, format: uuid }
         signature_event:
@@ -7753,6 +7764,17 @@ components:
         current_state: { type: [string, "null"] }
         signature_spec: { type: [object, "null"] }
         replayed: { type: [boolean, "null"] }
+        # The same additionalProperties:false gap, for the two domain-specific fields the CAPA and
+        # DCR decision paths re-derive onto the result: capa_close_state (services/capa/service.py
+        # :615 and :740) and dcr_state (services/dcr/service.py:561 and :735). Both are simply
+        # ABSENT on decisions of other subject types, which is legal since neither is required.
+        # Neither is null in practice today — Capa.close_state is nullable=False with a 'Raised'
+        # server_default — but the "null" branch is kept as a deliberate forward-compatible
+        # superset, so a future path that legitimately has no state cannot turn into a contract
+        # violation. (Do NOT cite services/dcr/repository.py here: its capa_close_state key belongs
+        # to caused_by_links(), the DCR impact panel, which is a different shape entirely.)
+        capa_close_state: { type: [string, "null"] }
+        dcr_state: { type: [string, "null"] }
 
     AuditEvent:
       type: object
@@ -7766,7 +7788,17 @@ components:
         actor_id: { type: [string, "null"], format: uuid, description: "Null for system/Beat jobs." }
         actor_type: { type: string, enum: [user, system, external_auditor, admin] }
         event_type: { type: string, description: "Extensible enum (clients tolerate unknown values)." }
-        object_type: { type: string, enum: [document, version, record, permission, user, session, config, audit] }
+        object_type:
+          type: string
+          description: >-
+            Closed set (doc 12 §4.2), grown additively via ``ALTER TYPE audit_object_type ADD
+            VALUE`` (0019/0025/0028/0029/0035/0036/0040/0052). Kept in lockstep with
+            ``AuditObjectType`` (db/models/_audit_enums.py) — see the parity guard in
+            tests/unit/test_openapi_enum_parity.py.
+          enum:
+            [document, version, record, permission, user, session, config, audit, process,
+             evidence_pack, retention_policy, import_run, workflow_instance, ncr, dcr,
+             improvement_initiative]
         object_id: { type: [string, "null"], format: uuid }
         scope_ref: { type: [string, "null"] }
         reason: { type: [string, "null"], description: "Mandatory Change Reason for content-changing events." }
@@ -9879,11 +9911,15 @@ components:
       description: >-
         The import-run state machine. The pipeline auto-chains Created → Scanning → Scanned →
         Extracting → Classifying → Classified → Deduping → Proposing → Proposed (the resting
-        checkpoint awaiting review) (+ Failed/Cancelled); later slices add the commit/complete stages
-        additively. S-ing-3: Classified is no longer terminal (it chains to dedup); Proposed is.
+        checkpoint awaiting review) (+ Failed/Cancelled). S-ing-3: Classified is no longer terminal
+        (it chains to dedup); Proposed is. S-ing-4 adds Reviewing (a lock-free, human-paced rest
+        state — decisions are accepted in {Proposed, Reviewing}); S-ing-5 commit transitions
+        Reviewing → Committing → Completed, or PartiallyCommitted when some items failed.
+        Kept in lockstep with ``ImportRunStatus`` (db/models/_ingestion_enums.py) — see the parity
+        guard in tests/unit/test_openapi_enum_parity.py.
       enum:
         [Created, Scanning, Scanned, Extracting, Classifying, Classified, Deduping, Proposing,
-         Proposed, Failed, Cancelled]
+         Proposed, Reviewing, Committing, Completed, PartiallyCommitted, Failed, Cancelled]
     ImportKind:
       type: string
       description: >-

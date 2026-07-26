@@ -97,11 +97,24 @@ published and presigned URLs / restore drills break. Verify:
 ```bash
 curl -s localhost/readyz                                                       # → 200
 docker compose --env-file .env -f infra/compose/compose.yml -f infra/compose/compose.s.yml \
-  exec -T api sh -c "cd /app; uv run alembic current"                          # → 0066_awareness_events (head)
+  exec -T api sh -c "cd /app; uv run alembic current"                          # → <head> (head)
 ```
 
-All 7 MinIO buckets should exist. (Migration head as of this writing is **0066**; it auto-applies on api
-startup — see CLAUDE.md *Current status* for the live head.)
+All 7 MinIO buckets should exist. Migrations are **not** applied by the api process: the compose
+`migrate` one-shot runs `alembic upgrade head` and exits, and `api` gates on it
+(`depends_on: migrate: {condition: service_completed_successfully}`). So `alembic current` should
+already report the head by the time the app is up. To see what the head *should* be:
+
+```bash
+cd apps/api && uv run alembic heads
+```
+
+⚠ Deliberately **not** hard-coded here. A head number written into prose goes stale on the next
+migration and has repeatedly misled a later session into numbering a new revision wrong — always read
+it from Alembic, never from a doc (CLAUDE.md *Current status* carries the same warning). ⚠ Do **not**
+substitute `ls migrations/versions/ | tail -1`: `_` sorts after the digits, so it returns
+`__pycache__` on any box that has run alembic or pytest. `alembic heads` also reports the real
+revision id (not a filename) and stays correct if the tree ever branches.
 
 ## 6. First-run wizard → OPERATIONAL
 
@@ -142,6 +155,48 @@ Docker is native, so the integration suite now runs locally (it was CI-only on t
 | Web | `cd apps/web && npx vitest run --pool=forks --maxWorkers=1` + `npm run lint && npm run typecheck && npm run build` (**vitest 4** — the old `--poolOptions.forks.singleFork` flag is gone) |
 | Integration | Run **CI-sharded** (a single full process pollutes — see ⚠): `cd apps/api && for g in 1 2 3 4; do uv run pytest -m integration --splits 4 --group $g --durations-path .test_durations; done` (needs Docker **and a version-matched `pg_dump`** — see ⚠) |
 
+⚠ **If Docker Desktop for Linux is installed, testcontainers cannot reach the daemon** — this is a
+hard blocker, not an ignorable artifact, and it presents as the ENTIRE integration suite erroring out
+in seconds (hundreds of `ERROR`s, no failures):
+
+```
+docker.errors.DockerException: Error while fetching server API version:
+  ('Connection aborted.', PermissionError(13, 'Permission denied'))
+```
+
+The trap is that `docker ps` works fine, so Docker looks healthy. Docker Desktop makes `desktop-linux`
+the active **context** (`unix://$HOME/.docker/desktop/docker.sock`, owned by you), and the CLI honours
+it — but testcontainers-python does **not** read docker contexts. It falls back to
+`/var/run/docker.sock`, which is `root:docker` `0660`, so it fails unless you are in the `docker`
+group.
+
+**Preferred fix — join the `docker` group.** The *system* `docker.service` is enabled and starts at
+boot; Docker Desktop's user unit does **not**, so a machine that reboots comes back with the Desktop
+socket gone and integration silently broken again. Group membership plus the default socket needs no
+config file at all:
+
+```bash
+sudo usermod -aG docker "$USER"
+```
+
+⚠ Requires a **full logout/restart** to take effect — group membership is fixed at login, and this
+box has no `sg`/`newgrp` shortcut. Once it is active, delete any `~/.testcontainers.properties`
+override so testcontainers just uses its `/var/run/docker.sock` default. Verify with `id -nG | grep docker`.
+
+**Fallback (no sudo, no restart)** — point testcontainers at the Docker Desktop socket instead. Works
+immediately, but only while Docker Desktop is running (`systemctl --user start docker-desktop`, and
+`systemctl --user enable docker-desktop` if you want it back after a reboot):
+
+```bash
+printf 'tc.host=unix://%s/.docker/desktop/docker.sock\n' "$HOME" >> ~/.testcontainers.properties
+```
+
+Verify with `docker context ls` (which endpoint is starred) and
+`cd apps/api && uv run python -c "from testcontainers.core.docker_client import get_docker_host; print(get_docker_host())"`.
+⚠ That properties file is parsed by splitting on the **first `=` of every line that contains one**, so
+any comment you add must not contain an equals sign or it is silently read as a setting. It also takes
+**precedence over `DOCKER_HOST`**, so a stale `tc.host` silently wins over a correct env var.
+
 ⚠ **Known LOCAL-env test artifacts (not real failures — all pass in CI):**
 - **Run the integration suite sharded, the way CI does.** CI runs it as **4 parallel shards**
   (`--splits 4 --group {1..4}`, each its own process + testcontainers). A single full
@@ -154,8 +209,18 @@ Docker is native, so the integration suite now runs locally (it was CI-only on t
   to `pg_dump`/`pg_restore`; a **newer** client (pg_dump 18 from a recent `postgresql-client` or brew
   `libpq`) makes `pg_restore` fail with `ERROR: unrecognized configuration parameter "transaction_timeout"`
   (a PG17+ GUC the PG16 server rejects → the drill reports `FAIL`). Install **pg_dump 16** and put it
-  first on `PATH` — Debian: `apt install postgresql-client-16`; brew: `brew install postgresql@16` then
-  prepend `$(brew --prefix postgresql@16)/bin`. The **live stack is unaffected** (the api/worker images
+  first on `PATH` — brew: `brew install postgresql@16` then prepend `$(brew --prefix postgresql@16)/bin`.
+  On Debian/Ubuntu `apt install postgresql-client-16` only works if that version is still in your
+  release's repos — **Ubuntu 26.04 ships 18 only**, so add PGDG first (it does publish a `resolute`
+  dist):
+  ```bash
+  sudo install -d /usr/share/postgresql-common/pgdg
+  sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc
+  echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list
+  sudo apt update && sudo apt install -y postgresql-client-16
+  ```
+  Installing **only** `postgresql-client-16` (not the unversioned metapackage) keeps `pg_wrapper` from
+  picking a newer client, so a bare `pg_dump` resolves to 16. The **live stack is unaffected** (the api/worker images
   carry pg_dump 16.14, so the wizard restore-drill always uses the matching version). With **no** `pg_dump`
   at all, the suite errors `pg_dump not found`.
 - `test_notification_settings.py::test_smtp_defaults_are_safe` asserts an empty `smtp_host` default, but a

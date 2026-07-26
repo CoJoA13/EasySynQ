@@ -142,10 +142,11 @@ Celery workers · Keycloak (auth) · Gotenberg/LibreOffice (rendering) · Caddy 
 > scope/provenance/tz edges (a new `provenance.excluded_processes` + its web banner line, context-only surface
 > admission consolidated in `report_read_resource_satisfiable`, an org-scoped process-name lookup, in-snapshot
 > `resolve_org_tz`) — PR #347 squash `d3fbb01`. Both BE(+web), no migration, no new key.
-> **Migration head `0074`** (next `0075`) — the 2026-07-22 remediation batches moved it past `0070`
+> **Migration head `0075`** (next `0076`) — the 2026-07-22 remediation batches moved it past `0070`
 > (`0071` audit-chain cursor · `0072` disposition append-only · `0073` pending-blob-purge · `0074`
-> operator alarms). Check `ls migrations/versions/ | tail` before writing a migration; this line has
-> gone stale before.
+> operator alarms · `0075` audit `scope_ref` index). Check `cd apps/api && uv run alembic heads`
+> before writing a migration — NOT `ls migrations/versions/ | tail -1`, which returns `__pycache__`;
+> this line has gone stale before.
 >
 > The authoritative, per-slice narrative — shipped slices, the migration-by-slice ledger, and every named deferred
 > residual — lives in **`docs/slice-history.md`**. Keep this section a short pointer (see Working preferences); land

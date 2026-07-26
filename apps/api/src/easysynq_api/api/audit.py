@@ -18,11 +18,12 @@ from typing import Any
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql.elements import ColumnElement
 
 from ..db.models._audit_enums import ActorType, AuditObjectType, EventType
 from ..db.models.app_user import AppUser
 from ..db.models.audit_checkpoint_sink import AuditCheckpointSink
-from ..db.models.audit_event import AuditEvent
+from ..db.models.audit_event import AuditEvent, bound_scope_ref
 from ..db.models.documented_information import DocumentedInformation
 from ..db.session import get_session
 from ..problems import ProblemException
@@ -202,6 +203,37 @@ async def get_audit_event(
     return _event(event)
 
 
+def document_scope_match(identifier: str) -> ColumnElement[bool]:
+    """The ``scope_ref`` predicate for one document's trail.
+
+    ⚠ The search key MUST be routed through ``bound_scope_ref``, because the write path caps
+    ``scope_ref`` (``AuditEvent._bound_scope_ref``). ``documented_information.identifier`` is
+    unbounded ``Text`` and an import can preserve an arbitrarily long legacy identifier, so for such
+    a document the raw identifier no longer equals what is stored — comparing against it would
+    return an INCOMPLETE trail with no error at all, which on an audit surface is worse than
+    failing outright. For a normal short identifier the helper is the identity function, so this is
+    byte-identical to the plain equality it replaced.
+
+    ⚠ **Exactly ONE key is searched. Do NOT add the raw identifier back as a compatibility
+    operand** — an earlier revision did, and it silently merged two documents' histories. A capped
+    key is exactly ``_SCOPE_REF_CAPPED_CHARS`` characters, and a raw identifier of that same length
+    is itself capped on write, so a value of that length appearing in ``scope_ref`` is ambiguous: it
+    is EITHER this document's own pre-cap row OR another document's post-cap key. Nothing in the row
+    distinguishes them, so searching it can return a different document's audit events — a
+    cross-document leak, strictly worse than the completeness gap below.
+
+    **Named residual:** audit rows written BEFORE the cap shipped, for a document whose identifier
+    exceeds ``_SCOPE_REF_MAX_CHARS``, are stored under the raw value and are therefore no longer
+    reachable here. This affects no document with a normal identifier (the helper is the identity
+    function below the threshold, so every ordinary row is unaffected) — only ones carrying a
+    pathologically long imported legacy identifier. Preferred deliberately over the leak.
+
+    Extracted from the handler purely so this is unit-testable: a regression to raw equality is
+    invisible in any test that only exercises short identifiers.
+    """
+    return AuditEvent.scope_ref == bound_scope_ref(identifier)
+
+
 @router.get("/documents/{document_id}/audit-events")
 async def document_audit_events(
     document_id: uuid.UUID,
@@ -211,12 +243,17 @@ async def document_audit_events(
     limit: int = Query(_PAGE_DEFAULT, ge=1, le=_PAGE_MAX),
 ) -> dict[str, Any]:
     """One document's full trail (doc + version events). Every vault/lifecycle row carries the
-    controlled identifier in ``scope_ref``, so the history is ``scope_ref == identifier``."""
+    controlled identifier in ``scope_ref``, so the history is ``scope_ref == identifier``.
+
+    ⚠ The scope predicate comes from ``document_scope_match``, NOT a plain
+    ``scope_ref == identifier`` — see that function for why a raw comparison silently returns an
+    incomplete trail once the write path caps ``scope_ref``.
+    """
     doc = await session.get(DocumentedInformation, document_id)
     if doc is None or doc.org_id != caller.org_id:
         raise ProblemException(status=404, code="not_found", title="Document not found")
     stmt = select(AuditEvent).where(
-        AuditEvent.org_id == caller.org_id, AuditEvent.scope_ref == doc.identifier
+        AuditEvent.org_id == caller.org_id, document_scope_match(doc.identifier)
     )
     if cursor is not None:
         stmt = stmt.where(AuditEvent.id < cursor)
