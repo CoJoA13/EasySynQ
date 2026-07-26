@@ -32,8 +32,21 @@ org email flag and the recipient's own preferences).
 > `backup_policy`, resolve an admin, insert a notification or append an audit row. Set
 > `OPS_ALERT_CHANNELS` to a comma-separated subset of `syslog,smtp,webhook` (see `.env.example`):
 >
-> * `syslog` → `OPS_ALERT_SYSLOG_ADDRESS` (a unix socket like `/dev/log`, or `host:port` for a UDP
->   collector). No network egress — the air-gap-friendly choice under D1.
+> * `syslog` → `OPS_ALERT_SYSLOG_ADDRESS`. ⚠ **Empty by default, and there is no working `/dev/log`
+>   in the shipped Compose deployment** — `worker` and `beat` run `python:3.12-slim-bookworm` with no
+>   syslog daemon, and neither bind-mounts the host socket, so a `/dev/log` value would look
+>   configured and reliably fail. Either point it at a collector reachable from the container
+>   (`syslog.internal:514`), or mount the host journald socket into **both** `worker` and `beat` —
+>   the two services that run the nightly jobs — via a compose override, then set `/dev/log`:
+>
+>   ```yaml
+>   services:
+>     worker: { volumes: ["/dev/log:/dev/log"] }
+>     beat:   { volumes: ["/dev/log:/dev/log"] }
+>   ```
+>
+>   Linux hosts with journald only (there is no host `/dev/log` under Docker Desktop). Mounted, this
+>   is the air-gap-friendly choice under D1 — no network egress at all.
 > * `smtp` → `OPS_ALERT_SMTP_TO`, an operator mailbox reached over the existing `SMTP_*` relay with
 >   no recipient lookup.
 > * `webhook` → `OPS_ALERT_WEBHOOK_URL` (+ optional `OPS_ALERT_WEBHOOK_TOKEN`), an off-host receiver

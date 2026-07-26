@@ -19,6 +19,7 @@ as soon as another file runs first. Everything reuses the default org — commit
 from __future__ import annotations
 
 import datetime
+import pathlib
 import uuid
 from collections.abc import AsyncIterator
 from typing import Any
@@ -474,7 +475,10 @@ async def test_a_succeeding_backup_raises_no_alarm(
     monkeypatch.setattr(
         backup_service.drill,
         "build_durable_backup",
-        lambda settings, destination: {"archive": f"{destination}/easysynq-backup-x.tar"},
+        lambda settings, destination: {
+            "archive": f"{destination}/easysynq-backup-x.tar",
+            "verified": True,
+        },
     )
 
     async with get_sessionmaker()() as s:
@@ -502,3 +506,62 @@ async def test_a_succeeding_backup_raises_no_alarm(
             )
         ).scalar_one()
     assert after == before, "a SUCCESSFUL backup wrote a BACKUP_FAILED audit row"
+
+
+async def test_unverified_archive_is_reported_as_a_failure(
+    app_under_test: Any, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+) -> None:
+    """An archive that does not match its own ``.sha256`` sidecar is as useless for a restore as one
+    that was never written — and ``build_durable_backup`` reports that by RETURNING
+    ``verified=False``, not by raising, so the exception handler never sees it (Codex P1).
+
+    Mutation-distinguishing: without the ``verified`` check the sweep logs ``backup.run.done``,
+    reports the org as a success, and fires nothing.
+    """
+    org_id = await _default_org_id()
+    admin_id = await _seed_admin(org_id)
+    fired: list[OperatorAlert] = []
+
+    async def _capture(settings: Settings, alert: OperatorAlert) -> dict[str, str]:
+        fired.append(alert)
+        return {}
+
+    monkeypatch.setattr(backup_service, "send_operator_alert", _capture)
+    monkeypatch.setattr(
+        backup_service.drill,
+        "build_durable_backup",
+        lambda settings, destination: {
+            "archive": f"{destination}/easysynq-backup-rotten.tar",
+            "verified": False,
+        },
+    )
+
+    # A policy must exist for the sweep to reach the per-org body; self-provided + torn down so the
+    # shared org is left exactly as found.
+    async with get_sessionmaker()() as s:
+        existing = (
+            await s.scalars(select(BackupPolicy).where(BackupPolicy.org_id == org_id))
+        ).all()
+        temp_policy_id: uuid.UUID | None = None
+        if not existing:
+            # The stubbed builder never touches the filesystem, so the destination is inert.
+            dest = str(tmp_path)
+            policy = BackupPolicy(org_id=org_id, destination=dest, cron="0 2 * * *")
+            s.add(policy)
+            await s.commit()
+            temp_policy_id = policy.id
+    try:
+        out = await backup_service.run_scheduled_backups()
+        assert any("error" in r for r in out["backups"]), "unverified archive reported as success"
+        assert len(fired) >= 1, "unverified archive raised no out-of-band alert"
+        assert fired[0].event == EVENT_BACKUP_FAILED
+        assert "checksum" in str(fired[0].detail.get("error", ""))
+        notes = await _notifications_for(admin_id, EVENT_BACKUP_FAILED)
+        assert len(notes) >= 1, "unverified archive notified no admin"
+    finally:
+        if temp_policy_id is not None:
+            async with get_sessionmaker()() as s:
+                row = await s.get(BackupPolicy, temp_policy_id)
+                if row is not None:
+                    await s.delete(row)
+                    await s.commit()

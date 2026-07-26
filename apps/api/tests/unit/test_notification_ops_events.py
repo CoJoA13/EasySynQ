@@ -14,6 +14,7 @@ from __future__ import annotations
 import importlib.util
 import pathlib
 import re
+import uuid
 from typing import Any
 
 import pytest
@@ -157,6 +158,37 @@ async def test_no_channel_configured_returns_empty_and_never_raises() -> None:
         OperatorAlert(event="system.backup_failed", severity="error", summary="x"),
     )
     assert result == {}
+
+
+def test_syslog_address_defaults_to_empty_not_dev_log() -> None:
+    """⚠ The worker/beat images are python:3.12-slim-bookworm with no syslog daemon, and the shipped
+    Compose services bind-mount no host socket — so a ``/dev/log`` default would look configured and
+    reliably fail, leaving a database-outage alarm in the very container log it was meant to escape
+    (Codex P2). Empty is honest: the channel reports ``skipped``, and the runbook gives the two ways
+    to make it real (a reachable collector, or mounting the socket into worker AND beat)."""
+    assert _settings().ops_alert_syslog_address == ""
+
+
+@pytest.mark.asyncio
+async def test_syslog_with_no_address_is_skipped_not_failed() -> None:
+    result = await send_operator_alert(
+        _settings(ops_alert_channels="syslog"),
+        OperatorAlert(event="system.backup_failed", severity="error", summary="x"),
+    )
+    assert result == {"syslog": SKIPPED}
+
+
+def test_seed_ids_are_deterministic_and_distinct() -> None:
+    """The downgrade deletes by seed id so an operator-authored template and any inactive historical
+    version survive it (Codex P2). That only holds if the id is a pure function of the event key —
+    a fresh uuid4 per run would make the delete unmatchable."""
+    module = _load_migration()
+    first = [module._seed_id(s[0]) for s in module._SEEDS]
+    second = [module._seed_id(s[0]) for s in module._SEEDS]
+    assert first == second, "seed ids must be deterministic across calls"
+    assert len(set(first)) == len(first), "each event key needs its own seed id"
+    # And the ids the upgrade INSERTs are the ones the downgrade targets.
+    assert all(isinstance(i, uuid.UUID) for i in first)
 
 
 @pytest.mark.asyncio

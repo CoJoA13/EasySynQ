@@ -71,6 +71,18 @@ _INTEGRITY_EMAIL_BODY = (
     "Manage notifications: {{prefs_link}}\n"
 )
 
+# DETERMINISTIC seed ids (Codex P2). The upgrade's ON CONFLICT DO NOTHING deliberately yields to an
+# operator-authored effective template — but a downgrade keyed on ``event_key`` alone would then
+# delete THAT row, plus any inactive historical version, none of which this migration created.
+# Deriving the id from the (event_key, locale, version) triple lets the downgrade delete exactly the
+# row it inserted and nothing else.
+_SEED_NAMESPACE = uuid.UUID("6f9619ff-8b86-d011-b42d-00c04fc964ff")
+
+
+def _seed_id(event_key: str) -> uuid.UUID:
+    return uuid.uuid5(_SEED_NAMESPACE, f"easysynq:notification_template:{event_key}:en:1")
+
+
 _SEEDS = (
     (
         "system.backup_failed",
@@ -124,7 +136,7 @@ def upgrade() -> None:
                 " ON CONFLICT (event_key, locale) WHERE is_effective DO NOTHING"
             ),
             {
-                "id": uuid.uuid4(),
+                "id": _seed_id(event_key),
                 "event_key": event_key,
                 "in_app_title": in_app_title,
                 "in_app_body": in_app_body,
@@ -136,17 +148,20 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     bind = op.get_bind()
-    # Guard each template delete: notification.template_id is a RESTRICT FK, so an unguarded delete
-    # aborts a POPULATED downgrade — a fresh-DB CI run is blind to this (the S-notify-4 lesson).
+    # Delete by the DETERMINISTIC seed id, not by event_key: an operator-authored template (which
+    # the upgrade's ON CONFLICT deliberately left alone) and any inactive historical version must
+    # survive a downgrade. Still guarded with NOT EXISTS — notification.template_id is a RESTRICT
+    # FK, so an unguarded delete aborts a POPULATED downgrade, and a fresh-DB CI run is blind to
+    # that (the S-notify-4 lesson).
     for event_key, *_ in _SEEDS:
         bind.execute(
             sa.text(
                 "DELETE FROM notification_template"
-                " WHERE event_key = :event_key"
+                " WHERE id = :id"
                 "   AND NOT EXISTS ("
                 "     SELECT 1 FROM notification n WHERE n.template_id = notification_template.id)"
             ),
-            {"event_key": event_key},
+            {"id": _seed_id(event_key)},
         )
     op.drop_column("audit_checkpoint_sink", "enabled_at")
     # BACKUP_FAILED is left in place — ALTER TYPE has no DROP VALUE, and a re-upgrade's

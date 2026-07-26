@@ -231,9 +231,14 @@ class Settings(BaseSettings):
     # endpoint the org controls — it carries operational metadata, never document content.
     ops_alert_webhook_url: str = ""
     ops_alert_webhook_token: str = ""  # optional bearer credential for the receiver
-    # syslog channel: a unix socket path ("/dev/log") or "host:port" for a UDP collector. The most
-    # air-gap-friendly option — the host's own journal/collector already exists.
-    ops_alert_syslog_address: str = "/dev/log"
+    # syslog channel: a unix socket path ("/dev/log") or "host:port" for a UDP collector. Empty ⇒
+    # the channel is inert (reports "skipped").
+    # ⚠ Deliberately EMPTY by default, not "/dev/log": the worker/beat images are
+    # python:3.12-slim-bookworm with no syslog daemon, and the shipped Compose services do not
+    # bind-mount the host socket — so a "/dev/log" default would look configured and reliably fail.
+    # Either bind-mount /dev/log into worker AND beat (see runbooks/backup-restore.md) or point this
+    # at a collector reachable from the container.
+    ops_alert_syslog_address: str = ""
     ops_alert_timeout_seconds: float = 10.0
 
     @property

@@ -17,7 +17,12 @@ import datetime
 import logging
 
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 
 from ..config import get_settings
 from ..db.models._audit_enums import ActorType, AuditObjectType, EventType
@@ -123,10 +128,11 @@ async def _run_chain_link() -> int:
 
 async def _run_verify_chain() -> int:
     settings = get_settings()
-    engine = create_async_engine(settings.database_url)
-    sessionmaker: async_sessionmaker[AsyncSession] = async_sessionmaker(
-        engine, expire_on_commit=False
-    )
+    # Engine construction is INSIDE the guarded region (Codex P2): create_async_engine() raises on a
+    # malformed DSN or an unavailable dialect/driver, and Settings.database_url is only typed as a
+    # string so nothing rejects that earlier. Built above the try, such a failure would exit the
+    # nightly detection control without the "could not run" alarm it promises.
+    engine: AsyncEngine | None = None
     # The nightly verify is the AUTHORITATIVE detection control (doc 12 §4.4): it holds the
     # beat-only signing key, so load_verify_key() always resolves (derives the public key) here and
     # the signed-checkpoint attestation runs — unlike the api/CLI, which may only walk.
@@ -162,6 +168,10 @@ async def _run_verify_chain() -> int:
     # discard the missing-verify-key notifications, which write no audit row by design.
     dirty = False
     try:
+        engine = create_async_engine(settings.database_url)
+        sessionmaker: async_sessionmaker[AsyncSession] = async_sessionmaker(
+            engine, expire_on_commit=False
+        )
         async with sessionmaker() as session:
             org_ids = (await session.execute(select(Organization.id))).scalars().all()
             for org_id in org_ids:
@@ -278,7 +288,8 @@ async def _run_verify_chain() -> int:
         )
         raise
     finally:
-        await engine.dispose()
+        if engine is not None:  # unbound when create_async_engine itself failed
+            await engine.dispose()
 
 
 async def _run_roll_partitions() -> list[str]:

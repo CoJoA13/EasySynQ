@@ -188,6 +188,25 @@ async def run_scheduled_backups() -> dict[str, Any]:
                 out = await asyncio.to_thread(
                     drill.build_durable_backup, settings, destination=policy.destination
                 )
+                # An archive that does not match its own .sha256 sidecar is exactly as useless for a
+                # restore as one that was never written — and build_durable_backup reports that by
+                # RETURNING verified=False, not by raising, so the exception handler below never
+                # sees it. Without this check the sweep logs backup.run.done and reports success
+                # over an unusable archive: the finding's whole scenario, one layer down.
+                # Fail-CLOSED on a missing key: an unreportable verification is not a pass.
+                if not out.get("verified", False):
+                    detail = (
+                        f"archive written but FAILED checksum verification: {out.get('archive')}"
+                    )
+                    logger.error("backup.run.unverified", extra={"extra_fields": out})
+                    await _report_backup_failure(
+                        sessionmaker,
+                        org_id=policy.org_id,
+                        destination=policy.destination,
+                        error=detail[:200],
+                    )
+                    results.append({"org_id": str(policy.org_id), **out, "error": detail[:200]})
+                    continue
                 logger.info("backup.run.done", extra={"extra_fields": out})
                 results.append({"org_id": str(policy.org_id), **out})
             except Exception as exc:
