@@ -26,6 +26,7 @@ def test_awareness_events():
 
 def test_system_failed_is_admin_ops():
     assert class_of("system.email_delivery_failed") is NotificationClass.ADMIN_OPS
+    assert class_of("system.backup_failed") is NotificationClass.ADMIN_OPS
 
 
 def test_unknown_event_falls_back_to_action_required():

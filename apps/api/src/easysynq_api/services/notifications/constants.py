@@ -10,6 +10,8 @@ EVENT_TASK_ESCALATED = "task.escalated"
 EVENT_TASK_DUE_FINAL = "task.due_final"
 EVENT_TASK_ESCALATED_FINAL = "task.escalated_final"
 EVENT_EMAIL_DELIVERY_FAILED = "system.email_delivery_failed"
+EVENT_BACKUP_FAILED = "system.backup_failed"
+EVENT_INTEGRITY_ALARM = "integrity.alarm"
 EVENT_DIGEST_DAILY = "digest.daily"
 EVENT_DOC_RELEASED = "doc.released"
 EVENT_CAPA_OVERDUE = "capa.overdue"
@@ -41,6 +43,23 @@ VARIABLE_WHITELIST: dict[str, frozenset[str]] = {
     EVENT_TASK_ESCALATED_FINAL: _TASK_EVENT_VARS,
     EVENT_EMAIL_DELIVERY_FAILED: frozenset(
         {"recipient_email", "attempts", "last_error", "notification_id", "created_at"}
+    ),
+    # system.backup_failed / integrity.alarm are OPERATIONAL-ONLY, like email_delivery_failed:
+    # System Administrators sit OUTSIDE the QMS and hold no document.* (deny-by-default), so these
+    # carry infrastructure metadata and NOTHING that names a controlled document or record — no
+    # subject.title, no subject.identifier, no deep_link into the vault (spec §5/§6).
+    EVENT_BACKUP_FAILED: frozenset(
+        {"recipient.first_name", "destination", "error", "failed_at", "prefs_link"}
+    ),
+    EVENT_INTEGRITY_ALARM: frozenset(
+        {
+            "recipient.first_name",
+            "check",
+            "reason_summary",
+            "break_count",
+            "detected_at",
+            "prefs_link",
+        }
     ),
     EVENT_DIGEST_DAILY: frozenset({"recipient.first_name", "item_count", "items", "prefs_link"}),
     EVENT_DOC_RELEASED: frozenset(

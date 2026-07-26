@@ -27,6 +27,9 @@ from ...db.models.audit_event import AuditEvent
 from ...db.models.backup_policy import BackupPolicy
 from ...logging import request_id_var
 from ..common.pg_locks import LOCK_RESTORE_DRILL, LOCK_RESTORE_LIVE, pg_advisory_lock
+from ..notifications.constants import EVENT_BACKUP_FAILED
+from ..notifications.ops_channel import OperatorAlert, send_operator_alert
+from ..notifications.ops_events import emit_backup_failed
 from . import drill, restore
 from .drill import ScratchHandle
 
@@ -86,6 +89,68 @@ def configure_backup_destination_check(destination: str) -> tuple[bool, str]:
     return True, "destination reachable and writable"
 
 
+async def _report_backup_failure(
+    sessionmaker: async_sessionmaker[AsyncSession],
+    *,
+    org_id: uuid.UUID,
+    destination: str,
+    error: str,
+) -> None:
+    """Batch 11 (review 2026-07-22 finding 2): make a failed nightly backup *visible*.
+
+    Before this, the only trace of "every nightly backup has failed for three weeks" was a worker
+    log line nobody reads — discovered when a restore was needed and the newest archive was weeks
+    old. Three carriers now, deliberately independent:
+
+    1. a durable ``BACKUP_FAILED`` audit row (the in-DB record an auditor can find later),
+    2. ``system.backup_failed`` to the org's System Administrators (in-app + email),
+    3. the OUT-OF-BAND operator channel, which needs no database at all.
+
+    Never raises: this runs inside the per-org failure handler, and a reporting problem must not
+    abort the remaining orgs' backups or mask the original ``BackupError``. A fresh session per
+    call (the S-ing-5 rule) so a failed report cannot poison the next org's.
+    """
+    settings = get_settings()
+    now = _now()
+    try:
+        async with sessionmaker() as session:
+            session.add(
+                AuditEvent(
+                    org_id=org_id,
+                    occurred_at=now,
+                    actor_id=None,
+                    actor_type=ActorType.system,
+                    event_type=EventType.BACKUP_FAILED,
+                    object_type=AuditObjectType.config,
+                    object_id=org_id,
+                    after={"destination": destination, "error": error},
+                    request_id=_maybe_uuid(request_id_var.get()),
+                )
+            )
+            await emit_backup_failed(
+                session, org_id=org_id, destination=destination, error=error, now=now
+            )
+            await session.commit()
+    except Exception:  # noqa: BLE001 — reporting must never abort the sweep or mask the real error
+        logger.warning(
+            "backup.failure_report_failed",
+            exc_info=True,
+            extra={"extra_fields": {"org": str(org_id)}},
+        )
+    # Fired unconditionally, and OUTSIDE the session block: if the in-DB half above just failed
+    # because PostgreSQL is unreachable, this is the only carrier left.
+    await send_operator_alert(
+        settings,
+        OperatorAlert(
+            event=EVENT_BACKUP_FAILED,
+            severity="error",
+            summary="scheduled EasySynQ backup failed",
+            detail={"destination": destination, "error": error},
+            org_id=str(org_id),
+        ),
+    )
+
+
 async def run_scheduled_backups() -> dict[str, Any]:
     """Write a durable backup archive for every configured ``backup_policy`` (one per org;
     single-org in MVP, D1). The nightly Beat job + ``easysynq backup run`` target. Best-effort +
@@ -97,8 +162,27 @@ async def run_scheduled_backups() -> dict[str, Any]:
     )
     results: list[dict[str, Any]] = []
     try:
-        async with sessionmaker() as session:
-            policies = (await session.scalars(select(BackupPolicy))).all()
+        try:
+            async with sessionmaker() as session:
+                policies = (await session.scalars(select(BackupPolicy))).all()
+        except Exception as exc:
+            # THE mode the in-DB path structurally cannot report (the finding's core point): with
+            # PostgreSQL down there is no policy list, no admin to resolve, no notification to
+            # insert and no audit row to append — the nightly job simply dies into a log. The
+            # out-of-band channel is the only carrier. Re-raise afterwards so Celery still records
+            # a failed task rather than a silent no-op run.
+            logger.exception("backup.run could not read backup_policy")
+            await send_operator_alert(
+                settings,
+                OperatorAlert(
+                    event=EVENT_BACKUP_FAILED,
+                    severity="critical",
+                    summary="scheduled backup could not start — the EasySynQ database is "
+                    "unreachable, so NO backup ran and no in-app alert could be raised",
+                    detail={"error": str(exc)[:500]},
+                ),
+            )
+            raise
         for policy in policies:
             try:
                 out = await asyncio.to_thread(
@@ -108,6 +192,12 @@ async def run_scheduled_backups() -> dict[str, Any]:
                 results.append({"org_id": str(policy.org_id), **out})
             except Exception as exc:
                 logger.exception("backup.run failed for org %s", policy.org_id)
+                await _report_backup_failure(
+                    sessionmaker,
+                    org_id=policy.org_id,
+                    destination=policy.destination,
+                    error=str(exc)[:200],
+                )
                 results.append({"org_id": str(policy.org_id), "error": str(exc)[:200]})
         return {"backups": results}
     finally:

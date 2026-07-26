@@ -18,7 +18,7 @@ import datetime
 import uuid
 from typing import Any
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, false
+from sqlalchemy import Boolean, DateTime, ForeignKey, false, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -38,4 +38,14 @@ class AuditCheckpointSink(Base):
     enabled: Mapped[bool] = mapped_column(Boolean, server_default=false(), nullable=False)
     last_anchored_at: Mapped[datetime.datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
+    )
+    # Batch 11 (migration 0074): when this witness was declared. It anchors the grace window for a
+    # sink that is enabled but has NEVER anchored — inside the window a fresh sink is benign, past
+    # it a configured-but-silently-dead witness raises integrity.alarm. NOT NULL with a
+    # ``now()`` server default so the v1 provisioning path (a direct operator INSERT — there is no
+    # in-app create/enable surface) populates it without knowing the column exists.
+    # ⚠ v1 approximation: this is set at row creation, so an operator who later toggles a sink
+    # ``enabled`` false→true should bump it too, or the grace window is measured from creation.
+    enabled_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
     )

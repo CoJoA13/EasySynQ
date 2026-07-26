@@ -79,3 +79,31 @@ async def resolve_recipients(session: AsyncSession, task: Task) -> list[Recipien
         )
         for u in users
     ]
+
+
+async def recipient_for_user(
+    session: AsyncSession, user_id: uuid.UUID, *, org_id: uuid.UUID
+) -> Recipient | None:
+    """Build a Recipient from an AppUser id, mirroring resolve_recipients' construction.
+
+    Returns None if the user doesn't exist, is inactive, or belongs to a different org.
+    A NULL email is allowed: the in-app notification row is always created; only the
+    downstream email send depends on an address (mirror resolve_recipients' behaviour).
+    Cross-org users are silently dropped to prevent task metadata leaking out of the org.
+
+    Lives here (not in ``escalation.py``, where it was first written) so ``ops_events.py`` can reuse
+    it without importing ``escalation`` — which imports ``dispatch``, which ``ops_events`` also
+    imports. ``escalation._recipient_for_user`` is kept as an alias for its existing importers.
+    """
+    user = await session.get(AppUser, user_id)
+    if user is None or user.status in _INACTIVE or user.org_id != org_id:
+        return None
+    pref = await session.get(NotificationPreference, user_id)
+    email_enabled = pref.email_enabled if pref is not None else True  # absence ⇒ enabled
+    return Recipient(
+        user_id=user.id,
+        email=user.email,  # may be None — only email-row creation depends on an address
+        display_name=user.display_name or "",
+        first_name=_first_name(user.display_name),
+        email_enabled=email_enabled,
+    )

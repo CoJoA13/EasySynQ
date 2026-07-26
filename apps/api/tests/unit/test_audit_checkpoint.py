@@ -165,6 +165,24 @@ def test_should_alarm_offhost_decision_table() -> None:
     # A read failure (unreachable witness) → fail-closed ALARM even though nothing was read back.
     assert _should_alarm_offhost(R(True, 0, False, ["read failed"], read_failed=True)) is True
 
+    # --- Batch 11 additions -------------------------------------------------------------------
+    # A sink enabled PAST the grace window that has never once anchored is a configured-but-dead
+    # witness, not a fresh one → ALARM. (Before enabled_at existed this state was benign forever.)
+    assert (
+        _should_alarm_offhost(R(True, 0, False, ["never anchored"], unanchored_overdue=1)) is True
+    )
+    # AUDIT_WITNESS_REQUIRED declared out-of-band + NO off-host sink in the DB → ALARM. This is the
+    # case a privileged DB owner creates by DELETING the sink row: without the out-of-DB
+    # declaration the verify goes quiet exactly when it should shout.
+    assert _should_alarm_offhost(R(False, 0, False, ["unavailable"]), witness_required=True) is True
+    # ...but the declaration must not turn a HEALTHY witness into an alarm.
+    assert _should_alarm_offhost(R(True, 1, True, []), witness_required=True) is False
+    # ...and with the declaration OFF the missing-witness case stays quiet (the default above,
+    # re-asserted explicitly so a future default flip is caught here).
+    assert (
+        _should_alarm_offhost(R(False, 0, False, ["unavailable"]), witness_required=False) is False
+    )
+
 
 def test_load_signing_key_exports_the_public_half(tmp_path: Any, monkeypatch: Any) -> None:
     priv_path = tmp_path / "priv.pem"
