@@ -100,16 +100,21 @@ docker compose --env-file .env -f infra/compose/compose.yml -f infra/compose/com
   exec -T api sh -c "cd /app; uv run alembic current"                          # → <head> (head)
 ```
 
-All 7 MinIO buckets should exist. The migration head auto-applies on api startup; `alembic current`
-should report the same revision as the newest file in `migrations/versions/`:
+All 7 MinIO buckets should exist. Migrations are **not** applied by the api process: the compose
+`migrate` one-shot runs `alembic upgrade head` and exits, and `api` gates on it
+(`depends_on: migrate: {condition: service_completed_successfully}`). So `alembic current` should
+already report the head by the time the app is up. To see what the head *should* be:
 
 ```bash
-ls migrations/versions/ | tail -1
+cd apps/api && uv run alembic heads
 ```
 
 ⚠ Deliberately **not** hard-coded here. A head number written into prose goes stale on the next
 migration and has repeatedly misled a later session into numbering a new revision wrong — always read
-it from `migrations/versions/`, never from a doc (CLAUDE.md *Current status* carries the same warning).
+it from Alembic, never from a doc (CLAUDE.md *Current status* carries the same warning). ⚠ Do **not**
+substitute `ls migrations/versions/ | tail -1`: `_` sorts after the digits, so it returns
+`__pycache__` on any box that has run alembic or pytest. `alembic heads` also reports the real
+revision id (not a filename) and stays correct if the tree ever branches.
 
 ## 6. First-run wizard → OPERATIONAL
 
