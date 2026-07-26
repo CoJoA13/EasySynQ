@@ -313,8 +313,10 @@ def downgrade() -> None:
     # workflow seed (guarded by live instances), then document_type (guarded by live docs), then
     # tables.
     has_instances = bind.execute(
-        sa.text("SELECT EXISTS(SELECT 1 FROM workflow_instance wi JOIN workflow_definition wd "
-                "ON wi.definition_id = wd.id WHERE wd.key = :k)"),
+        sa.text(
+            "SELECT EXISTS(SELECT 1 FROM workflow_instance wi JOIN workflow_definition wd "
+            "ON wi.definition_id = wd.id WHERE wd.key = :k)"
+        ),
         {"k": _DEF_KEY},
     ).scalar()
     if not has_instances:
@@ -327,8 +329,10 @@ def downgrade() -> None:
         )
         bind.execute(sa.text("DELETE FROM workflow_definition WHERE key = :k"), {"k": _DEF_KEY})
     bind.execute(
-        sa.text("DELETE FROM document_type dt WHERE dt.code = :c AND NOT EXISTS "
-                "(SELECT 1 FROM documented_information di WHERE di.document_type_id = dt.id)"),
+        sa.text(
+            "DELETE FROM document_type dt WHERE dt.code = :c AND NOT EXISTS "
+            "(SELECT 1 FROM documented_information di WHERE di.document_type_id = dt.id)"
+        ),
         {"c": _MR_TYPE[0]},
     )
     op.drop_constraint(

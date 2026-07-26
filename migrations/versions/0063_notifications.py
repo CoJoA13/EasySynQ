@@ -58,7 +58,9 @@ def upgrade() -> None:
         sa.Column("in_app_body", sa.Text(), nullable=False),
         sa.Column("email_subject", sa.Text(), nullable=False),
         sa.Column("email_body", sa.Text(), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
         sa.PrimaryKeyConstraint("id", name="pk_notification_template"),
     )
     op.create_index(
@@ -85,11 +87,16 @@ def upgrade() -> None:
         sa.Column("template_id", postgresql.UUID(as_uuid=True), nullable=True),
         sa.Column("template_version", sa.Integer(), nullable=True),
         sa.Column("context", postgresql.JSONB(), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
         sa.Column("read_at", sa.DateTime(timezone=True), nullable=True),
         sa.PrimaryKeyConstraint("id", name="pk_notification"),
         sa.ForeignKeyConstraint(
-            ["org_id"], ["organization.id"], name="fk_notification_org_id_organization", ondelete="RESTRICT"
+            ["org_id"],
+            ["organization.id"],
+            name="fk_notification_org_id_organization",
+            ondelete="RESTRICT",
         ),
         sa.ForeignKeyConstraint(
             ["recipient_user_id"],
@@ -108,7 +115,9 @@ def upgrade() -> None:
         ),
     )
     op.create_index(
-        "ix_notification_recipient_unread", "notification", ["recipient_user_id", "read_at", "created_at"]
+        "ix_notification_recipient_unread",
+        "notification",
+        ["recipient_user_id", "read_at", "created_at"],
     )
     op.create_index(
         "uq_notification_dedup_task",
@@ -133,7 +142,9 @@ def upgrade() -> None:
         sa.Column("last_error", sa.Text(), nullable=True),
         sa.Column("sent_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("failed_at", sa.DateTime(timezone=True), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
         sa.PrimaryKeyConstraint("id", name="pk_notification_email"),
         sa.ForeignKeyConstraint(
             ["org_id"],
@@ -158,7 +169,9 @@ def upgrade() -> None:
         "notification_preference",
         sa.Column("user_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("email_enabled", sa.Boolean(), server_default=sa.true(), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
         sa.PrimaryKeyConstraint("user_id", name="pk_notification_preference"),
         sa.ForeignKeyConstraint(
             ["user_id"],
@@ -171,7 +184,9 @@ def upgrade() -> None:
     # 6. The per-org opt-in column (column-add, server_default false → backfills every existing row).
     op.add_column(
         "system_config",
-        sa.Column("notifications_email_enabled", sa.Boolean(), server_default=sa.false(), nullable=False),
+        sa.Column(
+            "notifications_email_enabled", sa.Boolean(), server_default=sa.false(), nullable=False
+        ),
     )
 
     # 7. Seed the two en templates (global; version 1, effective). task.assigned (in-app + email);

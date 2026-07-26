@@ -69,27 +69,24 @@
   repoints `get_sessionmaker()` — so no existing fixture can reach it. **Closing it needs** an
   orchestrator harness (inject the sessionmaker, or a settings override the task honours) — a slice,
   not a remediation fix. Raised and named by Codex + this batch's own review on #368.
-- **No test validates any RESPONSE against its published schema — the `contract`/schemathesis marker
-  is declared but unused** (Batch 12; owner-acknowledged, **scheduled as its own slice between Batch
-  12 and Batch 13**). This is the root of the whole Batch-12 drift class, not a side note: `redocly
-  lint` only proves the document is *well-formed*, and `pyproject.toml:100` declares a `contract`
-  marker plus `schemathesis>=4.24.0` as a dev dep that **nothing invokes** — so nothing has ever
-  compared the contract to server truth. That is how `AuditEvent.object_type` sat 8 values stale
-  across eight `ALTER TYPE` migrations, and how `DecisionResult` kept rejecting the reachable quorum
-  `ALREADY_SATISFIED` 200 (caught only by the diff-critic pass, after the source review had already
-  found and lost it as `finder-only`). Batch 12 closed the *enum* half of the class
-  (`tests/unit/test_openapi_enum_parity.py`), leaving the response-shape half open. **Scope:** 230
-  paths / 282 operations (133 GET · 116 POST · 18 PATCH · 11 DELETE · 4 PUT), 360 responses carrying
-  a content schema. **Closing it needs** three things, and each is a real hazard if skipped: (1) it
-  must be driven through an **authenticated, post-setup** fixture — the app 423s everything outside
-  the wizard/verify exemptions until setup finalizes and most routes need a bearer token, so a naive
-  run validates a wall of 423/401s and reports a **meaningless green** (the false-PASS to avoid);
-  (2) it must run ONLY against the disposable `app_under_test` testcontainers, never a dev stack or
-  a real install — 149 of the 282 operations mutate, and some reach WORM/append-only and disposition
-  paths that are irreversible by design; (3) it should land **advisory / non-gating first**, because
-  a 360-response sweep will almost certainly surface a backlog of pre-existing violations — making
-  it a required CI job on day one would red CI on old debt and block Batch 13. Flip it to required
-  once triaged green.
+- **The advisory response-contract baseline has eight pre-existing violations** (Batch 12.5,
+  [PR #371](https://github.com/CoJoA13/EasySynQ/pull/371)). The gate now genuinely runs all 282
+  operations through an authenticated, OPERATIONAL, disposable testcontainers app and rejects a
+  401/423 wall, so these are server/contract findings rather than harness failures:
+  (1) `Problem.code` omits
+  `backup_not_configured` and `auth_unavailable`, emitted by the restore-test and auth-configuration
+  setup paths; (2) `POST /records:init-upload` permits an empty SHA under the request schema, then
+  lets botocore's invalid-empty-key exception escape instead of returning a response; (3) static
+  `GET /audit-events/export` is shadowed by `/{event_id}` and therefore returns an undocumented
+  validation 422; (4) CAPA containment/root-cause accept `{}` under the published input schema but
+  the service rejects an empty content block with an undocumented 422; and (5) complaint creation
+  accepts an empty description under the contract while Pydantic returns another undocumented 422;
+  and (6) `/notifications/stream` emits parsed SSE `{event,data}` frames while its response content
+  schema declares each event as a plain string. **Closing it needs** a focused follow-up that chooses
+  the honest direction per item (tighten input/stream schema, document a legitimate error
+  response/code, or correct server routing/exception handling), then re-runs the same sweep to zero.
+  Until then `contract-responses` stays advisory; make it required only when the baseline is green.
+  Batch 12.5 deliberately did not mix those unrelated behavior fixes into the gate-wiring slice.
 - **Pre-cap audit rows for a document with a >512-char identifier are unreachable via the
   per-document history endpoint** (Batch 12; a deliberate trade, not an oversight). Batch 12 caps
   `audit_event.scope_ref` on write so it cannot break its new btree index, and
@@ -109,22 +106,6 @@
   or a `scope_ref_kind` column) — a migration over append-only, hash-chained rows, so a slice with
   its own decision, not a remediation fix. Pinned by
   `test_history_query_never_searches_another_documents_key`.
-- **CI never lints or format-checks the `/migrations` tree — and a root-level ruff run silently uses
-  the WRONG config** (Batch 12; owner-acknowledged, **folded into the Batch 12.5 slice**). The `api`
-  CI job runs `ruff check . && ruff format --check --diff .` with `working-directory: apps/api`, so
-  the repo-root `migrations/` tree (76 files) is outside its scope entirely — despite migrations
-  being, by the project's own account, the most error-prone area in the codebase. Same failure shape
-  as the schemathesis residual above: a gate that never runs is indistinguishable from a gate that
-  passes. Measured on the Batch 12 branch: `ruff check` over `migrations/` is **already clean** (lint
-  is not the problem), but `ruff format --check` reports **29 of 76** files unformatted under the
-  project's config; `0075` itself is clean. ⚠ **The config trap must be fixed first or the numbers
-  lie:** there is **no ruff config at the repo root** and `[tool.ruff]` lives in
-  `apps/api/pyproject.toml`, so ruff's upward config discovery gives anything under `migrations/` its
-  **defaults — line-length 88, not the project's 100**. That is why a naive root-level run reports 61
-  files rather than 29: it is applying different rules than CI. **Closing it needs** a root
-  `ruff.toml` (or an explicit `--config`) so one rule set governs both trees, then a formatting sweep
-  of the 29, then the CI step widened to cover `migrations/` — landing the sweep separately from the
-  gate so the gate turns on green rather than red. Noticed while running the `/pr` gate on Batch 12.
 - **`easysynq upgrade` has no `lock_timeout`, so a migration can convoy the live write path**
   (Batch 12; owner-acknowledged, **deferred to Batch 13 — infra/deploy hardening**). The in-place
   upgrade runs on a one-off worker **while api/worker/beat stay up** (`scripts/easysynq:82` →

@@ -159,7 +159,7 @@ A create-gated (or token-gated) endpoint returns a resource body the caller cann
 > - **P1 — the cap silently broke the very endpoint this batch set out to index.** `document_audit_events` filters `scope_ref == doc.identifier` using the RAW identifier, while the new cap stores the capped form. `documented_information.identifier` is unbounded `Text` and an import can preserve an arbitrarily long legacy identifier, so for such a document the per-document trail would return **an incomplete history with no error at all** — on an audit surface, strictly worse than failing. Fixed by extracting `bound_scope_ref` as a module-level function and routing the search key through it (`api/audit.py::document_scope_match`), searching **both** the raw and capped forms when they differ so rows written before the cap are still found. The helper was extracted from the handler specifically so it is unit-testable: a regression to raw equality is invisible to any test using short identifiers, where the cap is the identity function. Mutation-verified — reverting to raw equality reds it, and so does searching only the capped key.
 > - **P1 — the round-1 pre-flight rejected rows that are perfectly indexable.** Its fixed `octet_length > 2000` bound contradicted the model's own cap: 512 four-byte characters is 2048 bytes, so a value the cap explicitly permits would have blocked the upgrade. Raw length cannot decide indexability at all — PostgreSQL compresses before indexing, so a long compressible value indexes fine while a shorter incompressible one does not. Replaced with a `try/except` around the DDL that translates only the `index row size` failure: **PostgreSQL itself is the exact oracle**, so there are no false positives and no data read. Proven on PG16 — a 2048-byte row now upgrades cleanly where the old bound refused it, and a genuinely unindexable row still produces the actionable error.
 > - **P2 — offline `--sql` generation crashed.** Under `alembic upgrade X:Y --sql` the offline bind emits the statement and returns `None`, so the pre-flight's `.scalar_one()` raised `AttributeError` and **no SQL was produced at all**. Reproduced exactly; fixed for free by the `try/except` above (no data read ⇒ nothing to break offline), and now verified to emit `CREATE INDEX …`. ⚠ Codex's rationale overstated one thing — the repo documents no `--sql` path (`install-airgapped.md`'s "offline" means air-gapped image bundles) — but the regression was real regardless: this broke a standard Alembic capability that worked before.
-> - **P2 — `outcome` should stay `required`.** Real but non-breaking (the published schema is a permissive superset), so **filed as [#370](https://github.com/CoJoA13/EasySynQ/issues/370)** rather than fixed in-branch, per the owner's triage rule for this round. `_response()` always emits `outcome` and the `ALREADY_SATISFIED` literal includes it as `null`, so nullable-but-required is the precise shape; Batch 12.5's response-schema validation would catch this class automatically.
+> - **P2 — `outcome` should stay `required`.** Real but non-breaking (the published schema is a permissive superset), so **filed as [#370](https://github.com/CoJoA13/EasySynQ/issues/370)** rather than fixed in-branch, per the owner's triage rule for this round. `_response()` always emits `outcome` and the `ALREADY_SATISFIED` literal includes it as `null`, so nullable-but-required is the precise shape. Closed in Batch 12.5 below with a structural guard (a live response alone cannot reveal an over-permissive superset).
 >
 > **From the Codex review round 3 (1 P1 — an aliasing flaw in the round-1/2 cap itself; fixed, since a merged audit trail breaks the product's core promise).** The capped key could **collide with another document's untouched identifier**. `bound_scope_ref` emitted exactly `_SCOPE_REF_MAX_CHARS` characters, so a value of that length passed through unchanged *and* was a possible cap output: document B with a 4000-char identifier capped to a 512-char key, while document A whose identifier **was** that exact 512-char string stored it verbatim — both documents' audit events landing on ONE `scope_ref`, and `document_scope_match` then silently merging two documents' histories. Reproduced directly (`bound(bound(x)) == bound(x)` returned `True`). Identifiers are arbitrary strings on the import path and the uniqueness constraint is on the raw value, so both rows can coexist: constructible, not theoretical.
 >
@@ -171,10 +171,12 @@ A create-gated (or token-gated) endpoint returns a resource body the caller cann
 >
 > **Fix**: exactly ONE key is searched — `scope_ref == bound_scope_ref(identifier)`. A value of exactly `_SCOPE_REF_CAPPED_CHARS` characters is irreducibly ambiguous (this document's own pre-cap row, or another document's post-cap key) and nothing in the row distinguishes them, so no predicate over that value is sound. Mutation-verified against **both** prior bugs: restoring the raw operand reds the new `test_history_query_never_searches_another_documents_key`, and reverting to raw-only equality reds two tests. ⚠ The cost is a **named residual** (now in `docs/slice-history.md` ⚠ OPEN RESIDUALS): pre-cap rows for a document with a >512-char identifier are no longer reachable. Nil blast radius for normal documents — below the threshold the cap is the identity function — and a completeness gap on a pathological imported identifier is strictly preferable to a cross-document leak. Closing it properly needs a discriminator separating legacy raw keys from capped keys, i.e. a migration over append-only hash-chained rows: its own slice.
 >
-> **P2 — `capa_close_state` / `dcr_state` should `$ref` the existing `CapaCloseState` / `DcrState` enums** instead of being bare nullable strings, so drift cannot validate and generated clients keep state-union exhaustiveness. Real but non-breaking (permissive superset) → tracked on [#370](https://github.com/CoJoA13/EasySynQ/issues/370) alongside the `outcome`-required fix, since it is the same schema and the same pass.
+> **P2 — `capa_close_state` / `dcr_state` should `$ref` the existing `CapaCloseState` / `DcrState` enums** instead of being bare nullable strings, so drift cannot validate and generated clients keep state-union exhaustiveness. Real but non-breaking (permissive superset) → tracked on [#370](https://github.com/CoJoA13/EasySynQ/issues/370) alongside the `outcome`-required fix, since it is the same schema and the same pass; closed together in Batch 12.5.
 
-### ☐ Batch 12.5 — Close the gates that never ran (INSERTED between 12 and 13, owner-scheduled)
-`branch: feat/contract-response-validation` · tests + CI only (no migration, no new key)
+### ☑ Batch 12.5 — Close the gates that never ran (INSERTED between 12 and 13, owner-scheduled)
+`branch: feat/contract-response-validation` ·
+[PR #371](https://github.com/CoJoA13/EasySynQ/pull/371) · tests + contract + CI only
+(no migration, no new key)
 
 Two separate gates are **declared but never invoked**. Both are the same failure shape, and it is the
 shape that produced Batch 12 in the first place: a check that does not run reads exactly like a check
@@ -202,7 +204,9 @@ a real hazard — full rationale in `docs/slice-history.md` ⚠ OPEN RESIDUALS):
 `migrations/` tree (76 files) is outside its scope entirely — despite being, by the project's own
 account, the most error-prone area in the codebase. Measured on this branch:
 
-- `ruff check` over `migrations/` is **already clean** — lint is not the problem;
+- a default-config `ruff check` over `migrations/` is clean, but re-running with the API's actual
+  strict selection exposes **357 existing findings** in five classes (mostly E501/S608/I001) — the
+  original "lint is not the problem" measurement was itself another consequence of config drift;
 - `ruff format --check` reports **29 of 76 files** unformatted under the project's config. (A naive
   run reports 61 — see the config trap below.) `0075` is clean.
 
@@ -213,6 +217,47 @@ project's 100**. Any `ruff` invocation from the repo root therefore silently app
 than CI does. Closing this needs a root `ruff.toml` (or an explicit `--config`) so one rule set governs
 both trees, *then* a formatting sweep of the 29, *then* the CI step widened. Same discipline as (a):
 land the sweep separately from the gate so the gate turns on green rather than red.
+
+- [x] `tests/integration/test_contract_response_schemas.py` — invoke the declared Schemathesis gate
+  over all **282 operations** against the published file, with one deterministic positive,
+  stateless case per operation and response status/header/content-type/schema checks (fixed:
+  the module uses only the disposable app fixture, maps the two unversioned health routes honestly,
+  disconnects the long-lived SSE route after its first real body frame, and asserts that every
+  selected operation actually returned a response; the explicit contract marker is excluded from
+  the four required integration shards)
+- [x] authenticated + post-setup proof — prevent a 401/423 wall from reading green (fixed:
+  each case gets a real signed test JWT for an ACTIVE disposable principal with SYSTEM-scope
+  permission coverage; `/me` and the non-exempt `/me/permissions` must both return 200 before the
+  generated request runs, and the run-level guard fails when 401+423 exceed 20% of observed
+  responses. The live baseline stayed below that guard with no 423 wall)
+- [x] `.github/workflows/ci.yml` — invoke the contract marker without blocking Batch 13 (fixed:
+  the dedicated `contract-responses` job runs the testcontainers sweep with
+  `continue-on-error: true`; a harness/setup failure still makes that advisory job visible rather
+  than fabricating a pass)
+- [x] root Ruff config + migration sweep + CI (fixed: `ruff.toml` now owns the shared Python
+  formatting and strict lint selection; the API adds only its test-credential exceptions, while
+  five measured migration-debt classes are explicitly scoped and every other selected rule is
+  live. Exactly **29 of 76** migrations were formatter-only changes in their own commit; an AST
+  comparison proved all 29 equivalent, including every SQL string and constant. Root and explicit
+  config formatting checks now agree at 76/76, and the separately-landed CI step runs both migration
+  lint and format checks from the repository root)
+- [x] issue [#370](https://github.com/CoJoA13/EasySynQ/issues/370) fold-in (fixed:
+  `DecisionResult.outcome` is nullable-but-required, and nullable
+  `capa_close_state`/`dcr_state` now reference the confirmed `CapaCloseState`/`DcrState`
+  components. A structural unit guard pins this precision because live-response validation alone
+  cannot detect an over-permissive published superset)
+
+> **Advisory baseline (2026-07-26): 274 operations passed / eight pre-existing violations, named
+> rather than fixed inline.**
+> Two setup responses emit problem codes absent from `Problem.code`
+> (`backup_not_configured`, `auth_unavailable`); `POST /records:init-upload` accepts an empty
+> contract-generated SHA then raises an unhandled botocore validation error; the static
+> `GET /audit-events/export` route is shadowed by `/{event_id}` and returns an undocumented 422; and
+> three requests valid under the published input schemas return undocumented 422s (empty CAPA
+> containment/root-cause content blocks and an empty complaint description); finally, the
+> notification stream publishes SSE `{event,data}` frames while its content schema declares each
+> event as a plain string. These are triaged in `docs/slice-history.md` ⚠ OPEN RESIDUALS; ratchet the
+> job to required only after that baseline is fixed in its own follow-up batch.
 
 ### ☐ Batch 13 — Infra / deploy hardening
 `branch: fix/major-infra-deploy` · infra (verify on the live/appliance path)

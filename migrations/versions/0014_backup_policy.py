@@ -52,9 +52,7 @@ def upgrade() -> None:
         sa.Column("destination", sa.Text(), nullable=False),
         sa.Column("encryption_key_ref", sa.Text(), nullable=True),
         sa.Column("cron", sa.Text(), nullable=False),
-        sa.Column(
-            "wal_pitr_enabled", sa.Boolean(), server_default=sa.false(), nullable=False
-        ),
+        sa.Column("wal_pitr_enabled", sa.Boolean(), server_default=sa.false(), nullable=False),
         sa.Column("retention_daily", sa.Integer(), server_default="7", nullable=False),
         sa.Column("retention_weekly", sa.Integer(), server_default="4", nullable=False),
         sa.Column("retention_monthly", sa.Integer(), server_default="6", nullable=False),

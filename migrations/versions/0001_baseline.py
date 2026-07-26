@@ -27,9 +27,7 @@ def upgrade() -> None:
     op.execute("CREATE EXTENSION IF NOT EXISTS ltree")
     op.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto")
 
-    setup_state = postgresql.ENUM(
-        "UNINITIALIZED", "IN_SETUP", "OPERATIONAL", name="setup_state"
-    )
+    setup_state = postgresql.ENUM("UNINITIALIZED", "IN_SETUP", "OPERATIONAL", name="setup_state")
     setup_state.create(op.get_bind(), checkfirst=True)
 
     op.create_table(

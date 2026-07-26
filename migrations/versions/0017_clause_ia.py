@@ -62,9 +62,7 @@ def upgrade() -> None:
         sa.Column("parent_id", postgresql.UUID(as_uuid=True), nullable=True),
         sa.Column("title", sa.Text(), nullable=False),
         sa.Column("intent_text", sa.Text(), nullable=False),
-        sa.Column(
-            "is_mandatory_star", sa.Boolean(), server_default=sa.false(), nullable=False
-        ),
+        sa.Column("is_mandatory_star", sa.Boolean(), server_default=sa.false(), nullable=False),
         sa.Column("pdca_phase", pdca_phase, nullable=False),
         sa.Column("requirement_node", sa.Boolean(), server_default=sa.false(), nullable=False),
         sa.ForeignKeyConstraint(
@@ -88,11 +86,12 @@ def upgrade() -> None:
         sa.Column("framework_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("clause_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("documented_information_id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("is_requirement_level", sa.Boolean(), server_default=sa.false(), nullable=False),
         sa.Column(
-            "is_requirement_level", sa.Boolean(), server_default=sa.false(), nullable=False
-        ),
-        sa.Column(
-            "created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
         ),
         sa.Column("created_by", postgresql.UUID(as_uuid=True), nullable=False),
         sa.ForeignKeyConstraint(

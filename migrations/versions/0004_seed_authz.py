@@ -294,9 +294,7 @@ def _roles() -> list[dict[str, Any]]:
 
     qms_owner: dict[str, dict[str, Any]] = {}
     for k in _QMS_OWNER_KEYS:
-        qms_owner[k] = (
-            _CONTENT_GRANT_SCOPE if k == "permission.grant" else _SYSTEM_SCOPE
-        )
+        qms_owner[k] = _CONTENT_GRANT_SCOPE if k == "permission.grant" else _SYSTEM_SCOPE
 
     auditor: dict[str, dict[str, Any]] = {k: _SYSTEM_SCOPE for k in _AUDITOR_READ_KEYS}
     auditor.update({k: _PROCESS_SCOPE for k in _AUDITOR_PROCESS_KEYS})
@@ -399,9 +397,7 @@ def upgrade() -> None:
         sa.column("is_system_domain", sa.Boolean),
         sa.column("sod_sensitive", sa.Boolean),
         sa.column("sig_hook", sa.Boolean),
-        sa.column(
-            "finest_scope", postgresql.ENUM(name="scope_level", create_type=False)
-        ),
+        sa.column("finest_scope", postgresql.ENUM(name="scope_level", create_type=False)),
     )
     role_t = sa.table(
         "role",
@@ -445,9 +441,7 @@ def upgrade() -> None:
         .on_conflict_do_nothing(index_elements=["org_id", "name"])
     )
 
-    perm_ids = {
-        key: pid for key, pid in bind.execute(sa.text("SELECT key, id FROM permission"))
-    }
+    perm_ids = {key: pid for key, pid in bind.execute(sa.text("SELECT key, id FROM permission"))}
     role_ids = {
         name: rid
         for name, rid in bind.execute(

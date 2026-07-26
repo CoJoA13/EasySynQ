@@ -47,12 +47,8 @@ def upgrade() -> None:
             server_default="ACTIVE",
             nullable=False,
         ),
-        sa.Column(
-            "mfa_enrolled", sa.Boolean(), server_default=sa.false(), nullable=False
-        ),
-        sa.Column(
-            "is_guest", sa.Boolean(), server_default=sa.false(), nullable=False
-        ),
+        sa.Column("mfa_enrolled", sa.Boolean(), server_default=sa.false(), nullable=False),
+        sa.Column("is_guest", sa.Boolean(), server_default=sa.false(), nullable=False),
         sa.Column("manager_id", postgresql.UUID(as_uuid=True), nullable=True),
         sa.Column("session_invalidated_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column(

@@ -93,7 +93,9 @@ def upgrade() -> None:
     bind = op.get_bind()
 
     # 1. The run-status enum (CREATE TYPE → usable same-txn). Sourced from the ORM tuple.
-    postgresql.ENUM(*IMPORT_RUN_STATUS_VALUES, name="import_run_status").create(bind, checkfirst=True)
+    postgresql.ENUM(*IMPORT_RUN_STATUS_VALUES, name="import_run_status").create(
+        bind, checkfirst=True
+    )
     import_run_status = postgresql.ENUM(name="import_run_status", create_type=False)
 
     # 2. import_run — the run header / state machine.
@@ -103,9 +105,7 @@ def upgrade() -> None:
         sa.Column("org_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("source_root", sa.Text(), nullable=False),
         sa.Column("source_root_hash", sa.Text(), nullable=False),
-        sa.Column(
-            "status", import_run_status, server_default=sa.text("'Created'"), nullable=False
-        ),
+        sa.Column("status", import_run_status, server_default=sa.text("'Created'"), nullable=False),
         sa.Column("lock_token", sa.Text(), nullable=True),
         sa.Column("profile", sa.Text(), nullable=True),
         sa.Column("ocr_enabled", sa.Boolean(), server_default=sa.text("false"), nullable=False),

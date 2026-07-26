@@ -364,9 +364,7 @@ def upgrade() -> None:
     )
     op.create_index("ix_task_assignee_user_id_state", "task", ["assignee_user_id", "state"])
     op.create_index("ix_task_instance_id", "task", ["instance_id"])
-    op.create_index(
-        "gin_task_candidate_pool", "task", ["candidate_pool"], postgresql_using="gin"
-    )
+    op.create_index("gin_task_candidate_pool", "task", ["candidate_pool"], postgresql_using="gin")
     op.create_index(
         "ix_signature_event_signed_object_type_signed_object_id",
         "signature_event",
@@ -388,9 +386,7 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.drop_index("ix_record_retention_basis_date_disposition_state", table_name="record")
     op.drop_index("ix_record_source_version_id", table_name="record")
-    op.drop_index(
-        "ix_signature_event_org_id_signer_user_id", table_name="signature_event"
-    )
+    op.drop_index("ix_signature_event_org_id_signer_user_id", table_name="signature_event")
     op.drop_index(
         "ix_signature_event_signed_object_type_signed_object_id", table_name="signature_event"
     )
@@ -400,9 +396,7 @@ def downgrade() -> None:
     op.drop_index(
         "ix_workflow_instance_org_id_subject_type_subject_id", table_name="workflow_instance"
     )
-    op.drop_index(
-        "uq_workflow_definition_effective_per_key", table_name="workflow_definition"
-    )
+    op.drop_index("uq_workflow_definition_effective_per_key", table_name="workflow_definition")
 
     op.drop_column("system_config", "allow_approver_release")
     op.drop_table("record")

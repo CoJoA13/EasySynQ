@@ -46,9 +46,7 @@ _FTS_DOC_EXPR = (
 
 
 def upgrade() -> None:
-    op.execute(
-        f"CREATE INDEX {_INDEX_NAME} ON documented_information USING gin ({_FTS_DOC_EXPR})"
-    )
+    op.execute(f"CREATE INDEX {_INDEX_NAME} ON documented_information USING gin ({_FTS_DOC_EXPR})")
 
 
 def downgrade() -> None:

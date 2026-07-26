@@ -115,9 +115,7 @@ def upgrade() -> None:
         sa.Column("run_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("file_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("full_text", sa.Text(), nullable=True),
-        sa.Column(
-            "text_truncated", sa.Boolean(), server_default=sa.text("false"), nullable=False
-        ),
+        sa.Column("text_truncated", sa.Boolean(), server_default=sa.text("false"), nullable=False),
         sa.Column("header_block", sa.Text(), nullable=True),
         sa.Column("embedded_props", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.Column("language", sa.Text(), nullable=True),

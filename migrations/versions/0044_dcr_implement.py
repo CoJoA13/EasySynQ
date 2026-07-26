@@ -44,7 +44,10 @@ down_revision: str | None = "0043_dcr_approval"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
-_PROCESS_SCOPE: dict[str, Any] = {"level": "PROCESS", "selector": {"process_id": ":assignment_process"}}
+_PROCESS_SCOPE: dict[str, Any] = {
+    "level": "PROCESS",
+    "selector": {"process_id": ":assignment_process"},
+}
 _BACKFILL: tuple[tuple[str, str], ...] = (
     ("Process Owner", "changeRequest.implement"),
     ("QMS Owner", "changeRequest.implement"),
@@ -148,11 +151,7 @@ def downgrade() -> None:
     # Drop both cross-FKs before dropping the back-edge column. resulting_version_id (the pre-0040
     # column) stays; only its FK is removed — a populated down→up re-adds the FK over the still-valid
     # version ids without dangling values.
-    op.drop_constraint(
-        "fk_dcr_resulting_version_id_document_version", "dcr", type_="foreignkey"
-    )
-    op.drop_constraint(
-        "fk_document_version_dcr_id_dcr", "document_version", type_="foreignkey"
-    )
+    op.drop_constraint("fk_dcr_resulting_version_id_document_version", "dcr", type_="foreignkey")
+    op.drop_constraint("fk_document_version_dcr_id_dcr", "document_version", type_="foreignkey")
     op.drop_column("dcr", "spawn_idempotency_key")
     op.drop_column("document_version", "dcr_id")

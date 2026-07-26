@@ -88,3 +88,24 @@ def test_openapi_enum_matches_python_enum(
         f"  not in {python_enum.__name__:<18}: {extra or '-'}\n"
         f"Add the value(s) at {dotted} in packages/contracts/openapi.yaml."
     )
+
+
+def test_decision_result_preserves_nullable_required_outcome_and_state_refs() -> None:
+    """Issue #370's precision fixes must not regress to permissive string supersets."""
+    schema = _walk(_document(), "components.schemas.DecisionResult")
+
+    assert "outcome" in schema["required"]
+    assert schema["properties"]["outcome"]["type"] == ["string", "null"]
+    assert None in schema["properties"]["outcome"]["enum"]
+    assert schema["properties"]["capa_close_state"] == {
+        "oneOf": [
+            {"$ref": "#/components/schemas/CapaCloseState"},
+            {"type": "null"},
+        ]
+    }
+    assert schema["properties"]["dcr_state"] == {
+        "oneOf": [
+            {"$ref": "#/components/schemas/DcrState"},
+            {"type": "null"},
+        ]
+    }

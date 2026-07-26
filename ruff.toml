@@ -1,0 +1,22 @@
+# Repository-wide Python policy. Subprojects may add path-specific exceptions,
+# but the selected rules and formatting settings stay shared.
+target-version = "py312"
+line-length = 100
+
+[lint]
+select = ["E", "F", "I", "UP", "B", "BLE", "ASYNC", "S", "RUF"]
+# Existing hand-authored migration debt, measured before this gate was enabled:
+# long SQL/comments, intentional SQL construction, unsorted migration imports,
+# two ambiguous docstring glyphs, and one now-unneeded noqa. Keep every other
+# selected rule live; retire these exceptions in a dedicated cleanup.
+per-file-ignores = { "migrations/**/*.py" = ["E501", "I001", "S608", "RUF002", "RUF100"] }
+
+[lint.flake8-bugbear]
+# FastAPI's dependency-injection defaults (= Depends(...)) are intentional.
+extend-immutable-calls = [
+  "fastapi.Depends",
+  "fastapi.Query",
+  "fastapi.Path",
+  "fastapi.Header",
+  "fastapi.Body",
+]

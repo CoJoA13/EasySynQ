@@ -125,7 +125,9 @@ def upgrade() -> None:
         ondelete="RESTRICT",
     )
     op.add_column("notification_email", sa.Column("item_count", sa.Integer(), nullable=True))
-    op.drop_constraint("uq_notification_email_notification_id", "notification_email", type_="unique")
+    op.drop_constraint(
+        "uq_notification_email_notification_id", "notification_email", type_="unique"
+    )
     op.alter_column("notification_email", "notification_id", nullable=True)
     op.create_index(
         "uq_notification_email_one_per_notification",
@@ -185,9 +187,7 @@ def downgrade() -> None:
     op.drop_column("notification_preference", "quiet_end")
     op.drop_column("notification_preference", "quiet_start")
     op.drop_column("notification_preference", "timezone")
-    op.drop_constraint(
-        "digest_hour", "notification_preference", type_="check"
-    )
+    op.drop_constraint("digest_hour", "notification_preference", type_="check")
     op.drop_column("notification_preference", "digest_hour")
     op.drop_column("notification_preference", "digest_mode_admin_ops")
     op.drop_column("notification_preference", "digest_mode_critical")

@@ -42,9 +42,7 @@ def upgrade() -> None:
         sa.Column("id", UUID(as_uuid=True), nullable=False),
         sa.Column("org_id", UUID(as_uuid=True), nullable=False),
         sa.Column("worm_verified_at", sa.DateTime(timezone=True), nullable=True),
-        sa.Column(
-            "object_lock_mode", sa.Text(), server_default="GOVERNANCE", nullable=False
-        ),
+        sa.Column("object_lock_mode", sa.Text(), server_default="GOVERNANCE", nullable=False),
         sa.Column(
             "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
         ),
