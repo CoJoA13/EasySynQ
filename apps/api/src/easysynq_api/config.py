@@ -79,6 +79,19 @@ class Settings(BaseSettings):
     # read principal. Empty → fall back to the vault s3 creds (dev only — NOT honest separation).
     audit_sink_read_access_key: str = ""
     audit_sink_read_secret_key: str = ""
+    # Batch 11: the OUT-OF-DB declaration that this install REQUIRES an off-host witness. It lives
+    # in the ENVIRONMENT, not in ``audit_checkpoint_sink``, precisely because the attack it closes
+    # is a privileged DB owner DELETING (or disabling) the sink row: an in-DB "is a witness
+    # required?" flag would be deleted alongside the thing it guards, and the verify would go quiet.
+    # With this set, a verify run that finds NO enabled off-host sink raises integrity.alarm instead
+    # of deferring to the passive R13 soft-gate. Default off so a fresh install with no witness
+    # configured does not alarm nightly (it still shows "NOT tamper-evident" on the soft-gate).
+    audit_witness_required: bool = False
+    # Grace window for a sink that is ENABLED but has NEVER anchored. Inside it, a fresh sink is
+    # benign (it may simply not have hit its first 15-minute anchor). Past it, a witness that was
+    # configured and never produced is an operator failure, so it alarms — closing the "enabled but
+    # silently dead witness" half of the audit-integrity-alarm residual.
+    audit_witness_grace_hours: int = 24
     # Configurable-verbosity knob (doc 12 §4.1): also persist routine authz ALLOW decisions.
     # Off in v1 — only denies + state-changes persist (avoids an audit row per read request).
     audit_persist_allows: bool = False
@@ -203,6 +216,30 @@ class Settings(BaseSettings):
     # The outbox drain retry ceiling (count-before-send lease; spec §4) + base backoff seconds.
     notification_max_send_attempts: int = 5
     notification_retry_base_seconds: int = 120
+
+    # Batch 11 (review 2026-07-22 finding 2): the OUT-OF-BAND operator alert channel for backup and
+    # audit-integrity failures. Deliberately INDEPENDENT of the app database + the notification
+    # outbox — the failure mode that matters most (PostgreSQL down) is exactly the one where the
+    # in-DB path cannot resolve admins, insert a notification, or append an audit row. Comma-
+    # separated subset of {syslog, smtp, webhook}; empty ⇒ no out-of-band channel (the alert still
+    # reaches the container log, and the in-DB path still runs whenever the DB is up).
+    ops_alert_channels: str = ""
+    # smtp channel: an operator mailbox reached over the SAME smtp_* relay as notifications but with
+    # NO DB lookup (no recipient resolution, no outbox row). Empty ⇒ the channel is inert.
+    ops_alert_smtp_to: str = ""
+    # webhook channel: an off-host receiver (POST application/json). Under D1 this must point at an
+    # endpoint the org controls — it carries operational metadata, never document content.
+    ops_alert_webhook_url: str = ""
+    ops_alert_webhook_token: str = ""  # optional bearer credential for the receiver
+    # syslog channel: a unix socket path ("/dev/log") or "host:port" for a UDP collector. Empty ⇒
+    # the channel is inert (reports "skipped").
+    # ⚠ Deliberately EMPTY by default, not "/dev/log": the worker/beat images are
+    # python:3.12-slim-bookworm with no syslog daemon, and the shipped Compose services do not
+    # bind-mount the host socket — so a "/dev/log" default would look configured and reliably fail.
+    # Either bind-mount /dev/log into worker AND beat (see runbooks/backup-restore.md) or point this
+    # at a collector reachable from the container.
+    ops_alert_syslog_address: str = ""
+    ops_alert_timeout_seconds: float = 10.0
 
     @property
     def sync_dsn(self) -> str:

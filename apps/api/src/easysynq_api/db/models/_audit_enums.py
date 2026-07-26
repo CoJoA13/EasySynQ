@@ -317,6 +317,11 @@ class EventType(enum.Enum):
     # ADD VALUE in 0070 (a from-scratch upgrade head rebuilds the type from EVENT_TYPE_VALUES).
     CAPA_OVERDUE = "CAPA_OVERDUE"
     CAPA_TARGET_DATE_SET = "CAPA_TARGET_DATE_SET"
+    # Batch 11 (review 2026-07-22 finding 2): a failed scheduled backup, so "the nightly backup has
+    # been failing for three weeks" is discoverable in the trail and not only in a worker log.
+    # object_type=config (the RESTORE_TEST_PASSED/_FAILED sibling). Additive via ALTER TYPE
+    # ADD VALUE in 0074 (a from-scratch upgrade head rebuilds the type from EVENT_TYPE_VALUES).
+    BACKUP_FAILED = "BACKUP_FAILED"
     COMPLAINT_CAPTURED = "COMPLAINT_CAPTURED"
     COMPLAINT_SPAWNED_CAPA = "COMPLAINT_SPAWNED_CAPA"
     NCR_CREATED = "NCR_CREATED"

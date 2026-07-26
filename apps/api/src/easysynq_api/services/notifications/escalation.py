@@ -18,7 +18,6 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from ...db.models._audit_enums import ActorType, AuditObjectType, EventType
 from ...db.models.app_user import AppUser, UserStatus
 from ...db.models.audit_event import AuditEvent
-from ...db.models.notification import NotificationPreference
 from ...db.models.organization import Organization
 from ...db.models.sla_policy import SlaPolicy
 from ...db.models.system_config import SystemConfig
@@ -35,7 +34,7 @@ from .constants import (
     EVENT_TASK_OVERDUE,
 )
 from .dispatch import EnqueueOutcome, _enqueue_one
-from .recipients import Recipient, _first_name, resolve_recipients
+from .recipients import Recipient, recipient_for_user, resolve_recipients
 from .subjects import resolve_subject
 from .timer import Calendar, TimerPolicy, TimerStamps, TimerStep, due_steps
 
@@ -109,28 +108,10 @@ async def resolve_escalation_2_recipients(
     return await users_with_roles(session, task.org_id, [_QM_ROLE]), "qm_fallback"
 
 
-async def _recipient_for_user(
-    session: AsyncSession, user_id: uuid.UUID, *, org_id: uuid.UUID
-) -> Recipient | None:
-    """Build a Recipient from an AppUser id, mirroring recipients.py's construction.
-
-    Returns None if the user doesn't exist, is inactive, or belongs to a different org.
-    A NULL email is allowed: the in-app notification row is always created; only the
-    downstream email send depends on an address (mirror resolve_recipients' behaviour).
-    Cross-org users are silently dropped to prevent task metadata leaking out of the org.
-    """
-    user = await session.get(AppUser, user_id)
-    if user is None or user.status in _INACTIVE or user.org_id != org_id:
-        return None
-    pref = await session.get(NotificationPreference, user_id)
-    email_enabled = pref.email_enabled if pref is not None else True  # absence ⇒ enabled
-    return Recipient(
-        user_id=user.id,
-        email=user.email,  # may be None — only email-row creation depends on an address
-        display_name=user.display_name or "",
-        first_name=_first_name(user.display_name),
-        email_enabled=email_enabled,
-    )
+# Moved to recipients.py (Batch 11) so ops_events.py can reuse it without importing this module —
+# escalation imports dispatch, and ops_events imports dispatch too, so an ops_events → escalation
+# edge would close a cycle. Kept under the original private name for fanout.py + capa/overdue.py.
+_recipient_for_user = recipient_for_user
 
 
 async def emit_task_event(

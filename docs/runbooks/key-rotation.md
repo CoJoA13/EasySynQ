@@ -17,3 +17,30 @@ the same custody as the host disk-encryption key.
 **After any rotation:** restart the affected containers, confirm `/readyz` is green, and run
 `easysynq backup run` so the next archive is sealed with the current key set. Secrets are redacted
 from logs / audit `before`/`after` / error responses by the allowlist serializer.
+
+## Declaring the off-host witness (`integrity.alarm`)
+
+The nightly `easysynq.audit.verify_chain` job raises **`integrity.alarm`** to System Administrators
+(in-app + email, CRITICAL so it pierces quiet hours) and to the out-of-band `OPS_ALERT_CHANNELS`
+(see [backup-restore.md](backup-restore.md)) when it detects a chain break, a checkpoint that fails
+signature verification, or an off-host witness that fails its independent read-back.
+
+Two settings govern the *absence* of a witness, which is otherwise unreportable:
+
+| Setting | Default | What it does |
+|---|---|---|
+| `AUDIT_WITNESS_REQUIRED` | `false` | Declares that this install **requires** an off-host witness. With it true, a nightly verify that finds no enabled off-host `audit_checkpoint_sink` raises `integrity.alarm` instead of quietly deferring to the R13 soft-gate. |
+| `AUDIT_WITNESS_GRACE_HOURS` | `24` | How long a sink may be enabled without ever anchoring before it is treated as a dead witness. Inside the window a fresh sink is benign; past it, it alarms. |
+
+> **Why `AUDIT_WITNESS_REQUIRED` lives in the environment and not the database.** The row a
+> privileged DB owner would delete in order to go dark *is* `audit_checkpoint_sink`. An in-DB "a
+> witness is required" flag would be deleted alongside the very thing it guards, and the nightly
+> verify would fall silent exactly when it should shout. Asserting the requirement from outside the
+> database is the whole point — keep it in the `0600` `.env` with the same custody as the other keys.
+
+**Turn it on only once a witness is actually configured**, or every night alarms. After enabling a
+new sink, confirm it anchors within `AUDIT_WITNESS_GRACE_HOURS` (`easysynq audit verify-offhost`).
+
+⚠ `audit_checkpoint_sink.enabled_at` — the grace-window anchor — is set at **row creation**. v1 has
+no in-app create/enable surface (provisioning is a direct operator INSERT), so if you later toggle a
+sink `enabled` false→true, bump `enabled_at` too or the window is measured from creation.

@@ -141,6 +141,38 @@ def test_load_verify_key_fails_closed_on_malformed_private(tmp_path: Any, monkey
     assert cp.load_verify_key() is None
 
 
+def test_unanchored_is_overdue_boundary() -> None:
+    """The grace window for a sink that is enabled but has NEVER anchored (Batch 11). Pure, so the
+    boundary is pinned without a database or a live object store. Inside the window a fresh sink is
+    benign; past it, a witness that was configured and never once produced is an operator failure.
+    Before ``enabled_at`` existed that state was benign FOREVER, so a permanently dead witness was
+    indistinguishable from one added five minutes ago."""
+    import datetime
+
+    from easysynq_api.services.audit.checkpoint import unanchored_is_overdue
+
+    now = datetime.datetime(2026, 7, 26, 12, 0, tzinfo=datetime.UTC)
+    grace = datetime.timedelta(hours=24)
+
+    # Just enabled → benign (it may not have hit its first 15-minute anchor yet).
+    assert unanchored_is_overdue(now, now, grace) is False
+    # One second inside the window → still benign.
+    assert unanchored_is_overdue(now - grace + datetime.timedelta(seconds=1), now, grace) is False
+    # EXACTLY at the boundary → still benign (strictly greater), so a 24h grace alarms from 24h+1s.
+    assert unanchored_is_overdue(now - grace, now, grace) is False
+    # One second past → a dead witness.
+    assert unanchored_is_overdue(now - grace - datetime.timedelta(seconds=1), now, grace) is True
+    # A naive timestamp is read as UTC, not raised on: this function decides whether to raise an
+    # alarm, so it must never be the reason the nightly verify crashes.
+    assert unanchored_is_overdue((now - grace * 2).replace(tzinfo=None), now, grace) is True
+    # A zero grace makes any nonzero age overdue (AUDIT_WITNESS_GRACE_HOURS=0 is a valid choice).
+    assert unanchored_is_overdue(now, now, datetime.timedelta(0)) is False
+    assert (
+        unanchored_is_overdue(now - datetime.timedelta(seconds=1), now, datetime.timedelta(0))
+        is True
+    )
+
+
 def test_should_alarm_offhost_decision_table() -> None:
     """The nightly beat's off-host alarm decision. A wipe leaves a readable off-host object that
     FAILS attestation (attest_failures>0) → ALARM; a read failure (unreachable witness) → ALARM;
@@ -164,6 +196,24 @@ def test_should_alarm_offhost_decision_table() -> None:
     assert _should_alarm_offhost(R(True, 1, False, ["deletion"], attest_failures=1)) is True
     # A read failure (unreachable witness) → fail-closed ALARM even though nothing was read back.
     assert _should_alarm_offhost(R(True, 0, False, ["read failed"], read_failed=True)) is True
+
+    # --- Batch 11 additions -------------------------------------------------------------------
+    # A sink enabled PAST the grace window that has never once anchored is a configured-but-dead
+    # witness, not a fresh one → ALARM. (Before enabled_at existed this state was benign forever.)
+    assert (
+        _should_alarm_offhost(R(True, 0, False, ["never anchored"], unanchored_overdue=1)) is True
+    )
+    # AUDIT_WITNESS_REQUIRED declared out-of-band + NO off-host sink in the DB → ALARM. This is the
+    # case a privileged DB owner creates by DELETING the sink row: without the out-of-DB
+    # declaration the verify goes quiet exactly when it should shout.
+    assert _should_alarm_offhost(R(False, 0, False, ["unavailable"]), witness_required=True) is True
+    # ...but the declaration must not turn a HEALTHY witness into an alarm.
+    assert _should_alarm_offhost(R(True, 1, True, []), witness_required=True) is False
+    # ...and with the declaration OFF the missing-witness case stays quiet (the default above,
+    # re-asserted explicitly so a future default flip is caught here).
+    assert (
+        _should_alarm_offhost(R(False, 0, False, ["unavailable"]), witness_required=False) is False
+    )
 
 
 def test_load_signing_key_exports_the_public_half(tmp_path: Any, monkeypatch: Any) -> None:

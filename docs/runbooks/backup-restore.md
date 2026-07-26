@@ -21,6 +21,50 @@ checksum-verified archive per configured policy to `BACKUP_PATH` (or the policy'
 > secret — never in the archive. **Lose it and every `.tar.enc` is unrecoverable.** Back it up
 > out-of-band with the same custody as the host disk-encryption key. See [key-rotation.md](key-rotation.md).
 
+## When a backup fails — the operator alarm
+
+A failed nightly backup is not silent. Each failure writes a durable **`BACKUP_FAILED`** audit row
+and sends **`system.backup_failed`** to every System Administrator (in-app + email, subject to the
+org email flag and the recipient's own preferences).
+
+> ⚠ **Configure at least one out-of-band channel.** The in-app path needs the database, and the
+> failure that hurts most is the one where PostgreSQL is *down*: the nightly job cannot read
+> `backup_policy`, resolve an admin, insert a notification or append an audit row. Set
+> `OPS_ALERT_CHANNELS` to a comma-separated subset of `syslog,smtp,webhook` (see `.env.example`):
+>
+> * `syslog` → `OPS_ALERT_SYSLOG_ADDRESS`. ⚠ **Empty by default, and there is no working `/dev/log`
+>   in the shipped Compose deployment** — `worker` and `beat` run `python:3.12-slim-bookworm` with no
+>   syslog daemon, and neither bind-mounts the host socket, so a `/dev/log` value would look
+>   configured and reliably fail. Either point it at a collector reachable from the container
+>   (`syslog.internal:514`), or mount the host journald socket into **both** `worker` and `beat` —
+>   the two services that run the nightly jobs — via a compose override, then set `/dev/log`:
+>
+>   ```yaml
+>   services:
+>     worker: { volumes: ["/dev/log:/dev/log"] }
+>     beat:   { volumes: ["/dev/log:/dev/log"] }
+>   ```
+>
+>   Linux hosts with journald only (there is no host `/dev/log` under Docker Desktop). Mounted, this
+>   is the air-gap-friendly choice under D1 — no network egress at all.
+>
+>   ⚠ The two forms report differently. A **unix socket** surfaces an absent or dead socket as
+>   `failed`. A **`host:port`** address is UDP and fire-and-forget, so a closed collector port still
+>   reports `sent` — the datagram reached the kernel and nothing comes back. Read `sent` on the UDP
+>   form as "emitted", not "delivered", and pair it with a second channel where confirmation matters.
+> * `smtp` → `OPS_ALERT_SMTP_TO`, an operator mailbox reached over the existing `SMTP_*` relay with
+>   no recipient lookup.
+> * `webhook` → `OPS_ALERT_WEBHOOK_URL` (+ optional `OPS_ALERT_WEBHOOK_TOKEN`), an off-host receiver
+>   the org controls. It carries operational metadata only, never document or record content.
+>
+> With none configured the alarm still reaches the container log, and nothing else. A channel that
+> is *named* but not configured (e.g. `smtp` with no `OPS_ALERT_SMTP_TO`) reports `skipped`, not
+> `sent` — check the `ops_alert.dispatched` log line after a test.
+
+The same channel carries **`integrity.alarm`** from the nightly chain verification — see
+[key-rotation.md](key-rotation.md) for the witness settings (`AUDIT_WITNESS_REQUIRED`,
+`AUDIT_WITNESS_GRACE_HOURS`).
+
 ## The restore-test drill (gate G-C / AC#5)
 
 `easysynq backup restore-test` runs a real backup → restore into a throwaway scratch DATABASE →

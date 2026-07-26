@@ -15,13 +15,28 @@ pytestmark = pytest.mark.unit
 _ALLOWED = frozenset({"subject.identifier", "subject.title", "task.due_at", "deep_link"})
 
 
-def test_substitutes_and_escapes() -> None:
+def test_substitutes_verbatim_into_the_plain_text_sinks() -> None:
+    """[Batch 11] Values substitute VERBATIM — both sinks are plain text (mail.py set_content() =
+    text/plain; the SPA renders a React text node). HTML-escaping here garbled ordinary titles in
+    email ("Q&amp;A" for "Q&A") and double-escaped them in the SPA. Any future HTML sink must escape
+    at the sink."""
     out = _substitute(
         'Review {{subject.identifier}}: "{{subject.title}}"',
         {"subject.identifier": "SOP-1", "subject.title": "A <b>bold</b> & risky title"},
         _ALLOWED,
     )
-    assert out == 'Review SOP-1: "A &lt;b&gt;bold&lt;/b&gt; &amp; risky title"'
+    assert out == 'Review SOP-1: "A <b>bold</b> & risky title"'
+
+
+def test_a_value_containing_a_slot_is_never_re_substituted() -> None:
+    """Dropping the escape must not open slot injection: re.sub walks the ORIGINAL string, so a
+    value that itself looks like a token is emitted literally, never re-scanned."""
+    out = _substitute(
+        "Title: {{subject.title}}",
+        {"subject.title": "{{deep_link}}", "deep_link": "https://evil.example"},
+        _ALLOWED,
+    )
+    assert out == "Title: {{deep_link}}"
 
 
 def test_missing_var_renders_placeholder_not_raises() -> None:

@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import dataclasses
 import datetime
-import html
 import re
 import uuid
 
@@ -58,7 +57,13 @@ def _substitute(text: str, variables: dict[str, object], allowed: frozenset[str]
             return _fmt_date(value)
         if value is None:
             return _PLACEHOLDER
-        return html.escape(str(value))
+        # NO html.escape: both sinks are PLAIN TEXT — mail.py sends via set_content() with no
+        # subtype (text/plain) and the SPA renders the body as a React text node (which escapes on
+        # its own). Escaping here garbled ordinary titles in email ("Q&amp;A" for "Q&A") and
+        # double-escaped them in the SPA. Slot injection is already impossible: only names in
+        # ``allowed`` substitute at all, and a value's own braces are never re-scanned (re.sub
+        # walks the ORIGINAL string). Any future HTML sink must escape at the SINK, not here.
+        return str(value)
 
     return _TOKEN.sub(repl, text)
 

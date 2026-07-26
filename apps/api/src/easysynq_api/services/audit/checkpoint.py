@@ -275,6 +275,22 @@ async def tamper_evidence_attested(session: AsyncSession, org_id: Any) -> bool:
     return False
 
 
+def unanchored_is_overdue(
+    enabled_at: datetime.datetime, now: datetime.datetime, grace: datetime.timedelta
+) -> bool:
+    """Has a sink that has NEVER anchored been enabled long enough to count as a dead witness?
+
+    Pure, so the boundary is unit-testable without a database or a live object store (the house
+    rule for date/calendar logic). STRICTLY greater than the grace window: at exactly the boundary
+    the sink is still given the benefit of the doubt, so a 24h grace means "alarm from 24h+1s", not
+    "alarm at 24h". A naive ``enabled_at`` is read as UTC rather than raising — this decides whether
+    to raise an alarm, so it must not itself become the reason the nightly verify crashes.
+    """
+    if enabled_at.tzinfo is None:
+        enabled_at = enabled_at.replace(tzinfo=datetime.UTC)
+    return now - enabled_at > grace
+
+
 @dataclasses.dataclass(frozen=True, slots=True)
 class OffHostCheckpointResult:
     """Outcome of the INDEPENDENT off-host read-back (doc 12 §4.4). FAIL-CLOSED: ``verified`` is
@@ -285,7 +301,14 @@ class OffHostCheckpointResult:
     returned an object; ``attest_failures`` counts those whose object FAILED attestation
     (tamper/stale/wipe); ``read_failed`` is True when a sink's read threw (unreachable witness). The
     beat alarms on ``attest_failures`` or ``read_failed`` — NOT on a mere not-yet-anchored empty
-    sink — so a freshly added second witness alongside a healthy one never false-alarms."""
+    sink — so a freshly added second witness alongside a healthy one never false-alarms.
+
+    ``unanchored_overdue`` (Batch 11) counts sinks that are ENABLED, have NEVER anchored, and whose
+    ``enabled_at`` is older than the configured grace window. A not-yet-anchored sink stays benign
+    INSIDE the window (it may simply not have hit its first 15-minute anchor); past it, a witness
+    that was configured and never once produced is an operator failure, not a fresh install — that
+    is the case that used to be benign forever, so a dead witness could never be distinguished from
+    a new one."""
 
     offhost_configured: bool
     sinks_read: int
@@ -293,6 +316,7 @@ class OffHostCheckpointResult:
     reasons: list[str]
     read_failed: bool = False
     attest_failures: int = 0
+    unanchored_overdue: int = 0
 
 
 async def _attest_offhost_doc(
@@ -386,6 +410,8 @@ async def verify_offhost_checkpoint(
     read = 0
     read_failed = False
     attest_failures = 0
+    unanchored_overdue = 0
+    grace = datetime.timedelta(hours=max(0, get_settings().audit_witness_grace_hours))
     for sink in offhost:
         try:
             doc = await asyncio.to_thread(
@@ -407,10 +433,22 @@ async def verify_offhost_checkpoint(
                     "(WORM objects deleted / bucket replaced?)"
                 )
                 attest_failures += 1
+            elif unanchored_is_overdue(sink.enabled_at, now, grace):
+                # Never anchored, and declared long enough ago that "it hasn't reached its first
+                # 15-minute anchor yet" is no longer a credible explanation. A witness that was
+                # configured and never once produced is an operator failure — it alarms (Batch 11).
+                # Before enabled_at existed this case was benign FOREVER, so a permanently dead
+                # witness was indistinguishable from a freshly added one.
+                reasons.append(
+                    f"sink {sink.id}: enabled at {sink.enabled_at.isoformat()} but has NEVER "
+                    "anchored a checkpoint (past the configured grace window)"
+                )
+                unanchored_overdue += 1
             else:
-                # Never anchored (a genuinely fresh sink) — benign, like a single fresh sink; NOT an
-                # attestation failure, so it never alarms even read alongside a healthy sibling. It
-                # still lands in ``reasons`` (verified=False) so the CLI reports it isn't producing.
+                # Never anchored, still INSIDE the grace window (a genuinely fresh sink) — benign;
+                # NOT an attestation failure, so it never alarms even read alongside a healthy
+                # sibling. It still lands in ``reasons`` (verified=False) so the CLI reports it
+                # isn't producing.
                 reasons.append(f"sink {sink.id}: no off-host checkpoint object found")
             continue
         read += 1
@@ -419,5 +457,11 @@ async def verify_offhost_checkpoint(
             reasons.append(f"sink {sink.id}: {reason}")
             attest_failures += 1
     return OffHostCheckpointResult(
-        True, read, not reasons, reasons, read_failed=read_failed, attest_failures=attest_failures
+        True,
+        read,
+        not reasons,
+        reasons,
+        read_failed=read_failed,
+        attest_failures=attest_failures,
+        unanchored_overdue=unanchored_overdue,
     )

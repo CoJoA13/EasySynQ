@@ -2,7 +2,9 @@
 
 > The running per-slice changelog + the deep per-slice rationale (this file IS the canonical narrative; it
 > also lives in the squash-merge commits). CLAUDE.md holds only the current head pointer.
-> **Migration head: `0070` (next `0071`).** Code: https://github.com/CoJoA13/EasySynQ (`main` protected, PR + green CI).
+> **Migration head: `0074` (next `0075`).** Code: https://github.com/CoJoA13/EasySynQ (`main` protected, PR + green CI).
+> (The pointer had gone stale at `0070` — the 2026-07-22 remediation batches added `0071` audit-chain
+> cursor, `0072` disposition append-only, `0073` pending-blob-purge and `0074` operator alarms.)
 
 ## ⚠ OPEN RESIDUALS — named, owner-acknowledged, NOT yet done
 
@@ -48,11 +50,38 @@
   15-minute beat re-anchor over the rewritten head passes verification, while the older immutable objects
   that would expose it are never read. **Closing it needs** a Merkle-chained anchor lineage (each
   checkpoint commits to the prior anchor's hash) — a checkpoint payload/format change + a register entry.
-- **Audit integrity alarm policy** (Batch 7 → Batch 11). A witness that *disappears* from the DB, and a
-  missing verify key, are currently passive signals (the R13 soft-gate flips to "NOT tamper-evident"; the
-  beat logs loudly) rather than active alarms. **Closing it needs** the `integrity.alarm` operator
-  notification wiring, plus an out-of-DB "witness required" declaration and a never-anchored-sink grace
-  window (a `audit_checkpoint_sink` enable-timestamp migration).
+- **`_run_verify_chain` has no orchestrator-level test coverage** (Batch 11, PR
+  [#368](https://github.com/CoJoA13/EasySynQ/pull/368); owner-acknowledged, deferred). The nightly
+  chain-verify task has had **zero** tests since S6 — this is pre-existing, not introduced by Batch 11
+  — but Batch 11 added real logic to it that is therefore unverified at the orchestrator level:
+  (a) the `emitted` → **`dirty`** commit decision (the commit must now also fire for
+  `integrity.alarm` rows, which write no audit row by design — keying it on the audit rows alone
+  would silently discard the missing-verify-key notifications); (b) the **missing-verify-key alarm**
+  itself (an `integrity.alarm` per org + the out-of-band channel, deliberately writing NO
+  `CHAIN_VERIFY_FAIL` row); (c) the **engine-inside-`try`** move with its conditional `dispose()`
+  (Codex P2 — a malformed DSN otherwise exits without the promised "could not run" alarm).
+  The individual pieces *are* covered: `_should_alarm_offhost` has a unit decision table including
+  the new `witness_required` / `unanchored_overdue` cases, `unanchored_is_overdue` has a
+  mutation-verified boundary test, and `emit_integrity_alarm` has integration cover. It is only the
+  orchestration that is untested. **Why it is not just an oversight:** `_run_verify_chain` builds its
+  own engine from `settings.database_url`, while the integration harness (`app_under_test`) only
+  repoints `get_sessionmaker()` — so no existing fixture can reach it. **Closing it needs** an
+  orchestrator harness (inject the sessionmaker, or a settings override the task honours) — a slice,
+  not a remediation fix. Raised and named by Codex + this batch's own review on #368.
+- ~~**Audit integrity alarm policy** (Batch 7 → Batch 11).~~ **CLOSED in Batch 11** (owner-approved,
+  all three parts). (1) The `integrity.alarm` operator notification is wired end-to-end on the
+  `CHAIN_VERIFY_FAIL` detection signal — in-app + email to System Administrators, CRITICAL class so it
+  pierces quiet hours, plus an out-of-band syslog/SMTP/webhook channel. (2) The out-of-DB "witness
+  required" declaration is `AUDIT_WITNESS_REQUIRED`, held in the ENVIRONMENT rather than the database
+  precisely because the row a privileged DB owner deletes to go dark *is* `audit_checkpoint_sink` — an
+  in-DB flag would be deleted alongside the thing it guards. (3) The never-anchored-sink grace window
+  is `audit_checkpoint_sink.enabled_at` (migration `0074`) + `AUDIT_WITNESS_GRACE_HOURS`, so a sink
+  that is enabled and never once anchors alarms as a dead witness instead of staying benign forever.
+  A missing verify key now alarms too. ⚠ Note it writes **no** `CHAIN_VERIFY_FAIL` audit row: that
+  event means a tamper was DETECTED, and recording a misconfiguration as a detection would poison the
+  tamper signal. ⚠ `enabled_at` is a v1 approximation — it is set at row creation (there is no in-app
+  create/enable surface; provisioning is a direct operator INSERT), so an operator who later toggles a
+  sink `enabled` false→true should bump it, or the grace window is measured from creation.
 - **Audit checkpoint key rotation** (Batch 7, PR #364). v1 is single-key; restoring a pre-rotation backup
   after a future rotation would verify the historical signature against the current key. **Closing it
   needs** a key-id on the checkpoint + a retained public-key history.
