@@ -167,8 +167,7 @@ def upgrade() -> None:
     )
     definition_id = bind.execute(
         sa.text(
-            "SELECT id FROM workflow_definition "
-            "WHERE org_id = :org AND key = :key AND version = 1"
+            "SELECT id FROM workflow_definition WHERE org_id = :org AND key = :key AND version = 1"
         ),
         {"org": org_id, "key": _DEF_KEY},
     ).scalar_one()
@@ -237,7 +236,9 @@ def downgrade() -> None:
     ).scalar()
     if not has_assignments:
         bind.execute(
-            sa.text("DELETE FROM role_grant WHERE role_id IN (SELECT id FROM role WHERE name = :n)"),
+            sa.text(
+                "DELETE FROM role_grant WHERE role_id IN (SELECT id FROM role WHERE name = :n)"
+            ),
             {"n": _TOPMGMT_ROLE},
         )
         bind.execute(sa.text("DELETE FROM role WHERE name = :n"), {"n": _TOPMGMT_ROLE})

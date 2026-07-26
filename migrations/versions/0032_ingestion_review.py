@@ -133,9 +133,7 @@ def upgrade() -> None:
         "import_decision",
         ["run_id", "file_id", "decided_at"],
     )
-    op.create_index(
-        "ix_import_decision_run_decided", "import_decision", ["run_id", "decided_at"]
-    )
+    op.create_index("ix_import_decision_run_decided", "import_decision", ["run_id", "decided_at"])
     # Partial UNIQUE idempotency index — raw DDL (a declarative partial index round-trips wrong;
     # excluded from alembic check via env.py._MIGRATION_MANAGED_INDEXES, the 0024 precedent).
     op.execute(

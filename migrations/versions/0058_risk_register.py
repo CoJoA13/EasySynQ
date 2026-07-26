@@ -149,9 +149,7 @@ def upgrade() -> None:
         sa.CheckConstraint("likelihood BETWEEN 1 AND 5", name="likelihood_range"),
         sa.CheckConstraint("severity BETWEEN 1 AND 5", name="severity_range"),
     )
-    op.create_index(
-        "ix_risk_opportunity_register_doc_id", "risk_opportunity", ["register_doc_id"]
-    )
+    op.create_index("ix_risk_opportunity_register_doc_id", "risk_opportunity", ["register_doc_id"])
     op.create_index("ix_risk_opportunity_process_id", "risk_opportunity", ["process_id"])
 
     # 4. Least-privilege grant (pg_roles-guarded): risk rows are mutable working content.

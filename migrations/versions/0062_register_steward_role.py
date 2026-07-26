@@ -127,15 +127,12 @@ def downgrade() -> None:
     # before the role. Scoped to the Register Steward role only (every other role untouched).
     bind.execute(
         sa.text(
-            "DELETE FROM role_assignment WHERE role_id IN "
-            "(SELECT id FROM role WHERE name = :role)"
+            "DELETE FROM role_assignment WHERE role_id IN (SELECT id FROM role WHERE name = :role)"
         ),
         {"role": _ROLE_NAME},
     )
     bind.execute(
-        sa.text(
-            "DELETE FROM role_grant WHERE role_id IN (SELECT id FROM role WHERE name = :role)"
-        ),
+        sa.text("DELETE FROM role_grant WHERE role_id IN (SELECT id FROM role WHERE name = :role)"),
         {"role": _ROLE_NAME},
     )
     bind.execute(sa.text("DELETE FROM role WHERE name = :role"), {"role": _ROLE_NAME})

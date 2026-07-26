@@ -294,8 +294,7 @@ def _apply_backfill(bind: sa.engine.Connection) -> None:
         sa.column("scope_template", postgresql.JSONB),
     )
     perm_ids = {
-        key: pid
-        for key, pid in bind.execute(sa.text("SELECT key, id FROM permission")).all()
+        key: pid for key, pid in bind.execute(sa.text("SELECT key, id FROM permission")).all()
     }
     rows: list[dict[str, Any]] = []
     for role_name, perm_key in _BACKFILL:
@@ -342,5 +341,11 @@ def downgrade() -> None:
     op.drop_table("capa")
     op.drop_table("ncr")
     op.drop_column("system_config", "allow_capa_self_verify")
-    for enum_name in ("capa_close_state", "capa_source", "ncr_disposition", "ncr_source", "nc_severity"):
+    for enum_name in (
+        "capa_close_state",
+        "capa_source",
+        "ncr_disposition",
+        "ncr_source",
+        "nc_severity",
+    ):
         op.execute(f"DROP TYPE IF EXISTS {enum_name}")

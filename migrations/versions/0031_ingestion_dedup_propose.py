@@ -105,7 +105,9 @@ def upgrade() -> None:
         sa.Column("org_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("run_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("method", import_dupe_method, nullable=False),
-        sa.Column("member_file_ids", postgresql.ARRAY(postgresql.UUID(as_uuid=True)), nullable=False),
+        sa.Column(
+            "member_file_ids", postgresql.ARRAY(postgresql.UUID(as_uuid=True)), nullable=False
+        ),
         sa.Column("canonical_file_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("jaccard", sa.Float(), nullable=True),
         sa.Column(
@@ -167,9 +169,7 @@ def upgrade() -> None:
             "effective_file_id",
             "fk_import_version_family_effective_file_id_import_file",
         ),
-        sa.UniqueConstraint(
-            "run_id", "family_key", name="uq_import_version_family_run_family_key"
-        ),
+        sa.UniqueConstraint("run_id", "family_key", name="uq_import_version_family_run_family_key"),
         sa.PrimaryKeyConstraint("id", name="pk_import_version_family"),
     )
 
@@ -196,9 +196,7 @@ def upgrade() -> None:
         ),
         _org_fk("import_proposal_node"),
         _run_fk("import_proposal_node"),
-        _file_fk(
-            "import_proposal_node", "file_id", "fk_import_proposal_node_file_id_import_file"
-        ),
+        _file_fk("import_proposal_node", "file_id", "fk_import_proposal_node_file_id_import_file"),
         sa.UniqueConstraint("run_id", "file_id", name="uq_import_proposal_node_run_file"),
         sa.PrimaryKeyConstraint("id", name="pk_import_proposal_node"),
     )

@@ -76,12 +76,10 @@ def upgrade() -> None:
     op.execute("ALTER TYPE event_type ADD VALUE IF NOT EXISTS 'IMPORT_RUN_PARTIAL'")
 
     # 3. The commit-result enum (CREATE TYPE → usable same-txn). Tuple from the ORM *_VALUES.
-    postgresql.ENUM(
-        *IMPORT_COMMIT_RESULT_STATUS_VALUES, name="import_commit_result_status"
-    ).create(bind, checkfirst=True)
-    commit_result_status = postgresql.ENUM(
-        name="import_commit_result_status", create_type=False
+    postgresql.ENUM(*IMPORT_COMMIT_RESULT_STATUS_VALUES, name="import_commit_result_status").create(
+        bind, checkfirst=True
     )
+    commit_result_status = postgresql.ENUM(name="import_commit_result_status", create_type=False)
 
     # 4. import_commit_result — the idempotent commit ledger.
     op.create_table(

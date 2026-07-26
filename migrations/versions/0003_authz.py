@@ -78,12 +78,8 @@ def upgrade() -> None:
         sa.Column("key", sa.Text(), nullable=False),
         sa.Column("resource", sa.Text(), nullable=False),
         sa.Column("action", sa.Text(), nullable=False),
-        sa.Column(
-            "is_system_domain", sa.Boolean(), server_default=sa.false(), nullable=False
-        ),
-        sa.Column(
-            "sod_sensitive", sa.Boolean(), server_default=sa.false(), nullable=False
-        ),
+        sa.Column("is_system_domain", sa.Boolean(), server_default=sa.false(), nullable=False),
+        sa.Column("sod_sensitive", sa.Boolean(), server_default=sa.false(), nullable=False),
         sa.Column("sig_hook", sa.Boolean(), server_default=sa.false(), nullable=False),
         sa.Column("finest_scope", scope_level, nullable=False),
         sa.PrimaryKeyConstraint("id", name="pk_permission"),
@@ -102,9 +98,7 @@ def upgrade() -> None:
         sa.Column("org_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("name", sa.Text(), nullable=False),
         sa.Column("description", sa.Text(), nullable=True),
-        sa.Column(
-            "is_reserved", sa.Boolean(), server_default=sa.false(), nullable=False
-        ),
+        sa.Column("is_reserved", sa.Boolean(), server_default=sa.false(), nullable=False),
         _org_fk("role"),
         sa.PrimaryKeyConstraint("id", name="pk_role"),
         sa.UniqueConstraint("org_id", "name", name="uq_role_org_id_name"),
@@ -122,9 +116,7 @@ def upgrade() -> None:
         sa.Column("org_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("role_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("permission_id", postgresql.UUID(as_uuid=True), nullable=False),
-        sa.Column(
-            "scope_template", postgresql.JSONB(astext_type=sa.Text()), nullable=True
-        ),
+        sa.Column("scope_template", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         _org_fk("role_grant"),
         sa.ForeignKeyConstraint(
             ["role_id"],
@@ -159,9 +151,7 @@ def upgrade() -> None:
         sa.Column("org_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("user_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("role_id", postgresql.UUID(as_uuid=True), nullable=False),
-        sa.Column(
-            "bound_scope", postgresql.JSONB(astext_type=sa.Text()), nullable=True
-        ),
+        sa.Column("bound_scope", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         _org_fk("role_assignment"),
         sa.ForeignKeyConstraint(
             ["user_id"],
@@ -213,9 +203,7 @@ def upgrade() -> None:
         sa.Column("predicates", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.Column("valid_from", sa.DateTime(timezone=True), nullable=True),
         sa.Column("valid_until", sa.DateTime(timezone=True), nullable=True),
-        sa.Column(
-            "require_reason", sa.Boolean(), server_default=sa.false(), nullable=False
-        ),
+        sa.Column("require_reason", sa.Boolean(), server_default=sa.false(), nullable=False),
         sa.Column("reason", sa.Text(), nullable=True),
         sa.Column("created_by", postgresql.UUID(as_uuid=True), nullable=True),
         sa.Column(
@@ -278,9 +266,7 @@ def upgrade() -> None:
         ),
         sa.Column("target_binding", sod_target_binding, nullable=False),
         sa.Column("severity", sod_severity, nullable=False),
-        sa.Column(
-            "org_overridable", sa.Boolean(), server_default=sa.false(), nullable=False
-        ),
+        sa.Column("org_overridable", sa.Boolean(), server_default=sa.false(), nullable=False),
         _org_fk("sod_constraint"),
         sa.PrimaryKeyConstraint("id", name="pk_sod_constraint"),
     )

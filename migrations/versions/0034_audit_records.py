@@ -85,9 +85,7 @@ def upgrade() -> None:
         sa.Column("title", sa.Text(), nullable=False),
         sa.Column("period", sa.Text(), nullable=True),
         sa.Column("coverage", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
-        sa.Column(
-            "archived", sa.Boolean(), server_default=sa.text("false"), nullable=False
-        ),
+        sa.Column("archived", sa.Boolean(), server_default=sa.text("false"), nullable=False),
         sa.Column("created_by", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column(
             "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
@@ -105,9 +103,7 @@ def upgrade() -> None:
             ondelete="RESTRICT",
         ),
         sa.PrimaryKeyConstraint("id", name="pk_audit_program"),
-        sa.UniqueConstraint(
-            "org_id", "identifier", name="uq_audit_program_org_id_identifier"
-        ),
+        sa.UniqueConstraint("org_id", "identifier", name="uq_audit_program_org_id_identifier"),
     )
 
     # 4. audit_plan — one scheduled audit of a process under a programme (own-table).
@@ -172,9 +168,7 @@ def upgrade() -> None:
         sa.Column("started_at", sa.Date(), nullable=True),
         sa.Column("completed_at", sa.Date(), nullable=True),
         sa.Column("result_summary", sa.Text(), nullable=True),
-        sa.Column(
-            "state", audit_state, server_default=sa.text("'Scheduled'"), nullable=False
-        ),
+        sa.Column("state", audit_state, server_default=sa.text("'Scheduled'"), nullable=False),
         sa.ForeignKeyConstraint(
             ["id"], ["record.id"], name="fk_audit_id_record", ondelete="RESTRICT"
         ),

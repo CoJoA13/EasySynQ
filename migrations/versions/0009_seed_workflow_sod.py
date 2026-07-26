@@ -84,8 +84,7 @@ def upgrade() -> None:
     )
     definition_id = bind.execute(
         sa.text(
-            "SELECT id FROM workflow_definition "
-            "WHERE org_id = :org AND key = :key AND version = 1"
+            "SELECT id FROM workflow_definition WHERE org_id = :org AND key = :key AND version = 1"
         ),
         {"org": org_id, "key": _DEF_KEY},
     ).scalar_one()

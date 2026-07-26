@@ -54,9 +54,7 @@ def upgrade() -> None:
         "organization",
         sa.Column("timezone", sa.String(length=64), server_default="UTC", nullable=False),
     )
-    op.add_column(
-        "system_config", sa.Column("bootstrap_secret_hash", sa.Text(), nullable=True)
-    )
+    op.add_column("system_config", sa.Column("bootstrap_secret_hash", sa.Text(), nullable=True))
     op.add_column(
         "system_config",
         sa.Column("bootstrap_expires_at", sa.DateTime(timezone=True), nullable=True),

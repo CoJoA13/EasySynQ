@@ -55,9 +55,7 @@ def upgrade() -> None:
         "documented_information",
         sa.Column("review_period_months", sa.Integer(), nullable=True),
     )
-    op.add_column(
-        "documented_information", sa.Column("next_review_due", sa.Date(), nullable=True)
-    )
+    op.add_column("documented_information", sa.Column("next_review_due", sa.Date(), nullable=True))
     op.add_column(
         "documented_information",
         sa.Column("last_reviewed_at", sa.DateTime(timezone=True), nullable=True),
@@ -155,9 +153,7 @@ def downgrade() -> None:
             {"k": _DEF_KEY},
         )
         bind.execute(sa.text("DELETE FROM workflow_definition WHERE key = :k"), {"k": _DEF_KEY})
-    op.drop_index(
-        "ix_documented_information_next_review_due", table_name="documented_information"
-    )
+    op.drop_index("ix_documented_information_next_review_due", table_name="documented_information")
     op.drop_column("documented_information", "last_reviewed_at")
     op.drop_column("documented_information", "next_review_due")
     op.drop_column("documented_information", "review_period_months")

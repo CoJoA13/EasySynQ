@@ -86,7 +86,10 @@ _STAGES: tuple[dict[str, Any], ...] = (
     },
 )
 
-_PROCESS_SCOPE: dict[str, Any] = {"level": "PROCESS", "selector": {"process_id": ":assignment_process"}}
+_PROCESS_SCOPE: dict[str, Any] = {
+    "level": "PROCESS",
+    "selector": {"process_id": ":assignment_process"},
+}
 _BACKFILL: tuple[tuple[str, str], ...] = (
     ("Process Owner", "changeRequest.route"),
     ("QMS Owner", "changeRequest.route"),

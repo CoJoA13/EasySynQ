@@ -122,9 +122,7 @@ def upgrade() -> None:
             ondelete="RESTRICT",
         ),
     )
-    op.create_index(
-        "ix_interested_party_register_doc_id", "interested_party", ["register_doc_id"]
-    )
+    op.create_index("ix_interested_party_register_doc_id", "interested_party", ["register_doc_id"])
 
     # 4. Least-privilege grant (pg_roles-guarded): interested-party rows are mutable working content.
     op.execute(
