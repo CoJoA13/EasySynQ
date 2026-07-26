@@ -2,7 +2,9 @@
 # docker compose with the appliance's full overlay set — the ONE compose invocation every helper
 # and operator command must use (base + S profile + internal-TLS + production MinIO site).
 set -euo pipefail
-cd /opt/easysynq
+APP_DIR="${EASYSYNQ_APP_DIR:-/opt/easysynq}"
+MIGRATION_SCRIPT="${EASYSYNQ_MIGRATION_SCRIPT:-scripts/migrate-keycloak-h2.sh}"
+cd "$APP_DIR"
 
 # Compatibility for an appliance .env generated before Batch 13: the old provisioner already wrote
 # SITE_ADDRESS but omitted these three same-origin consumers. Export derived values for this Compose
@@ -19,14 +21,61 @@ for key in PUBLIC_BASE_URL APP_BASE_URL KEYCLOAK_HOSTNAME; do
   fi
 done
 
-# The first `up` after upgrading from the legacy start-dev/H2 service must export identities before
-# Compose recreates Keycloak. Fresh/PostgreSQL-backed installs make this a read-only no-op.
-for arg in "$@"; do
-  if [ "$arg" = "up" ]; then
-    bash scripts/migrate-keycloak-h2.sh
-    break
-  fi
-done
+# The first full (or Keycloak-targeted) `up` after upgrading from the legacy start-dev/H2 service
+# must export identities before Compose recreates Keycloak. A non-Keycloak service target leaves
+# that legacy container untouched, so do not stop it and take authentication offline.
+up_needs_keycloak_migration() {
+  local saw_up=0 skip_value=0 ambiguous=0 arg target
+  local -a targets=()
+
+  for arg in "$@"; do
+    if [ "$saw_up" -eq 0 ]; then
+      if [ "$arg" = "up" ]; then
+        saw_up=1
+      fi
+      continue
+    fi
+    if [ "$skip_value" -eq 1 ]; then
+      skip_value=0
+      continue
+    fi
+    case "$arg" in
+      --attach|--exit-code-from|--no-attach|--pull|--scale|-t|--timeout|--wait-timeout)
+        skip_value=1
+        ;;
+      --*=*|-t?*)
+        ;;
+      --abort-on-container-exit|--abort-on-container-failure|--always-recreate-deps|\
+      --attach-dependencies|--build|-d|--detach|--force-recreate|--menu|--no-build|\
+      --no-color|--no-deps|--no-log-prefix|--no-recreate|--no-start|--quiet-pull|\
+      --remove-orphans|--renew-anon-volumes|--timestamps|--wait|--watch|-y|--yes)
+        ;;
+      --)
+        ;;
+      -*)
+        # A future option may consume the next token. Prefer the migration fail-safe over guessing
+        # that token is a service name and risking an H2 container recreation without an export.
+        ambiguous=1
+        ;;
+      *)
+        targets+=("$arg")
+        ;;
+    esac
+  done
+
+  [ "$saw_up" -eq 1 ] || return 1
+  [ "$skip_value" -eq 0 ] || return 1
+  [ "$ambiguous" -eq 0 ] || return 0
+  [ "${#targets[@]}" -gt 0 ] || return 0
+  for target in "${targets[@]}"; do
+    [ "$target" = "keycloak" ] && return 0
+  done
+  return 1
+}
+
+if up_needs_keycloak_migration "$@"; then
+  bash "$MIGRATION_SCRIPT" --env-file .env
+fi
 
 exec docker compose --env-file .env \
   -f infra/compose/compose.yml \

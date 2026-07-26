@@ -6,7 +6,8 @@
 # when Keycloak already uses PostgreSQL, or when a verified legacy export is already staged.
 set -Eeuo pipefail
 
-PROJECT="${COMPOSE_PROJECT_NAME:-easysynq}"
+PROJECT="${COMPOSE_PROJECT_NAME:-}"
+ENV_FILE="${EASYSYNQ_ENV_FILE:-.env}"
 CONTAINER=""
 IMPORT_VOLUME="easysynq-keycloak-import"
 SNAPSHOT_IMAGE=""
@@ -14,7 +15,7 @@ WAS_RUNNING=0
 STOPPED_LEGACY=0
 
 usage() {
-  echo "usage: migrate-keycloak-h2.sh [--project <compose-project>] [--container <name-or-id>] [--import-volume <name>]" >&2
+  echo "usage: migrate-keycloak-h2.sh [--project <compose-project>] [--env-file <path>] [--container <name-or-id>] [--import-volume <name>]" >&2
 }
 
 while [ $# -gt 0 ]; do
@@ -22,6 +23,11 @@ while [ $# -gt 0 ]; do
     --project)
       [ $# -ge 2 ] || { usage; exit 2; }
       PROJECT="$2"
+      shift 2
+      ;;
+    --env-file)
+      [ $# -ge 2 ] || { usage; exit 2; }
+      ENV_FILE="$2"
       shift 2
       ;;
     --container)
@@ -44,6 +50,20 @@ while [ $# -gt 0 ]; do
       ;;
   esac
 done
+
+# Docker Compose reads COMPOSE_PROJECT_NAME from its env file even when that file is not sourced by
+# the invoking shell. Mirror that precedence without sourcing operator-controlled shell text: an
+# explicit --project/environment value wins, then the env file, then compose.yml's stable name.
+env_value() {
+  grep -m1 -E "^$1[[:space:]]*=" "$ENV_FILE" 2>/dev/null | cut -d= -f2- \
+    | sed -E \
+      "s/[[:space:]]+#.*$//; s/^[[:space:]]*//; s/[[:space:]]*$//; s/^\"(.*)\"$/\\1/; s/^'(.*)'$/\\1/" \
+    || true
+}
+if [ -z "$PROJECT" ]; then
+  PROJECT="$(env_value COMPOSE_PROJECT_NAME)"
+fi
+PROJECT="${PROJECT:-easysynq}"
 
 cleanup() {
   local status=$?

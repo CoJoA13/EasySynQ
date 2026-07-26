@@ -22,8 +22,8 @@ A single Linux host with Docker (Compose v2). Profiles: **S** (≤25 users, Post
    ```
 
    `--tls acme` is the default; use `internal` when the DNS name is not reachable by a public CA.
-   The installer blocks until `https://<host>/readyz` is green and prints the URL. `beat` remains
-   exactly one replica.
+   The installer authorizes `https://<host>/*` on Keycloak's `easysynq-web` client, blocks until
+   `https://<host>/readyz` is green, and prints the URL. `beat` remains exactly one replica.
 
    The generated URLs are intentionally paired:
 
@@ -76,9 +76,9 @@ Compose recreation from an older `start-dev` install, run:
 This stops only the legacy Keycloak container, performs Keycloak's offline full realm export
 (including users, stable IDs and credential hashes), validates it, and stages it for first
 PostgreSQL boot. It restarts the untouched legacy container if export fails. `install.sh` invokes
-this automatically; run it explicitly before any raw `docker compose up` during that one transition.
-Afterward, ordinary Keycloak recreation preserves accounts and client edits in the PostgreSQL
-`pgdata` volume.
+this automatically and reads a custom `COMPOSE_PROJECT_NAME` from `.env`; run it explicitly before
+any raw `docker compose up` during that one transition. Afterward, ordinary Keycloak recreation
+preserves accounts and client edits in the PostgreSQL `pgdata` volume.
 
 ## Verify it works (release-time security check)
 

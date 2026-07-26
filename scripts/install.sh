@@ -82,6 +82,11 @@ set_kv() { # set_kv KEY VALUE  (update in place or append)
   fi
 }
 
+env_value() {
+  grep -m1 -E "^$1[[:space:]]*=" "$ENV_FILE" 2>/dev/null | cut -d= -f2- \
+    | sed -E 's/[[:space:]]+#.*$//; s/^[[:space:]]*//; s/[[:space:]]*$//' || true
+}
+
 if [ ! -f "$ENV_FILE" ]; then
   echo "install: generating $ENV_FILE from template..."
   cp "$ROOT/.env.example" "$ENV_FILE"
@@ -170,15 +175,55 @@ chmod 600 "$ENV_FILE"
 
 # If this checkout replaces the old start-dev/H2 service, export it before Compose recreates the
 # container. The script is a no-op for fresh or already-PostgreSQL installs.
-bash "$ROOT/scripts/migrate-keycloak-h2.sh"
+bash "$ROOT/scripts/migrate-keycloak-h2.sh" --env-file "$ENV_FILE"
+
+COMPOSE=(
+  docker compose
+  --env-file "$ENV_FILE"
+  -f infra/compose/compose.yml
+  -f "infra/compose/compose.${PROFILE}.yml"
+  -f infra/compose/compose.production.yml
+)
 
 echo "install: starting the stack (profile: $PROFILE)..."
-docker compose \
-  --env-file "$ENV_FILE" \
-  -f infra/compose/compose.yml \
-  -f "infra/compose/compose.${PROFILE}.yml" \
-  -f infra/compose/compose.production.yml \
-  up -d --build
+"${COMPOSE[@]}" up -d --build
+
+# KC_HOSTNAME controls the issuer URL but does not authorize SPA callbacks. Update the imported web
+# client after Keycloak starts so every installer-selected production host can complete login.
+KC_ADMIN_USER_VALUE="$(env_value KEYCLOAK_ADMIN_USER)"
+KC_ADMIN_PASSWORD_VALUE="$(env_value KEYCLOAK_ADMIN_PASSWORD)"
+[ -n "$KC_ADMIN_USER_VALUE" ] && [ -n "$KC_ADMIN_PASSWORD_VALUE" ] || {
+  echo "install: Keycloak admin credentials are missing from $ENV_FILE" >&2
+  exit 1
+}
+kc() {
+  "${COMPOSE[@]}" exec -T keycloak /opt/keycloak/bin/kcadm.sh "$@" </dev/null
+}
+echo "install: authorizing ${APP_ORIGIN}/ as the SPA login callback..."
+KEYCLOAK_REDIRECT_CONFIGURED=0
+for _ in $(seq 1 60); do
+  if kc config credentials \
+      --server http://localhost:8080 \
+      --realm master \
+      --user "$KC_ADMIN_USER_VALUE" \
+      --password "$KC_ADMIN_PASSWORD_VALUE" >/dev/null 2>&1; then
+    CLIENT_ID="$(
+      kc get clients -r easysynq -q clientId=easysynq-web --fields id --format csv --noquotes \
+        2>/dev/null | head -1
+    )"
+    if [ -n "$CLIENT_ID" ] && kc update "clients/${CLIENT_ID}" -r easysynq \
+        -s "redirectUris=[\"http://localhost/*\",\"https://localhost/*\",\"http://easysynq.local/*\",\"https://easysynq.local/*\",\"${APP_ORIGIN}/*\"]" \
+        >/dev/null 2>&1; then
+      KEYCLOAK_REDIRECT_CONFIGURED=1
+      break
+    fi
+  fi
+  sleep 2
+done
+[ "$KEYCLOAK_REDIRECT_CONFIGURED" -eq 1 ] || {
+  echo "install: could not authorize ${APP_ORIGIN}/ in the easysynq-web client" >&2
+  exit 1
+}
 
 echo "install: waiting for /readyz ..."
 for _ in $(seq 1 60); do

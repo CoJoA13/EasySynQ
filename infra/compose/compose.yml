@@ -92,7 +92,9 @@ services:
       POSTGRES_HOST: postgres
       POSTGRES_USER: ${POSTGRES_USER:-easysynq}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-easysynq}
-      POSTGRES_DB: ${POSTGRES_DB:-easysynq}
+      # The app and Keycloak normally share POSTGRES_DB. Restore cutover can select the verified
+      # database explicitly without changing the postgres container's initialization setting.
+      POSTGRES_DB: ${KEYCLOAK_DB_NAME:-${POSTGRES_DB:-easysynq}}
       # Older appliances predate KEYCLOAK_DB_PASSWORD; fall back to their already-random PostgreSQL
       # owner secret for the one-time transition. Fresh installers always generate a distinct value.
       KEYCLOAK_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:-${POSTGRES_PASSWORD:-easysynq}}
@@ -117,7 +119,7 @@ services:
       # the durable identity state. The stock realm import is therefore first-boot-only: Keycloak
       # skips it once the realm already exists.
       KC_DB: postgres
-      KC_DB_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-easysynq}
+      KC_DB_URL: jdbc:postgresql://postgres:5432/${KEYCLOAK_DB_NAME:-${POSTGRES_DB:-easysynq}}
       KC_DB_SCHEMA: keycloak
       KC_DB_USERNAME: easysynq_keycloak
       KC_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:-${POSTGRES_PASSWORD:-easysynq}}

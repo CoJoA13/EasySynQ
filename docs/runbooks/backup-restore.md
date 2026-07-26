@@ -89,10 +89,18 @@ re-verify** — then **leaves the verified target standing** for you to cut over
 
 ### Cut over (manual operator step)
 The MVP produces a verified target; **cutover is a documented operator action, not automated**
-(automated in-place live cutover is a tracked hardening item). To cut over: stop the app/worker,
-repoint `DATABASE_URL`/`DATABASE_URL_SYNC` at the restored DB (or `pg_dump`/`createdb` it into the
-production name), repoint MinIO at (or copy the blobs into) a fresh **object-lock-enabled** vault
-bucket — **never the old locked one** — then run `easysynq mirror rebuild` + a reindex, and restart.
+(automated in-place live cutover is a tracked hardening item). To cut over:
+
+1. Stop `api`, `worker`, `beat`, and `keycloak`.
+2. Repoint `DATABASE_URL`, `DATABASE_URL_SYNC`, and `AUDIT_LINKER_DATABASE_URL` at the restored
+   database (or `pg_dump`/`createdb` it into the production name). Set `KEYCLOAK_DB_NAME` to that
+   same database name so the restored identity/client state moves with the application.
+3. Repoint MinIO at (or copy the blobs into) a fresh **object-lock-enabled** vault bucket — **never
+   the old locked one**.
+4. Start the stack. The `keycloak-init` one-shot transfers restored `keycloak` schema objects from
+   the `pg_restore --no-owner` role back to `easysynq_keycloak` before Keycloak starts.
+5. Run `easysynq mirror rebuild` plus a reindex.
+
 Discard an unused target with `easysynq restore --discard <scratch_db>`.
 
 ## Upgrade

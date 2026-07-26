@@ -30,6 +30,43 @@ WHERE NOT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'keycloak')
 ALTER SCHEMA keycloak OWNER TO easysynq_keycloak;
 GRANT CONNECT ON DATABASE :"keycloak_database" TO easysynq_keycloak;
 GRANT USAGE, CREATE ON SCHEMA keycloak TO easysynq_keycloak;
+
+-- A restore-to-scratch uses pg_restore --no-owner --no-privileges, so every restored object is
+-- initially owned by the restoring cluster owner. Transfer the Keycloak relations back before its
+-- Liquibase startup: grants alone would permit DML but a later Keycloak upgrade could not ALTER
+-- those tables. ALTER TABLE also transfers its indexes and owned sequences; the explicit sequence
+-- branch covers standalone sequences.
+DO $ownership$
+DECLARE
+  object_row record;
+  object_kind text;
+BEGIN
+  FOR object_row IN
+    SELECT relation.relkind, namespace.nspname, relation.relname
+    FROM pg_class AS relation
+    JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+    WHERE namespace.nspname = 'keycloak'
+      AND relation.relkind IN ('r', 'p', 'S', 'v', 'm', 'f')
+  LOOP
+    object_kind := CASE object_row.relkind
+      WHEN 'S' THEN 'SEQUENCE'
+      WHEN 'v' THEN 'VIEW'
+      WHEN 'm' THEN 'MATERIALIZED VIEW'
+      WHEN 'f' THEN 'FOREIGN TABLE'
+      ELSE 'TABLE'
+    END;
+    EXECUTE format(
+      'ALTER %s %I.%I OWNER TO easysynq_keycloak',
+      object_kind,
+      object_row.nspname,
+      object_row.relname
+    );
+  END LOOP;
+END
+$ownership$;
+
+GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA keycloak TO easysynq_keycloak;
+GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA keycloak TO easysynq_keycloak;
 SQL
 
 # A full legacy-H2 export, when present, wins over the stock seed. Once PostgreSQL contains the
