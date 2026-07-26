@@ -2,7 +2,9 @@
 
 > The running per-slice changelog + the deep per-slice rationale (this file IS the canonical narrative; it
 > also lives in the squash-merge commits). CLAUDE.md holds only the current head pointer.
-> **Migration head: `0070` (next `0071`).** Code: https://github.com/CoJoA13/EasySynQ (`main` protected, PR + green CI).
+> **Migration head: `0074` (next `0075`).** Code: https://github.com/CoJoA13/EasySynQ (`main` protected, PR + green CI).
+> (The pointer had gone stale at `0070` — the 2026-07-22 remediation batches added `0071` audit-chain
+> cursor, `0072` disposition append-only, `0073` pending-blob-purge and `0074` operator alarms.)
 
 ## ⚠ OPEN RESIDUALS — named, owner-acknowledged, NOT yet done
 
@@ -48,11 +50,20 @@
   15-minute beat re-anchor over the rewritten head passes verification, while the older immutable objects
   that would expose it are never read. **Closing it needs** a Merkle-chained anchor lineage (each
   checkpoint commits to the prior anchor's hash) — a checkpoint payload/format change + a register entry.
-- **Audit integrity alarm policy** (Batch 7 → Batch 11). A witness that *disappears* from the DB, and a
-  missing verify key, are currently passive signals (the R13 soft-gate flips to "NOT tamper-evident"; the
-  beat logs loudly) rather than active alarms. **Closing it needs** the `integrity.alarm` operator
-  notification wiring, plus an out-of-DB "witness required" declaration and a never-anchored-sink grace
-  window (a `audit_checkpoint_sink` enable-timestamp migration).
+- ~~**Audit integrity alarm policy** (Batch 7 → Batch 11).~~ **CLOSED in Batch 11** (owner-approved,
+  all three parts). (1) The `integrity.alarm` operator notification is wired end-to-end on the
+  `CHAIN_VERIFY_FAIL` detection signal — in-app + email to System Administrators, CRITICAL class so it
+  pierces quiet hours, plus an out-of-band syslog/SMTP/webhook channel. (2) The out-of-DB "witness
+  required" declaration is `AUDIT_WITNESS_REQUIRED`, held in the ENVIRONMENT rather than the database
+  precisely because the row a privileged DB owner deletes to go dark *is* `audit_checkpoint_sink` — an
+  in-DB flag would be deleted alongside the thing it guards. (3) The never-anchored-sink grace window
+  is `audit_checkpoint_sink.enabled_at` (migration `0074`) + `AUDIT_WITNESS_GRACE_HOURS`, so a sink
+  that is enabled and never once anchors alarms as a dead witness instead of staying benign forever.
+  A missing verify key now alarms too. ⚠ Note it writes **no** `CHAIN_VERIFY_FAIL` audit row: that
+  event means a tamper was DETECTED, and recording a misconfiguration as a detection would poison the
+  tamper signal. ⚠ `enabled_at` is a v1 approximation — it is set at row creation (there is no in-app
+  create/enable surface; provisioning is a direct operator INSERT), so an operator who later toggles a
+  sink `enabled` false→true should bump it, or the grace window is measured from creation.
 - **Audit checkpoint key rotation** (Batch 7, PR #364). v1 is single-key; restoring a pre-rotation backup
   after a future rotation would verify the historical signature against the current key. **Closing it
   needs** a key-id on the checkpoint + a retained public-key history.

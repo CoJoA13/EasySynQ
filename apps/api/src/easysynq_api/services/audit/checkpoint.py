@@ -417,7 +417,7 @@ async def verify_offhost_checkpoint(
                     "(WORM objects deleted / bucket replaced?)"
                 )
                 attest_failures += 1
-            elif sink.enabled_at is not None and now - sink.enabled_at > grace:
+            elif now - sink.enabled_at > grace:  # enabled_at is NOT NULL (0074, server default)
                 # Never anchored, and declared long enough ago that "it hasn't reached its first
                 # 15-minute anchor yet" is no longer a credible explanation. A witness that was
                 # configured and never once produced is an operator failure — it alarms (Batch 11).
