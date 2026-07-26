@@ -106,7 +106,16 @@ def selected_channels(settings: Settings) -> list[str]:
 
 
 def _syslog_address(raw: str) -> str | tuple[str, int]:
-    """A unix socket path, or ``host:port`` for a UDP collector."""
+    """A unix socket path, or ``host:port`` for a UDP collector.
+
+    ⚠ The two forms differ in how honestly they can report. A unix socket is connection-oriented
+    enough that an absent/dead socket surfaces as ``failed`` (verified: a missing path reports
+    ``failed``, a live one reports ``sent`` and the bytes arrive). ``host:port`` is UDP —
+    fire-and-forget — so a closed collector port still reports ``sent``: the datagram was handed to
+    the kernel and nothing comes back. Treat ``sent`` on the UDP form as "emitted", not "delivered",
+    and prefer the mounted-socket form (or a second channel) where confirmation matters. TCP syslog
+    would close this gap and is the v1.x option; it needs its own socktype knob.
+    """
     if raw.startswith("/"):
         return raw
     host, _, port = raw.rpartition(":")

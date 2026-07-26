@@ -178,6 +178,46 @@ async def test_syslog_with_no_address_is_skipped_not_failed() -> None:
     assert result == {"syslog": SKIPPED}
 
 
+@pytest.mark.asyncio
+async def test_syslog_reports_failed_on_a_dead_socket_not_sent() -> None:
+    """The whole point of the channel is that it cannot silently no-op. ``SysLogHandler.emit`` sends
+    every exception to ``handleError``, which by default prints to stderr and returns — so without
+    the substituted ``handleError`` an absent socket would report ``sent``. This is the exact case
+    Codex flagged: the shipped worker/beat containers have no ``/dev/log``."""
+    result = await send_operator_alert(
+        _settings(ops_alert_channels="syslog", ops_alert_syslog_address="/nonexistent/dev/log"),
+        OperatorAlert(event="integrity.alarm", severity="critical", summary="x"),
+    )
+    assert result == {"syslog": FAILED}
+
+
+@pytest.mark.asyncio
+async def test_syslog_delivers_the_payload_over_a_live_socket() -> None:
+    """The positive half — otherwise "not erroring" could pass for "delivering". Binds a real
+    AF_UNIX datagram socket and asserts the alert bytes actually arrive."""
+    import socket
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as d:
+        path = str(pathlib.Path(d) / "log")
+        srv = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+        srv.bind(path)
+        try:
+            result = await send_operator_alert(
+                _settings(ops_alert_channels="syslog", ops_alert_syslog_address=path),
+                OperatorAlert(
+                    event="integrity.alarm", severity="critical", summary="chain verify failed"
+                ),
+            )
+            assert result == {"syslog": SENT}
+            srv.settimeout(2)
+            payload = srv.recv(65535)
+        finally:
+            srv.close()
+    assert b"integrity.alarm" in payload
+    assert b"chain verify failed" in payload
+
+
 def test_seed_ids_are_deterministic_and_distinct() -> None:
     """The downgrade deletes by seed id so an operator-authored template and any inactive historical
     version survive it (Codex P2). That only holds if the id is a pure function of the event key —

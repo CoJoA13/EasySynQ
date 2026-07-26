@@ -47,6 +47,11 @@ org email flag and the recipient's own preferences).
 >
 >   Linux hosts with journald only (there is no host `/dev/log` under Docker Desktop). Mounted, this
 >   is the air-gap-friendly choice under D1 — no network egress at all.
+>
+>   ⚠ The two forms report differently. A **unix socket** surfaces an absent or dead socket as
+>   `failed`. A **`host:port`** address is UDP and fire-and-forget, so a closed collector port still
+>   reports `sent` — the datagram reached the kernel and nothing comes back. Read `sent` on the UDP
+>   form as "emitted", not "delivered", and pair it with a second channel where confirmation matters.
 > * `smtp` → `OPS_ALERT_SMTP_TO`, an operator mailbox reached over the existing `SMTP_*` relay with
 >   no recipient lookup.
 > * `webhook` → `OPS_ALERT_WEBHOOK_URL` (+ optional `OPS_ALERT_WEBHOOK_TOKEN`), an off-host receiver
