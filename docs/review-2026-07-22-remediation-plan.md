@@ -260,7 +260,7 @@ land the sweep separately from the gate so the gate turns on green rather than r
 > job to required only after that baseline is fixed in its own follow-up batch.
 
 ### ☑ Batch 13 — Infra / deploy hardening
-`branch: fix/major-infra-deploy` · infra (verify on the live/appliance path)
+`branch: fix/major-infra-deploy` · [PR #372](https://github.com/CoJoA13/EasySynQ/pull/372) · infra (verify on the live/appliance path)
 
 - [x] `infra/appliance/provision/easysynq-provision.sh` — provisioner never sets
   `PUBLIC_BASE_URL`/`APP_BASE_URL` (fixed: first boot writes both from `HOSTNAME_DEFAULT`;

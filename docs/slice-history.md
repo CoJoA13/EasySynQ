@@ -178,7 +178,7 @@
 > The owner's production target is Windows Server + Hyper-V with the QMS tree on an SMB share — the
 > appliance is the near-1-click path onto that box, and the vehicle for the AHT dogfood import (UJ-2).
 
-### Batch 13 — browser-edge + identity-store deploy hardening (infra+scripts+docs; NO migration [app head stays `0075`]; NO new permission key; branch `fix/major-infra-deploy`)
+### Batch 13 — browser-edge + identity-store deploy hardening (infra+scripts+docs; NO migration [app head stays `0075`]; NO new permission key; PR [#372](https://github.com/CoJoA13/EasySynQ/pull/372))
 
 **What shipped — the online and appliance paths now derive one complete browser-edge contract, and
 Keycloak has a real durable store.** `install.sh` requires `--host` for a live install and supports
