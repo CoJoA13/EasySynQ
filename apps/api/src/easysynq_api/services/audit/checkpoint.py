@@ -275,6 +275,22 @@ async def tamper_evidence_attested(session: AsyncSession, org_id: Any) -> bool:
     return False
 
 
+def unanchored_is_overdue(
+    enabled_at: datetime.datetime, now: datetime.datetime, grace: datetime.timedelta
+) -> bool:
+    """Has a sink that has NEVER anchored been enabled long enough to count as a dead witness?
+
+    Pure, so the boundary is unit-testable without a database or a live object store (the house
+    rule for date/calendar logic). STRICTLY greater than the grace window: at exactly the boundary
+    the sink is still given the benefit of the doubt, so a 24h grace means "alarm from 24h+1s", not
+    "alarm at 24h". A naive ``enabled_at`` is read as UTC rather than raising — this decides whether
+    to raise an alarm, so it must not itself become the reason the nightly verify crashes.
+    """
+    if enabled_at.tzinfo is None:
+        enabled_at = enabled_at.replace(tzinfo=datetime.UTC)
+    return now - enabled_at > grace
+
+
 @dataclasses.dataclass(frozen=True, slots=True)
 class OffHostCheckpointResult:
     """Outcome of the INDEPENDENT off-host read-back (doc 12 §4.4). FAIL-CLOSED: ``verified`` is
@@ -417,7 +433,7 @@ async def verify_offhost_checkpoint(
                     "(WORM objects deleted / bucket replaced?)"
                 )
                 attest_failures += 1
-            elif now - sink.enabled_at > grace:  # enabled_at is NOT NULL (0074, server default)
+            elif unanchored_is_overdue(sink.enabled_at, now, grace):
                 # Never anchored, and declared long enough ago that "it hasn't reached its first
                 # 15-minute anchor yet" is no longer a credible explanation. A witness that was
                 # configured and never once produced is an operator failure — it alarms (Batch 11).

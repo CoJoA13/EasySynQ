@@ -141,6 +141,38 @@ def test_load_verify_key_fails_closed_on_malformed_private(tmp_path: Any, monkey
     assert cp.load_verify_key() is None
 
 
+def test_unanchored_is_overdue_boundary() -> None:
+    """The grace window for a sink that is enabled but has NEVER anchored (Batch 11). Pure, so the
+    boundary is pinned without a database or a live object store. Inside the window a fresh sink is
+    benign; past it, a witness that was configured and never once produced is an operator failure.
+    Before ``enabled_at`` existed that state was benign FOREVER, so a permanently dead witness was
+    indistinguishable from one added five minutes ago."""
+    import datetime
+
+    from easysynq_api.services.audit.checkpoint import unanchored_is_overdue
+
+    now = datetime.datetime(2026, 7, 26, 12, 0, tzinfo=datetime.UTC)
+    grace = datetime.timedelta(hours=24)
+
+    # Just enabled → benign (it may not have hit its first 15-minute anchor yet).
+    assert unanchored_is_overdue(now, now, grace) is False
+    # One second inside the window → still benign.
+    assert unanchored_is_overdue(now - grace + datetime.timedelta(seconds=1), now, grace) is False
+    # EXACTLY at the boundary → still benign (strictly greater), so a 24h grace alarms from 24h+1s.
+    assert unanchored_is_overdue(now - grace, now, grace) is False
+    # One second past → a dead witness.
+    assert unanchored_is_overdue(now - grace - datetime.timedelta(seconds=1), now, grace) is True
+    # A naive timestamp is read as UTC, not raised on: this function decides whether to raise an
+    # alarm, so it must never be the reason the nightly verify crashes.
+    assert unanchored_is_overdue((now - grace * 2).replace(tzinfo=None), now, grace) is True
+    # A zero grace makes any nonzero age overdue (AUDIT_WITNESS_GRACE_HOURS=0 is a valid choice).
+    assert unanchored_is_overdue(now, now, datetime.timedelta(0)) is False
+    assert (
+        unanchored_is_overdue(now - datetime.timedelta(seconds=1), now, datetime.timedelta(0))
+        is True
+    )
+
+
 def test_should_alarm_offhost_decision_table() -> None:
     """The nightly beat's off-host alarm decision. A wipe leaves a readable off-host object that
     FAILS attestation (attest_failures>0) → ALARM; a read failure (unreachable witness) → ALARM;
