@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import datetime
 import uuid
+from collections.abc import AsyncIterator
 from typing import Any
 
 import pytest
@@ -79,7 +80,7 @@ async def _seed_admin(
     async with get_sessionmaker()() as s:
         user = AppUser(
             org_id=org_id,
-            subject=f"ops-admin-{salt}",
+            keycloak_subject=f"ops-admin-{salt}",
             display_name=f"Avery Ops {salt}",
             email=email,
             status=UserStatus.ACTIVE,
@@ -108,14 +109,33 @@ async def _seed_admin(
         return user.id
 
 
-async def _enable_org_email(org_id: uuid.UUID) -> None:
+async def _set_org_email(org_id: uuid.UUID, value: bool) -> bool:
+    """Set the org's email flag; return the prior value so the caller can restore it."""
     async with get_sessionmaker()() as s:
         cfg = await s.get(SystemConfig, org_id)
-        if cfg is None:
-            s.add(SystemConfig(org_id=org_id, notifications_email_enabled=True))
-        else:
-            cfg.notifications_email_enabled = True
+        assert cfg is not None
+        prev = cfg.notifications_email_enabled
+        cfg.notifications_email_enabled = value
         await s.commit()
+        return prev
+
+
+@pytest.fixture
+async def org_email_on() -> AsyncIterator[uuid.UUID]:
+    """Enable the org email flag for one test and RESTORE it afterwards, yielding the org id.
+
+    ⚠ This flag is shared state on the default org, and ``test_notification_config.py`` asserts
+    ``GET /admin/config`` reads it back False by default. Leaving it on would red that file whenever
+    this one happens to run first in a shard — and shard composition is data-driven
+    (``.test_durations``), so it changes under your feet. The ``test_notification_requeue.py``
+    save-and-restore is the precedent.
+    """
+    org_id = await _default_org_id()
+    prev = await _set_org_email(org_id, True)
+    try:
+        yield org_id
+    finally:
+        await _set_org_email(org_id, prev)
 
 
 async def _notifications_for(user_id: uuid.UUID, event_key: str) -> list[Notification]:
@@ -140,13 +160,12 @@ async def _notifications_for(user_id: uuid.UUID, event_key: str) -> list[Notific
 
 
 async def test_backup_failure_notifies_admins_from_the_seeded_template(
-    app_under_test: Any,
+    app_under_test: Any, org_email_on: uuid.UUID
 ) -> None:
     """The in-DB half. Mutation-distinguishing on TWO axes: before Batch 11 there was no emitter at
     all (zero rows), and without the migration seed ``render()`` returns None so the emitter still
     produces zero rows. Asserting the rendered BODY proves both the wiring and the seed."""
-    org_id = await _default_org_id()
-    await _enable_org_email(org_id)
+    org_id = org_email_on
     admin_id = await _seed_admin(org_id, mode=NotificationDigestMode.IMMEDIATE)
 
     async with get_sessionmaker()() as s:
@@ -188,12 +207,11 @@ async def test_backup_failure_notifies_admins_from_the_seeded_template(
 
 
 async def test_backup_failure_reaches_a_daily_admin_via_the_digest_marker(
-    app_under_test: Any,
+    app_under_test: Any, org_email_on: uuid.UUID
 ) -> None:
     """An admin whose ADMIN_OPS mode is DAILY gets no immediate email row — so the alarm must carry
     ``digest_due_at`` or it produces an in-app row and NO email at all, a silent half-delivery."""
-    org_id = await _default_org_id()
-    await _enable_org_email(org_id)
+    org_id = org_email_on
     admin_id = await _seed_admin(org_id, mode=NotificationDigestMode.DAILY)
 
     async with get_sessionmaker()() as s:
@@ -323,12 +341,13 @@ async def test_out_of_band_fires_when_the_database_read_itself_fails(
 # ---------------------------------------------------------------------------
 
 
-async def test_integrity_alarm_reaches_admins_with_the_check_named(app_under_test: Any) -> None:
+async def test_integrity_alarm_reaches_admins_with_the_check_named(
+    app_under_test: Any, org_email_on: uuid.UUID
+) -> None:
     """The chain-verify alarm. Before Batch 11 a detected tamper produced a CHAIN_VERIFY_FAIL audit
     row and a log line — nobody was told. Pins that the specific detector is named in the body, so
     an admin can tell "the chain broke" from "the off-host witness is gone"."""
-    org_id = await _default_org_id()
-    await _enable_org_email(org_id)
+    org_id = org_email_on
     admin_id = await _seed_admin(org_id, mode=NotificationDigestMode.IMMEDIATE)
 
     async with get_sessionmaker()() as s:
