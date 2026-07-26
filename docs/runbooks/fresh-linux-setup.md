@@ -168,8 +168,24 @@ The trap is that `docker ps` works fine, so Docker looks healthy. Docker Desktop
 the active **context** (`unix://$HOME/.docker/desktop/docker.sock`, owned by you), and the CLI honours
 it — but testcontainers-python does **not** read docker contexts. It falls back to
 `/var/run/docker.sock`, which is `root:docker` `0660`, so it fails unless you are in the `docker`
-group. Point testcontainers at the right socket (no `sudo`, no global `DOCKER_HOST` override, no
-group change):
+group.
+
+**Preferred fix — join the `docker` group.** The *system* `docker.service` is enabled and starts at
+boot; Docker Desktop's user unit does **not**, so a machine that reboots comes back with the Desktop
+socket gone and integration silently broken again. Group membership plus the default socket needs no
+config file at all:
+
+```bash
+sudo usermod -aG docker "$USER"
+```
+
+⚠ Requires a **full logout/restart** to take effect — group membership is fixed at login, and this
+box has no `sg`/`newgrp` shortcut. Once it is active, delete any `~/.testcontainers.properties`
+override so testcontainers just uses its `/var/run/docker.sock` default. Verify with `id -nG | grep docker`.
+
+**Fallback (no sudo, no restart)** — point testcontainers at the Docker Desktop socket instead. Works
+immediately, but only while Docker Desktop is running (`systemctl --user start docker-desktop`, and
+`systemctl --user enable docker-desktop` if you want it back after a reboot):
 
 ```bash
 printf 'tc.host=unix://%s/.docker/desktop/docker.sock\n' "$HOME" >> ~/.testcontainers.properties
@@ -178,7 +194,8 @@ printf 'tc.host=unix://%s/.docker/desktop/docker.sock\n' "$HOME" >> ~/.testconta
 Verify with `docker context ls` (which endpoint is starred) and
 `cd apps/api && uv run python -c "from testcontainers.core.docker_client import get_docker_host; print(get_docker_host())"`.
 ⚠ That properties file is parsed by splitting on the **first `=` of every line that contains one**, so
-any comment you add must not contain an equals sign or it is silently read as a setting.
+any comment you add must not contain an equals sign or it is silently read as a setting. It also takes
+**precedence over `DOCKER_HOST`**, so a stale `tc.host` silently wins over a correct env var.
 
 ⚠ **Known LOCAL-env test artifacts (not real failures — all pass in CI):**
 - **Run the integration suite sharded, the way CI does.** CI runs it as **4 parallel shards**

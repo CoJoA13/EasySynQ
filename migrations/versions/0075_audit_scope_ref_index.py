@@ -61,6 +61,7 @@ exclusion — ``env.py::_include_object`` already drops everything prefixed ``au
 
 from __future__ import annotations
 
+import sqlalchemy as sa
 from alembic import op
 
 revision: str = "0075_audit_scope_ref_index"
@@ -69,9 +70,40 @@ branch_labels: str | None = None
 depends_on: str | None = None
 
 _INDEX = "ix_audit_event_org_id_scope_ref_id"
+# Conservative pre-flight bound. The hard btree limit is 2704 bytes for the whole tuple; anything
+# under 2000 bytes of scope_ref is comfortably indexable once org_id + id + overhead are added.
+_MAX_INDEXABLE_BYTES = 2000
 
 
 def upgrade() -> None:
+    # Pre-flight: a btree tuple cannot exceed ~2704 bytes, and `scope_ref` is unbounded Text that
+    # several producers build from caller-supplied values (see AuditEvent._bound_scope_ref). New
+    # rows are now capped at the model, but a row written BEFORE that cap could still be over-long,
+    # and `CREATE INDEX` would then abort with a raw PostgreSQL error mid-upgrade. Check first and
+    # fail with something actionable. `audit_event` is append-only (the app role holds no UPDATE and
+    # the rows are hash-chained), so this deliberately does NOT rewrite the offending row — that is
+    # an operator decision, not something a migration may do silently.
+    over_long = (
+        op.get_bind()
+        .execute(
+            sa.text(
+                "SELECT count(*) FROM audit_event WHERE octet_length(scope_ref) > :cap"
+            ),
+            {"cap": _MAX_INDEXABLE_BYTES},
+        )
+        .scalar_one()
+    )
+    if over_long:
+        raise RuntimeError(
+            f"Cannot create {_INDEX}: {over_long} audit_event row(s) have a scope_ref longer than "
+            f"{_MAX_INDEXABLE_BYTES} bytes, which exceeds PostgreSQL's btree tuple limit (2704). "
+            "These predate the cap now enforced in AuditEvent._bound_scope_ref. audit_event is "
+            "append-only and hash-chained, so this migration will not rewrite them. Identify them "
+            "with:  SELECT id, occurred_at, octet_length(scope_ref) FROM audit_event "
+            f"WHERE octet_length(scope_ref) > {_MAX_INDEXABLE_BYTES};  then decide with the quality "
+            "owner how to proceed (the rows are legitimate audit records; the usual answer is to "
+            "shorten them under a documented, signed-off correction, not to delete them)."
+        )
     op.create_index(_INDEX, "audit_event", ["org_id", "scope_ref", "id"])
 
 

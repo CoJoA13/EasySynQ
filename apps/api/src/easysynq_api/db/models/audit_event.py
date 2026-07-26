@@ -19,6 +19,7 @@ BRIN + btree indexes so ``alembic check`` stays clean. The monthly child partiti
 from __future__ import annotations
 
 import datetime
+import hashlib
 import uuid
 from typing import Any
 
@@ -33,7 +34,7 @@ from sqlalchemy import (
     Text,
 )
 from sqlalchemy.dialects.postgresql import INET, JSONB, UUID
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, validates
 
 from ..base import Base
 from ._audit_enums import (
@@ -44,6 +45,21 @@ from ._audit_enums import (
     audit_object_type_enum,
     event_type_enum,
 )
+
+# ``scope_ref`` is indexed (``ix_audit_event_org_id_scope_ref_id``, migration 0075), and a Postgres
+# btree tuple may not exceed ~1/3 of an 8 kB page — 2704 bytes. The column is unbounded ``Text`` and
+# several producers interpolate caller-supplied values into it: ``pep._scope_ref`` emits
+# ``f"folder:{resource.folder_path}"`` and ``DocumentCreate.folder_path`` has no length limit, while
+# the vault path uses ``documented_information.identifier`` / ``legacy_identifier`` — also unbounded
+# ``Text``, and an import can preserve an arbitrary legacy identifier. Without a bound, a single
+# ~2.7 kB incompressible value makes the INSERT fail; because ``DbAuthzAuditSink`` commits in its
+# OWN transaction, that surfaces as a **500 instead of a 403, with the denial never recorded**.
+# 512 CHARACTERS is the cap, deliberately not bytes: worst-case UTF-8 is 4 bytes/char, so 512 chars
+# ≤ 2048 bytes, leaving ample room for org_id (16) + id (8) + tuple overhead under the 2704 limit —
+# and a char cap cannot split a multi-byte sequence the way a byte cap would.
+_SCOPE_REF_MAX_CHARS = 512
+_SCOPE_REF_DIGEST_CHARS = 16
+_SCOPE_REF_MARKER = "…sha256:"
 
 
 class AuditEvent(Base):
@@ -109,3 +125,25 @@ class AuditEvent(Base):
         ForeignKey("signature_event.id", ondelete="RESTRICT"),
         nullable=True,
     )
+
+    @validates("scope_ref")
+    def _bound_scope_ref(self, _key: str, value: str | None) -> str | None:
+        """Cap ``scope_ref`` so it can never exceed the btree tuple limit (see the constants above).
+
+        Deliberately on the MODEL rather than at any producer: ``scope_ref`` is written from ~56
+        call sites across the vault, authz, ingestion and workflow paths, and a bound enforced at
+        one of them would silently not apply to the other 55 — or to the next one added. Firing on
+        attribute set means every construction path is covered, including plain ``AuditEvent(...)``.
+
+        Truncation keeps a readable prefix and appends a digest **of the full original**, so two
+        different over-long values stay distinguishable rather than collapsing to the same prefix.
+        The result is deterministic, which matters because ``scope_ref`` is an input to the audit
+        hash chain (``services/audit/canonical.py``) — the stored value is what gets hashed, so a
+        capped row is self-consistent. Existing rows are never rewritten (the table is append-only);
+        this only bounds what is written from here on.
+        """
+        if value is None or len(value) <= _SCOPE_REF_MAX_CHARS:
+            return value
+        digest = hashlib.sha256(value.encode("utf-8")).hexdigest()[:_SCOPE_REF_DIGEST_CHARS]
+        keep = _SCOPE_REF_MAX_CHARS - len(_SCOPE_REF_MARKER) - _SCOPE_REF_DIGEST_CHARS
+        return f"{value[:keep]}{_SCOPE_REF_MARKER}{digest}"
