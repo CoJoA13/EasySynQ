@@ -18,6 +18,7 @@ a 403, with the denial never recorded** — an audit-integrity gap, not just a b
 from __future__ import annotations
 
 from easysynq_api.db.models.audit_event import (
+    _SCOPE_REF_CAPPED_CHARS,
     _SCOPE_REF_MAX_CHARS,
     AuditEvent,
     bound_scope_ref,
@@ -46,7 +47,7 @@ def test_value_exactly_at_the_cap_is_untouched() -> None:
 def test_over_long_value_is_capped() -> None:
     capped = _scope_ref_of("folder:" + "x" * 5000)
     assert capped is not None
-    assert len(capped) == _SCOPE_REF_MAX_CHARS
+    assert len(capped) == _SCOPE_REF_CAPPED_CHARS
     assert capped.startswith("folder:xxx")
 
 
@@ -59,7 +60,7 @@ def test_capped_value_is_safely_under_the_btree_limit_even_in_utf8() -> None:
     capped = _scope_ref_of("folder:" + "🙂" * 5000)
     assert capped is not None
     # 2704 is the hard btree tuple limit; org_id (16) + id (8) + overhead also live in that budget.
-    assert len(capped.encode("utf-8")) <= 2048
+    assert len(capped.encode("utf-8")) <= 2400
 
 
 def test_capping_is_deterministic() -> None:
@@ -80,11 +81,31 @@ def test_read_key_matches_what_the_write_path_stores() -> None:
         assert bound_scope_ref(identifier) == AuditEvent(scope_ref=identifier).scope_ref
 
 
-def test_bounding_is_idempotent() -> None:
-    """An already-stored value must survive a second pass unchanged, or re-deriving the search key
-    from a stored value would drift away from it."""
-    once = bound_scope_ref("folder:" + "w" * 5000)
-    assert bound_scope_ref(once) == once
+def test_a_capped_key_can_never_alias_another_rows_untouched_value() -> None:
+    """The security property, and the reason this function is deliberately NOT idempotent.
+
+    Documents A and B are distinct rows — identifiers are arbitrary strings on the import path and
+    the uniqueness constraint is on the raw value, so both can exist. If B's long identifier capped
+    to a key that A's shorter identifier passes through to unchanged, both documents' audit events
+    would land on ONE scope_ref and ``document_scope_match`` would silently merge two documents'
+    histories. Making the emitted length exceed the pass-through threshold makes the two sets
+    disjoint by construction.
+
+    Idempotence is the direct trade: ``bound(bound(x)) == bound(x)`` would mean a capped value
+    passes through untouched, which is exactly the alias. Safe only because every caller applies
+    this exactly once to a RAW value — never to one read back from the database.
+    """
+    b_identifier = "LEGACY-" + "q" * 4000
+    a_identifier = bound_scope_ref(
+        b_identifier
+    )  # A adopts B's capped key as its literal identifier
+    assert a_identifier is not None
+
+    assert bound_scope_ref(a_identifier) != bound_scope_ref(b_identifier), (
+        "a capped key aliased another document's untouched identifier — audit histories would merge"
+    )
+    # The general invariant behind that case: nothing passes through at the emitted length.
+    assert _SCOPE_REF_CAPPED_CHARS > _SCOPE_REF_MAX_CHARS
 
 
 def test_history_query_searches_the_stored_key_for_a_long_identifier() -> None:
@@ -115,4 +136,4 @@ def test_two_over_long_values_sharing_a_prefix_stay_distinguishable() -> None:
     a, b = _scope_ref_of(shared + "-alpha"), _scope_ref_of(shared + "-beta")
     assert a != b
     assert a is not None and b is not None
-    assert len(a) == len(b) == _SCOPE_REF_MAX_CHARS
+    assert len(a) == len(b) == _SCOPE_REF_CAPPED_CHARS

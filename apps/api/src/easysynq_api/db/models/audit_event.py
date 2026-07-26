@@ -54,11 +54,28 @@ from ._audit_enums import (
 # ``Text``, and an import can preserve an arbitrary legacy identifier. Without a bound, a single
 # ~2.7 kB incompressible value makes the INSERT fail; because ``DbAuthzAuditSink`` commits in its
 # OWN transaction, that surfaces as a **500 instead of a 403, with the denial never recorded**.
-# 512 CHARACTERS is the cap, deliberately not bytes: worst-case UTF-8 is 4 bytes/char, so 512 chars
-# ≤ 2048 bytes, leaving ample room for org_id (16) + id (8) + tuple overhead under the 2704 limit —
-# and a char cap cannot split a multi-byte sequence the way a byte cap would.
+# The threshold is in CHARACTERS, deliberately not bytes: worst-case UTF-8 is 4 bytes/char, so the
+# emitted 544 chars stay ≈2.1 kB — ample room for org_id (16) + id (8) + tuple overhead under the
+# 2704 limit — and a character cap cannot split a multi-byte sequence the way a byte cap would.
+#
+# ⚠ THE EMITTED LENGTH IS DELIBERATELY LARGER THAN THE PASS-THROUGH THRESHOLD, and that is a
+# correctness property, not a style choice. A value ≤512 chars is stored verbatim; a capped value is
+# always exactly 544. The two sets are therefore DISJOINT BY LENGTH, so a capped key can never equal
+# some other row's untouched value. With an emitted length of 512 they aliased: document B with a
+# 4000-char identifier capped to a 512-char key, and document A whose identifier WAS that exact
+# 512-char string passed through unchanged to the same key — merging two documents' audit histories
+# under one scope_ref. Identifiers are arbitrary strings on the import path, so that was
+# constructible, not merely theoretical.
+#
+# ⚠ CONSEQUENCE: ``bound_scope_ref`` is NOT idempotent — ``bound(bound(x)) != bound(x)`` for a
+# capped x, since the 544-char result is itself over the threshold. That is unavoidable: being
+# idempotent means a capped value passes through unchanged, which IS the aliasing above. It is safe
+# only because every caller applies this EXACTLY ONCE to a raw value (the ``@validates`` hook on
+# write, ``document_scope_match`` on read). Never re-apply it to a value read back from the DB.
 _SCOPE_REF_MAX_CHARS = 512
-_SCOPE_REF_DIGEST_CHARS = 16
+_SCOPE_REF_CAPPED_CHARS = 544
+# 128 bits. Two distinct long values collide only on a full prefix match AND a 128-bit digest match.
+_SCOPE_REF_DIGEST_CHARS = 32
 _SCOPE_REF_MARKER = "…sha256:"
 
 
@@ -69,7 +86,7 @@ def bound_scope_ref(value: str | None) -> str | None:
     function.** The write path caps (``AuditEvent._bound_scope_ref``), so comparing a raw over-long
     key against the stored capped value silently matches nothing — for the per-document audit
     history that means an endpoint returning an incomplete trail with no error, which is a worse
-    failure than a crash. ``api/audit.py::document_audit_events`` is the one such caller today; it
+    failure than a crash. ``api/audit.py::document_scope_match`` is the one such caller today; it
     searches both the raw and capped forms so rows written before the cap are still found.
 
     Truncation keeps a readable prefix and appends a digest **of the full original**, so two
@@ -77,11 +94,14 @@ def bound_scope_ref(value: str | None) -> str | None:
     reference. Deterministic by construction, which matters because ``scope_ref`` is an input to the
     audit hash chain (``services/audit/canonical.py``) — the stored value is what gets hashed, so a
     capped row is self-consistent.
+
+    See the constants above for why the emitted length exceeds the pass-through threshold, and why
+    that costs idempotence.
     """
     if value is None or len(value) <= _SCOPE_REF_MAX_CHARS:
         return value
     digest = hashlib.sha256(value.encode("utf-8")).hexdigest()[:_SCOPE_REF_DIGEST_CHARS]
-    keep = _SCOPE_REF_MAX_CHARS - len(_SCOPE_REF_MARKER) - _SCOPE_REF_DIGEST_CHARS
+    keep = _SCOPE_REF_CAPPED_CHARS - len(_SCOPE_REF_MARKER) - _SCOPE_REF_DIGEST_CHARS
     return f"{value[:keep]}{_SCOPE_REF_MARKER}{digest}"
 
 
