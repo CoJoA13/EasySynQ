@@ -1,4 +1,5 @@
-# Single source of pinned container images (doc 03 §15; compose.yml references these).
+# Single source of pinned container images (doc 03 §15; Compose references these, while `keycloak`
+# is the base for infra/compose/keycloak/Dockerfile's optimized production image).
 #
 # NOTE: digests must be resolved on a host with Docker via `just images-update`
 # (docker buildx imagetools inspect / docker manifest inspect). Until then these

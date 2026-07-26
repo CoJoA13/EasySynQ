@@ -94,8 +94,8 @@ see the mount). Then start an import run from the app's **Import** section.
 sudo easysynq-reconfigure --host easysynq.corp.example.com
 ```
 
-Rewrites the site/issuer/presign URLs, whitelists the redirect URI in Keycloak, and
-recreates the affected containers. Create the matching **A record** in AD DNS first.
+Rewrites the site/issuer/presign, QR/share and notification deep-link URLs, whitelists the redirect
+URI in Keycloak, and recreates the affected containers. Create the matching **A record** in AD DNS first.
 Do this **before** real usage starts — changing the OIDC issuer signs everyone out.
 
 ## Day-2 helpers (on the VM)
@@ -108,7 +108,12 @@ Do this **before** real usage starts — changing the OIDC issuer signs everyone
 | `sudo easysynq-mount-qms //srv/share [user]` | Attach the QMS share read-only |
 | `sudo easysynq-reconfigure --host <fqdn>` | Move off mDNS to a real DNS name |
 | `easysynq-status --ca` | Print the root CA for the GPO trust rollout |
-| `easysynq-compose <args>` | Raw `docker compose` with the appliance overlay set — ⚠ never `down` casually: Keycloak has no volume, so `down` erases every sign-in account (`easysynq-create-user` recreates them; QMS data in Postgres/MinIO survives) |
+| `easysynq-compose <args>` | Raw `docker compose` with the appliance overlay set. Keycloak accounts/client edits persist in the PostgreSQL `pgdata` volume across container recreation. `down` preserves named volumes; `down -v` is the destructive full-data reset. |
+
+When an older appliance first receives the PostgreSQL-backed Keycloak definition,
+`easysynq-compose up …` automatically stops the legacy H2 container, performs and validates a full
+offline realm/user export, then lets Compose import it. A failed export restarts the untouched legacy
+container; do not bypass the helper with raw Compose for that one transition.
 
 ## Troubleshooting
 

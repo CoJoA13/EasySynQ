@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 # (Re)create the Keycloak `demo` dev user for local login (invoked by `just demo-user`).
-# Keycloak has no volume, so its data (incl. this user) is wiped on `just down` / any keycloak
-# recreate; the realm re-imports from realm-export.json. Idempotent; password is the documented dev
-# credential. Lives in a script (not a justfile shebang recipe) so it runs identically on Linux/macOS
-# and native Windows + Git Bash.
+# Identity state persists in PostgreSQL across ordinary container recreation. This remains
+# idempotent and restores the documented dev password. Lives in a script (not a justfile shebang
+# recipe) so it runs identically on Linux/macOS and native Windows + Git Bash.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 

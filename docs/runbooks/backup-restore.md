@@ -10,9 +10,9 @@ target; **continuous WAL/PITR, retention pruning, and S3 destinations are v1.x**
 `easysynq backup run` (and the nightly Beat job `easysynq.backup.run`) writes one timestamped,
 checksum-verified archive per configured policy to `BACKUP_PATH` (or the policy's destination):
 
-* `db.dump` (`pg_dump -Fc`) + `manifest.json` (the **blob snapshot**: sha256/size/bucket per
-  position, + per-table row counts) + the **Keycloak realm export** + a **config snapshot** + the
-  latest signed audit checkpoint;
+* `db.dump` (`pg_dump -Fc`, including Keycloak's durable `keycloak` schema) + `manifest.json` (the
+  **blob snapshot**: sha256/size/bucket per position, + per-table row counts) + the additional
+  **Keycloak realm export** + a **config snapshot** + the latest signed audit checkpoint;
 * the whole archive is **AES-256-GCM encrypted** to `…tar.enc` with `BACKUP_ENCRYPTION_KEY` (a
   stolen archive is useless without the key). If a Keycloak outage prevents the realm export, the
   backup still succeeds with `legs.realm_export = "absent"` (logged) — it never blocks.

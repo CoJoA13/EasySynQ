@@ -28,17 +28,24 @@ phone-home). The bundle is built on a connected host and transferred offline.
    sha256sum -c easysynq-airgap.tar.sha256      # verify transfer integrity
    docker load -i easysynq-airgap.tar
    ```
-4. Bring the stack up with the **air-gap overlay** (disables ACME — supply your own/internal TLS):
+4. Run the production installer with the internal CA mode (disables ACME and configures both HTTPS
+   browser origins):
+
    ```bash
-   docker compose -f infra/compose/compose.yml -f infra/compose/compose.s.yml \
-                  -f infra/compose/compose.airgap.yml up -d
+   ./scripts/install.sh s --host qms.corp.example --tls internal
    ```
-   Set `SITE_ADDRESS` to your domain and provide a cert, or use the internal self-signed issuer by
-   setting `CADDY_TLS_DIRECTIVE="tls internal"` (the air-gap overlay does this for you). The internal
-   CA requires `SITE_ADDRESS` to be a hostname — `tls internal` is invalid on a plain `:80` listener.
-   Then follow [install-online.md](install-online.md) steps 2–4.
+
+   Create the DNS record first. The installer sets the app/Keycloak origin to
+   `https://qms.corp.example`, the dedicated S3 origin to `https://qms.corp.example:9443`, and uses
+   `compose.production.yml`; plaintext MinIO `:9000` is never published. The internal CA requires a
+   hostname and must be distributed to workstations. Then follow
+   [install-online.md](install-online.md) from the CA-distribution step onward.
+
+   For a hand-authored Compose invocation, stack `compose.airgap.yml` **and**
+   `compose.production.yml`, and set all required browser variables shown in `.env.example`. The
+   production overlay deliberately fails Compose interpolation when one is missing.
 
 ## Assumed network capabilities
-No outbound HTTP. The browser reaches Caddy on the published port; everything else is the internal
-Docker network. If your org uses a private registry or internal NTP/DNS, document those as the
-operator's responsibility — they are not provided by the bundle.
+No outbound HTTP. The browser reaches Caddy on 443 (app/Keycloak) and 9443 (presigned S3); everything
+else is the internal Docker network. If your org uses a private registry or internal NTP/DNS,
+document those as the operator's responsibility — they are not provided by the bundle.

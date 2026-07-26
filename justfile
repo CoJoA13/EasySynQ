@@ -64,11 +64,13 @@ migrate-roundtrip:
 
 # --- compose stack ---
 up profile="s":
-    docker compose --env-file .env -f infra/compose/compose.yml -f infra/compose/compose.{{profile}}.yml up -d
+    bash scripts/migrate-keycloak-h2.sh
+    docker compose --env-file .env -f infra/compose/compose.yml -f infra/compose/compose.{{profile}}.yml -f infra/compose/compose.dev.yml up -d
 
 # `up` + a loopback Postgres publish (compose.mcp.yml) for the read-only PG MCP — opt-in; plain `up` keeps Postgres unexposed (D1). Restart Claude Code after first run; pgdata persists.
 up-mcp profile="s":
-    docker compose --env-file .env -f infra/compose/compose.yml -f infra/compose/compose.{{profile}}.yml -f infra/compose/compose.mcp.yml up -d
+    bash scripts/migrate-keycloak-h2.sh
+    docker compose --env-file .env -f infra/compose/compose.yml -f infra/compose/compose.{{profile}}.yml -f infra/compose/compose.dev.yml -f infra/compose/compose.mcp.yml up -d
 
 down:
     docker compose --env-file .env -f infra/compose/compose.yml down
@@ -76,16 +78,15 @@ down:
 logs:
     docker compose --env-file .env -f infra/compose/compose.yml logs -f --tail=100
 
-# (Re)create the Keycloak `demo` dev user for local login. Keycloak has no volume, so its data
-# (incl. this user) is wiped on `just down` / any keycloak recreate; the realm re-imports from
-# realm-export.json. Idempotent; password is the documented dev credential.
+# Create/update the Keycloak `demo` dev user for local login. Identity state persists in PostgreSQL
+# across container recreation; `just down -v`/volume deletion is the destructive reset. Idempotent.
 demo-user:
     bash scripts/demo-user.sh
 
 # Dev fixture: create the SoD persona logins (priya/ken/mara) in Keycloak + seed their
 # author/approver/releaser grants, so the full review->approve->release loop (S-web-5) is demoable.
-# Keycloak is ephemeral (wiped on `just down`), so re-run after a reset. Idempotent; password is the
-# documented dev credential.
+# Re-run whenever you want to restore the fixture passwords/grants. Idempotent; identity state
+# persists in PostgreSQL across ordinary restarts and container recreation.
 seed-personas:
     bash scripts/seed-personas.sh
 

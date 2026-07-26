@@ -3,8 +3,9 @@
 #
 #   easysynq-reconfigure --host easysynq.corp.example.com
 #
-# Rewrites the browser-facing URLs in .env (site, MinIO presign host, OIDC issuer), adds the new
-# redirect URIs to the Keycloak web client, and recreates the affected containers. The issuer
+# Rewrites every browser-facing URL in .env (site, MinIO presign host, QR/share/deep-link bases,
+# Keycloak hostname and OIDC issuer), adds the new redirect URIs to the Keycloak web client, and
+# recreates the affected containers. The issuer
 # change means everyone signs in again (tokens from the old issuer stop validating) — run this
 # before real usage starts, not after.
 set -euo pipefail
@@ -27,6 +28,9 @@ set_kv() {
 set_kv SITE_ADDRESS "https://${HOST}"
 set_kv MINIO_SITE_ADDRESS "https://${HOST}:9443"
 set_kv S3_PUBLIC_ENDPOINT "https://${HOST}:9443"
+set_kv PUBLIC_BASE_URL "https://${HOST}"
+set_kv APP_BASE_URL "https://${HOST}"
+set_kv KEYCLOAK_HOSTNAME "https://${HOST}"
 set_kv OIDC_ISSUER "https://${HOST}/realms/easysynq"
 
 # Keycloak: allow the new host on the web client (keeps the existing localhost/easysynq.local URIs).
@@ -39,8 +43,8 @@ CID="$(kc get clients -r easysynq -q clientId=easysynq-web --fields id --format 
 kc update "clients/${CID}" -r easysynq \
   -s "redirectUris=[\"http://localhost/*\",\"https://localhost/*\",\"http://easysynq.local/*\",\"https://easysynq.local/*\",\"https://${HOST}/*\"]"
 
-echo "recreating proxy + api with the new host..."
-easysynq-compose up -d proxy api worker beat
+echo "recreating the browser-facing services with the new host..."
+easysynq-compose up -d keycloak proxy api worker beat
 
 echo "done — the app now lives at https://${HOST}"
 echo "Reminder: create the DNS A record for ${HOST}, and distribute the Caddy internal CA"

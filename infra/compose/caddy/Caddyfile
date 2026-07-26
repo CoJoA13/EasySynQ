@@ -56,7 +56,7 @@
 	# (through Caddy) navigation. `connect-src` is 'self' PLUS {$S3_PUBLIC_ENDPOINT} because the browser
 	# uploads/downloads controlled bytes DIRECTLY to the object store via presigned URLs (a different
 	# origin than the app, e.g. http://localhost:9000 in dev) — 'self' alone would block those (the
-	# S-web-5 browser-upload finding). Empty in prod when the object store is same-origin behind Caddy.
+	# S-web-5 browser-upload finding). Production sets the dedicated https://host:9443 MinIO origin.
 	# `style-src` allows 'unsafe-inline'
 	# ONLY for styles (never script) because Mantine injects runtime inline <style> for its theme — a
 	# strict style nonce needs SPA build/HTML nonce injection this static proxy can't do (a web-track

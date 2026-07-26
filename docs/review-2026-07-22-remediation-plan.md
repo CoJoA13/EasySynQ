@@ -259,12 +259,31 @@ land the sweep separately from the gate so the gate turns on green rather than r
 > event as a plain string. These are triaged in `docs/slice-history.md` ⚠ OPEN RESIDUALS; ratchet the
 > job to required only after that baseline is fixed in its own follow-up batch.
 
-### ☐ Batch 13 — Infra / deploy hardening
+### ☑ Batch 13 — Infra / deploy hardening
 `branch: fix/major-infra-deploy` · infra (verify on the live/appliance path)
 
-- [ ] `infra/appliance/provision/easysynq-provision.sh:127` — provisioner never sets `PUBLIC_BASE_URL`/`APP_BASE_URL` → verify QR / share links / deep links all point at `http://localhost` `[f]`
-- [ ] `.env.example:34` — online install ships `S3_PUBLIC_ENDPOINT=http://localhost:9000` → presigned upload/download broken for remote browsers; the `s` profile also exposes plaintext MinIO on 0.0.0.0 `[C]`
-- [ ] `infra/compose/compose.yml:74` — Keycloak `start-dev` with no persistent volume → any container recreation wipes all accounts + client edits; move to a real store `[C]`
+- [x] `infra/appliance/provision/easysynq-provision.sh` — provisioner never sets
+  `PUBLIC_BASE_URL`/`APP_BASE_URL` (fixed: first boot writes both from `HOSTNAME_DEFAULT`;
+  `easysynq-reconfigure` writes both from its defined `HOST`, also updates the strict Keycloak
+  hostname, and recreates every consumer. The appliance Compose helper derives the three new
+  same-origin values in-process for a pre-Batch-13 read-only `.env`, so its first upgrade cannot
+  abort on missing variables)
+- [x] `.env.example` / online install — production ships a localhost S3 origin and plaintext
+  `0.0.0.0:9000` (fixed: S/M are sizing-only; `compose.dev.yml` is the sole `:9000` publisher and
+  binds `127.0.0.1`. `install.sh --host … --tls acme|internal` writes the app/QR/share/deep-link/
+  Keycloak origin on HTTPS 443 and the separately routed MinIO origin on HTTPS 9443;
+  `compose.production.yml` requires the complete browser-edge tuple, defensively resets any dev
+  MinIO port, and mounts the shared production Caddy entry. Rendered dev, online, appliance and
+  dev+production Compose shapes validate; Caddy validated both HTTPS sites)
+- [x] `infra/compose/compose.yml` — Keycloak `start-dev` with container-local H2 (fixed: an optimized
+  PostgreSQL build runs `start --optimized --import-realm` against the least-privilege
+  `easysynq_keycloak` role and dedicated `keycloak` schema in the existing durable `pgdata`.
+  A fail-safe one-time offline H2 exporter runs before standard installer/`just up`/appliance-helper
+  recreation, preserves users, stable IDs, credential hashes and client edits, validates its staged
+  realm, and restarts the untouched legacy container on failure. Live disposable proof retained
+  the exact user + credential IDs across a forced Keycloak recreation; a separate H2→PostgreSQL
+  proof retained the exact user/client IDs, authenticated with the old password, and retained a live
+  redirect-URI edit)
 
 ### ☐ Batch 14 — Web correctness
 `branch: fix/major-web-correctness` · apps/web + vitest

@@ -31,4 +31,4 @@ kc create users -r easysynq -s "username=${USERNAME}" -s enabled=true 2>/dev/nul
 kc set-password -r easysynq --username "$USERNAME" --new-password "$PW" --temporary
 
 echo "user ready: ${USERNAME} / ${PW}  (temporary — must be changed at first sign-in)"
-echo "NOTE: Keycloak state lives in the keycloak container; if it is ever recreated, re-run this."
+echo "NOTE: Keycloak identity state is durable in PostgreSQL; ordinary container recreation preserves it."

@@ -35,7 +35,7 @@ compose() {
     -f "$APP_DIR/infra/compose/compose.yml" \
     -f "$APP_DIR/infra/compose/compose.s.yml" \
     -f "$APP_DIR/infra/compose/compose.airgap.yml" \
-    -f "$APP_DIR/infra/compose/compose.appliance.yml" "$@"
+    -f "$APP_DIR/infra/compose/compose.production.yml" "$@"
 }
 
 # set_kv KEY VALUE — update-or-append in .env (mirrors scripts/install.sh).
@@ -116,7 +116,7 @@ cmd_run() {
   # file-exists guard would then keep forever — fail closed and regenerate on the next retry.
   # Check ONLY the keys install.sh generates: AUDIT_SINK_* keeps its placeholder by design
   # (the off-host checkpoint sink is operator-configured later — the wizard's soft gate).
-  if grep -E '^(POSTGRES_PASSWORD|DATABASE_URL|DATABASE_URL_SYNC|AUDIT_LINKER_DATABASE_URL|APP_DB_PASSWORD|LINKER_DB_PASSWORD|S3_ACCESS_KEY|S3_SECRET_KEY|APP_MASTER_KEK|BACKUP_ENCRYPTION_KEY|KEYCLOAK_ADMIN_PASSWORD)=' \
+  if grep -E '^(POSTGRES_PASSWORD|DATABASE_URL|DATABASE_URL_SYNC|AUDIT_LINKER_DATABASE_URL|APP_DB_PASSWORD|LINKER_DB_PASSWORD|S3_ACCESS_KEY|S3_SECRET_KEY|APP_MASTER_KEK|BACKUP_ENCRYPTION_KEY|KEYCLOAK_ADMIN_PASSWORD|KEYCLOAK_DB_PASSWORD)=' \
       "$APP_DIR/.env" | grep -q 'CHANGE_ME'; then
     rm -f "$APP_DIR/.env"
     echo "easysynq-provision: generated .env still held CHANGE_ME placeholders — removed; retry regenerates" >&2
@@ -127,6 +127,9 @@ cmd_run() {
   set_kv SITE_ADDRESS "https://${HOSTNAME_DEFAULT}"
   set_kv MINIO_SITE_ADDRESS "https://${HOSTNAME_DEFAULT}:9443"
   set_kv S3_PUBLIC_ENDPOINT "https://${HOSTNAME_DEFAULT}:9443"
+  set_kv PUBLIC_BASE_URL "https://${HOSTNAME_DEFAULT}"
+  set_kv APP_BASE_URL "https://${HOSTNAME_DEFAULT}"
+  set_kv KEYCLOAK_HOSTNAME "https://${HOSTNAME_DEFAULT}"
   set_kv OIDC_ISSUER "https://${HOSTNAME_DEFAULT}/realms/easysynq"
   set_kv OIDC_JWKS_URL "http://keycloak:8080/realms/easysynq/protocol/openid-connect/certs"
   set_kv OIDC_DISCOVERY_URL "http://keycloak:8080/realms/easysynq/.well-known/openid-configuration"
