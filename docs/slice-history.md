@@ -90,6 +90,25 @@
   a 360-response sweep will almost certainly surface a backlog of pre-existing violations — making
   it a required CI job on day one would red CI on old debt and block Batch 13. Flip it to required
   once triaged green.
+- **Pre-cap audit rows for a document with a >512-char identifier are unreachable via the
+  per-document history endpoint** (Batch 12; a deliberate trade, not an oversight). Batch 12 caps
+  `audit_event.scope_ref` on write so it cannot break its new btree index, and
+  `api/audit.py::document_scope_match` searches the ONE canonical capped key. Rows written *before*
+  that cap, for a document whose `identifier` exceeds `_SCOPE_REF_MAX_CHARS`, are stored under the
+  raw value and no longer match. **Why the obvious fix is wrong:** an intermediate revision also
+  searched the raw identifier as a compatibility operand, and Codex round 4 showed that reopens a
+  cross-document merge — a capped key is exactly `_SCOPE_REF_CAPPED_CHARS` characters, and a raw
+  identifier of that length is itself capped on write, so such a value in `scope_ref` is
+  irreducibly ambiguous: EITHER this document's own pre-cap row OR another document's post-cap key.
+  Nothing in the row distinguishes them, so searching it can return a **different document's audit
+  events**. A completeness gap on a pathological identifier is strictly preferable to a
+  cross-document leak. **Blast radius is nil for normal documents** — below the threshold the cap is
+  the identity function, so every ordinary row is untouched; this reaches only documents carrying a
+  pathologically long *imported legacy* identifier. **Closing it properly needs** a discriminator
+  that separates legacy raw keys from capped keys (e.g. a one-off backfill re-keying pre-cap rows,
+  or a `scope_ref_kind` column) — a migration over append-only, hash-chained rows, so a slice with
+  its own decision, not a remediation fix. Pinned by
+  `test_history_query_never_searches_another_documents_key`.
 - **CI never lints or format-checks the `/migrations` tree — and a root-level ruff run silently uses
   the WRONG config** (Batch 12; owner-acknowledged, **folded into the Batch 12.5 slice**). The `api`
   CI job runs `ruff check . && ruff format --check --diff .` with `working-directory: apps/api`, so

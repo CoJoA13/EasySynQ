@@ -211,19 +211,27 @@ def document_scope_match(identifier: str) -> ColumnElement[bool]:
     unbounded ``Text`` and an import can preserve an arbitrarily long legacy identifier, so for such
     a document the raw identifier no longer equals what is stored — comparing against it would
     return an INCOMPLETE trail with no error at all, which on an audit surface is worse than
-    failing outright.
+    failing outright. For a normal short identifier the helper is the identity function, so this is
+    byte-identical to the plain equality it replaced.
 
-    Rows written BEFORE the cap still hold the raw value, so both forms are searched when they
-    differ (``in_`` over two constants uses the same index as equality). For a normal short
-    identifier the helper is the identity function and this is the plain equality it replaced.
+    ⚠ **Exactly ONE key is searched. Do NOT add the raw identifier back as a compatibility
+    operand** — an earlier revision did, and it silently merged two documents' histories. A capped
+    key is exactly ``_SCOPE_REF_CAPPED_CHARS`` characters, and a raw identifier of that same length
+    is itself capped on write, so a value of that length appearing in ``scope_ref`` is ambiguous: it
+    is EITHER this document's own pre-cap row OR another document's post-cap key. Nothing in the row
+    distinguishes them, so searching it can return a different document's audit events — a
+    cross-document leak, strictly worse than the completeness gap below.
+
+    **Named residual:** audit rows written BEFORE the cap shipped, for a document whose identifier
+    exceeds ``_SCOPE_REF_MAX_CHARS``, are stored under the raw value and are therefore no longer
+    reachable here. This affects no document with a normal identifier (the helper is the identity
+    function below the threshold, so every ordinary row is unaffected) — only ones carrying a
+    pathologically long imported legacy identifier. Preferred deliberately over the leak.
 
     Extracted from the handler purely so this is unit-testable: a regression to raw equality is
     invisible in any test that only exercises short identifiers.
     """
-    stored_key = bound_scope_ref(identifier)
-    if stored_key == identifier:
-        return AuditEvent.scope_ref == identifier
-    return AuditEvent.scope_ref.in_([identifier, stored_key])
+    return AuditEvent.scope_ref == bound_scope_ref(identifier)
 
 
 @router.get("/documents/{document_id}/audit-events")

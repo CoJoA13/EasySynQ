@@ -113,8 +113,8 @@ def test_history_query_searches_the_stored_key_for_a_long_identifier() -> None:
 
     A regression to a plain ``scope_ref == identifier`` passes every other test in this file,
     because they all use short identifiers where the cap is the identity function. This one uses a
-    long identifier and asserts the compiled predicate actually contains the CAPPED key — which is
-    what the rows hold — plus the raw one, so pre-cap rows are still found.
+    long identifier and asserts the compiled predicate contains the CAPPED key — what the rows
+    actually hold.
     """
     from easysynq_api.api.audit import document_scope_match
 
@@ -124,7 +124,31 @@ def test_history_query_searches_the_stored_key_for_a_long_identifier() -> None:
 
     sql = str(document_scope_match(identifier).compile(compile_kwargs={"literal_binds": True}))
     assert stored in sql, "the capped key the rows are actually stored under is not searched"
-    assert identifier in sql, "pre-cap rows holding the raw identifier would be missed"
+
+
+def test_history_query_never_searches_another_documents_key() -> None:
+    """The read-side counterpart of the write-side disjointness rule.
+
+    Separating the WRITE keys is not sufficient on its own. An earlier revision also searched the
+    raw identifier as a backward-compatibility operand, which reopened the very same
+    cross-document merge: if document B's long identifier caps to ``K``, and document A's raw
+    identifier IS ``K``, then A's own events are stored under ``bound(K)`` while ``K`` itself is
+    B's key — so searching both returns B's events under A's history.
+
+    A value of exactly ``_SCOPE_REF_CAPPED_CHARS`` characters is irreducibly ambiguous (this
+    document's own pre-cap row, or another document's post-cap key), so the only sound predicate is
+    the single canonical key.
+    """
+    from easysynq_api.api.audit import document_scope_match
+
+    b_identifier = "LEGACY-" + "q" * 4000
+    b_key = bound_scope_ref(b_identifier)  # where B's events actually live
+    a_identifier = b_key  # A's raw identifier IS B's key
+    assert b_key is not None
+
+    sql = str(document_scope_match(a_identifier).compile(compile_kwargs={"literal_binds": True}))
+    assert b_key not in sql, "querying A's history would return document B's audit events"
+    assert bound_scope_ref(a_identifier) in sql, "A's own key must still be searched"
 
 
 def test_two_over_long_values_sharing_a_prefix_stay_distinguishable() -> None:
