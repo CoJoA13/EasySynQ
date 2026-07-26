@@ -15,13 +15,15 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
     pyramid — historically most ``tests/unit`` files carried no explicit ``pytest.mark.unit``, so
     ``pytest -m unit`` silently ran only the few that did (e.g. the AC#6 canonical golden-vector and
     the backup-archive tests were deselected). Marking by the parent directory closes that gap and
-    keeps future files covered without a per-file marker. Explicit module markers are harmless dups.
+    keeps future files covered without a per-file marker. Explicit ``contract`` tests use the real
+    integration fixtures but stay out of the required integration shards while their baseline is
+    advisory.
     """
     for item in items:
         parent = item.path.parent.name
         if parent == "unit":
             item.add_marker(pytest.mark.unit)
-        elif parent == "integration":
+        elif parent == "integration" and "contract" not in item.keywords:
             item.add_marker(pytest.mark.integration)
 
 
