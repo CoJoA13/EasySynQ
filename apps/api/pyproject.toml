@@ -59,8 +59,7 @@ build-backend = "hatchling.build"
 packages = ["src/easysynq_api"]
 
 [tool.ruff]
-target-version = "py312"
-line-length = 100
+extend = "../../ruff.toml"
 src = ["src", "tests"]
 
 [tool.ruff.lint]

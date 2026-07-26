@@ -1,0 +1,5 @@
+# Repository-wide Python baseline. Subprojects may extend this with stricter
+# lint rules, but formatting must stay identical for application and migration
+# code.
+target-version = "py312"
+line-length = 100
