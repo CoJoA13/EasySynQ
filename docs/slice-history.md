@@ -90,6 +90,22 @@
   a 360-response sweep will almost certainly surface a backlog of pre-existing violations — making
   it a required CI job on day one would red CI on old debt and block Batch 13. Flip it to required
   once triaged green.
+- **CI never lints or format-checks the `/migrations` tree — and a root-level ruff run silently uses
+  the WRONG config** (Batch 12; owner-acknowledged, **folded into the Batch 12.5 slice**). The `api`
+  CI job runs `ruff check . && ruff format --check --diff .` with `working-directory: apps/api`, so
+  the repo-root `migrations/` tree (76 files) is outside its scope entirely — despite migrations
+  being, by the project's own account, the most error-prone area in the codebase. Same failure shape
+  as the schemathesis residual above: a gate that never runs is indistinguishable from a gate that
+  passes. Measured on the Batch 12 branch: `ruff check` over `migrations/` is **already clean** (lint
+  is not the problem), but `ruff format --check` reports **29 of 76** files unformatted under the
+  project's config; `0075` itself is clean. ⚠ **The config trap must be fixed first or the numbers
+  lie:** there is **no ruff config at the repo root** and `[tool.ruff]` lives in
+  `apps/api/pyproject.toml`, so ruff's upward config discovery gives anything under `migrations/` its
+  **defaults — line-length 88, not the project's 100**. That is why a naive root-level run reports 61
+  files rather than 29: it is applying different rules than CI. **Closing it needs** a root
+  `ruff.toml` (or an explicit `--config`) so one rule set governs both trees, then a formatting sweep
+  of the 29, then the CI step widened to cover `migrations/` — landing the sweep separately from the
+  gate so the gate turns on green rather than red. Noticed while running the `/pr` gate on Batch 12.
 - **`easysynq upgrade` has no `lock_timeout`, so a migration can convoy the live write path**
   (Batch 12; owner-acknowledged, **deferred to Batch 13 — infra/deploy hardening**). The in-place
   upgrade runs on a one-off worker **while api/worker/beat stay up** (`scripts/easysynq:82` →

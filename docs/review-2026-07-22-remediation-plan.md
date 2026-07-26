@@ -149,18 +149,22 @@ A create-gated (or token-gated) endpoint returns a resource body the caller cann
 > - **The in-place upgrade path has no maintenance-window guidance** (MAJOR, CI-blind). `easysynq upgrade` runs on a one-off worker **while api/worker/beat stay up**, no `lock_timeout` is configured anywhere, and `env.py` wraps the run in ONE transaction — so an index build queued behind an open writer convoys the entire write path (nearly every mutating request writes an `audit_event`) until all of `upgrade head` commits. CI cannot see this: the `migrations` job round-trips an empty single-connection DB. Documented in `docs/runbooks/backup-restore.md` § Upgrade with stop/start steps and a row-count pre-check. It also corrected a wrong premise of mine — migrations do **not** auto-apply on api startup; the compose `migrate` one-shot completes before api/worker/beat start, so the fresh-boot path was never at risk. **A global `lock_timeout` on the alembic connection remains an open option — deliberately not taken here, as it changes every migration's failure mode and is Batch 13 (infra) territory.**
 > - **The index name deviated from `NAMING_CONVENTION`.** It was `ix_audit_event_scope_ref`, which reads as a single-column index and would mislead a later reader into thinking a bare `WHERE scope_ref = ?` is served — it is not, `org_id` leads. Renamed to the canonical `ix_audit_event_org_id_scope_ref_id` (`ix_%(table_name)s_%(column_0_N_name)s`, `db/base.py`) and the full round-trip re-verified after the rename.
 
-### ☐ Batch 12.5 — Wire schemathesis (INSERTED between 12 and 13, owner-scheduled)
-`branch: feat/contract-response-validation` · tests only (no migration, no new key)
+### ☐ Batch 12.5 — Close the gates that never ran (INSERTED between 12 and 13, owner-scheduled)
+`branch: feat/contract-response-validation` · tests + CI only (no migration, no new key)
 
-Batch 12 fixed four contract defects and closed the **enum** half of the drift class with a parity
-guard. This closes the other half — the reason the class existed at all: **nothing has ever compared
-a RESPONSE to its published schema.** `redocly lint` proves only that the document is well-formed,
-and `pyproject.toml:100` declares a `contract` marker plus `schemathesis>=4.24.0` that **nothing
-invokes**. That is how `AuditEvent.object_type` sat 8 values stale, and how `DecisionResult` kept
-rejecting the reachable quorum `ALREADY_SATISFIED` 200 through a source review *and* a first fix pass.
+Two separate gates are **declared but never invoked**. Both are the same failure shape, and it is the
+shape that produced Batch 12 in the first place: a check that does not run reads exactly like a check
+that passes.
+
+**(a) No RESPONSE is ever validated against its published schema.** `redocly lint` proves only that
+the document is well-formed, and `apps/api/pyproject.toml:100` declares a `contract` marker plus
+`schemathesis>=4.24.0` that **nothing invokes**. That is how `AuditEvent.object_type` sat 8 values
+stale, and how `DecisionResult` kept rejecting the reachable quorum `ALREADY_SATISFIED` 200 through a
+source review *and* a first fix pass. Batch 12 closed the *enum* half of the class
+(`tests/unit/test_openapi_enum_parity.py`); this closes the response-shape half.
 
 Scope: 230 paths / 282 operations, 360 responses with a content schema. Three non-negotiables (each
-a real hazard, see `docs/slice-history.md` ⚠ OPEN RESIDUALS for the full rationale):
+a real hazard — full rationale in `docs/slice-history.md` ⚠ OPEN RESIDUALS):
 
 - drive it through an **authenticated, post-setup** fixture — otherwise the 423 latch and bearer-auth
   turn the run into a wall of 423/401s and a **meaningless green**;
@@ -168,6 +172,23 @@ a real hazard, see `docs/slice-history.md` ⚠ OPEN RESIDUALS for the full ratio
   some into WORM/append-only and disposition paths that are irreversible by design;
 - land it **advisory / non-gating first**; a 360-response sweep will surface pre-existing violations,
   and making it required on day one would red CI on old debt and block Batch 13.
+
+**(b) The `/migrations` tree is never linted or format-checked by CI.** The `api` job runs
+`ruff check . && ruff format --check --diff .` with `working-directory: apps/api`, so the repo-root
+`migrations/` tree (76 files) is outside its scope entirely — despite being, by the project's own
+account, the most error-prone area in the codebase. Measured on this branch:
+
+- `ruff check` over `migrations/` is **already clean** — lint is not the problem;
+- `ruff format --check` reports **29 of 76 files** unformatted under the project's config. (A naive
+  run reports 61 — see the config trap below.) `0075` is clean.
+
+⚠ **The config trap, which must be fixed first or the numbers lie.** There is **no ruff config at the
+repo root**, and `[tool.ruff]` lives in `apps/api/pyproject.toml`. Ruff discovers config by walking up
+from each file, so anything under `migrations/` gets ruff's **defaults — line-length 88, not the
+project's 100**. Any `ruff` invocation from the repo root therefore silently applies different rules
+than CI does. Closing this needs a root `ruff.toml` (or an explicit `--config`) so one rule set governs
+both trees, *then* a formatting sweep of the 29, *then* the CI step widened. Same discipline as (a):
+land the sweep separately from the gate so the gate turns on green rather than red.
 
 ### ☐ Batch 13 — Infra / deploy hardening
 `branch: fix/major-infra-deploy` · infra (verify on the live/appliance path)
