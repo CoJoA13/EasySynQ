@@ -20,6 +20,7 @@ from __future__ import annotations
 from easysynq_api.db.models.audit_event import (
     _SCOPE_REF_MAX_CHARS,
     AuditEvent,
+    bound_scope_ref,
 )
 
 
@@ -64,6 +65,45 @@ def test_capped_value_is_safely_under_the_btree_limit_even_in_utf8() -> None:
 def test_capping_is_deterministic() -> None:
     value = "folder:" + "y" * 5000
     assert _scope_ref_of(value) == _scope_ref_of(value)
+
+
+def test_read_key_matches_what_the_write_path_stores() -> None:
+    """The write/read symmetry the per-document audit history depends on.
+
+    ``api/audit.py::document_audit_events`` looks rows up by ``scope_ref``, so its search key must
+    canonicalize exactly as the write path does. ``documented_information.identifier`` is unbounded
+    ``Text`` and an import can preserve an arbitrarily long legacy identifier, so for such a
+    document a raw-identifier comparison matches NOTHING once the cap applies — the endpoint would
+    return an incomplete audit trail with no error, which is worse than failing outright.
+    """
+    for identifier in ("SOP-PUR-001", "LEGACY-" + "q" * 4000):
+        assert bound_scope_ref(identifier) == AuditEvent(scope_ref=identifier).scope_ref
+
+
+def test_bounding_is_idempotent() -> None:
+    """An already-stored value must survive a second pass unchanged, or re-deriving the search key
+    from a stored value would drift away from it."""
+    once = bound_scope_ref("folder:" + "w" * 5000)
+    assert bound_scope_ref(once) == once
+
+
+def test_history_query_searches_the_stored_key_for_a_long_identifier() -> None:
+    """Guards the endpoint's key-building, not just the helper.
+
+    A regression to a plain ``scope_ref == identifier`` passes every other test in this file,
+    because they all use short identifiers where the cap is the identity function. This one uses a
+    long identifier and asserts the compiled predicate actually contains the CAPPED key — which is
+    what the rows hold — plus the raw one, so pre-cap rows are still found.
+    """
+    from easysynq_api.api.audit import document_scope_match
+
+    identifier = "LEGACY-" + "k" * 4000
+    stored = bound_scope_ref(identifier)
+    assert stored is not None and stored != identifier  # precondition: this identifier IS capped
+
+    sql = str(document_scope_match(identifier).compile(compile_kwargs={"literal_binds": True}))
+    assert stored in sql, "the capped key the rows are actually stored under is not searched"
+    assert identifier in sql, "pre-cap rows holding the raw identifier would be missed"
 
 
 def test_two_over_long_values_sharing_a_prefix_stay_distinguishable() -> None:

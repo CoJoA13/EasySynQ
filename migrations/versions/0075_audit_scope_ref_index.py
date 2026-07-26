@@ -61,7 +61,6 @@ exclusion — ``env.py::_include_object`` already drops everything prefixed ``au
 
 from __future__ import annotations
 
-import sqlalchemy as sa
 from alembic import op
 
 revision: str = "0075_audit_scope_ref_index"
@@ -70,41 +69,40 @@ branch_labels: str | None = None
 depends_on: str | None = None
 
 _INDEX = "ix_audit_event_org_id_scope_ref_id"
-# Conservative pre-flight bound. The hard btree limit is 2704 bytes for the whole tuple; anything
-# under 2000 bytes of scope_ref is comfortably indexable once org_id + id + overhead are added.
-_MAX_INDEXABLE_BYTES = 2000
 
 
 def upgrade() -> None:
-    # Pre-flight: a btree tuple cannot exceed ~2704 bytes, and `scope_ref` is unbounded Text that
-    # several producers build from caller-supplied values (see AuditEvent._bound_scope_ref). New
-    # rows are now capped at the model, but a row written BEFORE that cap could still be over-long,
-    # and `CREATE INDEX` would then abort with a raw PostgreSQL error mid-upgrade. Check first and
-    # fail with something actionable. `audit_event` is append-only (the app role holds no UPDATE and
-    # the rows are hash-chained), so this deliberately does NOT rewrite the offending row — that is
-    # an operator decision, not something a migration may do silently.
-    over_long = (
-        op.get_bind()
-        .execute(
-            sa.text(
-                "SELECT count(*) FROM audit_event WHERE octet_length(scope_ref) > :cap"
-            ),
-            {"cap": _MAX_INDEXABLE_BYTES},
-        )
-        .scalar_one()
-    )
-    if over_long:
+    # A btree tuple cannot exceed 2704 bytes, and `scope_ref` is unbounded Text built from
+    # caller-supplied values. New rows are capped at the model (AuditEvent._bound_scope_ref), but a
+    # row written BEFORE that cap could still be over-long and would abort this DDL with a raw
+    # PostgreSQL error mid-upgrade. So catch that specific failure and re-raise it as something an
+    # operator can act on.
+    #
+    # ⚠ Deliberately NOT a `SELECT ... WHERE octet_length(scope_ref) > N` pre-flight. Two reasons,
+    # both of which bit the first version of this migration:
+    #   * raw length does not decide indexability. PostgreSQL compresses before indexing, so a long
+    #     compressible value indexes fine while a shorter incompressible one does not. Any fixed
+    #     byte threshold therefore rejects legitimate rows — including ones this very migration's
+    #     own cap permits (512 four-byte characters is 2048 bytes, over a 2000-byte bound).
+    #   * a data-dependent read breaks OFFLINE generation. Under `alembic upgrade X:Y --sql` the
+    #     bind emits the statement and returns None, so `.scalar_one()` raises AttributeError and no
+    #     SQL is produced at all. Letting the DDL speak keeps `--sql` working.
+    # Postgres itself is the exact oracle here, and it costs nothing to ask it.
+    try:
+        op.create_index(_INDEX, "audit_event", ["org_id", "scope_ref", "id"])
+    except Exception as exc:  # noqa: BLE001 - re-raised below; only the size failure is translated
+        if "index row size" not in str(exc):
+            raise
         raise RuntimeError(
-            f"Cannot create {_INDEX}: {over_long} audit_event row(s) have a scope_ref longer than "
-            f"{_MAX_INDEXABLE_BYTES} bytes, which exceeds PostgreSQL's btree tuple limit (2704). "
-            "These predate the cap now enforced in AuditEvent._bound_scope_ref. audit_event is "
-            "append-only and hash-chained, so this migration will not rewrite them. Identify them "
-            "with:  SELECT id, occurred_at, octet_length(scope_ref) FROM audit_event "
-            f"WHERE octet_length(scope_ref) > {_MAX_INDEXABLE_BYTES};  then decide with the quality "
-            "owner how to proceed (the rows are legitimate audit records; the usual answer is to "
-            "shorten them under a documented, signed-off correction, not to delete them)."
-        )
-    op.create_index(_INDEX, "audit_event", ["org_id", "scope_ref", "id"])
+            f"Cannot create {_INDEX}: at least one audit_event row has a scope_ref too large to "
+            "index (PostgreSQL btree tuples are capped at 2704 bytes). Such rows predate the cap "
+            "now enforced in AuditEvent._bound_scope_ref. audit_event is append-only and "
+            "hash-chained, so this migration will not rewrite them. Find the candidates with:  "
+            "SELECT id, occurred_at, octet_length(scope_ref) FROM audit_event ORDER BY 3 DESC "
+            "LIMIT 20;  then decide with the quality owner how to proceed - they are legitimate "
+            "audit records, so the usual answer is to shorten them under a documented, signed-off "
+            "correction, not to delete them."
+        ) from exc
 
 
 def downgrade() -> None:

@@ -62,6 +62,29 @@ _SCOPE_REF_DIGEST_CHARS = 16
 _SCOPE_REF_MARKER = "…sha256:"
 
 
+def bound_scope_ref(value: str | None) -> str | None:
+    """Canonicalize a ``scope_ref`` to its stored form: unchanged if short, capped if not.
+
+    ⚠ **Any query that looks a row up BY ``scope_ref`` must route its search key through this same
+    function.** The write path caps (``AuditEvent._bound_scope_ref``), so comparing a raw over-long
+    key against the stored capped value silently matches nothing — for the per-document audit
+    history that means an endpoint returning an incomplete trail with no error, which is a worse
+    failure than a crash. ``api/audit.py::document_audit_events`` is the one such caller today; it
+    searches both the raw and capped forms so rows written before the cap are still found.
+
+    Truncation keeps a readable prefix and appends a digest **of the full original**, so two
+    over-long values that share a prefix stay distinguishable instead of collapsing to the same
+    reference. Deterministic by construction, which matters because ``scope_ref`` is an input to the
+    audit hash chain (``services/audit/canonical.py``) — the stored value is what gets hashed, so a
+    capped row is self-consistent.
+    """
+    if value is None or len(value) <= _SCOPE_REF_MAX_CHARS:
+        return value
+    digest = hashlib.sha256(value.encode("utf-8")).hexdigest()[:_SCOPE_REF_DIGEST_CHARS]
+    keep = _SCOPE_REF_MAX_CHARS - len(_SCOPE_REF_MARKER) - _SCOPE_REF_DIGEST_CHARS
+    return f"{value[:keep]}{_SCOPE_REF_MARKER}{digest}"
+
+
 class AuditEvent(Base):
     __tablename__ = "audit_event"
     __table_args__ = (
@@ -128,22 +151,13 @@ class AuditEvent(Base):
 
     @validates("scope_ref")
     def _bound_scope_ref(self, _key: str, value: str | None) -> str | None:
-        """Cap ``scope_ref`` so it can never exceed the btree tuple limit (see the constants above).
+        """Cap ``scope_ref`` on write — see ``bound_scope_ref`` for the why.
 
         Deliberately on the MODEL rather than at any producer: ``scope_ref`` is written from ~56
         call sites across the vault, authz, ingestion and workflow paths, and a bound enforced at
         one of them would silently not apply to the other 55 — or to the next one added. Firing on
         attribute set means every construction path is covered, including plain ``AuditEvent(...)``.
-
-        Truncation keeps a readable prefix and appends a digest **of the full original**, so two
-        different over-long values stay distinguishable rather than collapsing to the same prefix.
-        The result is deterministic, which matters because ``scope_ref`` is an input to the audit
-        hash chain (``services/audit/canonical.py``) — the stored value is what gets hashed, so a
-        capped row is self-consistent. Existing rows are never rewritten (the table is append-only);
-        this only bounds what is written from here on.
+        ``@validates`` does NOT fire on ORM load, so rows written before this cap read back
+        byte-identical and their hash-chain verification is untouched.
         """
-        if value is None or len(value) <= _SCOPE_REF_MAX_CHARS:
-            return value
-        digest = hashlib.sha256(value.encode("utf-8")).hexdigest()[:_SCOPE_REF_DIGEST_CHARS]
-        keep = _SCOPE_REF_MAX_CHARS - len(_SCOPE_REF_MARKER) - _SCOPE_REF_DIGEST_CHARS
-        return f"{value[:keep]}{_SCOPE_REF_MARKER}{digest}"
+        return bound_scope_ref(value)
