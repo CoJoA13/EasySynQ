@@ -69,6 +69,43 @@
   repoints `get_sessionmaker()` — so no existing fixture can reach it. **Closing it needs** an
   orchestrator harness (inject the sessionmaker, or a settings override the task honours) — a slice,
   not a remediation fix. Raised and named by Codex + this batch's own review on #368.
+- **No test validates any RESPONSE against its published schema — the `contract`/schemathesis marker
+  is declared but unused** (Batch 12; owner-acknowledged, **scheduled as its own slice between Batch
+  12 and Batch 13**). This is the root of the whole Batch-12 drift class, not a side note: `redocly
+  lint` only proves the document is *well-formed*, and `pyproject.toml:100` declares a `contract`
+  marker plus `schemathesis>=4.24.0` as a dev dep that **nothing invokes** — so nothing has ever
+  compared the contract to server truth. That is how `AuditEvent.object_type` sat 8 values stale
+  across eight `ALTER TYPE` migrations, and how `DecisionResult` kept rejecting the reachable quorum
+  `ALREADY_SATISFIED` 200 (caught only by the diff-critic pass, after the source review had already
+  found and lost it as `finder-only`). Batch 12 closed the *enum* half of the class
+  (`tests/unit/test_openapi_enum_parity.py`), leaving the response-shape half open. **Scope:** 230
+  paths / 282 operations (133 GET · 116 POST · 18 PATCH · 11 DELETE · 4 PUT), 360 responses carrying
+  a content schema. **Closing it needs** three things, and each is a real hazard if skipped: (1) it
+  must be driven through an **authenticated, post-setup** fixture — the app 423s everything outside
+  the wizard/verify exemptions until setup finalizes and most routes need a bearer token, so a naive
+  run validates a wall of 423/401s and reports a **meaningless green** (the false-PASS to avoid);
+  (2) it must run ONLY against the disposable `app_under_test` testcontainers, never a dev stack or
+  a real install — 149 of the 282 operations mutate, and some reach WORM/append-only and disposition
+  paths that are irreversible by design; (3) it should land **advisory / non-gating first**, because
+  a 360-response sweep will almost certainly surface a backlog of pre-existing violations — making
+  it a required CI job on day one would red CI on old debt and block Batch 13. Flip it to required
+  once triaged green.
+- **`easysynq upgrade` has no `lock_timeout`, so a migration can convoy the live write path**
+  (Batch 12; owner-acknowledged, **deferred to Batch 13 — infra/deploy hardening**). The in-place
+  upgrade runs on a one-off worker **while api/worker/beat stay up** (`scripts/easysynq:82` →
+  `cli/upgrade.py`), no `lock_timeout`/`statement_timeout` is set anywhere in the repo, and
+  `migrations/env.py:108` wraps the whole run in ONE transaction — so any migration that takes a
+  table lock and queues behind an open writer holds everything until the entire `upgrade head`
+  commits. Surfaced by `0075`, the first revision to index the hottest, largest, monotonically
+  growing table: its build takes `ShareLock` on `audit_event` and every partition, and since nearly
+  every mutating request writes an `audit_event` in the same transaction, the write path convoys
+  (reads are unaffected — `AccessShareLock` does not conflict). CI is structurally blind to this:
+  the `migrations` job round-trips an **empty, single-connection** DB, so there is neither data to
+  index nor a concurrent writer. **Mitigated for now, not closed:** `docs/runbooks/backup-restore.md`
+  § Upgrade documents stop/start steps and a row-count pre-check. **Closing it needs** a
+  `lock_timeout` on the alembic connection — deliberately NOT taken inside a contract-housekeeping
+  PR, since it changes *every* migration's failure mode from "wait" to "abort". Found by the
+  `migration-reviewer` pass on Batch 12.
 - ~~**Audit integrity alarm policy** (Batch 7 → Batch 11).~~ **CLOSED in Batch 11** (owner-approved,
   all three parts). (1) The `integrity.alarm` operator notification is wired end-to-end on the
   `CHAIN_VERIFY_FAIL` detection signal — in-app + email to System Administrators, CRITICAL class so it
