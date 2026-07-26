@@ -47,6 +47,9 @@ jobs:
       - uses: actions/checkout@v7
       - name: validate dev, online-production, and appliance Compose overlays
         run: |
+          # --env-file supplies interpolation values; the services' env_file entries still require
+          # the repo-root .env to exist. Materialize the ignored runner copy from the safe template.
+          cp .env.example .env
           docker compose --env-file .env.example \
             -f infra/compose/compose.yml \
             -f infra/compose/compose.s.yml \
