@@ -7725,15 +7725,15 @@ components:
     DecisionResult:
       type: object
       additionalProperties: false
-      # ⚠ outcome / decided_at / decided_by are deliberately NOT required, and `outcome` is nullable.
+      # ⚠ decided_at / decided_by are deliberately NOT required, and `outcome` is nullable.
       # engine.decide() has a benign no-op branch (services/workflow/engine.py, the `_QUORUM_SKIP`
       # arm returning stage_state "ALREADY_SATISFIED"): once a quorum stage has closed, every
-      # sibling approver's task is SKIPPED, but their task is still listed and still theirs, so a
-      # POST /tasks/{id}/decision returns 200 with `outcome: null` and NO decided_* fields — no
-      # decision was recorded, so inventing them would be dishonest. Requiring them made that
+      # sibling approver's task is SKIPPED, but their task is still listed and still theirs, so a POST
+      # /tasks/{id}/decision returns 200 with the always-emitted `outcome: null` and NO decided_*
+      # fields — no decision was recorded, so inventing those fields would be dishonest. Requiring them made that
       # reachable 200 an `additionalProperties:false` contract violation. Do not tighten this back
       # without first changing that branch.
-      required: [task_id, instance_id, stage_key]
+      required: [task_id, instance_id, stage_key, outcome]
       properties:
         task_id: { type: string, format: uuid }
         instance_id: { type: string, format: uuid }
@@ -7768,13 +7768,18 @@ components:
         # DCR decision paths re-derive onto the result: capa_close_state (services/capa/service.py
         # :615 and :740) and dcr_state (services/dcr/service.py:561 and :735). Both are simply
         # ABSENT on decisions of other subject types, which is legal since neither is required.
-        # Neither is null in practice today — Capa.close_state is nullable=False with a 'Raised'
-        # server_default — but the "null" branch is kept as a deliberate forward-compatible
-        # superset, so a future path that legitimately has no state cannot turn into a contract
-        # violation. (Do NOT cite services/dcr/repository.py here: its capa_close_state key belongs
-        # to caused_by_links(), the DCR impact panel, which is a different shape entirely.)
-        capa_close_state: { type: [string, "null"] }
-        dcr_state: { type: [string, "null"] }
+        # Nullable refs retain that forward-compatible branch without discarding the authoritative
+        # state enums (issue #370). (Do NOT cite services/dcr/repository.py here: its
+        # capa_close_state key belongs to caused_by_links(), the DCR impact panel, which is a
+        # different shape entirely.)
+        capa_close_state:
+          oneOf:
+            - { $ref: "#/components/schemas/CapaCloseState" }
+            - { type: "null" }
+        dcr_state:
+          oneOf:
+            - { $ref: "#/components/schemas/DcrState" }
+            - { type: "null" }
 
     AuditEvent:
       type: object
