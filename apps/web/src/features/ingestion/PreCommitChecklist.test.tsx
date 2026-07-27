@@ -45,6 +45,22 @@ test("renders the ★ mandatory ISO clause coverage as '17 / 20 satisfied' (advi
   expect(within(coverageRow).getByText("17 / 20 satisfied")).toBeInTheDocument();
 });
 
+test("falls back to the live covered count when a projected rollup is absent", () => {
+  const liveOnly: ImportChecklist = {
+    ...CHECKLIST,
+    advisory: {
+      ...CHECKLIST.advisory,
+      star_coverage: {
+        ...CHECKLIST.advisory.star_coverage!,
+        projected_rollup: undefined,
+      },
+    },
+  };
+  renderWithProviders(<PreCommitChecklist checklist={liveOnly} onShowBlocker={() => {}} />);
+  const coverageRow = screen.getByLabelText("Advisory: Mandatory ISO clause coverage");
+  expect(within(coverageRow).getByText("15 / 20 satisfied")).toBeInTheDocument();
+});
+
 test("renders the kind-confirmed advisory row as '1 / 4' (warning, never danger)", () => {
   renderWithProviders(<PreCommitChecklist checklist={CHECKLIST} onShowBlocker={() => {}} />);
   const kindRow = screen.getByLabelText("Advisory: Kind confirmed on every item");

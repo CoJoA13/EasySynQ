@@ -1,4 +1,5 @@
 import { screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { http, HttpResponse } from "msw";
 import { expect, it } from "vitest";
@@ -107,4 +108,39 @@ it("offers start-revision for an Effective document", () => {
     />,
   );
   expect(screen.getByRole("button", { name: /start revision/i })).toBeInTheDocument();
+});
+
+it("drops the checked-out file and reason when navigation switches to another document", async () => {
+  const user = userEvent.setup();
+  const view = renderWithProviders(<AuthorActions doc={{ ...baseDoc, capabilities: allCaps }} />);
+
+  await user.click(screen.getByRole("button", { name: /check out to edit/i }));
+  await screen.findByText(/checked out by you/i);
+  const firstFileInput = view.container.querySelector('input[type="file"]') as HTMLInputElement;
+  await user.upload(
+    firstFileInput,
+    new File(["document A"], "document-a.pdf", { type: "application/pdf" }),
+  );
+  await user.type(screen.getByLabelText(/change reason/i), "Document A correction");
+
+  view.rerender(
+    <AuthorActions
+      doc={{
+        ...baseDoc,
+        id: "44444444-4444-4444-4444-444444444444",
+        identifier: "SOP-GEN-002",
+        title: "Another Draft",
+        capabilities: allCaps,
+      }}
+    />,
+  );
+
+  expect(await screen.findByRole("button", { name: /check out to edit/i })).toBeInTheDocument();
+  expect(screen.queryByText(/checked out by you/i)).not.toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: /check out to edit/i }));
+  await screen.findByText(/checked out by you/i);
+  const secondFileInput = view.container.querySelector('input[type="file"]') as HTMLInputElement;
+  expect(secondFileInput.files).toHaveLength(0);
+  expect(screen.getByLabelText(/change reason/i)).toHaveValue("");
 });

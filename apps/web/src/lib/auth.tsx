@@ -58,26 +58,48 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   navRef.current = navigate;
 
   useEffect(() => {
+    let cancelled = false;
+    let unsubscribeUserLoaded: (() => void) | undefined;
+
+    // oidc-client-ts renews an access token in place (normally via the refresh token) and emits the
+    // replacement User. Keep React's bearer-token source synchronized so every useApi consumer sees
+    // the renewed token without unmounting the app or discarding an in-progress form.
+    const onUserLoaded = (loadedUser: User) => {
+      if (!cancelled) setUser(loadedUser);
+    };
+
     void (async () => {
       const mgr = await getManager();
+      if (cancelled) return;
+      unsubscribeUserLoaded = mgr.events.addUserLoaded(onUserLoaded);
+
       const params = new URLSearchParams(window.location.search);
       if (params.has("code") && params.has("state")) {
         try {
           const u = await mgr.signinRedirectCallback();
+          if (cancelled) return;
           setUser(u);
           // Restore the path stashed in the OIDC state (also strips ?code&state from the URL).
           navRef.current(safeReturnTo((u.state as { returnTo?: string } | undefined)?.returnTo), {
             replace: true,
           });
         } catch {
+          if (cancelled) return;
           // invalid/expired callback — strip the query, fall through to logged-out
           window.history.replaceState({}, "", window.location.pathname);
         }
       } else {
-        setUser(await mgr.getUser());
+        const storedUser = await mgr.getUser();
+        if (cancelled) return;
+        setUser(storedUser);
       }
       setReady(true);
     })();
+
+    return () => {
+      cancelled = true;
+      unsubscribeUserLoaded?.();
+    };
   }, []); // once-on-mount bootstrap: navRef.current is always latest, no navigate identity dep
 
   const value: AuthState = {

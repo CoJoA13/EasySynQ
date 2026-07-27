@@ -4,7 +4,7 @@ import { axe } from "jest-axe";
 import { http, HttpResponse } from "msw";
 import { expect, test } from "vitest";
 import { server } from "../../test/msw/server";
-import { ingestionRunFixture } from "../../test/msw/handlers";
+import { ingestionChecklistFixture, ingestionRunFixture } from "../../test/msw/handlers";
 import { renderWithProviders } from "../../test/render";
 import { ReviewCockpit } from "./ReviewCockpit";
 
@@ -66,7 +66,9 @@ test("the 'Already in vault' tab shows the explainer, not the files table", asyn
   await user.click(screen.getByRole("tab", { name: /Already in vault/ }));
   // The calm registry explainer renders; the triage table does NOT (the empty {} filter would
   // otherwise list page 1 of ALL files while the badge says 0).
-  expect(await screen.findByText(/already controlled in the vault are skipped/i)).toBeInTheDocument();
+  expect(
+    await screen.findByText(/already controlled in the vault are skipped/i),
+  ).toBeInTheDocument();
   expect(screen.queryByRole("table", { name: "Triage queue" })).not.toBeInTheDocument();
 });
 
@@ -81,6 +83,117 @@ test("changing the confidence facet clears the current selection", async () => {
   // is dropped, so the bulk bar disappears.
   await user.click(screen.getByRole("radio", { name: "High" }));
   expect(screen.queryByRole("region", { name: "Bulk actions" })).not.toBeInTheDocument();
+});
+
+test("surfaces a failed row decision instead of silently dropping it", async () => {
+  const user = userEvent.setup();
+  server.use(
+    http.post("/api/v1/admin/imports/:id/files/:fid/decision", () =>
+      HttpResponse.json(
+        {
+          code: "decision_conflict",
+          title: "Decision conflict",
+          detail: "Another reviewer changed this file.",
+        },
+        { status: 409 },
+      ),
+    ),
+  );
+  renderCockpit();
+  const filename = await screen.findByText("SOP-PUR-014 Purchasing.docx");
+  const row = filename.closest("tr");
+  expect(row).not.toBeNull();
+
+  await user.click(within(row!).getByRole("button", { name: "Accept" }));
+
+  expect(await screen.findByText("Another reviewer changed this file.")).toBeInTheDocument();
+  expect(screen.getByText("Review action failed")).toBeInTheDocument();
+});
+
+test("surfaces a failed bulk decision", async () => {
+  const user = userEvent.setup();
+  server.use(
+    http.post("/api/v1/admin/imports/:id/decisions", () =>
+      HttpResponse.json(
+        {
+          code: "bulk_conflict",
+          title: "Bulk conflict",
+          detail: "The selected review set is stale.",
+        },
+        { status: 409 },
+      ),
+    ),
+  );
+  renderCockpit();
+  await screen.findByText("SOP-PUR-014 Purchasing.docx");
+  await user.click(screen.getByLabelText("Select SOP-PUR-014 Purchasing.docx"));
+  await user.click(screen.getByRole("button", { name: "Bulk accept all High" }));
+
+  expect(await screen.findByText("The selected review set is stale.")).toBeInTheDocument();
+});
+
+test("surfaces a failed split action", async () => {
+  const user = userEvent.setup();
+  server.use(
+    http.post("/api/v1/admin/imports/:id/split", () =>
+      HttpResponse.json(
+        {
+          code: "split_conflict",
+          title: "Split conflict",
+          detail: "This group changed before the split completed.",
+        },
+        { status: 409 },
+      ),
+    ),
+  );
+  renderCockpit();
+  const filename = await screen.findByText("SOP-PUR-014 Purchasing.docx");
+  const row = filename.closest("tr");
+  expect(row).not.toBeNull();
+  await user.click(within(row!).getByRole("button", { name: "Open" }));
+  await user.click(await screen.findByRole("button", { name: "Split out of group" }));
+
+  expect(
+    await screen.findByText("This group changed before the split completed."),
+  ).toBeInTheDocument();
+  expect(
+    within(screen.getByRole("dialog")).getByText("This group changed before the split completed."),
+  ).toBeInTheDocument();
+});
+
+test("surfaces a failed commit inside the commit card", async () => {
+  const user = userEvent.setup();
+  server.use(
+    http.get("/api/v1/me/permissions", () =>
+      HttpResponse.json({
+        scope: { level: "SYSTEM", selector: null },
+        permissions: [{ key: "import.commit", effect: "ALLOW", source: "role" }],
+      }),
+    ),
+    http.get("/api/v1/admin/imports/:id/checklist", () =>
+      HttpResponse.json({
+        ...ingestionChecklistFixture,
+        ready: true,
+        blocking: [],
+        review: { ...ingestionChecklistFixture.review, commit_ready: 1 },
+      }),
+    ),
+    http.post("/api/v1/admin/imports/:id/commit", () =>
+      HttpResponse.json(
+        {
+          code: "commit_conflict",
+          title: "Commit conflict",
+          detail: "The checklist changed before commit.",
+        },
+        { status: 409 },
+      ),
+    ),
+  );
+  renderCockpit();
+  await user.click(await screen.findByRole("button", { name: "Commit 1 confirmed" }));
+
+  expect(await screen.findByText("The checklist changed before commit.")).toBeInTheDocument();
+  expect(screen.getByText("Commit failed")).toBeInTheDocument();
 });
 
 test("has no axe violations", async () => {

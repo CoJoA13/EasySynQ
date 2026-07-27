@@ -66,7 +66,11 @@ export function AuthorActions({ doc }: { doc: DocumentSummary }) {
         </Alert>
       )}
       {draftLike && caps.edit && (
-        <CheckInPanel documentId={doc.id} sourceVersionId={doc.current_effective_version_id} />
+        <CheckInPanel
+          key={doc.id}
+          documentId={doc.id}
+          sourceVersionId={doc.current_effective_version_id}
+        />
       )}
       {draftLike && caps.manage_metadata && <ClauseMapper documentId={doc.id} />}
       {draftLike && caps.submit && (

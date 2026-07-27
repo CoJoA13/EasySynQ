@@ -2,6 +2,7 @@ import { Alert, Stack, Text } from "@mantine/core";
 import { useCallback, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { usePermissions } from "../../app/shell/usePermissions";
+import { ApiError } from "../../lib/api";
 import type {
   ConfirmedKind,
   ImportDecisionAction,
@@ -41,6 +42,10 @@ import {
 // The review-face spine. Owns the selection Set, the active drawer file id, and the queue/conf/offset
 // URL state; joins clusters/families into the per-row dupe/family maps; threads handlers down to the
 // presentational children. Every write generates a fresh Idempotency-Key (one per bulk op).
+function errorMessage(error: unknown): string {
+  return error instanceof ApiError ? error.message : "Something went wrong. Please retry.";
+}
+
 export function ReviewCockpit({ runId, run }: { runId: string; run: ImportRun }) {
   const [params, setParams] = useSearchParams();
   const { queue, conf, offset } = parseRunUrl(params);
@@ -62,6 +67,9 @@ export function ReviewCockpit({ runId, run }: { runId: string; run: ImportRun })
   const splitRun = useSplit(runId);
   const { can } = usePermissions();
   const canCommit = can("import.commit");
+  const detailActionError = fileDecision.error ?? splitRun.error;
+  const reviewActionError =
+    bulkDecision.error ?? (activeFileId === null ? detailActionError : null);
 
   const files = useMemo(() => filesQuery.data?.files ?? [], [filesQuery.data]);
   const review = checklistQuery.data?.review;
@@ -105,7 +113,10 @@ export function ReviewCockpit({ runId, run }: { runId: string; run: ImportRun })
   // splitTargetMap: each member fileId → the group it can be split out of (a version family takes
   // priority over a dupe cluster). Used by the drawer's "Split out of group" action.
   const splitTargetMap = useMemo(() => {
-    const m = new Map<string, { target_kind: "version_family" | "dupe_cluster"; target_id: string }>();
+    const m = new Map<
+      string,
+      { target_kind: "version_family" | "dupe_cluster"; target_id: string }
+    >();
     for (const fam of familiesQuery.data?.families ?? [])
       for (const fid of fam.ordered_member_file_ids)
         m.set(fid, { target_kind: "version_family", target_id: fam.id });
@@ -237,6 +248,20 @@ export function ReviewCockpit({ runId, run }: { runId: string; run: ImportRun })
     <Stack gap="md" component="section" aria-label="Review cockpit">
       <RunSummaryTiles run={run} review={review} />
       <ImportPlanBanner />
+      {reviewActionError && (
+        <Alert
+          color="red"
+          title="Review action failed"
+          withCloseButton
+          onClose={() => {
+            fileDecision.reset();
+            bulkDecision.reset();
+            splitRun.reset();
+          }}
+        >
+          {errorMessage(reviewActionError)}
+        </Alert>
+      )}
       <QueueTabs counts={queueCounts} value={queue} onChange={onQueue} />
       <IngestionFacetBar conf={conf} onConf={onConf} />
 
@@ -249,7 +274,11 @@ export function ReviewCockpit({ runId, run }: { runId: string; run: ImportRun })
         />
       )}
       {selected.size >= 2 && (
-        <MergeMenu runId={runId} selectedFileIds={[...selected]} onDone={() => setSelected(new Set())} />
+        <MergeMenu
+          runId={runId}
+          selectedFileIds={[...selected]}
+          onDone={() => setSelected(new Set())}
+        />
       )}
 
       {queue === "vault" ? (
@@ -299,6 +328,8 @@ export function ReviewCockpit({ runId, run }: { runId: string; run: ImportRun })
             checklist={checklist}
             canCommit={canCommit}
             committing={commitRun.isPending}
+            error={commitRun.error}
+            onDismissError={() => commitRun.reset()}
             onCommit={() => commitRun.mutate()}
           />
         </>
@@ -308,6 +339,11 @@ export function ReviewCockpit({ runId, run }: { runId: string; run: ImportRun })
         runId={runId}
         fileId={activeFileId}
         onClose={() => setActiveFileId(null)}
+        actionError={detailActionError ? errorMessage(detailActionError) : null}
+        onDismissActionError={() => {
+          fileDecision.reset();
+          splitRun.reset();
+        }}
         onConfirmKind={(kind) => {
           if (activeFileId) onConfirmKind(activeFileId, kind);
         }}

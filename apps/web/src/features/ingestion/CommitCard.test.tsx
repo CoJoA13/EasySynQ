@@ -12,10 +12,26 @@ const NOT_READY: ImportChecklist = {
   status: "Reviewing",
   ready: false,
   blocking: [{ type: "duplicate_identifier_within_import" }],
-  advisory: { star_coverage: { total: 20, satisfied: 17 }, unknown_low: 2, kind_unconfirmed: 4 },
+  advisory: {
+    star_coverage: {
+      framework: "iso9001:2015",
+      rollup: { total: 20, covered: 15, partial: 1, gap: 4, overdue_review: 0 },
+      rows: [],
+      projected_rollup: { total: 20, covered: 17, partial: 1, gap: 2 },
+    },
+    unknown_low: 2,
+    kind_unconfirmed: 4,
+  },
   review: {
-    keep_items: 4, decided: 0, accepted: 0, corrected: 0, excluded: 0, deferred: 0,
-    undecided: 4, kind_confirmed: 1, commit_ready: 1,
+    keep_items: 4,
+    decided: 0,
+    accepted: 0,
+    corrected: 0,
+    excluded: 0,
+    deferred: 0,
+    undecided: 4,
+    kind_confirmed: 1,
+    commit_ready: 1,
   },
 };
 // A ready checklist: zero blocking, commit_ready = 3.
@@ -47,9 +63,7 @@ test("the button is enabled and clicking it calls onCommit when ready + commit_r
 });
 
 test("the button is disabled while committing (and shows a loading state)", () => {
-  renderWithProviders(
-    <CommitCard checklist={READY} canCommit committing onCommit={() => {}} />,
-  );
+  renderWithProviders(<CommitCard checklist={READY} canCommit committing onCommit={() => {}} />);
   expect(screen.getByRole("button", { name: /Commit 3 confirmed/ })).toBeDisabled();
 });
 

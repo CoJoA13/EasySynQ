@@ -290,13 +290,27 @@ land the sweep separately from the gate so the gate turns on green rather than r
   generate and persist it on their first root-run upgrade instead of passing the PostgreSQL owner
   password into the web-facing service)
 
-### ☐ Batch 14 — Web correctness
+### ☑ Batch 14 — Web correctness
 `branch: fix/major-web-correctness` · apps/web + vitest
 
-- [ ] `apps/web/src/features/authoring/CheckInPanel.tsx:41` — checked-out flag / file / reason not keyed on `documentId` → survives a doc-to-doc nav → wrong-content controlled-doc version; `key={doc.id}` or effect-reset `[C]`
-- [ ] `apps/web/src/lib/auth.tsx:86` — no token-renewal wiring → token goes stale at expiry, every call 401s until manual reload; subscribe to `addUserLoaded` and push the renewed token (do NOT unmount+redirect) `[C]`
-- [ ] `apps/web/src/features/ingestion/PreCommitChecklist.tsx:127` — ★-coverage reads `star_coverage.satisfied/.total` (never sent) → feature never displays; read the real projected shape + fix the fabricated MSW fixture `[C]`
-- [ ] `apps/web/src/features/ingestion/ReviewCockpit.tsx:59` — all import-review write actions fail silently → thread mutation errors into visible UI `[C]`
+- [x] `apps/web/src/features/authoring/CheckInPanel.tsx:41` — checked-out flag / file / reason
+  not keyed on `documentId` (fixed: `AuthorActions` keys the panel on `doc.id`, so a cached
+  doc-to-doc navigation remounts it and drops the prior document's lock UI, file and reason;
+  regression coverage checks out A, selects A's file/reason, navigates to B and proves B starts
+  empty)
+- [x] `apps/web/src/lib/auth.tsx:86` — no token-renewal wiring (fixed: `AuthProvider` subscribes to
+  `UserManager.events.addUserLoaded`, replaces the in-memory `User`/bearer token in place, and
+  unsubscribes on unmount; the renewal test proves the token changes without `signinRedirect` or an
+  app-unmounting navigation)
+- [x] `apps/web/src/features/ingestion/PreCommitChecklist.tsx:127` — ★-coverage reads fields the API
+  never sends (fixed: the UI reads `rollup.total` plus
+  `projected_rollup.covered ?? rollup.covered`; `ImportChecklistStarCoverage` pins the actual
+  serializer shape and the MSW/component fixtures now carry `framework`, `rollup`, `rows` and
+  `projected_rollup`)
+- [x] `apps/web/src/features/ingestion/ReviewCockpit.tsx:59` — all import-review write actions fail
+  silently (fixed: row/bulk errors render the server's problem detail in the cockpit, drawer
+  decision/split errors render inside the open drawer, commit errors render in `CommitCard`, and
+  merge errors remain visible inside the open popover; every surface is dismissible and retryable)
 
 ### ☐ Batch 15 — Web a11y & polish
 `branch: fix/major-web-a11y-polish` · apps/web + vitest/jest-axe

@@ -1,5 +1,6 @@
-import { Button, Checkbox, Popover, Radio, Stack, Text } from "@mantine/core";
+import { Alert, Button, Checkbox, Popover, Radio, Stack, Text } from "@mantine/core";
 import { useEffect, useState } from "react";
+import { ApiError } from "../../lib/api";
 import { useMerge } from "./hooks";
 
 // The mockup §8b "Merge ▾" control. Given ≥2 selected files, pick the effective member (Radio over
@@ -7,6 +8,10 @@ import { useMerge } from "./hooks";
 // submit a merge intent. Merge is server-authoritative: useMerge invalidates + refetches; we NEVER
 // reshape the cache here. ONE Idempotency-Key per merge (crypto.randomUUID()). Disabled (with a hint)
 // under 2 selected files.
+function errorMessage(error: unknown): string {
+  return error instanceof ApiError ? error.message : "Something went wrong. Please retry.";
+}
+
 export function MergeMenu({
   runId,
   selectedFileIds,
@@ -85,6 +90,11 @@ export function MergeMenu({
               checked={reconstruct}
               onChange={(e) => setReconstruct(e.currentTarget.checked)}
             />
+            {merge.error && (
+              <Alert color="red" title="Merge failed" withCloseButton onClose={() => merge.reset()}>
+                {errorMessage(merge.error)}
+              </Alert>
+            )}
             <Button onClick={submit} loading={merge.isPending}>
               Merge into one family
             </Button>

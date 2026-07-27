@@ -24,9 +24,7 @@ test("submitting posts file_ids + the chosen effective member + reconstruct flag
     }),
   );
   const onDone = vi.fn();
-  renderWithProviders(
-    <MergeMenu runId={RID} selectedFileIds={[A, B]} onDone={onDone} />,
-  );
+  renderWithProviders(<MergeMenu runId={RID} selectedFileIds={[A, B]} onDone={onDone} />);
   await user.click(screen.getByRole("button", { name: "Merge" }));
   // default effective member is the first id; choose the second instead.
   await user.click(await screen.findByRole("radio", { name: `Effective: ${B}` }));
@@ -54,9 +52,7 @@ test("defaults the effective member to the first id and reconstruct OFF (R10)", 
       return HttpResponse.json({ ok: true });
     }),
   );
-  renderWithProviders(
-    <MergeMenu runId={RID} selectedFileIds={[A, B]} onDone={() => {}} />,
-  );
+  renderWithProviders(<MergeMenu runId={RID} selectedFileIds={[A, B]} onDone={() => {}} />);
   await user.click(screen.getByRole("button", { name: "Merge" }));
   await user.click(await screen.findByRole("button", { name: "Merge into one family" }));
   await waitFor(() =>
@@ -68,10 +64,33 @@ test("defaults the effective member to the first id and reconstruct OFF (R10)", 
   );
 });
 
-test("the trigger is disabled with under 2 selected files", () => {
-  renderWithProviders(
-    <MergeMenu runId={RID} selectedFileIds={[A]} onDone={() => {}} />,
+test("surfaces the server detail when a merge fails", async () => {
+  const user = userEvent.setup();
+  server.use(
+    http.post("/api/v1/admin/imports/:id/merge", () =>
+      HttpResponse.json(
+        {
+          code: "merge_conflict",
+          title: "Merge conflict",
+          detail: "Another reviewer changed this version family.",
+        },
+        { status: 409 },
+      ),
+    ),
   );
+  renderWithProviders(<MergeMenu runId={RID} selectedFileIds={[A, B]} onDone={() => {}} />);
+
+  await user.click(screen.getByRole("button", { name: "Merge" }));
+  await user.click(await screen.findByRole("button", { name: "Merge into one family" }));
+
+  expect(
+    await screen.findByText("Another reviewer changed this version family."),
+  ).toBeInTheDocument();
+  expect(screen.getByText("Merge failed")).toBeInTheDocument();
+});
+
+test("the trigger is disabled with under 2 selected files", () => {
+  renderWithProviders(<MergeMenu runId={RID} selectedFileIds={[A]} onDone={() => {}} />);
   expect(screen.getByRole("button", { name: "Merge" })).toBeDisabled();
   expect(screen.getByText("Select 2 or more files to merge.")).toBeInTheDocument();
 });
