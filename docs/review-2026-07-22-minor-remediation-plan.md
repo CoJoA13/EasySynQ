@@ -148,9 +148,11 @@ migration and no new permission key
   human decision, resolve the reviewed reference against active non-guest users in the item's org,
   and materialize it on both imported Documents and Records; the bulk review UI now selects an
   actual directory user and submits its stable ID, while legacy exact identities remain accepted
-  even when a subject is UUID-shaped; an unresolved/ambiguous human choice fails the item rather
-  than silently assigning the committer, while authorship/capture/signature attribution remains
-  with the committer).
+  even when a subject is UUID-shaped; the checklist revalidates persisted human-owner references
+  before the run leaves its editable review state, so the old `Quality Manager` placeholder can be
+  corrected instead of stranding the run as partially committed; the worker remains fail-closed as
+  a write-boundary backstop, while authorship/capture/signature attribution remains with the
+  committer).
 - [x] `apps/api/src/easysynq_api/services/ingestion/commit.py:530` — `_record_failed` could commit a
   false failure audit after a peer successfully committed the item `[C]` (fixed: the conditional
   failure UPSERT now returns whether it won; only a won `failed` ledger write can emit the failure

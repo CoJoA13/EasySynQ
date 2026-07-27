@@ -1411,6 +1411,84 @@ async def test_commit_writes_documents_and_records_to_vault(
     assert recommit.status_code == 409  # already completed
 
 
+async def test_precommit_blocks_legacy_role_label_owner_until_corrected(
+    app_client: AsyncClient, token_factory: Callable[..., str], _stub_tika: None
+) -> None:
+    """A persisted pre-directory-picker owner stays reviewable instead of becoming stuck partial."""
+    admin = _subject("legacy-owner")
+    await _assign_role(admin, "System Administrator")
+    h = _auth(token_factory, admin)
+    run_id, by_name = await _proposed_classifiable(app_client, h, _stub_tika)
+    sop = by_name["SOP-PUR-002 Purchasing.docx"]["id"]
+    audit = by_name["Internal Audit Report Q2 2023.pdf"]["id"]
+    doc_ident = f"SOP-{uuid.uuid4().hex[:6].upper()}-001"
+    await _confirm_for_commit(app_client, h, run_id, sop, audit, doc_identifier=doc_ident)
+
+    # Model an append-only decision written by the old stub menu, whose sole choice was the
+    # persona/role label "Quality Manager" rather than a concrete directory identity.
+    async with get_sessionmaker()() as session:
+        run = await ingestion_repo.get_run(session, uuid.UUID(run_id))
+        reviewer = (
+            await session.execute(select(AppUser).where(AppUser.keycloak_subject == admin))
+        ).scalar_one()
+        assert run is not None
+        await ingestion_repo.insert_decision(
+            session,
+            org_id=run.org_id,
+            run_id=run.id,
+            action=ImportDecisionAction.CORRECT,
+            decided_by=reviewer.id,
+            file_id=uuid.UUID(sop),
+            target_kind="file",
+            after={"owner": "Quality Manager"},
+        )
+        await session.commit()
+
+    checklist = (
+        await app_client.get(f"/api/v1/admin/imports/{run_id}/checklist", headers=h)
+    ).json()
+    owner_blocks = [item for item in checklist["blocking"] if item["type"] == "owner_not_found"]
+    assert checklist["ready"] is False
+    assert owner_blocks == [
+        {
+            "type": "owner_not_found",
+            "owner": "Quality Manager",
+            "file_id": sop,
+            "resolved": False,
+        }
+    ]
+
+    blocked = await app_client.post(f"/api/v1/admin/imports/{run_id}/commit", headers=h)
+    assert blocked.status_code == 422, blocked.text
+    assert blocked.json()["code"] == "commit_blocked"
+    still_reviewing = (await app_client.get(f"/api/v1/admin/imports/{run_id}", headers=h)).json()
+    assert still_reviewing["status"] == "Reviewing"
+
+    # The new directory picker can append a concrete correction while the run is still reviewable.
+    owner_id = await _grant(_subject("replacement-owner"), ())
+    corrected = await app_client.post(
+        f"/api/v1/admin/imports/{run_id}/files/{sop}/decision",
+        headers=h,
+        json={"action": "correct", "after": {"owner": str(owner_id)}},
+    )
+    assert corrected.status_code == 200, corrected.text
+    repaired = (await app_client.get(f"/api/v1/admin/imports/{run_id}/checklist", headers=h)).json()
+    assert repaired["ready"] is True, repaired["blocking"]
+
+    commit = await app_client.post(f"/api/v1/admin/imports/{run_id}/commit", headers=h)
+    assert commit.status_code == 202, commit.text
+    await _drive_commit(uuid.UUID(run_id))
+    completed = (await app_client.get(f"/api/v1/admin/imports/{run_id}", headers=h)).json()
+    assert completed["status"] == "Completed"
+    async with get_sessionmaker()() as session:
+        doc = (
+            await session.execute(
+                select(DocumentedInformation).where(DocumentedInformation.identifier == doc_ident)
+            )
+        ).scalar_one()
+        assert doc.owner_user_id == owner_id
+
+
 async def test_blank_identifier_decision_is_rejected_before_commit(
     app_client: AsyncClient, token_factory: Callable[..., str], _stub_tika: None
 ) -> None:

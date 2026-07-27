@@ -901,6 +901,35 @@ async def compute_review_checklist(
         if len(fids) > 1
     ]
 
+    # Blocking: explicit reviewed owners must resolve while the run is still editable. This also
+    # catches decisions persisted by the pre-directory-picker UI (whose placeholder choice was the
+    # literal "Quality Manager") before the run can become PartiallyCommitted and non-reviewable.
+    # Resolve each distinct folded reference once: a large bulk correction normally shares one id.
+    human_owner_refs = sorted(
+        {
+            st.owner
+            for st in in_import.values()
+            if st.owner_source == "human" and st.owner is not None
+        }
+    )
+    owner_candidate_counts = {
+        owner_ref: len(await repo.resolve_import_owner_candidates(session, run.org_id, owner_ref))
+        for owner_ref in human_owner_refs
+    }
+    for fid, st in sorted(in_import.items(), key=lambda kv: str(kv[0])):
+        if st.owner_source != "human" or st.owner is None:
+            continue
+        candidate_count = owner_candidate_counts[st.owner]
+        if candidate_count != 1:
+            blocking.append(
+                {
+                    "type": "owner_ambiguous" if candidate_count else "owner_not_found",
+                    "owner": st.owner,
+                    "file_id": str(fid),
+                    "resolved": False,
+                }
+            )
+
     # Blocking: collides with an existing vault document (over COLLIDABLE EFFECTIVE identifiers).
     idents = [
         st.identifier
