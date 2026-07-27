@@ -57,7 +57,7 @@ export function IngestionRunPage() {
 
   const status = run.status;
   if (REVIEW_STATES.has(status)) {
-    return <ReviewCockpit runId={run.id} run={run} />;
+    return <ReviewCockpit key={run.id} runId={run.id} run={run} />;
   }
   if (status === "Committing") {
     return <CommitProgress run={run} />;

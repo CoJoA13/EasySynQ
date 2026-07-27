@@ -110,7 +110,7 @@ it("offers start-revision for an Effective document", () => {
   expect(screen.getByRole("button", { name: /start revision/i })).toBeInTheDocument();
 });
 
-it("drops the checked-out file and reason when navigation switches to another document", async () => {
+it("retains checkout per document without carrying its file and reason into another document", async () => {
   const user = userEvent.setup();
   const view = renderWithProviders(<AuthorActions doc={{ ...baseDoc, capabilities: allCaps }} />);
 
@@ -142,5 +142,12 @@ it("drops the checked-out file and reason when navigation switches to another do
   await screen.findByText(/checked out by you/i);
   const secondFileInput = view.container.querySelector('input[type="file"]') as HTMLInputElement;
   expect(secondFileInput.files).toHaveLength(0);
+  expect(screen.getByLabelText(/change reason/i)).toHaveValue("");
+
+  view.rerender(<AuthorActions doc={{ ...baseDoc, capabilities: allCaps }} />);
+
+  expect(await screen.findByText(/checked out by you/i)).toBeInTheDocument();
+  const restoredFileInput = view.container.querySelector('input[type="file"]') as HTMLInputElement;
+  expect(restoredFileInput.files).toHaveLength(0);
   expect(screen.getByLabelText(/change reason/i)).toHaveValue("");
 });

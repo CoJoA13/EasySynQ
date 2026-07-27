@@ -11,6 +11,7 @@ import { MergeMenu } from "./MergeMenu";
 const RID = ingestionRunFixture.id;
 const A = "f0000000-0000-0000-0000-0000000000a1";
 const B = "f0000000-0000-0000-0000-0000000000a4";
+const C = "f0000000-0000-0000-0000-0000000000a5";
 
 test("submitting posts file_ids + the chosen effective member + reconstruct flag, then calls onDone", async () => {
   const user = userEvent.setup();
@@ -87,6 +88,35 @@ test("surfaces the server detail when a merge fails", async () => {
     await screen.findByText("Another reviewer changed this version family."),
   ).toBeInTheDocument();
   expect(screen.getByText("Merge failed")).toBeInTheDocument();
+});
+
+test("clears a merge failure when the selected members change", async () => {
+  const user = userEvent.setup();
+  server.use(
+    http.post("/api/v1/admin/imports/:id/merge", () =>
+      HttpResponse.json(
+        {
+          code: "merge_conflict",
+          title: "Merge conflict",
+          detail: "The A+B family changed on the server.",
+        },
+        { status: 409 },
+      ),
+    ),
+  );
+  const view = renderWithProviders(
+    <MergeMenu runId={RID} selectedFileIds={[A, B]} onDone={() => {}} />,
+  );
+  await user.click(screen.getByRole("button", { name: "Merge" }));
+  await user.click(await screen.findByRole("button", { name: "Merge into one family" }));
+  expect(await screen.findByText("The A+B family changed on the server.")).toBeInTheDocument();
+
+  view.rerender(<MergeMenu runId={RID} selectedFileIds={[A, C]} onDone={() => {}} />);
+
+  await waitFor(() =>
+    expect(screen.queryByText("The A+B family changed on the server.")).not.toBeInTheDocument(),
+  );
+  expect(screen.getByRole("radio", { name: `Effective: ${C}` })).toBeInTheDocument();
 });
 
 test("the trigger is disabled with under 2 selected files", () => {
