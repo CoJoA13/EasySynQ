@@ -3266,8 +3266,11 @@ paths:
       summary: >-
         Apply ONE dimensional action (accept / correct / exclude / defer) across an explicit file_ids
         list OR a selector filter (kind / band / disposition) — the doc 09 §9.2a bulk-triage scale
-        lever. Bulk kind-confirm (after.kind) is the explicit human act (R10). An optional
-        Idempotency-Key header makes a retry a no-op replay. Needs import.review.
+        lever. A selector skips files with prior per-file decisions and fails atomically when the
+        match set includes a non-candidate or exceeds the configured bulk maximum; explicit
+        file_ids are the intentional overwrite path. Bulk kind-confirm (after.kind) is the explicit
+        human act (R10). An optional Idempotency-Key header makes a retry a no-op replay. Needs
+        import.review.
       parameters:
         - { name: Idempotency-Key, in: header, required: false, schema: { type: string } }
       requestBody:
@@ -3277,7 +3280,7 @@ paths:
             schema: { $ref: "#/components/schemas/ImportBulkDecisionRequest" }
       responses:
         "200":
-          description: The applied count (or a replay).
+          description: The applied and prior-decision-skipped counts (or a replay).
           content:
             application/json:
               schema: { type: object, additionalProperties: true }

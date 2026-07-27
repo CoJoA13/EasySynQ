@@ -835,6 +835,29 @@ async def list_decisions(session: AsyncSession, run_id: uuid.UUID) -> Sequence[I
     )
 
 
+async def decided_file_ids(
+    session: AsyncSession, run_id: uuid.UUID, file_ids: Sequence[uuid.UUID]
+) -> set[uuid.UUID]:
+    """The selected files that already carry specific human review intent.
+
+    Selector-based bulk review is intentionally subordinate to an existing per-file decision; this
+    bounded query avoids loading the full decision log merely to preserve those decisions.
+    """
+    if not file_ids:
+        return set()
+    rows = (
+        await session.execute(
+            select(ImportDecision.file_id)
+            .where(
+                ImportDecision.run_id == run_id,
+                ImportDecision.file_id.in_(file_ids),
+            )
+            .distinct()
+        )
+    ).scalars()
+    return {file_id for file_id in rows if file_id is not None}
+
+
 async def decisions_for_file(
     session: AsyncSession, run_id: uuid.UUID, file_id: uuid.UUID
 ) -> Sequence[ImportDecision]:

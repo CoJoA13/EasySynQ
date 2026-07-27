@@ -10,13 +10,14 @@ the per-family opt-in a human sets at S-ing-4 review to materialize the older me
 at
 commit; it is never auto-set.
 
-``ordered_member_file_ids`` is the full membership in §7.2 canonical order (newest/effective first),
-under a TOTAL order (version-marker → mtime/embedded-modified → editable-source > PDF →
+``ordered_member_file_ids`` is the full membership in §7.2 canonical order (newest/default-effective
+first), under a TOTAL order (version-marker → mtime/embedded-modified → editable-source > PDF →
 /Current//Released/ > /Archive//Old/ → lexically-lowest rel_path → id) so a re-run's
 DELETE-then-INSERT
-re-derives byte-identical ordering (the idempotency contract). ``effective_file_id`` is its head —
-the
-candidate Effective baseline. ``evidence`` carries the per-tie-break rationale +
+re-derives byte-identical ordering (the idempotency contract). ``effective_file_id`` defaults to its
+head, but review may select another member without changing the evidence order; a later structural
+split preserves that human choice while it remains in the family. ``evidence`` carries the
+per-tie-break rationale +
 ``obsolete_candidate``
 pre-flags (the ``import_classification.evidence`` shape).
 
@@ -70,6 +71,7 @@ class ImportVersionFamily(Base):
     ordered_member_file_ids: Mapped[list[uuid.UUID]] = mapped_column(
         ARRAY(UUID(as_uuid=True)), nullable=False
     )
+    # Defaults to ordered_member_file_ids[0], but may be a different human-selected member.
     effective_file_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("import_file.id", ondelete="CASCADE"), nullable=False
     )

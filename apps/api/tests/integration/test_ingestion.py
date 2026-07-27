@@ -40,6 +40,7 @@ from easysynq_api.domain.authz.types import Effect, ScopeLevel
 from easysynq_api.domain.ingestion.extractor import ExtractInput, ExtractResult
 from easysynq_api.services.ingestion import commit as commit_svc
 from easysynq_api.services.ingestion import repository as ingestion_repo
+from easysynq_api.services.ingestion import review as review_svc
 from easysynq_api.services.ingestion.classify import run_classify
 from easysynq_api.services.ingestion.commit import run_commit
 from easysynq_api.services.ingestion.dedup import run_dedup
@@ -874,6 +875,155 @@ async def test_bulk_decision_over_filter(
     assert docs[0]["review"]["kind"] == "DOCUMENT" and docs[0]["review"]["commit_ready"] is True
 
 
+async def test_bulk_accept_all_high_preserves_prior_file_decision(
+    app_client: AsyncClient, token_factory: Callable[..., str], _stub_tika: None
+) -> None:
+    admin = _subject("avery")
+    await _assign_role(admin, "System Administrator")
+    h = _auth(token_factory, admin)
+    run_id, by_name = await _proposed_classifiable(app_client, h, _stub_tika)
+    sop = by_name["SOP-PUR-002 Purchasing.docx"]["id"]
+    audit = by_name["Internal Audit Report Q2 2023.pdf"]["id"]
+
+    excluded = await app_client.post(
+        f"/api/v1/admin/imports/{run_id}/files/{sop}/decision",
+        headers=h,
+        json={"action": "exclude", "reason": "explicitly out of scope"},
+    )
+    assert excluded.status_code == 200, excluded.text
+
+    # Both files are HIGH, but a broad selector must not supersede the more-specific human choice.
+    accepted = await app_client.post(
+        f"/api/v1/admin/imports/{run_id}/decisions",
+        headers=h,
+        json={"action": "accept", "selector": {"band": "HIGH"}},
+    )
+    assert accepted.status_code == 200, accepted.text
+    assert accepted.json()["applied"] == 1
+    assert accepted.json()["skipped_prior_decisions"] == 1
+
+    sop_detail = (
+        await app_client.get(f"/api/v1/admin/imports/{run_id}/files/{sop}", headers=h)
+    ).json()
+    assert sop_detail["review"]["effective"]["disposition"] == "excluded"
+    assert [d["action"] for d in sop_detail["review"]["decision_history"]] == ["exclude"]
+
+    audit_detail = (
+        await app_client.get(f"/api/v1/admin/imports/{run_id}/files/{audit}", headers=h)
+    ).json()
+    assert audit_detail["review"]["effective"]["disposition"] == "included"
+    assert [d["action"] for d in audit_detail["review"]["decision_history"]] == ["accept"]
+
+    # A selector whose complete match set is already decided is a calm no-op, not a fabricated
+    # decision/event. Explicit file_ids remain available when a reviewer truly wants to overwrite.
+    async with get_sessionmaker()() as session:
+        audit_before = (
+            await session.execute(
+                select(sa.func.count())
+                .select_from(AuditEvent)
+                .where(
+                    AuditEvent.object_id == uuid.UUID(run_id),
+                    AuditEvent.event_type == EventType.IMPORT_DECISION_RECORDED,
+                )
+            )
+        ).scalar_one()
+    no_op = await app_client.post(
+        f"/api/v1/admin/imports/{run_id}/decisions",
+        headers=h,
+        json={"action": "accept", "selector": {"kind": "DOCUMENT"}},
+    )
+    assert no_op.status_code == 200, no_op.text
+    assert no_op.json()["applied"] == 0
+    assert no_op.json()["skipped_prior_decisions"] == 1
+    decisions = (
+        await app_client.get(f"/api/v1/admin/imports/{run_id}/decisions", headers=h)
+    ).json()["decisions"]
+    assert len(decisions) == 2
+    async with get_sessionmaker()() as session:
+        audit_after = (
+            await session.execute(
+                select(sa.func.count())
+                .select_from(AuditEvent)
+                .where(
+                    AuditEvent.object_id == uuid.UUID(run_id),
+                    AuditEvent.event_type == EventType.IMPORT_DECISION_RECORDED,
+                )
+            )
+        ).scalar_one()
+    assert audit_after == audit_before
+
+    overwritten = await app_client.post(
+        f"/api/v1/admin/imports/{run_id}/decisions",
+        headers=h,
+        json={"action": "accept", "file_ids": [sop]},
+    )
+    assert overwritten.status_code == 200, overwritten.text
+    assert overwritten.json()["applied"] == 1
+    assert overwritten.json()["skipped_prior_decisions"] == 0
+    sop_after_explicit = (
+        await app_client.get(f"/api/v1/admin/imports/{run_id}/files/{sop}", headers=h)
+    ).json()
+    assert sop_after_explicit["review"]["effective"]["disposition"] == "included"
+
+
+async def test_bulk_selector_rejects_non_candidate_matches(
+    app_client: AsyncClient, token_factory: Callable[..., str], _stub_tika: None
+) -> None:
+    admin = _subject("avery")
+    await _assign_role(admin, "System Administrator")
+    h = _auth(token_factory, admin)
+    _seed_source()  # disposition=excluded rows are deliberately not import candidates.
+    run_id = (
+        await app_client.post("/api/v1/admin/imports", headers=h, json={"source_root": "."})
+    ).json()["id"]
+    await _drive(uuid.UUID(run_id))
+
+    rejected = await app_client.post(
+        f"/api/v1/admin/imports/{run_id}/decisions",
+        headers=h,
+        json={"action": "accept", "selector": {"disposition": "excluded"}},
+    )
+    assert rejected.status_code == 422, rejected.text
+    assert "not an included candidate" in rejected.json()["title"]
+
+    decisions = (
+        await app_client.get(f"/api/v1/admin/imports/{run_id}/decisions", headers=h)
+    ).json()["decisions"]
+    assert decisions == []  # validation is atomic; no matched junk row receives a decision.
+    run = (await app_client.get(f"/api/v1/admin/imports/{run_id}", headers=h)).json()
+    assert run["status"] == "Proposed"
+
+
+async def test_bulk_selector_rejects_oversized_match_set(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    _stub_tika: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    admin = _subject("avery")
+    await _assign_role(admin, "System Administrator")
+    h = _auth(token_factory, admin)
+    run_id, _ = await _proposed_classifiable(app_client, h, _stub_tika)
+    settings = get_settings().model_copy(update={"import_bulk_decision_max": 1})
+    monkeypatch.setattr(review_svc, "get_settings", lambda: settings)
+
+    # The empty selector matches both included files. The old limit=1 query silently mutated one.
+    rejected = await app_client.post(
+        f"/api/v1/admin/imports/{run_id}/decisions",
+        headers=h,
+        json={"action": "accept", "selector": {}},
+    )
+    assert rejected.status_code == 422, rejected.text
+    assert rejected.json()["title"] == "bulk selection exceeds max 1"
+
+    decisions = (
+        await app_client.get(f"/api/v1/admin/imports/{run_id}/decisions", headers=h)
+    ).json()["decisions"]
+    assert decisions == []
+    run = (await app_client.get(f"/api/v1/admin/imports/{run_id}", headers=h)).json()
+    assert run["status"] == "Proposed"
+
+
 async def test_merge_forces_version_family_with_revision_chain(
     app_client: AsyncClient, token_factory: Callable[..., str], _stub_tika: None
 ) -> None:
@@ -956,6 +1106,55 @@ async def test_split_deletes_group_below_two_members(
     assert (
         after["counts"]["proposal"]["keep_items"] == keep_before + 1
     )  # the survivor became a keep
+
+
+async def test_split_version_family_preserves_surviving_human_effective_member(
+    app_client: AsyncClient, token_factory: Callable[..., str], _stub_tika: None
+) -> None:
+    admin = _subject("avery")
+    await _assign_role(admin, "System Administrator")
+    h = _auth(token_factory, admin)
+    _seed_dedup_corpus()
+    run_id = (
+        await app_client.post("/api/v1/admin/imports", headers=h, json={"source_root": "."})
+    ).json()["id"]
+    await _drive(uuid.UUID(run_id))
+
+    families = (
+        await app_client.get(f"/api/v1/admin/imports/{run_id}/version-families", headers=h)
+    ).json()["families"]
+    first, chosen, separated = families[0]["ordered_member_file_ids"]
+
+    merged = await app_client.post(
+        f"/api/v1/admin/imports/{run_id}/merge",
+        headers=h,
+        json={
+            "file_ids": [first, chosen],
+            "effective_file_id": chosen,
+            "reconstruct_revision_chain": True,
+        },
+    )
+    assert merged.status_code == 200, merged.text
+    family_id = merged.json()["family_id"]
+
+    split = await app_client.post(
+        f"/api/v1/admin/imports/{run_id}/split",
+        headers=h,
+        json={
+            "target_kind": "version_family",
+            "target_id": family_id,
+            "separate_file_ids": [separated],
+        },
+    )
+    assert split.status_code == 200, split.text
+
+    after = (
+        await app_client.get(f"/api/v1/admin/imports/{run_id}/version-families", headers=h)
+    ).json()["families"]
+    survivor = next(f for f in after if f["id"] == family_id)
+    assert survivor["ordered_member_file_ids"] == [first, chosen]
+    assert survivor["effective_file_id"] == chosen  # not reset to total-order member `first`
+    assert survivor["reconstruct_revision_chain"] is True
 
 
 async def test_exclude_then_merge_keeps_exclude(

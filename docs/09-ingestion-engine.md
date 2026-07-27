@@ -384,6 +384,11 @@ Within a cluster/family the engine nominates a **canonical** "keep" item using o
 4. Path preference: a file under `/Current/` or `/Released/` over `/Archive/` or `/Old/`.
 5. **Stable tie-break (total order):** lexically-lowest `rel_path`, then `import_file.id` — guarantees a *total* order so that identical exact-duplicates (and any all-tie cluster/family) resolve to the same canonical/effective deterministically across re-deliveries, which §11.1's "(run_id) recomputed deterministically" full-replace idempotency relies on.
 
+The total order remains structural evidence; a reviewer may choose a different effective member.
+Splitting a family recomputes the surviving order but preserves that human-selected effective member
+while it remains in the family, falling back to the total-order pick only when the selected member is
+split out.
+
 ### 7.3 Obsolescence outcome → the version chain
 This is where dedup connects to the **maintain/retain** model:
 - For a **Document version family**, the engine proposes the canonical as the **baseline `Rev A` (Released/Effective)** and resolves the older members per family. The **default** (and recommended) handling, and the **opt-in** alternative, are governed by **R10** (see the note below):
@@ -468,7 +473,7 @@ flowchart LR
 | **Split** | Break an over-eager dup/version cluster apart |
 | **Exclude** | Drop a file from import (kept in report as "excluded by Mara, reason") |
 | **Defer** | Leave un-decided; commit proceeds without it; resumable later |
-| **Bulk Accept-all-High** | One click confirms every green item; the headline efficiency feature. **Does not auto-confirm `kind`** — Document-vs-Record stays human-confirmed regardless of band (R10, §6.1). |
+| **Bulk Accept-all-High** | One click confirms every previously-undecided green item; a prior per-file decision is more-specific human intent and is skipped (the applied/skipped counts are returned). **Does not auto-confirm `kind`** — Document-vs-Record stays human-confirmed regardless of band (R10, §6.1). |
 | **Bulk triage (multi-select)** | Filter/sort thousands of low-confidence items and apply Accept / Correct-to-X / Exclude / Reassign across a multi-selection in one action; fully keyboard-driven (R10) |
 | **Pull from Quarantine** | Bring a quarantined/temp file back into the review set |
 | **Preview** | In-browser PDF.js preview of the rendition + extracted-text view + the evidence list (why the engine proposed this) |
@@ -480,6 +485,7 @@ The review UI **must scale to thousands of low-confidence items** — a real imp
 - **Server-paginated queues** (High / Medium / Needs Decision / Quarantine): server `offset`/`limit` pagination bounds the DOM to one page, so nothing renders a full 10,000-row table on first paint (no client virtualization needed) (§4.3, §14).
 - **Filter, sort, group, and saved facets** — by clause, process, type, confidence, folder-path token, OCR/low-text flag — let Mara carve a large Low/Unknown pile into homogeneous subsets.
 - **Multi-select + bulk actions** apply Accept / Correct-to-X / Exclude / Reassign-owner / Edit-identifier across an entire selection in one keyboard-driven action, so thousands of similar low-confidence items are triaged in batches rather than individually.
+- **Selector safety is atomic.** A selector rejects the whole operation if it matches a non-candidate or more than the configured bulk maximum; it never mutates a silently truncated prefix. Existing per-file decisions are skipped and reported, while an explicit `file_ids` selection is the intentional overwrite path.
 - **Bulk `kind` confirm is explicit, not implicit.** Bulk operations may *set* a `kind` across a selection, but the action is itself the required human confirmation; `kind` is never auto-finalized by a confidence threshold (R10, §6.1). Mara can bulk-confirm "all of these are Records" — a deliberate human act over a reviewed selection.
 - **Progress + resumability** — triage progress is checkpointed; Mara can stop and resume a large review later (§11.2).
 

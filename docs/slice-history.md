@@ -174,6 +174,29 @@
 
 ## REMEDIATION — correctness, accessibility, polish & test reliability
 
+### Minor Batch M6 — ingestion review and family integrity (API + integration + docs; NO migration [head stays `0076`]; NO new permission key [catalog 102]; PR pending)
+
+**What shipped.** Selector-based bulk review now preserves more-specific human intent. “Accept all
+High” and other selector operations omit files that already carry a per-file decision and return an
+honest `skipped_prior_decisions` count; an all-skipped match is a no-op that neither changes run
+state nor manufactures a decision/audit. Reviewers can still deliberately supersede an earlier
+decision through explicit `file_ids`. Every selector match is checked for `included_candidate`
+before the first insert, so a selector that reaches excluded/quarantined inventory fails atomically.
+Cardinality uses a bounded max-plus-one probe and rejects an oversized match set instead of applying
+only its first 5,000 rows.
+
+Version-family splits still recompute the surviving structural total order, but now retain a
+human-selected effective member when it remains in the family; only splitting that member out
+restores the total-order default. The family's independent `reconstruct_revision_chain` flag remains
+untouched, and the structural decision audit captures the before/after effective choice.
+
+**Tests.** Four mutation-distinguishing integration regressions cover prior EXCLUDE preservation
+(including the all-skipped no-op), atomic non-candidate rejection, max overflow rejection without a
+prefix mutation, and effective-member/reconstruction-flag preservation across a three-member family
+split. The complete ingestion integration file is green (**42 passed**), as are API Ruff/format,
+mypy over **426 source files**, the full unit suite (**1172 passed, 1 expected release-only skip**),
+and Redocly OpenAPI lint. No schema or permission-catalog change is required.
+
 ### Minor Batch M5 — ingestion commit integrity and repairable partial resumes (API + Web + OpenAPI + unit/integration + docs; migration `0076` [new head]; NO new permission key [catalog 102]; PR [#385](https://github.com/CoJoA13/EasySynQ/pull/385))
 
 **What shipped.** Human-reviewed owners are now materialized on imported Documents and Records
