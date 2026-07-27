@@ -350,65 +350,77 @@ async def test_resolve_recipients_excludes_foreign_org_user(app_under_test: Any)
     """
     org_id = await _default_org_id()
 
-    # Seed a second Organisation (the "foreign" tenant).
     salt = uuid.uuid4().hex[:8]
+    foreign_org_id = uuid.uuid4()
+    try:
+        # Seed a second Organisation (the "foreign" tenant).
+        async with get_sessionmaker()() as s:
+            foreign_org = Organization(
+                id=foreign_org_id,
+                legal_name=f"Foreign Org {salt}",
+                short_code=f"FRG{salt[:5].upper()}",
+            )
+            s.add(foreign_org)
+            await s.commit()
+
+        # A user who belongs to the FOREIGN org.
+        foreign_user_id = await _seed_user(foreign_org_id, email=f"foreign-{salt}@other.test")
+        # A user who belongs to the TASK's org.
+        local_user_id = await _seed_user(org_id, email=f"local-{salt}@example.com")
+
+        # Build a task in org_id whose candidate_pool contains BOTH users.
+        key = f"notify_crossorg_{uuid.uuid4().hex[:8]}"
+        async with get_sessionmaker()() as s:
+            defn = WorkflowDefinition(
+                org_id=org_id,
+                key=key,
+                version=1,
+                effective=True,
+                subject_type=WorkflowSubjectType.DOCUMENT,
+                stages={"entry": "approve"},
+            )
+            s.add(defn)
+            await s.flush()
+            instance = WorkflowInstance(
+                org_id=org_id,
+                definition_id=defn.id,
+                definition_version=1,
+                subject_type=WorkflowSubjectType.DOCUMENT,
+                subject_id=uuid.uuid4(),
+                current_state="IN_APPROVAL",
+            )
+            s.add(instance)
+            await s.flush()
+            task = Task(
+                org_id=org_id,
+                instance_id=instance.id,
+                stage_key="approve",
+                assignee_user_id=None,
+                candidate_pool=[str(local_user_id), str(foreign_user_id)],
+                type=TaskType.APPROVE,
+                state=TaskState.PENDING,
+            )
+            s.add(task)
+            await s.commit()
+            task_id = task.id
+
+        async with get_sessionmaker()() as s:
+            task2 = await s.get(Task, task_id)
+            assert task2 is not None
+            recipients = await resolve_recipients(s, task2)
+
+        recipient_ids = {r.user_id for r in recipients}
+        assert local_user_id in recipient_ids, "the same-org user must be a recipient"
+        assert foreign_user_id not in recipient_ids, (
+            "a user from a different org must be excluded from recipients"
+        )
+    finally:
+        # Restore the shard's single-org invariant even when the assertion fails. The task keeps
+        # the foreign UUID only in candidate_pool JSON, so there is no FK to remove first.
+        async with get_sessionmaker()() as s:
+            await s.execute(sa.delete(AppUser).where(AppUser.org_id == foreign_org_id))
+            await s.execute(sa.delete(Organization).where(Organization.id == foreign_org_id))
+            await s.commit()
+
     async with get_sessionmaker()() as s:
-        foreign_org = Organization(
-            legal_name=f"Foreign Org {salt}",
-            short_code=f"FRG{salt[:5].upper()}",
-        )
-        s.add(foreign_org)
-        await s.commit()
-        foreign_org_id = foreign_org.id
-
-    # A user who belongs to the FOREIGN org.
-    foreign_user_id = await _seed_user(foreign_org_id, email=f"foreign-{salt}@other.test")
-    # A user who belongs to the TASK's org.
-    local_user_id = await _seed_user(org_id, email=f"local-{salt}@example.com")
-
-    # Build a task in org_id whose candidate_pool contains BOTH users.
-    key = f"notify_crossorg_{uuid.uuid4().hex[:8]}"
-    async with get_sessionmaker()() as s:
-        defn = WorkflowDefinition(
-            org_id=org_id,
-            key=key,
-            version=1,
-            effective=True,
-            subject_type=WorkflowSubjectType.DOCUMENT,
-            stages={"entry": "approve"},
-        )
-        s.add(defn)
-        await s.flush()
-        instance = WorkflowInstance(
-            org_id=org_id,
-            definition_id=defn.id,
-            definition_version=1,
-            subject_type=WorkflowSubjectType.DOCUMENT,
-            subject_id=uuid.uuid4(),
-            current_state="IN_APPROVAL",
-        )
-        s.add(instance)
-        await s.flush()
-        task = Task(
-            org_id=org_id,
-            instance_id=instance.id,
-            stage_key="approve",
-            assignee_user_id=None,
-            candidate_pool=[str(local_user_id), str(foreign_user_id)],
-            type=TaskType.APPROVE,
-            state=TaskState.PENDING,
-        )
-        s.add(task)
-        await s.commit()
-        task_id = task.id
-
-    async with get_sessionmaker()() as s:
-        task2 = await s.get(Task, task_id)
-        assert task2 is not None
-        recipients = await resolve_recipients(s, task2)
-
-    recipient_ids = {r.user_id for r in recipients}
-    assert local_user_id in recipient_ids, "the same-org user must be a recipient"
-    assert foreign_user_id not in recipient_ids, (
-        "a user from a different org must be excluded from recipients"
-    )
+        assert await s.get(Organization, foreign_org_id) is None
