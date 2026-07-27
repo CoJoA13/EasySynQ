@@ -5,11 +5,18 @@ set -euo pipefail
 APP_DIR="${EASYSYNQ_APP_DIR:-/opt/easysynq}"
 MIGRATION_SCRIPT="${EASYSYNQ_MIGRATION_SCRIPT:-scripts/migrate-keycloak-h2.sh}"
 COMPOSE_VERSION_SCRIPT="${EASYSYNQ_COMPOSE_VERSION_SCRIPT:-scripts/require-compose-version.sh}"
+BROWSER_ORIGIN_SCRIPT="${EASYSYNQ_BROWSER_ORIGIN_SCRIPT:-scripts/validate-browser-origins.sh}"
+KEYCLOAK_DB_PASSWORD_SCRIPT="${EASYSYNQ_KEYCLOAK_DB_PASSWORD_SCRIPT:-scripts/ensure-keycloak-db-password.sh}"
 cd "$APP_DIR"
 
-# Compatibility for an appliance .env generated before Batch 13: the old provisioner already wrote
-# SITE_ADDRESS but omitted these three same-origin consumers. Export derived values for this Compose
-# process without weakening the 0640 env-file permissions; reconfigure/new provisioning persists them.
+# Persist a distinct least-privilege credential before Compose can expose the PostgreSQL owner
+# password to Keycloak. A pre-Batch-13 .env is root-owned 0640, so its first upgraded invocation
+# must use sudo; after this one idempotent backfill, the normal easysynq user remains sufficient.
+bash "$KEYCLOAK_DB_PASSWORD_SCRIPT" --env-file .env
+
+# Compatibility for an appliance .env generated before Batch 13: the old provisioner wrote the
+# site but omitted some browser consumers. Export derived values for this process without weakening
+# the 0640 env-file permissions; reconfigure/new provisioning persists the full tuple.
 env_value() {
   grep -m1 "^$1=" .env 2>/dev/null | cut -d= -f2- \
     | sed -E 's/[[:space:]]+#.*$//; s/^[[:space:]]*//; s/[[:space:]]*$//' || true
@@ -21,6 +28,36 @@ for key in PUBLIC_BASE_URL APP_BASE_URL KEYCLOAK_HOSTNAME; do
     export "${key}=${SITE_VALUE}"
   fi
 done
+
+MINIO_VALUE="$(env_value MINIO_SITE_ADDRESS)"
+if [ -z "$MINIO_VALUE" ]; then
+  case "$SITE_VALUE" in
+    https://*) ;;
+    *)
+      echo "easysynq-compose: cannot derive the legacy MinIO origin from SITE_ADDRESS=${SITE_VALUE}" >&2
+      exit 1
+      ;;
+  esac
+  SITE_HOST="${SITE_VALUE#https://}"
+  SITE_HOST="${SITE_HOST%/}"
+  case "$SITE_HOST" in
+    ""|*:*|*/*)
+      echo "easysynq-compose: cannot derive the legacy MinIO origin from SITE_ADDRESS=${SITE_VALUE}" >&2
+      exit 1
+      ;;
+  esac
+  MINIO_VALUE="https://${SITE_HOST}:9443"
+  export MINIO_SITE_ADDRESS="$MINIO_VALUE"
+  # A pre-Batch-13 template may hold the old plaintext development endpoint. The absent MinIO
+  # address is the upgrade marker, so override that stale value for this process only.
+  export S3_PUBLIC_ENDPOINT="$MINIO_VALUE"
+elif [ -z "$(env_value S3_PUBLIC_ENDPOINT)" ]; then
+  export S3_PUBLIC_ENDPOINT="$MINIO_VALUE"
+fi
+
+# Requiring six nonempty variables is insufficient: compare both complete tuples before any
+# migration or start operation.
+bash "$BROWSER_ORIGIN_SCRIPT" --env-file .env
 
 # Check before migration so an appliance with an old Compose binary cannot stop legacy Keycloak and
 # then fail while parsing production's !reset tag.

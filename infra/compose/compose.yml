@@ -95,9 +95,9 @@ services:
       # The app and Keycloak normally share POSTGRES_DB. Restore cutover can select the verified
       # database explicitly without changing the postgres container's initialization setting.
       POSTGRES_DB: ${KEYCLOAK_DB_NAME:-${POSTGRES_DB:-easysynq}}
-      # Older appliances predate KEYCLOAK_DB_PASSWORD; fall back to their already-random PostgreSQL
-      # owner secret for the one-time transition. Fresh installers always generate a distinct value.
-      KEYCLOAK_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:-${POSTGRES_PASSWORD:-easysynq}}
+      # Production entrypoints backfill this on pre-Batch-13 installs. Never expose the PostgreSQL
+      # owner credential to the web-facing identity service as a compatibility fallback.
+      KEYCLOAK_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:?set a distinct KEYCLOAK_DB_PASSWORD}
     volumes:
       - ./keycloak/keycloak-init.sh:/init/keycloak-init.sh:ro
       - ./keycloak/realm-export.json:/seed/easysynq-realm.json:ro
@@ -122,12 +122,13 @@ services:
       KC_DB_URL: jdbc:postgresql://postgres:5432/${KEYCLOAK_DB_NAME:-${POSTGRES_DB:-easysynq}}
       KC_DB_SCHEMA: keycloak
       KC_DB_USERNAME: easysynq_keycloak
-      KC_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:-${POSTGRES_PASSWORD:-easysynq}}
+      KC_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:?set a distinct KEYCLOAK_DB_PASSWORD}
       KC_HEALTH_ENABLED: "true"
       # Honor Caddy's X-Forwarded-* so tokens are issued for the browser-facing host.
       KC_PROXY_HEADERS: xforwarded
       KC_HTTP_ENABLED: "true"
-      KC_HOSTNAME: ${KEYCLOAK_HOSTNAME:-http://localhost}
+      # Dev's issuer follows a nondefault published HTTP port; production supplies its HTTPS host.
+      KC_HOSTNAME: ${KEYCLOAK_HOSTNAME:-http://localhost${HTTP_PORT:+:${HTTP_PORT}}}
     depends_on:
       keycloak-init:
         condition: service_completed_successfully

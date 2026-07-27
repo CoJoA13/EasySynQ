@@ -71,7 +71,9 @@ HTTPS/hostname overlays. Start from `.env.example` and ensure:
   `OIDC_ISSUER=http://localhost/realms/easysynq`; internal `OIDC_JWKS_URL` /
   `OIDC_DISCOVERY_URL` at `http://keycloak:8080/realms/easysynq/...`. Browser URLs may stay blank:
   `compose.dev.yml` supplies `S3_PUBLIC_ENDPOINT=http://localhost:9000` and
-  `PUBLIC_BASE_URL=APP_BASE_URL=http://localhost`.
+  `PUBLIC_BASE_URL=APP_BASE_URL=http://localhost`. If `HTTP_PORT` is set to a nondefault host port,
+  Keycloak derives its public hostname as `http://localhost:<HTTP_PORT>`; set `OIDC_ISSUER` to the
+  same origin plus `/realms/easysynq`.
 - `AUDIT_SINK_SECRET_KEY=audit-sink-secret-change-me` (the minio-init container gets no `env_file`, so it
   provisions that hardcoded fallback — they must match).
 

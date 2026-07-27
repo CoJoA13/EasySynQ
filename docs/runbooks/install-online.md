@@ -37,7 +37,8 @@ for sizing.
 
    Do not point `S3_PUBLIC_ENDPOINT` at the app origin: the app site's catch-all serves the SPA, not
    S3. Do not expose MinIO's plaintext `:9000`; that port exists only in `compose.dev.yml` and is
-   loopback-bound.
+   loopback-bound. The installer validates both complete tuples before migration/start, then appends
+   the selected callback without replacing redirect URIs added by an operator or identity provider.
 
 3. **Trust the CA when using `--tls internal`.** Export Caddy's root certificate and distribute it
    through the organization's trusted-root mechanism before workstation use:

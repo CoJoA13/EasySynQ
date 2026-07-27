@@ -111,9 +111,12 @@ Do this **before** real usage starts — changing the OIDC issuer signs everyone
 | `easysynq-compose <args>` | Raw `docker compose` with the appliance overlay set. Keycloak accounts/client edits persist in the PostgreSQL `pgdata` volume across container recreation. `down` preserves named volumes; `down -v` is the destructive full-data reset. |
 
 When an older appliance first receives the PostgreSQL-backed Keycloak definition,
-`easysynq-compose up …` automatically stops the legacy H2 container, performs and validates a full
-offline realm/user export, then lets Compose import it. A failed export restarts the untouched legacy
-container; do not bypass the helper with raw Compose for that one transition.
+run the first upgrade command as `sudo easysynq-compose up -d --build`. The helper first generates
+and persists a database credential dedicated to Keycloak (the root-owned `.env` is intentionally
+not writable by the normal helper user), then stops the legacy H2 container, performs and validates
+a full offline realm/user export, and lets Compose import it. Later helper commands do not need
+`sudo`. A failed credential backfill or export stops the upgrade; an export failure restarts the
+untouched legacy container. Do not bypass the helper with raw Compose for that one transition.
 
 ## Troubleshooting
 

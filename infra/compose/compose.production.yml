@@ -8,6 +8,8 @@
 # header — SigV4 signs the host, so the signature validates only because MinIO sees the exact host
 # the browser used
 # (S3_PUBLIC_ENDPOINT must equal this site address; the engineering-patterns presign rule).
+# Production entrypoints run scripts/validate-browser-origins.sh because Compose can require each
+# value but cannot assert equality across the app tuple and the object-store tuple.
 x-production-required:
   site_address: ${SITE_ADDRESS:?set SITE_ADDRESS to the browser-facing HTTPS app origin}
   minio_site_address: ${MINIO_SITE_ADDRESS:?set MINIO_SITE_ADDRESS to the HTTPS MinIO origin}

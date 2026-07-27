@@ -61,23 +61,9 @@ case "$TLS_MODE" in
   *) usage; exit 2 ;;
 esac
 
-valid_dns_name() {
-  local name="$1" label
-  local -a labels=()
-  [ "${#name}" -le 253 ] || return 1
-  [[ "$name" != .* && "$name" != *. ]] || return 1
-  [[ "$name" != *..* ]] || return 1
-  IFS='.' read -r -a labels <<< "$name"
-  [ "${#labels[@]}" -gt 0 ] || return 1
-  for label in "${labels[@]}"; do
-    # RFC-style host label: 1–63 alnum/hyphen characters, with alnum at both edges.
-    [[ "$label" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$ ]] || return 1
-  done
-}
-
 if [ "$ENV_ONLY" != "1" ]; then
   [ -n "$HOST_NAME" ] || { usage; exit 2; }
-  if ! valid_dns_name "$HOST_NAME"; then
+  if ! bash "$ROOT/scripts/validate-dns-name.sh" "$HOST_NAME"; then
     echo "install: --host must be a valid DNS name without a scheme, path, or port" >&2
     exit 2
   fi
@@ -93,11 +79,6 @@ set_kv() { # set_kv KEY VALUE  (update in place or append)
   else
     printf '%s=%s\n' "$key" "$val" >> "$ENV_FILE"
   fi
-}
-
-env_value() {
-  grep -m1 -E "^$1[[:space:]]*=" "$ENV_FILE" 2>/dev/null | cut -d= -f2- \
-    | sed -E 's/[[:space:]]+#.*$//; s/^[[:space:]]*//; s/[[:space:]]*$//' || true
 }
 
 if [ ! -f "$ENV_FILE" ]; then
@@ -153,11 +134,8 @@ fi
 # the caller applies its own hostname and internal-TLS settings before `up`.
 if [ "$ENV_ONLY" = "1" ]; then
   # Backfill the durable Keycloak database credential when an older .env is reused.
-  if ! grep -qE '^KEYCLOAK_DB_PASSWORD=' "$ENV_FILE" \
-      || grep -qE '^KEYCLOAK_DB_PASSWORD=.*CHANGE_ME' "$ENV_FILE"; then
-    set_kv KEYCLOAK_DB_PASSWORD "$(gen_secret)"
-    chmod 600 "$ENV_FILE"
-  fi
+  bash "$ROOT/scripts/ensure-keycloak-db-password.sh" --env-file "$ENV_FILE"
+  chmod 600 "$ENV_FILE"
   echo "install: EASYSYNQ_ENV_ONLY=1 — env ready; skipping stack startup."
   exit 0
 fi
@@ -166,12 +144,9 @@ fi
 # tag, and must not be allowed to leave Keycloak stopped after staging an otherwise valid export.
 bash "$ROOT/scripts/require-compose-version.sh"
 
-# Backfill the new database credential on an older online install without rotating any existing
-# secret. The legacy H2 exporter below uses the old store; this credential is only for PostgreSQL.
-if ! grep -qE '^KEYCLOAK_DB_PASSWORD=' "$ENV_FILE" \
-    || grep -qE '^KEYCLOAK_DB_PASSWORD=.*CHANGE_ME' "$ENV_FILE"; then
-  set_kv KEYCLOAK_DB_PASSWORD "$(gen_secret)"
-fi
+# Backfill the new least-privilege database credential on an older online install. The legacy H2
+# exporter below uses the old store; this credential is only for the PostgreSQL-backed service.
+bash "$ROOT/scripts/ensure-keycloak-db-password.sh" --env-file "$ENV_FILE"
 
 APP_ORIGIN="https://${HOST_NAME}"
 MINIO_ORIGIN="https://${HOST_NAME}:9443"
@@ -190,6 +165,10 @@ set_kv OIDC_DISCOVERY_URL "http://keycloak:8080/realms/easysynq/.well-known/open
 set_kv CADDY_TLS_DIRECTIVE "$TLS_DIRECTIVE"
 chmod 600 "$ENV_FILE"
 
+# Compose interpolation proves only that these values are nonempty. Compare the two complete
+# browser-origin tuples before migration/start so one stale setting cannot break login or presigns.
+bash "$ROOT/scripts/validate-browser-origins.sh" --env-file "$ENV_FILE"
+
 # If this checkout replaces the old start-dev/H2 service, export it before Compose recreates the
 # container. The script is a no-op for fresh or already-PostgreSQL installs.
 bash "$ROOT/scripts/migrate-keycloak-h2.sh" --env-file "$ENV_FILE"
@@ -205,35 +184,15 @@ COMPOSE=(
 echo "install: starting the stack (profile: $PROFILE)..."
 "${COMPOSE[@]}" up -d --build
 
-# KC_HOSTNAME controls the issuer URL but does not authorize SPA callbacks. Update the imported web
-# client after Keycloak starts so every installer-selected production host can complete login.
-KC_ADMIN_USER_VALUE="$(env_value KEYCLOAK_ADMIN_USER)"
-KC_ADMIN_PASSWORD_VALUE="$(env_value KEYCLOAK_ADMIN_PASSWORD)"
-[ -n "$KC_ADMIN_USER_VALUE" ] && [ -n "$KC_ADMIN_PASSWORD_VALUE" ] || {
-  echo "install: Keycloak admin credentials are missing from $ENV_FILE" >&2
-  exit 1
-}
-kc() {
-  "${COMPOSE[@]}" exec -T keycloak /opt/keycloak/bin/kcadm.sh "$@" </dev/null
-}
+# KC_HOSTNAME controls the issuer URL but does not authorize SPA callbacks. Append the selected URI
+# through the Admin API; updating the complete representation preserves operator-added callbacks.
 echo "install: authorizing ${APP_ORIGIN}/ as the SPA login callback..."
 KEYCLOAK_REDIRECT_CONFIGURED=0
 for _ in $(seq 1 60); do
-  if kc config credentials \
-      --server http://localhost:8080 \
-      --realm master \
-      --user "$KC_ADMIN_USER_VALUE" \
-      --password "$KC_ADMIN_PASSWORD_VALUE" >/dev/null 2>&1; then
-    CLIENT_ID="$(
-      kc get clients -r easysynq -q clientId=easysynq-web --fields id --format csv --noquotes \
-        2>/dev/null | head -1
-    )"
-    if [ -n "$CLIENT_ID" ] && kc update "clients/${CLIENT_ID}" -r easysynq \
-        -s "redirectUris=[\"http://localhost/*\",\"https://localhost/*\",\"http://easysynq.local/*\",\"https://easysynq.local/*\",\"${APP_ORIGIN}/*\"]" \
-        >/dev/null 2>&1; then
-      KEYCLOAK_REDIRECT_CONFIGURED=1
-      break
-    fi
+  if "${COMPOSE[@]}" exec -T api uv run python -m easysynq_api.cli.keycloak_redirect \
+      --redirect-uri "${APP_ORIGIN}/*" </dev/null >/dev/null 2>&1; then
+    KEYCLOAK_REDIRECT_CONFIGURED=1
+    break
   fi
   sleep 2
 done

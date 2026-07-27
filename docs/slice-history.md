@@ -190,7 +190,10 @@ MinIO origin without routing it through the SPA catch-all. S/M remain sizing-onl
 interpolation requires the complete public tuple and resets the dev port if both overlays are
 accidentally stacked. Appliance first boot + `easysynq-reconfigure` now propagate
 `PUBLIC_BASE_URL`/`APP_BASE_URL` as well as issuer/presign values; the helper derives missing
-same-origin keys for a pre-Batch-13 read-only `.env`.
+same-origin keys for a pre-Batch-13 read-only `.env`. Every production entrypoint also compares
+the values inside the app tuple and MinIO tuple before migration/start (nonempty-but-stale values
+cannot slip through Compose interpolation). Dev Keycloak includes a nondefault `HTTP_PORT` in its
+public hostname.
 
 **Keycloak durability + transition safety.** A two-stage Keycloak 26.7 image bakes PostgreSQL +
 health support, then runs `start --optimized --import-realm`. The idempotent `keycloak-init` one-shot
@@ -202,9 +205,10 @@ container-local H2 data (or reuses a real data mount), runs Keycloak's offline f
 `--users realm_file`, validates the user-bearing realm and stages a completion marker. On any
 failure it restarts the untouched legacy container. Standard online install, `just up` and the
 appliance Compose helper all invoke the transition; raw online upgrades are explicitly told to run
-it first. Older appliances without the newly generated DB password safely fall back to their
-already-random PostgreSQL owner secret for this one transition; fresh installs get a distinct
-credential.
+it first. Older appliances persist a generated, distinct Keycloak role password on their first
+root-run upgrade command; Compose has no PostgreSQL-owner-password fallback and fails closed until
+that backfill succeeds. Installer/reconfigure callback updates read the complete Keycloak client,
+append only the missing URI, and preserve every operator-managed redirect.
 
 **Proof.** CI now renders dev, online-production and appliance Compose shapes, while structural unit
 tests pin the loopback/production port split, required URL propagation, optimized PostgreSQL

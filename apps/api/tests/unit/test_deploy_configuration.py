@@ -7,7 +7,9 @@ plaintext MinIO, every browser URL is supplied together, and Keycloak's live sto
 
 from __future__ import annotations
 
+import json
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -43,6 +45,9 @@ def test_production_requires_one_consistent_browser_edge() -> None:
     production = _read("infra/compose/compose.production.yml")
     caddy = _read("infra/compose/caddy/Caddyfile.production")
     installer = _read("scripts/install.sh")
+    provisioner = _read("infra/appliance/provision/easysynq-provision.sh")
+    compose_helper = _read("infra/appliance/provision/bin/easysynq-compose")
+    reconfigure = _read("infra/appliance/provision/bin/easysynq-reconfigure")
     template = _read(".env.example")
 
     for key in (
@@ -62,7 +67,17 @@ def test_production_requires_one_consistent_browser_edge() -> None:
     assert 'MINIO_ORIGIN="https://${HOST_NAME}:9443"' in installer
     assert "${APP_ORIGIN}/*" in installer
     assert "easysynq-web client" in installer
+    assert "easysynq_api.cli.keycloak_redirect" in installer
+    assert "easysynq_api.cli.keycloak_redirect" in reconfigure
+    assert "redirectUris=[" not in installer
+    assert "redirectUris=[" not in reconfigure
     assert "compose.production.yml" in installer
+    assert "validate-browser-origins.sh" in installer
+    assert "validate-browser-origins.sh" in provisioner
+    assert "validate-browser-origins.sh" in compose_helper
+    assert "validate-browser-origins.sh" in reconfigure
+    assert "validate-dns-name.sh" in installer
+    assert "validate-dns-name.sh" in reconfigure
     assert "S3_PUBLIC_ENDPOINT=http://localhost:9000" not in template
     assert "APP_BASE_URL=" in template
 
@@ -102,7 +117,8 @@ def test_keycloak_runs_optimized_on_durable_postgres_schema() -> None:
     assert "KEYCLOAK_DB_NAME:-${POSTGRES_DB" in compose
     assert "KC_DB_SCHEMA: keycloak" in compose
     assert "KC_DB_USERNAME: easysynq_keycloak" in compose
-    assert "KEYCLOAK_DB_PASSWORD:-${POSTGRES_PASSWORD" in compose
+    assert compose.count("KEYCLOAK_DB_PASSWORD:?set a distinct KEYCLOAK_DB_PASSWORD") == 2
+    assert "KEYCLOAK_DB_PASSWORD:-${POSTGRES_PASSWORD" not in compose
     assert "keycloakimport:/opt/keycloak/data/import:ro" in compose
     assert "condition: service_completed_successfully" in compose
 
@@ -270,6 +286,138 @@ def test_installer_rejects_invalid_dns_labels_before_deployment() -> None:
         assert "must be a valid DNS name" in result.stderr
 
 
+def test_production_browser_origin_validator_rejects_both_tuple_mismatches(
+    tmp_path: Path,
+) -> None:
+    checker = ROOT / "scripts/validate-browser-origins.sh"
+    env_file = tmp_path / ".env"
+    values = {
+        "SITE_ADDRESS": "https://qms.example.com",
+        "PUBLIC_BASE_URL": "https://qms.example.com",
+        "APP_BASE_URL": "https://qms.example.com",
+        "KEYCLOAK_HOSTNAME": "https://qms.example.com",
+        "MINIO_SITE_ADDRESS": "https://qms.example.com:9443",
+        "S3_PUBLIC_ENDPOINT": "https://qms.example.com:9443",
+    }
+    browser_keys = set(values)
+
+    def check(overrides: dict[str, str]) -> subprocess.CompletedProcess[str]:
+        rendered = {**values, **overrides}
+        env_file.write_text("".join(f"{key}={value}\n" for key, value in rendered.items()))
+        clean_env = {key: value for key, value in os.environ.items() if key not in browser_keys}
+        return subprocess.run(  # noqa: S603 - fixed checker against an isolated env file
+            ["/bin/bash", str(checker), "--env-file", str(env_file)],
+            cwd=ROOT,
+            env=clean_env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    consistent = check({})
+    assert consistent.returncode == 0, consistent.stderr
+
+    app_mismatch = check({"APP_BASE_URL": "https://stale.example.com"})
+    assert app_mismatch.returncode != 0
+    assert "APP_BASE_URL must exactly equal SITE_ADDRESS" in app_mismatch.stderr
+
+    minio_mismatch = check({"S3_PUBLIC_ENDPOINT": "https://stale.example.com:9443"})
+    assert minio_mismatch.returncode != 0
+    assert "S3_PUBLIC_ENDPOINT must exactly equal MINIO_SITE_ADDRESS" in minio_mismatch.stderr
+
+
+def test_keycloak_db_password_backfill_is_distinct_persistent_and_idempotent(
+    tmp_path: Path,
+) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text("POSTGRES_PASSWORD=owner-secret\nKEYCLOAK_DB_PASSWORD=owner-secret\n")
+    helper = ROOT / "scripts/ensure-keycloak-db-password.sh"
+
+    env_file.chmod(0o440)
+    read_only = subprocess.run(  # noqa: S603 - fixed helper against an isolated env file
+        ["/bin/bash", str(helper), "--env-file", str(env_file)],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert read_only.returncode != 0
+    assert "rerun this first Batch 13 command with sudo" in read_only.stderr
+    assert "KEYCLOAK_DB_PASSWORD=owner-secret" in env_file.read_text()
+
+    env_file.chmod(0o640)
+    first = subprocess.run(  # noqa: S603 - fixed helper against an isolated env file
+        ["/bin/bash", str(helper), "--env-file", str(env_file)],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert first.returncode == 0, first.stderr
+    first_value = next(
+        line.split("=", 1)[1]
+        for line in env_file.read_text().splitlines()
+        if line.startswith("KEYCLOAK_DB_PASSWORD=")
+    )
+    assert first_value
+    assert first_value != "owner-secret"
+    assert env_file.stat().st_mode & 0o777 == 0o640
+
+    second = subprocess.run(  # noqa: S603 - fixed helper against an isolated env file
+        ["/bin/bash", str(helper), "--env-file", str(env_file)],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert second.returncode == 0, second.stderr
+    assert f"KEYCLOAK_DB_PASSWORD={first_value}" in env_file.read_text()
+
+
+def test_dev_keycloak_hostname_tracks_nondefault_http_port() -> None:
+    browser_keys = {
+        "HTTP_PORT",
+        "KEYCLOAK_HOSTNAME",
+        "KEYCLOAK_DB_PASSWORD",
+    }
+
+    def render(http_port: str | None) -> str:
+        docker = shutil.which("docker")
+        assert docker is not None
+        env = {key: value for key, value in os.environ.items() if key not in browser_keys}
+        env["KEYCLOAK_DB_PASSWORD"] = "keycloak-secret"
+        if http_port is not None:
+            env["HTTP_PORT"] = http_port
+        result = subprocess.run(  # noqa: S603 - resolved Docker binary; no daemon/network
+            [
+                docker,
+                "compose",
+                "--env-file",
+                str(ROOT / ".env.example"),
+                "-f",
+                str(ROOT / "infra/compose/compose.yml"),
+                "-f",
+                str(ROOT / "infra/compose/compose.s.yml"),
+                "-f",
+                str(ROOT / "infra/compose/compose.dev.yml"),
+                "config",
+                "--format",
+                "json",
+            ],
+            cwd=ROOT,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr
+        rendered = json.loads(result.stdout)
+        return rendered["services"]["keycloak"]["environment"]["KC_HOSTNAME"]
+
+    assert render(None) == "http://localhost"
+    assert render("8088") == "http://localhost:8088"
+
+
 def test_production_entrypoints_require_compose_2_24_4(tmp_path: Path) -> None:
     checker = ROOT / "scripts/require-compose-version.sh"
 
@@ -323,13 +471,27 @@ def test_appliance_targeted_up_only_migrates_when_keycloak_will_start(tmp_path: 
         'printf "%s\\n" "$*" >> "$MIGRATION_ARGS_LOG"\n'
     )
     fake_migration.chmod(0o755)
-    (tmp_path / ".env").write_text("SITE_ADDRESS=https://easysynq.local\n")
+    (tmp_path / ".env").write_text(
+        "POSTGRES_PASSWORD=owner-secret\nSITE_ADDRESS=https://easysynq.local\n"
+    )
+    browser_keys = {
+        "SITE_ADDRESS",
+        "MINIO_SITE_ADDRESS",
+        "S3_PUBLIC_ENDPOINT",
+        "PUBLIC_BASE_URL",
+        "APP_BASE_URL",
+        "KEYCLOAK_HOSTNAME",
+    }
     env = {
-        **os.environ,
+        **{key: value for key, value in os.environ.items() if key not in browser_keys},
         "PATH": f"{fake_bin}:{os.environ['PATH']}",
         "EASYSYNQ_APP_DIR": str(tmp_path),
         "EASYSYNQ_MIGRATION_SCRIPT": str(fake_migration),
         "EASYSYNQ_COMPOSE_VERSION_SCRIPT": str(ROOT / "scripts/require-compose-version.sh"),
+        "EASYSYNQ_BROWSER_ORIGIN_SCRIPT": str(ROOT / "scripts/validate-browser-origins.sh"),
+        "EASYSYNQ_KEYCLOAK_DB_PASSWORD_SCRIPT": str(
+            ROOT / "scripts/ensure-keycloak-db-password.sh"
+        ),
         "MIGRATION_LOG": str(migration_log),
         "MIGRATION_ARGS_LOG": str(migration_args_log),
     }
@@ -348,6 +510,9 @@ def test_appliance_targeted_up_only_migrates_when_keycloak_will_start(tmp_path: 
     result = run_wrapper("up", "-d", "api")
     assert result.returncode == 0, result.stderr
     assert not migration_log.exists()
+    env_after_backfill = (tmp_path / ".env").read_text()
+    assert "KEYCLOAK_DB_PASSWORD=" in env_after_backfill
+    assert "KEYCLOAK_DB_PASSWORD=owner-secret" not in env_after_backfill
 
     result = run_wrapper("up", "-d", "keycloak", "api")
     assert result.returncode == 0, result.stderr
