@@ -291,7 +291,8 @@ async def patch_initiative_endpoint(
     """Edit an initiative's mutable metadata (gate ``improvement.manage``); never the ``stage``.
     The ``_manage`` dep authorized the CURRENT process; a ``process_id`` reassignment ALSO requires
     ``improvement.manage`` on the TARGET process (else a manager of A could move an initiative into
-    B they cannot manage — the Codex P2). Mirrors create's body-scope enforce."""
+    B they cannot manage — the Codex P2). Mirrors create's body-scope enforce. Closed/Cancelled
+    initiatives are sealed (409 ``improvement_not_editable``)."""
     if body.process_id is not None:
         await enforce(
             session, authz_sink, request, caller, "improvement.manage", _scope_for(body.process_id)

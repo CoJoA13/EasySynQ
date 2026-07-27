@@ -82,7 +82,7 @@ async def list_dcr_stage_events(
             await session.execute(
                 select(DcrStageEvent)
                 .where(DcrStageEvent.dcr_id == dcr_id)
-                .order_by(DcrStageEvent.occurred_at.asc())
+                .order_by(DcrStageEvent.occurred_at.asc(), DcrStageEvent.id.asc())
             )
         )
         .scalars()

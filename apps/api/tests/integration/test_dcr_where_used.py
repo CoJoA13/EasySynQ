@@ -7,14 +7,17 @@ we prove the governs-active-process leg, which is run-scoped)."""
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import Callable
 
 import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
 
+from easysynq_api.db.models._dcr_enums import DcrState
 from easysynq_api.db.models._vault_enums import DocumentKind
 from easysynq_api.db.models.clause import Clause
+from easysynq_api.db.models.dcr import Dcr
 from easysynq_api.db.session import get_sessionmaker
 
 from .test_dcr import _auth, _grant, _seed_di, _seed_process_and_linked_doc, _subject
@@ -187,6 +190,64 @@ async def test_assess_auto_populates_impact_then_annotate(
         f"/api/v1/dcrs/{dcr_id}/impact", headers=h, json={"annotations": {"bogus": "x"}}
     )
     assert r.status_code == 422, r.text
+
+
+@pytest.mark.parametrize(
+    "terminal_state",
+    (DcrState.Closed, DcrState.Cancelled, DcrState.Rejected),
+)
+async def test_terminal_dcr_rejects_impact_annotation_edits(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    terminal_state: DcrState,
+) -> None:
+    """Closed, Cancelled, and Rejected DCR impact evidence is sealed. The API must reject a later
+    annotation edit and preserve the last non-terminal annotation."""
+    subject = _subject(f"impact-terminal-{terminal_state.value.lower()}")
+    await _grant(subject, _DCR_KEYS)
+    h = _auth(token_factory, subject)
+
+    created = await app_client.post(
+        "/api/v1/dcrs",
+        headers=h,
+        json={
+            "change_type": "CREATE",
+            "change_significance": "MINOR",
+            "reason_class": "process_improvement",
+            "reason_text": f"seal impact at {terminal_state.value}",
+        },
+    )
+    assert created.status_code == 201, created.text
+    dcr_id = created.json()["id"]
+    assessed = await app_client.post(f"/api/v1/dcrs/{dcr_id}/assess", headers=h)
+    assert assessed.status_code == 200, assessed.text
+
+    baseline = await app_client.put(
+        f"/api/v1/dcrs/{dcr_id}/impact",
+        headers=h,
+        json={"annotations": {"risk": "Approved terminal evidence"}},
+    )
+    assert baseline.status_code == 200, baseline.text
+
+    # Drive the focused service guard without paying for three complete lifecycle workflows. The
+    # public API still performs the mutation attempt and the readback below proves persistence.
+    async with get_sessionmaker()() as s:
+        dcr = await s.get(Dcr, uuid.UUID(dcr_id))
+        assert dcr is not None
+        dcr.state = terminal_state
+        await s.commit()
+
+    refused = await app_client.put(
+        f"/api/v1/dcrs/{dcr_id}/impact",
+        headers=h,
+        json={"annotations": {"risk": "Mutated after terminal"}},
+    )
+    assert refused.status_code == 409, refused.text
+    assert refused.json()["code"] == "dcr_impact_not_editable"
+
+    rows = (await app_client.get(f"/api/v1/dcrs/{dcr_id}/impact", headers=h)).json()["data"]
+    risk = next(row for row in rows if row["dimension"] == "risk")
+    assert risk["requester_annotation"] == "Approved terminal evidence"
 
 
 async def test_assess_create_dcr_is_all_na(

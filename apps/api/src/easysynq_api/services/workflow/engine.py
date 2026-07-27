@@ -500,11 +500,30 @@ async def decide(
     signature_spec: dict[str, Any] | None = None
     if spec is None:  # unresolvable conditional at decision time → fail closed
         state = "FAILED"
-        instance.current_state = NEEDS_ATTENTION
     else:
         state = quorum_state(spec, len(approvers), rejects, resolved_count)
 
-    if state == "MET" and stage is not None:
+    if spec is None:
+        # This is definition/context corruption, not a legitimate negative business decision.
+        # Retire sibling work and preserve the fail-closed sentinel rather than running the normal
+        # FAILED transition below, which would overwrite NEEDS_ATTENTION with REJECTED.
+        for t in tasks:
+            if t.state is TaskState.PENDING:
+                t.state = TaskState.SKIPPED
+                t.client_token = _QUORUM_SKIP
+        instance.current_state = NEEDS_ATTENTION
+        _emit(
+            session,
+            instance,
+            actor,
+            EventType.STAGE_FAILED,
+            after={
+                "from": locked.stage_key,
+                "current_state": instance.current_state,
+                "reason": "unresolvable_quorum",
+            },
+        )
+    elif state == "MET" and stage is not None:
         for t in tasks:
             if t.state is TaskState.PENDING:
                 t.state = TaskState.SKIPPED
@@ -539,15 +558,6 @@ async def decide(
             EventType.STAGE_FAILED,
             after={"from": locked.stage_key, "current_state": instance.current_state},
         )
-    elif state == "FAILED":  # stage missing or unresolvable conditional
-        _emit(
-            session,
-            instance,
-            actor,
-            EventType.STAGE_FAILED,
-            after={"from": locked.stage_key, "current_state": instance.current_state},
-        )
-
     if _commit:
         await session.commit()
     return _response(locked, decision, instance, stage_state=state, signature_spec=signature_spec)

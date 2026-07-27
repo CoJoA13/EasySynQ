@@ -174,7 +174,31 @@
 
 ## REMEDIATION — correctness, accessibility, polish & test reliability
 
-### Minor Batch M3 — notification-list input safety and retryable digest rendering (API + OpenAPI + integration + docs; NO migration [head stays `0075`]; NO new permission key [catalog 102]; PR [#383](https://github.com/CoJoA13/EasySynQ/pull/383))
+### Minor Batch M4 — sealed terminal workflows, causal DCR history, and fail-closed quorum decisions (API + OpenAPI + integration + docs; NO migration [head stays `0075`]; NO new permission key [catalog 102]; PR pending publish)
+
+**What shipped.** Improvement initiative metadata is now sealed at the locked service boundary once
+the initiative is `Closed` or `Cancelled`: attempted edits return the stable
+`improvement_not_editable` 409 without mutating the initiative or emitting a misleading update
+audit. DCR impact annotations are likewise sealed once a DCR is `Closed`, `Cancelled`, or
+`Rejected`, returning `dcr_impact_not_editable` while preserving the last accepted annotation.
+
+The atomic DCR route path now records its `Assessed → Routed → InApproval` stage events in strict
+causal order. PostgreSQL's transaction-stable `now()` had given both transitions the same timestamp;
+the service now supplies explicit timestamps one microsecond apart, and history reads use
+`(occurred_at, id)` for deterministic handling of legacy ties. Decision-time conditional quorum
+resolution also now fails closed as a workflow configuration/context problem: it skips remaining
+pending siblings, audits `unresolvable_quorum`, and preserves the `NEEDS_ATTENTION` sentinel instead
+of translating the failure into the business outcome `REJECTED`.
+
+**Contract + tests.** OpenAPI documents both terminal-edit 409 behaviors and declares the
+improvement PATCH problem response. All four defects were RED-verified across six pre-fix pytest
+cases; a seventh regression pins deterministic legacy tied-event ordering. The complete adjacent
+improvement, DCR impact/approval, and workflow-engine integration files pass (**42 passed**), as do
+API Ruff/format, migration Ruff/format, mypy over **426 source files**, the full unit suite
+(**1168 passed, 1 expected release-only skip**), and Redocly OpenAPI lint. No schema or permission
+catalog change was required.
+
+### Minor Batch M3 — notification-list input safety and retryable digest rendering (API + OpenAPI + integration + docs; NO migration [head stays `0075`]; NO new permission key [catalog 102]; PR [#383](https://github.com/CoJoA13/EasySynQ/pull/383), squash `c2334fe`)
 
 **What shipped.** `GET /notifications` now rejects a negative `limit` at FastAPI's request boundary
 instead of passing an invalid negative `LIMIT` to PostgreSQL and surfacing a 500. The lower bound is

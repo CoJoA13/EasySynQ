@@ -55,7 +55,7 @@ from ...db.models.management_review import ManagementReview
 from ...db.models.quality_objective import QualityObjective
 from ...db.models.signature_event import SignatureEvent as SignatureEventRow
 from ...db.models.workflow import Task, WorkflowInstance
-from ...domain.dcr import transition_allowed
+from ...domain.dcr import is_terminal, transition_allowed
 from ...domain.vault import format_identifier
 from ...logging import request_id_var
 from ...problems import ProblemException
@@ -408,11 +408,16 @@ async def annotate_impact(
 ) -> Dcr:
     """Set ``requester_annotation`` on the named impact dimensions (doc 15 PUT /dcrs/{id}/impact).
     Keys are ``ImpactDimension`` values; unknown keys → 422. Emits ``DCR_UPDATED``. The DCR must
-    have
-    been assessed (its impact_assessment rows exist) — annotating an absent dimension is a 409."""
+    have been assessed (its impact_assessment rows exist) — annotating an absent dimension is a
+    409. Terminal DCR impact evidence is sealed."""
     dcr = await repo.get_dcr(session, dcr_id, for_update=True)
     if dcr is None or dcr.org_id != actor.org_id:
         raise _not_found("DCR")
+    if is_terminal(dcr.state):
+        raise _conflict(
+            "dcr_impact_not_editable",
+            f"Impact annotations on a {dcr.state.value} DCR cannot be edited",
+        )
     valid = {d.value for d in ImpactDimension}
     unknown = set(annotations) - valid
     if unknown:
@@ -484,6 +489,11 @@ async def route_dcr(
             "no users hold the routed approver role(s); assign Process Owner / QMS Owner first",
         )
     before = dcr.state  # Assessed
+    # PostgreSQL's now() is transaction-stable, so two server-default timestamps in this atomic
+    # route are identical. Give the causal pair strict timestamps; the repository's UUID fallback
+    # then makes any legacy equal-timestamp rows deterministic.
+    routed_at = _now()
+    in_approval_at = routed_at + datetime.timedelta.resolution
     session.add(
         DcrStageEvent(
             org_id=actor.org_id,
@@ -491,6 +501,7 @@ async def route_dcr(
             from_state=before,
             to_state=DcrState.Routed,
             actor_id=actor.id,
+            occurred_at=routed_at,
         )
     )
     session.add(
@@ -501,6 +512,7 @@ async def route_dcr(
             to_state=DcrState.InApproval,
             actor_id=actor.id,
             payload={"workflow_instance_id": str(instance.id)},
+            occurred_at=in_approval_at,
         )
     )
     dcr.state = DcrState.InApproval

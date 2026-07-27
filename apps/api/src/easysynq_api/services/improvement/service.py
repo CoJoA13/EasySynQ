@@ -29,7 +29,7 @@ from ...db.models.improvement_initiative import ImprovementInitiative
 from ...db.models.improvement_initiative_stage_event import ImprovementInitiativeStageEvent
 from ...db.models.process import Process
 from ...domain.authz import ResourceContext
-from ...domain.improvement import transition_allowed
+from ...domain.improvement import is_terminal, transition_allowed
 from ...domain.vault import format_identifier
 from ...logging import request_id_var
 from ...problems import ProblemException
@@ -215,10 +215,16 @@ async def update_initiative(
 ) -> ImprovementInitiative:
     """Edit an initiative's mutable metadata (PATCH /improvement-initiatives/{id}); never the
     ``stage`` (that is the transition endpoint). Emits ``INITIATIVE_UPDATED`` only when something
-    actually changed. ``None`` means "unchanged" (this slice does not clear a field)."""
+    actually changed. ``None`` means "unchanged" (this slice does not clear a field). Closed and
+    Cancelled initiatives are sealed and reject every edit."""
     initiative = await repo.get_initiative(session, initiative_id, for_update=True)
     if initiative is None or initiative.org_id != actor.org_id:
         raise _not_found("Improvement initiative")
+    if is_terminal(initiative.stage):
+        raise _conflict(
+            "improvement_not_editable",
+            f"An initiative in {initiative.stage.value} cannot be edited",
+        )
     before: dict[str, Any] = {}
     after: dict[str, Any] = {}
     if title is not None and title != initiative.title:
