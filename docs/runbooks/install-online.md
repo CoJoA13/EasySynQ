@@ -1,7 +1,9 @@
 # Install (online)
 
-A single Linux host with Docker (Compose v2). Profiles: **S** (≤25 users, Postgres-FTS only) or
-**M** (≤100 users, full stack). See doc 03 §7 for sizing.
+A single Linux host with Docker Compose **2.24.4 or newer**. The minimum is enforced before any
+legacy Keycloak migration because the production overlay uses Compose's fail-closed `!reset` merge
+tag. Profiles: **S** (≤25 users, Postgres-FTS only) or **M** (≤100 users, full stack). See doc 03 §7
+for sizing.
 
 ## Steps
 
@@ -78,7 +80,9 @@ This stops only the legacy Keycloak container, performs Keycloak's offline full 
 PostgreSQL boot. It restarts the untouched legacy container if export fails. `install.sh` invokes
 this automatically and reads a custom `COMPOSE_PROJECT_NAME` from `.env`; run it explicitly before
 any raw `docker compose up` during that one transition. Afterward, ordinary Keycloak recreation
-preserves accounts and client edits in the PostgreSQL `pgdata` volume.
+preserves accounts and client edits in the PostgreSQL `pgdata` volume. The temporary import volume
+is scoped to that Compose project, so multiple installations on one Docker host cannot consume one
+another's exported identities.
 
 ## Verify it works (release-time security check)
 

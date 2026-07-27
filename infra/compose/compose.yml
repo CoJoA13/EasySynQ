@@ -281,10 +281,10 @@ networks:
 volumes:
   pgdata:
   miniodata:
-  # Initial realm seed only (not the live identity store). The stable name lets the one-time legacy
-  # H2 migration populate it before Compose recreates Keycloak; live state then resides in pgdata.
+  # Initial realm seed only (not the live identity store). Compose's project-scoped implicit name
+  # lets the one-time legacy H2 migration populate it without sharing credentials across projects;
+  # live state then resides in pgdata.
   keycloakimport:
-    name: easysynq-keycloak-import
   mirror:
   secrets:
   backup:   # S8b2: durable backup destination (default backup_policy.destination; a mounted path)

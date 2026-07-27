@@ -9,7 +9,7 @@ set -Eeuo pipefail
 PROJECT="${COMPOSE_PROJECT_NAME:-}"
 ENV_FILE="${EASYSYNQ_ENV_FILE:-.env}"
 CONTAINER=""
-IMPORT_VOLUME="easysynq-keycloak-import"
+IMPORT_VOLUME=""
 SNAPSHOT_IMAGE=""
 WAS_RUNNING=0
 STOPPED_LEGACY=0
@@ -64,6 +64,9 @@ if [ -z "$PROJECT" ]; then
   PROJECT="$(env_value COMPOSE_PROJECT_NAME)"
 fi
 PROJECT="${PROJECT:-easysynq}"
+# Compose's implicit volume name is project-scoped. Mirror it exactly so two EasySynQ projects on
+# one Docker host can never stage or consume each other's users and credential hashes.
+IMPORT_VOLUME="${IMPORT_VOLUME:-${PROJECT}_keycloakimport}"
 
 cleanup() {
   local status=$?
@@ -80,12 +83,23 @@ cleanup() {
 trap cleanup EXIT
 
 if [ -z "$CONTAINER" ]; then
-  mapfile -t candidates < <(
+  # A process substitution hides `docker ps`'s exit status from mapfile. Capture and validate the
+  # discovery command first: an unavailable daemon/context must never be treated as "no identities
+  # to migrate" before a subsequent Compose up replaces the legacy H2 container.
+  CANDIDATE_OUTPUT=""
+  if ! CANDIDATE_OUTPUT="$(
     docker ps -a \
       --filter "label=com.docker.compose.project=${PROJECT}" \
       --filter "label=com.docker.compose.service=keycloak" \
       --format '{{.ID}}'
-  )
+  )"; then
+    echo "keycloak-migrate: could not inspect legacy containers; refusing to continue" >&2
+    exit 1
+  fi
+  candidates=()
+  while IFS= read -r candidate; do
+    [ -n "$candidate" ] && candidates+=("$candidate")
+  done <<< "$CANDIDATE_OUTPUT"
   case "${#candidates[@]}" in
     0)
       echo "keycloak-migrate: no legacy container found; nothing to migrate"

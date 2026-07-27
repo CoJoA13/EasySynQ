@@ -20,7 +20,7 @@ services:
   # Defensive reset: if an operator accidentally includes compose.dev.yml too, production still
   # has no plaintext :9000 door. In-cluster clients always use minio:9000 on the internal network.
   minio:
-    ports: !reset []
+    ports: !reset []  # Compose >=2.24.4; production entrypoints enforce this before migration/up.
 
   proxy:
     ports:

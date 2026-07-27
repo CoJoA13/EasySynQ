@@ -149,6 +149,10 @@ if [ "$ENV_ONLY" = "1" ]; then
   exit 0
 fi
 
+# Gate before the legacy migration: an older Compose cannot parse production's fail-closed !reset
+# tag, and must not be allowed to leave Keycloak stopped after staging an otherwise valid export.
+bash "$ROOT/scripts/require-compose-version.sh"
+
 # Backfill the new database credential on an older online install without rotating any existing
 # secret. The legacy H2 exporter below uses the old store; this credential is only for PostgreSQL.
 if ! grep -qE '^KEYCLOAK_DB_PASSWORD=' "$ENV_FILE" \

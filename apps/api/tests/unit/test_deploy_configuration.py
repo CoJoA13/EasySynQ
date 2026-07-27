@@ -120,7 +120,9 @@ def test_keycloak_runs_optimized_on_durable_postgres_schema() -> None:
     assert "--users realm_file" in migration
     assert ".legacy-h2-export-complete" in migration
     assert "com.docker.compose.volume=keycloakimport" in migration
+    assert 'IMPORT_VOLUME="${IMPORT_VOLUME:-${PROJECT}_keycloakimport}"' in migration
     assert "restarting the untouched legacy container" in migration
+    assert "name: easysynq-keycloak-import" not in compose
 
 
 def test_h2_migration_reads_custom_compose_project_from_env_file(tmp_path: Path) -> None:
@@ -161,15 +163,133 @@ def test_h2_migration_reads_custom_compose_project_from_env_file(tmp_path: Path)
     assert "label=com.docker.compose.project=customer-qms" in docker_log.read_text()
 
 
+def test_h2_migration_fails_closed_when_container_discovery_errors(tmp_path: Path) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_docker = fake_bin / "docker"
+    fake_docker.write_text(
+        '#!/bin/sh\nif [ "$1" = "ps" ]; then\n  printf "daemon unavailable\\n" >&2\n  exit 1\nfi\n'
+    )
+    fake_docker.chmod(0o755)
+    env = {
+        **os.environ,
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+    }
+
+    result = subprocess.run(  # noqa: S603 - fixed test script and isolated fake PATH
+        ["/bin/bash", str(ROOT / "scripts/migrate-keycloak-h2.sh")],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "could not inspect legacy containers; refusing to continue" in result.stderr
+    assert "no legacy container found" not in result.stdout
+
+
+def test_h2_migration_scopes_import_volume_to_compose_project(tmp_path: Path) -> None:
+    docker_log = tmp_path / "docker.log"
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_docker = fake_bin / "docker"
+    fake_docker.write_text(
+        """#!/bin/sh
+printf "%s\\n" "$*" >> "$DOCKER_LOG"
+if [ "$1" = "ps" ]; then
+  printf "legacy-id\\n"
+elif [ "$1 $2" = "inspect --format" ] && [ "$3" = "{{.Image}}" ]; then
+  printf "sha256:legacy\\n"
+elif [ "$1 $2" = "volume inspect" ]; then
+  exit 1
+fi
+"""
+    )
+    fake_docker.chmod(0o755)
+    env = {
+        **os.environ,
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "DOCKER_LOG": str(docker_log),
+    }
+
+    result = subprocess.run(  # noqa: S603 - fixed test script and isolated fake PATH
+        [
+            "/bin/bash",
+            str(ROOT / "scripts/migrate-keycloak-h2.sh"),
+            "--project",
+            "customer-qms",
+        ],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "verified legacy export already staged" in result.stdout
+    create = next(
+        line for line in docker_log.read_text().splitlines() if line.startswith("volume create ")
+    )
+    assert "com.docker.compose.project=customer-qms" in create
+    assert "com.docker.compose.volume=keycloakimport" in create
+    assert create.endswith(" customer-qms_keycloakimport")
+
+
+def test_production_entrypoints_require_compose_2_24_4(tmp_path: Path) -> None:
+    checker = ROOT / "scripts/require-compose-version.sh"
+
+    def check(version: str) -> subprocess.CompletedProcess[str]:
+        fake_bin = tmp_path / version.replace(".", "_")
+        fake_bin.mkdir()
+        fake_docker = fake_bin / "docker"
+        fake_docker.write_text(f"#!/bin/sh\nprintf '%s\\n' '{version}'\n")
+        fake_docker.chmod(0o755)
+        env = {
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        }
+        return subprocess.run(  # noqa: S603 - fixed checker and isolated fake PATH
+            ["/bin/bash", str(checker)],
+            cwd=ROOT,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    unsupported = check("2.24.3")
+    assert unsupported.returncode != 0
+    assert "2.24.4 or newer is required" in unsupported.stderr
+
+    supported = check("2.24.4")
+    assert supported.returncode == 0, supported.stderr
+
+    installer = _read("scripts/install.sh")
+    appliance = _read("infra/appliance/provision/bin/easysynq-compose")
+    provisioner = _read("infra/appliance/provision/easysynq-provision.sh")
+    assert 'bash "$ROOT/scripts/require-compose-version.sh"' in installer
+    assert 'bash "$COMPOSE_VERSION_SCRIPT"' in appliance
+    assert 'bash "$APP_DIR/scripts/require-compose-version.sh"' in provisioner
+
+
 def test_appliance_targeted_up_only_migrates_when_keycloak_will_start(tmp_path: Path) -> None:
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     fake_docker = fake_bin / "docker"
-    fake_docker.write_text("#!/bin/sh\nexit 0\n")
+    fake_docker.write_text(
+        '#!/bin/sh\nif [ "$1 $2 $3" = "compose version --short" ]; then\n  printf "2.24.4\\n"\nfi\n'
+    )
     fake_docker.chmod(0o755)
     migration_log = tmp_path / "migration.log"
+    migration_args_log = tmp_path / "migration-args.log"
     fake_migration = tmp_path / "migrate.sh"
-    fake_migration.write_text('#!/bin/sh\nprintf "migrated\\n" >> "$MIGRATION_LOG"\n')
+    fake_migration.write_text(
+        '#!/bin/sh\nprintf "migrated\\n" >> "$MIGRATION_LOG"\n'
+        'printf "%s\\n" "$*" >> "$MIGRATION_ARGS_LOG"\n'
+    )
     fake_migration.chmod(0o755)
     (tmp_path / ".env").write_text("SITE_ADDRESS=https://easysynq.local\n")
     env = {
@@ -177,7 +297,9 @@ def test_appliance_targeted_up_only_migrates_when_keycloak_will_start(tmp_path: 
         "PATH": f"{fake_bin}:{os.environ['PATH']}",
         "EASYSYNQ_APP_DIR": str(tmp_path),
         "EASYSYNQ_MIGRATION_SCRIPT": str(fake_migration),
+        "EASYSYNQ_COMPOSE_VERSION_SCRIPT": str(ROOT / "scripts/require-compose-version.sh"),
         "MIGRATION_LOG": str(migration_log),
+        "MIGRATION_ARGS_LOG": str(migration_args_log),
     }
     wrapper = ROOT / "infra/appliance/provision/bin/easysynq-compose"
 
@@ -202,3 +324,12 @@ def test_appliance_targeted_up_only_migrates_when_keycloak_will_start(tmp_path: 
     result = run_wrapper("up", "--timeout", "60", "-d")
     assert result.returncode == 0, result.stderr
     assert migration_log.read_text().splitlines() == ["migrated", "migrated"]
+
+    result = run_wrapper("-p", "customer-qms", "up", "keycloak")
+    assert result.returncode == 0, result.stderr
+    assert migration_log.read_text().splitlines() == ["migrated", "migrated", "migrated"]
+    assert migration_args_log.read_text().splitlines() == [
+        "--env-file .env",
+        "--env-file .env",
+        "--env-file .env --project customer-qms",
+    ]

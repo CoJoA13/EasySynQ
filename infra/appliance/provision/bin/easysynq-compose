@@ -4,6 +4,7 @@
 set -euo pipefail
 APP_DIR="${EASYSYNQ_APP_DIR:-/opt/easysynq}"
 MIGRATION_SCRIPT="${EASYSYNQ_MIGRATION_SCRIPT:-scripts/migrate-keycloak-h2.sh}"
+COMPOSE_VERSION_SCRIPT="${EASYSYNQ_COMPOSE_VERSION_SCRIPT:-scripts/require-compose-version.sh}"
 cd "$APP_DIR"
 
 # Compatibility for an appliance .env generated before Batch 13: the old provisioner already wrote
@@ -20,6 +21,10 @@ for key in PUBLIC_BASE_URL APP_BASE_URL KEYCLOAK_HOSTNAME; do
     export "${key}=${SITE_VALUE}"
   fi
 done
+
+# Check before migration so an appliance with an old Compose binary cannot stop legacy Keycloak and
+# then fail while parsing production's !reset tag.
+bash "$COMPOSE_VERSION_SCRIPT"
 
 # The first full (or Keycloak-targeted) `up` after upgrading from the legacy start-dev/H2 service
 # must export identities before Compose recreates Keycloak. A non-Keycloak service target leaves
@@ -73,8 +78,35 @@ up_needs_keycloak_migration() {
   return 1
 }
 
+compose_project_override() {
+  local expect_value=0 arg
+  for arg in "$@"; do
+    if [ "$expect_value" -eq 1 ]; then
+      printf '%s\n' "$arg"
+      return
+    fi
+    case "$arg" in
+      up)
+        return
+        ;;
+      -p|--project-name)
+        expect_value=1
+        ;;
+      --project-name=*)
+        printf '%s\n' "${arg#*=}"
+        return
+        ;;
+    esac
+  done
+}
+
 if up_needs_keycloak_migration "$@"; then
-  bash "$MIGRATION_SCRIPT" --env-file .env
+  MIGRATION_ARGS=(--env-file .env)
+  PROJECT_OVERRIDE="$(compose_project_override "$@")"
+  if [ -n "$PROJECT_OVERRIDE" ]; then
+    MIGRATION_ARGS+=(--project "$PROJECT_OVERRIDE")
+  fi
+  bash "$MIGRATION_SCRIPT" "${MIGRATION_ARGS[@]}"
 fi
 
 exec docker compose --env-file .env \

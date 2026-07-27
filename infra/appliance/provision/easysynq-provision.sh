@@ -140,6 +140,9 @@ cmd_run() {
   chown root:easysynq "$APP_DIR/.env"
   chmod 640 "$APP_DIR/.env"
 
+  step "docker: verify Compose production-overlay support"
+  bash "$APP_DIR/scripts/require-compose-version.sh"
+
   step "stack: build + start (first run pulls + builds images — the long part)"
   compose up -d --build
 
