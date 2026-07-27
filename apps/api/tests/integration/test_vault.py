@@ -213,6 +213,54 @@ async def test_checkout_lock_ttl_is_8h(
     assert 28000 < remaining <= 28800  # ~8h (R24)
 
 
+async def test_init_upload_requires_checkout_owner_and_preserves_holder_scratch(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    """A caller with checkout permission cannot replace another editor's scratch pointer."""
+    holder_id = await _grant_doc_perms(subj.a)
+    await _grant_doc_perms(subj.b)
+    ha, hb = _auth(token_factory, subj.a), _auth(token_factory, subj.b)
+    did = (await _create(app_client, ha, await _sop_type_id()))["id"]
+    checked_out = await app_client.post(f"/api/v1/documents/{did}/checkout", headers=ha)
+    assert checked_out.status_code == 200, checked_out.text
+
+    holder_sha = hashlib.sha256(f"holder-scratch-{subj.a}".encode()).hexdigest()
+    holder_init = await app_client.post(
+        f"/api/v1/documents/{did}/versions:init-upload",
+        headers=ha,
+        json={"sha256": holder_sha, "content_type": "application/pdf"},
+    )
+    assert holder_init.status_code == 200, holder_init.text
+
+    other_sha = hashlib.sha256(f"other-scratch-{subj.b}".encode()).hexdigest()
+    rejected = await app_client.post(
+        f"/api/v1/documents/{did}/versions:init-upload",
+        headers=hb,
+        json={"sha256": other_sha, "content_type": "application/pdf"},
+    )
+    assert rejected.status_code == 409, rejected.text
+    assert rejected.json()["code"] == "lock_conflict"
+
+    # The PG mirror is not runtime authority: once its Redis token lapses, even the former holder
+    # must check out again and may not replace the preserved recovery pointer.
+    await locks.force_release(uuid.UUID(did))
+    lapsed_sha = hashlib.sha256(f"lapsed-scratch-{subj.a}".encode()).hexdigest()
+    lapsed = await app_client.post(
+        f"/api/v1/documents/{did}/versions:init-upload",
+        headers=ha,
+        json={"sha256": lapsed_sha, "content_type": "application/pdf"},
+    )
+    assert lapsed.status_code == 409, lapsed.text
+    assert lapsed.json()["code"] == "lock_conflict"
+
+    async with get_sessionmaker()() as s:
+        wd = (
+            await s.execute(select(WorkingDraft).where(WorkingDraft.document_id == uuid.UUID(did)))
+        ).scalar_one()
+        assert wd.checked_out_by == holder_id
+        assert wd.scratch_blob_ref == holder_sha
+
+
 # --- INV-3 ------------------------------------------------------------------------------
 
 

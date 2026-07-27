@@ -144,6 +144,50 @@ async def test_create_name_collision_409(
         await _delete_policy(pid)
 
 
+async def test_patch_explicit_null_rejects_required_fields_and_clears_nullable_fields(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """PATCH omission is a no-op; explicit null is legal only for nullable policy columns."""
+    subject = _subject("rp-null")
+    await _grant(subject, _PERMS)
+    h = _auth(token_factory, subject)
+    created = await app_client.post(
+        "/api/v1/retention-policies",
+        headers=h,
+        json=_policy_body(
+            applies_to={"record_type": "SUPPLIER_EVAL"},
+            worm_lock_period="P10Y",
+        ),
+    )
+    assert created.status_code == 201, created.text
+    original = created.json()
+    pid = original["id"]
+    try:
+        for field in ("name", "basis", "duration", "disposition_action", "review_required"):
+            rejected = await app_client.patch(
+                f"/api/v1/retention-policies/{pid}", headers=h, json={field: None}
+            )
+            assert rejected.status_code == 422, (field, rejected.text)
+            error = rejected.json()["errors"][0]
+            assert error["field"] == field
+            assert error["code"] == "not_nullable"
+
+            unchanged = await app_client.get(f"/api/v1/retention-policies/{pid}", headers=h)
+            assert unchanged.status_code == 200, unchanged.text
+            assert unchanged.json()[field] == original[field]
+
+        cleared = await app_client.patch(
+            f"/api/v1/retention-policies/{pid}",
+            headers=h,
+            json={"applies_to": None, "worm_lock_period": None},
+        )
+        assert cleared.status_code == 200, cleared.text
+        assert cleared.json()["applies_to"] is None
+        assert cleared.json()["worm_lock_period"] is None
+    finally:
+        await _delete_policy(pid)
+
+
 async def test_extend_forward_guard(
     app_client: AsyncClient, token_factory: Callable[..., str]
 ) -> None:

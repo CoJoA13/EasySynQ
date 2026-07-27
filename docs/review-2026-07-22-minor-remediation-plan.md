@@ -31,8 +31,8 @@
 | M4 | Lifecycle and workflow guards | 4 | ☑ merged | [#384](https://github.com/CoJoA13/EasySynQ/pull/384) |
 | M5 | Ingestion commit integrity | 3 | ☑ merged | [#385](https://github.com/CoJoA13/EasySynQ/pull/385) |
 | M6 | Ingestion review and family integrity | 4 | ☑ merged | [#386](https://github.com/CoJoA13/EasySynQ/pull/386) |
-| M7 | Records and rendering resilience | 3 | ☑ in PR | [#387](https://github.com/CoJoA13/EasySynQ/pull/387) |
-| M8 | Vault and retention input guards | 2 | ☐ queued — revalidate | — |
+| M7 | Records and rendering resilience | 3 | ☑ merged | [#387](https://github.com/CoJoA13/EasySynQ/pull/387) |
+| M8 | Vault and retention input guards | 2 | ☑ implemented | — |
 | M9 | Migration and ORM coherence | 4 | ☐ queued — revalidate | — |
 | M10 | Schema and index design | 4 | ☐ queued — revalidate | — |
 | M11 | Organization time and audit scalability | 3 | ☐ queued — revalidate | — |
@@ -219,14 +219,21 @@ unit/integration tests · no new permission key
   legacy empty-form preimage while v2 hashes `{}` distinctly from the `NULL` ad-hoc sentinel;
   exported pack manifests and dossier subjects carry that version beside every record hash).
 
-### ☐ M8 — Vault and retention input guards
+### ☑ M8 — Vault and retention input guards
 
 `branch: fix/minor-vault-retention-guards` · API + integration
 
-- [ ] `apps/api/src/easysynq_api/services/records/retention_policies.py:232` — explicit JSON nulls
-  in a retention-policy patch reach `.strip()`/NOT NULL failures as 500s `[f]`.
-- [ ] `apps/api/src/easysynq_api/services/vault/service.py:441` — `init_upload` can overwrite the
-  lock holder's scratch pointer without proving the caller owns the checkout `[f]`.
+- [x] `apps/api/src/easysynq_api/services/records/retention_policies.py:232` — explicit JSON nulls
+  in a retention-policy patch reached `.strip()`/NOT NULL failures as 500s `[f]` (fixed: PATCH now
+  distinguishes omission from explicit null, rejects null for the five required policy fields with
+  a field-specific `422 validation_error`, and preserves deliberate null-clearing for nullable
+  `applies_to` and `worm_lock_period`; the OpenAPI contract documents the same split).
+- [x] `apps/api/src/easysynq_api/services/vault/service.py:441` — `init_upload` could overwrite the
+  lock holder's scratch pointer without proving the caller owns the checkout `[f]` (fixed:
+  init-upload row-locks the working-draft mirror, requires `checked_out_by` to match the caller,
+  and CAS-refreshes its token against authoritative Redis; a mismatched user or lapsed lock returns
+  `409 lock_conflict` before changing scratch state or issuing a presigned upload. Regression
+  coverage proves neither case can replace the holder's stored SHA).
 
 ### ☐ M9 — Migration and ORM coherence
 

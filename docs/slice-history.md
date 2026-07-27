@@ -175,6 +175,28 @@
 
 ## REMEDIATION — correctness, accessibility, polish & test reliability
 
+### Minor Batch M8 — vault and retention input guards (API + OpenAPI + integration + docs; NO migration [head stays `0078`]; NO new permission key [catalog 102])
+
+**What shipped.** Retention-policy PATCH now treats omission and explicit JSON `null` as distinct
+operations. The five database-required fields (`name`, `basis`, `duration`, `disposition_action`,
+and `review_required`) reject explicit null with a field-specific `422 validation_error` before
+string normalization, enum comparison, or a NOT NULL constraint can turn the request into a 500.
+The genuinely nullable `applies_to` and `worm_lock_period` fields remain deliberately clearable,
+and the OpenAPI contract records that split.
+
+Document init-upload now proves the caller owns the document's active working draft before
+replacing `scratch_blob_ref`. It row-locks the PG mirror across the proof and update, matches
+`checked_out_by` to the actor, and CAS-refreshes the mirror token against authoritative Redis. A
+separately authorized user or former holder of a lapsed lock receives `409 lock_conflict` before
+scratch mutation or presigned-upload issuance, preserving the holder's recovery pointer.
+
+**Tests.** Two mutation-distinguishing integration regressions exercise all five required-policy
+nulls plus both nullable clears, and prove neither a separately authorized non-holder nor the former
+holder of a lapsed Redis lock can replace the checkout owner's stored scratch SHA. The complete
+retention-policy and vault integration files are green (**22 passed**). API Ruff/format and strict
+mypy over **426 source files** are clean, and the full unit suite is green (**1180 passed, 1 expected
+release-only skip**). Redocly validates the updated OpenAPI contract.
+
 ### Minor Batch M7 — records and rendering resilience (API + workers + docs; migrations `0077`/`0078` [new head]; NO new permission key [catalog 102]; PR [#387](https://github.com/CoJoA13/EasySynQ/pull/387))
 
 **What shipped.** Sealed evidence packs now pin a distinct system-managed `PERMANENT` +

@@ -480,11 +480,27 @@ async def init_upload(
     sha256: str,
     content_type: str,
 ) -> dict[str, Any]:
-    # Record the in-progress scratch ref on the check-out mirror so break-lock preserves it (R9).
-    wd = await repository.get_working_draft(session, doc.id)
-    if wd is not None:
-        wd.scratch_blob_ref = sha256
-        await session.commit()
+    # Only the active check-out holder may replace their in-progress scratch ref. Lock the mirror
+    # row so a lapsed-lock takeover cannot change its holder/token between this proof and the
+    # scratch update.
+    wd = await repository.get_working_draft(session, doc.id, for_update=True)
+    if wd is None or wd.checked_out_by != actor.id:
+        raise ProblemException(
+            status=409,
+            code="lock_conflict",
+            title="You do not hold the check-out for this document",
+        )
+    # Redis is the runtime lock authority; the PG row identifies its user/token. A successful CAS
+    # both proves this is still the active checkout and treats init-upload as editor activity.
+    if not await locks.heartbeat(doc.id, wd.lock_token or ""):
+        raise ProblemException(
+            status=409,
+            code="lock_conflict",
+            title="The check-out lock has lapsed; check out again",
+        )
+    # Record the in-progress scratch ref so break-lock preserves it (R9).
+    wd.scratch_blob_ref = sha256
+    await session.commit()
     existing = await repository.get_blob(session, sha256)
     settings = get_settings()
     if (
