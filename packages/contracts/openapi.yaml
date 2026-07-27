@@ -28,7 +28,8 @@ tags:
     description: >-
       First-run setup wizard (slice S8a). Latch-exempt; the QMS surface is 423 setup_incomplete
       until setup finalizes to OPERATIONAL. The bootstrap secret grants the first System
-      Administrator (outside the PEP); org-profile + finalize need config.update.
+      Administrator (outside the PEP); setup detail needs config.read, while org-profile +
+      finalize need config.update.
   - name: authz
     description: >-
       Authorization admin — the permission catalog, roles, and per-user role/override
@@ -206,7 +207,9 @@ paths:
         Reports reachability of every backing dependency (PostgreSQL, MinIO,
         Redis, Keycloak) plus the Alembic migration head. OpenSearch is NOT
         checked in the MVP (omitted per Decisions Register R34). Returns 200 when
-        all required dependencies are ready, 503 otherwise.
+        all required dependencies are ready, 503 otherwise. The public response
+        intentionally contains dependency names and readiness booleans only; it
+        never exposes connection errors or internal endpoints.
       security: []
       responses:
         "200":
@@ -254,13 +257,14 @@ paths:
     get:
       tags: [setup]
       operationId: getSetup
-      summary: The wizard view — state + live gate status + current org profile. Authenticated.
+      summary: The wizard view — state + live gate status + current org profile. Needs config.read.
       responses:
         "200":
           description: Setup state, gate status, and org profile.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/SetupDetail" }
+        "403": { $ref: "#/components/responses/ProblemResponse" }
 
   /setup/bootstrap:
     post:
@@ -6694,7 +6698,6 @@ components:
           type: string
           enum: [postgres, minio, redis, keycloak, alembic]
         ready: { type: boolean }
-        detail: { type: [string, "null"] }
 
     Readiness:
       type: object

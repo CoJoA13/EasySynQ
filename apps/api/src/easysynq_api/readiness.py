@@ -1,9 +1,10 @@
-"""Dependency readiness probes for ``/readyz``.
+"""Dependency readiness probes used by ``/readyz`` and trusted upgrade workflows.
 
 Checks PostgreSQL, Redis, MinIO, Keycloak, and the Alembic migration head.
 OpenSearch is intentionally NOT probed in the MVP (omitted per R34). Probes that
 are unconfigured in a dev environment report ``ready=True`` with a note rather
 than failing the whole skeleton; in the Compose stack every dependency is wired.
+Results retain diagnostics for internal callers; the public route strips ``detail``.
 """
 
 from __future__ import annotations
@@ -128,6 +129,7 @@ async def _check_alembic() -> DependencyStatus:
 
 
 async def check_all() -> list[dict[str, object]]:
+    """Run every probe, retaining internal diagnostic detail for trusted callers."""
     settings = get_settings()
     results = await asyncio.gather(
         _check_postgres(),

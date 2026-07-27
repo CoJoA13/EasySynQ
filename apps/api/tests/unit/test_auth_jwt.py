@@ -14,7 +14,7 @@ import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
 from jwt.algorithms import RSAAlgorithm
 
-from easysynq_api.auth.jwks import JWKSCache
+from easysynq_api.auth.jwks import JWKSCache, JWKSUnavailable
 from easysynq_api.auth.tokens import authenticate
 from easysynq_api.config import get_settings
 from easysynq_api.problems import ProblemException
@@ -104,3 +104,23 @@ async def test_unknown_kid_401(_settings, _keypair) -> None:
     with pytest.raises(ProblemException) as ei:
         await authenticate(token, JWKSCache("", static_jwks=jwks))
     assert ei.value.status == 401
+
+
+@pytest.mark.unit
+async def test_jwks_dependency_failure_is_a_sanitized_503(
+    _settings, _keypair, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    key, jwks = _keypair
+    cache = JWKSCache("https://kc.internal/jwks", static_jwks=jwks)
+
+    async def _unavailable() -> dict[str, object]:
+        raise JWKSUnavailable("connection to kc.internal failed")
+
+    monkeypatch.setattr(cache, "_load", _unavailable)
+
+    with pytest.raises(ProblemException) as ei:
+        await authenticate(_mint(key), cache)
+
+    assert ei.value.status == 503
+    assert ei.value.code == "dependency_unavailable"
+    assert ei.value.detail is None

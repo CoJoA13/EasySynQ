@@ -148,7 +148,7 @@ One envelope for every non-2xx. HTTP status is authoritative; `code` is the stab
 | HTTP | `code` (examples) | When |
 |---|---|---|
 | 400 | `invalid_cursor`, `unknown_filter`, `unknown_sort`, `malformed_request` | Bad query/path/syntax. |
-| 401 | `unauthenticated`, `token_expired`, `token_invalid` | Missing/expired/invalid Keycloak JWT or failed JWKS verification. |
+| 401 | `unauthenticated`, `token_expired`, `token_invalid` | Missing/expired/invalid Keycloak JWT, including a signing key unknown after a successful JWKS refresh. |
 | 403 | `permission_denied`, `out_of_scope`, `sod_violation`, `step_up_required`, `setup_incomplete` | Authenticated but policy engine denies: ABAC scope miss, Separation-of-Duties block (`14 §3`), MFA/re-auth required, or QMS locked because `setup_state ≠ OPERATIONAL`. |
 | 404 | `not_found` | Absent, **or** hidden by row-level visibility (§9.5). |
 | 409 | `conflict`, `duplicate_identifier`, `invalid_state_transition`, `document_checked_out`, `singleton_exists` | Unique violation, illegal transition, doc locked by another user, or a 2nd Quality-Policy/Scope singleton. |
@@ -157,7 +157,7 @@ One envelope for every non-2xx. HTTP status is authoritative; `code` is the stab
 | 422 | `validation_failed` | Well-formed JSON, semantically invalid; per-field `errors[]` (e.g. missing `change_reason`, no `clause_mapping` before `Draft→InReview`). |
 | 423 | `locked` | Acting on a checked-out document without holding the lock (`14 §5.4`). |
 | 429 | `rate_limited` | Redis token bucket exhausted; `Retry-After` set. |
-| 5xx | `internal_error`, `dependency_unavailable` | Server / MinIO / OpenSearch / DB fault. `request_id` always present. When OpenSearch is down, search degrades to Postgres FTS rather than 5xx-ing (`03 §11` graceful degradation). |
+| 5xx | `internal_error`, `dependency_unavailable` | Server / MinIO / OpenSearch / DB / Keycloak JWKS fault. `request_id` always present. Public errors and `/readyz` never expose dependency connection diagnostics. When OpenSearch is down, search degrades to Postgres FTS rather than 5xx-ing (`03 §11` graceful degradation). |
 
 `invalid_state_transition` and `sod_violation` responses include `"allowed_transitions": [...]` / `"conflicting_duty": {...}` so the client corrects without guessing.
 
