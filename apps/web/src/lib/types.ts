@@ -667,12 +667,21 @@ export interface ImportFileReviewDetail {
   decision_history: ImportDecision[];
 }
 
+export interface ImportFileCommitResult {
+  result: "success" | "failed" | "noop";
+  vault_document_id: string | null;
+  vault_version_id: string | null;
+  error: string | null;
+  committed_at: string | null;
+}
+
 export interface ImportFileDetail extends Omit<ImportFile, "review"> {
   run_id: string;
   extract: ImportExtract | null;
   dedup: ImportDedupMembership;
   proposal: ImportProposalNode | null;
   review: ImportFileReviewDetail | null;
+  commit: ImportFileCommitResult | null;
 }
 
 export interface ImportDupeCluster {

@@ -118,6 +118,15 @@ def test_fold_latest_kind_confirm_wins() -> None:
     assert st.kind == "DOCUMENT"
 
 
+def test_fold_tracks_human_owner_source() -> None:
+    st = fold_file_decisions(
+        [_decision(ImportDecisionAction.CORRECT, {"owner": str(uuid.uuid4())})],
+        _node(owner="embedded author"),
+        _cls(),
+    )
+    assert st.owner_source == "human"
+
+
 def test_validate_after_rejects_unknown_dimension() -> None:
     with pytest.raises(ProblemException) as exc:
         _validate_after(ImportDecisionAction.CORRECT, {"bogus": 1})
@@ -148,6 +157,14 @@ def test_validate_after_list_dimensions_must_be_string_lists() -> None:
     assert _validate_after(ImportDecisionAction.CORRECT, {"clause_numbers": ["8.4"]}) == {
         "clause_numbers": ["8.4"]
     }
+
+
+@pytest.mark.parametrize("identifier", ["", " ", "\t\r\n"])
+def test_validate_after_rejects_blank_identifier(identifier: str) -> None:
+    with pytest.raises(ProblemException) as exc:
+        _validate_after(ImportDecisionAction.CORRECT, {"identifier": identifier})
+    assert exc.value.status == 422
+    assert exc.value.title == "identifier must not be blank"
 
 
 def test_coerce_action_rejects_garbage_and_accepts_the_closed_set() -> None:

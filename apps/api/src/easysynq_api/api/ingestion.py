@@ -438,8 +438,9 @@ async def record_file_decision_endpoint(
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ) -> dict[str, Any]:
     """Record one per-file dimensional decision (accept/correct/exclude/defer + the R10 kind-confirm
-    via ``after.kind``). 422 on merge/split (use the dedicated endpoints). 409 if the run is not
-    Proposed/Reviewing. Needs ``import.review``."""
+    via ``after.kind``). 422 on merge/split (use the dedicated endpoints). PartiallyCommitted runs
+    accept only CORRECT on a failed/remaining item; committed items remain immutable. Needs
+    ``import.review``."""
     return await review_svc.record_file_decision(
         session,
         caller,

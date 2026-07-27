@@ -22,6 +22,7 @@ from ...db.models._ingestion_enums import (
     ImportRunStatus,
 )
 from ...db.models._vault_enums import DocumentCurrentState
+from ...db.models.app_user import AppUser, UserStatus
 from ...db.models.clause import Clause
 from ...db.models.document_type import DocumentType
 from ...db.models.documented_information import DocumentedInformation
@@ -977,6 +978,79 @@ async def get_base(session: AsyncSession, di_id: uuid.UUID) -> DocumentedInforma
     return await session.get(DocumentedInformation, di_id)
 
 
+async def resolve_import_owner_candidates(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    owner_ref: str,
+    *,
+    for_update: bool = False,
+) -> Sequence[AppUser]:
+    """Resolve a folded import-owner reference inside the caller's directory.
+
+    Review clients should submit the stable ``app_user.id`` exposed by ``GET /directory/users``.
+    Exact, case-insensitive display-name/email/subject matching keeps legacy decisions and
+    best-effort embedded-author hints usable. Returning at most two rows lets the commit path reject
+    an ambiguous human decision instead of silently choosing an owner.
+    """
+    owner_ref = owner_ref.strip()
+    if not owner_ref:
+        return ()
+    base = (
+        select(AppUser)
+        .where(
+            AppUser.org_id == org_id,
+            AppUser.status == UserStatus.ACTIVE,
+            AppUser.is_guest.is_(False),
+        )
+        .order_by(AppUser.id)
+        .limit(2)
+    )
+    normalized = owner_ref.lower()
+    exact_identity = or_(
+        func.lower(func.btrim(AppUser.display_name)) == normalized,
+        func.lower(func.btrim(AppUser.email)) == normalized,
+        func.lower(func.btrim(AppUser.keycloak_subject)) == normalized,
+    )
+    try:
+        owner_id = uuid.UUID(owner_ref)
+    except ValueError:
+        base = base.where(exact_identity)
+    else:
+        # Keycloak subjects are opaque strings and can be UUID-shaped without equalling app_user.id.
+        # Preserve both accepted identity forms instead of treating UUID syntax as a discriminator.
+        base = base.where(or_(AppUser.id == owner_id, exact_identity))
+    if for_update:
+        # Commit preflight takes a row lock on the validated identity. A concurrent lifecycle
+        # change therefore either wins first (and the now-inactive user no longer matches) or waits
+        # until the stable ID snapshot and Reviewing→Committing transition commit atomically.
+        base = base.with_for_update()
+    return (await session.execute(base)).scalars().all()
+
+
+async def get_import_owner_by_id(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    owner_id: uuid.UUID,
+    *,
+    for_update: bool = False,
+) -> AppUser | None:
+    """Load a stable, non-guest import-owner identity inside one tenant.
+
+    Unlike ``resolve_import_owner_candidates``, lifecycle status is deliberately unrestricted:
+    once an active owner was validated at the review boundary, disabling or retiring that identity
+    must not invalidate the immutable reviewed choice. Tenant scope and guest exclusion remain
+    load-bearing.
+    """
+    stmt = select(AppUser).where(
+        AppUser.id == owner_id,
+        AppUser.org_id == org_id,
+        AppUser.is_guest.is_(False),
+    )
+    if for_update:
+        stmt = stmt.with_for_update()
+    return (await session.execute(stmt)).scalar_one_or_none()
+
+
 async def get_commit_result(
     session: AsyncSession, run_id: uuid.UUID, file_id: uuid.UUID
 ) -> ImportCommitResult | None:
@@ -1040,9 +1114,12 @@ async def record_failed_result(
     run_id: uuid.UUID,
     file_id: uuid.UUID,
     error: str,
-) -> None:
-    """Record an isolated per-item FAILURE (ON CONFLICT DO UPDATE — re-fail on a resume); never
-    clobbers a peer-committed SUCCESS (the ``WHERE result != 'success'`` guard). Caller commits."""
+) -> bool:
+    """Atomically record an isolated per-item FAILURE iff no terminal result won first.
+
+    Returns whether this writer inserted/updated the ledger row. A concurrent SUCCESS/NOOP makes
+    the conditional UPSERT return no row, so the caller can avoid appending a false failure audit.
+    """
     stmt = (
         pg_insert(ImportCommitResult)
         .values(
@@ -1059,10 +1136,11 @@ async def record_failed_result(
                 "error": error,
                 "committed_at": func.now(),
             },
-            where=ImportCommitResult.result != ImportCommitResultStatus.SUCCESS,
+            where=ImportCommitResult.result == ImportCommitResultStatus.FAILED,
         )
+        .returning(ImportCommitResult.id)
     )
-    await session.execute(stmt)
+    return (await session.execute(stmt)).first() is not None
 
 
 async def list_commit_results(

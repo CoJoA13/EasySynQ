@@ -131,6 +131,44 @@ def _provenance(
     }
 
 
+async def _resolve_owner_user_id(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    committer: AppUser,
+    state: EffectiveFileState,
+    snapshot_owner_id: str | None,
+) -> uuid.UUID:
+    """Materialize the folded owner without confusing authorship with ownership.
+
+    A human-selected owner is load-bearing: unresolved or ambiguous references fail this item
+    honestly instead of silently assigning the committer. Engine-proposed embedded-author hints are
+    best-effort, so an unresolved hint retains the existing committer fallback. Initial commit
+    preflight pins a validated human reference in the run's internal owner snapshot before review
+    closes; lifecycle status changes after that decision do not rewrite the operator's choice.
+    """
+    if state.owner is None:
+        return committer.id
+    if snapshot_owner_id is not None:
+        try:
+            validated_id = uuid.UUID(snapshot_owner_id)
+        except (AttributeError, TypeError, ValueError) as exc:
+            raise _ItemCommitError("owner_not_found") from exc
+        validated = await repo.get_import_owner_by_id(session, org_id, validated_id)
+        # Status/is_guest were validated and row-locked at the review→commit boundary. Recheck only
+        # immutable tenant/non-guest identity here: disabling/retiring the user after that boundary
+        # must not strand the run.
+        if validated is None:
+            raise _ItemCommitError("owner_not_found")
+        return validated.id
+    candidates = await repo.resolve_import_owner_candidates(session, org_id, state.owner)
+    if len(candidates) == 1:
+        return candidates[0].id
+    if state.owner_source == "human":
+        reason = "owner_ambiguous" if candidates else "owner_not_found"
+        raise _ItemCommitError(reason)
+    return committer.id
+
+
 async def run_commit(sm: async_sessionmaker[AsyncSession], run_id: uuid.UUID) -> None:
     """The detached commit body. **Each item commits in its OWN fresh session/transaction**
     (per-item isolation — an item's failure never poisons the next), idempotent + single-flight via
@@ -144,6 +182,8 @@ async def run_commit(sm: async_sessionmaker[AsyncSession], run_id: uuid.UUID) ->
         org_id = run.org_id
         committed_by = run.committed_by
         classifier_version = run.classifier_version
+        raw_owner_snapshot = run.commit_owner_snapshot
+        owner_snapshot = dict(raw_owner_snapshot) if isinstance(raw_owner_snapshot, dict) else {}
         await guard.commit()  # release the run FOR UPDATE before the (long) per-item loop
 
     if committed_by is None:
@@ -176,7 +216,15 @@ async def run_commit(sm: async_sessionmaker[AsyncSession], run_id: uuid.UUID) ->
 
     # Single-flight is the per-item ledger CLAIM (see claim_commit_result), not a lock — concurrent
     # workers are de-duplicated atomically per item.
-    await _commit_items(sm, run_id, org_id, committer, framework_id, classifier_version)
+    await _commit_items(
+        sm,
+        run_id,
+        org_id,
+        committer,
+        framework_id,
+        classifier_version,
+        owner_snapshot,
+    )
 
 
 async def _commit_items(
@@ -186,6 +234,7 @@ async def _commit_items(
     committer: AppUser,
     framework_id: uuid.UUID,
     classifier_version: str | None,
+    owner_snapshot: dict[str, str],
 ) -> None:
     async with sm() as reads:
         nodes = await repo.list_proposal_nodes(reads, run_id)
@@ -219,12 +268,20 @@ async def _commit_items(
                     ImportCommitResultStatus.NOOP,
                 ):
                     continue  # idempotent: already committed (a resume / re-delivery)
+                owner_user_id = await _resolve_owner_user_id(
+                    s,
+                    org_id,
+                    committer,
+                    st,
+                    owner_snapshot.get(str(node.file_id)),
+                )
                 if st.kind == "DOCUMENT":
                     await _commit_document(
                         s,
                         run_id,
                         org_id,
                         committer,
+                        owner_user_id,
                         framework_id,
                         file,
                         st,
@@ -235,7 +292,16 @@ async def _commit_items(
                     )
                 else:  # RECORD
                     await _commit_record(
-                        s, run_id, org_id, committer, file, st, cls, decisions, classifier_version
+                        s,
+                        run_id,
+                        org_id,
+                        committer,
+                        owner_user_id,
+                        file,
+                        st,
+                        cls,
+                        decisions,
+                        classifier_version,
                     )
                 await s.commit()
         except _LostRace:
@@ -243,17 +309,18 @@ async def _commit_items(
         except Exception as exc:  # noqa: BLE001 — isolate the failure to this item (§10.2/§11.2)
             reason = exc.reason if isinstance(exc, _ItemCommitError) else repr(exc)[:500]
             async with sm() as fs:  # a FRESH session for the failed-ledger write
-                await _record_failed(fs, run_id, org_id, node.file_id, reason)
-            logger.warning(
-                "ingestion.commit.item_failed",
-                extra={
-                    "extra_fields": {
-                        "run_id": str(run_id),
-                        "file_id": str(node.file_id),
-                        "reason": reason,
-                    }
-                },
-            )
+                failure_recorded = await _record_failed(fs, run_id, org_id, node.file_id, reason)
+            if failure_recorded:
+                logger.warning(
+                    "ingestion.commit.item_failed",
+                    extra={
+                        "extra_fields": {
+                            "run_id": str(run_id),
+                            "file_id": str(node.file_id),
+                            "reason": reason,
+                        }
+                    },
+                )
 
     # Terminal flip + the Import Report + the mirror enqueue.
     await _finalize(sm, run_id, org_id, committer, framework_id)
@@ -264,6 +331,7 @@ async def _commit_document(
     run_id: uuid.UUID,
     org_id: uuid.UUID,
     committer: AppUser,
+    owner_user_id: uuid.UUID,
     framework_id: uuid.UUID,
     file: ImportFile,
     st: EffectiveFileState,
@@ -276,6 +344,10 @@ async def _commit_document(
     sha = file.sha256
     if sha is None:
         raise _ItemCommitError("no_staged_bytes")
+    # Revalidate the folded state at the write boundary. Older append-only decisions may predate
+    # request validation, and must not promote bytes or mint a vault row with a blank identifier.
+    if st.identifier is not None and not st.identifier.strip():
+        raise _ItemCommitError("blank_identifier")
     if st.type_code is None:
         raise _ItemCommitError("unknown_document_type")
     dt_by_code = await repo.get_document_types_by_codes(session, org_id, {st.type_code})
@@ -362,7 +434,7 @@ async def _commit_document(
         title=_title_for(file),
         document_type_id=dt.id,
         area_code=area,
-        owner_user_id=committer.id,
+        owner_user_id=owner_user_id,
         current_state=DocumentCurrentState.Effective,
         is_singleton=dt.is_singleton,
         classification=Classification.Internal,
@@ -447,7 +519,12 @@ async def _commit_document(
         object_type=AuditObjectType.document,
         object_id=doc.id,
         scope_ref=identifier,
-        after={"file_id": str(file.id), "identifier": identifier, "kind": "DOCUMENT"},
+        after={
+            "file_id": str(file.id),
+            "identifier": identifier,
+            "kind": "DOCUMENT",
+            "owner_user_id": str(owner_user_id),
+        },
     )
     # The CLAIM is the last write — if a concurrent worker already committed this item, we lose it
     # and roll the whole item back (the doc/version/signature included). No duplicate, no seq leak.
@@ -468,6 +545,7 @@ async def _commit_record(
     run_id: uuid.UUID,
     org_id: uuid.UUID,
     committer: AppUser,
+    owner_user_id: uuid.UUID,
     file: ImportFile,
     st: EffectiveFileState,
     cls: ImportClassification | None,
@@ -508,6 +586,7 @@ async def _commit_record(
 
     base = await repo.get_base(session, rec.id)
     if base is not None:
+        base.owner_user_id = owner_user_id
         base.import_provenance = _provenance(
             file, run_id, classifier_version, cls, _decided_by(decisions)
         )
@@ -520,7 +599,11 @@ async def _commit_record(
         object_type=AuditObjectType.record,
         object_id=rec.id,
         scope_ref=base.identifier if base is not None else None,
-        after={"file_id": str(file.id), "kind": "RECORD"},
+        after={
+            "file_id": str(file.id),
+            "kind": "RECORD",
+            "owner_user_id": str(owner_user_id),
+        },
     )
     won = await repo.claim_commit_result(
         session,
@@ -540,20 +623,14 @@ async def _record_failed(
     org_id: uuid.UUID,
     file_id: uuid.UUID,
     reason: str,
-) -> None:
-    """Record an isolated per-item failure in its own transaction (the rollback already happened).
-    Never overwrites a success (the ``record_failed_result`` WHERE-guard; belt-and-suspenders with
-    the success-skip below)."""
-    existing = await repo.get_commit_result(session, run_id, file_id)
-    if existing is not None and existing.result in (
-        ImportCommitResultStatus.SUCCESS,
-        ImportCommitResultStatus.NOOP,
-    ):
-        await session.rollback()
-        return
-    await repo.record_failed_result(
+) -> bool:
+    """Atomically record + audit an isolated failure after the item transaction rolled back."""
+    won = await repo.record_failed_result(
         session, org_id=org_id, run_id=run_id, file_id=file_id, error=reason
     )
+    if not won:
+        await session.rollback()
+        return False
     emit_import_event_system(
         session,
         org_id,
@@ -562,6 +639,7 @@ async def _record_failed(
         after={"file_id": str(file_id), "error": reason},
     )
     await session.commit()
+    return True
 
 
 async def _finalize(

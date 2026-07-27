@@ -1,5 +1,6 @@
 import { Button, Group, Menu, Paper, Text } from "@mantine/core";
 import { useState } from "react";
+import { useUserDirectory } from "../../app/shell/useUserDirectory";
 import { ConfirmDestructive } from "../../lib/ConfirmDestructive";
 import type { ImportDecisionAction, ImportDecisionAfter } from "../../lib/types";
 
@@ -9,9 +10,45 @@ import type { ImportDecisionAction, ImportDecisionAfter } from "../../lib/types"
 // over the *selection*; "Bulk accept all High" is the selector-based whole-bucket accept and must NOT
 // confirm kind. Theme tokens via Mantine props / var(--es-*) only — never hardcoded hex.
 
-// Representative corrective choices for the v1 bulk menus. The full picklist (driven by reference-data)
-// is a follow-on; these cover the operator journey + keep the bar entirely client-side.
+// Representative corrective choices for the v1 bulk menus. The full type/clause reference-data
+// picklists are follow-ons.
 const TYPE_CHOICES = ["SOP", "WI", "FORM", "POLICY"] as const;
+
+function ownerMenuLabel(user: { id: string; display_name: string | null }): string {
+  const idSuffix = user.id.slice(-8);
+  return user.display_name ? `${user.display_name} · ID …${idSuffix}` : `ID ${user.id}`;
+}
+
+function OwnerMenu({
+  onBulk,
+}: {
+  onBulk: (action: ImportDecisionAction, after?: ImportDecisionAfter) => void;
+}) {
+  const { data: directoryUsers = [], isLoading } = useUserDirectory();
+
+  return (
+    <Menu position="bottom-start" withinPortal={false}>
+      <Menu.Target>
+        <Button variant="subtle" size="xs" aria-label="Reassign owner for selected">
+          Reassign owner ▾
+        </Button>
+      </Menu.Target>
+      <Menu.Dropdown>
+        {isLoading ? (
+          <Menu.Item disabled>Loading users…</Menu.Item>
+        ) : directoryUsers.length === 0 ? (
+          <Menu.Item disabled>No available users</Menu.Item>
+        ) : (
+          directoryUsers.map((user) => (
+            <Menu.Item key={user.id} onClick={() => onBulk("correct", { owner: user.id })}>
+              {ownerMenuLabel(user)}
+            </Menu.Item>
+          ))
+        )}
+      </Menu.Dropdown>
+    </Menu>
+  );
+}
 
 export function BulkActionBar({
   count,
@@ -73,19 +110,8 @@ export function BulkActionBar({
           </Menu.Dropdown>
         </Menu>
 
-        {/* Reassign owner — representative item; the full owner picker is a follow-on. */}
-        <Menu position="bottom-start" withinPortal={false}>
-          <Menu.Target>
-            <Button variant="subtle" size="xs" aria-label="Reassign owner for selected">
-              Reassign owner ▾
-            </Button>
-          </Menu.Target>
-          <Menu.Dropdown>
-            <Menu.Item onClick={() => onBulk("correct", { owner: "Quality Manager" })}>
-              Quality Manager
-            </Menu.Item>
-          </Menu.Dropdown>
-        </Menu>
+        {/* Directory-backed so the decision carries the stable app_user.id accepted by commit. */}
+        <OwnerMenu onBulk={onBulk} />
 
         {/* Set clause — representative item; the full clause tree is a follow-on. */}
         <Menu position="bottom-start" withinPortal={false}>

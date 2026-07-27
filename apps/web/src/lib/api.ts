@@ -9,15 +9,17 @@ export class ApiError extends Error {
     readonly status: number,
     readonly code: string,
     message: string,
+    readonly problem?: ApiProblem,
   ) {
     super(message);
   }
 }
 
-interface Problem {
+export interface ApiProblem {
   code?: string;
   title?: string;
   detail?: string;
+  [key: string]: unknown;
 }
 
 async function request<T>(
@@ -36,9 +38,12 @@ async function request<T>(
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
   if (!resp.ok) {
-    let problem: Problem = {};
+    let problem: ApiProblem = {};
     try {
-      problem = (await resp.json()) as Problem;
+      const decoded: unknown = await resp.json();
+      if (decoded !== null && typeof decoded === "object" && !Array.isArray(decoded)) {
+        problem = decoded as ApiProblem;
+      }
     } catch {
       /* non-JSON error body */
     }
@@ -46,6 +51,7 @@ async function request<T>(
       resp.status,
       problem.code ?? "error",
       problem.detail ?? problem.title ?? `HTTP ${resp.status}`,
+      problem,
     );
   }
   if (resp.status === 204 || resp.headers.get("content-length") === "0") {
@@ -67,9 +73,12 @@ export async function apiGetBlob(path: string, token: string | null = null): Pro
   if (token) headers.Authorization = `Bearer ${token}`;
   const resp = await fetch(path, { headers });
   if (!resp.ok) {
-    let problem: Problem = {};
+    let problem: ApiProblem = {};
     try {
-      problem = (await resp.json()) as Problem;
+      const decoded: unknown = await resp.json();
+      if (decoded !== null && typeof decoded === "object" && !Array.isArray(decoded)) {
+        problem = decoded as ApiProblem;
+      }
     } catch {
       /* non-JSON error body */
     }
@@ -77,6 +86,7 @@ export async function apiGetBlob(path: string, token: string | null = null): Pro
       resp.status,
       problem.code ?? "error",
       problem.detail ?? problem.title ?? `HTTP ${resp.status}`,
+      problem,
     );
   }
   return await resp.blob();

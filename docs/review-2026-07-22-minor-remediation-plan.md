@@ -9,7 +9,7 @@
 
 - The historic denominator remains **104**. One finding was already closed while the MAJOR work was
   underway, leaving **103** to schedule here. Batch M1 closed 4; M2 closed 2; M3 closed 2; M4
-  closes 4; **91 remain queued** after M4.
+  closed 4; M5 closes 3; **88 remain queued** after M5.
 - A queued finding is not assumed to still be live. Every batch must re-locate and revalidate its
   findings against then-current `main` before implementation; close, re-scope, or reject it with
   evidence rather than mechanically applying the 2026-07-22 suggestion.
@@ -28,8 +28,8 @@
 | M1 | Auth boundaries and public diagnostics | 4 | ☑ merged | [#381](https://github.com/CoJoA13/EasySynQ/pull/381) |
 | M2 | Scoped authorization and reporting | 2 | ☑ merged | [#382](https://github.com/CoJoA13/EasySynQ/pull/382) |
 | M3 | Notification reliability | 2 | ☑ merged | [#383](https://github.com/CoJoA13/EasySynQ/pull/383) |
-| M4 | Lifecycle and workflow guards | 4 | ☑ in PR | [#384](https://github.com/CoJoA13/EasySynQ/pull/384) |
-| M5 | Ingestion commit integrity | 3 | ☐ queued — revalidate | — |
+| M4 | Lifecycle and workflow guards | 4 | ☑ merged | [#384](https://github.com/CoJoA13/EasySynQ/pull/384) |
+| M5 | Ingestion commit integrity | 3 | ☑ in PR | [#385](https://github.com/CoJoA13/EasySynQ/pull/385) |
 | M6 | Ingestion review and family integrity | 4 | ☐ queued — revalidate | — |
 | M7 | Records and rendering resilience | 3 | ☐ queued — revalidate | — |
 | M8 | Vault and retention input guards | 2 | ☐ queued — revalidate | — |
@@ -48,7 +48,7 @@
 | M21 | Web async and error UX | 8 | ☐ queued — revalidate | — |
 | M22 | Web accessibility | 7 | ☐ queued — revalidate | — |
 
-**Accounting: 1 preclosed + 8 merged + 4 in PR + 91 queued = 104 original findings.**
+**Accounting: 1 preclosed + 12 merged + 3 in PR + 88 queued = 104 original findings.**
 
 ---
 
@@ -138,16 +138,36 @@ new permission key
   distinct failed-stage marker whose retry response remains `FAILED`, and records
   `reason=unresolvable_quorum` instead of taking a normal business-rejection transition).
 
-### ☐ M5 — Ingestion commit integrity
+### ☑ M5 — Ingestion commit integrity — [#385](https://github.com/CoJoA13/EasySynQ/pull/385)
 
-`branch: fix/minor-ingestion-commit-integrity` · API + integration
+`branch: fix/minor-ingestion-commit-integrity` · API + Web + OpenAPI + unit/integration · migration
+`0076` · no new permission key
 
-- [ ] `apps/api/src/easysynq_api/services/ingestion/commit.py:338` — the validated and audited
-  folded owner decision is ignored during commit `[f]`.
-- [ ] `apps/api/src/easysynq_api/services/ingestion/commit.py:530` — `_record_failed` can commit a
-  false failure audit after a peer successfully committed the item `[f]`.
-- [ ] `apps/api/src/easysynq_api/services/ingestion/review.py:253` — an empty identifier survives
-  validation and commits a vault document with `identifier=''` `[f]`.
+- [x] `apps/api/src/easysynq_api/services/ingestion/commit.py:338` — the validated and audited
+  folded owner decision was ignored during commit `[C]` (fixed: carry whether the owner came from a
+  human decision, resolve the reviewed reference against active non-guest users in the item's org,
+  and materialize it on both imported Documents and Records; the bulk review UI now selects an
+  actual directory user and submits its stable ID, while legacy exact identities remain accepted
+  even when a subject is UUID-shaped; the checklist revalidates persisted human-owner references
+  before the run leaves its editable review state, so the old `Quality Manager` placeholder can be
+  corrected instead of stranding the run as partially committed; commit then resolves the owner
+  again under a directory-row lock and stores the validated ID in migration `0076`'s internal
+  run-level snapshot, leaving the human decision history and checklist counts unchanged; both
+  initial commit and partial resume snapshot remaining owners, exact stable IDs survive a later
+  disable/retire, and unresolved legacy labels can receive a per-file correction while successful
+  items remain immutable; duplicate display names are disambiguated by a stable ID suffix in the
+  picker; the worker remains fail-closed for a missing/guest/cross-org snapshot, while
+  authorship/capture/signature attribution remains with the committer).
+- [x] `apps/api/src/easysynq_api/services/ingestion/commit.py:530` — `_record_failed` could commit a
+  false failure audit after a peer successfully committed the item `[C]` (fixed: the conditional
+  failure UPSERT now returns whether it won; only a won `failed` ledger write can emit the failure
+  audit/log, while a concurrent `success`/`noop` suppresses both atomically).
+- [x] `apps/api/src/easysynq_api/services/ingestion/review.py:253` — an empty identifier survived
+  validation and committed a vault document with `identifier=''` `[C]` (fixed: reject empty and
+  whitespace-only identifier corrections with a 422 before recording the decision, surface
+  persisted legacy blanks as checklist/resume blockers before status transition, and revalidate the
+  folded identifier at the commit boundary so a bypassed legacy decision still cannot write a
+  blank vault identifier; the OpenAPI schema advertises the non-blank constraint).
 
 ### ☐ M6 — Ingestion review and family integrity
 

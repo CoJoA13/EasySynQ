@@ -30,6 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ...config import get_settings
 from ...db.models._audit_enums import EventType
 from ...db.models._ingestion_enums import (
+    ImportCommitResultStatus,
     ImportConfidenceBand,
     ImportDecisionAction,
     ImportKind,
@@ -94,6 +95,7 @@ class EffectiveFileState:
     clause_numbers: list[str]
     process_names: list[str] | None
     owner: str | None
+    owner_source: str | None
     decided: bool
     last_action: str | None
 
@@ -122,6 +124,7 @@ class EffectiveFileState:
             "clause_numbers": self.clause_numbers,
             "process_names": self.process_names,
             "owner": self.owner,
+            "owner_source": self.owner_source,
             "decided": self.decided,
             "last_action": self.last_action,
             "commit_ready": self.commit_ready,
@@ -166,9 +169,18 @@ def fold_file_decisions(
     process = latest("process_names")
     if process is None and classification is not None and classification.process_names:
         process = list(classification.process_names)
-    owner = latest("owner")
-    if owner is None and node is not None:
+    owner: str | None
+    owner_source: str | None
+    human_owner = latest("owner")
+    if human_owner is not None:
+        owner = human_owner
+        owner_source = "human"
+    elif node is not None:
         owner = node.proposed_owner
+        owner_source = node.owner_source
+    else:
+        owner = None
+        owner_source = None
     return EffectiveFileState(
         disposition=disposition,
         kind=str(kind),
@@ -178,6 +190,7 @@ def fold_file_decisions(
         clause_numbers=list(clauses),
         process_names=process,
         owner=owner,
+        owner_source=owner_source,
         decided=bool(decisions_newest_first),
         last_action=last.value if last is not None else None,
     )
@@ -198,6 +211,32 @@ async def _load_reviewable(
             code="conflict",
             title="Import run is not in a reviewable state",
             detail=f"status={run.status.value}; review requires Proposed or Reviewing",
+        )
+    return run
+
+
+async def _load_file_decision_writable(
+    session: AsyncSession, caller: AppUser, run_id: uuid.UUID
+) -> ImportRun:
+    """Load a run for one dimensional file decision.
+
+    Ordinary review remains Proposed/Reviewing-only. A PartiallyCommitted run additionally permits
+    a narrowly scoped CORRECT decision on an item that has not committed, so legacy owner/identifier
+    data can be repaired before resume without reopening structural review over immutable vault
+    writes.
+    """
+    run = await repo.get_run(session, run_id, for_update=True)
+    if run is None or run.org_id != caller.org_id:
+        raise ProblemException(status=404, code="not_found", title="Import run not found")
+    if run.status not in _REVIEWABLE and run.status is not ImportRunStatus.PARTIALLY_COMMITTED:
+        raise ProblemException(
+            status=409,
+            code="conflict",
+            title="Import run is not accepting file decisions",
+            detail=(
+                f"status={run.status.value}; file decisions require Proposed, Reviewing, or a "
+                "correction to an uncommitted item in PartiallyCommitted"
+            ),
         )
     return run
 
@@ -254,6 +293,12 @@ def _validate_after(action: ImportDecisionAction, after: dict[str, Any] | None) 
                 raise ProblemException(
                     status=422, code="validation_error", title=f"{key} must be a string"
                 )
+            if key == "identifier" and not val.strip():
+                raise ProblemException(
+                    status=422,
+                    code="validation_error",
+                    title="identifier must not be blank",
+                )
             clean[key] = val
     for key in ("clause_numbers", "process_names"):
         val = after.get(key)
@@ -295,7 +340,7 @@ async def record_file_decision(
 ) -> dict[str, Any]:
     """Record one dimensional decision (accept/correct/exclude/defer). Merge/split are rejected here
     (they have dedicated endpoints — structural ≠ dimensional)."""
-    run = await _load_reviewable(session, caller, run_id, for_update=True)
+    run = await _load_file_decision_writable(session, caller, run_id)
     act = _coerce_action(action)
     if act not in _FILE_ACTIONS:
         raise ProblemException(
@@ -303,6 +348,39 @@ async def record_file_decision(
             code="validation_error",
             title="merge/split are structural — use the /merge or /split endpoint",
         )
+
+    f = await repo.get_file(session, run_id, file_id)
+    if f is None:
+        raise ProblemException(status=404, code="not_found", title="Import file not found")
+    if not f.included_candidate:
+        # An excluded/quarantined scan file is not a candidate — it has no proposal node and can
+        # never commit, so a decision on it is meaningless (pull-from-quarantine is deferred).
+        raise ProblemException(
+            status=422, code="validation_error", title="file is not an included candidate"
+        )
+    if run.status is ImportRunStatus.PARTIALLY_COMMITTED:
+        if act is not ImportDecisionAction.CORRECT:
+            raise ProblemException(
+                status=409,
+                code="conflict",
+                title="A partially committed item may only be corrected",
+                detail=(
+                    "Committed vault writes are immutable; only failed or remaining items may be "
+                    "corrected."
+                ),
+            )
+        result = await repo.get_commit_result(session, run_id, file_id)
+        if result is not None and result.result in (
+            ImportCommitResultStatus.SUCCESS,
+            ImportCommitResultStatus.NOOP,
+        ):
+            raise ProblemException(
+                status=409,
+                code="conflict",
+                title="This import item is already committed",
+                detail="A committed item cannot be changed through import review.",
+            )
+
     replay = await _replay(session, run_id, idem_key)
     if replay is not None:
         replay_id = replay.id  # capture BEFORE rollback (loaded; rollback would expire → lazy I/O)
@@ -314,15 +392,6 @@ async def record_file_decision(
             "decision_id": str(replay_id),
         }
 
-    f = await repo.get_file(session, run_id, file_id)
-    if f is None:
-        raise ProblemException(status=404, code="not_found", title="Import file not found")
-    if not f.included_candidate:
-        # An excluded/quarantined scan file is not a candidate — it has no proposal node and can
-        # never commit, so a decision on it is meaningless (pull-from-quarantine is deferred).
-        raise ProblemException(
-            status=422, code="validation_error", title="file is not an included candidate"
-        )
     clean_after = _validate_after(act, after)
     _, _, node = await repo.get_file_membership(session, run_id, file_id)
     cls = await _classification_for(session, run, file_id)
@@ -343,6 +412,16 @@ async def record_file_decision(
         after=payload,
         idempotency_key=idem_key,
     )
+    if (
+        run.status is ImportRunStatus.PARTIALLY_COMMITTED
+        and "owner" in clean_after
+        and run.commit_owner_snapshot
+    ):
+        # A correction changes the reviewed reference, so force resume preflight to resolve and pin
+        # the new identity rather than reusing the failed attempt's stale per-file snapshot.
+        owner_snapshot = dict(run.commit_owner_snapshot)
+        owner_snapshot.pop(str(file_id), None)
+        run.commit_owner_snapshot = owner_snapshot or None
     _enter_reviewing(session, run, caller)
     emit_import_event(
         session,
@@ -833,6 +912,37 @@ async def get_file_review(
     }
 
 
+async def _fold_run_states(
+    session: AsyncSession, run: ImportRun
+) -> tuple[
+    dict[uuid.UUID, EffectiveFileState],
+    dict[uuid.UUID, ImportClassification | None],
+]:
+    """Fold every proposal node from one consistent run transaction.
+
+    Commit preflight deliberately calls this again after the read-only checklist: the second pass
+    resolves and locks owner rows while the run itself is already ``FOR UPDATE``, closing the
+    checklist-to-worker lifecycle race without making ordinary checklist reads lock the directory.
+    """
+    nodes = await repo.list_proposal_nodes(session, run.id)
+    rows = await repo.included_files_with_context(session, run.id, run.classifier_version)
+    cls_by_file = {f.id: c for f, _e, c in rows}
+    decisions_by_file: dict[uuid.UUID, list[ImportDecision]] = {}
+    for decision in await repo.list_decisions(session, run.id):
+        if decision.file_id is not None:
+            decisions_by_file.setdefault(decision.file_id, []).append(decision)
+
+    states = {
+        node.file_id: fold_file_decisions(
+            decisions_by_file.get(node.file_id, []),
+            node,
+            cls_by_file.get(node.file_id),
+        )
+        for node in nodes
+    }
+    return states, cls_by_file
+
+
 async def compute_review_checklist(
     session: AsyncSession, caller: AppUser, run_id: uuid.UUID
 ) -> dict[str, Any]:
@@ -843,21 +953,7 @@ async def compute_review_checklist(
     if run is None or run.org_id != caller.org_id:
         raise ProblemException(status=404, code="not_found", title="Import run not found")
 
-    nodes = await repo.list_proposal_nodes(session, run_id)
-    rows = await repo.included_files_with_context(session, run_id, run.classifier_version)
-    cls_by_file = {f.id: c for f, _e, c in rows}
-    all_decisions = await repo.list_decisions(session, run_id)
-    decisions_by_file: dict[uuid.UUID, list[ImportDecision]] = {}
-    for d in all_decisions:  # newest-first already (list_decisions ordering)
-        if d.file_id is not None:
-            decisions_by_file.setdefault(d.file_id, []).append(d)
-
-    # Fold each keep-item (= each proposal node).
-    states: dict[uuid.UUID, EffectiveFileState] = {}
-    for node in nodes:
-        states[node.file_id] = fold_file_decisions(
-            decisions_by_file.get(node.file_id, []), node, cls_by_file.get(node.file_id)
-        )
+    states, cls_by_file = await _fold_run_states(session, run)
 
     # In-import keep-items (excluded/deferred are out for conflicts + projection).
     in_import = {fid: st for fid, st in states.items() if st.disposition in _IN_IMPORT}
@@ -882,6 +978,49 @@ async def compute_review_checklist(
         for ident, fids in sorted(by_ident.items())
         if len(fids) > 1
     ]
+
+    # Blocking: append-only decisions written before today's request validator may contain a blank
+    # human identifier. Surface that while the run is still editable; the worker keeps the same
+    # write-boundary check as defense in depth.
+    for fid, st in sorted(in_import.items(), key=lambda kv: str(kv[0])):
+        if st.commit_ready and st.identifier is not None and not st.identifier.strip():
+            blocking.append(
+                {
+                    "type": "blank_identifier",
+                    "identifier": st.identifier,
+                    "file_id": str(fid),
+                    "resolved": False,
+                }
+            )
+
+    # Blocking: explicit reviewed owners must resolve while the run is still editable. This also
+    # catches decisions persisted by the pre-directory-picker UI (whose placeholder choice was the
+    # literal "Quality Manager") before the run can become PartiallyCommitted and non-reviewable.
+    # Resolve each distinct folded reference once: a large bulk correction normally shares one id.
+    human_owner_refs = sorted(
+        {
+            st.owner
+            for st in in_import.values()
+            if st.owner_source == "human" and st.owner is not None
+        }
+    )
+    owner_candidate_counts = {
+        owner_ref: len(await repo.resolve_import_owner_candidates(session, run.org_id, owner_ref))
+        for owner_ref in human_owner_refs
+    }
+    for fid, st in sorted(in_import.items(), key=lambda kv: str(kv[0])):
+        if st.owner_source != "human" or st.owner is None:
+            continue
+        candidate_count = owner_candidate_counts[st.owner]
+        if candidate_count != 1:
+            blocking.append(
+                {
+                    "type": "owner_ambiguous" if candidate_count else "owner_not_found",
+                    "owner": st.owner,
+                    "file_id": str(fid),
+                    "resolved": False,
+                }
+            )
 
     # Blocking: collides with an existing vault document (over COLLIDABLE EFFECTIVE identifiers).
     idents = [
@@ -995,6 +1134,134 @@ async def compute_review_checklist(
 
 
 # --------------------------------------------------------------------------- internal helpers
+
+
+async def prepare_commit_inputs(session: AsyncSession, run: ImportRun) -> int:
+    """Validate remaining materialization inputs and pin reviewed owners on the run.
+
+    This runs in the same transaction as the run's transition to ``Committing`` and is used for
+    both an initial start and a partial resume. Successful/no-op ledger items are immutable and
+    skipped. Existing snapshots may refer to an owner that has since been disabled or retired;
+    tenant scope and non-guest identity remain mandatory.
+
+    A pre-snapshot partial run can recover an exact stable owner ID even after lifecycle changes.
+    Unresolvable legacy labels stay ``PartiallyCommitted`` and surface a repairable blocker; the
+    per-file decision endpoint accepts a CORRECT action for that uncommitted item.
+    """
+    states, _ = await _fold_run_states(session, run)
+    completed_file_ids = {
+        result.file_id
+        for result in await repo.list_commit_results(session, run.id)
+        if result.result in (ImportCommitResultStatus.SUCCESS, ImportCommitResultStatus.NOOP)
+    }
+    remaining = {
+        file_id: state
+        for file_id, state in states.items()
+        if state.commit_ready and file_id not in completed_file_ids
+    }
+
+    raw_snapshot = run.commit_owner_snapshot
+    owner_snapshot = dict(raw_snapshot) if isinstance(raw_snapshot, dict) else {}
+    candidates_by_ref: dict[str, list[AppUser]] = {}
+    blocking: list[dict[str, Any]] = []
+    added = 0
+
+    for file_id, state in sorted(remaining.items(), key=lambda item: str(item[0])):
+        file_key = str(file_id)
+        if state.identifier is not None and not state.identifier.strip():
+            blocking.append(
+                {
+                    "type": "blank_identifier",
+                    "identifier": state.identifier,
+                    "file_id": file_key,
+                    "resolved": False,
+                }
+            )
+
+        if state.owner_source != "human" or state.owner is None:
+            continue
+
+        snapshotted = owner_snapshot.get(file_key)
+        if snapshotted is not None:
+            try:
+                owner_id = uuid.UUID(snapshotted)
+            except (AttributeError, TypeError, ValueError):
+                snapshotted_owner = None
+            else:
+                snapshotted_owner = await repo.get_import_owner_by_id(
+                    session,
+                    run.org_id,
+                    owner_id,
+                    for_update=True,
+                )
+            if snapshotted_owner is None:
+                blocking.append(
+                    {
+                        "type": "owner_not_found",
+                        "owner": state.owner,
+                        "file_id": file_key,
+                        "resolved": False,
+                    }
+                )
+            continue
+
+        if state.owner not in candidates_by_ref:
+            candidates_by_ref[state.owner] = list(
+                await repo.resolve_import_owner_candidates(
+                    session,
+                    run.org_id,
+                    state.owner,
+                    for_update=True,
+                )
+            )
+        candidates = candidates_by_ref[state.owner]
+        resolved_owner: AppUser | None = candidates[0] if len(candidates) == 1 else None
+
+        # A partial run created before snapshots existed may hold the stable app_user ID selected
+        # during its original review. Recover that exact, same-tenant non-guest identity even if it
+        # is now disabled/retired. Text labels and renamed identities must be explicitly corrected.
+        if (
+            resolved_owner is None
+            and not candidates
+            and run.status is ImportRunStatus.PARTIALLY_COMMITTED
+        ):
+            try:
+                owner_id = uuid.UUID(state.owner)
+            except ValueError:
+                pass
+            else:
+                resolved_owner = await repo.get_import_owner_by_id(
+                    session,
+                    run.org_id,
+                    owner_id,
+                    for_update=True,
+                )
+
+        if resolved_owner is None:
+            blocking.append(
+                {
+                    "type": "owner_ambiguous" if candidates else "owner_not_found",
+                    "owner": state.owner,
+                    "file_id": file_key,
+                    "resolved": False,
+                }
+            )
+            continue
+        owner_snapshot[file_key] = str(resolved_owner.id)
+        added += 1
+
+    if blocking:
+        raise ProblemException(
+            status=422,
+            code="commit_blocked",
+            title="Resolve the blocking conflicts before committing",
+            members={"blocking": blocking},
+        )
+
+    # Assign a fresh mapping so SQLAlchemy observes the JSONB mutation. It is committed atomically
+    # with the run status transition while ``import_run`` remains FOR UPDATE.
+    run.commit_owner_snapshot = owner_snapshot or None
+    return added
 
 
 async def _classification_for(
