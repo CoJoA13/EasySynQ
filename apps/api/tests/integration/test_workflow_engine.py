@@ -479,6 +479,53 @@ async def test_null_quorum_fails_closed_at_instantiate(app_under_test: object) -
     assert await _stage_tasks(iid, "gate") == []
 
 
+async def test_unresolvable_conditional_at_decision_stays_needs_attention(
+    app_under_test: object,
+) -> None:
+    """If a conditional quorum loses its discriminator after task materialization, deciding a task
+    must fail closed to NEEDS_ATTENTION and retire sibling work. It must not masquerade as a normal
+    REJECTED business outcome."""
+    org = await _org_id()
+    a, b = await _user("conditional-a"), await _user("conditional-b")
+    role = await _role_with([a, b])
+    conditional = {
+        "type": "conditional",
+        "rule": [
+            {"when": "risk == 'high'", "quorum": {"type": "ANY"}},
+            {"default": {"type": "ALL"}},
+        ],
+    }
+    key = await _seed_definition(
+        org, [_approve_stage("gate", role, quorum=conditional)], entry="gate"
+    )
+    iid = await _instantiate(key, uuid.uuid4(), {"risk": "high"}, a)
+    tasks = await _stage_tasks(iid, "gate")
+    by_user = {task.assignee_user_id: task for task in tasks}
+
+    # Simulate context drift/corruption after the conditional materialized successfully.
+    async with get_sessionmaker()() as s:
+        instance = await s.get(WorkflowInstance, iid)
+        assert instance is not None
+        instance.context = {}
+        await s.commit()
+
+    result = await _decide(by_user[a].id, a, "approve")
+    assert result["stage_state"] == "FAILED"
+    assert result["current_state"] == engine.NEEDS_ATTENTION
+    assert (await _instance(iid)).current_state == engine.NEEDS_ATTENTION
+
+    sibling = next(task for task in await _stage_tasks(iid, "gate") if task.assignee_user_id == b)
+    assert sibling.state is TaskState.SKIPPED
+    assert sibling.client_token == engine._FAILED_STAGE_SKIP
+
+    retry = await _decide(sibling.id, b, "approve")
+    assert retry["stage_state"] == "FAILED"
+    assert retry["current_state"] == engine.NEEDS_ATTENTION
+    assert retry["outcome"] is None
+    assert retry["replayed"] is True
+    assert await _audit_count(iid, EventType.STAGE_FAILED) == 1
+
+
 async def test_invalid_signature_spec_fails_closed_at_instantiate(app_under_test: object) -> None:
     org = await _org_id()
     a = await _user("badsig-a")

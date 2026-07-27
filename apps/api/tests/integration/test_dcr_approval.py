@@ -9,6 +9,7 @@ Assertions are run-scoped to this run's DCR / instance.
 
 from __future__ import annotations
 
+import datetime
 import uuid
 from collections.abc import Callable
 
@@ -16,6 +17,9 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy import func, select
 
+from easysynq_api.db.models._dcr_enums import DcrState
+from easysynq_api.db.models.app_user import AppUser
+from easysynq_api.db.models.dcr_stage_event import DcrStageEvent
 from easysynq_api.db.models.signature_event import SignatureEvent
 from easysynq_api.db.models.workflow import Task
 from easysynq_api.db.session import get_sessionmaker
@@ -128,6 +132,81 @@ async def test_minor_dcr_single_qms_approval(
         "state"
     ] == "Approved"
     assert await _approval_sig_count(dcr_id) == 1
+
+
+async def test_route_stage_events_have_strict_causal_order(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """The atomic Assessed→Routed→InApproval route writes two events in one transaction. Their
+    timestamps must be strictly increasing so the public trail cannot render the pair backwards."""
+    req = _subject("dcr-route-order")
+    await _grant(req, _ROUTE_PERMS)
+    hr = _auth(token_factory, req)
+    qm = _subject("dcr-route-order-qms")
+    await _assign_seeded_role(qm, "QMS Owner")
+
+    dcr_id = await _open_assessed_dcr(app_client, hr, "MINOR")
+    routed = await app_client.post(f"/api/v1/dcrs/{dcr_id}/route", headers=hr)
+    assert routed.status_code == 200, routed.text
+
+    detail = (await app_client.get(f"/api/v1/dcrs/{dcr_id}", headers=hr)).json()
+    events = detail["stage_events"]
+    assert [(event["from_state"], event["to_state"]) for event in events[-2:]] == [
+        ("Assessed", "Routed"),
+        ("Routed", "InApproval"),
+    ]
+    routed_at, in_approval_at = (
+        datetime.datetime.fromisoformat(event["occurred_at"]) for event in events[-2:]
+    )
+    assert routed_at < in_approval_at
+
+
+async def test_equal_timestamp_stage_events_follow_transition_chain(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """Legacy equal-timestamp route pairs follow from→to adjacency, not heap or UUID order. Insert
+    the later event physically first and give it the smaller UUID so both accidental orderings are
+    opposite the causal trail."""
+    req = _subject("dcr-route-tie")
+    actor_id = await _grant(req, _ROUTE_PERMS)
+    hr = _auth(token_factory, req)
+    dcr_id = await _open_assessed_dcr(app_client, hr, "MINOR")
+
+    in_approval_id, routed_id = sorted((uuid.uuid4(), uuid.uuid4()))
+    tied_at = datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=1)
+    async with get_sessionmaker()() as s:
+        actor = await s.get(AppUser, actor_id)
+        assert actor is not None
+        # Flush the later transition first so an occurred_at-only query returns the wrong order.
+        s.add(
+            DcrStageEvent(
+                id=in_approval_id,
+                org_id=actor.org_id,
+                dcr_id=uuid.UUID(dcr_id),
+                from_state=DcrState.Routed,
+                to_state=DcrState.InApproval,
+                actor_id=actor.id,
+                occurred_at=tied_at,
+            )
+        )
+        await s.flush()
+        s.add(
+            DcrStageEvent(
+                id=routed_id,
+                org_id=actor.org_id,
+                dcr_id=uuid.UUID(dcr_id),
+                from_state=DcrState.Assessed,
+                to_state=DcrState.Routed,
+                actor_id=actor.id,
+                occurred_at=tied_at,
+            )
+        )
+        await s.commit()
+
+    events = (await app_client.get(f"/api/v1/dcrs/{dcr_id}", headers=hr)).json()["stage_events"]
+    tied = [event for event in events if event["id"] in {str(routed_id), str(in_approval_id)}]
+    assert [event["id"] for event in tied] == [str(routed_id), str(in_approval_id)]
+    assert [event["to_state"] for event in tied] == ["Routed", "InApproval"]
 
 
 async def test_approval_decision_idempotent_replay(

@@ -4835,7 +4835,9 @@ paths:
       operationId: annotateDcrImpact
       summary: >-
         Set requester_annotation on the named impact dimensions (keyed by ImpactDimension value);
-        the auto_populated facts are untouched. 422 on an unknown dimension. Needs changeRequest.assess.
+        the auto_populated facts are untouched. Terminal Closed / Cancelled / Rejected DCRs are
+        sealed (409 dcr_impact_not_editable). 422 on an unknown dimension. Needs
+        changeRequest.assess.
       parameters:
         - { name: dcr_id, in: path, required: true, schema: { type: string, format: uuid } }
       requestBody:
@@ -4983,7 +4985,8 @@ paths:
       summary: >-
         Edit an initiative's mutable metadata (title / description / target_outcome / owner_user_id /
         process_id) — never the stage (use the transition endpoint). Writes an INITIATIVE_UPDATED audit
-        when something changes. Needs improvement.manage.
+        when something changes. Closed / Cancelled initiatives are sealed (409
+        improvement_not_editable). Needs improvement.manage.
       parameters:
         - { name: initiative_id, in: path, required: true, schema: { type: string, format: uuid } }
       requestBody:
@@ -4999,6 +5002,7 @@ paths:
               schema: { $ref: "#/components/schemas/ImprovementInitiative" }
         "403": { $ref: "#/components/responses/ProblemResponse" }
         "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409": { $ref: "#/components/responses/ProblemResponse" }
         "422": { $ref: "#/components/responses/ProblemResponse" }
   /improvement-initiatives/{initiative_id}/stage-events:
     get:

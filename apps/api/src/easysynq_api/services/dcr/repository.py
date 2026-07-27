@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Sequence
+from itertools import groupby
 from typing import Any
 
 from sqlalchemy import func, select
@@ -25,6 +26,34 @@ from ...db.models.record import Record
 # Cap the records-produced-under id list surfaced in where-used (§7.2: a count + a sample;
 # historical records are immutable + read-only — the full set is not needed in the panel).
 _RECORDS_SAMPLE_CAP = 50
+
+
+def _order_stage_events_causally(
+    events: Sequence[DcrStageEvent],
+) -> list[DcrStageEvent]:
+    """Linearize equal-timestamp rows through their ``from_state → to_state`` chain.
+
+    Legacy atomic routes received one transaction-stable PostgreSQL ``now()`` value for both
+    Assessed→Routed and Routed→InApproval. UUIDv4 and heap order carry no lifecycle meaning, so use
+    the preceding event's destination to choose the next tied transition. UUID is only the
+    deterministic last resort for disconnected or otherwise malformed legacy rows.
+    """
+    ordered: list[DcrStageEvent] = []
+    prior_state: DcrState | None = None
+    for _, tied_group in groupby(events, key=lambda event: event.occurred_at):
+        remaining = list(tied_group)
+        while remaining:
+            candidates = [event for event in remaining if event.from_state == prior_state]
+            if not candidates:
+                remaining_targets = {event.to_state for event in remaining}
+                candidates = [
+                    event for event in remaining if event.from_state not in remaining_targets
+                ]
+            event = min(candidates or remaining, key=lambda candidate: candidate.id.int)
+            ordered.append(event)
+            prior_state = event.to_state
+            remaining.remove(event)
+    return ordered
 
 
 async def get_dcr(
@@ -77,17 +106,18 @@ async def list_dcrs(
 async def list_dcr_stage_events(
     session: AsyncSession, dcr_id: uuid.UUID
 ) -> Sequence[DcrStageEvent]:
-    return (
+    events = (
         (
             await session.execute(
                 select(DcrStageEvent)
                 .where(DcrStageEvent.dcr_id == dcr_id)
-                .order_by(DcrStageEvent.occurred_at.asc())
+                .order_by(DcrStageEvent.occurred_at.asc(), DcrStageEvent.id.asc())
             )
         )
         .scalars()
         .all()
     )
+    return _order_stage_events_causally(events)
 
 
 # --- where-used / impact reads (S-dcr-2) ------------------------------------------------------

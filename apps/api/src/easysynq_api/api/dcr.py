@@ -596,7 +596,8 @@ async def put_dcr_impact_endpoint(
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
     """Annotate the impact dimensions (gate ``changeRequest.assess``). ``annotations`` is keyed by
-    ImpactDimension value; the auto_populated facts are untouched."""
+    ImpactDimension value; the auto_populated facts are untouched. Terminal DCRs are sealed (409
+    ``dcr_impact_not_editable``)."""
     await annotate_impact(session, caller, dcr_id, body.annotations)
     rows = [_impact(ia) for ia in await dcr_repo.list_impact_assessments(session, dcr_id)]
     return {"data": rows}

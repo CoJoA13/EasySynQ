@@ -275,6 +275,45 @@ async def test_illegal_transition_is_409_and_stage_unchanged(
     ).json()["stage"] == "Closed"
 
 
+async def test_terminal_initiatives_reject_metadata_edits(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """Closed and Cancelled initiatives are sealed workflow records: PATCH must return a stable
+    409, leave the metadata untouched, and emit no ``INITIATIVE_UPDATED`` audit."""
+    subject = _subject("imp-terminal-edit")
+    await _grant(subject, _IMP_KEYS)
+    h = _auth(token_factory, subject)
+
+    closed_id = str((await _create(app_client, h, title="Closed baseline"))["id"])
+    await _transition(app_client, h, closed_id, to_state="InProgress")
+    await _transition(app_client, h, closed_id, to_state="Completed")
+    await _transition(app_client, h, closed_id, to_state="Closed", comment="filed")
+
+    cancelled_id = str((await _create(app_client, h, title="Cancelled baseline"))["id"])
+    await _transition(
+        app_client, h, cancelled_id, to_state="Cancelled", comment="withdrawn before work"
+    )
+
+    for initiative_id, stage, title in (
+        (closed_id, "Closed", "Closed baseline"),
+        (cancelled_id, "Cancelled", "Cancelled baseline"),
+    ):
+        refused = await app_client.patch(
+            f"/api/v1/improvement-initiatives/{initiative_id}",
+            headers=h,
+            json={"title": "Mutated after terminal"},
+        )
+        assert refused.status_code == 409, refused.text
+        assert refused.json()["code"] == "improvement_not_editable"
+
+        detail = (
+            await app_client.get(f"/api/v1/improvement-initiatives/{initiative_id}", headers=h)
+        ).json()
+        assert detail["stage"] == stage
+        assert detail["title"] == title
+        assert await _event_count(initiative_id, EventType.INITIATIVE_UPDATED) == 0
+
+
 # --- 3. Cancel --------------------------------------------------------------------------------
 
 

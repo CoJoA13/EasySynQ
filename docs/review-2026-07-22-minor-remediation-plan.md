@@ -8,8 +8,8 @@
 ## Inventory and conventions
 
 - The historic denominator remains **104**. One finding was already closed while the MAJOR work was
-  underway, leaving **103** to schedule here. Batch M1 closed 4; M2 closed 2; M3 closes 2;
-  **95 remain queued** after M3.
+  underway, leaving **103** to schedule here. Batch M1 closed 4; M2 closed 2; M3 closed 2; M4
+  closes 4; **91 remain queued** after M4.
 - A queued finding is not assumed to still be live. Every batch must re-locate and revalidate its
   findings against then-current `main` before implementation; close, re-scope, or reject it with
   evidence rather than mechanically applying the 2026-07-22 suggestion.
@@ -27,8 +27,8 @@
 | M0 | Preclosed during MAJOR remediation | 1 | ☑ merged | [#369](https://github.com/CoJoA13/EasySynQ/pull/369), precision follow-up [#371](https://github.com/CoJoA13/EasySynQ/pull/371) |
 | M1 | Auth boundaries and public diagnostics | 4 | ☑ merged | [#381](https://github.com/CoJoA13/EasySynQ/pull/381) |
 | M2 | Scoped authorization and reporting | 2 | ☑ merged | [#382](https://github.com/CoJoA13/EasySynQ/pull/382) |
-| M3 | Notification reliability | 2 | ☑ in PR | [#383](https://github.com/CoJoA13/EasySynQ/pull/383) |
-| M4 | Lifecycle and workflow guards | 4 | ☐ queued — revalidate | — |
+| M3 | Notification reliability | 2 | ☑ merged | [#383](https://github.com/CoJoA13/EasySynQ/pull/383) |
+| M4 | Lifecycle and workflow guards | 4 | ☑ in PR | [#384](https://github.com/CoJoA13/EasySynQ/pull/384) |
 | M5 | Ingestion commit integrity | 3 | ☐ queued — revalidate | — |
 | M6 | Ingestion review and family integrity | 4 | ☐ queued — revalidate | — |
 | M7 | Records and rendering resilience | 3 | ☐ queued — revalidate | — |
@@ -48,7 +48,7 @@
 | M21 | Web async and error UX | 8 | ☐ queued — revalidate | — |
 | M22 | Web accessibility | 7 | ☐ queued — revalidate | — |
 
-**Accounting: 1 preclosed + 6 merged + 2 in PR + 95 queued = 104 original findings.**
+**Accounting: 1 preclosed + 8 merged + 4 in PR + 91 queued = 104 original findings.**
 
 ---
 
@@ -116,18 +116,27 @@ new permission key
   digest on retry; genuinely ineligible users retain the intentional terminal stamp/no-email
   behavior).
 
-### ☐ M4 — Lifecycle and workflow guards
+### ☑ M4 — Lifecycle and workflow guards — [#384](https://github.com/CoJoA13/EasySynQ/pull/384)
 
-`branch: fix/minor-lifecycle-workflow-guards` · API + integration
+`branch: fix/minor-lifecycle-workflow-guards` · API + OpenAPI + integration · no migration and no
+new permission key
 
-- [ ] `apps/api/src/easysynq_api/services/improvement/service.py:219` — terminal Closed/Cancelled
-  initiatives remain editable `[f]`.
-- [ ] `apps/api/src/easysynq_api/services/dcr/repository.py:85` — same-transaction DCR stage events
-  can tie on `occurred_at` and render out of order without a stable tiebreaker `[f]`.
-- [ ] `apps/api/src/easysynq_api/services/dcr/service.py:397` — impact annotations remain editable
-  on terminal DCRs `[f]`.
-- [ ] `apps/api/src/easysynq_api/services/workflow/engine.py:521` — an unresolvable quorum
-  conditional is overwritten from `NEEDS_ATTENTION` to a plausible `REJECTED` terminal `[f]`.
+- [x] `apps/api/src/easysynq_api/services/improvement/service.py:219` — terminal Closed/Cancelled
+  initiatives remain editable `[C]` (fixed: the locked update path rejects every terminal metadata
+  edit with 409 `improvement_not_editable`, preserving both fields and audit history).
+- [x] `apps/api/src/easysynq_api/services/dcr/repository.py:85` — same-transaction DCR stage events
+  can tie on `occurred_at` and render out of order without a stable tiebreaker `[C]` (fixed: the
+  atomic Assessed→Routed→InApproval pair receives strictly increasing causal timestamps, and reads
+  reconstruct legacy equal-timestamp rows through their from-state→to-state chain, using UUID only
+  as a deterministic last resort for disconnected/malformed history).
+- [x] `apps/api/src/easysynq_api/services/dcr/service.py:397` — impact annotations remain editable
+  on terminal DCRs `[C]` (fixed: Closed/Cancelled/Rejected requests return 409
+  `dcr_impact_not_editable` before any annotation or audit mutation).
+- [x] `apps/api/src/easysynq_api/services/workflow/engine.py:521` — an unresolvable quorum
+  conditional is overwritten from `NEEDS_ATTENTION` to a plausible `REJECTED` terminal `[C]`
+  (fixed: the dedicated fail-closed branch preserves `NEEDS_ATTENTION`, retires sibling work under a
+  distinct failed-stage marker whose retry response remains `FAILED`, and records
+  `reason=unresolvable_quorum` instead of taking a normal business-rejection transition).
 
 ### ☐ M5 — Ingestion commit integrity
 
