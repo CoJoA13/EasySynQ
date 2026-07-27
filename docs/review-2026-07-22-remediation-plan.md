@@ -312,13 +312,27 @@ land the sweep separately from the gate so the gate turns on green rather than r
   decision/split errors render inside the open drawer, commit errors render in `CommitCard`, and
   merge errors remain visible inside the open popover; every surface is dismissible and retryable)
 
-### ☐ Batch 15 — Web a11y & polish
-`branch: fix/major-web-a11y-polish` · apps/web + vitest/jest-axe
+### ☑ Batch 15 — Web a11y & polish
+`branch: fix/major-web-a11y-polish` · [PR #378](https://github.com/CoJoA13/EasySynQ/pull/378) · API contract + apps/api + apps/web + pytest/vitest/jest-axe · NO migration · NO new permission key
 
-- [ ] `apps/web/src/app/shell/DetailDrawer.tsx:32` — app-wide unlabeled Modal/Drawer close buttons; default `closeButtonProps` on the Modal/Drawer theme components (NOT the shared `CloseButton`) `[C]`
-- [ ] `apps/web/src/features/notifications/NotificationBell.tsx:48` — bell Popover has interactive content but no `trapFocus` → broken keyboard focus order `[C]`
-- [ ] `apps/web/src/features/review/TasksInbox.tsx:169` — due/effective dates rendered as UTC-truncated ISO disagree with the org-tz dates notifications + the register report show; use one org-tz-aware helper `[f]`
-- [ ] `apps/web/src/features/context/ContextScorecardBand.tsx:20` — scorecard/hero bands hardcode a light bg → illegible in dark mode across 5 register surfaces `[C]`
+- [x] `apps/web/src/app/shell/DetailDrawer.tsx:32` — app-wide unlabeled Modal/Drawer close
+  buttons (fixed: Mantine's `Modal` and `Drawer` theme defaults now give their close controls the
+  accessible name "Close" without changing the shared `CloseButton`; direct portal-rendered
+  component tests audit `document.body`, and the existing implementation-modal audit does too)
+- [x] `apps/web/src/features/notifications/NotificationBell.tsx:48` — bell Popover has interactive
+  content but no `trapFocus` → broken keyboard focus order (fixed: the popover traps focus and
+  returns it to the bell on close; a keyboard regression proves focus remains inside, Escape closes
+  it, and focus does not leak to the adjacent account menu)
+- [x] `apps/web/src/features/review/TasksInbox.tsx:169` — due/effective dates rendered as
+  UTC-truncated ISO disagree with the org-tz dates notifications + the register report show (fixed:
+  `/me` exposes the canonical timezone already resolved at the auth boundary; one shared
+  `Intl.DateTimeFormat` helper now renders task, acknowledgment, library, periodic-review and
+  document-ack dates in that timezone, including both sides of UTC, and working-calendar updates
+  invalidate the cached `/me` value)
+- [x] `apps/web/src/features/context/ContextScorecardBand.tsx:20` — scorecard/hero bands hardcode a
+  light bg → illegible in dark mode across 5 register surfaces (fixed: context, risk, objective and
+  interested-party scorecards plus the commitment hero now use the color-scheme-aware
+  `--es-surface-2` token; component regressions pin the rendered background)
 
 ### ☐ Batch 16 — Test false-PASS / CI-flake
 `branch: fix/major-test-ci-flake` · integration test hygiene · **quick; protects every later PR's CI**
