@@ -29,7 +29,7 @@
 | M2 | Scoped authorization and reporting | 2 | ☑ merged | [#382](https://github.com/CoJoA13/EasySynQ/pull/382) |
 | M3 | Notification reliability | 2 | ☑ merged | [#383](https://github.com/CoJoA13/EasySynQ/pull/383) |
 | M4 | Lifecycle and workflow guards | 4 | ☑ merged | [#384](https://github.com/CoJoA13/EasySynQ/pull/384) |
-| M5 | Ingestion commit integrity | 3 | ☑ implemented — PR pending | — |
+| M5 | Ingestion commit integrity | 3 | ☑ in PR | [#385](https://github.com/CoJoA13/EasySynQ/pull/385) |
 | M6 | Ingestion review and family integrity | 4 | ☐ queued — revalidate | — |
 | M7 | Records and rendering resilience | 3 | ☐ queued — revalidate | — |
 | M8 | Vault and retention input guards | 2 | ☐ queued — revalidate | — |
@@ -48,7 +48,7 @@
 | M21 | Web async and error UX | 8 | ☐ queued — revalidate | — |
 | M22 | Web accessibility | 7 | ☐ queued — revalidate | — |
 
-**Accounting: 1 preclosed + 12 merged + 3 implemented + 88 queued = 104 original findings.**
+**Accounting: 1 preclosed + 12 merged + 3 in PR + 88 queued = 104 original findings.**
 
 ---
 
@@ -138,7 +138,7 @@ new permission key
   distinct failed-stage marker whose retry response remains `FAILED`, and records
   `reason=unresolvable_quorum` instead of taking a normal business-rejection transition).
 
-### ☑ M5 — Ingestion commit integrity
+### ☑ M5 — Ingestion commit integrity — [#385](https://github.com/CoJoA13/EasySynQ/pull/385)
 
 `branch: fix/minor-ingestion-commit-integrity` · API + OpenAPI + unit/integration · no migration
 and no new permission key
