@@ -28,7 +28,7 @@
 | M1 | Auth boundaries and public diagnostics | 4 | ☑ merged | [#381](https://github.com/CoJoA13/EasySynQ/pull/381) |
 | M2 | Scoped authorization and reporting | 2 | ☑ merged | [#382](https://github.com/CoJoA13/EasySynQ/pull/382) |
 | M3 | Notification reliability | 2 | ☑ merged | [#383](https://github.com/CoJoA13/EasySynQ/pull/383) |
-| M4 | Lifecycle and workflow guards | 4 | ☑ implementation complete | pending publish |
+| M4 | Lifecycle and workflow guards | 4 | ☑ in PR | [#384](https://github.com/CoJoA13/EasySynQ/pull/384) |
 | M5 | Ingestion commit integrity | 3 | ☐ queued — revalidate | — |
 | M6 | Ingestion review and family integrity | 4 | ☐ queued — revalidate | — |
 | M7 | Records and rendering resilience | 3 | ☐ queued — revalidate | — |
@@ -48,7 +48,7 @@
 | M21 | Web async and error UX | 8 | ☐ queued — revalidate | — |
 | M22 | Web accessibility | 7 | ☐ queued — revalidate | — |
 
-**Accounting: 1 preclosed + 8 merged + 4 implementation complete + 91 queued = 104 original findings.**
+**Accounting: 1 preclosed + 8 merged + 4 in PR + 91 queued = 104 original findings.**
 
 ---
 
@@ -116,7 +116,7 @@ new permission key
   digest on retry; genuinely ineligible users retain the intentional terminal stamp/no-email
   behavior).
 
-### ☑ M4 — Lifecycle and workflow guards
+### ☑ M4 — Lifecycle and workflow guards — [#384](https://github.com/CoJoA13/EasySynQ/pull/384)
 
 `branch: fix/minor-lifecycle-workflow-guards` · API + OpenAPI + integration · no migration and no
 new permission key

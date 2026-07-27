@@ -174,7 +174,7 @@
 
 ## REMEDIATION — correctness, accessibility, polish & test reliability
 
-### Minor Batch M4 — sealed terminal workflows, causal DCR history, and fail-closed quorum decisions (API + OpenAPI + integration + docs; NO migration [head stays `0075`]; NO new permission key [catalog 102]; PR pending publish)
+### Minor Batch M4 — sealed terminal workflows, causal DCR history, and fail-closed quorum decisions (API + OpenAPI + integration + docs; NO migration [head stays `0075`]; NO new permission key [catalog 102]; PR [#384](https://github.com/CoJoA13/EasySynQ/pull/384))
 
 **What shipped.** Improvement initiative metadata is now sealed at the locked service boundary once
 the initiative is `Closed` or `Cancelled`: attempted edits return the stable
