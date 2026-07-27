@@ -19,7 +19,7 @@ from collections.abc import Callable
 import pytest
 from httpx import AsyncClient
 from pypdf import PdfReader
-from sqlalchemy import update
+from sqlalchemy import delete, update
 
 from easysynq_api.db.models._mgmt_review_enums import ManagementReviewCloseState
 from easysynq_api.db.models.document_version import DocumentVersion
@@ -107,27 +107,56 @@ async def test_pack_404_cross_org(
     h = _auth(token_factory, subject)
     await _grant(subject, _MR_KEYS)  # the caller is a permitted reader in org A
     rid = await _create_review(app_client, h, "Cross-org pack review")
+    review_id = uuid.UUID(rid)
+    other_org_id = uuid.uuid4()
 
     async with get_sessionmaker()() as s:
-        other_org = Organization(
-            legal_name=f"Other Org {salt}", short_code=f"OTHER-{salt[:6].upper()}"
-        )
-        s.add(other_org)
-        await s.flush()
-        await s.execute(
-            update(DocumentedInformation)
-            .where(DocumentedInformation.id == uuid.UUID(rid))
-            .values(org_id=other_org.id)
-        )
-        await s.execute(
-            update(ManagementReview)
-            .where(ManagementReview.id == uuid.UUID(rid))
-            .values(org_id=other_org.id)
-        )
-        await s.commit()
+        doc = await s.get(DocumentedInformation, review_id)
+        review = await s.get(ManagementReview, review_id)
+        assert doc is not None and review is not None
+        original_doc_org_id = doc.org_id
+        original_review_org_id = review.org_id
 
-    r = await app_client.get(f"/api/v1/management-reviews/{rid}/pack", headers=h)
-    assert r.status_code == 404, r.text
+    try:
+        async with get_sessionmaker()() as s:
+            other_org = Organization(
+                id=other_org_id,
+                legal_name=f"Other Org {salt}",
+                short_code=f"OTHER-{salt[:6].upper()}",
+            )
+            s.add(other_org)
+            await s.execute(
+                update(DocumentedInformation)
+                .where(DocumentedInformation.id == review_id)
+                .values(org_id=other_org_id)
+            )
+            await s.execute(
+                update(ManagementReview)
+                .where(ManagementReview.id == review_id)
+                .values(org_id=other_org_id)
+            )
+            await s.commit()
+
+        r = await app_client.get(f"/api/v1/management-reviews/{rid}/pack", headers=h)
+        assert r.status_code == 404, r.text
+    finally:
+        # Put the existing review back before deleting the temporary org; both FKs are RESTRICT.
+        async with get_sessionmaker()() as s:
+            await s.execute(
+                update(DocumentedInformation)
+                .where(DocumentedInformation.id == review_id)
+                .values(org_id=original_doc_org_id)
+            )
+            await s.execute(
+                update(ManagementReview)
+                .where(ManagementReview.id == review_id)
+                .values(org_id=original_review_org_id)
+            )
+            await s.execute(delete(Organization).where(Organization.id == other_org_id))
+            await s.commit()
+
+    async with get_sessionmaker()() as s:
+        assert await s.get(Organization, other_org_id) is None
 
 
 async def test_pack_403_without_read(

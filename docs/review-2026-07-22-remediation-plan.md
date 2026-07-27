@@ -334,11 +334,18 @@ land the sweep separately from the gate so the gate turns on green rather than r
   interested-party scorecards plus the commitment hero now use the color-scheme-aware
   `--es-surface-2` token; component regressions pin the rendered background)
 
-### ☐ Batch 16 — Test false-PASS / CI-flake
-`branch: fix/major-test-ci-flake` · integration test hygiene · **quick; protects every later PR's CI**
+### ☑ Batch 16 — Test false-PASS / CI-flake
+`branch: fix/major-test-ci-flake` · [PR #379](https://github.com/CoJoA13/EasySynQ/pull/379) · apps/api integration-test hygiene only · NO migration · NO new permission key
 
-- [ ] `apps/api/tests/integration/test_notification_dispatch.py:356` — commits a second Organization with no cleanup → `scalar_one()` MultipleResultsFound when the shard boundary shifts `[f]`
-- [ ] `apps/api/tests/integration/test_mgmt_review_pack.py:112` — commits a second Organization (strands the MR) with no cleanup → same shard-flake `[f]`
+- [x] `apps/api/tests/integration/test_notification_dispatch.py:356` — commits a second
+  Organization with no cleanup → `scalar_one()` MultipleResultsFound when the shard boundary
+  shifts (fixed: the test owns an explicit temporary-org id and unconditionally deletes that
+  org's user rows before the RESTRICTed org row in `finally`; a postcondition proves the org is
+  gone)
+- [x] `apps/api/tests/integration/test_mgmt_review_pack.py:112` — commits a second Organization
+  (strands the MR) with no cleanup → same shard-flake (fixed: the test captures the management
+  review base document's and satellite's original org ids, restores both in `finally`, then deletes
+  the temporary org and proves it is absent)
 
 ### ☐ Batch 17 — Docs drift
 `branch: fix/major-docs-drift` · docs-only
