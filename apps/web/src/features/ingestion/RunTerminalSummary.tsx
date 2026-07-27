@@ -22,9 +22,11 @@ function commitCount(counts: ImportRun["counts"], key: "committed" | "failed"): 
 export function RunTerminalSummary({
   run,
   onResume,
+  resuming = false,
 }: {
   run: ImportRun;
   onResume?: () => void;
+  resuming?: boolean;
 }) {
   const failed = run.status === "Failed";
   const cancelled = run.status === "Cancelled";
@@ -39,7 +41,8 @@ export function RunTerminalSummary({
             Import failed
           </Text>
           <Alert color="gray" title="The import couldn't be committed">
-            {run.error ?? "The commit stopped before any item became controlled. You can start a new import."}
+            {run.error ??
+              "The commit stopped before any item became controlled. You can start a new import."}
           </Alert>
         </Stack>
       </Card>
@@ -92,12 +95,14 @@ export function RunTerminalSummary({
           <Alert color="gray" title="Some items weren't committed">
             <Stack gap="sm">
               <Text size="sm">
-                {failedCount} item{failedCount === 1 ? "" : "s"} couldn&rsquo;t be committed. Resuming re-attempts
-                the remaining subset; items already in the vault are skipped.
+                {failedCount} item{failedCount === 1 ? "" : "s"} couldn&rsquo;t be committed.
+                Resuming re-attempts the remaining subset; items already in the vault are skipped.
               </Text>
               {onResume && (
                 <Group>
-                  <Button onClick={onResume}>Resume commit</Button>
+                  <Button onClick={onResume} loading={resuming} disabled={resuming}>
+                    Resume commit
+                  </Button>
                 </Group>
               )}
             </Stack>

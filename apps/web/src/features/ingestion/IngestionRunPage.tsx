@@ -1,9 +1,10 @@
-import { Alert, Anchor, Container, Title } from "@mantine/core";
+import { Alert, Anchor, Container, Stack, Title } from "@mantine/core";
 import { Link, useParams } from "react-router-dom";
 import { usePermissions } from "../../app/shell/usePermissions";
 import { ApiError } from "../../lib/api";
 import { LoadingState, NoAccessState } from "../../lib/states";
 import { CommitProgress } from "./CommitProgress";
+import { PartialCommitRepair } from "./PartialCommitRepair";
 import { ReviewCockpit } from "./ReviewCockpit";
 import { RunTerminalSummary } from "./RunTerminalSummary";
 import { ScanProgress } from "./ScanProgress";
@@ -13,7 +14,7 @@ import { useCancelRun, useCommitRun, useImportRun } from "./hooks";
 // set (Created/Scanning/Extracting/… and any additive stage) is "the engine is still settling" →
 // ScanProgress. The switch is exhaustive-by-fallthrough so an unknown additive status degrades calmly.
 const REVIEW_STATES = new Set(["Proposed", "Reviewing"]);
-const TERMINAL_STATES = new Set(["Completed", "PartiallyCommitted", "Failed", "Cancelled"]);
+const TERMINAL_STATES = new Set(["Completed", "Failed", "Cancelled"]);
 
 // S-ing-4b: the four-faces controller for /ingestion/:runId. Reads the run, polls it while settling
 // (useImportRun owns the refetchInterval), and mounts exactly one lifecycle face by status. Per-view
@@ -62,15 +63,23 @@ export function IngestionRunPage() {
   if (status === "Committing") {
     return <CommitProgress run={run} />;
   }
-  if (TERMINAL_STATES.has(status)) {
-    // PartiallyCommitted → resume is an idempotent re-commit (already-landed items are skipped). Gate
-    // the affordance on import.commit (RunTerminalSummary hides Resume when onResume is undefined).
+  if (status === "PartiallyCommitted") {
+    const canCommit = can("import.commit");
     return (
-      <RunTerminalSummary
-        run={run}
-        onResume={can("import.commit") ? () => commitRun.mutate() : undefined}
-      />
+      <Stack gap="md">
+        <RunTerminalSummary
+          run={run}
+          onResume={canCommit ? () => commitRun.mutate() : undefined}
+          resuming={commitRun.isPending}
+        />
+        {canCommit && commitRun.error && (
+          <PartialCommitRepair runId={run.id} error={commitRun.error} />
+        )}
+      </Stack>
     );
+  }
+  if (TERMINAL_STATES.has(status)) {
+    return <RunTerminalSummary run={run} />;
   }
   // pre-Proposed (Created/Scanning/Extracting/Classifying/… ) and any additive stage → scan progress.
   // Cancel is gated on import.execute (ScanProgress hides the button when onCancel is undefined).
