@@ -2,6 +2,9 @@ import { axe } from "jest-axe";
 import { expect, test } from "vitest";
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { http, HttpResponse } from "msw";
+import { docFixture } from "../../test/msw/handlers";
+import { server } from "../../test/msw/server";
 import { renderWithProviders } from "../../test/render";
 import { LibraryPage } from "./LibraryPage";
 
@@ -17,6 +20,31 @@ test("lists documents with resolved Type/Owner and is accessible", async () => {
   expect(screen.getByLabelText("State: Effective")).toBeInTheDocument();
   expect(screen.getByText("2026-03-14")).toBeInTheDocument();
   expect(await axe(container)).toHaveNoViolations();
+});
+
+test("renders effective timestamps on the organization calendar day", async () => {
+  server.use(
+    http.get("/api/v1/me", () =>
+      HttpResponse.json({
+        id: "me",
+        keycloak_subject: "subject",
+        display_name: "Mara",
+        email: "mara@example.test",
+        status: "ACTIVE",
+        org_timezone: "America/Chicago",
+      }),
+    ),
+    http.get("/api/v1/documents", () =>
+      HttpResponse.json({
+        data: [{ ...docFixture[0], effective_from: "2026-07-01T02:00:00Z" }],
+        page: { limit: 50, offset: 0, returned: 1, has_more: false },
+      }),
+    ),
+  );
+  renderWithProviders(<LibraryPage />, { route: "/library" });
+
+  expect(await screen.findByText("2026-06-30")).toBeInTheDocument();
+  expect(screen.queryByText("2026-07-01")).not.toBeInTheDocument();
 });
 
 test("clicking a row opens the deep-linkable detail drawer with the artifact header", async () => {

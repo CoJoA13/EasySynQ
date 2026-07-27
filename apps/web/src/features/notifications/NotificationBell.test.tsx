@@ -73,6 +73,29 @@ describe("NotificationBell", () => {
     );
   });
 
+  it("moves keyboard focus into the popover and returns it to the bell on close", async () => {
+    server.use(http.get("/api/v1/notifications", () => HttpResponse.json(unreadList(1))));
+    const user = userEvent.setup();
+    renderWithProviders(
+      <>
+        <NotificationBell />
+        <button>Account menu</button>
+      </>,
+    );
+    const bell = await screen.findByRole("button", { name: /Notifications/ });
+    bell.focus();
+    await user.keyboard("{Enter}");
+
+    const popover = await screen.findByRole("dialog");
+    await waitFor(() => expect(popover).toContainElement(document.activeElement as HTMLElement));
+    await user.tab();
+    expect(screen.getByRole("button", { name: "Account menu" })).not.toHaveFocus();
+    expect(popover).toContainElement(document.activeElement as HTMLElement);
+
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(bell).toHaveFocus());
+  });
+
   it("mark all read POSTs read-all", async () => {
     let hit = false;
     server.use(

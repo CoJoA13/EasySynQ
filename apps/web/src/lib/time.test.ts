@@ -1,5 +1,18 @@
 import { describe, expect, it } from "vitest";
-import { formatRelativeTime, formatTimestamp } from "./time";
+import { formatDateInTimeZone, formatRelativeTime, formatTimestamp } from "./time";
+
+describe("formatDateInTimeZone", () => {
+  it("renders a UTC instant on the organization calendar date", () => {
+    expect(formatDateInTimeZone("2026-06-28T15:00:00Z", "Asia/Tokyo")).toBe("2026-06-29");
+    expect(formatDateInTimeZone("2026-07-01T02:00:00Z", "America/Chicago")).toBe("2026-06-30");
+  });
+
+  it("fails safely when the timezone or timestamp is unavailable", () => {
+    expect(formatDateInTimeZone("2026-06-28T15:00:00Z", undefined)).toBe("2026-06-28");
+    expect(formatDateInTimeZone("2026-06-28T15:00:00Z", "Mars/Phobos")).toBe("2026-06-28");
+    expect(formatDateInTimeZone("not-a-date", "Asia/Tokyo")).toBe("not-a-date");
+  });
+});
 
 describe("formatRelativeTime", () => {
   const now = Date.parse("2026-06-15T12:00:00Z");

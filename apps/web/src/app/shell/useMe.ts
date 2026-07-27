@@ -10,6 +10,7 @@ export interface Me {
   display_name: string | null;
   email: string | null;
   status: string;
+  org_timezone: string;
 }
 
 export function useMe() {

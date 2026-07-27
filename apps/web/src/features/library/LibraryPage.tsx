@@ -14,10 +14,12 @@ import { useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { SkeletonList } from "../../lib/states";
 import { useDocumentTypes } from "../../app/shell/useDocumentTypes";
+import { useMe } from "../../app/shell/useMe";
 import { usePermissions } from "../../app/shell/usePermissions";
 import { useUserDirectory } from "../../app/shell/useUserDirectory";
 import { DocumentDrawer } from "../document/DocumentDrawer";
 import { StateBadge } from "../document/StateBadge";
+import { formatDateInTimeZone } from "../../lib/time";
 import { ClauseTree } from "./ClauseTree";
 import { FacetBar } from "./FacetBar";
 import { Pagination } from "./Pagination";
@@ -42,6 +44,7 @@ export function LibraryPage() {
   const { data, isLoading, isError } = useDocuments(toDocumentFilters(uf), { limit: size, offset });
   const { data: types } = useDocumentTypes();
   const { data: directory } = useUserDirectory();
+  const { data: me } = useMe();
   const { can } = usePermissions();
 
   const [density, setDensity] = useState<"comfortable" | "compact">("comfortable");
@@ -211,7 +214,9 @@ export function LibraryPage() {
                         </Table.Td>
                         <Table.Td>
                           <Text size="sm">
-                            {d.effective_from ? d.effective_from.slice(0, 10) : "—"}
+                            {d.effective_from
+                              ? formatDateInTimeZone(d.effective_from, me?.org_timezone)
+                              : "—"}
                           </Text>
                         </Table.Td>
                       </Table.Tr>

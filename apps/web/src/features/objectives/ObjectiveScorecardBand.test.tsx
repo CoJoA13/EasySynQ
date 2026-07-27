@@ -17,6 +17,9 @@ it("renders the on-target headline and each RAG count, accessibly", async () => 
   expect(screen.getByText("1 needs attention")).toBeInTheDocument();
   expect(screen.getByText("1 action required")).toBeInTheDocument();
   expect(screen.getByText("1 not yet measured")).toBeInTheDocument();
+  expect(screen.getByText(/1\s*\/\s*4 on target/i).closest(".mantine-Paper-root")).toHaveStyle({
+    background: "var(--es-surface-2)",
+  });
   expect(await axe(container)).toHaveNoViolations();
 });
 

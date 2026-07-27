@@ -125,13 +125,12 @@ it("surfaces a release/SoD-2 403 calmly (submit-and-show)", async () => {
 
 it("has no axe violations", async () => {
   mockReads();
-  const { container } = renderWithProviders(
-    <ImplementCreateDcrModal dcrId={DCR_ID} onClose={() => {}} />,
-  );
+  renderWithProviders(<ImplementCreateDcrModal dcrId={DCR_ID} onClose={() => {}} />);
   // Let the documents query settle (the Select renders) before auditing — drains the pending state
   // inside act (the DcrsRegisterPage axe precedent).
   await screen.findByLabelText(/New document/);
-  expect(await axe(container)).toHaveNoViolations();
+  // The Modal is portalled outside Testing Library's render container.
+  expect(await axe(document.body)).toHaveNoViolations();
 });
 
 it("sends the two narrowing filters to GET /documents", async () => {

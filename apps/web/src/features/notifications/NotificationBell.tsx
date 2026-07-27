@@ -50,6 +50,8 @@ export function NotificationBell() {
         width={360}
         opened={opened}
         onChange={setOpened}
+        trapFocus
+        returnFocus
         withArrow
         shadow="md"
       >
