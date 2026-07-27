@@ -23,7 +23,7 @@ This section specifies the **external HTTP API surface** of EasySynQ: the contra
 - **Base path:** `https://{org-host}/api/v1`. The SPA and `/api` are served behind the same Caddy proxy (`03 §5`).
 - **Media type:** `application/json; charset=utf-8` for bodies; full UTF-8 end-to-end (`03 §11` i18n). Errors use `application/problem+json` (§4).
 - **Required on authenticated calls:** `Authorization: Bearer <keycloak_access_jwt>`, `Accept: application/json`.
-- **Mutating requests:** `Content-Type: application/json`; **`Idempotency-Key: <client-uuid>`** SHOULD be sent on every mutating POST (deduped in Redis; replays return the original result — `03 §5` Redis).
+- **Idempotent mutations:** endpoints marked **Idem ✓** accept `Idempotency-Key: <client-uuid>`; clients SHOULD reuse the same value when retrying one logical request (deduped in Redis; replays return the original result — `03 §5` Redis). Unmarked mutations do not promise replay semantics.
 - **Optimistic concurrency:** detail GETs return a strong `ETag`; unsafe updates SHOULD send `If-Match`. A stale `If-Match` → `412` (prevents lost updates when two authors touch one document's metadata). Document *content* edits are additionally guarded by the Redis check-out lock (§8.5), surfaced as `423 locked`.
 - **Correlation:** every request carries / is assigned `X-Request-Id`; it is propagated API→worker (`03 §10`) and stored on the resulting `audit_event.request_id` for end-to-end traceability.
 
@@ -188,7 +188,10 @@ The JWT `acr`/`amr` (auth-context) is carried onto `signature_event.auth_context
 | GET | `/me` | Current user profile (`app_user`) + a compact effective-permission summary. |
 | GET | `/me/permissions?scope_level=&scope_id=` | Resolved effective permissions for the caller in a given scope (drives UI gating). |
 | GET | `/me/actions` | **My-Actions** inbox: a query over `task` where state ∈ `PENDING/CLAIMED` for the user or their candidate pool, grouped by urgency then PDCA phase (`14 §11` — My-Actions is a query, not a table). |
-| GET | `/me/notifications?unread=true` | Awareness inbox (`notification`); `POST /me/notifications/{id}/read`, `POST /me/notifications/read-all`. |
+| GET | `/notifications?unread_only=true` | Awareness inbox, newest first; authenticated-self and always scoped to the caller. |
+| POST | `/notifications/{id}/read` / `/notifications/read-all` | Mark one notification, or every unread notification for the caller, as read. |
+| GET | `/notifications/stream` | Authenticated-self SSE nudge stream; clients refetch `/notifications` when a `notify` event arrives. |
+| GET / PUT | `/me/notification-preferences` | Read or update the caller's email, digest, timezone, and quiet-hours preferences. |
 
 **`POST /auth/session` 200:**
 ```json
@@ -335,7 +338,7 @@ The logical maintained item (`documented_information` + `document`, `14 §5.2`).
 | GET | `/documents` | `document.read` | — | Filter `current_state`, `document_type`, `folder_id`, `owner_user_id`, `clause_refs[has]`, `review_state`, `classification`. **Row-filtered by scope** (§9.3). |
 | POST | `/documents` | `document.create` | ✓ | Creates the logical doc in `Draft` with no version yet. Identifier is **vault-allocated** from the org `numbering_scheme` (`14 §2`) unless `legacy_identifier` is supplied on import. `singleton_exists`→`409` for a 2nd Quality Policy/Scope. |
 | GET | `/documents/{id}` | `document.read` | — | `expand=owner,effective_version,folder`; `_links` advertise permitted actions. |
-| PATCH | `/documents/{id}` | `document.edit` | — | **Metadata only** (title, owner, folder, clause map, classification, review period). **Never** sets state — see actions. `If-Match`. |
+| PATCH | `/documents/{id}` | `document.manage_metadata` | — | **Metadata only:** `title`, `folder_path`, `classification`, and `review_period_months` (`null` opts out). **Never** sets state — see actions. _(Gate corrected to the as-built metadata permission; `document.edit` governs content revision/check-in, while clause/process links have their own sub-resources.)_ |
 | DELETE | `/documents/{id}` | `document.delete` | — | Soft-delete only; blocked (`409`) once a version is `Effective` (must be obsoleted via lifecycle). |
 | POST | `/documents/{id}/checkout` | `document.checkout` | ✓ | Acquires the **Redis** exclusive edit lock (authority is Redis; `document.checkout_*` columns are a display/recovery mirror — `14 §5.4`/R8). `409 document_checked_out` if held by another; returns a `working_draft` token. |
 | POST | `/documents/{id}/checkin` | `document.checkout` | ✓ | Two-step blob upload then finalize → a new **immutable** `document_version` (`Draft`). Releases the lock; enqueues the Celery render→index→mirror pipeline. Requires non-empty `change_reason` + `change_significance` (INV-3) → else `422`. |
@@ -487,7 +490,7 @@ Documented evidence to be **retained** (`14 §5.5`, ISO 7.5.3). Records are **im
 | POST | `/records:init-upload` | `record.create` | ✓ | Presigned PUT for evidence blob(s) (content-addressed, WORM). |
 | POST | `/records` | `record.create` | ✓ | Finalize: `{ record_type, source_document_id?, source_version_id?, title, evidence:[{sha256}], captured_at, form_field_values?, retention_basis_date? }`. Server snapshots the `retention_policy` (one-way ratchet); when `source_document_id` resolves to an **`FRM` form template** (Mode-B, S-rec-3) it resolves + pins the Effective (or pre-release) version and validates `form_field_values` against **that version's pinned schema** (422 `errors[].field`). The capture `record.create` scope is built from the source template's framework + process-links (the R28 full-context rule). |
 | GET | `/records/{id}` | `record.read` | — | Metadata + `_links.download` + `content_hash` + `has_structured_pdf`. |
-| GET | `/records/{id}/download` | `record.read` | — | Presigned GET to the immutable evidence blob. |
+| GET | `/records/{id}/evidence/{sha256}/download` | `record.read` | — | Presigned GET for one immutable evidence blob attached to the record. A record may carry multiple evidence blobs, addressed individually by SHA-256. |
 | GET | `/records/{id}/rendition` | `record.read` | — | **S-rec-3:** presigned GET to the structured-record PDF rendition (a derived, regenerable view of the fielded data). `409 rendition_pending` until the best-effort Stage-2 build lands (or the record is not structured). |
 | POST | `/records/{id}/correction` | `record.create` | ✓ | Create a successor record correcting this one (sets `correction_of`/`superseded_by_correction`). The original is never mutated. |
 | PATCH | `/records/{id}/disposition` | `record.dispose` | — | Advance `disposition_state` only (`ACTIVE→DUE_FOR_REVIEW→…→DISPOSED`); a `disposition_event` tombstone is written. **Blocked (`409`)** while `worm_lock_period` is unexpired or `legal_hold=true` (the refusal is audited `RECORD_ERASURE_REFUSED`, R27) (`14 §10`). |
@@ -520,7 +523,7 @@ The `ncr` record also carries an ISO 9001 8.7 **`disposition`** enum and a **`di
 | GET | `/ncrs` | `ncr.read` | — | Filter `source`, `severity`, `process_id`, `disposition`. |
 | POST | `/ncrs` | `ncr.create` | ✓ | `{ source:"audit"\|"process"\|"complaint"\|"internal", description, severity, process_id?, source_link? }`. |
 | GET | `/ncrs/{id}` | `ncr.read` | — | `expand=process,promoted_capa`. |
-| PATCH | `/ncrs/{id}` | `ncr.update` | — | Edit while not yet promoted/closed; set `disposition` (one of `use_as_is`/`rework`/`scrap`/`return`/`concession`/`regrade`) and `disposition_authorized_by` (ISO 9001 8.7) (reconciled per Decisions Register R20). |
+| PATCH | `/ncrs/{id}/disposition` | `ncr.record_correction` | — | Record the one-shot disposition (`{disposition, notes?}`); the caller is retained as `disposition_authorized_by`. A second disposition returns `409 ncr_already_dispositioned` (R20). |
 | POST | `/ncrs/{id}/promote-capa` | `capa.create` | ✓ | Create a `capa` whose `Raised` stage is this NC; links bidirectionally. |
 
 ### 8.10b Risks & Opportunities (`/risks`)
@@ -621,10 +624,15 @@ PDCA "Check" (`14 §9`). The program is a **maintained document**; an `audit` an
 |---|---|---|---|---|
 | GET / POST | `/audit-programs` | `audit.read` / `audit.plan` | ✓ | The Cl 9.2 program (coverage, period). |
 | GET | `/audits` | `audit.read` | — | Filter `state`, `lead_auditor`, `plan_id`, scope clauses/processes, dates. |
-| POST | `/audits` | `audit.plan` | ✓ | From a plan; starts `Scheduled`. |
+| POST | `/audits` | `audit.create` | ✓ | From a plan; starts `Scheduled`. |
 | GET | `/audits/{id}` | `audit.read` | — | `expand=lead_auditor,findings`. |
-| POST | `/audits/{id}/transition` | `audit.conduct` | ✓ | `{ to:"InProgress"\|"FindingsDraft"\|"Reported"\|"Closing"\|"Closed" }`. **`Closed` blocked** while any NC-sourced CAPA is unverified (`14 §9`). |
-| GET / POST | `/audits/{id}/findings` | `audit.read` / `audit.record_finding` | ✓ | `{ finding_type:"NC"\|"OBSERVATION"\|"OFI", severity?, clause_ref, process_ref?, description }`. An `NC` **auto-creates** a `capa` and sets `auto_capa_id` (bidirectional link) in the same transaction. |
+| POST | `/audits/{id}/plan` | `audit.conduct` | — | `Scheduled→Planned`; finalize the audit-instance plan. |
+| POST | `/audits/{id}/conduct` | `audit.conduct` | — | `Planned→InProgress`; begin conducting. |
+| POST | `/audits/{id}/draft-findings` | `audit.conduct` | — | `InProgress→FindingsDraft`. |
+| POST | `/audits/{id}/report` | `audit.conduct` | — | `FindingsDraft→Reported`. |
+| POST | `/audits/{id}/begin-closing` | `audit.close` | — | `Reported→Closing`. |
+| POST | `/audits/{id}/close` | `audit.close` | — | `Closing→Closed`; blocked while any live NC lacks a linked Closed CAPA (`409 audit_close_blocked`, `14 §9`). |
+| GET / POST | `/audits/{id}/findings` | `finding.read` / `finding.create` | ✓ | `{ finding_type:"NC"\|"OBSERVATION"\|"OFI", severity?, clause_ref, process_ref?, description }`. An `NC` **auto-creates** a `capa` and sets `auto_capa_id` (bidirectional link) in the same transaction. |
 
 ### 8.12a Management Review — as built (slice S-mr-1, clause 9.3, R45)
 

@@ -2865,7 +2865,7 @@ paths:
     post:
       tags: [audits]
       operationId: planAudit
-      summary: Scheduled → Planned (finalize the plan). Needs audit.plan.
+      summary: Scheduled → Planned (finalize the plan). Needs audit.conduct.
       responses:
         "200": { $ref: "#/components/responses/AuditTransition" }
         "403": { $ref: "#/components/responses/ProblemResponse" }
