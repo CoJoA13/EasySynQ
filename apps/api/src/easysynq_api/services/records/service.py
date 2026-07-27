@@ -211,9 +211,11 @@ async def _resolve_source_version(
     source_version_id: uuid.UUID | None,
     form_field_values: dict[str, Any] | None,
     pin_version: uuid.UUID | None,
-) -> uuid.UUID | None:
-    """Validate the source document + resolve the pinned version, returning the resolved
-    ``source_version_id`` (None for ad-hoc EVIDENCE). Two cases:
+) -> tuple[uuid.UUID | None, bool]:
+    """Validate the source document + resolve the pinned version.
+
+    Returns ``(source_version_id, is_structured_form)``; the id is ``None`` for ad-hoc EVIDENCE.
+    Two cases:
 
     * **Mode-B** — the source is a Form/Template (``document_type`` code FRM): the SERVER resolves
       the Effective (or, if the org enabled it, the latest pre-release) version, validates
@@ -228,7 +230,7 @@ async def _resolve_source_version(
             raise _validation_error(
                 "source_version_id", "invalid", "source_version_id requires source_document_id"
             )
-        return None
+        return None, False
 
     source_doc = await session.get(DocumentedInformation, source_document_id)
     if (
@@ -280,7 +282,7 @@ async def _resolve_source_version(
                 title="Form values do not match the template schema",
                 errors=[e.as_dict() for e in field_errors],
             )
-        return version.id
+        return version.id, True
 
     # --- R21: a record produced under a regular controlled document MUST pin its version ---
     if source_version_id is None:
@@ -294,7 +296,7 @@ async def _resolve_source_version(
         raise _validation_error(
             "source_version_id", "not_found", "Source version not found for that document"
         )
-    return source_version_id
+    return source_version_id, False
 
 
 def _enqueue_structured_pdf(record_id: uuid.UUID) -> None:
@@ -460,7 +462,7 @@ async def capture_record(
 
     # Validate + resolve the source/version (R21 pin, or the Mode-B Effective-version resolution +
     # schema validation). Returns the resolved source_version_id the record will pin.
-    source_version_id = await _resolve_source_version(
+    source_version_id, is_structured_form = await _resolve_source_version(
         session,
         actor,
         framework.id,
@@ -469,6 +471,11 @@ async def capture_record(
         form_field_values=form_field_values,
         pin_version=_pin_version,
     )
+    # An omitted body on an all-optional Form/Template is still a structured capture. Persist the
+    # canonical empty object so it is enqueued, rendered, redriven, and sealed distinctly from the
+    # NULL sentinel used by genuinely unstructured records.
+    if is_structured_form and form_field_values is None:
+        form_field_values = {}
 
     captured_at = _now()
     resolution = await resolve_capture_retention(

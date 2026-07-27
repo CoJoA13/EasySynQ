@@ -98,10 +98,10 @@ Layered on the universal `DocumentedInformation` fields. Shown as the conceptual
 | `captured_at` | timestamptz | The point-in-time the evidence is fixed. Immutable once set. |
 | `captured_by` | user ref | Who captured it (attribution; future signature subject). |
 | `immutable` | bool = true | Always true post-capture; enforced in API + WORM. |
-| `content_hash` | sha-256 | Hash over the canonical serialization of structured content **and** the manifest of attached blob digests. Frozen at capture; re-verified on schedule. |
+| `content_hash` | sha-256 | Hash over the canonical serialization of structured content **and** the manifest of attached blob digests. The valid empty object `{}` remains distinct from the `null` unstructured sentinel. Frozen at capture; re-verified on schedule. |
 | `source_document_id` | doc ref \| null | The Document this Record proves was followed (null only for `EVIDENCE`/ad-hoc). |
 | `source_version_id` | version ref \| null | **The exact pinned Version** — survives later supersession. **Nullable**: required for records produced under a controlled document; null for ad-hoc `EVIDENCE` with no source document (reconciled per Decisions Register R21). |
-| `form_field_values` | jsonb \| null | For structured submissions: schema-validated values, validated against the pinned template Version's `Schema`. |
+| `form_field_values` | jsonb \| null | For structured submissions: schema-validated values, validated against the pinned template Version's `Schema`. An omitted all-optional form is stored canonically as `{}`; `null` denotes no fielded content (or a DESTROY-erased record). |
 | `evidence_blobs[]` | blob refs | Content-addressed attachments (uploaded files, generated PDF renditions). |
 | `clause_map[]` | M:N | (universal) Drives clause-scoped Evidence Packs + Compliance Checklist. |
 | `process_links[]` | M:N | (universal) Drives process-scoped Evidence Packs + Process Map lens. |
@@ -194,18 +194,22 @@ Rules specific to Mode B:
 > `metadata_snapshot`** (never the mutable working copy), validates `form_field_values` against it
 > (422 `errors[].field` on failure), and pins `source_version_id` = that version. A **correction**
 > validates against and re-pins the **original record's** edition (so "records keep showing v2.0"
-> survives a v2→v3 template revision). The **pre-release toggle** is flipped via `PATCH /admin/config`
+> survives a v2→v3 template revision). If an all-optional form omits `form_field_values`, capture
+> stores `{}` so the rendition workflow and integrity hash preserve its structured identity. The
+> **pre-release toggle** is flipped via `PATCH /admin/config`
 > (SYSTEM-only `config.update`, admin; audited `CONFIG_UPDATED`). The **structured-record PDF** (the
 > "render for export/print" below) is built **best-effort at Stage 2** after capture commits — a
 > DERIVED, regenerable rendition (doc 14 §5.4: "rebuildable, never authoritative"), cached in the
 > non-WORM renditions bucket and pointed at by `record.structured_pdf_blob_sha256` (plain Text, NO FK
 > — the `evidence_pack.zip_blob_sha256` R27 precedent; reconciles the "generated `evidence_blob`"
 > wording below — the **record's integrity seal is its `content_hash`**, not the PDF). Capture makes
-> the low-latency enqueue; an hourly bounded Beat redrive selects live structured records whose
-> pointer is still absent, recovering a dropped publish or failed build without making the rendition
-> GET mutate state. The builder locks the Record and refuses `DISPOSED`, so a delayed task cannot
-> recreate bytes after destroy. The WORM-destroy / disposition DESTROY path drops the rendition
-> object + its `blob` row + nulls the pointer (the blob-row-iff-bytes invariant). **Deferred:** Mode B
+> the low-latency enqueue; an hourly bounded Beat redrive selects structured records whose pointer is
+> still absent, including legacy optional-form rows identified by their pinned `field_schema`.
+> Neither path makes the rendition GET mutate state. The builder locks the Record and refuses a
+> `DESTROY` disposition tombstone, so delayed work cannot recreate erased bytes; a non-destructive
+> `ARCHIVE_COLD`/`TRANSFER` tombstone may still finish the same derived view. The WORM-destroy /
+> disposition DESTROY path drops the rendition object + its `blob` row + nulls the pointer (the
+> blob-row-iff-bytes invariant). **Deferred:** Mode B
 > for `audit`/`capa` multi-stage
 > structured records (those entities don't exist yet); a richer schema language; the web form-builder.
 
@@ -413,7 +417,7 @@ sequenceDiagram
 - **Delivery to external auditors.** Olsen receives a **time-boxed, read-only guest link** (Vision & Scope: Time-boxed Guest Access) or a downloaded archive — never standing access to the live vault. The pack is a frozen snapshot; revoking the link does not affect it.
 - **Rebuildable, not backup-critical.** A pack is derivable from PG+MinIO (the source records persist), but because handing a *specific* artifact to an auditor is itself a controlled act, the generated pack blob is retained per its own retention policy as an audit artifact.
 
-> **Implementation status (as built).** **S-pack-1** (PR #48, migration `0025`) shipped the build/seal half: scope resolution (CLAUSE/PROCESS + date overlay; Finding/CAPA deferred — those entities don't exist yet), the synchronous preview, the R28 INCLUDED/EXCLUDED_PERMISSION/EXCLUDED_ABSENCE classification + the gap report, the worker build that seals the ZIP into the WORM `records` bucket as a `RETAIN_PERMANENT` EVIDENCE Record, and the immutable `/evidence-packs` API (data model: `14 §5.7`; endpoints: `15 §8.15a`). Migration `0077` pins both existing and future sealed-pack Records to the separate system-managed `PERMANENT` + `RETAIN_PERMANENT` policy instead of the org-configurable System Default; the build path lazily ensures and normalizes that policy for organizations created after the migration. The pack is sealed over its **content list** with a domain-separated `pack_content_hash` (the cover's "own SHA-256"); the ZIP file's own digest is the addressable artifact.
+> **Implementation status (as built).** **S-pack-1** (PR #48, migration `0025`) shipped the build/seal half: scope resolution (CLAUSE/PROCESS + date overlay; Finding/CAPA deferred — those entities don't exist yet), the synchronous preview, the R28 INCLUDED/EXCLUDED_PERMISSION/EXCLUDED_ABSENCE classification + the gap report, the worker build that seals the ZIP into the WORM `records` bucket as a `RETAIN_PERMANENT` EVIDENCE Record, and the immutable `/evidence-packs` API (data model: `14 §5.7`; endpoints: `15 §8.15a`). Migration `0077` pins both existing and future sealed-pack Records to the separate system-managed `PERMANENT` + `RETAIN_PERMANENT` policy instead of the org-configurable System Default; the build path lazily ensures and normalizes that policy for organizations created after the migration. A pre-existing user policy with the newly reserved name is renamed in place—its settings, id, and pinned references are preserved—before the separate managed row is created. The pack is sealed over its **content list** with a domain-separated `pack_content_hash` (the cover's "own SHA-256"); the ZIP file's own digest is the addressable artifact.
 >
 > **S-pack-2** (migration `0026`) completes UJ-7 with external delivery + the PDF portfolio. **Delivery** uses an Ed25519 **signed-token-outside-the-PEP** path (reusing the S7c verify-token key, **domain-separated** by a `easysynq.packshare.v1` preamble + a distinct 105-byte token length so a verify token can never cross-validate as a share token; mint **fails closed** if the key isn't durably persisted), with a DB-backed **`pack_share_link`** record (`token_digest` only — the raw token is returned once, never stored; `recipient`/`expires_at`/`revoked_at`+`by`+`reason`/`download_count`; state derived from the nullable timestamps). `POST /evidence-packs/{id}/share` (gate `report.evidence_pack.generate` — the pack-management authority, catalog CLOSED) mints a time-boxed link; `…/share-links` lists them; `…/share-links/{id}/revoke` is immediate. The **public, no-auth, latch-exempt** guest surface (`GET /evidence-packs/shared?t=` landing + `…/shared/download?t=&format=zip|pdf`) re-checks the **revocable** DB row on every access (revoke takes effect at once), audits `PACK_DOWNLOADED`, and **streams** the bytes through the API (no presigned URL outlives a revoke; `Referrer-Policy: no-referrer`; the raw token is never logged). The landing surfaces the gap + exclusion summary (R28 honesty). The **PDF portfolio** (`format=pdf`) is built at seal **Stage 2** (a separate transaction after the seal commits, best-effort so a Gotenberg outage never blocks the canonical pack): a cover + traceability index + gap/exclusion pages + each version's **cached** §11.3-stamped rendition (a truthful pure-pypdf "no longer governs" overlay if its state changed; an honest placeholder when uncached — so the **API never invokes Gotenberg**), content-addressed into the non-WORM renditions bucket; the per-request guest stamp reuses `watermark.stamp_per_request_copy` (the S7d export precedent). **Deferred (v1.x / later):** the heavier `guest_grant` table + the `scope.evidence_pack_id` ABAC predicate + a Keycloak guest identity (the token path supersedes them for v1); `ip_allow` binding; app-layer rate-limiting (a Caddy edge concern).
 >

@@ -201,17 +201,19 @@ unit/integration tests · no new permission key
 - [x] `apps/api/src/easysynq_api/services/packs/build.py:358` — sealed packs used the mutable System
   Default retention policy rather than a guaranteed permanent policy `[C]` (fixed: packs now pin a
   reserved, API-immutable `PERMANENT` + `RETAIN_PERMANENT` policy; migration `0077` seeds it and
-  re-pins existing pack records, while the build path normalizes/lazily creates it for future
-  organizations).
+  re-pins existing pack records, preserving and renaming any pre-existing same-name user policy;
+  the build path normalizes/lazily creates the distinct stable-id policy for future organizations).
 - [x] `apps/api/src/easysynq_api/services/records/render.py:144` — a delayed render could recreate a
   destroyed record's rendition without a remaining purge path `[C]` (fixed: the row-locked builder
-  and the redrive selector both reject `DISPOSED`; integration proves a post-destroy delayed build
-  leaves the pointer, blob row, and rendition object absent).
+  and redrive selector reject a `DESTROY` tombstone while allowing content-preserving
+  `ARCHIVE_COLD`/`TRANSFER`; integration proves a post-destroy delayed build leaves the pointer,
+  blob row, and rendition object absent).
 - [x] `apps/api/src/easysynq_api/services/records/service.py:308` — a failed structured-record PDF
   build/enqueue had no re-drive and left rendition retrieval at 409 forever `[C]` (fixed: an hourly
-  bounded Beat task re-enqueues live structured records with a missing pointer, isolates per-record
-  publish failures for the next tick, and keeps GET as a pure poll; `form_field_values={}` is
-  consistently treated as structured rather than confused with the `NULL` ad-hoc sentinel).
+  bounded Beat task re-enqueues structured records with a missing pointer, isolates per-record
+  publish failures for the next tick, and keeps GET as a pure poll; omitted optional forms normalize
+  to `{}`, legacy `NULL` forms are recognized from the pinned schema, and `{}` hashes distinctly
+  from the `NULL` ad-hoc sentinel).
 
 ### ☐ M8 — Vault and retention input guards
 

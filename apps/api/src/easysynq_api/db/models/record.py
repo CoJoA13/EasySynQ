@@ -91,8 +91,9 @@ class Record(Base):
     # S-rec-3 (doc 06 §4.2): a pointer to the cached structured-record PDF rendition — a DERIVED,
     # regenerable view in the NON-WORM renditions bucket (doc 14 §5.4), built best-effort at Stage 2
     # after capture commits and redriven hourly while the pointer is missing. The row-locked builder
-    # excludes DISPOSED so delayed work cannot recreate a purged rendition. Plain Text, NO FK (the
-    # evidence_pack.zip_blob_sha256 / portfolio precedent) so the R27 WORM-destroy hatch never
-    # aborts on a RESTRICT FK; nulled + the blob row dropped when the record is destroyed/disposed
+    # excludes a destructive disposition tombstone so delayed work cannot recreate a purged
+    # rendition, while ARCHIVE_COLD/TRANSFER may still finish the derived view. Plain Text, NO FK
+    # (the evidence_pack.zip_blob_sha256 / portfolio precedent) so the R27 WORM-destroy hatch never
+    # aborts on a RESTRICT FK; nulled + the blob row dropped when the record is destroyed
     # (the blob-row-iff-bytes invariant).
     structured_pdf_blob_sha256: Mapped[str | None] = mapped_column(Text, nullable=True)

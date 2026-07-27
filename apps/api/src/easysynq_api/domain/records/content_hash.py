@@ -49,7 +49,9 @@ def record_content_hash(
         "source_version_id": (
             str(source_version_id).lower() if source_version_id is not None else None
         ),
-        "form_field_values": form_field_values or None,
+        # ``{}`` is a valid structured-form submission (for example, an all-optional template),
+        # and is semantically distinct from the ``NULL`` ad-hoc-record sentinel.
+        "form_field_values": form_field_values,
         "evidence_manifest": sorted({s.lower() for s in evidence_sha256s}),
     }
     payload = PREAMBLE + rfc8785.dumps(obj)

@@ -22,9 +22,13 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
 
+from easysynq_api.db.models._record_enums import RecordDispositionState
+from easysynq_api.db.models._retention_enums import DispositionAction
 from easysynq_api.db.models.blob import Blob
+from easysynq_api.db.models.disposition_event import DispositionEvent
 from easysynq_api.db.models.record import Record
 from easysynq_api.db.session import get_sessionmaker
+from easysynq_api.domain.records.content_hash import record_content_hash
 from easysynq_api.services.records import build_structured_pdf, redrive_missing_structured_pdfs
 from easysynq_api.services.records import service as records_service
 from easysynq_api.services.vault import storage
@@ -404,13 +408,41 @@ async def test_structured_pdf_rendition_builds_and_downloads(
         await redrive_missing_structured_pdfs(s, enqueue=queued_after_build.append, limit=10_000)
     assert uuid.UUID(rec_id) not in queued_after_build
 
+    # ARCHIVE_COLD/TRANSFER are custody changes, not erasure. Simulate a build that was still
+    # missing when the non-destructive tombstone committed: both redrive and the worker may finish
+    # it even though the shared state enum is DISPOSED.
+    archived_id = uuid.UUID(await _capture_mode_b(app_client, hc, did))
+    async with get_sessionmaker()() as s:
+        rec = await s.get(Record, archived_id)
+        assert rec is not None
+        rec.disposition_state = RecordDispositionState.DISPOSED
+        s.add(
+            DispositionEvent(
+                org_id=rec.org_id,
+                record_id=rec.id,
+                action=DispositionAction.ARCHIVE_COLD,
+                policy_id=rec.retention_policy_id,
+                approved_by=rec.captured_by,
+            )
+        )
+        await s.commit()
+    queued_after_archive: list[uuid.UUID] = []
+    async with get_sessionmaker()() as s:
+        await redrive_missing_structured_pdfs(s, enqueue=queued_after_archive.append, limit=10_000)
+    assert archived_id in queued_after_archive
+    async with get_sessionmaker()() as s:
+        await build_structured_pdf(s, archived_id)
+    async with get_sessionmaker()() as s:
+        rec = await s.get(Record, archived_id)
+        assert rec is not None and rec.structured_pdf_blob_sha256 is not None
 
-async def test_empty_structured_values_are_enqueued_and_rendered(
+
+async def test_omitted_optional_form_values_are_normalized_and_legacy_null_is_redriven(
     app_client: AsyncClient,
     token_factory: Callable[..., str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """An empty object is still a structured form, not the NULL ad-hoc-record sentinel."""
+    """An omitted optional form becomes {}; legacy NULL rows remain identifiable by their pin."""
     ha, hb = await _authors(token_factory)
     did = await _drive_template_effective(app_client, ha, hb, _OPTIONAL_SCHEMA)
     cap_subj = _subject("cap-empty")
@@ -426,12 +458,31 @@ async def test_empty_structured_values_are_enqueued_and_rendered(
             "record_type": "FILLED_FORM",
             "title": "Empty optional form",
             "source_document_id": did,
-            "form_field_values": {},
         },
     )
     assert cap.status_code == 201, cap.text
+    assert cap.json()["form_field_values"] == {}
     rec_id = uuid.UUID(cap.json()["id"])
     assert queued == [rec_id]
+
+    # Reproduce a valid pre-fix optional-form row that stored NULL. Its pinned version still carries
+    # field_schema, so the durable scan and builder must recognize it without treating every NULL
+    # ad-hoc record as structured.
+    async with get_sessionmaker()() as s:
+        rec = await s.get(Record, rec_id)
+        assert rec is not None and rec.source_version_id is not None
+        rec.form_field_values = None
+        rec.content_hash = record_content_hash(
+            record_type=rec.record_type.value,
+            source_version_id=rec.source_version_id,
+            form_field_values=None,
+            evidence_sha256s=[],
+        )
+        await s.commit()
+    redriven: list[uuid.UUID] = []
+    async with get_sessionmaker()() as s:
+        await redrive_missing_structured_pdfs(s, enqueue=redriven.append, limit=10_000)
+    assert rec_id in redriven
 
     async with get_sessionmaker()() as s:
         await build_structured_pdf(s, rec_id)
@@ -492,8 +543,8 @@ async def test_destroy_purges_structured_pdf_blob(
         await storage.head(pdf_sha, bucket=storage.get_settings().s3_bucket_renditions)
     ).exists
 
-    # A task published before destroy may arrive afterward. The DISPOSED row is the terminal guard:
-    # neither the direct worker nor the missing-pointer redrive may recreate/requeue its rendition.
+    # A task published before destroy may arrive afterward. The destructive disposition tombstone
+    # is the terminal guard: neither worker nor redrive may recreate/requeue its rendition.
     async with get_sessionmaker()() as s:
         await build_structured_pdf(s, uuid.UUID(rec_id))
     queued_after_destroy: list[uuid.UUID] = []

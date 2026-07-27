@@ -10,10 +10,11 @@ pointer, no FK, doc 14 §5.4). The record id + content hash are folded into the 
 each record's PDF has a DISTINCT sha — a per-record content-address, never shared, so the
 WORM-destroy purge (which drops the pointer's blob row to keep blob-row-iff-bytes) is always safe.
 
-Idempotent: ``FOR UPDATE`` on the record + early-return if the pointer is set or the record has been
-disposed; one transaction (content-addressed writes dedup on re-run). A bounded hourly Beat redrive
-re-enqueues structured records whose pointer is still absent, recovering both dropped broker
-publishes and failed builds while ``GET /records/{id}/rendition`` remains a pure 409 poll.
+Idempotent: ``FOR UPDATE`` on the record + early-return if the pointer is set or a destructive
+disposition tombstone exists; one transaction (content-addressed writes dedup on re-run). A bounded
+hourly Beat redrive re-enqueues structured records whose pointer is still absent, recovering both
+dropped broker publishes and failed builds while ``GET /records/{id}/rendition`` remains a pure
+409 poll.
 """
 
 from __future__ import annotations
@@ -28,13 +29,14 @@ from typing import Any
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
-from sqlalchemy import select
+from sqlalchemy import exists, not_, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...config import get_settings
-from ...db.models._record_enums import RecordDispositionState
+from ...db.models._retention_enums import DispositionAction
 from ...db.models.blob import Blob
+from ...db.models.disposition_event import DispositionEvent
 from ...db.models.document_version import DocumentVersion
 from ...db.models.documented_information import DocumentedInformation
 from ...db.models.record import Record
@@ -139,17 +141,24 @@ def _render_lines(
 
 async def build_structured_pdf(session: AsyncSession, record_id: uuid.UUID) -> None:
     """Build + cache the structured-record PDF (idempotent, best-effort). Skips a record that is not
-    structured, already rendered, disposed, or absent. The row lock serializes with disposition:
-    once destroy has committed, a delayed task cannot recreate the purged rendition."""
+    structured, already rendered, destructively disposed, or absent. The row lock serializes with
+    disposition: once DESTROY has committed, a delayed task sees its tombstone and cannot recreate
+    the purged rendition; ARCHIVE_COLD/TRANSFER may still finish a missing derived view."""
     record = (
         await session.execute(select(Record).where(Record.id == record_id).with_for_update())
     ).scalar_one_or_none()
-    if (
-        record is None
-        or record.form_field_values is None
-        or record.structured_pdf_blob_sha256 is not None
-        or record.disposition_state == RecordDispositionState.DISPOSED
-    ):
+    if record is None or record.structured_pdf_blob_sha256 is not None:
+        await session.rollback()
+        return
+    destroyed = await session.scalar(
+        select(DispositionEvent.id)
+        .where(
+            DispositionEvent.record_id == record_id,
+            DispositionEvent.action == DispositionAction.DESTROY,
+        )
+        .limit(1)
+    )
+    if destroyed is not None:
         await session.rollback()
         return
     base = await session.get(DocumentedInformation, record_id)
@@ -161,6 +170,14 @@ async def build_structured_pdf(session: AsyncSession, record_id: uuid.UUID) -> N
         if record.source_version_id is not None
         else None
     )
+    # Pre-fix optional-form captures can carry NULL values even though their pinned immutable
+    # version contains a form schema. Keep those legacy records recoverable without confusing a
+    # genuinely unstructured ad-hoc record with a structured one.
+    if record.form_field_values is None and (
+        version is None or schema_from_version(version) is None
+    ):
+        await session.rollback()
+        return
     version_base = (
         await session.get(DocumentedInformation, version.document_id)
         if version is not None
@@ -193,14 +210,26 @@ async def _missing_structured_pdf_ids(session: AsyncSession, *, limit: int) -> l
 
     Successful builds leave the candidate set, so later ticks advance through the backlog.
     """
+    pinned_form_version = exists(
+        select(1).where(
+            DocumentVersion.id == Record.source_version_id,
+            DocumentVersion.metadata_snapshot.op("?")("field_schema"),
+        )
+    )
+    destructive_disposition = exists(
+        select(1).where(
+            DispositionEvent.record_id == Record.id,
+            DispositionEvent.action == DispositionAction.DESTROY,
+        )
+    )
     return list(
         (
             await session.scalars(
                 select(Record.id)
                 .where(
-                    Record.form_field_values.is_not(None),
+                    or_(Record.form_field_values.is_not(None), pinned_form_version),
                     Record.structured_pdf_blob_sha256.is_(None),
-                    Record.disposition_state != RecordDispositionState.DISPOSED,
+                    not_(destructive_disposition),
                 )
                 .order_by(Record.captured_at, Record.id)
                 .limit(limit)

@@ -57,6 +57,14 @@ def test_form_field_values_key_order_independent() -> None:
     assert a == b
 
 
+def test_empty_form_values_are_distinct_from_null() -> None:
+    """An all-optional submitted form is not the NULL sentinel for an unstructured record."""
+    base = dict(record_type="FILLED_FORM", source_version_id=_VID, evidence_sha256s=[])
+    empty = record_content_hash(form_field_values={}, **base)  # type: ignore[arg-type]
+    null = record_content_hash(form_field_values=None, **base)  # type: ignore[arg-type]
+    assert empty != null
+
+
 def test_null_vs_set_source_version_differ() -> None:
     base = dict(record_type="RELEASE", form_field_values=None, evidence_sha256s=[])
     null = record_content_hash(source_version_id=None, **base)  # type: ignore[arg-type]
