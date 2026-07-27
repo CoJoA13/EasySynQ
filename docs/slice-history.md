@@ -174,7 +174,7 @@
 
 ## REMEDIATION — web correctness
 
-### Batch 14 — document-safe authoring state, live token renewal, honest ingestion projection/errors (apps/web only; NO migration [head stays `0075`]; NO new permission key)
+### Batch 14 — document-safe authoring state, live token renewal, honest ingestion projection/errors (apps/web only; NO migration [head stays `0075`]; NO new permission key; PR [#377](https://github.com/CoJoA13/EasySynQ/pull/377))
 
 **What shipped.** Cached document navigation can no longer carry a checked-out flag, selected file
 or change reason across documents: the authoring surface keys `CheckInPanel` on the document id, so

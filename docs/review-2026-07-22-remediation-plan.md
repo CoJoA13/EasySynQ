@@ -291,7 +291,7 @@ land the sweep separately from the gate so the gate turns on green rather than r
   password into the web-facing service)
 
 ### ☑ Batch 14 — Web correctness
-`branch: fix/major-web-correctness` · apps/web + vitest
+`branch: fix/major-web-correctness` · [PR #377](https://github.com/CoJoA13/EasySynQ/pull/377) · apps/web + vitest
 
 - [x] `apps/web/src/features/authoring/CheckInPanel.tsx:41` — checked-out flag / file / reason
   not keyed on `documentId` (fixed: `AuthorActions` keys the panel on `doc.id`, so a cached
