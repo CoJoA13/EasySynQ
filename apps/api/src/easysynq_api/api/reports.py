@@ -20,14 +20,14 @@ from ..config import get_settings
 from ..db.models.app_user import AppUser
 from ..db.session import get_session
 from ..domain.authz import Effect, RequestContext, ResourceContext, ScopeLevel
-from ..domain.authz.pdp import _context_predicates_pass, _predicates_pass
+from ..domain.authz.pdp import _predicates_pass
 from ..problems import ProblemException
 from ..services.authz import gather_grants, require
 from ..services.reports import compute_checklist
 from ..services.reports.document_control import (
     build_provenance,
     compute_document_control_register,
-    report_read_resource_satisfiable,
+    satisfiable_report_read_allows,
 )
 from .documents import parse_document_filters_with_applied
 
@@ -51,33 +51,31 @@ async def compliance_checklist_endpoint(
 # built-in Process Owner — migrations/versions/0004_seed_authz.py _PROCESS_OWNER_KEYS). The
 # register is an org-level surface, so the SURFACE gate here admits any report.read ALLOW at
 # SYSTEM or PROCESS scope (an ARTIFACT-scoped guest grant stays excluded — the spec keeps guests
-# on Evidence Packs; a plain Employee with no report.read grant is refused here) UNLESS a
-# report.read DENY also exists at one of those levels — deny-always-wins (R3 / AZ-INV-2) must hold
-# at the surface gate too, not just the per-row filter below (a narrow lower-scope DENY outside
-# _SURFACE_LEVELS is out of scope for this check; the per-row filter remains the data boundary for
-# it). Rows are then filtered per-row by document.read inside the service (doc 13 §6.1 "all
-# Documents the requester may see") — a Process Owner admitted here still only sees their
+# on Evidence Packs; a plain Employee with no report.read grant is refused here). An unconditional
+# SYSTEM report.read DENY revokes the whole surface; narrower denies stay row-scoped so
+# deny-always-wins (R3 / AZ-INV-2) holds without turning a PROCESS deny into an org-wide one. Rows
+# are then filtered per-row by BOTH document.read and report.read inside the service (doc 13 §6.1
+# "all Documents the requester may see") — a Process Owner admitted here still only sees their
 # linked-process docs.
 #
 # FIX A (Codex round 2, P1): the surface gate evaluates each candidate grant's REQUEST-CONTEXT ABAC
-# predicates (valid_from/valid_until/ip_allow/read_only) via ``_context_predicates_pass`` — so an
-# expired/not-yet-valid/wrong-IP report.read ALLOW does not admit (and an expired/future SYSTEM DENY
-# does not block forever). It reuses the PDP's own evaluator so this gate matches the semantics
-# ``authorize()`` would apply.
+# predicates (valid_from/valid_until/ip_allow/read_only) via the shared satisfiable-ALLOW selector —
+# so an expired/not-yet-valid/wrong-IP report.read ALLOW does not admit (and an expired/future
+# SYSTEM DENY does not block forever). It reuses the PDP's evaluator so this gate matches the
+# semantics ``authorize()`` would apply.
 #
 # FIX 2 (#335, P2): the surface defers a MATCHABLE ``lifecycle_state`` predicate to the per-row gate
 # rather than evaluating it for ADMISSION. A report.read ALLOW narrowed by ``lifecycle_state=
 # ["Effective"]`` is a legitimate grant that admits the caller to the Effective rows, so it must be
 # admitted here and narrowed by the per-row ``authorize(report.read, row)`` gate — evaluating it
 # against ``ResourceContext.system()`` (all-None) wrongly dropped it and 403'd the caller. But a
-# grant whose resource predicate can match NO row is NOT admitted (``report_read_resource_
-# satisfiable`` — the per-row gate would reject every row → a misleading 200-empty, worse than the
-# honest 403; #347 Codex): ``requirement_source`` is v1-unimplemented (no producer), and an
-# empty/unknown ``lifecycle_state`` set matches nothing. A SYSTEM report.read DENY still revokes the
-# whole surface only when it applies unconditionally on the resource plane, so it IS evaluated
-# against ``ResourceContext.system()`` with the full ``_predicates_pass``: a resource-scoped SYSTEM
-# DENY is row-scoped, left per-row.
-_SURFACE_LEVELS = frozenset({ScopeLevel.SYSTEM, ScopeLevel.PROCESS})
+# grant whose resource predicate can match NO row is NOT admitted (#347); M2 extends that same
+# fail-closed rule to structural PROCESS scope. ``satisfiable_report_read_allows`` accepts a
+# PROCESS ALLOW only when its selector contains a real process in this org (the process need not
+# have a current document link). A SYSTEM report.read DENY still revokes the whole surface only
+# when it applies unconditionally on the resource plane, so it IS evaluated against
+# ``ResourceContext.system()`` with the full ``_predicates_pass``: a resource-scoped SYSTEM DENY is
+# row-scoped, left per-row.
 
 # FIX 1 (Codex round 6, P2): only a SYSTEM-scoped report.read DENY revokes the whole surface. A
 # PROCESS-scoped DENY is row-scoped — the round-5 per-row ``authorize(report_grants, ...)`` in
@@ -118,18 +116,18 @@ async def document_control_register_endpoint(
     # --- surface gate (FIX A) — still on connection #1, before it's released ---
     report_grants = await gather_grants(session, uid, org_id, "report.read")
     gate_ctx = RequestContext(now=datetime.datetime.now(datetime.UTC), source_ip=source_ip)
-    # ADMIT on any report.read ALLOW at a surface level whose REQUEST-CONTEXT predicates pass AND
-    # whose RESOURCE predicates can match ≥1 real document (report_read_resource_satisfiable): a
-    # lifecycle_state=["Effective"] grant IS admitted (the per-row gate narrows it), but a grant
-    # that can match nothing — an unimplemented requirement_source, or an empty/unknown
-    # lifecycle_state set — is NOT (the per-row gate would reject every row → a misleading
-    # 200-empty, worse than the honest 403; #347). See the block comment above _SURFACE_LEVELS.
-    has_allow = any(
-        g.effect == Effect.ALLOW
-        and g.level in _SURFACE_LEVELS
-        and _context_predicates_pass(g, gate_ctx, "report.read")
-        and report_read_resource_satisfiable(g)
-        for g in report_grants
+    # ADMIT on any report.read ALLOW whose request context, resource predicates, and structural
+    # scope can match a real document authorization context. A lifecycle_state=["Effective"] grant
+    # remains eligible (the per-row gate narrows it), while an impossible resource predicate or
+    # empty/malformed/nonexistent/cross-org PROCESS selector cannot turn into a misleading
+    # 200-empty register. The shared selector is reused inside the snapshot service for provenance.
+    has_allow = bool(
+        await satisfiable_report_read_allows(
+            session,
+            org_id=org_id,
+            grants=report_grants,
+            context=gate_ctx,
+        )
     )
     # A SYSTEM report.read DENY revokes the whole surface only when it applies unconditionally on
     # the resource plane — so it stays evaluated against ResourceContext.system() (full

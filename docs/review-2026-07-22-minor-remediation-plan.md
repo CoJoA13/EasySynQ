@@ -8,7 +8,8 @@
 ## Inventory and conventions
 
 - The historic denominator remains **104**. One finding was already closed while the MAJOR work was
-  underway, leaving **103** to schedule here. Batch M1 closes 4; **99 remain queued** after M1.
+  underway, leaving **103** to schedule here. Batch M1 closed 4; M2 closes 2; **97 remain queued**
+  after M2.
 - A queued finding is not assumed to still be live. Every batch must re-locate and revalidate its
   findings against then-current `main` before implementation; close, re-scope, or reject it with
   evidence rather than mechanically applying the 2026-07-22 suggestion.
@@ -24,8 +25,8 @@
 | Batch | Group | Findings | Status | PR |
 |---|---|:---:|---|---|
 | M0 | Preclosed during MAJOR remediation | 1 | ☑ merged | [#369](https://github.com/CoJoA13/EasySynQ/pull/369), precision follow-up [#371](https://github.com/CoJoA13/EasySynQ/pull/371) |
-| M1 | Auth boundaries and public diagnostics | 4 | ☑ in PR | [#381](https://github.com/CoJoA13/EasySynQ/pull/381) |
-| M2 | Scoped authorization and reporting | 2 | ☐ queued — revalidate | — |
+| M1 | Auth boundaries and public diagnostics | 4 | ☑ merged | [#381](https://github.com/CoJoA13/EasySynQ/pull/381) |
+| M2 | Scoped authorization and reporting | 2 | ☑ in PR | [#382](https://github.com/CoJoA13/EasySynQ/pull/382) |
 | M3 | Notification reliability | 2 | ☐ queued — revalidate | — |
 | M4 | Lifecycle and workflow guards | 4 | ☐ queued — revalidate | — |
 | M5 | Ingestion commit integrity | 3 | ☐ queued — revalidate | — |
@@ -47,7 +48,7 @@
 | M21 | Web async and error UX | 8 | ☐ queued — revalidate | — |
 | M22 | Web accessibility | 7 | ☐ queued — revalidate | — |
 
-**Accounting: 1 preclosed + 4 active + 99 queued = 104 original findings.**
+**Accounting: 1 preclosed + 4 merged + 2 in PR + 97 queued = 104 original findings.**
 
 ---
 
@@ -81,15 +82,24 @@ and no new permission key
   exception strings `[C]` (fixed: expose names and readiness booleans only while retaining internal
   diagnostics for trusted workflows).
 
-### ☐ M2 — Scoped authorization and reporting
+### ☑ M2 — Scoped authorization and reporting — [#382](https://github.com/CoJoA13/EasySynQ/pull/382)
 
-`branch: fix/minor-scoped-authz-reporting` · API + integration
+`branch: fix/minor-scoped-authz-reporting` · API + integration · no migration and no new permission
+key
 
-- [ ] `apps/api/src/easysynq_api/services/ack/decide.py:166` — acknowledgment authorization uses a
-  raw `ProcessLink` query instead of the canonical satellite-aware scope loader `[f]`.
-- [ ] `apps/api/src/easysynq_api/api/reports.py:131` — register surface accepts a
-  scope-unsatisfiable PROCESS `report.read` allow and returns a misleading org-wide empty result
-  `[f]`.
+- [x] `apps/api/src/easysynq_api/services/ack/decide.py:166` — acknowledgment authorization used a
+  raw `ProcessLink` query instead of the canonical satellite-aware scope loader `[C]` (fixed:
+  converge on `vault_repo.process_ids_for_doc`; a mutation-distinguishing deny-wins integration
+  proof verifies the decision gate consumes it, while the existing objective-satellite proof pins
+  the loader's real union semantics).
+- [x] `apps/api/src/easysynq_api/api/reports.py:131` — register surface accepted a
+  scope-unsatisfiable PROCESS `report.read` allow and returned a misleading org-wide empty result
+  `[C]` (fixed: centralize satisfiable-ALLOW selection for both the request gate and snapshot
+  provenance; a PROCESS selector must contain at least one real process in the caller's org. Empty,
+  malformed, nonexistent, and cross-org-only selectors now yield an honest 403 when they are the
+  sole allow. A valid in-org process remains satisfiable even when it currently has no linked
+  documents, because that is an accurate process-scoped empty register rather than an impossible
+  authorization scope).
 
 ### ☐ M3 — Notification reliability
 
