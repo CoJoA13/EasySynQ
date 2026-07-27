@@ -174,7 +174,7 @@
 
 ## REMEDIATION — correctness, accessibility, polish & test reliability
 
-### Batch 17 — reconcile the authorization and API design docs with shipped behavior (docs only; NO runtime/API-contract change; NO migration [head stays `0075`]; NO new permission key)
+### Batch 17 — reconcile the authorization and API design docs with shipped behavior (docs only; NO runtime/API-contract change; NO migration [head stays `0075`]; NO new permission key; PR [#380](https://github.com/CoJoA13/EasySynQ/pull/380))
 
 **What shipped.** The supposedly complete authorization catalog now includes the already-seeded R42
 `document.distribute` key with its ARTIFACT scope and non-SoD/non-signing flags; its §3.10 resource

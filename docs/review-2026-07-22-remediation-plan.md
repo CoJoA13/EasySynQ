@@ -348,7 +348,7 @@ land the sweep separately from the gate so the gate turns on green rather than r
   the temporary org and proves it is absent)
 
 ### ☑ Batch 17 — Docs drift
-`branch: fix/major-docs-drift` · docs-only · NO runtime/API-contract change · NO migration · NO new permission key
+`branch: fix/major-docs-drift` · [PR #380](https://github.com/CoJoA13/EasySynQ/pull/380) · docs-only · NO runtime/API-contract change · NO migration · NO new permission key
 
 - [x] `docs/07-authorization-model.md:89` — catalog omits `document.distribute`
   (+ `retention`/`drift` rows in §3.10) (fixed: the existing R42
