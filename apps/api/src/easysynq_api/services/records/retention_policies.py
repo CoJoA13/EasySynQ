@@ -52,6 +52,13 @@ _PATCHABLE = frozenset(
         "worm_lock_period",
     }
 )
+_NON_NULLABLE_PATCH_FIELDS = (
+    "name",
+    "basis",
+    "duration",
+    "disposition_action",
+    "review_required",
+)
 
 
 # --- errors ------------------------------------------------------------------------------
@@ -216,6 +223,13 @@ async def update_policy(
         raise ProblemException(status=404, code="not_found", title="Retention policy not found")
 
     changes = {k: v for k, v in changes.items() if k in _PATCHABLE}
+    # PATCH omission means "leave unchanged", but an explicit JSON null may clear only the two
+    # nullable columns (applies_to / worm_lock_period). Reject nulls for required fields before
+    # string normalization, enum comparison, or the NOT NULL constraints can turn them into 500s.
+    for field in _NON_NULLABLE_PATCH_FIELDS:
+        if field in changes and changes[field] is None:
+            raise _invalid(field, "not_nullable", f"{field} cannot be null")
+
     is_system_default = policy.name == SYSTEM_DEFAULT_POLICY_NAME
     is_sealed_pack_policy = policy.name == SEALED_PACK_POLICY_NAME
 

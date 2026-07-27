@@ -1415,6 +1415,7 @@ paths:
               schema: { $ref: "#/components/schemas/InitUploadResult" }
         "403": { $ref: "#/components/responses/ProblemResponse" }
         "404": { $ref: "#/components/responses/ProblemResponse" }
+        "409": { $ref: "#/components/responses/ProblemResponse" }
 
   /documents/{document_id}/checkin:
     post:
@@ -9691,14 +9692,16 @@ components:
     RetentionPolicyUpdate:
       type: object
       additionalProperties: false
-      description: A partial update; only supplied fields change (extend-forward only while pinned).
+      description: >-
+        A partial update; only supplied fields change (extend-forward only while pinned). Explicit
+        null may clear applies_to and worm_lock_period; all other fields reject null.
       properties:
-        name: { type: [string, "null"] }
+        name: { type: string }
         applies_to: { type: [object, "null"] }
-        basis: { type: [string, "null"], enum: [captured_at, "event:employment_end", "event:product_eol", "event:contract_end", "event:capa_closed", null] }
-        duration: { type: [string, "null"] }
-        disposition_action: { type: [string, "null"], enum: [DESTROY, ARCHIVE_COLD, TRANSFER, RETAIN_PERMANENT, null] }
-        review_required: { type: [boolean, "null"] }
+        basis: { $ref: "#/components/schemas/RetentionBasis" }
+        duration: { type: string }
+        disposition_action: { $ref: "#/components/schemas/DispositionAction" }
+        review_required: { type: boolean }
         worm_lock_period: { type: [string, "null"] }
 
     Record:

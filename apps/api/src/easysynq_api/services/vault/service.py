@@ -480,11 +480,27 @@ async def init_upload(
     sha256: str,
     content_type: str,
 ) -> dict[str, Any]:
-    # Record the in-progress scratch ref on the check-out mirror so break-lock preserves it (R9).
-    wd = await repository.get_working_draft(session, doc.id)
-    if wd is not None:
-        wd.scratch_blob_ref = sha256
-        await session.commit()
+    # Only the active check-out holder may replace their in-progress scratch ref. Lock the mirror
+    # row so a lapsed-lock takeover cannot change its holder/token between this proof and the
+    # scratch update.
+    wd = await repository.get_working_draft(session, doc.id, for_update=True)
+    if wd is None or wd.checked_out_by != actor.id:
+        raise ProblemException(
+            status=409,
+            code="lock_conflict",
+            title="You do not hold the check-out for this document",
+        )
+    token = wd.lock_token or ""
+    # Redis is the runtime lock authority; the PG row identifies its user/token. A successful CAS
+    # both proves this is still the active checkout and treats init-upload as editor activity.
+    if not await locks.heartbeat(doc.id, token):
+        raise ProblemException(
+            status=409,
+            code="lock_conflict",
+            title="The check-out lock has lapsed; check out again",
+        )
+    # Record the in-progress scratch ref so break-lock preserves it (R9).
+    wd.scratch_blob_ref = sha256
     existing = await repository.get_blob(session, sha256)
     settings = get_settings()
     if (
@@ -496,9 +512,29 @@ async def init_upload(
         # needed. CR-1: a blob in ANOTHER bucket (records evidence / a rendition) must NOT dedup
         # — a controlled version's source bytes belong in the WORM documents bucket, and checkin
         # fail-closes (423) on a foreign-bucket row anyway, so force a fresh staging upload.
-        return {"dedup": True, "object_key": existing.object_key, "upload_url": None}
-    url = await storage.presign_put(sha256, content_type)
-    return {"dedup": False, "object_key": sha256, "upload_url": url}
+        result = {"dedup": True, "object_key": existing.object_key, "upload_url": None}
+    else:
+        url = await storage.presign_put(sha256, content_type)
+        result = {"dedup": False, "object_key": sha256, "upload_url": url}
+
+    # Presigning is an authorization decision: if break-lock/check-in invalidated the Redis token
+    # while the URL was generated, reject without committing the scratch change. Revalidate once
+    # more after the commit releases the PG row lock so a takeover during commit cannot receive a
+    # stale holder's URL. There is deliberately no await between the final CAS and return.
+    if not await locks.heartbeat(doc.id, token):
+        raise ProblemException(
+            status=409,
+            code="lock_conflict",
+            title="The check-out changed while authorizing the upload; check out again",
+        )
+    await session.commit()
+    if not await locks.heartbeat(doc.id, token):
+        raise ProblemException(
+            status=409,
+            code="lock_conflict",
+            title="The check-out changed while authorizing the upload; check out again",
+        )
+    return result
 
 
 async def checkin(
@@ -638,10 +674,14 @@ async def break_lock(
     session: AsyncSession, sink: VaultAuditSink, actor: AppUser, doc: DocumentedInformation
 ) -> None:
     """Release the lock WITHOUT check-in, preserving the displaced editor's scratch (R9)."""
+    # Serialize against init-upload's scratch mutation. If upload owns this row, its commit happens
+    # first and break-lock preserves that latest pointer; if break-lock owns it first, Redis is
+    # cleared before upload can re-read/heartbeat the mirror and the upload rejects without writing.
+    await repository.get_working_draft(session, doc.id, for_update=True)
     await locks.force_release(doc.id)
     # The working_draft row (and its scratch_blob_ref) is deliberately NOT deleted. LOCK_BROKEN has
-    # no SQL state-change to be atomic with, so the audit row gets its own dedicated one-row commit
-    # (the request session is clean here — break_lock issues no other SQL). doc 12 §4.4 carve-out.
+    # no persistent draft state-change to be atomic with; this commit persists the dedicated audit
+    # row and releases the serialization locks. doc 12 §4.4 carve-out.
     _emit(session, sink, "LOCK_BROKEN", actor, "document", doc.id, identifier=doc.identifier)
     await session.commit()
 

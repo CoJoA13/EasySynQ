@@ -104,10 +104,13 @@ async def get_framework(
     ).scalar_one_or_none()
 
 
-async def get_working_draft(session: AsyncSession, doc_id: uuid.UUID) -> WorkingDraft | None:
-    return (
-        await session.execute(select(WorkingDraft).where(WorkingDraft.document_id == doc_id))
-    ).scalar_one_or_none()
+async def get_working_draft(
+    session: AsyncSession, doc_id: uuid.UUID, *, for_update: bool = False
+) -> WorkingDraft | None:
+    stmt = select(WorkingDraft).where(WorkingDraft.document_id == doc_id)
+    if for_update:
+        stmt = stmt.with_for_update()
+    return (await session.execute(stmt)).scalar_one_or_none()
 
 
 async def latest_version(session: AsyncSession, doc_id: uuid.UUID) -> DocumentVersion | None:

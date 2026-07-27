@@ -8,6 +8,7 @@ are unique per test so the session-scoped containers stay isolated.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import uuid
 from collections.abc import Callable
@@ -17,12 +18,15 @@ import httpx
 import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from easysynq_api.api import documents as documents_api
 from easysynq_api.db.models.app_user import AppUser, UserStatus
 from easysynq_api.db.models.authz_grant import PermissionOverride
 from easysynq_api.db.models.blob import Blob
 from easysynq_api.db.models.clause import Clause
 from easysynq_api.db.models.document_type import DocumentType
+from easysynq_api.db.models.documented_information import DocumentedInformation
 from easysynq_api.db.models.framework import Framework
 from easysynq_api.db.models.organization import Organization
 from easysynq_api.db.models.permission import Permission
@@ -31,6 +35,8 @@ from easysynq_api.db.models.working_draft import WorkingDraft
 from easysynq_api.db.session import get_sessionmaker
 from easysynq_api.domain.authz.types import Effect, ScopeLevel
 from easysynq_api.services.vault import locks
+from easysynq_api.services.vault import service as vault_service
+from easysynq_api.services.vault.audit import VaultAuditSink
 
 pytestmark = pytest.mark.integration
 
@@ -211,6 +217,181 @@ async def test_checkout_lock_ttl_is_8h(
     await app_client.post(f"/api/v1/documents/{doc['id']}/checkout", headers=h)
     remaining = await locks.ttl(uuid.UUID(doc["id"]))
     assert 28000 < remaining <= 28800  # ~8h (R24)
+
+
+async def test_init_upload_requires_checkout_owner_and_preserves_holder_scratch(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    """A caller with checkout permission cannot replace another editor's scratch pointer."""
+    holder_id = await _grant_doc_perms(subj.a)
+    await _grant_doc_perms(subj.b)
+    ha, hb = _auth(token_factory, subj.a), _auth(token_factory, subj.b)
+    did = (await _create(app_client, ha, await _sop_type_id()))["id"]
+    checked_out = await app_client.post(f"/api/v1/documents/{did}/checkout", headers=ha)
+    assert checked_out.status_code == 200, checked_out.text
+
+    holder_sha = hashlib.sha256(f"holder-scratch-{subj.a}".encode()).hexdigest()
+    holder_init = await app_client.post(
+        f"/api/v1/documents/{did}/versions:init-upload",
+        headers=ha,
+        json={"sha256": holder_sha, "content_type": "application/pdf"},
+    )
+    assert holder_init.status_code == 200, holder_init.text
+
+    other_sha = hashlib.sha256(f"other-scratch-{subj.b}".encode()).hexdigest()
+    rejected = await app_client.post(
+        f"/api/v1/documents/{did}/versions:init-upload",
+        headers=hb,
+        json={"sha256": other_sha, "content_type": "application/pdf"},
+    )
+    assert rejected.status_code == 409, rejected.text
+    assert rejected.json()["code"] == "lock_conflict"
+
+    # The PG mirror is not runtime authority: once its Redis token lapses, even the former holder
+    # must check out again and may not replace the preserved recovery pointer.
+    await locks.force_release(uuid.UUID(did))
+    lapsed_sha = hashlib.sha256(f"lapsed-scratch-{subj.a}".encode()).hexdigest()
+    lapsed = await app_client.post(
+        f"/api/v1/documents/{did}/versions:init-upload",
+        headers=ha,
+        json={"sha256": lapsed_sha, "content_type": "application/pdf"},
+    )
+    assert lapsed.status_code == 409, lapsed.text
+    assert lapsed.json()["code"] == "lock_conflict"
+
+    async with get_sessionmaker()() as s:
+        wd = (
+            await s.execute(select(WorkingDraft).where(WorkingDraft.document_id == uuid.UUID(did)))
+        ).scalar_one()
+        assert wd.checked_out_by == holder_id
+        assert wd.scratch_blob_ref == holder_sha
+
+
+async def test_init_upload_revalidates_checkout_after_presigning(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    subj: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A URL generated while the lock is broken must never escape in a successful response."""
+    await _grant_doc_perms(subj.a)
+    h = _auth(token_factory, subj.a)
+    did = (await _create(app_client, h, await _sop_type_id()))["id"]
+    checked_out = await app_client.post(f"/api/v1/documents/{did}/checkout", headers=h)
+    assert checked_out.status_code == 200, checked_out.text
+
+    async def _break_lock_while_presigning(_sha256: str, _content_type: str) -> str:
+        await locks.force_release(uuid.UUID(did))
+        return "https://should-not-leak.invalid/presigned-put"
+
+    monkeypatch.setattr(vault_service.storage, "presign_put", _break_lock_while_presigning)
+    sha = hashlib.sha256(f"presign-race-{subj.a}".encode()).hexdigest()
+    raced = await app_client.post(
+        f"/api/v1/documents/{did}/versions:init-upload",
+        headers=h,
+        json={"sha256": sha, "content_type": "application/pdf"},
+    )
+    assert raced.status_code == 409, raced.text
+    assert raced.json()["code"] == "lock_conflict"
+    assert "should-not-leak" not in raced.text
+
+    async with get_sessionmaker()() as s:
+        wd = (
+            await s.execute(select(WorkingDraft).where(WorkingDraft.document_id == uuid.UUID(did)))
+        ).scalar_one()
+        assert wd.scratch_blob_ref is None
+
+
+async def test_break_lock_serializes_with_init_upload_scratch_commit(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    subj: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Break-lock cannot invalidate Redis between upload's final check and scratch commit."""
+    await _grant_doc_perms(subj.a)
+    h = _auth(token_factory, subj.a)
+    did = (await _create(app_client, h, await _sop_type_id()))["id"]
+    document_id = uuid.UUID(did)
+    checked_out = await app_client.post(f"/api/v1/documents/{did}/checkout", headers=h)
+    assert checked_out.status_code == 200, checked_out.text
+
+    precommit_checked = asyncio.Event()
+    allow_commit = asyncio.Event()
+    break_entered = asyncio.Event()
+    redis_released = asyncio.Event()
+
+    original_heartbeat = locks.heartbeat
+    heartbeat_calls = 0
+
+    async def _pause_between_precommit_check_and_commit(
+        candidate_id: uuid.UUID, token: str
+    ) -> bool:
+        nonlocal heartbeat_calls
+        if candidate_id == document_id:
+            heartbeat_calls += 1
+            if heartbeat_calls == 3:
+                await redis_released.wait()
+            result = await original_heartbeat(candidate_id, token)
+            if heartbeat_calls == 2:
+                precommit_checked.set()
+                await allow_commit.wait()
+            return result
+        return await original_heartbeat(candidate_id, token)
+
+    original_force_release = locks.force_release
+
+    async def _observe_force_release(candidate_id: uuid.UUID) -> None:
+        await original_force_release(candidate_id)
+        if candidate_id == document_id:
+            redis_released.set()
+
+    original_break_lock = documents_api.break_lock
+
+    async def _observe_break_lock(
+        session: AsyncSession,
+        sink: VaultAuditSink,
+        actor: AppUser,
+        doc: DocumentedInformation,
+    ) -> None:
+        break_entered.set()
+        await original_break_lock(session, sink, actor, doc)
+
+    monkeypatch.setattr(locks, "heartbeat", _pause_between_precommit_check_and_commit)
+    monkeypatch.setattr(locks, "force_release", _observe_force_release)
+    monkeypatch.setattr(documents_api, "break_lock", _observe_break_lock)
+
+    sha = hashlib.sha256(f"serialized-scratch-{subj.a}".encode()).hexdigest()
+    upload_task = asyncio.create_task(
+        app_client.post(
+            f"/api/v1/documents/{did}/versions:init-upload",
+            headers=h,
+            json={"sha256": sha, "content_type": "application/pdf"},
+        )
+    )
+    await asyncio.wait_for(precommit_checked.wait(), timeout=5)
+
+    break_task = asyncio.create_task(
+        app_client.post(f"/api/v1/documents/{did}/break-lock", headers=h)
+    )
+    await asyncio.wait_for(break_entered.wait(), timeout=5)
+    # The break request reached the service but cannot clear Redis while upload owns the draft row.
+    ordering_protected = not redis_released.is_set()
+
+    allow_commit.set()
+    uploaded, broken = await asyncio.gather(upload_task, break_task)
+    assert ordering_protected
+    assert uploaded.status_code == 409, uploaded.text
+    assert uploaded.json()["code"] == "lock_conflict"
+    assert broken.status_code == 200, broken.text
+    assert redis_released.is_set()
+
+    async with get_sessionmaker()() as s:
+        wd = (
+            await s.execute(select(WorkingDraft).where(WorkingDraft.document_id == document_id))
+        ).scalar_one()
+        # Upload committed first; break-lock then preserved that serialized, latest scratch pointer.
+        assert wd.scratch_blob_ref == sha
 
 
 # --- INV-3 ------------------------------------------------------------------------------
