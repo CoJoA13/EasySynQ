@@ -140,23 +140,26 @@ new permission key
 
 ### ☑ M5 — Ingestion commit integrity — [#385](https://github.com/CoJoA13/EasySynQ/pull/385)
 
-`branch: fix/minor-ingestion-commit-integrity` · API + OpenAPI + unit/integration · no migration
-and no new permission key
+`branch: fix/minor-ingestion-commit-integrity` · API + Web + OpenAPI + unit/integration · no
+migration and no new permission key
 
 - [x] `apps/api/src/easysynq_api/services/ingestion/commit.py:338` — the validated and audited
   folded owner decision was ignored during commit `[C]` (fixed: carry whether the owner came from a
   human decision, resolve the reviewed reference against active non-guest users in the item's org,
-  and materialize it on both imported Documents and Records; an unresolved/ambiguous human choice
-  fails the item rather than silently assigning the committer, while authorship/capture/signature
-  attribution remains with the committer).
+  and materialize it on both imported Documents and Records; the bulk review UI now selects an
+  actual directory user and submits its stable ID, while legacy exact identities remain accepted
+  even when a subject is UUID-shaped; an unresolved/ambiguous human choice fails the item rather
+  than silently assigning the committer, while authorship/capture/signature attribution remains
+  with the committer).
 - [x] `apps/api/src/easysynq_api/services/ingestion/commit.py:530` — `_record_failed` could commit a
   false failure audit after a peer successfully committed the item `[C]` (fixed: the conditional
   failure UPSERT now returns whether it won; only a won `failed` ledger write can emit the failure
   audit/log, while a concurrent `success`/`noop` suppresses both atomically).
 - [x] `apps/api/src/easysynq_api/services/ingestion/review.py:253` — an empty identifier survived
   validation and committed a vault document with `identifier=''` `[C]` (fixed: reject empty and
-  whitespace-only identifier corrections with a 422 before recording the decision; the OpenAPI
-  schema now advertises the non-blank constraint).
+  whitespace-only identifier corrections with a 422 before recording the decision, and revalidate
+  the folded identifier at the commit boundary so legacy in-flight decisions cannot write a blank
+  vault identifier; the OpenAPI schema advertises the non-blank constraint).
 
 ### ☐ M6 — Ingestion review and family integrity
 

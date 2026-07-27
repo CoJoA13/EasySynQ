@@ -18,7 +18,10 @@ from sqlalchemy import select
 
 from easysynq_api.config import get_settings
 from easysynq_api.db.models._audit_enums import EventType
-from easysynq_api.db.models._ingestion_enums import ImportCommitResultStatus
+from easysynq_api.db.models._ingestion_enums import (
+    ImportCommitResultStatus,
+    ImportDecisionAction,
+)
 from easysynq_api.db.models._signature_enums import SignatureMeaning, SignedObjectType
 from easysynq_api.db.models._vault_enums import DocumentCurrentState, DocumentKind, VersionState
 from easysynq_api.db.models.app_user import AppUser, UserStatus
@@ -1264,8 +1267,10 @@ async def test_commit_writes_documents_and_records_to_vault(
     audit = by_name["Internal Audit Report Q2 2023.pdf"]["id"]
     tag = uuid.uuid4().hex[:6].upper()
     doc_ident = f"SOP-{tag}-001"
-    owner_subject = _subject("import-owner")
+    # Directory subjects can themselves be UUID-shaped and need not equal the app_user primary key.
+    owner_subject = str(uuid.uuid4())
     owner_id = await _grant(owner_subject, ())
+    assert owner_id != uuid.UUID(owner_subject)
     await _confirm_for_commit(
         app_client,
         h,
@@ -1423,6 +1428,70 @@ async def test_blank_identifier_decision_is_rejected_before_commit(
 
     assert response.status_code == 422, response.text
     assert response.json()["title"] == "identifier must not be blank"
+
+
+async def test_commit_revalidates_legacy_persisted_blank_identifier(
+    app_client: AsyncClient, token_factory: Callable[..., str], _stub_tika: None
+) -> None:
+    """A decision persisted before request validation existed must not write a blank vault id."""
+    admin = _subject("legacy-blank")
+    await _assign_role(admin, "System Administrator")
+    h = _auth(token_factory, admin)
+    run_id, by_name = await _proposed_classifiable(app_client, h, _stub_tika)
+    sop = by_name["SOP-PUR-002 Purchasing.docx"]["id"]
+    audit = by_name["Internal Audit Report Q2 2023.pdf"]["id"]
+
+    # Confirm the other item through today's API, then insert a pre-validation decision directly
+    # through the append-only repository to model data written by an older deployment.
+    audit_decision = await app_client.post(
+        f"/api/v1/admin/imports/{run_id}/files/{audit}/decision",
+        headers=h,
+        json={"action": "accept", "after": {"kind": "RECORD"}},
+    )
+    assert audit_decision.status_code == 200, audit_decision.text
+    async with get_sessionmaker()() as session:
+        run = await ingestion_repo.get_run(session, uuid.UUID(run_id))
+        reviewer = (
+            await session.execute(select(AppUser).where(AppUser.keycloak_subject == admin))
+        ).scalar_one()
+        assert run is not None
+        await ingestion_repo.insert_decision(
+            session,
+            org_id=run.org_id,
+            run_id=run.id,
+            action=ImportDecisionAction.CORRECT,
+            decided_by=reviewer.id,
+            file_id=uuid.UUID(sop),
+            target_kind="file",
+            after={"kind": "DOCUMENT", "identifier": " \t "},
+        )
+        await session.commit()
+
+    checklist = (
+        await app_client.get(f"/api/v1/admin/imports/{run_id}/checklist", headers=h)
+    ).json()
+    assert checklist["ready"] is True, checklist["blocking"]
+    commit = await app_client.post(f"/api/v1/admin/imports/{run_id}/commit", headers=h)
+    assert commit.status_code == 202, commit.text
+    await _drive_commit(uuid.UUID(run_id))
+
+    run = (await app_client.get(f"/api/v1/admin/imports/{run_id}", headers=h)).json()
+    assert run["status"] == "PartiallyCommitted"
+    assert run["counts"]["commit"] == {"committed": 1, "failed": 1}
+    sop_detail = (
+        await app_client.get(f"/api/v1/admin/imports/{run_id}/files/{sop}", headers=h)
+    ).json()
+    assert sop_detail["commit"]["result"] == "failed"
+    assert "blank_identifier" in sop_detail["commit"]["error"]
+    async with get_sessionmaker()() as session:
+        persisted = (
+            await session.execute(
+                select(sa.func.count())
+                .select_from(DocumentedInformation)
+                .where(DocumentedInformation.identifier == " \t ")
+            )
+        ).scalar_one()
+        assert persisted == 0
 
 
 async def test_record_failed_does_not_audit_after_peer_success(

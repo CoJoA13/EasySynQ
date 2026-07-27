@@ -312,6 +312,10 @@ async def _commit_document(
     sha = file.sha256
     if sha is None:
         raise _ItemCommitError("no_staged_bytes")
+    # Revalidate the folded state at the write boundary. Older append-only decisions may predate
+    # request validation, and must not promote bytes or mint a vault row with a blank identifier.
+    if st.identifier is not None and not st.identifier.strip():
+        raise _ItemCommitError("blank_identifier")
     if st.type_code is None:
         raise _ItemCommitError("unknown_document_type")
     dt_by_code = await repo.get_document_types_by_codes(session, org_id, {st.type_code})

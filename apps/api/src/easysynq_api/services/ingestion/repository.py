@@ -1001,19 +1001,20 @@ async def resolve_import_owner_candidates(
         .order_by(AppUser.id)
         .limit(2)
     )
+    normalized = owner_ref.lower()
+    exact_identity = or_(
+        func.lower(func.btrim(AppUser.display_name)) == normalized,
+        func.lower(func.btrim(AppUser.email)) == normalized,
+        func.lower(func.btrim(AppUser.keycloak_subject)) == normalized,
+    )
     try:
         owner_id = uuid.UUID(owner_ref)
     except ValueError:
-        normalized = owner_ref.lower()
-        base = base.where(
-            or_(
-                func.lower(func.btrim(AppUser.display_name)) == normalized,
-                func.lower(func.btrim(AppUser.email)) == normalized,
-                func.lower(func.btrim(AppUser.keycloak_subject)) == normalized,
-            )
-        )
+        base = base.where(exact_identity)
     else:
-        base = base.where(AppUser.id == owner_id)
+        # Keycloak subjects are opaque strings and can be UUID-shaped without equalling app_user.id.
+        # Preserve both accepted identity forms instead of treating UUID syntax as a discriminator.
+        base = base.where(or_(AppUser.id == owner_id, exact_identity))
     return (await session.execute(base)).scalars().all()
 
 

@@ -434,10 +434,10 @@ QMS-Mirror/
 | No code and no scheme | Propose a sensible default (`{TYPE}-{SEQ}`) and flag for Mara to confirm/rename |
 | **Collision** (two files would get the same code) | Flagged as a **conflict** (§9); engine never silently reuses an identifier |
 
-Numbering is **proposed, never forced** — Mara can accept the existing codes wholesale (common when an org already has a scheme) or apply the configured scheme to normalize. A human correction must be non-blank when the decision is recorded, and all identifiers are validated unique at commit.
+Numbering is **proposed, never forced** — Mara can accept the existing codes wholesale (common when an org already has a scheme) or apply the configured scheme to normalize. A human correction must be non-blank when the decision is recorded; commit revalidates the folded identifier so an in-flight legacy decision cannot bypass that rule, and all identifiers are validated unique at commit.
 
 ### 8.3 Owner & process-link proposals
-- **Owner** is proposed from embedded author / a folder-owner mapping / the process's `OrgRole` (Clause 5.3 data), defaulting to *unassigned* if low confidence — Mara assigns on review (UJ-2 step 6). Review clients should send the stable directory user ID; commit resolves legacy exact directory identity strings inside the run's org. An unresolved/ambiguous human assignment fails that item rather than silently changing its owner.
+- **Owner** is proposed from embedded author / a folder-owner mapping / the process's `OrgRole` (Clause 5.3 data), defaulting to *unassigned* if low confidence — Mara assigns on review (UJ-2 step 6). The review UI selects from the user directory and sends the stable user ID; commit also resolves legacy exact directory identity strings (including UUID-shaped subjects) inside the run's org. An unresolved/ambiguous human assignment fails that item rather than silently changing its owner.
 - **Process link** uses an existing `Process`; if the engine infers a process that doesn't exist yet, it emits a **"create process?"** suggestion rather than inventing one silently.
 
 ---

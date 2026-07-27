@@ -59,6 +59,17 @@ test("Correct to type → an item posts a correct decision with the chosen type"
   expect(onBulk).toHaveBeenCalledWith("correct", { type_code: "SOP" });
 });
 
+test("Reassign owner posts the selected directory user id", async () => {
+  const u = userEvent.setup();
+  const { getByRole, onBulk } = setup(3);
+  await u.click(getByRole("button", { name: /reassign owner/i }));
+  await u.click(await screen.findByRole("menuitem", { name: "Mara Quality" }));
+  expect(onBulk).toHaveBeenCalledOnce();
+  expect(onBulk).toHaveBeenCalledWith("correct", {
+    owner: "bbbb1111-1111-1111-1111-111111111111",
+  });
+});
+
 test("Bulk accept all High triggers the selector-based accept (does NOT confirm kind)", async () => {
   const u = userEvent.setup();
   const { getByRole, onAcceptAllHigh, onConfirmKind, onBulk } = setup(3);
