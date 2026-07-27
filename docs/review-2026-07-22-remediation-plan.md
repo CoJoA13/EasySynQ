@@ -20,25 +20,27 @@
 
 | # | Batch | Tier | Findings | Status | PR |
 |---|-------|------|:--------:|--------|----|
-| 1 | Stale FOR-UPDATE reads (`populate_existing`) | 1 | 4 | ☑ in PR | [#354](https://github.com/CoJoA13/EasySynQ/pull/354) |
-| 2 | Deny-wins scope-tuple completeness | 1 | 2 | ☑ in PR | [#355](https://github.com/CoJoA13/EasySynQ/pull/355) |
-| 3 | System-tier authz guards (last-admin / revoke-side) | 1 | 2 | ☑ in PR | [#356](https://github.com/CoJoA13/EasySynQ/pull/356) |
-| 4 | WORM erasure completeness | 1 | 2 | ☑ in PR | [#357](https://github.com/CoJoA13/EasySynQ/pull/357) |
-| 5 | Disposition txn / locking integrity | 1 | 2 | ☑ in PR | [#358](https://github.com/CoJoA13/EasySynQ/pull/358) |
-| 6 | Read-authorization on returned bodies | 1 | 3 | ☑ in PR | [#362](https://github.com/CoJoA13/EasySynQ/pull/362) |
-| 7 | Audit signed-checkpoint verification | 1 | 1 | ☑ in PR | [#364](https://github.com/CoJoA13/EasySynQ/pull/364) |
-| 8 | Document lifecycle FSM gates | 2 | 2 | ☑ in PR | [#365](https://github.com/CoJoA13/EasySynQ/pull/365) |
-| 9 | Workflow approval correctness | 2 | 3 | ☑ in PR | [#366](https://github.com/CoJoA13/EasySynQ/pull/366) |
-| 10 | Ingestion pipeline correctness | 2 | 3 | ☑ in PR | [#367](https://github.com/CoJoA13/EasySynQ/pull/367) |
-| 11 | Notifications & operator alerting | 2 | 2 | ☐ not started | — |
-| 12 | Contract & schema housekeeping | 3 | 4 | ☐ not started | — |
-| 13 | Infra / deploy hardening | 3 | 3 | ☐ not started | — |
-| 14 | Web correctness | 3 | 4 | ☐ not started | — |
-| 15 | Web a11y & polish | 3 | 4 | ☐ not started | — |
-| 16 | Test false-PASS / CI-flake | 3 | 2 | ☐ not started | — |
-| 17 | Docs drift | 3 | 7 | ☐ not started | — |
+| 1 | Stale FOR-UPDATE reads (`populate_existing`) | 1 | 4 | ☑ merged | [#354](https://github.com/CoJoA13/EasySynQ/pull/354) |
+| 2 | Deny-wins scope-tuple completeness | 1 | 2 | ☑ merged | [#355](https://github.com/CoJoA13/EasySynQ/pull/355) |
+| 3 | System-tier authz guards (last-admin / revoke-side) | 1 | 2 | ☑ merged | [#356](https://github.com/CoJoA13/EasySynQ/pull/356) |
+| 4 | WORM erasure completeness | 1 | 2 | ☑ merged | [#357](https://github.com/CoJoA13/EasySynQ/pull/357) |
+| 5 | Disposition txn / locking integrity | 1 | 2 | ☑ merged | [#358](https://github.com/CoJoA13/EasySynQ/pull/358) |
+| 6 | Read-authorization on returned bodies | 1 | 3 | ☑ merged | [#362](https://github.com/CoJoA13/EasySynQ/pull/362) |
+| 7 | Audit signed-checkpoint verification | 1 | 1 | ☑ merged | [#364](https://github.com/CoJoA13/EasySynQ/pull/364) |
+| 8 | Document lifecycle FSM gates | 2 | 2 | ☑ merged | [#365](https://github.com/CoJoA13/EasySynQ/pull/365) |
+| 9 | Workflow approval correctness | 2 | 3 | ☑ merged | [#366](https://github.com/CoJoA13/EasySynQ/pull/366) |
+| 10 | Ingestion pipeline correctness | 2 | 3 | ☑ merged | [#367](https://github.com/CoJoA13/EasySynQ/pull/367) |
+| 11 | Notifications & operator alerting | 2 | 2 | ☑ merged | [#368](https://github.com/CoJoA13/EasySynQ/pull/368) |
+| 12 | Contract & schema housekeeping | 3 | 4 | ☑ merged | [#369](https://github.com/CoJoA13/EasySynQ/pull/369) |
+| 13 | Infra / deploy hardening | 3 | 3 | ☑ merged | [#372](https://github.com/CoJoA13/EasySynQ/pull/372) |
+| 14 | Web correctness | 3 | 4 | ☑ merged | [#377](https://github.com/CoJoA13/EasySynQ/pull/377) |
+| 15 | Web a11y & polish | 3 | 4 | ☑ merged | [#378](https://github.com/CoJoA13/EasySynQ/pull/378) |
+| 16 | Test false-PASS / CI-flake | 3 | 2 | ☑ merged | [#379](https://github.com/CoJoA13/EasySynQ/pull/379) |
+| 17 | Docs drift | 3 | 7 | ☑ merged | [#380](https://github.com/CoJoA13/EasySynQ/pull/380) |
 
-**Total: 50 findings across 17 batches.**
+**Total: 50 findings across 17 batches, all merged.** The inserted Batch 12.5 gate-hardening
+follow-up also merged in [#371](https://github.com/CoJoA13/EasySynQ/pull/371); it was not one of the
+original 50 findings and is therefore not counted in this table.
 
 ---
 
@@ -122,7 +124,7 @@ A create-gated (or token-gated) endpoint returns a resource body the caller cann
 - [x] `services/ingestion/service.py:673` — `reap_stalled_runs` FAILs a live, heartbeating pipeline after 6h → large OCR import can never complete; anchor the backstop on stage progress `[C]` (fixed: new `repo.max_stage_progress` (newest `import_extract`/`import_classification` row) anchors the backstop, taking the GREATEST of it and `scan_started_at` — mirroring `reap_stalled_commits`' progress-liveness. Also corrects the docstring that named only 4 of the reaped states)
 
 ### ☑ Batch 11 — Notifications & operator alerting
-`branch: fix/major-notify-and-alerting` · backend + **migration 0074** (head `0073` → `0074`)
+`branch: fix/major-notify-and-alerting` · [PR #368](https://github.com/CoJoA13/EasySynQ/pull/368) · backend + **migration 0074** (head `0073` → `0074`)
 
 - [x] `services/notifications/render.py:61` — `html.escape` in `_substitute` feeds two PLAIN-TEXT sinks → titles with `& ' < >` garbled in email + double-escaped in the SPA; **drop the escape** (both sinks are plain text; the whitelist regex already blocks slot injection), reserving sink-level escaping only for a future HTML sink `[C]` (fixed: the escape is gone. Slot injection stays impossible for a reason independent of escaping — only whitelisted names substitute at all, and `re.sub` walks the ORIGINAL string, so a value that itself looks like a token is emitted literally and never re-scanned; now pinned by a test)
 - [x] `services/backup/service.py:110` — nightly backup failures + chain-verify breaks never notify admins (`system.backup_failed` / `integrity.alarm` class-mapped, no emitter); wire the in-DB path AND an out-of-band operator channel (SMTP/syslog/webhook) for the DB-down mode `[C]` (fixed: **in-DB** `services/notifications/ops_events.py` emits both to the org's System Administrators through the normal delivery machinery — per-class digest mode, quiet hours [`integrity.alarm` is CRITICAL → pierces], the org flag, the per-user opt-out — plus a durable `BACKUP_FAILED` audit row; savepoint-wrapped so a broken notification can never roll back the caller's `CHAIN_VERIFY_FAIL` row. **Out-of-band** `services/notifications/ops_channel.py` adds syslog / SMTP-to-an-ops-mailbox / webhook, opt-in via `OPS_ALERT_CHANNELS` and deliberately DB-free; `run_scheduled_backups`' policy read now alerts out-of-band and re-raises, covering the DB-down mode the in-DB path structurally cannot report. Also **closes the "Audit integrity alarm policy" residual in full** (owner-approved): `AUDIT_WITNESS_REQUIRED` is held in the ENVIRONMENT, not the DB — the row a privileged DB owner deletes to go dark IS `audit_checkpoint_sink` — and `audit_checkpoint_sink.enabled_at` + a grace window make an enabled-but-never-anchoring sink alarm as a dead witness. A missing verify key alarms too, without writing `CHAIN_VERIFY_FAIL` [that event means a tamper was DETECTED; recording a misconfiguration as one would poison the signal])
@@ -134,7 +136,7 @@ A create-gated (or token-gated) endpoint returns a resource body the caller cann
 ## Tier 3 — Contract · infra · web · tests · docs
 
 ### ☑ Batch 12 — Contract & schema housekeeping
-`branch: fix/major-contract-schema-housekeeping` · openapi + **migration 0075** (head `0074` → `0075`)
+`branch: fix/major-contract-schema-housekeeping` · [PR #369](https://github.com/CoJoA13/EasySynQ/pull/369) · openapi + **migration 0075** (head `0074` → `0075`)
 
 > ⚠ The line numbers recorded below had all drifted since the review (9844→9877, 7743→7769, 7699→7725); each item was re-located and re-confirmed against source before the fix.
 
@@ -378,5 +380,6 @@ land the sweep separately from the gate so the gate turns on green rather than r
 ---
 
 _See [`review-2026-07-22.md`](./review-2026-07-22.md) for the full failure scenario and fix rationale
-behind every line above. MINOR (104) and NIT (35) findings are tracked in that doc and not scheduled
-here._
+behind every line above. The original 104 MINOR findings are now grouped and scheduled in the
+dedicated [`minor remediation plan`](./review-2026-07-22-minor-remediation-plan.md). The 35 NITs
+remain recorded in the source review._

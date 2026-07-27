@@ -1,10 +1,11 @@
 """The first-run setup wizard surface (slice S8a, doc 08).
 
 All routes are latch-exempt (``main.py`` lets ``/api/v1/setup*`` through while ``setup_state !=
-OPERATIONAL``). ``/setup/state`` is **public** so the SPA can route before sign-in; ``/setup`` +
-``/setup/bootstrap`` are authenticated but run **outside the PEP** (the bootstrap secret — not a
-grant — authorizes becoming the first admin, breaking the deny-by-default chicken-and-egg); the
-config-mutating steps require ``config.update`` (held by the just-granted System Administrator).
+OPERATIONAL``). ``/setup/state`` is **public** so the SPA can route before sign-in; ``/setup``
+requires ``config.read`` because it exposes configuration and gate diagnostics. Only
+``/setup/bootstrap`` runs outside the PEP (the bootstrap secret — not a grant — authorizes becoming
+the first admin, breaking the deny-by-default chicken-and-egg); config-mutating steps require
+``config.update`` (held by the just-granted System Administrator).
 """
 
 from __future__ import annotations
@@ -33,7 +34,8 @@ from ..services.setup import (
 
 router = APIRouter(prefix="/api/v1", tags=["setup"])
 
-# config.update is a SYSTEM-scope permission in the System Administrator bundle (doc 07 §3.9).
+# Both config permissions are SYSTEM-scoped in the System Administrator bundle (doc 07 §3.9).
+_config_read = require("config.read")
 _config_update = require("config.update")
 # storage.manage gates the WORM-verify step (doc 07 §3.9 / doc 15 §8.17); also in that bundle.
 _storage_manage = require("storage.manage")
@@ -81,11 +83,10 @@ async def setup_state_endpoint(session: AsyncSession = Depends(get_session)) -> 
 
 @router.get("/setup")
 async def setup_detail_endpoint(
-    caller: AppUser = Depends(get_current_user),
+    caller: AppUser = Depends(_config_read),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
-    """The wizard's view: state + live gate status + the current org profile. Authenticated (any
-    signed-in user — needed before the caller is the admin), not PEP-gated."""
+    """The wizard's sensitive config/gate view. Requires ``config.read``."""
     return await get_setup_detail(session, caller)
 
 

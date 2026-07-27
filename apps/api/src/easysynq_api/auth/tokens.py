@@ -13,7 +13,7 @@ import jwt
 
 from ..config import get_settings
 from ..problems import ProblemException
-from .jwks import JWKSCache
+from .jwks import JWKSCache, JWKSUnavailable
 
 
 def _unauthorized(code: str, title: str, detail: str | None = None) -> ProblemException:
@@ -31,7 +31,16 @@ async def authenticate(token: str, jwks: JWKSCache) -> dict[str, Any]:
     if not kid:
         raise _unauthorized("token_invalid", "Token header has no kid")
 
-    key = await jwks.get_public_key(kid)
+    try:
+        key = await jwks.get_public_key(kid)
+    except JWKSUnavailable as exc:
+        # The issuer is an external dependency. Fail closed, but do not turn its URL, network
+        # error, or response body into a public diagnostic.
+        raise ProblemException(
+            status=503,
+            code="dependency_unavailable",
+            title="Identity provider unavailable",
+        ) from exc
     if key is None:
         raise _unauthorized("token_invalid", "Unknown signing key")
 

@@ -8,8 +8,11 @@ revocation/lock takes effect on the next request rather than at token expiry.
 
 from __future__ import annotations
 
+import uuid
+
 from fastapi import Depends, Request
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db.models.app_user import AppUser, UserStatus
@@ -28,6 +31,45 @@ def _bearer(request: Request) -> str:
     if scheme.lower() != "bearer" or not token:
         raise ProblemException(status=401, code="unauthenticated", title="Missing bearer token")
     return token
+
+
+async def _jit_provision_user(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    subject: str,
+    display_name: str | None,
+    email: str | None,
+) -> AppUser:
+    """Create the first-login identity once, converging concurrent requests on the winner."""
+    candidate_id = uuid.uuid4()
+    inserted_id = (
+        await session.execute(
+            pg_insert(AppUser)
+            .values(
+                id=candidate_id,
+                org_id=org_id,
+                keycloak_subject=subject,
+                display_name=display_name,
+                email=email,
+                status=UserStatus.ACTIVE,
+                mfa_enrolled=False,
+                is_guest=False,
+            )
+            .on_conflict_do_nothing(constraint="uq_app_user_keycloak_subject")
+            .returning(AppUser.id)
+        )
+    ).scalar_one_or_none()
+    await session.commit()
+
+    # PostgreSQL waits for the competing transaction before deciding the conflict, so the
+    # winning row is committed and visible by the time a losing INSERT reaches this query.
+    user = await session.get(AppUser, inserted_id) if inserted_id is not None else None
+    if user is None:
+        user = (
+            await session.execute(select(AppUser).where(AppUser.keycloak_subject == subject))
+        ).scalar_one()
+    return user
 
 
 async def resolve_current_user(
@@ -57,19 +99,18 @@ async def resolve_current_user(
             raise ProblemException(
                 status=403, code="setup_incomplete", title="No organization configured"
             )
-        user = AppUser(
+        user = await _jit_provision_user(
+            session,
             org_id=org_id,
-            keycloak_subject=sub,
+            subject=sub,
             display_name=claims.get("name") or claims.get("preferred_username") or sub,
             email=claims.get("email"),
-            status=UserStatus.ACTIVE,
         )
-        session.add(user)
-        await session.commit()
-        await session.refresh(user)
-    elif user.status == UserStatus.INVITED:
+
+    if user.status == UserStatus.INVITED:
         # An admin-invited user (S8d): the pre-created INVITED row reconciles to a real ACTIVE
-        # account on the subject's first genuine login. One-time write (only while INVITED).
+        # account on the subject's first genuine login. This also handles an invitation racing the
+        # JIT INSERT: ON CONFLICT returns the pre-created row and this request activates it.
         user.status = UserStatus.ACTIVE
         await session.commit()
         await session.refresh(user)

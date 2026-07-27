@@ -174,6 +174,26 @@ async def test_bootstrap_grants_first_admin_and_audits(
     assert bootstrapped is not None
 
 
+async def test_setup_detail_requires_config_read(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """The public state probe supports routing; sensitive gate/config detail is admin-only."""
+    secret = await _reset_uninitialized()
+    other_headers = _auth(token_factory, _sub("setup-detail-other"))
+
+    denied = await app_client.get("/api/v1/setup", headers=other_headers)
+
+    assert denied.status_code == 403
+    assert denied.json()["code"] == "permission_denied"
+
+    admin_headers = _auth(token_factory, _sub("setup-detail-admin"))
+    await _bootstrap(app_client, admin_headers, secret)
+    detail = await app_client.get("/api/v1/setup", headers=admin_headers)
+
+    assert detail.status_code == 200
+    assert {"gates", "org_profile", "backup", "auth", "tamper_evident"} <= set(detail.json())
+
+
 async def test_bootstrap_rejects_wrong_secret_and_replay(
     app_client: AsyncClient, token_factory: Callable[..., str]
 ) -> None:
