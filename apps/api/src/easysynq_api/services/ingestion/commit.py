@@ -141,10 +141,24 @@ async def _resolve_owner_user_id(
 
     A human-selected owner is load-bearing: unresolved or ambiguous references fail this item
     honestly instead of silently assigning the committer. Engine-proposed embedded-author hints are
-    best-effort, so an unresolved hint retains the existing committer fallback.
+    best-effort, so an unresolved hint retains the existing committer fallback. Initial commit
+    preflight pins a validated human reference to ``validated_owner_user_id`` before review closes;
+    lifecycle status changes after that decision do not rewrite the operator's reviewed choice.
     """
     if state.owner is None:
         return committer.id
+    if state.validated_owner_user_id is not None:
+        try:
+            validated_id = uuid.UUID(state.validated_owner_user_id)
+        except ValueError as exc:
+            raise _ItemCommitError("owner_not_found") from exc
+        validated = await session.get(AppUser, validated_id)
+        # Status/is_guest were validated and row-locked at the review→commit boundary. Recheck only
+        # immutable existence + tenant scope here: disabling/retiring the user after that boundary
+        # must not strand the now-non-reviewable run.
+        if validated is None or validated.org_id != org_id:
+            raise _ItemCommitError("owner_not_found")
+        return validated.id
     candidates = await repo.resolve_import_owner_candidates(session, org_id, state.owner)
     if len(candidates) == 1:
         return candidates[0].id

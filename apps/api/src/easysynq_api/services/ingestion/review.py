@@ -68,6 +68,7 @@ _FILE_ACTIONS = frozenset(
     }
 )
 _DIMENSION_KEYS = ("kind", "type_code", "clause_numbers", "process_names", "identifier", "owner")
+_VALIDATED_OWNER_KEY = "_validated_owner_user_id"
 # Dispositions that keep a keep-item "in the import" for conflict/projection purposes (excluded +
 # deferred files never collide / never project coverage; doc 09 §9.2/§11.3).
 _IN_IMPORT = frozenset({"included", "undecided"})
@@ -95,6 +96,11 @@ class EffectiveFileState:
     process_names: list[str] | None
     owner: str | None
     owner_source: str | None
+    # Internal commit-preflight snapshot. It is derived from the human owner reference under a
+    # directory-row lock and persisted in the append-only decision log before review closes. It is
+    # intentionally omitted from ``as_dict``: this is commit materialization state, not another
+    # reviewer-editable dimension.
+    validated_owner_user_id: str | None
     decided: bool
     last_action: str | None
 
@@ -171,6 +177,7 @@ def fold_file_decisions(
     owner: str | None
     owner_source: str | None
     human_owner = latest("owner")
+    validated_owner_user_id = latest(_VALIDATED_OWNER_KEY)
     if human_owner is not None:
         owner = human_owner
         owner_source = "human"
@@ -190,6 +197,9 @@ def fold_file_decisions(
         process_names=process,
         owner=owner,
         owner_source=owner_source,
+        validated_owner_user_id=(
+            str(validated_owner_user_id) if validated_owner_user_id is not None else None
+        ),
         decided=bool(decisions_newest_first),
         last_action=last.value if last is not None else None,
     )
@@ -851,6 +861,37 @@ async def get_file_review(
     }
 
 
+async def _fold_run_states(
+    session: AsyncSession, run: ImportRun
+) -> tuple[
+    dict[uuid.UUID, EffectiveFileState],
+    dict[uuid.UUID, ImportClassification | None],
+]:
+    """Fold every proposal node from one consistent run transaction.
+
+    Commit preflight deliberately calls this again after the read-only checklist: the second pass
+    resolves and locks owner rows while the run itself is already ``FOR UPDATE``, closing the
+    checklist-to-worker lifecycle race without making ordinary checklist reads lock the directory.
+    """
+    nodes = await repo.list_proposal_nodes(session, run.id)
+    rows = await repo.included_files_with_context(session, run.id, run.classifier_version)
+    cls_by_file = {f.id: c for f, _e, c in rows}
+    decisions_by_file: dict[uuid.UUID, list[ImportDecision]] = {}
+    for decision in await repo.list_decisions(session, run.id):
+        if decision.file_id is not None:
+            decisions_by_file.setdefault(decision.file_id, []).append(decision)
+
+    states = {
+        node.file_id: fold_file_decisions(
+            decisions_by_file.get(node.file_id, []),
+            node,
+            cls_by_file.get(node.file_id),
+        )
+        for node in nodes
+    }
+    return states, cls_by_file
+
+
 async def compute_review_checklist(
     session: AsyncSession, caller: AppUser, run_id: uuid.UUID
 ) -> dict[str, Any]:
@@ -861,21 +902,7 @@ async def compute_review_checklist(
     if run is None or run.org_id != caller.org_id:
         raise ProblemException(status=404, code="not_found", title="Import run not found")
 
-    nodes = await repo.list_proposal_nodes(session, run_id)
-    rows = await repo.included_files_with_context(session, run_id, run.classifier_version)
-    cls_by_file = {f.id: c for f, _e, c in rows}
-    all_decisions = await repo.list_decisions(session, run_id)
-    decisions_by_file: dict[uuid.UUID, list[ImportDecision]] = {}
-    for d in all_decisions:  # newest-first already (list_decisions ordering)
-        if d.file_id is not None:
-            decisions_by_file.setdefault(d.file_id, []).append(d)
-
-    # Fold each keep-item (= each proposal node).
-    states: dict[uuid.UUID, EffectiveFileState] = {}
-    for node in nodes:
-        states[node.file_id] = fold_file_decisions(
-            decisions_by_file.get(node.file_id, []), node, cls_by_file.get(node.file_id)
-        )
+    states, cls_by_file = await _fold_run_states(session, run)
 
     # In-import keep-items (excluded/deferred are out for conflicts + projection).
     in_import = {fid: st for fid, st in states.items() if st.disposition in _IN_IMPORT}
@@ -1042,6 +1069,101 @@ async def compute_review_checklist(
 
 
 # --------------------------------------------------------------------------- internal helpers
+
+
+async def snapshot_reviewed_owner_ids(
+    session: AsyncSession,
+    caller: AppUser,
+    run: ImportRun,
+) -> int:
+    """Pin reviewed human-owner references to stable directory IDs before review closes.
+
+    The read-only checklist proves that each reference resolves at that moment. This write-side
+    pass repeats the resolution with matching directory rows locked, then appends one internal
+    ACCEPT decision per commit-ready file. The marker is not accepted by the public decision
+    validator, so only commit preflight can create it. The marker and Reviewing→Committing
+    transition share one transaction; a later disable/retire cannot change what the operator
+    validated, while tenant identity is rechecked by the worker before vault writes.
+    """
+    states, _ = await _fold_run_states(session, run)
+    snapshot_states: dict[uuid.UUID, tuple[EffectiveFileState, str]] = {}
+    for file_id, state in states.items():
+        if (
+            state.commit_ready
+            and state.owner_source == "human"
+            and state.owner is not None
+            and state.validated_owner_user_id is None
+        ):
+            snapshot_states[file_id] = (state, state.owner)
+    if not snapshot_states:
+        return 0
+
+    candidates_by_ref: dict[str, list[AppUser]] = {}
+    owner_refs = {owner_ref for _state, owner_ref in snapshot_states.values()}
+    for owner_ref in sorted(owner_refs):
+        candidates_by_ref[owner_ref] = list(
+            await repo.resolve_import_owner_candidates(
+                session,
+                run.org_id,
+                owner_ref,
+                for_update=True,
+            )
+        )
+
+    blocking: list[dict[str, Any]] = []
+    for file_id, (_state, owner_ref) in sorted(
+        snapshot_states.items(), key=lambda item: str(item[0])
+    ):
+        candidates = candidates_by_ref[owner_ref]
+        if len(candidates) != 1:
+            blocking.append(
+                {
+                    "type": "owner_ambiguous" if candidates else "owner_not_found",
+                    "owner": owner_ref,
+                    "file_id": str(file_id),
+                    "resolved": False,
+                }
+            )
+    if blocking:
+        # A lifecycle/identity update won between the read-only checklist and the locked snapshot.
+        # Stay in review and surface the same repairable 422 shape as the checklist gate.
+        raise ProblemException(
+            status=422,
+            code="commit_blocked",
+            title="Resolve the blocking conflicts before committing",
+            members={"blocking": blocking},
+        )
+
+    for file_id, (state, owner_ref) in sorted(
+        snapshot_states.items(), key=lambda item: str(item[0])
+    ):
+        owner = candidates_by_ref[owner_ref][0]
+        await repo.insert_decision(
+            session,
+            org_id=run.org_id,
+            run_id=run.id,
+            action=ImportDecisionAction.ACCEPT,
+            decided_by=caller.id,
+            file_id=file_id,
+            target_kind="file",
+            before=state.as_dict(),
+            after={_VALIDATED_OWNER_KEY: str(owner.id)},
+        )
+
+    emit_import_event(
+        session,
+        caller,
+        EventType.IMPORT_DECISION_RECORDED,
+        run.id,
+        after={
+            "action": ImportDecisionAction.ACCEPT.value,
+            "bulk": True,
+            "commit_preflight_owner_snapshot": True,
+            "count": len(snapshot_states),
+            "file_ids": [str(file_id) for file_id in sorted(snapshot_states, key=str)],
+        },
+    )
+    return len(snapshot_states)
 
 
 async def _classification_for(

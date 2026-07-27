@@ -441,7 +441,7 @@ async def start_import_commit(
 
     if run.status in _COMMIT_START:
         # Lazy import to avoid the service↔review module cycle (review imports from service).
-        from .review import compute_review_checklist
+        from .review import compute_review_checklist, snapshot_reviewed_owner_ids
 
         checklist = await compute_review_checklist(session, caller, run_id)
         if not checklist["ready"]:
@@ -451,6 +451,10 @@ async def start_import_commit(
                 title="Resolve the blocking conflicts before committing",
                 members={"blocking": checklist["blocking"]},
             )
+        # Repeat owner resolution under directory-row locks and append stable IDs in the same
+        # transaction as Reviewing→Committing. The detached worker consumes that snapshot even if
+        # the selected account is disabled or retired immediately after this transaction commits.
+        await snapshot_reviewed_owner_ids(session, caller, run)
         prev = run.status.value
     elif run.status in _COMMIT_RESUME:
         prev = run.status.value

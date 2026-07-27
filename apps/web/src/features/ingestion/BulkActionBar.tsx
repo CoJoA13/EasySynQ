@@ -14,6 +14,11 @@ import type { ImportDecisionAction, ImportDecisionAfter } from "../../lib/types"
 // picklists are follow-ons.
 const TYPE_CHOICES = ["SOP", "WI", "FORM", "POLICY"] as const;
 
+function ownerMenuLabel(user: { id: string; display_name: string | null }): string {
+  const idSuffix = user.id.slice(-8);
+  return user.display_name ? `${user.display_name} · ID …${idSuffix}` : `ID ${user.id}`;
+}
+
 function OwnerMenu({
   onBulk,
 }: {
@@ -36,7 +41,7 @@ function OwnerMenu({
         ) : (
           directoryUsers.map((user) => (
             <Menu.Item key={user.id} onClick={() => onBulk("correct", { owner: user.id })}>
-              {user.display_name ?? user.id}
+              {ownerMenuLabel(user)}
             </Menu.Item>
           ))
         )}

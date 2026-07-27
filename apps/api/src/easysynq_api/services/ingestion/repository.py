@@ -979,7 +979,11 @@ async def get_base(session: AsyncSession, di_id: uuid.UUID) -> DocumentedInforma
 
 
 async def resolve_import_owner_candidates(
-    session: AsyncSession, org_id: uuid.UUID, owner_ref: str
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    owner_ref: str,
+    *,
+    for_update: bool = False,
 ) -> Sequence[AppUser]:
     """Resolve a folded import-owner reference inside the caller's directory.
 
@@ -1015,6 +1019,11 @@ async def resolve_import_owner_candidates(
         # Keycloak subjects are opaque strings and can be UUID-shaped without equalling app_user.id.
         # Preserve both accepted identity forms instead of treating UUID syntax as a discriminator.
         base = base.where(or_(AppUser.id == owner_id, exact_identity))
+    if for_update:
+        # Commit preflight takes a row lock on the validated identity. A concurrent lifecycle
+        # change therefore either wins first (and the now-inactive user no longer matches) or waits
+        # until the stable ID snapshot and Reviewing→Committing transition commit atomically.
+        base = base.with_for_update()
     return (await session.execute(base)).scalars().all()
 
 

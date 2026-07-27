@@ -1477,6 +1477,16 @@ async def test_precommit_blocks_legacy_role_label_owner_until_corrected(
 
     commit = await app_client.post(f"/api/v1/admin/imports/{run_id}/commit", headers=h)
     assert commit.status_code == 202, commit.text
+
+    # The commit boundary snapshots the reviewed ID. A lifecycle change after the API transaction
+    # but before the detached worker starts must not turn the non-reviewable run into a permanently
+    # stuck PartiallyCommitted run.
+    async with get_sessionmaker()() as session:
+        owner = await session.get(AppUser, owner_id)
+        assert owner is not None
+        owner.status = UserStatus.DISABLED
+        await session.commit()
+
     await _drive_commit(uuid.UUID(run_id))
     completed = (await app_client.get(f"/api/v1/admin/imports/{run_id}", headers=h)).json()
     assert completed["status"] == "Completed"
