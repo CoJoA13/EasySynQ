@@ -122,6 +122,12 @@ jobs:
       - name: upgrade head then downgrade base (reversible) then back to head
         working-directory: apps/api
         run: uv run alembic upgrade head && uv run alembic downgrade base && uv run alembic upgrade head
+      - name: populated migration coherence regressions
+        working-directory: apps/api
+        env:
+          # The test creates and drops its own scratch DB on this disposable CI-only PG16 service.
+          MIGRATION_TEST_DATABASE_URL: postgresql+psycopg://easysynq:easysynq@localhost:5432/easysynq
+        run: uv run pytest tests/migration/test_migration_coherence.py
       - name: autogenerate drift check (models == migrations)
         working-directory: apps/api
         run: uv run alembic check

@@ -473,17 +473,29 @@ def downgrade() -> None:
     role_names = [r["name"] for r in _roles()]
     keys = [row["key"] for row in _permission_rows()]
 
+    # Preserve the full dependency closure for any seeded role that is already assigned. Deleting
+    # its grants first would make the FK-safe downgrade silently strip authority from the retained
+    # live role; delete grants only for roles that can themselves be removed.
     del_grants = sa.text(
-        "DELETE FROM role_grant WHERE role_id IN (SELECT id FROM role WHERE name IN :names)"
+        "DELETE FROM role_grant rg USING role r "
+        "WHERE rg.role_id = r.id AND r.name IN :names "
+        "AND NOT EXISTS (SELECT 1 FROM role_assignment ra WHERE ra.role_id = r.id)"
     ).bindparams(sa.bindparam("names", expanding=True))
     bind.execute(del_grants, {"names": role_names})
 
-    del_roles = sa.text("DELETE FROM role WHERE name IN :names").bindparams(
-        sa.bindparam("names", expanding=True)
-    )
+    del_roles = sa.text(
+        "DELETE FROM role r WHERE r.name IN :names "
+        "AND NOT EXISTS (SELECT 1 FROM role_assignment ra WHERE ra.role_id = r.id)"
+    ).bindparams(sa.bindparam("names", expanding=True))
     bind.execute(del_roles, {"names": role_names})
 
-    del_perms = sa.text("DELETE FROM permission WHERE key IN :keys").bindparams(
-        sa.bindparam("keys", expanding=True)
-    )
+    # An assigned role retained above still needs its grants and global permission rows. Direct
+    # per-user overrides are the other RESTRICT child that must keep a permission alive.
+    del_perms = sa.text(
+        "DELETE FROM permission p WHERE p.key IN :keys "
+        "AND NOT EXISTS (SELECT 1 FROM role_grant rg WHERE rg.permission_id = p.id) "
+        "AND NOT EXISTS ("
+        "SELECT 1 FROM permission_override po WHERE po.permission_id = p.id"
+        ")"
+    ).bindparams(sa.bindparam("keys", expanding=True))
     bind.execute(del_perms, {"keys": keys})

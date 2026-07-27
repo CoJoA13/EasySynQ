@@ -102,4 +102,12 @@ def downgrade() -> None:
         sa.text("UPDATE clause SET parent_id = NULL WHERE framework_id = :fw"),
         {"fw": framework_id},
     )
-    bind.execute(sa.text("DELETE FROM clause WHERE framework_id = :fw"), {"fw": framework_id})
+    # A populated install may already map documents to seeded clauses. Preserve those referenced
+    # rows instead of letting the RESTRICT FK abort the downgrade; unreferenced seed rows still go.
+    bind.execute(
+        sa.text(
+            "DELETE FROM clause c WHERE c.framework_id = :fw "
+            "AND NOT EXISTS (SELECT 1 FROM clause_mapping cm WHERE cm.clause_id = c.id)"
+        ),
+        {"fw": framework_id},
+    )

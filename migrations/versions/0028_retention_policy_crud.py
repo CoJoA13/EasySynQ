@@ -13,9 +13,10 @@ Slice S-rec-4 (doc 06 §5, doc 07 §7, doc 15 §8.16) — the records-family clo
 3. **R38 — the first post-v1 ADDITIVE catalog extension.** Two new CONTENT-domain permission keys
    ``retention.read`` + ``retention.manage`` (is_system_domain=False, sig_hook=False, sod_sensitive=
    False, finest_scope=SYSTEM — retention policies are org-level, gated at SYSTEM scope like
-   config.update). Seeded for the DEFAULT org's roles: ``retention.read`` + ``retention.manage`` →
-   QMS Owner; ``retention.read`` → Internal Auditor (the checklist-read precedent). Idempotent
-   (ON CONFLICT DO NOTHING). The closed-catalog rule (R5) is REFINED, not broken: no renaming/removal,
+   config.update). Seeded through every matching org-scoped role, including an operational install
+   whose bootstrap short code has been renamed: ``retention.read`` + ``retention.manage`` → QMS
+   Owner; ``retention.read`` → Internal Auditor (the checklist-read precedent). Idempotent (ON
+   CONFLICT DO NOTHING). The closed-catalog rule (R5) is REFINED, not broken: no renaming/removal,
    additive growth allowed with a register entry.
 4. **event_type / audit_object_type** additive ``ALTER TYPE … ADD VALUE`` (the 0011-0027 pattern):
    event_type += RETENTION_POLICY_CREATED/UPDATED/ARCHIVED + DISPOSITION_REFUSED_SOD; audit_object_type
@@ -41,8 +42,6 @@ Create Date: 2026-06-04
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Any
-
 import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
@@ -66,7 +65,7 @@ _NEW_OBJECT_TYPES = ("retention_policy",)
 # R38: the two new CONTENT-domain keys (key, resource, action). is_system_domain/sig_hook/sod_sensitive
 # are all False; finest_scope SYSTEM (org-level resource, the config.update precedent).
 _NEW_KEYS = ("retention.read", "retention.manage")
-# Grants per role name (DEFAULT org); retention.read also for the Internal Auditor (read-authority).
+# Grants per role name in every org; retention.read also for Internal Auditor (read-authority).
 _ROLE_GRANTS: dict[str, tuple[str, ...]] = {
     "QMS Owner": ("retention.read", "retention.manage"),
     "Internal Auditor": ("retention.read",),
@@ -161,45 +160,42 @@ def upgrade() -> None:
         .on_conflict_do_nothing(index_elements=["key"])
     )
 
-    org_id = bind.execute(
-        sa.text("SELECT id FROM organization WHERE short_code = 'DEFAULT'")
-    ).scalar_one_or_none()
-    if org_id is not None:  # a fresh test DB without the DEFAULT org seed → nothing to grant
-        perm_ids = {
-            key: pid
-            for key, pid in bind.execute(
-                sa.text("SELECT key, id FROM permission WHERE key IN :keys").bindparams(
-                    sa.bindparam("keys", expanding=True)
-                ),
-                {"keys": list(_NEW_KEYS)},
+    # Setup renames ``organization.short_code`` before an operational install reaches this
+    # migration. Resolve the org through the already-seeded role rows instead of the bootstrap
+    # ``DEFAULT`` code, and cover every matching org defensively.
+    perm_ids = {
+        key: pid
+        for key, pid in bind.execute(
+            sa.text("SELECT key, id FROM permission WHERE key IN :keys").bindparams(
+                sa.bindparam("keys", expanding=True)
+            ),
+            {"keys": list(_NEW_KEYS)},
+        )
+    }
+    role_rows = bind.execute(
+        sa.text("SELECT org_id, id, name FROM role WHERE name IN :names").bindparams(
+            sa.bindparam("names", expanding=True)
+        ),
+        {"names": list(_ROLE_GRANTS)},
+    ).mappings()
+    grant_rows: list[dict[str, object]] = []
+    for role in role_rows:
+        role_name = str(role["name"])
+        for key in _ROLE_GRANTS[role_name]:
+            grant_rows.append(
+                {
+                    "org_id": role["org_id"],
+                    "role_id": role["id"],
+                    "permission_id": perm_ids[key],
+                    "scope_template": {"level": "SYSTEM"},
+                }
             )
-        }
-        role_ids = {
-            name: rid
-            for name, rid in bind.execute(
-                sa.text("SELECT name, id FROM role WHERE org_id = :org"), {"org": org_id}
-            )
-        }
-        grant_rows: list[dict[str, Any]] = []
-        for role_name, keys in _ROLE_GRANTS.items():
-            rid = role_ids.get(role_name)
-            if rid is None:
-                continue
-            for key in keys:
-                grant_rows.append(
-                    {
-                        "org_id": org_id,
-                        "role_id": rid,
-                        "permission_id": perm_ids[key],
-                        "scope_template": {"level": "SYSTEM"},
-                    }
-                )
-        if grant_rows:
-            bind.execute(
-                pg_insert(role_grant_t)
-                .values(grant_rows)
-                .on_conflict_do_nothing(index_elements=["org_id", "role_id", "permission_id"])
-            )
+    if grant_rows:
+        bind.execute(
+            pg_insert(role_grant_t)
+            .values(grant_rows)
+            .on_conflict_do_nothing(index_elements=["org_id", "role_id", "permission_id"])
+        )
 
 
 def downgrade() -> None:
