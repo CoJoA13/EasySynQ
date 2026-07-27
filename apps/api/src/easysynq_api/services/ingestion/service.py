@@ -397,12 +397,12 @@ async def start_import_commit(
 ) -> ImportRun:
     """Flip a reviewed run (Proposed/Reviewing) — or RESUME a PartiallyCommitted one — to Committing
     and enqueue the detached commit worker. A start checks the §9.3 checklist (blocking conflicts →
-    422 ``commit_blocked``); a resume skips it (the conflicts were cleared at the original start and
-    the idempotent ledger only re-attempts failed/remaining items). The Reviewing→Committing flip
-    is a USER act (the committer is in scope); the per-item commits run as a SYSTEM worker, with the
-    human committer carried by ``committed_by`` + the import_baseline signature. Idempotency is the
-    status routing + the ``(run_id, file_id)`` ledger, not a header (commit is one transition, not
-    an append-of-N like decisions)."""
+    422 ``commit_blocked``). A resume skips whole-run review checks that would re-evaluate already
+    committed items, but revalidates remaining materialization inputs and lazily snapshots legacy
+    owner references. The Reviewing→Committing flip is a USER act (the committer is in scope); the
+    per-item commits run as a SYSTEM worker, with the human committer carried by ``committed_by`` +
+    the import_baseline signature. Idempotency is the status routing + the ``(run_id, file_id)``
+    ledger, not a header (commit is one transition, not an append-of-N like decisions)."""
     run = await repo.get_run(session, run_id, for_update=True)
     if run is None or run.org_id != caller.org_id:
         raise ProblemException(status=404, code="not_found", title="Import run not found")
@@ -441,7 +441,7 @@ async def start_import_commit(
 
     if run.status in _COMMIT_START:
         # Lazy import to avoid the service↔review module cycle (review imports from service).
-        from .review import compute_review_checklist, snapshot_reviewed_owner_ids
+        from .review import compute_review_checklist, prepare_commit_inputs
 
         checklist = await compute_review_checklist(session, caller, run_id)
         if not checklist["ready"]:
@@ -451,12 +451,18 @@ async def start_import_commit(
                 title="Resolve the blocking conflicts before committing",
                 members={"blocking": checklist["blocking"]},
             )
-        # Repeat owner resolution under directory-row locks and append stable IDs in the same
-        # transaction as Reviewing→Committing. The detached worker consumes that snapshot even if
-        # the selected account is disabled or retired immediately after this transaction commits.
-        await snapshot_reviewed_owner_ids(session, caller, run)
+        # Repeat mutable-input validation under directory-row locks and persist stable owner IDs in
+        # the same transaction as Reviewing→Committing. This is internal materialization state,
+        # intentionally separate from the operator's append-only review history.
+        await prepare_commit_inputs(session, run)
         prev = run.status.value
     elif run.status in _COMMIT_RESUME:
+        # Do not rerun the whole checklist: already-committed identifiers now collide with the
+        # vault by design. Validate only failed/remaining items and backfill owner snapshots for
+        # partial runs created before the snapshot column existed.
+        from .review import prepare_commit_inputs
+
+        await prepare_commit_inputs(session, run)
         prev = run.status.value
     elif run.status is ImportRunStatus.COMMITTING:
         raise ProblemException(status=409, code="conflict", title="A commit is already in progress")

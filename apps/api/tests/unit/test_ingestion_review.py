@@ -127,24 +127,6 @@ def test_fold_tracks_human_owner_source() -> None:
     assert st.owner_source == "human"
 
 
-def test_fold_tracks_commit_preflight_owner_snapshot() -> None:
-    owner_id = uuid.uuid4()
-    st = fold_file_decisions(
-        [
-            _decision(
-                ImportDecisionAction.ACCEPT,
-                {"_validated_owner_user_id": str(owner_id)},
-            ),
-            _decision(ImportDecisionAction.CORRECT, {"owner": "Mara Quality"}),
-        ],
-        _node(owner="embedded author"),
-        _cls(),
-    )
-    assert st.owner == "Mara Quality"
-    assert st.owner_source == "human"
-    assert st.validated_owner_user_id == str(owner_id)
-
-
 def test_validate_after_rejects_unknown_dimension() -> None:
     with pytest.raises(ProblemException) as exc:
         _validate_after(ImportDecisionAction.CORRECT, {"bogus": 1})

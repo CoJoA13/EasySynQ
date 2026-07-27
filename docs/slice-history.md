@@ -2,10 +2,10 @@
 
 > The running per-slice changelog + the deep per-slice rationale (this file IS the canonical narrative; it
 > also lives in the squash-merge commits). CLAUDE.md holds only the current head pointer.
-> **Migration head: `0075` (next `0076`).** Code: https://github.com/CoJoA13/EasySynQ (`main` protected, PR + green CI).
+> **Migration head: `0076` (next `0077`).** Code: https://github.com/CoJoA13/EasySynQ (`main` protected, PR + green CI).
 > (The pointer had gone stale at `0070` — the 2026-07-22 remediation batches added `0071` audit-chain
 > cursor, `0072` disposition append-only, `0073` pending-blob-purge, `0074` operator alarms and
-> `0075` the audit `scope_ref` index.)
+> `0075` the audit `scope_ref` index; Minor Batch M5 added `0076`'s import-owner snapshot.)
 
 ## ⚠ OPEN RESIDUALS — named, owner-acknowledged, NOT yet done
 
@@ -173,6 +173,27 @@
 **Tests + review.** Unit `test_authz_resource` (`resource_from_doc` populates `framework_id`+`kind`; mutation-distinguishing deny-wins — blanking a field flips DENY→ALLOW) + integration (a FRAMEWORK-scoped `document.read` DENY 403s the detail gate AND hides the row from the library list + search/suggest; an objective-release deny-wins — FRAMEWORK ALLOW + PROCESS DENY on the satellite process → 403; a foundational `process_ids_for_doc`-unions-the-satellite test). diff-critic CLEAN across the satellite + DCR/records passes (proved the swap identical for non-objectives, the TOCTOU correction floor only gets tighter). api unit 1078→1090. (S-scope-tuple, BE, NO migration [head `0070`], NO new key [catalog 102], PR #346 squash `26360bb`.)
 
 ## REMEDIATION — correctness, accessibility, polish & test reliability
+
+### Minor Batch M5 — ingestion commit integrity and repairable partial resumes (API + Web + OpenAPI + unit/integration + docs; migration `0076` [new head]; NO new permission key [catalog 102]; PR [#385](https://github.com/CoJoA13/EasySynQ/pull/385))
+
+**What shipped.** Human-reviewed owners are now materialized on imported Documents and Records
+without conflating ownership with commit attribution. The directory-backed picker submits stable
+IDs and disambiguates duplicate display names; legacy exact identity strings remain resolvable
+inside the run's tenant. Initial commit and partial resume lock and validate remaining human owners,
+then persist their per-file IDs in `import_run.commit_owner_snapshot` (migration `0076`). That
+internal execution snapshot is deliberately outside the append-only human decision log, so commit
+does not manufacture an ACCEPT action or change accepted/corrected/history semantics. A selected
+owner may be disabled or retired after the transition without stranding the worker; missing, guest,
+or cross-org snapshot identities still fail closed.
+
+Older `PartiallyCommitted` runs are migrated lazily: successful/no-op ledger items are skipped,
+remaining stable IDs can be recovered across lifecycle changes, and an unresolved legacy label
+returns a repairable 422 without changing status. The per-file decision endpoint now permits only a
+CORRECT action on a failed/unattempted partial item; it rejects already-committed files and clears a
+stale owner snapshot when that owner is corrected. Legacy blank identifiers are likewise checklist
+and resume blockers before status transition, while the existing write-boundary guard remains as
+defense in depth. Conditional failed-ledger writes also now report whether they won, suppressing a
+false failure audit/log when a peer has already committed the item.
 
 ### Minor Batch M4 — sealed terminal workflows, causal DCR history, and fail-closed quorum decisions (API + OpenAPI + integration + docs; NO migration [head stays `0075`]; NO new permission key [catalog 102]; PR [#384](https://github.com/CoJoA13/EasySynQ/pull/384))
 

@@ -136,27 +136,28 @@ async def _resolve_owner_user_id(
     org_id: uuid.UUID,
     committer: AppUser,
     state: EffectiveFileState,
+    snapshot_owner_id: str | None,
 ) -> uuid.UUID:
     """Materialize the folded owner without confusing authorship with ownership.
 
     A human-selected owner is load-bearing: unresolved or ambiguous references fail this item
     honestly instead of silently assigning the committer. Engine-proposed embedded-author hints are
     best-effort, so an unresolved hint retains the existing committer fallback. Initial commit
-    preflight pins a validated human reference to ``validated_owner_user_id`` before review closes;
-    lifecycle status changes after that decision do not rewrite the operator's reviewed choice.
+    preflight pins a validated human reference in the run's internal owner snapshot before review
+    closes; lifecycle status changes after that decision do not rewrite the operator's choice.
     """
     if state.owner is None:
         return committer.id
-    if state.validated_owner_user_id is not None:
+    if snapshot_owner_id is not None:
         try:
-            validated_id = uuid.UUID(state.validated_owner_user_id)
-        except ValueError as exc:
+            validated_id = uuid.UUID(snapshot_owner_id)
+        except (AttributeError, TypeError, ValueError) as exc:
             raise _ItemCommitError("owner_not_found") from exc
-        validated = await session.get(AppUser, validated_id)
+        validated = await repo.get_import_owner_by_id(session, org_id, validated_id)
         # Status/is_guest were validated and row-locked at the review→commit boundary. Recheck only
-        # immutable existence + tenant scope here: disabling/retiring the user after that boundary
-        # must not strand the now-non-reviewable run.
-        if validated is None or validated.org_id != org_id:
+        # immutable tenant/non-guest identity here: disabling/retiring the user after that boundary
+        # must not strand the run.
+        if validated is None:
             raise _ItemCommitError("owner_not_found")
         return validated.id
     candidates = await repo.resolve_import_owner_candidates(session, org_id, state.owner)
@@ -181,6 +182,8 @@ async def run_commit(sm: async_sessionmaker[AsyncSession], run_id: uuid.UUID) ->
         org_id = run.org_id
         committed_by = run.committed_by
         classifier_version = run.classifier_version
+        raw_owner_snapshot = run.commit_owner_snapshot
+        owner_snapshot = dict(raw_owner_snapshot) if isinstance(raw_owner_snapshot, dict) else {}
         await guard.commit()  # release the run FOR UPDATE before the (long) per-item loop
 
     if committed_by is None:
@@ -213,7 +216,15 @@ async def run_commit(sm: async_sessionmaker[AsyncSession], run_id: uuid.UUID) ->
 
     # Single-flight is the per-item ledger CLAIM (see claim_commit_result), not a lock — concurrent
     # workers are de-duplicated atomically per item.
-    await _commit_items(sm, run_id, org_id, committer, framework_id, classifier_version)
+    await _commit_items(
+        sm,
+        run_id,
+        org_id,
+        committer,
+        framework_id,
+        classifier_version,
+        owner_snapshot,
+    )
 
 
 async def _commit_items(
@@ -223,6 +234,7 @@ async def _commit_items(
     committer: AppUser,
     framework_id: uuid.UUID,
     classifier_version: str | None,
+    owner_snapshot: dict[str, str],
 ) -> None:
     async with sm() as reads:
         nodes = await repo.list_proposal_nodes(reads, run_id)
@@ -256,7 +268,13 @@ async def _commit_items(
                     ImportCommitResultStatus.NOOP,
                 ):
                     continue  # idempotent: already committed (a resume / re-delivery)
-                owner_user_id = await _resolve_owner_user_id(s, org_id, committer, st)
+                owner_user_id = await _resolve_owner_user_id(
+                    s,
+                    org_id,
+                    committer,
+                    st,
+                    owner_snapshot.get(str(node.file_id)),
+                )
                 if st.kind == "DOCUMENT":
                     await _commit_document(
                         s,

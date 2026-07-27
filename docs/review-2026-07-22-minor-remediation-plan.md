@@ -140,8 +140,8 @@ new permission key
 
 ### ☑ M5 — Ingestion commit integrity — [#385](https://github.com/CoJoA13/EasySynQ/pull/385)
 
-`branch: fix/minor-ingestion-commit-integrity` · API + Web + OpenAPI + unit/integration · no
-migration and no new permission key
+`branch: fix/minor-ingestion-commit-integrity` · API + Web + OpenAPI + unit/integration · migration
+`0076` · no new permission key
 
 - [x] `apps/api/src/easysynq_api/services/ingestion/commit.py:338` — the validated and audited
   folded owner decision was ignored during commit `[C]` (fixed: carry whether the owner came from a
@@ -151,19 +151,23 @@ migration and no new permission key
   even when a subject is UUID-shaped; the checklist revalidates persisted human-owner references
   before the run leaves its editable review state, so the old `Quality Manager` placeholder can be
   corrected instead of stranding the run as partially committed; commit then resolves the owner
-  again under a directory-row lock and appends the validated ID before closing review, so a
-  subsequent disable/retire cannot strand the run; duplicate display names are disambiguated by a
-  stable ID suffix in the picker; the worker remains fail-closed for a missing/cross-org snapshot,
-  while authorship/capture/signature attribution remains with the committer).
+  again under a directory-row lock and stores the validated ID in migration `0076`'s internal
+  run-level snapshot, leaving the human decision history and checklist counts unchanged; both
+  initial commit and partial resume snapshot remaining owners, exact stable IDs survive a later
+  disable/retire, and unresolved legacy labels can receive a per-file correction while successful
+  items remain immutable; duplicate display names are disambiguated by a stable ID suffix in the
+  picker; the worker remains fail-closed for a missing/guest/cross-org snapshot, while
+  authorship/capture/signature attribution remains with the committer).
 - [x] `apps/api/src/easysynq_api/services/ingestion/commit.py:530` — `_record_failed` could commit a
   false failure audit after a peer successfully committed the item `[C]` (fixed: the conditional
   failure UPSERT now returns whether it won; only a won `failed` ledger write can emit the failure
   audit/log, while a concurrent `success`/`noop` suppresses both atomically).
 - [x] `apps/api/src/easysynq_api/services/ingestion/review.py:253` — an empty identifier survived
   validation and committed a vault document with `identifier=''` `[C]` (fixed: reject empty and
-  whitespace-only identifier corrections with a 422 before recording the decision, and revalidate
-  the folded identifier at the commit boundary so legacy in-flight decisions cannot write a blank
-  vault identifier; the OpenAPI schema advertises the non-blank constraint).
+  whitespace-only identifier corrections with a 422 before recording the decision, surface
+  persisted legacy blanks as checklist/resume blockers before status transition, and revalidate the
+  folded identifier at the commit boundary so a bypassed legacy decision still cannot write a
+  blank vault identifier; the OpenAPI schema advertises the non-blank constraint).
 
 ### ☐ M6 — Ingestion review and family integrity
 

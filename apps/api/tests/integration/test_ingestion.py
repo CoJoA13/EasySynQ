@@ -21,6 +21,7 @@ from easysynq_api.db.models._audit_enums import EventType
 from easysynq_api.db.models._ingestion_enums import (
     ImportCommitResultStatus,
     ImportDecisionAction,
+    ImportRunStatus,
 )
 from easysynq_api.db.models._signature_enums import SignatureMeaning, SignedObjectType
 from easysynq_api.db.models._vault_enums import DocumentCurrentState, DocumentKind, VersionState
@@ -1474,18 +1475,172 @@ async def test_precommit_blocks_legacy_role_label_owner_until_corrected(
     assert corrected.status_code == 200, corrected.text
     repaired = (await app_client.get(f"/api/v1/admin/imports/{run_id}/checklist", headers=h)).json()
     assert repaired["ready"] is True, repaired["blocking"]
+    decisions_before_commit = (
+        await app_client.get(f"/api/v1/admin/imports/{run_id}/decisions", headers=h)
+    ).json()["decisions"]
 
     commit = await app_client.post(f"/api/v1/admin/imports/{run_id}/commit", headers=h)
     assert commit.status_code == 202, commit.text
+    decisions_after_commit = (
+        await app_client.get(f"/api/v1/admin/imports/{run_id}/decisions", headers=h)
+    ).json()["decisions"]
+    checklist_after_commit = (
+        await app_client.get(f"/api/v1/admin/imports/{run_id}/checklist", headers=h)
+    ).json()
+    assert decisions_after_commit == decisions_before_commit
+    assert checklist_after_commit["review"] == repaired["review"]
 
     # The commit boundary snapshots the reviewed ID. A lifecycle change after the API transaction
     # but before the detached worker starts must not turn the non-reviewable run into a permanently
     # stuck PartiallyCommitted run.
     async with get_sessionmaker()() as session:
+        run = await ingestion_repo.get_run(session, uuid.UUID(run_id))
+        assert run is not None
+        assert run.commit_owner_snapshot == {sop: str(owner_id)}
         owner = await session.get(AppUser, owner_id)
         assert owner is not None
         owner.status = UserStatus.DISABLED
         await session.commit()
+
+    await _drive_commit(uuid.UUID(run_id))
+    completed = (await app_client.get(f"/api/v1/admin/imports/{run_id}", headers=h)).json()
+    assert completed["status"] == "Completed"
+    async with get_sessionmaker()() as session:
+        doc = (
+            await session.execute(
+                select(DocumentedInformation).where(DocumentedInformation.identifier == doc_ident)
+            )
+        ).scalar_one()
+        assert doc.owner_user_id == owner_id
+
+
+async def test_partial_resume_allows_uncommitted_owner_correction(
+    app_client: AsyncClient, token_factory: Callable[..., str], _stub_tika: None
+) -> None:
+    """A migrated partial run with a legacy owner label can be repaired and resumed."""
+    admin = _subject("partial-owner-correction")
+    await _assign_role(admin, "System Administrator")
+    h = _auth(token_factory, admin)
+    run_id, by_name = await _proposed_classifiable(app_client, h, _stub_tika)
+    sop = by_name["SOP-PUR-002 Purchasing.docx"]["id"]
+    audit = by_name["Internal Audit Report Q2 2023.pdf"]["id"]
+    doc_ident = f"SOP-{uuid.uuid4().hex[:6].upper()}-001"
+    await _confirm_for_commit(app_client, h, run_id, sop, audit, doc_identifier=doc_ident)
+
+    # Model an old deployment: the invalid legacy decision made it past review, the worker imported
+    # the other file, and this owner failed live resolution before run-level snapshots existed.
+    async with get_sessionmaker()() as session:
+        run = await ingestion_repo.get_run(session, uuid.UUID(run_id))
+        reviewer = (
+            await session.execute(select(AppUser).where(AppUser.keycloak_subject == admin))
+        ).scalar_one()
+        assert run is not None
+        await ingestion_repo.insert_decision(
+            session,
+            org_id=run.org_id,
+            run_id=run.id,
+            action=ImportDecisionAction.CORRECT,
+            decided_by=reviewer.id,
+            file_id=uuid.UUID(sop),
+            target_kind="file",
+            after={"owner": "Quality Manager"},
+        )
+        run.status = ImportRunStatus.COMMITTING
+        run.committed_by = reviewer.id
+        run.commit_owner_snapshot = None
+        await session.commit()
+    await _drive_commit(uuid.UUID(run_id))
+
+    partial = (await app_client.get(f"/api/v1/admin/imports/{run_id}", headers=h)).json()
+    assert partial["status"] == "PartiallyCommitted"
+    assert partial["counts"]["commit"] == {"committed": 1, "failed": 1}
+
+    blocked = await app_client.post(f"/api/v1/admin/imports/{run_id}/commit", headers=h)
+    assert blocked.status_code == 422, blocked.text
+    assert blocked.json()["blocking"] == [
+        {
+            "type": "owner_not_found",
+            "owner": "Quality Manager",
+            "file_id": sop,
+            "resolved": False,
+        }
+    ]
+    assert (await app_client.get(f"/api/v1/admin/imports/{run_id}", headers=h)).json()[
+        "status"
+    ] == "PartiallyCommitted"
+
+    owner_id = await _grant(_subject("partial-replacement-owner"), ())
+    corrected = await app_client.post(
+        f"/api/v1/admin/imports/{run_id}/files/{sop}/decision",
+        headers=h,
+        json={"action": "correct", "after": {"owner": str(owner_id)}},
+    )
+    assert corrected.status_code == 200, corrected.text
+    assert (await app_client.get(f"/api/v1/admin/imports/{run_id}", headers=h)).json()[
+        "status"
+    ] == "PartiallyCommitted"
+
+    immutable = await app_client.post(
+        f"/api/v1/admin/imports/{run_id}/files/{audit}/decision",
+        headers=h,
+        json={"action": "correct", "after": {"owner": str(owner_id)}},
+    )
+    assert immutable.status_code == 409, immutable.text
+    assert immutable.json()["title"] == "This import item is already committed"
+
+    resumed = await app_client.post(f"/api/v1/admin/imports/{run_id}/commit", headers=h)
+    assert resumed.status_code == 202, resumed.text
+    await _drive_commit(uuid.UUID(run_id))
+
+    completed = (await app_client.get(f"/api/v1/admin/imports/{run_id}", headers=h)).json()
+    assert completed["status"] == "Completed"
+    assert completed["counts"]["commit"] == {"committed": 2, "failed": 0}
+    async with get_sessionmaker()() as session:
+        doc = (
+            await session.execute(
+                select(DocumentedInformation).where(DocumentedInformation.identifier == doc_ident)
+            )
+        ).scalar_one()
+        assert doc.owner_user_id == owner_id
+
+
+async def test_partial_resume_snapshots_a_disabled_stable_owner_id(
+    app_client: AsyncClient, token_factory: Callable[..., str], _stub_tika: None
+) -> None:
+    """Pre-snapshot partial runs preserve an exact reviewed ID across lifecycle changes."""
+    admin = _subject("partial-disabled-owner")
+    await _assign_role(admin, "System Administrator")
+    h = _auth(token_factory, admin)
+    run_id, by_name = await _proposed_classifiable(app_client, h, _stub_tika)
+    sop = by_name["SOP-PUR-002 Purchasing.docx"]["id"]
+    audit = by_name["Internal Audit Report Q2 2023.pdf"]["id"]
+    doc_ident = f"SOP-{uuid.uuid4().hex[:6].upper()}-001"
+    owner_id = await _grant(_subject("partial-disabled-identity"), ())
+    await _confirm_for_commit(
+        app_client,
+        h,
+        run_id,
+        sop,
+        audit,
+        doc_identifier=doc_ident,
+        doc_owner=str(owner_id),
+    )
+
+    async with get_sessionmaker()() as session:
+        run = await ingestion_repo.get_run(session, uuid.UUID(run_id))
+        owner = await session.get(AppUser, owner_id)
+        assert run is not None and owner is not None
+        run.status = ImportRunStatus.PARTIALLY_COMMITTED
+        run.commit_owner_snapshot = None
+        owner.status = UserStatus.DISABLED
+        await session.commit()
+
+    resumed = await app_client.post(f"/api/v1/admin/imports/{run_id}/commit", headers=h)
+    assert resumed.status_code == 202, resumed.text
+    async with get_sessionmaker()() as session:
+        run = await ingestion_repo.get_run(session, uuid.UUID(run_id))
+        assert run is not None
+        assert run.commit_owner_snapshot == {sop: str(owner_id)}
 
     await _drive_commit(uuid.UUID(run_id))
     completed = (await app_client.get(f"/api/v1/admin/imports/{run_id}", headers=h)).json()
@@ -1518,10 +1673,10 @@ async def test_blank_identifier_decision_is_rejected_before_commit(
     assert response.json()["title"] == "identifier must not be blank"
 
 
-async def test_commit_revalidates_legacy_persisted_blank_identifier(
+async def test_precommit_and_boundary_block_legacy_persisted_blank_identifier(
     app_client: AsyncClient, token_factory: Callable[..., str], _stub_tika: None
 ) -> None:
-    """A decision persisted before request validation existed must not write a blank vault id."""
+    """Legacy blanks block review exit and remain guarded if preflight is bypassed."""
     admin = _subject("legacy-blank")
     await _assign_role(admin, "System Administrator")
     h = _auth(token_factory, admin)
@@ -1558,9 +1713,33 @@ async def test_commit_revalidates_legacy_persisted_blank_identifier(
     checklist = (
         await app_client.get(f"/api/v1/admin/imports/{run_id}/checklist", headers=h)
     ).json()
-    assert checklist["ready"] is True, checklist["blocking"]
+    assert checklist["ready"] is False
+    assert [item for item in checklist["blocking"] if item["type"] == "blank_identifier"] == [
+        {
+            "type": "blank_identifier",
+            "identifier": " \t ",
+            "file_id": sop,
+            "resolved": False,
+        }
+    ]
     commit = await app_client.post(f"/api/v1/admin/imports/{run_id}/commit", headers=h)
-    assert commit.status_code == 202, commit.text
+    assert commit.status_code == 422, commit.text
+    assert commit.json()["code"] == "commit_blocked"
+    assert (await app_client.get(f"/api/v1/admin/imports/{run_id}", headers=h)).json()[
+        "status"
+    ] == "Reviewing"
+
+    # Defense in depth: model an old/in-flight deployment that bypassed the new checklist. The
+    # write boundary still refuses the blank identifier and records an isolated failed item.
+    async with get_sessionmaker()() as session:
+        run = await ingestion_repo.get_run(session, uuid.UUID(run_id))
+        reviewer = (
+            await session.execute(select(AppUser).where(AppUser.keycloak_subject == admin))
+        ).scalar_one()
+        assert run is not None
+        run.status = ImportRunStatus.COMMITTING
+        run.committed_by = reviewer.id
+        await session.commit()
     await _drive_commit(uuid.UUID(run_id))
 
     run = (await app_client.get(f"/api/v1/admin/imports/{run_id}", headers=h)).json()
@@ -1580,6 +1759,29 @@ async def test_commit_revalidates_legacy_persisted_blank_identifier(
             )
         ).scalar_one()
         assert persisted == 0
+
+    repaired_ident = f"SOP-{uuid.uuid4().hex[:6].upper()}-001"
+    corrected = await app_client.post(
+        f"/api/v1/admin/imports/{run_id}/files/{sop}/decision",
+        headers=h,
+        json={"action": "correct", "after": {"identifier": repaired_ident}},
+    )
+    assert corrected.status_code == 200, corrected.text
+    resumed = await app_client.post(f"/api/v1/admin/imports/{run_id}/commit", headers=h)
+    assert resumed.status_code == 202, resumed.text
+    await _drive_commit(uuid.UUID(run_id))
+
+    completed = (await app_client.get(f"/api/v1/admin/imports/{run_id}", headers=h)).json()
+    assert completed["status"] == "Completed"
+    async with get_sessionmaker()() as session:
+        repaired = (
+            await session.execute(
+                select(DocumentedInformation).where(
+                    DocumentedInformation.identifier == repaired_ident
+                )
+            )
+        ).scalar_one()
+        assert repaired.identifier == repaired_ident
 
 
 async def test_record_failed_does_not_audit_after_peer_success(

@@ -1027,6 +1027,30 @@ async def resolve_import_owner_candidates(
     return (await session.execute(base)).scalars().all()
 
 
+async def get_import_owner_by_id(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    owner_id: uuid.UUID,
+    *,
+    for_update: bool = False,
+) -> AppUser | None:
+    """Load a stable, non-guest import-owner identity inside one tenant.
+
+    Unlike ``resolve_import_owner_candidates``, lifecycle status is deliberately unrestricted:
+    once an active owner was validated at the review boundary, disabling or retiring that identity
+    must not invalidate the immutable reviewed choice. Tenant scope and guest exclusion remain
+    load-bearing.
+    """
+    stmt = select(AppUser).where(
+        AppUser.id == owner_id,
+        AppUser.org_id == org_id,
+        AppUser.is_guest.is_(False),
+    )
+    if for_update:
+        stmt = stmt.with_for_update()
+    return (await session.execute(stmt)).scalar_one_or_none()
+
+
 async def get_commit_result(
     session: AsyncSession, run_id: uuid.UUID, file_id: uuid.UUID
 ) -> ImportCommitResult | None:

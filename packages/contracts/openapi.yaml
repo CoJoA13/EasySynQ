@@ -3298,7 +3298,9 @@ paths:
         Record one per-file dimensional decision (accept / correct / exclude / defer + the R10
         kind-confirm via after.kind; doc 09 §9.2). Merge/split are rejected here (422) — they are
         structural and have dedicated endpoints. An optional Idempotency-Key header makes a retry a
-        no-op replay. Needs import.review. 409 if the run is not Proposed/Reviewing.
+        no-op replay. Needs import.review. A PartiallyCommitted run accepts only CORRECT for a
+        failed or remaining item; already-committed items remain immutable. Other run states return
+        409.
       parameters:
         - { name: Idempotency-Key, in: header, required: false, schema: { type: string } }
       requestBody:

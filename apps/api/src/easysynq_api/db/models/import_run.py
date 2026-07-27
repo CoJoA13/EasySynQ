@@ -74,6 +74,11 @@ class ImportRun(Base):
     committed_by: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("app_user.id", ondelete="RESTRICT"), nullable=True
     )
+    # M5 commit materialization state: per-file stable app_user IDs for human-reviewed owners.
+    # Kept off the append-only review-decision log because this is an internal execution snapshot,
+    # not another operator decision. The whole mapping is replaced atomically while the run row is
+    # locked; keys/values are string UUIDs so JSONB round-trips without custom serialization.
+    commit_owner_snapshot: Mapped[dict[str, str] | None] = mapped_column(JSONB, nullable=True)
     scan_started_at: Mapped[datetime.datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
