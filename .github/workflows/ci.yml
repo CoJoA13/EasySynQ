@@ -45,6 +45,31 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      - name: validate dev, online-production, and appliance Compose overlays
+        run: |
+          # --env-file supplies interpolation values; the services' env_file entries still require
+          # the repo-root .env to exist. Materialize the ignored runner copy from the safe template.
+          cp .env.example .env
+          docker compose --env-file .env.example \
+            -f infra/compose/compose.yml \
+            -f infra/compose/compose.s.yml \
+            -f infra/compose/compose.dev.yml config --quiet
+          export SITE_ADDRESS=https://qms.example.test
+          export MINIO_SITE_ADDRESS=https://qms.example.test:9443
+          export S3_PUBLIC_ENDPOINT=https://qms.example.test:9443
+          export PUBLIC_BASE_URL=https://qms.example.test
+          export APP_BASE_URL=https://qms.example.test
+          export KEYCLOAK_HOSTNAME=https://qms.example.test
+          export KEYCLOAK_DB_PASSWORD=ci-compose-only
+          docker compose --env-file .env.example \
+            -f infra/compose/compose.yml \
+            -f infra/compose/compose.s.yml \
+            -f infra/compose/compose.production.yml config --quiet
+          docker compose --env-file .env.example \
+            -f infra/compose/compose.yml \
+            -f infra/compose/compose.s.yml \
+            -f infra/compose/compose.airgap.yml \
+            -f infra/compose/compose.production.yml config --quiet
       - name: install uv
         # exact pin — setup-uv stopped publishing floating major tags at v8
         uses: astral-sh/setup-uv@v8.3.2
@@ -260,18 +285,20 @@ jobs:
   # The air-gap bundle (scripts/airgap-bundle.sh) collects image refs from infra/images.lock, so a
   # Dependabot bump to compose.yml (the new `docker-compose` ecosystem) must ALSO land in images.lock,
   # or the offline bundle ships the stale ref while Compose asks for the new one (Codex #153). Assert
-  # every Compose `image:` ref is pinned in images.lock.
+  # every Compose `image:` ref plus the optimized Keycloak Dockerfile base is pinned in images.lock.
   compose-images-lock:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - name: every Compose image must be pinned in infra/images.lock
+      - name: every deployed/base image must be pinned in infra/images.lock
         run: |
           compose=$(grep -hE '^[[:space:]]+image:[[:space:]]' infra/compose/compose.yml infra/compose/compose.*.yml 2>/dev/null | awk '{print $2}' | sort -u)
+          keycloak_base=$(grep -E '^FROM[[:space:]]' infra/compose/keycloak/Dockerfile | awk '{print $2}' | sort -u)
+          required=$(printf '%s\n%s\n' "$compose" "$keycloak_base" | sort -u)
           lock=$(grep -vE '^[[:space:]]*#' infra/images.lock | awk 'NF>=2 {print $2}' | sort -u)
-          missing=$(comm -23 <(printf '%s\n' "$compose") <(printf '%s\n' "$lock"))
+          missing=$(comm -23 <(printf '%s\n' "$required") <(printf '%s\n' "$lock"))
           if [ -n "$missing" ]; then
-            echo "::error::Compose image(s) not pinned in infra/images.lock — the air-gap bundle would drift:"
+            echo "::error::Deployed/base image(s) not pinned in infra/images.lock — the air-gap bundle would drift:"
             printf '  %s\n' $missing
             echo "Add them to infra/images.lock (then \`just images-update\` for digests)."
             exit 1

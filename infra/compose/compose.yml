@@ -2,7 +2,10 @@
 # Only the `proxy` (Caddy) publishes host ports; everything else is on the internal
 # network (D1). OpenSearch is intentionally absent in the MVP (R34).
 #
-#   docker compose -f infra/compose/compose.yml -f infra/compose/compose.s.yml up -d
+# Dev:
+#   docker compose -f infra/compose/compose.yml -f infra/compose/compose.s.yml \
+#                  -f infra/compose/compose.dev.yml up -d
+# Production adds compose.production.yml for the dedicated HTTPS MinIO origin.
 #
 # Healthchecks use tooling guaranteed present in each image (pg_isready, redis-cli,
 # python in the api image, node in the web image). MinIO/Keycloak/Gotenberg lack a
@@ -76,20 +79,61 @@ services:
     networks: [internal]
     restart: "no"
 
+  # One-shot: create the least-privilege Keycloak role/schema in the existing durable PostgreSQL
+  # service, and seed the import volume only while it is empty. A legacy-H2 migration writes a full
+  # realm export (including users/credential hashes) into the same volume before this runs.
+  keycloak-init:
+    image: postgres:16
+    depends_on:
+      postgres:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "/init/keycloak-init.sh"]
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_USER: ${POSTGRES_USER:-easysynq}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-easysynq}
+      # The app and Keycloak normally share POSTGRES_DB. Restore cutover can select the verified
+      # database explicitly without changing the postgres container's initialization setting.
+      POSTGRES_DB: ${KEYCLOAK_DB_NAME:-${POSTGRES_DB:-easysynq}}
+      # Production entrypoints backfill this on pre-Batch-13 installs. Never expose the PostgreSQL
+      # owner credential to the web-facing identity service as a compatibility fallback.
+      KEYCLOAK_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:?set a distinct KEYCLOAK_DB_PASSWORD}
+    volumes:
+      - ./keycloak/keycloak-init.sh:/init/keycloak-init.sh:ro
+      - ./keycloak/realm-export.json:/seed/easysynq-realm.json:ro
+      - keycloakimport:/import
+    networks: [internal]
+    restart: "no"
+
   keycloak:
-    image: quay.io/keycloak/keycloak:26.7
+    build:
+      context: ./keycloak
+      dockerfile: Dockerfile
     restart: unless-stopped
-    command: ["start-dev", "--import-realm"]
+    command: ["start", "--optimized", "--import-realm"]
     environment:
       # Same admin credential the worker uses for the S11 realm export (KEYCLOAK_ADMIN_USER/PASSWORD).
       KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN_USER:-admin}
       KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
+      # Production store: Keycloak owns only its schema, while the PostgreSQL named volume provides
+      # the durable identity state. The stock realm import is therefore first-boot-only: Keycloak
+      # skips it once the realm already exists.
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/${KEYCLOAK_DB_NAME:-${POSTGRES_DB:-easysynq}}
+      KC_DB_SCHEMA: keycloak
+      KC_DB_USERNAME: easysynq_keycloak
+      KC_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:?set a distinct KEYCLOAK_DB_PASSWORD}
       KC_HEALTH_ENABLED: "true"
       # Honor Caddy's X-Forwarded-* so tokens are issued for the browser-facing host.
       KC_PROXY_HEADERS: xforwarded
       KC_HTTP_ENABLED: "true"
+      # Dev's issuer follows a nondefault published HTTP port; production supplies its HTTPS host.
+      KC_HOSTNAME: ${KEYCLOAK_HOSTNAME:-http://localhost${HTTP_PORT:+:${HTTP_PORT}}}
+    depends_on:
+      keycloak-init:
+        condition: service_completed_successfully
     volumes:
-      - ./keycloak:/opt/keycloak/data/import:ro
+      - keycloakimport:/opt/keycloak/data/import:ro
     networks: [internal]
 
   # S7b: office→PDF for the watermarked controlled-copy renditions. Pinned (consistent with the
@@ -211,7 +255,7 @@ services:
       SITE_ADDRESS: ${SITE_ADDRESS:-:80}
       CADDY_TLS_DIRECTIVE: ${CADDY_TLS_DIRECTIVE:-}
       # Browser presigned upload/download go DIRECTLY to the object store (a different origin), so the
-      # SPA CSP connect-src must allow it (empty when the object store is same-origin behind Caddy).
+      # SPA CSP connect-src must allow it (dev loopback :9000 or production HTTPS :9443).
       S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-}
     ports:
       - "${HTTP_PORT:-80}:80"
@@ -238,6 +282,10 @@ networks:
 volumes:
   pgdata:
   miniodata:
+  # Initial realm seed only (not the live identity store). Compose's project-scoped implicit name
+  # lets the one-time legacy H2 migration populate it without sharing credentials across projects;
+  # live state then resides in pgdata.
+  keycloakimport:
   mirror:
   secrets:
   backup:   # S8b2: durable backup destination (default backup_policy.destination; a mounted path)

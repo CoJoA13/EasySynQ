@@ -107,7 +107,9 @@
   its own decision, not a remediation fix. Pinned by
   `test_history_query_never_searches_another_documents_key`.
 - **`easysynq upgrade` has no `lock_timeout`, so a migration can convoy the live write path**
-  (Batch 12; owner-acknowledged, **deferred to Batch 13 — infra/deploy hardening**). The in-place
+  (Batch 12; owner-acknowledged. It was initially earmarked as “Batch 13 territory,” but Batch 13's
+  approved checklist is the three live deploy findings and deliberately does not change Alembic's
+  global failure semantics; this remains open for a dedicated upgrade-safety slice). The in-place
   upgrade runs on a one-off worker **while api/worker/beat stay up** (`scripts/easysynq:82` →
   `cli/upgrade.py`), no `lock_timeout`/`statement_timeout` is set anywhere in the repo, and
   `migrations/env.py:108` wraps the whole run in ONE transaction — so any migration that takes a
@@ -175,6 +177,50 @@
 > The product was feature-complete but only installable by a developer (compose + a hand-tended `.env`).
 > The owner's production target is Windows Server + Hyper-V with the QMS tree on an SMB share — the
 > appliance is the near-1-click path onto that box, and the vehicle for the AHT dogfood import (UJ-2).
+
+### Batch 13 — browser-edge + identity-store deploy hardening (infra+scripts+docs; NO migration [app head stays `0075`]; NO new permission key; PR [#372](https://github.com/CoJoA13/EasySynQ/pull/372))
+
+**What shipped — the online and appliance paths now derive one complete browser-edge contract, and
+Keycloak has a real durable store.** `install.sh` requires `--host` for a live install and supports
+explicit ACME/internal-CA modes. It writes the app, QR/share, notification deep-link, Keycloak and
+OIDC origins on `https://<host>`, plus a separately addressed S3 origin on
+`https://<host>:9443`. The generalized `compose.production.yml`/`Caddyfile.production` serves that
+MinIO origin without routing it through the SPA catch-all. S/M remain sizing-only; the new
+`compose.dev.yml` is the **only** MinIO host publish and binds `127.0.0.1:9000`. Production
+interpolation requires the complete public tuple and resets the dev port if both overlays are
+accidentally stacked. Appliance first boot + `easysynq-reconfigure` now propagate
+`PUBLIC_BASE_URL`/`APP_BASE_URL` as well as issuer/presign values; the helper derives missing
+same-origin keys for a pre-Batch-13 read-only `.env`. Every production entrypoint also compares
+the values inside the app tuple and MinIO tuple before migration/start (nonempty-but-stale values
+cannot slip through Compose interpolation). Dev Keycloak includes a nondefault `HTTP_PORT` in its
+public hostname.
+
+**Keycloak durability + transition safety.** A two-stage Keycloak 26.7 image bakes PostgreSQL +
+health support, then runs `start --optimized --import-realm`. The idempotent `keycloak-init` one-shot
+creates a dedicated `easysynq_keycloak` login and `keycloak` schema in the existing PostgreSQL
+service; live identities therefore ride the durable `pgdata` volume, while the import volume is
+first-boot seed only. `scripts/migrate-keycloak-h2.sh` closes the dangerous first-upgrade seam:
+before Compose can recreate a legacy `start-dev` container, it stops that container, snapshots its
+container-local H2 data (or reuses a real data mount), runs Keycloak's offline full export with
+`--users realm_file`, validates the user-bearing realm and stages a completion marker. On any
+failure it restarts the untouched legacy container. Standard online install, `just up` and the
+appliance Compose helper all invoke the transition; raw online upgrades are explicitly told to run
+it first. Older appliances persist a generated, distinct Keycloak role password on their first
+root-run upgrade command; Compose has no PostgreSQL-owner-password fallback and fails closed until
+that backfill succeeds. Installer/reconfigure callback updates read the complete Keycloak client,
+append only the missing URI, and preserve every operator-managed redirect.
+
+**Proof.** CI now renders dev, online-production and appliance Compose shapes, while structural unit
+tests pin the loopback/production port split, required URL propagation, optimized PostgreSQL
+settings and legacy-export safeguards. Live disposable tests built Keycloak 26.7 with the
+PostgreSQL driver, ran the schema initializer twice, and forced a Keycloak container recreation:
+the exact user and credential-row UUIDs survived and the old password still obtained a token. A
+second end-to-end legacy H2 test exercised the exporter and PostgreSQL first import: the exact user
+and SPA-client UUIDs survived, the legacy password authenticated, and a live redirect-URI edit was
+unchanged. The first attempt deliberately exposed a marker-file permission defect; the failure trap
+restarted the legacy container as designed, the root-owned validation fix landed, and the full
+transition then passed. The production Caddy entry validated with both HTTPS sites, and rendered
+production had no MinIO host port other than Caddy `:9443`.
 
 ### S-appliance — the 1-click Hyper-V appliance: VHDX + seed ISO + PS installer (infra+scripts+docs only; NO migration [head stays `0070`]; NO new key [catalog 102]; NO api/web source change except `scripts/install.sh`; PR #313 squash `2f4be28`)
 

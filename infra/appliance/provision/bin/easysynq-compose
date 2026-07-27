@@ -1,10 +1,153 @@
 #!/usr/bin/env bash
 # docker compose with the appliance's full overlay set — the ONE compose invocation every helper
-# and operator command must use (base + S profile + internal-TLS + appliance MinIO site).
+# and operator command must use (base + S profile + internal-TLS + production MinIO site).
 set -euo pipefail
-cd /opt/easysynq
+APP_DIR="${EASYSYNQ_APP_DIR:-/opt/easysynq}"
+MIGRATION_SCRIPT="${EASYSYNQ_MIGRATION_SCRIPT:-scripts/migrate-keycloak-h2.sh}"
+COMPOSE_VERSION_SCRIPT="${EASYSYNQ_COMPOSE_VERSION_SCRIPT:-scripts/require-compose-version.sh}"
+BROWSER_ORIGIN_SCRIPT="${EASYSYNQ_BROWSER_ORIGIN_SCRIPT:-scripts/validate-browser-origins.sh}"
+KEYCLOAK_DB_PASSWORD_SCRIPT="${EASYSYNQ_KEYCLOAK_DB_PASSWORD_SCRIPT:-scripts/ensure-keycloak-db-password.sh}"
+cd "$APP_DIR"
+
+# Persist a distinct least-privilege credential before Compose can expose the PostgreSQL owner
+# password to Keycloak. A pre-Batch-13 .env is root-owned 0640, so its first upgraded invocation
+# must use sudo; after this one idempotent backfill, the normal easysynq user remains sufficient.
+bash "$KEYCLOAK_DB_PASSWORD_SCRIPT" --env-file .env
+
+# Compatibility for an appliance .env generated before Batch 13: the old provisioner wrote the
+# site but omitted some browser consumers. Export derived values for this process without weakening
+# the 0640 env-file permissions; reconfigure/new provisioning persists the full tuple.
+env_value() {
+  grep -m1 "^$1=" .env 2>/dev/null | cut -d= -f2- \
+    | sed -E 's/[[:space:]]+#.*$//; s/^[[:space:]]*//; s/[[:space:]]*$//' || true
+}
+SITE_VALUE="$(env_value SITE_ADDRESS)"
+[ -n "$SITE_VALUE" ] || SITE_VALUE="https://easysynq.local"
+for key in PUBLIC_BASE_URL APP_BASE_URL KEYCLOAK_HOSTNAME; do
+  if [ -z "$(env_value "$key")" ]; then
+    export "${key}=${SITE_VALUE}"
+  fi
+done
+
+MINIO_VALUE="$(env_value MINIO_SITE_ADDRESS)"
+if [ -z "$MINIO_VALUE" ]; then
+  case "$SITE_VALUE" in
+    https://*) ;;
+    *)
+      echo "easysynq-compose: cannot derive the legacy MinIO origin from SITE_ADDRESS=${SITE_VALUE}" >&2
+      exit 1
+      ;;
+  esac
+  SITE_HOST="${SITE_VALUE#https://}"
+  SITE_HOST="${SITE_HOST%/}"
+  case "$SITE_HOST" in
+    ""|*:*|*/*)
+      echo "easysynq-compose: cannot derive the legacy MinIO origin from SITE_ADDRESS=${SITE_VALUE}" >&2
+      exit 1
+      ;;
+  esac
+  MINIO_VALUE="https://${SITE_HOST}:9443"
+  export MINIO_SITE_ADDRESS="$MINIO_VALUE"
+  # A pre-Batch-13 template may hold the old plaintext development endpoint. The absent MinIO
+  # address is the upgrade marker, so override that stale value for this process only.
+  export S3_PUBLIC_ENDPOINT="$MINIO_VALUE"
+elif [ -z "$(env_value S3_PUBLIC_ENDPOINT)" ]; then
+  export S3_PUBLIC_ENDPOINT="$MINIO_VALUE"
+fi
+
+# Requiring six nonempty variables is insufficient: compare both complete tuples before any
+# migration or start operation.
+bash "$BROWSER_ORIGIN_SCRIPT" --env-file .env
+
+# Check before migration so an appliance with an old Compose binary cannot stop legacy Keycloak and
+# then fail while parsing production's !reset tag.
+bash "$COMPOSE_VERSION_SCRIPT"
+
+# The first full (or Keycloak-targeted) `up` after upgrading from the legacy start-dev/H2 service
+# must export identities before Compose recreates Keycloak. A non-Keycloak service target leaves
+# that legacy container untouched, so do not stop it and take authentication offline.
+up_needs_keycloak_migration() {
+  local saw_up=0 skip_value=0 ambiguous=0 arg target
+  local -a targets=()
+
+  for arg in "$@"; do
+    if [ "$saw_up" -eq 0 ]; then
+      if [ "$arg" = "up" ]; then
+        saw_up=1
+      fi
+      continue
+    fi
+    if [ "$skip_value" -eq 1 ]; then
+      skip_value=0
+      continue
+    fi
+    case "$arg" in
+      --attach|--exit-code-from|--no-attach|--pull|--scale|-t|--timeout|--wait-timeout)
+        skip_value=1
+        ;;
+      --*=*|-t?*)
+        ;;
+      --abort-on-container-exit|--abort-on-container-failure|--always-recreate-deps|\
+      --attach-dependencies|--build|-d|--detach|--force-recreate|--menu|--no-build|\
+      --no-color|--no-deps|--no-log-prefix|--no-recreate|--no-start|--quiet-pull|\
+      --remove-orphans|--renew-anon-volumes|--timestamps|--wait|--watch|-y|--yes)
+        ;;
+      --)
+        ;;
+      -*)
+        # A future option may consume the next token. Prefer the migration fail-safe over guessing
+        # that token is a service name and risking an H2 container recreation without an export.
+        ambiguous=1
+        ;;
+      *)
+        targets+=("$arg")
+        ;;
+    esac
+  done
+
+  [ "$saw_up" -eq 1 ] || return 1
+  [ "$skip_value" -eq 0 ] || return 1
+  [ "$ambiguous" -eq 0 ] || return 0
+  [ "${#targets[@]}" -gt 0 ] || return 0
+  for target in "${targets[@]}"; do
+    [ "$target" = "keycloak" ] && return 0
+  done
+  return 1
+}
+
+compose_project_override() {
+  local expect_value=0 arg
+  for arg in "$@"; do
+    if [ "$expect_value" -eq 1 ]; then
+      printf '%s\n' "$arg"
+      return
+    fi
+    case "$arg" in
+      up)
+        return
+        ;;
+      -p|--project-name)
+        expect_value=1
+        ;;
+      --project-name=*)
+        printf '%s\n' "${arg#*=}"
+        return
+        ;;
+    esac
+  done
+}
+
+if up_needs_keycloak_migration "$@"; then
+  MIGRATION_ARGS=(--env-file .env)
+  PROJECT_OVERRIDE="$(compose_project_override "$@")"
+  if [ -n "$PROJECT_OVERRIDE" ]; then
+    MIGRATION_ARGS+=(--project "$PROJECT_OVERRIDE")
+  fi
+  bash "$MIGRATION_SCRIPT" "${MIGRATION_ARGS[@]}"
+fi
+
 exec docker compose --env-file .env \
   -f infra/compose/compose.yml \
   -f infra/compose/compose.s.yml \
   -f infra/compose/compose.airgap.yml \
-  -f infra/compose/compose.appliance.yml "$@"
+  -f infra/compose/compose.production.yml "$@"

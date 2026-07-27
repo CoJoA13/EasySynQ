@@ -1,0 +1,27 @@
+# Developer-only browser endpoints. Never include this overlay on an operator/production host.
+#
+# MinIO is bound to LOOPBACK (not 0.0.0.0), and the browser-facing values override the blank,
+# fail-closed production placeholders in .env.example. The S/M sizing overlays contain no published
+# object-store port.
+x-dev-browser-env: &dev-browser-env
+  S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-http://localhost:${S3_PORT:-9000}}
+  PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost}
+  APP_BASE_URL: ${APP_BASE_URL:-http://localhost}
+
+services:
+  minio:
+    ports:
+      - "127.0.0.1:${S3_PORT:-9000}:9000"
+
+  api:
+    environment: *dev-browser-env
+
+  worker:
+    environment: *dev-browser-env
+
+  beat:
+    environment: *dev-browser-env
+
+  proxy:
+    environment:
+      S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-http://localhost:${S3_PORT:-9000}}

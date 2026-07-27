@@ -12,12 +12,15 @@ docker compose -f infra/compose/compose.yml restart keycloak
 # wait for health, then confirm:
 curl -fsS http://<host>/readyz | grep keycloak       # ready:true
 ```
-Keycloak runs `start-dev --import-realm` with an **embedded ephemeral H2 database and no data volume**.
-The realm definition is re-imported from `infra/compose/keycloak/` on every start; a **same-container
-`restart` preserves** the H2 data (accounts survive), but a **recreate / `compose down`** wipes it.
-After a recreate, re-provision the operator accounts (`just demo-user`, and `just seed-personas` for the
-SoD trio); if the realm export itself was lost, restore it from a backup (see
-[backup-restore.md](backup-restore.md)).
+Keycloak runs the optimized production server against its dedicated `keycloak` schema in the
+existing PostgreSQL service. Accounts, credential hashes, stable subjects, federation settings and
+client edits therefore survive a Keycloak restart, image bump, container recreation and ordinary
+`compose down`; the authoritative state is in the durable `pgdata` volume. The committed realm file
+is imported only when the realm does not yet exist.
+
+Deleting named volumes (`compose down -v`) is a destructive full-stack reset. Recover identity state
+with the PostgreSQL backup/cutover procedure in [backup-restore.md](backup-restore.md); the encrypted
+realm export remains an additional recovery leg, not the live store.
 
 ## Beat is down
 **Symptom:** scheduled jobs stall — effectivity-cutover sweep, chain-linker, chain-verify, blob

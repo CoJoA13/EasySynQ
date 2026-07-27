@@ -35,7 +35,7 @@ compose() {
     -f "$APP_DIR/infra/compose/compose.yml" \
     -f "$APP_DIR/infra/compose/compose.s.yml" \
     -f "$APP_DIR/infra/compose/compose.airgap.yml" \
-    -f "$APP_DIR/infra/compose/compose.appliance.yml" "$@"
+    -f "$APP_DIR/infra/compose/compose.production.yml" "$@"
 }
 
 # set_kv KEY VALUE — update-or-append in .env (mirrors scripts/install.sh).
@@ -112,11 +112,14 @@ cmd_run() {
   if [ ! -f "$APP_DIR/.env" ]; then
     (cd "$APP_DIR" && EASYSYNQ_ENV_ONLY=1 bash scripts/install.sh s)
   fi
+  # An interrupted/older provision may have created .env before the dedicated Keycloak role
+  # password existed. Backfill it while this root-run provisioner can safely persist the secret.
+  bash "$APP_DIR/scripts/ensure-keycloak-db-password.sh" --env-file "$APP_DIR/.env"
   # A crash mid-generation leaves a .env full of template CHANGE_ME values that the bare
   # file-exists guard would then keep forever — fail closed and regenerate on the next retry.
   # Check ONLY the keys install.sh generates: AUDIT_SINK_* keeps its placeholder by design
   # (the off-host checkpoint sink is operator-configured later — the wizard's soft gate).
-  if grep -E '^(POSTGRES_PASSWORD|DATABASE_URL|DATABASE_URL_SYNC|AUDIT_LINKER_DATABASE_URL|APP_DB_PASSWORD|LINKER_DB_PASSWORD|S3_ACCESS_KEY|S3_SECRET_KEY|APP_MASTER_KEK|BACKUP_ENCRYPTION_KEY|KEYCLOAK_ADMIN_PASSWORD)=' \
+  if grep -E '^(POSTGRES_PASSWORD|DATABASE_URL|DATABASE_URL_SYNC|AUDIT_LINKER_DATABASE_URL|APP_DB_PASSWORD|LINKER_DB_PASSWORD|S3_ACCESS_KEY|S3_SECRET_KEY|APP_MASTER_KEK|BACKUP_ENCRYPTION_KEY|KEYCLOAK_ADMIN_PASSWORD|KEYCLOAK_DB_PASSWORD)=' \
       "$APP_DIR/.env" | grep -q 'CHANGE_ME'; then
     rm -f "$APP_DIR/.env"
     echo "easysynq-provision: generated .env still held CHANGE_ME placeholders — removed; retry regenerates" >&2
@@ -127,15 +130,22 @@ cmd_run() {
   set_kv SITE_ADDRESS "https://${HOSTNAME_DEFAULT}"
   set_kv MINIO_SITE_ADDRESS "https://${HOSTNAME_DEFAULT}:9443"
   set_kv S3_PUBLIC_ENDPOINT "https://${HOSTNAME_DEFAULT}:9443"
+  set_kv PUBLIC_BASE_URL "https://${HOSTNAME_DEFAULT}"
+  set_kv APP_BASE_URL "https://${HOSTNAME_DEFAULT}"
+  set_kv KEYCLOAK_HOSTNAME "https://${HOSTNAME_DEFAULT}"
   set_kv OIDC_ISSUER "https://${HOSTNAME_DEFAULT}/realms/easysynq"
   set_kv OIDC_JWKS_URL "http://keycloak:8080/realms/easysynq/protocol/openid-connect/certs"
   set_kv OIDC_DISCOVERY_URL "http://keycloak:8080/realms/easysynq/.well-known/openid-configuration"
   set_kv IMPORT_SOURCE_PATH "/srv/easysynq/import"
+  bash "$APP_DIR/scripts/validate-browser-origins.sh" --env-file "$APP_DIR/.env"
   # The sudo-less helpers (easysynq-status/--remint, easysynq-compose) read .env as the easysynq
   # user; install.sh leaves it root:root 0600. Group-read for easysynq adds no exposure — the
   # user is docker-group (root-equivalent) already.
   chown root:easysynq "$APP_DIR/.env"
   chmod 640 "$APP_DIR/.env"
+
+  step "docker: verify Compose production-overlay support"
+  bash "$APP_DIR/scripts/require-compose-version.sh"
 
   step "stack: build + start (first run pulls + builds images — the long part)"
   compose up -d --build

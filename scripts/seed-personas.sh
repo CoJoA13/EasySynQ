@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Dev fixture: create the SoD persona logins (priya/ken/mara) in Keycloak + seed their
 # author/approver/releaser grants, so the full review->approve->release loop (S-web-5) is demoable
-# (invoked by `just seed-personas`). Keycloak is ephemeral (wiped on `just down`), so re-run after a
-# reset. Idempotent; password is the documented dev credential. Lives in a script (not a justfile
+# (invoked by `just seed-personas`). Identity state persists in PostgreSQL; re-running remains
+# idempotent and restores the documented fixture passwords/grants. Lives in a script (not a justfile
 # shebang recipe) so it runs identically on Linux/macOS and native Windows + Git Bash.
 set -euo pipefail
 cd "$(dirname "$0")/.."

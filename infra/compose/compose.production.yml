@@ -1,0 +1,56 @@
+# Production browser-edge overlay (stacked ON TOP of compose.yml + compose.<profile>.yml).
+# The appliance additionally stacks compose.airgap.yml to select Caddy's internal CA.
+#
+# Adds the browser-facing MinIO TLS front: presigned upload/download URLs are fetched by the SPA
+# from an https:// page, so a plain http://host:9000 object-store origin is blocked as mixed
+# content (the Caddyfile CSP even carries upgrade-insecure-requests). Caddy terminates TLS on
+# :9443 with the same certificate mode as the app site and proxies to MinIO PRESERVING the Host
+# header — SigV4 signs the host, so the signature validates only because MinIO sees the exact host
+# the browser used
+# (S3_PUBLIC_ENDPOINT must equal this site address; the engineering-patterns presign rule).
+# Production entrypoints run scripts/validate-browser-origins.sh because Compose can require each
+# value but cannot assert equality across the app tuple and the object-store tuple.
+x-production-required:
+  site_address: ${SITE_ADDRESS:?set SITE_ADDRESS to the browser-facing HTTPS app origin}
+  minio_site_address: ${MINIO_SITE_ADDRESS:?set MINIO_SITE_ADDRESS to the HTTPS MinIO origin}
+  s3_public_endpoint: ${S3_PUBLIC_ENDPOINT:?set S3_PUBLIC_ENDPOINT to MINIO_SITE_ADDRESS}
+  public_base_url: ${PUBLIC_BASE_URL:?set PUBLIC_BASE_URL to SITE_ADDRESS}
+  app_base_url: ${APP_BASE_URL:?set APP_BASE_URL to SITE_ADDRESS}
+  keycloak_hostname: ${KEYCLOAK_HOSTNAME:?set KEYCLOAK_HOSTNAME to SITE_ADDRESS}
+
+services:
+  # Defensive reset: if an operator accidentally includes compose.dev.yml too, production still
+  # has no plaintext :9000 door. In-cluster clients always use minio:9000 on the internal network.
+  minio:
+    ports: !reset []  # Compose >=2.24.4; production entrypoints enforce this before migration/up.
+
+  proxy:
+    ports:
+      - "9443:9443"
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:?set SITE_ADDRESS}
+      MINIO_SITE_ADDRESS: ${MINIO_SITE_ADDRESS:?set MINIO_SITE_ADDRESS}
+      S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:?set S3_PUBLIC_ENDPOINT}
+    volumes:
+      # The entry Caddyfile imports the base verbatim — one source of truth for the app site; only
+      # the separately-addressed MinIO site is production-specific.
+      - ./caddy/Caddyfile.production:/etc/caddy/Caddyfile:ro
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile.base:ro
+
+  api:
+    environment:
+      S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:?set S3_PUBLIC_ENDPOINT}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?set PUBLIC_BASE_URL}
+      APP_BASE_URL: ${APP_BASE_URL:?set APP_BASE_URL}
+
+  worker:
+    environment:
+      S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:?set S3_PUBLIC_ENDPOINT}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?set PUBLIC_BASE_URL}
+      APP_BASE_URL: ${APP_BASE_URL:?set APP_BASE_URL}
+
+  beat:
+    environment:
+      S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:?set S3_PUBLIC_ENDPOINT}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?set PUBLIC_BASE_URL}
+      APP_BASE_URL: ${APP_BASE_URL:?set APP_BASE_URL}

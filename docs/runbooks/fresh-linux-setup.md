@@ -59,15 +59,21 @@ git clone https://github.com/CoJoA13/EasySynQ.git ~/Documents/EasySynQ && cd ~/D
 ## 3. The gitignored repo-root `.env`
 
 The `.env` does **not** carry over and must be recreated beside `justfile`/`.env.example`.
-⚠ **Do not use `scripts/install.sh`** for the dev box — it mis-points the app at the owner DB role and
-leaves OIDC blank. Start from `.env.example` and ensure:
+⚠ **Do not use `scripts/install.sh`** for the dev box — it intentionally configures the production
+HTTPS/hostname overlays. Start from `.env.example` and ensure:
 
 - **DB role separation** (migration `0010` creates these roles): `DATABASE_URL` → `easysynq_app`,
   `DATABASE_URL_SYNC` → owner `easysynq`, `AUDIT_LINKER_DATABASE_URL` → `easysynq_linker`, with
-  `APP_DB_PASSWORD` / `LINKER_DB_PASSWORD` matching what `0010` sets.
+  `APP_DB_PASSWORD` / `LINKER_DB_PASSWORD` matching what `0010` sets. Set
+  `POSTGRES_USER`/`POSTGRES_PASSWORD`/`POSTGRES_DB` consistently, and replace
+  `KEYCLOAK_DB_PASSWORD=CHANGE_ME` for Keycloak's dedicated durable schema.
 - **localhost OIDC + S3** (PKCE needs a secure context → `http://localhost` only, never a hostname):
   `OIDC_ISSUER=http://localhost/realms/easysynq`; internal `OIDC_JWKS_URL` /
-  `OIDC_DISCOVERY_URL` at `http://keycloak:8080/realms/easysynq/...`; `S3_PUBLIC_ENDPOINT=http://localhost:9000`.
+  `OIDC_DISCOVERY_URL` at `http://keycloak:8080/realms/easysynq/...`. Browser URLs may stay blank:
+  `compose.dev.yml` supplies `S3_PUBLIC_ENDPOINT=http://localhost:9000` and
+  `PUBLIC_BASE_URL=APP_BASE_URL=http://localhost`. If `HTTP_PORT` is set to a nondefault host port,
+  Keycloak derives its public hostname as `http://localhost:<HTTP_PORT>`; set `OIDC_ISSUER` to the
+  same origin plus `/realms/easysynq`.
 - `AUDIT_SINK_SECRET_KEY=audit-sink-secret-change-me` (the minio-init container gets no `env_file`, so it
   provisions that hardcoded fallback — they must match).
 
@@ -91,12 +97,14 @@ just up s                              # 11 services; app at http://localhost
 docker ps --format '{{.Names}}\t{{.Status}}' | grep easysynq
 ```
 
-⚠ Always include the `-f compose.s.yml` profile (`just up s` does) — without it MinIO `:9000` isn't
-published and presigned URLs / restore drills break. Verify:
+⚠ `just up s` includes both the S sizing overlay and `compose.dev.yml`. The latter is the **only**
+place MinIO is published, and binds it to `127.0.0.1:9000` so presigned browser traffic works without
+opening plaintext S3 to the LAN. Verify:
 
 ```bash
 curl -s localhost/readyz                                                       # → 200
 docker compose --env-file .env -f infra/compose/compose.yml -f infra/compose/compose.s.yml \
+  -f infra/compose/compose.dev.yml \
   exec -T api sh -c "cd /app; uv run alembic current"                          # → <head> (head)
 ```
 
@@ -124,6 +132,7 @@ until the wizard completes. The old box's OPERATIONAL state lived in the (now-go
 ```bash
 # mint the bootstrap token
 docker compose --env-file .env -f infra/compose/compose.yml -f infra/compose/compose.s.yml \
+  -f infra/compose/compose.dev.yml \
   exec -T api sh -c "cd /app; uv run python -m easysynq_api.cli.setup mint-bootstrap --org DEFAULT"
 ```
 
@@ -132,12 +141,16 @@ Then drive `http://localhost/setup` in the browser: demo Keycloak login → **or
 → local-accounts auth verify → **Finalize**. The "Not yet tamper-evident" finalize warning is **expected
 and non-blocking in dev** (the audit-checkpoint anchor is same-host MinIO, not off-host).
 
-## 7. Seed logins (Keycloak is ephemeral — re-run after every `up`/recreate)
+## 7. Seed logins (Keycloak persists in PostgreSQL)
 
 ```bash
 just demo-user        # demo / Demo-Password-1   (System Administrator)
 just seed-personas    # priya (Author) · ken (Approver) · mara (Releaser) — the SoD trio
 ```
+
+Both commands are idempotent. Accounts and stable Keycloak subjects now survive ordinary restarts,
+image upgrades and container recreation because the live Keycloak schema is inside `pgdata`.
+Deleting named volumes (`docker compose down -v`) remains a destructive full dev reset.
 
 ⚠ `demo` is a System Administrator and holds **no `document.*`/`capa.*`/content keys** (admin sits
 outside the QMS, by design) — Home PLAN/CHECK cards showing "No access to this section's data" is
