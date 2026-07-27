@@ -1,4 +1,4 @@
-import { Badge, Button, Divider, Group, Menu, Stack, Text } from "@mantine/core";
+import { Alert, Badge, Button, Divider, Group, Menu, Stack, Text } from "@mantine/core";
 import { DetailDrawer } from "../../app/shell/DetailDrawer";
 import { LoadingState } from "../../lib/states";
 import type {
@@ -28,6 +28,8 @@ export function ItemDetailDrawer({
   onConfirmKind,
   onDecision,
   onSplit,
+  actionError,
+  onDismissActionError,
 }: {
   runId: string;
   fileId: string | null;
@@ -35,6 +37,8 @@ export function ItemDetailDrawer({
   onConfirmKind: (kind: ConfirmedKind) => void;
   onDecision: (input: { action: ImportDecisionAction }) => void;
   onSplit: () => void;
+  actionError?: string | null;
+  onDismissActionError?: () => void;
 }) {
   const { data: detail, isLoading } = useImportFile(runId, fileId);
   // The detail endpoint already returns THIS file's decision history under review.decision_history —
@@ -46,6 +50,17 @@ export function ItemDetailDrawer({
 
   return (
     <DetailDrawer opened={fileId !== null} onClose={onClose} title="Item detail">
+      {actionError && (
+        <Alert
+          color="red"
+          title="Review action failed"
+          mb="md"
+          withCloseButton={onDismissActionError !== undefined}
+          onClose={onDismissActionError}
+        >
+          {actionError}
+        </Alert>
+      )}
       {isLoading || !detail ? (
         <LoadingState label="Loading item detail" />
       ) : (

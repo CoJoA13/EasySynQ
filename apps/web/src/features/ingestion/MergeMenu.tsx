@@ -1,5 +1,6 @@
-import { Button, Checkbox, Popover, Radio, Stack, Text } from "@mantine/core";
-import { useEffect, useState } from "react";
+import { Alert, Button, Checkbox, Popover, Radio, Stack, Text } from "@mantine/core";
+import { useEffect, useRef, useState } from "react";
+import { ApiError } from "../../lib/api";
 import { useMerge } from "./hooks";
 
 // The mockup §8b "Merge ▾" control. Given ≥2 selected files, pick the effective member (Radio over
@@ -7,6 +8,10 @@ import { useMerge } from "./hooks";
 // submit a merge intent. Merge is server-authoritative: useMerge invalidates + refetches; we NEVER
 // reshape the cache here. ONE Idempotency-Key per merge (crypto.randomUUID()). Disabled (with a hint)
 // under 2 selected files.
+function errorMessage(error: unknown): string {
+  return error instanceof ApiError ? error.message : "Something went wrong. Please retry.";
+}
+
 export function MergeMenu({
   runId,
   selectedFileIds,
@@ -20,8 +25,12 @@ export function MergeMenu({
   // Default the effective member to the first selected id (degrade to "" under noUncheckedIndexedAccess).
   const [effective, setEffective] = useState<string>(selectedFileIds[0] ?? "");
   const [reconstruct, setReconstruct] = useState(false);
+  const [mergeError, setMergeError] = useState<unknown>(null);
   const merge = useMerge(runId);
   const tooFew = selectedFileIds.length < 2;
+  const selectionKey = JSON.stringify([runId, ...[...selectedFileIds].sort()]);
+  const selectionKeyRef = useRef(selectionKey);
+  selectionKeyRef.current = selectionKey;
 
   // The selection can change while the menu is mounted (the cockpit owns it). Clamp the chosen
   // effective member back into the current selection so we never submit an effective_file_id that
@@ -32,24 +41,28 @@ export function MergeMenu({
     }
   }, [selectedFileIds, effective]);
 
-  function submit() {
+  useEffect(() => {
+    setMergeError(null);
+  }, [selectionKey]);
+
+  async function submit() {
     const effective_file_id = effective || (selectedFileIds[0] ?? "");
-    merge.mutate(
-      {
+    const submittedSelectionKey = selectionKey;
+    setMergeError(null);
+    try {
+      await merge.mutateAsync({
         body: {
           file_ids: selectedFileIds,
           effective_file_id,
           reconstruct_revision_chain: reconstruct,
         },
         idempotencyKey: crypto.randomUUID(),
-      },
-      {
-        onSuccess: () => {
-          setOpened(false);
-          onDone();
-        },
-      },
-    );
+      });
+      setOpened(false);
+      onDone();
+    } catch (error) {
+      if (selectionKeyRef.current === submittedSelectionKey) setMergeError(error);
+    }
   }
 
   return (
@@ -85,7 +98,17 @@ export function MergeMenu({
               checked={reconstruct}
               onChange={(e) => setReconstruct(e.currentTarget.checked)}
             />
-            <Button onClick={submit} loading={merge.isPending}>
+            {mergeError !== null && (
+              <Alert
+                color="red"
+                title="Merge failed"
+                withCloseButton
+                onClose={() => setMergeError(null)}
+              >
+                {errorMessage(mergeError)}
+              </Alert>
+            )}
+            <Button onClick={() => void submit()} loading={merge.isPending}>
               Merge into one family
             </Button>
           </Stack>

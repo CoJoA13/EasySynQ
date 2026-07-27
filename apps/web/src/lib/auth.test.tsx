@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, useLocation, useNavigate } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, test, vi } from "vitest";
@@ -6,11 +6,31 @@ import { AuthProvider, safeReturnTo, useAuth } from "./auth";
 
 // Mock oidc-client-ts: one UserManager whose methods are hoisted module spies we reconfigure per test.
 // (vi.mock is hoisted above const decls → the spies must come from vi.hoisted.)
-const { signinRedirect, signinRedirectCallback, getUser } = vi.hoisted(() => ({
-  signinRedirect: vi.fn(async () => undefined),
-  signinRedirectCallback: vi.fn(async () => null as unknown),
-  getUser: vi.fn(async () => null as unknown),
-}));
+const {
+  signinRedirect,
+  signinRedirectCallback,
+  getUser,
+  addUserLoaded,
+  emitUserLoaded,
+  resetUserLoaded,
+} = vi.hoisted(() => {
+  let userLoadedHandler: ((user: unknown) => void) | null = null;
+  return {
+    signinRedirect: vi.fn(async () => undefined),
+    signinRedirectCallback: vi.fn(async () => null as unknown),
+    getUser: vi.fn(async () => null as unknown),
+    addUserLoaded: vi.fn((handler: (user: unknown) => void) => {
+      userLoadedHandler = handler;
+      return () => {
+        if (userLoadedHandler === handler) userLoadedHandler = null;
+      };
+    }),
+    emitUserLoaded: (user: unknown) => userLoadedHandler?.(user),
+    resetUserLoaded: () => {
+      userLoadedHandler = null;
+    },
+  };
+});
 vi.mock("oidc-client-ts", () => ({
   // vitest 4: a vi.fn() invoked with `new` must use the `function`/`class` keyword —
   // an arrow returning an object throws "is not a constructor" (the constructor-mock change).
@@ -18,6 +38,7 @@ vi.mock("oidc-client-ts", () => ({
     this.signinRedirect = signinRedirect;
     this.signinRedirectCallback = signinRedirectCallback;
     this.getUser = getUser;
+    this.events = { addUserLoaded };
     this.removeUser = vi.fn();
     this.signoutRedirect = vi.fn();
   }),
@@ -31,6 +52,8 @@ beforeEach(() => {
   signinRedirectCallback.mockResolvedValue(null);
   getUser.mockReset();
   getUser.mockResolvedValue(null);
+  addUserLoaded.mockClear();
+  resetUserLoaded();
   window.history.pushState({}, "", "/"); // login()/callback read window.location, not the MemoryRouter
 });
 afterEach(() => {
@@ -68,6 +91,24 @@ test("AuthProvider exposes auth context to children", async () => {
   );
   await waitFor(() => expect(screen.getByText(/ready:true/)).toBeInTheDocument());
   expect(screen.getByText(/token:none/)).toBeInTheDocument();
+});
+
+it("updates the in-place bearer token when oidc-client-ts emits a renewed User", async () => {
+  getUser.mockResolvedValue({ access_token: "initial-token" });
+  render(
+    <MemoryRouter initialEntries={["/"]}>
+      <AuthProvider>
+        <Probe />
+      </AuthProvider>
+    </MemoryRouter>,
+  );
+  await waitFor(() => expect(screen.getByText(/token:initial-token/)).toBeInTheDocument());
+  expect(addUserLoaded).toHaveBeenCalledTimes(1);
+
+  act(() => emitUserLoaded({ access_token: "renewed-token" }));
+
+  await waitFor(() => expect(screen.getByText(/token:renewed-token/)).toBeInTheDocument());
+  expect(signinRedirect).not.toHaveBeenCalled();
 });
 
 it("login() stashes the current path in the OIDC returnTo state", async () => {

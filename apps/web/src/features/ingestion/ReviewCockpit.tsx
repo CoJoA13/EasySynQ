@@ -2,12 +2,15 @@ import { Alert, Stack, Text } from "@mantine/core";
 import { useCallback, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { usePermissions } from "../../app/shell/usePermissions";
+import { ApiError } from "../../lib/api";
 import type {
   ConfirmedKind,
+  ImportBulkDecisionRequest,
   ImportDecisionAction,
   ImportDecisionAfter,
   ImportFile,
   ImportRun,
+  ImportSplitRequest,
 } from "../../lib/types";
 import { BulkActionBar } from "./BulkActionBar";
 import { CommitCard } from "./CommitCard";
@@ -41,12 +44,20 @@ import {
 // The review-face spine. Owns the selection Set, the active drawer file id, and the queue/conf/offset
 // URL state; joins clusters/families into the per-row dupe/family maps; threads handlers down to the
 // presentational children. Every write generates a fresh Idempotency-Key (one per bulk op).
+function errorMessage(error: unknown): string {
+  return error instanceof ApiError ? error.message : "Something went wrong. Please retry.";
+}
+
+type ReviewActionFailure =
+  { scope: "bulk"; error: unknown } | { scope: "file"; fileId: string; error: unknown };
+
 export function ReviewCockpit({ runId, run }: { runId: string; run: ImportRun }) {
   const [params, setParams] = useSearchParams();
   const { queue, conf, offset } = parseRunUrl(params);
 
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [activeFileId, setActiveFileId] = useState<string | null>(null);
+  const [reviewActionFailure, setReviewActionFailure] = useState<ReviewActionFailure | null>(null);
 
   const filter = useMemo(() => queueToFilesQuery(queue, conf), [queue, conf]);
   // The "vault" queue has no per-file listing in v1 (it renders an explainer) — don't fetch files for
@@ -62,6 +73,52 @@ export function ReviewCockpit({ runId, run }: { runId: string; run: ImportRun })
   const splitRun = useSplit(runId);
   const { can } = usePermissions();
   const canCommit = can("import.commit");
+  const detailActionError =
+    reviewActionFailure?.scope === "file" && reviewActionFailure.fileId === activeFileId
+      ? reviewActionFailure.error
+      : null;
+  const reviewActionError =
+    reviewActionFailure &&
+    (reviewActionFailure.scope === "bulk" || reviewActionFailure.fileId !== activeFileId)
+      ? reviewActionFailure.error
+      : null;
+  const runFileDecision = useCallback(
+    (fileId: string, action: ImportDecisionAction, after?: ImportDecisionAfter) => {
+      setReviewActionFailure(null);
+      void fileDecision
+        .mutateAsync({
+          fileId,
+          body: { action, after },
+          idempotencyKey: crypto.randomUUID(),
+        })
+        .catch((error: unknown) => {
+          setReviewActionFailure({ scope: "file", fileId, error });
+        });
+    },
+    [fileDecision],
+  );
+  const runBulkDecision = useCallback(
+    (body: ImportBulkDecisionRequest) => {
+      setReviewActionFailure(null);
+      void bulkDecision
+        .mutateAsync({ body, idempotencyKey: crypto.randomUUID() })
+        .catch((error: unknown) => {
+          setReviewActionFailure({ scope: "bulk", error });
+        });
+    },
+    [bulkDecision],
+  );
+  const runSplit = useCallback(
+    (fileId: string, body: ImportSplitRequest) => {
+      setReviewActionFailure(null);
+      void splitRun
+        .mutateAsync({ body, idempotencyKey: crypto.randomUUID() })
+        .catch((error: unknown) => {
+          setReviewActionFailure({ scope: "file", fileId, error });
+        });
+    },
+    [splitRun],
+  );
 
   const files = useMemo(() => filesQuery.data?.files ?? [], [filesQuery.data]);
   const review = checklistQuery.data?.review;
@@ -105,7 +162,10 @@ export function ReviewCockpit({ runId, run }: { runId: string; run: ImportRun })
   // splitTargetMap: each member fileId → the group it can be split out of (a version family takes
   // priority over a dupe cluster). Used by the drawer's "Split out of group" action.
   const splitTargetMap = useMemo(() => {
-    const m = new Map<string, { target_kind: "version_family" | "dupe_cluster"; target_id: string }>();
+    const m = new Map<
+      string,
+      { target_kind: "version_family" | "dupe_cluster"; target_id: string }
+    >();
     for (const fam of familiesQuery.data?.families ?? [])
       for (const fid of fam.ordered_member_file_ids)
         m.set(fid, { target_kind: "version_family", target_id: fam.id });
@@ -186,48 +246,31 @@ export function ReviewCockpit({ runId, run }: { runId: string; run: ImportRun })
   // ---- writes (a fresh key per user action; one key per bulk op) ----
   const onConfirmKind = useCallback(
     (fileId: string, kind: ConfirmedKind) => {
-      fileDecision.mutate({
-        fileId,
-        body: { action: "accept", after: { kind } },
-        idempotencyKey: crypto.randomUUID(),
-      });
+      runFileDecision(fileId, "accept", { kind });
     },
-    [fileDecision],
+    [runFileDecision],
   );
   const onRowAction = useCallback(
     (file: ImportFile, action: ImportDecisionAction) => {
-      fileDecision.mutate({
-        fileId: file.id,
-        body: { action },
-        idempotencyKey: crypto.randomUUID(),
-      });
+      runFileDecision(file.id, action);
     },
-    [fileDecision],
+    [runFileDecision],
   );
   const onBulk = useCallback(
     (action: ImportDecisionAction, after?: ImportDecisionAfter) => {
-      bulkDecision.mutate({
-        body: { action, file_ids: [...selected], after },
-        idempotencyKey: crypto.randomUUID(),
-      });
+      runBulkDecision({ action, file_ids: [...selected], after });
     },
-    [bulkDecision, selected],
+    [runBulkDecision, selected],
   );
   const onBulkConfirmKind = useCallback(
     (kind: ConfirmedKind) => {
-      bulkDecision.mutate({
-        body: { action: "accept", file_ids: [...selected], after: { kind } },
-        idempotencyKey: crypto.randomUUID(),
-      });
+      runBulkDecision({ action: "accept", file_ids: [...selected], after: { kind } });
     },
-    [bulkDecision, selected],
+    [runBulkDecision, selected],
   );
   const onAcceptAllHigh = useCallback(() => {
-    bulkDecision.mutate({
-      body: { action: "accept", selector: { band: "HIGH" } },
-      idempotencyKey: crypto.randomUUID(),
-    });
-  }, [bulkDecision]);
+    runBulkDecision({ action: "accept", selector: { band: "HIGH" } });
+  }, [runBulkDecision]);
 
   const checklist = checklistQuery.data;
   const total = queueCounts[queue] ?? 0;
@@ -237,6 +280,21 @@ export function ReviewCockpit({ runId, run }: { runId: string; run: ImportRun })
     <Stack gap="md" component="section" aria-label="Review cockpit">
       <RunSummaryTiles run={run} review={review} />
       <ImportPlanBanner />
+      {reviewActionError !== null && (
+        <Alert
+          color="red"
+          title="Review action failed"
+          withCloseButton
+          onClose={() => {
+            setReviewActionFailure(null);
+            fileDecision.reset();
+            bulkDecision.reset();
+            splitRun.reset();
+          }}
+        >
+          {errorMessage(reviewActionError)}
+        </Alert>
+      )}
       <QueueTabs counts={queueCounts} value={queue} onChange={onQueue} />
       <IngestionFacetBar conf={conf} onConf={onConf} />
 
@@ -249,7 +307,11 @@ export function ReviewCockpit({ runId, run }: { runId: string; run: ImportRun })
         />
       )}
       {selected.size >= 2 && (
-        <MergeMenu runId={runId} selectedFileIds={[...selected]} onDone={() => setSelected(new Set())} />
+        <MergeMenu
+          runId={runId}
+          selectedFileIds={[...selected]}
+          onDone={() => setSelected(new Set())}
+        />
       )}
 
       {queue === "vault" ? (
@@ -299,6 +361,8 @@ export function ReviewCockpit({ runId, run }: { runId: string; run: ImportRun })
             checklist={checklist}
             canCommit={canCommit}
             committing={commitRun.isPending}
+            error={commitRun.error}
+            onDismissError={() => commitRun.reset()}
             onCommit={() => commitRun.mutate()}
           />
         </>
@@ -308,25 +372,27 @@ export function ReviewCockpit({ runId, run }: { runId: string; run: ImportRun })
         runId={runId}
         fileId={activeFileId}
         onClose={() => setActiveFileId(null)}
+        actionError={detailActionError !== null ? errorMessage(detailActionError) : null}
+        onDismissActionError={() => {
+          setReviewActionFailure(null);
+          fileDecision.reset();
+          splitRun.reset();
+        }}
         onConfirmKind={(kind) => {
           if (activeFileId) onConfirmKind(activeFileId, kind);
         }}
         onDecision={({ action }) => {
-          if (activeFileId)
-            fileDecision.mutate({
-              fileId: activeFileId,
-              body: { action },
-              idempotencyKey: crypto.randomUUID(),
-            });
+          if (activeFileId) {
+            runFileDecision(activeFileId, action);
+          }
         }}
         onSplit={() => {
           if (!activeFileId) return;
-          const target = splitTargetMap.get(activeFileId);
-          if (target)
-            splitRun.mutate({
-              body: { ...target, separate_file_ids: [activeFileId] },
-              idempotencyKey: crypto.randomUUID(),
-            });
+          const fileId = activeFileId;
+          const target = splitTargetMap.get(fileId);
+          if (target) {
+            runSplit(fileId, { ...target, separate_file_ids: [fileId] });
+          }
         }}
       />
     </Stack>

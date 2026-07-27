@@ -172,6 +172,28 @@
 
 **Tests + review.** Unit `test_authz_resource` (`resource_from_doc` populates `framework_id`+`kind`; mutation-distinguishing deny-wins — blanking a field flips DENY→ALLOW) + integration (a FRAMEWORK-scoped `document.read` DENY 403s the detail gate AND hides the row from the library list + search/suggest; an objective-release deny-wins — FRAMEWORK ALLOW + PROCESS DENY on the satellite process → 403; a foundational `process_ids_for_doc`-unions-the-satellite test). diff-critic CLEAN across the satellite + DCR/records passes (proved the swap identical for non-objectives, the TOCTOU correction floor only gets tighter). api unit 1078→1090. (S-scope-tuple, BE, NO migration [head `0070`], NO new key [catalog 102], PR #346 squash `26360bb`.)
 
+## REMEDIATION — web correctness
+
+### Batch 14 — document-safe authoring state, live token renewal, honest ingestion projection/errors (apps/web only; NO migration [head stays `0075`]; NO new permission key; PR [#377](https://github.com/CoJoA13/EasySynQ/pull/377))
+
+**What shipped.** Cached document navigation can no longer carry a checked-out flag, selected file
+or change reason across documents: the authoring surface keys `CheckInPanel` on the document id, so
+the whole governed check-in state remounts at that boundary. `AuthProvider` now consumes
+oidc-client-ts `addUserLoaded` events and replaces its in-memory `User` in place, which moves every
+token-aware API hook onto the renewed bearer without a redirect or form-destroying app unmount.
+The ingestion pre-commit ★ row now consumes the real compliance-checklist projection
+(`rollup.total`, `projected_rollup.covered` with live-covered fallback), and its TypeScript/MSW
+shape is pinned to the backend serializer rather than fabricated `{total,satisfied}` fields.
+
+**Import-review failures are visible at the action surface.** File/bulk decision failures show the
+RFC problem detail in the cockpit; decision/split failures made inside the item drawer show inside
+that still-open drawer; commit failures stay beside the commit control; merge failures stay inside
+the open merge popover. All remain retryable and their alerts can be dismissed. Regression tests
+exercise each mutation family plus the doc-to-doc wrong-content scenario, in-place OIDC renewal,
+the real projected coverage shape and the live-rollup fallback. Web tests increased
+**1342→1350**; the complete gate passed ESLint, TypeScript, production build and **235 files /
+1350 tests**.
+
 ## DISTRIBUTION — the on-prem install path (doc 03 §12; the roadmap's air-gap/appliance seed)
 
 > The product was feature-complete but only installable by a developer (compose + a hand-tended `.env`).

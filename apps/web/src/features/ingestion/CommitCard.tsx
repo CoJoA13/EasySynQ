@@ -1,4 +1,5 @@
 import { Alert, Badge, Button, Card, Group, Progress, Stack, Text } from "@mantine/core";
+import { ApiError } from "../../lib/api";
 import type { ImportChecklist } from "../../lib/types";
 
 // The "On commit" card (mockup #screen-ingestion §10). Presentational: ReviewCockpit owns the
@@ -8,15 +9,23 @@ import type { ImportChecklist } from "../../lib/types";
 // the caller holds import.commit AND a commit isn't already in flight. Unconfirmed kind is ADVISORY
 // (surfaced in PreCommitChecklist), never a hard block here. When the caller lacks import.commit a
 // deployment may split SoD (Mara reviews, Avery commits) — render a calm note, not a dead button.
+function errorMessage(error: unknown): string {
+  return error instanceof ApiError ? error.message : "Something went wrong. Please retry.";
+}
+
 export function CommitCard({
   checklist,
   canCommit,
   committing,
+  error,
+  onDismissError,
   onCommit,
 }: {
   checklist: ImportChecklist;
   canCommit: boolean;
   committing: boolean;
+  error?: unknown;
+  onDismissError?: () => void;
   onCommit: () => void;
 }) {
   const ready = checklist.review.commit_ready;
@@ -82,6 +91,18 @@ export function CommitCard({
           </Text>
         </Group>
       </Stack>
+
+      {error !== null && error !== undefined && (
+        <Alert
+          color="red"
+          title="Commit failed"
+          mb="sm"
+          withCloseButton={onDismissError !== undefined}
+          onClose={onDismissError}
+        >
+          {errorMessage(error)}
+        </Alert>
+      )}
 
       {canCommit ? (
         <Button

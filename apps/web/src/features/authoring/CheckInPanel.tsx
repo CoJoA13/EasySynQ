@@ -9,8 +9,10 @@ import {
   Text,
   Textarea,
 } from "@mantine/core";
-import { useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { useEffect, useState } from "react";
 import { ApiError, useApi } from "../../lib/api";
+import { useAuth } from "../../lib/auth";
 import type { ChangeSignificance, CheckinResult } from "../../lib/types";
 import { useBreakLock, useCheckout, useUploadAndCheckin } from "./hooks";
 
@@ -20,6 +22,17 @@ import { useBreakLock, useCheckout, useUploadAndCheckin } from "./hooks";
 // immutable Draft version. The change reason + MAJOR/MINOR significance are mandatory (INV-3).
 function errMsg(e: unknown): string {
   return e instanceof ApiError ? e.message : "Something went wrong. Please retry.";
+}
+
+const CHECKOUT_SESSION_ROOT = ["document-checkout-session"] as const;
+const CHECKOUT_SESSION_GC_MS = 8 * 60 * 60 * 1000;
+
+function checkoutSessionKey(actorId: string, documentId: string) {
+  return [...CHECKOUT_SESSION_ROOT, actorId, documentId] as const;
+}
+
+interface CheckoutSession {
+  expiresAt: number;
 }
 
 export function CheckInPanel({
@@ -34,11 +47,17 @@ export function CheckInPanel({
   onCheckedIn?: (version: CheckinResult) => void;
 }) {
   const api = useApi();
+  const { user } = useAuth();
+  const queryClient = useQueryClient();
   const checkout = useCheckout();
   const breakLock = useBreakLock();
   const checkin = useUploadAndCheckin();
+  const sessionKey = checkoutSessionKey(String(user?.profile.sub ?? "anonymous"), documentId);
 
-  const [checkedOut, setCheckedOut] = useState(false);
+  const [checkedOut, setCheckedOut] = useState(() => {
+    const session = queryClient.getQueryData<CheckoutSession>(sessionKey);
+    return session !== undefined && session.expiresAt > Date.now();
+  });
   const [lockHolder, setLockHolder] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -46,11 +65,21 @@ export function CheckInPanel({
   const [reason, setReason] = useState("");
   const [significance, setSignificance] = useState<ChangeSignificance>(defaultSignificance);
 
+  // A checkout lock lives for eight hours server-side. Remember only that per-document lock state
+  // in the app's query client so remounting the keyed panel clears file/reason fields without
+  // forgetting that this browser session already owns the lock.
+  useEffect(() => {
+    queryClient.setQueryDefaults(CHECKOUT_SESSION_ROOT, { gcTime: CHECKOUT_SESSION_GC_MS });
+  }, [queryClient]);
+
   async function doCheckout() {
     setError(null);
     setLockHolder(null);
     try {
-      await checkout.mutateAsync(documentId);
+      const workingDraft = await checkout.mutateAsync(documentId);
+      queryClient.setQueryData<CheckoutSession>(sessionKey, {
+        expiresAt: Date.now() + workingDraft.lock_ttl_seconds * 1000,
+      });
       setCheckedOut(true);
     } catch (e) {
       if (e instanceof ApiError && e.code === "lock_conflict") setLockHolder(e.message);
@@ -95,6 +124,7 @@ export function CheckInPanel({
       setReason("");
       // Check-in releases the lock + deletes the working draft server-side, so return to the
       // "check out" affordance — another revision needs a fresh check-out (else a 2nd check-in 409s).
+      queryClient.removeQueries({ queryKey: sessionKey, exact: true });
       setCheckedOut(false);
       onCheckedIn?.(version);
     } catch (e) {
@@ -146,7 +176,12 @@ export function CheckInPanel({
             ✓ Checked out by you — edit the file, then check it back in.
           </Text>
           {sourceVersionId && (
-            <Anchor component="button" type="button" size="sm" onClick={() => void downloadWorkingCopy()}>
+            <Anchor
+              component="button"
+              type="button"
+              size="sm"
+              onClick={() => void downloadWorkingCopy()}
+            >
               ⤓ Download working copy
             </Anchor>
           )}

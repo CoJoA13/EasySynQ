@@ -1323,7 +1323,12 @@ export const ingestionChecklistFixture = {
     },
   ],
   advisory: {
-    star_coverage: { total: 20, satisfied: 17 },
+    star_coverage: {
+      framework: "iso9001:2015",
+      rollup: { total: 20, covered: 15, partial: 1, gap: 4, overdue_review: 0 },
+      rows: [],
+      projected_rollup: { total: 20, covered: 17, partial: 1, gap: 2 },
+    },
     unknown_low: 2,
     kind_unconfirmed: 4,
   },

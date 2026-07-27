@@ -1,7 +1,7 @@
 import { http, HttpResponse } from "msw";
 import { axe } from "jest-axe";
 import { expect, test } from "vitest";
-import { Route, Routes } from "react-router-dom";
+import { Route, Routes, useNavigate, useParams } from "react-router-dom";
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderWithProviders } from "../../test/render";
@@ -10,6 +10,7 @@ import { ingestionRunFixture } from "../../test/msw/handlers";
 import { IngestionRunPage } from "./IngestionRunPage";
 
 const RID = ingestionRunFixture.id;
+const SECOND_RID = "b0000000-0000-0000-0000-000000000002";
 
 function renderPage(route = `/ingestion/${RID}`) {
   return renderWithProviders(
@@ -17,6 +18,33 @@ function renderPage(route = `/ingestion/${RID}`) {
       <Route path="ingestion/:runId" element={<IngestionRunPage />} />
     </Routes>,
     { route },
+  );
+}
+
+function RunNavigationHarness() {
+  const navigate = useNavigate();
+  return (
+    <>
+      <button type="button" onClick={() => navigate(`/ingestion/${RID}`)}>
+        Go to run A
+      </button>
+      <button type="button" onClick={() => navigate(`/ingestion/${SECOND_RID}`)}>
+        Go to run B
+      </button>
+      <Routes>
+        <Route path="ingestion/:runId" element={<RunRoute />} />
+      </Routes>
+    </>
+  );
+}
+
+function RunRoute() {
+  const { runId } = useParams();
+  return (
+    <>
+      <span data-testid="active-run">{runId}</span>
+      <IngestionRunPage />
+    </>
   );
 }
 
@@ -29,6 +57,46 @@ test("IngestionRunPage renders the review cockpit for a Proposed run", async () 
   renderPage();
   // a cockpit-only affordance: the queue tablist (QueueTabs, Task 7)
   expect(await screen.findByRole("tab", { name: /Needs decision/ })).toBeInTheDocument();
+});
+
+test("switching between cached runs remounts the cockpit and clears its prior failure", async () => {
+  const user = userEvent.setup();
+  const fetchedRuns: string[] = [];
+  server.use(
+    http.get("/api/v1/admin/imports/:id", ({ params }) => {
+      const id = String(params.id);
+      fetchedRuns.push(id);
+      return HttpResponse.json({ ...ingestionRunFixture, id, status: "Proposed" });
+    }),
+    http.post("/api/v1/admin/imports/:id/decisions", () =>
+      HttpResponse.json(
+        {
+          code: "bulk_conflict",
+          title: "Bulk conflict",
+          detail: "Run A's selected review set is stale.",
+        },
+        { status: 409 },
+      ),
+    ),
+  );
+  renderWithProviders(<RunNavigationHarness />, { route: `/ingestion/${RID}` });
+  await screen.findByRole("tab", { name: /Needs decision/ });
+
+  // Visit both runs once so their query results are cached; the second A → B switch should keep the
+  // same IngestionRunPage tree mounted and exercise ReviewCockpit's run key directly.
+  await user.click(screen.getByRole("button", { name: "Go to run B" }));
+  await waitFor(() => expect(fetchedRuns).toContain(SECOND_RID));
+  await screen.findByRole("tab", { name: /Needs decision/ });
+  await user.click(screen.getByRole("button", { name: "Go to run A" }));
+  await waitFor(() => expect(screen.getByTestId("active-run")).toHaveTextContent(RID));
+
+  await user.click(screen.getByLabelText("Select SOP-PUR-014 Purchasing.docx"));
+  await user.click(screen.getByRole("button", { name: "Bulk accept all High" }));
+  expect(await screen.findByText("Run A's selected review set is stale.")).toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: "Go to run B" }));
+  await waitFor(() => expect(screen.getByTestId("active-run")).toHaveTextContent(SECOND_RID));
+  expect(screen.queryByText("Run A's selected review set is stale.")).not.toBeInTheDocument();
 });
 
 test("IngestionRunPage renders the commit-progress face for a Committing run", async () => {

@@ -723,13 +723,38 @@ export interface ImportChecklistReviewStats {
   kind_confirmed: number;
   commit_ready: number;
 }
+export type ImportChecklistCoverageStatus = "COVERED" | "PARTIAL" | "GAP";
+export interface ImportChecklistCoverageRollup {
+  total: number;
+  covered: number;
+  partial: number;
+  gap: number;
+  overdue_review?: number;
+}
+export interface ImportChecklistCoverageRow {
+  clause_id: string;
+  number: string;
+  title: string;
+  pdca_phase: string;
+  mapped_count: number;
+  effective_count: number;
+  status: ImportChecklistCoverageStatus;
+  overdue_review: boolean;
+  projected_status?: ImportChecklistCoverageStatus;
+}
+export interface ImportChecklistStarCoverage {
+  framework: string;
+  rollup: ImportChecklistCoverageRollup;
+  rows: ImportChecklistCoverageRow[];
+  projected_rollup?: ImportChecklistCoverageRollup;
+}
 export interface ImportChecklist {
   run_id: string;
   status: string;
   ready: boolean;
   blocking: ImportChecklistBlocker[];
   advisory: {
-    star_coverage?: { total?: number; satisfied?: number; [k: string]: unknown } | null;
+    star_coverage?: ImportChecklistStarCoverage | null;
     unknown_low?: number;
     kind_unconfirmed?: number;
   };

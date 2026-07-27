@@ -124,8 +124,8 @@ export function PreCommitChecklist({
 
   // ★ coverage — guard the whole sub-object AND each field (additionalProperties:true → may be absent).
   const cov = advisory.star_coverage ?? undefined;
-  const covSatisfied = cov?.satisfied ?? undefined;
-  const covTotal = cov?.total ?? undefined;
+  const covSatisfied = cov?.projected_rollup?.covered ?? cov?.rollup?.covered;
+  const covTotal = cov?.rollup?.total;
   const covValue = `${covSatisfied ?? "—"} / ${covTotal ?? "—"} satisfied`;
 
   // kind-confirmed — warn while any item is still unconfirmed (advisory, never a hard block).
