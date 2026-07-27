@@ -9,7 +9,7 @@
 
 - The historic denominator remains **104**. One finding was already closed while the MAJOR work was
   underway, leaving **103** to schedule here. Batch M1 closed 4; M2 closed 2; M3 closed 2; M4
-  closed 4; M5 closed 3; M6 closes 4; **84 remain queued** after M6.
+  closed 4; M5 closed 3; M6 closed 4; M7 closes 3; **81 remain queued** after M7.
 - A queued finding is not assumed to still be live. Every batch must re-locate and revalidate its
   findings against then-current `main` before implementation; close, re-scope, or reject it with
   evidence rather than mechanically applying the 2026-07-22 suggestion.
@@ -30,8 +30,8 @@
 | M3 | Notification reliability | 2 | ☑ merged | [#383](https://github.com/CoJoA13/EasySynQ/pull/383) |
 | M4 | Lifecycle and workflow guards | 4 | ☑ merged | [#384](https://github.com/CoJoA13/EasySynQ/pull/384) |
 | M5 | Ingestion commit integrity | 3 | ☑ merged | [#385](https://github.com/CoJoA13/EasySynQ/pull/385) |
-| M6 | Ingestion review and family integrity | 4 | ☑ in PR | [#386](https://github.com/CoJoA13/EasySynQ/pull/386) |
-| M7 | Records and rendering resilience | 3 | ☐ queued — revalidate | — |
+| M6 | Ingestion review and family integrity | 4 | ☑ merged | [#386](https://github.com/CoJoA13/EasySynQ/pull/386) |
+| M7 | Records and rendering resilience | 3 | ☑ implemented — PR pending | — |
 | M8 | Vault and retention input guards | 2 | ☐ queued — revalidate | — |
 | M9 | Migration and ORM coherence | 4 | ☐ queued — revalidate | — |
 | M10 | Schema and index design | 4 | ☐ queued — revalidate | — |
@@ -48,7 +48,7 @@
 | M21 | Web async and error UX | 8 | ☐ queued — revalidate | — |
 | M22 | Web accessibility | 7 | ☐ queued — revalidate | — |
 
-**Accounting: 1 preclosed + 15 merged + 4 in PR + 84 queued = 104 original findings.**
+**Accounting: 1 preclosed + 19 merged + 3 implemented + 81 queued = 104 original findings.**
 
 ---
 
@@ -193,16 +193,25 @@ permission key
   at most configured-max-plus-one as an overflow probe and return 422 without writes instead of
   applying a truncated prefix).
 
-### ☐ M7 — Records and rendering resilience
+### ☑ M7 — Records and rendering resilience
 
-`branch: fix/minor-record-render-resilience` · API + workers + integration
+`branch: fix/minor-record-render-resilience` · API + workers + migration `0077` + docs +
+unit/integration tests · no new permission key
 
-- [ ] `apps/api/src/easysynq_api/services/packs/build.py:358` — sealed packs use a mutable System
-  Default retention policy rather than a guaranteed permanent policy `[f]`.
-- [ ] `apps/api/src/easysynq_api/services/records/render.py:144` — a delayed render can recreate a
-  destroyed record's rendition without a remaining purge path `[f]`.
-- [ ] `apps/api/src/easysynq_api/services/records/service.py:308` — a failed structured-record PDF
-  build/enqueue has no re-drive and leaves rendition retrieval at 409 forever `[f]`.
+- [x] `apps/api/src/easysynq_api/services/packs/build.py:358` — sealed packs used the mutable System
+  Default retention policy rather than a guaranteed permanent policy `[C]` (fixed: packs now pin a
+  reserved, API-immutable `PERMANENT` + `RETAIN_PERMANENT` policy; migration `0077` seeds it and
+  re-pins existing pack records, while the build path normalizes/lazily creates it for future
+  organizations).
+- [x] `apps/api/src/easysynq_api/services/records/render.py:144` — a delayed render could recreate a
+  destroyed record's rendition without a remaining purge path `[C]` (fixed: the row-locked builder
+  and the redrive selector both reject `DISPOSED`; integration proves a post-destroy delayed build
+  leaves the pointer, blob row, and rendition object absent).
+- [x] `apps/api/src/easysynq_api/services/records/service.py:308` — a failed structured-record PDF
+  build/enqueue had no re-drive and left rendition retrieval at 409 forever `[C]` (fixed: an hourly
+  bounded Beat task re-enqueues live structured records with a missing pointer, isolates per-record
+  publish failures for the next tick, and keeps GET as a pure poll; `form_field_values={}` is
+  consistently treated as structured rather than confused with the `NULL` ad-hoc sentinel).
 
 ### ☐ M8 — Vault and retention input guards
 

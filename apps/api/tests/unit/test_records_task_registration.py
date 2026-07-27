@@ -21,10 +21,10 @@ def test_reap_pending_blob_purges_task_is_registered_and_beat_scheduled() -> Non
     assert "easysynq.records.reap_pending_blob_purges" in tasks
 
 
-def test_structured_pdf_is_not_beat_scheduled() -> None:
-    # The rendition build is .delay-triggered after capture, NOT Beat-scheduled (best-effort, no
-    # reaper — it is derived + rebuildable; GET /records/{id}/rendition 409s until it lands).
+def test_structured_pdf_redrive_is_registered_and_beat_scheduled() -> None:
+    assert "easysynq.records.redrive_structured_pdfs" in app.tasks
     tasks = {entry["task"] for entry in app.conf.beat_schedule.values()}
+    assert "easysynq.records.redrive_structured_pdfs" in tasks
+    # Beat schedules the bounded missing-pointer scan, not a parameter-less invocation of the
+    # per-record builder. Capture still takes the low-latency direct-enqueue path.
     assert "easysynq.records.build_structured_pdf" not in tasks
-    # The retention sweep IS Beat-scheduled (S-rec-2) — sanity that the schedule is non-trivial.
-    assert "easysynq.records.retention_sweep" in tasks

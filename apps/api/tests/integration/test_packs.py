@@ -42,6 +42,7 @@ from easysynq_api.db.session import get_sessionmaker
 from easysynq_api.domain.authz.types import Effect, ScopeLevel
 from easysynq_api.services.packs import build
 from easysynq_api.services.packs import repository as packs_repo
+from easysynq_api.services.records.repository import SEALED_PACK_POLICY_NAME
 
 from ._owner_db import owner_delete_disposition_events
 from .test_records import _capture, _grant, _subject, _upload_evidence
@@ -248,14 +249,18 @@ async def test_pack_build_seal_r28_matrix_and_download(
         assert r_absent in sealed["exclusion_summary"]["absence"]
         assert "clauses" in sealed["gap_summary"] and "permission" not in sealed["gap_summary"]
 
-        # The pack is itself a RETAIN_PERMANENT EVIDENCE Record.
+        # The pack is itself an EVIDENCE Record pinned to the reserved immutable policy, never the
+        # org-configurable System Default.
         async with get_sessionmaker()() as s:
             pack_rec = await s.get(Record, uuid.UUID(sealed["pack_record_id"]))
             assert pack_rec is not None and pack_rec.record_type.value == "EVIDENCE"
             policy = await s.get(RetentionPolicy, pack_rec.retention_policy_id)
             assert (
                 policy is not None
+                and policy.name == SEALED_PACK_POLICY_NAME
+                and policy.duration == "PERMANENT"
                 and policy.disposition_action == DispositionAction.RETAIN_PERMANENT
+                and policy.active is True
             )
 
         # Download the sealed ZIP and verify its contents.

@@ -5,8 +5,9 @@ or process (with an optional date overlay), then seals it. The header persists t
 the build status, and the gap/exclusion summaries; the ``pack_item`` rows are the resolved members.
 
 On seal the generated ZIP is written to the WORM ``records`` bucket and **registered as an
-EVIDENCE-type Record** (``pack_record_id``) pinned ``RETAIN_PERMANENT`` (doc 06 §7.4) — so "which
-pack did we hand the auditor" is itself auditable. The ZIP blob is reached via
+EVIDENCE-type Record** (``pack_record_id``) pinned to the immutable system-managed
+``PERMANENT``/``RETAIN_PERMANENT`` policy (doc 06 §7.4) — so "which pack did we hand the auditor"
+is itself auditable. The ZIP blob is reached via
 ``pack_record_id → evidence_blob → blob``; ``zip_blob_sha256`` is a denormalised display pointer
 with **no FK to ``blob``** — a RESTRICT FK would abort the EVIDENCE record's R27 WORM-destroy hatch
 (``delete_blob_and_links``) and defeat the blob-row-iff-bytes invariant.

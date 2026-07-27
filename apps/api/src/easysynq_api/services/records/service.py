@@ -299,9 +299,8 @@ async def _resolve_source_version(
 
 def _enqueue_structured_pdf(record_id: uuid.UUID) -> None:
     """Best-effort: enqueue the Stage-2 structured-record PDF rendition build after capture commits
-    (the ``packs.generate_pack`` precedent). Swallows a broker hiccup — the rendition is derived +
-    rebuildable (no reaper; ``GET /records/{id}/rendition`` 409s until it lands), so a publish
-    failure must never fail the capture."""
+    (the ``packs.generate_pack`` precedent). Swallows a broker hiccup — the rendition is derived,
+    the hourly missing-pointer redrive retries it, and a publish failure must never fail capture."""
     try:
         from ...tasks.records import build_structured_pdf
 
@@ -550,7 +549,8 @@ async def capture_record(
     if _commit:
         await session.commit()
         await session.refresh(record)
-        if record.form_field_values:  # a structured record → best-effort Stage-2 PDF rendition
+        if record.form_field_values is not None:
+            # A structured record (including a valid empty form) → best-effort Stage-2 rendition.
             _enqueue_structured_pdf(record.id)
     return record
 
@@ -614,7 +614,8 @@ async def capture_correction(
     )
     await session.commit()
     await session.refresh(new_record)
-    if new_record.form_field_values:  # a structured correction → best-effort Stage-2 PDF rendition
+    if new_record.form_field_values is not None:
+        # A structured correction (including a valid empty form) → best-effort Stage-2 rendition.
         _enqueue_structured_pdf(new_record.id)
     return new_record
 

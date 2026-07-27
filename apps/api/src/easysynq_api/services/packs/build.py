@@ -367,7 +367,7 @@ async def build(session: AsyncSession, pack_id: uuid.UUID) -> None:
         await storage.put_bytes(
             zip_bytes, zip_sha, bucket=storage._staging_bucket(), content_type="application/zip"
         )
-        permanent = await records_repo.ensure_default_policy(session, pack.org_id)
+        permanent = await records_repo.ensure_sealed_pack_policy(session, pack.org_id)
         record = await capture_record(
             session,
             generator,

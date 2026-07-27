@@ -10,6 +10,10 @@ Like the other Beat tasks it uses its own disposed async engine (a fresh event l
 ``asyncio.run`` is safe). It connects with the **app DSN** (``database_url``, the non-owner
 ``easysynq_app`` role) — the sweep only SELECTs/UPDATEs ``record`` + INSERTs ``disposition_event``/
 ``audit_event`` (all granted to the app role in 0010/0024); it needs no owner DDL (unlike backup).
+
+This module also registers the per-record structured-PDF builder and its hourly bounded
+missing-pointer redrive. The redrive only reads candidate ids and publishes idempotent builder
+tasks; the builder owns the row lock and cache transaction.
 """
 
 from __future__ import annotations
@@ -22,7 +26,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from ..config import get_settings
 from ..services.records import build_structured_pdf as _build_structured_pdf
-from ..services.records import reap_pending_blob_purges, sweep_due_records
+from ..services.records import (
+    reap_pending_blob_purges,
+    redrive_missing_structured_pdfs,
+    sweep_due_records,
+)
 from .app import task
 
 logger = logging.getLogger("easysynq.records.tasks")
@@ -88,3 +96,25 @@ async def _run_build_structured_pdf(record_id: str) -> None:
 def build_structured_pdf(record_id: str) -> None:
     """Build the Stage-2 structured-record PDF rendition (S-rec-3; idempotent, best-effort)."""
     asyncio.run(_run_build_structured_pdf(record_id))
+
+
+async def _run_redrive_missing_structured_pdfs() -> dict[str, int]:
+    engine = create_async_engine(get_settings().database_url)
+    sessionmaker: async_sessionmaker[AsyncSession] = async_sessionmaker(
+        engine, expire_on_commit=False
+    )
+    try:
+        async with sessionmaker() as session:
+            summary = await redrive_missing_structured_pdfs(
+                session, enqueue=lambda record_id: build_structured_pdf.delay(str(record_id))
+            )
+            logger.info("records.redrive_structured_pdfs", extra={"extra_fields": summary})
+            return summary
+    finally:
+        await engine.dispose()
+
+
+@task(name="easysynq.records.redrive_structured_pdfs")
+def redrive_structured_pdfs() -> dict[str, int]:
+    """Recover dropped or failed structured-PDF builds from their durable missing-pointer state."""
+    return asyncio.run(_run_redrive_missing_structured_pdfs())

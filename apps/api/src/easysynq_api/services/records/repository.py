@@ -33,6 +33,7 @@ from ...db.models.system_config import SystemConfig
 from ...db.models.worm_destroy_request import WormDestroyRequest
 
 SYSTEM_DEFAULT_POLICY_NAME = "System Default Retention"
+SEALED_PACK_POLICY_NAME = "Sealed Evidence Pack Retention"
 
 
 # --- record lookups ----------------------------------------------------------------------
@@ -211,6 +212,50 @@ async def ensure_default_policy(session: AsyncSession, org_id: uuid.UUID) -> Ret
     )
     policy = await system_default_policy(session, org_id)
     assert policy is not None  # noqa: S101 — just inserted-or-existing under the unique index
+    return policy
+
+
+async def ensure_sealed_pack_policy(session: AsyncSession, org_id: uuid.UUID) -> RetentionPolicy:
+    """Get-or-create the system-managed policy reserved for sealed evidence packs.
+
+    Unlike the org-configurable System Default, this policy is normalized on every use so a
+    pre-existing name collision or out-of-band edit cannot make a newly sealed pack disposable.
+    The retention-policy service reserves the name and rejects API mutation/archive attempts.
+    """
+    await session.execute(
+        pg_insert(RetentionPolicy)
+        .values(
+            org_id=org_id,
+            name=SEALED_PACK_POLICY_NAME,
+            applies_to=None,
+            basis=RetentionBasis.CAPTURED_AT,
+            duration="PERMANENT",
+            disposition_action=DispositionAction.RETAIN_PERMANENT,
+            review_required=False,
+            worm_lock_period=None,
+            active=True,
+            archived_at=None,
+            archived_by=None,
+        )
+        .on_conflict_do_update(
+            index_elements=["org_id", "name"],
+            set_={
+                "applies_to": None,
+                "basis": RetentionBasis.CAPTURED_AT,
+                "duration": "PERMANENT",
+                "disposition_action": DispositionAction.RETAIN_PERMANENT,
+                "review_required": False,
+                "worm_lock_period": None,
+                "active": True,
+                "archived_at": None,
+                "archived_by": None,
+                "updated_at": func.now(),
+            },
+        )
+    )
+    policy = await policy_by_name(session, org_id, SEALED_PACK_POLICY_NAME)
+    assert policy is not None  # noqa: S101 — just inserted-or-normalized under the unique index
+    await session.refresh(policy)
     return policy
 
 

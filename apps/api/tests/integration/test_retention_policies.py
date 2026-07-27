@@ -22,6 +22,7 @@ from easysynq_api.db.models.record import Record
 from easysynq_api.db.models.retention_policy import RetentionPolicy
 from easysynq_api.db.session import get_sessionmaker
 from easysynq_api.services.records import sweep_due_records
+from easysynq_api.services.records.repository import SEALED_PACK_POLICY_NAME
 
 from ._owner_db import owner_delete_disposition_events
 from .test_records import _capture, _grant, _subject
@@ -106,11 +107,12 @@ async def test_create_reserved_name_422(
     subject = _subject("rp")
     await _grant(subject, _PERMS)
     h = _auth(token_factory, subject)
-    bad = await app_client.post(
-        "/api/v1/retention-policies", headers=h, json=_policy_body(name="System Default Retention")
-    )
-    assert bad.status_code == 422
-    assert bad.json()["errors"][0]["code"] == "reserved_name"
+    for name in ("System Default Retention", SEALED_PACK_POLICY_NAME):
+        bad = await app_client.post(
+            "/api/v1/retention-policies", headers=h, json=_policy_body(name=name)
+        )
+        assert bad.status_code == 422
+        assert bad.json()["errors"][0]["code"] == "reserved_name"
 
 
 async def test_create_name_collision_409(
@@ -177,7 +179,7 @@ async def test_extend_forward_guard(
         await _delete_policy(pid)
 
 
-async def test_system_default_protected(
+async def test_system_managed_policies_protected(
     app_client: AsyncClient, token_factory: Callable[..., str]
 ) -> None:
     subject = _subject("rp")
@@ -196,6 +198,21 @@ async def test_system_default_protected(
     )
     assert renamed.status_code == 409
     assert renamed.json()["code"] == "system_default_protected"
+
+    sealed_pack = next(p for p in listed if p["name"] == SEALED_PACK_POLICY_NAME)
+    assert sealed_pack["duration"] == "PERMANENT"
+    assert sealed_pack["disposition_action"] == "RETAIN_PERMANENT"
+    sid = sealed_pack["id"]
+    mutated = await app_client.patch(
+        f"/api/v1/retention-policies/{sid}",
+        headers=h,
+        json={"duration": "P1D", "disposition_action": "DESTROY"},
+    )
+    assert mutated.status_code == 409
+    assert mutated.json()["code"] == "system_policy_protected"
+    sealed_archived = await app_client.post(f"/api/v1/retention-policies/{sid}/archive", headers=h)
+    assert sealed_archived.status_code == 409
+    assert sealed_archived.json()["code"] == "system_policy_protected"
 
 
 async def test_archive_hides_from_resolution_but_pinned_records_still_swept(

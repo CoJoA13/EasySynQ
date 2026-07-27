@@ -16,7 +16,7 @@ from .disposition import (
     request_worm_destroy,
     sweep_due_records,
 )
-from .render import build_structured_pdf
+from .render import build_structured_pdf, redrive_missing_structured_pdfs
 from .service import (
     capture_correction,
     capture_record,
@@ -41,6 +41,7 @@ __all__ = [
     "place_legal_hold",
     "reap_pending_blob_purges",
     "record_init_upload",
+    "redrive_missing_structured_pdfs",
     "release_legal_hold",
     "request_worm_destroy",
     "resolve_capture_retention",

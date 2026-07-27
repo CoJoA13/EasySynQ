@@ -25,7 +25,8 @@ from sqlalchemy import select
 from easysynq_api.db.models.blob import Blob
 from easysynq_api.db.models.record import Record
 from easysynq_api.db.session import get_sessionmaker
-from easysynq_api.services.records import build_structured_pdf
+from easysynq_api.services.records import build_structured_pdf, redrive_missing_structured_pdfs
+from easysynq_api.services.records import service as records_service
 from easysynq_api.services.vault import storage
 
 from . import s5_helpers as s5
@@ -40,6 +41,9 @@ _CAL_SCHEMA = {
         {"key": "reading", "type": "number", "min": 0, "max": 100},
         {"key": "result", "type": "enum", "required": True, "enum": ["pass", "adjusted", "fail"]},
     ]
+}
+_OPTIONAL_SCHEMA = {
+    "fields": [{"key": "note", "label": "Note", "type": "string", "required": False}]
 }
 
 
@@ -378,6 +382,12 @@ async def test_structured_pdf_rendition_builds_and_downloads(
     pending = await app_client.get(f"/api/v1/records/{rec_id}/rendition", headers=hc)
     assert pending.status_code == 409, pending.text
 
+    # The durable missing pointer is discoverable by the bounded Beat redrive.
+    queued: list[uuid.UUID] = []
+    async with get_sessionmaker()() as s:
+        await redrive_missing_structured_pdfs(s, enqueue=queued.append, limit=10_000)
+    assert uuid.UUID(rec_id) in queued
+
     # Run the Stage-2 build directly (the worker path; .delay is fire-and-forget in tests).
     async with get_sessionmaker()() as s:
         await build_structured_pdf(s, uuid.UUID(rec_id))
@@ -389,6 +399,46 @@ async def test_structured_pdf_rendition_builds_and_downloads(
     # Idempotent: a second build is a no-op (the pointer is already set).
     async with get_sessionmaker()() as s:
         await build_structured_pdf(s, uuid.UUID(rec_id))
+    queued_after_build: list[uuid.UUID] = []
+    async with get_sessionmaker()() as s:
+        await redrive_missing_structured_pdfs(s, enqueue=queued_after_build.append, limit=10_000)
+    assert uuid.UUID(rec_id) not in queued_after_build
+
+
+async def test_empty_structured_values_are_enqueued_and_rendered(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An empty object is still a structured form, not the NULL ad-hoc-record sentinel."""
+    ha, hb = await _authors(token_factory)
+    did = await _drive_template_effective(app_client, ha, hb, _OPTIONAL_SCHEMA)
+    cap_subj = _subject("cap-empty")
+    await _grant(cap_subj, ("record.read", "record.create"))
+    hc = _auth(token_factory, cap_subj)
+    queued: list[uuid.UUID] = []
+    monkeypatch.setattr(records_service, "_enqueue_structured_pdf", queued.append)
+
+    cap = await app_client.post(
+        "/api/v1/records",
+        headers=hc,
+        json={
+            "record_type": "FILLED_FORM",
+            "title": "Empty optional form",
+            "source_document_id": did,
+            "form_field_values": {},
+        },
+    )
+    assert cap.status_code == 201, cap.text
+    rec_id = uuid.UUID(cap.json()["id"])
+    assert queued == [rec_id]
+
+    async with get_sessionmaker()() as s:
+        await build_structured_pdf(s, rec_id)
+    async with get_sessionmaker()() as s:
+        rec = await s.get(Record, rec_id)
+        assert rec is not None
+        assert rec.structured_pdf_blob_sha256 is not None
 
 
 async def test_destroy_purges_structured_pdf_blob(
@@ -438,6 +488,24 @@ async def test_destroy_purges_structured_pdf_blob(
         assert (
             await s.execute(select(Blob).where(Blob.sha256 == pdf_sha))
         ).scalar_one_or_none() is None
+    assert not (
+        await storage.head(pdf_sha, bucket=storage.get_settings().s3_bucket_renditions)
+    ).exists
+
+    # A task published before destroy may arrive afterward. The DISPOSED row is the terminal guard:
+    # neither the direct worker nor the missing-pointer redrive may recreate/requeue its rendition.
+    async with get_sessionmaker()() as s:
+        await build_structured_pdf(s, uuid.UUID(rec_id))
+    queued_after_destroy: list[uuid.UUID] = []
+    async with get_sessionmaker()() as s:
+        await redrive_missing_structured_pdfs(s, enqueue=queued_after_destroy.append, limit=10_000)
+        rec = await s.get(Record, uuid.UUID(rec_id))
+        assert rec is not None
+        assert rec.structured_pdf_blob_sha256 is None
+        assert (
+            await s.execute(select(Blob).where(Blob.sha256 == pdf_sha))
+        ).scalar_one_or_none() is None
+    assert uuid.UUID(rec_id) not in queued_after_destroy
     assert not (
         await storage.head(pdf_sha, bucket=storage.get_settings().s3_bucket_renditions)
     ).exists
