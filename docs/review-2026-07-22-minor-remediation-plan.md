@@ -8,8 +8,8 @@
 ## Inventory and conventions
 
 - The historic denominator remains **104**. One finding was already closed while the MAJOR work was
-  underway, leaving **103** to schedule here. Batch M1 closed 4; M2 closes 2; **97 remain queued**
-  after M2.
+  underway, leaving **103** to schedule here. Batch M1 closed 4; M2 closed 2; M3 closes 2;
+  **95 remain queued** after M3.
 - A queued finding is not assumed to still be live. Every batch must re-locate and revalidate its
   findings against then-current `main` before implementation; close, re-scope, or reject it with
   evidence rather than mechanically applying the 2026-07-22 suggestion.
@@ -26,8 +26,8 @@
 |---|---|:---:|---|---|
 | M0 | Preclosed during MAJOR remediation | 1 | ☑ merged | [#369](https://github.com/CoJoA13/EasySynQ/pull/369), precision follow-up [#371](https://github.com/CoJoA13/EasySynQ/pull/371) |
 | M1 | Auth boundaries and public diagnostics | 4 | ☑ merged | [#381](https://github.com/CoJoA13/EasySynQ/pull/381) |
-| M2 | Scoped authorization and reporting | 2 | ☑ in PR | [#382](https://github.com/CoJoA13/EasySynQ/pull/382) |
-| M3 | Notification reliability | 2 | ☐ queued — revalidate | — |
+| M2 | Scoped authorization and reporting | 2 | ☑ merged | [#382](https://github.com/CoJoA13/EasySynQ/pull/382) |
+| M3 | Notification reliability | 2 | ☑ in PR | [#383](https://github.com/CoJoA13/EasySynQ/pull/383) |
 | M4 | Lifecycle and workflow guards | 4 | ☐ queued — revalidate | — |
 | M5 | Ingestion commit integrity | 3 | ☐ queued — revalidate | — |
 | M6 | Ingestion review and family integrity | 4 | ☐ queued — revalidate | — |
@@ -48,7 +48,7 @@
 | M21 | Web async and error UX | 8 | ☐ queued — revalidate | — |
 | M22 | Web accessibility | 7 | ☐ queued — revalidate | — |
 
-**Accounting: 1 preclosed + 4 merged + 2 in PR + 97 queued = 104 original findings.**
+**Accounting: 1 preclosed + 6 merged + 2 in PR + 95 queued = 104 original findings.**
 
 ---
 
@@ -101,14 +101,20 @@ key
   documents, because that is an accurate process-scoped empty register rather than an impossible
   authorization scope).
 
-### ☐ M3 — Notification reliability
+### ☑ M3 — Notification reliability — [#383](https://github.com/CoJoA13/EasySynQ/pull/383)
 
-`branch: fix/minor-notification-reliability` · API + unit/integration
+`branch: fix/minor-notification-reliability` · API + OpenAPI + integration · no migration and no
+new permission key
 
-- [ ] `apps/api/src/easysynq_api/api/notifications.py:69` — a negative notification-list limit
-  reaches PostgreSQL as an invalid negative `LIMIT` and returns 500 `[f]`.
-- [ ] `apps/api/src/easysynq_api/services/notifications/digest.py:151` — a missing `digest.daily`
-  template still stamps `digested_at`, silently dropping retryable items `[f]`.
+- [x] `apps/api/src/easysynq_api/api/notifications.py:69` — a negative notification-list limit
+  reached PostgreSQL as an invalid negative `LIMIT` and returned 500 `[C]` (fixed: reject values
+  below zero at FastAPI request validation while preserving the existing zero-row request and
+  server cap above 200; OpenAPI now declares the non-negative bound and 422 response).
+- [x] `apps/api/src/easysynq_api/services/notifications/digest.py:151` — a missing `digest.daily`
+  template still stamped `digested_at`, silently dropping retryable items `[C]` (fixed: an eligible
+  template miss logs and rolls back without stamping, so a restored template creates exactly one
+  digest on retry; genuinely ineligible users retain the intentional terminal stamp/no-email
+  behavior).
 
 ### ☐ M4 — Lifecycle and workflow guards
 

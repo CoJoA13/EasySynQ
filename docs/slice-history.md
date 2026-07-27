@@ -174,7 +174,30 @@
 
 ## REMEDIATION — correctness, accessibility, polish & test reliability
 
-### Minor Batch M2 — canonical acknowledgment scope and honest PROCESS-report admission (API + tests + docs; NO migration [head stays `0075`]; NO new permission key [catalog 102]; PR [#382](https://github.com/CoJoA13/EasySynQ/pull/382))
+### Minor Batch M3 — notification-list input safety and retryable digest rendering (API + OpenAPI + integration + docs; NO migration [head stays `0075`]; NO new permission key [catalog 102]; PR [#383](https://github.com/CoJoA13/EasySynQ/pull/383))
+
+**What shipped.** `GET /notifications` now rejects a negative `limit` at FastAPI's request boundary
+instead of passing an invalid negative `LIMIT` to PostgreSQL and surfacing a 500. The lower bound is
+deliberately zero: `limit=0` retains its existing useful empty-read behavior, while values above 200
+retain the documented server cap. The static OpenAPI contract now declares `minimum: 0` and the
+validation-problem 422 response.
+
+The daily-digest bundler now distinguishes a genuinely ineligible recipient from an eligible
+recipient whose effective `digest.daily` template is missing. Ineligible rows remain terminally
+stamped with no email, as designed. A template miss now emits a structured warning and rolls back
+the per-user transaction before `digested_at` is stamped, releasing the row and advisory lock for a
+later sweep. Restoring the template therefore creates one digest and stamps the row on retry instead
+of silently losing the item.
+
+**Tests + gate.** Both defects were RED-verified against the pre-fix code: PostgreSQL raised
+`InvalidRowCountInLimitClause`, and a forced template miss committed `digested_at`. Focused
+integration regressions now prove the 422 problem response and the full missing→unstamped→restore→
+one-email retry path, while the existing ineligible-user test preserves the intentional terminal
+branch. The complete notification API + digest integration files are green (**17 passed**), as are
+API Ruff/format, mypy over **426 source files**, the full unit suite (**1168 passed, 1 expected
+release-only skip**), and Redocly OpenAPI lint.
+
+### Minor Batch M2 — canonical acknowledgment scope and honest PROCESS-report admission (API + tests + docs; NO migration [head stays `0075`]; NO new permission key [catalog 102]; PR [#382](https://github.com/CoJoA13/EasySynQ/pull/382), squash `1e12c48`)
 
 **What shipped.** The fresh DOC_ACK decision gate no longer rebuilds process scope from raw
 `ProcessLink` rows. It now consumes the same `vault_repo.process_ids_for_doc` loader as the other
