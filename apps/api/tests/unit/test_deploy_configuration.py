@@ -113,7 +113,7 @@ def test_keycloak_runs_optimized_on_durable_postgres_schema() -> None:
     assert "ALL TABLES IN SCHEMA keycloak" in init
     assert "KEYCLOAK_DB_NAME=" in template
     assert "`KEYCLOAK_DB_NAME`" in restore_runbook
-    assert "transfers restored `keycloak` schema objects" in restore_runbook
+    assert "restored `keycloak` schema objects" in restore_runbook
 
     # A transition must export users/credential hashes before the legacy container is replaced.
     assert "docker stop --time 60" in migration
@@ -121,8 +121,14 @@ def test_keycloak_runs_optimized_on_durable_postgres_schema() -> None:
     assert ".legacy-h2-export-complete" in migration
     assert "com.docker.compose.volume=keycloakimport" in migration
     assert 'IMPORT_VOLUME="${IMPORT_VOLUME:-${PROJECT}_keycloakimport}"' in migration
+    assert (
+        'grep -q "\\"users\\"[[:space:]]*:" /migration-export/easysynq-realm.json &&' in migration
+    )
     assert "restarting the untouched legacy container" in migration
     assert "name: easysynq-keycloak-import" not in compose
+    assert 'legs.realm_export = "present"' in restore_runbook
+    assert "<compose-project>_keycloakimport" in restore_runbook
+    assert "before the first Keycloak start" in restore_runbook
 
 
 def test_h2_migration_reads_custom_compose_project_from_env_file(tmp_path: Path) -> None:
@@ -236,6 +242,32 @@ fi
     assert "com.docker.compose.project=customer-qms" in create
     assert "com.docker.compose.volume=keycloakimport" in create
     assert create.endswith(" customer-qms_keycloakimport")
+
+
+def test_installer_rejects_invalid_dns_labels_before_deployment() -> None:
+    for hostname in (
+        "qms.-corp.example",
+        "qms-.corp.example",
+        ".qms.corp.example",
+        "qms.corp.example.",
+        f"{'a' * 64}.example",
+    ):
+        result = subprocess.run(  # noqa: S603 - fixed repository installer
+            [
+                "/bin/bash",
+                str(ROOT / "scripts/install.sh"),
+                "s",
+                "--host",
+                hostname,
+            ],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        assert result.returncode == 2
+        assert "must be a valid DNS name" in result.stderr
 
 
 def test_production_entrypoints_require_compose_2_24_4(tmp_path: Path) -> None:

@@ -180,9 +180,9 @@ docker run --rm \
   --volume "${IMPORT_VOLUME}:/migration-export" \
   --entrypoint /bin/sh \
   "$LEGACY_IMAGE_ID" \
-  -c 'test -s /migration-export/easysynq-realm.json
-      grep -q "\"realm\"[[:space:]]*:[[:space:]]*\"easysynq\"" /migration-export/easysynq-realm.json
-      grep -q "\"users\"[[:space:]]*:" /migration-export/easysynq-realm.json
+  -c 'test -s /migration-export/easysynq-realm.json &&
+      grep -q "\"realm\"[[:space:]]*:[[:space:]]*\"easysynq\"" /migration-export/easysynq-realm.json &&
+      grep -q "\"users\"[[:space:]]*:" /migration-export/easysynq-realm.json &&
       touch /migration-export/.legacy-h2-export-complete'
 
 echo "keycloak-migrate: export staged in ${IMPORT_VOLUME}; keep legacy Keycloak stopped and run Compose up"

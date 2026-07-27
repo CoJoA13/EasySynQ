@@ -95,11 +95,28 @@ The MVP produces a verified target; **cutover is a documented operator action, n
 2. Repoint `DATABASE_URL`, `DATABASE_URL_SYNC`, and `AUDIT_LINKER_DATABASE_URL` at the restored
    database (or `pg_dump`/`createdb` it into the production name). Set `KEYCLOAK_DB_NAME` to that
    same database name so the restored identity/client state moves with the application.
-3. Repoint MinIO at (or copy the blobs into) a fresh **object-lock-enabled** vault bucket — **never
+3. **Choose the Keycloak recovery path before starting anything:**
+
+   - A Batch-13-or-newer target contains the `keycloak` PostgreSQL schema. No realm re-import is
+     needed; `KEYCLOAK_DB_NAME` selects that durable identity state.
+   - A pre-Batch-13 target has no `keycloak` schema because its identities lived in H2. For this
+     case, `KEYCLOAK_DB_NAME` alone does **not** recover identities. Confirm the archive manifest
+     records `legs.realm_export = "present"`, decrypt/extract its `realm.json` leg into a controlled
+     `0600` temporary file, and stage it as `easysynq-realm.json` in this installation's
+     project-scoped `<compose-project>_keycloakimport` volume **before the first Keycloak start**.
+     This is the same offline import path used by `scripts/migrate-keycloak-h2.sh`; do not let
+     `keycloak-init` substitute the committed stock seed. If the realm leg is absent, stop: that
+     archive cannot recover the legacy Keycloak users/credentials, so use the separately retained
+     identity backup instead.
+
+4. Repoint MinIO at (or copy the blobs into) a fresh **object-lock-enabled** vault bucket — **never
    the old locked one**.
-4. Start the stack. The `keycloak-init` one-shot transfers restored `keycloak` schema objects from
-   the `pg_restore --no-owner` role back to `easysynq_keycloak` before Keycloak starts.
-5. Run `easysynq mirror rebuild` plus a reindex.
+5. Start the stack. For a PostgreSQL-backed archive, the `keycloak-init` one-shot transfers
+   restored `keycloak` schema objects from the `pg_restore --no-owner` role back to
+   `easysynq_keycloak`. For a legacy archive, it creates the empty schema while preserving the
+   staged realm for Keycloak's offline import. Verify a restored account and the `easysynq-web`
+   client before reopening access.
+6. Run `easysynq mirror rebuild` plus a reindex.
 
 Discard an unused target with `easysynq restore --discard <scratch_db>`.
 

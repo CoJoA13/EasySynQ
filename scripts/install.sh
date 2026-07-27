@@ -61,11 +61,24 @@ case "$TLS_MODE" in
   *) usage; exit 2 ;;
 esac
 
+valid_dns_name() {
+  local name="$1" label
+  local -a labels=()
+  [ "${#name}" -le 253 ] || return 1
+  [[ "$name" != .* && "$name" != *. ]] || return 1
+  [[ "$name" != *..* ]] || return 1
+  IFS='.' read -r -a labels <<< "$name"
+  [ "${#labels[@]}" -gt 0 ] || return 1
+  for label in "${labels[@]}"; do
+    # RFC-style host label: 1–63 alnum/hyphen characters, with alnum at both edges.
+    [[ "$label" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$ ]] || return 1
+  done
+}
+
 if [ "$ENV_ONLY" != "1" ]; then
   [ -n "$HOST_NAME" ] || { usage; exit 2; }
-  if [[ ! "$HOST_NAME" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ ]] \
-      || [[ "$HOST_NAME" == *..* ]]; then
-    echo "install: --host must be a DNS name without a scheme, path, or port" >&2
+  if ! valid_dns_name "$HOST_NAME"; then
+    echo "install: --host must be a valid DNS name without a scheme, path, or port" >&2
     exit 2
   fi
 fi
