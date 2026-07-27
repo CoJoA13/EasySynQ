@@ -231,9 +231,10 @@ unit/integration tests · no new permission key
 - [x] `apps/api/src/easysynq_api/services/vault/service.py:441` — `init_upload` could overwrite the
   lock holder's scratch pointer without proving the caller owns the checkout `[f]` (fixed:
   init-upload row-locks the working-draft mirror, requires `checked_out_by` to match the caller,
-  and CAS-refreshes its token against authoritative Redis; a mismatched user or lapsed lock returns
-  `409 lock_conflict` before changing scratch state or issuing a presigned upload. Regression
-  coverage proves neither case can replace the holder's stored SHA).
+  and CAS-refreshes its token against authoritative Redis before presigning, before committing
+  scratch, and immediately before returning; a mismatched user, lapsed lock, or concurrent
+  invalidation returns the contract-declared `409 lock_conflict` without leaking an upload URL.
+  Regression coverage proves these cases cannot replace the holder's stored SHA).
 
 ### ☐ M9 — Migration and ORM coherence
 

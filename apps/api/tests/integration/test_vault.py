@@ -31,6 +31,7 @@ from easysynq_api.db.models.working_draft import WorkingDraft
 from easysynq_api.db.session import get_sessionmaker
 from easysynq_api.domain.authz.types import Effect, ScopeLevel
 from easysynq_api.services.vault import locks
+from easysynq_api.services.vault import service as vault_service
 
 pytestmark = pytest.mark.integration
 
@@ -259,6 +260,41 @@ async def test_init_upload_requires_checkout_owner_and_preserves_holder_scratch(
         ).scalar_one()
         assert wd.checked_out_by == holder_id
         assert wd.scratch_blob_ref == holder_sha
+
+
+async def test_init_upload_revalidates_checkout_after_presigning(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    subj: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A URL generated while the lock is broken must never escape in a successful response."""
+    await _grant_doc_perms(subj.a)
+    h = _auth(token_factory, subj.a)
+    did = (await _create(app_client, h, await _sop_type_id()))["id"]
+    checked_out = await app_client.post(f"/api/v1/documents/{did}/checkout", headers=h)
+    assert checked_out.status_code == 200, checked_out.text
+
+    async def _break_lock_while_presigning(_sha256: str, _content_type: str) -> str:
+        await locks.force_release(uuid.UUID(did))
+        return "https://should-not-leak.invalid/presigned-put"
+
+    monkeypatch.setattr(vault_service.storage, "presign_put", _break_lock_while_presigning)
+    sha = hashlib.sha256(f"presign-race-{subj.a}".encode()).hexdigest()
+    raced = await app_client.post(
+        f"/api/v1/documents/{did}/versions:init-upload",
+        headers=h,
+        json={"sha256": sha, "content_type": "application/pdf"},
+    )
+    assert raced.status_code == 409, raced.text
+    assert raced.json()["code"] == "lock_conflict"
+    assert "should-not-leak" not in raced.text
+
+    async with get_sessionmaker()() as s:
+        wd = (
+            await s.execute(select(WorkingDraft).where(WorkingDraft.document_id == uuid.UUID(did)))
+        ).scalar_one()
+        assert wd.scratch_blob_ref is None
 
 
 # --- INV-3 ------------------------------------------------------------------------------

@@ -490,9 +490,10 @@ async def init_upload(
             code="lock_conflict",
             title="You do not hold the check-out for this document",
         )
+    token = wd.lock_token or ""
     # Redis is the runtime lock authority; the PG row identifies its user/token. A successful CAS
     # both proves this is still the active checkout and treats init-upload as editor activity.
-    if not await locks.heartbeat(doc.id, wd.lock_token or ""):
+    if not await locks.heartbeat(doc.id, token):
         raise ProblemException(
             status=409,
             code="lock_conflict",
@@ -500,7 +501,6 @@ async def init_upload(
         )
     # Record the in-progress scratch ref so break-lock preserves it (R9).
     wd.scratch_blob_ref = sha256
-    await session.commit()
     existing = await repository.get_blob(session, sha256)
     settings = get_settings()
     if (
@@ -512,9 +512,29 @@ async def init_upload(
         # needed. CR-1: a blob in ANOTHER bucket (records evidence / a rendition) must NOT dedup
         # — a controlled version's source bytes belong in the WORM documents bucket, and checkin
         # fail-closes (423) on a foreign-bucket row anyway, so force a fresh staging upload.
-        return {"dedup": True, "object_key": existing.object_key, "upload_url": None}
-    url = await storage.presign_put(sha256, content_type)
-    return {"dedup": False, "object_key": sha256, "upload_url": url}
+        result = {"dedup": True, "object_key": existing.object_key, "upload_url": None}
+    else:
+        url = await storage.presign_put(sha256, content_type)
+        result = {"dedup": False, "object_key": sha256, "upload_url": url}
+
+    # Presigning is an authorization decision: if break-lock/check-in invalidated the Redis token
+    # while the URL was generated, reject without committing the scratch change. Revalidate once
+    # more after the commit releases the PG row lock so a takeover during commit cannot receive a
+    # stale holder's URL. There is deliberately no await between the final CAS and return.
+    if not await locks.heartbeat(doc.id, token):
+        raise ProblemException(
+            status=409,
+            code="lock_conflict",
+            title="The check-out changed while authorizing the upload; check out again",
+        )
+    await session.commit()
+    if not await locks.heartbeat(doc.id, token):
+        raise ProblemException(
+            status=409,
+            code="lock_conflict",
+            title="The check-out changed while authorizing the upload; check out again",
+        )
+    return result
 
 
 async def checkin(
