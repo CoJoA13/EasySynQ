@@ -2,11 +2,12 @@
 
 > The running per-slice changelog + the deep per-slice rationale (this file IS the canonical narrative; it
 > also lives in the squash-merge commits). CLAUDE.md holds only the current head pointer.
-> **Migration head: `0078` (next `0079`).** Code: https://github.com/CoJoA13/EasySynQ (`main` protected, PR + green CI).
+> **Migration head: `0079` (next `0080`).** Code: https://github.com/CoJoA13/EasySynQ (`main` protected, PR + green CI).
 > (The pointer had gone stale at `0070` — the 2026-07-22 remediation batches added `0071` audit-chain
 > cursor, `0072` disposition append-only, `0073` pending-blob-purge, `0074` operator alarms and
 > `0075` the audit `scope_ref` index; M5 added `0076`'s import-owner snapshot; M7 added `0077`'s
-> sealed-pack retention policy and `0078`'s record content-hash version.)
+> sealed-pack retention policy and `0078`'s record content-hash version; M9 added `0079`'s
+> operational-install coherence repair.)
 
 ## ⚠ OPEN RESIDUALS — named, owner-acknowledged, NOT yet done
 
@@ -174,6 +175,41 @@
 **Tests + review.** Unit `test_authz_resource` (`resource_from_doc` populates `framework_id`+`kind`; mutation-distinguishing deny-wins — blanking a field flips DENY→ALLOW) + integration (a FRAMEWORK-scoped `document.read` DENY 403s the detail gate AND hides the row from the library list + search/suggest; an objective-release deny-wins — FRAMEWORK ALLOW + PROCESS DENY on the satellite process → 403; a foundational `process_ids_for_doc`-unions-the-satellite test). diff-critic CLEAN across the satellite + DCR/records passes (proved the swap identical for non-objectives, the TOCTOU correction floor only gets tighter). api unit 1078→1090. (S-scope-tuple, BE, NO migration [head `0070`], NO new key [catalog 102], PR #346 squash `26360bb`.)
 
 ## REMEDIATION — correctness, accessibility, polish & test reliability
+
+### Minor Batch M9 — populated migration safety and ORM constraint coherence (migrations + CI migration test + docs; migration `0079` [new head]; NO new permission key [catalog 102]; PR pending)
+
+**What shipped.** Historical seed downgrades now preserve their live dependency closure. Migration
+`0004` removes grants and roles only when no `role_assignment` references the seeded role, then
+deletes a seeded permission only when neither a retained grant nor a `permission_override` depends
+on it. An assigned role therefore keeps its authority bundle instead of surviving the downgrade as
+an empty shell. Migration `0018` clears clause parent links as before but deletes only clauses with
+no `clause_mapping`; re-upgrade restores the complete idempotent catalog and parent tree.
+
+Retention authorization no longer depends on the setup-only `DEFAULT` organization code. Migration
+`0028` discovers the org through every matching QMS Owner/Internal Auditor role and seeds the three
+SYSTEM-scope grants for each matching org. New migration `0079` applies the same idempotent backfill
+to operational installations that already crossed `0028` after setup renamed their short code.
+
+Fresh installs now give the process-edge self-loop CHECK its canonical
+`ck_process_edge_no_self_loop` name by passing the bare `no_self_loop` token through SQLAlchemy's
+constraint convention. Migration `0079` normalizes the already-deployed doubled name, tolerates an
+already-canonical database, and collapses the duplicate legacy copy if both are present. Downgrade
+deliberately retains both coherence repairs: administrator-created grants cannot be distinguished
+from identical backfills, and renaming the CHECK backward would recreate drift without reversing
+any schema behavior.
+
+**Tests.** A dedicated migration-CI regression creates its own scratch database on disposable PG16
+and proves four mutation-distinguishing boundaries: populated `0004→0003` preserves an assigned
+role, its grants, and a direct override while removing an unassigned seed role; populated
+`0018→0017` keeps the mapped clause and removes the unreferenced catalog; a renamed-org
+`0027→0028` receives all three retention grants; and a simulated old `0078` install reaches `0079`
+with those missing grants plus the doubled CHECK, then exits with the grants restored, the canonical
+name only across legacy-only, duplicate, and missing-constraint cases, a non-destructive
+`0079→0078→0079` cycle, and a clean `alembic check`. The existing fresh-database head→base→head gate
+remains separate so populated fixtures cannot mask unrelated downgrade behavior. API Ruff/format
+and strict mypy over **426 source files** are clean; all **80** migration files pass root
+Ruff/format; the full unit suite is green (**1180 passed, 1 expected release-only skip**); and a
+separate disposable PG16 head→base→head round trip finishes with no ORM drift.
 
 ### Minor Batch M8 — vault and retention input guards (API + OpenAPI + integration + docs; NO migration [head stays `0078`]; NO new permission key [catalog 102]; PR [#388](https://github.com/CoJoA13/EasySynQ/pull/388))
 

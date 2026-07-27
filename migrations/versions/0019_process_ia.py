@@ -176,7 +176,9 @@ def upgrade() -> None:
         ),
         _created_by_fk("process_edge"),
         sa.PrimaryKeyConstraint("id", name="pk_process_edge"),
-        sa.CheckConstraint("from_process_id <> to_process_id", name="ck_process_edge_no_self_loop"),
+        # Pass the bare token: the metadata convention supplies ``ck_process_edge_``. Supplying the
+        # full name here makes PostgreSQL store ``ck_process_edge_ck_process_edge_no_self_loop``.
+        sa.CheckConstraint("from_process_id <> to_process_id", name="no_self_loop"),
         sa.UniqueConstraint("from_process_id", "to_process_id", name="uq_process_edge_from_to"),
     )
 

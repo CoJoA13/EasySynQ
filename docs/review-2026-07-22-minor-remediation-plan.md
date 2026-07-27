@@ -9,7 +9,8 @@
 
 - The historic denominator remains **104**. One finding was already closed while the MAJOR work was
   underway, leaving **103** to schedule here. Batch M1 closed 4; M2 closed 2; M3 closed 2; M4
-  closed 4; M5 closed 3; M6 closed 4; M7 closes 3; **81 remain queued** after M7.
+  closed 4; M5 closed 3; M6 closed 4; M7 closed 3; M8 closed 2; M9 closes 4; **75 remain queued**
+  after M9.
 - A queued finding is not assumed to still be live. Every batch must re-locate and revalidate its
   findings against then-current `main` before implementation; close, re-scope, or reject it with
   evidence rather than mechanically applying the 2026-07-22 suggestion.
@@ -32,8 +33,8 @@
 | M5 | Ingestion commit integrity | 3 | ☑ merged | [#385](https://github.com/CoJoA13/EasySynQ/pull/385) |
 | M6 | Ingestion review and family integrity | 4 | ☑ merged | [#386](https://github.com/CoJoA13/EasySynQ/pull/386) |
 | M7 | Records and rendering resilience | 3 | ☑ merged | [#387](https://github.com/CoJoA13/EasySynQ/pull/387) |
-| M8 | Vault and retention input guards | 2 | ☑ in PR | [#388](https://github.com/CoJoA13/EasySynQ/pull/388) |
-| M9 | Migration and ORM coherence | 4 | ☐ queued — revalidate | — |
+| M8 | Vault and retention input guards | 2 | ☑ merged | [#388](https://github.com/CoJoA13/EasySynQ/pull/388) |
+| M9 | Migration and ORM coherence | 4 | ☑ implementation complete — PR pending | — |
 | M10 | Schema and index design | 4 | ☐ queued — revalidate | — |
 | M11 | Organization time and audit scalability | 3 | ☐ queued — revalidate | — |
 | M12 | Data-model documentation drift | 5 | ☐ queued — revalidate | — |
@@ -48,7 +49,8 @@
 | M21 | Web async and error UX | 8 | ☐ queued — revalidate | — |
 | M22 | Web accessibility | 7 | ☐ queued — revalidate | — |
 
-**Accounting: 1 preclosed + 19 merged + 3 in PR + 81 queued = 104 original findings.**
+**Accounting: 1 preclosed + 24 merged + 4 implementation-complete + 75 queued = 104 original
+findings.**
 
 ---
 
@@ -219,7 +221,7 @@ unit/integration tests · no new permission key
   legacy empty-form preimage while v2 hashes `{}` distinctly from the `NULL` ad-hoc sentinel;
   exported pack manifests and dossier subjects carry that version beside every record hash).
 
-### ☑ M8 — Vault and retention input guards
+### ☑ M8 — Vault and retention input guards — [#388](https://github.com/CoJoA13/EasySynQ/pull/388)
 
 `branch: fix/minor-vault-retention-guards` · API + integration
 
@@ -238,18 +240,27 @@ unit/integration tests · no new permission key
   leaking an upload URL. Regression coverage proves the recovery pointer follows that serialized
   order).
 
-### ☐ M9 — Migration and ORM coherence
+### ☑ M9 — Migration and ORM coherence
 
-`branch: fix/minor-migration-orm-coherence` · migrations + migration tests
+`branch: fix/minor-migration-orm-coherence` · migration `0079` + historical migration corrections +
+populated migration tests · no new permission key
 
-- [ ] `migrations/versions/0004_seed_authz.py:487` — downgrade seed deletes abort once role
-  assignments or permission overrides reference the rows `[f]`.
-- [ ] `migrations/versions/0018_seed_clauses.py:105` — downgrade's unguarded clause delete aborts
-  once mappings exist `[f]`.
-- [ ] `migrations/versions/0028_retention_policy_crud.py:167` — retention grants are skipped after
-  an operational install renames the organization short code `[C]`.
-- [ ] `migrations/versions/0019_process_ia.py:179` — the live `process_edge` CHECK name is doubled
-  while the ORM expects the canonical undoubled name `[C]`.
+- [x] `migrations/versions/0004_seed_authz.py:487` — downgrade seed deletes abort once role
+  assignments or permission overrides reference the rows `[C]` (fixed: remove grants and roles only
+  when the seeded role has no live assignment, then retain every permission referenced by a
+  preserved grant or direct override; an assigned role keeps its complete authority bundle rather
+  than surviving as an empty shell).
+- [x] `migrations/versions/0018_seed_clauses.py:105` — downgrade's unguarded clause delete aborts
+  once mappings exist `[C]` (fixed: clear the self-parent links, delete only clauses with no
+  `clause_mapping`, and let re-upgrade idempotently restore the complete catalog and parent tree).
+- [x] `migrations/versions/0028_retention_policy_crud.py:167` — retention grants are skipped after
+  an operational install renames the organization short code `[C]` (fixed: resolve every matching
+  org-scoped QMS Owner/Internal Auditor role without consulting the bootstrap code; migration
+  `0079` idempotently backfills installations that already crossed the faulty upgrade).
+- [x] `migrations/versions/0019_process_ia.py:179` — the live `process_edge` CHECK name is doubled
+  while the ORM expects the canonical undoubled name `[C]` (fixed: the historical create now passes
+  the bare naming-convention token, while `0079` renames the deployed doubled constraint, tolerates
+  an already-canonical database, and removes a duplicate legacy copy if both exist).
 
 ### ☐ M10 — Schema and index design
 
