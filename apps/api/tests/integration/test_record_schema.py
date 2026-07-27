@@ -76,5 +76,6 @@ async def test_record_shared_pk_round_trip(app_under_test: object) -> None:
         assert loaded.record_type is RecordType.CALIBRATION
         assert loaded.disposition_state is RecordDispositionState.ACTIVE
         assert loaded.legal_hold is False  # server default
+        assert loaded.content_hash_version == 1  # legacy-safe DB default; capture stamps v2
         parent = await s.get(DocumentedInformation, record_id)
         assert parent is not None and parent.kind is DocumentKind.RECORD

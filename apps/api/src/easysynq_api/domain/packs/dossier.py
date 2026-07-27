@@ -127,6 +127,7 @@ def serialize_finding_dossier(
     captured_at: str | None,
     captured_by: UserRef | None,
     content_hash: str | None,
+    content_hash_version: int,
     audit: dict[str, Any] | None,
     correction_of: str | None,
     superseded_by_correction: str | None,
@@ -147,6 +148,7 @@ def serialize_finding_dossier(
         "captured_at": captured_at,
         "captured_by": project_user(captured_by),
         "content_hash": content_hash,
+        "content_hash_version": content_hash_version,
         "audit": audit,
         "correction_of": correction_of,
         "superseded_by_correction": superseded_by_correction,
@@ -193,6 +195,7 @@ def serialize_capa_dossier(
     captured_at: str | None,
     captured_by: UserRef | None,
     content_hash: str | None,
+    content_hash_version: int,
     origin_finding: dict[str, Any] | None,
     stages: Iterable[dict[str, Any]],
 ) -> dict[str, Any]:
@@ -213,6 +216,7 @@ def serialize_capa_dossier(
         "captured_at": captured_at,
         "captured_by": project_user(captured_by),
         "content_hash": content_hash,
+        "content_hash_version": content_hash_version,
         "origin_finding": origin_finding,
         "stages": ordered,
     }

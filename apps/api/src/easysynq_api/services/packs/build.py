@@ -123,6 +123,7 @@ async def _assemble(
                 "title": c.base.title,
                 "captured_at": c.record.captured_at.isoformat() if c.record.captured_at else None,
                 "content_hash": c.record.content_hash,
+                "content_hash_version": c.record.content_hash_version,
                 "source_document_id": (
                     str(c.record.source_document_id) if c.record.source_document_id else None
                 ),
@@ -367,7 +368,7 @@ async def build(session: AsyncSession, pack_id: uuid.UUID) -> None:
         await storage.put_bytes(
             zip_bytes, zip_sha, bucket=storage._staging_bucket(), content_type="application/zip"
         )
-        permanent = await records_repo.ensure_default_policy(session, pack.org_id)
+        permanent = await records_repo.ensure_sealed_pack_policy(session, pack.org_id)
         record = await capture_record(
             session,
             generator,

@@ -18,7 +18,18 @@ import datetime
 import uuid
 from typing import Any
 
-from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Index, Text, func, text
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    Date,
+    DateTime,
+    ForeignKey,
+    Index,
+    SmallInteger,
+    Text,
+    func,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -34,6 +45,10 @@ from ._record_enums import (
 class Record(Base):
     __tablename__ = "record"
     __table_args__ = (
+        CheckConstraint(
+            "content_hash_version IN (1, 2)",
+            name="ck_record_content_hash_version_supported",
+        ),
         Index("ix_record_source_version_id", "source_version_id"),
         # Beat retention sweep (doc 14 §15.1).
         Index(
@@ -60,6 +75,11 @@ class Record(Base):
         UUID(as_uuid=True), ForeignKey("app_user.id", ondelete="RESTRICT"), nullable=False
     )
     content_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Existing rows are v1; the capture service explicitly stamps v2. Keep the DB default at 1 so
+    # an old application process during a rolling migration cannot write a v1 digest marked as v2.
+    content_hash_version: Mapped[int] = mapped_column(
+        SmallInteger, server_default=text("1"), default=1, nullable=False
+    )
     source_document_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("documented_information.id", ondelete="RESTRICT"),
@@ -90,7 +110,10 @@ class Record(Base):
     )
     # S-rec-3 (doc 06 §4.2): a pointer to the cached structured-record PDF rendition — a DERIVED,
     # regenerable view in the NON-WORM renditions bucket (doc 14 §5.4), built best-effort at Stage 2
-    # after capture commits. Plain Text, NO FK (the evidence_pack.zip_blob_sha256 / portfolio
-    # precedent) so the R27 WORM-destroy hatch never aborts on a RESTRICT FK; nulled + the blob row
-    # dropped when the record is destroyed/disposed (the blob-row-iff-bytes invariant).
+    # after capture commits and redriven hourly while the pointer is missing. The row-locked builder
+    # excludes a destructive disposition tombstone so delayed work cannot recreate a purged
+    # rendition, while ARCHIVE_COLD/TRANSFER may still finish the derived view. Plain Text, NO FK
+    # (the evidence_pack.zip_blob_sha256 / portfolio precedent) so the R27 WORM-destroy hatch never
+    # aborts on a RESTRICT FK; nulled + the blob row dropped when the record is destroyed
+    # (the blob-row-iff-bytes invariant).
     structured_pdf_blob_sha256: Mapped[str | None] = mapped_column(Text, nullable=True)

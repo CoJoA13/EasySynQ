@@ -133,6 +133,7 @@ async def test_capture_read_download_round_trip(
     assert rec["disposition_state"] == "ACTIVE"
     assert rec["retention_policy_id"] is not None
     assert rec["retention_basis_date"] is not None  # captured_at basis → a date
+    assert rec["content_hash_version"] == 2
     assert rec["content_hash"] == record_content_hash(
         record_type="EVIDENCE",
         source_version_id=None,

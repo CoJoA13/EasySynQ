@@ -1406,10 +1406,13 @@ async def checkin_mgmt_review_minutes(
 
 
 def schema_from_version(version: DocumentVersionModel) -> dict[str, Any] | None:
-    """The pinned ``field_schema`` from a version's immutable ``metadata_snapshot`` (None if absent
-    — e.g. an ordinary document version). The Mode-B validator reads ONLY here (doc 06 §4.2)."""
+    """Return a valid pinned ``field_schema`` from an immutable version snapshot.
+
+    ``None`` covers both absence (an ordinary document version) and defensive rejection of malformed
+    legacy/corrupt metadata. Mode-B capture and rendition classification read ONLY here.
+    """
     fs = (version.metadata_snapshot or {}).get("field_schema")
-    return fs if isinstance(fs, dict) else None
+    return fs if isinstance(fs, dict) and not validate_schema(fs) else None
 
 
 async def resolve_template_version(

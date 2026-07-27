@@ -15,13 +15,21 @@ from collections.abc import Callable
 import pytest
 from httpx import AsyncClient
 from sqlalchemy import delete, update
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from easysynq_api.db.models._retention_enums import DispositionAction, RetentionBasis
 from easysynq_api.db.models.documented_information import DocumentedInformation
 from easysynq_api.db.models.evidence_blob import EvidenceBlob
+from easysynq_api.db.models.organization import Organization
 from easysynq_api.db.models.record import Record
 from easysynq_api.db.models.retention_policy import RetentionPolicy
 from easysynq_api.db.session import get_sessionmaker
 from easysynq_api.services.records import sweep_due_records
+from easysynq_api.services.records.repository import (
+    SEALED_PACK_POLICY_NAME,
+    ensure_sealed_pack_policy,
+    sealed_pack_policy_id,
+)
 
 from ._owner_db import owner_delete_disposition_events
 from .test_records import _capture, _grant, _subject
@@ -106,11 +114,12 @@ async def test_create_reserved_name_422(
     subject = _subject("rp")
     await _grant(subject, _PERMS)
     h = _auth(token_factory, subject)
-    bad = await app_client.post(
-        "/api/v1/retention-policies", headers=h, json=_policy_body(name="System Default Retention")
-    )
-    assert bad.status_code == 422
-    assert bad.json()["errors"][0]["code"] == "reserved_name"
+    for name in ("System Default Retention", SEALED_PACK_POLICY_NAME):
+        bad = await app_client.post(
+            "/api/v1/retention-policies", headers=h, json=_policy_body(name=name)
+        )
+        assert bad.status_code == 422
+        assert bad.json()["errors"][0]["code"] == "reserved_name"
 
 
 async def test_create_name_collision_409(
@@ -177,7 +186,7 @@ async def test_extend_forward_guard(
         await _delete_policy(pid)
 
 
-async def test_system_default_protected(
+async def test_system_managed_policies_protected(
     app_client: AsyncClient, token_factory: Callable[..., str]
 ) -> None:
     subject = _subject("rp")
@@ -196,6 +205,78 @@ async def test_system_default_protected(
     )
     assert renamed.status_code == 409
     assert renamed.json()["code"] == "system_default_protected"
+
+    sealed_pack = next(p for p in listed if p["name"] == SEALED_PACK_POLICY_NAME)
+    assert sealed_pack["duration"] == "PERMANENT"
+    assert sealed_pack["disposition_action"] == "RETAIN_PERMANENT"
+    sid = sealed_pack["id"]
+    mutated = await app_client.patch(
+        f"/api/v1/retention-policies/{sid}",
+        headers=h,
+        json={"duration": "P1D", "disposition_action": "DESTROY"},
+    )
+    assert mutated.status_code == 409
+    assert mutated.json()["code"] == "system_policy_protected"
+    sealed_archived = await app_client.post(f"/api/v1/retention-policies/{sid}/archive", headers=h)
+    assert sealed_archived.status_code == 409
+    assert sealed_archived.json()["code"] == "system_policy_protected"
+
+
+async def test_lazy_pack_policy_ensure_preserves_a_user_name_collision(
+    app_client: AsyncClient, dsns: dict[str, str]
+) -> None:
+    """An org created after 0077 can still arrive with a same-name row during a rolling upgrade."""
+    del app_client  # fixture dependency ensures the shared database is migrated
+    org_id = uuid.uuid4()
+    legacy_id = uuid.uuid4()
+    owner_engine = create_async_engine(dsns["owner"])
+    try:
+        async with async_sessionmaker(owner_engine, expire_on_commit=False)() as s:
+            s.add(
+                Organization(
+                    id=org_id,
+                    legal_name="M7 collision proof",
+                    short_code=f"M7-{uuid.uuid4().hex[:8].upper()}",
+                )
+            )
+            legacy = RetentionPolicy(
+                id=legacy_id,
+                org_id=org_id,
+                name=SEALED_PACK_POLICY_NAME,
+                applies_to={"record_type": "SUPPLIER_EVAL"},
+                basis=RetentionBasis.CAPTURED_AT,
+                duration="P3Y",
+                disposition_action=DispositionAction.DESTROY,
+                review_required=True,
+                worm_lock_period="P5Y",
+                active=True,
+            )
+            s.add(legacy)
+            await s.flush()
+
+            managed = await ensure_sealed_pack_policy(s, org_id)
+            await s.commit()
+            await s.refresh(legacy)
+            assert managed.id == sealed_pack_policy_id(org_id)
+            assert managed.id != legacy.id
+            assert managed.name == SEALED_PACK_POLICY_NAME
+            assert managed.duration == "PERMANENT"
+            assert managed.disposition_action is DispositionAction.RETAIN_PERMANENT
+            assert legacy.name.startswith(f"{SEALED_PACK_POLICY_NAME} (preserved user policy: ")
+            assert legacy.applies_to == {"record_type": "SUPPLIER_EVAL"}
+            assert legacy.duration == "P3Y"
+            assert legacy.disposition_action is DispositionAction.DESTROY
+            assert legacy.review_required is True
+            assert legacy.worm_lock_period == "P5Y"
+
+    finally:
+        try:
+            async with async_sessionmaker(owner_engine, expire_on_commit=False)() as s:
+                await s.execute(delete(RetentionPolicy).where(RetentionPolicy.org_id == org_id))
+                await s.execute(delete(Organization).where(Organization.id == org_id))
+                await s.commit()
+        finally:
+            await owner_engine.dispose()
 
 
 async def test_archive_hides_from_resolution_but_pinned_records_still_swept(

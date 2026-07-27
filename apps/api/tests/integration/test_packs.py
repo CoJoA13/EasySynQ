@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import datetime
 import io
+import json
 import uuid
 import zipfile
 from collections.abc import Callable
@@ -40,8 +41,10 @@ from easysynq_api.db.models.retention_policy import RetentionPolicy
 from easysynq_api.db.models.scope import Scope
 from easysynq_api.db.session import get_sessionmaker
 from easysynq_api.domain.authz.types import Effect, ScopeLevel
+from easysynq_api.domain.records.content_hash import CONTENT_HASH_VERSION_V1, record_content_hash
 from easysynq_api.services.packs import build
 from easysynq_api.services.packs import repository as packs_repo
+from easysynq_api.services.records.repository import SEALED_PACK_POLICY_NAME
 
 from ._owner_db import owner_delete_disposition_events
 from .test_records import _capture, _grant, _subject, _upload_evidence
@@ -204,6 +207,21 @@ async def test_pack_build_seal_r28_matrix_and_download(
     ]
     record_ids = [r_inc, r_form, r_perm, r_absent]
 
+    # Simulate a pre-0078 record so the exported manifest proves that a mixed v1/v2 pack carries
+    # the algorithm selector beside each immutable record seal.
+    async with get_sessionmaker()() as s:
+        legacy = await s.get(Record, uuid.UUID(r_inc))
+        assert legacy is not None
+        legacy.content_hash_version = CONTENT_HASH_VERSION_V1
+        legacy.content_hash = record_content_hash(
+            record_type=legacy.record_type.value,
+            source_version_id=legacy.source_version_id,
+            form_field_values=legacy.form_field_values,
+            evidence_sha256s=[sha],
+            version=CONTENT_HASH_VERSION_V1,
+        )
+        await s.commit()
+
     scope_id: uuid.UUID | None = None
     pack_uuid: uuid.UUID | None = None
     try:
@@ -248,14 +266,18 @@ async def test_pack_build_seal_r28_matrix_and_download(
         assert r_absent in sealed["exclusion_summary"]["absence"]
         assert "clauses" in sealed["gap_summary"] and "permission" not in sealed["gap_summary"]
 
-        # The pack is itself a RETAIN_PERMANENT EVIDENCE Record.
+        # The pack is itself an EVIDENCE Record pinned to the reserved immutable policy, never the
+        # org-configurable System Default.
         async with get_sessionmaker()() as s:
             pack_rec = await s.get(Record, uuid.UUID(sealed["pack_record_id"]))
             assert pack_rec is not None and pack_rec.record_type.value == "EVIDENCE"
             policy = await s.get(RetentionPolicy, pack_rec.retention_policy_id)
             assert (
                 policy is not None
+                and policy.name == SEALED_PACK_POLICY_NAME
+                and policy.duration == "PERMANENT"
                 and policy.disposition_action == DispositionAction.RETAIN_PERMANENT
+                and policy.active is True
             )
 
         # Download the sealed ZIP and verify its contents.
@@ -276,6 +298,11 @@ async def test_pack_build_seal_r28_matrix_and_download(
                 n.startswith(f"records/{r_inc}/") for n in names
             )  # the included evidence file
             assert not any(n.startswith(f"records/{r_perm}/") for n in names)  # excluded → no bytes
+            manifest = json.loads(zf.read("manifest.json"))
+            hash_versions = {
+                entry["id"]: entry["content_hash_version"] for entry in manifest["records"]
+            }
+            assert hash_versions == {r_inc: 1, r_form: 2}
     finally:
         await _teardown(
             record_ids=record_ids, pack_id=pack_uuid, scope_id=scope_id, process_id=process_id

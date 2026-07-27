@@ -9,6 +9,7 @@ per org, but a fresh install whose org row postdates the migration has none, so
 
 from __future__ import annotations
 
+import hashlib
 import uuid
 
 from sqlalchemy import and_, asc, delete, desc, func, or_, select
@@ -33,6 +34,15 @@ from ...db.models.system_config import SystemConfig
 from ...db.models.worm_destroy_request import WormDestroyRequest
 
 SYSTEM_DEFAULT_POLICY_NAME = "System Default Retention"
+SEALED_PACK_POLICY_NAME = "Sealed Evidence Pack Retention"
+SEALED_PACK_POLICY_ID_SALT = "easysynq.sealed-pack-retention.v1:"
+_PRESERVED_PACK_POLICY_PREFIX = f"{SEALED_PACK_POLICY_NAME} (preserved user policy: "
+
+
+def sealed_pack_policy_id(org_id: uuid.UUID) -> uuid.UUID:
+    """Return the stable per-org id used to distinguish the managed policy from a name collision."""
+    digest = hashlib.sha256(f"{SEALED_PACK_POLICY_ID_SALT}{org_id}".encode()).digest()
+    return uuid.UUID(bytes=digest[:16])
 
 
 # --- record lookups ----------------------------------------------------------------------
@@ -211,6 +221,69 @@ async def ensure_default_policy(session: AsyncSession, org_id: uuid.UUID) -> Ret
     )
     policy = await system_default_policy(session, org_id)
     assert policy is not None  # noqa: S101 — just inserted-or-existing under the unique index
+    return policy
+
+
+async def ensure_sealed_pack_policy(session: AsyncSession, org_id: uuid.UUID) -> RetentionPolicy:
+    """Get-or-create the system-managed policy reserved for sealed evidence packs.
+
+    Its deterministic id distinguishes it from a pre-existing user policy that happens to use the
+    newly reserved name. Such a collision is renamed in place (preserving its id, settings, and
+    pinned records) before the separate managed row is created. The managed row is normalized on
+    every use so an out-of-band edit cannot make a newly sealed pack disposable.
+    """
+    policy_id = sealed_pack_policy_id(org_id)
+    collision = (
+        await session.execute(
+            select(RetentionPolicy)
+            .where(
+                RetentionPolicy.org_id == org_id,
+                RetentionPolicy.name == SEALED_PACK_POLICY_NAME,
+                RetentionPolicy.id != policy_id,
+            )
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if collision is not None:
+        collision.name = f"{_PRESERVED_PACK_POLICY_PREFIX}{collision.id}:{uuid.uuid4().hex[:16]})"
+        await session.flush()
+
+    await session.execute(
+        pg_insert(RetentionPolicy)
+        .values(
+            id=policy_id,
+            org_id=org_id,
+            name=SEALED_PACK_POLICY_NAME,
+            applies_to=None,
+            basis=RetentionBasis.CAPTURED_AT,
+            duration="PERMANENT",
+            disposition_action=DispositionAction.RETAIN_PERMANENT,
+            review_required=False,
+            worm_lock_period=None,
+            active=True,
+            archived_at=None,
+            archived_by=None,
+        )
+        .on_conflict_do_update(
+            index_elements=["id"],
+            set_={
+                "name": SEALED_PACK_POLICY_NAME,
+                "applies_to": None,
+                "basis": RetentionBasis.CAPTURED_AT,
+                "duration": "PERMANENT",
+                "disposition_action": DispositionAction.RETAIN_PERMANENT,
+                "review_required": False,
+                "worm_lock_period": None,
+                "active": True,
+                "archived_at": None,
+                "archived_by": None,
+                "updated_at": func.now(),
+            },
+        )
+    )
+    policy = await session.get(RetentionPolicy, policy_id)
+    assert policy is not None  # noqa: S101 — just inserted-or-normalized under the unique index
+    await session.refresh(policy)
     return policy
 
 

@@ -81,6 +81,12 @@ app.conf.update(
             "task": "easysynq.records.reap_pending_blob_purges",
             "schedule": 3600.0,  # hourly
         },
+        # M7: recover a dropped capture-time publish or a failed structured-PDF build. The durable
+        # missing pointer is the retry marker; the builder's row lock makes duplicate enqueues safe.
+        "records-redrive-structured-pdfs": {
+            "task": "easysynq.records.redrive_structured_pdfs",
+            "schedule": 3600.0,  # hourly
+        },
         # S-drift-1: daily D5 periodic re-review sweep (doc 04 §9.1)
         "documents-review-sweep": {
             "task": "easysynq.documents.review_sweep",

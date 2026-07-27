@@ -38,7 +38,7 @@ from . import repository as repo
 class DossierBuild:
     files: list[tuple[str, bytes]]  # (zip_path, bytes) — written into the pack ZIP
     file_manifest: list[dict[str, Any]]  # [{path, sha256}] — for manifest["dossier"]["files"]
-    subjects: list[dict[str, Any]]  # [{kind, id, identifier, content_hash, path}] — manifest index
+    subjects: list[dict[str, Any]]  # manifest subject index, including each hash + its version
     digest: str  # the dossier seal (folds into the v2 pack_content_hash)
 
 
@@ -109,6 +109,7 @@ async def _finding_subject(
         captured_at=record.captured_at.isoformat() if record.captured_at else None,
         captured_by=_user_ref(captured_by),
         content_hash=record.content_hash,
+        content_hash_version=record.content_hash_version,
         audit=audit_ref,
         correction_of=await _identifier(session, record.correction_of),
         superseded_by_correction=await _identifier(session, record.superseded_by_correction),
@@ -192,6 +193,7 @@ async def _capa_subject(
         captured_at=record.captured_at.isoformat() if record.captured_at else None,
         captured_by=_user_ref(users.get(record.captured_by)),
         content_hash=record.content_hash,
+        content_hash_version=record.content_hash_version,
         origin_finding=origin_finding,
         stages=stage_dicts,
     )
@@ -239,6 +241,7 @@ async def build_dossier(
                 "id": str(sid),
                 "identifier": base.identifier,
                 "content_hash": record.content_hash,
+                "content_hash_version": record.content_hash_version,
                 "path": path,
             }
         )

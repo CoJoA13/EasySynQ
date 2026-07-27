@@ -172,6 +172,7 @@ async def test_finding_scope_pack_bundles_dossier(
             assert len(dossier_names) == 1, names
             d = json.loads(zf.read(dossier_names[0]))
             assert d["kind"] == "finding" and d["id"] == finding_id
+            assert d["content_hash_version"] == 2
             assert d["finding_type"] == "NC" and d["severity"] == "Major"
             assert d["clause_ref"] == "8.4"
             assert d["linked_capa"]["id"] == auto_capa_id
@@ -183,7 +184,12 @@ async def test_finding_scope_pack_bundles_dossier(
             assert manifest["scope_kind"] == "FINDING"
             assert manifest["dossier"]["digest"].startswith("sha256:")
             assert dossier_names[0] in {fm["path"] for fm in manifest["dossier"]["files"]}
-            assert any(sub["id"] == finding_id for sub in manifest["dossier_subjects"])
+            subject_entry = next(
+                sub for sub in manifest["dossier_subjects"] if sub["id"] == finding_id
+            )
+            assert subject_entry["content_hash_version"] == 2
+            evidence_entry = next(rec for rec in manifest["records"] if rec["id"] == ev_id)
+            assert evidence_entry["content_hash_version"] == 2
             assert json.loads(zf.read("gap_report.json"))["applicable"] is False
             # No PII: the dossier emits only {user_id, display_name} — never an email or a
             # keycloak_subject field (the structural project_user boundary).
@@ -718,6 +724,7 @@ async def test_capa_scope_pack_proves_closed_effectively(
             assert len(dossier_names) == 1, names
             d = json.loads(zf.read(dossier_names[0]))
             assert d["kind"] == "capa" and d["id"] == capa_id
+            assert d["content_hash_version"] == 2
             assert d["close_state"] == "Closed"
             assert d["origin_finding"] is not None  # the audit NC
 
@@ -738,6 +745,15 @@ async def test_capa_scope_pack_proves_closed_effectively(
             manifest = json.loads(zf.read("manifest.json"))
             assert manifest["scope_kind"] == "CAPA"
             assert manifest["dossier"]["digest"].startswith("sha256:")
+            subject_entry = next(
+                sub for sub in manifest["dossier_subjects"] if sub["id"] == capa_id
+            )
+            assert subject_entry["content_hash_version"] == 2
+            record_versions = {
+                rec["id"]: rec["content_hash_version"] for rec in manifest["records"]
+            }
+            assert record_versions[impl_ev] == 2
+            assert record_versions[eff_ev] == 2
     finally:
         await _teardown([impl_ev, eff_ev], pack_uuid)
 

@@ -42,7 +42,7 @@ from ...db.models.documented_information import DocumentedInformation
 from ...db.models.evidence_blob import EvidenceBlob
 from ...db.models.evidence_for_link import EvidenceForLink
 from ...db.models.record import Record
-from ...domain.records.content_hash import record_content_hash
+from ...domain.records.content_hash import CONTENT_HASH_VERSION, record_content_hash
 from ...domain.records.form_schema import validate_values, values_too_large
 from ...domain.records.retention import (
     PolicyCandidate,
@@ -211,9 +211,11 @@ async def _resolve_source_version(
     source_version_id: uuid.UUID | None,
     form_field_values: dict[str, Any] | None,
     pin_version: uuid.UUID | None,
-) -> uuid.UUID | None:
-    """Validate the source document + resolve the pinned version, returning the resolved
-    ``source_version_id`` (None for ad-hoc EVIDENCE). Two cases:
+) -> tuple[uuid.UUID | None, bool]:
+    """Validate the source document + resolve the pinned version.
+
+    Returns ``(source_version_id, is_structured_form)``; the id is ``None`` for ad-hoc EVIDENCE.
+    Two cases:
 
     * **Mode-B** — the source is a Form/Template (``document_type`` code FRM): the SERVER resolves
       the Effective (or, if the org enabled it, the latest pre-release) version, validates
@@ -228,7 +230,7 @@ async def _resolve_source_version(
             raise _validation_error(
                 "source_version_id", "invalid", "source_version_id requires source_document_id"
             )
-        return None
+        return None, False
 
     source_doc = await session.get(DocumentedInformation, source_document_id)
     if (
@@ -280,7 +282,7 @@ async def _resolve_source_version(
                 title="Form values do not match the template schema",
                 errors=[e.as_dict() for e in field_errors],
             )
-        return version.id
+        return version.id, True
 
     # --- R21: a record produced under a regular controlled document MUST pin its version ---
     if source_version_id is None:
@@ -294,14 +296,13 @@ async def _resolve_source_version(
         raise _validation_error(
             "source_version_id", "not_found", "Source version not found for that document"
         )
-    return source_version_id
+    return source_version_id, False
 
 
 def _enqueue_structured_pdf(record_id: uuid.UUID) -> None:
     """Best-effort: enqueue the Stage-2 structured-record PDF rendition build after capture commits
-    (the ``packs.generate_pack`` precedent). Swallows a broker hiccup — the rendition is derived +
-    rebuildable (no reaper; ``GET /records/{id}/rendition`` 409s until it lands), so a publish
-    failure must never fail the capture."""
+    (the ``packs.generate_pack`` precedent). Swallows a broker hiccup — the rendition is derived,
+    the hourly missing-pointer redrive retries it, and a publish failure must never fail capture."""
     try:
         from ...tasks.records import build_structured_pdf
 
@@ -461,7 +462,7 @@ async def capture_record(
 
     # Validate + resolve the source/version (R21 pin, or the Mode-B Effective-version resolution +
     # schema validation). Returns the resolved source_version_id the record will pin.
-    source_version_id = await _resolve_source_version(
+    source_version_id, is_structured_form = await _resolve_source_version(
         session,
         actor,
         framework.id,
@@ -470,6 +471,11 @@ async def capture_record(
         form_field_values=form_field_values,
         pin_version=_pin_version,
     )
+    # An omitted body on an all-optional Form/Template is still a structured capture. Persist the
+    # canonical empty object so it is enqueued, rendered, redriven, and sealed distinctly from the
+    # NULL sentinel used by genuinely unstructured records.
+    if is_structured_form and form_field_values is None:
+        form_field_values = {}
 
     captured_at = _now()
     resolution = await resolve_capture_retention(
@@ -517,6 +523,7 @@ async def capture_record(
         retention_basis_date=resolution.retention_basis_date,
         correction_of=_correction_of,
         content_hash=None,
+        content_hash_version=CONTENT_HASH_VERSION,
     )
     session.add(record)
     await session.flush()
@@ -529,6 +536,7 @@ async def capture_record(
         source_version_id=source_version_id,
         form_field_values=form_field_values,
         evidence_sha256s=shas,
+        version=record.content_hash_version,
     )
 
     emit_record_event(
@@ -541,6 +549,7 @@ async def capture_record(
             "record_type": rtype.value,
             "source_version_id": str(source_version_id) if source_version_id else None,
             "content_hash": record.content_hash,
+            "content_hash_version": record.content_hash_version,
             "evidence_count": len(shas),
             "retention_policy_id": str(resolution.policy_id),
             "retention_tier": resolution.tier,
@@ -550,7 +559,9 @@ async def capture_record(
     if _commit:
         await session.commit()
         await session.refresh(record)
-        if record.form_field_values:  # a structured record → best-effort Stage-2 PDF rendition
+        if is_structured_form:
+            # Only a pinned Form/Template capture gets the best-effort Stage-2 rendition. Ad-hoc
+            # records may legitimately seal JSON in form_field_values (for example KPI_READING).
             _enqueue_structured_pdf(record.id)
     return record
 
@@ -612,9 +623,19 @@ async def capture_correction(
         before={"superseded_by_correction": None},
         after={"superseded_by_correction": str(new_record.id)},
     )
+    pinned_version = (
+        await session.get(DocumentVersion, new_record.source_version_id)
+        if new_record.source_version_id is not None
+        else None
+    )
+    is_structured_form = (
+        pinned_version is not None and schema_from_version(pinned_version) is not None
+    )
     await session.commit()
     await session.refresh(new_record)
-    if new_record.form_field_values:  # a structured correction → best-effort Stage-2 PDF rendition
+    if is_structured_form:
+        # Corrections inherit their source pin; identify the form from that immutable version rather
+        # than from form_field_values, which ad-hoc records may also use as sealed JSON.
         _enqueue_structured_pdf(new_record.id)
     return new_record
 
