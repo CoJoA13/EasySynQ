@@ -174,6 +174,30 @@
 
 ## REMEDIATION — correctness, accessibility, polish & test reliability
 
+### Minor Batch M2 — canonical acknowledgment scope and honest PROCESS-report admission (API + tests + docs; NO migration [head stays `0075`]; NO new permission key [catalog 102]; PR pending)
+
+**What shipped.** The fresh DOC_ACK decision gate no longer rebuilds process scope from raw
+`ProcessLink` rows. It now consumes the same `vault_repo.process_ids_for_doc` loader as the other
+document authorization boundaries, so a process bound on a managed satellite (currently Quality
+Objectives) participates in deny-always-wins instead of disappearing at acknowledgment time.
+
+The Controlled Document Register now selects usable `report.read` ALLOWs through one shared
+request-context/resource/scope check used by both the request gate and the repeatable-read
+snapshot's provenance calculation. A PROCESS grant admits the surface only when its selector
+contains a real process in the caller's organization; empty, malformed, nonexistent, and
+cross-org-only selectors return the honest 403 rather than a misleading 200-empty register. The
+check deliberately validates `process`, not `process_link`: a real in-org process with no current
+documents remains a valid boundary and returns an accurate empty process-scoped register.
+
+**Tests + gate.** Both defects were RED-verified against the pre-fix code. A deny-wins integration
+test proves DOC_ACK consumes the canonical loader, composing with the existing real
+objective-satellite union proof. Report integration covers empty/malformed/nonexistent selectors,
+org isolation with cleanup of the temporary tenant, and the valid-process/no-documents control
+case. The complete report file (**32 passed**), complete acknowledgment file (**16 passed**), and
+objective loader proof pass against disposable PostgreSQL/MinIO/Redis testcontainers. API
+Ruff/format, mypy over **426 source files**, the full unit suite (**1168 passed, 1 expected
+release-only skip**), and Redocly are green.
+
 ### Minor Batch M1 — privileged setup detail, race-safe JIT identities, bounded JWKS rotation, and sanitized readiness (API + OpenAPI + docs; NO migration [head stays `0075`]; NO new permission key [catalog 102]; PR [#381](https://github.com/CoJoA13/EasySynQ/pull/381))
 
 **Tracker reconciliation.** The source review's 104 MINOR findings were broad-subsystem lists, not

@@ -15,6 +15,7 @@ import datetime
 import hashlib
 import json
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -175,12 +176,13 @@ _VALID_DOC_STATES: frozenset[str] = frozenset(s.value for s in DocumentCurrentSt
 
 
 def report_read_resource_satisfiable(grant: ResolvedGrant) -> bool:
-    """Whether a report.read grant's RESOURCE predicates can match ≥1 real document — the surface
-    admits an ALLOW (and the provenance counts it toward the boundary) only if so, else the per-row
-    ``authorize()`` rejects every row and the endpoint returns a misleading 200-empty register.
+    """Whether a report.read grant's RESOURCE predicates can match ≥1 real document. This is the
+    resource-plane half of surface admission; ``satisfiable_report_read_allows`` also validates a
+    PROCESS grant's structural scope before admitting it.
 
     ``lifecycle_state`` and ``requirement_source`` are the ONLY two resource predicates
-    ``_predicates_pass`` applies, so validating both makes surface admission complete (#347 Codex):
+    ``_predicates_pass`` applies, so validating both completes the resource-predicate admission
+    check (#347 Codex):
       * ``requirement_source`` is v1-unimplemented (no ``documented_information`` column / producer;
         ``resource.requirement_source`` is always None), so a grant narrowed by it never matches.
       * ``lifecycle_state`` must be a non-empty set intersecting the real ``DocumentCurrentState``
@@ -197,6 +199,71 @@ def report_read_resource_satisfiable(grant: ResolvedGrant) -> bool:
         if not (set(map(str, allowed)) & _VALID_DOC_STATES):
             return False
     return True
+
+
+def _report_read_process_ids(grant: ResolvedGrant) -> frozenset[str]:
+    """Extract a PROCESS selector exactly as the PDP does (singular wins when truthy)."""
+    selector = grant.selector or {}
+    return _as_set(selector.get("process_id") or selector.get("process_ids"))
+
+
+async def satisfiable_report_read_allows(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    grants: Sequence[ResolvedGrant],
+    context: RequestContext,
+) -> list[ResolvedGrant]:
+    """Return report.read ALLOWs capable of matching at least one document authorization context.
+
+    SYSTEM grants are structurally satisfiable by definition. A PROCESS grant is satisfiable when
+    its selector contains at least one parseable process id that exists in ``org_id``. It does NOT
+    need a current ``ProcessLink``: a real process with no documents is still a valid scope whose
+    empty register accurately describes the current state. Empty, malformed, nonexistent, and
+    cross-org-only selectors can never match this org's document resources and therefore must not
+    admit the org-report surface merely to produce a misleading 200-empty response.
+
+    Request-context and resource-predicate checks live here too so the request gate and the
+    snapshot's provenance calculation consume one definition rather than drifting independently.
+    """
+    candidates = [
+        grant
+        for grant in grants
+        if grant.effect == Effect.ALLOW
+        and grant.level in (ScopeLevel.SYSTEM, ScopeLevel.PROCESS)
+        and _context_predicates_pass(grant, context, "report.read")
+        and report_read_resource_satisfiable(grant)
+    ]
+    process_uuids: set[uuid.UUID] = set()
+    for grant in candidates:
+        if grant.level != ScopeLevel.PROCESS:
+            continue
+        for process_id in _report_read_process_ids(grant):
+            try:
+                process_uuids.add(uuid.UUID(process_id))
+            except (TypeError, ValueError):
+                continue
+
+    existing_process_ids: frozenset[str] = frozenset()
+    if process_uuids:
+        existing_process_ids = frozenset(
+            str(process_id)
+            for process_id in (
+                await session.execute(
+                    select(Process.id).where(
+                        Process.org_id == org_id,
+                        Process.id.in_(process_uuids),
+                    )
+                )
+            ).scalars()
+        )
+
+    return [
+        grant
+        for grant in candidates
+        if grant.level == ScopeLevel.SYSTEM
+        or bool(_report_read_process_ids(grant) & existing_process_ids)
+    ]
 
 
 async def compute_document_control_register(
@@ -299,24 +366,17 @@ async def compute_document_control_register(
         # separate wall-clock read) — so the scope reflects the SAME instant the rows were
         # materialized as-of.
         #
-        # FIX 2 (#335, P2): ADMIT the ALLOW boundary on CONTEXT predicates only (a report.read
-        # ALLOW narrowed by a RESOURCE predicate — e.g. lifecycle_state — still confines the caller
-        # to its process; the per-row gate narrows which rows), mirroring the surface gate. A
-        # predicate-passing SYSTEM ALLOW means org-wide (process_scope=None); otherwise the caller
-        # is confined to the union of their PROCESS ALLOW selectors ("process_id" singular, falling
-        # back to "process_ids" plural).
-        allow_grants = [
-            g
-            for g in report_grants
-            if g.effect == Effect.ALLOW
-            and g.level in (ScopeLevel.SYSTEM, ScopeLevel.PROCESS)
-            and _context_predicates_pass(g, ctx, "report.read")
-            # A resource-predicated grant that can't match any row (unimplemented
-            # requirement_source, or an empty/unknown lifecycle_state set) doesn't contribute to the
-            # ALLOW boundary — the per-row gate excludes every row it would match (#347; same check
-            # as the surface).
-            and report_read_resource_satisfiable(g)
-        ]
+        # FIX 2 (#335)/M2: use the same satisfiable-ALLOW selection as the request surface. A
+        # resource-predicated grant that can match real rows remains eligible and is narrowed
+        # per-row; an impossible resource predicate or PROCESS selector contributes nothing to the
+        # boundary. A SYSTEM ALLOW means org-wide (process_scope=None); otherwise the caller is
+        # confined to the union of their usable PROCESS selectors.
+        allow_grants = await satisfiable_report_read_allows(
+            session,
+            org_id=org_id,
+            grants=report_grants,
+            context=ctx,
+        )
         has_system_allow = any(g.level == ScopeLevel.SYSTEM for g in allow_grants)
         authorization_scope: list[dict[str, str]] | None
         if has_system_allow:
@@ -325,8 +385,7 @@ async def compute_document_control_register(
             scoped_process_ids: set[str] = set()
             for g in allow_grants:
                 if g.level == ScopeLevel.PROCESS:
-                    sel = g.selector or {}
-                    scoped_process_ids |= _as_set(sel.get("process_id") or sel.get("process_ids"))
+                    scoped_process_ids |= _report_read_process_ids(g)
             authorization_scope = await _resolve_process_names(session, scoped_process_ids, org_id)
 
         # FIX 1 (#335, P2): a PROCESS report.read DENY that applies UNCONDITIONALLY on the resource

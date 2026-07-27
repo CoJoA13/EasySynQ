@@ -15,11 +15,13 @@ from types import SimpleNamespace
 
 import pytest
 from httpx import AsyncClient
-from sqlalchemy import select, text, update
+from sqlalchemy import delete, select, text, update
 
 from easysynq_api.db.models._clause_enums import PdcaPhase
+from easysynq_api.db.models.app_user import AppUser, UserStatus
 from easysynq_api.db.models.authz_grant import PermissionOverride
 from easysynq_api.db.models.clause import Clause
+from easysynq_api.db.models.organization import Organization
 from easysynq_api.db.models.permission import Permission
 from easysynq_api.db.models.process import Process
 from easysynq_api.db.models.process_link import ProcessLink
@@ -373,10 +375,8 @@ async def _create_in_folder(
     return r.json()
 
 
-async def _create_process_linked_to(subject: str, org_id: uuid.UUID, doc_id: str) -> str:
-    """Direct-ORM Process + ProcessLink seed (test_acknowledgements.py's precedent) — avoids
-    needing extra process.create/document.manage_metadata grants just to set up a fixture. Returns
-    the new process id (str)."""
+async def _create_process(subject: str, org_id: uuid.UUID, *, doc_id: str | None = None) -> str:
+    """Direct-ORM Process seed, optionally linked to one document in the same transaction."""
     async with get_sessionmaker()() as s:
         creator = await _ensure_user(s, subject)
         proc = Process(
@@ -386,17 +386,25 @@ async def _create_process_linked_to(subject: str, org_id: uuid.UUID, doc_id: str
             created_by=creator.id,
         )
         s.add(proc)
-        await s.flush()
-        s.add(
-            ProcessLink(
-                org_id=org_id,
-                process_id=proc.id,
-                documented_information_id=uuid.UUID(doc_id),
-                created_by=creator.id,
+        if doc_id is not None:
+            await s.flush()
+            s.add(
+                ProcessLink(
+                    org_id=org_id,
+                    process_id=proc.id,
+                    documented_information_id=uuid.UUID(doc_id),
+                    created_by=creator.id,
+                )
             )
-        )
         await s.commit()
         return str(proc.id)
+
+
+async def _create_process_linked_to(subject: str, org_id: uuid.UUID, doc_id: str) -> str:
+    """Direct-ORM Process + ProcessLink seed (test_acknowledgements.py's precedent) — avoids
+    needing extra process.create/document.manage_metadata grants just to set up a fixture. Returns
+    the new process id (str)."""
+    return await _create_process(subject, org_id, doc_id=doc_id)
 
 
 async def test_endpoint_403s_without_report_read(
@@ -1009,37 +1017,131 @@ async def test_provenance_process_scope_records_the_process_for_a_process_scoped
     assert scope == [{"id": process_id, "name": process_name}]
 
 
-# --- a malformed PROCESS report.read selector must not 500 the provenance computation ------
+# --- M2: PROCESS report.read admission requires a satisfiable in-org scope -----------------
 
 
-async def test_provenance_process_scope_tolerates_a_malformed_process_selector(
-    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+@pytest.mark.parametrize("case", ("empty", "malformed", "missing"))
+async def test_surface_rejects_a_scope_unsatisfiable_process_read_allow(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    subj: SimpleNamespace,
+    case: str,
 ) -> None:
-    """``selector`` is unvalidated at grant-time (``api/authz.py`` accepts ``selector: dict[str,
-    Any]``), so a PROCESS report.read ALLOW with a non-UUID process id (a benign misconfiguration,
-    e.g. a bad admin edit) must not crash the provenance computation with an uncaught
-    ``ValueError`` from ``uuid.UUID(...)``. The per-row PDP path already tolerates the same
-    garbage (``_matches_scope`` does a plain string comparison, never parses) — the provenance
-    computation must degrade the same way: drop the un-parseable id rather than raising.
+    """M2: PROCESS scope is structural, so an empty, malformed, or nonexistent selector can match
+    no document. Such an ALLOW must not admit an org-report surface and return a misleading
+    ``200`` + empty register. The selector is unrestricted JSON at grant time, so the request gate
+    owns this fail-closed validation and returns the same calm 403 as no usable report.read grant.
 
-    Mutation-distinguishing / RED-verified: against the pre-fix set-comprehension
-    (``{uuid.UUID(pid) for pid in scoped_process_ids}``), this 500s with an uncaught
-    ``ValueError``. After the fix, the malformed id is skipped, the caller still gets their
-    register (they hold a broad SYSTEM document.read too, so they'd otherwise see rows), and
-    ``provenance.process_scope`` reports the empty list (no valid process survived)."""
+    Mutation-distinguishing: before M2 all three grants pass the surface's context/resource checks;
+    the per-row PDP then matches nothing and the endpoint returns 200 with
+    ``provenance.process_scope == []``."""
+    selector: dict[str, object]
+    if case == "empty":
+        selector = {"process_ids": []}
+    elif case == "malformed":
+        selector = {"process_ids": ["not-a-uuid"]}
+    else:
+        selector = {"process_id": str(uuid.uuid4())}
     await _add_override(
         subj.a,
         "report.read",
         Effect.ALLOW,
         ScopeLevel.PROCESS,
-        selector={"process_ids": ["not-a-uuid"]},
+        selector=selector,
     )
     await _grant(subj.a, ("document.read",))  # broad SYSTEM — would otherwise see rows
     ha = _auth(token_factory, subj.a)
 
     resp = await app_client.get(_ROUTE, headers=ha)
+    assert resp.status_code == 403, resp.text
+    assert resp.json()["code"] == "forbidden"
+
+
+async def test_surface_admits_an_existing_process_even_when_it_has_no_documents(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    """M2 validates that a PROCESS selector names a real process, not that the process happens to
+    have linked documents at this instant. An existing in-org process with no links is a valid
+    authorization boundary and therefore an honest empty process-scoped report (200), not an
+    impossible grant (403). This prevents an implementation from incorrectly joining through
+    ``process_link`` to decide surface admission."""
+    org_id = await s5.default_org_id()
+    process_id = await _create_process(subj.a, org_id)  # deliberately no ProcessLink
+    await _grant_process(subj.a, "report.read", process_id)
+    await _grant(subj.a, ("document.read",))
+    async with get_sessionmaker()() as s:
+        process_name = (
+            await s.execute(select(Process.name).where(Process.id == uuid.UUID(process_id)))
+        ).scalar_one()
+
+    resp = await app_client.get(_ROUTE, headers=_auth(token_factory, subj.a))
     assert resp.status_code == 200, resp.text
-    assert resp.json()["provenance"]["process_scope"] == []
+    assert resp.json()["provenance"]["process_scope"] == [{"id": process_id, "name": process_name}]
+
+
+async def test_surface_rejects_a_cross_org_only_process_read_allow(
+    app_client: AsyncClient, token_factory: Callable[..., str], subj: SimpleNamespace
+) -> None:
+    """A syntactically valid PROCESS selector is still unsatisfiable for this org when it names
+    only another tenant's process. The existence lookup must remain org-scoped; otherwise the
+    foreign row admits the surface before the per-row PDP collapses to a misleading empty report.
+    The temporary organization is removed in ``finally`` so the shared integration shard retains
+    its single-org invariant."""
+    salt = uuid.uuid4().hex[:10]
+    temp_org_id = uuid.uuid4()
+    temp_user_id = uuid.uuid4()
+    foreign_process_id = uuid.uuid4()
+    async with get_sessionmaker()() as s:
+        s.add(
+            Organization(
+                id=temp_org_id,
+                legal_name=f"M2 Foreign Org {salt}",
+                short_code=f"M2X{salt}".upper(),
+                timezone="UTC",
+            )
+        )
+        await s.flush()
+        s.add(
+            AppUser(
+                id=temp_user_id,
+                org_id=temp_org_id,
+                keycloak_subject=f"m2-foreign-{salt}",
+                display_name="M2 Foreign User",
+                status=UserStatus.ACTIVE,
+            )
+        )
+        await s.flush()
+        s.add(
+            Process(
+                id=foreign_process_id,
+                org_id=temp_org_id,
+                name=f"M2 Foreign Process {salt}",
+                pdca_phase=PdcaPhase.DO,
+                created_by=temp_user_id,
+            )
+        )
+        await s.commit()
+
+    try:
+        await _add_override(
+            subj.a,
+            "report.read",
+            Effect.ALLOW,
+            ScopeLevel.PROCESS,
+            selector={"process_id": str(foreign_process_id)},
+        )
+        await _grant(subj.a, ("document.read",))
+        resp = await app_client.get(_ROUTE, headers=_auth(token_factory, subj.a))
+        assert resp.status_code == 403, resp.text
+        assert resp.json()["code"] == "forbidden"
+    finally:
+        async with get_sessionmaker()() as s:
+            await s.execute(delete(Process).where(Process.id == foreign_process_id))
+            await s.execute(delete(AppUser).where(AppUser.id == temp_user_id))
+            await s.execute(delete(Organization).where(Organization.id == temp_org_id))
+            await s.commit()
+        async with get_sessionmaker()() as s:
+            assert await s.get(Organization, temp_org_id) is None
 
 
 # --- #335: register report.read scope / provenance / tz edge-hardening ---------------------
@@ -1139,8 +1241,9 @@ async def test_surface_gate_rejects_an_unmatchable_lifecycle_predicated_report_r
     match NO document — an empty list, or only-unknown states (both accepted by the unrestricted
     predicates dict) — must NOT be surface-admitted, else the caller gets a misleading 200-empty
     register. (A lifecycle_state intersecting real states, e.g. ["Effective"], IS admitted — the
-    fix-2 admit test above.) This closes the admission class: lifecycle_state + requirement_source
-    are the only two resource predicates, so validating both makes surface admission complete."""
+    fix-2 admit test above.) This closes the resource-predicate class: lifecycle_state +
+    requirement_source are the only two resource predicates, so validating both makes that half
+    of surface admission complete."""
     # empty allow-list → intersects no DocumentCurrentState → matches nothing → 403
     empty = f"kc-lc-empty-{uuid.uuid4().hex[:8]}"
     await _add_override(

@@ -34,6 +34,7 @@ from easysynq_api.db.session import get_sessionmaker
 from easysynq_api.domain.authz.types import Effect, ScopeLevel
 from easysynq_api.problems import ProblemException
 from easysynq_api.services.ack.sweep import _cancel_instance, sweep_acks
+from easysynq_api.services.vault import repository as vault_repo
 from easysynq_api.services.workflow import engine as wf_engine
 from easysynq_api.services.workflow import repository as wf_repo
 
@@ -817,6 +818,105 @@ async def test_decide_authz_matrix(
             await s.execute(select(TaskOutcome).where(TaskOutcome.task_id == uuid.UUID(sam_task2)))
         ).scalar_one_or_none()
         assert residue2 is None, "a 403'd fresh decide must leave no TaskOutcome row"
+
+
+async def test_decide_authz_uses_the_canonical_satellite_process_scope(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    subj: SimpleNamespace,
+    app_under_test: object,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """M2: the DOC_ACK decision gate must consume the canonical satellite-aware process loader,
+    not re-query ``ProcessLink`` directly. Sam has a broad SYSTEM document.acknowledge ALLOW plus a
+    PROCESS DENY supplied by that loader; deny-always-wins must refuse the fresh decision.
+
+    This test isolates the consumer seam by substituting the shared loader's result. The existing
+    ``test_process_ids_for_doc_unions_objective_satellite`` integration proof separately pins that
+    the real loader obtains this exact scope from ``quality_objective.process_id`` when no
+    ProcessLink exists. Before M2, ``decide_doc_ack`` bypasses the substituted loader, sees the
+    deliberately empty ProcessLink set, and incorrectly completes the acknowledgement (200)."""
+    sam_id = await _setup_actors(subj)  # includes the broad SYSTEM acknowledge ALLOW
+    ha = _auth(token_factory, subj.a)
+    hb = _auth(token_factory, subj.b)
+    hs = _auth(token_factory, subj.sam)
+    type_id = await s5.type_id("SOP")
+    _, doc_uuid = await _release_ack_doc(
+        app_client,
+        ha,
+        hb,
+        type_id,
+        f"ack-canonical-scope-{subj.a}".encode(),
+        entries=[{"target_type": "user", "target_id": str(sam_id)}],
+    )
+    await _run_sweep(document_id=doc_uuid, trigger="release")
+    task_id = await _ack_task_for(doc_uuid, sam_id)
+
+    async with get_sessionmaker()() as s:
+        # The direct-query implementation must see an empty set, making this test
+        # mutation-distinguishing from the canonical-loader implementation below.
+        direct_link = (
+            await s.execute(
+                select(ProcessLink).where(ProcessLink.documented_information_id == doc_uuid)
+            )
+        ).scalar_one_or_none()
+        assert direct_link is None
+
+        sam = await s.get(AppUser, sam_id)
+        assert sam is not None
+        proc = Process(
+            org_id=sam.org_id,
+            name=f"ack-satellite-scope-{uuid.uuid4().hex[:8]}",
+            pdca_phase=PdcaPhase.DO,
+            created_by=sam.id,
+        )
+        s.add(proc)
+        await s.flush()
+        process_id = str(proc.id)
+        ack_permission = (
+            await s.execute(select(Permission).where(Permission.key == "document.acknowledge"))
+        ).scalar_one()
+        deny_scope = Scope(
+            org_id=sam.org_id,
+            level=ScopeLevel.PROCESS,
+            selector={"process_id": process_id},
+        )
+        s.add(deny_scope)
+        await s.flush()
+        s.add(
+            PermissionOverride(
+                org_id=sam.org_id,
+                user_id=sam.id,
+                permission_id=ack_permission.id,
+                effect=Effect.DENY,
+                scope_id=deny_scope.id,
+            )
+        )
+        await s.commit()
+
+    async def canonical_satellite_scope(
+        _session: object, loaded_doc_id: uuid.UUID
+    ) -> frozenset[str]:
+        assert loaded_doc_id == doc_uuid
+        return frozenset({process_id})
+
+    monkeypatch.setattr(vault_repo, "process_ids_for_doc", canonical_satellite_scope)
+
+    response = await app_client.post(
+        f"/api/v1/tasks/{task_id}/decision",
+        headers=hs,
+        json={"outcome": "acknowledge"},
+    )
+    assert response.status_code == 403, response.text
+    assert response.json()["code"] == "permission_denied"
+
+    async with get_sessionmaker()() as s:
+        task = await s.get(Task, uuid.UUID(task_id))
+        assert task is not None and task.state is TaskState.PENDING
+        outcome = (
+            await s.execute(select(TaskOutcome).where(TaskOutcome.task_id == uuid.UUID(task_id)))
+        ).scalar_one_or_none()
+        assert outcome is None
 
 
 # ---------------------------------------------------------------------------

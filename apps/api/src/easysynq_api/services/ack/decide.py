@@ -28,12 +28,12 @@ from ...db.models.audit_event import AuditEvent
 from ...db.models.document_type import DocumentType
 from ...db.models.document_version import DocumentVersion
 from ...db.models.documented_information import DocumentedInformation
-from ...db.models.process_link import ProcessLink
 from ...db.models.workflow import Task, WorkflowInstance
 from ...logging import request_id_var
 from ...problems import ProblemException
 from ..authz import AuthzAuditSink, enforce
 from ..authz.resource import resource_from_doc
+from ..vault import repository as vault_repo
 from ..workflow import engine as wf_engine
 from . import queries
 
@@ -162,19 +162,17 @@ async def decide_doc_ack(
     if doc.document_type_id:
         dt = await session.get(DocumentType, doc.document_type_id)
         level = dt.document_level.value if dt else None
-    process_ids = (
-        await session.execute(
-            select(ProcessLink.process_id).where(ProcessLink.documented_information_id == doc.id)
-        )
-    ).scalars()
     # R28: the FULL context — the seeded Employee grant is PROCESS-scoped; without process_ids
     # the PDP can never match it (Codex P1).
-    # #333: full scope tuple via the shared helper (adds framework_id + kind so a FRAMEWORK/kind-
-    # scoped document.acknowledge DENY isn't dropped).
+    # #333/M2: full scope tuple via the shared helper (adds framework_id + kind so a
+    # FRAMEWORK/kind-scoped document.acknowledge DENY isn't dropped), with process ids from the
+    # canonical satellite-aware loader. An objective binds its process on
+    # ``quality_objective.process_id``, not ProcessLink; bypassing this loader drops a matching
+    # PROCESS DENY from the fresh-decision gate.
     resource = resource_from_doc(
         doc,
         document_level=level,
-        process_ids=frozenset(str(p) for p in process_ids),
+        process_ids=await vault_repo.process_ids_for_doc(session, doc.id),
     )
     await enforce(session, authz_sink, request, actor, "document.acknowledge", resource)
 
