@@ -108,6 +108,7 @@ def test_keycloak_runs_optimized_on_durable_postgres_schema() -> None:
     image = _read("infra/compose/keycloak/Dockerfile")
     init = _read("infra/compose/keycloak/keycloak-init.sh")
     migration = _read("scripts/migrate-keycloak-h2.sh")
+    justfile = _read("justfile")
     restore_runbook = _read("docs/runbooks/backup-restore.md")
     template = _read(".env.example")
 
@@ -145,6 +146,10 @@ def test_keycloak_runs_optimized_on_durable_postgres_schema() -> None:
     assert 'legs.realm_export = "present"' in restore_runbook
     assert "<compose-project>_keycloakimport" in restore_runbook
     assert "before the first Keycloak start" in restore_runbook
+    assert justfile.count("ensure-keycloak-db-password.sh --env-file .env") == 4
+    assert justfile.index("ensure-keycloak-db-password.sh") < justfile.index(
+        "migrate-keycloak-h2.sh"
+    )
 
 
 def test_h2_migration_reads_custom_compose_project_from_env_file(tmp_path: Path) -> None:

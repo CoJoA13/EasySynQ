@@ -64,18 +64,22 @@ migrate-roundtrip:
 
 # --- compose stack ---
 up profile="s":
+    bash scripts/ensure-keycloak-db-password.sh --env-file .env
     bash scripts/migrate-keycloak-h2.sh
     docker compose --env-file .env -f infra/compose/compose.yml -f infra/compose/compose.{{profile}}.yml -f infra/compose/compose.dev.yml up -d
 
 # `up` + a loopback Postgres publish (compose.mcp.yml) for the read-only PG MCP — opt-in; plain `up` keeps Postgres unexposed (D1). Restart Claude Code after first run; pgdata persists.
 up-mcp profile="s":
+    bash scripts/ensure-keycloak-db-password.sh --env-file .env
     bash scripts/migrate-keycloak-h2.sh
     docker compose --env-file .env -f infra/compose/compose.yml -f infra/compose/compose.{{profile}}.yml -f infra/compose/compose.dev.yml -f infra/compose/compose.mcp.yml up -d
 
 down:
+    bash scripts/ensure-keycloak-db-password.sh --env-file .env
     docker compose --env-file .env -f infra/compose/compose.yml down
 
 logs:
+    bash scripts/ensure-keycloak-db-password.sh --env-file .env
     docker compose --env-file .env -f infra/compose/compose.yml logs -f --tail=100
 
 # Create/update the Keycloak `demo` dev user for local login. Identity state persists in PostgreSQL
