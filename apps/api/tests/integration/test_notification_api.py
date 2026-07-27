@@ -1,9 +1,10 @@
 """GET /notifications + mark-read + /me/notification-preferences — self-scope proofs.
 
-Three tests:
+Four tests:
 1. GET /notifications returns only the caller's rows (user B's rows are excluded).
-2. User B cannot mark user A's notification read (404 + A's row stays unread).
-3. PUT /me/notification-preferences {email_enabled:false} upserts; GET round-trips the value.
+2. GET /notifications rejects a negative limit before it reaches PostgreSQL.
+3. User B cannot mark user A's notification read (404 + A's row stays unread).
+4. PUT /me/notification-preferences {email_enabled:false} upserts; GET round-trips the value.
 
 Notifications are seeded directly (no dispatch) so the tests are self-contained.
 """
@@ -115,6 +116,23 @@ async def test_list_notifications_returns_only_callers_rows(
             .all()
         }
     assert not (ids & b_ids), "B's notification leaked into A's listing"
+
+
+async def test_list_notifications_rejects_negative_limit(
+    app_client: AsyncClient, token_factory: Callable[..., str], app_under_test: Any
+) -> None:
+    """A negative LIMIT is request validation, never a PostgreSQL error surfaced as 500."""
+    salt = uuid.uuid4().hex[:8]
+    org_id = await _default_org_id()
+    user = await _seed_user(org_id, f"negative-limit-{salt}")
+
+    r = await app_client.get(
+        "/api/v1/notifications?limit=-1",
+        headers=_auth(token_factory, user.keycloak_subject),
+    )
+
+    assert r.status_code == 422, r.text
+    assert r.json()["code"] == "validation_error"
 
 
 async def test_mark_read_cross_user_returns_404_and_row_stays_unread(

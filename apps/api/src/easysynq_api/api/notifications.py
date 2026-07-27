@@ -11,7 +11,7 @@ import uuid
 from typing import Any, cast
 from zoneinfo import available_timezones
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import select, update
@@ -61,7 +61,7 @@ async def list_notifications(
     caller: AppUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
     unread_only: bool = False,
-    limit: int = 50,
+    limit: int = Query(50, ge=0),
 ) -> list[dict[str, Any]]:
     stmt = select(Notification).where(Notification.recipient_user_id == caller.id)
     if unread_only:

@@ -16,6 +16,7 @@ Integration tests for the new dispatch.py behavior (S-notify-3a, spec §4/§5/§
    notification_id IS NULL, recipient_user_id, item_count=N, PENDING); stamps digested_at.
 7. A second sweep run for the same user is a no-op (idempotent — no new email).
 8. Ineligible user (email_enabled=False between enqueue and sweep): rows stamped, no email.
+9. An eligible user's missing digest.daily template leaves rows unstamped for retry after restore.
 """
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ import asyncio
 import datetime
 import uuid
 from typing import Any
+from unittest.mock import AsyncMock, patch
 
 import pytest
 import sqlalchemy as sa
@@ -47,6 +49,7 @@ from easysynq_api.db.models.role import Role, RoleAssignment
 from easysynq_api.db.models.system_config import SystemConfig
 from easysynq_api.db.models.workflow import Task, WorkflowDefinition, WorkflowInstance
 from easysynq_api.db.session import get_sessionmaker
+from easysynq_api.services.notifications import digest as digest_service
 from easysynq_api.services.notifications import dispatch
 from easysynq_api.services.notifications.constants import EVENT_EMAIL_DELIVERY_FAILED
 from easysynq_api.services.notifications.digest import bundle_user_digest, sweep_digests
@@ -590,6 +593,49 @@ async def test_sweep_ineligible_user_stamped_but_no_email(org_email_on: Any) -> 
     assert note is not None and note.digested_at is not None, (
         "digested_at must be set even when user is ineligible"
     )
+
+
+# ---------------------------------------------------------------------------
+# Test 9: eligible user + missing digest template → rows stay retryable
+# ---------------------------------------------------------------------------
+
+
+async def test_missing_digest_template_keeps_rows_retryable(org_email_on: Any) -> None:
+    """A template miss must not stamp due rows; restoring the template retries successfully."""
+    org_id = await _default_org_id()
+    user_id = await _seed_user(org_id, email="sweep-template-miss@example.com")
+    note_id = await _seed_daily_notification(
+        org_id, user_id, digest_due_at=_DUE_AT, title="Approve retryable DOC-6"
+    )
+
+    with patch.object(digest_service, "render", new=AsyncMock(return_value=None)):
+        async with get_sessionmaker()() as s:
+            created_while_missing = await bundle_user_digest(
+                s,
+                user_id=user_id,
+                settings=_configured_settings(),
+                now=_SWEEP_NOW,
+            )
+
+    assert created_while_missing is False
+    assert await _digest_email_count_for_user(user_id) == 0
+    note_after_miss = await _get_notification(note_id)
+    assert note_after_miss is not None and note_after_miss.digested_at is None, (
+        "template-missing digest rows must remain unstamped for retry"
+    )
+
+    async with get_sessionmaker()() as s:
+        created_after_restore = await bundle_user_digest(
+            s,
+            user_id=user_id,
+            settings=_configured_settings(),
+            now=_SWEEP_NOW,
+        )
+
+    assert created_after_restore is True
+    assert await _digest_email_count_for_user(user_id) == 1
+    note_after_restore = await _get_notification(note_id)
+    assert note_after_restore is not None and note_after_restore.digested_at is not None
 
 
 # ---------------------------------------------------------------------------

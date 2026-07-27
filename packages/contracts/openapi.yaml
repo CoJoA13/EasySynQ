@@ -6552,8 +6552,8 @@ paths:
         - name: limit
           in: query
           required: false
-          description: Maximum number of rows to return (server-capped at 200).
-          schema: { type: integer, default: 50 }
+          description: Non-negative maximum number of rows to return (server-capped at 200).
+          schema: { type: integer, minimum: 0, default: 50 }
       responses:
         "200":
           description: The caller's notifications.
@@ -6562,6 +6562,7 @@ paths:
               schema:
                 type: array
                 items: { $ref: "#/components/schemas/Notification" }
+        "422": { $ref: "#/components/responses/ProblemResponse" }
 
   /notifications/stream:
     get:

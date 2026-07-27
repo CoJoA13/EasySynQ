@@ -1,7 +1,8 @@
 """The daily-digest bundler (spec §5.2). A pure item renderer + an async per-user sweep that claims
 a user's due notification rows, renders ONE summary email (summaries + deep links only — never
 controlled content), creates a PENDING digest NotificationEmail (the existing outbox_drain sends
-it), and stamps digested_at. One idempotent txn per user; a re-run finds nothing pending → no-op."""
+it), and stamps digested_at. An eligible template miss leaves the rows retryable. One idempotent
+txn per user; a re-run finds nothing pending → no-op."""
 
 from __future__ import annotations
 
@@ -80,7 +81,8 @@ async def bundle_user_digest(
     now: datetime.datetime,
 ) -> bool:
     """One idempotent txn: claim the user's due rows, re-check eligibility, create the digest email
-    (or just stamp if ineligible), stamp digested_at. Returns True iff an email was created."""
+    (or just stamp if ineligible), stamp digested_at. An eligible template miss rolls back without
+    stamping so restoration can retry. Returns True iff an email was created."""
     # Serialize concurrent sweeps for THIS user: the 2nd sweep blocks here until the 1st commits,
     # then finds the rows already stamped (digested_at) and no-ops — one digest per window.
     await session.execute(select(func.pg_advisory_xact_lock(func.hashtext(str(user_id)))))
@@ -133,20 +135,26 @@ async def bundle_user_digest(
                 "prefs_link": prefs_link(),
             },
         )
-        if forms is not None:
-            session.add(
-                NotificationEmail(
-                    org_id=org_id,
-                    notification_id=None,
-                    recipient_user_id=user_id,
-                    recipient_email=user.email,
-                    subject=forms.email_subject,
-                    body=forms.email_body,
-                    email_kind=NotificationEmailKind.DIGEST,
-                    item_count=count,
-                )
+        if forms is None:
+            logger.warning(
+                "notification.template_missing",
+                extra={"event_key": EVENT_DIGEST_DAILY, "user_id": str(user_id)},
             )
-            created = True
+            await session.rollback()
+            return False
+        session.add(
+            NotificationEmail(
+                org_id=org_id,
+                notification_id=None,
+                recipient_user_id=user_id,
+                recipient_email=user.email,
+                subject=forms.email_subject,
+                body=forms.email_body,
+                email_kind=NotificationEmailKind.DIGEST,
+                item_count=count,
+            )
+        )
+        created = True
 
     for n in notes:
         n.digested_at = now
