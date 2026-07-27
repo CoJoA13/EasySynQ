@@ -184,15 +184,17 @@ audit. DCR impact annotations are likewise sealed once a DCR is `Closed`, `Cance
 
 The atomic DCR route path now records its `Assessed → Routed → InApproval` stage events in strict
 causal order. PostgreSQL's transaction-stable `now()` had given both transitions the same timestamp;
-the service now supplies explicit timestamps one microsecond apart, and history reads use
-`(occurred_at, id)` for deterministic handling of legacy ties. Decision-time conditional quorum
-resolution also now fails closed as a workflow configuration/context problem: it skips remaining
-pending siblings, audits `unresolvable_quorum`, and preserves the `NEEDS_ATTENTION` sentinel instead
-of translating the failure into the business outcome `REJECTED`.
+the service now supplies explicit timestamps one microsecond apart, and history reads reconstruct
+legacy ties through their from-state→to-state transition chain (UUID is only a malformed-history
+fallback). Decision-time conditional quorum resolution also now fails closed as a workflow
+configuration/context problem: it skips remaining pending siblings with a distinct failed-stage
+marker, audits `unresolvable_quorum`, and preserves the `NEEDS_ATTENTION` sentinel; retrying one of
+those siblings reports `FAILED` rather than either translating the instance into the business
+outcome `REJECTED` or claiming the quorum was already satisfied.
 
 **Contract + tests.** OpenAPI documents both terminal-edit 409 behaviors and declares the
 improvement PATCH problem response. All four defects were RED-verified across six pre-fix pytest
-cases; a seventh regression pins deterministic legacy tied-event ordering. The complete adjacent
+cases; a seventh regression pins causal reconstruction of legacy tied events. The complete adjacent
 improvement, DCR impact/approval, and workflow-engine integration files pass (**42 passed**), as do
 API Ruff/format, migration Ruff/format, mypy over **426 source files**, the full unit suite
 (**1168 passed, 1 expected release-only skip**), and Redocly OpenAPI lint. No schema or permission

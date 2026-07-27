@@ -127,14 +127,16 @@ new permission key
 - [x] `apps/api/src/easysynq_api/services/dcr/repository.py:85` — same-transaction DCR stage events
   can tie on `occurred_at` and render out of order without a stable tiebreaker `[C]` (fixed: the
   atomic Assessed→Routed→InApproval pair receives strictly increasing causal timestamps, and reads
-  use UUID as a deterministic fallback for legacy equal-timestamp rows).
+  reconstruct legacy equal-timestamp rows through their from-state→to-state chain, using UUID only
+  as a deterministic last resort for disconnected/malformed history).
 - [x] `apps/api/src/easysynq_api/services/dcr/service.py:397` — impact annotations remain editable
   on terminal DCRs `[C]` (fixed: Closed/Cancelled/Rejected requests return 409
   `dcr_impact_not_editable` before any annotation or audit mutation).
 - [x] `apps/api/src/easysynq_api/services/workflow/engine.py:521` — an unresolvable quorum
   conditional is overwritten from `NEEDS_ATTENTION` to a plausible `REJECTED` terminal `[C]`
-  (fixed: the dedicated fail-closed branch preserves `NEEDS_ATTENTION`, retires sibling work, and
-  records `reason=unresolvable_quorum` instead of taking a normal business-rejection transition).
+  (fixed: the dedicated fail-closed branch preserves `NEEDS_ATTENTION`, retires sibling work under a
+  distinct failed-stage marker whose retry response remains `FAILED`, and records
+  `reason=unresolvable_quorum` instead of taking a normal business-rejection transition).
 
 ### ☐ M5 — Ingestion commit integrity
 

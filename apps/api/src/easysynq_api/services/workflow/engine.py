@@ -72,6 +72,7 @@ _NEGATIVE = {TaskOutcomeKind.reject, TaskOutcomeKind.changes_requested}
 _SUCCESS_ON = {"satisfied", "stage_satisfied", "approve"}
 _REJECT_ON = {"reject", "fail"}
 _QUORUM_SKIP = "quorum_skip"  # marker stamped on a task auto-skipped when its stage closed
+_FAILED_STAGE_SKIP = "failed_stage_skip"  # auto-skipped because the stage failed closed
 _SIG_MEANINGS = {m.value for m in SignatureMeaning}
 
 
@@ -440,6 +441,18 @@ async def decide(
                 "signature_spec": None,
                 "replayed": True,
             }
+        if locked.client_token == _FAILED_STAGE_SKIP:
+            # This sibling was retired by a fail-closed stage, not by a satisfied quorum.
+            return {
+                "task_id": str(locked.id),
+                "instance_id": str(locked.instance_id),
+                "stage_key": locked.stage_key,
+                "outcome": None,
+                "stage_state": "FAILED",
+                "current_state": instance.current_state,
+                "signature_spec": None,
+                "replayed": True,
+            }
         raise ProblemException(status=409, code="conflict", title="Task not decidable")
     if locked.state is not TaskState.PENDING:
         raise ProblemException(
@@ -510,7 +523,7 @@ async def decide(
         for t in tasks:
             if t.state is TaskState.PENDING:
                 t.state = TaskState.SKIPPED
-                t.client_token = _QUORUM_SKIP
+                t.client_token = _FAILED_STAGE_SKIP
         instance.current_state = NEEDS_ATTENTION
         _emit(
             session,

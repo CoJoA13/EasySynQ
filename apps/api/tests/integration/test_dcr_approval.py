@@ -161,18 +161,18 @@ async def test_route_stage_events_have_strict_causal_order(
     assert routed_at < in_approval_at
 
 
-async def test_equal_timestamp_stage_events_have_stable_tiebreaker(
+async def test_equal_timestamp_stage_events_follow_transition_chain(
     app_client: AsyncClient, token_factory: Callable[..., str]
 ) -> None:
-    """Legacy equal-timestamp route pairs use UUID as a deterministic fallback. Insert the later
-    event physically first, with IDs encoding the causal order, to distinguish the second ORDER BY
-    key from PostgreSQL heap order."""
+    """Legacy equal-timestamp route pairs follow from→to adjacency, not heap or UUID order. Insert
+    the later event physically first and give it the smaller UUID so both accidental orderings are
+    opposite the causal trail."""
     req = _subject("dcr-route-tie")
     actor_id = await _grant(req, _ROUTE_PERMS)
     hr = _auth(token_factory, req)
     dcr_id = await _open_assessed_dcr(app_client, hr, "MINOR")
 
-    routed_id, in_approval_id = sorted((uuid.uuid4(), uuid.uuid4()))
+    in_approval_id, routed_id = sorted((uuid.uuid4(), uuid.uuid4()))
     tied_at = datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=1)
     async with get_sessionmaker()() as s:
         actor = await s.get(AppUser, actor_id)

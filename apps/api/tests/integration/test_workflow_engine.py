@@ -516,7 +516,13 @@ async def test_unresolvable_conditional_at_decision_stays_needs_attention(
 
     sibling = next(task for task in await _stage_tasks(iid, "gate") if task.assignee_user_id == b)
     assert sibling.state is TaskState.SKIPPED
-    assert sibling.client_token == engine._QUORUM_SKIP
+    assert sibling.client_token == engine._FAILED_STAGE_SKIP
+
+    retry = await _decide(sibling.id, b, "approve")
+    assert retry["stage_state"] == "FAILED"
+    assert retry["current_state"] == engine.NEEDS_ATTENTION
+    assert retry["outcome"] is None
+    assert retry["replayed"] is True
     assert await _audit_count(iid, EventType.STAGE_FAILED) == 1
 
 
