@@ -172,7 +172,25 @@
 
 **Tests + review.** Unit `test_authz_resource` (`resource_from_doc` populates `framework_id`+`kind`; mutation-distinguishing deny-wins — blanking a field flips DENY→ALLOW) + integration (a FRAMEWORK-scoped `document.read` DENY 403s the detail gate AND hides the row from the library list + search/suggest; an objective-release deny-wins — FRAMEWORK ALLOW + PROCESS DENY on the satellite process → 403; a foundational `process_ids_for_doc`-unions-the-satellite test). diff-critic CLEAN across the satellite + DCR/records passes (proved the swap identical for non-objectives, the TOCTOU correction floor only gets tighter). api unit 1078→1090. (S-scope-tuple, BE, NO migration [head `0070`], NO new key [catalog 102], PR #346 squash `26360bb`.)
 
-## REMEDIATION — web correctness, accessibility & polish
+## REMEDIATION — correctness, accessibility, polish & test reliability
+
+### Batch 16 — restore the single-org invariant after committed cross-org integration tests (apps/api tests only; NO production change; NO migration [head stays `0075`]; NO new permission key; PR [#379](https://github.com/CoJoA13/EasySynQ/pull/379))
+
+**What shipped.** Two cross-organization boundary tests created a real second `Organization` and
+committed it into the PostgreSQL database shared by every test in their CI shard, but never removed
+it. A data-driven shard rebalance could therefore place any later single-org
+`select(Organization).scalar_one()` consumer behind either test and produce an order-dependent
+`MultipleResultsFound`. The notification-recipient test now owns an explicit temporary-org id and
+always deletes that org's test user rows before its RESTRICTed organization row in `finally`; its
+task retains only a JSON candidate UUID, not an FK. The management-review pack test captures the
+base document's and shared-PK satellite's original org ids, restores both in `finally`, and only
+then deletes the temporary organization. Both successful paths assert their temporary org is gone.
+
+**Tests + gate.** The two repaired tests followed by a singleton-org setup consumer passed in one
+shared disposable PostgreSQL database (**3 passed**), and both complete touched files plus that
+consumer passed in the same ordering proof (**11 passed**). API Ruff/format, mypy over **426 source
+files**, and the full unit suite (**1161 passed, 1 expected release-only skip**) also passed. Test
+counts are unchanged; this batch removes state leakage rather than adding cases.
 
 ### Batch 15 — named dialog controls, contained notification focus, canonical org-local dates and dark-safe scorecards (API contract + apps/api + apps/web; NO migration [head stays `0075`]; NO new permission key; PR [#378](https://github.com/CoJoA13/EasySynQ/pull/378))
 
