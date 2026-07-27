@@ -463,7 +463,9 @@ async def record_bulk_decisions_endpoint(
 ) -> dict[str, Any]:
     """Apply ONE dimensional action across an explicit ``file_ids`` list OR a ``selector`` filter
     (kind/band/disposition) — the §9.2a scale lever. Bulk kind-confirm (``after.kind``) is the
-    explicit human act. Needs ``import.review``."""
+    explicit human act. Selectors skip prior per-file decisions and fail atomically on an
+    ineligible or oversized match set; explicit IDs are the overwrite path. Needs
+    ``import.review``."""
     return await review_svc.record_bulk_decisions(
         session,
         caller,

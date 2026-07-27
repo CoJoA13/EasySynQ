@@ -449,8 +449,10 @@ async def record_bulk_decisions(
 ) -> dict[str, Any]:
     """Apply ONE dimensional action across an explicit ``file_ids`` list OR a ``selector`` filter
     (kind/band/disposition over the existing classification/scan columns). Bulk kind-confirm
-    (``after.kind``) is the explicit human act (R10) — never threshold-auto. One decision row per
-    file; one summary ``IMPORT_DECISION_RECORDED`` event."""
+    (``after.kind``) is the explicit human act (R10) — never threshold-auto. A selector is broad
+    automation, so it skips files with a prior per-file decision; explicit ``file_ids`` remain the
+    deliberate overwrite path. One decision row per file; one summary
+    ``IMPORT_DECISION_RECORDED`` event."""
     settings = get_settings()
     run = await _load_reviewable(session, caller, run_id, for_update=True)
     act = _coerce_action(action)
@@ -462,16 +464,16 @@ async def record_bulk_decisions(
         )
     clean_after = _validate_after(act, after)
 
-    targets = await _resolve_selection(session, run, file_ids, selector, settings)
-    if not targets:
+    selection = await _resolve_selection(session, run, file_ids, selector, settings)
+    if selection.matched == 0:
         raise ProblemException(
             status=422, code="validation_error", title="bulk decision selected no files"
         )
-    if len(targets) > settings.import_bulk_decision_max:
+    if selection.matched > settings.import_bulk_decision_max:
         raise ProblemException(
             status=422,
             code="validation_error",
-            title=f"bulk selection {len(targets)} exceeds max {settings.import_bulk_decision_max}",
+            title=f"bulk selection exceeds max {settings.import_bulk_decision_max}",
         )
 
     # Idempotency for the whole bulk: the key (if any) is stamped on the FIRST inserted row; a
@@ -488,10 +490,22 @@ async def record_bulk_decisions(
             "decision_id": str(replay_id),
         }
 
+    # A selector that matched only previously-decided files is a successful no-op. Roll back the
+    # read transaction to release the run lock without manufacturing a decision/event or changing
+    # Proposed → Reviewing.
+    if not selection.targets:
+        await session.rollback()
+        return {
+            "run_id": str(run_id),
+            "action": act.value,
+            "applied": 0,
+            "skipped_prior_decisions": selection.skipped_prior_decisions,
+        }
+
     payload = dict(clean_after)
     if reason:
         payload["reason"] = reason
-    targets_sorted = sorted(targets, key=str)
+    targets_sorted = sorted(selection.targets, key=str)
     for n, fid in enumerate(targets_sorted):
         await repo.insert_decision(
             session,
@@ -515,12 +529,25 @@ async def record_bulk_decisions(
             "action": act.value,
             "bulk": True,
             "count": len(targets_sorted),
+            "skipped_prior_decisions": selection.skipped_prior_decisions,
             "file_ids": [str(i) for i in targets_sorted],
             **payload,
         },
     )
     await session.commit()
-    return {"run_id": str(run_id), "action": act.value, "applied": len(targets_sorted)}
+    return {
+        "run_id": str(run_id),
+        "action": act.value,
+        "applied": len(targets_sorted),
+        "skipped_prior_decisions": selection.skipped_prior_decisions,
+    }
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class _BulkSelection:
+    targets: list[uuid.UUID]
+    matched: int
+    skipped_prior_decisions: int = 0
 
 
 async def _resolve_selection(
@@ -529,10 +556,11 @@ async def _resolve_selection(
     file_ids: list[uuid.UUID] | None,
     selector: dict[str, Any] | None,
     settings: Any,
-) -> list[uuid.UUID]:
+) -> _BulkSelection:
     """Bulk selection: explicit ``file_ids`` (validated ∈ run) OR a ``selector`` over the existing
     ``list_files_with_classification`` dimensions (disposition/kind/band) — NOT a review_status
-    push-down (that is a read-only display filter)."""
+    push-down (that is a read-only display filter). Selector matches are validated atomically,
+    bounded with a max+1 overflow probe, and narrowed to files without prior per-file decisions."""
     if file_ids:
         rows = []
         for fid in file_ids:
@@ -548,7 +576,7 @@ async def _resolve_selection(
                     title=f"file is not an included candidate: {fid}",
                 )
             rows.append(f.id)
-        return rows
+        return _BulkSelection(targets=rows, matched=len(rows))
     if selector is not None:
         kind = selector.get("kind")
         band = selector.get("band")
@@ -560,10 +588,29 @@ async def _resolve_selection(
             disposition=disposition,
             kind=ImportKind(kind) if kind else None,
             band=_coerce_band(band),
-            limit=settings.import_bulk_decision_max,
+            limit=settings.import_bulk_decision_max + 1,
             offset=0,
         )
-        return [f.id for f, _c in files]
+        if len(files) > settings.import_bulk_decision_max:
+            raise ProblemException(
+                status=422,
+                code="validation_error",
+                title=f"bulk selection exceeds max {settings.import_bulk_decision_max}",
+            )
+        for f, _classification in files:
+            if not f.included_candidate:
+                raise ProblemException(
+                    status=422,
+                    code="validation_error",
+                    title=f"file is not an included candidate: {f.id}",
+                )
+        matched_ids = [f.id for f, _classification in files]
+        decided_ids = await repo.decided_file_ids(session, run.id, matched_ids)
+        return _BulkSelection(
+            targets=[file_id for file_id in matched_ids if file_id not in decided_ids],
+            matched=len(matched_ids),
+            skipped_prior_decisions=len(decided_ids),
+        )
     raise ProblemException(
         status=422, code="validation_error", title="bulk decision needs file_ids or a selector"
     )
@@ -735,7 +782,8 @@ async def split_cluster(
     idem_key: str | None = None,
 ) -> dict[str, Any]:
     """Break members out of a dupe-cluster / version-family. The separated files (and a survivor
-    when the group drops <2 members → the group is DELETED) become standalone keep-items."""
+    when the group drops <2 members → the group is DELETED) become standalone keep-items. A
+    version-family split preserves a surviving human-selected effective member."""
     run = await _load_reviewable(session, caller, run_id, for_update=True)
     if target_kind not in ("dupe_cluster", "version_family"):
         raise ProblemException(
@@ -753,6 +801,8 @@ async def split_cluster(
         return {"run_id": str(run_id), "replayed": True, "decision_id": str(replay_id)}
 
     sep = set(separate_file_ids)
+    family_effective_after: uuid.UUID | None = None
+    before: dict[str, Any]
     if target_kind == "dupe_cluster":
         cluster = await repo.get_dupe_cluster(session, run_id, target_id)
         if cluster is None:
@@ -781,10 +831,13 @@ async def split_cluster(
         if family is None:
             raise ProblemException(status=404, code="not_found", title="Version family not found")
         members = list(family.ordered_member_file_ids)
+        previous_effective = family.effective_file_id
         before = {
             "kind": "version_family",
             "family_id": str(target_id),
             "members": [str(i) for i in members],
+            "effective_file_id": str(previous_effective),
+            "reconstruct_revision_chain": family.reconstruct_revision_chain,
         }
         if not sep <= set(members):
             raise ProblemException(
@@ -797,18 +850,25 @@ async def split_cluster(
             ctx = await _file_ctx(session, run, remaining)
             ordered = [m.file_id for m in order_members([ctx[m] for m in remaining])]
             family.ordered_member_file_ids = ordered
-            family.effective_file_id = ordered[0]
+            family.effective_file_id = (
+                previous_effective if previous_effective in remaining else ordered[0]
+            )
+            family_effective_after = family.effective_file_id
     await session.flush()
 
     await rebuild_proposals(session, run_id, org_id=run.org_id, version=run.classifier_version)
     await _refresh_counts(session, run)
     _enter_reviewing(session, run, caller)
-    after = {
+    after: dict[str, Any] = {
         "action": "split",
         "target_kind": target_kind,
         "target_id": str(target_id),
         "separated": [str(i) for i in sorted(sep, key=str)],
     }
+    if target_kind == "version_family":
+        after["effective_file_id"] = (
+            str(family_effective_after) if family_effective_after is not None else None
+        )
     if reason:
         after["reason"] = reason
     await repo.insert_decision(

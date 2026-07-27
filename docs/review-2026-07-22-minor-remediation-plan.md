@@ -9,7 +9,7 @@
 
 - The historic denominator remains **104**. One finding was already closed while the MAJOR work was
   underway, leaving **103** to schedule here. Batch M1 closed 4; M2 closed 2; M3 closed 2; M4
-  closed 4; M5 closes 3; **88 remain queued** after M5.
+  closed 4; M5 closed 3; M6 closes 4; **84 remain queued** after M6.
 - A queued finding is not assumed to still be live. Every batch must re-locate and revalidate its
   findings against then-current `main` before implementation; close, re-scope, or reject it with
   evidence rather than mechanically applying the 2026-07-22 suggestion.
@@ -29,8 +29,8 @@
 | M2 | Scoped authorization and reporting | 2 | ☑ merged | [#382](https://github.com/CoJoA13/EasySynQ/pull/382) |
 | M3 | Notification reliability | 2 | ☑ merged | [#383](https://github.com/CoJoA13/EasySynQ/pull/383) |
 | M4 | Lifecycle and workflow guards | 4 | ☑ merged | [#384](https://github.com/CoJoA13/EasySynQ/pull/384) |
-| M5 | Ingestion commit integrity | 3 | ☑ in PR | [#385](https://github.com/CoJoA13/EasySynQ/pull/385) |
-| M6 | Ingestion review and family integrity | 4 | ☐ queued — revalidate | — |
+| M5 | Ingestion commit integrity | 3 | ☑ merged | [#385](https://github.com/CoJoA13/EasySynQ/pull/385) |
+| M6 | Ingestion review and family integrity | 4 | ☑ in PR | [#386](https://github.com/CoJoA13/EasySynQ/pull/386) |
 | M7 | Records and rendering resilience | 3 | ☐ queued — revalidate | — |
 | M8 | Vault and retention input guards | 2 | ☐ queued — revalidate | — |
 | M9 | Migration and ORM coherence | 4 | ☐ queued — revalidate | — |
@@ -48,7 +48,7 @@
 | M21 | Web async and error UX | 8 | ☐ queued — revalidate | — |
 | M22 | Web accessibility | 7 | ☐ queued — revalidate | — |
 
-**Accounting: 1 preclosed + 12 merged + 3 in PR + 88 queued = 104 original findings.**
+**Accounting: 1 preclosed + 15 merged + 4 in PR + 84 queued = 104 original findings.**
 
 ---
 
@@ -169,18 +169,29 @@ new permission key
   folded identifier at the commit boundary so a bypassed legacy decision still cannot write a
   blank vault identifier; the OpenAPI schema advertises the non-blank constraint).
 
-### ☐ M6 — Ingestion review and family integrity
+### ☑ M6 — Ingestion review and family integrity — [#386](https://github.com/CoJoA13/EasySynQ/pull/386)
 
-`branch: fix/minor-ingestion-review-integrity` · API + integration
+`branch: fix/minor-ingestion-review-integrity` · API + integration + docs · no migration and no new
+permission key
 
-- [ ] `apps/api/src/easysynq_api/services/ingestion/review.py:477` — bulk “accept all HIGH”
-  silently supersedes a prior explicit EXCLUDE `[C]`.
-- [ ] `apps/api/src/easysynq_api/services/ingestion/review.py:487` — the bulk-selector path skips
-  the `included_candidate` guard used by the other paths `[f]`.
-- [ ] `apps/api/src/easysynq_api/services/ingestion/review.py:721` — splitting a version family
-  resets a human-selected effective member to the total-order pick `[f]`.
-- [ ] `apps/api/src/easysynq_api/services/ingestion/review.py:484` — bulk selectors silently stop
-  at 5,000 matches while oversized explicit `file_ids` correctly fail `[f]`.
+- [x] `apps/api/src/easysynq_api/services/ingestion/review.py:477` — bulk “accept all HIGH”
+  silently superseded a prior explicit EXCLUDE `[C]` (fixed: selector-based bulk review now treats
+  any existing per-file decision as more-specific human intent, skips those files, and reports the
+  skipped count; an all-skipped selection is a calm no-op with no fabricated decision/event, while
+  explicit `file_ids` remain the deliberate overwrite path).
+- [x] `apps/api/src/easysynq_api/services/ingestion/review.py:487` — the bulk-selector path skipped
+  the `included_candidate` guard used by the other paths `[C]` (fixed: validate every selector
+  match before inserting anything and reject the entire request with 422 if even one match is not
+  an included candidate).
+- [x] `apps/api/src/easysynq_api/services/ingestion/review.py:721` — splitting a version family
+  reset a human-selected effective member to the total-order pick `[C]` (fixed: recompute the
+  structural member order but preserve the prior effective member when it survives; fall back to
+  the total-order pick only when that member was separated, while retaining the family
+  reconstruction flag and recording the effective choice in the structural audit).
+- [x] `apps/api/src/easysynq_api/services/ingestion/review.py:484` — bulk selectors silently
+  stopped at 5,000 matches while oversized explicit `file_ids` correctly failed `[C]` (fixed: query
+  at most configured-max-plus-one as an overflow probe and return 422 without writes instead of
+  applying a truncated prefix).
 
 ### ☐ M7 — Records and rendering resilience
 
