@@ -31,7 +31,7 @@
 | M4 | Lifecycle and workflow guards | 4 | ☑ merged | [#384](https://github.com/CoJoA13/EasySynQ/pull/384) |
 | M5 | Ingestion commit integrity | 3 | ☑ merged | [#385](https://github.com/CoJoA13/EasySynQ/pull/385) |
 | M6 | Ingestion review and family integrity | 4 | ☑ merged | [#386](https://github.com/CoJoA13/EasySynQ/pull/386) |
-| M7 | Records and rendering resilience | 3 | ☑ implemented — PR pending | — |
+| M7 | Records and rendering resilience | 3 | ☑ in PR | [#387](https://github.com/CoJoA13/EasySynQ/pull/387) |
 | M8 | Vault and retention input guards | 2 | ☐ queued — revalidate | — |
 | M9 | Migration and ORM coherence | 4 | ☐ queued — revalidate | — |
 | M10 | Schema and index design | 4 | ☐ queued — revalidate | — |
@@ -48,7 +48,7 @@
 | M21 | Web async and error UX | 8 | ☐ queued — revalidate | — |
 | M22 | Web accessibility | 7 | ☐ queued — revalidate | — |
 
-**Accounting: 1 preclosed + 19 merged + 3 implemented + 81 queued = 104 original findings.**
+**Accounting: 1 preclosed + 19 merged + 3 in PR + 81 queued = 104 original findings.**
 
 ---
 
@@ -193,7 +193,7 @@ permission key
   at most configured-max-plus-one as an overflow probe and return 422 without writes instead of
   applying a truncated prefix).
 
-### ☑ M7 — Records and rendering resilience
+### ☑ M7 — Records and rendering resilience — [#387](https://github.com/CoJoA13/EasySynQ/pull/387)
 
 `branch: fix/minor-record-render-resilience` · API + workers + migration `0077` + docs +
 unit/integration tests · no new permission key
