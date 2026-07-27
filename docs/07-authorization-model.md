@@ -108,6 +108,7 @@ Permissions are named `resource.action`. The catalog below is **complete for v1*
 | `document.delete_draft` | Discard a never-released Draft (hard rule: released versions are immutable, never deletable) | ARTIFACT | – | – |
 | `document.manage_metadata` | Edit clause_map, process_links, owner, identifier scheme, review cadence | ARTIFACT / DOC_CLASS | – | – |
 | `document.acknowledge` | Record a "read & understood" acknowledgement (Sam's flow) | ARTIFACT | – | – |
+| `document.distribute` | Manage controlled-distribution entries and acknowledgement requirements | ARTIFACT | – | – |
 | `document.print_controlled` | Render/print a watermarked *controlled* copy | ARTIFACT | – | – |
 | `document.export` | Export Document + history outside EasySynQ | ARTIFACT / PROCESS | yes | – |
 
@@ -231,8 +232,9 @@ Permissions are named `resource.action`. The catalog below is **complete for v1*
 
 | Resource | Actions (v1) |
 |---|---|
-| `document` | read, read_obsolete, read_draft, create, checkout, edit, submit, review, approve, release, obsolete, delete_draft, manage_metadata, acknowledge, print_controlled, export |
+| `document` | read, read_obsolete, read_draft, create, checkout, edit, submit, review, approve, release, obsolete, delete_draft, manage_metadata, acknowledge, distribute, print_controlled, export |
 | `record` | read, create, correct, dispose, set_retention, export |
+| `retention` | read, manage |
 | `changeRequest` | create, read, assess, route, approve, implement, close |
 | `audit` | read, create, plan, conduct, close |
 | `finding` | create, read, link_capa |
@@ -256,6 +258,7 @@ Permissions are named `resource.action`. The catalog below is **complete for v1*
 | `storage` | read, manage |
 | `backup` | read, run, configure |
 | `restore` | run |
+| `drift` | read |
 | `import` | execute, review, commit |
 | `system` | audit_log.read, audit_log.export, health.read |
 

@@ -347,16 +347,32 @@ land the sweep separately from the gate so the gate turns on green rather than r
   review base document's and satellite's original org ids, restores both in `finally`, then deletes
   the temporary org and proves it is absent)
 
-### ☐ Batch 17 — Docs drift
-`branch: fix/major-docs-drift` · docs-only
+### ☑ Batch 17 — Docs drift
+`branch: fix/major-docs-drift` · docs-only · NO runtime/API-contract change · NO migration · NO new permission key
 
-- [ ] `docs/07-authorization-model.md:89` — catalog omits `document.distribute` (+ `retention`/`drift` rows in §3.10) `[f]`
-- [ ] `docs/15-api-design.md:338` — `PATCH /documents/{id}` documented `document.edit`; implemented `document.manage_metadata` `[f]`
-- [ ] `docs/15-api-design.md:626` — documented `POST /audits/{id}/transition` does not exist (six verb endpoints) `[C]`
-- [ ] `docs/15-api-design.md:627` — §8.12 wrong audit permission keys (`audit.record_finding`/`audit.plan` → `finding.create`/`audit.create`) `[f]`
-- [ ] `docs/15-api-design.md:523` — NCR edit documented `PATCH /ncrs/{id}` `ncr.update`; implemented `PATCH /ncrs/{id}/disposition` `ncr.record_correction` `[f]`
-- [ ] `docs/15-api-design.md:191` — notification inbox documented `/me/notifications`; shipped `/notifications*` `[C]`
-- [ ] `docs/15-api-design.md:490` — documented `GET /records/{id}/download` does not exist (per-blob `/records/{id}/evidence/{sha256}/download`) `[f]`
+- [x] `docs/07-authorization-model.md:89` — catalog omits `document.distribute`
+  (+ `retention`/`drift` rows in §3.10) (fixed: the existing R42
+  `document.distribute` key now carries its seeded ARTIFACT scope and non-SoD/non-signing flags in
+  §3.1; the resource summary now includes `document.distribute`, `retention.read/manage`, and
+  `drift.read`) `[f]`
+- [x] `docs/15-api-design.md:338` — `PATCH /documents/{id}` documented `document.edit`;
+  implemented `document.manage_metadata` (fixed: the endpoint row now names the live metadata gate
+  and distinguishes it from content revision/check-in) `[f]`
+- [x] `docs/15-api-design.md:626` — documented `POST /audits/{id}/transition` does not exist (fixed:
+  §8.12 lists all six shipped verb endpoints with their exact FSM edges and `audit.conduct` /
+  `audit.close` gates) `[C]`
+- [x] `docs/15-api-design.md:627` — §8.12 wrong audit permission keys
+  (`audit.record_finding`/`audit.plan` → `finding.create`/`audit.create`) (fixed: audit creation now
+  names `audit.create`, and finding list/create names `finding.read` / `finding.create`) `[f]`
+- [x] `docs/15-api-design.md:523` — NCR edit documented `PATCH /ncrs/{id}` `ncr.update`;
+  implemented `PATCH /ncrs/{id}/disposition` `ncr.record_correction` (fixed: the as-built one-shot
+  body, authorizer, and conflict are documented) `[f]`
+- [x] `docs/15-api-design.md:191` — notification inbox documented `/me/notifications`; shipped
+  `/notifications*` (fixed: §5.2 now lists the self-scoped inbox, single/read-all writes, SSE stream,
+  and GET/PUT preferences endpoints with the real `unread_only` query name) `[C]`
+- [x] `docs/15-api-design.md:490` — documented `GET /records/{id}/download` does not exist (fixed:
+  the row now documents per-blob `/records/{id}/evidence/{sha256}/download` and the multi-evidence
+  record shape) `[f]`
 
 ---
 
