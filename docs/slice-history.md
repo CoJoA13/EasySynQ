@@ -174,7 +174,7 @@
 
 ## REMEDIATION — correctness, accessibility, polish & test reliability
 
-### Minor Batch M6 — ingestion review and family integrity (API + integration + docs; NO migration [head stays `0076`]; NO new permission key [catalog 102]; PR pending)
+### Minor Batch M6 — ingestion review and family integrity (API + integration + docs; NO migration [head stays `0076`]; NO new permission key [catalog 102]; PR [#386](https://github.com/CoJoA13/EasySynQ/pull/386))
 
 **What shipped.** Selector-based bulk review now preserves more-specific human intent. “Accept all
 High” and other selector operations omit files that already carry a per-file decision and return an

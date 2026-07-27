@@ -30,7 +30,7 @@
 | M3 | Notification reliability | 2 | ☑ merged | [#383](https://github.com/CoJoA13/EasySynQ/pull/383) |
 | M4 | Lifecycle and workflow guards | 4 | ☑ merged | [#384](https://github.com/CoJoA13/EasySynQ/pull/384) |
 | M5 | Ingestion commit integrity | 3 | ☑ merged | [#385](https://github.com/CoJoA13/EasySynQ/pull/385) |
-| M6 | Ingestion review and family integrity | 4 | ☑ implementation complete | PR pending |
+| M6 | Ingestion review and family integrity | 4 | ☑ in PR | [#386](https://github.com/CoJoA13/EasySynQ/pull/386) |
 | M7 | Records and rendering resilience | 3 | ☐ queued — revalidate | — |
 | M8 | Vault and retention input guards | 2 | ☐ queued — revalidate | — |
 | M9 | Migration and ORM coherence | 4 | ☐ queued — revalidate | — |
@@ -48,8 +48,7 @@
 | M21 | Web async and error UX | 8 | ☐ queued — revalidate | — |
 | M22 | Web accessibility | 7 | ☐ queued — revalidate | — |
 
-**Accounting: 1 preclosed + 15 merged + 4 implementation-complete + 84 queued = 104 original
-findings.**
+**Accounting: 1 preclosed + 15 merged + 4 in PR + 84 queued = 104 original findings.**
 
 ---
 
@@ -170,7 +169,7 @@ new permission key
   folded identifier at the commit boundary so a bypassed legacy decision still cannot write a
   blank vault identifier; the OpenAPI schema advertises the non-blank constraint).
 
-### ☑ M6 — Ingestion review and family integrity
+### ☑ M6 — Ingestion review and family integrity — [#386](https://github.com/CoJoA13/EasySynQ/pull/386)
 
 `branch: fix/minor-ingestion-review-integrity` · API + integration + docs · no migration and no new
 permission key
