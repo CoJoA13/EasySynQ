@@ -94,6 +94,7 @@ class EffectiveFileState:
     clause_numbers: list[str]
     process_names: list[str] | None
     owner: str | None
+    owner_source: str | None
     decided: bool
     last_action: str | None
 
@@ -122,6 +123,7 @@ class EffectiveFileState:
             "clause_numbers": self.clause_numbers,
             "process_names": self.process_names,
             "owner": self.owner,
+            "owner_source": self.owner_source,
             "decided": self.decided,
             "last_action": self.last_action,
             "commit_ready": self.commit_ready,
@@ -166,9 +168,18 @@ def fold_file_decisions(
     process = latest("process_names")
     if process is None and classification is not None and classification.process_names:
         process = list(classification.process_names)
-    owner = latest("owner")
-    if owner is None and node is not None:
+    owner: str | None
+    owner_source: str | None
+    human_owner = latest("owner")
+    if human_owner is not None:
+        owner = human_owner
+        owner_source = "human"
+    elif node is not None:
         owner = node.proposed_owner
+        owner_source = node.owner_source
+    else:
+        owner = None
+        owner_source = None
     return EffectiveFileState(
         disposition=disposition,
         kind=str(kind),
@@ -178,6 +189,7 @@ def fold_file_decisions(
         clause_numbers=list(clauses),
         process_names=process,
         owner=owner,
+        owner_source=owner_source,
         decided=bool(decisions_newest_first),
         last_action=last.value if last is not None else None,
     )
@@ -253,6 +265,12 @@ def _validate_after(action: ImportDecisionAction, after: dict[str, Any] | None) 
             if not isinstance(val, str):
                 raise ProblemException(
                     status=422, code="validation_error", title=f"{key} must be a string"
+                )
+            if key == "identifier" and not val.strip():
+                raise ProblemException(
+                    status=422,
+                    code="validation_error",
+                    title="identifier must not be blank",
                 )
             clean[key] = val
     for key in ("clause_numbers", "process_names"):

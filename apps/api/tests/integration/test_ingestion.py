@@ -18,6 +18,7 @@ from sqlalchemy import select
 
 from easysynq_api.config import get_settings
 from easysynq_api.db.models._audit_enums import EventType
+from easysynq_api.db.models._ingestion_enums import ImportCommitResultStatus
 from easysynq_api.db.models._signature_enums import SignatureMeaning, SignedObjectType
 from easysynq_api.db.models._vault_enums import DocumentCurrentState, DocumentKind, VersionState
 from easysynq_api.db.models.app_user import AppUser, UserStatus
@@ -33,6 +34,8 @@ from easysynq_api.db.models.signature_event import SignatureEvent
 from easysynq_api.db.session import get_sessionmaker
 from easysynq_api.domain.authz.types import Effect, ScopeLevel
 from easysynq_api.domain.ingestion.extractor import ExtractInput, ExtractResult
+from easysynq_api.services.ingestion import commit as commit_svc
+from easysynq_api.services.ingestion import repository as ingestion_repo
 from easysynq_api.services.ingestion.classify import run_classify
 from easysynq_api.services.ingestion.commit import run_commit
 from easysynq_api.services.ingestion.dedup import run_dedup
@@ -1221,17 +1224,21 @@ async def _confirm_for_commit(
     audit_id: str,
     *,
     doc_identifier: str,
+    doc_owner: str | None = None,
     audit_kind: str = "RECORD",
     audit_after: dict[str, object] | None = None,
 ) -> None:
     """Confirm the SOP as a DOCUMENT with a per-test-UNIQUE identifier (the shared-DB collision
     guard) + the audit per ``audit_kind``/``audit_after`` — making the run commit-ready."""
+    doc_after = {"kind": "DOCUMENT", "identifier": doc_identifier, "clause_numbers": ["8.4"]}
+    if doc_owner is not None:
+        doc_after["owner"] = doc_owner
     r1 = await app_client.post(
         f"/api/v1/admin/imports/{run_id}/files/{sop_id}/decision",
         headers=h,
         json={
             "action": "correct",
-            "after": {"kind": "DOCUMENT", "identifier": doc_identifier, "clause_numbers": ["8.4"]},
+            "after": doc_after,
         },
     )
     assert r1.status_code == 200, r1.text
@@ -1257,7 +1264,18 @@ async def test_commit_writes_documents_and_records_to_vault(
     audit = by_name["Internal Audit Report Q2 2023.pdf"]["id"]
     tag = uuid.uuid4().hex[:6].upper()
     doc_ident = f"SOP-{tag}-001"
-    await _confirm_for_commit(app_client, h, run_id, sop, audit, doc_identifier=doc_ident)
+    owner_subject = _subject("import-owner")
+    owner_id = await _grant(owner_subject, ())
+    await _confirm_for_commit(
+        app_client,
+        h,
+        run_id,
+        sop,
+        audit,
+        doc_identifier=doc_ident,
+        doc_owner=str(owner_id),
+        audit_after={"kind": "RECORD", "owner": owner_subject},
+    )
 
     chk = (await app_client.get(f"/api/v1/admin/imports/{run_id}/checklist", headers=h)).json()
     assert chk["ready"] is True, chk["blocking"]
@@ -1280,6 +1298,7 @@ async def test_commit_writes_documents_and_records_to_vault(
         ).scalar_one()
         assert doc.current_state == DocumentCurrentState.Effective
         assert doc.kind == DocumentKind.DOCUMENT
+        assert doc.owner_user_id == owner_id
         assert doc.import_provenance and doc.import_provenance["run_id"] == run_id
         assert doc.import_provenance["source_sha256"]
         assert doc.current_effective_version_id is not None
@@ -1349,6 +1368,7 @@ async def test_commit_writes_documents_and_records_to_vault(
     async with get_sessionmaker()() as s:
         rec = await s.get(DocumentedInformation, uuid.UUID(rec_id))
         assert rec is not None and rec.kind == DocumentKind.RECORD
+        assert rec.owner_user_id == owner_id
         assert rec.import_provenance and rec.import_provenance["run_id"] == run_id
         # R2: a RECORD is captured, NOT released — NO import_baseline signature (the asymmetry).
         rec_sigs = (
@@ -1384,6 +1404,99 @@ async def test_commit_writes_documents_and_records_to_vault(
         assert n == 1  # still exactly one — no duplicate document
     recommit = await app_client.post(f"/api/v1/admin/imports/{run_id}/commit", headers=h)
     assert recommit.status_code == 409  # already completed
+
+
+async def test_blank_identifier_decision_is_rejected_before_commit(
+    app_client: AsyncClient, token_factory: Callable[..., str], _stub_tika: None
+) -> None:
+    admin = _subject("avery")
+    await _assign_role(admin, "System Administrator")
+    h = _auth(token_factory, admin)
+    run_id, by_name = await _proposed_classifiable(app_client, h, _stub_tika)
+    sop = by_name["SOP-PUR-002 Purchasing.docx"]["id"]
+
+    response = await app_client.post(
+        f"/api/v1/admin/imports/{run_id}/files/{sop}/decision",
+        headers=h,
+        json={"action": "correct", "after": {"kind": "DOCUMENT", "identifier": " \t "}},
+    )
+
+    assert response.status_code == 422, response.text
+    assert response.json()["title"] == "identifier must not be blank"
+
+
+async def test_record_failed_does_not_audit_after_peer_success(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    _stub_tika: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A success committed after the failure path's read but before its conditional UPSERT wins
+    atomically; the losing failure writer must not append a false IMPORT_ITEM_FAILED event."""
+    admin = _subject("avery")
+    await _assign_role(admin, "System Administrator")
+    h = _auth(token_factory, admin)
+    run_id, by_name = await _proposed_classifiable(app_client, h, _stub_tika)
+    file_id = uuid.UUID(by_name["SOP-PUR-002 Purchasing.docx"]["id"])
+    run_uuid = uuid.UUID(run_id)
+
+    original_record_failed = ingestion_repo.record_failed_result
+    peer_inserted = False
+
+    async def _peer_wins_before_failed_upsert(
+        session: object,
+        *,
+        org_id: uuid.UUID,
+        run_id: uuid.UUID,
+        file_id: uuid.UUID,
+        error: str,
+    ) -> bool:
+        nonlocal peer_inserted
+        if not peer_inserted:
+            async with get_sessionmaker()() as peer:
+                won = await ingestion_repo.claim_commit_result(
+                    peer,
+                    org_id=org_id,
+                    run_id=run_id,
+                    file_id=file_id,
+                    vault_document_id=None,
+                    vault_version_id=None,
+                )
+                assert won is True
+                await peer.commit()
+            peer_inserted = True
+        return await original_record_failed(
+            session, org_id=org_id, run_id=run_id, file_id=file_id, error=error
+        )
+
+    monkeypatch.setattr(commit_svc.repo, "record_failed_result", _peer_wins_before_failed_upsert)
+
+    async with get_sessionmaker()() as session:
+        run = await ingestion_repo.get_run(session, run_uuid)
+        assert run is not None
+        await commit_svc._record_failed(
+            session, run_uuid, run.org_id, file_id, "simulated_worker_failure"
+        )
+
+    async with get_sessionmaker()() as session:
+        result = await ingestion_repo.get_commit_result(session, run_uuid, file_id)
+        assert result is not None
+        assert result.result is ImportCommitResultStatus.SUCCESS
+        failure_events = (
+            (
+                await session.execute(
+                    select(AuditEvent).where(
+                        AuditEvent.object_id == run_uuid,
+                        AuditEvent.event_type == EventType.IMPORT_ITEM_FAILED,
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert not any(
+            (event.after or {}).get("file_id") == str(file_id) for event in failure_events
+        )
 
 
 async def test_commit_partial_then_resume_keeps_committed_item(
