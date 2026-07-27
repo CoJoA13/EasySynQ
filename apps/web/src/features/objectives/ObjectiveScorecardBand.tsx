@@ -17,7 +17,7 @@ const KEYS: ObjectiveRag[] = ["green", "amber", "red", "unmeasured"];
 
 export function ObjectiveScorecardBand({ total, onTarget, byRag }: Props) {
   return (
-    <Paper withBorder p="md" radius="md" bg="var(--mantine-color-gray-0)">
+    <Paper withBorder p="md" radius="md" bg="var(--es-surface-2)">
       <Group justify="space-between" wrap="wrap">
         <Text>
           {onTarget} / {total} on target

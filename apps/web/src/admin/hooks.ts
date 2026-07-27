@@ -72,6 +72,8 @@ export function useUpdateWorkingCalendar() {
       api.send<WorkingCalendar>("PUT", "/api/v1/admin/notifications/working-calendar", body),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["working-calendar"] });
+      // /me carries the canonical calendar/org timezone used by every date-rendering surface.
+      void qc.invalidateQueries({ queryKey: ["me"] });
     },
   });
 }

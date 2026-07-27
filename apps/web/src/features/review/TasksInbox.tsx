@@ -1,11 +1,13 @@
 import { Stack, Table, Text, Title } from "@mantine/core";
 import { useMemo } from "react";
 import { Link, useSearchParams } from "react-router-dom";
+import { useMe } from "../../app/shell/useMe";
 import { ApiError } from "../../lib/api";
 import { humanizeStageKey, humanizeToken } from "../../lib/labels";
 import { RegisterToolbar, SortableTh } from "../../lib/RegisterToolbar";
 import { sortRows, useDebouncedSearch, useTableSort } from "../../lib/registerControls";
 import { EmptyState, LoadingState } from "../../lib/states";
+import { formatDateInTimeZone } from "../../lib/time";
 import type { Task } from "../../lib/types";
 import { useRowKeyboardNav } from "../../lib/useRowKeyboardNav";
 import { TaskStateBadge } from "../document/TaskStateBadge";
@@ -53,6 +55,7 @@ function sortValue(t: Task, key: SortKey): string | null | undefined {
 
 function GeneralTasksInbox() {
   const { data: tasks, isLoading, isError, error } = useTasks({ state: "PENDING" });
+  const { data: me } = useMe();
   const { q, setQ, query } = useDebouncedSearch();
   const { sort, dir, toggleSort } = useTableSort<SortKey>({
     keys: SORT_KEYS,
@@ -166,7 +169,9 @@ function GeneralTasksInbox() {
                     <Table.Td>
                       <TaskStateBadge state={t.state} />
                     </Table.Td>
-                    <Table.Td>{t.due_at ? t.due_at.slice(0, 10) : "—"}</Table.Td>
+                    <Table.Td>
+                      {t.due_at ? formatDateInTimeZone(t.due_at, me?.org_timezone) : "—"}
+                    </Table.Td>
                   </Table.Tr>
                 ))}
               </Table.Tbody>

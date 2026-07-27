@@ -19,7 +19,7 @@ export function InterestedPartyScorecardBand({ rows }: { rows: InterestedParty[]
   const neverReviewed = rows.filter((r) => r.last_reviewed_at === null).length;
 
   return (
-    <Paper withBorder p="md" radius="md" bg="var(--mantine-color-gray-0)">
+    <Paper withBorder p="md" radius="md" bg="var(--es-surface-2)">
       <Group justify="space-between" wrap="wrap">
         <Text>
           {active} of {total} active

@@ -14,6 +14,42 @@ test("names the subject and links each row to the review page", async () => {
   expect(link).toHaveAttribute("href", "/tasks/task1111-1111-1111-1111-111111111111");
 });
 
+test("renders due dates on the organization calendar day", async () => {
+  server.use(
+    http.get("/api/v1/me", () =>
+      HttpResponse.json({
+        id: "me",
+        keycloak_subject: "subject",
+        display_name: "Mara",
+        email: "mara@example.test",
+        status: "ACTIVE",
+        org_timezone: "Asia/Tokyo",
+      }),
+    ),
+    http.get("/api/v1/tasks", () =>
+      HttpResponse.json([
+        {
+          id: "tokyo-task",
+          instance_id: "tokyo-instance",
+          stage_key: "quality_approval",
+          type: "APPROVE",
+          state: "PENDING",
+          assignee_user_id: null,
+          candidate_pool: null,
+          action_expected: "approve",
+          due_at: "2026-06-28T15:00:00Z",
+          subject_identifier: "SOP-TYO-001",
+          subject_title: "Tokyo due date",
+        },
+      ]),
+    ),
+  );
+  renderWithProviders(<TasksInbox />, { route: "/tasks" });
+
+  expect(await screen.findByText("2026-06-29")).toBeInTheDocument();
+  expect(screen.queryByText("2026-06-28")).not.toBeInTheDocument();
+});
+
 test("filters rows by the debounced search and shows a calm no-match state", async () => {
   const { findByRole, findByLabelText, findByText, queryByText } = renderWithProviders(
     <TasksInbox />,

@@ -26,7 +26,7 @@ export function CommitmentHero({ objective: o }: { objective: Objective }) {
       ? `${o.baseline_value ?? "—"} → ${o.at_risk_threshold ?? "—"}`
       : "—";
   return (
-    <Paper withBorder p="md" radius="md" bg="var(--mantine-color-gray-0)">
+    <Paper withBorder p="md" radius="md" bg="var(--es-surface-2)">
       <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="lg">
         <Stack gap="xs">
           <Group align="baseline" gap={6}>

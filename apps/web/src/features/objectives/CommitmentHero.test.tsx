@@ -37,6 +37,9 @@ it("shows current vs target, the RAG and attainment badges, and the meta", async
   expect(screen.getByText(TONE_GLYPH.warning)).toBeInTheDocument();
   expect(screen.getByText("In progress")).toBeInTheDocument();
   expect(screen.getByText("Higher is better")).toBeInTheDocument();
+  expect(screen.getByText("92").closest(".mantine-Paper-root")).toHaveStyle({
+    background: "var(--es-surface-2)",
+  });
   expect(await axe(container)).toHaveNoViolations();
 });
 

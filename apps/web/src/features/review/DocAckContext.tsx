@@ -1,12 +1,15 @@
 import { Alert, Anchor, Card, Stack, Table, Text } from "@mantine/core";
 import { Link } from "react-router-dom";
+import { useMe } from "../../app/shell/useMe";
 import { ApiError } from "../../lib/api";
+import { formatDateInTimeZone } from "../../lib/time";
 import { useDocument } from "../document/useDocument";
 
 // S-ack-2: the DOC_ACK task's left column — the document to read, loaded BEST-EFFORT via document.read.
 // A 403 degrades calmly and never blocks the attestation card (the obligation stands regardless of read).
 export function DocAckContext({ documentId }: { documentId: string }) {
   const { data: doc, isLoading, isError, error } = useDocument(documentId, { enabled: true, retry: false });
+  const { data: me } = useMe();
   if (isLoading && !doc) return <Text c="dimmed">Loading the document to acknowledge…</Text>;
   if (isError || !doc) {
     const status = error instanceof ApiError ? error.status : 0;
@@ -40,7 +43,11 @@ export function DocAckContext({ documentId }: { documentId: string }) {
             </Table.Tr>
             <Table.Tr>
               <Table.Td><Text size="sm" c="dimmed">Effective</Text></Table.Td>
-              <Table.Td>{doc.effective_from ? doc.effective_from.slice(0, 10) : "—"}</Table.Td>
+              <Table.Td>
+                {doc.effective_from
+                  ? formatDateInTimeZone(doc.effective_from, me?.org_timezone)
+                  : "—"}
+              </Table.Td>
             </Table.Tr>
           </Table.Tbody>
         </Table>

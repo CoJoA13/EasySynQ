@@ -1,8 +1,10 @@
 import { Alert, Button, Checkbox, Group, Stack, Table, Text, Title } from "@mantine/core";
 import { useState } from "react";
 import { Link } from "react-router-dom";
+import { useMe } from "../../app/shell/useMe";
 import { ApiError } from "../../lib/api";
 import { EmptyState, LoadingState } from "../../lib/states";
+import { formatDateInTimeZone } from "../../lib/time";
 import type { Task } from "../../lib/types";
 import { useBulkSelection } from "../../lib/useBulkSelection";
 import { useBulkAcknowledge } from "./ackHooks";
@@ -27,6 +29,7 @@ export function AckInbox() {
     isError,
     error,
   } = useTasks({ state: "PENDING", type: "DOC_ACK" });
+  const { data: me } = useMe();
   const bulk = useBulkAcknowledge();
   const rows = tasks ?? [];
   const { selected, toggle, toggleAll, clear, allSelected, count, selectedIds } =
@@ -96,7 +99,9 @@ export function AckInbox() {
                     <Table.Td>
                       <Link to={`/tasks/${t.id}`}>{name}</Link>
                     </Table.Td>
-                    <Table.Td>{t.due_at ? t.due_at.slice(0, 10) : "—"}</Table.Td>
+                    <Table.Td>
+                      {t.due_at ? formatDateInTimeZone(t.due_at, me?.org_timezone) : "—"}
+                    </Table.Td>
                   </Table.Tr>
                 );
               })}

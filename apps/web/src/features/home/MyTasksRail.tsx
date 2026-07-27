@@ -1,5 +1,7 @@
 import { Anchor, Group, Paper, Skeleton, Stack, Text } from "@mantine/core";
 import { Link } from "react-router-dom";
+import { useMe } from "../../app/shell/useMe";
+import { formatDateInTimeZone } from "../../lib/time";
 import type { Task, TaskType } from "../../lib/types";
 import { useMyTasks } from "./hooks";
 
@@ -35,6 +37,7 @@ function sortByDue(tasks: Task[]): Task[] {
 // Self-scoped (no permission key); always visible.
 export function MyTasksRail() {
   const { data, isLoading, isError } = useMyTasks();
+  const { data: me } = useMe();
   const tasks = data ?? [];
   const top = sortByDue(tasks).slice(0, 3);
 
@@ -65,7 +68,7 @@ export function MyTasksRail() {
               </Text>
               {t.subject_title ? ` — ${t.subject_title}` : ""}
               {` · ${TASK_LABEL[t.type]}`}
-              {t.due_at ? ` · due ${t.due_at.slice(0, 10)}` : ""}
+              {t.due_at ? ` · due ${formatDateInTimeZone(t.due_at, me?.org_timezone)}` : ""}
             </Text>
           ))}
         </Stack>

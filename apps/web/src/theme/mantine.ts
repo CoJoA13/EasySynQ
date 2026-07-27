@@ -1,6 +1,8 @@
 import {
   createTheme,
   defaultVariantColorsResolver,
+  Drawer,
+  Modal,
   type VariantColorsResolver,
 } from "@mantine/core";
 import type { Tone } from "../lib/status";
@@ -38,4 +40,15 @@ export const theme = createTheme({
   primaryColor: "indigo", // closest built-in to the mockup accent #4f5bd5; exact accent via tokens
   defaultRadius: "md",
   variantColorResolver: statusVariantColorResolver,
+  // Modal/Drawer render their close controls from the dialog components themselves. Default the
+  // accessible name here so every app dialog gets a named X without contaminating Mantine's shared
+  // CloseButton primitive (also used by Select/FileInput clear controls, where "Close" is wrong).
+  components: {
+    Modal: Modal.extend({
+      defaultProps: { closeButtonProps: { "aria-label": "Close" } },
+    }),
+    Drawer: Drawer.extend({
+      defaultProps: { closeButtonProps: { "aria-label": "Close" } },
+    }),
+  },
 });

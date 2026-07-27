@@ -3499,6 +3499,7 @@ export const handlers = [
       display_name: "Mara Quality",
       email: "mara@example.com",
       status: "ACTIVE",
+      org_timezone: "UTC",
     }),
   ),
   http.get("/api/v1/setup/state", () => HttpResponse.json({ setup_state: "OPERATIONAL" })),

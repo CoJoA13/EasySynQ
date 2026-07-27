@@ -172,7 +172,31 @@
 
 **Tests + review.** Unit `test_authz_resource` (`resource_from_doc` populates `framework_id`+`kind`; mutation-distinguishing deny-wins — blanking a field flips DENY→ALLOW) + integration (a FRAMEWORK-scoped `document.read` DENY 403s the detail gate AND hides the row from the library list + search/suggest; an objective-release deny-wins — FRAMEWORK ALLOW + PROCESS DENY on the satellite process → 403; a foundational `process_ids_for_doc`-unions-the-satellite test). diff-critic CLEAN across the satellite + DCR/records passes (proved the swap identical for non-objectives, the TOCTOU correction floor only gets tighter). api unit 1078→1090. (S-scope-tuple, BE, NO migration [head `0070`], NO new key [catalog 102], PR #346 squash `26360bb`.)
 
-## REMEDIATION — web correctness
+## REMEDIATION — web correctness, accessibility & polish
+
+### Batch 15 — named dialog controls, contained notification focus, canonical org-local dates and dark-safe scorecards (API contract + apps/api + apps/web; NO migration [head stays `0075`]; NO new permission key; PR [#378](https://github.com/CoJoA13/EasySynQ/pull/378))
+
+**What shipped.** Mantine `Modal` and `Drawer` now receive an app-wide `"Close"` accessible-name
+default at the component-theme boundary (the shared `CloseButton` remains untouched), with real
+portal-rendered axe coverage against `document.body`. The notification bell's interactive popover
+now traps keyboard focus and returns it to the bell on Escape/close; its regression proves focus
+cannot leak to the adjacent account menu. All five light-only register summary surfaces — context,
+risk, objective and interested-party scorecards plus the commitment hero — now use the
+color-scheme-aware `--es-surface-2` recessed-surface token.
+
+**Org-local dates now have one browser contract.** The prior UI truncated UTC timestamps with
+`slice(0, 10)`, so a task or effective date could disagree with the timezone-aware notification
+and report surfaces. `GET /me` now exposes `org_timezone`, the canonical timezone already resolved
+and pinned by the auth dependency (no extra query or new configuration source). A shared
+`Intl.DateTimeFormat` helper renders task, acknowledgment, library, periodic-review and document-ack
+dates through that value, preserves explicit date-only inputs, and safely falls back for missing or
+invalid values. Updating the default working calendar invalidates the cached `/me` value so a live
+timezone change propagates. Boundary tests cover Tokyo crossing into the next date and Chicago
+crossing into the previous date.
+
+**Tests + gate.** API unit tests increased **1160→1161**; web tests increased **1355→1363** across
+**236 files**. The complete gate passed API Ruff/format/mypy + unit, web ESLint/TypeScript/production
+build + full Vitest, and Redocly OpenAPI lint.
 
 ### Batch 14 — document-safe authoring state, live token renewal, honest ingestion projection/errors (apps/web only; NO migration [head stays `0075`]; NO new permission key; PR [#377](https://github.com/CoJoA13/EasySynQ/pull/377))
 
@@ -191,8 +215,8 @@ that still-open drawer; commit failures stay beside the commit control; merge fa
 the open merge popover. All remain retryable and their alerts can be dismissed. Regression tests
 exercise each mutation family plus the doc-to-doc wrong-content scenario, in-place OIDC renewal,
 the real projected coverage shape and the live-rollup fallback. Web tests increased
-**1342→1350**; the complete gate passed ESLint, TypeScript, production build and **235 files /
-1350 tests**.
+**1342→1355**; the complete gate passed ESLint, TypeScript, production build and **235 files /
+1355 tests**.
 
 ## DISTRIBUTION — the on-prem install path (doc 03 §12; the roadmap's air-gap/appliance seed)
 

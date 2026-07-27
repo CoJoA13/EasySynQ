@@ -1,6 +1,8 @@
 import { Alert, Anchor, Card, Group, Stack, Table, Text } from "@mantine/core";
 import { Link } from "react-router-dom";
+import { useMe } from "../../app/shell/useMe";
 import { ApiError } from "../../lib/api";
+import { formatDateInTimeZone } from "../../lib/time";
 import { ReviewStateBadge } from "../document/ReviewStateBadge";
 import { useDocument } from "../document/useDocument";
 
@@ -14,6 +16,7 @@ export function PeriodicReviewContext({ documentId }: { documentId: string }) {
     enabled: true,
     retry: false,
   });
+  const { data: me } = useMe();
 
   if (isLoading && !doc) return <Text c="dimmed">Loading the document under review…</Text>;
   if (isError || !doc) {
@@ -46,7 +49,11 @@ export function PeriodicReviewContext({ documentId }: { documentId: string }) {
             </Table.Tr>
             <Table.Tr>
               <Table.Td><Text size="sm" c="dimmed">Effective</Text></Table.Td>
-              <Table.Td>{doc.effective_from ? doc.effective_from.slice(0, 10) : "—"}</Table.Td>
+              <Table.Td>
+                {doc.effective_from
+                  ? formatDateInTimeZone(doc.effective_from, me?.org_timezone)
+                  : "—"}
+              </Table.Td>
             </Table.Tr>
             <Table.Tr>
               <Table.Td><Text size="sm" c="dimmed">Review period</Text></Table.Td>
@@ -56,7 +63,11 @@ export function PeriodicReviewContext({ documentId }: { documentId: string }) {
             </Table.Tr>
             <Table.Tr>
               <Table.Td><Text size="sm" c="dimmed">Last reviewed</Text></Table.Td>
-              <Table.Td>{doc.last_reviewed_at ? doc.last_reviewed_at.slice(0, 10) : "—"}</Table.Td>
+              <Table.Td>
+                {doc.last_reviewed_at
+                  ? formatDateInTimeZone(doc.last_reviewed_at, me?.org_timezone)
+                  : "—"}
+              </Table.Td>
             </Table.Tr>
             <Table.Tr>
               <Table.Td><Text size="sm" c="dimmed">Next review due</Text></Table.Td>

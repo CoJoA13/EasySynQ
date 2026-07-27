@@ -54,6 +54,28 @@ it("names the subject (identifier + title) when the enriched list provides it", 
   expect(screen.getByText(/Supplier Selection/)).toBeInTheDocument();
 });
 
+it("renders the due date in the organization timezone", async () => {
+  server.use(
+    http.get("/api/v1/me", () =>
+      HttpResponse.json({
+        id: "me",
+        keycloak_subject: "subject",
+        display_name: "Mara",
+        email: "mara@example.test",
+        status: "ACTIVE",
+        org_timezone: "Asia/Tokyo",
+      }),
+    ),
+    http.get("/api/v1/tasks", () =>
+      HttpResponse.json([task("tokyo", "REVIEW", "2026-06-28T15:00:00Z")]),
+    ),
+  );
+  renderWithProviders(<MyTasksRail />);
+
+  expect(await screen.findByText(/due 2026-06-29/)).toBeInTheDocument();
+  expect(screen.queryByText(/due 2026-06-28/)).not.toBeInTheDocument();
+});
+
 it("shows a calm caught-up state when there are no tasks", async () => {
   server.use(http.get("/api/v1/tasks", () => HttpResponse.json([])));
   renderWithProviders(<MyTasksRail />);

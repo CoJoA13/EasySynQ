@@ -14,6 +14,7 @@ from ..config import get_settings
 from ..db.models.app_user import AppUser
 from ..db.session import get_session
 from ..services.authz.effective import compute_effective_permissions
+from ..services.common.org_clock import current_org_tz
 
 router = APIRouter(prefix="/api/v1", tags=["auth"])
 
@@ -37,6 +38,10 @@ def _represent(user: AppUser) -> dict[str, Any]:
         "email": user.email,
         "status": user.status.value,
         "is_guest": user.is_guest,
+        # get_current_user has already resolved + pinned the canonical working-calendar/org
+        # timezone for this request. Expose that same value so the SPA can render UTC wire
+        # timestamps on the organization calendar date instead of the browser's date.
+        "org_timezone": str(current_org_tz()),
     }
 
 

@@ -6845,7 +6845,7 @@ components:
     AppUser:
       type: object
       additionalProperties: false
-      required: [id, keycloak_subject, status, is_guest]
+      required: [id, keycloak_subject, status, is_guest, org_timezone]
       properties:
         id: { type: string, format: uuid }
         keycloak_subject: { type: string }
@@ -6855,6 +6855,10 @@ components:
           type: string
           enum: [INVITED, ACTIVE, LOCKED, DISABLED, RETIRED]
         is_guest: { type: boolean }
+        org_timezone:
+          type: string
+          description: Canonical organization/working-calendar IANA timezone for date rendering.
+          example: America/Chicago
 
     UserAdmin:
       type: object
