@@ -23,7 +23,7 @@ This section specifies the **external HTTP API surface** of EasySynQ: the contra
 - **Base path:** `https://{org-host}/api/v1`. The SPA and `/api` are served behind the same Caddy proxy (`03 §5`).
 - **Media type:** `application/json; charset=utf-8` for bodies; full UTF-8 end-to-end (`03 §11` i18n). Errors use `application/problem+json` (§4).
 - **Required on authenticated calls:** `Authorization: Bearer <keycloak_access_jwt>`, `Accept: application/json`.
-- **Mutating requests:** `Content-Type: application/json`; **`Idempotency-Key: <client-uuid>`** SHOULD be sent on every mutating POST (deduped in Redis; replays return the original result — `03 §5` Redis).
+- **Idempotent mutations:** endpoints marked **Idem ✓** accept `Idempotency-Key: <client-uuid>`; clients SHOULD reuse the same value when retrying one logical request (deduped in Redis; replays return the original result — `03 §5` Redis). Unmarked mutations do not promise replay semantics.
 - **Optimistic concurrency:** detail GETs return a strong `ETag`; unsafe updates SHOULD send `If-Match`. A stale `If-Match` → `412` (prevents lost updates when two authors touch one document's metadata). Document *content* edits are additionally guarded by the Redis check-out lock (§8.5), surfaced as `423 locked`.
 - **Correlation:** every request carries / is assigned `X-Request-Id`; it is propagated API→worker (`03 §10`) and stored on the resulting `audit_event.request_id` for end-to-end traceability.
 
@@ -626,12 +626,12 @@ PDCA "Check" (`14 §9`). The program is a **maintained document**; an `audit` an
 | GET | `/audits` | `audit.read` | — | Filter `state`, `lead_auditor`, `plan_id`, scope clauses/processes, dates. |
 | POST | `/audits` | `audit.create` | ✓ | From a plan; starts `Scheduled`. |
 | GET | `/audits/{id}` | `audit.read` | — | `expand=lead_auditor,findings`. |
-| POST | `/audits/{id}/plan` | `audit.conduct` | ✓ | `Scheduled→Planned`; finalize the audit-instance plan. |
-| POST | `/audits/{id}/conduct` | `audit.conduct` | ✓ | `Planned→InProgress`; begin conducting. |
-| POST | `/audits/{id}/draft-findings` | `audit.conduct` | ✓ | `InProgress→FindingsDraft`. |
-| POST | `/audits/{id}/report` | `audit.conduct` | ✓ | `FindingsDraft→Reported`. |
-| POST | `/audits/{id}/begin-closing` | `audit.close` | ✓ | `Reported→Closing`. |
-| POST | `/audits/{id}/close` | `audit.close` | ✓ | `Closing→Closed`; blocked while any live NC lacks a linked Closed CAPA (`409 audit_close_blocked`, `14 §9`). |
+| POST | `/audits/{id}/plan` | `audit.conduct` | — | `Scheduled→Planned`; finalize the audit-instance plan. |
+| POST | `/audits/{id}/conduct` | `audit.conduct` | — | `Planned→InProgress`; begin conducting. |
+| POST | `/audits/{id}/draft-findings` | `audit.conduct` | — | `InProgress→FindingsDraft`. |
+| POST | `/audits/{id}/report` | `audit.conduct` | — | `FindingsDraft→Reported`. |
+| POST | `/audits/{id}/begin-closing` | `audit.close` | — | `Reported→Closing`. |
+| POST | `/audits/{id}/close` | `audit.close` | — | `Closing→Closed`; blocked while any live NC lacks a linked Closed CAPA (`409 audit_close_blocked`, `14 §9`). |
 | GET / POST | `/audits/{id}/findings` | `finding.read` / `finding.create` | ✓ | `{ finding_type:"NC"\|"OBSERVATION"\|"OFI", severity?, clause_ref, process_ref?, description }`. An `NC` **auto-creates** a `capa` and sets `auto_capa_id` (bidirectional link) in the same transaction. |
 
 ### 8.12a Management Review — as built (slice S-mr-1, clause 9.3, R45)

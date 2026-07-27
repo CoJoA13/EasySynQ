@@ -174,7 +174,7 @@
 
 ## REMEDIATION — correctness, accessibility, polish & test reliability
 
-### Batch 17 — reconcile the authorization and API design docs with shipped behavior (docs only; NO runtime/API-contract change; NO migration [head stays `0075`]; NO new permission key; PR [#380](https://github.com/CoJoA13/EasySynQ/pull/380))
+### Batch 17 — reconcile the authorization and API design docs with shipped behavior (docs + OpenAPI prose only; NO runtime/schema change; NO migration [head stays `0075`]; NO new permission key; PR [#380](https://github.com/CoJoA13/EasySynQ/pull/380))
 
 **What shipped.** The supposedly complete authorization catalog now includes the already-seeded R42
 `document.distribute` key with its ARTIFACT scope and non-SoD/non-signing flags; its §3.10 resource
@@ -184,11 +184,12 @@ record evidence download, and the one-shot NCR disposition route and permission.
 
 **The route inventory is now as-built.** The stale generic audit transition is replaced by all six
 verb endpoints with their exact FSM edges: the first four ride `audit.conduct`, and begin-close /
-close ride `audit.close`; audit and finding creation name `audit.create` and `finding.create`, while
-finding reads name `finding.read`. Notification documentation now covers the self-scoped
+close ride `audit.close`; none advertises unsupported idempotent replay. The `/plan` OpenAPI summary
+now agrees with the live `audit.conduct` dependency. Audit and finding creation name `audit.create`
+and `finding.create`, while finding reads name `finding.read`. Notification documentation now covers the self-scoped
 `/notifications` inbox, single/read-all writes, SSE stream, and GET/PUT preferences using the real
 `unread_only` query parameter. Every correction was traced to the FastAPI route dependency or the
-seed migration; executable code and the published OpenAPI contract are unchanged.
+seed migration; executable code and OpenAPI request/response schemas are unchanged.
 
 ### Batch 16 — restore the single-org invariant after committed cross-org integration tests (apps/api tests only; NO production change; NO migration [head stays `0075`]; NO new permission key; PR [#379](https://github.com/CoJoA13/EasySynQ/pull/379))
 

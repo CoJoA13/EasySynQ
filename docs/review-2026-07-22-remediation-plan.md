@@ -348,7 +348,7 @@ land the sweep separately from the gate so the gate turns on green rather than r
   the temporary org and proves it is absent)
 
 ### ☑ Batch 17 — Docs drift
-`branch: fix/major-docs-drift` · [PR #380](https://github.com/CoJoA13/EasySynQ/pull/380) · docs-only · NO runtime/API-contract change · NO migration · NO new permission key
+`branch: fix/major-docs-drift` · [PR #380](https://github.com/CoJoA13/EasySynQ/pull/380) · docs + OpenAPI prose only · NO runtime/schema change · NO migration · NO new permission key
 
 - [x] `docs/07-authorization-model.md:89` — catalog omits `document.distribute`
   (+ `retention`/`drift` rows in §3.10) (fixed: the existing R42
@@ -360,10 +360,11 @@ land the sweep separately from the gate so the gate turns on green rather than r
   and distinguishes it from content revision/check-in) `[f]`
 - [x] `docs/15-api-design.md:626` — documented `POST /audits/{id}/transition` does not exist (fixed:
   §8.12 lists all six shipped verb endpoints with their exact FSM edges and `audit.conduct` /
-  `audit.close` gates) `[C]`
+  `audit.close` gates; none claims unsupported `Idempotency-Key` replay semantics) `[C]`
 - [x] `docs/15-api-design.md:627` — §8.12 wrong audit permission keys
   (`audit.record_finding`/`audit.plan` → `finding.create`/`audit.create`) (fixed: audit creation now
-  names `audit.create`, and finding list/create names `finding.read` / `finding.create`) `[f]`
+  names `audit.create`, finding list/create names `finding.read` / `finding.create`, and the
+  published `/audits/{id}/plan` OpenAPI summary now agrees with its `audit.conduct` dependency) `[f]`
 - [x] `docs/15-api-design.md:523` — NCR edit documented `PATCH /ncrs/{id}` `ncr.update`;
   implemented `PATCH /ncrs/{id}/disposition` `ncr.record_correction` (fixed: the as-built one-shot
   body, authorizer, and conflict are documented) `[f]`
