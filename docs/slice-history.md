@@ -175,7 +175,7 @@
 
 ## REMEDIATION — correctness, accessibility, polish & test reliability
 
-### Minor Batch M8 — vault and retention input guards (API + OpenAPI + integration + docs; NO migration [head stays `0078`]; NO new permission key [catalog 102])
+### Minor Batch M8 — vault and retention input guards (API + OpenAPI + integration + docs; NO migration [head stays `0078`]; NO new permission key [catalog 102]; PR [#388](https://github.com/CoJoA13/EasySynQ/pull/388))
 
 **What shipped.** Retention-policy PATCH now treats omission and explicit JSON `null` as distinct
 operations. The five database-required fields (`name`, `basis`, `duration`, `disposition_action`,
