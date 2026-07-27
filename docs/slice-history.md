@@ -176,7 +176,7 @@
 
 ## REMEDIATION — correctness, accessibility, polish & test reliability
 
-### Minor Batch M9 — populated migration safety and ORM constraint coherence (migrations + CI migration test + docs; migration `0079` [new head]; NO new permission key [catalog 102]; PR pending)
+### Minor Batch M9 — populated migration safety and ORM constraint coherence (migrations + CI migration test + docs; migration `0079` [new head]; NO new permission key [catalog 102]; PR [#389](https://github.com/CoJoA13/EasySynQ/pull/389))
 
 **What shipped.** Historical seed downgrades now preserve their live dependency closure. Migration
 `0004` removes grants and roles only when no `role_assignment` references the seeded role, then

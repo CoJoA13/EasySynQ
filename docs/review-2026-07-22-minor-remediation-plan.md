@@ -34,7 +34,7 @@
 | M6 | Ingestion review and family integrity | 4 | ☑ merged | [#386](https://github.com/CoJoA13/EasySynQ/pull/386) |
 | M7 | Records and rendering resilience | 3 | ☑ merged | [#387](https://github.com/CoJoA13/EasySynQ/pull/387) |
 | M8 | Vault and retention input guards | 2 | ☑ merged | [#388](https://github.com/CoJoA13/EasySynQ/pull/388) |
-| M9 | Migration and ORM coherence | 4 | ☑ implementation complete — PR pending | — |
+| M9 | Migration and ORM coherence | 4 | ☑ in PR | [#389](https://github.com/CoJoA13/EasySynQ/pull/389) |
 | M10 | Schema and index design | 4 | ☐ queued — revalidate | — |
 | M11 | Organization time and audit scalability | 3 | ☐ queued — revalidate | — |
 | M12 | Data-model documentation drift | 5 | ☐ queued — revalidate | — |
@@ -49,8 +49,7 @@
 | M21 | Web async and error UX | 8 | ☐ queued — revalidate | — |
 | M22 | Web accessibility | 7 | ☐ queued — revalidate | — |
 
-**Accounting: 1 preclosed + 24 merged + 4 implementation-complete + 75 queued = 104 original
-findings.**
+**Accounting: 1 preclosed + 24 merged + 4 in PR + 75 queued = 104 original findings.**
 
 ---
 
@@ -240,7 +239,7 @@ unit/integration tests · no new permission key
   leaking an upload URL. Regression coverage proves the recovery pointer follows that serialized
   order).
 
-### ☑ M9 — Migration and ORM coherence
+### ☑ M9 — Migration and ORM coherence — [#389](https://github.com/CoJoA13/EasySynQ/pull/389)
 
 `branch: fix/minor-migration-orm-coherence` · migration `0079` + historical migration corrections +
 populated migration tests · no new permission key
