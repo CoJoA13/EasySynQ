@@ -200,6 +200,89 @@ test("shows the latest drawer-action error when an earlier failure is still undi
   expect(within(drawer).queryByText("An earlier file decision failed.")).not.toBeInTheDocument();
 });
 
+test("keeps a row-action error attached to its originating file", async () => {
+  const user = userEvent.setup();
+  server.use(
+    http.post("/api/v1/admin/imports/:id/files/:fid/decision", () =>
+      HttpResponse.json(
+        {
+          code: "decision_conflict",
+          title: "Decision conflict",
+          detail: "The first file changed on the server.",
+        },
+        { status: 409 },
+      ),
+    ),
+  );
+  renderCockpit();
+  const firstFilename = await screen.findByText("SOP-PUR-014 Purchasing.docx");
+  const firstRow = firstFilename.closest("tr");
+  expect(firstRow).not.toBeNull();
+  await user.click(within(firstRow!).getByRole("button", { name: "Accept" }));
+  expect(await screen.findByText("The first file changed on the server.")).toBeInTheDocument();
+
+  const secondFilename = screen.getByText("SOP-PUR v2 FINAL.docx");
+  const secondRow = secondFilename.closest("tr");
+  expect(secondRow).not.toBeNull();
+  await user.click(within(secondRow!).getByRole("button", { name: "Open" }));
+  const drawer = await screen.findByRole("dialog");
+
+  expect(
+    within(drawer).queryByText("The first file changed on the server."),
+  ).not.toBeInTheDocument();
+  expect(screen.getByText("The first file changed on the server.")).toBeInTheDocument();
+});
+
+test("surfaces an earlier request failure that settles after a later action starts", async () => {
+  const user = userEvent.setup();
+  let markDecisionStarted!: () => void;
+  let releaseDecision!: () => void;
+  let markSplitStarted!: () => void;
+  const decisionStarted = new Promise<void>((resolve) => {
+    markDecisionStarted = resolve;
+  });
+  const decisionRelease = new Promise<void>((resolve) => {
+    releaseDecision = resolve;
+  });
+  const splitStarted = new Promise<void>((resolve) => {
+    markSplitStarted = resolve;
+  });
+  server.use(
+    http.post("/api/v1/admin/imports/:id/files/:fid/decision", async () => {
+      markDecisionStarted();
+      await decisionRelease;
+      return HttpResponse.json(
+        {
+          code: "decision_conflict",
+          title: "Decision conflict",
+          detail: "The overlapping file decision failed late.",
+        },
+        { status: 409 },
+      );
+    }),
+    http.post("/api/v1/admin/imports/:id/split", () => {
+      markSplitStarted();
+      return HttpResponse.json({ ok: true });
+    }),
+  );
+  renderCockpit();
+  const filename = await screen.findByText("SOP-PUR-014 Purchasing.docx");
+  const row = filename.closest("tr");
+  expect(row).not.toBeNull();
+  await user.click(within(row!).getByRole("button", { name: "Open" }));
+  const drawer = await screen.findByRole("dialog");
+
+  await user.click(within(drawer).getByRole("button", { name: "Accept item" }));
+  await decisionStarted;
+  await user.click(within(drawer).getByRole("button", { name: "Split out of group" }));
+  await splitStarted;
+  releaseDecision();
+
+  expect(
+    await within(drawer).findByText("The overlapping file decision failed late."),
+  ).toBeInTheDocument();
+});
+
 test("surfaces a failed commit inside the commit card", async () => {
   const user = userEvent.setup();
   server.use(

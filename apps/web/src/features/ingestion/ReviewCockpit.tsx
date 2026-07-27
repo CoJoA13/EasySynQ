@@ -5,10 +5,12 @@ import { usePermissions } from "../../app/shell/usePermissions";
 import { ApiError } from "../../lib/api";
 import type {
   ConfirmedKind,
+  ImportBulkDecisionRequest,
   ImportDecisionAction,
   ImportDecisionAfter,
   ImportFile,
   ImportRun,
+  ImportSplitRequest,
 } from "../../lib/types";
 import { BulkActionBar } from "./BulkActionBar";
 import { CommitCard } from "./CommitCard";
@@ -46,7 +48,8 @@ function errorMessage(error: unknown): string {
   return error instanceof ApiError ? error.message : "Something went wrong. Please retry.";
 }
 
-type ReviewActionKind = "file" | "bulk" | "split";
+type ReviewActionFailure =
+  { scope: "bulk"; error: unknown } | { scope: "file"; fileId: string; error: unknown };
 
 export function ReviewCockpit({ runId, run }: { runId: string; run: ImportRun }) {
   const [params, setParams] = useSearchParams();
@@ -54,7 +57,7 @@ export function ReviewCockpit({ runId, run }: { runId: string; run: ImportRun })
 
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [activeFileId, setActiveFileId] = useState<string | null>(null);
-  const [latestReviewAction, setLatestReviewAction] = useState<ReviewActionKind | null>(null);
+  const [reviewActionFailure, setReviewActionFailure] = useState<ReviewActionFailure | null>(null);
 
   const filter = useMemo(() => queueToFilesQuery(queue, conf), [queue, conf]);
   // The "vault" queue has no per-file listing in v1 (it renders an explainer) — don't fetch files for
@@ -71,17 +74,51 @@ export function ReviewCockpit({ runId, run }: { runId: string; run: ImportRun })
   const { can } = usePermissions();
   const canCommit = can("import.commit");
   const detailActionError =
-    latestReviewAction === "file"
-      ? fileDecision.error
-      : latestReviewAction === "split"
-        ? splitRun.error
-        : null;
+    reviewActionFailure?.scope === "file" && reviewActionFailure.fileId === activeFileId
+      ? reviewActionFailure.error
+      : null;
   const reviewActionError =
-    latestReviewAction === "bulk"
-      ? bulkDecision.error
-      : activeFileId === null
-        ? detailActionError
-        : null;
+    reviewActionFailure &&
+    (reviewActionFailure.scope === "bulk" || reviewActionFailure.fileId !== activeFileId)
+      ? reviewActionFailure.error
+      : null;
+  const runFileDecision = useCallback(
+    (fileId: string, action: ImportDecisionAction, after?: ImportDecisionAfter) => {
+      setReviewActionFailure(null);
+      void fileDecision
+        .mutateAsync({
+          fileId,
+          body: { action, after },
+          idempotencyKey: crypto.randomUUID(),
+        })
+        .catch((error: unknown) => {
+          setReviewActionFailure({ scope: "file", fileId, error });
+        });
+    },
+    [fileDecision],
+  );
+  const runBulkDecision = useCallback(
+    (body: ImportBulkDecisionRequest) => {
+      setReviewActionFailure(null);
+      void bulkDecision
+        .mutateAsync({ body, idempotencyKey: crypto.randomUUID() })
+        .catch((error: unknown) => {
+          setReviewActionFailure({ scope: "bulk", error });
+        });
+    },
+    [bulkDecision],
+  );
+  const runSplit = useCallback(
+    (fileId: string, body: ImportSplitRequest) => {
+      setReviewActionFailure(null);
+      void splitRun
+        .mutateAsync({ body, idempotencyKey: crypto.randomUUID() })
+        .catch((error: unknown) => {
+          setReviewActionFailure({ scope: "file", fileId, error });
+        });
+    },
+    [splitRun],
+  );
 
   const files = useMemo(() => filesQuery.data?.files ?? [], [filesQuery.data]);
   const review = checklistQuery.data?.review;
@@ -209,53 +246,31 @@ export function ReviewCockpit({ runId, run }: { runId: string; run: ImportRun })
   // ---- writes (a fresh key per user action; one key per bulk op) ----
   const onConfirmKind = useCallback(
     (fileId: string, kind: ConfirmedKind) => {
-      setLatestReviewAction("file");
-      fileDecision.mutate({
-        fileId,
-        body: { action: "accept", after: { kind } },
-        idempotencyKey: crypto.randomUUID(),
-      });
+      runFileDecision(fileId, "accept", { kind });
     },
-    [fileDecision],
+    [runFileDecision],
   );
   const onRowAction = useCallback(
     (file: ImportFile, action: ImportDecisionAction) => {
-      setLatestReviewAction("file");
-      fileDecision.mutate({
-        fileId: file.id,
-        body: { action },
-        idempotencyKey: crypto.randomUUID(),
-      });
+      runFileDecision(file.id, action);
     },
-    [fileDecision],
+    [runFileDecision],
   );
   const onBulk = useCallback(
     (action: ImportDecisionAction, after?: ImportDecisionAfter) => {
-      setLatestReviewAction("bulk");
-      bulkDecision.mutate({
-        body: { action, file_ids: [...selected], after },
-        idempotencyKey: crypto.randomUUID(),
-      });
+      runBulkDecision({ action, file_ids: [...selected], after });
     },
-    [bulkDecision, selected],
+    [runBulkDecision, selected],
   );
   const onBulkConfirmKind = useCallback(
     (kind: ConfirmedKind) => {
-      setLatestReviewAction("bulk");
-      bulkDecision.mutate({
-        body: { action: "accept", file_ids: [...selected], after: { kind } },
-        idempotencyKey: crypto.randomUUID(),
-      });
+      runBulkDecision({ action: "accept", file_ids: [...selected], after: { kind } });
     },
-    [bulkDecision, selected],
+    [runBulkDecision, selected],
   );
   const onAcceptAllHigh = useCallback(() => {
-    setLatestReviewAction("bulk");
-    bulkDecision.mutate({
-      body: { action: "accept", selector: { band: "HIGH" } },
-      idempotencyKey: crypto.randomUUID(),
-    });
-  }, [bulkDecision]);
+    runBulkDecision({ action: "accept", selector: { band: "HIGH" } });
+  }, [runBulkDecision]);
 
   const checklist = checklistQuery.data;
   const total = queueCounts[queue] ?? 0;
@@ -265,13 +280,13 @@ export function ReviewCockpit({ runId, run }: { runId: string; run: ImportRun })
     <Stack gap="md" component="section" aria-label="Review cockpit">
       <RunSummaryTiles run={run} review={review} />
       <ImportPlanBanner />
-      {reviewActionError && (
+      {reviewActionError !== null && (
         <Alert
           color="red"
           title="Review action failed"
           withCloseButton
           onClose={() => {
-            setLatestReviewAction(null);
+            setReviewActionFailure(null);
             fileDecision.reset();
             bulkDecision.reset();
             splitRun.reset();
@@ -357,9 +372,9 @@ export function ReviewCockpit({ runId, run }: { runId: string; run: ImportRun })
         runId={runId}
         fileId={activeFileId}
         onClose={() => setActiveFileId(null)}
-        actionError={detailActionError ? errorMessage(detailActionError) : null}
+        actionError={detailActionError !== null ? errorMessage(detailActionError) : null}
         onDismissActionError={() => {
-          setLatestReviewAction(null);
+          setReviewActionFailure(null);
           fileDecision.reset();
           splitRun.reset();
         }}
@@ -368,23 +383,15 @@ export function ReviewCockpit({ runId, run }: { runId: string; run: ImportRun })
         }}
         onDecision={({ action }) => {
           if (activeFileId) {
-            setLatestReviewAction("file");
-            fileDecision.mutate({
-              fileId: activeFileId,
-              body: { action },
-              idempotencyKey: crypto.randomUUID(),
-            });
+            runFileDecision(activeFileId, action);
           }
         }}
         onSplit={() => {
           if (!activeFileId) return;
-          const target = splitTargetMap.get(activeFileId);
+          const fileId = activeFileId;
+          const target = splitTargetMap.get(fileId);
           if (target) {
-            setLatestReviewAction("split");
-            splitRun.mutate({
-              body: { ...target, separate_file_ids: [activeFileId] },
-              idempotencyKey: crypto.randomUUID(),
-            });
+            runSplit(fileId, { ...target, separate_file_ids: [fileId] });
           }
         }}
       />
