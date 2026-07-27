@@ -27,7 +27,7 @@
 | M0 | Preclosed during MAJOR remediation | 1 | ☑ merged | [#369](https://github.com/CoJoA13/EasySynQ/pull/369), precision follow-up [#371](https://github.com/CoJoA13/EasySynQ/pull/371) |
 | M1 | Auth boundaries and public diagnostics | 4 | ☑ merged | [#381](https://github.com/CoJoA13/EasySynQ/pull/381) |
 | M2 | Scoped authorization and reporting | 2 | ☑ merged | [#382](https://github.com/CoJoA13/EasySynQ/pull/382) |
-| M3 | Notification reliability | 2 | ☑ completed — PR pending | — |
+| M3 | Notification reliability | 2 | ☑ in PR | [#383](https://github.com/CoJoA13/EasySynQ/pull/383) |
 | M4 | Lifecycle and workflow guards | 4 | ☐ queued — revalidate | — |
 | M5 | Ingestion commit integrity | 3 | ☐ queued — revalidate | — |
 | M6 | Ingestion review and family integrity | 4 | ☐ queued — revalidate | — |
@@ -48,7 +48,7 @@
 | M21 | Web async and error UX | 8 | ☐ queued — revalidate | — |
 | M22 | Web accessibility | 7 | ☐ queued — revalidate | — |
 
-**Accounting: 1 preclosed + 6 merged + 2 completed in M3 + 95 queued = 104 original findings.**
+**Accounting: 1 preclosed + 6 merged + 2 in PR + 95 queued = 104 original findings.**
 
 ---
 
@@ -101,7 +101,7 @@ key
   documents, because that is an accurate process-scoped empty register rather than an impossible
   authorization scope).
 
-### ☑ M3 — Notification reliability
+### ☑ M3 — Notification reliability — [#383](https://github.com/CoJoA13/EasySynQ/pull/383)
 
 `branch: fix/minor-notification-reliability` · API + OpenAPI + integration · no migration and no
 new permission key

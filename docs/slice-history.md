@@ -174,7 +174,7 @@
 
 ## REMEDIATION — correctness, accessibility, polish & test reliability
 
-### Minor Batch M3 — notification-list input safety and retryable digest rendering (API + OpenAPI + integration + docs; NO migration [head stays `0075`]; NO new permission key [catalog 102]; PR pending)
+### Minor Batch M3 — notification-list input safety and retryable digest rendering (API + OpenAPI + integration + docs; NO migration [head stays `0075`]; NO new permission key [catalog 102]; PR [#383](https://github.com/CoJoA13/EasySynQ/pull/383))
 
 **What shipped.** `GET /notifications` now rejects a negative `limit` at FastAPI's request boundary
 instead of passing an invalid negative `LIMIT` to PostgreSQL and surfacing a 500. The lower bound is
