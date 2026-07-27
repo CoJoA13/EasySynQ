@@ -161,6 +161,45 @@ test("surfaces a failed split action", async () => {
   ).toBeInTheDocument();
 });
 
+test("shows the latest drawer-action error when an earlier failure is still undismissed", async () => {
+  const user = userEvent.setup();
+  server.use(
+    http.post("/api/v1/admin/imports/:id/files/:fid/decision", () =>
+      HttpResponse.json(
+        {
+          code: "decision_conflict",
+          title: "Decision conflict",
+          detail: "An earlier file decision failed.",
+        },
+        { status: 409 },
+      ),
+    ),
+    http.post("/api/v1/admin/imports/:id/split", () =>
+      HttpResponse.json(
+        {
+          code: "split_conflict",
+          title: "Split conflict",
+          detail: "The later split action failed.",
+        },
+        { status: 409 },
+      ),
+    ),
+  );
+  renderCockpit();
+  const filename = await screen.findByText("SOP-PUR-014 Purchasing.docx");
+  const row = filename.closest("tr");
+  expect(row).not.toBeNull();
+  await user.click(within(row!).getByRole("button", { name: "Open" }));
+  const drawer = await screen.findByRole("dialog");
+
+  await user.click(within(drawer).getByRole("button", { name: "Accept item" }));
+  expect(await within(drawer).findByText("An earlier file decision failed.")).toBeInTheDocument();
+
+  await user.click(within(drawer).getByRole("button", { name: "Split out of group" }));
+  expect(await within(drawer).findByText("The later split action failed.")).toBeInTheDocument();
+  expect(within(drawer).queryByText("An earlier file decision failed.")).not.toBeInTheDocument();
+});
+
 test("surfaces a failed commit inside the commit card", async () => {
   const user = userEvent.setup();
   server.use(

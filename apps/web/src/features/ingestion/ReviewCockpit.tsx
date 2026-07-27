@@ -46,12 +46,15 @@ function errorMessage(error: unknown): string {
   return error instanceof ApiError ? error.message : "Something went wrong. Please retry.";
 }
 
+type ReviewActionKind = "file" | "bulk" | "split";
+
 export function ReviewCockpit({ runId, run }: { runId: string; run: ImportRun }) {
   const [params, setParams] = useSearchParams();
   const { queue, conf, offset } = parseRunUrl(params);
 
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [activeFileId, setActiveFileId] = useState<string | null>(null);
+  const [latestReviewAction, setLatestReviewAction] = useState<ReviewActionKind | null>(null);
 
   const filter = useMemo(() => queueToFilesQuery(queue, conf), [queue, conf]);
   // The "vault" queue has no per-file listing in v1 (it renders an explainer) — don't fetch files for
@@ -67,9 +70,18 @@ export function ReviewCockpit({ runId, run }: { runId: string; run: ImportRun })
   const splitRun = useSplit(runId);
   const { can } = usePermissions();
   const canCommit = can("import.commit");
-  const detailActionError = fileDecision.error ?? splitRun.error;
+  const detailActionError =
+    latestReviewAction === "file"
+      ? fileDecision.error
+      : latestReviewAction === "split"
+        ? splitRun.error
+        : null;
   const reviewActionError =
-    bulkDecision.error ?? (activeFileId === null ? detailActionError : null);
+    latestReviewAction === "bulk"
+      ? bulkDecision.error
+      : activeFileId === null
+        ? detailActionError
+        : null;
 
   const files = useMemo(() => filesQuery.data?.files ?? [], [filesQuery.data]);
   const review = checklistQuery.data?.review;
@@ -197,6 +209,7 @@ export function ReviewCockpit({ runId, run }: { runId: string; run: ImportRun })
   // ---- writes (a fresh key per user action; one key per bulk op) ----
   const onConfirmKind = useCallback(
     (fileId: string, kind: ConfirmedKind) => {
+      setLatestReviewAction("file");
       fileDecision.mutate({
         fileId,
         body: { action: "accept", after: { kind } },
@@ -207,6 +220,7 @@ export function ReviewCockpit({ runId, run }: { runId: string; run: ImportRun })
   );
   const onRowAction = useCallback(
     (file: ImportFile, action: ImportDecisionAction) => {
+      setLatestReviewAction("file");
       fileDecision.mutate({
         fileId: file.id,
         body: { action },
@@ -217,6 +231,7 @@ export function ReviewCockpit({ runId, run }: { runId: string; run: ImportRun })
   );
   const onBulk = useCallback(
     (action: ImportDecisionAction, after?: ImportDecisionAfter) => {
+      setLatestReviewAction("bulk");
       bulkDecision.mutate({
         body: { action, file_ids: [...selected], after },
         idempotencyKey: crypto.randomUUID(),
@@ -226,6 +241,7 @@ export function ReviewCockpit({ runId, run }: { runId: string; run: ImportRun })
   );
   const onBulkConfirmKind = useCallback(
     (kind: ConfirmedKind) => {
+      setLatestReviewAction("bulk");
       bulkDecision.mutate({
         body: { action: "accept", file_ids: [...selected], after: { kind } },
         idempotencyKey: crypto.randomUUID(),
@@ -234,6 +250,7 @@ export function ReviewCockpit({ runId, run }: { runId: string; run: ImportRun })
     [bulkDecision, selected],
   );
   const onAcceptAllHigh = useCallback(() => {
+    setLatestReviewAction("bulk");
     bulkDecision.mutate({
       body: { action: "accept", selector: { band: "HIGH" } },
       idempotencyKey: crypto.randomUUID(),
@@ -254,6 +271,7 @@ export function ReviewCockpit({ runId, run }: { runId: string; run: ImportRun })
           title="Review action failed"
           withCloseButton
           onClose={() => {
+            setLatestReviewAction(null);
             fileDecision.reset();
             bulkDecision.reset();
             splitRun.reset();
@@ -341,6 +359,7 @@ export function ReviewCockpit({ runId, run }: { runId: string; run: ImportRun })
         onClose={() => setActiveFileId(null)}
         actionError={detailActionError ? errorMessage(detailActionError) : null}
         onDismissActionError={() => {
+          setLatestReviewAction(null);
           fileDecision.reset();
           splitRun.reset();
         }}
@@ -348,21 +367,25 @@ export function ReviewCockpit({ runId, run }: { runId: string; run: ImportRun })
           if (activeFileId) onConfirmKind(activeFileId, kind);
         }}
         onDecision={({ action }) => {
-          if (activeFileId)
+          if (activeFileId) {
+            setLatestReviewAction("file");
             fileDecision.mutate({
               fileId: activeFileId,
               body: { action },
               idempotencyKey: crypto.randomUUID(),
             });
+          }
         }}
         onSplit={() => {
           if (!activeFileId) return;
           const target = splitTargetMap.get(activeFileId);
-          if (target)
+          if (target) {
+            setLatestReviewAction("split");
             splitRun.mutate({
               body: { ...target, separate_file_ids: [activeFileId] },
               idempotencyKey: crypto.randomUUID(),
             });
+          }
         }}
       />
     </Stack>
