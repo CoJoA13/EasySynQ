@@ -1678,7 +1678,9 @@ async def break_lock_endpoint(
     session: AsyncSession = Depends(get_session),
     vault_sink: VaultAuditSink = Depends(get_vault_audit_sink),
 ) -> dict[str, Any]:
-    doc = await _load_document(session, caller, document_id)
+    # Use the same document→working-draft lock order as checkout/check-in. The service then locks
+    # the draft row before force-releasing Redis, so break-lock cannot bisect an init-upload commit.
+    doc = await _load_document(session, caller, document_id, for_update=True)
     await break_lock(session, vault_sink, caller, doc)
     return {"document_id": str(doc.id), "lock_broken": True}
 

@@ -674,10 +674,14 @@ async def break_lock(
     session: AsyncSession, sink: VaultAuditSink, actor: AppUser, doc: DocumentedInformation
 ) -> None:
     """Release the lock WITHOUT check-in, preserving the displaced editor's scratch (R9)."""
+    # Serialize against init-upload's scratch mutation. If upload owns this row, its commit happens
+    # first and break-lock preserves that latest pointer; if break-lock owns it first, Redis is
+    # cleared before upload can re-read/heartbeat the mirror and the upload rejects without writing.
+    await repository.get_working_draft(session, doc.id, for_update=True)
     await locks.force_release(doc.id)
     # The working_draft row (and its scratch_blob_ref) is deliberately NOT deleted. LOCK_BROKEN has
-    # no SQL state-change to be atomic with, so the audit row gets its own dedicated one-row commit
-    # (the request session is clean here — break_lock issues no other SQL). doc 12 §4.4 carve-out.
+    # no persistent draft state-change to be atomic with; this commit persists the dedicated audit
+    # row and releases the serialization locks. doc 12 §4.4 carve-out.
     _emit(session, sink, "LOCK_BROKEN", actor, "document", doc.id, identifier=doc.identifier)
     await session.commit()
 

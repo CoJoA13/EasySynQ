@@ -187,15 +187,18 @@ and the OpenAPI contract records that split.
 Document init-upload now proves the caller owns the document's active working draft before
 replacing `scratch_blob_ref`. It row-locks the PG mirror across the proof and update, matches
 `checked_out_by` to the actor, and CAS-refreshes the mirror token against authoritative Redis before
-presigning, before committing scratch, and immediately before returning. A separately authorized
-user, former holder of a lapsed lock, or caller invalidated while the URL is generated receives the
-contract-declared `409 lock_conflict`; no stale-holder upload URL escapes.
+presigning, before committing scratch, and immediately before returning. Break-lock takes the
+document + same draft-row locks before clearing Redis, so it either preserves a scratch commit that
+ordered first or invalidates before upload can mutate. A separately authorized user, former holder
+of a lapsed lock, or caller invalidated while the URL is generated receives the contract-declared
+`409 lock_conflict`; no stale-holder upload URL escapes.
 
 **Tests.** Two mutation-distinguishing integration regressions exercise all five required-policy
 nulls plus both nullable clears, and prove neither a separately authorized non-holder nor the former
 holder of a lapsed Redis lock can replace the checkout owner's stored scratch SHA; a presign-time
-break cannot leak the generated URL or commit its scratch pointer. The complete retention-policy
-and vault integration files are green (**23 passed**). API Ruff/format and strict
+break cannot leak the generated URL or commit its scratch pointer; and a forced pre-commit race
+proves break-lock waits on the draft row and preserves the serialized latest pointer. The complete
+retention-policy and vault integration files are green (**24 passed**). API Ruff/format and strict
 mypy over **426 source files** are clean, and the full unit suite is green (**1180 passed, 1 expected
 release-only skip**). Redocly validates the updated OpenAPI contract.
 

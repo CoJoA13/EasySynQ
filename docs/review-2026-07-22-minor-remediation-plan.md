@@ -232,9 +232,11 @@ unit/integration tests · no new permission key
   lock holder's scratch pointer without proving the caller owns the checkout `[f]` (fixed:
   init-upload row-locks the working-draft mirror, requires `checked_out_by` to match the caller,
   and CAS-refreshes its token against authoritative Redis before presigning, before committing
-  scratch, and immediately before returning; a mismatched user, lapsed lock, or concurrent
-  invalidation returns the contract-declared `409 lock_conflict` without leaking an upload URL.
-  Regression coverage proves these cases cannot replace the holder's stored SHA).
+  scratch, and immediately before returning. Break-lock takes the document + same draft-row locks
+  before clearing Redis, so scratch commit and invalidation cannot interleave; a mismatched user,
+  lapsed lock, or concurrent invalidation returns the contract-declared `409 lock_conflict` without
+  leaking an upload URL. Regression coverage proves the recovery pointer follows that serialized
+  order).
 
 ### ☐ M9 — Migration and ORM coherence
 
