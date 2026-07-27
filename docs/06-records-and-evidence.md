@@ -98,7 +98,8 @@ Layered on the universal `DocumentedInformation` fields. Shown as the conceptual
 | `captured_at` | timestamptz | The point-in-time the evidence is fixed. Immutable once set. |
 | `captured_by` | user ref | Who captured it (attribution; future signature subject). |
 | `immutable` | bool = true | Always true post-capture; enforced in API + WORM. |
-| `content_hash` | sha-256 | Hash over the canonical serialization of structured content **and** the manifest of attached blob digests. The valid empty object `{}` remains distinct from the `null` unstructured sentinel. Frozen at capture; re-verified on schedule. |
+| `content_hash` | sha-256 | Hash over the canonical serialization of structured content **and** the manifest of attached blob digests. In v2, the valid empty object `{}` remains distinct from the `null` unstructured sentinel. Frozen at capture; re-verified with its persisted algorithm version. |
+| `content_hash_version` | smallint | Record-seal algorithm selector. Migration `0078` marks every pre-existing seal as v1 (whose historical serializer collapsed `{}` to `null`); new captures explicitly use v2, so old immutable records remain byte-verifiable without weakening new seals. |
 | `source_document_id` | doc ref \| null | The Document this Record proves was followed (null only for `EVIDENCE`/ad-hoc). |
 | `source_version_id` | version ref \| null | **The exact pinned Version** — survives later supersession. **Nullable**: required for records produced under a controlled document; null for ad-hoc `EVIDENCE` with no source document (reconciled per Decisions Register R21). |
 | `form_field_values` | jsonb \| null | For structured submissions: schema-validated values, validated against the pinned template Version's `Schema`. An omitted all-optional form is stored canonically as `{}`; `null` denotes no fielded content (or a DESTROY-erased record). |
@@ -203,9 +204,10 @@ Rules specific to Mode B:
 > non-WORM renditions bucket and pointed at by `record.structured_pdf_blob_sha256` (plain Text, NO FK
 > — the `evidence_pack.zip_blob_sha256` R27 precedent; reconciles the "generated `evidence_blob`"
 > wording below — the **record's integrity seal is its `content_hash`**, not the PDF). Capture makes
-> the low-latency enqueue; an hourly bounded Beat redrive selects structured records whose pointer is
-> still absent, including legacy optional-form rows identified by their pinned `field_schema`.
-> Neither path makes the rendition GET mutate state. The builder locks the Record and refuses a
+> the low-latency enqueue; an hourly bounded Beat redrive selects **only records with a pinned
+> version carrying `field_schema`** whose pointer is still absent, including legacy optional-form
+> rows whose values are `NULL`. Ad-hoc JSON records (notably `KPI_READING`) are never treated as
+> form captures. Neither path makes the rendition GET mutate state. The builder locks the Record and refuses a
 > `DESTROY` disposition tombstone, so delayed work cannot recreate erased bytes; a non-destructive
 > `ARCHIVE_COLD`/`TRANSFER` tombstone may still finish the same derived view. The WORM-destroy /
 > disposition DESTROY path drops the rendition object + its `blob` row + nulls the pointer (the

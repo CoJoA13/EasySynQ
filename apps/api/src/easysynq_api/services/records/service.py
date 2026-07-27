@@ -42,7 +42,7 @@ from ...db.models.documented_information import DocumentedInformation
 from ...db.models.evidence_blob import EvidenceBlob
 from ...db.models.evidence_for_link import EvidenceForLink
 from ...db.models.record import Record
-from ...domain.records.content_hash import record_content_hash
+from ...domain.records.content_hash import CONTENT_HASH_VERSION, record_content_hash
 from ...domain.records.form_schema import validate_values, values_too_large
 from ...domain.records.retention import (
     PolicyCandidate,
@@ -523,6 +523,7 @@ async def capture_record(
         retention_basis_date=resolution.retention_basis_date,
         correction_of=_correction_of,
         content_hash=None,
+        content_hash_version=CONTENT_HASH_VERSION,
     )
     session.add(record)
     await session.flush()
@@ -535,6 +536,7 @@ async def capture_record(
         source_version_id=source_version_id,
         form_field_values=form_field_values,
         evidence_sha256s=shas,
+        version=record.content_hash_version,
     )
 
     emit_record_event(
@@ -547,6 +549,7 @@ async def capture_record(
             "record_type": rtype.value,
             "source_version_id": str(source_version_id) if source_version_id else None,
             "content_hash": record.content_hash,
+            "content_hash_version": record.content_hash_version,
             "evidence_count": len(shas),
             "retention_policy_id": str(resolution.policy_id),
             "retention_tier": resolution.tier,
@@ -556,8 +559,9 @@ async def capture_record(
     if _commit:
         await session.commit()
         await session.refresh(record)
-        if record.form_field_values is not None:
-            # A structured record (including a valid empty form) → best-effort Stage-2 rendition.
+        if is_structured_form:
+            # Only a pinned Form/Template capture gets the best-effort Stage-2 rendition. Ad-hoc
+            # records may legitimately seal JSON in form_field_values (for example KPI_READING).
             _enqueue_structured_pdf(record.id)
     return record
 
@@ -619,10 +623,19 @@ async def capture_correction(
         before={"superseded_by_correction": None},
         after={"superseded_by_correction": str(new_record.id)},
     )
+    pinned_version = (
+        await session.get(DocumentVersion, new_record.source_version_id)
+        if new_record.source_version_id is not None
+        else None
+    )
+    is_structured_form = (
+        pinned_version is not None and schema_from_version(pinned_version) is not None
+    )
     await session.commit()
     await session.refresh(new_record)
-    if new_record.form_field_values is not None:
-        # A structured correction (including a valid empty form) → best-effort Stage-2 rendition.
+    if is_structured_form:
+        # Corrections inherit their source pin; identify the form from that immutable version rather
+        # than from form_field_values, which ad-hoc records may also use as sealed JSON.
         _enqueue_structured_pdf(new_record.id)
     return new_record
 

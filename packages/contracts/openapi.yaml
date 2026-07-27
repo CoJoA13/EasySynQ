@@ -9704,7 +9704,7 @@ components:
     Record:
       type: object
       additionalProperties: false
-      required: [id, identifier, kind, record_type, title, classification, framework_id, captured_by, retention_policy_id, disposition_state, legal_hold]
+      required: [id, identifier, kind, record_type, title, classification, framework_id, captured_by, content_hash_version, retention_policy_id, disposition_state, legal_hold]
       properties:
         id: { type: string, format: uuid }
         identifier: { type: string, example: REC-QA-014 }
@@ -9718,6 +9718,10 @@ components:
         content_hash:
           type: [string, "null"]
           description: The "sha256:"-prefixed seal over the structured content + the evidence-digest manifest.
+        content_hash_version:
+          type: integer
+          enum: [1, 2]
+          description: Persisted record-seal algorithm version; existing records are v1 and new captures are v2.
         source_document_id:
           type: [string, "null"]
           format: uuid

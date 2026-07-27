@@ -28,7 +28,7 @@ from easysynq_api.db.models.blob import Blob
 from easysynq_api.db.models.disposition_event import DispositionEvent
 from easysynq_api.db.models.record import Record
 from easysynq_api.db.session import get_sessionmaker
-from easysynq_api.domain.records.content_hash import record_content_hash
+from easysynq_api.domain.records.content_hash import CONTENT_HASH_VERSION_V1, record_content_hash
 from easysynq_api.services.records import build_structured_pdf, redrive_missing_structured_pdfs
 from easysynq_api.services.records import service as records_service
 from easysynq_api.services.vault import storage
@@ -477,7 +477,9 @@ async def test_omitted_optional_form_values_are_normalized_and_legacy_null_is_re
             source_version_id=rec.source_version_id,
             form_field_values=None,
             evidence_sha256s=[],
+            version=CONTENT_HASH_VERSION_V1,
         )
+        rec.content_hash_version = CONTENT_HASH_VERSION_V1
         await s.commit()
     redriven: list[uuid.UUID] = []
     async with get_sessionmaker()() as s:
@@ -490,6 +492,46 @@ async def test_omitted_optional_form_values_are_normalized_and_legacy_null_is_re
         rec = await s.get(Record, rec_id)
         assert rec is not None
         assert rec.structured_pdf_blob_sha256 is not None
+
+
+async def test_ad_hoc_json_record_is_not_a_structured_rendition_candidate(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """KPI grading JSON is sealed record data, not a pinned Mode-B form submission."""
+    subject = _subject("cap-kpi")
+    await _grant(subject, ("record.read", "record.create"))
+    headers = _auth(token_factory, subject)
+    enqueued_at_capture: list[uuid.UUID] = []
+    monkeypatch.setattr(records_service, "_enqueue_structured_pdf", enqueued_at_capture.append)
+
+    cap = await app_client.post(
+        "/api/v1/records",
+        headers=headers,
+        json={
+            "record_type": "KPI_READING",
+            "title": "Objective grading snapshot",
+            "form_field_values": {"value": 99.5, "grade": "on_target"},
+        },
+    )
+    assert cap.status_code == 201, cap.text
+    record_id = uuid.UUID(cap.json()["id"])
+    assert enqueued_at_capture == []
+
+    redriven: list[uuid.UUID] = []
+    async with get_sessionmaker()() as s:
+        await redrive_missing_structured_pdfs(s, enqueue=redriven.append, limit=10_000)
+    assert record_id not in redriven
+
+    # Even a directly delivered/stale task must not produce the misleading "structured form
+    # capture" PDF without an immutable source version carrying a field_schema.
+    async with get_sessionmaker()() as s:
+        await build_structured_pdf(s, record_id)
+    async with get_sessionmaker()() as s:
+        record = await s.get(Record, record_id)
+        assert record is not None
+        assert record.structured_pdf_blob_sha256 is None
 
 
 async def test_destroy_purges_structured_pdf_blob(

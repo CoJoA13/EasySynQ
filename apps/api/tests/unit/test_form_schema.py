@@ -6,6 +6,7 @@ and the size guards. Every entry point returns ``list[FieldError]`` (empty = val
 
 from __future__ import annotations
 
+from easysynq_api.db.models.document_version import DocumentVersion
 from easysynq_api.domain.records.form_schema import (
     DEFAULT_MAX_STRING_LEN,
     MAX_FIELDS,
@@ -15,6 +16,7 @@ from easysynq_api.domain.records.form_schema import (
     validate_values,
     values_too_large,
 )
+from easysynq_api.services.vault import schema_from_version
 
 _GOOD_SCHEMA = {
     "fields": [
@@ -81,6 +83,16 @@ def test_schema_rejects_non_numeric_and_bad_date_bounds() -> None:
 def test_schema_caps_field_count() -> None:
     big = {"fields": [{"key": f"f{i}", "type": "string"} for i in range(MAX_FIELDS + 1)]}
     assert "too_many" in _codes(validate_schema(big))
+
+
+def test_schema_from_version_rejects_malformed_snapshot_metadata() -> None:
+    version = DocumentVersion(metadata_snapshot={"field_schema": _GOOD_SCHEMA})
+    assert schema_from_version(version) == _GOOD_SCHEMA
+
+    version.metadata_snapshot = {"field_schema": {"fields": []}}
+    assert schema_from_version(version) is None
+    version.metadata_snapshot = {"field_schema": None}
+    assert schema_from_version(version) is None
 
 
 # --- validate_values (the submission) ----------------------------------------------------

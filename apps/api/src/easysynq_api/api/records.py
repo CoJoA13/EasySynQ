@@ -191,6 +191,7 @@ def _record(
         "captured_at": record.captured_at.isoformat() if record.captured_at else None,
         "captured_by": str(record.captured_by),
         "content_hash": record.content_hash,
+        "content_hash_version": record.content_hash_version,
         "source_document_id": (
             str(record.source_document_id) if record.source_document_id else None
         ),

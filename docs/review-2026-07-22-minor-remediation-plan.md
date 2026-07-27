@@ -195,7 +195,7 @@ permission key
 
 ### ☑ M7 — Records and rendering resilience — [#387](https://github.com/CoJoA13/EasySynQ/pull/387)
 
-`branch: fix/minor-record-render-resilience` · API + workers + migration `0077` + docs +
+`branch: fix/minor-record-render-resilience` · API + workers + migrations `0077`/`0078` + docs +
 unit/integration tests · no new permission key
 
 - [x] `apps/api/src/easysynq_api/services/packs/build.py:358` — sealed packs used the mutable System
@@ -210,10 +210,12 @@ unit/integration tests · no new permission key
   blob row, and rendition object absent).
 - [x] `apps/api/src/easysynq_api/services/records/service.py:308` — a failed structured-record PDF
   build/enqueue had no re-drive and left rendition retrieval at 409 forever `[C]` (fixed: an hourly
-  bounded Beat task re-enqueues structured records with a missing pointer, isolates per-record
+  bounded Beat task re-enqueues pinned-form records with a missing pointer, isolates per-record
   publish failures for the next tick, and keeps GET as a pure poll; omitted optional forms normalize
-  to `{}`, legacy `NULL` forms are recognized from the pinned schema, and `{}` hashes distinctly
-  from the `NULL` ad-hoc sentinel).
+  to `{}`, legacy `NULL` forms are recognized from the pinned schema, and ad-hoc JSON records such as
+  `KPI_READING` are excluded from enqueue/build/redrive. Migration `0078` marks historical record
+  seals as v1 and new captures as v2, preserving the legacy empty-form preimage while v2 hashes `{}`
+  distinctly from the `NULL` ad-hoc sentinel).
 
 ### ☐ M8 — Vault and retention input guards
 

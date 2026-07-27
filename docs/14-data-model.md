@@ -294,7 +294,8 @@ erDiagram
 | `record_type` | enum | AUDIT, AUDIT_FINDING, CAPA, COMPETENCE, CALIBRATION, MGMT_REVIEW, SUPPLIER_EVAL, RELEASE, KPI_READING, SATISFACTION, TRACEABILITY, PROPERTY_EVENT, CHANGE, EVIDENCE, FILLED_FORM, **COMPLAINT** (`06 §2`; COMPLAINT added per Decisions Register R16). |
 | `captured_at` | timestamptz | Point-in-time; immutable once set. |
 | `captured_by` | uuid FK | |
-| `content_hash` | sha256 | Over canonical structured content + attached blob digest manifest (`06 §3`); `{}` and `null` are distinct canonical values. |
+| `content_hash` | sha256 | Over canonical structured content + attached blob digest manifest (`06 §3`); v2 keeps `{}` and `null` distinct. |
+| `content_hash_version` | smallint | Persisted seal algorithm. Migration `0078` assigns v1 to every existing row (preserving the legacy `{}`→`null` preimage); the capture service explicitly stamps new rows as v2. The DB default remains v1 for rolling-deploy safety. Once a v2 row exists, the migration downgrade fails closed rather than dropping the selector and silently relabelling that immutable seal as v1 on re-upgrade. |
 | `source_document_id`, `source_version_id` | uuid FK null | **Pinned** exact version produced under (survives supersession). Every Record produced UNDER a controlled document pins `source_version_id`; **ad-hoc EVIDENCE records may leave it null** (nullable allowed) (reconciled per Decisions Register R21). |
 | `form_field_values` | jsonb null | Validated against pinned template Version's `Schema`; an omitted valid all-optional form is normalized to `{}`, while `null` marks unstructured or DESTROY-erased content. |
 | `correction_of` | uuid FK null | Prior record this corrects. |
@@ -303,7 +304,7 @@ erDiagram
 | `retention_basis_date` | date | Anchor for retention computation. |
 | `disposition_state` | enum(`ACTIVE`,`DUE_FOR_REVIEW`,`ON_HOLD`,`DISPOSED`) | `06 §5.3`. |
 | `legal_hold` | bool | Overrides expiry. |
-| `structured_pdf_blob_sha256` (**S-rec-3**) | text null, **NO FK** | Pointer to the cached structured-record PDF — a DERIVED, regenerable rendition (§5.4) in the non-WORM renditions bucket, built best-effort at Stage 2. Capture enqueues it immediately; an hourly bounded missing-pointer redrive retries dropped/failed builds and recognizes legacy optional-form rows from their pinned `field_schema`. The selector and row-locked builder exclude a `DESTROY` disposition event, so delayed work cannot recreate a purged rendition; `ARCHIVE_COLD`/`TRANSFER` may still finish one because they preserve content. Plain Text (the `evidence_pack.zip_blob_sha256` R27 precedent) so the WORM-destroy hatch never aborts; nulled + the `blob` row dropped on destroy (blob-row-iff-bytes). NOT part of `content_hash`. |
+| `structured_pdf_blob_sha256` (**S-rec-3**) | text null, **NO FK** | Pointer to the cached structured-record PDF — a DERIVED, regenerable rendition (§5.4) in the non-WORM renditions bucket, built best-effort at Stage 2. Capture enqueues it immediately; an hourly bounded missing-pointer redrive retries dropped/failed builds and recognizes legacy optional-form rows from their pinned `field_schema`. The pinned schema is the discriminator, so ad-hoc JSON such as a `KPI_READING` grading snapshot is never rendered as a structured form. The selector and row-locked builder exclude a `DESTROY` disposition event, so delayed work cannot recreate a purged rendition; `ARCHIVE_COLD`/`TRANSFER` may still finish one because they preserve content. Plain Text (the `evidence_pack.zip_blob_sha256` R27 precedent) so the WORM-destroy hatch never aborts; nulled + the `blob` row dropped on destroy (blob-row-iff-bytes). NOT part of `content_hash`. |
 
 | Supporting entity | Key attributes | Notes |
 |---|---|---|

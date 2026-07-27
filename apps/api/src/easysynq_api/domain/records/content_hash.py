@@ -10,8 +10,15 @@ but it borrows the same two safety properties:
 * **RFC 8785 JCS** (the ``rfc8785`` package the codebase already depends on) gives deterministic key
   ordering + number/string encoding, so ``form_field_values`` serializes identically regardless of
   insertion order.
-* A **domain-separation preamble** (``b"easysynq.record.v1\\n"``) binds the version in, so a record
-  digest can never collide with an audit digest or a future v2.
+* A **domain-separation preamble** binds the version in, so a record digest can never collide with
+  an audit digest or another record-hash version.
+
+**v1 compatibility.** The original v1 serializer normalized a falsey
+``form_field_values`` value with ``value or None``. Existing records therefore retain
+``content_hash_version=1`` and must continue to collapse ``{}`` to ``null`` when re-verified. New
+captures use v2, whose preimage preserves ``{}`` as the valid empty structured-form submission and
+keeps it distinct from the ``null`` ad-hoc-record sentinel. Migration ``0078`` persists that
+algorithm choice beside every record so verification never has to guess from the digest.
 
 The ``evidence_manifest`` is ``sorted(set(...))`` of lowercased sha256s — re-attaching the blobs in
 any order (or a duplicate) yields the identical seal. The preimage deliberately EXCLUDES the
@@ -28,8 +35,11 @@ from typing import Any
 
 import rfc8785
 
-CONTENT_HASH_VERSION = 1
-PREAMBLE = b"easysynq.record.v1\n"
+CONTENT_HASH_VERSION_V1 = 1
+CONTENT_HASH_VERSION = 2
+PREAMBLE_V1 = b"easysynq.record.v1\n"
+PREAMBLE_V2 = b"easysynq.record.v2\n"
+PREAMBLE = PREAMBLE_V2
 
 
 def record_content_hash(
@@ -38,21 +48,31 @@ def record_content_hash(
     source_version_id: uuid.UUID | None,
     form_field_values: dict[str, Any] | None,
     evidence_sha256s: Iterable[str],
+    version: int = CONTENT_HASH_VERSION,
 ) -> str:
     """Return the ``"sha256:"``-prefixed content seal for a record (doc 06 §4.4).
 
     Deterministic and order-/duplicate-independent in the evidence manifest and the form values.
+    Re-verification must pass the record's persisted ``content_hash_version``; v1 deliberately
+    retains its historical ``{}``-to-``null`` normalization, while v2 preserves ``{}``.
     """
+    if version == CONTENT_HASH_VERSION_V1:
+        preamble = PREAMBLE_V1
+        canonical_form_values = form_field_values or None
+    elif version == CONTENT_HASH_VERSION:
+        preamble = PREAMBLE_V2
+        canonical_form_values = form_field_values
+    else:
+        raise ValueError(f"unsupported record content hash version: {version}")
+
     obj: dict[str, Any] = {
-        "v": CONTENT_HASH_VERSION,
+        "v": version,
         "record_type": record_type,
         "source_version_id": (
             str(source_version_id).lower() if source_version_id is not None else None
         ),
-        # ``{}`` is a valid structured-form submission (for example, an all-optional template),
-        # and is semantically distinct from the ``NULL`` ad-hoc-record sentinel.
-        "form_field_values": form_field_values,
+        "form_field_values": canonical_form_values,
         "evidence_manifest": sorted({s.lower() for s in evidence_sha256s}),
     }
-    payload = PREAMBLE + rfc8785.dumps(obj)
+    payload = preamble + rfc8785.dumps(obj)
     return "sha256:" + hashlib.sha256(payload).hexdigest()

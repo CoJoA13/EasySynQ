@@ -147,9 +147,10 @@ Celery workers · Keycloak (auth) · Gotenberg/LibreOffice (rendering) · Caddy 
 > scope/provenance/tz edges (a new `provenance.excluded_processes` + its web banner line, context-only surface
 > admission consolidated in `report_read_resource_satisfiable`, an org-scoped process-name lookup, in-snapshot
 > `resolve_org_tz`) — PR #347 squash `d3fbb01`. Both BE(+web), no migration, no new key.
-> **Migration head `0076`** (next `0077`) — the 2026-07-22 remediation batches moved it past `0070`
+> **Migration head `0078`** (next `0079`) — the 2026-07-22 remediation batches moved it past `0070`
 > (`0071` audit-chain cursor · `0072` disposition append-only · `0073` pending-blob-purge · `0074`
-> operator alarms · `0075` audit `scope_ref` index · `0076` import-owner snapshot). Check `cd apps/api && uv run alembic heads`
+> operator alarms · `0075` audit `scope_ref` index · `0076` import-owner snapshot · `0077` sealed-pack
+> retention · `0078` record content-hash version). Check `cd apps/api && uv run alembic heads`
 > before writing a migration — NOT `ls migrations/versions/ | tail -1`, which returns `__pycache__`;
 > this line has gone stale before.
 >

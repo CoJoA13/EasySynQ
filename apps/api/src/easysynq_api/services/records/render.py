@@ -29,7 +29,7 @@ from typing import Any
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
-from sqlalchemy import exists, not_, or_, select
+from sqlalchemy import case, exists, func, not_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -170,12 +170,10 @@ async def build_structured_pdf(session: AsyncSession, record_id: uuid.UUID) -> N
         if record.source_version_id is not None
         else None
     )
-    # Pre-fix optional-form captures can carry NULL values even though their pinned immutable
-    # version contains a form schema. Keep those legacy records recoverable without confusing a
-    # genuinely unstructured ad-hoc record with a structured one.
-    if record.form_field_values is None and (
-        version is None or schema_from_version(version) is None
-    ):
+    # The pinned immutable form schema is the authoritative Mode-B discriminator. Values alone are
+    # insufficient: ad-hoc records such as KPI_READING deliberately store sealed JSON here too.
+    # This still includes pre-fix optional-form captures whose values are NULL.
+    if version is None or schema_from_version(version) is None:
         await session.rollback()
         return
     version_base = (
@@ -210,10 +208,25 @@ async def _missing_structured_pdf_ids(session: AsyncSession, *, limit: int) -> l
 
     Successful builds leave the candidate set, so later ticks advance through the backlog.
     """
+    pinned_schema = DocumentVersion.metadata_snapshot["field_schema"]
+    pinned_fields = pinned_schema["fields"]
     pinned_form_version = exists(
         select(1).where(
             DocumentVersion.id == Record.source_version_id,
             DocumentVersion.metadata_snapshot.op("?")("field_schema"),
+            # Authored schemas are fully validated before snapshotting. These shape guards keep a
+            # malformed/null ad-hoc metadata key out of the bounded candidate batch; the builder's
+            # schema_from_version call defensively runs the complete validator as a final gate.
+            func.jsonb_typeof(pinned_schema) == "object",
+            func.jsonb_typeof(pinned_fields) == "array",
+            case(
+                (
+                    func.jsonb_typeof(pinned_fields) == "array",
+                    func.jsonb_array_length(pinned_fields),
+                ),
+                else_=0,
+            )
+            > 0,
         )
     )
     destructive_disposition = exists(
@@ -227,7 +240,7 @@ async def _missing_structured_pdf_ids(session: AsyncSession, *, limit: int) -> l
             await session.scalars(
                 select(Record.id)
                 .where(
-                    or_(Record.form_field_values.is_not(None), pinned_form_version),
+                    pinned_form_version,
                     Record.structured_pdf_blob_sha256.is_(None),
                     not_(destructive_disposition),
                 )

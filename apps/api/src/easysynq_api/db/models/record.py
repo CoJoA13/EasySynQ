@@ -18,7 +18,18 @@ import datetime
 import uuid
 from typing import Any
 
-from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Index, Text, func, text
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    Date,
+    DateTime,
+    ForeignKey,
+    Index,
+    SmallInteger,
+    Text,
+    func,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -34,6 +45,10 @@ from ._record_enums import (
 class Record(Base):
     __tablename__ = "record"
     __table_args__ = (
+        CheckConstraint(
+            "content_hash_version IN (1, 2)",
+            name="ck_record_content_hash_version_supported",
+        ),
         Index("ix_record_source_version_id", "source_version_id"),
         # Beat retention sweep (doc 14 §15.1).
         Index(
@@ -60,6 +75,11 @@ class Record(Base):
         UUID(as_uuid=True), ForeignKey("app_user.id", ondelete="RESTRICT"), nullable=False
     )
     content_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Existing rows are v1; the capture service explicitly stamps v2. Keep the DB default at 1 so
+    # an old application process during a rolling migration cannot write a v1 digest marked as v2.
+    content_hash_version: Mapped[int] = mapped_column(
+        SmallInteger, server_default=text("1"), default=1, nullable=False
+    )
     source_document_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("documented_information.id", ondelete="RESTRICT"),
