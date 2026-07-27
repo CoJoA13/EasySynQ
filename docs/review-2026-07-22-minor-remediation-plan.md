@@ -24,7 +24,7 @@
 | Batch | Group | Findings | Status | PR |
 |---|---|:---:|---|---|
 | M0 | Preclosed during MAJOR remediation | 1 | ☑ merged | [#369](https://github.com/CoJoA13/EasySynQ/pull/369), precision follow-up [#371](https://github.com/CoJoA13/EasySynQ/pull/371) |
-| M1 | Auth boundaries and public diagnostics | 4 | ◐ active | — |
+| M1 | Auth boundaries and public diagnostics | 4 | ☑ in PR | [#381](https://github.com/CoJoA13/EasySynQ/pull/381) |
 | M2 | Scoped authorization and reporting | 2 | ☐ queued — revalidate | — |
 | M3 | Notification reliability | 2 | ☐ queued — revalidate | — |
 | M4 | Lifecycle and workflow guards | 4 | ☐ queued — revalidate | — |
@@ -63,7 +63,7 @@
 
 ## Backend security and correctness
 
-### ◐ M1 — Auth boundaries and public diagnostics
+### ☑ M1 — Auth boundaries and public diagnostics — [#381](https://github.com/CoJoA13/EasySynQ/pull/381)
 
 `branch: fix/minor-auth-boundaries` · API + OpenAPI + docs + unit/integration tests · no migration
 and no new permission key

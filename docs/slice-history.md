@@ -174,6 +174,33 @@
 
 ## REMEDIATION — correctness, accessibility, polish & test reliability
 
+### Minor Batch M1 — privileged setup detail, race-safe JIT identities, bounded JWKS rotation, and sanitized readiness (API + OpenAPI + docs; NO migration [head stays `0075`]; NO new permission key [catalog 102]; PR [#381](https://github.com/CoJoA13/EasySynQ/pull/381))
+
+**Tracker reconciliation.** The source review's 104 MINOR findings were broad-subsystem lists, not
+implementation batches. The dedicated minor remediation plan now maps every source location exactly
+once into 22 PR-sized batches plus one preclosed accounting bucket: **1 closed in #369/#371, 4 in
+M1, 99 queued for batch-time revalidation**. The MAJOR tracker's stale summary was also corrected:
+all original 50 findings across Batches 1–17 are merged, with the inserted Batch 12.5 tracked
+separately.
+
+**What shipped.** Four revalidated application-boundary findings close together. Sensitive
+`GET /setup` detail now requires the existing SYSTEM `config.read`; only the minimal
+`/setup/state` remains public, while the one-time bootstrap-secret path remains outside the PEP.
+First-login JIT provisioning now uses PostgreSQL `INSERT … ON CONFLICT DO NOTHING` and resolves the
+winning subject row, so simultaneous requests converge without a unique-constraint 500 (including
+the invited-user race). JWKS caching now has a bounded TTL, replacement-on-refresh key rotation,
+single-flight fetches, and a shared refresh/outage cooldown; failures fail closed as a sanitized
+`503 dependency_unavailable`, while an opportunistic unknown-kid failure cannot poison a still-valid
+known key. Internal readiness probes retain diagnostics for the upgrade workflow, but public
+`/readyz` emits dependency names and booleans only.
+
+**Tests + gate.** New tests pin JWKS eviction, miss throttling, concurrent single-flight refresh,
+failure backoff, cached-key continuity and sanitized 503 behavior; a synthetic raw readiness error
+proves public stripping; two real PostgreSQL sessions prove JIT convergence; and setup integration
+proves non-admin 403 plus post-bootstrap admin access. API Ruff/format, mypy over **426 source
+files**, the full unit suite (**1168 passed, 1 expected release-only skip**), Redocly, the complete
+setup integration file (**24 passed**) and auth/JIT integration selection (**5 passed**) are green.
+
 ### Batch 17 — reconcile the authorization and API design docs with shipped behavior (docs + OpenAPI prose only; NO runtime/schema change; NO migration [head stays `0075`]; NO new permission key; PR [#380](https://github.com/CoJoA13/EasySynQ/pull/380))
 
 **What shipped.** The supposedly complete authorization catalog now includes the already-seeded R42
