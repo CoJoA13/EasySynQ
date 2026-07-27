@@ -26,7 +26,7 @@
 |---|---|:---:|---|---|
 | M0 | Preclosed during MAJOR remediation | 1 | ☑ merged | [#369](https://github.com/CoJoA13/EasySynQ/pull/369), precision follow-up [#371](https://github.com/CoJoA13/EasySynQ/pull/371) |
 | M1 | Auth boundaries and public diagnostics | 4 | ☑ merged | [#381](https://github.com/CoJoA13/EasySynQ/pull/381) |
-| M2 | Scoped authorization and reporting | 2 | ☑ ready for PR | — |
+| M2 | Scoped authorization and reporting | 2 | ☑ in PR | [#382](https://github.com/CoJoA13/EasySynQ/pull/382) |
 | M3 | Notification reliability | 2 | ☐ queued — revalidate | — |
 | M4 | Lifecycle and workflow guards | 4 | ☐ queued — revalidate | — |
 | M5 | Ingestion commit integrity | 3 | ☐ queued — revalidate | — |
@@ -48,7 +48,7 @@
 | M21 | Web async and error UX | 8 | ☐ queued — revalidate | — |
 | M22 | Web accessibility | 7 | ☐ queued — revalidate | — |
 
-**Accounting: 1 preclosed + 4 merged + 2 ready + 97 queued = 104 original findings.**
+**Accounting: 1 preclosed + 4 merged + 2 in PR + 97 queued = 104 original findings.**
 
 ---
 
@@ -82,7 +82,7 @@ and no new permission key
   exception strings `[C]` (fixed: expose names and readiness booleans only while retaining internal
   diagnostics for trusted workflows).
 
-### ☑ M2 — Scoped authorization and reporting
+### ☑ M2 — Scoped authorization and reporting — [#382](https://github.com/CoJoA13/EasySynQ/pull/382)
 
 `branch: fix/minor-scoped-authz-reporting` · API + integration · no migration and no new permission
 key

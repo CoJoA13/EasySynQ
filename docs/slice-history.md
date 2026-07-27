@@ -174,7 +174,7 @@
 
 ## REMEDIATION — correctness, accessibility, polish & test reliability
 
-### Minor Batch M2 — canonical acknowledgment scope and honest PROCESS-report admission (API + tests + docs; NO migration [head stays `0075`]; NO new permission key [catalog 102]; PR pending)
+### Minor Batch M2 — canonical acknowledgment scope and honest PROCESS-report admission (API + tests + docs; NO migration [head stays `0075`]; NO new permission key [catalog 102]; PR [#382](https://github.com/CoJoA13/EasySynQ/pull/382))
 
 **What shipped.** The fresh DOC_ACK decision gate no longer rebuilds process scope from raw
 `ProcessLink` rows. It now consumes the same `vault_repo.process_ids_for_doc` loader as the other
