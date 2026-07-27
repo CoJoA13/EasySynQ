@@ -213,9 +213,11 @@ unit/integration tests · no new permission key
   bounded Beat task re-enqueues pinned-form records with a missing pointer, isolates per-record
   publish failures for the next tick, and keeps GET as a pure poll; omitted optional forms normalize
   to `{}`, legacy `NULL` forms are recognized from the pinned schema, and ad-hoc JSON records such as
-  `KPI_READING` are excluded from enqueue/build/redrive. Migration `0078` marks historical record
-  seals as v1 and new captures as v2, preserving the legacy empty-form preimage while v2 hashes `{}`
-  distinctly from the `NULL` ad-hoc sentinel).
+  `KPI_READING` are excluded from enqueue/build/redrive. The scan keyset-pages beyond malformed
+  legacy schema snapshots, so an invalid oldest page cannot starve later valid renditions.
+  Migration `0078` marks historical record seals as v1 and new captures as v2, preserving the
+  legacy empty-form preimage while v2 hashes `{}` distinctly from the `NULL` ad-hoc sentinel;
+  exported pack manifests and dossier subjects carry that version beside every record hash).
 
 ### ☐ M8 — Vault and retention input guards
 

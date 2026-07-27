@@ -19,6 +19,7 @@ dropped broker publishes and failed builds while ``GET /records/{id}/rendition``
 
 from __future__ import annotations
 
+import datetime
 import hashlib
 import io
 import logging
@@ -29,7 +30,7 @@ from typing import Any
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
-from sqlalchemy import case, exists, func, not_, select
+from sqlalchemy import and_, case, exists, func, not_, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -203,20 +204,34 @@ async def build_structured_pdf(session: AsyncSession, record_id: uuid.UUID) -> N
     await session.commit()
 
 
-async def _missing_structured_pdf_ids(session: AsyncSession, *, limit: int) -> list[uuid.UUID]:
-    """Return oldest missing live renditions first.
+async def _missing_structured_pdf_page(
+    session: AsyncSession,
+    *,
+    limit: int,
+    after: tuple[datetime.datetime, uuid.UUID] | None,
+) -> list[tuple[uuid.UUID, datetime.datetime, DocumentVersion]]:
+    """Return one keyset page of plausible missing live renditions.
 
-    Successful builds leave the candidate set, so later ticks advance through the backlog.
+    JSON shape checks keep ordinary/ad-hoc versions out of the scan cheaply. The complete schema
+    validator runs in :func:`_missing_structured_pdf_ids`; keeping the cursor fields in each row
+    lets that scan advance beyond malformed legacy snapshots instead of selecting the same first
+    page forever.
     """
     pinned_schema = DocumentVersion.metadata_snapshot["field_schema"]
     pinned_fields = pinned_schema["fields"]
-    pinned_form_version = exists(
+    destructive_disposition = exists(
         select(1).where(
-            DocumentVersion.id == Record.source_version_id,
+            DispositionEvent.record_id == Record.id,
+            DispositionEvent.action == DispositionAction.DESTROY,
+        )
+    )
+    statement = (
+        select(Record.id, Record.captured_at, DocumentVersion)
+        .join(DocumentVersion, DocumentVersion.id == Record.source_version_id)
+        .where(
             DocumentVersion.metadata_snapshot.op("?")("field_schema"),
-            # Authored schemas are fully validated before snapshotting. These shape guards keep a
-            # malformed/null ad-hoc metadata key out of the bounded candidate batch; the builder's
-            # schema_from_version call defensively runs the complete validator as a final gate.
+            # Authored schemas are fully validated before snapshotting. These shape guards keep
+            # malformed/null ad-hoc metadata out cheaply; Python applies the full validator below.
             func.jsonb_typeof(pinned_schema) == "object",
             func.jsonb_typeof(pinned_fields) == "array",
             case(
@@ -227,28 +242,50 @@ async def _missing_structured_pdf_ids(session: AsyncSession, *, limit: int) -> l
                 else_=0,
             )
             > 0,
+            Record.structured_pdf_blob_sha256.is_(None),
+            not_(destructive_disposition),
         )
+        .order_by(Record.captured_at, Record.id)
+        .limit(limit)
     )
-    destructive_disposition = exists(
-        select(1).where(
-            DispositionEvent.record_id == Record.id,
-            DispositionEvent.action == DispositionAction.DESTROY,
-        )
-    )
-    return list(
-        (
-            await session.scalars(
-                select(Record.id)
-                .where(
-                    pinned_form_version,
-                    Record.structured_pdf_blob_sha256.is_(None),
-                    not_(destructive_disposition),
-                )
-                .order_by(Record.captured_at, Record.id)
-                .limit(limit)
+    if after is not None:
+        statement = statement.where(
+            or_(
+                Record.captured_at > after[0],
+                and_(Record.captured_at == after[0], Record.id > after[1]),
             )
-        ).all()
-    )
+        )
+    rows = (await session.execute(statement)).all()
+    return [(record_id, captured_at, version) for record_id, captured_at, version in rows]
+
+
+async def _missing_structured_pdf_ids(session: AsyncSession, *, limit: int) -> list[uuid.UUID]:
+    """Return up to ``limit`` oldest fully valid missing live renditions.
+
+    Successful builds leave the candidate set, so later ticks advance through the backlog. A
+    malformed legacy snapshot remains pointer-less, but keyset paging advances past every invalid
+    page during this tick; such rows therefore cannot starve later valid records from the bounded
+    publish batch.
+    """
+    if limit <= 0:
+        return []
+
+    record_ids: list[uuid.UUID] = []
+    cursor: tuple[datetime.datetime, uuid.UUID] | None = None
+    while len(record_ids) < limit:
+        page = await _missing_structured_pdf_page(session, limit=limit, after=cursor)
+        if not page:
+            break
+        for record_id, captured_at, version in page:
+            cursor = (captured_at, record_id)
+            if schema_from_version(version) is None:
+                continue
+            record_ids.append(record_id)
+            if len(record_ids) == limit:
+                break
+        if len(page) < limit:
+            break
+    return record_ids
 
 
 async def redrive_missing_structured_pdfs(

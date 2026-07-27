@@ -123,6 +123,7 @@ async def _assemble(
                 "title": c.base.title,
                 "captured_at": c.record.captured_at.isoformat() if c.record.captured_at else None,
                 "content_hash": c.record.content_hash,
+                "content_hash_version": c.record.content_hash_version,
                 "source_document_id": (
                     str(c.record.source_document_id) if c.record.source_document_id else None
                 ),

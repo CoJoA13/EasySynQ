@@ -89,6 +89,7 @@ def test_serialize_finding_dossier_shape_and_no_pii() -> None:
         captured_at="2026-06-01T00:00:00+00:00",
         captured_by=UserRef(user_id="u1", display_name="Ingrid A"),
         content_hash="sha256:aa",
+        content_hash_version=2,
         audit={"id": "a1", "identifier": "REC-AUD-0001"},
         correction_of=None,
         superseded_by_correction=None,
@@ -97,6 +98,7 @@ def test_serialize_finding_dossier_shape_and_no_pii() -> None:
     )
     assert d["kind"] == "finding"
     assert d["finding_type"] == "NC" and d["severity"] == "Major"
+    assert d["content_hash_version"] == 2
     assert d["captured_by"] == {"user_id": "u1", "display_name": "Ingrid A"}
     assert d["linked_capa"]["close_state"] == "Closed"
     # evidence sorted by record_id for a stable seal.
@@ -145,11 +147,13 @@ def test_serialize_capa_dossier_cycle_grouping_and_signature() -> None:
         captured_at="2026-06-01T00:00:00+00:00",
         captured_by=UserRef(user_id="u1", display_name="Diego P"),
         content_hash="sha256:cc",
+        content_hash_version=1,
         origin_finding={"id": "f1", "identifier": "REC-QMS-0001"},
         stages=[s_ver, s_rc],
     )
     assert d["kind"] == "capa" and d["close_state"] == "Closed"
     assert d["cycle_count"] == 2  # cycle_marker 1 → two iterations (0 and 1)
+    assert d["content_hash_version"] == 1
     assert [s["id"] for s in d["stages"]] == ["s1", "s2"]  # re-sorted chronological
     sig = d["stages"][1]["signature"]
     assert sig["meaning"] == "verify"

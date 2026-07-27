@@ -187,9 +187,11 @@ Structured form PDFs remain best-effort derived views, but an hourly bounded red
 dropped publishes and failed builds. Capture, correction, direct build, and redrive identify a form
 from its pinned version's `field_schema`, not merely a non-null JSON payload, so ad-hoc records such
 as `KPI_READING` never receive misleading “structured form capture” PDFs. Omitted all-optional form
-values normalize to `{}`; legacy `NULL` form rows remain recoverable through their pin. A `DESTROY`
-disposition tombstone blocks delayed recreation, while content-preserving `ARCHIVE_COLD` and
-`TRANSFER` dispositions may still finish a missing rendition.
+values normalize to `{}`; legacy `NULL` form rows remain recoverable through their pin. The bounded
+publish batch keyset-pages through malformed legacy snapshots, preventing an invalid oldest page
+from starving every later valid rendition. A `DESTROY` disposition tombstone blocks delayed
+recreation, while content-preserving `ARCHIVE_COLD` and `TRANSFER` dispositions may still finish a
+missing rendition.
 
 Record seals now persist their algorithm choice. Migration `0078` marks all historical rows as v1,
 whose frozen serializer collapsed `{}` to `null`; new captures explicitly use domain-separated v2,
@@ -197,13 +199,17 @@ which preserves the two values distinctly. The API exposes `content_hash_version
 integrity verification can select the exact preimage without guessing or invalidating legacy
 records. The database default stays v1 for safe rolling deployment with an older writer. Downgrade
 fails closed after the first v2 capture rather than dropping the selector and silently mislabelling
-that immutable seal if the migration is later re-applied.
+that immutable seal if the migration is later re-applied. Evidence-pack manifests snapshot the
+selector beside each included record hash; Finding/CAPA dossier files and their subject index do the
+same, so a standalone export remains verifiable when it mixes v1 and v2 records.
 
 **Tests.** API Ruff/format and strict mypy over **426 source files** are clean; the full unit suite is
-green (**1179 passed, 1 expected release-only skip**). The complete M7 form/pack/retention/schema set
-passes **25 integration tests**, and the full capture/correction file passes **14**. Populated
-`0077→0078` compatibility preserves a legacy empty-form row and v1 seal; `0078→0077→0078` plus
-`alembic check` is clean. Redocly validates the updated OpenAPI contract.
+green (**1180 passed, 1 expected release-only skip**). The complete structured-form and
+evidence-pack/dossier files pass **29 integration tests**, including a mixed-v1/v2 exported
+manifest; focused unit coverage proves keyset progress beyond a full invalid-schema page. The full
+capture/correction file passes **14**. Populated `0077→0078` compatibility preserves a legacy
+empty-form row and v1 seal; `0078→0077→0078` plus `alembic check` is clean. Redocly validates the
+updated OpenAPI contract.
 
 ### Minor Batch M6 — ingestion review and family integrity (API + integration + docs; NO migration [head stays `0076`]; NO new permission key [catalog 102]; PR [#386](https://github.com/CoJoA13/EasySynQ/pull/386))
 

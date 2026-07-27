@@ -207,9 +207,11 @@ Rules specific to Mode B:
 > the low-latency enqueue; an hourly bounded Beat redrive selects **only records with a pinned
 > version carrying `field_schema`** whose pointer is still absent, including legacy optional-form
 > rows whose values are `NULL`. Ad-hoc JSON records (notably `KPI_READING`) are never treated as
-> form captures. Neither path makes the rendition GET mutate state. The builder locks the Record and refuses a
-> `DESTROY` disposition tombstone, so delayed work cannot recreate erased bytes; a non-destructive
-> `ARCHIVE_COLD`/`TRANSFER` tombstone may still finish the same derived view. The WORM-destroy /
+> form captures. The bounded publish batch keyset-pages past malformed pinned schemas rather than
+> repeatedly stopping at the same invalid oldest page. Neither path makes the rendition GET mutate
+> state. The builder locks the Record and refuses a `DESTROY` disposition tombstone, so delayed work
+> cannot recreate erased bytes; a non-destructive `ARCHIVE_COLD`/`TRANSFER` tombstone may still
+> finish the same derived view. The WORM-destroy /
 > disposition DESTROY path drops the rendition object + its `blob` row + nulls the pointer (the
 > blob-row-iff-bytes invariant). **Deferred:** Mode B
 > for `audit`/`capa` multi-stage
@@ -405,7 +407,7 @@ sequenceDiagram
 
 1. **Cover sheet** — scope, generated-by, generated-at, organization, framework, period, and the pack's own SHA-256.
 2. **Traceability manifest** — the requirement→process→document→record→evidence map (the §6 chain) for every included item, machine-readable (JSON) **and** human-readable (PDF index).
-3. **The records themselves** — structured records as sealed PDF renditions; uploaded evidence in original form; each item stamped with its `captured_at`, `captured_by`, `source_version_id`, `content_hash`, and retention status.
+3. **The records themselves** — structured records as sealed PDF renditions; uploaded evidence in original form; each item stamped with its `captured_at`, `captured_by`, `source_version_id`, `content_hash`, `content_hash_version`, and retention status. The version travels beside the hash in `manifest.json` (and in Finding/CAPA dossier subjects), so mixed pre-/post-`0078` exports are independently verifiable.
 4. **The governing Document Versions** — the *exact pinned versions* (not current), so the auditor sees the edition in force at capture time.
 5. **Audit-trail excerpts** — the relevant `RECORD_CAPTURED`, link, and disposition events for included items.
 6. **Gap report** — any in-scope mandatory ★ requirement lacking current evidence is explicitly listed (calm honesty beats a silent hole; lets Mara remediate before the auditor finds it).
