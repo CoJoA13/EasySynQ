@@ -168,7 +168,7 @@
 
 ## REMEDIATION — correctness, accessibility, polish & test reliability
 
-### Issue #328 — preserve failed-email recovery when SMTP is unconfigured (API + OpenAPI + web + tests; NO migration [head stays `0080`]; NO new permission key [catalog 102]; closes [#328](https://github.com/CoJoA13/EasySynQ/issues/328))
+### Issue #328 — preserve failed-email recovery when SMTP is unconfigured (API + OpenAPI + web + tests; NO migration [head stays `0080`]; NO new permission key [catalog 102]; closes [#328](https://github.com/CoJoA13/EasySynQ/issues/328); PR [#405](https://github.com/CoJoA13/EasySynQ/pull/405))
 
 **What changed.** Notification email delivery now has one shared readiness predicate: the
 organization's `notifications_email_enabled` flag must be on **and** the deployment must have a
