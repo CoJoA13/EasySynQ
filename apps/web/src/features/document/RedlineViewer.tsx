@@ -236,7 +236,6 @@ export function RedlineViewer({
                 aria-label={`Text redline ${data.from.revision_label} to ${data.to.revision_label}`}
                 tabIndex={0}
                 onKeyDown={onKeyDown}
-                style={{ outline: "none" }}
               >
                 {hunkEls}
               </Stack>

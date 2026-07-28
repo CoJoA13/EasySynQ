@@ -80,6 +80,7 @@ test("VisualDiffViewer n/p steps through the changed pages", async () => {
   renderWithProviders(<VisualDiffViewer documentId={DOC} fromVid={FROM} toVid={TO} />);
   await screen.findByAltText("Page 2 of 3 — Diff layer (changed)");
   const region = screen.getByRole("group", { name: "Visual page diff" });
+  expect(region.style.outline).toBe("");
   region.focus();
   await user.keyboard("n"); // page 1 → next changed page (index 2 → "Page 3")
   await screen.findByAltText("Page 3 of 3 — Diff layer (changed)");

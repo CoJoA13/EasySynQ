@@ -624,8 +624,10 @@ migration, or new permission key
   override, so repeated row actions are distinguishable).
 - [x] `apps/web/src/app/shell/DetailDrawer.tsx:44` — resize handle has no keyboard or non-drag
   pointer operation `[C]` (fixed: the WAI-ARIA window-splitter pattern exposes current/min/max
-  width and supports Arrow Left/Right plus Home/End; named narrow/widen buttons provide a
-  single-pointer alternative while drag remains available).
+  width, identifies the pane it controls, and supports Arrow Left/Right plus Home/End; named
+  narrow/widen buttons provide a single-pointer alternative while drag remains available.
+  The range follows the live viewport, and resize affordances are withheld when the drawer is a
+  full-width mobile sheet).
 - [x] `apps/web/src/features/document/RedlineViewer.tsx:90` — unchanged-context text is roughly
   3.2:1 at 14px `[C]` (fixed: unchanged context uses the scheme-aware secondary-text token,
   reaching at least 6.37:1 in light mode and 7.55:1 in dark mode).
@@ -641,7 +643,7 @@ migration, or new permission key
   action).
 - [x] `apps/web/src/index.css:16` — forced-colors mode loses the global focus indicator `[C]`
   (fixed: a forced-colors override restores a two-pixel system `Highlight` outline with offset
-  when box shadows are suppressed).
+  when box shadows are suppressed, and focusable diff regions no longer override it inline).
 
 ---
 

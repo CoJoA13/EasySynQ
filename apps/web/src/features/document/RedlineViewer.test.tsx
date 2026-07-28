@@ -46,6 +46,7 @@ test("RedlineViewer n/p keyboard navigation moves focus through the changes", as
   const user = userEvent.setup();
   renderWithProviders(<RedlineViewer documentId={DOC} fromVid={FROM} toVid={TO} />);
   const region = await screen.findByRole("group", { name: /Text redline/ });
+  expect(region.style.outline).toBe("");
   region.focus();
   await user.keyboard("n");
   expect(document.activeElement).toBe(screen.getByLabelText(/^Removed:/));

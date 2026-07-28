@@ -236,7 +236,6 @@ export function VisualDiffViewer({
         aria-label="Visual page diff"
         tabIndex={0}
         onKeyDown={onKeyDown}
-        style={{ outline: "none" }}
       >
         <Group justify="space-between" align="center">
           <Text size="xs" fw={700} c="dimmed" tt="uppercase">

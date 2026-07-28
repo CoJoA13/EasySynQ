@@ -182,22 +182,25 @@
 **What shipped.** All seven finder-only accessibility reports were re-located against merged M21
 and remained live. User-management revoke/remove actions now name the exact assignment they affect.
 The shared detail drawer implements the focusable ARIA window-splitter pattern with value metadata,
-Arrow/Home/End operation, and named narrow/widen buttons as a single-pointer alternative to drag.
+an explicit controlled-pane relationship, Arrow/Home/End operation, and named narrow/widen buttons
+as a single-pointer alternative to drag. Its range follows the available viewport, while full-width
+mobile sheets omit inoperative resize affordances.
 
 The redline's unchanged 14px context and the visual-diff page rail move from the muted token
 (3.20:1 light; 3.75:1 dark) to the scheme-aware secondary-text token (at least 6.37:1 light; 7.55:1
 dark). Dashboard stat lines announce RAG meaning instead of hiding it with the decorative glyph.
 Library rows return to native table semantics, with an explicit named identifier action opening
 detail. Windows High Contrast receives a system-colour focus outline when its forced-colors mode
-suppresses the normal box-shadow ring.
+suppresses the normal box-shadow ring; focusable diff regions no longer defeat it with inline
+outline resets.
 
 **Impact.** Web behavior, Vitest/jest-axe coverage, and remediation documentation only; no API
 route, contract, database schema, migration, permission, event, persistence, or task-name change.
 The remediation tracker advances M21 to merged, closes all seven M22 findings, and accounts for the
 complete original inventory: 1 preclosed + 96 merged + 7 in PR = 104; 0 queued.
 
-**Validation.** `git diff --check`; affected web coverage (**38 passed across 7 files**); full web
-suite (**1,414 passed across 245 files**); web ESLint, strict TypeScript, production build, axe,
+**Validation.** `git diff --check`; affected web coverage (**40 passed across 7 files**); full web
+suite (**1,416 passed across 245 files**); web ESLint, strict TypeScript, production build, axe,
 keyboard resize, single-pointer resize, and static forced-colors assertions.
 
 ### Minor Batch M21 — web async and error UX (web + tests + docs; NO API or contract change; NO migration [head stays `0080`]; NO new permission key [catalog 102]; PR [#401](https://github.com/CoJoA13/EasySynQ/pull/401))

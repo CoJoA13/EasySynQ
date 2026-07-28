@@ -1,5 +1,5 @@
 import { ActionIcon, Drawer, Group } from "@mantine/core";
-import { useState, type ReactNode } from "react";
+import { useEffect, useId, useState, type ReactNode } from "react";
 import { clampDrawerWidth, DRAWER_DEFAULT, DRAWER_MAX, DRAWER_MIN } from "./drawerWidth";
 
 const RESIZE_STEP = 32;
@@ -18,11 +18,35 @@ export function DetailDrawer({
   children: ReactNode;
 }) {
   const [width, setWidth] = useState(DRAWER_DEFAULT);
-  const resizeBy = (delta: number) => setWidth((current) => clampDrawerWidth(current + delta));
+  const [viewportWidth, setViewportWidth] = useState(() =>
+    typeof window === "undefined" ? DRAWER_MAX : window.innerWidth,
+  );
+  const paneId = useId();
+  const resizeMax = Math.min(DRAWER_MAX, viewportWidth);
+  const canResize = resizeMax > DRAWER_MIN;
+  const effectiveWidth = canResize ? Math.min(width, resizeMax) : DRAWER_MIN;
+
+  useEffect(() => {
+    const updateViewportWidth = () => setViewportWidth(window.innerWidth);
+    window.addEventListener("resize", updateViewportWidth);
+    return () => window.removeEventListener("resize", updateViewportWidth);
+  }, []);
+
+  const resizeBy = (delta: number) => {
+    if (!canResize) return;
+    setWidth((current) =>
+      Math.min(resizeMax, clampDrawerWidth(Math.min(current, resizeMax) + delta)),
+    );
+  };
 
   const startResize = (e: React.PointerEvent) => {
     e.preventDefault();
-    const move = (ev: PointerEvent) => setWidth(clampDrawerWidth(window.innerWidth - ev.clientX));
+    const move = (ev: PointerEvent) => {
+      const currentMax = Math.min(DRAWER_MAX, window.innerWidth);
+      if (currentMax > DRAWER_MIN) {
+        setWidth(Math.min(currentMax, clampDrawerWidth(window.innerWidth - ev.clientX)));
+      }
+    };
     const up = () => {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
@@ -43,7 +67,7 @@ export function DetailDrawer({
       setWidth(DRAWER_MIN);
     } else if (e.key === "End") {
       e.preventDefault();
-      setWidth(DRAWER_MAX);
+      setWidth(resizeMax);
     }
   };
 
@@ -52,59 +76,64 @@ export function DetailDrawer({
       opened={opened}
       onClose={onClose}
       position="right"
-      size={width}
+      size={canResize ? effectiveWidth : "100%"}
       title={title}
       trapFocus
       closeOnEscape
       closeOnClickOutside
       withOverlay
     >
-      {/* A focusable separator with value metadata is the WAI-ARIA Window Splitter pattern. The
-          generic jsx-a11y rules do not recognize separator as an operable role. */}
-      {/* eslint-disable jsx-a11y/no-noninteractive-element-interactions, jsx-a11y/no-noninteractive-tabindex */}
-      <div
-        role="separator"
-        aria-label="Resize panel"
-        aria-orientation="vertical"
-        aria-valuemin={DRAWER_MIN}
-        aria-valuemax={DRAWER_MAX}
-        aria-valuenow={width}
-        aria-valuetext={`${width} pixels`}
-        tabIndex={0}
-        onPointerDown={startResize}
-        onKeyDown={resizeWithKeyboard}
-        style={{
-          position: "absolute",
-          insetBlock: 0,
-          insetInlineStart: 0,
-          width: 6,
-          cursor: "col-resize",
-        }}
-      />
-      {/* eslint-enable jsx-a11y/no-noninteractive-element-interactions, jsx-a11y/no-noninteractive-tabindex */}
-      <Group role="group" aria-label="Panel width controls" gap={4} justify="flex-end" mb="xs">
-        <ActionIcon
-          variant="subtle"
-          size="sm"
-          aria-label="Narrow panel"
-          title="Narrow panel"
-          disabled={width === DRAWER_MIN}
-          onClick={() => resizeBy(-RESIZE_STEP)}
-        >
-          −
-        </ActionIcon>
-        <ActionIcon
-          variant="subtle"
-          size="sm"
-          aria-label="Widen panel"
-          title="Widen panel"
-          disabled={width === DRAWER_MAX}
-          onClick={() => resizeBy(RESIZE_STEP)}
-        >
-          +
-        </ActionIcon>
-      </Group>
-      {children}
+      {canResize && (
+        <>
+          {/* A focusable separator with value metadata is the WAI-ARIA Window Splitter pattern.
+              The generic jsx-a11y rules do not recognize separator as an operable role. */}
+          {/* eslint-disable jsx-a11y/no-noninteractive-element-interactions, jsx-a11y/no-noninteractive-tabindex */}
+          <div
+            role="separator"
+            aria-label="Resize panel"
+            aria-controls={paneId}
+            aria-orientation="vertical"
+            aria-valuemin={DRAWER_MIN}
+            aria-valuemax={resizeMax}
+            aria-valuenow={effectiveWidth}
+            aria-valuetext={`${effectiveWidth} pixels`}
+            tabIndex={0}
+            onPointerDown={startResize}
+            onKeyDown={resizeWithKeyboard}
+            style={{
+              position: "absolute",
+              insetBlock: 0,
+              insetInlineStart: 0,
+              width: 6,
+              cursor: "col-resize",
+            }}
+          />
+          {/* eslint-enable jsx-a11y/no-noninteractive-element-interactions, jsx-a11y/no-noninteractive-tabindex */}
+          <Group role="group" aria-label="Panel width controls" gap={4} justify="flex-end" mb="xs">
+            <ActionIcon
+              variant="subtle"
+              size="sm"
+              aria-label="Narrow panel"
+              title="Narrow panel"
+              disabled={effectiveWidth === DRAWER_MIN}
+              onClick={() => resizeBy(-RESIZE_STEP)}
+            >
+              −
+            </ActionIcon>
+            <ActionIcon
+              variant="subtle"
+              size="sm"
+              aria-label="Widen panel"
+              title="Widen panel"
+              disabled={effectiveWidth === resizeMax}
+              onClick={() => resizeBy(RESIZE_STEP)}
+            >
+              +
+            </ActionIcon>
+          </Group>
+        </>
+      )}
+      <div id={paneId}>{children}</div>
     </Drawer>
   );
 }
