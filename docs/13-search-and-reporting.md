@@ -414,7 +414,12 @@ These are the audit-defensible, parameterized, exportable reports a certificatio
 
 ### 6.1 Controlled Document Register ("master document list")
 
-**The master list of every controlled Document.** Default scope: all Documents the requester may see; filterable by clause/process/type/status/owner (same facet object as search).
+**The master list of every controlled Document.** Default scope: all Documents the requester may see;
+filterable by clause/process/type/status/owner (same facet object as search). As built, entry to the
+report requires `report.read`, and each row must independently satisfy both `report.read` and
+`document.read`. Per R57, `document.read` is the lifecycle-independent live-metadata gate across all
+seven Document states; a row does not switch to `document.read_draft` or `document.read_obsolete`
+because its status changes. State-scoped predicates on the `document.read` grant remain authoritative.
 
 | Column | Source |
 |---|---|

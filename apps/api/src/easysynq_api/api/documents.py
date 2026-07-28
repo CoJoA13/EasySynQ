@@ -477,6 +477,9 @@ async def _load_document(
     return doc
 
 
+# R57/#330: this is the lifecycle-independent gate for the live Document metadata row (including
+# detail GET). Specialized draft/obsolete keys protect version content; they do not substitute for
+# this dependency. The resolver still carries lifecycle_state so predicates/DENYs narrow normally.
 _read = require("document.read", async_scope_resolver=_document_scope)
 _read_draft = require("document.read_draft", async_scope_resolver=_document_scope)
 _checkout = require("document.checkout", async_scope_resolver=_document_scope)
@@ -723,6 +726,9 @@ async def list_documents(
                 DocumentedInformation.title.ilike(pat, escape="\\"),
             )
         )
+    # R57/#330: the Library exposes the live metadata row, so document.read is deliberately the
+    # one key for every headline lifecycle state. Draft/obsolete keys protect version content and
+    # never substitute here; lifecycle-predicated document.read grants still narrow per row below.
     grants = await gather_grants(session, caller.id, caller.org_id, "document.read")
     docs = (
         (

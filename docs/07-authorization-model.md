@@ -94,9 +94,9 @@ Permissions are named `resource.action`. The catalog below is **complete for v1*
 
 | Permission | Meaning | Scopable to | SoD-sensitive | Sig-hook |
 |---|---|---|---|---|
-| `document.read` | View a Document and its released/effective version + metadata | ARTIFACT | – | – |
-| `document.read_obsolete` | View superseded/obsolete versions (history) | ARTIFACT | – | – |
-| `document.read_draft` | View Draft / In-Review (non-released) versions | ARTIFACT | – | – |
+| `document.read` | View a Document's live metadata row in any lifecycle state, plus released/effective content when available | ARTIFACT | – | – |
+| `document.read_obsolete` | View superseded/obsolete version content and history; does not substitute for metadata-row read | ARTIFACT | – | – |
+| `document.read_draft` | View Draft / In-Review (non-released) version content; does not substitute for metadata-row read | ARTIFACT | – | – |
 | `document.create` | Create a new Document (from template/blank) | FOLDER / DOC_CLASS | yes | – |
 | `document.checkout` | Acquire the exclusive edit lock (Redis lock; Architecture §6.1) | ARTIFACT | – | – |
 | `document.edit` | Check in a new Draft revision (with mandatory Change Reason) | ARTIFACT | yes (author side) | – |
@@ -111,6 +111,13 @@ Permissions are named `resource.action`. The catalog below is **complete for v1*
 | `document.distribute` | Manage controlled-distribution entries and acknowledgement requirements | ARTIFACT | – | – |
 | `document.print_controlled` | Render/print a watermarked *controlled* copy | ARTIFACT | – | – |
 | `document.export` | Export Document + history outside EasySynQ | ARTIFACT / PROCESS | yes | – |
+
+> **Metadata/version read boundary (R57, issue #330).** The live
+> `documented_information(kind=DOCUMENT)` metadata row is always gated by `document.read`, regardless
+> of its `current_state`. `document.read_draft` and `document.read_obsolete` neither replace that key
+> nor grant metadata-row access by themselves; they are the additional version-content/history
+> capabilities described above. Lifecycle remains part of the `document.read` `ResourceContext`, so
+> an organization may still narrow or deny metadata access by state with an explicit grant predicate.
 
 ### 3.2 Documented information — Records (retained, immutable)
 

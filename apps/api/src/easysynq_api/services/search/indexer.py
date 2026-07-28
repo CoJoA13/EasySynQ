@@ -12,11 +12,11 @@ Scope of the MVP index: the **metadata plane** only — identifier, title, legac
 area_code (doc 13 §2.1 content plane / extracted body text is deferred; it needs the extracted-text
 rendition pipeline, doc 13 §2.2). ``ts_rank`` weights identifier > title > legacy/area.
 
-**Effective documents only** (doc 13 §1/§2.2: "Effective only" is the general searcher's default;
-Draft/InReview/Superseded/Obsolete artifacts require the distinct ``document.read_draft`` /
-``document.read_obsolete`` keys, which this metadata search does not consult). Restricting the
-candidate set to ``current_state = 'Effective'`` keeps search from leaking non-Effective titles/
-snippets to a plain ``document.read`` holder; surfacing other states by facet is a v1 refinement.
+**Effective documents only** (doc 13 §1/§2.2: "Effective only" is the general searcher's default).
+This is a product/query-scope choice, not a different metadata authorization rule: R57 keeps
+``document.read`` as the live metadata-row key in every lifecycle state on Library/detail/register,
+while general search deliberately supplies only Effective candidates. Surfacing other states by a
+search facet remains a v1 refinement and would still post-filter every hit with ``document.read``.
 """
 
 from __future__ import annotations

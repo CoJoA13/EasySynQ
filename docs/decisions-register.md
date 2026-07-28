@@ -1,6 +1,6 @@
 # EasySynQ Decisions Register
 
-This document is the **single authoritative source of truth** for the EasySynQ self-hosted ISO 9001:2015 QMS specification. It records the locked foundational decisions, the locked stakeholder decisions, and the normative resolutions (R1–R54) to every finding raised in the gap audit (`17-gaps-and-open-questions.md`); R38 (slice S-rec-4) is the first post-v1 *additive* decision (additive catalog extensibility + SoD-6), R39 (slice family S-aud/S-capa) locks the Audits/Findings/CAPA model + workflow posture, R40 (slice family S-dcr) locks the Revision & change-depth (DCR) family model + the InApproval reject-loop target, and R41 (slice S-drift-3) adds the `drift.read` SYSTEM-domain permission key; R42 (slice S-ack-1) adds the `document.distribute` CONTENT-domain key, and R43 locks the Acknowledgements-family model.
+This document is the **single authoritative source of truth** for the EasySynQ self-hosted ISO 9001:2015 QMS specification. It records the locked foundational decisions, the locked stakeholder decisions, and the normative resolutions (R1–R57) to every finding raised in the gap audit (`17-gaps-and-open-questions.md`); R38 (slice S-rec-4) is the first post-v1 *additive* decision (additive catalog extensibility + SoD-6), R39 (slice family S-aud/S-capa) locks the Audits/Findings/CAPA model + workflow posture, R40 (slice family S-dcr) locks the Revision & change-depth (DCR) family model + the InApproval reject-loop target, and R41 (slice S-drift-3) adds the `drift.read` SYSTEM-domain permission key; R42 (slice S-ack-1) adds the `document.distribute` CONTENT-domain key, and R43 locks the Acknowledgements-family model.
 
 **Precedence:** Where this register conflicts with any text in sections `01`–`15`, **this register supersedes that text.** Section editors MUST back-propagate the changes listed under each resolution's *Back-propagation* note. The exact tokens, enum values, state names, and field names quoted here are **canonical and verbatim** — they must be reproduced character-for-character (case, snake_case, dot-namespacing, and all) wherever the underlying concept appears. Do not soften, rename, abbreviate, or omit any token.
 
@@ -52,7 +52,7 @@ Proceed with the **full reconcile-and-harden pass** — i.e., adopt R1–R37 bel
 
 ---
 
-## Part 3 — Resolutions R1–R55
+## Part 3 — Resolutions R1–R57
 
 Each resolution states the decision, the exact canonical tokens/enums/states/field-names verbatim, and a Back-propagation note listing the section files that change.
 
@@ -1574,6 +1574,41 @@ UTC-clock-authoritative. The env var is retained as the bottom fallback; `organi
 S-notify-7 regression). OVERDUE is now `now_is_working`-gated (closing R55 D-5's weekend-pierce
 exemption). A one-time idempotent CLI (`cli/backfill_review_dates.py`) recomputes stored
 `next_review_due` into the canonical tz (MR next-due is derived, no backfill).
+
+---
+
+### R57 — Document metadata read boundary across lifecycle states (issue #330) — 2026-07-28
+
+The live `documented_information(kind=DOCUMENT)` **metadata row** is gated by `document.read` in
+every `DocumentCurrentState`: `Draft`, `InReview`, `Approved`, `Effective`, `UnderRevision`,
+`Superseded`, and `Obsolete`. `document.read_draft` and `document.read_obsolete` are
+version-content/history capabilities; neither replaces `document.read`, adds a second requirement
+to these metadata surfaces, nor grants metadata-row access by itself. Lifecycle state remains in
+the `document.read` `ResourceContext`, so explicit state predicates and DENYs on that key continue
+to narrow access under the normal deny-wins algorithm.
+
+This boundary applies consistently to the three issue-#330 metadata surfaces: `GET /documents`
+filters rows by `document.read`; `GET /documents/{id}` returns `403` when `document.read` denies;
+and `GET /reports/document-control` first requires a satisfiable `report.read` grant, then includes
+only rows authorized by both `report.read` and `document.read`. Headline state never selects a
+different metadata permission.
+
+The metadata/version separation preserves ordinary readers' discovery of a currently governing
+document while its next revision moves through `UnderRevision`, `InReview`, or `Approved`. It also
+keeps one stable metadata key for never-released and retired rows without weakening version-content
+controls. General search remains Effective-only as a product/query-scope choice; R57 does not expand
+its candidate set. Enforcing `document.read_obsolete` on obsolete/superseded **version-history**
+surfaces is separate follow-up [#406](https://github.com/CoJoA13/EasySynQ/issues/406) because that
+key currently has no complete runtime consumer.
+
+No runtime authorization branch, schema migration, or permission-catalog change is required. A
+Docker-backed truth table locks all seven states across Library, detail, and register and proves
+that a caller holding only `document.read_draft` / `document.read_obsolete` cannot substitute those
+keys for metadata access.
+
+**Back-propagation:** 07 §3.1, 13 §6.1, 15 §8.5/§8.15, OpenAPI.
+
+Bumps the resolutions range **R1–R56 → R1–R57**.
 
 ---
 
