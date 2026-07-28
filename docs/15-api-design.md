@@ -169,40 +169,33 @@ AuthN is brokered entirely by **Keycloak** (`03 §2/§8.3`): local accounts, LDA
 
 ### 5.1 Token handling
 
-| Token | Issuer | Lifetime (Keycloak-configured) | SPA storage | API role |
+| Artifact | Issuer | Lifetime | SPA storage | API role |
 |---|---|---|---|---|
 | Access JWT | Keycloak | short (e.g. 5–15 min) | in-memory | Validated per request against JWKS (signature, `iss`, `aud`, `exp`). Claims read: `sub` (→ `app_user.keycloak_sub`), `realm_access`/group hints, `acr`/`amr` (auth strength), `sid`. **Permissions are NOT taken from the token** — they are resolved server-side per request (§9) so a revocation takes effect immediately, not at token expiry. |
-| Refresh token | Keycloak | sliding | `HttpOnly; Secure; SameSite=Strict` cookie (BFF-style refresh proxied through the API to keep it out of JS) | Used only to mint a new access JWT via Keycloak. |
+| OIDC user/token bundle (ID token and provider-issued refresh token when present) | Keycloak | Keycloak-configured | in-memory `oidc-client-ts` `userStore`; a page reload discards it and requires re-authentication | Never accepted by an EasySynQ endpoint. Renewal and logout run directly between the SPA and Keycloak. |
+| Authorization-request state (PKCE verifier, nonce, and return path) | SPA / `oidc-client-ts` | one redirect interaction (then removed; stale entries age out) | browser `localStorage` through the library's default `stateStore`, so it survives the full-page Keycloak redirect | Used only to correlate and complete the OIDC callback; never an EasySynQ session or authorization source. |
 
 The JWT `acr`/`amr` (auth-context) is carried onto `signature_event.auth_context` and `audit_event.auth_context` so high-assurance actions (future Part 11 signing, admin config) can demand **step-up** without re-architecting tokens.
 
 ### 5.2 Session & identity endpoints
 
+EasySynQ does **not** own an application session or proxy the OIDC code/refresh/logout exchanges.
+The SPA completes Authorization Code + PKCE, renewal, and logout directly with Keycloak. The first
+API request carrying a valid bearer token resolves or JIT-provisions `app_user` from `sub` (and
+activates a matching `INVITED` row). Consequently v1 exposes no `/auth/session`, `/auth/refresh`,
+or `/auth/logout` routes.
+
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/auth/config` | Public: enabled login methods / Keycloak realm + client + authority URLs the SPA needs to start PKCE. Unauthenticated. |
-| POST | `/auth/session` | Exchange a freshly obtained Keycloak code/token for an EasySynQ session: links/provisions the `app_user` by `keycloak_sub` (JIT provisioning honoring `INVITED→ACTIVE`), sets the refresh cookie, returns the access token + session metadata. |
-| POST | `/auth/refresh` | Refresh the access JWT via the cookie-held refresh token. |
-| POST | `/auth/logout` | End-session: revokes the Keycloak session and clears the cookie; sets `app_user.session_invalidated_at`. |
-| POST | `/auth/step-up` | Re-assert MFA / re-authentication to raise `acr` for a sensitive operation; returns an upgraded access token. Pre-positions Part 11. |
-| GET | `/me` | Current user profile (`app_user`) + a compact effective-permission summary. |
+| GET | `/auth/config` | Public issuer, client, and audience values the SPA needs to start PKCE. Unauthenticated. |
+| POST | `/auth/step-up` | Reserved Part 11 seam. v1 performs no re-authentication and returns an acknowledgement with `acr_satisfied=true` and `enforced=false`; it does not mint or upgrade a token. |
+| GET | `/me` | Current `app_user` profile. |
 | GET | `/me/permissions?scope_level=&scope_id=` | Resolved effective permissions for the caller in a given scope (drives UI gating). |
-| GET | `/me/actions` | **My-Actions** inbox: a query over `task` where state ∈ `PENDING/CLAIMED` for the user or their candidate pool, grouped by urgency then PDCA phase (`14 §11` — My-Actions is a query, not a table). |
+| GET | `/tasks?assignee=me&state=PENDING` | Canonical self-scoped **My Tasks** inbox for assignments and candidate-pool work. There is no separate `/me/actions` alias. |
 | GET | `/notifications?unread_only=true` | Awareness inbox, newest first; authenticated-self and always scoped to the caller. |
 | POST | `/notifications/{id}/read` / `/notifications/read-all` | Mark one notification, or every unread notification for the caller, as read. |
 | GET | `/notifications/stream` | Authenticated-self SSE nudge stream; clients refetch `/notifications` when a `notify` event arrives. |
 | GET / PUT | `/me/notification-preferences` | Read or update the caller's email, digest, timezone, and quiet-hours preferences. |
-
-**`POST /auth/session` 200:**
-```json
-{
-  "access_token": "eyJhbGciOi...",
-  "token_type": "Bearer",
-  "expires_in": 600,
-  "session": { "acr": "mfa", "keycloak_sid": "01J..." },
-  "user": { "id": "018f9000-...", "username": "a.okoye", "display_name": "A. Okoye", "is_guest": false }
-}
-```
 
 ---
 
@@ -216,11 +209,12 @@ Every authenticated route declares (a) the **required permission key(s)** (from 
 
 | Domain | Base path(s) | Backing entities (`14`) |
 |---|---|---|
-| Auth / Session | `/auth/*`, `/me/*` | `app_user`, Keycloak, Redis sessions |
+| Auth / Identity | `/auth/config`, `/auth/step-up`, `/me`, `/me/permissions` | `app_user`, Keycloak |
+| Notifications | `/notifications`, `/notifications/stream`, `/me/notification-preferences` | `notification`, `notification_preference` |
 | Users | `/users` | `app_user` |
 | Roles | `/roles` | `role`, `role_grant`, `role_assignment` |
 | Permissions / Grants | `/permissions`, `/users/{id}/roles`, `/users/{id}/overrides` | `permission`, `permission_override`, `scope`, `sod_constraint` |
-| Folders / IA | `/folders`, `/processes`, `/clauses` | `folder`/IA, `process`, `process_edge`, `clause`, `clause_mapping`, `process_link` |
+| Information architecture | `/processes`, `/clauses` | `documented_information.folder_path` (logical scope value; no folder entity/router), `process`, `process_edge`, `clause`, `clause_mapping`, `process_link` |
 | Documents | `/documents` | `documented_information`, `working_draft` |
 | Versions | `/documents/{id}/versions` | `document_version`, `blob` (source/rendition pointers) |
 | Change Requests (DCR) | `/dcrs` | `dcr`, `impact_assessment` |
@@ -235,7 +229,7 @@ Every authenticated route declares (a) the **required permission key(s)** (from 
 | Improvement Initiatives | `/improvement-initiatives` | `improvement_initiative`, `improvement_initiative_stage_event` |
 | Audit Trail | `/audit-events`, `/{resource}/{id}/audit-events` | `audit_event`, `audit_checkpoint` |
 | Search | `/search` | OpenSearch (Postgres-FTS fallback) |
-| Dashboards / Reports | `/dashboards/*`, `/reports/*` | aggregates |
+| Reports | `/reports/compliance-checklist`, `/reports/document-control` | computed aggregates (no dashboard route ships) |
 | Evidence Packs | `/evidence-packs` | `evidence_pack`, `pack_item`, `pack_share_link`, `record` (`record_type=EVIDENCE`) |
 | Retention | `/retention-policies`, `/records/{id}/disposition` | `retention_policy`, `disposition_event` |
 | Setup / Admin Config | `/setup/*`, `/admin/config`, `/admin/notifications/working-calendar` | `organization`, `system_config`, `storage_config`, `backup_policy`, `working_calendar` |
@@ -316,16 +310,19 @@ The permission **catalog** is read-only seed data (`07 §3`, 24 resources). Gran
 }
 ```
 
-### 8.4 Information Architecture — Folders, Processes, Clauses
+### 8.4 Information Architecture — Processes, Clauses, Logical Folder Scope
 
-Clauses are **read-only seed reference data** — there is deliberately no `clause.edit` (`14 §4`). Processes are the Clause 4.4 graph; folders are the document-tree scope used by FOLDER-level grants.
+Clauses are **read-only seed reference data** — there is deliberately no `clause.edit` (`14 §4`).
+Processes are the Clause 4.4 graph. A folder is only the logical
+`documented_information.folder_path` value used by FOLDER-level grants: v1 has no `folder` table,
+`/folders` router, or `folder.read/create/update/delete` permission keys. Clients set the value
+through document create/metadata update and may group returned documents by path; hierarchy CRUD
+is deferred.
 
 | Method | Path | Perm | Idem | Notes |
 |---|---|---|---|---|
 | GET | `/clauses` | `clauseMap.read` | — | **S9** ✅. The clause spine (4 → 4.4 → 4.4.1), returned flat + numeric-sorted (the client builds the tree from `parent_id`). Read-only seed data. Optional `?framework=iso9001:2015` (the framework *code*, default iso9001:2015). _(Key corrected from `clause.read` per the S9 build — the closed doc-07 catalog has `clauseMap.read`, not `clause.read`.)_ |
 | POST / GET / DELETE | `/documents/{id}/clause-mappings` | `document.manage_metadata` / `document.read` | ✓ | **S9** ✅. Map / list / unmap a document↔clause (flat sub-resources, body `{clause_id, is_requirement_level?}`). Framework-mismatch → 422; duplicate → 409; emits `CLAUSE_MAPPED`/`CLAUSE_UNMAPPED`. _(The dedicated `clauseMap.map_artifact` key stays seeded-but-ungranted; the build gates the write on `document.manage_metadata`, which the Author bundle holds, so mapping + the submit gate work out of the box — owner decision.)_ |
-| GET | `/folders/tree` / `/folders` | `folder.read` | — | Hierarchy for the navigator (lazy children); `?parent_id=` / `?subtree_of=`. |
-| POST / PATCH / DELETE | `/folders` … | `folder.create`/`.update`/`.delete` | ✓ | Move re-roots the subtree path (async-mirrored). Cascade delete needs `document.delete` too. |
 | GET | `/processes` / `/processes/{id}` / `/processes/map` | `process.read` | — | **S9c** ✅. Process list / detail / the `{nodes, edges}` graph for the Process Map lens. Gated at the **default SYSTEM scope** (the `GET /clauses` shape — QMS Owner / Internal Auditor; per-process read-filtering for PROCESS-scoped owners is deferred until owner-assignment, since the seeded PROCESS grants carry an unsubstituted `:assignment_process` placeholder). |
 | POST / PATCH | `/processes` … | `process.create`/`process.manage` | ✓ | **S9c** ✅. Create (`state=SEED`) / confirm `SEED→ACTIVE` (a one-way ratchet; `ACTIVE→SEED` → 409 `invalid_state_transition`), set owner org-role + metadata. _(Key corrected from the shorthand `process.update` → the closed catalog's `process.manage`. `process.create`/`assign_owner` are **seeded-but-ungranted** → grant via override until the role UI, the `document.export` precedent.)_ |
 | POST / DELETE | `/processes/{id}/edges` `(/{edge_id})` | `process.manage` | ✓ | **S9c** ✅. Add / remove an input/output edge (`{to_process_id, io_label}`); self-loop or duplicate pair → 409 (DB `CHECK`+`UNIQUE` backstop). |
@@ -333,17 +330,18 @@ Clauses are **read-only seed reference data** — there is deliberately no `clau
 
 ### 8.5 Documents (`/documents`)
 
-The logical maintained item (`documented_information` + `document`, `14 §5.2`). Content lives on versions (§8.6); the only mutable surface is the `working_draft` between check-out and check-in (`14 §1.2/§5.4`).
+The logical maintained item is `documented_information(kind=DOCUMENT)` (`14 §5.2`); there is no
+separate `document` extension table. Content lives on versions (§8.6); the only mutable content
+surface is the `working_draft` between check-out and check-in (`14 §1.2/§5.4`).
 
 | Method | Path | Perm | Idem | Notes |
 |---|---|---|---|---|
-| GET | `/documents` | `document.read` | — | Filter `current_state`, `document_type`, `folder_id`, `owner_user_id`, `clause_refs[has]`, `review_state`, `classification`. **Row-filtered by scope** (§9.3). |
+| GET | `/documents` | `document.read` | — | `q`, `limit`/`offset`, and allow-listed filters for `current_state`, `document_type`, `owner_user_id`, `clause_refs[has]`, `classification`, effective-date bounds, `has_effective_version`, `managed_subtype`, and `process_id`. **Row-filtered by scope** before pagination (§9.3). |
 | POST | `/documents` | `document.create` | ✓ | Creates the logical doc in `Draft` with no version yet. Identifier is **vault-allocated** through the org's atomic `numbering_counter` and `{TYPE}[-{AREA}]-{SEQ}` service formatter (`14 §2`) unless `legacy_identifier` is supplied on import. `singleton_exists`→`409` for a 2nd Quality Policy/Scope. |
-| GET | `/documents/{id}` | `document.read` | — | `expand=owner,effective_version,folder`; `_links` advertise permitted actions. |
+| GET | `/documents/{id}` | `document.read` | — | Metadata plus `clause_refs`, governing `effective_from`, and the caller's per-document `capabilities` affordance block. |
 | PATCH | `/documents/{id}` | `document.manage_metadata` | — | **Metadata only:** `title`, `folder_path`, `classification`, and `review_period_months` (`null` opts out). **Never** sets state — see actions. _(Gate corrected to the as-built metadata permission; `document.edit` governs content revision/check-in, while clause/process links have their own sub-resources.)_ |
-| DELETE | `/documents/{id}` | `document.delete` | — | Soft-delete only; blocked (`409`) once a version is `Effective` (must be obsoleted via lifecycle). |
 | POST | `/documents/{id}/checkout` | `document.checkout` | ✓ | Acquires the **Redis** exclusive edit lock (authority is Redis; `document.checkout_*` columns are a display/recovery mirror — `14 §5.4`/R8). `409 document_checked_out` if held by another; returns a `working_draft` token. |
-| POST | `/documents/{id}/checkin` | `document.checkout` | ✓ | Two-step blob upload then finalize → a new **immutable** `document_version` (`Draft`). Releases the lock; enqueues the Celery render→index→mirror pipeline. Requires non-empty `change_reason` + `change_significance` (INV-3) → else `422`. |
+| POST | `/documents/{id}/checkin` | `document.edit` | ✓ | Two-step blob upload then finalize → a new **immutable** `document_version` (`Draft`). Releases the lock; enqueues the Celery render→index→mirror pipeline. Requires non-empty `change_reason` + `change_significance` (INV-3) → else `422`. |
 | POST | `/documents/{id}/submit-review` | `document.submit` | ✓ | `Draft→InReview`; **requires ≥1 `clause_mapping`** (`14 §4`) → else `422`. Instantiates the approval `workflow_instance` (§8.7). _(Key corrected from `document.edit` per the S4 build — the closed doc-07 catalog has a dedicated `document.submit`, which doc-04 T2/T9 uses.)_ |
 | POST | `/documents/{id}/release` | `document.release` | ✓ | On an `Approved` version: makes it the single `Effective` version (partial-unique-index enforced, SERIALIZABLE supersession), writes a `signature_event(meaning=release)`, enqueues the **read-only FS mirror** rewrite. Only released versions ever hit the mirror. |
 | POST | `/documents/{id}/start-revision` | `document.edit` | ✓ | `Effective→UnderRevision` (derived): opens a new draft while the current version keeps governing. |
@@ -359,6 +357,10 @@ The logical maintained item (`documented_information` + `document`, `14 §5.2`).
 | POST | `/documents/{id}/distribution` | `document.distribute` | — | Add entries and/or set the doc-level flag (one body). `422 target_kind_deferred` for `process`/`folder` targets (owner-assignment track). Writes `DISTRIBUTION_UPDATED`; enqueues the doc-scoped ack sweep post-commit. |
 | DELETE | `/documents/{id}/distribution/{entry_id}` | `document.distribute` | — | Remove an entry (change = delete + re-add; no UPDATE). Audit + scoped sweep enqueue (cancels lapsed obligations). |
 | GET | `/documents/{id}/acknowledgements` | `document.distribute` | — | The **named** per-user status matrix for the current Effective version (who acked which version when; outstanding/overdue) — the QM chase view (doc 13 §6.3). A user's own status rides `/tasks` + the counts rollup above. |
+
+There is no `DELETE /documents/{id}` in v1 and no `document.delete` key. Released content is
+withdrawn through `/obsolete` and remains retained. The seeded `document.delete_draft` key reserves
+the never-released/discard-draft policy concept, but no public discard or hard-delete handler ships.
 
 **Document/version lifecycle** (server-enforced; illegal transition → `409 invalid_state_transition`; reconciliation R1 — document `current_state` is derived, version state is authoritative):
 
@@ -394,7 +396,7 @@ Immutable snapshots (`14 §5.3`). Two-step presigned upload keeps large blobs of
 |---|---|---|---|---|
 | GET | `/documents/{id}/versions` | `document.read` | — | Newest first: `version_seq`, `revision_label`, `change_significance`, `version_state`, `change_reason`. |
 | POST | `/documents/{id}/versions:init-upload` | `document.checkout` | ✓ | Returns a **MinIO presigned PUT URL** + required headers + intended `object_key`. Client uploads bytes directly. |
-| POST | `/documents/{id}/checkin` | `document.checkout` | ✓ | Finalize (see §8.5): server verifies the uploaded object's `sha256` + `size_bytes`, dedups against existing `blob`, creates the immutable `document_version`, bumps `version_seq`. |
+| POST | `/documents/{id}/checkin` | `document.edit` | ✓ | Finalize (see §8.5): server verifies the uploaded object's `sha256` + `size_bytes`, dedups against existing `blob`, creates the immutable `document_version`, bumps `version_seq`. |
 | GET | `/documents/{id}/versions/{vid}` | `document.read` | — | Includes `metadata_snapshot` (title/type/owner/clause map **as they were**). |
 | GET | `/documents/{id}/versions/{vid}/download` | `document.read` | — | Presigned GET to the immutable source or PDF rendition. |
 | GET | `/documents/{id}/versions/{vid}/diff?from={vid2}` | `document.read_draft` | — | Rendered/text diff between two versions (the drift-prevention view). Gated `document.read_draft` because the diff can expose non-released Draft content (S-dcr-3a). |
@@ -450,21 +452,29 @@ stateDiagram-v2
 
 ### 8.8 Workflows & Tasks — the approval surface (`/workflow-instances`, `/tasks`)
 
-Per reconciliation **R6**, "approvals" are **not** standalone tables: an approval **stage** is a `workflow_stage`, an approval **step** is a `task`, and the recorded **decision** is a `signature_event`. Workflows are **declarative, versioned data** (`workflow_definition`), and a running `workflow_instance` **pins its `definition_version`** like a record pins its template (`14 §7`). The `task` is the atom of **My-Actions**.
+Per reconciliation **R6**, "approvals" are **not** standalone tables: an approval **stage** is a
+`workflow_stage`, an approval **step** is a `task`, and its durable result is a `task_outcome`
+(plus a `signature_event` when that subject/outcome is a signature hook). Workflows are
+**declarative, versioned data** (`workflow_definition`), and a running `workflow_instance` **pins
+its `definition_version`** like a record pins its template (`14 §7`). Definitions are
+seed-/service-managed in v1; there is no public `/workflow-definitions` route. The `task` is the
+atom of the **My Tasks** inbox.
 
 | Method | Path | Perm | Idem | Notes |
 |---|---|---|---|---|
-| GET | `/workflow-definitions` | `workflow.read` | — | The configured templates (`subject_type`, stages, quorum). |
-| GET | `/workflow-instances/{id}` | `workflow.read` | — | `expand=tasks`; `current_state`, pinned `definition_version`, subject. |
+| GET | `/workflow-instances/{id}` | `document.read` on the subject | — | `expand=tasks`; returns `current_state`, pinned `definition_version`, and subject. The closed catalog has no `workflow.read`. |
 | GET | `/documents/{id}/approval` | `document.read` (on the subject) | — | **S-web-5 (implemented).** The document → its current approval cycle: the **latest** `workflow_instance` (+ tasks) or `null` when never submitted (calm, not 404). Powers the Approvals stepper. |
-| GET | `/tasks?assignee=me&state=PENDING` | `task.read` | — | The reviewer/approver queue. Filter `type`, `state`, `instance_id`, `stage_key`, `due_at`. Also surfaced via `/me/actions`. |
-| GET | `/tasks/{id}` | `task.read` | — | Task detail + the subject it acts on. |
-| POST | `/tasks/{id}/claim` | `task.claim` | ✓ | Claim a pool task (`PENDING→CLAIMED`). |
-| POST | `/tasks/{id}/decision` | derived from subject (`document.approve` \| `changeRequest.approve` \| `capa.verify` \| `document.acknowledge`) | ✓ | `{ outcome:"approve"\|"reject"\|"acknowledge"\|"complete"\|"verify"\|"changes_requested", comment? }` (idempotent via `client_token`). Writes a `task_outcome` **and** a `signature_event` and an `audit_event` in one transaction. **SoD enforced:** an author/auditor excluded by `sod_author_excluded`/`sod_constraint` → `403 sod_violation`. May require `acr=mfa` (config) → else `403 step_up_required`. Reject returns the subject to `Draft`/`Open` with the comment. |
-| POST | `/tasks/{id}/reassign` | `task.reassign` | ✓ | `{ to_user_id, reason }`. |
-| POST | `/tasks/{id}/escalate` | `task.escalate` | ✓ | Manual escalation; SLA breach auto-escalates via Beat (`task` state `ESCALATED`). |
+| GET | `/tasks?assignee=me&state=PENDING` | authenticated self | — | Assignments and candidate-pool work for the caller only. Filters: `state`, `type`, and `instance_id`; the optional `assignee` string is a compatibility no-op (including values other than `me`) and never widens the self scope. |
+| GET | `/tasks/{id}` | authenticated self | — | Task detail + subject label when the caller is its assignee or a candidate; otherwise sensitive-collapse `404`. |
+| POST | `/tasks/{id}/decision` | subject/outcome-derived | ✓ | `{ outcome:"approve"\|"reject"\|"acknowledge"\|"complete"\|"verify"\|"changes_requested", comment? }`. A recorded decision replays only for its matching `Idempotency-Key`; absent/different keys then receive `409`. Exception: a sibling already auto-skipped because quorum closed or the stage failed closed returns a key-independent benign replay (`outcome=null`, `replayed=true`, `stage_state=ALREADY_SATISFIED` or `FAILED`). Document approval/rejection enforces `document.approve`/`document.review`; DOC_ACK also enforces `document.acknowledge`; CAPA, DCR, management-review, periodic-review, and leadership/improvement branches enforce their live assignee/candidate rules. The service writes the subject-appropriate outcome/audit/signature atoms transactionally. |
 
-> **Implemented-gate note (S5/S-web-5):** the closed v1 catalog has **no `task.*`/`workflow.*` keys**, so the implementation gates differ from the aspirational columns above: `GET /tasks` and `/tasks/{id}` are **self-scoped** (caller is assignee or in the candidate pool — no permission key), and `GET /workflow-instances/{id}` and `GET /documents/{id}/approval` gate on **`document.read` on the subject document** (not `workflow.read`). `POST /tasks/{id}/decision` derives the key from the (subject, outcome) as shown (`document.approve`/`document.review`). **(S-ack-1, R43)** A `DOC_ACK` decision is the non-sig-hook carve-out to "writes a `signature_event`": it writes **NO `signature_event`** (doc 07 §6.3's pipeline — `document.acknowledge` is `sig_hook=false`); outcome `acknowledge`, recorded as the append-only `acknowledgement` row + `DOCUMENT_ACKNOWLEDGED` in one transaction.
+The closed v1 catalog has no `task.*` or `workflow.*` permission keys, and v1 exposes no
+`/tasks/{id}/claim`, `/reassign`, or `/escalate` mutations. The engine materializes assignee and
+candidate-pool authority; candidates can decide without a separate claim. Timer escalation only
+emits notifications/audit and stamps its delivery tier—it does not manually reassign the task or
+flip its state. **(S-ack-1, R43)** A `DOC_ACK` decision is the non-signature carve-out: outcome
+`acknowledge` writes the append-only `acknowledgement` row plus `DOCUMENT_ACKNOWLEDGED`, with no
+`signature_event`.
 
 **`POST /tasks/{id}/decision` 200 (note the e-signature-ready shape — the Part 11 hook):**
 ```json
@@ -504,29 +514,35 @@ Documented evidence to be **retained** (`14 §5.5`, ISO 7.5.3). Records are **im
 
 ### 8.9a Complaints (`/complaints`)
 
-A lightweight customer-complaint intake (ISO 9001 8.2.1), modeled as `record_type=COMPLAINT` (`14`, `06`) so it lives in the controlled record store. A complaint can **one-click spawn an NCR/CAPA** with `source=complaint`, closing the previously-dangling `source=complaint` reference (reconciled per Decisions Register R16). Fields: `customer`, `received_at`, `channel`, `description`, `severity`.
+A lightweight customer-complaint intake (ISO 9001 8.2.1), modeled as
+`record_type=COMPLAINT` (`14`, `06`) so it lives in the controlled record store. A complaint can
+one-click spawn a CAPA with `source=complaint`; v1 does not expose complaint→NCR promotion.
+Fields: `customer`, `received_at`, `channel`, `description`, `severity`.
 
 | Method | Path | Perm | Idem | Notes |
 |---|---|---|---|---|
-| GET | `/complaints` | `record.read` | — | List `record_type=COMPLAINT` records. Filter `customer`, `channel`, `severity`, `received_at` range. |
-| POST | `/complaints` | `record.create` | ✓ | `{ customer, received_at, channel, description, severity }`. Creates a `record_type=COMPLAINT` record. |
-| GET | `/complaints/{id}` | `record.read` | — | `expand=spawned_ncr,spawned_capa`. |
-| POST | `/complaints/{id}/spawn-ncr` | `ncr.create` | ✓ | One-click create an `ncr` with `source=complaint`, linked bidirectionally to this complaint (reconciled per Decisions Register R16). |
-| POST | `/complaints/{id}/spawn-capa` | `capa.create` | ✓ | One-click create a `capa` with `source=complaint` (its `Raised` stage cites this complaint), linked bidirectionally (reconciled per Decisions Register R16). |
+| GET | `/complaints` | `record.read` | — | List the organization's `record_type=COMPLAINT` records; no query filters ship. |
+| POST | `/complaints` | `record.create` | — | `{ customer, received_at, channel, description, severity }`. Creates a `record_type=COMPLAINT` record. |
+| GET | `/complaints/{id}` | `record.read` | — | Complaint fields plus nullable `spawned_capa_id`; there is no expansion parameter. |
+| POST | `/complaints/{id}/spawn-capa` | `capa.create`; replay also `capa.read` | — | `{severity?, process_id?}`. Creates a `source=complaint` CAPA whose `Raised` stage cites the complaint and latches `spawned_capa_id`; the first call returns `201`. A replay re-checks `capa.read` at the latched CAPA's own process scope before returning that CAPA with `200`, so a caller without that independent read grant receives `403`. Retry safety comes from the one-CAPA latch, not `Idempotency-Key`. |
 
 ### 8.10 NCRs (`/ncrs`)
 
-Per reconciliation **R5**: a **thin** nonconforming-output / raised-NC capture (8.7) that may stand alone or be **promoted into a `capa`** (the NC becomes the CAPA's `Raised` stage). It carries its own `ncr.*` permissions.
+Per reconciliation **R5**: a **thin**, standalone nonconforming-output / raised-NC capture (8.7).
+It carries its own `ncr.*` permissions. The model and router do not yet provide a first-class
+NCR→CAPA link or promotion action.
 
 The `ncr` record also carries an ISO 9001 8.7 **`disposition`** enum and a **`disposition_authorized_by`** (FK to `app_user`) recording who authorized the disposition. The `disposition` enum is fixed (verbatim): `use_as_is`, `rework`, `scrap`, `return`, `concession`, `regrade` (reconciled per Decisions Register R20).
 
 | Method | Path | Perm | Idem | Notes |
 |---|---|---|---|---|
-| GET | `/ncrs` | `ncr.read` | — | Filter `source`, `severity`, `process_id`, `disposition`. |
-| POST | `/ncrs` | `ncr.create` | ✓ | `{ source:"audit"\|"process"\|"complaint"\|"internal", description, severity, process_id?, source_link? }`. |
-| GET | `/ncrs/{id}` | `ncr.read` | — | `expand=process,promoted_capa`. |
+| GET | `/ncrs` | `ncr.read` | — | List the organization's NCRs; no query filters ship. |
+| POST | `/ncrs` | `ncr.create` | — | `{ source:"audit"\|"process"\|"complaint"\|"internal", description, severity, process_id? }`. |
+| GET | `/ncrs/{id}` | `ncr.read` | — | The NCR and its recorded disposition fields; there is no expansion parameter. |
 | PATCH | `/ncrs/{id}/disposition` | `ncr.record_correction` | — | Record the one-shot disposition (`{disposition, notes?}`); the caller is retained as `disposition_authorized_by`. A second disposition returns `409 ncr_already_dispositioned` (R20). |
-| POST | `/ncrs/{id}/promote-capa` | `capa.create` | ✓ | Create a `capa` whose `Raised` stage is this NC; links bidirectionally. |
+
+The shipped promotion surface is therefore exactly `POST /complaints/{id}/spawn-capa`; there is no
+`POST /complaints/{id}/spawn-ncr` or `POST /ncrs/{id}/promote-capa`.
 
 ### 8.10b Risks & Opportunities (`/risks`)
 
@@ -694,18 +710,21 @@ OpenSearch on M/L profiles; **Postgres FTS fallback** on the S profile and on Op
 | GET | `/search/suggest?q=...` | `document.read` | Low-latency type-ahead (identifiers, titles). |
 | GET / POST | `/saved-searches` | `search.read` / `search.save` | `saved_search` (live re-run, permission-filtered per viewer); subscriptions notify on count-crosses / new-item (`14 §11`). |
 
-### 8.15 Dashboards & Reports (`/dashboards`, `/reports`)
+### 8.15 Reports (`/reports`) and deferred dashboards
 
-Purpose-built aggregation (the reason GraphQL was unnecessary), organized around **PDCA** so the UI flow mirrors ISO 9001 and stays calm.
+The shipped report surface is purpose-built aggregation (the reason GraphQL was unnecessary).
 
 | Method | Path | Perm | Notes |
 |---|---|---|---|
-| GET | `/dashboards/overview` | `dashboard.read` | PDCA KPI tiles: docs by state, reviews due/overdue (Plan/Do), pending approvals, open NCRs by severity, overdue CAPAs, upcoming audits (Check), improvement initiatives (Act). Cached in Redis (short TTL). |
-| GET | `/dashboards/my-work` | `dashboard.read` | Caller's actionable queue (alias view over `/me/actions` + owned CAPAs + authored DCRs + checked-out docs). |
-| GET | `/reports/document-control` | `report.read` | Controlled-doc register: identifier, title, owner, effective revision, state, next review, clause coverage. Exportable. |
-| GET | `/reports/capa-effectiveness` | `report.read` | Closure & effectiveness over a period (`from`,`to`,`group_by`). |
-| GET | `/reports/audit-coverage` | `report.read` | ISO clause-coverage matrix from audits/findings. |
-| POST | `/reports/{key}/export` | `report.export` | Async export (PDF/CSV/XLSX) → `202` + job; the artifact lands in MinIO and is returned via presigned URL (self-hosted; nothing leaves the boundary). |
+| GET | `/reports/compliance-checklist` | `report.compliance_checklist.read` | Org-wide 20-★ mandatory-clause coverage with per-clause `COVERED`/`PARTIAL`/`GAP` and a rollup. |
+| GET | `/reports/document-control` | `report.read` | Provenance-stamped, content-hashed controlled-document register. The surface admits a satisfiable SYSTEM- or PROCESS-scoped `report.read` allow; rows are then filtered by both `report.read` and `document.read`. |
+
+**Future-only (not shipped in v1):** there is no `/dashboards` router and no `dashboard.read`
+permission key. `/dashboards/overview` and `/dashboards/my-work` remain design ideas; clients use
+the canonical self-scoped `/tasks` inbox for actionable work. `/reports/capa-effectiveness`,
+`/reports/audit-coverage`, and generic `POST /reports/{key}/export` are likewise not routes in the
+current API/OpenAPI. The existing `report.export` key gates evidence-pack download (§8.15a), not a
+generic report-export endpoint.
 
 ### 8.15a Evidence Packs (`/evidence-packs`) — as built (slices S-pack-1/2, doc 06 §7)
 
@@ -935,9 +954,9 @@ SSE topics: `actions` (My-Actions/`task` changes affecting the caller), `notific
 
 | Concern | Convention |
 |---|---|
-| Auth | Keycloak OIDC + PKCE; API is a resource server validating the access JWT against JWKS; refresh token in `HttpOnly` cookie; **permissions resolved server-side, never from the token**. |
+| Auth | Keycloak OIDC + PKCE; the SPA keeps its user/token bundle in memory while `oidc-client-ts` keeps transient redirect-request state in browser `localStorage`, and talks directly to Keycloak; the API is a resource server validating access JWTs against JWKS; **permissions resolved server-side, never from the token**. |
 | Authorization | FastAPI dependency on every route; deny-by-default, deny-wins, SoD against immutable history (§9); list endpoints filter, detail endpoints 403/404 per §9.5. |
-| Idempotency | `Idempotency-Key` on mutating POSTs (Redis dedupe); task actions also idempotent via `client_token`. |
+| Idempotency | Retry-sensitive POSTs advertise `Idempotency-Key` explicitly. A recorded task decision persists the header value in `task.client_token` and replays only on a matching non-null key; auto-skipped quorum/fail-closed sibling tasks instead use internal sentinels and return key-independent benign replays with `outcome=null` and `stage_state=ALREADY_SATISFIED`/`FAILED`. |
 | Concurrency | `ETag` + `If-Match` optimistic lock (`412`); document content guarded by the Redis check-out lock (`423`). |
 | Pagination | Keyset cursor over UUID v7; `limit ≤ 100`; no exact totals on hot paths. |
 | Filter/Sort/Shape | Allow-listed bracketed operators; `sort=-field`; `fields=`, `view=summary\|full`, `expand=` (depth 1, permission-checked). |

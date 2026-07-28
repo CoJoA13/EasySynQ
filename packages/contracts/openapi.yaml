@@ -3674,7 +3674,13 @@ paths:
       operationId: listTasks
       summary: "My Tasks — tasks assigned to the caller or where the caller is a candidate (self-scoped)."
       parameters:
-        - { name: assignee, in: query, required: false, schema: { type: string, enum: [me] } }
+        - name: assignee
+          in: query
+          required: false
+          description: >-
+            Compatibility no-op. Every value is ignored; the result is always scoped to the caller's
+            assignments and candidate-pool work.
+          schema: { type: string }
         - name: state
           in: query
           required: false
@@ -3718,10 +3724,13 @@ paths:
         authorized by candidate-pool membership (the role-resolved approver pool — no document
         permission); on the completing approval it writes a signature_event(meaning=approval,
         signed_object=capa_stage) + the signed ActionPlan stage and flips the CAPA to ActionPlan;
-        409 if the actor already decided an earlier stage of the same approval. Idempotent via the
-        Idempotency-Key header (replay on match, else 409). For PERIODIC_REVIEW subjects the accepted
-        outcomes are complete ("no change needed" — emits the review_confirmed signature and resets
-        next_review_due) and changes_requested. For DOC_ACK subjects the only accepted outcome is
+        409 if the actor already decided an earlier stage of the same approval. A recorded decision
+        is idempotent via the Idempotency-Key header (replay on match, else 409). Exception: a sibling
+        task auto-skipped after quorum closes or a stage fails closed returns a key-independent benign
+        replay with outcome=null, replayed=true, and stage_state=ALREADY_SATISFIED or FAILED. For
+        PERIODIC_REVIEW subjects the accepted outcomes are complete ("no change needed" — emits the
+        review_confirmed signature and resets next_review_due) and changes_requested. For DOC_ACK
+        subjects the only accepted outcome is
         acknowledge — membership 404-collapses, document.acknowledge is enforced at the document's
         scope (403), and the decision writes the immutable acknowledgement row + a DOCUMENT_ACKNOWLEDGED
         audit event (never a signature_event; 409 ack_superseded when a newer MAJOR replaced the task,
@@ -3742,7 +3751,9 @@ paths:
             schema: { $ref: "#/components/schemas/Decision" }
       responses:
         "200":
-          description: The recorded decision (+ the signature_event for an approval).
+          description: >-
+            The recorded/replayed decision (+ the signature_event for an approval), or a benign
+            key-independent no-op for an auto-skipped quorum/fail-closed sibling task.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/DecisionResult" }
@@ -4546,7 +4557,9 @@ paths:
         Idempotently spawn a CAPA from a complaint (R16). Returns 201 on the first spawn, 200 on an
         idempotent replay (the complaint already spawned — the SAME CAPA is returned; a retry after a
         timed-out first attempt receives 200). severity resolves from the body else the complaint;
-        422 if neither is set. Needs capa.create.
+        422 if neither is set. Every call needs capa.create at the request process scope. A replay
+        additionally needs capa.read at the latched CAPA's own process scope; without it the replay
+        returns 403 instead of the CAPA.
       parameters:
         - { name: complaint_id, in: path, required: true, schema: { type: string, format: uuid } }
       requestBody:
@@ -4561,7 +4574,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Capa" }
         "200":
-          description: The existing CAPA (idempotent replay).
+          description: The existing CAPA after the replay-time capa.read check succeeds.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Capa" }
@@ -7744,13 +7757,13 @@ components:
       type: object
       additionalProperties: false
       # ⚠ decided_at / decided_by are deliberately NOT required, and `outcome` is nullable.
-      # engine.decide() has a benign no-op branch (services/workflow/engine.py, the `_QUORUM_SKIP`
-      # arm returning stage_state "ALREADY_SATISFIED"): once a quorum stage has closed, every
-      # sibling approver's task is SKIPPED, but their task is still listed and still theirs, so a POST
-      # /tasks/{id}/decision returns 200 with the always-emitted `outcome: null` and NO decided_*
-      # fields — no decision was recorded, so inventing those fields would be dishonest. Requiring them made that
-      # reachable 200 an `additionalProperties:false` contract violation. Do not tighten this back
-      # without first changing that branch.
+      # engine.decide() has benign no-op branches for auto-skipped siblings: `_QUORUM_SKIP` returns
+      # stage_state "ALREADY_SATISFIED", while `_FAILED_STAGE_SKIP` returns "FAILED". The task remains
+      # listed and owned by its assignee/candidate, so POST /tasks/{id}/decision returns 200 with the
+      # always-emitted `outcome: null` and NO decided_* fields — no decision was recorded, so inventing
+      # those fields would be dishonest. Requiring them made those reachable 200s an
+      # `additionalProperties:false` contract violation. Do not tighten this back without first
+      # changing both branches.
       required: [task_id, instance_id, stage_key, outcome]
       properties:
         task_id: { type: string, format: uuid }

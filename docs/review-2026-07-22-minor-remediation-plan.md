@@ -10,7 +10,7 @@
 - The historic denominator remains **104**. One finding was already closed while the MAJOR work was
   underway, leaving **103** to schedule here. Batch M1 closed 4; M2 closed 2; M3 closed 2; M4
   closed 4; M5 closed 3; M6 closed 4; M7 closed 3; M8 closed 2; M9 closed 4; M10 closed 4;
-  M11 closed 3; M12 resolves 5; **63 remain queued** after M12.
+  M11 closed 3; M12 closed 5; M13 resolves 4; **59 remain queued** after M13.
 - A queued finding is not assumed to still be live. Every batch must re-locate and revalidate its
   findings against then-current `main` before implementation; close, re-scope, or reject it with
   evidence rather than mechanically applying the 2026-07-22 suggestion.
@@ -38,8 +38,8 @@
 | M9 | Migration and ORM coherence | 4 | ☑ merged | [#389](https://github.com/CoJoA13/EasySynQ/pull/389) |
 | M10 | Schema and index design | 4 | ☑ merged | [#390](https://github.com/CoJoA13/EasySynQ/pull/390) |
 | M11 | Organization time and audit scalability | 3 | ☑ merged | [#391](https://github.com/CoJoA13/EasySynQ/pull/391) |
-| M12 | Data-model documentation drift | 5 | ☑ in PR | [#392](https://github.com/CoJoA13/EasySynQ/pull/392) |
-| M13 | API documentation drift | 4 | ☐ queued — revalidate | — |
+| M12 | Data-model documentation drift | 5 | ☑ merged | [#392](https://github.com/CoJoA13/EasySynQ/pull/392) |
+| M13 | API documentation drift | 4 | ☑ in PR | [#393](https://github.com/CoJoA13/EasySynQ/pull/393) |
 | M14 | Infrastructure, deploy, and public edge | 6 | ☐ queued — revalidate | — |
 | M15 | Cross-stack naming | 4 | ☐ queued — revalidate | — |
 | M16 | UI copy and terminology | 7 | ☐ queued — revalidate | — |
@@ -50,7 +50,7 @@
 | M21 | Web async and error UX | 8 | ☐ queued — revalidate | — |
 | M22 | Web accessibility | 7 | ☐ queued — revalidate | — |
 
-**Accounting: 1 preclosed + 35 merged + 5 in PR + 63 queued = 104 original findings.**
+**Accounting: 1 preclosed + 40 merged + 4 in PR + 59 queued = 104 original findings.**
 
 ---
 
@@ -345,17 +345,33 @@ permission key
   retained shared-PK satellite, and point document versions/drafts/links/distribution directly to
   the root throughout the ERD and API inventory).
 
-### ☐ M13 — API documentation drift
+### ☑ M13 — API documentation drift — [#393](https://github.com/CoJoA13/EasySynQ/pull/393)
 
 `branch: fix/minor-api-docs` · docs + OpenAPI prose
 
-- [ ] `docs/15-api-design.md:524` — documents unshipped NC/complaint promotion endpoints `[f]`.
-- [ ] `docs/15-api-design.md:184` — documents unshipped auth-session and `/me/actions` endpoints
-  `[f]`.
-- [ ] `docs/15-api-design.md:457` — documents unshipped task claim/reassign/escalate and workflow
-  definition endpoints `[f]`.
-- [ ] `docs/15-api-design.md:339` — names absent permission keys on never-built delete/folder
-  routes `[f]`.
+- [x] `docs/15-api-design.md:524` — documents unshipped NC/complaint promotion endpoints `[C]`
+  (fixed: preserve the shipped, idempotent complaint→CAPA route and remove
+  `/complaints/{id}/spawn-ncr` plus `/ncrs/{id}/promote-capa`; align the neighboring list/detail
+  filters, expansions, request shapes, and the replay-time `capa.read` gate with the current CAPA
+  router and OpenAPI).
+- [x] `docs/15-api-design.md:184` — documents unshipped auth-session and `/me/actions` endpoints
+  `[C]` (fixed: document the SPA's direct OIDC/PKCE relationship with Keycloak, its memory-only
+  user/token store and redirect-request state in browser `localStorage`, JIT on the first valid bearer
+  request, the absence of API-owned session/refresh/logout routes, the reserved non-enforcing
+  step-up seam, and `/tasks` as the canonical self-scoped work inbox).
+- [x] `docs/15-api-design.md:457` — documents unshipped task claim/reassign/escalate and workflow
+  definition endpoints `[C]` (fixed: inventory only task list/detail/decision plus workflow
+  instance/approval reads, state their real self/candidate or subject-derived gates, identify
+  `assignee` as an ignored compatibility parameter, preserve the key-independent sentinel replay
+  contract for auto-skipped tasks, keep notification preferences in the resource inventory, and
+  record definitions and manual task mutations as non-public/deferred. PR review also moved the
+  future-only `/dashboards/my-work` aggregation—and its nonexistent `dashboard.read` key—out of
+  the shipped endpoint inventory; `/tasks` remains the shipped work queue).
+- [x] `docs/15-api-design.md:339` — names absent permission keys on never-built delete/folder
+  routes `[C]` (fixed: identify `folder_path` as a logical document scope value with no entity,
+  router, or `folder.*` keys; remove the nonexistent document DELETE/`document.delete`, while
+  retaining `document.delete_draft` only as a seeded route-less policy seam, and correct both
+  duplicated check-in inventory rows to the handler's `document.edit` gate).
 
 ### ☐ M14 — Infrastructure, deploy, and public edge
 
