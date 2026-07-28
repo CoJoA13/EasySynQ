@@ -45,11 +45,12 @@ export function buildDocumentsQuery(filters: DocumentFilters, page: PageParams):
   return p.toString();
 }
 
-export function useDocuments(filters: DocumentFilters, page: PageParams) {
+export function useDocuments(filters: DocumentFilters, page: PageParams, enabled = true) {
   const api = useApi();
   const qs = buildDocumentsQuery(filters, page);
   return useQuery({
     queryKey: ["documents", filters, page],
     queryFn: () => api.get<DocumentsPage>(`/api/v1/documents?${qs}`),
+    enabled,
   });
 }

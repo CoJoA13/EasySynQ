@@ -989,8 +989,9 @@ paths:
               - { type: string, format: date }
               - { type: string, format: date-time }
           description: >-
-            As effective_from][gte] but an upper bound (≤), with bare ISO dates interpreted as
-            midnight in the canonical organization timezone.
+            Documents whose CURRENT effective version's effective_from is ≤ this bound. A bare ISO
+            date includes through the end of that day in the canonical organization timezone; an
+            ISO date-time is an explicit instant. Docs with no effective version are excluded.
         - name: "filter[has_effective_version][eq]"
           in: query
           required: false
@@ -3938,8 +3939,9 @@ paths:
               - { type: string, format: date }
               - { type: string, format: date-time }
           description: >-
-            As effective_from][gte] but an upper bound (≤), with bare ISO dates interpreted as
-            midnight in the canonical organization timezone.
+            Documents whose CURRENT effective version's effective_from is ≤ this bound. A bare ISO
+            date includes through the end of that day in the canonical organization timezone; an
+            ISO date-time is an explicit instant. Docs with no effective version are excluded.
         - name: "filter[has_effective_version][eq]"
           in: query
           required: false

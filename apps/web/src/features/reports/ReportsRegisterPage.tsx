@@ -2,6 +2,7 @@ import { Badge, Button, Card, Container, Group, Stack, Table, Text, Title } from
 import { useMemo } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useDocumentControlRegister } from "./useDocumentControlRegister";
+import { useMe } from "../../app/shell/useMe";
 import { ClauseBadge } from "../../lib/ClauseBadge";
 import type { RegisterProvenance, RegisterRow } from "../../lib/types";
 import { AsOf } from "../../lib/AsOf";
@@ -58,11 +59,13 @@ export function ReportsRegisterPage() {
   // Resolved BEFORE `filters` is built (FIX 3) — the process facet's own applicability gate below
   // needs to know whether the facet is representable at all.
   const { data: processes } = useProcesses();
+  const { data: me, isError: meError, refetch: refetchMe } = useMe();
   const processMap = new Map((processes ?? []).map((p) => [p.id, p.name]));
   // A fresh object each render is fine — React Query hashes queryKey BY VALUE (a stable JSON
   // serialization), not by reference, so this still refetches on a real facet change and NOT on
   // every unrelated re-render.
-  const filters = toDocumentFilters(uf);
+  const effectiveFilterReady = !uf.eff || Boolean(me?.org_timezone);
+  const filters = toDocumentFilters(uf, me?.org_timezone);
   // The register-only process facet (R3-1): the shared `toDocumentFilters` no longer maps it (the
   // Library doesn't know about `process`), so the register maps it itself — it owns the
   // ProcessSelect + this file's FILTER_KEYS/hasFilters/clearFilters bookkeeping for it.
@@ -74,8 +77,16 @@ export function ReportsRegisterPage() {
   // the value is simply not applied (still removable via "Clear all", which stays in FILTER_KEYS).
   if (uf.process && (processes?.length ?? 0) > 0) filters.process_id = uf.process;
 
-  const { data, isLoading, isError, forbidden, dataUpdatedAt, refetch } =
-    useDocumentControlRegister(filters);
+  const {
+    data,
+    isLoading: registerLoading,
+    isError: registerError,
+    forbidden,
+    dataUpdatedAt,
+    refetch,
+  } = useDocumentControlRegister(filters, effectiveFilterReady);
+  const isLoading = registerLoading || (!effectiveFilterReady && !meError);
+  const isError = registerError || (Boolean(uf.eff) && meError);
   const { q, setQ, query } = useDebouncedSearch();
   const { sort, dir, toggleSort } = useTableSort<SortKey>({
     keys: SORT_KEYS,
@@ -123,7 +134,13 @@ export function ReportsRegisterPage() {
         ) : isLoading ? (
           <LoadingState label="Loading the register" />
         ) : isError || !data ? (
-          <ErrorState title="Couldn't load the register" onRetry={() => refetch()} />
+          <ErrorState
+            title="Couldn't load the register"
+            onRetry={() => {
+              void refetchMe();
+              void refetch();
+            }}
+          />
         ) : (
           <>
             <AsOf at={dataUpdatedAt} />

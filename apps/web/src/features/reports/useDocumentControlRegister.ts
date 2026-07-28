@@ -13,7 +13,7 @@ import { buildFilterParams } from "../library/useDocuments";
 // (buildFilterParams, factored out of useDocuments so both stay byte-identical) — the register has
 // no pagination, so only the filter params are appended. `filters` rides the query key so a facet
 // change triggers a refetch (React Query hashes the key by value, not by reference).
-export function useDocumentControlRegister(filters: DocumentFilters = {}) {
+export function useDocumentControlRegister(filters: DocumentFilters = {}, enabled = true) {
   const api = useApi();
   const qs = buildFilterParams(filters).toString();
   const query = useQuery({
@@ -23,6 +23,7 @@ export function useDocumentControlRegister(filters: DocumentFilters = {}) {
         qs ? `/api/v1/reports/document-control?${qs}` : "/api/v1/reports/document-control",
       ),
     retry: false,
+    enabled,
   });
   const forbidden = query.error instanceof ApiError && query.error.status === 403;
   return { ...query, forbidden };

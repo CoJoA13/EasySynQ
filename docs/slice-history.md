@@ -168,30 +168,35 @@
 
 ## REMEDIATION — correctness, accessibility, polish & test reliability
 
-### Issue #332 — interpret date-only effective bounds in the organization timezone (API + OpenAPI + integration + docs; NO migration [head stays `0080`]; NO new permission key [catalog 102]; closes [#332](https://github.com/CoJoA13/EasySynQ/issues/332); PR [#409](https://github.com/CoJoA13/EasySynQ/pull/409))
+### Issue #332 — interpret date-only effective bounds in the organization timezone (API + web + OpenAPI + integration + docs; NO migration [head stays `0080`]; NO new permission key [catalog 102]; closes [#332](https://github.com/CoJoA13/EasySynQ/issues/332); PR [#409](https://github.com/CoJoA13/EasySynQ/pull/409))
 
-**Shared parser correction.** `filter[effective_from][gte|lte]=YYYY-MM-DD` now means midnight on
-that calendar date in the request's canonical organization timezone
-(`is_default working_calendar.timezone → organization.timezone → env → UTC`), then compares the
-equivalent instant with the UTC `timestamptz`. Offset-bearing date-times remain explicit instants,
-and the legacy offset-less date-time fallback remains UTC. The auth boundary already pins the
-canonical timezone before either consumer invokes the shared parser, so no session lookup or
-frontend timezone parameter is added.
+**Shared parser correction.** `filter[effective_from][gte|lte]=YYYY-MM-DD` now means a calendar date
+in the canonical organization timezone
+(`is_default working_calendar.timezone → organization.timezone → env → UTC`): `gte` starts at
+local midnight and `lte` includes through local end-of-day before comparison with the stored UTC
+`timestamptz`. Offset-bearing date-times remain explicit instants, and the legacy offset-less
+date-time fallback remains UTC. The Library uses the request-pinned timezone; the register carries
+raw effective-date bounds into its REPEATABLE READ materialization and resolves them with the
+timezone from that same snapshot, keeping selection, rendering, and provenance consistent across
+a concurrent timezone configuration change.
 
 **Surface and contract parity.** Both `GET /documents` (Library) and
-`GET /reports/document-control` (Controlled Document Register) continue through the same filter
-builder. Their OpenAPI parameters now publish the truthful `date | date-time` input shape and state
-the organization-local-midnight rule; the API-design filter convention and R8 carry the same
-boundary. Runtime response shapes, pagination, report provenance, authorization, migrations,
-permission catalog, and the shared web facet mapping are unchanged.
+`GET /reports/document-control` (Controlled Document Register) continue through the same
+effective-bound materializer. Their OpenAPI parameters publish the truthful `date | date-time`
+input shape and distinguish local-midnight lower bounds from full-local-day upper bounds; the
+API-design filter convention and R8 carry the same boundary. Relative `Last 30/90/365 days` web
+buckets now derive today's calendar date from `GET /me.org_timezone` and subtract calendar days
+rather than subtracting fixed UTC milliseconds. Both Library and register wait for that canonical
+timezone before issuing a relative-bucket request.
 
-**Regression proof.** Pure parser tests pin a UTC+14 bare date to the prior UTC calendar day's
-instant while preserving offset-aware and historical offset-less date-time behavior. A
-Docker-backed east-of-UTC boundary test pins an Effective version exactly at
-`2026-06-20T00:00:00+14:00` (`2026-06-19T10:00:00Z`) and proves the date-only lower bound includes
-the same row on both Library and register surfaces; the register's rendered date is the same
-organization-calendar day. Structural contract guards require the date/date-time union and
-timezone wording on both duplicated endpoint declarations.
+**Regression proof.** Pure parser tests pin a UTC+14 bare lower date to the prior UTC calendar
+day, pin a bare upper date to local end-of-day, and preserve offset-aware and historical
+offset-less date-time behavior. A Docker-backed east-of-UTC boundary test pins an Effective
+version at `2026-06-20T12:00:00+14:00` (`2026-06-19T22:00:00Z`) and proves same-day `gte` + `lte`
+include it on both Library and register surfaces. The direct register proof deliberately gives the
+request context UTC while the report snapshot resolves Pacific/Kiritimati, proving deferred bounds
+follow the snapshot. Web tests lock the UTC/org-date crossover and contract guards require the
+date/date-time union plus lower/upper semantics on both endpoint declarations.
 
 ### Issue #331 — publish repeatable Document clause filters correctly (OpenAPI + contract tests + docs; NO runtime behavior change; NO migration [head stays `0080`]; NO new permission key [catalog 102]; closes [#331](https://github.com/CoJoA13/EasySynQ/issues/331); PR [#408](https://github.com/CoJoA13/EasySynQ/pull/408))
 

@@ -68,11 +68,14 @@ def test_effective_date_bounds_publish_date_and_date_time_semantics(path: str) -
         ]
     }
 
-    for name in ("filter[effective_from][gte]", "filter[effective_from][lte]"):
-        parameter = parameters[name]
+    lower = parameters["filter[effective_from][gte]"]
+    upper = parameters["filter[effective_from][lte]"]
+    for parameter in (lower, upper):
         assert parameter["schema"] == expected_schema
         assert "organization timezone" in parameter["description"]
-        assert "midnight" in parameter["description"]
+        assert "explicit instant" in parameter["description"]
+    assert "midnight" in lower["description"]
+    assert "end of that day" in upper["description"]
 
 
 def test_shared_document_filter_serialization_shapes_match_on_both_endpoints() -> None:

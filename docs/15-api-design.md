@@ -122,11 +122,14 @@ supplied membership condition. For example,
 clauses. The other filters on those two endpoints remain single-valued.
 
 The shared `effective_from` `gte`/`lte` bounds accept either a date or a date-time on both
-endpoints. A bare `YYYY-MM-DD` is a calendar date in the canonical organization timezone and means
-that date's local midnight; the server compares the equivalent UTC instant to the stored
-`timestamptz`. An offset-bearing date-time remains the explicit instant supplied by the caller.
-Because the Library and Controlled Document Register share both the facet mapping and this parser,
-the same date-only facet boundary selects the same displayed organization-calendar dates.
+endpoints. A bare `YYYY-MM-DD` is a calendar date in the canonical organization timezone: `gte`
+starts at that date's local midnight, while `lte` includes through that date's local end-of-day.
+The server compares the equivalent UTC instants to the stored `timestamptz`; an offset-bearing
+date-time remains the explicit instant supplied by the caller. Relative web buckets derive today's
+date and subtract calendar days in `GET /me`'s `org_timezone`, never by slicing a UTC timestamp.
+The Controlled Document Register materializes raw date bounds using the canonical timezone it
+resolves inside its REPEATABLE READ snapshot, so selection, rendered dates, and provenance cannot
+straddle an organization-timezone configuration change.
 
 ### 3.3 Sorting
 

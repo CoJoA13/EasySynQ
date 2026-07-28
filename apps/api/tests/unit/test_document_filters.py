@@ -11,9 +11,10 @@ import zoneinfo
 import pytest
 from sqlalchemy import ColumnElement
 
-from easysynq_api.api.documents import _filter_condition, _parse_effective_from_bound
+from easysynq_api.api.documents import _filter_condition
 from easysynq_api.problems import ProblemException
 from easysynq_api.services.common.org_clock import using_org_tz
+from easysynq_api.services.vault.document_filters import parse_effective_from_bound
 
 
 def test_effective_from_gte_builds_a_condition() -> None:
@@ -27,11 +28,43 @@ def test_effective_from_lte_accepts_bare_date() -> None:
     assert isinstance(cond, ColumnElement)
 
 
+def test_effective_from_bare_date_lte_includes_the_full_org_day() -> None:
+    """A date-only upper bound is local end-of-day, not the day's starting midnight."""
+    org_tz = zoneinfo.ZoneInfo("Pacific/Kiritimati")
+    with using_org_tz(org_tz):
+        cond = _filter_condition("effective_from", "lte", "2026-06-20")
+
+    compiled = cond.compile()
+    assert "document_version.effective_from <=" in str(compiled)
+    assert (
+        datetime.datetime(
+            2026,
+            6,
+            20,
+            23,
+            59,
+            59,
+            999999,
+            tzinfo=org_tz,
+        )
+        in compiled.params.values()
+    )
+
+
+def test_effective_from_date_time_lte_remains_an_inclusive_instant() -> None:
+    bound = datetime.datetime(2026, 6, 20, 12, 30, tzinfo=datetime.UTC)
+    cond = _filter_condition("effective_from", "lte", bound.isoformat())
+
+    compiled = cond.compile()
+    assert "document_version.effective_from <=" in str(compiled)
+    assert bound in compiled.params.values()
+
+
 def test_effective_from_bare_date_is_org_local_midnight() -> None:
     """UTC+14 makes the intended local date land on the prior UTC calendar date."""
     org_tz = zoneinfo.ZoneInfo("Pacific/Kiritimati")
     with using_org_tz(org_tz):
-        bound = _parse_effective_from_bound("2026-06-20")
+        bound = parse_effective_from_bound("2026-06-20")
 
     assert bound == datetime.datetime(2026, 6, 20, tzinfo=org_tz)
     assert bound.astimezone(datetime.UTC) == datetime.datetime(2026, 6, 19, 10, tzinfo=datetime.UTC)
@@ -53,7 +86,7 @@ def test_effective_from_bare_date_is_org_local_midnight() -> None:
 def test_effective_from_date_time_compatibility(value: str, expected: datetime.datetime) -> None:
     """Offset-aware instants stay intact; legacy offset-less date-times remain UTC."""
     with using_org_tz(zoneinfo.ZoneInfo("Pacific/Kiritimati")):
-        assert _parse_effective_from_bound(value) == expected
+        assert parse_effective_from_bound(value) == expected
 
 
 def test_effective_from_bad_value_422() -> None:
