@@ -177,6 +177,53 @@
 
 ## REMEDIATION — correctness, accessibility, polish & test reliability
 
+### Minor Batch M12 — shipped data-model documentation alignment (docs only; NO migration [head stays `0080`]; NO new permission key [catalog 102]; PR [#392](https://github.com/CoJoA13/EasySynQ/pull/392))
+
+**What shipped.** All five finder-only reports were re-located and confirmed against the current
+ORM, migrations, services, and API surface. The authoritative data-model diagrams now describe the
+schema that v1 actually ships. `documented_information` is the single
+`kind=DOCUMENT|RECORD` root: maintained Documents store their headline lifecycle and governing
+version pointer on that row, while only retained Records add the shared-primary-key `record`
+satellite. Document versions, working drafts, document links, and distribution entries therefore
+point directly to `documented_information`; the nonexistent symmetric `document` extension is no
+longer depicted.
+
+The organization/config cluster now contains the real `organization`, `system_config`,
+`storage_config`, `backup_policy`, `numbering_counter`, `mirror_build`, and `drift_scan` rows. It
+explicitly maps the seven removed table concepts to their shipped owners: profile timezone lives
+on `organization`; setup/bootstrap/auth proof and install toggles live on `system_config`;
+federation details live in Keycloak/environment configuration; restore-drill state lives on
+`backup_policy` plus audit events; identifiers use the atomic counter and fixed service format;
+and controlled-copy stamping is fixed renderer behavior. Domain concepts no longer imply
+uncreated `org_profile`, `setup_state`, `instance_config`, `identity_provider_config`,
+`backup_run`, `numbering_scheme`, or `header_footer_template` tables. Doc 15's resource catalog
+and setup/backup rows now name the shipped `/setup/*` and `/admin/config` surfaces and their real
+backing rows instead of the corresponding unbuilt admin routes/entities.
+
+Derived renderings are likewise documented as pointers rather than a `rendition` entity:
+`document_version.rendition_blob_sha256` references `blob`, while
+`record.structured_pdf_blob_sha256` intentionally remains a plain-text cache pointer so the
+dual-control WORM-destroy path is not FK-blocked. Direct requirement traceability is the shipped
+polymorphic `evidence_for_link(target_type=clause)` edge, not a separate `requirement_link`.
+Delegation remains intentionally v1.x-deferred: migration `0003` creates no table, the API exposes
+no delegation routes, and effective access resolves role grants plus direct overrides only.
+`delegation.administer` and nullable `on_behalf_of` remain clearly labelled reserved hooks; doc 15
+no longer invents `delegation.read/create/revoke`, delegated provenance, or a live permissions
+cache.
+
+**PR-review precision pass.** The shipped setup inventory now includes the bootstrap-of-trust
+operation and names every setup mutation's real authority (`config.update`, `storage.manage`,
+`backup.configure`, or `restore.run`; bootstrap remains secret-authorized outside the PEP).
+Backup prose also records the two fail-closed edges enforced by the service: v1 rejects
+`wal_pitr_enabled=true` as unavailable, and an overlapping restore-test worker returns `SKIPPED`
+without changing the prior persisted result/timestamp rather than queuing a second drill.
+
+**Impact.** Documentation only—no ORM, migration, OpenAPI, permission-catalog, or runtime behavior
+changed. The remediation tracker advances M11 to merged, closes all five M12 findings, and
+preserves the original 104-finding denominator: 1 preclosed + 35 merged + 5 in PR + 63 queued.
+`git diff --check` is clean. API Ruff and format checks pass; strict mypy is clean across **426
+source files**; the full unit selection is green (**1182 passed, 1 expected release-only skip**).
+
 ### Minor Batch M11 — organization-date coherence and bounded audit verification (API + unit/integration + docs; NO migration [head stays `0080`]; NO new permission key [catalog 102]; PR [#391](https://github.com/CoJoA13/EasySynQ/pull/391))
 
 **What shipped.** Objective attainment and internal-audit lifecycle dates now use the same canonical
