@@ -10,7 +10,7 @@
 - The historic denominator remains **104**. One finding was already closed while the MAJOR work was
   underway, leaving **103** to schedule here. Batch M1 closed 4; M2 closed 2; M3 closed 2; M4
   closed 4; M5 closed 3; M6 closed 4; M7 closed 3; M8 closed 2; M9 closed 4; M10 closed 4;
-  M11 resolves 3; **68 remain queued** after M11.
+  M11 closed 3; M12 resolves 5; **63 remain queued** after M12.
 - A queued finding is not assumed to still be live. Every batch must re-locate and revalidate its
   findings against then-current `main` before implementation; close, re-scope, or reject it with
   evidence rather than mechanically applying the 2026-07-22 suggestion.
@@ -37,8 +37,8 @@
 | M8 | Vault and retention input guards | 2 | ☑ merged | [#388](https://github.com/CoJoA13/EasySynQ/pull/388) |
 | M9 | Migration and ORM coherence | 4 | ☑ merged | [#389](https://github.com/CoJoA13/EasySynQ/pull/389) |
 | M10 | Schema and index design | 4 | ☑ merged | [#390](https://github.com/CoJoA13/EasySynQ/pull/390) |
-| M11 | Organization time and audit scalability | 3 | ☑ in PR | [#391](https://github.com/CoJoA13/EasySynQ/pull/391) |
-| M12 | Data-model documentation drift | 5 | ☐ queued — revalidate | — |
+| M11 | Organization time and audit scalability | 3 | ☑ merged | [#391](https://github.com/CoJoA13/EasySynQ/pull/391) |
+| M12 | Data-model documentation drift | 5 | ☑ in PR | PR pending |
 | M13 | API documentation drift | 4 | ☐ queued — revalidate | — |
 | M14 | Infrastructure, deploy, and public edge | 6 | ☐ queued — revalidate | — |
 | M15 | Cross-stack naming | 4 | ☐ queued — revalidate | — |
@@ -50,7 +50,7 @@
 | M21 | Web async and error UX | 8 | ☐ queued — revalidate | — |
 | M22 | Web accessibility | 7 | ☐ queued — revalidate | — |
 
-**Accounting: 1 preclosed + 32 merged + 3 in PR + 68 queued = 104 original findings.**
+**Accounting: 1 preclosed + 35 merged + 5 in PR + 63 queued = 104 original findings.**
 
 ---
 
@@ -319,19 +319,31 @@ permission key
 
 ## Documentation, infrastructure, and naming
 
-### ☐ M12 — Data-model documentation drift
+### ☑ M12 — Data-model documentation drift
 
 `branch: fix/minor-data-model-docs` · docs only unless revalidation finds missing implementation
 
-- [ ] `docs/14-data-model.md:286` — documents a `rendition` table although renditions are pointer
-  columns `[f]`.
-- [ ] `docs/14-data-model.md:312` — documents an unshipped `requirement_link` satellite table
-  `[f]`.
-- [ ] `docs/14-data-model.md:126` — documents an unshipped `delegation` table (and doc 15 names
-  nonexistent delegation permission keys) `[f]`.
-- [ ] `docs/14-data-model.md:80` — documents seven config tables that were never created `[f]`.
-- [ ] `docs/14-data-model.md:241` — depicts class-table document/record inheritance despite the
-  shipped single kind-discriminated base and contradicts the same document `[f]`.
+- [x] `docs/14-data-model.md:286` — documents a `rendition` table although renditions are pointer
+  columns `[C]` (fixed: remove the entity/relationship and document the shipped
+  `document_version.rendition_blob_sha256` FK plus deliberately non-FK
+  `record.structured_pdf_blob_sha256` cache pointer).
+- [x] `docs/14-data-model.md:312` — documents an unshipped `requirement_link` satellite table
+  `[C]` (fixed: remove it and identify `evidence_for_link(target_type=clause)` as the shipped
+  direct record-to-requirement traceability edge).
+- [x] `docs/14-data-model.md:126` — documents an unshipped `delegation` table (and doc 15 names
+  nonexistent delegation permission keys) `[C]` (fixed: migration `0003` confirms delegation is
+  v1.x-deferred; remove the table/API/resolution claims and `delegation.read/create/revoke` keys,
+  while retaining `delegation.administer` and `on_behalf_of` only as explicit reserved hooks).
+- [x] `docs/14-data-model.md:80` — documents seven config tables that were never created `[C]`
+  (fixed: replace the ERD/table with the shipped `organization`, `system_config`,
+  `storage_config`, `backup_policy`, `numbering_counter`, `mirror_build`, and `drift_scan` shape,
+  map each former domain concept to its real v1 storage/configuration owner, and reconcile doc
+  15's setup/backup inventory with the shipped endpoints and backing rows).
+- [x] `docs/14-data-model.md:241` — depicts class-table document/record inheritance despite the
+  shipped single kind-discriminated base and contradicts the same document `[C]` (fixed: establish
+  `documented_information` as the one `kind=DOCUMENT|RECORD` root, keep only `record` as the
+  retained shared-PK satellite, and point document versions/drafts/links/distribution directly to
+  the root throughout the ERD and API inventory).
 
 ### ☐ M13 — API documentation drift
 

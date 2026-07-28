@@ -27,7 +27,7 @@ Drives DB grants, WORM object-lock, and the absence of UPDATE/DELETE API verbs.
 
 | Entity | Mutable? | Rule | Enforcement |
 |---|---|---|---|
-| `document` | Pointers only (`current_state`, `effective_version_id`, checkout state) | The logical line of descent; content lives on versions. | App + FK |
+| `documented_information` (`kind=DOCUMENT`) | Headline metadata and pointers only (`current_state`, `current_effective_version_id`) | The logical line of descent; content lives on versions. There is no separate `document` table. | App + FK |
 | `document_version` | **Immutable** content; only `version_state` transitions (state-machine-guarded) | No UPDATE of content columns; INSERT successors only. | No UPDATE verb; partial-unique index for single-effective |
 | `working_draft` | **The only mutable surface** | Exists between checkout and check-in; frozen into a version on check-in. | Redis lock + app |
 | `blob` | **Immutable**, content-addressed | SHA-256 identity; WORM/object-lock in MinIO. | Storage layer (WORM) |
@@ -43,8 +43,8 @@ Drives DB grants, WORM object-lock, and the absence of UPDATE/DELETE API verbs.
 
 ```mermaid
 flowchart LR
-    A["A. Identity & Authorization\norganization, app_user, role,\npermission, grant, scope, delegation, SoD"]
-    B["B. Documented Information core\ndocumented_information ->\ndocument | record, version,\nblob, metadata, links"]
+    A["A. Identity & Authorization\norganization, app_user, role,\npermission, grant, scope, SoD"]
+    B["B. Documented Information core\ndocumented_information(kind=DOCUMENT|RECORD),\nrecord satellite, version, blob,\nmetadata, links"]
     C["C. QMS Information Architecture\nclause, process, framework,\nregisters, objectives, resources"]
     D["D. Process & Evidence machinery\nDCR, workflow, task, approval,\naudit/finding, NCR/CAPA, mgmt review,\nretention, notification, audit_event"]
     A --> B
@@ -56,39 +56,40 @@ flowchart LR
 
 ---
 
-## 2. Organization, Instance Config, Storage & Backup
+## 2. Organization, System Config, Storage & Backup
 
 ```mermaid
 erDiagram
     ORGANIZATION ||--o{ APP_USER : has
-    ORGANIZATION ||--|| ORG_PROFILE : "is described by"
     ORGANIZATION ||--o{ FRAMEWORK : "enabled (v1: ISO9001 only)"
-    ORGANIZATION ||--|| INSTANCE_CONFIG : "configured by"
-    ORGANIZATION ||--|| STORAGE_CONFIG : "vault+mirror"
-    ORGANIZATION ||--o{ BACKUP_POLICY : "schedules"
-    BACKUP_POLICY ||--o{ BACKUP_RUN : "produces"
-    ORGANIZATION ||--|| SETUP_STATE : "tracks first-run"
-    ORGANIZATION ||--o{ IDENTITY_PROVIDER_CONFIG : "federates via"
-    ORGANIZATION ||--o{ NUMBERING_SCHEME : "identifier rules"
-    ORGANIZATION ||--o{ HEADER_FOOTER_TEMPLATE : "controlled-copy stamping"
+    ORGANIZATION ||--|| SYSTEM_CONFIG : "setup+install config"
+    ORGANIZATION ||--o| STORAGE_CONFIG : "WORM verification"
+    ORGANIZATION ||--o| BACKUP_POLICY : "backup+restore drill"
+    ORGANIZATION ||--o{ NUMBERING_COUNTER : "allocates identifiers"
+    ORGANIZATION ||--o{ MIRROR_BUILD : "records mirror baseline"
+    ORGANIZATION ||--o{ DRIFT_SCAN : "records integrity scan"
 ```
 
 | Entity | Key attributes | Notes / source |
 |---|---|---|
-| `organization` | `id` PK, `legal_name`, `short_code` (unique, `[A-Z0-9-]`), `framework_id` (default), `created_at` | Singleton tenant in v1; `org_id` everywhere FKs here. `08 §6`. |
-| `org_profile` | `org_id` PK/FK, `logo_blob_id`, `primary_locale` (`en`), `timezone` (IANA), `default_retention_defaults` jsonb | `08 §6`. Logo is a non-controlled system asset. |
-| `setup_state` | `org_id` PK/FK, `state` enum(`UNINITIALIZED`,`IN_SETUP`,`OPERATIONAL`), `bootstrap_secret_hash`, `bootstrap_ttl`, `bootstrap_consumed_at`, gate flags `g_a..g_e` | `08 §2`. QMS locked until `OPERATIONAL`. |
-| `instance_config` | `org_id` PK/FK, `license_key`, `named_user_cap`, `sizing_profile` enum(`S`,`M`,`L`), `feature_flags` jsonb (`part11=false`,`multi_standard=false`), `airgap` bool, `version`, `build_digest` | `08 §15.5`. Feature flags reserved, off in v1. |
-| `storage_config` | `id` PK, `org_id`, `pg_dsn_ref`, `minio_endpoint`, `bucket_documents`, `bucket_renditions`, `bucket_records`, `bucket_staging`, `worm_verified_at`, `sse_enabled`, `mirror_path`, `mirror_layout` enum(`by_clause`,`by_process`,`hybrid`), `mirror_released_only` (forced true) | `08 §7`, `04 §10`. Mirror is read-only, regenerable, never backup-critical. **S8b shipped a minimal `storage_config` (`worm_verified_at` + `object_lock_mode`); the `mirror_*`/`bucket_*`/`sse_enabled` columns are still deferred. `mirror_layout` specifically: S9b/S9d build the by-clause + by-process trees **always-on (hybrid)**, so the toggle column lands with its config UI (v1).** |
-| `backup_policy` | `id` PK, `org_id`, `destination`, `encryption_key_ref`, `cron`, `wal_pitr_enabled`, `retention_daily/weekly/monthly`, `alert_sink`, `last_restore_test_at`, `last_restore_test_result` | `08 §8`, `12 §8`. Restore-test gate G-C. |
-| `backup_run` | `id` PK, `org_id`, `policy_id` FK, `started_at`, `finished_at`, `status`, `archive_checksum`, `includes_audit_checkpoint` bool, `rpo_estimate`, `rto_estimate` | `12 §8.2`. |
+| `organization` | `id` PK, `legal_name`, `short_code` (unique, `[A-Z0-9-]`), `timezone` (IANA), `created_at` | Singleton tenant in v1; `org_id` everywhere FKs here. The organization row itself owns the shipped profile timezone. `08 §6`. |
+| `system_config` | `org_id` PK/FK, `setup_state` enum(`UNINITIALIZED`,`IN_SETUP`,`OPERATIONAL`), bootstrap secret/expiry/consumption fields, `auth_method`, auth-test proof fields, audit serializer/lag settings, install behavior toggles, notification settings, management-review cadence/owner, `finalized_at`, timestamps | The shipped per-install row. It combines the first-run latch, bootstrap/auth proof, and live install flags; federation connection details remain in Keycloak/environment configuration. |
+| `storage_config` | `id` PK, `org_id` unique FK, `worm_verified_at`, `object_lock_mode`, timestamps | The intentionally minimal G-B/D-7 row shipped by S8b. Bucket, encryption, and mirror settings are deployment configuration rather than columns in v1. |
+| `backup_policy` | `id` PK, `org_id` unique FK, `destination`, `encryption_key_ref`, `cron`, `wal_pitr_enabled`, `retention_daily/weekly/monthly`, `alert_sink`, `last_restore_test_at`, `last_restore_test_result`, timestamps | `08 §8`, `12 §8`. The last persisted restore-drill result is the G-C signal; drill outcomes are also durable audit events. |
+| `numbering_counter` | (`org_id`, `type_code`, `area_code`) composite PK, `next_value` | Atomic per-(type, area) allocation. Identifiers use the shipped `{TYPE}[-{AREA}]-{SEQ}` service formatter (three-digit padding by default); there is no configurable scheme row. |
 | `mirror_build` (**S-drift-2**) | `id` PK, `org_id`, `build_name` (unique, the `.builds/<hex>` dir), `built_at`, `swapped_at` (null until the post-swap stamp), `manifest` jsonb (file/symlink entries; doc-owned ones carry `document_id`/`version_id`), `manifest_sha256` (digest of the on-disk `_meta/manifest.json`), `documents`/`files`/`symlinks` counts | `05 §9.2`, R11. The mirror scan's **vault-side expected-state baseline** — the on-disk manifest is byte-verified against this row, never trusted as authority; `current` is verified against the newest *swapped* row (pointer integrity). A regenerable registry (mutable; keep-last-20 pruned, never the row `current` points at). |
 | `drift_scan` (**S-drift-2**) | `id` PK, `org_id`, `kind` enum(`'MIRROR','BLOB_REHASH'` — `BLOB_REHASH` added additively in mig `0047`, S-drift-3), `started_at`/`finished_at`, `status` enum(`CLEAN`,`DIVERGENT`,`FAILED`), `counts` jsonb (scanned/stale/tampered/extra/missing/quarantined + `scan_id`/`pointer`/`rebuild_triggered`), `triggered_by` (`beat`/`sync`/`cli`) | `05 §9.2` "write scan summary", R11. One write-once row per scan; the S-drift-3 admin drift-status surface reads latest-per-kind via `ix_drift_scan_kind_started_at`. |
-| `identity_provider_config` | `id` PK, `org_id`, `mode` enum(`local`,`ldap_ad`,`oidc_saml`), `connection` jsonb (secrets envelope-encrypted), `group_role_hints` jsonb, `break_glass_local_enabled` (forced true while 1 admin) | `08 §9`, `12 §2`. AuthN brokered by Keycloak; this row is EasySynQ-side config only. |
-| `numbering_scheme` | `id` PK, `org_id`, `template` (e.g. `{TYPE}-{AREA}-{SEQ:000}`), `revision_label_style` enum(`letter`,`numeric`,`major_minor`), `per_area_sequencing` bool | `04 §7`. Identifier allocation backed by per-(type,area) PG sequences. |
-| `header_footer_template` | `id` PK, `org_id`, `logo_blob_id`, `fields` jsonb, mandatory non-removable: rev + effective date + copy status | `04 §11.3`. |
 
-**Constraints:** at least one `ORGANIZATION`; `setup_state.state` cannot reach `OPERATIONAL` unless gates G-A…G-E pass (`08 §14`); `worm_verified_at` must be non-null before any blob write (G-B).
+> **As-built consolidation (M12).** v1 has no `org_profile`, `setup_state`, `instance_config`,
+> `identity_provider_config`, `backup_run`, `numbering_scheme`, or `header_footer_template` table.
+> Their shipped responsibilities live on `organization`/`system_config`/`backup_policy`, in
+> Keycloak or deployment configuration, in the atomic `numbering_counter`, and in the fixed
+> renderer/watermark rules described above. A separate table must not be inferred from the domain
+> concept.
+
+**Constraints:** at least one `ORGANIZATION`; `system_config.setup_state` cannot reach
+`OPERATIONAL` unless gates G-A…G-E pass (`08 §14`); `storage_config.worm_verified_at` must be
+non-null before setup finalization permits any blob write (G-B).
 
 ---
 
@@ -105,9 +106,6 @@ erDiagram
     ROLE_GRANT }o--|| SCOPE : "constrained by"
     PERMISSION_OVERRIDE }o--|| SCOPE : "constrained by"
     ROLE_ASSIGNMENT }o--|| SCOPE : "binds scope template"
-    APP_USER ||--o{ DELEGATION : "delegator"
-    APP_USER ||--o{ DELEGATION : "delegate"
-    DELEGATION }o--o{ PERMISSION : "lends subset"
     SOD_CONSTRAINT }o--o{ PERMISSION : "relates incompatible duties"
     APP_USER ||--o{ GUEST_GRANT : "external auditor scope"
     APP_USER ||--o{ ORG_ROLE_ASSIGNMENT : "QMS responsibility"
@@ -123,7 +121,6 @@ erDiagram
 | `permission` | `id` PK, `key` (`resource.action`, unique), `resource`, `action`, `finest_scope` enum, `sod_sensitive` bool, `sig_hook` bool | `07 §3` — the complete v1 catalog is seed data (24 resources). Seed keys are the **doc 07 canonical keys exactly**, including the import family `import.execute`/`import.review`/`import.commit`, `record.dispose`, the `changeRequest.*` / `capa.*` / `audit.*` families — see §3.1 (reconciled per Decisions Register R5). |
 | `permission_override` | `id` PK, `user_id` FK, `permission_id` FK, `effect` enum(`ALLOW`,`DENY`), `scope_id` FK, `predicates` jsonb, `valid_from`, `valid_until`, `require_reason` bool | `07 §10`, `12 §3.2`. Deny-wins, beats role grants. |
 | `scope` | `id` PK, `org_id`, `level` enum(`SYSTEM`,`PROCESS`,`FOLDER`,`DOC_CLASS`,`ARTIFACT`), `selector` jsonb (`process_id`/`folder_id`/`doc_class`/`artifact_id`), `predicates` jsonb (`lifecycle_state`,`requirement_source`,`pdca_phase`,`valid_from/until`,`ip_allow`,`evidence_pack_id`,`read_only`) | `07 §5`. ABAC layer; narrowing-only (AZ-INV-8). |
-| `delegation` | `id` PK, `org_id`, `delegator_id`, `delegate_id`, `permissions[]` (subset), `scope_id`, `valid_from`, `valid_until`, `reason`, `revocable_by` enum, `status` enum(`ACTIVE`,`EXPIRED`,`REVOKED`) | `07 §8`. Subset-only, SoD survives, no re-delegation. |
 | `sod_constraint` | `id` PK, `org_id`, `duty_a` jsonb, `duty_b` jsonb, `target_binding` enum(`SAME_VERSION`,`SAME_DOCUMENT`,`SAME_PROCESS`,`SAME_CAPA`), `severity` enum(`HARD_DENY`,`FLAG_AND_REQUIRE_REASON`), `org_overridable` bool | `07 §7`. SoD-1/SoD-3 non-overridable. |
 | `guest_grant` | `id` PK, `user_id` (guest), `evidence_pack_id` FK, `valid_until`, `ip_allow`, `read_only` (forced) | `06 §7.4`, `07 §5.4`. Time-boxed external auditor — the **heavier** delivery path (a DB-backed guest identity + ABAC). **Deferred to v1.x**: S-pack-2 shipped the lighter Ed25519 signed-token path instead (`pack_share_link`, §5.7). |
 | `org_role` | `id` PK, `org_id`, `name` (e.g. "Process Owner of Purchasing", "Top Management"), `description` | `02 §3.4`. **QMS role ≠ permission role** — RACI/accountability only, drives assignee resolution, not authz. |
@@ -131,6 +128,11 @@ erDiagram
 | `working_calendar` | `id` PK, `org_id`, `name`, `working_days` jsonb (ISO weekday mask 1=Mon..7=Sun), `holidays` jsonb (org holiday `YYYY-MM-DD` dates), **`timezone`** (IANA, default `UTC`, additive — S-notify-6), `is_default` bool, `created_at`/`updated_at` | Org holidays/working days; **business-day SLAs and notification escalations resolve against this** (reconciled per Decisions Register R29; as-built in slice S-notify-6, migration 0067 — at most one `is_default` per org). |
 
 **Constraints:** ADMIN holds no QMS-content permission by default (`07 §2.1`); last-ADMIN revoke rejected; `app_user.username` unique per org; `permission.key` globally unique; `sod_constraint` evaluated against immutable version/audit history (cannot edit-then-approve).
+
+> **Delegation is deferred.** v1 has no `delegation` table, API, or effective-permission source;
+> migration `0003` deliberately leaves the feature for v1.x. The seeded
+> `delegation.administer` permission and nullable `on_behalf_of` attribution fields are reserved
+> forward-compatibility hooks only.
 
 ### 3.1 Permission-catalog seed (canonical, matches doc 07; reconciled per Decisions Register R5)
 
@@ -194,30 +196,32 @@ erDiagram
 
 ## 5. Documented Information Core — the Maintain/Retain Spine (Cluster B)
 
-This is the heart of the model: the abstract superclass and its two subtypes, expressed as **class-table inheritance** (`documented_information` base + `document` / `record` extension tables sharing the same PK).
+This is the heart of the model. `documented_information` is the single
+`kind=DOCUMENT|RECORD` root. Maintained Documents store their identity, headline lifecycle, and
+version pointer directly on that row—there is **no `document` extension table**. Retained Records
+add the shipped shared-primary-key `record` satellite for record-only fields.
 
 ```mermaid
 erDiagram
-    DOCUMENTED_INFORMATION ||--o| DOCUMENT : "kind=DOCUMENT (subtype)"
-    DOCUMENTED_INFORMATION ||--o| RECORD : "kind=RECORD (subtype)"
-    DOCUMENT ||--o{ DOCUMENT_VERSION : "ordered immutable chain"
-    DOCUMENT ||--o| WORKING_DRAFT : "0..1 active (mutable)"
+    DOCUMENTED_INFORMATION ||--o| RECORD : "kind=RECORD satellite"
+    DOCUMENTED_INFORMATION ||--o| FORM_TEMPLATE : "kind=DOCUMENT form satellite"
+    DOCUMENTED_INFORMATION ||--o{ DOCUMENT_VERSION : "kind=DOCUMENT version chain"
+    DOCUMENTED_INFORMATION ||--o| WORKING_DRAFT : "kind=DOCUMENT; 0..1 active"
     DOCUMENT_VERSION }o--|| BLOB : "source_blob"
-    DOCUMENT_VERSION ||--o{ RENDITION : "derived (pdf/thumb/text)"
-    RENDITION }o--|| BLOB : "rendition_blob"
-    DOCUMENT ||--o| DOCUMENT_VERSION : "effective_version_id"
+    DOCUMENT_VERSION }o--o| BLOB : "rendition_blob (optional)"
+    DOCUMENTED_INFORMATION ||--o| DOCUMENT_VERSION : "current_effective_version_id"
     DOCUMENT_VERSION ||--o{ SIGNATURE_EVENT : "approval/release decisions"
-    DOCUMENT ||--o{ DOCUMENT_LINK : "related/parent-child/references"
+    DOCUMENTED_INFORMATION ||--o{ DOCUMENT_LINK : "related/parent-child/references"
     FORM_TEMPLATE ||--o{ RECORD : "instantiates"
     RECORD }o--o| DOCUMENT_VERSION : "produced_under (source_version pin)"
     RECORD ||--o{ EVIDENCE_BLOB : "evidence"
     EVIDENCE_BLOB }o--|| BLOB : "content-addressed"
     RECORD }o--o| RECORD : "correction_of"
-    DOCUMENT ||--o{ DISTRIBUTION_ENTRY : "issued to"
+    DOCUMENTED_INFORMATION ||--o{ DISTRIBUTION_ENTRY : "kind=DOCUMENT; issued to"
     DISTRIBUTION_ENTRY ||--o{ ACKNOWLEDGEMENT : "read-and-understood"
 ```
 
-### 5.1 `documented_information` (abstract base — universal control fields)
+### 5.1 `documented_information` (kind-discriminated root)
 
 | Attribute | Type | Notes |
 |---|---|---|
@@ -227,26 +231,26 @@ erDiagram
 | `legacy_identifier` | text null | Preserved on import (`04 §7.2`). |
 | `title` | text | |
 | `kind` | enum(`DOCUMENT`,`RECORD`) | Discriminator driving all lifecycle behavior. |
-| `concrete_type` | enum | Leaf type (Procedure, Form/Template, Audit, CAPA, Calibration, …). |
-| `requirement_source` | enum(`iso_mandatory`,`org_determined`) | Drives ★ checklist + SoD default. |
-| `pdca_phase` | enum(`PLAN`,`DO`,`CHECK`,`ACT`) | Dashboard placement. |
 | `owner_user_id` | uuid FK | Accountable person (Cl 5.3). |
-| `owner_org_role_id` | uuid FK null | QMS responsibility (RACI). |
-| `folder_path` | ltree null | Materialized logical folder path; a **scope selector**, not physical storage. Scope evaluation uses **subtree-prefix (ltree ancestor) matching**; `FOLDER` survives as a first-class scope level. Set/edited via document metadata (metadata UI affordance) (reconciled per Decisions Register R6). |
+| `folder_path` | text null | An ltree-compatible dotted logical path and **scope selector**, not physical storage. v1 evaluates subtree-prefix matching in the policy layer; a native `ltree` type/GiST index remains additive. |
 | `import_provenance` | jsonb null | `source_rel_path`, `source_sha256`, `run_id`, `classifier_version`, `confidence`, `decided_by` (`09 §10.2`). |
-| `created_at/by` | | |
+| `created_at/by`, `updated_at/by` | | Mutable headline metadata; immutable content remains on versions/record evidence. |
 
 > `clause_map[]` and `process_links[]` are the `clause_mapping` / `process_link` join tables (§4), keyed to `documented_information_id`. Registers, objectives, etc. are also `documented_information` rows (see §6 reconciliation R3).
+> v1 does not store separate `concrete_type`, `requirement_source`, `pdca_phase`, or
+> `owner_org_role_id` columns on this root. Document type/level comes from `document_type_id`,
+> record type from the `record` satellite, requirement/process context from audited mappings, and
+> QMS responsibility from the organization-role tables.
 
-### 5.2 `document` (subtype — maintained)
+### 5.2 Maintained-Document fields (stored on `documented_information`)
 
 | Attribute | Type | Notes |
 |---|---|---|
-| `id` PK/FK | uuid | = `documented_information.id`. |
-| `current_state` | enum(`Draft`,`InReview`,`Approved`,`Effective`,`UnderRevision`,`Superseded`,`Obsolete`) | **Derived headline** (state lives precisely on versions). `04 §3.1`. |
-| `effective_version_id` | uuid FK null | The single governing version (or null). |
-| `document_type` | enum | Quality Policy, Manual, Scope Statement, Process Definition, Procedure/SOP, Work Instruction, Form/Template, Quality Objective, Register, … (catalog: see `document_type` entity in §6). |
-| `document_level` | enum(`L1_POLICY`,`L2_PROCEDURE`,`L3_WORK_INSTRUCTION`,`L4_FORM`) | Explicit ISO documentation level (extensible); the `DOC_CLASS` authz scope (`07`) matches on `document_level` (and optionally `kind`+`type`), and doc 10 routing key `document_class` resolves to `document_level` (reconciled per Decisions Register R7). |
+| `document_type_id` | uuid FK null | Catalog row for Quality Policy, Procedure/SOP, Form/Template, Objective, Register, etc. |
+| `area_code` | text null | The `{AREA}` component used by the identifier allocator. |
+| `current_state` | enum(`Draft`,`InReview`,`Approved`,`Effective`,`UnderRevision`,`Superseded`,`Obsolete`) | Stored headline projection synchronized by lifecycle transitions; version state remains authoritative for an individual immutable version. |
+| `current_effective_version_id` | uuid FK null | The single governing version (or null). |
+| `document_level` | derived via `document_type` | `L1_POLICY`/`L2_PROCEDURE`/`L3_WORK_INSTRUCTION`/`L4_FORM`; used by `DOC_CLASS` authorization and routing, never duplicated on the root. |
 | `is_singleton` | bool | Quality Policy / Scope Statement (vault refuses a 2nd **Effective** at a time, not a 2nd ever — see §5.2 singleton note, reconciled per Decisions Register R25). |
 | `review_period_months` | integer (months) | Nullable; `null` = no scheduled review. **NOT `interval`** — psycopg3 cannot load month-bearing PG intervals into `timedelta` (S-drift-1). |
 | `next_review_due` | date STORED | Nullable. Recomputed on release (`_cutover`), on `review_confirmed`, and on PATCH. Anchor = `MAX(last_reviewed_at, effective_from)` + months (day-clamped). (S-drift-1) |
@@ -254,20 +258,22 @@ erDiagram
 | `review_state` | derived at read (`current`/`due_soon`/`overdue`) | **Never stored/indexed** — computed from `next_review_due` + org-tz. `05 §9.3`. (S-drift-1) |
 | `classification` | enum(`Public`,`Internal`,`Confidential`,`Restricted`) | Watermark + export gating. |
 | `acknowledgement_required` | bool | |
-| `retention_of_superseded` | uuid FK → `retention_policy` | How long superseded versions kept. |
-| `checkout_user_id`, `checkout_at`, `lock_token` | | Redis lock mirror (authority is Redis; this is for display/recovery). |
+
+Checkout fields are not columns on `documented_information`; the optional `working_draft` row is
+their database mirror and Redis remains the authoritative lock (§5.4).
 
 ### 5.3 `document_version` (immutable snapshot)
 
 | Attribute | Type | Notes |
 |---|---|---|
 | `id` PK | uuid | |
-| `document_id` FK | uuid | |
+| `org_id`, `document_id` FK | uuid | `document_id` points directly to `documented_information.id`. |
 | `version_seq` | int | System-owned monotonic; never reused (`05 §2.2`). |
 | `revision_label` | text | Projected per scheme (`Rev C`/`2.0`). |
 | `change_significance` | enum(`MAJOR`,`MINOR`) | Set on DCR/check-in (`05 §2.2`). |
 | `version_state` | enum(`Draft`,`InReview`,`Approved`,`Effective`,`Superseded`,`Obsolete`) | The authoritative per-version state. `04 §3.1`. |
-| `source_blob_id` FK | uuid | The exact bytes (`04 §2.2`). |
+| `source_blob_sha256` FK | text | The exact authoritative bytes (`04 §2.2`). |
+| `rendition_blob_sha256` FK null | text | Optional cached PDF pointer to `blob.sha256`; derived and rebuildable, never authoritative. |
 | `metadata_snapshot` | jsonb | Title/type/owner/clause_map/process_links/classification **as they were** (`04 §2.2`). |
 | `change_reason` | text NOT NULL | Mandatory with `change_significance` at check-in (INV-3 / 422 otherwise). |
 | `dcr_id` FK null | uuid | The DCR that produced it (reverse of `dcr.resulting_version_id`; the cross-FK realized in S-dcr-5, mig `0044`, `use_alter`). |
@@ -278,12 +284,12 @@ erDiagram
 
 > **INV-1 (single effective) enforcement:** `CREATE UNIQUE INDEX ON document_version (document_id) WHERE version_state = 'Effective'` — a partial unique index. Supersession runs in one SERIALIZABLE transaction (`04 §3.4`).
 
-### 5.4 `blob`, `rendition`, `working_draft`
+### 5.4 `blob`, rendition pointers, `working_draft`
 
 | Entity | Key attributes | Notes |
 |---|---|---|
 | `blob` | `sha256` PK, `org_id`, `size_bytes`, `mime_type`, `bucket`, `object_key`, `worm_until`, `sse`, `verified_at`, `verify_failed_at` | Content-addressed, deduplicated, WORM. Identity *is* the global hash (`04 §2.1`, `12 §5`), and under D1's single-organization deployment each identity owns exactly one canonical storage placement; `org_id` records that placement's provenance. A second placement cannot create another row, and document/record workflows reject cross-bucket retention-domain collisions rather than reusing foreign-domain WORM bytes. Multi-placement content identities require a separate placement schema. `verified_at` = the D1 rolling-verify cursor (S-drift-3): stamped on a passing re-hash ONLY. `verify_failed_at` (mig 0047) = the alarm latch: set on a finding, cleared on a pass, sorted FIRST in the rotation sample — an unresolved finding re-alarms every run regardless of the never-verified backlog. |
-| `rendition` | `id` PK, `document_version_id` FK (or `record_id`), `rendition_type` enum(`pdf`,`thumbnail`,`extracted_text`), `blob_sha256` FK | Derived, rebuildable, never authoritative. |
+| Rendition pointers (no `rendition` table) | `document_version.rendition_blob_sha256` FK null; `record.structured_pdf_blob_sha256` text null, no FK | Derived, rebuildable cached PDFs. The document-version pointer references `blob`; the record pointer deliberately does not, preserving the dual-control WORM-destroy path (§5.5). |
 | `working_draft` | `id` PK, `document_id` FK (unique — at most one active), `checked_out_by`, `checked_out_at`, `source_version_id`, `scratch_blob_ref`, `lock_token`, `lock_ttl` | The only mutable surface; frozen into a version on check-in (`04 §2.1`). The checkout permission authorizes the operation class; init-upload row-locks this mirror, matches `checked_out_by`, and CAS-refreshes `lock_token` against authoritative Redis before presigning, before commit, and immediately before returning a URL. Break-lock takes the document + same draft-row locks before clearing Redis, giving scratch commit and invalidation one total order. |
 
 ### 5.5 `record` (subtype — retained, immutable)
@@ -310,8 +316,7 @@ erDiagram
 |---|---|---|
 | `form_template` (**S-rec-3**) | `id` PK/FK = `documented_information.id` (a shared-PK subtype of a `kind=DOCUMENT`, `document_type` code `FRM`; there is no separate `document` table — DI is the single kind-discriminated base), `org_id`, `field_schema` jsonb (the **editable WORKING copy** — a bespoke field-list DSL; doc 06 §4.2) | A maintained Document that instantiates Records (`06 §1.2`, `02 §4.2`). The working `field_schema` is **frozen into each `document_version.metadata_snapshot` at check-in** (`metadata_snapshot.field_schema`) — Mode-B capture validates + pins the schema from the record's `source_version_id` snapshot, **never** this mutable row, so already-captured records keep showing their edition (the v2.0 ratchet, doc 06 §4.2). |
 | `evidence_blob` | `id` PK, `record_id` FK, `blob_sha256` FK, `is_original` bool | Content-addressed attachment(s); original never mutated. |
-| `requirement_link` | `id` PK, `record_id` FK, `clause_id` FK (requirement node) | Finer-grained direct requirement traceability (`06 §3`). |
-| `evidence_for_link` | `id` PK, `record_id` FK, `target_type` enum(`finding`,`capa_stage`,`clause`,`process`,`document`), `target_id` | Link-as-evidence (Mode C), audited, never copies (`06 §4.3`). |
+| `evidence_for_link` | `id` PK, `org_id`, `record_id` FK, `target_type` enum(`finding`,`capa_stage`,`clause`,`process`,`document`), `target_id`, `link_reason`, `created_at/by` | The shipped polymorphic link-as-evidence edge (Mode C), audited and never a copy (`06 §4.3`). A `target_type=clause` row is the direct requirement-level traceability representation; there is no separate `requirement_link` table. |
 
 ### 5.6 Document linking & distribution
 
@@ -433,12 +438,12 @@ erDiagram
     SIGNATURE_EVENT }o--o| CAPA_STAGE : "per-stage sign"
     AUDIT_EVENT }o--o| SIGNATURE_EVENT : "reserved FK link"
     APP_USER ||--o{ SIGNATURE_EVENT : "signer"
-    APP_USER ||--o{ SIGNATURE_EVENT : "on_behalf_of (delegation)"
+    APP_USER ||--o{ SIGNATURE_EVENT : "on_behalf_of (reserved)"
 ```
 
 | Entity | Key attributes | Notes / source |
 |---|---|---|
-| `signature_event` | `id` PK, `org_id`, `signer_user_id` FK, `on_behalf_of` FK null (delegation), `signed_object_type` enum(`document_version`,`record`,`capa_stage`,`dcr` *(S-dcr-4, mig `0043`)*,`improvement_initiative_stage_event` *(S-improvement-4, mig `0053`)*), `signed_object_id`, `meaning` enum(`review`,`approval`,`release`,`obsolete`,`verify`,`disposition`,`import_baseline`,`review_confirmed`; **reserved for the future Part-11 phase, declared but NOT emitted in v1:** `authored`,`responsibility`), `intent` text, `method` enum(`app_click`/`SESSION` v1; reserved `password_reauth`,`mfa_totp`,`mfa_webauthn`), `content_digest` (binds to bytes), `auth_context` jsonb (`acr`/`amr`), `reauth_at` (reserved), `manifest` jsonb (reserved), `crypto_signature` (reserved), `prev_signature_hash`/`signature_hash` (reserved chaining), `voided_by`/`voided_reason`, `created_at` | **Append-only.** Single-factor v1; Part 11 = populate reserved fields + stricter policy flag, no rewrite (`04 §4.2`, `12 §11`, `07 AZ-INV-7`). |
+| `signature_event` | `id` PK, `org_id`, `signer_user_id` FK, `on_behalf_of` FK null (**reserved, unpopulated in v1**), `signed_object_type` enum(`document_version`,`record`,`capa_stage`,`dcr` *(S-dcr-4, mig `0043`)*,`improvement_initiative_stage_event` *(S-improvement-4, mig `0053`)*), `signed_object_id`, `meaning` enum(`review`,`approval`,`release`,`obsolete`,`verify`,`disposition`,`import_baseline`,`review_confirmed`; **reserved for the future Part-11 phase, declared but NOT emitted in v1:** `authored`,`responsibility`), `intent` text, `method` enum(`app_click`/`SESSION` v1; reserved `password_reauth`,`mfa_totp`,`mfa_webauthn`), `content_digest` (binds to bytes), `auth_context` jsonb (`acr`/`amr`), `reauth_at` (reserved), `manifest` jsonb (reserved), `crypto_signature` (reserved), `prev_signature_hash`/`signature_hash` (reserved chaining), `voided_by`/`voided_reason`, `created_at` | **Append-only.** Single-factor v1; Part 11 = populate reserved fields + stricter policy flag, no rewrite (`04 §4.2`, `12 §11`, `07 AZ-INV-7`). |
 
 > **Reconciliation note:** `04`/`05`/`12` use lowercase `meaning` values (`approval`); `10` uses uppercase (`APPROVE`). Canonical = **lowercase** enum values to match the storage examples in `04 §4.2` and `12 §11.2`. The `IMPORT_BASELINE` meaning (`09 §10.2`) is normalized to `import_baseline`. Per Decisions Register R2 the v1 emitted enum is fixed at `review, approval, release, obsolete, verify, disposition, import_baseline, review_confirmed` — `review_confirmed` is emitted by a **periodic review that concludes no change needed** — and `authored`, `responsibility` are reserved for the future Part-11 phase (declared but NOT emitted in v1).
 
@@ -641,9 +646,9 @@ The upstream sections were internally consistent on the big decisions but drifte
 
 ## 16. Summary — How the Model Locks to the Foundation
 
-1. **One vault, two kinds.** `documented_information` is the spine; `document` (versioned, single-effective via a partial unique index) and `record` (immutable, retention-governed, `correction_of`) are its subtypes — the maintain/retain rule is structural, not advisory.
+1. **One vault, two kinds.** `documented_information` is the kind-discriminated spine. `kind=DOCUMENT` rows version directly and hold the single-effective pointer; `kind=RECORD` rows add the immutable, retention-governed shared-PK `record` satellite with `correction_of` — the maintain/retain rule is structural, not advisory.
 2. **Immutability is enforced, not hoped.** Blobs are content-addressed + WORM; versions and records have no UPDATE path; the audit trail is append-only and hash-chained with signed checkpoints — tamper-*evident* per the honest posture.
-3. **Authorization is data.** Permissions are atomic rows, roles are bundles, grants/overrides carry scopes with ABAC predicates, SoD and delegation are first-class — deny-by-default, deny-wins, every mutation audited.
+3. **Authorization is data.** Permissions are atomic rows, roles are bundles, grants/overrides carry scopes with ABAC predicates, and SoD is first-class — deny-by-default, deny-wins, every mutation audited. Delegation remains an explicit v1.x hook, not a shipped table or resolution source.
 4. **The ISA is the navigation.** `clause` (read-only seed) + `process` (4.4 graph) + `clause_mapping`/`process_link` M:N joins drive the three lenses and the compliance checklist without duplicating truth.
 5. **The Check→Act loop is wired.** `audit_finding(NC) → capa` auto-link, CAPA closure gate, DCR↔CAPA `source_link`, management-review outputs spawning CAPAs/initiatives — traceability is a graph of audited links.
 6. **Workflows pin like records.** `workflow_instance` pins its `definition_version`; tasks feed My-Actions; decisions become `signature_event`s — the same hook Part 11 will tighten.

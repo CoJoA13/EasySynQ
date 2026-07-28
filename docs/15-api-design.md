@@ -149,7 +149,7 @@ One envelope for every non-2xx. HTTP status is authoritative; `code` is the stab
 |---|---|---|
 | 400 | `invalid_cursor`, `unknown_filter`, `unknown_sort`, `malformed_request` | Bad query/path/syntax. |
 | 401 | `unauthenticated`, `token_expired`, `token_invalid` | Missing/expired/invalid Keycloak JWT, including a signing key unknown after a successful JWKS refresh. |
-| 403 | `permission_denied`, `out_of_scope`, `sod_violation`, `step_up_required`, `setup_incomplete` | Authenticated but policy engine denies: ABAC scope miss, Separation-of-Duties block (`14 §3`), MFA/re-auth required, or QMS locked because `setup_state ≠ OPERATIONAL`. |
+| 403 | `permission_denied`, `out_of_scope`, `sod_violation`, `step_up_required`, `setup_incomplete` | Authenticated but policy engine denies: ABAC scope miss, Separation-of-Duties block (`14 §3`), MFA/re-auth required, or QMS locked because `system_config.setup_state ≠ OPERATIONAL`. |
 | 404 | `not_found` | Absent, **or** hidden by row-level visibility (§9.5). |
 | 409 | `conflict`, `duplicate_identifier`, `invalid_state_transition`, `document_checked_out`, `singleton_exists` | Unique violation, illegal transition, doc locked by another user, or a 2nd Quality-Policy/Scope singleton. |
 | 412 | `precondition_failed` | `If-Match` ETag mismatch (optimistic lock). |
@@ -219,10 +219,10 @@ Every authenticated route declares (a) the **required permission key(s)** (from 
 | Auth / Session | `/auth/*`, `/me/*` | `app_user`, Keycloak, Redis sessions |
 | Users | `/users` | `app_user` |
 | Roles | `/roles` | `role`, `role_grant`, `role_assignment` |
-| Permissions / Grants | `/permissions`, `/users/{id}/roles`, `/users/{id}/overrides`, `/delegations` | `permission`, `permission_override`, `scope`, `delegation`, `sod_constraint` |
+| Permissions / Grants | `/permissions`, `/users/{id}/roles`, `/users/{id}/overrides` | `permission`, `permission_override`, `scope`, `sod_constraint` |
 | Folders / IA | `/folders`, `/processes`, `/clauses` | `folder`/IA, `process`, `process_edge`, `clause`, `clause_mapping`, `process_link` |
-| Documents | `/documents` | `documented_information`+`document`, `working_draft` |
-| Versions | `/documents/{id}/versions` | `document_version`, `blob`, `rendition` |
+| Documents | `/documents` | `documented_information`, `working_draft` |
+| Versions | `/documents/{id}/versions` | `document_version`, `blob` (source/rendition pointers) |
 | Change Requests (DCR) | `/dcrs` | `dcr`, `impact_assessment` |
 | Workflows / Tasks (approvals) | `/workflow-instances`, `/tasks` | `workflow_instance`, `task`, `task_outcome`, `signature_event` |
 | Records / Evidence | `/records` | `record`, `evidence_blob`, `form_template` |
@@ -238,8 +238,8 @@ Every authenticated route declares (a) the **required permission key(s)** (from 
 | Dashboards / Reports | `/dashboards/*`, `/reports/*` | aggregates |
 | Evidence Packs | `/evidence-packs` | `evidence_pack`, `pack_item`, `pack_share_link`, `record` (`record_type=EVIDENCE`) |
 | Retention | `/retention-policies`, `/records/{id}/disposition` | `retention_policy`, `disposition_event` |
-| Admin / Config | `/admin/*` | `organization`, `instance_config`, `storage_config`, `setup_state`, `identity_provider_config`, `numbering_scheme` |
-| Backup | `/admin/backups` | `backup_policy`, `backup_run` |
+| Setup / Admin Config | `/setup/*`, `/admin/config`, `/admin/notifications/working-calendar` | `organization`, `system_config`, `storage_config`, `backup_policy`, `working_calendar` |
+| Backup setup / restore drill | `/setup/configure-backup`, `/setup/run-restore-test` | `backup_policy` (latest result; no run table) |
 | Import | `/admin/imports` | `import_run`, `import_file`, `import_classification`, `import_decision`, `import_commit_result` |
 | Webhooks / Events | `/admin/webhooks`, `/events` (SSE) | system |
 
@@ -287,9 +287,10 @@ Roles are **convenience bundles, never binding** (`14 §3` AZ-INV-4). `is_reserv
 | DELETE | `/roles/{id}` | `role.delete` | — | `409 conflict` if assigned; `?reassign_to={roleId}` to force. |
 | PUT | `/roles/{id}/grants` | `role.update` | — | Replace the full grant set (idempotent set semantics). |
 
-### 8.3 Permissions, Grants, Overrides, Delegation
+### 8.3 Permissions, Grants, Overrides, and Effective Access
 
-The permission **catalog** is read-only seed data (`07 §3`, 24 resources). Grants live on roles (§8.2); per-user overrides and delegations live here.
+The permission **catalog** is read-only seed data (`07 §3`, 24 resources). Grants live on roles
+(§8.2), and per-user ALLOW/DENY overrides provide the direct exception layer.
 
 | Method | Path | Perm | Notes |
 |---|---|---|---|
@@ -298,18 +299,19 @@ The permission **catalog** is read-only seed data (`07 §3`, 24 resources). Gran
 | DELETE | `/users/{id}/roles/{assignmentId}` | `permission.grant` | Revoke a scoped assignment. |
 | GET / POST | `/users/{id}/overrides` | `user.read` / `permission.grant` | Direct `permission_override`: `{ permission_key, effect:"ALLOW"\|"DENY", scope:{level,selector,predicates}, valid_from?, valid_until?, reason? }`. **Deny-wins, beats role grants.** |
 | DELETE | `/users/{id}/overrides/{overrideId}` | `permission.grant` | Remove override. |
-| GET / POST | `/delegations` | `delegation.read` / `delegation.create` | Subset-only, scope-bound, time-boxed delegation (`14 §3`): SoD survives, no re-delegation. |
-| POST | `/delegations/{id}/revoke` | `delegation.revoke` | →`REVOKED`. |
-| GET | `/users/{id}/effective-permissions?scope_level=&scope_id=` | `user.read` | Computed result **with provenance** (which role/override/delegation produced each, and whether a `sod_constraint` flagged it). Auditor-facing. |
+| GET | `/users/{id}/effective-permissions?scope_level=&scope_id=` | `user.read` | Computed result with the winning role/override provenance. Auditor-facing. |
+
+> **Delegation is a v1.x hook, not a v1 API.** There is no `/delegations` route, `delegation`
+> table, or `delegation.read`/`delegation.create`/`delegation.revoke` key. The only seeded key is
+> reserved `delegation.administer`; it does not activate delegated grants or attribution.
 
 **`GET /users/{id}/effective-permissions` 200:**
 ```json
 {
-  "scope": { "level": "FOLDER", "selector": { "folder_id": "018f...fld" } },
+  "scope": { "level": "FOLDER", "selector": { "scope_id": "quality.manuals" } },
   "permissions": [
-    { "key": "document.read",     "effect": "ALLOW", "source": "role:Quality Manager" },
-    { "key": "document.approve",  "effect": "ALLOW", "source": "role:Quality Manager", "sod_flag": "author_excluded" },
-    { "key": "document.delete",   "effect": "DENY",  "source": "user_override" }
+    { "key": "document.read",    "effect": "ALLOW", "source": "role:Quality Manager" },
+    { "key": "document.approve", "effect": "DENY",  "source": "user_override" }
   ]
 }
 ```
@@ -336,7 +338,7 @@ The logical maintained item (`documented_information` + `document`, `14 §5.2`).
 | Method | Path | Perm | Idem | Notes |
 |---|---|---|---|---|
 | GET | `/documents` | `document.read` | — | Filter `current_state`, `document_type`, `folder_id`, `owner_user_id`, `clause_refs[has]`, `review_state`, `classification`. **Row-filtered by scope** (§9.3). |
-| POST | `/documents` | `document.create` | ✓ | Creates the logical doc in `Draft` with no version yet. Identifier is **vault-allocated** from the org `numbering_scheme` (`14 §2`) unless `legacy_identifier` is supplied on import. `singleton_exists`→`409` for a 2nd Quality Policy/Scope. |
+| POST | `/documents` | `document.create` | ✓ | Creates the logical doc in `Draft` with no version yet. Identifier is **vault-allocated** through the org's atomic `numbering_counter` and `{TYPE}[-{AREA}]-{SEQ}` service formatter (`14 §2`) unless `legacy_identifier` is supplied on import. `singleton_exists`→`409` for a 2nd Quality Policy/Scope. |
 | GET | `/documents/{id}` | `document.read` | — | `expand=owner,effective_version,folder`; `_links` advertise permitted actions. |
 | PATCH | `/documents/{id}` | `document.manage_metadata` | — | **Metadata only:** `title`, `folder_path`, `classification`, and `review_period_months` (`null` opts out). **Never** sets state — see actions. _(Gate corrected to the as-built metadata permission; `document.edit` governs content revision/check-in, while clause/process links have their own sub-resources.)_ |
 | DELETE | `/documents/{id}` | `document.delete` | — | Soft-delete only; blocked (`409`) once a version is `Effective` (must be obsoleted via lifecycle). |
@@ -459,7 +461,7 @@ Per reconciliation **R6**, "approvals" are **not** standalone tables: an approva
 | GET | `/tasks/{id}` | `task.read` | — | Task detail + the subject it acts on. |
 | POST | `/tasks/{id}/claim` | `task.claim` | ✓ | Claim a pool task (`PENDING→CLAIMED`). |
 | POST | `/tasks/{id}/decision` | derived from subject (`document.approve` \| `changeRequest.approve` \| `capa.verify` \| `document.acknowledge`) | ✓ | `{ outcome:"approve"\|"reject"\|"acknowledge"\|"complete"\|"verify"\|"changes_requested", comment? }` (idempotent via `client_token`). Writes a `task_outcome` **and** a `signature_event` and an `audit_event` in one transaction. **SoD enforced:** an author/auditor excluded by `sod_author_excluded`/`sod_constraint` → `403 sod_violation`. May require `acr=mfa` (config) → else `403 step_up_required`. Reject returns the subject to `Draft`/`Open` with the comment. |
-| POST | `/tasks/{id}/reassign` | `task.reassign` | ✓ | `{ to_user_id, reason }` (delegation-aware). |
+| POST | `/tasks/{id}/reassign` | `task.reassign` | ✓ | `{ to_user_id, reason }`. |
 | POST | `/tasks/{id}/escalate` | `task.escalate` | ✓ | Manual escalation; SLA breach auto-escalates via Beat (`task` state `ESCALATED`). |
 
 > **Implemented-gate note (S5/S-web-5):** the closed v1 catalog has **no `task.*`/`workflow.*` keys**, so the implementation gates differ from the aspirational columns above: `GET /tasks` and `/tasks/{id}` are **self-scoped** (caller is assignee or in the candidate pool — no permission key), and `GET /workflow-instances/{id}` and `GET /documents/{id}/approval` gate on **`document.read` on the subject document** (not `workflow.read`). `POST /tasks/{id}/decision` derives the key from the (subject, outcome) as shown (`document.approve`/`document.review`). **(S-ack-1, R43)** A `DOC_ACK` decision is the non-sig-hook carve-out to "writes a `signature_event`": it writes **NO `signature_event`** (doc 07 §6.3's pipeline — `document.acknowledge` is `sig_hook=false`); outcome `acknowledge`, recorded as the append-only `acknowledgement` row + `DOCUMENT_ACKNOWLEDGED` in one transaction.
@@ -741,16 +743,21 @@ FKs) → retirement is the soft `:archive` action.
 
 ### 8.17 Admin & Config (`/admin/*`)
 
-The ADMIN super-user sits **outside the QMS** (`03 §4`): first-run setup, users, roles, storage/backup, IdP federation, import. ADMIN holds **no QMS-content permission by default** (`14 §3`) and **every admin action is itself audited**. All `/admin/**` require `is_system_admin` **and** `acr=mfa`; while `setup_state ≠ OPERATIONAL` the QMS surface returns `403 setup_incomplete`.
+The ADMIN super-user sits **outside the QMS** (`03 §4`): first-run setup, users, roles,
+storage/backup, IdP federation, import. ADMIN holds **no QMS-content permission by default**
+(`14 §3`) and **every admin action is itself audited**. All `/admin/**` require
+`is_system_admin` **and** `acr=mfa`; while `system_config.setup_state ≠ OPERATIONAL` the QMS
+surface returns `403 setup_incomplete`.
 
 | Method | Path | Notes |
 |---|---|---|
-| GET / PATCH | `/admin/setup` | First-run `setup_state` gates G-A…G-E; cannot reach `OPERATIONAL` until all pass (`14 §2`). |
 | GET / PATCH | `/admin/config` | **S-rec-3 (as built):** post-OPERATIONAL org toggles on `system_config` (today `capture_pre_release_templates`, doc 06 §4.2). Gated on the SYSTEM-domain `config.update` (admin-only; R35); audited `CONFIG_UPDATED` (object_type `config`). |
-| GET / PATCH | `/admin/org` | `organization` + `org_profile` (locale, timezone, logo). |
-| GET / PATCH | `/admin/config/storage` | `storage_config`: MinIO endpoint/buckets (secret fields write-only), `mirror_path`/`mirror_layout`, `worm_verified_at`. `POST …:test` runs a connectivity + WORM check (must be verified before any blob write, gate G-B). |
-| GET / PATCH | `/admin/config/identity` | `identity_provider_config`: Keycloak mode (local/LDAP-AD/OIDC-SAML), connection (secrets envelope-encrypted), group→role hints. |
-| GET / PATCH | `/admin/config/numbering` | `numbering_scheme` (`{TYPE}-{AREA}-{SEQ:000}`, revision-label style). |
+| GET | `/setup/state` | Public minimal read of `system_config.setup_state`; the SPA uses it to choose wizard vs shell. |
+| GET | `/setup` | Sensitive setup/gate detail, backed by `organization`, `system_config`, `storage_config`, and `backup_policy`; gated on `config.read`. |
+| PATCH | `/setup/org-profile` | Updates `organization.legal_name`, `short_code`, and `timezone`; there is no profile table. |
+| POST | `/setup/verify-storage` | Runs the G-B WORM probe and persists `storage_config.worm_verified_at`/`object_lock_mode`; bucket/endpoint values remain deployment configuration. |
+| POST | `/setup/configure-auth` | Persists the selected auth method and successful non-bootstrap OIDC proof on `system_config`; federation details remain in Keycloak/environment configuration. |
+| POST | `/setup/finalize` | Rechecks G-A…G-E and advances `system_config.setup_state` to `OPERATIONAL`. |
 | GET / PATCH | `/admin/config/workflow` | `workflow_definition`s (versioned); per-doc-type approval chains, MFA-on-approval toggle, SLAs. |
 | GET | `/admin/system/health` | Liveness/readiness of PG, MinIO, OpenSearch, Redis, Keycloak, renderer, queue depth (mirrors `/readyz`, `03 §10`). |
 | GET | `/admin/jobs/{id}` | Generic async-job status (the `202` follow-up): `{ id, kind, status:queued\|running\|succeeded\|failed, progress, result_url?, error? }`. |
@@ -758,17 +765,14 @@ The ADMIN super-user sits **outside the QMS** (`03 §4`): first-run setup, users
 | GET | `/admin/drift/superseded-copies` | **S-drift-3 (D4, R11):** outstanding EXPORTED/PRINTED copies of now-Superseded/Obsolete versions (`limit`/`offset`; totals over the full set). The only detection leg reaching copies outside the mirror; the public `/verify` token is the per-copy resolution. |
 | POST | `/admin/export` | **Whole-vault export stub** (`vault.export`): a portable, full-QMS export — documents + records + audit in open formats — for tenant migration/decommission, **distinct** from scoped Evidence Packs and from backups. Async: returns `202` + a job (poll `/admin/jobs/{id}`); the archive lands in MinIO and is returned via presigned URL. Declared for the v1.x roadmap (`16`) (reconciled per Decisions Register R33). |
 
-### 8.18 Backup (`/admin/backups`)
+### 8.18 Backup setup and restore drill (`/setup/*`)
 
 Admin-controlled (`03 §9`, locked decision #1). Only PG + MinIO are backup-critical; OpenSearch/mirror are rebuildable.
 
 | Method | Path | Notes |
 |---|---|---|
-| GET / POST | `/admin/backups` | List `backup_run`s / trigger now → `202` + job (quiesces briefly for DB↔blob consistency, checksums, optional encryption). |
-| GET | `/admin/backups/{id}` | Snapshot metadata + integrity status (`includes_audit_checkpoint`, RPO/RTO estimates). |
-| GET | `/admin/backups/{id}/download` | Presigned URL to the encrypted archive. |
-| GET / PUT | `/admin/backups/policy` | `backup_policy` (cron, WAL-PITR, retention, alert sink, last restore-test). |
-| POST | `/admin/restore` | Initiate restore (guarded: confirmation token from `GET /admin/backups/{id}`; enters maintenance mode; triggers reindex + mirror-sync afterward). |
+| POST | `/setup/configure-backup` | Validates the destination and upserts the org's one `backup_policy` row (cron, retention counts, encryption-key reference, alert sink, WAL/PITR flag). Does not satisfy G-C by itself. |
+| POST | `/setup/run-restore-test` | Enqueues the backup→scratch-restore drill (`202`); serializes concurrent drills and persists PASS/FAIL plus its timestamp on `backup_policy`. Poll `GET /setup` for the result. There is no `backup_run` table or run-list API in v1. |
 
 ### 8.19 Import (`/admin/imports`)
 
@@ -830,7 +834,7 @@ A **FastAPI dependency** on every authenticated route. The route declares the re
 
 ```mermaid
 flowchart TD
-    A["Authenticated request:\nuser, permission_key, resolved scope"] --> S{setup_state OPERATIONAL?\n(non-admin routes)}
+    A["Authenticated request:\nuser, permission_key, resolved scope"] --> S{system_config.setup_state\nOPERATIONAL?\n(non-admin routes)}
     S -- no --> SI["403 setup_incomplete"]
     S -- yes --> ADM{is_system_admin AND /admin route?}
     ADM -- yes --> ALLOW["ALLOW + audit_event"]
@@ -850,7 +854,7 @@ flowchart TD
 - **Deny-wins absolutely**; default is deny.
 - **Scope inheritance:** a grant at `FOLDER`/`DOC_CLASS` covers artifacts beneath it (ltree subtree / doc-class match). A **`PROCESS` grant in v1 covers only its own `process_id`** — artifacts linked to that exact process, **not** descendant/subprocess artifacts (`include_subprocesses` descendant inclusion is **v1.x-deferred per Decisions Register R48**; doc 07 §5.3). Narrowing-only ABAC predicates (`lifecycle_state`, `pdca_phase`, `requirement_source`, `valid_from/until`, `ip_allow`, `read_only`) can only further constrain a grant (`14 §3` AZ-INV-8).
 - **SoD** (`sod_constraint`) is evaluated against **immutable version/audit history** so an author cannot edit-then-approve the same version; HARD_DENY blocks, FLAG_AND_REQUIRE_REASON forces a reason. Auditor-cannot-approve and verifier≠owner are the same machinery.
-- **Delegations** lend a subset of permissions within a scope and time window; they appear in resolution with `source: delegation`.
+- v1 resolution sources are role grants and direct user overrides. Delegation is deferred (§8.3).
 
 ### 9.3 Row-level visibility (list filtering)
 
@@ -858,7 +862,10 @@ List endpoints **filter, not 403**: the dependency injects a scope predicate int
 
 ### 9.4 Caching & freshness
 
-Effective-permission resolution is cached in **Redis** keyed by `(user_id, permissions_epoch)`. Any role/grant/override/delegation change bumps the user's `permissions_epoch`, instantly invalidating the cache — so a revoke takes effect on the **next request**, not at token expiry (this is the operational payoff of *not* baking permissions into the JWT, §5.1).
+v1 resolves grants from PostgreSQL on every request, so a role or override revoke takes effect on
+the next request rather than at token expiry. Grant mutations also best-effort bump a Redis
+`permissions_epoch`; that is a forward seam for a future effective-permission cache, not a cache
+read by v1.
 
 ### 9.5 Non-leakage rule
 
