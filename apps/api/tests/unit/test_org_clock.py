@@ -49,10 +49,10 @@ def test_set_request_org_tz_no_reset_within_call():
 async def test_get_current_user_sets_org_tz_contextvar(monkeypatch: pytest.MonkeyPatch) -> None:
     """The auth boundary wires the canonical org tz into the request context (S-orgtz-unify).
 
-    Deterministic + Docker-free complement to the end-to-end HTTP propagation test (which is only
-    mutation-distinguishing ~14/24 hours): monkeypatch the user-resolution + tz-resolution that
-    get_current_user calls, then assert get_current_user set the contextvar to the resolved tz.
-    Fails if get_current_user omits the set_request_org_tz call (mutation-distinguishing).
+    Docker-free complement to the end-to-end HTTP propagation test: monkeypatch the user-resolution
+    + tz-resolution that get_current_user calls, then assert get_current_user set the contextvar to
+    the resolved tz. Fails if get_current_user omits the set_request_org_tz call
+    (mutation-distinguishing).
     """
     from easysynq_api.auth import dependencies as deps
 

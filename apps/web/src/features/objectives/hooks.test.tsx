@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderHook, waitFor } from "@testing-library/react";
 import { http, HttpResponse } from "msw";
 import type { ReactNode } from "react";
+import { expect, it } from "vitest";
 import { AuthContext } from "../../lib/auth";
 import { TEST_AUTH } from "../../test/render";
 import { server } from "../../test/msw/server";
@@ -36,7 +37,9 @@ it("useObjectiveScorecard sets forbidden on a 403", async () => {
 });
 
 it("useObjective loads a single objective with plans", async () => {
-  const { result } = renderHook(() => useObjective("ob000001-0001-0001-0001-000000000001"), { wrapper });
+  const { result } = renderHook(() => useObjective("ob000001-0001-0001-0001-000000000001"), {
+    wrapper,
+  });
   await waitFor(() => expect(result.current.isSuccess).toBe(true));
   expect(result.current.data?.plans).toHaveLength(1);
 });

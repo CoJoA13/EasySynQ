@@ -1,53 +1,56 @@
 import datetime
+import uuid
+from collections.abc import Callable
 
 import pytest
-from sqlalchemy import select, update
+from httpx import AsyncClient
 
 from easysynq_api.cli.backfill_review_dates import backfill
 from easysynq_api.db.models.documented_information import DocumentedInformation
-from easysynq_api.db.models.organization import Organization
 from easysynq_api.db.session import get_sessionmaker
+
+from . import s5_helpers as s5
+from .test_periodic_review import _release_doc
+from .test_vault import _auth
 
 pytestmark = pytest.mark.integration
 
 
-async def test_backfill_recomputes_changed_only_and_is_idempotent(app_under_test: object) -> None:
+async def test_backfill_recomputes_changed_only_and_is_idempotent(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    app_under_test: object,
+) -> None:
+    salt = uuid.uuid4().hex[:10]
+    author = f"kc-backfill-author-{salt}"
+    approver = f"kc-backfill-approver-{salt}"
+    await s5.grant_lifecycle(author)
+    await s5.grant_lifecycle(approver)
+    await s5.set_approver_release(await s5.default_org_id(), True)
+
+    document_id, _ = await _release_doc(
+        app_client,
+        _auth(token_factory, author),
+        _auth(token_factory, approver),
+        await s5.type_id("SOP"),
+        f"backfill-review-date-{salt}".encode(),
+    )
+    doc_id = uuid.UUID(document_id)
+
     async with get_sessionmaker()() as session:
-        org_id = (
-            await session.execute(
-                select(Organization.id).order_by(Organization.created_at).limit(1)
-            )
-        ).scalar_one()
-        # Pick any Effective doc with a review period + effective version; if none exists in the
-        # shared DB, create one via the test harness used by test_periodic_review. For the assertion
-        # we only need: a documented_information row with review_period_months set and a non-null
-        # next_review_due deliberately stored as a WRONG value, then assert backfill fixes it.
-        doc = (
-            await session.execute(
-                select(DocumentedInformation)
-                .where(
-                    DocumentedInformation.org_id == org_id,
-                    DocumentedInformation.review_period_months.is_not(None),
-                    DocumentedInformation.next_review_due.is_not(None),
-                )
-                .limit(1)
-            )
-        ).scalar_one_or_none()
-        if doc is None:
-            pytest.skip("No periodic-review doc in the shared DB; create via the review harness")
-        wrong = doc.next_review_due + datetime.timedelta(days=400)
-        await session.execute(
-            update(DocumentedInformation)
-            .where(DocumentedInformation.id == doc.id)
-            .values(next_review_due=wrong)
-        )
+        doc = await session.get(DocumentedInformation, doc_id)
+        assert doc is not None
+        assert doc.next_review_due is not None
+        canonical_due = doc.next_review_due
+        wrong = canonical_due + datetime.timedelta(days=400)
+        doc.next_review_due = wrong
         await session.commit()
 
         changed = await backfill(session, dry_run=False)
-        assert any(c[0] == doc.id for c in changed)
-        refreshed = await session.get(DocumentedInformation, doc.id)
-        assert refreshed.next_review_due != wrong  # recomputed to the canonical-tz value
+        assert (doc_id, wrong, canonical_due) in changed
+        await session.refresh(doc)
+        assert doc.next_review_due == canonical_due
 
         # Idempotent: a second run reports this doc unchanged.
         changed2 = await backfill(session, dry_run=False)
-        assert all(c[0] != doc.id for c in changed2)
+        assert all(changed_id != doc_id for changed_id, _old, _new in changed2)
