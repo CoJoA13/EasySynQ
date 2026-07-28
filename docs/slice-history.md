@@ -168,7 +168,7 @@
 
 ## REMEDIATION — correctness, accessibility, polish & test reliability
 
-### Issue #331 — publish repeatable Document clause filters correctly (OpenAPI + contract tests + docs; NO runtime behavior change; NO migration [head stays `0080`]; NO new permission key [catalog 102]; closes [#331](https://github.com/CoJoA13/EasySynQ/issues/331))
+### Issue #331 — publish repeatable Document clause filters correctly (OpenAPI + contract tests + docs; NO runtime behavior change; NO migration [head stays `0080`]; NO new permission key [catalog 102]; closes [#331](https://github.com/CoJoA13/EasySynQ/issues/331); PR [#408](https://github.com/CoJoA13/EasySynQ/pull/408))
 
 **Contract correction.** `GET /documents` and `GET /reports/document-control` now publish
 `filter[clause_refs][has]` as an OpenAPI exploded form array (`style: form`, `explode: true`) instead
