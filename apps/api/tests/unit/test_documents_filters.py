@@ -18,6 +18,7 @@ from easysynq_api.api.documents import (
     _ilike_escape,
     _parse_document_filters,
     _parse_filter_bool,
+    parse_document_filters_with_applied,
 )
 from easysynq_api.problems import ProblemException
 
@@ -104,6 +105,23 @@ def test_parse_document_filters_known_field_unknown_op_400() -> None:
         _parse_document_filters(_fake_request(("filter[has_effective_version][gte]", "true")))
     assert exc.value.status == 400
     assert exc.value.code == "unknown_filter"
+
+
+# --- #331: repeatable clause-membership filters -----------------------------------------------
+
+
+def test_parse_document_filters_preserves_repeated_clause_membership_values() -> None:
+    conditions, applied = parse_document_filters_with_applied(
+        _fake_request(
+            ("filter[clause_refs][has]", "8.4"),
+            ("filter[clause_refs][has]", "7.5.3"),
+        )
+    )
+
+    # Both independent conditions reach ``where(*filters)`` and are therefore ANDed.
+    assert len(conditions) == 2
+    assert all(isinstance(condition, ColumnElement) for condition in conditions)
+    assert applied == {"filter[clause_refs][has]": ["8.4", "7.5.3"]}
 
 
 # --- _ilike_escape: the s-dcr-target-typeahead free-text `q` wildcard guard --------------------

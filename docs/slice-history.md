@@ -168,6 +168,27 @@
 
 ## REMEDIATION — correctness, accessibility, polish & test reliability
 
+### Issue #331 — publish repeatable Document clause filters correctly (OpenAPI + contract tests + docs; NO runtime behavior change; NO migration [head stays `0080`]; NO new permission key [catalog 102]; closes [#331](https://github.com/CoJoA13/EasySynQ/issues/331))
+
+**Contract correction.** `GET /documents` and `GET /reports/document-control` now publish
+`filter[clause_refs][has]` as an OpenAPI exploded form array (`style: form`, `explode: true`) instead
+of a scalar. Generated clients can therefore serialize the already-supported repeated-key form,
+for example `filter[clause_refs][has]=8.4&filter[clause_refs][has]=7.5.3`; the shared parser ANDs the
+independent membership conditions, so only documents mapped to every supplied exact clause match.
+Both endpoint descriptions state that repeatable-AND behavior and the no-subtree rule.
+
+**Audited boundary.** The other nine allow-listed filters remain scalar. Repeating an equality,
+boolean, UUID selector, or one side of a range would be contradictory or redundant rather than a
+distinct public facet. The API-design grammar now makes scalar-by-default explicit and names the
+clause-membership exception. Runtime parsing, report provenance, response schemas, permissions,
+pagination, and the web single-select facets are unchanged.
+
+**Regression proof.** A unit guard loads the real hand-maintained OpenAPI document, audits the exact
+ten-filter set on both endpoints, proves that only the clause filter is an array, pins its exploded
+serialization and AND example, and requires all shared filter serialization shapes to match. The
+parser unit suite also pins both repeated clause conditions and their ordered provenance values.
+The contract remains Redocly-clean.
+
 ### Issue #330 — lock the lifecycle-independent Document metadata read boundary (API regression tests + docs/contracts; NO runtime behavior change; NO migration [head stays `0080`]; NO new permission key [catalog 102]; closes [#330](https://github.com/CoJoA13/EasySynQ/issues/330); PR [#407](https://github.com/CoJoA13/EasySynQ/pull/407))
 
 **Owner decision (R57).** The live Document metadata row stays under `document.read` in all seven

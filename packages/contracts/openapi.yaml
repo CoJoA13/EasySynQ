@@ -927,10 +927,13 @@ paths:
         document.read grant still narrow the visible set. Each row carries clause_refs (the mapped
         clause numbers, slice S10). The bracketed filter[field][op] grammar (doc 15 §3.2) narrows the
         candidate set in SQL before the row-filter; an unrecognised field/op → 400 unknown_filter, a
-        bad enum/uuid/timestamp value → 422. Pagination (slice S-web-2) returns a {data, page}
-        envelope: limit + offset slice the AUTHZ-FILTERED set (applied after the per-row scope filter,
-        not as a pre-authz SQL OFFSET), so page boundaries are correct for scoped users. page.has_more
-        is derived (no COUNT(*)); it is accurate up to a bounded candidate scan cap.
+        bad enum/uuid/timestamp value → 422. Only filter[clause_refs][has] is published as
+        repeatable: serialize each clause as a separate query key and all supplied clauses are
+        ANDed. Every other filter parameter is published as scalar. Pagination (slice S-web-2)
+        returns a {data, page} envelope: limit + offset slice the AUTHZ-FILTERED set (applied after
+        the per-row scope filter, not as a pre-authz SQL OFFSET), so page boundaries are correct for
+        scoped users. page.has_more is derived (no COUNT(*)); it is accurate up to a bounded
+        candidate scan cap.
       parameters:
         - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
         - { name: offset, in: query, required: false, schema: { type: integer, minimum: 0, default: 0 } }
@@ -945,8 +948,15 @@ paths:
         - name: "filter[clause_refs][has]"
           in: query
           required: false
-          schema: { type: string }
-          description: Only documents mapped to this exact clause number (e.g. 8.4). No subtree rollup.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { type: string }
+          description: >-
+            Documents mapped to every supplied exact clause number (logical AND; no subtree rollup).
+            Repeat the query key for each clause, for example
+            filter[clause_refs][has]=8.4&filter[clause_refs][has]=7.5.3.
         - name: "filter[current_state][eq]"
           in: query
           required: false
@@ -3869,15 +3879,24 @@ paths:
         REPEATABLE READ snapshot so every row reflects a single consistent instant. The bracketed
         filter[field][op] grammar (doc 15 §3.2, shared with GET /documents) narrows the candidate set
         before the row-filter; an unrecognised field/op → 400 unknown_filter, a bad
-        enum/uuid/timestamp value → 422. The applied filter[...] params are echoed in
+        enum/uuid/timestamp value → 422. Only filter[clause_refs][has] is published as repeatable:
+        serialize each clause as a separate query key and all supplied clauses are ANDed. Every
+        other filter parameter is published as scalar. The applied filter[...] params are echoed in
         provenance.filters (grouped per key, preserving repeated values) for hash reproducibility.
         Read-only (no audit_event).
       parameters:
         - name: "filter[clause_refs][has]"
           in: query
           required: false
-          schema: { type: string }
-          description: Only documents mapped to this exact clause number (e.g. 8.4). No subtree rollup.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { type: string }
+          description: >-
+            Documents mapped to every supplied exact clause number (logical AND; no subtree rollup).
+            Repeat the query key for each clause, for example
+            filter[clause_refs][has]=8.4&filter[clause_refs][has]=7.5.3.
         - name: "filter[current_state][eq]"
           in: query
           required: false
