@@ -168,7 +168,7 @@
 
 ## REMEDIATION — correctness, accessibility, polish & test reliability
 
-### Issue #332 — interpret date-only effective bounds in the organization timezone (API + OpenAPI + integration + docs; NO migration [head stays `0080`]; NO new permission key [catalog 102]; closes [#332](https://github.com/CoJoA13/EasySynQ/issues/332))
+### Issue #332 — interpret date-only effective bounds in the organization timezone (API + OpenAPI + integration + docs; NO migration [head stays `0080`]; NO new permission key [catalog 102]; closes [#332](https://github.com/CoJoA13/EasySynQ/issues/332); PR [#409](https://github.com/CoJoA13/EasySynQ/pull/409))
 
 **Shared parser correction.** `filter[effective_from][gte|lte]=YYYY-MM-DD` now means midnight on
 that calendar date in the request's canonical organization timezone
