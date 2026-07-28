@@ -1606,7 +1606,7 @@ Docker-backed truth table locks all seven states across Library, detail, and reg
 that a caller holding only `document.read_draft` / `document.read_obsolete` cannot substitute those
 keys for metadata access.
 
-**Back-propagation:** 07 §3.1, 13 §6.1, 15 §8.5/§8.15, OpenAPI.
+**Back-propagation:** 07 §3.1, 13 §2/§6.1, 15 §8.5/§8.14/§8.15, OpenAPI.
 
 Bumps the resolutions range **R1–R56 → R1–R57**.
 

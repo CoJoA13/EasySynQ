@@ -706,7 +706,7 @@ OpenSearch on M/L profiles; **Postgres FTS fallback** on the S profile and on Op
 
 | Method | Path | Perm | Notes |
 |---|---|---|---|
-| GET | `/search?q=...&types=document,record,ncr,capa,audit&facets=clause,process,pdca_phase` | per-type read | Unified faceted search. Results are **post-filtered by the caller's effective permissions** — never leak titles of out-of-scope items. Cursor-paginated; highlight snippets included. |
+| GET | `/search?q=...&types=document,record,ncr,capa,audit&facets=clause,process,pdca_phase` | per-type read | Unified faceted search. Results are **post-filtered by the caller's effective permissions** — never leak titles of out-of-scope items. Document metadata hits use `document.read` in every lifecycle state (R57); the shipped Effective-only candidate set is a query default, not a permission switch. Cursor-paginated; highlight snippets included. |
 | GET | `/search/suggest?q=...` | `document.read` | Low-latency type-ahead (identifiers, titles). |
 | GET / POST | `/saved-searches` | `search.read` / `search.save` | `saved_search` (live re-run, permission-filtered per viewer); subscriptions notify on count-crosses / new-item (`14 §11`). |
 

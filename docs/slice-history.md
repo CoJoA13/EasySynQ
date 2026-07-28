@@ -191,7 +191,9 @@ isolates its row gate). R57, the authorization model, search/reporting model, AP
 and implementation comments now state the same metadata/version separation. Complete
 `document.read_obsolete` enforcement on version-history surfaces remains explicitly tracked as a
 separate follow-up [#406](https://github.com/CoJoA13/EasySynQ/issues/406) rather than being partially
-wired here.
+wired here. The review follow-up also removed the last stale search wording: Effective-only remains
+the shipped candidate default, while a future non-Effective **metadata** facet still post-filters
+with `document.read` under R57.
 
 ### Issue #328 — preserve failed-email recovery when SMTP is unconfigured (API + OpenAPI + web + tests; NO migration [head stays `0080`]; NO new permission key [catalog 102]; closes [#328](https://github.com/CoJoA13/EasySynQ/issues/328); PR [#405](https://github.com/CoJoA13/EasySynQ/pull/405))
 

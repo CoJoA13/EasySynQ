@@ -2,12 +2,13 @@
 
 Postgres-FTS over the document metadata plane behind the ``Indexer`` seam (R34 — OpenSearch is a v1
 drop-in). The indexer returns *candidate* hits **over Effective documents only** (doc 13's
-"Effective only" default — non-Effective states need the distinct read_draft/read_obsolete keys, a
-v1 facet); this tier **re-validates ``document.read`` per hit** against PostgreSQL (deny-by-default)
-so a stale/over-broad index can never over-disclose (doc 13 §2.7). Search is a **list surface: it
-filters, never 403s** (doc 18 §5.2) — a caller who may read nothing gets ``200`` with empty results
-and ``hidden_by_scope`` counting what their access scope hid ("N hidden by your access scope").
-Records/other types are not built → documents only.
+"Effective only" default — non-Effective metadata is a deferred facet, not a permission switch).
+Per R57, this tier **re-validates ``document.read`` per metadata hit** in every lifecycle state;
+``document.read_draft`` / ``document.read_obsolete`` remain version-content/history capabilities.
+The post-filter is deny-by-default, so a stale/over-broad index can never over-disclose (doc 13
+§2.7). Search is a **list surface: it filters, never 403s** (doc 18 §5.2) — a caller who may read
+nothing gets ``200`` with empty results and ``hidden_by_scope`` counting what their access scope hid
+("N hidden by your access scope"). Records/other types are not built → documents only.
 """
 
 from __future__ import annotations

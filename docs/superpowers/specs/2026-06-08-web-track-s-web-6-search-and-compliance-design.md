@@ -244,8 +244,9 @@ Existing suites stay green (`StateBadge`, Library deep-links unchanged).
   results page links out to `/library?clause=N` rather than re-implementing facets client-side over a capped
   candidate set (which would mislead).
 - **Saved searches** (§2.6), **content-plane / body-text search** (§2.2 — needs the extracted-text pipeline),
-  **non-Effective states** in search (needs `read_draft`/`read_obsolete` keys, §2.2), **People/Process**
-  result groups, and the **revision-history `versions` index**.
+  **non-Effective metadata states** in search (needs the deferred status facet/index expansion; hits
+  remain gated by `document.read` per R57), **People/Process** result groups, and the
+  **revision-history `versions` index** (a separate version-content authorization surface).
 - **Auditor exports** (§7 PDF/Excel) and the **Home center-hub ★ coverage tile** (§5.1 — the Home/PDCA
   dashboard is deferred until its acknowledgement/objective engines exist).
 - **Compliance "overdue review" + "linked evidence" legs** (§3.1) — need `next_review_due` (drift family) +

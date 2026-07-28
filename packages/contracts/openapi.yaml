@@ -3801,10 +3801,12 @@ paths:
       summary: Unified Postgres-FTS search over the document metadata plane (slice S10).
       description: >-
         Metadata-plane full-text search (identifier/title/legacy_identifier/area_code) over
-        **Effective documents only** (doc 13's "Effective only" default; other states need
-        read_draft/read_obsolete, a v1 facet). Candidate hits are post-filtered by the caller's
-        document.read — a list surface, so it never 403s: a caller who may read nothing gets 200
-        with empty results and a non-zero hidden_by_scope.
+        **Effective documents only** (doc 13's "Effective only" default; other states are a deferred
+        facet). That candidate restriction is query scope, not a permission switch: per R57,
+        metadata hits in every lifecycle state are post-filtered by document.read;
+        document.read_draft and document.read_obsolete remain version-content/history capabilities.
+        This is a list surface, so it never 403s: a caller who may read nothing gets 200 with empty
+        results and a non-zero hidden_by_scope.
       parameters:
         - { name: q, in: query, required: true, schema: { type: string, minLength: 1 } }
         - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 100, default: 25 } }
