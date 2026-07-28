@@ -357,25 +357,7 @@ async def _attach_evidence(
             continue
         seen.add(sha256)
         blob = await vault_repo.get_blob(session, sha256)
-        if blob is not None:
-            # FAIL-CLOSED reuse (review fix): the global content-addressed Blob PK can't track the
-            # same bytes in two buckets, so reuse ONLY a blob already WORM-sealed in the RECORDS
-            # bucket (the legitimate "same evidence on >1 record" dedup). A blob in another bucket —
-            # the WORM ``documents`` vault (a different retention domain) or, worse, the NON-WORM
-            # ``renditions`` bucket — must never back a record's sealed evidence (doc 06 §4.4 / R3).
-            # The operator uploads fresh evidence, or links to that document via evidence-for.
-            if not (blob.worm_locked and blob.bucket == settings.s3_bucket_records):
-                raise ProblemException(
-                    status=423,
-                    code="worm_required",
-                    title="Evidence bytes are already vaulted outside the records bucket",
-                    detail=(
-                        "These exact bytes exist in another bucket and cannot back a record's "
-                        "WORM-sealed evidence; upload fresh evidence, or link to that document via "
-                        "POST /records/{id}/evidence-links."
-                    ),
-                )
-        else:
+        if blob is None:
             promoted = await storage.finalize_worm(
                 sha256, bucket=storage._records_bucket(), source_bucket=source_bucket
             )
@@ -402,6 +384,26 @@ async def _attach_evidence(
                 .on_conflict_do_nothing(index_elements=["sha256"])
             )
             await session.flush()
+            # A concurrent documents-domain insert can win the global-sha conflict while this
+            # promotion is in flight. Re-read the authoritative row after the conflict-capable
+            # statement; validating only the stale pre-insert ``None`` would attach records
+            # evidence to the winner's foreign-retention bytes.
+            blob = await vault_repo.get_blob(session, sha256)
+        # FAIL CLOSED: the global content-addressed Blob PK can't track the same bytes in two
+        # buckets, so reuse ONLY a row already WORM-sealed in the records bucket (the legitimate
+        # "same evidence on >1 record" dedup). A documents/renditions row must never back a record's
+        # sealed evidence (doc 06 §4.4 / R3).
+        if blob is None or not (blob.worm_locked and blob.bucket == settings.s3_bucket_records):
+            raise ProblemException(
+                status=423,
+                code="worm_required",
+                title="Evidence bytes are already vaulted outside the records bucket",
+                detail=(
+                    "These exact bytes exist in another bucket and cannot back a record's "
+                    "WORM-sealed evidence; upload fresh evidence, or link to that document via "
+                    "POST /records/{id}/evidence-links."
+                ),
+            )
         await session.execute(
             pg_insert(EvidenceBlob)
             .values(

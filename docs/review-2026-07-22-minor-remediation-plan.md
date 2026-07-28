@@ -272,10 +272,14 @@ tests + docs · no new permission key
   D1 is explicitly single-organization and the documented/modelled blob identity is intentionally
   the global content hash with one canonical storage placement. Existing vault, ingestion, and
   records guards reject a digest collision across storage domains instead of mutating WORM
-  provenance; the foreign-bucket check-in integration test pins that distinction. Supporting
-  multiple physical placements for one digest would require a separate placement schema and
-  coordinated backup, verification, retrieval, disposition, and purge changes—not a minor PK
-  adjustment. The model docs now state the single-placement contract explicitly).
+  provenance; the foreign-bucket check-in integration test pins that distinction. PR review found
+  that the ingestion and records first-writer paths still trusted a stale pre-insert `None` after
+  losing their conflict-tolerant insert. Both now re-read and validate the authoritative winner,
+  with regressions that force the stale observation and prove no foreign-domain reference is
+  created. Supporting multiple physical placements for one digest would require a separate
+  placement schema and coordinated backup, verification, retrieval, disposition, and purge
+  changes—not a minor PK adjustment. The model docs now state the single-placement contract
+  explicitly).
 - [x] `apps/api/src/easysynq_api/db/models/document_version.py:73` — `change_summary` is dead and
   nullable while the data-model contract calls it mandatory at check-in `[C]` (fixed: the API and
   every check-in path already use mandatory `change_reason` plus `change_significance` for INV-3;

@@ -422,7 +422,11 @@ async def _commit_document(
             .on_conflict_do_nothing(index_elements=["sha256"])
         )
         await session.flush()
-    elif blob.bucket != settings.s3_bucket_documents:
+        # The global-sha insert may have lost to a concurrent records/renditions-domain writer.
+        # Under READ COMMITTED this new statement sees the committed winner; never create the
+        # immutable version from the stale pre-insert ``None`` assumption.
+        blob = await vault_repo.get_blob(session, sha)
+    if blob is None or blob.bucket != settings.s3_bucket_documents or not blob.worm_locked:
         raise _ItemCommitError("source_bytes_in_foreign_bucket")
 
     doc = DocumentedInformation(

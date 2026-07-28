@@ -185,10 +185,14 @@ model and `Blob` ORM deliberately define the SHA-256 digest as the global conten
 identity owns one canonical org/bucket/object placement; existing vault, ingestion, and records
 guards fail closed when the same digest appears from another storage domain so WORM provenance and
 disposition cannot be silently reassigned. The existing foreign-bucket check-in regression pins
-that behavior. A design with multiple physical placements per digest would require a dedicated
-placement entity plus coordinated changes to backup, verification, retrieval, disposition, purge,
-and every current blob FK, so it remains a separate architecture slice rather than a minor PK edit.
-The model docs now state the actual single-placement invariant.
+that behavior. PR review caught the concurrency edge behind that claim: the ingestion and records
+first-writer paths could both observe no row, lose `ON CONFLICT DO NOTHING` to the other retention
+domain, and then create a foreign-key reference without examining the winner. Both paths now
+re-read and validate the authoritative row after every conflict-capable blob insert. A design with
+multiple physical placements per digest would require a dedicated placement entity plus
+coordinated changes to backup, verification, retrieval, disposition, purge, and every current blob
+FK, so it remains a separate architecture slice rather than a minor PK edit. The model docs now
+state the actual single-placement invariant.
 
 The nullable `document_version.change_summary` field was genuinely dead: it had no API contract,
 producer, or consumer, while every check-in already enforces `change_reason` and
@@ -207,7 +211,9 @@ survival, and clean re-upgrade; the broader fresh-database head→base→head an
 the final migration authority. Both live-database gates are clean. API Ruff/format and strict mypy
 over **426 source files** pass; all **81** migration files pass root Ruff/format; the full unit suite
 is green (**1180 passed, 1 expected release-only skip**); and the focused foreign-bucket check-in
-integration regression passes.
+integration regression passes. Two additional mutation-distinguishing integration regressions
+force a stale initial blob lookup over a real conflicting row and prove the records path returns
+423 with no evidence link while ingestion records an isolated failed item with no document version.
 
 ### Minor Batch M9 — populated migration safety and ORM constraint coherence (migrations + CI migration test + docs; migration `0079` [new head]; NO new permission key [catalog 102]; PR [#389](https://github.com/CoJoA13/EasySynQ/pull/389))
 

@@ -18,7 +18,9 @@ import httpx
 import pytest
 from httpx import AsyncClient
 from sqlalchemy import delete, func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from easysynq_api.config import get_settings
 from easysynq_api.db.models._audit_enums import AuditObjectType, EventType
 from easysynq_api.db.models._clause_enums import PdcaPhase
 from easysynq_api.db.models._record_enums import RecordType
@@ -38,6 +40,7 @@ from easysynq_api.db.models.scope import Scope
 from easysynq_api.db.session import get_sessionmaker
 from easysynq_api.domain.authz.types import Effect, ScopeLevel
 from easysynq_api.domain.records.content_hash import record_content_hash
+from easysynq_api.services.records import service as records_service
 
 from .test_vault import _auth, _ensure_user, _grant_doc_perms, _sop_type_id, _upload
 
@@ -291,6 +294,83 @@ async def test_evidence_reuse_of_non_worm_blob_rejected(
             assert n == 0  # nothing attached — capture rolled back
     finally:
         async with get_sessionmaker()() as s:
+            await s.execute(delete(Blob).where(Blob.sha256 == sha))
+            await s.commit()
+
+
+async def test_evidence_revalidates_blob_after_insert_conflict(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A records-domain first writer must validate the global-sha conflict winner.
+
+    The first lookup is forced stale to model two transactions that both observed no Blob before a
+    documents-domain writer committed. Without the post-insert re-read, capture returns 201 and
+    attaches sealed record evidence to the foreign-retention row.
+    """
+    subject = _subject("rec-blob-race")
+    user_id = await _grant(subject, _RECORD_PERMS)
+    h = _auth(token_factory, subject)
+    content = f"record-blob-race-{uuid.uuid4().hex}".encode()
+    sha = await _upload_evidence(app_client, h, content)
+
+    async with get_sessionmaker()() as s:
+        user = await s.get(AppUser, user_id)
+        assert user is not None
+        s.add(
+            Blob(
+                sha256=sha,
+                org_id=user.org_id,
+                size_bytes=len(content),
+                mime_type="application/pdf",
+                bucket=get_settings().s3_bucket_documents,
+                object_key=sha,
+                worm_locked=True,
+            )
+        )
+        await s.commit()
+
+    original_get_blob = records_service.vault_repo.get_blob
+    target_reads = 0
+
+    async def stale_then_authoritative(
+        session: AsyncSession,
+        requested_sha: str,
+    ) -> Blob | None:
+        nonlocal target_reads
+        if requested_sha == sha:
+            target_reads += 1
+            if target_reads == 1:
+                return None
+        return await original_get_blob(session, requested_sha)
+
+    monkeypatch.setattr(records_service.vault_repo, "get_blob", stale_then_authoritative)
+    try:
+        response = await _capture(
+            app_client,
+            h,
+            record_type="EVIDENCE",
+            title="conflicting evidence placement",
+            evidence=[{"sha256": sha, "content_type": "application/pdf"}],
+        )
+        assert response.status_code == 423, response.text
+        assert response.json()["code"] == "worm_required"
+        assert target_reads == 2
+        async with get_sessionmaker()() as s:
+            blob = await s.get(Blob, sha)
+            assert blob is not None and blob.bucket == get_settings().s3_bucket_documents
+            attached = (
+                await s.execute(
+                    select(func.count())
+                    .select_from(EvidenceBlob)
+                    .where(EvidenceBlob.blob_sha256 == sha)
+                )
+            ).scalar_one()
+            assert attached == 0
+    finally:
+        async with get_sessionmaker()() as s:
+            await s.execute(delete(EvidenceBlob).where(EvidenceBlob.blob_sha256 == sha))
             await s.execute(delete(Blob).where(Blob.sha256 == sha))
             await s.commit()
 
