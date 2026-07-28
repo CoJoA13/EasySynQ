@@ -177,7 +177,7 @@
 
 ## REMEDIATION — correctness, accessibility, polish & test reliability
 
-### Minor Batch M12 — shipped data-model documentation alignment (docs only; NO migration [head stays `0080`]; NO new permission key [catalog 102]; PR pending)
+### Minor Batch M12 — shipped data-model documentation alignment (docs only; NO migration [head stays `0080`]; NO new permission key [catalog 102]; PR [#392](https://github.com/CoJoA13/EasySynQ/pull/392))
 
 **What shipped.** All five finder-only reports were re-located and confirmed against the current
 ORM, migrations, services, and API surface. The authoritative data-model diagrams now describe the

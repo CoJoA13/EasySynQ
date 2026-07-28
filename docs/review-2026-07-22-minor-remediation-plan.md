@@ -38,7 +38,7 @@
 | M9 | Migration and ORM coherence | 4 | ☑ merged | [#389](https://github.com/CoJoA13/EasySynQ/pull/389) |
 | M10 | Schema and index design | 4 | ☑ merged | [#390](https://github.com/CoJoA13/EasySynQ/pull/390) |
 | M11 | Organization time and audit scalability | 3 | ☑ merged | [#391](https://github.com/CoJoA13/EasySynQ/pull/391) |
-| M12 | Data-model documentation drift | 5 | ☑ in PR | PR pending |
+| M12 | Data-model documentation drift | 5 | ☑ in PR | [#392](https://github.com/CoJoA13/EasySynQ/pull/392) |
 | M13 | API documentation drift | 4 | ☐ queued — revalidate | — |
 | M14 | Infrastructure, deploy, and public edge | 6 | ☐ queued — revalidate | — |
 | M15 | Cross-stack naming | 4 | ☐ queued — revalidate | — |
@@ -319,7 +319,7 @@ permission key
 
 ## Documentation, infrastructure, and naming
 
-### ☑ M12 — Data-model documentation drift
+### ☑ M12 — Data-model documentation drift — [#392](https://github.com/CoJoA13/EasySynQ/pull/392)
 
 `branch: fix/minor-data-model-docs` · docs only unless revalidation finds missing implementation
 
