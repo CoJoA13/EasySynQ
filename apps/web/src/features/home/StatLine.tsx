@@ -1,4 +1,5 @@
-import { Group, Text } from "@mantine/core";
+import { Group, Text, VisuallyHidden } from "@mantine/core";
+import { useId } from "react";
 import type { Rag } from "./rag";
 import { RAG_META } from "./rag";
 
@@ -15,8 +16,10 @@ export function StatLine({
 }) {
   const hasValue = value !== undefined && value !== "";
   const name = hasValue ? `${value} ${label}` : label;
+  const status = tone === "neutral" ? "Informational" : RAG_META[tone].label;
+  const statusId = useId();
   return (
-    <Group gap={8} wrap="nowrap" aria-label={name}>
+    <Group gap={8} wrap="nowrap" role="group" aria-label={name} aria-describedby={statusId}>
       <Text span c={RAG_META[tone].hue} aria-hidden style={{ lineHeight: 1 }}>
         {RAG_META[tone].glyph}
       </Text>
@@ -29,6 +32,7 @@ export function StatLine({
         {hasValue ? " " : ""}
         {label}
       </Text>
+      <VisuallyHidden id={statusId}>Status: {status}</VisuallyHidden>
     </Group>
   );
 }

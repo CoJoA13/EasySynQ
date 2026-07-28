@@ -35,6 +35,13 @@ test("RedlineViewer renders ins/del with non-color +/- markers + semantics (DP-7
   expect(inserts[0]?.textContent?.trimStart().startsWith("+")).toBe(true);
 });
 
+test("unchanged 14px context uses the AA secondary-text token", async () => {
+  renderWithProviders(<RedlineViewer documentId={DOC} fromVid={FROM} toVid={TO} />);
+  const unchanged = await screen.findByText("1. Purpose & Scope");
+  expect(unchanged.getAttribute("style")).toContain("color: var(--es-text-2)");
+  expect(unchanged.getAttribute("style")).not.toContain("var(--es-text-muted)");
+});
+
 test("RedlineViewer n/p keyboard navigation moves focus through the changes", async () => {
   const user = userEvent.setup();
   renderWithProviders(<RedlineViewer documentId={DOC} fromVid={FROM} toVid={TO} />);

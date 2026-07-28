@@ -87,7 +87,7 @@ export function RedlineViewer({
           style={{
             whiteSpace: "pre-wrap",
             fontSize: "0.875rem",
-            color: "var(--es-text-muted)",
+            color: "var(--es-text-2)",
             padding: "2px 6px",
           }}
         >

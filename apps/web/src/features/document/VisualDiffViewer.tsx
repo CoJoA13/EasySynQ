@@ -270,9 +270,7 @@ export function VisualDiffViewer({
                     fontSize: "0.875rem",
                     fontWeight: p.page === page ? 700 : 400,
                     color:
-                      p.page === page
-                        ? "var(--es-accent, #2563eb)"
-                        : "var(--es-text-muted, #6b7280)",
+                      p.page === page ? "var(--es-accent, #2563eb)" : "var(--es-text-2, #565b6b)",
                     background: p.page === page ? "var(--es-accent-soft, #eff6ff)" : "transparent",
                   }}
                 >

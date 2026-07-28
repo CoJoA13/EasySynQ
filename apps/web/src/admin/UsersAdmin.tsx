@@ -299,7 +299,7 @@ function ManageUser({
                 variant="subtle"
                 color="red"
                 onClick={() => revokeMut.mutate(a.id)}
-                aria-label="Revoke role"
+                aria-label={`Revoke role ${a.role_name}`}
               >
                 ✕
               </ActionIcon>
@@ -346,7 +346,7 @@ function ManageUser({
                 variant="subtle"
                 color="red"
                 onClick={() => removeOvMut.mutate(o.id)}
-                aria-label="Remove override"
+                aria-label={`Remove ${o.effect.toLowerCase()} ${o.scope.level.toLowerCase()} override for ${o.permission_key}`}
               >
                 ✕
               </ActionIcon>

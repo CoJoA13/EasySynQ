@@ -11,8 +11,8 @@
   underway, leaving **103** to schedule here. Batch M1 closed 4; M2 closed 2; M3 closed 2; M4
   closed 4; M5 closed 3; M6 closed 4; M7 closed 3; M8 closed 2; M9 closed 4; M10 closed 4;
   M11 closed 3; M12 closed 5; M13 closed 4; M14 closed 6; M15 closed 4; M16 closed 7;
-  M17 closed 3; M18 closed 9; M19 closed 9; M20 closed 6; M21 resolves 8;
-  **7 remain queued** after M21.
+  M17 closed 3; M18 closed 9; M19 closed 9; M20 closed 6; M21 closed 8; M22 resolves 7;
+  **no findings remain queued** after M22.
 - A queued finding is not assumed to still be live. Every batch must re-locate and revalidate its
   findings against then-current `main` before implementation; close, re-scope, or reject it with
   evidence rather than mechanically applying the 2026-07-22 suggestion.
@@ -49,10 +49,10 @@
 | M18 | Web shell, layout, and error consistency | 9 | ☑ merged | [#398](https://github.com/CoJoA13/EasySynQ/pull/398) |
 | M19 | Web state and badge consistency | 9 | ☑ merged | [#399](https://github.com/CoJoA13/EasySynQ/pull/399) |
 | M20 | Web visual tokens and semantics | 6 | ☑ merged | [#400](https://github.com/CoJoA13/EasySynQ/pull/400) |
-| M21 | Web async and error UX | 8 | ☑ in PR | [#401](https://github.com/CoJoA13/EasySynQ/pull/401) |
-| M22 | Web accessibility | 7 | ☐ queued — revalidate | — |
+| M21 | Web async and error UX | 8 | ☑ merged | [#401](https://github.com/CoJoA13/EasySynQ/pull/401) |
+| M22 | Web accessibility | 7 | ☑ ready for PR | — |
 
-**Accounting: 1 preclosed + 88 merged + 8 in PR + 7 queued = 104 original findings.**
+**Accounting: 1 preclosed + 96 merged + 7 ready for PR = 104 original findings; 0 queued.**
 
 ---
 
@@ -615,23 +615,33 @@ migration, or new permission key
   drawer switches risks `[C]` (fixed: the spawn mutation/error leaf is keyed to the selected risk,
   so the persistent drawer cannot carry one row's failure into another).
 
-### ☐ M22 — Web accessibility
+### ☑ M22 — Web accessibility
 
 `branch: fix/minor-web-accessibility` · web + vitest/jest-axe/manual keyboard checks
 
-- [ ] `apps/web/src/admin/UsersAdmin.tsx:301` — sibling revoke/remove controls receive identical
-  accessible names `[f]`.
-- [ ] `apps/web/src/app/shell/DetailDrawer.tsx:44` — resize handle has no keyboard or non-drag
-  pointer operation `[f]`.
-- [ ] `apps/web/src/features/document/RedlineViewer.tsx:90` — unchanged-context text is roughly
-  3.2:1 at 14px `[f]`.
-- [ ] `apps/web/src/features/document/VisualDiffViewer.tsx:275` — interactive page-rail text is
-  roughly 3.2:1 `[f]`.
-- [ ] `apps/web/src/features/home/StatLine.tsx:19` — RAG tone is hidden from assistive technology
-  `[f]`.
-- [ ] `apps/web/src/features/library/LibraryPage.tsx:178` — clickable/focusable table rows have no
-  interactive role or accessible name `[f]`.
-- [ ] `apps/web/src/index.css:16` — forced-colors mode loses the global focus indicator `[f]`.
+- [x] `apps/web/src/admin/UsersAdmin.tsx:301` — sibling revoke/remove controls receive identical
+  accessible names `[C]` (fixed: every control names its specific role or permission/effect/scope
+  override, so repeated row actions are distinguishable).
+- [x] `apps/web/src/app/shell/DetailDrawer.tsx:44` — resize handle has no keyboard or non-drag
+  pointer operation `[C]` (fixed: the WAI-ARIA window-splitter pattern exposes current/min/max
+  width and supports Arrow Left/Right plus Home/End; named narrow/widen buttons provide a
+  single-pointer alternative while drag remains available).
+- [x] `apps/web/src/features/document/RedlineViewer.tsx:90` — unchanged-context text is roughly
+  3.2:1 at 14px `[C]` (fixed: unchanged context uses the scheme-aware secondary-text token,
+  reaching at least 6.37:1 in light mode and 7.55:1 in dark mode).
+- [x] `apps/web/src/features/document/VisualDiffViewer.tsx:275` — interactive page-rail text is
+  roughly 3.2:1 `[C]` (fixed: inactive page buttons use the same AA-safe secondary-text token;
+  active pages retain the accent treatment and `aria-current`).
+- [x] `apps/web/src/features/home/StatLine.tsx:19` — RAG tone is hidden from assistive technology
+  `[C]` (fixed: each named signal group announces the domain meaning—On track, Needs attention,
+  Action required, or Informational—rather than a raw colour word).
+- [x] `apps/web/src/features/library/LibraryPage.tsx:178` — clickable/focusable table rows have no
+  interactive role or accessible name `[C]` (fixed: rows retain native table semantics and no
+  longer masquerade as controls; each identifier is an explicit, focusable, fully named detail
+  action).
+- [x] `apps/web/src/index.css:16` — forced-colors mode loses the global focus indicator `[C]`
+  (fixed: a forced-colors override restores a two-pixel system `Highlight` outline with offset
+  when box shadows are suppressed).
 
 ---
 
