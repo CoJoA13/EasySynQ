@@ -211,6 +211,13 @@ no delegation routes, and effective access resolves role grants plus direct over
 no longer invents `delegation.read/create/revoke`, delegated provenance, or a live permissions
 cache.
 
+**PR-review precision pass.** The shipped setup inventory now includes the bootstrap-of-trust
+operation and names every setup mutation's real authority (`config.update`, `storage.manage`,
+`backup.configure`, or `restore.run`; bootstrap remains secret-authorized outside the PEP).
+Backup prose also records the two fail-closed edges enforced by the service: v1 rejects
+`wal_pitr_enabled=true` as unavailable, and an overlapping restore-test worker returns `SKIPPED`
+without changing the prior persisted result/timestamp rather than queuing a second drill.
+
 **Impact.** Documentation only—no ORM, migration, OpenAPI, permission-catalog, or runtime behavior
 changed. The remediation tracker advances M11 to merged, closes all five M12 findings, and
 preserves the original 104-finding denominator: 1 preclosed + 35 merged + 5 in PR + 63 queued.

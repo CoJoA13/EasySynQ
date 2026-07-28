@@ -753,11 +753,12 @@ surface returns `403 setup_incomplete`.
 |---|---|---|
 | GET / PATCH | `/admin/config` | **S-rec-3 (as built):** post-OPERATIONAL org toggles on `system_config` (today `capture_pre_release_templates`, doc 06 §4.2). Gated on the SYSTEM-domain `config.update` (admin-only; R35); audited `CONFIG_UPDATED` (object_type `config`). |
 | GET | `/setup/state` | Public minimal read of `system_config.setup_state`; the SPA uses it to choose wizard vs shell. |
+| POST | `/setup/bootstrap` | Authenticated but deliberately outside the PEP: the single-use install secret authorizes the first System Administrator grant and breaks the deny-by-default bootstrap cycle. |
 | GET | `/setup` | Sensitive setup/gate detail, backed by `organization`, `system_config`, `storage_config`, and `backup_policy`; gated on `config.read`. |
-| PATCH | `/setup/org-profile` | Updates `organization.legal_name`, `short_code`, and `timezone`; there is no profile table. |
-| POST | `/setup/verify-storage` | Runs the G-B WORM probe and persists `storage_config.worm_verified_at`/`object_lock_mode`; bucket/endpoint values remain deployment configuration. |
-| POST | `/setup/configure-auth` | Persists the selected auth method and successful non-bootstrap OIDC proof on `system_config`; federation details remain in Keycloak/environment configuration. |
-| POST | `/setup/finalize` | Rechecks G-A…G-E and advances `system_config.setup_state` to `OPERATIONAL`. |
+| PATCH | `/setup/org-profile` | Requires `config.update`; updates `organization.legal_name`, `short_code`, and `timezone`. There is no profile table. |
+| POST | `/setup/verify-storage` | Requires `storage.manage`; runs the G-B WORM probe and persists `storage_config.worm_verified_at`/`object_lock_mode`. Bucket/endpoint values remain deployment configuration. |
+| POST | `/setup/configure-auth` | Requires `config.update`; persists the selected auth method and successful non-bootstrap OIDC proof on `system_config`. Federation details remain in Keycloak/environment configuration. |
+| POST | `/setup/finalize` | Requires `config.update`; rechecks G-A…G-E and advances `system_config.setup_state` to `OPERATIONAL`. |
 | GET / PATCH | `/admin/config/workflow` | `workflow_definition`s (versioned); per-doc-type approval chains, MFA-on-approval toggle, SLAs. |
 | GET | `/admin/system/health` | Liveness/readiness of PG, MinIO, OpenSearch, Redis, Keycloak, renderer, queue depth (mirrors `/readyz`, `03 §10`). |
 | GET | `/admin/jobs/{id}` | Generic async-job status (the `202` follow-up): `{ id, kind, status:queued\|running\|succeeded\|failed, progress, result_url?, error? }`. |
@@ -771,8 +772,8 @@ Admin-controlled (`03 §9`, locked decision #1). Only PG + MinIO are backup-crit
 
 | Method | Path | Notes |
 |---|---|---|
-| POST | `/setup/configure-backup` | Validates the destination and upserts the org's one `backup_policy` row (cron, retention counts, encryption-key reference, alert sink, WAL/PITR flag). Does not satisfy G-C by itself. |
-| POST | `/setup/run-restore-test` | Enqueues the backup→scratch-restore drill (`202`); serializes concurrent drills and persists PASS/FAIL plus its timestamp on `backup_policy`. Poll `GET /setup` for the result. There is no `backup_run` table or run-list API in v1. |
+| POST | `/setup/configure-backup` | Requires `backup.configure`; validates the destination and upserts the org's one `backup_policy` row (cron, retention counts, encryption-key reference, alert sink). `wal_pitr_enabled` is a false-only forward seam in v1: `true` returns `422 wal_pitr_unavailable`. Configuration alone does not satisfy G-C. |
+| POST | `/setup/run-restore-test` | Requires `restore.run`; enqueues the backup→scratch-restore drill (`202`). The worker takes the shared advisory lock: the winner persists PASS/FAIL plus its timestamp on `backup_policy`, while an overlapping worker returns `SKIPPED` and persists neither field, so the prior result remains visible and the operator must rerun. Poll `GET /setup`; there is no `backup_run` table or run-list API in v1. |
 
 ### 8.19 Import (`/admin/imports`)
 
