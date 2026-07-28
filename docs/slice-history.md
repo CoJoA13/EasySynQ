@@ -177,7 +177,7 @@
 
 ## REMEDIATION — correctness, accessibility, polish & test reliability
 
-### Minor Batch M15 — cross-stack naming without contract churn (API + web + tests + docs; NO migration [head stays `0080`]; NO new permission key [catalog 102]; PR pending)
+### Minor Batch M15 — cross-stack naming without contract churn (API + web + tests + docs; NO migration [head stays `0080`]; NO new permission key [catalog 102]; PR [#395](https://github.com/CoJoA13/EasySynQ/pull/395))
 
 **What shipped.** All four finder-only reports were re-located against current API, ORM, browser,
 event, permission, and persistence contracts. Three are confirmed at layers that can be corrected

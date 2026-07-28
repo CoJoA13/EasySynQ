@@ -42,7 +42,7 @@
 | M12 | Data-model documentation drift | 5 | ☑ merged | [#392](https://github.com/CoJoA13/EasySynQ/pull/392) |
 | M13 | API documentation drift | 4 | ☑ merged | [#393](https://github.com/CoJoA13/EasySynQ/pull/393) |
 | M14 | Infrastructure, deploy, and public edge | 6 | ☑ merged | [#394](https://github.com/CoJoA13/EasySynQ/pull/394) |
-| M15 | Cross-stack naming | 4 | ☑ in PR | pending |
+| M15 | Cross-stack naming | 4 | ☑ in PR | [#395](https://github.com/CoJoA13/EasySynQ/pull/395) |
 | M16 | UI copy and terminology | 7 | ☐ queued — revalidate | — |
 | M17 | Test false-PASS traps | 3 | ☐ queued — revalidate | — |
 | M18 | Web shell, layout, and error consistency | 9 | ☐ queued — revalidate | — |
@@ -405,7 +405,7 @@ permission key
   script-free CSP with `frame-ancestors 'none'`, `X-Frame-Options: DENY`, and a no-referrer policy
   before the generic API handler).
 
-### ☑ M15 — Cross-stack naming — PR pending
+### ☑ M15 — Cross-stack naming — [#395](https://github.com/CoJoA13/EasySynQ/pull/395)
 
 `branch: fix/minor-cross-stack-naming` · API/web/docs; stable persisted and public contracts retained
 
