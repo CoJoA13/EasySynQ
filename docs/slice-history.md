@@ -177,7 +177,7 @@
 
 ## REMEDIATION — correctness, accessibility, polish & test reliability
 
-### Minor Batch M19 — web state and badge consistency (web + tests + docs; NO API or contract change; NO migration [head stays `0080`]; NO new permission key [catalog 102]; PR pending)
+### Minor Batch M19 — web state and badge consistency (web + tests + docs; NO API or contract change; NO migration [head stays `0080`]; NO new permission key [catalog 102]; PR [#399](https://github.com/CoJoA13/EasySynQ/pull/399))
 
 **What shipped.** All nine confirmed reports were re-located against the current admin, audit,
 CAPA, DCR, document-awareness, and ingestion surfaces; all nine remained live. User status now has

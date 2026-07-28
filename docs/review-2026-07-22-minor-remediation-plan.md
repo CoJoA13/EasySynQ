@@ -46,7 +46,7 @@
 | M16 | UI copy and terminology | 7 | ☑ merged | [#396](https://github.com/CoJoA13/EasySynQ/pull/396) |
 | M17 | Test false-PASS traps | 3 | ☑ merged | [#397](https://github.com/CoJoA13/EasySynQ/pull/397) |
 | M18 | Web shell, layout, and error consistency | 9 | ☑ merged | [#398](https://github.com/CoJoA13/EasySynQ/pull/398) |
-| M19 | Web state and badge consistency | 9 | ☑ in PR | — |
+| M19 | Web state and badge consistency | 9 | ☑ in PR | [#399](https://github.com/CoJoA13/EasySynQ/pull/399) |
 | M20 | Web visual tokens and semantics | 6 | ☐ queued — revalidate | — |
 | M21 | Web async and error UX | 8 | ☐ queued — revalidate | — |
 | M22 | Web accessibility | 7 | ☐ queued — revalidate | — |
@@ -522,7 +522,7 @@ migration, or new permission key
   hand-rolls a no-retry forbidden/error panel instead of the shared states `[C]` (fixed: 403 uses
   `NoAccessState`; genuine load failures use `ErrorState` with a working query refetch).
 
-### ☑ M19 — Web state and badge consistency
+### ☑ M19 — Web state and badge consistency — [#399](https://github.com/CoJoA13/EasySynQ/pull/399)
 
 `branch: fix/minor-web-state-badges` · web + vitest
 
