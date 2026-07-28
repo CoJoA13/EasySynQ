@@ -59,7 +59,13 @@ function wrap(stages: CapaStage[], cycleMarker = 0) {
 
 test("renders the three close-gate requirements", () => {
   wrap([mk("Raised")]);
+  expect(screen.getByLabelText("CAPA close requirements")).toBeInTheDocument();
   expect(screen.getByText(/Root cause documented/)).toBeInTheDocument();
   expect(screen.getByText(/Corrective action defined/)).toBeInTheDocument();
   expect(screen.getByText(/Effectiveness evidence/)).toBeInTheDocument();
+  expect(screen.getAllByText("Required")).toHaveLength(3);
+  expect(screen.getByText(/Root cause documented/).closest("li")).toHaveAttribute(
+    "data-lifecycle-status",
+    "pending",
+  );
 });

@@ -3,6 +3,7 @@ import { useState } from "react";
 import { usePermissions } from "../../app/shell/usePermissions";
 import { ApiError } from "../../lib/api";
 import { ConfirmDestructive } from "../../lib/ConfirmDestructive";
+import { LifecycleStepper, type LifecycleStep } from "../../lib/LifecycleStepper";
 import type { Audit } from "../../lib/types";
 import { AUDIT_STATE_LABEL, AUDIT_STATE_ORDER, NEXT_TRANSITION } from "./labels";
 import { useAdvanceAudit } from "./mutations";
@@ -44,28 +45,20 @@ export function AuditLifecyclePanel({
   const currentIdx = AUDIT_STATE_ORDER.indexOf(audit.state);
   const [confirming, setConfirming] = useState(false);
   const confirmCfg = next ? AUDIT_CONFIRM[next.path] : undefined;
+  const lifecycleSteps: LifecycleStep[] = AUDIT_STATE_ORDER.map((state, index) => ({
+    key: state,
+    label: AUDIT_STATE_LABEL[state],
+    status: index < currentIdx ? "done" : index === currentIdx ? "current" : "pending",
+  }));
 
   return (
     <Paper withBorder p="md">
       <Title order={5} mb="sm">
         Lifecycle
       </Title>
-      <Stack gap={4} mb="md">
-        {AUDIT_STATE_ORDER.map((s, i) => {
-          const glyph = i < currentIdx ? "✓" : i === currentIdx ? "●" : "○";
-          return (
-            <div key={s} aria-current={i === currentIdx ? "step" : undefined}>
-              <Text
-                size="sm"
-                fw={i === currentIdx ? 700 : 400}
-                c={i > currentIdx ? "dimmed" : undefined}
-              >
-                {glyph} {AUDIT_STATE_LABEL[s]}
-              </Text>
-            </div>
-          );
-        })}
-      </Stack>
+      <div style={{ marginBottom: "var(--mantine-spacing-md)" }}>
+        <LifecycleStepper ariaLabel="Audit lifecycle" steps={lifecycleSteps} />
+      </div>
       {next === null ? (
         <Text size="sm" c="dimmed">
           Audit closed{audit.completed_at ? ` on ${audit.completed_at}` : ""}.

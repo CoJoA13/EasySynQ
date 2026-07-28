@@ -4,6 +4,7 @@ import { http, HttpResponse } from "msw";
 import { describe, expect, test } from "vitest";
 import { server } from "../../test/msw/server";
 import { renderWithProviders } from "../../test/render";
+import { TONE_GLYPH } from "../../lib/status";
 import { CompliancePage } from "./CompliancePage";
 
 test("renders the rollup + ★ rows with a clause drill-through link", async () => {
@@ -51,7 +52,8 @@ test("gives register headers a column scope (a11y)", async () => {
 describe("overdue-review leg (S-web-8)", () => {
   test("rollup shows the overdue-review counter", async () => {
     renderWithProviders(<CompliancePage />, { route: "/compliance" });
-    expect(await screen.findByText(/Review overdue: 1/)).toBeInTheDocument();
+    expect(await screen.findByText(`${TONE_GLYPH.danger} Review overdue: 1`)).toBeInTheDocument();
+    expect(screen.queryByText(/⏰/)).not.toBeInTheDocument();
   });
 
   test("an overdue row gets the badge; others render a dash", async () => {

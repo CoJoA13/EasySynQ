@@ -1,21 +1,12 @@
-import { Box, Stack, Text } from "@mantine/core";
+import { LifecycleStepper, type LifecycleStepStatus } from "../../lib/LifecycleStepper";
 import type { DocumentCurrentState, Task, WorkflowInstance } from "../../lib/types";
 
-type NodeStatus = "done" | "current" | "pending" | "rejected";
 export interface StepNode {
   key: string;
   title: string;
   sub: string;
-  status: NodeStatus;
+  status: LifecycleStepStatus;
 }
-
-const MARK: Record<NodeStatus, string> = { done: "✓", current: "◉", pending: "·", rejected: "✕" };
-const COLOR: Record<NodeStatus, string> = {
-  done: "var(--es-success)",
-  current: "var(--es-info)",
-  pending: "var(--es-text-muted)",
-  rejected: "var(--es-danger)",
-};
 
 function approvalNode(
   instance: WorkflowInstance,
@@ -26,7 +17,9 @@ function approvalNode(
     return {
       key: "approval",
       title: "Changes requested",
-      sub: task?.assignee_user_id ? `By ${nameOf(task.assignee_user_id)}` : "Returned to the author",
+      sub: task?.assignee_user_id
+        ? `By ${nameOf(task.assignee_user_id)}`
+        : "Returned to the author",
       status: "rejected",
     };
   }
@@ -87,47 +80,21 @@ export function ApprovalStepper(props: {
   effectiveFrom: string | null;
   nameOf: (id: string | null) => string;
 }) {
-  const nodes = buildApprovalNodes(props.instance, props.docState, props.effectiveFrom, props.nameOf);
+  const nodes = buildApprovalNodes(
+    props.instance,
+    props.docState,
+    props.effectiveFrom,
+    props.nameOf,
+  );
   return (
-    <Stack
-      gap={0}
-      component="ol"
-      aria-label="Approval progress"
-      style={{ listStyle: "none", padding: 0, margin: 0 }}
-    >
-      {nodes.map((n, i) => (
-        <Box
-          component="li"
-          key={n.key}
-          aria-current={n.status === "current" ? "step" : undefined}
-          style={{ display: "flex", gap: 12, paddingBottom: i < nodes.length - 1 ? 16 : 0 }}
-        >
-          <Box
-            aria-hidden="true"
-            style={{
-              width: 22,
-              height: 22,
-              borderRadius: "50%",
-              flexShrink: 0,
-              color: "#fff",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              background: COLOR[n.status],
-            }}
-          >
-            {MARK[n.status]}
-          </Box>
-          <Box>
-            <Text fw={600} size="sm">
-              {n.title}
-            </Text>
-            <Text size="xs" c="dimmed">
-              {n.sub}
-            </Text>
-          </Box>
-        </Box>
-      ))}
-    </Stack>
+    <LifecycleStepper
+      ariaLabel="Approval progress"
+      steps={nodes.map((node) => ({
+        key: node.key,
+        label: node.title,
+        description: node.sub,
+        status: node.status,
+      }))}
+    />
   );
 }

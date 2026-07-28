@@ -13,14 +13,15 @@ import { RISK_BAND_LABEL, RISK_BAND_ORDER, RISK_BAND_TONE } from "./labels";
 // there, carries a <title>, and the selected row's cell gets an accent ring. role="img" + a summary
 // aria-label give the a11y tree the same signal.
 
-// Light band tints — dark text stays AA-legible on all; the rating + glyph-legend carry the meaning,
-// never colour alone (DP-5). critical is a stronger red than high (the heatmap gradient).
+// Semantic band tints re-key with the active colour scheme. Critical and High share the canonical
+// danger tone; the always-visible rating plus glyph legend distinguish their thresholds without
+// relying on a second red shade (DP-5).
 const BAND_FILL: Record<RiskBand, string> = {
-  critical: "var(--mantine-color-red-3)",
-  high: "var(--mantine-color-red-1)",
-  medium: "var(--mantine-color-yellow-2)",
-  low: "var(--mantine-color-green-2)",
-  unscored: "var(--mantine-color-gray-1)",
+  critical: "var(--es-danger-soft)",
+  high: "var(--es-danger-soft)",
+  medium: "var(--es-warning-soft)",
+  low: "var(--es-success-soft)",
+  unscored: "var(--es-surface-2)",
 };
 
 // The achievable 5×5 product range per band (spec §4) — the legend's threshold key.
@@ -38,10 +39,10 @@ const GRID = CELL * 5;
 const VIEW_W = M.left + GRID + M.right;
 const VIEW_H = M.top + GRID + M.bottom;
 
-const GRID_STROKE = "var(--mantine-color-gray-4)";
-const AXIS_TEXT = "var(--mantine-color-gray-7)";
-const CELL_TEXT = "var(--mantine-color-dark-6)";
-const SEL_RING = "var(--mantine-color-indigo-7)";
+const GRID_STROKE = "var(--es-border-strong)";
+const AXIS_TEXT = "var(--es-text-2)";
+const CELL_TEXT = "var(--es-text)";
+const SEL_RING = "var(--es-accent)";
 
 export function RiskMatrix({ rows, selected }: { rows: RiskRow[]; selected?: RiskRow | null }) {
   // Density: count rows at each (likelihood, severity). Only rows with both in 1..5 land on the grid

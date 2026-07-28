@@ -1,5 +1,4 @@
 import {
-  Badge,
   Box,
   Button,
   Grid,
@@ -12,6 +11,7 @@ import {
 } from "@mantine/core";
 import { useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
+import { ClauseBadge } from "../../lib/ClauseBadge";
 import { SkeletonList } from "../../lib/states";
 import { useDocumentTypes } from "../../app/shell/useDocumentTypes";
 import { useMe } from "../../app/shell/useMe";
@@ -203,9 +203,7 @@ export function LibraryPage() {
                         <Table.Td>
                           <Group gap={4}>
                             {(d.clause_refs ?? []).map((c) => (
-                              <Badge key={c} variant="outline" color="var(--es-accent)">
-                                {c}
-                              </Badge>
+                              <ClauseBadge key={c} clause={c} />
                             ))}
                           </Group>
                         </Table.Td>
