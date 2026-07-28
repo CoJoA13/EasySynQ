@@ -168,7 +168,7 @@
 
 ## REMEDIATION — correctness, accessibility, polish & test reliability
 
-### Issue #330 — lock the lifecycle-independent Document metadata read boundary (API regression tests + docs/contracts; NO runtime behavior change; NO migration [head stays `0080`]; NO new permission key [catalog 102]; closes [#330](https://github.com/CoJoA13/EasySynQ/issues/330))
+### Issue #330 — lock the lifecycle-independent Document metadata read boundary (API regression tests + docs/contracts; NO runtime behavior change; NO migration [head stays `0080`]; NO new permission key [catalog 102]; closes [#330](https://github.com/CoJoA13/EasySynQ/issues/330); PR [#407](https://github.com/CoJoA13/EasySynQ/pull/407))
 
 **Owner decision (R57).** The live Document metadata row stays under `document.read` in all seven
 headline lifecycle states. `document.read_draft` and `document.read_obsolete` remain specialized
