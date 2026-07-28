@@ -121,6 +121,13 @@ supplied membership condition. For example,
 `filter[clause_refs][has]=8.4&filter[clause_refs][has]=7.5.3` requires a document mapped to both
 clauses. The other filters on those two endpoints remain single-valued.
 
+The shared `effective_from` `gte`/`lte` bounds accept either a date or a date-time on both
+endpoints. A bare `YYYY-MM-DD` is a calendar date in the canonical organization timezone and means
+that date's local midnight; the server compares the equivalent UTC instant to the stored
+`timestamptz`. An offset-bearing date-time remains the explicit instant supplied by the caller.
+Because the Library and Controlled Document Register share both the facet mapping and this parser,
+the same date-only facet boundary selects the same displayed organization-calendar dates.
+
 ### 3.3 Sorting
 
 `sort=field` (asc) or `sort=-field` (desc); comma-separated multi-key: `sort=-severity,created_at`. Allow-listed sortable fields only (`400 unknown_sort` otherwise). The effective sort always appends `,id` internally to keep the keyset cursor totally ordered.

@@ -195,6 +195,11 @@ The **`DOC_CLASS`** authorization scope in doc 07 is defined as matching on `doc
 
 **Amended by R56 (2026-06-26):** the org tz for date display/derivation is the resolved canonical tz (calendar-first); effective-date cutover is unchanged (UTC-clock-authoritative).
 
+**Amended by issue #332 (2026-07-28):** a date-only `effective_from` filter bound is likewise a
+calendar date in that canonical org timezone and is converted from local midnight to its UTC
+instant before comparison. An explicit date-time remains an instant; filtering does not change the
+UTC-clock-authoritative cutover rule.
+
 ---
 
 ### R9 — Lock loss / break-lock

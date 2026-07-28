@@ -517,6 +517,7 @@ _print = require("document.print_controlled", async_scope_resolver=_document_sco
 # SQL filters just narrow the candidate set first; pagination (limit/offset) slices the POST-authz
 # set, with ``_LIST_SCAN_CAP`` the pre-authz candidate cap (S-web-2).
 _FILTER_KEY_RE = re.compile(r"^filter\[([^\]]+)\]\[([^\]]+)\]$")
+_ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _FILTER_ALLOW: frozenset[tuple[str, str]] = frozenset(
     {
         ("clause_refs", "has"),
@@ -563,6 +564,25 @@ def _parse_filter_bool(field: str, value: str) -> bool:
     )
 
 
+def _parse_effective_from_bound(value: str) -> datetime.datetime:
+    """Parse an effective-date filter bound.
+
+    A canonical bare date is a calendar date in the caller's organization timezone (R8/R56), so
+    its instant is that local day's midnight. Date-times retain their existing behavior: an
+    explicit offset is respected, while an offset-less date-time keeps the historical UTC default.
+    """
+    try:
+        if _ISO_DATE_RE.fullmatch(value):
+            local_date = datetime.date.fromisoformat(value)
+            return datetime.datetime.combine(local_date, datetime.time.min, tzinfo=current_org_tz())
+        ts = datetime.datetime.fromisoformat(value)
+    except ValueError as exc:
+        raise ProblemException(
+            status=422, code="validation_error", title="Invalid effective_from filter value"
+        ) from exc
+    return ts if ts.tzinfo is not None else ts.replace(tzinfo=datetime.UTC)
+
+
 def _filter_condition(field: str, op: str, value: str) -> ColumnElement[bool]:
     """Build one SQL WHERE condition for an allow-listed (field, op); bad value → 422."""
     # filter[has_effective_version][eq]=true|false — narrow to (never-)released docs (S-doc-filters,
@@ -582,14 +602,7 @@ def _filter_condition(field: str, op: str, value: str) -> ColumnElement[bool]:
         return is_managed if flag else ~is_managed
     # filter[effective_from][gte|lte]=<ISO> — bound on the current effective version
     if field == "effective_from":
-        try:
-            ts = datetime.datetime.fromisoformat(value)
-        except ValueError as exc:
-            raise ProblemException(
-                status=422, code="validation_error", title="Invalid effective_from filter value"
-            ) from exc
-        if ts.tzinfo is None:
-            ts = ts.replace(tzinfo=datetime.UTC)
+        ts = _parse_effective_from_bound(value)
         bound = (
             DocumentVersion.effective_from >= ts
             if op == "gte"

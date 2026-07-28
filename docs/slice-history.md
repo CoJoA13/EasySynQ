@@ -168,6 +168,31 @@
 
 ## REMEDIATION — correctness, accessibility, polish & test reliability
 
+### Issue #332 — interpret date-only effective bounds in the organization timezone (API + OpenAPI + integration + docs; NO migration [head stays `0080`]; NO new permission key [catalog 102]; closes [#332](https://github.com/CoJoA13/EasySynQ/issues/332))
+
+**Shared parser correction.** `filter[effective_from][gte|lte]=YYYY-MM-DD` now means midnight on
+that calendar date in the request's canonical organization timezone
+(`is_default working_calendar.timezone → organization.timezone → env → UTC`), then compares the
+equivalent instant with the UTC `timestamptz`. Offset-bearing date-times remain explicit instants,
+and the legacy offset-less date-time fallback remains UTC. The auth boundary already pins the
+canonical timezone before either consumer invokes the shared parser, so no session lookup or
+frontend timezone parameter is added.
+
+**Surface and contract parity.** Both `GET /documents` (Library) and
+`GET /reports/document-control` (Controlled Document Register) continue through the same filter
+builder. Their OpenAPI parameters now publish the truthful `date | date-time` input shape and state
+the organization-local-midnight rule; the API-design filter convention and R8 carry the same
+boundary. Runtime response shapes, pagination, report provenance, authorization, migrations,
+permission catalog, and the shared web facet mapping are unchanged.
+
+**Regression proof.** Pure parser tests pin a UTC+14 bare date to the prior UTC calendar day's
+instant while preserving offset-aware and historical offset-less date-time behavior. A
+Docker-backed east-of-UTC boundary test pins an Effective version exactly at
+`2026-06-20T00:00:00+14:00` (`2026-06-19T10:00:00Z`) and proves the date-only lower bound includes
+the same row on both Library and register surfaces; the register's rendered date is the same
+organization-calendar day. Structural contract guards require the date/date-time union and
+timezone wording on both duplicated endpoint declarations.
+
 ### Issue #331 — publish repeatable Document clause filters correctly (OpenAPI + contract tests + docs; NO runtime behavior change; NO migration [head stays `0080`]; NO new permission key [catalog 102]; closes [#331](https://github.com/CoJoA13/EasySynQ/issues/331); PR [#408](https://github.com/CoJoA13/EasySynQ/pull/408))
 
 **Contract correction.** `GET /documents` and `GET /reports/document-control` now publish
