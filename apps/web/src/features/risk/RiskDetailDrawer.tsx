@@ -11,6 +11,32 @@ import { useRisk } from "./hooks";
 import { useSpawnRiskCapa } from "./mutations";
 import { EditRiskModal } from "./EditRiskModal";
 
+function SpawnRiskCapaAction({ riskId }: { riskId: string }) {
+  const spawn = useSpawnRiskCapa(riskId);
+  const [error, setError] = useState<string | null>(null);
+
+  async function doSpawn() {
+    setError(null);
+    try {
+      await spawn.mutateAsync();
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "Could not raise a CAPA.");
+    }
+  }
+
+  return (
+    <Stack gap="xs">
+      {error && <Alert color="red">{error}</Alert>}
+      <Button variant="light" onClick={() => void doSpawn()} loading={spawn.isPending}>
+        Treat → raise CAPA
+      </Button>
+      <Text size="xs" c="dimmed">
+        Raises a corrective action to treat this risk (severity set from the band).
+      </Text>
+    </Stack>
+  );
+}
+
 // The risk detail drawer (the CapaDrawer/InitiativeDrawer idiom): prop-driven riskId, opened on
 // riskId !== null; the page owns the ?risk= URL wiring. Shows the score/treatment, the gated Edit
 // (register.manage @ the row's process AND headEditable), and the risk→CAPA spawn seam. There is no
@@ -39,18 +65,7 @@ export function RiskDetailDrawer({
   const canManage = hasProc ? proc.can("register.manage") : sys.can("register.manage");
   const canSpawn = hasProc ? proc.can("capa.create") : sys.can("capa.create");
 
-  const spawn = useSpawnRiskCapa(riskId ?? "");
   const [editOpen, setEditOpen] = useState(false);
-  const [spawnError, setSpawnError] = useState<string | null>(null);
-
-  async function doSpawn() {
-    setSpawnError(null);
-    try {
-      await spawn.mutateAsync();
-    } catch (e) {
-      setSpawnError(e instanceof ApiError ? e.message : "Could not raise a CAPA.");
-    }
-  }
 
   return (
     <DetailDrawer
@@ -133,19 +148,9 @@ export function RiskDetailDrawer({
                     </Anchor>
                   </Group>
                 ) : risk.type === "risk" && canSpawn ? (
-                  <Stack gap="xs">
-                    {spawnError && <Alert color="red">{spawnError}</Alert>}
-                    <Button
-                      variant="light"
-                      onClick={() => void doSpawn()}
-                      loading={spawn.isPending}
-                    >
-                      Treat → raise CAPA
-                    </Button>
-                    <Text size="xs" c="dimmed">
-                      Raises a corrective action to treat this risk (severity set from the band).
-                    </Text>
-                  </Stack>
+                  // Key the mutation/error leaf to the selected row. The drawer itself stays mounted
+                  // while ?risk= changes, but a failed spawn must not leak into the next risk.
+                  <SpawnRiskCapaAction key={risk.id} riskId={risk.id} />
                 ) : (
                   <Text size="sm" c="dimmed">
                     No corrective action raised.

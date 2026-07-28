@@ -177,6 +177,32 @@
 
 ## REMEDIATION — correctness, accessibility, polish & test reliability
 
+### Minor Batch M21 — web async and error UX (web + tests + docs; NO API or contract change; NO migration [head stays `0080`]; NO new permission key [catalog 102]; PR [#401](https://github.com/CoJoA13/EasySynQ/pull/401))
+
+**What shipped.** All eight finder-only reports were re-located against merged M20; every report
+still had an actionable failure mode. The breadcrumb report's raw-label half was already closed by
+M18, while its dead-parent-link half remained live and is closed here.
+
+Admin user role/override failures now render inside the manage drawer rather than behind its overlay.
+Breadcrumb parent segments with no real route render as orientation text. Ingestion item-detail and
+triage-list reads now distinguish loading, error, and empty states, expose working retries, and avoid
+showing pagination for a failed queue.
+
+Bulk acknowledgements have an immediate in-flight ref guard in addition to disabled/loading controls,
+so a rapid second click cannot start duplicate decision requests or manufacture a false partial
+failure. CAPA approval context distinguishes loading, forbidden, and retryable read errors. Pending
+document approvals distinguish instance-to-document loading/failure from the genuinely decided state.
+Risk-to-CAPA spawn state lives in a risk-keyed leaf, so switching rows remounts the mutation/error
+surface while keeping the enclosing drawer mounted.
+
+**Impact.** Web behavior, Vitest coverage, and remediation documentation only; no API route,
+contract, database schema, migration, permission, event, persistence, or task-name change. The
+remediation tracker advances M20 to merged, closes all eight M21 findings, and preserves the original
+denominator: 1 preclosed + 88 merged + 8 in PR + 7 queued.
+
+**Validation.** `git diff --check`; affected web coverage (**113 passed across 9 files**); full web
+suite (**1,406 passed across 243 files**); web ESLint, strict TypeScript, and production build.
+
 ### Minor Batch M20 — web visual tokens and semantics (web + tests + docs; NO API or contract change; NO migration [head stays `0080`]; NO new permission key [catalog 102]; PR [#400](https://github.com/CoJoA13/EasySynQ/pull/400))
 
 **What shipped.** All six confirmed reports were re-located against the current CAPA, audit,

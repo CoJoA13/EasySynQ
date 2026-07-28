@@ -1,4 +1,4 @@
-import { screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { describe, expect, test } from "vitest";
@@ -29,6 +29,34 @@ describe("AckInbox", () => {
     await userEvent.click(screen.getByRole("button", { name: /acknowledge 1 selected/i }));
     await waitFor(() => expect(posts).toBe(1));
     expect(await screen.findByText(/1 acknowledged/i)).toBeInTheDocument();
+  });
+
+  test("a pending bulk acknowledgement ignores a rapid second click", async () => {
+    let posts = 0;
+    let release: (() => void) | undefined;
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    server.use(
+      http.post("/api/v1/tasks/:id/decision", async () => {
+        posts += 1;
+        await blocked;
+        return HttpResponse.json(ackDecisionResultFixture);
+      }),
+    );
+    renderWithProviders(<AckInbox />);
+    await screen.findByText(/SOP-PUR-014/);
+    await userEvent.click(screen.getByLabelText(/select all/i));
+    const acknowledge = screen.getByRole("button", { name: /acknowledge 1 selected/i });
+
+    fireEvent.click(acknowledge);
+    fireEvent.click(acknowledge);
+
+    await waitFor(() => expect(posts).toBe(1));
+    expect(acknowledge).toBeDisabled();
+    act(() => release?.());
+    expect(await screen.findByText(/1 acknowledged/i)).toBeInTheDocument();
+    expect(posts).toBe(1);
   });
 
   test("empty queue shows the calm empty state", async () => {

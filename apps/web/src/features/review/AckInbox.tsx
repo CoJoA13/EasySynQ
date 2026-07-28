@@ -1,5 +1,5 @@
 import { Alert, Button, Checkbox, Group, Stack, Table, Text, Title } from "@mantine/core";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { useMe } from "../../app/shell/useMe";
 import { ApiError } from "../../lib/api";
@@ -35,6 +35,8 @@ export function AckInbox() {
   const { selected, toggle, toggleAll, clear, allSelected, count, selectedIds } =
     useBulkSelection(rows);
   const [summary, setSummary] = useState<string | null>(null);
+  const [isAcknowledging, setIsAcknowledging] = useState(false);
+  const acknowledgingRef = useRef(false);
 
   if (isLoading) return <LoadingState label="Loading acknowledgements" />;
   if (isError) {
@@ -44,13 +46,23 @@ export function AckInbox() {
   }
 
   async function acknowledgeSelected() {
+    // The ref closes the same-tick double-click gap before React can commit the disabled/loading
+    // button state. One user action must produce one set of per-task decision requests.
+    if (acknowledgingRef.current) return;
+    acknowledgingRef.current = true;
+    setIsAcknowledging(true);
     setSummary(null);
-    const out = await bulk.run(selectedIds);
-    clear();
-    const failedNote = out.failed.length
-      ? ` · ${out.failed.length} could not be acknowledged (refresh)`
-      : "";
-    setSummary(`${out.ok.length} acknowledged${failedNote}`);
+    try {
+      const out = await bulk.run([...selectedIds]);
+      clear();
+      const failedNote = out.failed.length
+        ? ` · ${out.failed.length} could not be acknowledged (refresh)`
+        : "";
+      setSummary(`${out.ok.length} acknowledged${failedNote}`);
+    } finally {
+      acknowledgingRef.current = false;
+      setIsAcknowledging(false);
+    }
   }
 
   return (
@@ -70,7 +82,11 @@ export function AckInbox() {
       ) : (
         <>
           <Group>
-            <Button onClick={() => void acknowledgeSelected()} disabled={count === 0}>
+            <Button
+              onClick={() => void acknowledgeSelected()}
+              disabled={count === 0 || isAcknowledging}
+              loading={isAcknowledging}
+            >
               Acknowledge {count} selected
             </Button>
           </Group>
@@ -78,7 +94,12 @@ export function AckInbox() {
             <Table.Thead>
               <Table.Tr>
                 <Table.Th scope="col">
-                  <Checkbox aria-label="Select all" checked={allSelected} onChange={toggleAll} />
+                  <Checkbox
+                    aria-label="Select all"
+                    checked={allSelected}
+                    disabled={isAcknowledging}
+                    onChange={toggleAll}
+                  />
                 </Table.Th>
                 <Table.Th scope="col">Document</Table.Th>
                 <Table.Th scope="col">Due</Table.Th>
@@ -93,6 +114,7 @@ export function AckInbox() {
                       <Checkbox
                         aria-label={`Select ${name}`}
                         checked={selected.has(t.id)}
+                        disabled={isAcknowledging}
                         onChange={() => toggle(t.id)}
                       />
                     </Table.Td>

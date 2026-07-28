@@ -65,6 +65,35 @@ it("spawn seam: an unlinked risk with capa.create shows the user-facing raise ac
   ).not.toBeInTheDocument();
 });
 
+it("a failed spawn error clears when the mounted drawer switches risks", async () => {
+  grant("capa.create");
+  server.use(
+    http.post("/api/v1/risks/:id/capa", () =>
+      HttpResponse.json(
+        {
+          code: "capa_unavailable",
+          title: "CAPA unavailable",
+          detail: "The CAPA service is unavailable.",
+        },
+        { status: 503 },
+      ),
+    ),
+  );
+  const user = userEvent.setup();
+  const { rerender } = renderWithProviders(
+    <RiskDetailDrawer riskId={CRITICAL} onClose={noop} headEditable={false} />,
+  );
+  const dialog = await screen.findByRole("dialog");
+  await user.click(await within(dialog).findByRole("button", { name: /treat.*raise capa/i }));
+  expect(await within(dialog).findByText("The CAPA service is unavailable.")).toBeInTheDocument();
+
+  rerender(<RiskDetailDrawer riskId={HIGH} onClose={noop} headEditable={false} />);
+  expect(
+    await within(dialog).findByText("Untrained operators on the new line"),
+  ).toBeInTheDocument();
+  expect(within(dialog).queryByText("The CAPA service is unavailable.")).not.toBeInTheDocument();
+});
+
 it("spawn seam: a linked risk shows the CAPA link and no treat button", async () => {
   grant("capa.create");
   renderWithProviders(<RiskDetailDrawer riskId={LINKED} onClose={noop} headEditable={false} />);

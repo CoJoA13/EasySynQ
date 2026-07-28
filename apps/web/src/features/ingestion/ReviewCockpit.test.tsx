@@ -23,6 +23,22 @@ test("the High tab shows the 2 high-band rows", async () => {
   expect(within(table).queryByText("Final Inspection WI rev1.docx")).not.toBeInTheDocument();
 });
 
+test("a files-list failure renders as an error, not an empty queue", async () => {
+  server.use(
+    http.get("/api/v1/admin/imports/:id/files", () =>
+      HttpResponse.json(
+        { code: "files_failed", title: "Files failed", detail: "Could not list files." },
+        { status: 500 },
+      ),
+    ),
+  );
+  renderCockpit();
+
+  expect(await screen.findByText("Couldn't load this queue")).toBeInTheDocument();
+  expect(screen.queryByText("Nothing in this queue.")).not.toBeInTheDocument();
+  expect(screen.queryByLabelText("Triage pagination")).not.toBeInTheDocument();
+});
+
 test("switching to the Needs-decision tab refetches the undecided rows", async () => {
   const user = userEvent.setup();
   renderCockpit();

@@ -336,6 +336,8 @@ export function ReviewCockpit({ runId, run }: { runId: string; run: ImportRun })
             dupeMap={dupeMap}
             familyMap={familyMap}
             loading={filesQuery.isLoading}
+            isError={filesQuery.isError}
+            onRetry={() => void filesQuery.refetch()}
             selected={selected}
             onToggle={onToggle}
             onToggleAllOnPage={onToggleAllOnPage}
@@ -344,13 +346,15 @@ export function ReviewCockpit({ runId, run }: { runId: string; run: ImportRun })
             onOpenDetail={setActiveFileId}
             onRowAction={onRowAction}
           />
-          <TriagePagination
-            offset={offset}
-            hasMore={hasMore}
-            onOffset={onOffset}
-            total={total}
-            pageCount={files.length}
-          />
+          {!filesQuery.isError && (
+            <TriagePagination
+              offset={offset}
+              hasMore={hasMore}
+              onOffset={onOffset}
+              total={total}
+              pageCount={files.length}
+            />
+          )}
         </>
       )}
 

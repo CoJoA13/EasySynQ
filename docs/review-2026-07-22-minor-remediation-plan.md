@@ -11,7 +11,8 @@
   underway, leaving **103** to schedule here. Batch M1 closed 4; M2 closed 2; M3 closed 2; M4
   closed 4; M5 closed 3; M6 closed 4; M7 closed 3; M8 closed 2; M9 closed 4; M10 closed 4;
   M11 closed 3; M12 closed 5; M13 closed 4; M14 closed 6; M15 closed 4; M16 closed 7;
-  M17 closed 3; M18 closed 9; M19 closed 9; M20 resolves 6; **15 remain queued** after M20.
+  M17 closed 3; M18 closed 9; M19 closed 9; M20 closed 6; M21 resolves 8;
+  **7 remain queued** after M21.
 - A queued finding is not assumed to still be live. Every batch must re-locate and revalidate its
   findings against then-current `main` before implementation; close, re-scope, or reject it with
   evidence rather than mechanically applying the 2026-07-22 suggestion.
@@ -47,11 +48,11 @@
 | M17 | Test false-PASS traps | 3 | ☑ merged | [#397](https://github.com/CoJoA13/EasySynQ/pull/397) |
 | M18 | Web shell, layout, and error consistency | 9 | ☑ merged | [#398](https://github.com/CoJoA13/EasySynQ/pull/398) |
 | M19 | Web state and badge consistency | 9 | ☑ merged | [#399](https://github.com/CoJoA13/EasySynQ/pull/399) |
-| M20 | Web visual tokens and semantics | 6 | ☑ in PR | [#400](https://github.com/CoJoA13/EasySynQ/pull/400) |
-| M21 | Web async and error UX | 8 | ☐ queued — revalidate | — |
+| M20 | Web visual tokens and semantics | 6 | ☑ merged | [#400](https://github.com/CoJoA13/EasySynQ/pull/400) |
+| M21 | Web async and error UX | 8 | ☑ in PR | [#401](https://github.com/CoJoA13/EasySynQ/pull/401) |
 | M22 | Web accessibility | 7 | ☐ queued — revalidate | — |
 
-**Accounting: 1 preclosed + 82 merged + 6 in PR + 15 queued = 104 original findings.**
+**Accounting: 1 preclosed + 88 merged + 8 in PR + 7 queued = 104 original findings.**
 
 ---
 
@@ -583,25 +584,36 @@ migration, or new permission key
   `ClauseBadge` now serves Search, Library, the artifact header, and the Controlled Document
   Register while preserving mandatory-star meaning).
 
-### ☐ M21 — Web async and error UX
+### ☑ M21 — Web async and error UX — [#401](https://github.com/CoJoA13/EasySynQ/pull/401)
 
 `branch: fix/minor-web-async-errors` · web + vitest
 
-- [ ] `apps/web/src/admin/UsersAdmin.tsx:212` — drawer action failures render behind the overlay
-  `[f]`.
-- [ ] `apps/web/src/app/shell/Breadcrumb.tsx:51` — breadcrumbs link to nonexistent routes `[f]`.
-- [ ] `apps/web/src/features/ingestion/ItemDetailDrawer.tsx:49` — item-read failures become an
-  infinite loading spinner `[f]`.
-- [ ] `apps/web/src/features/ingestion/TriageTable.tsx:53` — fetch failure masquerades as an empty
-  queue `[f]`.
-- [ ] `apps/web/src/features/review/AckInbox.tsx:70` — bulk acknowledgment has no pending guard, so
-  double-clicks produce a false failure summary `[f]`.
-- [ ] `apps/web/src/features/review/CapaApprovalContext.tsx:13` — CAPA read failure leaves the
-  review context spinning forever `[f]`.
-- [ ] `apps/web/src/features/review/ReviewApprovePage.tsx:340` — pending/failed subject resolution
-  is mislabeled “already decided” `[f]`.
-- [ ] `apps/web/src/features/risk/RiskDetailDrawer.tsx:44` — CAPA-spawn errors persist when the
-  drawer switches risks `[f]`.
+- [x] `apps/web/src/admin/UsersAdmin.tsx:212` — drawer action failures render behind the overlay
+  `[C]` (fixed: role and override mutations now own a drawer-local dismissible error surface; page
+  actions retain their page-level alert).
+- [x] `apps/web/src/app/shell/Breadcrumb.tsx:51` — breadcrumbs link to nonexistent routes `[C]`
+  (revalidation found M18 already removed the raw slug/UUID half of the original report; the
+  remaining `/documents`, `/reports`, `/settings`, and `/dcrs/:id` dead parents now render as
+  orientation text rather than catch-all-redirect links).
+- [x] `apps/web/src/features/ingestion/ItemDetailDrawer.tsx:49` — item-read failures become an
+  infinite loading spinner `[C]` (fixed: loading, failed, and loaded reads are distinct; failures
+  render the shared `ErrorState` with a working refetch).
+- [x] `apps/web/src/features/ingestion/TriageTable.tsx:53` — fetch failure masquerades as an empty
+  queue `[C]` (fixed: the files query's error/refetch state is threaded into the table, which shows
+  a retryable error and suppresses stale pagination instead of the empty-queue message).
+- [x] `apps/web/src/features/review/AckInbox.tsx:70` — bulk acknowledgment has no pending guard, so
+  double-clicks produce a false failure summary `[C]` (fixed: an immediate ref guard closes the
+  same-tick gap, while loading/disabled controls prevent selection or resubmission until the one
+  request set settles).
+- [x] `apps/web/src/features/review/CapaApprovalContext.tsx:13` — CAPA read failure leaves the
+  review context spinning forever `[C]` (fixed: loading, forbidden, and genuine error states are
+  explicit; genuine failures expose query retry).
+- [x] `apps/web/src/features/review/ReviewApprovePage.tsx:340` — pending/failed subject resolution
+  is mislabeled “already decided” `[C]` (fixed: only a non-pending task gets the decided alert;
+  instance-to-document resolution has named loading and retryable error states).
+- [x] `apps/web/src/features/risk/RiskDetailDrawer.tsx:44` — CAPA-spawn errors persist when the
+  drawer switches risks `[C]` (fixed: the spawn mutation/error leaf is keyed to the selected risk,
+  so the persistent drawer cannot carry one row's failure into another).
 
 ### ☐ M22 — Web accessibility
 

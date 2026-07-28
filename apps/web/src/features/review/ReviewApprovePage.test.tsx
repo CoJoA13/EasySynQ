@@ -1,7 +1,7 @@
 import { http, HttpResponse } from "msw";
 import { Route, Routes } from "react-router-dom";
 import { describe, expect, test } from "vitest";
-import { screen } from "@testing-library/react";
+import { act, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { server } from "../../test/msw/server";
@@ -38,6 +38,48 @@ test("renders the document context + the decision card for a pending task", asyn
   const { findByText, findByRole } = mount("/tasks/task1111-1111-1111-1111-111111111111");
   expect(await findByText(/Supplier Selection/)).toBeInTheDocument();
   expect(await findByRole("button", { name: "Submit decision" })).toBeInTheDocument();
+});
+
+test("a pending document task stays loading while its instance subject resolves", async () => {
+  let release: (() => void) | undefined;
+  const blocked = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  server.use(
+    http.get("/api/v1/workflow-instances/:id", async () => {
+      await blocked;
+      return HttpResponse.json(approvalFixture);
+    }),
+  );
+  mount("/tasks/task1111-1111-1111-1111-111111111111");
+
+  expect(
+    await screen.findByRole("status", { name: "Loading approval context" }),
+  ).toBeInTheDocument();
+  expect(screen.queryByText("This task has already been decided.")).not.toBeInTheDocument();
+  act(() => release?.());
+  expect(await screen.findByRole("button", { name: "Submit decision" })).toBeInTheDocument();
+});
+
+test("a failed instance subject resolution is not mislabeled as an already-decided task", async () => {
+  server.use(
+    http.get("/api/v1/workflow-instances/:id", () =>
+      HttpResponse.json(
+        {
+          code: "instance_failed",
+          title: "Instance failed",
+          detail: "Could not resolve the task subject.",
+        },
+        { status: 500 },
+      ),
+    ),
+  );
+  mount("/tasks/task1111-1111-1111-1111-111111111111");
+
+  expect(await screen.findByText("Approval context unavailable")).toBeInTheDocument();
+  expect(screen.queryByText("This task has already been decided.")).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Submit decision" })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
 });
 
 test("a 404 task is calm with a back link", async () => {

@@ -30,6 +30,8 @@ function baseProps(over: Partial<Parameters<typeof TriageTable>[0]> = {}) {
     dupeMap: DUPE_MAP,
     familyMap: FAMILY_MAP,
     loading: false,
+    isError: false,
+    onRetry: vi.fn(),
     selected: new Set<string>(),
     onToggle: vi.fn(),
     onToggleAllOnPage: vi.fn(),
@@ -166,6 +168,17 @@ test("loading renders skeleton rows, not the empty state", () => {
   renderWithProviders(<TriageTable {...baseProps({ files: [], loading: true })} />);
   expect(screen.getByLabelText("Loading files")).toBeInTheDocument();
   expect(screen.queryByText("Nothing in this queue.")).not.toBeInTheDocument();
+});
+
+test("a failed fetch shows a retryable error instead of the empty queue", async () => {
+  const user = userEvent.setup();
+  const onRetry = vi.fn();
+  renderWithProviders(<TriageTable {...baseProps({ files: [], isError: true, onRetry })} />);
+
+  expect(screen.getByText("Couldn't load this queue")).toBeInTheDocument();
+  expect(screen.queryByText("Nothing in this queue.")).not.toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "Try again" }));
+  expect(onRetry).toHaveBeenCalledTimes(1);
 });
 
 test("an empty file list shows the calm empty state", () => {

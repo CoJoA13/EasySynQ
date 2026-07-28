@@ -50,6 +50,15 @@ function humanizeSegment(segment: string): string {
   return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
+// Some route trees have a presentational parent segment but no page at that cumulative path. Keep
+// those crumbs as orientation text instead of sending users through the catch-all redirect. The DCR
+// diff is the one dynamic case: /dcrs exists and /dcrs/:id/diff exists, but /dcrs/:id does not.
+const NON_ROUTE_CRUMBS = new Set(["/documents", "/reports", "/settings"]);
+
+function isRoutableCrumb(path: string): boolean {
+  return !NON_ROUTE_CRUMBS.has(path) && !/^\/dcrs\/[^/]+$/.test(path);
+}
+
 export function Breadcrumb() {
   const { pathname } = useLocation();
   const segments = pathname.split("/").filter(Boolean);
@@ -67,7 +76,7 @@ export function Breadcrumb() {
     enabled: false,
   });
 
-  const crumbs = [{ to: "/", label: "Home" }].concat(
+  const crumbs = [{ to: "/", label: "Home", linkable: true }].concat(
     segments.map((seg, i) => {
       const parent = i > 0 ? segments[i - 1] : null;
       let label = LABELS[seg];
@@ -77,14 +86,15 @@ export function Breadcrumb() {
         label = DETAIL_LABELS[parent];
       }
       label ??= humanizeSegment(seg);
-      return { to: "/" + segments.slice(0, i + 1).join("/"), label };
+      const to = "/" + segments.slice(0, i + 1).join("/");
+      return { to, label, linkable: isRoutableCrumb(to) };
     }),
   );
   return (
     <Breadcrumbs aria-label="Breadcrumb">
       {crumbs.map((c, i) =>
-        i === crumbs.length - 1 ? (
-          <Text key={`${i}-${c.to}`} c="dimmed">
+        i === crumbs.length - 1 || !c.linkable ? (
+          <Text key={`${i}-${c.to}`} c={i === crumbs.length - 1 ? "dimmed" : undefined}>
             {c.label}
           </Text>
         ) : (
