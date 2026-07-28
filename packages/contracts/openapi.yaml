@@ -8404,11 +8404,14 @@ components:
     NotificationDeliveryHealth:
       type: object
       additionalProperties: false
-      required: [org_email_enabled, email, recent_failures, awareness]
+      required: [org_email_enabled, delivery_ready, email, recent_failures, awareness]
       properties:
         org_email_enabled:
           type: boolean
           description: The org's notifications_email_enabled flag — echoed so a zero panel is contextualised.
+        delivery_ready:
+          type: boolean
+          description: True only when org email delivery is enabled and the deployment has an SMTP transport configured.
         email:
           type: object
           additionalProperties: false

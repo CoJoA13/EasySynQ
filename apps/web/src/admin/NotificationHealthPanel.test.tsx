@@ -41,7 +41,7 @@ describe("NotificationHealthPanel", () => {
   });
 
   it("shows the email-off banner when delivery is disabled org-wide", async () => {
-    health({ org_email_enabled: false });
+    health({ org_email_enabled: false, delivery_ready: false });
     renderWithProviders(<NotificationHealthPanel />);
     expect(await screen.findByText("Email delivery is off")).toBeInTheDocument();
   });
@@ -81,9 +81,28 @@ describe("NotificationHealthPanel", () => {
   });
 
   it("disables requeue while org email delivery is off", async () => {
-    health({ org_email_enabled: false, email: { ...notificationHealthFixture.email, failed: 3 } });
+    health({
+      org_email_enabled: false,
+      delivery_ready: false,
+      email: { ...notificationHealthFixture.email, failed: 3 },
+    });
     renderWithProviders(<NotificationHealthPanel />);
     expect(await screen.findByRole("button", { name: "Requeue failed" })).toBeDisabled();
+  });
+
+  it("disables requeue and explains when SMTP transport is not configured", async () => {
+    health({
+      org_email_enabled: true,
+      delivery_ready: false,
+      email: { ...notificationHealthFixture.email, failed: 3 },
+    });
+    renderWithProviders(<NotificationHealthPanel />);
+    expect(await screen.findByText("Email transport is not configured")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Requeue failed" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Requeue failed" })).toHaveAttribute(
+      "title",
+      "Configure SMTP before requeuing",
+    );
   });
 
   it("requeues failed emails after confirmation", async () => {

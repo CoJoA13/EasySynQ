@@ -15,10 +15,12 @@ from typing import Any
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ...config import Settings
 from ...db.models._notification_enums import NotificationEmailStatus
 from ...db.models.awareness_event import AwarenessEvent
 from ...db.models.notification import NotificationEmail
 from ...db.models.system_config import SystemConfig
+from .delivery import email_delivery_ready
 
 _RECENT_FAILURES_LIMIT = 10
 
@@ -27,7 +29,9 @@ def _iso(dt: datetime.datetime | None) -> str | None:
     return dt.isoformat() if dt is not None else None
 
 
-async def get_delivery_health(session: AsyncSession, org_id: uuid.UUID) -> dict[str, Any]:
+async def get_delivery_health(
+    session: AsyncSession, org_id: uuid.UUID, *, settings: Settings
+) -> dict[str, Any]:
     st = NotificationEmailStatus
     pending = NotificationEmail.status == st.PENDING
     claimable = pending & (
@@ -80,8 +84,13 @@ async def get_delivery_health(session: AsyncSession, org_id: uuid.UUID) -> dict[
 
     cfg = await session.get(SystemConfig, org_id)
 
+    org_email_enabled = bool(cfg and cfg.notifications_email_enabled)
     return {
-        "org_email_enabled": bool(cfg and cfg.notifications_email_enabled),
+        "org_email_enabled": org_email_enabled,
+        "delivery_ready": email_delivery_ready(
+            org_email_enabled=org_email_enabled,
+            settings=settings,
+        ),
         "email": {
             "failed": failed,
             "pending_now": pending_now,

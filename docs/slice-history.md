@@ -168,6 +168,33 @@
 
 ## REMEDIATION — correctness, accessibility, polish & test reliability
 
+### Issue #328 — preserve failed-email recovery when SMTP is unconfigured (API + OpenAPI + web + tests; NO migration [head stays `0080`]; NO new permission key [catalog 102]; closes [#328](https://github.com/CoJoA13/EasySynQ/issues/328); PR [#405](https://github.com/CoJoA13/EasySynQ/pull/405))
+
+**What changed.** Notification email delivery now has one shared readiness predicate: the
+organization's `notifications_email_enabled` flag must be on **and** the deployment must have a
+non-empty SMTP host. The admin recovery route applies that predicate before changing any failed
+email, so an enabled org with no transport leaves `FAILED` rows untouched instead of requeueing
+them for the drain to terminally suppress. The drain uses the same transport predicate at send
+time, preventing the recovery guard and delivery behavior from drifting.
+
+**Operational honesty.** `GET /admin/notifications/health` and its OpenAPI response now expose
+`delivery_ready` alongside the raw organization flag. The admin panel disables “Requeue failed”
+unless delivery is ready and distinguishes an organization-level opt-out from a missing SMTP
+transport, giving the operator the actual prerequisite instead of presenting a doomed recovery
+action.
+
+**Tests and impact.** A pure four-case truth table proves both readiness inputs independently. The
+Docker-backed route regression holds the organization flag on while forcing SMTP empty and proves
+the failed row's status, attempt count, and recovery eligibility remain unchanged; the existing
+email-disabled case now forces SMTP configured so it cannot pass for the wrong reason. Health
+response and web tests pin the additive field, the disabled action, and the transport-specific
+message. No database schema, migration, permission, audit event, notification event, task, or
+delivery-retry policy changes.
+
+**Validation.** API Ruff + format; mypy (**428 source files**); API unit (**1,227 passed, 1
+release-only skip**); Docker-backed notification integration (**9 passed**); Redocly; web ESLint +
+TypeScript + production build + Vitest (**245 files / 1,417 tests**).
+
 ### CR1 — close and ratchet the response-contract baseline (API + OpenAPI + tests + CI + docs; NO migration [head stays `0080`]; NO new permission key [catalog 102]; PR [#404](https://github.com/CoJoA13/EasySynQ/pull/404))
 
 **What shipped.** The eight failures named by Batch 12.5's first authenticated baseline are closed at

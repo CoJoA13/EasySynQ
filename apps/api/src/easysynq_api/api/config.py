@@ -21,6 +21,7 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..config import get_settings
 from ..db.models._audit_enums import ActorType, AuditObjectType, EventType
 from ..db.models.app_user import AppUser
 from ..db.models.audit_event import AuditEvent
@@ -30,6 +31,7 @@ from ..logging import request_id_var
 from ..problems import ProblemException
 from ..services.authz import require
 from ..services.notifications.calendar_admin import get_working_calendar, update_working_calendar
+from ..services.notifications.delivery import email_delivery_ready
 from ..services.notifications.health import get_delivery_health
 from ..services.notifications.requeue import requeue_failed
 
@@ -119,7 +121,7 @@ async def get_notification_health_endpoint(
 
     Failure/backlog/suppressed counts + the recent-failure list (operational-only) + the awareness
     fan-out backlog. Pure read. Needs ``config.update`` (admin-only)."""
-    return await get_delivery_health(session, caller.org_id)
+    return await get_delivery_health(session, caller.org_id, settings=get_settings())
 
 
 @router.post("/admin/notifications/requeue-failed")
@@ -131,10 +133,13 @@ async def requeue_failed_endpoint(
 
     Ops-recovery action (structured-log only; email is advisory). Needs ``config.update``."""
     cfg = await session.get(SystemConfig, caller.org_id)
-    if cfg is None or not cfg.notifications_email_enabled:
-        # Email delivery is off → leave FAILED rows untouched. Requeuing them would only let the
+    if not email_delivery_ready(
+        org_email_enabled=bool(cfg and cfg.notifications_email_enabled),
+        settings=get_settings(),
+    ):
+        # Delivery is not ready → leave FAILED rows untouched. Requeuing them would only let the
         # next drain terminally SUPPRESS them (drain._still_eligible), making them unrecoverable
-        # once email is re-enabled. The FE also disables the action while email is off.
+        # once org delivery or SMTP is configured. The FE mirrors this guard.
         return {"requeued": 0}
     count = await requeue_failed(session, caller.org_id)
     await session.commit()

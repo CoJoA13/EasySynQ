@@ -2005,6 +2005,7 @@ export interface NotificationEmailFailure {
 
 export interface NotificationDeliveryHealth {
   org_email_enabled: boolean;
+  delivery_ready: boolean;
   email: {
     failed: number;
     pending_now: number;
