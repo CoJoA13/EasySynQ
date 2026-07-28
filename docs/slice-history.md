@@ -202,20 +202,24 @@ instance/document-approval reads. `workflow_definition` remains versioned intern
 public read route; the catalog has no `task.*`/`workflow.*` keys; candidate work needs no claim;
 the optional `assignee` query value is an ignored compatibility parameter; and there are no manual
 claim/reassign/escalate mutations. Timer escalation remains notification, audit, and delivery-stamp
-behavior rather than a public task reassignment/state API. Finally, the complaint/NCR chapter
-preserves the implemented idempotent complaint→CAPA operation: the first create returns 201, while
-a replay returns 200 only after `capa.read` succeeds at the latched CAPA's own process scope
-(otherwise 403). It removes the never-built complaint→NCR and NCR→CAPA routes. Neighboring filters,
-expansions, and request shapes now match the router/OpenAPI instead of implying related unshipped
-behavior.
+behavior rather than a public task reassignment/state API. Recorded decisions replay only on a
+matching non-null idempotency key, while quorum/fail-closed siblings carry internal skip sentinels
+and return key-independent benign no-op replays. The resource catalog retains the shipped
+notification inbox/stream/preferences surface and its `notification_preference` backing entity.
+Finally, the complaint/NCR chapter preserves the implemented idempotent complaint→CAPA operation:
+the first create returns 201, while a replay returns 200 only after `capa.read` succeeds at the
+latched CAPA's own process scope (otherwise 403). It removes the never-built complaint→NCR and
+NCR→CAPA routes. Neighboring filters, expansions, and request shapes now match the router/OpenAPI
+instead of implying related unshipped behavior.
 
 **Impact.** Documentation/contract accuracy only—no runtime, migration, domain schema, route,
 payload, or permission-catalog behavior changed. The published OpenAPI keeps the same route/payload
-surface while correcting the ignored `assignee` query schema and the complaint→CAPA replay
-authorization prose. The remediation tracker advances M12 to merged, closes all four M13 findings,
-and preserves the original denominator: 1 preclosed + 40 merged + 4 in PR + 59 queued. Validation:
-`git diff --check`; configured Redocly OpenAPI lint; API Ruff + format; strict mypy across **426
-source files**; full unit selection (**1182 passed, 1 expected release-only skip**).
+surface while correcting the ignored `assignee` query schema, task-decision sentinel replay
+contract, and complaint→CAPA replay authorization prose. The remediation tracker advances M12 to
+merged, closes all four M13 findings, and preserves the original denominator: 1 preclosed + 40
+merged + 4 in PR + 59 queued. Validation: `git diff --check`; configured Redocly OpenAPI lint; API
+Ruff + format; strict mypy across **426 source files**; full unit selection (**1182 passed, 1
+expected release-only skip**).
 
 ### Minor Batch M12 — shipped data-model documentation alignment (docs only; NO migration [head stays `0080`]; NO new permission key [catalog 102]; PR [#392](https://github.com/CoJoA13/EasySynQ/pull/392))
 

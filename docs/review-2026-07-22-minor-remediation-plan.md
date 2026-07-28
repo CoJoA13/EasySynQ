@@ -362,8 +362,9 @@ permission key
 - [x] `docs/15-api-design.md:457` — documents unshipped task claim/reassign/escalate and workflow
   definition endpoints `[C]` (fixed: inventory only task list/detail/decision plus workflow
   instance/approval reads, state their real self/candidate or subject-derived gates, identify
-  `assignee` as an ignored compatibility parameter, and record definitions and manual task
-  mutations as non-public/deferred).
+  `assignee` as an ignored compatibility parameter, preserve the key-independent sentinel replay
+  contract for auto-skipped tasks, keep notification preferences in the resource inventory, and
+  record definitions and manual task mutations as non-public/deferred).
 - [x] `docs/15-api-design.md:339` — names absent permission keys on never-built delete/folder
   routes `[C]` (fixed: identify `folder_path` as a logical document scope value with no entity,
   router, or `folder.*` keys; remove the nonexistent document DELETE/`document.delete`, while

@@ -210,6 +210,7 @@ Every authenticated route declares (a) the **required permission key(s)** (from 
 | Domain | Base path(s) | Backing entities (`14`) |
 |---|---|---|
 | Auth / Identity | `/auth/config`, `/auth/step-up`, `/me`, `/me/permissions` | `app_user`, Keycloak |
+| Notifications | `/notifications`, `/notifications/stream`, `/me/notification-preferences` | `notification`, `notification_preference` |
 | Users | `/users` | `app_user` |
 | Roles | `/roles` | `role`, `role_grant`, `role_assignment` |
 | Permissions / Grants | `/permissions`, `/users/{id}/roles`, `/users/{id}/overrides` | `permission`, `permission_override`, `scope`, `sod_constraint` |
@@ -465,7 +466,7 @@ atom of the **My Tasks** inbox.
 | GET | `/documents/{id}/approval` | `document.read` (on the subject) | — | **S-web-5 (implemented).** The document → its current approval cycle: the **latest** `workflow_instance` (+ tasks) or `null` when never submitted (calm, not 404). Powers the Approvals stepper. |
 | GET | `/tasks?assignee=me&state=PENDING` | authenticated self | — | Assignments and candidate-pool work for the caller only. Filters: `state`, `type`, and `instance_id`; the optional `assignee` string is a compatibility no-op (including values other than `me`) and never widens the self scope. |
 | GET | `/tasks/{id}` | authenticated self | — | Task detail + subject label when the caller is its assignee or a candidate; otherwise sensitive-collapse `404`. |
-| POST | `/tasks/{id}/decision` | subject/outcome-derived | ✓ | `{ outcome:"approve"\|"reject"\|"acknowledge"\|"complete"\|"verify"\|"changes_requested", comment? }`, idempotent via `Idempotency-Key`. Document approval/rejection enforces `document.approve`/`document.review`; DOC_ACK also enforces `document.acknowledge`; CAPA, DCR, management-review, periodic-review, and leadership/improvement branches enforce their live assignee/candidate rules. The service writes the subject-appropriate outcome/audit/signature atoms transactionally. |
+| POST | `/tasks/{id}/decision` | subject/outcome-derived | ✓ | `{ outcome:"approve"\|"reject"\|"acknowledge"\|"complete"\|"verify"\|"changes_requested", comment? }`. A recorded decision replays only for its matching `Idempotency-Key`; absent/different keys then receive `409`. Exception: a sibling already auto-skipped because quorum closed or the stage failed closed returns a key-independent benign replay (`outcome=null`, `replayed=true`, `stage_state=ALREADY_SATISFIED` or `FAILED`). Document approval/rejection enforces `document.approve`/`document.review`; DOC_ACK also enforces `document.acknowledge`; CAPA, DCR, management-review, periodic-review, and leadership/improvement branches enforce their live assignee/candidate rules. The service writes the subject-appropriate outcome/audit/signature atoms transactionally. |
 
 The closed v1 catalog has no `task.*` or `workflow.*` permission keys, and v1 exposes no
 `/tasks/{id}/claim`, `/reassign`, or `/escalate` mutations. The engine materializes assignee and
@@ -952,7 +953,7 @@ SSE topics: `actions` (My-Actions/`task` changes affecting the caller), `notific
 |---|---|
 | Auth | Keycloak OIDC + PKCE; the SPA keeps its user/token bundle in memory while `oidc-client-ts` keeps transient redirect-request state in browser `localStorage`, and talks directly to Keycloak; the API is a resource server validating access JWTs against JWKS; **permissions resolved server-side, never from the token**. |
 | Authorization | FastAPI dependency on every route; deny-by-default, deny-wins, SoD against immutable history (§9); list endpoints filter, detail endpoints 403/404 per §9.5. |
-| Idempotency | Retry-sensitive POSTs advertise `Idempotency-Key` explicitly. Task decisions persist the header value in `task.client_token` and replay only on a matching key. |
+| Idempotency | Retry-sensitive POSTs advertise `Idempotency-Key` explicitly. A recorded task decision persists the header value in `task.client_token` and replays only on a matching non-null key; auto-skipped quorum/fail-closed sibling tasks instead use internal sentinels and return key-independent benign replays with `outcome=null` and `stage_state=ALREADY_SATISFIED`/`FAILED`. |
 | Concurrency | `ETag` + `If-Match` optimistic lock (`412`); document content guarded by the Redis check-out lock (`423`). |
 | Pagination | Keyset cursor over UUID v7; `limit ≤ 100`; no exact totals on hot paths. |
 | Filter/Sort/Shape | Allow-listed bracketed operators; `sort=-field`; `fields=`, `view=summary\|full`, `expand=` (depth 1, permission-checked). |
