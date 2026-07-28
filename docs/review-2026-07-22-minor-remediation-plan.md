@@ -11,7 +11,7 @@
   underway, leaving **103** to schedule here. Batch M1 closed 4; M2 closed 2; M3 closed 2; M4
   closed 4; M5 closed 3; M6 closed 4; M7 closed 3; M8 closed 2; M9 closed 4; M10 closed 4;
   M11 closed 3; M12 closed 5; M13 closed 4; M14 closed 6; M15 closed 4; M16 closed 7;
-  M17 closed 3; M18 closed 9; M19 closed 9; M20 closed 6; M21 closed 8; M22 resolves 7;
+  M17 closed 3; M18 closed 9; M19 closed 9; M20 closed 6; M21 closed 8; M22 closed 7;
   **no findings remain queued** after M22.
 - A queued finding is not assumed to still be live. Every batch must re-locate and revalidate its
   findings against then-current `main` before implementation; close, re-scope, or reject it with
@@ -50,9 +50,9 @@
 | M19 | Web state and badge consistency | 9 | ☑ merged | [#399](https://github.com/CoJoA13/EasySynQ/pull/399) |
 | M20 | Web visual tokens and semantics | 6 | ☑ merged | [#400](https://github.com/CoJoA13/EasySynQ/pull/400) |
 | M21 | Web async and error UX | 8 | ☑ merged | [#401](https://github.com/CoJoA13/EasySynQ/pull/401) |
-| M22 | Web accessibility | 7 | ☑ in PR | [#402](https://github.com/CoJoA13/EasySynQ/pull/402) |
+| M22 | Web accessibility | 7 | ☑ merged | [#402](https://github.com/CoJoA13/EasySynQ/pull/402) |
 
-**Accounting: 1 preclosed + 96 merged + 7 in PR = 104 original findings; 0 queued.**
+**Accounting: 1 preclosed + 103 merged = 104 original findings; 0 queued.**
 
 ---
 
@@ -615,7 +615,7 @@ migration, or new permission key
   drawer switches risks `[C]` (fixed: the spawn mutation/error leaf is keyed to the selected risk,
   so the persistent drawer cannot carry one row's failure into another).
 
-### ☑ M22 — Web accessibility
+### ☑ M22 — Web accessibility — [#402](https://github.com/CoJoA13/EasySynQ/pull/402)
 
 `branch: fix/minor-web-accessibility` · web + vitest/jest-axe/manual keyboard checks
 
