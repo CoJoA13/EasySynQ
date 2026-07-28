@@ -84,30 +84,30 @@ class CapaRaise(BaseModel):
 class ContainmentCreate(BaseModel):
     # The sealed correction narrative (caller-constructed). Must be non-empty (the service guards;
     # 422 otherwise) — e.g. {"correction": "...", "evidence_note": "..."}.
-    content_block: dict[str, Any]
+    content_block: dict[str, Any] = Field(min_length=1)
 
 
 class RootCauseCreate(BaseModel):
     # The sealed RCA narrative (5-Whys / fishbone), e.g. {"root_cause": "...", "method": "5-whys"}.
-    content_block: dict[str, Any]
+    content_block: dict[str, Any] = Field(min_length=1)
 
 
 class ActionPlanPropose(BaseModel):
     # The proposed corrective action plan (caller-constructed), e.g.
     # {"action_items": [{"description": "...", "owner": "...", "due_date": "..."}]}.
-    content_block: dict[str, Any]
+    content_block: dict[str, Any] = Field(min_length=1)
 
 
 class ImplementCreate(BaseModel):
     # The action-completion narrative (caller-constructed), e.g. {"actions_done": "..."}.
-    content_block: dict[str, Any]
+    content_block: dict[str, Any] = Field(min_length=1)
 
 
 class VerifyCreate(BaseModel):
     # The verifier's effectiveness decision + narrative. ``decision`` drives the M4 close gate:
     # ``effective`` is the only value that can close; ``not_effective`` loops back to RootCause.
     decision: Literal["effective", "not_effective"]
-    content_block: dict[str, Any]
+    content_block: dict[str, Any] = Field(min_length=1)
 
 
 class ComplaintCreate(BaseModel):

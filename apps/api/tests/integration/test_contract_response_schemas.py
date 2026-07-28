@@ -46,6 +46,9 @@ _BASE_URL = "http://test/api/v1"
 _UNVERSIONED_BASE_URL = "http://test"
 _UNVERSIONED_PATHS = frozenset({"/healthz", "/readyz"})
 _STREAMING_PATHS = frozenset({"/notifications/stream"})
+_DEFERRED_OPERATIONS = {
+    ("GET", "/audit-events/export"): "exportAuditEvents",
+}
 _SUBJECT = "kc-contract-response-validation"
 _LOCKED_STATUSES = frozenset({401, 423})
 
@@ -64,6 +67,14 @@ enabled = false
 """
 )
 _SCHEMA = schemathesis.openapi.from_path(_CONTRACT_PATH, config=_CONFIG)
+for (method, path), operation_id in _DEFERRED_OPERATIONS.items():
+    # D-9 keeps future operation shapes in the published schema without mounting their routers.
+    # Exclude only an explicitly marked, exact operation so a live route cannot disappear from this
+    # sweep through a broad tag/path filter.
+    raw_operation = _SCHEMA[path][method].definition.raw
+    assert raw_operation.get("operationId") == operation_id
+    assert raw_operation.get("x-easysynq-implementation-status") == "deferred"
+    _SCHEMA = _SCHEMA.exclude(operation_id=operation_id)
 
 
 class _FirstChunkASGITransport(AsyncBaseTransport):

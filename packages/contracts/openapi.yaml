@@ -1416,6 +1416,7 @@ paths:
         "403": { $ref: "#/components/responses/ProblemResponse" }
         "404": { $ref: "#/components/responses/ProblemResponse" }
         "409": { $ref: "#/components/responses/ProblemResponse" }
+        "422": { $ref: "#/components/responses/ProblemResponse" }
 
   /documents/{document_id}/checkin:
     post:
@@ -2180,6 +2181,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/InitUploadResult" }
         "403": { $ref: "#/components/responses/ProblemResponse" }
+        "422": { $ref: "#/components/responses/ProblemResponse" }
 
   /records:
     get:
@@ -3963,6 +3965,7 @@ paths:
     get:
       tags: [audit]
       operationId: exportAuditEvents
+      x-easysynq-implementation-status: deferred
       summary: "Async export (CSV/JSON) for evidence packs. DEFERRED in MVP (omit-with-schema, D-9)."
       parameters:
         - { name: format, in: query, required: false, schema: { type: string, enum: [csv, json], default: json } }
@@ -4360,6 +4363,7 @@ paths:
         "403": { $ref: "#/components/responses/ProblemResponse" }
         "404": { $ref: "#/components/responses/ProblemResponse" }
         "409": { $ref: "#/components/responses/ProblemResponse" }
+        "422": { $ref: "#/components/responses/ProblemResponse" }
   /capas/{capa_id}/root-cause:
     post:
       tags: [capa]
@@ -4383,6 +4387,7 @@ paths:
         "403": { $ref: "#/components/responses/ProblemResponse" }
         "404": { $ref: "#/components/responses/ProblemResponse" }
         "409": { $ref: "#/components/responses/ProblemResponse" }
+        "422": { $ref: "#/components/responses/ProblemResponse" }
   /capas/{capa_id}/action-plan:
     post:
       tags: [capa]
@@ -4520,6 +4525,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Complaint" }
         "403": { $ref: "#/components/responses/ProblemResponse" }
+        "422": { $ref: "#/components/responses/ProblemResponse" }
     get:
       tags: [capa]
       operationId: listComplaints
@@ -6603,7 +6609,15 @@ paths:
           content:
             text/event-stream:
               schema:
-                type: string
+                type: object
+                additionalProperties: false
+                required: [event, data]
+                properties:
+                  event: { type: string, enum: [notify] }
+                  data:
+                    type: string
+                    maxLength: 0
+                    description: Content-free nudge; clients refetch the authoritative notification list.
         "401": { $ref: "#/components/responses/ProblemResponse" }
 
   /notifications/{notification_id}/read:
@@ -6766,6 +6780,8 @@ components:
             - setup_not_initialized
             - setup_already_complete
             - setup_gates_unsatisfied
+            - backup_not_configured
+            - auth_unavailable
             - no_bootstrap_secret
             - bootstrap_invalid
             - bootstrap_expired
@@ -7360,12 +7376,19 @@ components:
               type: boolean
               description: false means identical bytes were re-checked-in — no new version.
 
+    Sha256Hex:
+      type: string
+      minLength: 64
+      maxLength: 64
+      pattern: "^[0-9a-f]{64}$"
+      description: Client-computed lowercase-hex SHA-256 content address.
+
     InitUpload:
       type: object
       additionalProperties: false
       required: [sha256]
       properties:
-        sha256: { type: string, description: Client-computed lowercase-hex SHA-256 of the bytes. }
+        sha256: { $ref: "#/components/schemas/Sha256Hex" }
         content_type: { type: string, default: application/octet-stream }
 
     InitUploadResult:
@@ -7384,7 +7407,7 @@ components:
       additionalProperties: false
       required: [sha256]
       properties:
-        sha256: { type: string }
+        sha256: { $ref: "#/components/schemas/Sha256Hex" }
         change_reason: { type: string, description: "Mandatory, non-empty (INV-3)." }
         change_significance: { type: string, enum: [MAJOR, MINOR], description: Mandatory (INV-3). }
         mime_type: { type: string, default: application/octet-stream }
@@ -8152,7 +8175,7 @@ components:
       additionalProperties: false
       required: [sha256]
       properties:
-        sha256: { type: string, description: Client-computed lowercase-hex SHA-256 of the evidence bytes. }
+        sha256: { $ref: "#/components/schemas/Sha256Hex" }
         content_type: { type: string, default: application/octet-stream }
 
     EvidenceBlob:
@@ -8574,6 +8597,7 @@ components:
       properties:
         content_block:
           type: object
+          minProperties: 1
           additionalProperties: true
           description: The sealed correction narrative (non-empty).
     StageBlockCreate:
@@ -8583,6 +8607,7 @@ components:
       properties:
         content_block:
           type: object
+          minProperties: 1
           additionalProperties: true
           description: >-
             The sealed stage block (non-empty). For root-cause: the RCA narrative (e.g. root_cause,
@@ -8602,6 +8627,7 @@ components:
             evidence gate); `not_effective` loops it back to RootCause for a re-approved revised plan.
         content_block:
           type: object
+          minProperties: 1
           additionalProperties: true
           description: The sealed effectiveness-verification narrative (non-empty).
     DcrState:
@@ -9474,10 +9500,10 @@ components:
       additionalProperties: false
       required: [description]
       properties:
-        description: { type: string }
-        customer: { type: [string, "null"] }
+        description: { type: string, minLength: 1, maxLength: 4000 }
+        customer: { type: [string, "null"], maxLength: 300 }
         received_at: { type: [string, "null"], format: date-time }
-        channel: { type: [string, "null"] }
+        channel: { type: [string, "null"], maxLength: 100 }
         severity:
           oneOf:
             - { $ref: "#/components/schemas/NcSeverity" }
