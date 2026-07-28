@@ -1,4 +1,5 @@
 import {
+  Anchor,
   Box,
   Button,
   Grid,
@@ -178,22 +179,18 @@ export function LibraryPage() {
                   </Table.Thead>
                   <Table.Tbody>
                     {rows.map((d) => (
-                      <Table.Tr
-                        key={d.id}
-                        style={{ cursor: "pointer" }}
-                        onClick={() => openDetail(d.id)}
-                        tabIndex={0}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter" || e.key === " ") {
-                            e.preventDefault();
-                            openDetail(d.id);
-                          }
-                        }}
-                      >
+                      <Table.Tr key={d.id}>
                         <Table.Td>
-                          <Text ff="monospace" size="sm">
-                            {d.identifier}
-                          </Text>
+                          <Anchor
+                            component="button"
+                            type="button"
+                            onClick={() => openDetail(d.id)}
+                            aria-label={`Open ${d.identifier}: ${d.title}`}
+                          >
+                            <Text span ff="monospace" size="sm">
+                              {d.identifier}
+                            </Text>
+                          </Anchor>
                         </Table.Td>
                         <Table.Td>{d.title}</Table.Td>
                         <Table.Td>

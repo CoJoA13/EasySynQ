@@ -50,11 +50,15 @@ test("renders effective timestamps on the organization calendar day", async () =
   expect(screen.queryByText("2026-07-01")).not.toBeInTheDocument();
 });
 
-test("clicking a row opens the deep-linkable detail drawer with the artifact header", async () => {
+test("the named identifier action opens the deep-linkable detail drawer", async () => {
   renderWithProviders(<LibraryPage />, { route: "/library" });
   await waitFor(() => expect(screen.getByText("SOP-PUR-014")).toBeInTheDocument());
 
-  await userEvent.click(screen.getByText("SOP-PUR-014"));
+  const open = screen.getByRole("button", {
+    name: "Open SOP-PUR-014: Supplier Selection & Evaluation",
+  });
+  expect(open.closest("tr")).not.toHaveAttribute("tabindex");
+  await userEvent.click(open);
   await waitFor(() =>
     expect(
       screen.getByRole("heading", { name: "Supplier Selection & Evaluation" }),

@@ -18,6 +18,15 @@ body {
   border-radius: var(--es-radius-sm);
 }
 
+/* Box shadows are suppressed in Windows High Contrast; restore a system-colour outline there. */
+@media (forced-colors: active) {
+  :focus-visible {
+    outline: 2px solid Highlight;
+    outline-offset: 2px;
+    box-shadow: none;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

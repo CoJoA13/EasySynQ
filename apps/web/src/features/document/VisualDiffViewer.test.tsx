@@ -38,6 +38,15 @@ test("VisualDiffViewer (Ready) renders the changed-page rail + the page image vi
   expect(screen.getByRole("button", { name: "Page 1" })).toBeInTheDocument(); // page 0 unchanged
 });
 
+test("inactive page-rail buttons use the AA secondary-text token", async () => {
+  server.use(http.get(PAGE, () => png()));
+  renderWithProviders(<VisualDiffViewer documentId={DOC} fromVid={FROM} toVid={TO} />);
+  await screen.findByAltText("Page 2 of 3 — Diff layer (changed)");
+  const inactive = screen.getByRole("button", { name: "Page 1" });
+  expect(inactive.getAttribute("style")).toContain("color: var(--es-text-2, #565b6b)");
+  expect(inactive.getAttribute("style")).not.toContain("var(--es-text-muted");
+});
+
 test("VisualDiffViewer layer toggle re-fetches the page with ?layer=to", async () => {
   const layers: string[] = [];
   server.use(
@@ -71,6 +80,7 @@ test("VisualDiffViewer n/p steps through the changed pages", async () => {
   renderWithProviders(<VisualDiffViewer documentId={DOC} fromVid={FROM} toVid={TO} />);
   await screen.findByAltText("Page 2 of 3 — Diff layer (changed)");
   const region = screen.getByRole("group", { name: "Visual page diff" });
+  expect(region.style.outline).toBe("");
   region.focus();
   await user.keyboard("n"); // page 1 → next changed page (index 2 → "Page 3")
   await screen.findByAltText("Page 3 of 3 — Diff layer (changed)");
