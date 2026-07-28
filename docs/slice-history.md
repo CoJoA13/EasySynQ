@@ -177,7 +177,7 @@
 
 ## REMEDIATION — correctness, accessibility, polish & test reliability
 
-### Minor Batch M21 — web async and error UX (web + tests + docs; NO API or contract change; NO migration [head stays `0080`]; NO new permission key [catalog 102]; PR pending)
+### Minor Batch M21 — web async and error UX (web + tests + docs; NO API or contract change; NO migration [head stays `0080`]; NO new permission key [catalog 102]; PR [#401](https://github.com/CoJoA13/EasySynQ/pull/401))
 
 **What shipped.** All eight finder-only reports were re-located against merged M20; every report
 still had an actionable failure mode. The breadcrumb report's raw-label half was already closed by
@@ -198,7 +198,7 @@ surface while keeping the enclosing drawer mounted.
 **Impact.** Web behavior, Vitest coverage, and remediation documentation only; no API route,
 contract, database schema, migration, permission, event, persistence, or task-name change. The
 remediation tracker advances M20 to merged, closes all eight M21 findings, and preserves the original
-denominator: 1 preclosed + 88 merged + 8 ready for PR + 7 queued.
+denominator: 1 preclosed + 88 merged + 8 in PR + 7 queued.
 
 **Validation.** `git diff --check`; affected web coverage (**113 passed across 9 files**); full web
 suite (**1,406 passed across 243 files**); web ESLint, strict TypeScript, and production build.

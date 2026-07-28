@@ -49,10 +49,10 @@
 | M18 | Web shell, layout, and error consistency | 9 | ☑ merged | [#398](https://github.com/CoJoA13/EasySynQ/pull/398) |
 | M19 | Web state and badge consistency | 9 | ☑ merged | [#399](https://github.com/CoJoA13/EasySynQ/pull/399) |
 | M20 | Web visual tokens and semantics | 6 | ☑ merged | [#400](https://github.com/CoJoA13/EasySynQ/pull/400) |
-| M21 | Web async and error UX | 8 | ☑ ready for PR | — |
+| M21 | Web async and error UX | 8 | ☑ in PR | [#401](https://github.com/CoJoA13/EasySynQ/pull/401) |
 | M22 | Web accessibility | 7 | ☐ queued — revalidate | — |
 
-**Accounting: 1 preclosed + 88 merged + 8 ready for PR + 7 queued = 104 original findings.**
+**Accounting: 1 preclosed + 88 merged + 8 in PR + 7 queued = 104 original findings.**
 
 ---
 
@@ -584,7 +584,7 @@ migration, or new permission key
   `ClauseBadge` now serves Search, Library, the artifact header, and the Controlled Document
   Register while preserving mandatory-star meaning).
 
-### ☑ M21 — Web async and error UX
+### ☑ M21 — Web async and error UX — [#401](https://github.com/CoJoA13/EasySynQ/pull/401)
 
 `branch: fix/minor-web-async-errors` · web + vitest
 
