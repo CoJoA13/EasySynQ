@@ -2,6 +2,7 @@ import { Badge, Button, Card, Container, Group, Stack, Table, Text, Title } from
 import { useMemo } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useDocumentControlRegister } from "./useDocumentControlRegister";
+import { ClauseBadge } from "../../lib/ClauseBadge";
 import type { RegisterProvenance, RegisterRow } from "../../lib/types";
 import { AsOf } from "../../lib/AsOf";
 import { ErrorState, LoadingState, NoAccessState, EmptyState } from "../../lib/states";
@@ -233,10 +234,11 @@ export function ReportsRegisterPage() {
                             ) : (
                               <Group gap={4}>
                                 {r.clause_refs.map((c) => (
-                                  <Text key={c.clause} size="sm">
-                                    {c.starred ? "★ " : ""}
-                                    {c.clause}
-                                  </Text>
+                                  <ClauseBadge
+                                    key={c.clause}
+                                    clause={c.clause}
+                                    starred={c.starred}
+                                  />
                                 ))}
                               </Group>
                             )}

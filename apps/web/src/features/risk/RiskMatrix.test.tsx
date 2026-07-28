@@ -23,3 +23,24 @@ it("summarises an empty register as 0 plotted", () => {
     screen.getByRole("img", { name: /risk matrix.*0 risks plotted; 0 high or critical/i }),
   ).toBeInTheDocument();
 });
+
+it("uses dark-mode-safe semantic tokens for SVG fills, text, grid, and selection", () => {
+  const selected = riskListFixture.data[0];
+  const { container } = renderWithProviders(
+    <RiskMatrix rows={riskListFixture.data} selected={selected} />,
+  );
+  const svg = screen.getByRole("img");
+  const source = svg.innerHTML;
+
+  expect(source).not.toContain("--mantine-color-");
+  expect(source).toContain("var(--es-success-soft)");
+  expect(source).toContain("var(--es-warning-soft)");
+  expect(source).toContain("var(--es-danger-soft)");
+  expect(source).toContain("var(--es-text-2)");
+  expect(source).toContain("var(--es-text)");
+  expect(source).toContain("var(--es-border-strong)");
+  expect(container.querySelector('rect[fill="none"]')).toHaveAttribute(
+    "stroke",
+    "var(--es-accent)",
+  );
+});

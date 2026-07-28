@@ -177,6 +177,33 @@
 
 ## REMEDIATION — correctness, accessibility, polish & test reliability
 
+### Minor Batch M20 — web visual tokens and semantics (web + tests + docs; NO API or contract change; NO migration [head stays `0080`]; NO new permission key [catalog 102]; PR [#400](https://github.com/CoJoA13/EasySynQ/pull/400))
+
+**What shipped.** All six confirmed reports were re-located against the current CAPA, audit,
+document-approval, compliance, ingestion, risk, search, library, and register surfaces; all six
+remained live. One shared `LifecycleStepper` now owns the ordered-list semantics, canonical
+done/current/pending/rejected glyphs, marker geometry, and scheme-aware visual tokens for CAPA
+close requirements, document approval progress, and audit lifecycle. Domain labels, descriptions,
+and state derivation remain with their feature callers.
+
+The compliance overdue rollup now uses the canonical danger glyph already carried by the row-level
+badge. Approval markers use `--es-text-inverse` rather than literal white, and the ingestion
+ambiguity signal is explicit text without a pictograph. The risk matrix replaces every light-only
+Mantine palette reference with dark-rekeyed semantic band, text, border, and accent tokens while
+retaining its numeric and labeled non-colour channels.
+
+One shared `ClauseBadge` replaces the light Search chip, outline Library/header chips, and plain
+Controlled Document Register text. Its stable accessible name identifies the clause, and mandatory
+register mappings retain the star with an explicit “mandatory” name.
+
+**Impact.** Web behavior, Vitest coverage, and remediation documentation only; no API route,
+contract, database schema, migration, permission, event, persistence, or task-name change. The
+remediation tracker advances M19 to merged, closes all six M20 findings, and preserves the original
+denominator: 1 preclosed + 82 merged + 6 in PR + 15 queued.
+
+**Validation.** `git diff --check`; affected web coverage (**68 passed across 11 files**); full web
+suite (**1,393 passed across 242 files**); web ESLint, strict TypeScript, and production build.
+
 ### Minor Batch M19 — web state and badge consistency (web + tests + docs; NO API or contract change; NO migration [head stays `0080`]; NO new permission key [catalog 102]; PR [#399](https://github.com/CoJoA13/EasySynQ/pull/399))
 
 **What shipped.** All nine confirmed reports were re-located against the current admin, audit,

@@ -1,4 +1,4 @@
-import { List, ThemeIcon } from "@mantine/core";
+import { LifecycleStepper, type LifecycleStep } from "../../lib/LifecycleStepper";
 import type { CapaStage } from "../../lib/types";
 
 export interface GateState {
@@ -20,22 +20,11 @@ export function deriveGate(stages: CapaStage[], cycleMarker: number): GateState 
   return {
     rootCause: hasAnyRootCause,
     action: currentWithEvidence("Implement"),
-    effectiveness: currentWithEvidence("Verify", (s) => s.content_block["decision"] === "effective"),
+    effectiveness: currentWithEvidence(
+      "Verify",
+      (s) => s.content_block["decision"] === "effective",
+    ),
   };
-}
-
-function Step({ done, label }: { done: boolean; label: string }) {
-  return (
-    <List.Item
-      icon={
-        <ThemeIcon color={done ? "teal" : "gray"} size={18} radius="xl">
-          {done ? "✓" : "•"}
-        </ThemeIcon>
-      }
-    >
-      {label} {done ? "" : "— required"}
-    </List.Item>
-  );
 }
 
 export function CloseGateStepper({
@@ -46,11 +35,25 @@ export function CloseGateStepper({
   cycleMarker: number;
 }) {
   const gate = deriveGate(stages, cycleMarker);
-  return (
-    <List spacing="xs" size="sm" center>
-      <Step done={gate.rootCause} label="Root cause documented" />
-      <Step done={gate.action} label="Corrective action defined" />
-      <Step done={gate.effectiveness} label="Effectiveness evidence" />
-    </List>
-  );
+  const steps: LifecycleStep[] = [
+    {
+      key: "root-cause",
+      label: "Root cause documented",
+      description: gate.rootCause ? "Requirement met" : "Required",
+      status: gate.rootCause ? "done" : "pending",
+    },
+    {
+      key: "corrective-action",
+      label: "Corrective action defined",
+      description: gate.action ? "Requirement met" : "Required",
+      status: gate.action ? "done" : "pending",
+    },
+    {
+      key: "effectiveness",
+      label: "Effectiveness evidence",
+      description: gate.effectiveness ? "Requirement met" : "Required",
+      status: gate.effectiveness ? "done" : "pending",
+    },
+  ];
+  return <LifecycleStepper ariaLabel="CAPA close requirements" steps={steps} />;
 }

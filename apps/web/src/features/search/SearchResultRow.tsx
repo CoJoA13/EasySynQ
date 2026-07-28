@@ -1,5 +1,6 @@
-import { Anchor, Badge, Group, Stack, Text } from "@mantine/core";
+import { Anchor, Group, Stack, Text } from "@mantine/core";
 import { Link } from "react-router-dom";
+import { ClauseBadge } from "../../lib/ClauseBadge";
 import type { SearchHit } from "../../lib/types";
 import { StateBadge } from "../document/StateBadge";
 import { Snippet } from "./Snippet";
@@ -19,10 +20,13 @@ export function SearchResultRow({ hit }: { hit: SearchHit }) {
       {hit.clause_refs.length > 0 && (
         <Group gap={4}>
           {hit.clause_refs.map((c) => (
-            <Anchor key={c} component={Link} to={`/library?clause=${encodeURIComponent(c)}`} underline="never">
-              <Badge variant="light" size="sm">
-                Clause {c}
-              </Badge>
+            <Anchor
+              key={c}
+              component={Link}
+              to={`/library?clause=${encodeURIComponent(c)}`}
+              underline="never"
+            >
+              <ClauseBadge clause={c} />
             </Anchor>
           ))}
         </Group>

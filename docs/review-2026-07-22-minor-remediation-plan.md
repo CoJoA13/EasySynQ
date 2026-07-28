@@ -11,7 +11,7 @@
   underway, leaving **103** to schedule here. Batch M1 closed 4; M2 closed 2; M3 closed 2; M4
   closed 4; M5 closed 3; M6 closed 4; M7 closed 3; M8 closed 2; M9 closed 4; M10 closed 4;
   M11 closed 3; M12 closed 5; M13 closed 4; M14 closed 6; M15 closed 4; M16 closed 7;
-  M17 closed 3; M18 closed 9; M19 resolves 9; **21 remain queued** after M19.
+  M17 closed 3; M18 closed 9; M19 closed 9; M20 resolves 6; **15 remain queued** after M20.
 - A queued finding is not assumed to still be live. Every batch must re-locate and revalidate its
   findings against then-current `main` before implementation; close, re-scope, or reject it with
   evidence rather than mechanically applying the 2026-07-22 suggestion.
@@ -46,12 +46,12 @@
 | M16 | UI copy and terminology | 7 | ☑ merged | [#396](https://github.com/CoJoA13/EasySynQ/pull/396) |
 | M17 | Test false-PASS traps | 3 | ☑ merged | [#397](https://github.com/CoJoA13/EasySynQ/pull/397) |
 | M18 | Web shell, layout, and error consistency | 9 | ☑ merged | [#398](https://github.com/CoJoA13/EasySynQ/pull/398) |
-| M19 | Web state and badge consistency | 9 | ☑ in PR | [#399](https://github.com/CoJoA13/EasySynQ/pull/399) |
-| M20 | Web visual tokens and semantics | 6 | ☐ queued — revalidate | — |
+| M19 | Web state and badge consistency | 9 | ☑ merged | [#399](https://github.com/CoJoA13/EasySynQ/pull/399) |
+| M20 | Web visual tokens and semantics | 6 | ☑ in PR | [#400](https://github.com/CoJoA13/EasySynQ/pull/400) |
 | M21 | Web async and error UX | 8 | ☐ queued — revalidate | — |
 | M22 | Web accessibility | 7 | ☐ queued — revalidate | — |
 
-**Accounting: 1 preclosed + 73 merged + 9 in PR + 21 queued = 104 original findings.**
+**Accounting: 1 preclosed + 82 merged + 6 in PR + 15 queued = 104 original findings.**
 
 ---
 
@@ -558,22 +558,30 @@ migration, or new permission key
   and its contrast fails in both schemes `[C]` (fixed: confirmed Document/Record kinds use the
   AA-paired `StatusBadge` treatment while retaining their existing inline SVG domain icons).
 
-### ☐ M20 — Web visual tokens and semantics
+### ☑ M20 — Web visual tokens and semantics — [#400](https://github.com/CoJoA13/EasySynQ/pull/400)
 
 `branch: fix/minor-web-visual-tokens` · web + accessibility-focused vitest
 
-- [ ] `apps/web/src/features/capa/CloseGateStepper.tsx:31` — equivalent progress steppers use three
-  unrelated visual treatments `[C]`.
-- [ ] `apps/web/src/features/compliance/CompliancePage.tsx:63` — compliance rollup uses an emoji
-  anti-pattern inconsistent with the signal below `[C]`.
-- [ ] `apps/web/src/features/document/ApprovalStepper.tsx:112` — hard-coded white bypasses the
-  inverse-text token in dark mode `[C]`.
-- [ ] `apps/web/src/features/ingestion/ConfidenceCell.tsx:43` — ambiguity caption reintroduces a
-  purged pictograph style `[C]`.
-- [ ] `apps/web/src/features/risk/RiskMatrix.tsx:42` — light-only SVG palette variables make dark
-  mode axis text low contrast `[C]`.
-- [ ] `apps/web/src/features/search/SearchResultRow.tsx:23` — clause chips have three different
-  representations across primary surfaces `[C]`.
+- [x] `apps/web/src/features/capa/CloseGateStepper.tsx:31` — equivalent progress steppers use three
+  unrelated visual treatments `[C]` (fixed: CAPA close requirements, document approval progress,
+  and audit lifecycle now render through one ordered, accessible `LifecycleStepper` with canonical
+  status glyphs and domain copy supplied by each caller).
+- [x] `apps/web/src/features/compliance/CompliancePage.tsx:63` — compliance rollup uses an emoji
+  anti-pattern inconsistent with the signal below `[C]` (fixed: the overdue count consumes the
+  canonical danger glyph used by the row-level overdue badge).
+- [x] `apps/web/src/features/document/ApprovalStepper.tsx:112` — hard-coded white bypasses the
+  inverse-text token in dark mode `[C]` (fixed: strong lifecycle markers use
+  `--es-text-inverse`; pending markers use the re-keyed surface/text/border token pair).
+- [x] `apps/web/src/features/ingestion/ConfidenceCell.tsx:43` — ambiguity caption reintroduces a
+  purged pictograph style `[C]` (fixed: the secondary signal is explicit “Ambiguous
+  classification” copy with no decorative pictograph).
+- [x] `apps/web/src/features/risk/RiskMatrix.tsx:42` — light-only SVG palette variables make dark
+  mode axis text low contrast `[C]` (fixed: band fills, grid, axis/cell text, and selection ring all
+  consume dark-rekeyed `--es-*` semantic tokens).
+- [x] `apps/web/src/features/search/SearchResultRow.tsx:23` — clause chips have three different
+  representations across primary surfaces `[C]` (fixed: one outlined, explicitly named
+  `ClauseBadge` now serves Search, Library, the artifact header, and the Controlled Document
+  Register while preserving mandatory-star meaning).
 
 ### ☐ M21 — Web async and error UX
 

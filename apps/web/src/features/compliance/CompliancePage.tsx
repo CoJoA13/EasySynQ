@@ -1,6 +1,7 @@
 import { Anchor, Container, Group, Table, Text, Title } from "@mantine/core";
 import { Link } from "react-router-dom";
 import { AsOf } from "../../lib/AsOf";
+import { TONE_GLYPH } from "../../lib/status";
 import { StatusBadge } from "../../lib/StatusBadge";
 import { ErrorState, LoadingState, NoAccessState } from "../../lib/states";
 import { CoverageBadge } from "./CoverageBadge";
@@ -60,7 +61,9 @@ export function CompliancePage() {
         <Text>✓ Covered: {rollup.covered}</Text>
         <Text>◔ Partial: {rollup.partial}</Text>
         <Text>✕ Gap: {rollup.gap}</Text>
-        <Text>⏰ Review overdue: {rollup.overdue_review}</Text>
+        <Text>
+          {TONE_GLYPH.danger} Review overdue: {rollup.overdue_review}
+        </Text>
       </Group>
       <Table.ScrollContainer minWidth={720}>
         <Table striped highlightOnHover>

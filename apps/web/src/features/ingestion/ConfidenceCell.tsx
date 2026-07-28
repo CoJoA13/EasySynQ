@@ -9,7 +9,7 @@ import type { ImportClassification, ImportConfidenceBand } from "../../lib/types
 // disambiguated by the text label only — a faithful 1:1 carry-over of the prior band hues; the
 // LOW-vs-AMBIGUOUS semantic split is deferred to Phase 3. The displayed `% ` is kind_conf (the
 // dimension the human confirms). The badge always shows the BAND (so the tone glyph never contradicts
-// the label); `classification.ambiguous` is surfaced by the separate `⚖ ambiguous` caption.
+// the label); `classification.ambiguous` is surfaced by a separate explicit-text caption.
 const BAND_META: Record<ImportConfidenceBand, { label: string; tone: Tone }> = {
   HIGH: { label: "High", tone: "success" },
   MEDIUM: { label: "Medium", tone: "warning" },
@@ -40,7 +40,7 @@ export function ConfidenceCell({
       <StatusBadge tone={meta.tone} label={`${meta.label} · ${pct}%`} kind="Confidence" />
       {classification.ambiguous && (
         <Text span size="xs" c="dimmed">
-          ⚖ ambiguous
+          Ambiguous classification
         </Text>
       )}
     </Stack>

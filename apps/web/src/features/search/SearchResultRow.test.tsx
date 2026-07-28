@@ -22,6 +22,7 @@ test("renders identifier, a title link to the document, and a clause chip link",
   expect(title).toHaveAttribute("href", "/documents/11111111-1111-1111-1111-111111111111");
   const clause = screen.getByRole("link", { name: /Clause 8.4/ });
   expect(clause).toHaveAttribute("href", "/library?clause=8.4");
+  expect(clause.querySelector("[data-clause-badge]")).toHaveAttribute("data-variant", "outline");
 });
 
 test("renders the state badge and the highlighted snippet", () => {

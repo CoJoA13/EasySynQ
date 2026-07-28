@@ -16,6 +16,9 @@ test("lists documents with resolved Type/Owner and is accessible", async () => {
   // scoped to the table cell (the facet selects also reference these names).
   expect(screen.getByRole("cell", { name: "Procedure" })).toBeInTheDocument(); // type name, not UUID
   expect(screen.getByRole("cell", { name: "Mara Quality" })).toBeInTheDocument(); // owner name
+  expect(screen.getByText("Clause 8.4").closest("[data-clause-badge]")).toHaveAttribute(
+    "data-clause-badge",
+  );
   // State badge (icon + label, never color-only) + effective date.
   expect(screen.getByLabelText("State: Effective")).toBeInTheDocument();
   expect(screen.getByText("2026-03-14")).toBeInTheDocument();

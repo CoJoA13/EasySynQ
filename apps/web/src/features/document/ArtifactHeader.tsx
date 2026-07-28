@@ -1,4 +1,5 @@
-import { Badge, Group, Stack, Text, Title } from "@mantine/core";
+import { Group, Stack, Text, Title } from "@mantine/core";
+import { ClauseBadge } from "../../lib/ClauseBadge";
 import type { DocumentSummary } from "../../lib/types";
 import { StateBadge } from "./StateBadge";
 
@@ -44,9 +45,7 @@ export function ArtifactHeader({
       {doc.clause_refs && doc.clause_refs.length > 0 && (
         <Group gap={4}>
           {doc.clause_refs.map((c) => (
-            <Badge key={c} variant="outline" color="var(--es-accent)">
-              {c}
-            </Badge>
+            <ClauseBadge key={c} clause={c} />
           ))}
         </Group>
       )}

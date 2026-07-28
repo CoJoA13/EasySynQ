@@ -35,12 +35,17 @@ const SYSTEM = { level: "SYSTEM" } as const;
 test("renders the 7-node stepper with done/current/pending and aria-current on the current step", async () => {
   grant(["audit.conduct"]);
   renderWithProviders(<AuditLifecyclePanel audit={base} scope={SYSTEM} />);
-  // The current node sits inside the aria-current="step" wrapper.
-  const current = await screen.findByText(/● In progress/);
-  expect(current.closest("[aria-current='step']")).not.toBeNull();
-  // Done steps carry the ✓ glyph; pending the ○.
-  expect(screen.getByText(/✓ Scheduled/)).toBeInTheDocument();
-  expect(screen.getByText(/○ Reported/)).toBeInTheDocument();
+  expect(screen.getByLabelText("Audit lifecycle")).toBeInTheDocument();
+  const current = await screen.findByText("In progress");
+  expect(current.closest("li")).toHaveAttribute("aria-current", "step");
+  expect(screen.getByText("Scheduled").closest("li")).toHaveAttribute(
+    "data-lifecycle-status",
+    "done",
+  );
+  expect(screen.getByText("Reported").closest("li")).toHaveAttribute(
+    "data-lifecycle-status",
+    "pending",
+  );
 });
 
 test("offers exactly the one legal next transition, gated audit.conduct", async () => {

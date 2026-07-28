@@ -70,7 +70,7 @@ test("ConfidenceCell labels MEDIUM (warning) and LOW (danger) bands with distinc
   expect(screen.getByText(TONE_GLYPH.danger)).toBeInTheDocument(); // LOW → danger (owner design-call)
 });
 
-test("ConfidenceCell shows the band on the badge + the ⚖ ambiguous caption when ambiguous", () => {
+test("ConfidenceCell shows the band on the badge + an explicit caption when ambiguous", () => {
   renderWithProviders(
     <ConfidenceCell
       classification={classification({ band: "LOW", kind_conf: 41, ambiguous: true })}
@@ -80,7 +80,8 @@ test("ConfidenceCell shows the band on the badge + the ⚖ ambiguous caption whe
   // ambiguity is the separate caption channel (the LOW-vs-AMBIGUOUS split is deferred to Phase 3).
   expect(screen.getByLabelText("Confidence: Low · 41%")).toBeInTheDocument();
   expect(screen.getByText(TONE_GLYPH.danger)).toBeInTheDocument();
-  expect(screen.getByText("⚖ ambiguous")).toBeInTheDocument();
+  expect(screen.getByText("Ambiguous classification")).toBeInTheDocument();
+  expect(screen.queryByText(/⚖/)).not.toBeInTheDocument();
 });
 
 test("ConfidenceCell renders a dash for a null classification", () => {

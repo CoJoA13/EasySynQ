@@ -75,7 +75,9 @@ describe("ReportsRegisterPage", () => {
     expect(screen.getAllByText("Controlled Document Register").length).toBeGreaterThanOrEqual(2);
     expect(screen.getByText(/sha256:abc123/)).toBeInTheDocument();
     expect(screen.getByText("Rev A")).toBeInTheDocument();
-    expect(screen.getByText(/7\.5\.3/)).toBeInTheDocument();
+    expect(
+      screen.getByText("Clause 7.5.3, mandatory").closest("[data-clause-badge]"),
+    ).toHaveAttribute("data-clause-badge");
     expect(screen.getByText("WI-QA-002")).toBeInTheDocument();
     // RAG signal: the review-state badge renders next to the next-review date (never colour alone).
     expect(screen.getByText("Overdue")).toBeInTheDocument();
