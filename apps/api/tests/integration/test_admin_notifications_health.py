@@ -24,7 +24,14 @@ async def test_health_endpoint_returns_snapshot_for_admin(
     )
     assert r.status_code == 200, r.text
     body = r.json()
-    assert set(body) == {"org_email_enabled", "email", "recent_failures", "awareness"}
+    assert set(body) == {
+        "org_email_enabled",
+        "delivery_ready",
+        "email",
+        "recent_failures",
+        "awareness",
+    }
+    assert isinstance(body["delivery_ready"], bool)
     assert set(body["email"]) == {
         "failed",
         "pending_now",

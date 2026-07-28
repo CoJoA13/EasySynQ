@@ -9,6 +9,7 @@ import pytest
 import sqlalchemy as sa
 from sqlalchemy import select
 
+from easysynq_api.config import Settings
 from easysynq_api.db.models._notification_enums import NotificationEmailStatus
 from easysynq_api.db.models.awareness_event import AwarenessEvent
 from easysynq_api.db.models.notification import NotificationEmail
@@ -20,6 +21,7 @@ pytestmark = pytest.mark.integration
 
 # A far-future sentinel: never claimable as pending, and sorts first in recent_failures.
 _SCHED = datetime.datetime(2099, 1, 1, tzinfo=datetime.UTC)
+_SETTINGS = Settings(smtp_host="smtp.example.test")
 
 
 async def _default_org_id() -> uuid.UUID:
@@ -34,7 +36,7 @@ async def test_get_delivery_health_aggregates_and_isolates(app_under_test: objec
     salt = uuid.uuid4().hex[:8]
     aw_id = uuid.uuid4()
     async with get_sessionmaker()() as s:
-        base = await get_delivery_health(s, org_id)
+        base = await get_delivery_health(s, org_id, settings=_SETTINGS)
         s.add_all(
             [
                 NotificationEmail(
@@ -84,7 +86,7 @@ async def test_get_delivery_health_aggregates_and_isolates(app_under_test: objec
         )
         await s.commit()
         try:
-            after = await get_delivery_health(s, org_id)
+            after = await get_delivery_health(s, org_id, settings=_SETTINGS)
             assert after["email"]["failed"] == base["email"]["failed"] + 1
             assert after["email"]["pending_now"] == base["email"]["pending_now"] + 1
             assert after["email"]["pending_scheduled"] == base["email"]["pending_scheduled"] + 1
@@ -98,13 +100,15 @@ async def test_get_delivery_health_aggregates_and_isolates(app_under_test: objec
             assert top["email_kind"] == "single"
             assert top["failed_at"] is not None
             assert isinstance(after["org_email_enabled"], bool)
+            assert isinstance(after["delivery_ready"], bool)
             # Org isolation: a random (non-existent) org id matches no rows + no config.
-            empty = await get_delivery_health(s, uuid.uuid4())
+            empty = await get_delivery_health(s, uuid.uuid4(), settings=_SETTINGS)
             assert empty["email"]["failed"] == 0
             assert empty["email"]["pending_now"] == 0
             assert empty["recent_failures"] == []
             assert empty["awareness"]["pending"] == 0
             assert empty["org_email_enabled"] is False
+            assert empty["delivery_ready"] is False
         finally:
             # easysynq_app has REVOKE DELETE on notification_email and awareness_event (migrations
             # 0063/0066 enforce the append-only-ish posture). Neutralise test rows via UPDATE so

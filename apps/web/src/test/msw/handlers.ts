@@ -2730,6 +2730,7 @@ export const workingCalendarFixture = {
 
 export const notificationHealthFixture = {
   org_email_enabled: true,
+  delivery_ready: true,
   email: {
     failed: 2,
     pending_now: 1,

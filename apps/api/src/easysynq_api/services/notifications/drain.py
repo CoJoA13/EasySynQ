@@ -17,6 +17,7 @@ from ...db.models.notification import Notification, NotificationEmail, Notificat
 from ...db.models.system_config import SystemConfig
 from .admins import admin_user_ids
 from .constants import EVENT_EMAIL_DELIVERY_FAILED
+from .delivery import smtp_transport_configured
 from .dispatch import emit_system_notification
 from .mail import MailMessage, MailSender
 
@@ -36,7 +37,7 @@ async def _still_eligible(
     """Re-evaluate at send time (spec §4): an admin may have disabled the org flag, or the user
     may have opted out / been deactivated, between enqueue and drain. Any of those → suppress.
     Also folds in the unconfigured-SMTP short-circuit (no deliverable transport)."""
-    if not settings.smtp_host:
+    if not smtp_transport_configured(settings):
         return False
     if row.notification_id is not None:
         # Single-notification email — resolve org/user via the source Notification row.

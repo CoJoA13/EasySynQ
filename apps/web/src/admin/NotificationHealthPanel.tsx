@@ -36,6 +36,11 @@ export function NotificationHealthPanel() {
   const h = health.data;
   const failed = h.email.failed;
   const hasPending = h.email.pending_now + h.email.pending_scheduled > 0;
+  const requeueDisabledTitle = h.delivery_ready
+    ? undefined
+    : h.org_email_enabled
+      ? "Configure SMTP before requeuing"
+      : "Enable email delivery before requeuing";
   const doRequeue = () => requeue.mutate(undefined, { onSuccess: () => confirm.close() });
   const closeConfirm = () => {
     requeue.reset();
@@ -52,10 +57,10 @@ export function NotificationHealthPanel() {
               variant="light"
               size="compact-sm"
               onClick={confirm.open}
-              // Requeuing while email delivery is off would only let the next drain terminally
-              // suppress the rows, so block it until email is re-enabled.
-              disabled={!h.org_email_enabled}
-              title={h.org_email_enabled ? undefined : "Enable email delivery before requeuing"}
+              // Requeuing without both org enablement and an SMTP transport would only let the
+              // next drain terminally suppress the rows, so mirror the server readiness guard.
+              disabled={!h.delivery_ready}
+              title={requeueDisabledTitle}
             >
               Requeue failed
             </Button>
@@ -75,6 +80,12 @@ export function NotificationHealthPanel() {
         <Alert variant="light" color="gray" title="Email delivery is off">
           Email delivery is off for the organization — no emails are being sent. The counts below
           stay at zero until you enable email above.
+        </Alert>
+      )}
+      {h.org_email_enabled && !h.delivery_ready && (
+        <Alert variant="light" color="gray" title="Email transport is not configured">
+          Email delivery is enabled, but no SMTP transport is configured. Configure SMTP in the
+          deployment environment before requeuing failed emails.
         </Alert>
       )}
 

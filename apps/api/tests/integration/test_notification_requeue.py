@@ -12,6 +12,8 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
 
+from easysynq_api.api import config as config_api
+from easysynq_api.config import get_settings
 from easysynq_api.db.models._notification_enums import (
     NotificationEmailKind,
     NotificationEmailStatus,
@@ -27,6 +29,11 @@ from .test_capa import _grant  # SYSTEM-scope PermissionOverride grant helper �
 from .test_vault import _auth  # bearer-header builder
 
 pytestmark = pytest.mark.integration
+
+
+def _set_smtp(monkeypatch: pytest.MonkeyPatch, smtp_host: str) -> None:
+    settings = get_settings().model_copy(update={"smtp_host": smtp_host})
+    monkeypatch.setattr(config_api, "get_settings", lambda: settings)
 
 
 def _email(org_id: uuid.UUID, status: NotificationEmailStatus, **over: Any) -> NotificationEmail:
@@ -65,8 +72,11 @@ async def _caller_org(user_id: uuid.UUID) -> uuid.UUID:
 
 
 async def test_requeue_resets_failed_and_leaves_other_statuses(
-    app_client: AsyncClient, token_factory: Callable[..., str]
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    _set_smtp(monkeypatch, "smtp.example.test")
     subject = f"rq-admin-{uuid.uuid4().hex[:8]}"
     user_id = await _grant(subject, ("config.update",))
     org_id = await _caller_org(user_id)
@@ -111,10 +121,13 @@ async def test_requeue_resets_failed_and_leaves_other_statuses(
 
 
 async def test_requeue_noop_when_email_disabled(
-    app_client: AsyncClient, token_factory: Callable[..., str]
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """With email delivery OFF, requeue must leave FAILED rows untouched — requeuing them would only
     let the next drain terminally SUPPRESS them (unrecoverable once email is re-enabled)."""
+    _set_smtp(monkeypatch, "smtp.example.test")
     subject = f"rq-off-{uuid.uuid4().hex[:8]}"
     user_id = await _grant(subject, ("config.update",))
     org_id = await _caller_org(user_id)
@@ -141,6 +154,43 @@ async def test_requeue_noop_when_email_disabled(
             await s.execute(select(NotificationEmail).where(NotificationEmail.id == failed_id))
         ).scalar_one()
         assert row.status == NotificationEmailStatus.FAILED  # untouched: email delivery is off
+        assert row.attempts == 5
+
+
+async def test_requeue_noop_when_smtp_is_unconfigured(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An enabled org without SMTP must retain FAILED rows for recovery after transport setup."""
+    _set_smtp(monkeypatch, "")
+    subject = f"rq-nosmtp-{uuid.uuid4().hex[:8]}"
+    user_id = await _grant(subject, ("config.update",))
+    org_id = await _caller_org(user_id)
+
+    now = datetime.datetime.now(datetime.UTC)
+    async with get_sessionmaker()() as s:
+        failed = _email(org_id, NotificationEmailStatus.FAILED, failed_at=now, attempts=5)
+        s.add(failed)
+        await s.commit()
+        failed_id = failed.id
+
+    prev = await _set_email_enabled(org_id, True)
+    try:
+        resp = await app_client.post(
+            "/api/v1/admin/notifications/requeue-failed",
+            headers=_auth(token_factory, subject),
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["requeued"] == 0
+    finally:
+        await _set_email_enabled(org_id, prev)
+
+    async with get_sessionmaker()() as s:
+        row = (
+            await s.execute(select(NotificationEmail).where(NotificationEmail.id == failed_id))
+        ).scalar_one()
+        assert row.status == NotificationEmailStatus.FAILED
         assert row.attempts == 5
 
 
@@ -199,12 +249,16 @@ async def test_requeue_is_org_scoped(app_under_test: object) -> None:
 
 
 async def test_requeue_logs_structured_fields_after_commit(
-    app_client: AsyncClient, token_factory: Callable[..., str], caplog: pytest.LogCaptureFixture
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The requeue log is the SOLE record of the action (no audit_event by design). It must fire
     from the ROUTE after commit, with its fields nested under ``extra_fields`` — the JsonFormatter
     emits ONLY those (flat ``extra`` is dropped). Mutation-distinguishing on both: flat extra ⇒
     ``record.extra_fields`` absent; a pre-commit emit would move it back into the service."""
+    _set_smtp(monkeypatch, "smtp.example.test")
     subject = f"rq-log-{uuid.uuid4().hex[:8]}"
     user_id = await _grant(subject, ("config.update",))
     org_id = await _caller_org(user_id)
