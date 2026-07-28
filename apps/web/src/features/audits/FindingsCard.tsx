@@ -77,7 +77,7 @@ export function FindingsCard({
         <Title order={5}>Findings ({rows.length})</Title>
         {canCreate && !closed && (
           <Button size="xs" variant="light" onClick={onLog}>
-            ＋ Log finding
+            Log finding
           </Button>
         )}
       </Group>

@@ -110,7 +110,7 @@ test("shows the Raise CAPA button when the caller holds capa.create and opens th
   );
   const u = userEvent.setup();
   renderWithProviders(<CapaBoardPage />, { route: "/capa" });
-  const raise = await screen.findByRole("button", { name: /Raise CAPA/ });
+  const raise = await screen.findByRole("button", { name: "Raise CAPA" });
   await u.click(raise);
   expect(await screen.findByLabelText(/^Title/)).toBeInTheDocument();
 });

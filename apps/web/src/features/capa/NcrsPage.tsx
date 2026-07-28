@@ -65,7 +65,7 @@ export function NcrsPage() {
     <Container size="lg" py="md">
       <Group justify="space-between" mb="md">
         <Title order={3}>Nonconforming Output (NCR)</Title>
-        {can("ncr.create") && <Button onClick={() => setFormOpen(true)}>＋ Raise NCR</Button>}
+        {can("ncr.create") && <Button onClick={() => setFormOpen(true)}>Raise NCR</Button>}
       </Group>
       <AsOf at={dataUpdatedAt} />
       {rows.length === 0 ? (

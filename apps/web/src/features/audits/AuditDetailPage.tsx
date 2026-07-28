@@ -1,14 +1,4 @@
-import {
-  Alert,
-  Anchor,
-  Breadcrumbs,
-  Container,
-  Grid,
-  Group,
-  Paper,
-  Text,
-  Title,
-} from "@mantine/core";
+import { Alert, Anchor, Container, Grid, Group, Paper, Text, Title } from "@mantine/core";
 import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { useUserDirectory } from "../../app/shell/useUserDirectory";
@@ -89,14 +79,11 @@ export function AuditDetailPage() {
 
   return (
     <Container size="xl" py="md">
-      <Breadcrumbs mb="sm">
-        <Anchor component={Link} to="/audits">
-          Internal audit
-        </Anchor>
-        <Text>{a.identifier ?? a.id.slice(0, 8)}</Text>
-      </Breadcrumbs>
       <Group justify="space-between" mb="md" align="flex-start">
         <div>
+          <Text c="dimmed" size="sm" fw={500}>
+            {a.identifier ?? a.id.slice(0, 8)}
+          </Text>
           <Title order={3}>{a.title ?? "Internal audit"}</Title>
           <Text size="sm" c="dimmed">
             Lead auditor{" "}

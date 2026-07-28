@@ -102,7 +102,7 @@ export function ImprovementRegisterPage() {
 
   if (forbidden) {
     return (
-      <Container size="md" py="md">
+      <Container size="xl" py="md">
         <Title order={2} mb="md">
           Improvement
         </Title>
@@ -112,14 +112,14 @@ export function ImprovementRegisterPage() {
   }
   if (isLoading) {
     return (
-      <Container size="md" py="md">
+      <Container size="xl" py="md">
         <LoadingState label="Loading improvement initiatives" />
       </Container>
     );
   }
   if (isError) {
     return (
-      <Container size="md" py="md">
+      <Container size="xl" py="md">
         <Title order={2} mb="md">
           Improvement
         </Title>

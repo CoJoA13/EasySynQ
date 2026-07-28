@@ -89,6 +89,35 @@ it("shows a calm not-found alert on a 404", async () => {
   );
   renderAt(ID);
   await waitFor(() => expect(screen.getByText(/couldn't load this review/i)).toBeInTheDocument());
+  expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
+});
+
+it("shows the shared no-access state on a 403", async () => {
+  server.use(
+    http.get("/api/v1/management-reviews/:id", () =>
+      HttpResponse.json({ code: "forbidden", title: "Forbidden" }, { status: 403 }),
+    ),
+  );
+  renderAt(ID);
+  expect(await screen.findByText("No access")).toBeInTheDocument();
+  expect(screen.getByText("You don't have access to this management review.")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Try again" })).not.toBeInTheDocument();
+});
+
+it("retries a failed detail load", async () => {
+  let calls = 0;
+  server.use(
+    http.get("/api/v1/management-reviews/:id", () => {
+      calls += 1;
+      return calls === 1
+        ? HttpResponse.json({ code: "internal_error", title: "Error" }, { status: 500 })
+        : HttpResponse.json(mgmtReviewClosable());
+    }),
+  );
+  renderAt(ID);
+  await userEvent.click(await screen.findByRole("button", { name: "Try again" }));
+  expect(await screen.findByText("MR-001")).toBeInTheDocument();
+  expect(calls).toBe(2);
 });
 
 it("maps the review_close_blocked code to calm copy when an action's task isn't done", async () => {

@@ -64,7 +64,7 @@ export function ProgrammePage() {
     <Container size="xl" py="md">
       <Group justify="space-between" mb="md">
         <Title order={3}>Audit programme</Title>
-        {can("audit.plan") && <Button onClick={() => setEditing("new")}>＋ New programme</Button>}
+        {can("audit.plan") && <Button onClick={() => setEditing("new")}>New programme</Button>}
       </Group>
       {rows.length === 0 ? (
         <EmptyState message="No programmes yet." />
@@ -129,7 +129,7 @@ export function ProgrammePage() {
             <Title order={4}>Plans — {selected.identifier}</Title>
             {can("audit.plan") && !selected.archived && (
               <Button variant="light" onClick={() => setPlanFormOpen(true)}>
-                ＋ Add plan
+                Add plan
               </Button>
             )}
           </Group>

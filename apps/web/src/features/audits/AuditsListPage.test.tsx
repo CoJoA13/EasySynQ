@@ -20,7 +20,9 @@ function grant(keys: string[]) {
 
 test("renders honest tiles (Total / Active / Closed) from the list", async () => {
   renderWithProviders(<AuditsListPage />, { route: "/audits" });
-  expect(await screen.findByRole("heading", { name: "Internal audit" })).toBeInTheDocument();
+  expect(
+    await screen.findByRole("heading", { level: 2, name: "Internal audit" }),
+  ).toBeInTheDocument();
   // 3 fixture audits: InProgress + Closing (active) and Closed.
   // Tile labels are "… audits" so they never collide with the segmented control's All/Active/Closed.
   const total = screen.getByText("Total audits");
@@ -131,11 +133,11 @@ test("no axe violations", async () => {
 test("New audit hidden without audit.create; shown + opens with the key", async () => {
   renderWithProviders(<AuditsListPage />, { route: "/audits" });
   await screen.findByText("REC-000061");
-  expect(screen.queryByRole("button", { name: /New audit/ })).toBeNull();
+  expect(screen.queryByRole("button", { name: "New audit" })).toBeNull();
 
   grant(["audit.create"]);
   const u = userEvent.setup();
   renderWithProviders(<AuditsListPage />, { route: "/audits" });
-  await u.click(await screen.findByRole("button", { name: /New audit/ }));
+  await u.click(await screen.findByRole("button", { name: "New audit" }));
   expect(await screen.findByRole("dialog")).toBeInTheDocument();
 });

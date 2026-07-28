@@ -11,7 +11,7 @@
   underway, leaving **103** to schedule here. Batch M1 closed 4; M2 closed 2; M3 closed 2; M4
   closed 4; M5 closed 3; M6 closed 4; M7 closed 3; M8 closed 2; M9 closed 4; M10 closed 4;
   M11 closed 3; M12 closed 5; M13 closed 4; M14 closed 6; M15 closed 4; M16 closed 7;
-  M17 resolves 3; **39 remain queued** after M17.
+  M17 closed 3; M18 resolves 9; **30 remain queued** after M18.
 - A queued finding is not assumed to still be live. Every batch must re-locate and revalidate its
   findings against then-current `main` before implementation; close, re-scope, or reject it with
   evidence rather than mechanically applying the 2026-07-22 suggestion.
@@ -44,14 +44,14 @@
 | M14 | Infrastructure, deploy, and public edge | 6 | ☑ merged | [#394](https://github.com/CoJoA13/EasySynQ/pull/394) |
 | M15 | Cross-stack naming | 4 | ☑ merged | [#395](https://github.com/CoJoA13/EasySynQ/pull/395) |
 | M16 | UI copy and terminology | 7 | ☑ merged | [#396](https://github.com/CoJoA13/EasySynQ/pull/396) |
-| M17 | Test false-PASS traps | 3 | ☑ in PR | [#397](https://github.com/CoJoA13/EasySynQ/pull/397) |
-| M18 | Web shell, layout, and error consistency | 9 | ☐ queued — revalidate | — |
+| M17 | Test false-PASS traps | 3 | ☑ merged | [#397](https://github.com/CoJoA13/EasySynQ/pull/397) |
+| M18 | Web shell, layout, and error consistency | 9 | ☑ in PR | [#398](https://github.com/CoJoA13/EasySynQ/pull/398) |
 | M19 | Web state and badge consistency | 9 | ☐ queued — revalidate | — |
 | M20 | Web visual tokens and semantics | 6 | ☐ queued — revalidate | — |
 | M21 | Web async and error UX | 8 | ☐ queued — revalidate | — |
 | M22 | Web accessibility | 7 | ☐ queued — revalidate | — |
 
-**Accounting: 1 preclosed + 61 merged + 3 in PR + 39 queued = 104 original findings.**
+**Accounting: 1 preclosed + 64 merged + 9 in PR + 30 queued = 104 original findings.**
 
 ---
 
@@ -490,26 +490,37 @@ migration, or new permission key
 
 ## Web consistency and usability
 
-### ☐ M18 — Web shell, layout, and error consistency
+### ☑ M18 — Web shell, layout, and error consistency — [#398](https://github.com/CoJoA13/EasySynQ/pull/398)
 
 `branch: fix/minor-web-shell-layout` · web + vitest
 
-- [ ] `apps/web/src/admin/RolesAdmin.tsx:67` — admin drawers use bare unnamed loaders `[C]`.
-- [ ] `apps/web/src/app/shell/Breadcrumb.tsx:47` — global breadcrumbs expose raw UUIDs/slugs `[C]`.
-- [ ] `apps/web/src/features/audits/AuditDetailPage.tsx:92` — audit detail duplicates the global
-  breadcrumb `[C]`.
-- [ ] `apps/web/src/features/audits/AuditsListPage.tsx:149` — equivalent page titles use different
-  heading levels `[C]`.
-- [ ] `apps/web/src/features/audits/AuditsListPage.tsx:150` — only three feature families prefix
-  create buttons with a fullwidth plus `[C]`.
-- [ ] `apps/web/src/features/capa/CapaLayout.tsx:24` — CAPA navigation and content widths do not
-  align `[C]`.
-- [ ] `apps/web/src/features/dcr/DcrsRegisterPage.tsx:126` — DCR width changes between loading and
-  loaded states `[C]`.
-- [ ] `apps/web/src/features/improvement/ImprovementRegisterPage.tsx:105` — improvement width
-  changes between loading/error and loaded states `[C]`.
-- [ ] `apps/web/src/features/management-review/ManagementReviewDetailPage.tsx:66` — MR detail
-  hand-rolls a no-retry forbidden/error panel instead of the shared states `[C]`.
+- [x] `apps/web/src/admin/RolesAdmin.tsx:67` — admin drawers use bare unnamed loaders `[C]`
+  (fixed: role details and process owners now render compact, explicitly named `LoadingState`
+  regions whose labels identify the role or process).
+- [x] `apps/web/src/app/shell/Breadcrumb.tsx:47` — global breadcrumbs expose raw UUIDs/slugs `[C]`
+  (fixed: every current static route segment has product copy, every non-document detail family
+  receives a generic entity label, unknown slugs are humanized, and document identifiers retain
+  their reactive cache-backed label).
+- [x] `apps/web/src/features/audits/AuditDetailPage.tsx:92` — audit detail duplicates the global
+  breadcrumb `[C]` (fixed: remove the local breadcrumb while preserving the audit identifier in
+  the page header).
+- [x] `apps/web/src/features/audits/AuditsListPage.tsx:149` — equivalent page titles use different
+  heading levels `[C]` (fixed: loaded, forbidden, and error states consistently render the audit
+  page title at the register convention's level 2).
+- [x] `apps/web/src/features/audits/AuditsListPage.tsx:150` — only three feature families prefix
+  create buttons with a fullwidth plus `[C]` (fixed: remove the prefix from every remaining action
+  label across library, authoring, ingestion, audit, and CAPA surfaces).
+- [x] `apps/web/src/features/capa/CapaLayout.tsx:24` — CAPA navigation and content widths do not
+  align `[C]` (fixed: the shared tab strip follows the active face's existing width — `xl` for the
+  board and `lg` for Complaints/NCRs).
+- [x] `apps/web/src/features/dcr/DcrsRegisterPage.tsx:126` — DCR width changes between loading and
+  loaded states `[C]` (fixed: forbidden, loading, error, and loaded states all use `xl`).
+- [x] `apps/web/src/features/improvement/ImprovementRegisterPage.tsx:105` — improvement width
+  changes between loading/error and loaded states `[C]` (fixed: forbidden, loading, error, and
+  loaded states all use `xl`).
+- [x] `apps/web/src/features/management-review/ManagementReviewDetailPage.tsx:66` — MR detail
+  hand-rolls a no-retry forbidden/error panel instead of the shared states `[C]` (fixed: 403 uses
+  `NoAccessState`; genuine load failures use `ErrorState` with a working query refetch).
 
 ### ☐ M19 — Web state and badge consistency
 

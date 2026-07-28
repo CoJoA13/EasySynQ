@@ -113,7 +113,7 @@ export function LibraryPage() {
         <Group gap="sm">
           {can("document.create") && (
             <Button component={Link} to="/library/new" size="sm">
-              ＋ New document
+              New document
             </Button>
           )}
           <SegmentedControl

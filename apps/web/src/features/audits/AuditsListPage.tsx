@@ -100,7 +100,7 @@ export function AuditsListPage() {
   if (forbidden) {
     return (
       <Container size="xl" py="md">
-        <Title order={3} mb="md">
+        <Title order={2} mb="md">
           Internal audit
         </Title>
         <NoAccessState
@@ -124,7 +124,7 @@ export function AuditsListPage() {
   if (isError) {
     return (
       <Container size="xl" py="md">
-        <Title order={3} mb="md">
+        <Title order={2} mb="md">
           Internal audit
         </Title>
         <ErrorState title="Couldn't load audits" onRetry={() => refetch()} />
@@ -146,8 +146,8 @@ export function AuditsListPage() {
   return (
     <Container size="xl" py="md">
       <Group justify="space-between" mb="md">
-        <Title order={3}>Internal audit</Title>
-        {can("audit.create") && <Button onClick={() => setNewOpen(true)}>＋ New audit</Button>}
+        <Title order={2}>Internal audit</Title>
+        {can("audit.create") && <Button onClick={() => setNewOpen(true)}>New audit</Button>}
       </Group>
       <AsOf at={dataUpdatedAt} />
       <SimpleGrid cols={{ base: 1, sm: 3 }} mb="md">

@@ -17,18 +17,26 @@ function tree() {
   );
 }
 
+function tabContainerSize() {
+  const container = screen.getByRole("tablist").closest(".mantine-Container-root");
+  expect(container).not.toBeNull();
+  return (container as HTMLElement).style.getPropertyValue("--container-size");
+}
+
 test("renders the board face + three tabs at /capa", async () => {
   renderWithProviders(tree(), { route: "/capa" });
   expect(await screen.findByText("BOARD FACE")).toBeInTheDocument();
   expect(screen.getByRole("tab", { name: "Board" })).toBeInTheDocument();
   expect(screen.getByRole("tab", { name: "Complaints" })).toBeInTheDocument();
   expect(screen.getByRole("tab", { name: "NCRs" })).toBeInTheDocument();
+  expect(tabContainerSize()).toBe("var(--container-size-xl)");
 });
 
 test("the active tab follows the deep-linked route", async () => {
   renderWithProviders(tree(), { route: "/capa/ncrs" });
   expect(await screen.findByText("NCRS FACE")).toBeInTheDocument();
   expect(screen.getByRole("tab", { name: "NCRs" })).toHaveAttribute("aria-selected", "true");
+  expect(tabContainerSize()).toBe("var(--container-size-lg)");
 });
 
 test("clicking a tab navigates to that face", async () => {
@@ -37,4 +45,5 @@ test("clicking a tab navigates to that face", async () => {
   await screen.findByText("BOARD FACE");
   await u.click(screen.getByRole("tab", { name: "Complaints" }));
   expect(await screen.findByText("COMPLAINTS FACE")).toBeInTheDocument();
+  expect(tabContainerSize()).toBe("var(--container-size-lg)");
 });

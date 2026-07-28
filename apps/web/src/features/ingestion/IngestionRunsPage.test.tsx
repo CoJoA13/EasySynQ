@@ -51,7 +51,7 @@ test('shows the "New import" button only when can("import.execute")', async () =
 test('clicking "New import" opens the NewImportModal (the source root field appears)', async () => {
   grantExecute();
   renderPage();
-  const button = await screen.findByRole("button", { name: /New import/ });
+  const button = await screen.findByRole("button", { name: "New import" });
   await userEvent.click(button);
   expect(await screen.findByLabelText(/Source folder path/i)).toBeInTheDocument();
 });

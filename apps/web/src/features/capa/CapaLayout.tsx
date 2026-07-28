@@ -19,11 +19,12 @@ function activeTab(pathname: string): string {
 export function CapaLayout() {
   const { pathname } = useLocation();
   const navigate = useNavigate();
+  const tab = activeTab(pathname);
   return (
     <>
-      <Container size="xl" pt="md" pb={0}>
+      <Container size={tab === "board" ? "xl" : "lg"} pt="md" pb={0}>
         <Tabs
-          value={activeTab(pathname)}
+          value={tab}
           onChange={(v) => {
             const tab = TABS.find((t) => t.value === v);
             if (tab) navigate(tab.path);

@@ -24,6 +24,6 @@ it("shows the New document entry when document.create is granted", async () => {
     ),
   );
   renderWithProviders(<LibraryPage />, { route: "/library" });
-  const link = await screen.findByRole("link", { name: /new document/i });
+  const link = await screen.findByRole("link", { name: "New document" });
   expect(link).toHaveAttribute("href", "/library/new");
 });

@@ -9,7 +9,11 @@ const LABELS: Record<string, string> = {
   new: "New document",
   documents: "Document",
   tasks: "Task",
+  notifications: "Notifications",
+  settings: "Settings",
   compliance: "Compliance",
+  reports: "Reports",
+  "document-control": "Controlled document register",
   capa: "Nonconformity and CAPA",
   complaints: "Complaints",
   ncrs: "NCRs",
@@ -23,8 +27,28 @@ const LABELS: Record<string, string> = {
   "superseded-copies": "Superseded copies",
   objectives: "Objectives",
   "management-reviews": "Management reviews",
+  improvement: "Improvement",
+  risks: "Risk & opportunity register",
+  context: "Context of the organization",
+  "interested-parties": "Interested parties",
   search: "Search",
 };
+
+const DETAIL_LABELS: Record<string, string> = {
+  documents: "Document",
+  tasks: "Task",
+  audits: "Audit",
+  imports: "Import run",
+  ingestion: "Import run",
+  objectives: "Objective",
+  "management-reviews": "Management review",
+  dcrs: "Change request",
+};
+
+function humanizeSegment(segment: string): string {
+  const words = segment.replaceAll("-", " ");
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
 
 export function Breadcrumb() {
   const { pathname } = useLocation();
@@ -45,10 +69,14 @@ export function Breadcrumb() {
 
   const crumbs = [{ to: "/", label: "Home" }].concat(
     segments.map((seg, i) => {
-      let label = LABELS[seg] ?? seg;
-      if (i > 0 && segments[i - 1] === "documents") {
-        label = doc?.identifier ?? "Document";
+      const parent = i > 0 ? segments[i - 1] : null;
+      let label = LABELS[seg];
+      if (!label && parent === "documents") {
+        label = doc?.identifier ?? DETAIL_LABELS.documents;
+      } else if (!label && parent) {
+        label = DETAIL_LABELS[parent];
       }
+      label ??= humanizeSegment(seg);
       return { to: "/" + segments.slice(0, i + 1).join("/"), label };
     }),
   );

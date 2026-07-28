@@ -1,4 +1,4 @@
-import { screen, waitFor } from "@testing-library/react";
+import { act, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { http, HttpResponse } from "msw";
@@ -12,6 +12,34 @@ function LocationProbe() {
   const loc = useLocation();
   return <div data-testid="loc">{loc.pathname + loc.search}</div>;
 }
+
+function containerSizeFor(element: HTMLElement) {
+  const container = element.closest(".mantine-Container-root");
+  expect(container).not.toBeNull();
+  return (container as HTMLElement).style.getPropertyValue("--container-size");
+}
+
+test("keeps the loading and loaded register at the same xl width", async () => {
+  let release: (() => void) | undefined;
+  const blocked = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  server.use(
+    http.get("/api/v1/improvement-initiatives", async () => {
+      await blocked;
+      return HttpResponse.json({ data: [] });
+    }),
+  );
+
+  renderWithProviders(<ImprovementRegisterPage />, { route: "/improvement" });
+  expect(
+    containerSizeFor(screen.getByRole("status", { name: "Loading improvement initiatives" })),
+  ).toBe("var(--container-size-xl)");
+  act(() => release?.());
+  expect(containerSizeFor(await screen.findByRole("heading", { name: "Improvement" }))).toBe(
+    "var(--container-size-xl)",
+  );
+});
 
 function grantManage() {
   server.use(
