@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { http, HttpResponse } from "msw";
 import { expect, test, vi } from "vitest";
+import { TONE_GLYPH } from "../../lib/status";
 import {
   ingestionFileDetailFixture,
   ingestionRunFixture,
@@ -66,7 +67,7 @@ test("renders the version-family / dedup membership", async () => {
   expect(await screen.findByText(/version family/i)).toBeInTheDocument();
 });
 
-test("renders the extraction status (page count) and the proposal target path", async () => {
+test("renders the extraction status, proposal path, and humanized conflict badge", async () => {
   renderWithProviders(
     <ItemDetailDrawer
       runId={RID}
@@ -81,6 +82,9 @@ test("renders the extraction status (page count) and the proposal target path", 
   expect(await screen.findByText(/3 pages/i)).toBeInTheDocument();
   // proposal.target_ia_path
   expect(screen.getByText(/DO\/08-Operation/)).toBeInTheDocument();
+  const conflict = screen.getByLabelText("Conflict: Duplicate identifier in this import");
+  expect(conflict).toHaveTextContent(TONE_GLYPH.danger);
+  expect(screen.queryByText("duplicate_identifier_within_import")).toBeNull();
 });
 
 test("clicking Accept calls onDecision with action \"accept\"", async () => {
@@ -198,6 +202,18 @@ test("renders the decision history from the detail response (no separate /decisi
               decided_by: "bbbb1111-1111-1111-1111-111111111111",
               decided_at: "2026-06-08T11:00:00+00:00",
             },
+            {
+              id: "d2",
+              action: "constructor",
+              file_id: FID,
+              cluster_id: null,
+              target_kind: "DOCUMENT",
+              before: null,
+              after: null,
+              reason: null,
+              decided_by: "bbbb1111-1111-1111-1111-111111111111",
+              decided_at: "2026-06-08T12:00:00+00:00",
+            },
           ],
         },
       }),
@@ -213,8 +229,11 @@ test("renders the decision history from the detail response (no separate /decisi
       onSplit={noop}
     />,
   );
-  // This file's "accept" decision is listed from the detail's decision_history.
-  expect(await screen.findByText(/accept/)).toBeInTheDocument();
+  // This file's "accept" decision is listed with the canonical human label + non-colour glyph.
+  const decision = await screen.findByLabelText("Decision: Accepted");
+  expect(decision).toHaveTextContent(TONE_GLYPH.success);
+  expect(screen.getByLabelText("Decision: Constructor")).toHaveTextContent(TONE_GLYPH.neutral);
+  expect(screen.queryByText("accept")).toBeNull();
 });
 
 test("a non-candidate file is inspect-only — no decision/confirm/split actions", async () => {

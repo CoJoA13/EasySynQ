@@ -1,6 +1,9 @@
 import { Alert, Badge, Button, Divider, Group, Menu, Stack, Text } from "@mantine/core";
 import { DetailDrawer } from "../../app/shell/DetailDrawer";
+import { StatusBadge } from "../../lib/StatusBadge";
+import { humanizeToken } from "../../lib/labels";
 import { LoadingState } from "../../lib/states";
+import type { Tone } from "../../lib/status";
 import type {
   ConfirmedKind,
   ImportClassificationEvidence,
@@ -11,6 +14,34 @@ import type {
   ImportProposalNode,
 } from "../../lib/types";
 import { useImportFile } from "./hooks";
+
+type ImportDecisionHistoryAction = ImportDecisionAction | "merge" | "split";
+
+const DECISION_META: Record<ImportDecisionHistoryAction, { label: string; tone: Tone }> = {
+  accept: { label: "Accepted", tone: "success" },
+  correct: { label: "Corrected", tone: "info" },
+  merge: { label: "Merged", tone: "info" },
+  split: { label: "Split", tone: "info" },
+  exclude: { label: "Excluded", tone: "neutral" },
+  defer: { label: "Deferred", tone: "warning" },
+};
+
+function decisionMeta(action: string): { label: string; tone: Tone } {
+  if (Object.hasOwn(DECISION_META, action))
+    return DECISION_META[action as ImportDecisionHistoryAction];
+  return { label: humanizeToken(action) || "Unknown decision", tone: "neutral" };
+}
+
+const CONFLICT_LABEL: Record<string, string> = {
+  duplicate_identifier_within_import: "Duplicate identifier in this import",
+  collides_with_vault_doc: "Identifier already exists in the vault",
+  needs_identifier: "Identifier required",
+};
+
+function conflictLabel(token: string): string {
+  if (Object.hasOwn(CONFLICT_LABEL, token)) return CONFLICT_LABEL[token]!;
+  return humanizeToken(token) || "Unspecified conflict";
+}
 
 // The per-item review detail (DP-3, reuses app/shell/DetailDrawer for focus-trap + Esc + ARIA dialog).
 // Presentational: ReviewCockpit (Task 14) owns the active fileId + the decision handlers; this leaf
@@ -166,16 +197,17 @@ export function ItemDetailDrawer({
             </Text>
           ) : (
             <Stack gap={4}>
-              {history.map((d) => (
-                <Group key={d.id} gap="xs" wrap="nowrap">
-                  <Badge variant="light" size="sm">
-                    {d.action}
-                  </Badge>
-                  <Text size="xs" c="dimmed">
-                    {d.decided_at.slice(0, 10)}
-                  </Text>
-                </Group>
-              ))}
+              {history.map((d) => {
+                const meta = decisionMeta(d.action);
+                return (
+                  <Group key={d.id} gap="xs" wrap="nowrap">
+                    <StatusBadge tone={meta.tone} label={meta.label} kind="Decision" />
+                    <Text size="xs" c="dimmed">
+                      {d.decided_at.slice(0, 10)}
+                    </Text>
+                  </Group>
+                );
+              })}
             </Stack>
           )}
         </Stack>
@@ -281,9 +313,7 @@ function ProposalSummary({ proposal }: { proposal: ImportProposalNode | null }) 
       {conflicts.length > 0 && (
         <Group gap={4}>
           {conflicts.map((c) => (
-            <Badge key={c} variant="light" color="var(--es-danger)" size="sm">
-              {c}
-            </Badge>
+            <StatusBadge key={c} tone="danger" label={conflictLabel(c)} kind="Conflict" />
           ))}
         </Group>
       )}

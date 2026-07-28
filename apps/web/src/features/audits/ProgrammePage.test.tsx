@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { http, HttpResponse } from "msw";
 import { expect, test } from "vitest";
+import { TONE_GLYPH } from "../../lib/status";
 import { server } from "../../test/msw/server";
 import { renderWithProviders } from "../../test/render";
 import { ProgrammePage } from "./ProgrammePage";
@@ -18,11 +19,17 @@ function grant(keys: string[]) {
   );
 }
 
-test("lists programmes with the archived badge; write affordances hidden without audit.plan", async () => {
+test("lists programmes with canonical status badges; write affordances hidden without audit.plan", async () => {
   renderWithProviders(<ProgrammePage />, { route: "/audits/programme" });
   expect(await screen.findByText("AUDPROG-000001")).toBeInTheDocument();
+  const active = screen.getByRole("row", { name: /AUDPROG-000001/ });
+  expect(within(active).getByLabelText("Programme status: Active")).toHaveTextContent(
+    TONE_GLYPH.success,
+  );
   const archived = screen.getByRole("row", { name: /AUDPROG-000002/ });
-  expect(within(archived).getByText(/Archived/)).toBeInTheDocument();
+  expect(within(archived).getByLabelText("Programme status: Archived")).toHaveTextContent(
+    TONE_GLYPH.neutral,
+  );
   expect(screen.queryByRole("button", { name: /New programme/ })).toBeNull();
   expect(screen.queryByRole("button", { name: /Edit/ })).toBeNull();
 });

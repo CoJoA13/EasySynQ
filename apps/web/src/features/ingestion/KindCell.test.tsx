@@ -97,13 +97,13 @@ test("choosing Record from the Confirm menu calls onConfirm('RECORD')", async ()
   expect(onConfirm).toHaveBeenCalledWith("RECORD");
 });
 
-test("a confirmed kind renders a solid badge with no '?' and no Confirm button", () => {
+test("a confirmed kind renders the canonical AA-paired badge with no '?' and no Confirm button", () => {
   renderCell({
     review: CONFIRMED_DOC_REVIEW,
     classification: DOC_CLASS,
     onConfirm: vi.fn(),
   });
-  expect(screen.getByLabelText("Kind: Document")).toBeInTheDocument();
+  expect(screen.getByLabelText("Kind: Document")).toHaveAttribute("data-variant", "status");
   expect(screen.queryByText("Document?")).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Confirm kind" })).not.toBeInTheDocument();
 });

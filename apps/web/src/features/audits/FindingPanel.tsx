@@ -1,21 +1,11 @@
 import { Anchor, Badge, Button, Group, Paper, Text } from "@mantine/core";
 import { Link } from "react-router-dom";
 import type { CapaCloseState, Finding } from "../../lib/types";
+import { CapaStateBadge } from "../capa/CapaStateBadge";
 import { FindingTypeBadge } from "./badges";
 
 // One finding. capaState: the cross-ref'd CAPA close_state (undefined = capa.read denied →
 // chip omitted; the deep-link always renders — the board page enforces its own access).
-const CAPA_STATE_LABEL: Record<CapaCloseState, string> = {
-  Raised: "Raised",
-  Containment: "Containment",
-  RootCause: "Root cause",
-  ActionPlan: "Action plan",
-  Implement: "Implement",
-  Verify: "Verify",
-  Closed: "Closed",
-  Rejected: "Rejected",
-};
-
 export function FindingPanel({
   finding,
   capaState,
@@ -67,11 +57,7 @@ export function FindingPanel({
       )}
       <Group justify="space-between" mt={4}>
         <Group gap="xs">
-          {finding.auto_capa_id && capaState !== undefined && (
-            <Badge variant="light" color={capaState === "Closed" ? "green" : "orange"}>
-              CAPA: {CAPA_STATE_LABEL[capaState]}
-            </Badge>
-          )}
+          {finding.auto_capa_id && capaState !== undefined && <CapaStateBadge state={capaState} />}
           {finding.auto_capa_id && (
             <Anchor component={Link} size="sm" to={`/capa?capa=${finding.auto_capa_id}`}>
               View CAPA →

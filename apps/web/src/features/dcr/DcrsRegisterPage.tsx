@@ -15,21 +15,10 @@ import { AsOf } from "../../lib/AsOf";
 import { EmptyState, ErrorState, LoadingState, NoAccessState } from "../../lib/states";
 import { DcrDrawer } from "./DcrDrawer";
 import { DcrStateBadge } from "./DcrStateBadge";
+import { DCR_STATES, dcrStateLabel } from "./dcrState";
 import { CHANGE_TYPE_LABEL, REASON_LABEL, SIGNIFICANCE_LABEL } from "./labels";
 import { useDcrs } from "./hooks";
 import { RaiseDcrModal } from "./RaiseDcrModal";
-
-const STATES: DcrState[] = [
-  "Open",
-  "Assessed",
-  "Routed",
-  "InApproval",
-  "Approved",
-  "Implemented",
-  "Closed",
-  "Cancelled",
-  "Rejected",
-];
 
 const SORT_KEYS = [
   "identifier",
@@ -175,7 +164,7 @@ export function DcrsRegisterPage() {
               clearable
               value={state || null}
               onChange={(v) => setState((v as DcrState) ?? "")}
-              data={STATES.map((s) => ({ value: s, label: s }))}
+              data={DCR_STATES.map((s) => ({ value: s, label: dcrStateLabel(s) }))}
             />
             <Select
               aria-label="Change type"

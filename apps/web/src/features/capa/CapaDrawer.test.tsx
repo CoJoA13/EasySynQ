@@ -20,6 +20,8 @@ test("renders the title, the closed-loop thread and the close gate", async () =>
   const severity = screen.getByLabelText("Severity: Major");
   expect(severity).toHaveTextContent("Major");
   expect(severity).toHaveTextContent(TONE_GLYPH.warning);
+  const state = screen.getByLabelText("CAPA state: Root cause");
+  expect(state).toHaveTextContent(TONE_GLYPH.info);
   expect(screen.getByText("Closed-loop thread")).toBeInTheDocument();
   expect(screen.getByText("Raised")).toBeInTheDocument();
   expect(screen.getByText("Containment")).toBeInTheDocument();

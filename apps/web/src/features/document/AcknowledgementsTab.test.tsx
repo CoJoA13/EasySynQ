@@ -1,6 +1,7 @@
 import { screen, within } from "@testing-library/react";
 import { http, HttpResponse } from "msw";
 import { describe, expect, test } from "vitest";
+import { TONE_GLYPH } from "../../lib/status";
 import { renderWithProviders } from "../../test/render";
 import { server } from "../../test/msw/server";
 import { AcknowledgementsTab } from "./AcknowledgementsTab";
@@ -32,7 +33,9 @@ describe("AcknowledgementsTab", () => {
     renderWithProviders(<AcknowledgementsTab documentId={DOC} active />);
     expect(await screen.findByText("Sam Patel")).toBeInTheDocument();
     const row = screen.getByText("Sam Patel").closest("tr")!;
-    expect(within(row).getByText("overdue")).toBeInTheDocument();
+    expect(within(row).getByLabelText("Acknowledgement: Overdue")).toHaveTextContent(
+      TONE_GLYPH.danger,
+    );
     // "Mara Quality" now also appears as a distribution entry (the real DistributionEditor renders it),
     // so scope the matrix assertion to the matrix table.
     const matrix = screen.getByRole("table", { name: "Acknowledgement matrix" });
