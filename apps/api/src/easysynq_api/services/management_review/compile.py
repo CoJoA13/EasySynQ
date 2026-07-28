@@ -38,7 +38,7 @@ from ...db.models.review_input import ReviewInput
 from ...domain.authz import RequestContext, ResourceContext, authorize
 from ...domain.context.summary import summarize_register as summarize_context
 from ...domain.interested_parties.summary import summarize_register as summarize_parties
-from ...domain.mgmt_review.inputs import (
+from ...domain.management_review.inputs import (
     summarize_audits,
     summarize_capas_ncrs,
     summarize_kpis,

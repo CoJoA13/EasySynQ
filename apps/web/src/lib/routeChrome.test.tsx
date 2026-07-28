@@ -52,6 +52,15 @@ describe("useRouteChrome", () => {
     expect(document.title).toBe("EasySynQ — Library");
   });
 
+  it("uses the user-facing Import name for the canonical route", () => {
+    render(
+      <MemoryRouter initialEntries={["/imports"]}>
+        <Harness />
+      </MemoryRouter>,
+    );
+    expect(document.title).toBe("EasySynQ — Import");
+  });
+
   it("falls back to the bare app name for an unmapped route", () => {
     render(
       <MemoryRouter initialEntries={["/totally-unknown"]}>

@@ -16,7 +16,7 @@ import { useCancelRun, useCommitRun, useImportRun } from "./hooks";
 const REVIEW_STATES = new Set(["Proposed", "Reviewing"]);
 const TERMINAL_STATES = new Set(["Completed", "Failed", "Cancelled"]);
 
-// S-ing-4b: the four-faces controller for /ingestion/:runId. Reads the run, polls it while settling
+// S-ing-4b: the four-faces controller for /imports/:runId. Reads the run, polls it while settling
 // (useImportRun owns the refetchInterval), and mounts exactly one lifecycle face by status. Per-view
 // permission is the server's job (403 → calm); a foreign/missing run is a 404 → calm. Selection/queue
 // state lives in ReviewCockpit, not here.
@@ -47,7 +47,7 @@ export function IngestionRunPage() {
         ) : (
           <Alert color="gray" title="Not found">
             Import run not found.{" "}
-            <Anchor component={Link} to="/ingestion">
+            <Anchor component={Link} to="/imports">
               Back to imports
             </Anchor>
           </Alert>

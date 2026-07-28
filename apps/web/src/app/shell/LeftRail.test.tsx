@@ -154,9 +154,9 @@ test("shows the gated Import entry when the caller holds import.review", async (
       }),
     ),
   );
-  renderWithProviders(<LeftRail />, { route: "/ingestion" });
+  renderWithProviders(<LeftRail />, { route: "/imports" });
   const link = await screen.findByRole("link", { name: "Import" });
-  expect(link).toHaveAttribute("href", "/ingestion");
+  expect(link).toHaveAttribute("href", "/imports");
 });
 
 test("Internal audit entry is unconditional (the CAPA precedent — calm-403 lives on the page)", async () => {

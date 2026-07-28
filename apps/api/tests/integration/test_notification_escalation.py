@@ -101,7 +101,7 @@ async def _seed_workflow_objects(
             org_id=org_id,
             key=key,
             version=1,
-            effective=True,
+            is_effective=True,
             subject_type=WorkflowSubjectType.DOCUMENT,
             stages={"entry": "approve"},
         )

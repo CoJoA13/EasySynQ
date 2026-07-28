@@ -10,7 +10,8 @@
 - The historic denominator remains **104**. One finding was already closed while the MAJOR work was
   underway, leaving **103** to schedule here. Batch M1 closed 4; M2 closed 2; M3 closed 2; M4
   closed 4; M5 closed 3; M6 closed 4; M7 closed 3; M8 closed 2; M9 closed 4; M10 closed 4;
-  M11 closed 3; M12 closed 5; M13 closed 4; M14 resolves 6; **53 remain queued** after M14.
+  M11 closed 3; M12 closed 5; M13 closed 4; M14 closed 6; M15 resolves 4;
+  **49 remain queued** after M15.
 - A queued finding is not assumed to still be live. Every batch must re-locate and revalidate its
   findings against then-current `main` before implementation; close, re-scope, or reject it with
   evidence rather than mechanically applying the 2026-07-22 suggestion.
@@ -40,8 +41,8 @@
 | M11 | Organization time and audit scalability | 3 | ☑ merged | [#391](https://github.com/CoJoA13/EasySynQ/pull/391) |
 | M12 | Data-model documentation drift | 5 | ☑ merged | [#392](https://github.com/CoJoA13/EasySynQ/pull/392) |
 | M13 | API documentation drift | 4 | ☑ merged | [#393](https://github.com/CoJoA13/EasySynQ/pull/393) |
-| M14 | Infrastructure, deploy, and public edge | 6 | ☑ in PR | [#394](https://github.com/CoJoA13/EasySynQ/pull/394) |
-| M15 | Cross-stack naming | 4 | ☐ queued — revalidate | — |
+| M14 | Infrastructure, deploy, and public edge | 6 | ☑ merged | [#394](https://github.com/CoJoA13/EasySynQ/pull/394) |
+| M15 | Cross-stack naming | 4 | ☑ in PR | pending |
 | M16 | UI copy and terminology | 7 | ☐ queued — revalidate | — |
 | M17 | Test false-PASS traps | 3 | ☐ queued — revalidate | — |
 | M18 | Web shell, layout, and error consistency | 9 | ☐ queued — revalidate | — |
@@ -50,7 +51,7 @@
 | M21 | Web async and error UX | 8 | ☐ queued — revalidate | — |
 | M22 | Web accessibility | 7 | ☐ queued — revalidate | — |
 
-**Accounting: 1 preclosed + 44 merged + 6 in PR + 53 queued = 104 original findings.**
+**Accounting: 1 preclosed + 50 merged + 4 in PR + 49 queued = 104 original findings.**
 
 ---
 
@@ -404,18 +405,34 @@ permission key
   script-free CSP with `frame-ancestors 'none'`, `X-Frame-Options: DENY`, and a no-referrer policy
   before the generic API handler).
 
-### ☐ M15 — Cross-stack naming
+### ☑ M15 — Cross-stack naming — PR pending
 
-`branch: fix/minor-cross-stack-naming` · API/web/docs; re-scope before renaming persisted contracts
+`branch: fix/minor-cross-stack-naming` · API/web/docs; stable persisted and public contracts retained
 
-- [ ] `apps/api/src/easysynq_api/api/mgmt_review.py:88` — Management Review uses four naming
-  dialects across API, code, and events `[f]`.
-- [ ] `apps/api/src/easysynq_api/api/risk.py:205` — singular/plural module and feature naming
-  diverges across the cloned register families `[f]`.
-- [ ] `apps/api/src/easysynq_api/db/models/workflow.py:69` — the same active/effective flag pattern
-  ships under inconsistent column spellings `[f]`.
-- [ ] `apps/web/src/app/shell/LeftRail.tsx:49` — the web UI calls the domain “ingestion” while API,
-  permission, table, and navigation contracts call it “import” `[f]`.
+- [x] `apps/api/src/easysynq_api/api/mgmt_review.py:88` — Management Review uses four naming
+  dialects across API, code, and events `[C]` (fixed at the avoidable Python layer: API, domain,
+  service, and task modules now use `management_review`, as do router aliases, helpers, task
+  functions, and ORM configuration attributes. Stable contracts remain deliberately unchanged:
+  `mgmtReview.*` permission keys, `mr.*` event topics, `mgmt_review` enum/metadata values, physical
+  database columns, and the registered Celery task name).
+- [x] `apps/api/src/easysynq_api/api/risk.py:205` — singular/plural module and feature naming
+  diverges across the cloned register families `[R]` (rejected on current source: `risk`,
+  `context`, and `interested_parties` are grammatical bounded-context names, while their shipped
+  routes correctly use the collection/domain forms `/risks`, `/context`, and
+  `/interested-parties`; each router's list/get/create/update names agree with its resource.
+  Forcing one number across all three would create worse names and churn stable public paths
+  without removing ambiguity).
+- [x] `apps/api/src/easysynq_api/db/models/workflow.py:69` — the same active/effective flag pattern
+  ships under inconsistent column spellings `[C]` (fixed: `WorkflowDefinition.is_effective`,
+  `RetentionPolicy.is_active`, and `SlaPolicy.is_active` now follow the predicate-style ORM
+  convention. Explicit `mapped_column("effective" | "active", ...)` names preserve the deployed
+  schema, partial index, and API `active` response field, so no migration or payload change occurs).
+- [x] `apps/web/src/app/shell/LeftRail.tsx:49` — the web UI calls the domain “ingestion” while API,
+  permission, table, and navigation contracts call it “import” `[C]` (fixed: `/imports` and
+  `/imports/{runId}` are canonical, and navigation, breadcrumbs, browser titles, links, and tests
+  consistently say Import. Redirect-only `/ingestion` compatibility preserves run ids and query
+  strings for bookmarks; the technical `features/ingestion` package remains named for the pipeline
+  activity and that layering is documented).
 
 ### ☐ M16 — UI copy and terminology
 

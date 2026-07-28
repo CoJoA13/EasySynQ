@@ -277,7 +277,7 @@ async def test_pack_build_seal_r28_matrix_and_download(
                 and policy.name == SEALED_PACK_POLICY_NAME
                 and policy.duration == "PERMANENT"
                 and policy.disposition_action == DispositionAction.RETAIN_PERMANENT
-                and policy.active is True
+                and policy.is_active is True
             )
 
         # Download the sealed ZIP and verify its contents.

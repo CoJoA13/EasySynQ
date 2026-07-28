@@ -3,7 +3,7 @@ import uuid
 
 import rfc8785
 
-from easysynq_api.domain.mgmt_review.minutes import build_minutes
+from easysynq_api.domain.management_review.minutes import build_minutes
 
 
 def test_build_minutes_is_json_safe_and_rfc8785_serializable() -> None:

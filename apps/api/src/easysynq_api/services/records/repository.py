@@ -297,7 +297,7 @@ async def record_type_default_policy(
             select(RetentionPolicy)
             .where(
                 RetentionPolicy.org_id == org_id,
-                RetentionPolicy.active.is_(True),
+                RetentionPolicy.is_active.is_(True),
                 RetentionPolicy.applies_to["record_type"].astext == record_type,
             )
             .order_by(asc(RetentionPolicy.id))
@@ -316,7 +316,7 @@ async def clause_default_policy(
             select(RetentionPolicy)
             .where(
                 RetentionPolicy.org_id == org_id,
-                RetentionPolicy.active.is_(True),
+                RetentionPolicy.is_active.is_(True),
                 RetentionPolicy.applies_to["clause_id"].astext.in_(clause_ids),
             )
             .order_by(asc(RetentionPolicy.id))
@@ -335,7 +335,7 @@ async def process_default_policy(
             select(RetentionPolicy)
             .where(
                 RetentionPolicy.org_id == org_id,
-                RetentionPolicy.active.is_(True),
+                RetentionPolicy.is_active.is_(True),
                 RetentionPolicy.applies_to["process_id"].astext.in_(process_ids),
             )
             .order_by(asc(RetentionPolicy.id))
@@ -350,7 +350,7 @@ async def list_retention_policies(
     """All of an org's retention policies (newest first), optionally including archived ones."""
     stmt = select(RetentionPolicy).where(RetentionPolicy.org_id == org_id)
     if not include_archived:
-        stmt = stmt.where(RetentionPolicy.active.is_(True))
+        stmt = stmt.where(RetentionPolicy.is_active.is_(True))
     stmt = stmt.order_by(desc(RetentionPolicy.created_at), asc(RetentionPolicy.id))
     return list((await session.execute(stmt)).scalars().all())
 

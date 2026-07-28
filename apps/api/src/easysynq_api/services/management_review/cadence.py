@@ -2,7 +2,7 @@
 when the org's cadence horizon is reached (mirrors the S-drift-1 ``sweep_reviews`` posture).
 
 ``next_mr_due`` is the pure cadence rule (``add_months`` from the last released review's
-``effective_from``). ``sweep_mgmt_reviews`` is the daily pass:
+``effective_from``). ``sweep_management_reviews`` is the daily pass:
 
   1. Acquire ``LOCK_MGMT_REVIEW_SWEEP`` (skip-and-return if another holder has it — acks-late
      re-delivery makes concurrent Beat fires real).
@@ -101,14 +101,14 @@ async def read_cadence(
         return None
     anchor = await _last_released_effective_from(session, org_id, org_tz)
     return CadenceStatus(
-        cadence_months=config.mgmt_review_cadence_months,
-        owner_user_id=config.mgmt_review_owner_user_id,
+        cadence_months=config.management_review_cadence_months,
+        owner_user_id=config.management_review_owner_user_id,
         last_review_effective_from=anchor,
-        next_review_due=next_mr_due(anchor, config.mgmt_review_cadence_months),
+        next_review_due=next_mr_due(anchor, config.management_review_cadence_months),
     )
 
 
-def mr_review_state(next_due: datetime.date | None, today: datetime.date) -> str | None:
+def management_review_state(next_due: datetime.date | None, today: datetime.date) -> str | None:
     """current | due_soon | overdue (None = not scheduled). Mirrors vault.review.review_state with
     an MR-specific lead window (MR_REVIEW_LEAD_DAYS)."""
     if next_due is None:
@@ -167,7 +167,7 @@ def _period_label(due: datetime.date) -> str:
     return f"{due.year} Annual"
 
 
-async def sweep_mgmt_reviews(session: AsyncSession) -> dict[str, int]:
+async def sweep_management_reviews(session: AsyncSession) -> dict[str, int]:
     """The daily cadence sweep. Returns ``{mgmt_reviews_opened, skipped_open, skipped_lock_held}``
     (int-valued counts). Idempotent: the org-scoped ``open_review_exists`` guard makes a re-run a
     no-op while any MR is open, so the two-commit ``create_review`` shape is safe."""

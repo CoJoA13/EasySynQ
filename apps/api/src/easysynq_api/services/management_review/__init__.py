@@ -1,11 +1,11 @@
 """Management Review service (S-mr-1, clause 9.3). ``create_review`` reuses the vault
 ``create_document`` (kind=DOCUMENT, type MR), auto-maps to clause 9.3, and adds the satellite;
 ``submit_review_for_review`` freezes the minutes + submits; ``release_review`` rides the generic
-release cutover. Reads live in ``repository``; serializers in ``api/mgmt_review``."""
+release cutover. Reads live in ``repository``; serializers in ``api/management_review``."""
 
 from .actions import spawn_capa_for_output, spawn_dcr_for_output, spawn_initiative_for_output
 from .compile import compile_inputs
-from .decide import decide_mr_task
+from .decide import decide_management_review_task
 from .pack import build_minutes_pdf
 from .repository import (
     get_review,
@@ -33,7 +33,7 @@ __all__ = [
     "close_review",
     "compile_inputs",
     "create_review",
-    "decide_mr_task",
+    "decide_management_review_task",
     "delete_output",
     "get_review",
     "get_review_doc",

@@ -8,7 +8,7 @@ import logging
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from ..config import get_settings
-from ..services.mgmt_review.cadence import sweep_mgmt_reviews
+from ..services.management_review.cadence import sweep_management_reviews
 from .app import task
 
 logger = logging.getLogger("easysynq.mgmt_review.tasks")
@@ -21,7 +21,7 @@ async def _run_mgmt_review_sweep() -> dict[str, int]:
     )
     try:
         async with sessionmaker() as session:
-            summary = await sweep_mgmt_reviews(session)
+            summary = await sweep_management_reviews(session)
             logger.info("mgmt_review.cadence_sweep", extra={"extra_fields": summary})
             return summary
     finally:

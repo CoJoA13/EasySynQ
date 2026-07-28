@@ -68,7 +68,7 @@ export function IngestionRunsPage() {
             {runs.map((run) => (
               <Table.Tr key={run.id}>
                 <Table.Td>
-                  <Anchor component={Link} to={`/ingestion/${run.id}`} ff="monospace" size="sm">
+                  <Anchor component={Link} to={`/imports/${run.id}`} ff="monospace" size="sm">
                     {run.source_root}
                   </Anchor>
                 </Table.Td>
@@ -89,7 +89,7 @@ export function IngestionRunsPage() {
         onClose={modal.close}
         onCreated={(runId) => {
           modal.close();
-          navigate(`/ingestion/${runId}`);
+          navigate(`/imports/${runId}`);
         }}
       />
     </Stack>

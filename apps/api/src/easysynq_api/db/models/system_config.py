@@ -132,12 +132,14 @@ class SystemConfig(Base):
         nullable=False,
     )
     # S-mr-1: clause-9.3 management-review cadence (coded default; org-tunable later, additive).
-    # ``mgmt_review_owner_user_id`` is the owner the cadence sweep assigns the minted Draft MR to;
-    # NULL → the sweep degrades to a logged no-op (it can't create an ownerless document).
-    mgmt_review_cadence_months: Mapped[int] = mapped_column(
-        Integer, server_default=text("12"), nullable=False
+    # ``management_review_owner_user_id`` is the Python attribute for the owner the cadence sweep
+    # assigns the minted Draft MR to; NULL means the sweep degrades to a logged no-op.
+    # Explicit physical names preserve the deployed database contract without a migration.
+    management_review_cadence_months: Mapped[int] = mapped_column(
+        "mgmt_review_cadence_months", Integer, server_default=text("12"), nullable=False
     )
-    mgmt_review_owner_user_id: Mapped[uuid.UUID | None] = mapped_column(
+    management_review_owner_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        "mgmt_review_owner_user_id",
         UUID(as_uuid=True),
         ForeignKey(
             "app_user.id",

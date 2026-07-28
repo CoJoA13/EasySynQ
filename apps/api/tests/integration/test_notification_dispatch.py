@@ -78,7 +78,7 @@ async def _seed_workflow_objects(
             org_id=org_id,
             key=key,
             version=1,
-            effective=True,
+            is_effective=True,
             subject_type=WorkflowSubjectType.DOCUMENT,
             stages={"entry": "approve"},
         )
@@ -304,7 +304,7 @@ async def test_resolve_recipients_excludes_inactive_users(app_under_test: Any) -
             org_id=org_id,
             key=key,
             version=1,
-            effective=True,
+            is_effective=True,
             subject_type=WorkflowSubjectType.DOCUMENT,
             stages={"entry": "approve"},
         )
@@ -375,7 +375,7 @@ async def test_resolve_recipients_excludes_foreign_org_user(app_under_test: Any)
                 org_id=org_id,
                 key=key,
                 version=1,
-                effective=True,
+                is_effective=True,
                 subject_type=WorkflowSubjectType.DOCUMENT,
                 stages={"entry": "approve"},
             )

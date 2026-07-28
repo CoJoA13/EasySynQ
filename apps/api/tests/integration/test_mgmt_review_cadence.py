@@ -1,4 +1,4 @@
-"""S-mr-1 Phase 7 (the cadence Beat sweep) integration: ``sweep_mgmt_reviews`` mints the next
+"""S-mr-1 Phase 7 (the cadence Beat sweep) integration: ``sweep_management_reviews`` mints the next
 Scheduled Management Review (a Draft MR document + one ``MR_INPUT`` task on a fresh ``MGMT_REVIEW``
 instance) when the org's cadence horizon is reached, and degrades honestly.
 
@@ -28,7 +28,7 @@ from easysynq_api.db.models.management_review import ManagementReview
 from easysynq_api.db.models.system_config import SystemConfig
 from easysynq_api.db.models.workflow import Task, WorkflowInstance
 from easysynq_api.db.session import get_sessionmaker
-from easysynq_api.services.mgmt_review.cadence import sweep_mgmt_reviews
+from easysynq_api.services.management_review.cadence import sweep_management_reviews
 
 from .test_quality_objectives import _grant
 
@@ -36,14 +36,14 @@ pytestmark = pytest.mark.integration
 
 
 async def _set_owner(owner_id: uuid.UUID | None) -> uuid.UUID:
-    """Set ``system_config.mgmt_review_owner_user_id`` for the single org; return the org id."""
+    """Set the Management Review owner for the single org; return the org id."""
     async with get_sessionmaker()() as s:
         org_id = (await s.execute(select(SystemConfig.org_id))).scalars().first()
         assert org_id is not None
         await s.execute(
             update(SystemConfig)
             .where(SystemConfig.org_id == org_id)
-            .values(mgmt_review_owner_user_id=owner_id)
+            .values(management_review_owner_user_id=owner_id)
         )
         await s.commit()
         return org_id
@@ -85,7 +85,7 @@ async def _open_mr_doc_count(org_id: uuid.UUID) -> int:
 
 async def _run_sweep() -> dict[str, int]:
     async with get_sessionmaker()() as session:
-        return await sweep_mgmt_reviews(session)
+        return await sweep_management_reviews(session)
 
 
 async def test_sweep_mints_first_review_and_is_idempotent(

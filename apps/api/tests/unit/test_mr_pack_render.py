@@ -4,7 +4,7 @@ import io
 
 from pypdf import PdfReader
 
-from easysynq_api.domain.mgmt_review.pack_render import render_minutes_pdf
+from easysynq_api.domain.management_review.pack_render import render_minutes_pdf
 
 
 def _args(**over):

@@ -10,7 +10,7 @@ import { ReviewCockpit } from "./ReviewCockpit";
 
 const RID = ingestionRunFixture.id;
 
-function renderCockpit(route = `/ingestion/${RID}?queue=high`) {
+function renderCockpit(route = `/imports/${RID}?queue=high`) {
   return renderWithProviders(<ReviewCockpit runId={RID} run={ingestionRunFixture} />, { route });
 }
 

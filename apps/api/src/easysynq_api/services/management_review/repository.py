@@ -28,7 +28,7 @@ from ...db.models.workflow import Task
 ReviewRow = tuple[ManagementReview, str, str, DocumentCurrentState]
 
 # A close-gate row: (output_type, spawned MR_ACTION task state | None). The pure
-# domain.mgmt_review.output_blocks_close predicate is applied to each.
+# domain.management_review.output_blocks_close predicate is applied to each.
 ReviewCloseGateRow = tuple[ReviewOutputType, TaskState | None]
 
 # The pre-release "open" cycle: a Management Review document that has not yet reached a terminal /

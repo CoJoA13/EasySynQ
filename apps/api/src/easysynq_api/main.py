@@ -33,7 +33,7 @@ from .api.health import router as health_router
 from .api.improvement import router as improvement_router
 from .api.ingestion import router as ingestion_router
 from .api.interested_parties import router as interested_parties_router
-from .api.mgmt_review import router as mgmt_review_router
+from .api.management_review import router as management_review_router
 from .api.notifications import router as notifications_router
 from .api.objectives import router as objectives_router
 from .api.pack_share import router as pack_share_router
@@ -172,7 +172,8 @@ def create_app() -> FastAPI:
     app.include_router(audits_router)  # S-aud-1: internal-audit programmes/plans/audits + FSM
     app.include_router(capa_router)  # S-capa-1: CAPA core + intake (capas/complaints/ncrs)
     app.include_router(objectives_router)  # S-obj-1: clause-6.2 Quality Objectives (obj.*/kpi.*)
-    app.include_router(mgmt_review_router)  # S-mr-1: clause-9.3 Management Review (mgmtReview.*)
+    # S-mr-1: clause-9.3 Management Review (mgmtReview.*)
+    app.include_router(management_review_router)
     app.include_router(dcr_router)  # S-dcr-1: Document Change Request core + intake (/dcrs)
     app.include_router(improvement_router)  # S-improvement-1: clause-10.3 Improvement Initiatives
     app.include_router(risk_router)  # S-risk-1: clause-6.1 Risk & Opportunity register (register.*)

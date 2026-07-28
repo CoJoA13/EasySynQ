@@ -46,7 +46,7 @@ const NAV: Record<PdcaPhase, NavItem[]> = {
   DO: [
     { to: "/library", label: "Library", prefix: "/library" },
     { to: "/tasks", label: "Review and approve", prefix: "/tasks" },
-    { to: "/ingestion", label: "Import", prefix: "/ingestion", gate: "import.review" },
+    { to: "/imports", label: "Import", prefix: "/imports", gate: "import.review" },
   ],
   CHECK: [
     {

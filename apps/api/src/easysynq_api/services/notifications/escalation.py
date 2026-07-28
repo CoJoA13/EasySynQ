@@ -191,7 +191,7 @@ async def _due_task_ids(session: AsyncSession, now: datetime.datetime) -> list[u
                 .where(
                     Task.state.in_(_OPEN),
                     Task.due_at.is_not(None),
-                    SlaPolicy.active.is_(True),
+                    SlaPolicy.is_active.is_(True),
                     (
                         (SlaPolicy.remind_1_before.is_not(None) & Task.remind_1_sent_at.is_(None))
                         | (SlaPolicy.remind_2_before.is_not(None) & Task.remind_2_sent_at.is_(None))
@@ -293,7 +293,7 @@ async def process_task_timers(
             select(SlaPolicy).where(
                 SlaPolicy.org_id == task.org_id,
                 SlaPolicy.task_type == task.type,
-                SlaPolicy.active.is_(True),
+                SlaPolicy.is_active.is_(True),
             )
         )
     ).scalar_one_or_none()

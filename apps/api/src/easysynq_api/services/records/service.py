@@ -177,7 +177,7 @@ async def resolve_capture_retention(
         policy = await repo.get_policy(session, override_policy_id, org_id)
         if policy is None:
             raise _validation_error("retention_policy_id", "not_found", "Unknown retention policy")
-        if not policy.active:  # S-rec-4: an archived policy must not be pinned to a NEW record
+        if not policy.is_active:  # S-rec-4: archived policy cannot be pinned to a NEW record
             raise _validation_error(
                 "retention_policy_id",
                 "retention_policy_archived",

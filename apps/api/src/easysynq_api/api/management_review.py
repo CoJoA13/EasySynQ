@@ -47,7 +47,7 @@ from ..services.authz import (
 from ..services.authz.repository import gather_sod_constraints, get_allow_approver_release
 from ..services.authz.resource import resource_from_doc
 from ..services.common.org_clock import resolve_org_tz
-from ..services.mgmt_review import (
+from ..services.management_review import (
     add_output,
     build_minutes_pdf,
     close_review,
@@ -67,8 +67,8 @@ from ..services.mgmt_review import (
     update_output,
     update_review_meta,
 )
-from ..services.mgmt_review import repository as mr_repo
-from ..services.mgmt_review.cadence import mr_review_state, read_cadence
+from ..services.management_review import repository as mr_repo
+from ..services.management_review.cadence import management_review_state, read_cadence
 from ..services.vault import (
     SignatureEventSink,
     VaultAuditSink,
@@ -152,7 +152,7 @@ class OutputInitiativeCreate(BaseModel):
 
 
 # --- serializers ---
-def _mgmt_review(
+def _management_review(
     mr: ManagementReview,
     *,
     identifier: str,
@@ -325,7 +325,7 @@ async def create_review_endpoint(
             status=500, code="internal_error", title="Review row not found after create"
         )
     _mr, ident, title, state = row
-    return _mgmt_review(mr, identifier=ident, title=title, current_state=state)
+    return _management_review(mr, identifier=ident, title=title, current_state=state)
 
 
 @router.get("/management-reviews")
@@ -335,7 +335,9 @@ async def list_reviews_endpoint(
 ) -> dict[str, Any]:
     rows = await list_reviews(session, caller.org_id)
     return {
-        "data": [_mgmt_review(mr, identifier=i, title=t, current_state=s) for mr, i, t, s in rows]
+        "data": [
+            _management_review(mr, identifier=i, title=t, current_state=s) for mr, i, t, s in rows
+        ]
     }
 
 
@@ -361,7 +363,7 @@ async def next_due_endpoint(
             cad.last_review_effective_from.isoformat() if cad.last_review_effective_from else None
         ),
         "next_review_due": cad.next_review_due.isoformat() if cad.next_review_due else None,
-        "review_state": mr_review_state(cad.next_review_due, today_org()),
+        "review_state": management_review_state(cad.next_review_due, today_org()),
         "owner_configured": cad.owner_user_id is not None,
     }
 
@@ -405,7 +407,9 @@ async def get_review_endpoint(
         raise ProblemException(status=404, code="not_found", title="Management Review not found")
     _mr, ident, title, state = row
     caps = await _mr_capabilities(session, caller, _doc)
-    out = _mgmt_review(mr, identifier=ident, title=title, current_state=state, capabilities=caps)
+    out = _management_review(
+        mr, identifier=ident, title=title, current_state=state, capabilities=caps
+    )
     out["inputs"] = [_review_input(ri) for ri in await list_inputs(session, review_id)]
     out["outputs"] = [_review_output(ro) for ro in await list_outputs(session, review_id)]
     return out
@@ -434,7 +438,7 @@ async def compile_inputs_endpoint(
     if row is None:  # pragma: no cover — just mutated it, cannot be absent
         raise ProblemException(status=404, code="not_found", title="Management Review not found")
     mr2, ident, title, state = row
-    out = _mgmt_review(mr2, identifier=ident, title=title, current_state=state)
+    out = _management_review(mr2, identifier=ident, title=title, current_state=state)
     out["inputs"] = [_review_input(ri) for ri in await list_inputs(session, review_id)]
     out["outputs"] = [_review_output(ro) for ro in await list_outputs(session, review_id)]
     return out
@@ -455,7 +459,7 @@ async def close_review_endpoint(
     if row is None:  # pragma: no cover — the review exists (we just loaded + mutated it)
         raise ProblemException(status=404, code="not_found", title="Management Review not found")
     mr2, ident, title, state = row
-    return _mgmt_review(mr2, identifier=ident, title=title, current_state=state)
+    return _management_review(mr2, identifier=ident, title=title, current_state=state)
 
 
 @router.post("/management-reviews/{review_id}/outputs", status_code=status.HTTP_201_CREATED)
@@ -645,7 +649,7 @@ async def update_review_meta_endpoint(
     if row is None:  # pragma: no cover — just mutated it, cannot be absent
         raise ProblemException(status=404, code="not_found", title="Management Review not found")
     _mr, ident, title, state = row
-    return _mgmt_review(mr, identifier=ident, title=title, current_state=state)
+    return _management_review(mr, identifier=ident, title=title, current_state=state)
 
 
 @router.get("/management-reviews/{review_id}/approval")
@@ -708,7 +712,7 @@ async def submit_review_endpoint(
     if row is None:  # pragma: no cover — just mutated it, cannot be absent
         raise ProblemException(status=404, code="not_found", title="Management Review not found")
     mr2, ident, title, state = row
-    return _mgmt_review(mr2, identifier=ident, title=title, current_state=state)
+    return _management_review(mr2, identifier=ident, title=title, current_state=state)
 
 
 @router.post("/management-reviews/{review_id}/release")
@@ -752,4 +756,4 @@ async def release_review_endpoint(
     if row is None:  # pragma: no cover — the doc was just released, it cannot be absent
         raise ProblemException(status=404, code="not_found", title="Management Review not found")
     mr2, ident, title, state = row
-    return _mgmt_review(mr2, identifier=ident, title=title, current_state=state)
+    return _management_review(mr2, identifier=ident, title=title, current_state=state)

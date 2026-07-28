@@ -66,7 +66,11 @@ class WorkflowDefinition(Base):
     )
     key: Mapped[str] = mapped_column(Text, nullable=False)
     version: Mapped[int] = mapped_column(Integer, nullable=False)
-    effective: Mapped[bool] = mapped_column(Boolean, server_default=text("false"), nullable=False)
+    # Predicate-style Python naming matches the other boolean ORM attributes. The explicit
+    # physical name preserves the deployed ``effective`` column and partial-index contract.
+    is_effective: Mapped[bool] = mapped_column(
+        "effective", Boolean, server_default=text("false"), nullable=False
+    )
     subject_type: Mapped[WorkflowSubjectType] = mapped_column(
         workflow_subject_type_enum, nullable=False
     )

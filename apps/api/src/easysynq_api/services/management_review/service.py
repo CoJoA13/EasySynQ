@@ -1,7 +1,7 @@
 """Management Review service (S-mr-1, clause 9.3) — the txn owner. ``create_review`` reuses the
 vault ``create_document`` (kind=DOCUMENT, type MR), then adds the satellite + a clause_mapping to
 9.3 (the OBJ recipe). ``submit_review_for_review`` freezes the minutes (Phase 2's
-``checkin_mgmt_review_minutes``) + submits + instantiates approval, all in one txn.
+``checkin_management_review_minutes``) + submits + instantiates approval, all in one txn.
 ``release_review`` is a thin wrapper over the generic release cutover. Output CRUD + meta edits are
 Draft-only."""
 
@@ -27,8 +27,8 @@ from ...db.models.document_type import DocumentType
 from ...db.models.documented_information import DocumentedInformation
 from ...db.models.management_review import ManagementReview
 from ...db.models.review_output import ReviewOutput
-from ...domain.mgmt_review.close_gate import output_blocks_close
-from ...domain.mgmt_review.minutes import build_minutes
+from ...domain.management_review.close_gate import output_blocks_close
+from ...domain.management_review.minutes import build_minutes
 from ...problems import ProblemException
 from ..vault import (
     SignatureEventSink,
@@ -38,7 +38,7 @@ from ..vault import (
     release,
     submit_review,
 )
-from ..vault.service import checkin_mgmt_review_minutes
+from ..vault.service import checkin_management_review_minutes
 from ..workflow import instantiate_approval
 from ..workflow import repository as wf_repo
 from . import repository as repo
@@ -224,7 +224,7 @@ async def submit_review_for_review(
     # First-release freeze: unconditional on this Draft → InReview path (no prior frozen minutes to
     # dedup against). The content-aware ``minutes_need_freeze`` dedup lands with the revision slice.
     default_reason = "Management Review minutes submitted for review"
-    await checkin_mgmt_review_minutes(
+    await checkin_management_review_minutes(
         session,
         vault_sink,
         actor,
