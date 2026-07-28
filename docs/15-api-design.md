@@ -336,9 +336,9 @@ surface is the `working_draft` between check-out and check-in (`14 §1.2/§5.4`)
 
 | Method | Path | Perm | Idem | Notes |
 |---|---|---|---|---|
-| GET | `/documents` | `document.read` | — | `q`, `limit`/`offset`, and allow-listed filters for `current_state`, `document_type`, `owner_user_id`, `clause_refs[has]`, `classification`, effective-date bounds, `has_effective_version`, `managed_subtype`, and `process_id`. **Row-filtered by scope** before pagination (§9.3). |
+| GET | `/documents` | `document.read` | — | `q`, `limit`/`offset`, and allow-listed filters for `current_state`, `document_type`, `owner_user_id`, `clause_refs[has]`, `classification`, effective-date bounds, `has_effective_version`, `managed_subtype`, and `process_id`. **Row-filtered by scope** before pagination (§9.3). `document.read` remains the metadata-row key for every lifecycle state (R57); draft/obsolete version-read keys are not alternatives. |
 | POST | `/documents` | `document.create` | ✓ | Creates the logical doc in `Draft` with no version yet. Identifier is **vault-allocated** through the org's atomic `numbering_counter` and `{TYPE}[-{AREA}]-{SEQ}` service formatter (`14 §2`) unless `legacy_identifier` is supplied on import. `singleton_exists`→`409` for a 2nd Quality Policy/Scope. |
-| GET | `/documents/{id}` | `document.read` | — | Metadata plus `clause_refs`, governing `effective_from`, and the caller's per-document `capabilities` affordance block. |
+| GET | `/documents/{id}` | `document.read` | — | Live metadata plus `clause_refs`, governing `effective_from`, and the caller's per-document `capabilities` affordance block. The gate is lifecycle-independent (R57); `document.read_draft` / `document.read_obsolete` alone do not admit this surface. |
 | PATCH | `/documents/{id}` | `document.manage_metadata` | — | **Metadata only:** `title`, `folder_path`, `classification`, and `review_period_months` (`null` opts out). **Never** sets state — see actions. _(Gate corrected to the as-built metadata permission; `document.edit` governs content revision/check-in, while clause/process links have their own sub-resources.)_ |
 | POST | `/documents/{id}/checkout` | `document.checkout` | ✓ | Acquires the **Redis** exclusive edit lock (authority is Redis; `document.checkout_*` columns are a display/recovery mirror — `14 §5.4`/R8). `409 document_checked_out` if held by another; returns a `working_draft` token. |
 | POST | `/documents/{id}/checkin` | `document.edit` | ✓ | Two-step blob upload then finalize → a new **immutable** `document_version` (`Draft`). Releases the lock; enqueues the Celery render→index→mirror pipeline. Requires non-empty `change_reason` + `change_significance` (INV-3) → else `422`. |
@@ -706,7 +706,7 @@ OpenSearch on M/L profiles; **Postgres FTS fallback** on the S profile and on Op
 
 | Method | Path | Perm | Notes |
 |---|---|---|---|
-| GET | `/search?q=...&types=document,record,ncr,capa,audit&facets=clause,process,pdca_phase` | per-type read | Unified faceted search. Results are **post-filtered by the caller's effective permissions** — never leak titles of out-of-scope items. Cursor-paginated; highlight snippets included. |
+| GET | `/search?q=...&types=document,record,ncr,capa,audit&facets=clause,process,pdca_phase` | per-type read | Unified faceted search. Results are **post-filtered by the caller's effective permissions** — never leak titles of out-of-scope items. Document metadata hits use `document.read` in every lifecycle state (R57); the shipped Effective-only candidate set is a query default, not a permission switch. Cursor-paginated; highlight snippets included. |
 | GET | `/search/suggest?q=...` | `document.read` | Low-latency type-ahead (identifiers, titles). |
 | GET / POST | `/saved-searches` | `search.read` / `search.save` | `saved_search` (live re-run, permission-filtered per viewer); subscriptions notify on count-crosses / new-item (`14 §11`). |
 
@@ -717,7 +717,7 @@ The shipped report surface is purpose-built aggregation (the reason GraphQL was 
 | Method | Path | Perm | Notes |
 |---|---|---|---|
 | GET | `/reports/compliance-checklist` | `report.compliance_checklist.read` | Org-wide 20-★ mandatory-clause coverage with per-clause `COVERED`/`PARTIAL`/`GAP` and a rollup. |
-| GET | `/reports/document-control` | `report.read` | Provenance-stamped, content-hashed controlled-document register. The surface admits a satisfiable SYSTEM- or PROCESS-scoped `report.read` allow; rows are then filtered by both `report.read` and `document.read`. |
+| GET | `/reports/document-control` | `report.read` | Provenance-stamped, content-hashed controlled-document register. The surface admits a satisfiable SYSTEM- or PROCESS-scoped `report.read` allow; rows are then filtered by both `report.read` and the lifecycle-independent metadata key `document.read` (R57). |
 
 **Future-only (not shipped in v1):** there is no `/dashboards` router and no `dashboard.read`
 permission key. `/dashboards/overview` and `/dashboards/my-work` remain design ideas; clients use

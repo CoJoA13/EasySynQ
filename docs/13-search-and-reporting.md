@@ -107,7 +107,7 @@ flowchart TD
 | Type-specific searchable fields | PostgreSQL | CAPA root-cause/CA text, audit finding text+severity, objective name, supplier name |
 | People & Process names | PostgreSQL | so "Diego" or "Order Fulfilment" returns the person/process entity, not just docs |
 | **Not indexed:** raw audit-trail rows | — | Audit search is a **separate, permission-gated audit-log search** (PG-backed, optionally mirrored to OS) — never blended into general document search, to avoid leaking who-did-what to under-privileged users |
-| **Not indexed:** draft working copies mid-checkout | — | Drafts are searchable only by users with edit/view-draft scope; never surfaced to read-only users |
+| **Not indexed:** draft working-copy bytes/text mid-checkout | — | Working-copy content is never indexed. A future non-Effective **metadata** facet still filters hits by `document.read` in every lifecycle state (R57); version-content/history search is a separate authorization surface. |
 
 ### 2.3 Faceted filtering
 
@@ -118,7 +118,7 @@ The facet rail (left side of the search results page) shows the **six canonical 
 | **Type** | `kind` + concrete type | Top split Documents / Records, then concrete types (Procedure, Work Instruction, Form/Template, Quality Objective, Audit, CAPA, Calibration, Training, KPI reading, …) | Two-level tree; Documents vs Records visually distinct (version-timeline glyph vs lock glyph) per domain model §4.3 |
 | **Clause** | `clause_map[]` (M:N) | Clause-catalog tree 4–10 → sub-clauses; counts roll **up** the tree; `★` marks mandatory items | Collapsible clause tree; selecting `8` selects all of 8.x |
 | **Process** | `process_links[]` (M:N) | Flat list of Process nodes (from Process Map); "(unlinked)" bucket surfaces governance gaps | Type-ahead for large maps |
-| **Status** | lifecycle `status` (Documents) / disposition (Records) | Draft, In Review, Approved, Released/Effective, Obsolete; Records: Active / Archived / Disposed | Chips; "Effective only" is the default for the general searcher |
+| **Status** | lifecycle `status` (Documents) / disposition (Records) | Draft, In Review, Approved, Released/Effective, Obsolete; Records: Active / Archived / Disposed | Chips; "Effective only" is the default. A future non-Effective metadata facet remains under `document.read` (R57), not a state-selected permission key. |
 | **Owner** | `owner` / `org_role` | People + OrgRoles; "My items" quick toggle | Type-ahead; respects who the searcher may see |
 | **Date** | created / modified / **next-review-due** / effective-from / captured-at | Presets (last 7/30/90 d, this quarter, overdue) + custom range; the date *dimension* is itself selectable | Date-dimension dropdown + range picker |
 
@@ -414,7 +414,12 @@ These are the audit-defensible, parameterized, exportable reports a certificatio
 
 ### 6.1 Controlled Document Register ("master document list")
 
-**The master list of every controlled Document.** Default scope: all Documents the requester may see; filterable by clause/process/type/status/owner (same facet object as search).
+**The master list of every controlled Document.** Default scope: all Documents the requester may see;
+filterable by clause/process/type/status/owner (same facet object as search). As built, entry to the
+report requires `report.read`, and each row must independently satisfy both `report.read` and
+`document.read`. Per R57, `document.read` is the lifecycle-independent live-metadata gate across all
+seven Document states; a row does not switch to `document.read_draft` or `document.read_obsolete`
+because its status changes. State-scoped predicates on the `document.read` grant remain authoritative.
 
 | Column | Source |
 |---|---|

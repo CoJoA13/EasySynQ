@@ -168,6 +168,33 @@
 
 ## REMEDIATION — correctness, accessibility, polish & test reliability
 
+### Issue #330 — lock the lifecycle-independent Document metadata read boundary (API regression tests + docs/contracts; NO runtime behavior change; NO migration [head stays `0080`]; NO new permission key [catalog 102]; closes [#330](https://github.com/CoJoA13/EasySynQ/issues/330); PR [#407](https://github.com/CoJoA13/EasySynQ/pull/407))
+
+**Owner decision (R57).** The live Document metadata row stays under `document.read` in all seven
+headline lifecycle states. `document.read_draft` and `document.read_obsolete` remain specialized
+version-content/history capabilities: they neither replace the metadata key as state changes nor
+grant Library/detail/register rows on their own. Existing lifecycle predicates and DENYs on
+`document.read` still narrow those rows through the full `ResourceContext`.
+
+**Surface and compatibility posture.** Library continues to filter (not 403) per row, detail
+continues to 403 on deny, and the Controlled Document Register continues its two-layer
+`report.read` + per-row (`report.read` and `document.read`) boundary. This avoids making a governing
+document disappear from ordinary readers while a new revision moves through UnderRevision,
+InReview, or Approved. General search remains Effective-only as a separate candidate-scope policy.
+There is no runtime branch, migration, catalog, role-bundle, response-schema, or UI change.
+
+**Regression proof and documentation.** One Docker-backed integration truth table seeds every
+`DocumentCurrentState` and exercises all three metadata surfaces twice: a `document.read` holder
+must see every state, while a caller holding only `document.read_draft` +
+`document.read_obsolete` must see none (the register caller also holds `report.read` so the test
+isolates its row gate). R57, the authorization model, search/reporting model, API design, OpenAPI,
+and implementation comments now state the same metadata/version separation. Complete
+`document.read_obsolete` enforcement on version-history surfaces remains explicitly tracked as a
+separate follow-up [#406](https://github.com/CoJoA13/EasySynQ/issues/406) rather than being partially
+wired here. The review follow-up also removed the last stale search wording: Effective-only remains
+the shipped candidate default, while a future non-Effective **metadata** facet still post-filters
+with `document.read` under R57.
+
 ### Issue #328 — preserve failed-email recovery when SMTP is unconfigured (API + OpenAPI + web + tests; NO migration [head stays `0080`]; NO new permission key [catalog 102]; closes [#328](https://github.com/CoJoA13/EasySynQ/issues/328); PR [#405](https://github.com/CoJoA13/EasySynQ/pull/405))
 
 **What changed.** Notification email delivery now has one shared readiness predicate: the

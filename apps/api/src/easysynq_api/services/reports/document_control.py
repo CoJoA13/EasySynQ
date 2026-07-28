@@ -344,8 +344,12 @@ async def compute_document_control_register(
 
         process_ids_by_doc = await vault_repo.process_ids_for_docs(session, [d.id for d in docs])
 
-        # the document.read row filter — part of the same consistent read (not the surface gate's
+        # The document.read row filter — part of the same consistent read (not the surface gate's
         # report.read check, which lives in api/reports.py, ahead of the request-session rollback).
+        # R57/#330: this register projects each document's live metadata row, so document.read is
+        # deliberately lifecycle-independent. Draft/obsolete keys protect version content and are
+        # neither replacements nor alternatives here; lifecycle predicates on document.read are
+        # still evaluated against each resource below.
         #
         # FIX 1 (Codex round 5, P1): the surface gate (api/reports.py) admits any report.read ALLOW
         # at SYSTEM or PROCESS scope but then discards that grant's PROCESS selector — so a caller

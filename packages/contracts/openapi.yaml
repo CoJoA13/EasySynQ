@@ -919,12 +919,15 @@ paths:
     get:
       tags: [documents]
       operationId: listDocuments
-      summary: List documents the caller may read (row-filtered by scope).
+      summary: List document metadata the caller may read (row-filtered by scope).
       description: >-
-        Row-filtered by document.read (filter, not 403). Each row carries clause_refs (the mapped
-        clause numbers, slice S10). The bracketed filter[field][op] grammar (doc 15 §3.2) narrows
-        the candidate set in SQL before the row-filter; an unrecognised field/op → 400 unknown_filter,
-        a bad enum/uuid/timestamp value → 422. Pagination (slice S-web-2) returns a {data, page}
+        Row-filtered by document.read (filter, not 403). Per R57, that key governs the live metadata
+        row across every lifecycle state; document.read_draft and document.read_obsolete neither
+        replace it nor grant metadata-row access by themselves. Lifecycle predicates on a
+        document.read grant still narrow the visible set. Each row carries clause_refs (the mapped
+        clause numbers, slice S10). The bracketed filter[field][op] grammar (doc 15 §3.2) narrows the
+        candidate set in SQL before the row-filter; an unrecognised field/op → 400 unknown_filter, a
+        bad enum/uuid/timestamp value → 422. Pagination (slice S-web-2) returns a {data, page}
         envelope: limit + offset slice the AUTHZ-FILTERED set (applied after the per-row scope filter,
         not as a pre-authz SQL OFFSET), so page boundaries are correct for scoped users. page.has_more
         is derived (no COUNT(*)); it is accurate up to a bounded candidate scan cap.
@@ -1032,7 +1035,9 @@ paths:
     get:
       tags: [documents]
       operationId: getDocument
-      summary: A document's metadata. Needs document.read.
+      summary: >-
+        A document's live metadata in any lifecycle state. Needs document.read; draft/obsolete
+        version-read keys do not substitute.
       responses:
         "200":
           description: The document.
@@ -3796,10 +3801,12 @@ paths:
       summary: Unified Postgres-FTS search over the document metadata plane (slice S10).
       description: >-
         Metadata-plane full-text search (identifier/title/legacy_identifier/area_code) over
-        **Effective documents only** (doc 13's "Effective only" default; other states need
-        read_draft/read_obsolete, a v1 facet). Candidate hits are post-filtered by the caller's
-        document.read — a list surface, so it never 403s: a caller who may read nothing gets 200
-        with empty results and a non-zero hidden_by_scope.
+        **Effective documents only** (doc 13's "Effective only" default; other states are a deferred
+        facet). That candidate restriction is query scope, not a permission switch: per R57,
+        metadata hits in every lifecycle state are post-filtered by document.read;
+        document.read_draft and document.read_obsolete remain version-content/history capabilities.
+        This is a list surface, so it never 403s: a caller who may read nothing gets 200 with empty
+        results and a non-zero hidden_by_scope.
       parameters:
         - { name: q, in: query, required: true, schema: { type: string, minLength: 1 } }
         - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 100, default: 25 } }
@@ -3854,11 +3861,14 @@ paths:
         cover the complete as-of set) of every controlled Document the caller may read. Two-layer
         gate: the surface check admits a report.read ALLOW at SYSTEM or PROCESS scope (the
         built-in Process Owner is seeded at PROCESS scope) and refuses a caller with no such grant
-        before any query; the visible set is then filtered per row by document.read (doc 13 §6.1),
-        so a PROCESS-scoped caller still only sees their linked-process documents. Materialized
-        under one REPEATABLE READ snapshot so every row reflects a single consistent instant. The
-        bracketed filter[field][op] grammar (doc 15 §3.2, shared with GET /documents) narrows the
-        candidate set before the row-filter; an unrecognised field/op → 400 unknown_filter, a bad
+        before any query; the visible set is then filtered per row by document.read (doc 13 §6.1).
+        Per R57, document.read is the live-metadata key across every lifecycle state;
+        document.read_draft and document.read_obsolete are not alternative row gates. A
+        PROCESS-scoped caller therefore still only sees their linked-process documents, and an
+        explicit lifecycle predicate on document.read still narrows the set. Materialized under one
+        REPEATABLE READ snapshot so every row reflects a single consistent instant. The bracketed
+        filter[field][op] grammar (doc 15 §3.2, shared with GET /documents) narrows the candidate set
+        before the row-filter; an unrecognised field/op → 400 unknown_filter, a bad
         enum/uuid/timestamp value → 422. The applied filter[...] params are echoed in
         provenance.filters (grouped per key, preserving repeated values) for hash reproducibility.
         Read-only (no audit_event).
