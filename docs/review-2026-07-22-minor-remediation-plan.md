@@ -9,14 +9,15 @@
 
 - The historic denominator remains **104**. One finding was already closed while the MAJOR work was
   underway, leaving **103** to schedule here. Batch M1 closed 4; M2 closed 2; M3 closed 2; M4
-  closed 4; M5 closed 3; M6 closed 4; M7 closed 3; M8 closed 2; M9 closes 4; **75 remain queued**
-  after M9.
+  closed 4; M5 closed 3; M6 closed 4; M7 closed 3; M8 closed 2; M9 closed 4; M10 resolves 4;
+  **71 remain queued** after M10.
 - A queued finding is not assumed to still be live. Every batch must re-locate and revalidate its
   findings against then-current `main` before implementation; close, re-scope, or reject it with
   evidence rather than mechanically applying the 2026-07-22 suggestion.
 - One branch and one ready (non-draft) PR per implementation batch. Each PR updates its own status,
   records the verified fix, and links the PR. Squash-merge remains owner-controlled.
-- `[C]` means confirmed against current source, `[f]` preserves the source review's finder-only
+- `[C]` means confirmed and corrected against current source, `[R]` means rejected after
+  revalidation with the recorded evidence, and `[f]` preserves the source review's finder-only
   status pending batch-time revalidation. Line numbers are historical pointers and may drift.
 - M0 is an accounting bucket, not a new PR. It prevents an already-closed finding from silently
   disappearing or being fixed twice.
@@ -34,8 +35,8 @@
 | M6 | Ingestion review and family integrity | 4 | ☑ merged | [#386](https://github.com/CoJoA13/EasySynQ/pull/386) |
 | M7 | Records and rendering resilience | 3 | ☑ merged | [#387](https://github.com/CoJoA13/EasySynQ/pull/387) |
 | M8 | Vault and retention input guards | 2 | ☑ merged | [#388](https://github.com/CoJoA13/EasySynQ/pull/388) |
-| M9 | Migration and ORM coherence | 4 | ☑ in PR | [#389](https://github.com/CoJoA13/EasySynQ/pull/389) |
-| M10 | Schema and index design | 4 | ☐ queued — revalidate | — |
+| M9 | Migration and ORM coherence | 4 | ☑ merged | [#389](https://github.com/CoJoA13/EasySynQ/pull/389) |
+| M10 | Schema and index design | 4 | ☑ resolved — PR pending | — |
 | M11 | Organization time and audit scalability | 3 | ☐ queued — revalidate | — |
 | M12 | Data-model documentation drift | 5 | ☐ queued — revalidate | — |
 | M13 | API documentation drift | 4 | ☐ queued — revalidate | — |
@@ -49,7 +50,7 @@
 | M21 | Web async and error UX | 8 | ☐ queued — revalidate | — |
 | M22 | Web accessibility | 7 | ☐ queued — revalidate | — |
 
-**Accounting: 1 preclosed + 24 merged + 4 in PR + 75 queued = 104 original findings.**
+**Accounting: 1 preclosed + 28 merged + 4 resolved pending PR + 71 queued = 104 original findings.**
 
 ---
 
@@ -261,19 +262,33 @@ populated migration tests · no new permission key
   the bare naming-convention token, while `0079` renames the deployed doubled constraint, tolerates
   an already-canonical database, and removes a duplicate legacy copy if both exist).
 
-### ☐ M10 — Schema and index design
+### ☑ M10 — Schema and index design
 
-`branch: fix/minor-schema-index-design` · schema decision + migration + integration
+`branch: fix/minor-schema-index-design` · schema decision + migration `0080` + populated migration
+tests + docs · no new permission key
 
-- [ ] `apps/api/src/easysynq_api/db/models/blob.py:27` — a global SHA-256 primary key paired with
-  one bucket/org cannot represent identical bytes in two buckets or organizations `[f]`.
-- [ ] `apps/api/src/easysynq_api/db/models/document_version.py:73` — `change_summary` is dead and
-  nullable while the data-model contract calls it mandatory at check-in `[f]`.
-- [ ] `apps/api/src/easysynq_api/db/models/record.py:63` — `record.source_document_id` is unindexed
-  despite backing real filters and joins `[f]`.
-- [ ] `apps/api/src/easysynq_api/db/models/role.py:64` — `role_assignment.user_id` has no index for
+- [x] `apps/api/src/easysynq_api/db/models/blob.py:27` — a global SHA-256 primary key paired with
+  one bucket/org cannot represent identical bytes in two buckets or organizations `[R]` (rejected:
+  D1 is explicitly single-organization and the documented/modelled blob identity is intentionally
+  the global content hash with one canonical storage placement. Existing vault, ingestion, and
+  records guards reject a digest collision across storage domains instead of mutating WORM
+  provenance; the foreign-bucket check-in integration test pins that distinction. Supporting
+  multiple physical placements for one digest would require a separate placement schema and
+  coordinated backup, verification, retrieval, disposition, and purge changes—not a minor PK
+  adjustment. The model docs now state the single-placement contract explicitly).
+- [x] `apps/api/src/easysynq_api/db/models/document_version.py:73` — `change_summary` is dead and
+  nullable while the data-model contract calls it mandatory at check-in `[C]` (fixed: the API and
+  every check-in path already use mandatory `change_reason` plus `change_significance` for INV-3;
+  migration `0080` removes the unused nullable field and fails closed if unsupported manually
+  inserted summary data exists, while downgrade restores the nullable compatibility column. The
+  contradictory document-control and data-model prose now names the fields actually enforced).
+- [x] `apps/api/src/easysynq_api/db/models/record.py:63` — `record.source_document_id` is unindexed
+  despite backing real filters and joins `[C]` (fixed: add the plain
+  `ix_record_source_document_id` index in migration `0080` and matching ORM metadata).
+- [x] `apps/api/src/easysynq_api/db/models/role.py:64` — `role_assignment.user_id` has no index for
   the per-request grant-resolution path; do not add the intentionally-absent blanket uniqueness
-  constraint `[f]`.
+  constraint `[C]` (fixed: add only the plain `ix_role_assignment_user_id` index in migration
+  `0080` and matching ORM metadata, preserving all existing assignment cardinality).
 
 ### ☐ M11 — Organization time and audit scalability
 

@@ -70,7 +70,6 @@ class DocumentVersion(Base):
         change_significance_enum, nullable=False
     )
     change_reason: Mapped[str] = mapped_column(Text, nullable=False)
-    change_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     version_state: Mapped[VersionState] = mapped_column(
         version_state_enum, default=VersionState.Draft, nullable=False
     )

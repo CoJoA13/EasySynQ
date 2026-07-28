@@ -12,7 +12,7 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from sqlalchemy import Boolean, ForeignKey, Text, UniqueConstraint
+from sqlalchemy import Boolean, ForeignKey, Index, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -63,6 +63,7 @@ class RoleGrant(Base):
 
 class RoleAssignment(Base):
     __tablename__ = "role_assignment"
+    __table_args__ = (Index("ix_role_assignment_user_id", "user_id"),)
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     org_id: Mapped[uuid.UUID] = mapped_column(

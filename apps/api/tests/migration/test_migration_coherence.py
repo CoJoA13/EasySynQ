@@ -28,8 +28,11 @@ from easysynq_api.services.backup.dsn import conn_kwargs
 
 _API_ROOT = Path(__file__).resolve().parents[2]
 _M9_REVISION = "0079_migration_orm_coherence"
+_M10_REVISION = "0080_schema_index_design"
 _CANONICAL_CHECK = "ck_process_edge_no_self_loop"
 _LEGACY_CHECK = "ck_process_edge_ck_process_edge_no_self_loop"
+_RECORD_SOURCE_DOCUMENT_INDEX = "ix_record_source_document_id"
+_ROLE_ASSIGNMENT_USER_INDEX = "ix_role_assignment_user_id"
 _EXPECTED_RETENTION_GRANTS = {
     ("Internal Auditor", "retention.read"),
     ("QMS Owner", "retention.manage"),
@@ -56,7 +59,7 @@ def postgres_admin_url() -> Iterator[str]:
 
 @contextmanager
 def _scratch_database(admin_url: str) -> Iterator[str]:
-    database = f"easysynq_m9_{uuid.uuid4().hex[:12]}"
+    database = f"easysynq_migrations_{uuid.uuid4().hex[:12]}"
     with psycopg.connect(
         **conn_kwargs(admin_url, dbname="postgres"),
         autocommit=True,
@@ -108,6 +111,37 @@ def _process_edge_checks(connection: sa.Connection) -> set[str]:
                 "SELECT conname FROM pg_constraint "
                 "WHERE conrelid = 'process_edge'::regclass AND contype = 'c'"
             )
+        ).scalars()
+    }
+
+
+def _column_nullable(
+    connection: sa.Connection,
+    table_name: str,
+    column_name: str,
+) -> str | None:
+    return connection.execute(
+        sa.text(
+            "SELECT is_nullable "
+            "FROM information_schema.columns "
+            "WHERE table_schema = current_schema() "
+            "AND table_name = :table_name "
+            "AND column_name = :column_name"
+        ),
+        {"table_name": table_name, "column_name": column_name},
+    ).scalar_one_or_none()
+
+
+def _table_indexes(connection: sa.Connection, table_name: str) -> set[str]:
+    return {
+        str(name)
+        for name in connection.execute(
+            sa.text(
+                "SELECT indexname "
+                "FROM pg_indexes "
+                "WHERE schemaname = current_schema() AND tablename = :table_name"
+            ),
+            {"table_name": table_name},
         ).scalars()
     }
 
@@ -314,6 +348,84 @@ def test_populated_historical_transitions_and_head_repairs(
                 check_names = _process_edge_checks(connection)
                 assert _CANONICAL_CHECK in check_names
                 assert _LEGACY_CHECK not in check_names
+
+            # 0080: unsupported manual data must fail closed before the dead column is removed.
+            source_blob_sha256 = "8" * 64
+            with engine.begin() as connection:
+                connection.execute(
+                    sa.text(
+                        "INSERT INTO blob "
+                        "(sha256, org_id, size_bytes, mime_type, bucket, object_key, "
+                        "worm_locked, sse) "
+                        "VALUES (:sha256, :org, 10, 'application/pdf', "
+                        "'m10-vault', 'm10/source.pdf', true, true)"
+                    ),
+                    {"sha256": source_blob_sha256, "org": org_id},
+                )
+                version_id = connection.execute(
+                    sa.text(
+                        "INSERT INTO document_version "
+                        "(org_id, document_id, version_seq, revision_label, "
+                        "change_significance, change_reason, change_summary, version_state, "
+                        "source_blob_sha256, metadata_snapshot, imported, author_user_id, "
+                        "created_by) "
+                        "VALUES (:org, :document, 1, 'A', 'MINOR', 'M10 migration proof', "
+                        "'unsupported manual summary', 'Draft', :sha256, "
+                        "CAST('{}' AS jsonb), false, :user, :user) "
+                        "RETURNING id"
+                    ),
+                    {
+                        "org": org_id,
+                        "document": document_id,
+                        "sha256": source_blob_sha256,
+                        "user": user_id,
+                    },
+                ).scalar_one()
+
+            with pytest.raises(sa.exc.DBAPIError, match="cannot upgrade 0080"):
+                command.upgrade(config, _M10_REVISION)
+            with engine.connect() as connection:
+                assert _column_nullable(connection, "document_version", "change_summary") == "YES"
+                assert _RECORD_SOURCE_DOCUMENT_INDEX not in _table_indexes(connection, "record")
+                assert _ROLE_ASSIGNMENT_USER_INDEX not in _table_indexes(
+                    connection, "role_assignment"
+                )
+
+            # Once deliberately cleared, the populated upgrade removes only the unsupported field.
+            with engine.begin() as connection:
+                connection.execute(
+                    sa.text(
+                        "UPDATE document_version SET change_summary = NULL WHERE id = :version"
+                    ),
+                    {"version": version_id},
+                )
+            command.upgrade(config, _M10_REVISION)
+            with engine.connect() as connection:
+                assert _column_nullable(connection, "document_version", "change_summary") is None
+                assert _RECORD_SOURCE_DOCUMENT_INDEX in _table_indexes(connection, "record")
+                assert _ROLE_ASSIGNMENT_USER_INDEX in _table_indexes(connection, "role_assignment")
+                assert (
+                    connection.execute(
+                        sa.text("SELECT count(*) FROM document_version WHERE id = :version"),
+                        {"version": version_id},
+                    ).scalar_one()
+                    == 1
+                )
+
+            # The downgrade restores a nullable compatibility column and removes only M10's
+            # indexes; a clean re-upgrade remains safe with the live version row in place.
+            command.downgrade(config, _M9_REVISION)
+            with engine.connect() as connection:
+                assert _column_nullable(connection, "document_version", "change_summary") == "YES"
+                assert _RECORD_SOURCE_DOCUMENT_INDEX not in _table_indexes(connection, "record")
+                assert _ROLE_ASSIGNMENT_USER_INDEX not in _table_indexes(
+                    connection, "role_assignment"
+                )
+            command.upgrade(config, "head")
+            with engine.connect() as connection:
+                assert _column_nullable(connection, "document_version", "change_summary") is None
+                assert _RECORD_SOURCE_DOCUMENT_INDEX in _table_indexes(connection, "record")
+                assert _ROLE_ASSIGNMENT_USER_INDEX in _table_indexes(connection, "role_assignment")
 
             # The repair downgrade is intentionally non-destructive; re-upgrade is idempotent.
             command.downgrade(config, "0078_record_content_hash_version")
