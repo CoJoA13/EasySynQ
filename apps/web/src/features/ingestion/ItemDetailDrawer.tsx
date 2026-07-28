@@ -27,8 +27,9 @@ const DECISION_META: Record<ImportDecisionHistoryAction, { label: string; tone: 
 };
 
 function decisionMeta(action: string): { label: string; tone: Tone } {
-  if (action in DECISION_META) return DECISION_META[action as ImportDecisionHistoryAction];
-  return { label: humanizeToken(action), tone: "neutral" };
+  if (Object.hasOwn(DECISION_META, action))
+    return DECISION_META[action as ImportDecisionHistoryAction];
+  return { label: humanizeToken(action) || "Unknown decision", tone: "neutral" };
 }
 
 const CONFLICT_LABEL: Record<string, string> = {
@@ -38,7 +39,8 @@ const CONFLICT_LABEL: Record<string, string> = {
 };
 
 function conflictLabel(token: string): string {
-  return CONFLICT_LABEL[token] ?? humanizeToken(token);
+  if (Object.hasOwn(CONFLICT_LABEL, token)) return CONFLICT_LABEL[token]!;
+  return humanizeToken(token) || "Unspecified conflict";
 }
 
 // The per-item review detail (DP-3, reuses app/shell/DetailDrawer for focus-trap + Esc + ARIA dialog).

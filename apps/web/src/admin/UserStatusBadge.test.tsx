@@ -23,9 +23,16 @@ test("maps every user state to a human label and canonical status tone", () => {
   }
 });
 
-test("degrades an additive backend state to readable neutral copy", () => {
-  renderWithProviders(<UserStatusBadge status="PENDING_REVIEW" />);
-  const badge = screen.getByLabelText("User status: Pending review");
-  expect(badge).toHaveTextContent(TONE_GLYPH.neutral);
-  expect(badge).not.toHaveTextContent("PENDING_REVIEW");
+test("degrades additive backend states to readable neutral copy", () => {
+  const cases = [
+    ["PENDING_REVIEW", "Pending review"],
+    ["constructor", "Constructor"],
+  ] as const;
+  for (const [status, label] of cases) {
+    const { unmount } = renderWithProviders(<UserStatusBadge status={status} />);
+    const badge = screen.getByLabelText(`User status: ${label}`);
+    expect(badge).toHaveTextContent(TONE_GLYPH.neutral);
+    expect(badge).not.toHaveTextContent(status);
+    unmount();
+  }
 });

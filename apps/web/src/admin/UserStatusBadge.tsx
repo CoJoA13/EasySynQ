@@ -13,7 +13,7 @@ const USER_STATUS_META: Record<UserStatus, { label: string; tone: Tone }> = {
 };
 
 function userStatusMeta(status: string): { label: string; tone: Tone } {
-  if (status in USER_STATUS_META) return USER_STATUS_META[status as UserStatus];
+  if (Object.hasOwn(USER_STATUS_META, status)) return USER_STATUS_META[status as UserStatus];
   return {
     label: status.trim() ? humanizeToken(status.toLowerCase()) : "Unknown",
     tone: "neutral",

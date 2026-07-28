@@ -202,6 +202,18 @@ test("renders the decision history from the detail response (no separate /decisi
               decided_by: "bbbb1111-1111-1111-1111-111111111111",
               decided_at: "2026-06-08T11:00:00+00:00",
             },
+            {
+              id: "d2",
+              action: "constructor",
+              file_id: FID,
+              cluster_id: null,
+              target_kind: "DOCUMENT",
+              before: null,
+              after: null,
+              reason: null,
+              decided_by: "bbbb1111-1111-1111-1111-111111111111",
+              decided_at: "2026-06-08T12:00:00+00:00",
+            },
           ],
         },
       }),
@@ -220,6 +232,7 @@ test("renders the decision history from the detail response (no separate /decisi
   // This file's "accept" decision is listed with the canonical human label + non-colour glyph.
   const decision = await screen.findByLabelText("Decision: Accepted");
   expect(decision).toHaveTextContent(TONE_GLYPH.success);
+  expect(screen.getByLabelText("Decision: Constructor")).toHaveTextContent(TONE_GLYPH.neutral);
   expect(screen.queryByText("accept")).toBeNull();
 });
 
