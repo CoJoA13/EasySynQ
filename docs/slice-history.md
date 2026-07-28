@@ -190,7 +190,7 @@ all 281 in the authenticated, OPERATIONAL, disposable testcontainers app. With t
 `contract-responses` no longer has `continue-on-error` and is added to `main` branch protection
 without changing the five existing required contexts.
 
-**Validation.** API Ruff + format; mypy (**427 source files**); API unit (**1,218 passed, 1
+**Validation.** API Ruff + format; mypy (**427 source files**); API unit (**1,223 passed, 1
 release-only skip**); Redocly; exact deferred-operation collection (**281 selected**); GitHub live
 response sweep (**281 passed, 2,163 deselected**). Local live execution was unavailable because the
 Docker Desktop socket was absent; GitHub CI supplied the authoritative disposable-container result.
