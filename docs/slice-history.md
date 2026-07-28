@@ -177,6 +177,42 @@
 
 ## REMEDIATION — correctness, accessibility, polish & test reliability
 
+### Minor Batch M13 — shipped API documentation alignment (docs only; OpenAPI contract unchanged; NO migration [head stays `0080`]; NO new permission key [catalog 102]; PR pending)
+
+**What shipped.** All four finder-only reports were re-located and confirmed against the current
+FastAPI decorators, service behavior, seeded permission catalog, web OIDC client, and published
+OpenAPI. The authentication chapter now describes the shipped resource-server boundary: the SPA
+keeps its OIDC state in memory and performs PKCE, renewal, and logout directly with Keycloak; the
+first valid bearer request resolves/JIT-provisions `app_user`. There is no API-owned
+`/auth/session`, `/auth/refresh`, or `/auth/logout`. `/auth/step-up` remains documented because it
+does ship, but accurately as a non-enforcing Part 11 seam that mints no token. `/tasks` is the
+canonical self-scoped work inbox; `/me/actions` is not an alias.
+
+Information-architecture and document inventories now treat `documented_information.folder_path`
+as the logical FOLDER-scope selector it actually is—there is no folder entity, `/folders` router,
+or `folder.read/create/update/delete` catalog family. The nonexistent
+`DELETE /documents/{id}`/`document.delete` pair is gone as well: released content is obsoleted and
+retained, while seeded `document.delete_draft` remains explicitly route-less. The touched document
+rows also use the single `documented_information(kind=DOCUMENT)` root, the published list filters,
+the real detail affordance payload, and the `document.edit` check-in gate.
+
+The workflow inventory now exposes only the implemented task list/detail/decision and workflow
+instance/document-approval reads. `workflow_definition` remains versioned internal data with no
+public read route; the catalog has no `task.*`/`workflow.*` keys; candidate work needs no claim;
+and there are no manual claim/reassign/escalate mutations. Timer escalation remains notification,
+audit, and delivery-stamp behavior rather than a public task reassignment/state API. Finally, the
+complaint/NCR chapter preserves the implemented idempotent complaint→CAPA operation (including its
+201-first/200-replay contract) while removing the never-built complaint→NCR and NCR→CAPA routes.
+Neighboring filters, expansions, and request shapes now match the router/OpenAPI instead of
+implying related unshipped behavior.
+
+**Impact.** Documentation only—no runtime, migration, schema, OpenAPI, or permission-catalog
+behavior changed. The published OpenAPI already carried the correct shipped route set, so it
+needed no edit. The remediation tracker advances M12 to merged, closes all four M13 findings, and
+preserves the original denominator: 1 preclosed + 40 merged + 4 in PR + 59 queued. Validation:
+`git diff --check`; configured Redocly OpenAPI lint; API Ruff + format; strict mypy across **426
+source files**; full unit selection (**1182 passed, 1 expected release-only skip**).
+
 ### Minor Batch M12 — shipped data-model documentation alignment (docs only; NO migration [head stays `0080`]; NO new permission key [catalog 102]; PR [#392](https://github.com/CoJoA13/EasySynQ/pull/392))
 
 **What shipped.** All five finder-only reports were re-located and confirmed against the current
