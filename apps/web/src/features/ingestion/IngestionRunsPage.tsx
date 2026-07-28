@@ -40,7 +40,7 @@ export function IngestionRunsPage() {
         </div>
         {can("import.execute") && (
           <Button size="sm" onClick={modal.open}>
-            ＋ New import
+            New import
           </Button>
         )}
       </Group>

@@ -177,6 +177,35 @@
 
 ## REMEDIATION — correctness, accessibility, polish & test reliability
 
+### Minor Batch M18 — web shell, layout, and error consistency (web + tests + docs; NO API or contract change; NO migration [head stays `0080`]; NO new permission key [catalog 102])
+
+**What shipped.** All nine confirmed reports were re-located against the current shell, admin
+drawers, register states, and feature layouts; all nine remained live. Role-detail accordions and
+the process-owner drawer now use compact, explicitly named shared loading regions. The global
+breadcrumb maps every current route slug to product copy and replaces non-document detail IDs with
+generic entity labels, while retaining the document identifier's reactive cache upgrade.
+
+Audit detail no longer repeats the shell breadcrumb; its identifier remains in the page header.
+Audit register titles use the register-level heading convention in every state. The inconsistent
+fullwidth-plus prefix is gone from all remaining action labels, including the live occurrences
+beyond the original audit/CAPA/authoring pointer. CAPA tabs now follow the active face's existing
+content width, while DCR and Improvement keep one `xl` width across loading, forbidden, error, and
+loaded states.
+
+Management-review detail now distinguishes authorization from genuine failure: 403 renders the
+shared calm `NoAccessState`, while 404/5xx-style failures render `ErrorState` with a real query
+refetch. Focused tests pin accessible loader names, route-label sanitization, single-breadcrumb
+ownership, heading semantics, exact action labels, route-aware tab width, stable register width,
+and the management-review 403/retry split.
+
+**Impact.** Web behavior, Vitest coverage, and remediation documentation only; no API route,
+contract, database schema, migration, permission, event, persistence, or task-name change. The
+remediation tracker advances M17 to merged, closes all nine M18 findings, and preserves the
+original denominator: 1 preclosed + 64 merged + 9 in PR + 30 queued.
+
+**Validation.** `git diff --check`; affected web coverage (**105 passed across 12 files**); full
+web suite (**1,386 passed across 238 files**); web ESLint, strict TypeScript, and production build.
+
 ### Minor Batch M17 — eliminate test false-PASS traps (API + web tests + docs; NO production change; NO migration [head stays `0080`]; NO new permission key [catalog 102]; PR [#397](https://github.com/CoJoA13/EasySynQ/pull/397))
 
 **What shipped.** All three finder-only reports were re-located against the current integration

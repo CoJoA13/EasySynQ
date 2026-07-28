@@ -1,7 +1,7 @@
 import { http, HttpResponse } from "msw";
 import { axe } from "jest-axe";
 import { expect, it } from "vitest";
-import { screen, waitFor, within } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useLocation } from "react-router-dom";
 import { renderWithProviders } from "../../test/render";
@@ -12,6 +12,34 @@ function LocationProbe() {
   const loc = useLocation();
   return <div data-testid="loc">{loc.pathname + loc.search}</div>;
 }
+
+function containerSizeFor(element: HTMLElement) {
+  const container = element.closest(".mantine-Container-root");
+  expect(container).not.toBeNull();
+  return (container as HTMLElement).style.getPropertyValue("--container-size");
+}
+
+it("keeps the loading and loaded register at the same xl width", async () => {
+  let release: (() => void) | undefined;
+  const blocked = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  server.use(
+    http.get("/api/v1/dcrs", async () => {
+      await blocked;
+      return HttpResponse.json({ data: [] });
+    }),
+  );
+
+  renderWithProviders(<DcrsRegisterPage />);
+  expect(containerSizeFor(screen.getByRole("status", { name: "Loading change requests" }))).toBe(
+    "var(--container-size-xl)",
+  );
+  act(() => release?.());
+  expect(containerSizeFor(await screen.findByRole("heading", { name: "Change requests" }))).toBe(
+    "var(--container-size-xl)",
+  );
+});
 
 it("lists change requests and opens the drawer when an identifier is clicked", async () => {
   renderWithProviders(<DcrsRegisterPage />);

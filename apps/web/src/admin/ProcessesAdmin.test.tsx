@@ -1,4 +1,4 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { expect, test } from "vitest";
@@ -17,6 +17,28 @@ function allowAssignOwner() {
     ),
   );
 }
+
+test("announces owner loading with the process name", async () => {
+  let release: (() => void) | undefined;
+  const blocked = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  server.use(
+    http.get("/api/v1/processes/:id/owners", async () => {
+      await blocked;
+      return HttpResponse.json([]);
+    }),
+  );
+
+  renderWithProviders(<ProcessesAdmin token="test-token" />);
+  await userEvent.click((await screen.findAllByRole("button", { name: /manage owners/i }))[0]!);
+  expect(
+    await screen.findByRole("status", { name: "Loading owners for Purchasing" }),
+  ).toBeInTheDocument();
+
+  act(() => release?.());
+  expect(await screen.findByText("No owners assigned.")).toBeInTheDocument();
+});
 
 test("lists processes and, without process.assign_owner, the drawer is read-only", async () => {
   const u = userEvent.setup();

@@ -56,9 +56,7 @@ export function ComplaintsPage() {
     <Container size="lg" py="md">
       <Group justify="space-between" mb="md">
         <Title order={3}>Complaints</Title>
-        {can("record.create") && (
-          <Button onClick={() => setFormOpen(true)}>＋ Log complaint</Button>
-        )}
+        {can("record.create") && <Button onClick={() => setFormOpen(true)}>Log complaint</Button>}
       </Group>
       <AsOf at={dataUpdatedAt} />
       {rows.length === 0 ? (

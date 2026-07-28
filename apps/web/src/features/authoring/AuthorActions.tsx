@@ -93,7 +93,7 @@ export function AuthorActions({ doc }: { doc: DocumentSummary }) {
       {canRevise && (
         <Group>
           <Button loading={startRevision.isPending} onClick={() => void revise()}>
-            ＋ Start revision
+            Start revision
           </Button>
         </Group>
       )}

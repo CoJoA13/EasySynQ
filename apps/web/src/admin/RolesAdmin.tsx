@@ -1,4 +1,4 @@
-import { Accordion, Badge, Group, Loader, Stack, Table, Text } from "@mantine/core";
+import { Accordion, Badge, Group, Stack, Table, Text } from "@mantine/core";
 import { useQuery } from "@tanstack/react-query";
 import { apiGet } from "../lib/api";
 import { ErrorState, LoadingState } from "../lib/states";
@@ -64,7 +64,7 @@ function RoleRow({ role, token }: { role: Role; token: string | null }) {
       </Accordion.Control>
       <Accordion.Panel>
         {detail.isLoading ? (
-          <Loader size="sm" />
+          <LoadingState label={`Loading ${role.name} role details`} mih={80} />
         ) : (
           <Table withTableBorder>
             <Table.Thead>

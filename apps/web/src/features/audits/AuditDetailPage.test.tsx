@@ -42,6 +42,7 @@ test("renders header (identifier · title · state) + plan/programme context", a
   // getAllBy: FindingsCard now also renders "Purchasing" as a process_ref badge (Task 14).
   expect(screen.getAllByText(/Purchasing$/).length).toBeGreaterThan(0);
   expect(screen.getByText(/2026 Internal Audit Programme/)).toBeInTheDocument();
+  expect(screen.queryByRole("link", { name: "Internal audit" })).not.toBeInTheDocument();
 });
 
 test("404 → a calm not-found panel", async () => {

@@ -140,7 +140,7 @@ export function CapaBoardPage() {
       <Group justify="space-between" mb="md">
         <Title order={2}>Nonconformity and CAPA</Title>
         <Group gap="sm">
-          {canRaiseCapa && <Button onClick={() => setRaiseOpen(true)}>＋ Raise CAPA</Button>}
+          {canRaiseCapa && <Button onClick={() => setRaiseOpen(true)}>Raise CAPA</Button>}
           <SegmentedControl
             value={view}
             onChange={(v) => setView(v as "board" | "list")}

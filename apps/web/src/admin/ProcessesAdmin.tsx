@@ -4,7 +4,6 @@ import {
   Button,
   Drawer,
   Group,
-  Loader,
   Select,
   Stack,
   Table,
@@ -166,7 +165,7 @@ function ManageOwners({
       <Stack gap="xs">
         <Title order={4}>Current owners</Title>
         {owners.isLoading ? (
-          <Loader size="sm" />
+          <LoadingState label={`Loading owners for ${process.name}`} mih={80} />
         ) : owners.data?.length ? (
           owners.data.map((o) => (
             <Group key={o.id} justify="space-between">

@@ -4,7 +4,7 @@ import { useParams } from "react-router-dom";
 import { useUserDirectory } from "../../app/shell/useUserDirectory";
 import { usePermissions } from "../../app/shell/usePermissions";
 import { ApiError, useApi } from "../../lib/api";
-import { LoadingState } from "../../lib/states";
+import { ErrorState, LoadingState, NoAccessState } from "../../lib/states";
 import { ConfirmDestructive } from "../../lib/ConfirmDestructive";
 import { ApprovalStepper } from "../document/ApprovalStepper";
 import { StateBadge } from "../document/StateBadge";
@@ -29,7 +29,7 @@ function errMsg(e: unknown): string {
 
 export function ManagementReviewDetailPage() {
   const { id = null } = useParams();
-  const { data: mr, isLoading, isError, forbidden } = useMgmtReview(id);
+  const { data: mr, isLoading, isError, forbidden, refetch } = useMgmtReview(id);
   const { data: instance } = useMgmtReviewApproval(id);
   // S-leadership-1: clause 9.3 Management Review is a leadership artifact — release is gated on a
   // Top-Management authorization when the org flag is on (suppresses Release; the gate panel explains).
@@ -54,20 +54,28 @@ export function ManagementReviewDetailPage() {
     run: () => Promise<unknown>;
   } | null>(null);
 
-  if (isError || !mr) {
-    if (isLoading)
-      return (
-        <Container size="lg" py="md">
-          <LoadingState label="Loading the review" />
-        </Container>
-      );
+  if (forbidden) {
     return (
       <Container size="lg" py="md">
-        <Alert color={forbidden ? "gray" : "red"} title="Couldn't load this review">
-          {forbidden
-            ? "You don't have access to this management review."
-            : "It may have been removed, or you may not have access."}
-        </Alert>
+        <NoAccessState message="You don't have access to this management review." />
+      </Container>
+    );
+  }
+  if (isLoading) {
+    return (
+      <Container size="lg" py="md">
+        <LoadingState label="Loading the review" />
+      </Container>
+    );
+  }
+  if (isError || !mr) {
+    return (
+      <Container size="lg" py="md">
+        <ErrorState
+          title="Couldn't load this review"
+          message="It may have been removed."
+          onRetry={() => void refetch()}
+        />
       </Container>
     );
   }

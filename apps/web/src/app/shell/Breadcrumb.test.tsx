@@ -1,6 +1,6 @@
 import { MantineProvider } from "@mantine/core";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, render, screen } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import type { ReactNode } from "react";
 import { expect, test } from "vitest";
@@ -49,4 +49,32 @@ test("Breadcrumb updates to the identifier when the document loads after a cold 
   });
   expect(await screen.findByText("SOP-PUR-014")).toBeInTheDocument();
   expect(screen.queryByText(ID)).not.toBeInTheDocument();
+});
+
+test.each([
+  [`/tasks/${ID}`, "Task"],
+  [`/audits/${ID}`, "Audit"],
+  [`/imports/${ID}`, "Import run"],
+  [`/objectives/${ID}`, "Objective"],
+  [`/management-reviews/${ID}`, "Management review"],
+  [`/dcrs/${ID}/diff`, "Change request"],
+])("Breadcrumb replaces the detail identifier in %s with %s", (route, label) => {
+  const client = new QueryClient();
+  renderCrumb(client, route);
+  const breadcrumb = screen.getByLabelText("Breadcrumb");
+  expect(within(breadcrumb).getAllByText(label).length).toBeGreaterThan(0);
+  expect(within(breadcrumb).queryByText(ID)).not.toBeInTheDocument();
+});
+
+test.each([
+  ["/reports/document-control", "Controlled document register", "document-control"],
+  ["/management-reviews", "Management reviews", "management-reviews"],
+  ["/interested-parties", "Interested parties", "interested-parties"],
+  ["/drift/superseded-copies", "Superseded copies", "superseded-copies"],
+])("Breadcrumb humanizes the registered route %s", (route, label, rawSlug) => {
+  const client = new QueryClient();
+  renderCrumb(client, route);
+  const breadcrumb = screen.getByLabelText("Breadcrumb");
+  expect(within(breadcrumb).getByText(label)).toBeInTheDocument();
+  expect(within(breadcrumb).queryByText(rawSlug)).not.toBeInTheDocument();
 });
