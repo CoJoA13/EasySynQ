@@ -1,7 +1,8 @@
-import { Badge, Button, Container, Group, Table, Text, Title } from "@mantine/core";
+import { Button, Container, Group, Table, Text, Title } from "@mantine/core";
 import { useState } from "react";
 import { usePermissions } from "../../app/shell/usePermissions";
 import { useUserDirectory } from "../../app/shell/useUserDirectory";
+import { StatusBadge } from "../../lib/StatusBadge";
 import { EmptyState, ErrorState, LoadingState, NoAccessState } from "../../lib/states";
 import type { AuditProgram } from "../../lib/types";
 import { useAuditPlans, useAuditPrograms, useProcesses } from "./hooks";
@@ -94,15 +95,11 @@ export function ProgrammePage() {
                 {/* || not ??: a cleared period arrives as "" — render the same em-dash as null. */}
                 <Table.Td>{p.period || "—"}</Table.Td>
                 <Table.Td>
-                  {p.archived ? (
-                    <Badge variant="light" color="gray">
-                      ▣ Archived
-                    </Badge>
-                  ) : (
-                    <Badge variant="light" color="green">
-                      ▶ Active
-                    </Badge>
-                  )}
+                  <StatusBadge
+                    tone={p.archived ? "neutral" : "success"}
+                    label={p.archived ? "Archived" : "Active"}
+                    kind="Programme status"
+                  />
                 </Table.Td>
                 <Table.Td>
                   {can("audit.plan") && (

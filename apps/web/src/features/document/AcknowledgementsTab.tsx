@@ -1,15 +1,17 @@
-import { Alert, Avatar, Badge, Card, Group, Stack, Table, Text } from "@mantine/core";
+import { Alert, Avatar, Card, Group, Stack, Table, Text } from "@mantine/core";
 import { usePermissions } from "../../app/shell/usePermissions";
+import { StatusBadge } from "../../lib/StatusBadge";
 import { InlineState } from "../../lib/states";
+import type { Tone } from "../../lib/status";
 import type { AckStatus } from "../../lib/types";
 import { AckCoverageRing } from "./AckCoverageRing";
 import { DistributionEditor } from "./DistributionEditor";
 import { useAcknowledgements, useDistribution } from "./ackHooks";
 
-const STATUS_COLOR: Record<AckStatus, string> = {
-  acknowledged: "green",
-  pending: "gray",
-  overdue: "red",
+const STATUS_META: Record<AckStatus, { label: string; tone: Tone }> = {
+  acknowledged: { label: "Acknowledged", tone: "success" },
+  pending: { label: "Pending", tone: "neutral" },
+  overdue: { label: "Overdue", tone: "danger" },
 };
 
 function initials(name: string | null): string {
@@ -124,9 +126,11 @@ export function AcknowledgementsTab({
                       <Table.Tr key={r.user_id}>
                         <Table.Td>{r.display_name ?? r.user_id}</Table.Td>
                         <Table.Td>
-                          <Badge color={STATUS_COLOR[r.status]} variant="light">
-                            {r.status}
-                          </Badge>
+                          <StatusBadge
+                            tone={STATUS_META[r.status].tone}
+                            label={STATUS_META[r.status].label}
+                            kind="Acknowledgement"
+                          />
                         </Table.Td>
                         <Table.Td>{r.acknowledged_revision_label ?? "—"}</Table.Td>
                         <Table.Td>{r.due_at ? r.due_at.slice(0, 10) : "—"}</Table.Td>

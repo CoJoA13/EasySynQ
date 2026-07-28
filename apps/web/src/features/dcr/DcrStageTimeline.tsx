@@ -1,5 +1,6 @@
 import { Text, Timeline } from "@mantine/core";
 import type { DcrStageEvent, DirectoryUser } from "../../lib/types";
+import { dcrStateLabel } from "./dcrState";
 
 function actorLabel(actorId: string | null, directory: DirectoryUser[]): string {
   if (!actorId) return "system";
@@ -32,7 +33,9 @@ export function DcrStageTimeline({
           key={e.id}
           title={
             <Text span fw={600}>
-              {e.from_state ? `${e.from_state} → ${e.to_state}` : e.to_state}
+              {e.from_state
+                ? `${dcrStateLabel(e.from_state)} → ${dcrStateLabel(e.to_state)}`
+                : dcrStateLabel(e.to_state)}
             </Text>
           }
         >

@@ -86,6 +86,15 @@ it("filters by state", async () => {
   expect(screen.getByText("DCR-2026-0004")).toBeInTheDocument();
 });
 
+it("uses the canonical human label for the InApproval filter option", async () => {
+  renderWithProviders(<DcrsRegisterPage />);
+  expect(await screen.findByText("DCR-2026-0001")).toBeInTheDocument();
+  const [stateInput] = screen.getAllByLabelText("State");
+  await userEvent.click(stateInput!);
+  expect(await screen.findByRole("option", { name: "In approval" })).toBeInTheDocument();
+  expect(screen.queryByRole("option", { name: "InApproval" })).toBeNull();
+});
+
 it("shows the target document's identifier in the Target column when resolved", async () => {
   renderWithProviders(<DcrsRegisterPage />);
   const idCell = await screen.findByText("DCR-2026-0001");

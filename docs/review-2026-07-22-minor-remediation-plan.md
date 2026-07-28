@@ -11,7 +11,7 @@
   underway, leaving **103** to schedule here. Batch M1 closed 4; M2 closed 2; M3 closed 2; M4
   closed 4; M5 closed 3; M6 closed 4; M7 closed 3; M8 closed 2; M9 closed 4; M10 closed 4;
   M11 closed 3; M12 closed 5; M13 closed 4; M14 closed 6; M15 closed 4; M16 closed 7;
-  M17 closed 3; M18 resolves 9; **30 remain queued** after M18.
+  M17 closed 3; M18 closed 9; M19 resolves 9; **21 remain queued** after M19.
 - A queued finding is not assumed to still be live. Every batch must re-locate and revalidate its
   findings against then-current `main` before implementation; close, re-scope, or reject it with
   evidence rather than mechanically applying the 2026-07-22 suggestion.
@@ -45,13 +45,13 @@
 | M15 | Cross-stack naming | 4 | ☑ merged | [#395](https://github.com/CoJoA13/EasySynQ/pull/395) |
 | M16 | UI copy and terminology | 7 | ☑ merged | [#396](https://github.com/CoJoA13/EasySynQ/pull/396) |
 | M17 | Test false-PASS traps | 3 | ☑ merged | [#397](https://github.com/CoJoA13/EasySynQ/pull/397) |
-| M18 | Web shell, layout, and error consistency | 9 | ☑ in PR | [#398](https://github.com/CoJoA13/EasySynQ/pull/398) |
-| M19 | Web state and badge consistency | 9 | ☐ queued — revalidate | — |
+| M18 | Web shell, layout, and error consistency | 9 | ☑ merged | [#398](https://github.com/CoJoA13/EasySynQ/pull/398) |
+| M19 | Web state and badge consistency | 9 | ☑ in PR | — |
 | M20 | Web visual tokens and semantics | 6 | ☐ queued — revalidate | — |
 | M21 | Web async and error UX | 8 | ☐ queued — revalidate | — |
 | M22 | Web accessibility | 7 | ☐ queued — revalidate | — |
 
-**Accounting: 1 preclosed + 64 merged + 9 in PR + 30 queued = 104 original findings.**
+**Accounting: 1 preclosed + 73 merged + 9 in PR + 21 queued = 104 original findings.**
 
 ---
 
@@ -522,28 +522,41 @@ migration, or new permission key
   hand-rolls a no-retry forbidden/error panel instead of the shared states `[C]` (fixed: 403 uses
   `NoAccessState`; genuine load failures use `ErrorState` with a working query refetch).
 
-### ☐ M19 — Web state and badge consistency
+### ☑ M19 — Web state and badge consistency
 
 `branch: fix/minor-web-state-badges` · web + vitest
 
-- [ ] `apps/web/src/admin/UsersAdmin.tsx:129` — user states use a local palette and raw all-caps
-  enums instead of `StatusBadge` and humanized labels `[C]`.
-- [ ] `apps/web/src/features/audits/FindingPanel.tsx:8` — duplicates and has drifted from the
-  canonical CAPA close-state labels `[C]`.
-- [ ] `apps/web/src/features/audits/ProgrammePage.tsx:97` — programme status invents glyphs and raw
-  colors instead of `StatusBadge` `[C]`.
-- [ ] `apps/web/src/features/capa/CapaDrawer.tsx:68` — CAPA close state has no canonical badge
-  treatment `[C]`.
-- [ ] `apps/web/src/features/capa/NcrsPage.tsx:90` — NCR severity bypasses the domain's shared
-  `SeverityBadge` `[C]`.
-- [ ] `apps/web/src/features/dcr/DcrStageTimeline.tsx:35` — raw DCR state casing leaks into the
-  timeline and filter `[C]`.
-- [ ] `apps/web/src/features/document/AcknowledgementsTab.tsx:127` — acknowledgment state uses a
-  local color map and raw enum labels `[C]`.
-- [ ] `apps/web/src/features/ingestion/ItemDetailDrawer.tsx:269` — conflict/history badges expose
-  raw machine tokens and color-only danger `[C]`.
-- [ ] `apps/web/src/features/ingestion/KindCell.tsx:52` — confirmed kind is the only filled badge
-  and its contrast fails in both schemes `[C]`.
+- [x] `apps/web/src/admin/UsersAdmin.tsx:129` — user states use a local palette and raw all-caps
+  enums instead of `StatusBadge` and humanized labels `[C]` (fixed: the exhaustive
+  `UserStatusBadge` maps every known state to canonical label/tone/glyph semantics and degrades a
+  future additive state to readable neutral copy).
+- [x] `apps/web/src/features/audits/FindingPanel.tsx:8` — duplicates and has drifted from the
+  canonical CAPA close-state labels `[C]` (fixed: the panel now consumes the same
+  `CapaStateBadge`/`CLOSE_STATE_LABEL` source as the CAPA feature, including “Implementation” and
+  “Verification”).
+- [x] `apps/web/src/features/audits/ProgrammePage.tsx:97` — programme status invents glyphs and raw
+  colors instead of `StatusBadge` `[C]` (fixed: Active and Archived use canonical success/neutral
+  status treatments and accessible names).
+- [x] `apps/web/src/features/capa/CapaDrawer.tsx:68` — CAPA close state has no canonical badge
+  treatment `[C]` (fixed: one exhaustive close-state label/tone map now drives a shared
+  `CapaStateBadge`; live lifecycle phases are informational, Closed is success, and Rejected is
+  danger).
+- [x] `apps/web/src/features/capa/NcrsPage.tsx:90` — NCR severity bypasses the domain's shared
+  `SeverityBadge` `[C]` (fixed: NCR rows now render the existing exhaustive severity badge and its
+  non-color glyph).
+- [x] `apps/web/src/features/dcr/DcrStageTimeline.tsx:35` — raw DCR state casing leaks into the
+  timeline and filter `[C]` (fixed: badge, timeline, and filter all consume one exhaustive
+  `DCR_STATE_META`, so `InApproval` is consistently presented as “In approval”).
+- [x] `apps/web/src/features/document/AcknowledgementsTab.tsx:127` — acknowledgment state uses a
+  local color map and raw enum labels `[C]` (fixed: Acknowledged, Pending, and Overdue now use an
+  exhaustive human label/tone map through `StatusBadge`).
+- [x] `apps/web/src/features/ingestion/ItemDetailDrawer.tsx:269` — conflict/history badges expose
+  raw machine tokens and color-only danger `[C]` (fixed: decision history has curated read-side
+  labels for accept/correct/merge/split/exclude/defer plus a neutral additive fallback; proposal
+  conflicts use curated or humanized labels and canonical danger glyphs).
+- [x] `apps/web/src/features/ingestion/KindCell.tsx:52` — confirmed kind is the only filled badge
+  and its contrast fails in both schemes `[C]` (fixed: confirmed Document/Record kinds use the
+  AA-paired `StatusBadge` treatment while retaining their existing inline SVG domain icons).
 
 ### ☐ M20 — Web visual tokens and semantics
 

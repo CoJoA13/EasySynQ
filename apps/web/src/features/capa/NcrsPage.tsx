@@ -5,11 +5,11 @@ import { useUserDirectory } from "../../app/shell/useUserDirectory";
 import { AsOf } from "../../lib/AsOf";
 import { EmptyState, ErrorState, LoadingState, NoAccessState } from "../../lib/states";
 import type { DirectoryUser, Ncr } from "../../lib/types";
-import { SEVERITY_LABEL } from "./columns";
 import { DispositionModal } from "./DispositionModal";
 import { useNcrs } from "./hooks";
 import { DISPOSITION_LABEL, NCR_SOURCE_LABEL } from "./intake";
 import { NcrForm } from "./NcrForm";
+import { SeverityBadge } from "./SeverityBadge";
 
 // Resolve a disposition authorizer's id → display name, degrading to a short id when the directory
 // isn't loaded/permitted (the CapaTimeline `actorLabel` pattern — the table is the only NCR surface,
@@ -87,7 +87,9 @@ export function NcrsPage() {
                 <Table.Tr key={n.id}>
                   <Table.Td>{n.identifier}</Table.Td>
                   <Table.Td>{NCR_SOURCE_LABEL[n.source]}</Table.Td>
-                  <Table.Td>{SEVERITY_LABEL[n.severity]}</Table.Td>
+                  <Table.Td>
+                    <SeverityBadge severity={n.severity} />
+                  </Table.Td>
                   <Table.Td>
                     <Text lineClamp={2}>{n.description}</Text>
                   </Table.Td>

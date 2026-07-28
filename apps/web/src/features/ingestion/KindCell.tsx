@@ -1,6 +1,8 @@
-import { Badge, Button, Group, Menu, Text } from "@mantine/core";
+import { Button, Group, Menu, Text } from "@mantine/core";
 import type { ReactNode } from "react";
 import { IconDocument, IconRecord } from "../../lib/icons";
+import { StatusBadge } from "../../lib/StatusBadge";
+import type { Tone } from "../../lib/status";
 import type {
   ConfirmedKind,
   ImportClassification,
@@ -17,9 +19,9 @@ import type {
 
 // #4: inline-SVG glyphs (a page for Document, a padlock for the WORM-locked Record) — geometric, not
 // emoji, so they render identically air-gapped and inherit the badge's colour via currentColor.
-const CONFIRMED_META: Record<ConfirmedKind, { label: string; icon: ReactNode; color: string }> = {
-  DOCUMENT: { label: "Document", icon: <IconDocument size={14} />, color: "var(--es-info)" },
-  RECORD: { label: "Record", icon: <IconRecord size={14} />, color: "var(--es-success)" },
+const CONFIRMED_META: Record<ConfirmedKind, { label: string; icon: ReactNode; tone: Tone }> = {
+  DOCUMENT: { label: "Document", icon: <IconDocument size={14} />, tone: "info" },
+  RECORD: { label: "Record", icon: <IconRecord size={14} />, tone: "success" },
 };
 
 // The dimmed engine-guess TEXT for the UNCONFIRMED state — kept plain (no glyph) so it reads the same
@@ -44,20 +46,10 @@ export function KindCell({
 }) {
   const kind = review?.kind;
 
-  // Confirmed (DOCUMENT|RECORD) → a solid badge, no "?", no Confirm.
+  // Confirmed (DOCUMENT|RECORD) → the AA-paired canonical badge, no "?", no Confirm.
   if (kind === "DOCUMENT" || kind === "RECORD") {
     const meta = CONFIRMED_META[kind];
-    return (
-      <Badge
-        variant="filled"
-        color={meta.color}
-        size="sm"
-        leftSection={meta.icon}
-        aria-label={`Kind: ${meta.label}`}
-      >
-        {meta.label}
-      </Badge>
-    );
+    return <StatusBadge tone={meta.tone} label={meta.label} glyph={meta.icon} kind="Kind" />;
   }
 
   // UNCONFIRMED (or a null review) → the dimmed engine guess + a Confirm menu (Document / Record).

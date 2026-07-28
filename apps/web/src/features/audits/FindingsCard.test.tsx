@@ -104,7 +104,7 @@ test("per-row CAPA chips come from the capa cross-ref; Correct fires onCorrect",
     <FindingsCard audit={audit} scope={SYSTEM} onLog={() => {}} onCorrect={onCorrect} />,
   );
   const row = (await screen.findByText("REC-000062")).closest("[data-finding]") as HTMLElement;
-  expect(within(row).getByText(/CAPA: Root cause/)).toBeInTheDocument();
+  expect(within(row).getByLabelText("CAPA state: Root cause")).toBeInTheDocument();
   await u.click(within(row).getByRole("button", { name: /Correct/ }));
   expect(onCorrect).toHaveBeenCalledWith(
     expect.objectContaining({ id: "fd000001-0001-0001-0001-000000000001" }),

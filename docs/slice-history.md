@@ -177,6 +177,34 @@
 
 ## REMEDIATION — correctness, accessibility, polish & test reliability
 
+### Minor Batch M19 — web state and badge consistency (web + tests + docs; NO API or contract change; NO migration [head stays `0080`]; NO new permission key [catalog 102]; PR pending)
+
+**What shipped.** All nine confirmed reports were re-located against the current admin, audit,
+CAPA, DCR, document-awareness, and ingestion surfaces; all nine remained live. User status now has
+an exhaustive human-label/tone map with a neutral additive-state fallback. CAPA close-state labels
+and tones live in one source consumed by a shared `CapaStateBadge`, removing the audit panel's
+drifted “Implement”/“Verify” copy and the drawer's raw local color.
+
+Programme Active/Archived and acknowledgement Acknowledged/Pending/Overdue states now use the
+shared status vocabulary. NCR rows reuse the domain's existing `SeverityBadge`. One exhaustive DCR
+state map now feeds its badge, timeline, and register filter, so `InApproval` never leaks through
+those user-facing paths.
+
+Ingestion decision history covers the full accept/correct/merge/split/exclude/defer read vocabulary
+with curated labels and a safe additive fallback. Proposal conflicts carry curated or humanized
+copy plus the canonical danger glyph instead of raw snake-case and color alone. Confirmed
+Document/Record kinds moved off the contrast-failing filled badge onto the AA-paired status
+variant; `StatusBadge` now accepts a domain `ReactNode` glyph so the existing page/record SVG icons
+remain intact.
+
+**Impact.** Web behavior, Vitest coverage, and remediation documentation only; no API route,
+contract, database schema, migration, permission, event, persistence, or task-name change. The
+remediation tracker advances M18 to merged, closes all nine M19 findings, and preserves the
+original denominator: 1 preclosed + 73 merged + 9 in PR + 21 queued.
+
+**Validation.** `git diff --check`; affected web coverage (**99 passed across 14 files**); full web
+suite (**1,390 passed across 240 files**); web ESLint, strict TypeScript, and production build.
+
 ### Minor Batch M18 — web shell, layout, and error consistency (web + tests + docs; NO API or contract change; NO migration [head stays `0080`]; NO new permission key [catalog 102]; PR [#398](https://github.com/CoJoA13/EasySynQ/pull/398))
 
 **What shipped.** All nine confirmed reports were re-located against the current shell, admin

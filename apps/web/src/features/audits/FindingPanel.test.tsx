@@ -45,7 +45,7 @@ test("a live NC renders badge + title + tags + the CAPA state chip + the deep-li
   expect(screen.getByText("Major NC")).toBeInTheDocument();
   expect(screen.getByText(/Supplier re-evaluation overdue/)).toBeInTheDocument();
   expect(screen.getByText("8.4")).toBeInTheDocument();
-  expect(screen.getByText(/CAPA: Root cause/)).toBeInTheDocument();
+  expect(screen.getByLabelText("CAPA state: Root cause")).toBeInTheDocument();
   expect(screen.getByRole("link", { name: /View CAPA/ })).toHaveAttribute(
     "href",
     "/capa?capa=ca000001-0001-0001-0001-000000000001",
@@ -62,7 +62,7 @@ test("the CAPA chip is omitted when capaState is undefined (capa.read degrade) â
       {...noRaise}
     />,
   );
-  expect(screen.queryByText(/CAPA:/)).toBeNull();
+  expect(screen.queryByLabelText(/CAPA state:/)).toBeNull();
   expect(screen.getByRole("link", { name: /View CAPA/ })).toBeInTheDocument();
 });
 

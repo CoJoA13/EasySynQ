@@ -1,11 +1,13 @@
 import { Badge, type MantineSize } from "@mantine/core";
+import type { ReactNode } from "react";
 import { TONE_GLYPH, type Tone } from "./status";
 
 // The single status pill for the whole SPA. Status is NEVER colour-only (DP-5 / doc-11 DP-7): the
 // `tone` drives an AA-tuned --es-*-soft / --es-*-text token pair (via the variant="status" resolver in
 // theme/mantine.ts — light + dark come free), the glyph adds a non-colour channel, and the caller's
-// `label` carries the meaning. `glyph` defaults to the canonical glyph for the tone; an explicit glyph
-// overrides it. `kind` prefixes the accessible name (e.g. "State: Effective", "Coverage: Gap").
+// `label` carries the meaning. `glyph` defaults to the canonical glyph for the tone; an explicit text
+// or domain icon overrides it. `kind` prefixes the accessible name (e.g. "State: Effective",
+// "Coverage: Gap").
 export function StatusBadge({
   tone,
   label,
@@ -15,7 +17,7 @@ export function StatusBadge({
 }: {
   tone: Tone;
   label: string;
-  glyph?: string;
+  glyph?: ReactNode;
   kind?: string;
   size?: MantineSize;
 }) {

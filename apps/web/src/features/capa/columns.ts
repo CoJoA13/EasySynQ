@@ -63,3 +63,16 @@ export const CLOSE_STATE_LABEL: Record<CapaCloseState, string> = {
   Closed: "Closed",
   Rejected: "Rejected",
 };
+
+// Lifecycle state is distinct from CAPA health: every live phase is informational/in progress,
+// while the two terminal outcomes carry their own success/failure semantics.
+export const CLOSE_STATE_TONE: Record<CapaCloseState, Tone> = {
+  Raised: "info",
+  Containment: "info",
+  RootCause: "info",
+  ActionPlan: "info",
+  Implement: "info",
+  Verify: "info",
+  Closed: "success",
+  Rejected: "danger",
+};

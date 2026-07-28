@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { http, HttpResponse } from "msw";
 import { expect, test } from "vitest";
+import { TONE_GLYPH } from "../../lib/status";
 import { server } from "../../test/msw/server";
 import { renderWithProviders } from "../../test/render";
 import { NcrsPage } from "./NcrsPage";
@@ -23,6 +24,7 @@ test("lists NCRs from {data} with friendly source labels", async () => {
   expect(await screen.findByText("NCR-000052")).toBeInTheDocument();
   const row = screen.getByRole("row", { name: /NCR-000052/ });
   expect(within(row).getByText("Process")).toBeInTheDocument();
+  expect(within(row).getByLabelText("Severity: Major")).toHaveTextContent(TONE_GLYPH.warning);
   // Default /me/permissions is empty → no write affordances (negative-gating); the undisposed row
   // shows "Pending", not a "Record disposition" button.
   expect(screen.queryByRole("button", { name: /Raise NCR/ })).toBeNull();

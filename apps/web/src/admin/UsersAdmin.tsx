@@ -1,7 +1,6 @@
 import {
   ActionIcon,
   Alert,
-  Badge,
   Button,
   Drawer,
   Group,
@@ -18,6 +17,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { ApiError, apiGet, apiSend } from "../lib/api";
 import { ErrorState, LoadingState } from "../lib/states";
+import { UserStatusBadge } from "./UserStatusBadge";
 
 interface User {
   id: string;
@@ -43,14 +43,6 @@ interface Override {
   effect: string;
   scope: { level: string };
 }
-
-const STATUS_COLOR: Record<string, string> = {
-  ACTIVE: "teal",
-  INVITED: "blue",
-  DISABLED: "orange",
-  LOCKED: "red",
-  RETIRED: "gray",
-};
 
 // S8d: the Users admin roster — invite, enable/disable, and per-user role + override management
 // (reusing the shipped S2 grant endpoints + their two-tier guard). The Avery→Mara hand-off in-app.
@@ -126,9 +118,7 @@ export function UsersAdmin({ token }: { token: string | null }) {
               <Table.Td>{u.display_name ?? <Text c="dimmed">(no name)</Text>}</Table.Td>
               <Table.Td>{u.email ?? "—"}</Table.Td>
               <Table.Td>
-                <Badge variant="light" color={STATUS_COLOR[u.status] ?? "gray"}>
-                  {u.status}
-                </Badge>
+                <UserStatusBadge status={u.status} />
               </Table.Td>
               <Table.Td>
                 <Text size="sm">{u.roles.length ? u.roles.join(", ") : "—"}</Text>
