@@ -35,7 +35,7 @@ async def effective_definition(
                 WorkflowDefinition.org_id == org_id,
                 WorkflowDefinition.key == key,
                 WorkflowDefinition.subject_type == subject_type,
-                WorkflowDefinition.effective.is_(True),
+                WorkflowDefinition.is_effective.is_(True),
             )
         )
     ).scalar_one_or_none()

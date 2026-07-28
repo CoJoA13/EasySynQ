@@ -1340,7 +1340,7 @@ async def checkin_interested_party_register(
     return version
 
 
-async def checkin_mgmt_review_minutes(
+async def checkin_management_review_minutes(
     session: AsyncSession,
     sink: VaultAuditSink,
     actor: AppUser,

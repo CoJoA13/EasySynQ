@@ -1,7 +1,8 @@
 import { screen, waitFor } from "@testing-library/react";
+import { Route, Routes, useLocation } from "react-router-dom";
 import { expect, test, vi } from "vitest";
 import { renderWithProviders } from "./test/render";
-import { App } from "./App";
+import { App, LegacyImportRedirect } from "./App";
 
 test("operational app renders the shell + Library at /library", async () => {
   renderWithProviders(<App />, { route: "/library" });
@@ -31,15 +32,33 @@ test("operational app with no token bounces to sign-in (in-memory tokens, post-r
   expect(screen.queryByText("Document Library")).not.toBeInTheDocument();
 });
 
-test("the /ingestion route renders the runs landing", async () => {
-  renderWithProviders(<App />, { route: "/ingestion" });
+test("the /imports route renders the runs landing", async () => {
+  renderWithProviders(<App />, { route: "/imports" });
   expect(await screen.findByRole("heading", { name: "Import" })).toBeInTheDocument();
 });
 
-test("the /ingestion/:runId route renders the run page cockpit", async () => {
+test("the /imports/:runId route renders the run page cockpit", async () => {
   renderWithProviders(<App />, {
-    route: "/ingestion/10000000-0000-0000-0000-000000000001",
+    route: "/imports/10000000-0000-0000-0000-000000000001",
   });
   // the Proposed run fixture rests at the review cockpit (IngestionRunPage → ReviewCockpit)
   expect(await screen.findByRole("region", { name: "Review cockpit" })).toBeInTheDocument();
+});
+
+function LocationProbe() {
+  const { pathname, search } = useLocation();
+  return <div data-testid="location">{pathname + search}</div>;
+}
+
+test("legacy ingestion bookmarks redirect to imports and preserve the query", async () => {
+  const runId = "10000000-0000-0000-0000-000000000001";
+  renderWithProviders(
+    <Routes>
+      <Route path="/ingestion/:runId" element={<LegacyImportRedirect />} />
+      <Route path="/imports/:runId" element={<LocationProbe />} />
+    </Routes>,
+    { route: `/ingestion/${runId}?queue=high` },
+  );
+
+  expect(await screen.findByTestId("location")).toHaveTextContent(`/imports/${runId}?queue=high`);
 });

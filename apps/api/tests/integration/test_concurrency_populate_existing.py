@@ -200,7 +200,7 @@ async def test_compile_inputs_locks_against_concurrent_submit_freeze(
     not replace the frozen review_input set that approvers signed. Mutation-verify: without the
     locked populate_existing load it reads stale Draft from the identity map and re-compiles.
     """
-    from easysynq_api.services.mgmt_review.compile import compile_inputs
+    from easysynq_api.services.management_review.compile import compile_inputs
 
     subject = _subject("mr-drift")
     user_id = await _grant(subject, _MR_KEYS)

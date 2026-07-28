@@ -12,10 +12,10 @@ import { IngestionRunPage } from "./IngestionRunPage";
 const RID = ingestionRunFixture.id;
 const SECOND_RID = "b0000000-0000-0000-0000-000000000002";
 
-function renderPage(route = `/ingestion/${RID}`) {
+function renderPage(route = `/imports/${RID}`) {
   return renderWithProviders(
     <Routes>
-      <Route path="ingestion/:runId" element={<IngestionRunPage />} />
+      <Route path="imports/:runId" element={<IngestionRunPage />} />
     </Routes>,
     { route },
   );
@@ -25,14 +25,14 @@ function RunNavigationHarness() {
   const navigate = useNavigate();
   return (
     <>
-      <button type="button" onClick={() => navigate(`/ingestion/${RID}`)}>
+      <button type="button" onClick={() => navigate(`/imports/${RID}`)}>
         Go to run A
       </button>
-      <button type="button" onClick={() => navigate(`/ingestion/${SECOND_RID}`)}>
+      <button type="button" onClick={() => navigate(`/imports/${SECOND_RID}`)}>
         Go to run B
       </button>
       <Routes>
-        <Route path="ingestion/:runId" element={<RunRoute />} />
+        <Route path="imports/:runId" element={<RunRoute />} />
       </Routes>
     </>
   );
@@ -79,7 +79,7 @@ test("switching between cached runs remounts the cockpit and clears its prior fa
       ),
     ),
   );
-  renderWithProviders(<RunNavigationHarness />, { route: `/ingestion/${RID}` });
+  renderWithProviders(<RunNavigationHarness />, { route: `/imports/${RID}` });
   await screen.findByRole("tab", { name: /Needs decision/ });
 
   // Visit both runs once so their query results are cached; the second A → B switch should keep the

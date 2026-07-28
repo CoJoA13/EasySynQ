@@ -1,7 +1,7 @@
 import { Button, Container, Loader, Stack, Text } from "@mantine/core";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect } from "react";
-import { Navigate, Route, Routes } from "react-router-dom";
+import { Navigate, Route, Routes, useLocation, useParams } from "react-router-dom";
 import { SetupWizard } from "./SetupWizard";
 import { AppShell } from "./app/shell/AppShell";
 import { AdminShell } from "./admin/AdminShell";
@@ -46,6 +46,13 @@ import { NotificationSettingsPage } from "./features/notifications/NotificationS
 import { apiGet } from "./lib/api";
 import { useAuth } from "./lib/auth";
 import { useRouteChrome } from "./lib/routeChrome";
+
+export function LegacyImportRedirect() {
+  const { runId } = useParams();
+  const { search } = useLocation();
+  const target = runId ? `/imports/${encodeURIComponent(runId)}${search}` : `/imports${search}`;
+  return <Navigate to={target} replace />;
+}
 
 export function App() {
   useRouteChrome();
@@ -154,8 +161,10 @@ export function App() {
           <Route path="programme" element={<ProgrammePage />} />
         </Route>
         <Route path="audits/:id" element={<AuditDetailPage />} />
-        <Route path="ingestion" element={<IngestionRunsPage />} />
-        <Route path="ingestion/:runId" element={<IngestionRunPage />} />
+        <Route path="imports" element={<IngestionRunsPage />} />
+        <Route path="imports/:runId" element={<IngestionRunPage />} />
+        <Route path="ingestion" element={<LegacyImportRedirect />} />
+        <Route path="ingestion/:runId" element={<LegacyImportRedirect />} />
         <Route path="drift" element={<DriftLayout />}>
           <Route index element={<DriftStatusPage />} />
           <Route path="superseded-copies" element={<SupersededCopiesPage />} />

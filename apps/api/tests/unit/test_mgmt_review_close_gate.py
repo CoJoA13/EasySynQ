@@ -6,7 +6,7 @@ passes)."""
 
 from easysynq_api.db.models._mgmt_review_enums import ReviewOutputType
 from easysynq_api.db.models._workflow_enums import TaskState
-from easysynq_api.domain.mgmt_review.close_gate import output_blocks_close
+from easysynq_api.domain.management_review.close_gate import output_blocks_close
 
 
 def test_decision_never_blocks() -> None:

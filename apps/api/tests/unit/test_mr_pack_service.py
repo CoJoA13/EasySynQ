@@ -5,7 +5,7 @@ import uuid
 import pytest
 
 from easysynq_api.problems import ProblemException
-from easysynq_api.services.mgmt_review.pack import _signer_label, minutes_from_snapshot
+from easysynq_api.services.management_review.pack import _signer_label, minutes_from_snapshot
 
 
 def test_minutes_from_snapshot_returns_dict():

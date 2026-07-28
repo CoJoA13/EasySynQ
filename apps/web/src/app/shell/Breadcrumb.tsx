@@ -17,6 +17,7 @@ const LABELS: Record<string, string> = {
   programme: "Programme",
   dcrs: "Change requests",
   diff: "Visual diff",
+  imports: "Import",
   ingestion: "Import",
   drift: "Drift",
   "superseded-copies": "Superseded copies",

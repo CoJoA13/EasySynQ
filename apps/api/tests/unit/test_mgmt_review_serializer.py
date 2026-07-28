@@ -1,9 +1,9 @@
-"""S-mr-3: _mgmt_review includes a capabilities block only when one is passed (detail-only)."""
+"""The Management Review serializer adds capabilities only when supplied (detail-only)."""
 
 import datetime
 import uuid
 
-from easysynq_api.api.mgmt_review import _mgmt_review
+from easysynq_api.api.management_review import _management_review
 from easysynq_api.db.models._mgmt_review_enums import ManagementReviewCloseState
 from easysynq_api.db.models.management_review import ManagementReview
 
@@ -23,12 +23,12 @@ def _mr() -> ManagementReview:
 
 
 def test_capabilities_absent_when_none() -> None:
-    out = _mgmt_review(_mr(), identifier="MR-001", title="x", current_state="Effective")
+    out = _management_review(_mr(), identifier="MR-001", title="x", current_state="Effective")
     assert "capabilities" not in out
 
 
 def test_capabilities_present_when_passed() -> None:
-    out = _mgmt_review(
+    out = _management_review(
         _mr(),
         identifier="MR-001",
         title="x",

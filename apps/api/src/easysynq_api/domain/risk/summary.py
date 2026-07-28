@@ -13,7 +13,7 @@ Each frozen row's BAND grades against the GOVERNING version's per-method **froze
 (``resolve_criteria``), never a live module constant (R49 L2 derive-and-freeze) — so a code-level
 band-threshold edit can never re-grade an already-published register's summary. Every leaf is a JSON
 primitive (int/str/nested-dict-of-those) so the summary survives ``rfc8785.dumps`` at the minutes
-freeze (a Decimal/UUID/datetime leaf would TypeError there — the ``domain/mgmt_review/inputs``
+freeze (a Decimal/UUID/datetime leaf would TypeError there — the ``domain/management_review/inputs``
 discipline).
 """
 

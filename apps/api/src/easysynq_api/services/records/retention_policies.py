@@ -322,9 +322,9 @@ async def archive_policy(
             "system_policy_protected",
             "The sealed evidence-pack retention policy cannot be archived",
         )
-    if not policy.active:
+    if not policy.is_active:
         raise _conflict("already_archived", "Policy is already archived")
-    policy.active = False
+    policy.is_active = False
     policy.archived_at = _now()
     policy.archived_by = actor.id
     _emit(
@@ -351,9 +351,9 @@ async def unarchive_policy(
             "system_policy_protected",
             "The sealed evidence-pack retention policy is system-managed",
         )
-    if policy.active:
+    if policy.is_active:
         raise _conflict("not_archived", "Policy is not archived")
-    policy.active = True
+    policy.is_active = True
     policy.archived_at = None
     policy.archived_by = None
     _emit(

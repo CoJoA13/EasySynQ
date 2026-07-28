@@ -93,7 +93,7 @@ async def _seed_definition(
             org_id=org_id,
             key=key,
             version=1,
-            effective=True,
+            is_effective=True,
             subject_type=WorkflowSubjectType.CAPA,
             stages={"entry": entry or stages[0]["key"]},
             default_sla=default_sla,

@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ...db.models.app_user import AppUser
 from ...db.models.document_version import DocumentVersion
 from ...db.models.documented_information import DocumentedInformation
-from ...domain.mgmt_review.pack_render import render_minutes_pdf
+from ...domain.management_review.pack_render import render_minutes_pdf
 from ...problems import ProblemException
 from . import repository as repo
 

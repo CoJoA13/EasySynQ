@@ -191,7 +191,7 @@ def test_all_holiday_calendar_returns_input_unchanged():
 
 
 def test_action_due_at_builds_in_calendar_tz_not_env():
-    from easysynq_api.services.mgmt_review.spawn import _action_due_at
+    from easysynq_api.services.management_review.spawn import _action_due_at
 
     tokyo = zoneinfo.ZoneInfo("Asia/Tokyo")
     cal = Calendar({1, 2, 3, 4, 5}, frozenset(), tokyo)
@@ -203,7 +203,7 @@ def test_action_due_at_builds_in_calendar_tz_not_env():
 
 
 def test_action_due_at_weekend_snaps_and_none_passthrough():
-    from easysynq_api.services.mgmt_review.spawn import _action_due_at
+    from easysynq_api.services.management_review.spawn import _action_due_at
 
     cal = Calendar({1, 2, 3, 4, 5}, frozenset(), zoneinfo.ZoneInfo("UTC"))
     out = _action_due_at(_D(2026, 6, 27), cal)  # Saturday → Monday

@@ -23,21 +23,21 @@ function grantExecute() {
   );
 }
 
-// Render the page under a sentinel route so a navigate('/ingestion/<id>') is observable.
-function renderPage(route = "/ingestion") {
+// Render the page under a sentinel route so a navigate('/imports/<id>') is observable.
+function renderPage(route = "/imports") {
   return renderWithProviders(
     <Routes>
-      <Route path="/ingestion" element={<IngestionRunsPage />} />
-      <Route path="/ingestion/:runId" element={<div>RUN PAGE</div>} />
+      <Route path="/imports" element={<IngestionRunsPage />} />
+      <Route path="/imports/:runId" element={<div>RUN PAGE</div>} />
     </Routes>,
     { route },
   );
 }
 
-test("renders the fixture run with its source_root, a status badge, and a link to /ingestion/<id>", async () => {
+test("renders the fixture run with its source_root, a status badge, and a link to /imports/<id>", async () => {
   renderPage();
   const link = await screen.findByRole("link", { name: /legacy-qms-share/ });
-  expect(link).toHaveAttribute("href", `/ingestion/${RID}`);
+  expect(link).toHaveAttribute("href", `/imports/${RID}`);
   expect(screen.getByLabelText("Run status: Proposed")).toBeInTheDocument();
 });
 

@@ -72,7 +72,7 @@ def _view(policy: RetentionPolicy) -> dict[str, Any]:
         "disposition_action": policy.disposition_action.value,
         "review_required": policy.review_required,
         "worm_lock_period": policy.worm_lock_period,
-        "active": policy.active,
+        "active": policy.is_active,
         "archived_at": _iso(policy.archived_at),
         "archived_by": str(policy.archived_by) if policy.archived_by else None,
         "created_at": _iso(policy.created_at),

@@ -1,9 +1,10 @@
 """Pure reportlab (Platypus) render of a Management Review's filed minutes -> a table-styled PDF.
 
 S-mr-pack. NO DB / NO IO / NO ProblemException - the caller
-(services/mgmt_review/pack.build_minutes_pdf) gathers the frozen minutes snapshot + resolved user
-names + the version's sign-off signatures and passes plain data in. Deterministic via an invariant
-canvasmaker (the PDF /ID + metadata are fixed) so a given released MR renders byte-identical - no
+(services/management_review/pack.build_minutes_pdf) gathers the frozen minutes snapshot + resolved
+user names + the version's sign-off signatures and passes plain data in. Deterministic via an
+invariant canvasmaker (the PDF /ID + metadata are fixed) so a given released MR renders
+byte-identical - no
 Date.now(), only stored values. Defensive on the free-form source_ref / attendee shapes (never
 raises on an unexpected JSON shape)."""
 

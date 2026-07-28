@@ -63,12 +63,14 @@ class RetentionPolicy(Base):
     # S-rec-4 (doc 06 §5.1, doc 15 §8.16): soft-archive. A hard DELETE is blocked by 3 RESTRICT FKs
     # (record / document_type / disposition_event), so retirement = ``active=false``. An archived
     # policy stops auto-attaching to NEW captures (the resolver's record_type/clause/process tiers
-    # filter ``active``), but records already pinned to it keep being swept (``due_active_records``
-    # joins by id, no active filter) — so "archive + create a shorter policy" is the spec's
-    # shorten-retention-for-future-only workflow (doc 06 §5.2, the one-way ratchet). The seeded
-    # System Default is never archivable.
-    active: Mapped[bool] = mapped_column(
-        Boolean, server_default=text("true"), default=True, nullable=False
+    # filter ``is_active``), but records already pinned to it keep being swept
+    # (``due_active_records`` joins by id, no active filter) — so "archive + create a shorter
+    # policy" is the spec's shorten-retention-for-future-only workflow (doc 06 §5.2, the one-way
+    # ratchet). The seeded System Default is never archivable.
+    # The Python attribute follows the predicate-style convention; the database and API continue
+    # to expose the stable ``active`` name.
+    is_active: Mapped[bool] = mapped_column(
+        "active", Boolean, server_default=text("true"), default=True, nullable=False
     )
     archived_at: Mapped[datetime.datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True

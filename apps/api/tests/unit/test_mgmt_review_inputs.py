@@ -12,7 +12,7 @@ import datetime
 
 import rfc8785
 
-from easysynq_api.domain.mgmt_review.inputs import (
+from easysynq_api.domain.management_review.inputs import (
     summarize_audits,
     summarize_capas_ncrs,
     summarize_kpis,

@@ -13,7 +13,7 @@ Unlike the risk register, clause 4.1 has **no computed/graded axis** (``classifi
 ``category`` / ``status`` are categorical user inputs, not a derived band) — so there is no
 ``criteria`` resolve, the projection is purely categorical counts. Every leaf is a JSON primitive
 (int) so the summary survives ``rfc8785.dumps`` if a consumer freezes it (the
-``domain/mgmt_review/inputs`` / ``domain/risk/summary`` discipline)."""
+``domain/management_review/inputs`` / ``domain/risk/summary`` discipline)."""
 
 from __future__ import annotations
 

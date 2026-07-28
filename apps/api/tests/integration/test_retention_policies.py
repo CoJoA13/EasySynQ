@@ -293,7 +293,7 @@ async def test_lazy_pack_policy_ensure_preserves_a_user_name_collision(
                 disposition_action=DispositionAction.DESTROY,
                 review_required=True,
                 worm_lock_period="P5Y",
-                active=True,
+                is_active=True,
             )
             s.add(legacy)
             await s.flush()

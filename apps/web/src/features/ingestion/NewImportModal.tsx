@@ -6,7 +6,7 @@ import { useCreateImportRun } from "./hooks";
 
 // The New-Import form (D-1): a typed source_root within the configured import mount (no directory
 // picker — §10), an OCR toggle, and an optional profile. On 202 we hand the new run id up to the
-// page controller (it then routes to /ingestion/:runId and polls ScanProgress). A 409 (a scan is
+// page controller (it then routes to /imports/:runId and polls ScanProgress). A 409 (a scan is
 // already active) or a 422 (bad/escaping source root) is a calm inline message read from
 // ApiError.message (the RFC 9457 detail/title) — never a red toast or a thrown stack (DP-6).
 export function NewImportModal({
@@ -57,7 +57,13 @@ export function NewImportModal({
         : null;
 
   return (
-    <Modal opened={opened} onClose={close} title="New import" size="lg" closeButtonProps={{ "aria-label": "Close new import dialog" }}>
+    <Modal
+      opened={opened}
+      onClose={close}
+      title="New import"
+      size="lg"
+      closeButtonProps={{ "aria-label": "Close new import dialog" }}
+    >
       <Stack gap="md">
         <TextInput
           data-autofocus

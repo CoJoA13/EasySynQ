@@ -32,7 +32,7 @@ from ..workflow import repository as wf_repo
 _ALLOWED_MR_ACTION_OUTCOMES = {"complete"}
 
 
-async def decide_mr_task(
+async def decide_management_review_task(
     session: AsyncSession,
     task: Task,
     actor: AppUser,

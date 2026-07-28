@@ -177,6 +177,53 @@
 
 ## REMEDIATION — correctness, accessibility, polish & test reliability
 
+### Minor Batch M15 — cross-stack naming without contract churn (API + web + tests + docs; NO migration [head stays `0080`]; NO new permission key [catalog 102]; PR [#395](https://github.com/CoJoA13/EasySynQ/pull/395))
+
+**What shipped.** All four finder-only reports were re-located against current API, ORM, browser,
+event, permission, and persistence contracts. Three are confirmed at layers that can be corrected
+without compatibility breakage; the register-family pluralization report is rejected because its
+three names already describe different grammatical concepts rather than one drifting collection
+convention.
+
+The Management Review Python namespace is now consistently `management_review`: the API module,
+domain and service packages, worker module, router alias, serializers, cadence/decision helpers,
+vault helper, and `SystemConfig` attributes all use the full domain name. This is intentionally an
+internal rename. The seeded `mgmtReview.*` permission family, `mr.*` topics, `mgmt_review`
+enum/workflow/metadata values, physical configuration columns, logging identifiers, and registered
+Celery task name remain byte-for-byte stable. Historical migration imports and test-module names
+also remain intact.
+
+Boolean mapper attributes now follow the existing predicate convention:
+`WorkflowDefinition.is_effective`, `RetentionPolicy.is_active`, and `SlaPolicy.is_active`. Each
+mapper explicitly pins its old physical `effective` or `active` column, retaining the workflow
+partial index and the retention-policy API's `active` field. A focused mapper test proves the
+Python-to-physical-name pairs, and the populated migration-coherence run (including
+`alembic check`) proves there is no schema drift.
+
+The Import resource now owns the canonical browser URLs `/imports` and `/imports/{runId}` along
+with the rail link, in-app links, breadcrumbs, browser title, and route tests. The former
+`/ingestion` paths are compatibility redirects that preserve both the run id and query string.
+`features/ingestion` remains the accurate implementation name for the ingestion pipeline; API
+design documentation now states that layering explicitly. The risk/context/interested-party
+finding receives no churn: singular `risk`, mass-noun `context`, and plural `interested_parties`
+are coherent bounded-context packages, while `/risks`, `/context`, and `/interested-parties` are
+the grammatically appropriate stable routes.
+
+**Impact.** No migration, public API route or payload, permission key, event topic, database name,
+or worker task-name change. Python callers get consistent full Management Review and predicate
+attribute names; browser users get one Import vocabulary and old bookmarks keep working. The
+remediation tracker advances M14 to merged, closes all four M15 findings, and preserves the
+original denominator: 1 preclosed + 50 merged + 4 in PR + 49 queued.
+
+**Validation.** `git diff --check`; full API Ruff + format; API mypy (**426 source files**); full
+API unit suite (**1187 passed, 1 expected release-only skip**); populated migration coherence
+(**1 passed**, includes `alembic check`); Management Review cadence integration (**2 passed**);
+affected workflow/retention/notification integration (**76 passed**); focused web route/shell/
+ingestion coverage (**64 passed**); web lint, TypeScript, and production build. Two pre-existing
+pack-upload integration cases were not counted because their testcontainer-generated MinIO URL
+was unreachable from this local execution environment; the remaining three tests in that module
+passed, and CI retains authoritative container-network coverage.
+
 ### Minor Batch M14 — infrastructure, deploy, and public-edge hardening (env + web image + Compose + Caddy + tests + runbook; NO migration [head stays `0080`]; NO new permission key [catalog 102]; PR [#394](https://github.com/CoJoA13/EasySynQ/pull/394))
 
 **What shipped.** All six finder-only reports were re-located against current deployment source.
