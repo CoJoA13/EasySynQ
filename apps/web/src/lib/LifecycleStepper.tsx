@@ -1,4 +1,4 @@
-import { Box, Stack, Text } from "@mantine/core";
+import { Box, Stack, Text, VisuallyHidden } from "@mantine/core";
 import { TONE_GLYPH } from "./status";
 
 export type LifecycleStepStatus = "done" | "current" | "pending" | "rejected";
@@ -15,6 +15,13 @@ const MARK: Record<LifecycleStepStatus, string> = {
   current: TONE_GLYPH.info,
   pending: TONE_GLYPH.neutral,
   rejected: TONE_GLYPH.danger,
+};
+
+const STATUS_LABEL: Record<LifecycleStepStatus, string> = {
+  done: "Completed",
+  current: "Current",
+  pending: "Pending",
+  rejected: "Rejected",
 };
 
 const MARK_STYLE: Record<
@@ -90,6 +97,7 @@ export function LifecycleStepper({
             {MARK[step.status]}
           </Box>
           <Box>
+            <VisuallyHidden>Status: {STATUS_LABEL[step.status]}</VisuallyHidden>
             <Text fw={step.status === "current" ? 700 : 600} size="sm">
               {step.label}
             </Text>

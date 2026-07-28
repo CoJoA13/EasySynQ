@@ -27,6 +27,10 @@ it("renders one accessible, token-driven treatment for every lifecycle status", 
     "data-lifecycle-status",
     "rejected",
   );
+  expect(screen.getByText("Status: Completed")).not.toHaveAttribute("aria-hidden");
+  expect(screen.getByText("Status: Current")).not.toHaveAttribute("aria-hidden");
+  expect(screen.getByText("Status: Pending")).not.toHaveAttribute("aria-hidden");
+  expect(screen.getByText("Status: Rejected")).not.toHaveAttribute("aria-hidden");
 
   const done = container.querySelector('[data-lifecycle-marker="done"]');
   const current = container.querySelector('[data-lifecycle-marker="current"]');

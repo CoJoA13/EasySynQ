@@ -25,7 +25,6 @@ export function SearchResultRow({ hit }: { hit: SearchHit }) {
               component={Link}
               to={`/library?clause=${encodeURIComponent(c)}`}
               underline="never"
-              aria-label={`Clause ${c}`}
             >
               <ClauseBadge clause={c} />
             </Anchor>

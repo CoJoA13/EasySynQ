@@ -12,13 +12,15 @@ it("uses one outlined, accessible treatment and preserves mandatory meaning", as
     </>,
   );
 
-  const regular = screen.getByLabelText("Clause 8.4");
-  const mandatory = screen.getByLabelText("Clause 7.5.3, mandatory");
+  const regularText = screen.getByText("Clause 8.4");
+  const mandatoryText = screen.getByText("Clause 7.5.3, mandatory");
+  const regular = regularText.closest("[data-clause-badge]");
+  const mandatory = mandatoryText.closest("[data-clause-badge]");
   expect(regular).toHaveAttribute("data-variant", "outline");
   expect(regular).toHaveAttribute("data-clause-badge");
-  expect(regular).toHaveTextContent("8.4");
+  expect(regularText).not.toHaveAttribute("aria-hidden");
   expect(mandatory).toHaveAttribute("data-variant", "outline");
-  expect(mandatory).toHaveTextContent("★ 7.5.3");
-  expect(mandatory.querySelector('[aria-hidden="true"]')).toHaveTextContent("★");
+  expect(mandatoryText).not.toHaveAttribute("aria-hidden");
+  expect(mandatory?.querySelector('[aria-hidden="true"]')).toHaveTextContent("★ 7.5.3");
   expect(await axe(container)).toHaveNoViolations();
 });
