@@ -177,7 +177,7 @@
 
 ## REMEDIATION — correctness, accessibility, polish & test reliability
 
-### Minor Batch M20 — web visual tokens and semantics (web + tests + docs; NO API or contract change; NO migration [head stays `0080`]; NO new permission key [catalog 102]; PR pending)
+### Minor Batch M20 — web visual tokens and semantics (web + tests + docs; NO API or contract change; NO migration [head stays `0080`]; NO new permission key [catalog 102]; PR [#400](https://github.com/CoJoA13/EasySynQ/pull/400))
 
 **What shipped.** All six confirmed reports were re-located against the current CAPA, audit,
 document-approval, compliance, ingestion, risk, search, library, and register surfaces; all six
@@ -199,7 +199,7 @@ register mappings retain the star with an explicit “mandatory” name.
 **Impact.** Web behavior, Vitest coverage, and remediation documentation only; no API route,
 contract, database schema, migration, permission, event, persistence, or task-name change. The
 remediation tracker advances M19 to merged, closes all six M20 findings, and preserves the original
-denominator: 1 preclosed + 82 merged + 6 ready for PR + 15 queued.
+denominator: 1 preclosed + 82 merged + 6 in PR + 15 queued.
 
 **Validation.** `git diff --check`; affected web coverage (**68 passed across 11 files**); full web
 suite (**1,393 passed across 242 files**); web ESLint, strict TypeScript, and production build.

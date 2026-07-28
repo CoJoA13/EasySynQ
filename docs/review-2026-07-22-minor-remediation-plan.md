@@ -47,11 +47,11 @@
 | M17 | Test false-PASS traps | 3 | ☑ merged | [#397](https://github.com/CoJoA13/EasySynQ/pull/397) |
 | M18 | Web shell, layout, and error consistency | 9 | ☑ merged | [#398](https://github.com/CoJoA13/EasySynQ/pull/398) |
 | M19 | Web state and badge consistency | 9 | ☑ merged | [#399](https://github.com/CoJoA13/EasySynQ/pull/399) |
-| M20 | Web visual tokens and semantics | 6 | ☑ ready for PR | pending |
+| M20 | Web visual tokens and semantics | 6 | ☑ in PR | [#400](https://github.com/CoJoA13/EasySynQ/pull/400) |
 | M21 | Web async and error UX | 8 | ☐ queued — revalidate | — |
 | M22 | Web accessibility | 7 | ☐ queued — revalidate | — |
 
-**Accounting: 1 preclosed + 82 merged + 6 ready for PR + 15 queued = 104 original findings.**
+**Accounting: 1 preclosed + 82 merged + 6 in PR + 15 queued = 104 original findings.**
 
 ---
 
@@ -558,7 +558,7 @@ migration, or new permission key
   and its contrast fails in both schemes `[C]` (fixed: confirmed Document/Record kinds use the
   AA-paired `StatusBadge` treatment while retaining their existing inline SVG domain icons).
 
-### ☑ M20 — Web visual tokens and semantics
+### ☑ M20 — Web visual tokens and semantics — [#400](https://github.com/CoJoA13/EasySynQ/pull/400)
 
 `branch: fix/minor-web-visual-tokens` · web + accessibility-focused vitest
 
