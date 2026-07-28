@@ -45,7 +45,7 @@
 | M15 | Cross-stack naming | 4 | ☑ merged | [#395](https://github.com/CoJoA13/EasySynQ/pull/395) |
 | M16 | UI copy and terminology | 7 | ☑ merged | [#396](https://github.com/CoJoA13/EasySynQ/pull/396) |
 | M17 | Test false-PASS traps | 3 | ☑ merged | [#397](https://github.com/CoJoA13/EasySynQ/pull/397) |
-| M18 | Web shell, layout, and error consistency | 9 | ☑ in PR | — |
+| M18 | Web shell, layout, and error consistency | 9 | ☑ in PR | [#398](https://github.com/CoJoA13/EasySynQ/pull/398) |
 | M19 | Web state and badge consistency | 9 | ☐ queued — revalidate | — |
 | M20 | Web visual tokens and semantics | 6 | ☐ queued — revalidate | — |
 | M21 | Web async and error UX | 8 | ☐ queued — revalidate | — |
@@ -490,7 +490,7 @@ migration, or new permission key
 
 ## Web consistency and usability
 
-### ☑ M18 — Web shell, layout, and error consistency
+### ☑ M18 — Web shell, layout, and error consistency — [#398](https://github.com/CoJoA13/EasySynQ/pull/398)
 
 `branch: fix/minor-web-shell-layout` · web + vitest
 

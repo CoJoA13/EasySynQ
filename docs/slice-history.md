@@ -177,7 +177,7 @@
 
 ## REMEDIATION — correctness, accessibility, polish & test reliability
 
-### Minor Batch M18 — web shell, layout, and error consistency (web + tests + docs; NO API or contract change; NO migration [head stays `0080`]; NO new permission key [catalog 102])
+### Minor Batch M18 — web shell, layout, and error consistency (web + tests + docs; NO API or contract change; NO migration [head stays `0080`]; NO new permission key [catalog 102]; PR [#398](https://github.com/CoJoA13/EasySynQ/pull/398))
 
 **What shipped.** All nine confirmed reports were re-located against the current shell, admin
 drawers, register states, and feature layouts; all nine remained live. Role-detail accordions and
