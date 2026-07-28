@@ -9,6 +9,7 @@ install runbook). A regression/typo here fails the ``api`` job's ``pytest -m uni
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 
@@ -54,3 +55,25 @@ def test_strict_static_csp_present_with_required_directives() -> None:
     assert "script-src 'self' 'unsafe-inline'" not in text
     assert "script-src 'self';" in text  # script-src is strictly 'self'
     assert "style-src 'self' 'unsafe-inline'" in text  # the documented style-only fallback
+
+
+def test_public_api_html_has_dedicated_csp_and_frame_denial() -> None:
+    text = _caddyfile()
+    matcher = "@public_html path /api/v1/verify /api/v1/evidence-packs/shared"
+    assert matcher in text
+    assert text.index("handle @public_html") < text.index("handle @api")
+
+    match = re.search(r"handle @public_html \{\n(?P<body>.*?)\n\t\}", text, flags=re.DOTALL)
+    assert match is not None
+    block = match.group("body")
+    for directive in (
+        "default-src 'none'",
+        "style-src 'unsafe-inline'",
+        "object-src 'none'",
+        "base-uri 'none'",
+        "form-action 'none'",
+        "frame-ancestors 'none'",
+    ):
+        assert directive in block, f"public HTML CSP missing: {directive}"
+    assert 'X-Frame-Options "DENY"' in block
+    assert 'Referrer-Policy "no-referrer"' in block
