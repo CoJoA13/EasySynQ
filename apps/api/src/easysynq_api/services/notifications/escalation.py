@@ -523,7 +523,7 @@ async def sweep_task_timers(
         try:
             async with sessionmaker() as session:
                 steps = await process_task_timers(session, task_id=task_id, now=now)
-        except Exception:  # noqa: BLE001 — one task's failure must not wedge the sweep
+        except Exception:  # one task's failure must not wedge the sweep
             logger.warning(
                 "notifications.timer_task_failed",
                 exc_info=True,

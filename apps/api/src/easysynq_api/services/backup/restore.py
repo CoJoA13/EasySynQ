@@ -167,7 +167,7 @@ def _off_host_buckets(settings: Settings, org_id: uuid.UUID) -> list[str]:
                 bucket = (connection or {}).get("bucket")
                 if bucket:
                     buckets.add(bucket)
-    except Exception:  # noqa: BLE001 — best-effort; always falls back to the default bucket
+    except Exception:  # best-effort; always falls back to the default bucket
         logger.warning("restore: off-host sink bucket lookup failed", exc_info=True)
     return sorted(buckets)
 
@@ -200,7 +200,7 @@ def _default_fetch_off_host(settings: Settings, org_id: uuid.UUID) -> int | None
                         value = int(head)
                         best = value if best is None else max(best, value)
         return best
-    except Exception:  # noqa: BLE001 — an unreachable off-host anchor is UNVERIFIABLE, not a crash
+    except Exception:  # an unreachable off-host anchor is UNVERIFIABLE, not a crash
         logger.warning("restore: off-host checkpoint fetch failed", exc_info=True)
         return None
 
@@ -319,7 +319,7 @@ def _sweep_stale_restore(owner_dsn: str) -> None:
                 cur.execute(
                     sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(sql.Identifier(name))
                 )
-    except Exception:  # noqa: BLE001 — best-effort cleanup must not fail the restore
+    except Exception:  # best-effort cleanup must not fail the restore
         logger.warning("restore: stale-target sweep skipped", exc_info=True)
 
 
@@ -485,11 +485,11 @@ def run_restore(
         if handle is not None and not keep_standing:
             try:
                 drill._drop_scratch_db(owner_dsn, scratch_db)
-            except Exception:  # noqa: BLE001 — best-effort teardown
+            except Exception:  # best-effort teardown
                 logger.warning("restore: scratch DB teardown failed", exc_info=True)
             try:
                 drill._delete_scratch_objects(settings, handle.scratch_bucket, handle.object_prefix)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 logger.warning("restore: scratch bucket teardown failed", exc_info=True)
 
 
@@ -502,5 +502,5 @@ def discard_target(settings: Settings, scratch_db: str) -> None:
     prefix = scratch_db.removeprefix(_RESTORE_PREFIX) + "/"
     try:
         drill._delete_scratch_objects(settings, settings.s3_bucket_restore_scratch, prefix)
-    except Exception:  # noqa: BLE001 — best-effort object cleanup must not fail the discard
+    except Exception:  # best-effort object cleanup must not fail the discard
         logger.warning("restore: discard scratch-object cleanup failed", exc_info=True)

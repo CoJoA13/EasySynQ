@@ -143,7 +143,7 @@ def _sweep_stale_scratch(owner_dsn: str) -> None:
                 cur.execute(
                     sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(sql.Identifier(name))
                 )
-    except Exception:  # noqa: BLE001 — best-effort cleanup; a sweep failure must not fail the drill
+    except Exception:  # best-effort cleanup; a sweep failure must not fail the drill
         logger.warning("restore-drill: stale-scratch sweep skipped", exc_info=True)
 
 
@@ -163,7 +163,7 @@ def _sweep_stale_verify(owner_dsn: str) -> None:
                 cur.execute(
                     sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(sql.Identifier(name))
                 )
-    except Exception:  # noqa: BLE001 — best-effort cleanup; a sweep failure must not fail the verify
+    except Exception:  # best-effort cleanup; a sweep failure must not fail the verify
         logger.warning("retained-verify: stale-verify sweep skipped", exc_info=True)
 
 
@@ -323,7 +323,7 @@ def _latest_checkpoint_bundle(owner_dsn: str) -> bytes | None:
                     ),
                 }
             ).encode()
-    except Exception:  # noqa: BLE001 — best-effort; a checkpoint bundle is reference-only
+    except Exception:  # best-effort; a checkpoint bundle is reference-only
         logger.warning("backup: audit-checkpoint bundle read failed", exc_info=True)
         return None
 
@@ -369,7 +369,7 @@ def build_durable_backup(settings: Settings, *, destination: str) -> dict[str, A
                     config_snapshot.build_config_snapshot(owner_dsn), sort_keys=True
                 ).encode()
                 legs["config_snapshot"] = "present"
-            except Exception:  # noqa: BLE001 — snapshot is reference-only; never block the backup
+            except Exception:  # snapshot is reference-only; never block the backup
                 logger.warning("backup: config snapshot failed", exc_info=True)
         else:
             logger.warning(
@@ -502,11 +502,11 @@ def run_drill(
         if handle is not None:
             try:
                 _drop_scratch_db(owner_dsn, scratch_db)
-            except Exception:  # noqa: BLE001 — best-effort teardown
+            except Exception:  # best-effort teardown
                 logger.warning("restore-drill: scratch DB teardown failed", exc_info=True)
             try:
                 _delete_scratch_objects(settings, handle.scratch_bucket, handle.object_prefix)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 logger.warning("restore-drill: scratch bucket teardown failed", exc_info=True)
 
 
@@ -661,9 +661,9 @@ def verify_retained_archive(
         if handle is not None:
             try:
                 _drop_scratch_db(owner_dsn, scratch_db)
-            except Exception:  # noqa: BLE001 — best-effort teardown
+            except Exception:  # best-effort teardown
                 logger.warning("retained-verify: scratch DB teardown failed", exc_info=True)
             try:
                 _delete_scratch_objects(settings, handle.scratch_bucket, handle.object_prefix)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 logger.warning("retained-verify: scratch bucket teardown failed", exc_info=True)

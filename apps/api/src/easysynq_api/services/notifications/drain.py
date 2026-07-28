@@ -110,7 +110,7 @@ async def drain_once(
             try:
                 await _emit_failure(session, row)
                 await session.commit()
-            except Exception:  # noqa: BLE001
+            except Exception:
                 logger.warning(
                     "notification.emit_failure_failed",
                     exc_info=True,

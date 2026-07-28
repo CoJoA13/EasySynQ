@@ -64,5 +64,5 @@ async def record_awareness_event(
         if _is_serialization_error(exc):
             raise  # SERIALIZABLE conflict — let _cutover's _is_race_loss produce the clean 409
         logger.warning("awareness.record_failed", exc_info=True, extra={"event_key": event_key})
-    except Exception:  # noqa: BLE001 — best-effort: awareness must never block a release
+    except Exception:  # best-effort: awareness must never block a release
         logger.warning("awareness.record_failed", exc_info=True, extra={"event_key": event_key})

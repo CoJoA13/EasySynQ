@@ -240,7 +240,7 @@ async def send_operator_alert(settings: Settings, alert: OperatorAlert) -> dict[
     for name in channels:
         try:
             results[name] = await senders[name](settings, alert)
-        except Exception:  # noqa: BLE001 — one dead channel must not suppress the others
+        except Exception:  # one dead channel must not suppress the others
             results[name] = FAILED
             logger.warning(
                 "ops_alert.channel_failed",

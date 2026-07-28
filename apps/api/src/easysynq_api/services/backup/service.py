@@ -131,7 +131,7 @@ async def _report_backup_failure(
                 session, org_id=org_id, destination=destination, error=error, now=now
             )
             await session.commit()
-    except Exception:  # noqa: BLE001 — reporting must never abort the sweep or mask the real error
+    except Exception:  # reporting must never abort the sweep or mask the real error
         logger.warning(
             "backup.failure_report_failed",
             exc_info=True,

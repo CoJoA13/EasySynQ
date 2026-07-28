@@ -163,7 +163,7 @@ async def _emit_admin_alert(
                     },
                 )
             return created
-    except Exception:  # noqa: BLE001 — an alarm-notification failure must never lose the audit row
+    except Exception:  # an alarm-notification failure must never lose the audit row
         logger.warning(
             "notifications.ops_event_emit_failed",
             exc_info=True,

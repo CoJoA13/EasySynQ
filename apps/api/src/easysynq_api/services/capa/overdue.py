@@ -228,7 +228,7 @@ async def sweep_capa_overdue(
     for capa_id in ids:
         try:
             n = await _process_one(sessionmaker, capa_id, now, today)
-        except Exception:  # noqa: BLE001 — one CAPA's failure must not wedge the sweep
+        except Exception:  # one CAPA's failure must not wedge the sweep
             logger.warning(
                 "capa.overdue_failed",
                 exc_info=True,
