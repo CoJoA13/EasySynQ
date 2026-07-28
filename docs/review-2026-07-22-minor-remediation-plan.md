@@ -364,11 +364,14 @@ permission key
   instance/approval reads, state their real self/candidate or subject-derived gates, identify
   `assignee` as an ignored compatibility parameter, preserve the key-independent sentinel replay
   contract for auto-skipped tasks, keep notification preferences in the resource inventory, and
-  record definitions and manual task mutations as non-public/deferred).
+  record definitions and manual task mutations as non-public/deferred. PR review also moved the
+  future-only `/dashboards/my-work` aggregation—and its nonexistent `dashboard.read` key—out of
+  the shipped endpoint inventory; `/tasks` remains the shipped work queue).
 - [x] `docs/15-api-design.md:339` — names absent permission keys on never-built delete/folder
   routes `[C]` (fixed: identify `folder_path` as a logical document scope value with no entity,
   router, or `folder.*` keys; remove the nonexistent document DELETE/`document.delete`, while
-  retaining `document.delete_draft` only as a seeded route-less policy seam).
+  retaining `document.delete_draft` only as a seeded route-less policy seam, and correct both
+  duplicated check-in inventory rows to the handler's `document.edit` gate).
 
 ### ☐ M14 — Infrastructure, deploy, and public edge
 

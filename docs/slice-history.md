@@ -195,7 +195,8 @@ or `folder.read/create/update/delete` catalog family. The nonexistent
 `DELETE /documents/{id}`/`document.delete` pair is gone as well: released content is obsoleted and
 retained, while seeded `document.delete_draft` remains explicitly route-less. The touched document
 rows also use the single `documented_information(kind=DOCUMENT)` root, the published list filters,
-the real detail affordance payload, and the `document.edit` check-in gate.
+the real detail affordance payload, and the `document.edit` check-in gate in both duplicated
+document/version catalog entries.
 
 The workflow inventory now exposes only the implemented task list/detail/decision and workflow
 instance/document-approval reads. `workflow_definition` remains versioned internal data with no
@@ -206,6 +207,9 @@ behavior rather than a public task reassignment/state API. Recorded decisions re
 matching non-null idempotency key, while quorum/fail-closed siblings carry internal skip sentinels
 and return key-independent benign no-op replays. The resource catalog retains the shipped
 notification inbox/stream/preferences surface and its `notification_preference` backing entity.
+The shipped report inventory now contains only the two real `/reports` reads; the nonexistent
+`/dashboards/my-work`/`dashboard.read` pair and neighboring dashboard/report design ideas are
+explicitly future-only, while `/tasks` remains the shipped work queue.
 Finally, the complaint/NCR chapter preserves the implemented idempotent complaint→CAPA operation:
 the first create returns 201, while a replay returns 200 only after `capa.read` succeeds at the
 latched CAPA's own process scope (otherwise 403). It removes the never-built complaint→NCR and

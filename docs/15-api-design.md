@@ -229,7 +229,7 @@ Every authenticated route declares (a) the **required permission key(s)** (from 
 | Improvement Initiatives | `/improvement-initiatives` | `improvement_initiative`, `improvement_initiative_stage_event` |
 | Audit Trail | `/audit-events`, `/{resource}/{id}/audit-events` | `audit_event`, `audit_checkpoint` |
 | Search | `/search` | OpenSearch (Postgres-FTS fallback) |
-| Dashboards / Reports | `/dashboards/*`, `/reports/*` | aggregates |
+| Reports | `/reports/compliance-checklist`, `/reports/document-control` | computed aggregates (no dashboard route ships) |
 | Evidence Packs | `/evidence-packs` | `evidence_pack`, `pack_item`, `pack_share_link`, `record` (`record_type=EVIDENCE`) |
 | Retention | `/retention-policies`, `/records/{id}/disposition` | `retention_policy`, `disposition_event` |
 | Setup / Admin Config | `/setup/*`, `/admin/config`, `/admin/notifications/working-calendar` | `organization`, `system_config`, `storage_config`, `backup_policy`, `working_calendar` |
@@ -396,7 +396,7 @@ Immutable snapshots (`14 §5.3`). Two-step presigned upload keeps large blobs of
 |---|---|---|---|---|
 | GET | `/documents/{id}/versions` | `document.read` | — | Newest first: `version_seq`, `revision_label`, `change_significance`, `version_state`, `change_reason`. |
 | POST | `/documents/{id}/versions:init-upload` | `document.checkout` | ✓ | Returns a **MinIO presigned PUT URL** + required headers + intended `object_key`. Client uploads bytes directly. |
-| POST | `/documents/{id}/checkin` | `document.checkout` | ✓ | Finalize (see §8.5): server verifies the uploaded object's `sha256` + `size_bytes`, dedups against existing `blob`, creates the immutable `document_version`, bumps `version_seq`. |
+| POST | `/documents/{id}/checkin` | `document.edit` | ✓ | Finalize (see §8.5): server verifies the uploaded object's `sha256` + `size_bytes`, dedups against existing `blob`, creates the immutable `document_version`, bumps `version_seq`. |
 | GET | `/documents/{id}/versions/{vid}` | `document.read` | — | Includes `metadata_snapshot` (title/type/owner/clause map **as they were**). |
 | GET | `/documents/{id}/versions/{vid}/download` | `document.read` | — | Presigned GET to the immutable source or PDF rendition. |
 | GET | `/documents/{id}/versions/{vid}/diff?from={vid2}` | `document.read_draft` | — | Rendered/text diff between two versions (the drift-prevention view). Gated `document.read_draft` because the diff can expose non-released Draft content (S-dcr-3a). |
@@ -710,18 +710,21 @@ OpenSearch on M/L profiles; **Postgres FTS fallback** on the S profile and on Op
 | GET | `/search/suggest?q=...` | `document.read` | Low-latency type-ahead (identifiers, titles). |
 | GET / POST | `/saved-searches` | `search.read` / `search.save` | `saved_search` (live re-run, permission-filtered per viewer); subscriptions notify on count-crosses / new-item (`14 §11`). |
 
-### 8.15 Dashboards & Reports (`/dashboards`, `/reports`)
+### 8.15 Reports (`/reports`) and deferred dashboards
 
-Purpose-built aggregation (the reason GraphQL was unnecessary), organized around **PDCA** so the UI flow mirrors ISO 9001 and stays calm.
+The shipped report surface is purpose-built aggregation (the reason GraphQL was unnecessary).
 
 | Method | Path | Perm | Notes |
 |---|---|---|---|
-| GET | `/dashboards/overview` | `dashboard.read` | PDCA KPI tiles: docs by state, reviews due/overdue (Plan/Do), pending approvals, open NCRs by severity, overdue CAPAs, upcoming audits (Check), improvement initiatives (Act). Cached in Redis (short TTL). |
-| GET | `/dashboards/my-work` | `dashboard.read` | Caller's actionable queue (planned aggregation over the canonical `/tasks` inbox + owned CAPAs + authored DCRs + checked-out docs). |
-| GET | `/reports/document-control` | `report.read` | Controlled-doc register: identifier, title, owner, effective revision, state, next review, clause coverage. Exportable. |
-| GET | `/reports/capa-effectiveness` | `report.read` | Closure & effectiveness over a period (`from`,`to`,`group_by`). |
-| GET | `/reports/audit-coverage` | `report.read` | ISO clause-coverage matrix from audits/findings. |
-| POST | `/reports/{key}/export` | `report.export` | Async export (PDF/CSV/XLSX) → `202` + job; the artifact lands in MinIO and is returned via presigned URL (self-hosted; nothing leaves the boundary). |
+| GET | `/reports/compliance-checklist` | `report.compliance_checklist.read` | Org-wide 20-★ mandatory-clause coverage with per-clause `COVERED`/`PARTIAL`/`GAP` and a rollup. |
+| GET | `/reports/document-control` | `report.read` | Provenance-stamped, content-hashed controlled-document register. The surface admits a satisfiable SYSTEM- or PROCESS-scoped `report.read` allow; rows are then filtered by both `report.read` and `document.read`. |
+
+**Future-only (not shipped in v1):** there is no `/dashboards` router and no `dashboard.read`
+permission key. `/dashboards/overview` and `/dashboards/my-work` remain design ideas; clients use
+the canonical self-scoped `/tasks` inbox for actionable work. `/reports/capa-effectiveness`,
+`/reports/audit-coverage`, and generic `POST /reports/{key}/export` are likewise not routes in the
+current API/OpenAPI. The existing `report.export` key gates evidence-pack download (§8.15a), not a
+generic report-export endpoint.
 
 ### 8.15a Evidence Packs (`/evidence-packs`) — as built (slices S-pack-1/2, doc 06 §7)
 
