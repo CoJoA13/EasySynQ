@@ -114,6 +114,13 @@ Bracketed operators. Only fields explicitly declared filterable on a resource ar
 | `filter[clause_refs][has]=8.4` | array contains | `text[]`/array columns |
 | `filter[metadata.site][eq]=Plant-A` | JSONB path | `metadata_snapshot`/`payload` keys |
 
+Filter parameters are scalar unless a resource explicitly publishes an array parameter.
+`GET /documents` and `GET /reports/document-control` publish `filter[clause_refs][has]` as an
+exploded form array: repeat the query key for each exact clause number, and the server ANDs every
+supplied membership condition. For example,
+`filter[clause_refs][has]=8.4&filter[clause_refs][has]=7.5.3` requires a document mapped to both
+clauses. The other filters on those two endpoints remain single-valued.
+
 ### 3.3 Sorting
 
 `sort=field` (asc) or `sort=-field` (desc); comma-separated multi-key: `sort=-severity,created_at`. Allow-listed sortable fields only (`400 unknown_sort` otherwise). The effective sort always appends `,id` internally to keep the keyset cursor totally ordered.
