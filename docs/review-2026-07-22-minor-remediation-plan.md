@@ -50,9 +50,9 @@
 | M19 | Web state and badge consistency | 9 | ☑ merged | [#399](https://github.com/CoJoA13/EasySynQ/pull/399) |
 | M20 | Web visual tokens and semantics | 6 | ☑ merged | [#400](https://github.com/CoJoA13/EasySynQ/pull/400) |
 | M21 | Web async and error UX | 8 | ☑ merged | [#401](https://github.com/CoJoA13/EasySynQ/pull/401) |
-| M22 | Web accessibility | 7 | ☑ ready for PR | — |
+| M22 | Web accessibility | 7 | ☑ in PR | [#402](https://github.com/CoJoA13/EasySynQ/pull/402) |
 
-**Accounting: 1 preclosed + 96 merged + 7 ready for PR = 104 original findings; 0 queued.**
+**Accounting: 1 preclosed + 96 merged + 7 in PR = 104 original findings; 0 queued.**
 
 ---
 

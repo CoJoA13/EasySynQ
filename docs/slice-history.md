@@ -177,7 +177,7 @@
 
 ## REMEDIATION — correctness, accessibility, polish & test reliability
 
-### Minor Batch M22 — web accessibility (web + tests + docs; NO API or contract change; NO migration [head stays `0080`]; NO new permission key [catalog 102]; PR pending)
+### Minor Batch M22 — web accessibility (web + tests + docs; NO API or contract change; NO migration [head stays `0080`]; NO new permission key [catalog 102]; PR [#402](https://github.com/CoJoA13/EasySynQ/pull/402))
 
 **What shipped.** All seven finder-only accessibility reports were re-located against merged M21
 and remained live. User-management revoke/remove actions now name the exact assignment they affect.
@@ -194,7 +194,7 @@ suppresses the normal box-shadow ring.
 **Impact.** Web behavior, Vitest/jest-axe coverage, and remediation documentation only; no API
 route, contract, database schema, migration, permission, event, persistence, or task-name change.
 The remediation tracker advances M21 to merged, closes all seven M22 findings, and accounts for the
-complete original inventory: 1 preclosed + 96 merged + 7 ready for PR = 104; 0 queued.
+complete original inventory: 1 preclosed + 96 merged + 7 in PR = 104; 0 queued.
 
 **Validation.** `git diff --check`; affected web coverage (**38 passed across 7 files**); full web
 suite (**1,414 passed across 245 files**); web ESLint, strict TypeScript, production build, axe,
