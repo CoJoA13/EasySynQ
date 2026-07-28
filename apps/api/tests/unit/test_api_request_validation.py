@@ -1,6 +1,9 @@
 """Request-model guards that keep invalid generated inputs away from operational services."""
 
+import pathlib
+
 import pytest
+import yaml
 from pydantic import BaseModel, ValidationError
 
 from easysynq_api.api.capa import (
@@ -13,6 +16,15 @@ from easysynq_api.api.capa import (
 )
 from easysynq_api.api.documents import CheckIn, InitUpload
 from easysynq_api.api.records import EvidenceRef, RecordInitUpload
+
+_OPENAPI = pathlib.Path(__file__).resolve().parents[4] / "packages" / "contracts" / "openapi.yaml"
+_SHA_BODY_OPERATIONS = (
+    "/documents/{document_id}/versions:init-upload",
+    "/documents/{document_id}/checkin",
+    "/records:init-upload",
+    "/records",
+    "/records/{record_id}/correction",
+)
 
 
 @pytest.mark.parametrize("model", [InitUpload, CheckIn, RecordInitUpload, EvidenceRef])
@@ -39,6 +51,12 @@ def test_content_address_models_reject_noncanonical_sha256(
 @pytest.mark.parametrize("model", [InitUpload, CheckIn, RecordInitUpload, EvidenceRef])
 def test_content_address_models_accept_lowercase_sha256(model: type[BaseModel]) -> None:
     assert model.model_validate({"sha256": "a" * 64}).sha256 == "a" * 64
+
+
+@pytest.mark.parametrize("path", _SHA_BODY_OPERATIONS)
+def test_sha_body_operations_document_validation_response(path: str) -> None:
+    contract = yaml.safe_load(_OPENAPI.read_text(encoding="utf-8"))
+    assert "422" in contract["paths"][path]["post"]["responses"]
 
 
 @pytest.mark.parametrize(
