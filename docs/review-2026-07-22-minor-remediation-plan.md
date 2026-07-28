@@ -43,7 +43,7 @@
 | M13 | API documentation drift | 4 | ☑ merged | [#393](https://github.com/CoJoA13/EasySynQ/pull/393) |
 | M14 | Infrastructure, deploy, and public edge | 6 | ☑ merged | [#394](https://github.com/CoJoA13/EasySynQ/pull/394) |
 | M15 | Cross-stack naming | 4 | ☑ merged | [#395](https://github.com/CoJoA13/EasySynQ/pull/395) |
-| M16 | UI copy and terminology | 7 | ☑ in PR | PR pending |
+| M16 | UI copy and terminology | 7 | ☑ in PR | [#396](https://github.com/CoJoA13/EasySynQ/pull/396) |
 | M17 | Test false-PASS traps | 3 | ☐ queued — revalidate | — |
 | M18 | Web shell, layout, and error consistency | 9 | ☐ queued — revalidate | — |
 | M19 | Web state and badge consistency | 9 | ☐ queued — revalidate | — |
@@ -434,7 +434,7 @@ permission key
   strings for bookmarks; the technical `features/ingestion` package remains named for the pipeline
   activity and that layering is documented).
 
-### ☑ M16 — UI copy and terminology — PR pending
+### ☑ M16 — UI copy and terminology — [#396](https://github.com/CoJoA13/EasySynQ/pull/396)
 
 `branch: fix/minor-ui-copy-terminology` · API problem copy + web + focused tests
 

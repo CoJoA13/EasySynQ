@@ -177,7 +177,7 @@
 
 ## REMEDIATION — correctness, accessibility, polish & test reliability
 
-### Minor Batch M16 — user-facing copy and terminology consistency (API + web + tests + docs; NO migration [head stays `0080`]; NO new permission key [catalog 102]; PR pending)
+### Minor Batch M16 — user-facing copy and terminology consistency (API + web + tests + docs; NO migration [head stays `0080`]; NO new permission key [catalog 102]; PR [#396](https://github.com/CoJoA13/EasySynQ/pull/396))
 
 **What shipped.** All seven finder-only copy reports were re-located against current API problem
 rendering, shared web state primitives, navigation, feature labels, and stable route/URL contracts;
