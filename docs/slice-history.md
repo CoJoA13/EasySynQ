@@ -177,7 +177,7 @@
 
 ## REMEDIATION — correctness, accessibility, polish & test reliability
 
-### Minor Batch M10 — explicit blob identity contract and live query-path indexes (models + migration + populated migration test + docs; migration `0080` [new head]; NO new permission key [catalog 102]; PR pending)
+### Minor Batch M10 — explicit blob identity contract and live query-path indexes (models + migration + populated migration test + docs; migration `0080` [new head]; NO new permission key [catalog 102]; PR [#390](https://github.com/CoJoA13/EasySynQ/pull/390))
 
 **What shipped.** The reported global-blob-key mismatch was revalidated and rejected as an
 out-of-contract architecture change. D1 is a single-organization deployment, and both the data

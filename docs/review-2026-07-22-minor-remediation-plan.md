@@ -36,7 +36,7 @@
 | M7 | Records and rendering resilience | 3 | ☑ merged | [#387](https://github.com/CoJoA13/EasySynQ/pull/387) |
 | M8 | Vault and retention input guards | 2 | ☑ merged | [#388](https://github.com/CoJoA13/EasySynQ/pull/388) |
 | M9 | Migration and ORM coherence | 4 | ☑ merged | [#389](https://github.com/CoJoA13/EasySynQ/pull/389) |
-| M10 | Schema and index design | 4 | ☑ resolved — PR pending | — |
+| M10 | Schema and index design | 4 | ☑ in PR | [#390](https://github.com/CoJoA13/EasySynQ/pull/390) |
 | M11 | Organization time and audit scalability | 3 | ☐ queued — revalidate | — |
 | M12 | Data-model documentation drift | 5 | ☐ queued — revalidate | — |
 | M13 | API documentation drift | 4 | ☐ queued — revalidate | — |
@@ -50,7 +50,7 @@
 | M21 | Web async and error UX | 8 | ☐ queued — revalidate | — |
 | M22 | Web accessibility | 7 | ☐ queued — revalidate | — |
 
-**Accounting: 1 preclosed + 28 merged + 4 resolved pending PR + 71 queued = 104 original findings.**
+**Accounting: 1 preclosed + 28 merged + 4 in PR + 71 queued = 104 original findings.**
 
 ---
 
@@ -262,7 +262,7 @@ populated migration tests · no new permission key
   the bare naming-convention token, while `0079` renames the deployed doubled constraint, tolerates
   an already-canonical database, and removes a duplicate legacy copy if both exist).
 
-### ☑ M10 — Schema and index design
+### ☑ M10 — Schema and index design — [#390](https://github.com/CoJoA13/EasySynQ/pull/390)
 
 `branch: fix/minor-schema-index-design` · schema decision + migration `0080` + populated migration
 tests + docs · no new permission key
