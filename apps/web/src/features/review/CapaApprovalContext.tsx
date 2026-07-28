@@ -1,5 +1,6 @@
 import { Badge, Group, Stack, Text, Title } from "@mantine/core";
-import { LoadingState } from "../../lib/states";
+import { ApiError } from "../../lib/api";
+import { ErrorState, LoadingState, NoAccessState } from "../../lib/states";
 import { ContentBlock } from "../capa/ContentBlock";
 import { SOURCE_LABEL } from "../capa/columns";
 import { SeverityBadge } from "../capa/SeverityBadge";
@@ -8,9 +9,15 @@ import { useCapa, useCapaApproval } from "../capa/hooks";
 // The CAPA-subject context on the /tasks decision page: identity + the proposed action plan the approver
 // is signing. Both reads are gated capa.read (NOT document.read), so a Top-Management approver works.
 export function CapaApprovalContext({ capaId }: { capaId: string }) {
-  const { data: capa, isLoading } = useCapa(capaId);
+  const { data: capa, isLoading, isError, error, refetch } = useCapa(capaId);
   const { data: approval } = useCapaApproval(capaId);
-  if (isLoading || !capa) return <LoadingState label="Loading CAPA" />;
+  if (isLoading) return <LoadingState label="Loading CAPA" />;
+  if (isError || !capa) {
+    if (error instanceof ApiError && error.status === 403) {
+      return <NoAccessState message="You don't have access to this CAPA." />;
+    }
+    return <ErrorState title="Couldn't load this CAPA" onRetry={() => void refetch()} />;
+  }
   return (
     <Stack gap="md">
       <div>

@@ -199,7 +199,7 @@ export function UsersAdmin({ token }: { token: string | null }) {
           manage ? `Manage — ${manage.display_name ?? manage.email ?? manage.keycloak_subject}` : ""
         }
       >
-        {manage && <ManageUser user={manage} token={token} onError={onErr} onChange={refresh} />}
+        {manage && <ManageUser user={manage} token={token} onChange={refresh} />}
       </Drawer>
     </Stack>
   );
@@ -208,17 +208,18 @@ export function UsersAdmin({ token }: { token: string | null }) {
 function ManageUser({
   user,
   token,
-  onError,
   onChange,
 }: {
   user: User;
   token: string | null;
-  onError: (e: unknown) => void;
   onChange: () => void;
 }) {
   const qc = useQueryClient();
   const [roleId, setRoleId] = useState<string | null>(null);
   const [ov, setOv] = useState({ permission_key: "", effect: "ALLOW" });
+  const [error, setError] = useState<string | null>(null);
+  const onError = (e: unknown) =>
+    setError(e instanceof ApiError ? `${e.code}: ${e.message}` : String(e));
 
   const roles = useQuery({
     queryKey: ["roles"],
@@ -237,6 +238,7 @@ function ManageUser({
   });
 
   const after = () => {
+    setError(null);
     void qc.invalidateQueries({ queryKey: ["user-roles", user.id] });
     void qc.invalidateQueries({ queryKey: ["user-overrides", user.id] });
     onChange();
@@ -244,6 +246,7 @@ function ManageUser({
 
   const assignMut = useMutation({
     mutationFn: () => apiSend("POST", `/api/v1/users/${user.id}/roles`, token, { role_id: roleId }),
+    onMutate: () => setError(null),
     onError,
     onSuccess: () => {
       setRoleId(null);
@@ -253,6 +256,7 @@ function ManageUser({
   const revokeMut = useMutation({
     mutationFn: (aid: string) =>
       apiSend("DELETE", `/api/v1/users/${user.id}/roles/${aid}`, token, undefined),
+    onMutate: () => setError(null),
     onError,
     onSuccess: after,
   });
@@ -263,6 +267,7 @@ function ManageUser({
         effect: ov.effect,
         scope: { level: "SYSTEM" },
       }),
+    onMutate: () => setError(null),
     onError,
     onSuccess: () => {
       setOv({ permission_key: "", effect: "ALLOW" });
@@ -272,12 +277,18 @@ function ManageUser({
   const removeOvMut = useMutation({
     mutationFn: (oid: string) =>
       apiSend("DELETE", `/api/v1/users/${user.id}/overrides/${oid}`, token, undefined),
+    onMutate: () => setError(null),
     onError,
     onSuccess: after,
   });
 
   return (
     <Stack gap="lg">
+      {error && (
+        <Alert color="red" title="Action failed" withCloseButton onClose={() => setError(null)}>
+          {error}
+        </Alert>
+      )}
       <Stack gap="xs">
         <Title order={4}>Roles</Title>
         {assignments.data?.length ? (

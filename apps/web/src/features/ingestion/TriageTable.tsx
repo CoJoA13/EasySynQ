@@ -1,5 +1,5 @@
 import { Button, Checkbox, Group, Table, Text } from "@mantine/core";
-import { EmptyState, SkeletonList } from "../../lib/states";
+import { EmptyState, ErrorState, SkeletonList } from "../../lib/states";
 import type { ConfirmedKind, ImportDecisionAction, ImportFile } from "../../lib/types";
 import { ConfidenceCell } from "./ConfidenceCell";
 import { IdentifierCell } from "./IdentifierCell";
@@ -26,6 +26,8 @@ export function TriageTable({
   dupeMap,
   familyMap,
   loading,
+  isError,
+  onRetry,
   selected,
   onToggle,
   onToggleAllOnPage,
@@ -38,6 +40,8 @@ export function TriageTable({
   dupeMap: Map<string, string>;
   familyMap: Map<string, number>;
   loading: boolean;
+  isError: boolean;
+  onRetry: () => void;
   selected: Set<string>;
   onToggle: (id: string) => void;
   onToggleAllOnPage: () => void;
@@ -48,6 +52,15 @@ export function TriageTable({
 }) {
   if (loading) {
     return <SkeletonList rows={5} height={44} label="Loading files" />;
+  }
+  if (isError) {
+    return (
+      <ErrorState
+        title="Couldn't load this queue"
+        message="The files could not be loaded."
+        onRetry={onRetry}
+      />
+    );
   }
   if (files.length === 0) {
     return <EmptyState message="Nothing in this queue." />;

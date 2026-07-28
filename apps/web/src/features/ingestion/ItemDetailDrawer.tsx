@@ -2,7 +2,7 @@ import { Alert, Badge, Button, Divider, Group, Menu, Stack, Text } from "@mantin
 import { DetailDrawer } from "../../app/shell/DetailDrawer";
 import { StatusBadge } from "../../lib/StatusBadge";
 import { humanizeToken } from "../../lib/labels";
-import { LoadingState } from "../../lib/states";
+import { ErrorState, LoadingState } from "../../lib/states";
 import type { Tone } from "../../lib/status";
 import type {
   ConfirmedKind,
@@ -71,7 +71,7 @@ export function ItemDetailDrawer({
   actionError?: string | null;
   onDismissActionError?: () => void;
 }) {
-  const { data: detail, isLoading } = useImportFile(runId, fileId);
+  const { data: detail, isLoading, isError, refetch } = useImportFile(runId, fileId);
   // The detail endpoint already returns THIS file's decision history under review.decision_history —
   // read it from there (guard under noUncheckedIndexedAccess) rather than fetching the whole run log.
   const history: ImportDecision[] = detail?.review?.decision_history ?? [];
@@ -92,8 +92,14 @@ export function ItemDetailDrawer({
           {actionError}
         </Alert>
       )}
-      {isLoading || !detail ? (
+      {fileId === null ? null : isLoading ? (
         <LoadingState label="Loading item detail" />
+      ) : isError || !detail ? (
+        <ErrorState
+          title="Couldn't load item detail"
+          message="The item detail request failed. Please try again."
+          onRetry={() => void refetch()}
+        />
       ) : (
         <Stack gap="md">
           {/* Header — filename + proposed identifier (DP-5 shape, quiet absence → "—"). */}

@@ -4,10 +4,7 @@ import { axe } from "jest-axe";
 import { http, HttpResponse } from "msw";
 import { expect, test, vi } from "vitest";
 import { TONE_GLYPH } from "../../lib/status";
-import {
-  ingestionFileDetailFixture,
-  ingestionRunFixture,
-} from "../../test/msw/handlers";
+import { ingestionFileDetailFixture, ingestionRunFixture } from "../../test/msw/handlers";
 import { server } from "../../test/msw/server";
 import { renderWithProviders } from "../../test/render";
 import { ItemDetailDrawer } from "./ItemDetailDrawer";
@@ -32,6 +29,39 @@ test("renders nothing actionable when fileId is null (drawer closed)", () => {
   expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
 });
 
+test("a failed item read shows a retryable error instead of an infinite spinner", async () => {
+  let attempts = 0;
+  server.use(
+    http.get("/api/v1/admin/imports/:id/files/:fid", () => {
+      attempts += 1;
+      if (attempts === 1) {
+        return HttpResponse.json(
+          { code: "read_failed", title: "Read failed", detail: "The item could not be loaded." },
+          { status: 500 },
+        );
+      }
+      return HttpResponse.json(ingestionFileDetailFixture);
+    }),
+  );
+  const user = userEvent.setup();
+  renderWithProviders(
+    <ItemDetailDrawer
+      runId={RID}
+      fileId={FID}
+      onClose={noop}
+      onConfirmKind={noop}
+      onDecision={noop}
+      onSplit={noop}
+    />,
+  );
+
+  expect(await screen.findByText("Couldn't load item detail")).toBeInTheDocument();
+  expect(screen.queryByRole("status", { name: "Loading item detail" })).not.toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "Try again" }));
+  expect(await screen.findByText("SOP-PUR-014 Purchasing.docx")).toBeInTheDocument();
+  expect(attempts).toBe(2);
+});
+
 test("renders the filename, identifier, and a classification evidence explanation", async () => {
   renderWithProviders(
     <ItemDetailDrawer
@@ -43,9 +73,7 @@ test("renders the filename, identifier, and a classification evidence explanatio
       onSplit={noop}
     />,
   );
-  expect(
-    await screen.findByText("SOP-PUR-014 Purchasing.docx"),
-  ).toBeInTheDocument();
+  expect(await screen.findByText("SOP-PUR-014 Purchasing.docx")).toBeInTheDocument();
   // The effective review identifier surfaces (the DETAIL endpoint nests review under `effective`).
   expect(screen.getAllByText(/SOP-PUR-014/).length).toBeGreaterThan(0);
   // The classification dimension/explanation list is present (evidence array, guarded for null).
@@ -87,7 +115,7 @@ test("renders the extraction status, proposal path, and humanized conflict badge
   expect(screen.queryByText("duplicate_identifier_within_import")).toBeNull();
 });
 
-test("clicking Accept calls onDecision with action \"accept\"", async () => {
+test('clicking Accept calls onDecision with action "accept"', async () => {
   const user = userEvent.setup();
   const onDecision = vi.fn();
   renderWithProviders(

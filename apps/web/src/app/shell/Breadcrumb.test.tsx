@@ -78,3 +78,16 @@ test.each([
   expect(within(breadcrumb).getByText(label)).toBeInTheDocument();
   expect(within(breadcrumb).queryByText(rawSlug)).not.toBeInTheDocument();
 });
+
+test.each([
+  [`/documents/${ID}`, "Document"],
+  ["/reports/document-control", "Reports"],
+  ["/settings/notifications", "Settings"],
+  [`/dcrs/${ID}/diff`, "Change request"],
+])("Breadcrumb renders the non-route parent in %s as text, not a dead link", (route, label) => {
+  const client = new QueryClient();
+  renderCrumb(client, route);
+  const breadcrumb = screen.getByLabelText("Breadcrumb");
+  expect(within(breadcrumb).getAllByText(label).length).toBeGreaterThan(0);
+  expect(within(breadcrumb).queryByRole("link", { name: label })).not.toBeInTheDocument();
+});

@@ -1,7 +1,7 @@
 import { Alert, Anchor, Button, Card, Grid, Stack, Text, Title } from "@mantine/core";
 import { Link, useParams } from "react-router-dom";
 import { ApiError } from "../../lib/api";
-import { LoadingState } from "../../lib/states";
+import { ErrorState, LoadingState } from "../../lib/states";
 import { useDocument } from "../document/useDocument";
 import { useDocumentVersions } from "../document/useDocumentVersions";
 import { VersionCompare } from "../document/VersionCompare";
@@ -47,9 +47,12 @@ export function ReviewApprovePage() {
     !isDcr &&
     !isImprovement &&
     !isLeadership;
-  const { data: instance } = useWorkflowInstance(
-    isDocumentSubject && task ? task.instance_id : null,
-  );
+  const {
+    data: instance,
+    isLoading: instanceLoading,
+    isError: instanceError,
+    refetch: refetchInstance,
+  } = useWorkflowInstance(isDocumentSubject && task ? task.instance_id : null);
   const docId = isDocumentSubject ? (instance?.subject_id ?? null) : null;
   const { data: doc } = useDocument(docId, { enabled: docId !== null });
   const { data: versions } = useDocumentVersions(docId, docId !== null);
@@ -335,12 +338,20 @@ export function ReviewApprovePage() {
           </Stack>
         </Grid.Col>
         <Grid.Col span={{ base: 12, md: 5 }}>
-          {/* Byte-identical to S-web-5: gate on docId too, so the card only renders once the instance→doc
-              resolved (subjectId is a real document id, never "") and the cache invalidation is correct. */}
-          {decidable && docId ? (
-            <DecisionCard taskId={task.id} subjectType="DOCUMENT" subjectId={docId} />
-          ) : (
+          {/* A pending task stays pending while instance→document resolution is in flight or failed.
+              Never collapse either state into the read-only "Decided" branch. */}
+          {!decidable ? (
             decidedAlert
+          ) : instanceLoading ? (
+            <LoadingState label="Loading approval context" />
+          ) : instanceError || !docId ? (
+            <ErrorState
+              title="Approval context unavailable"
+              message="The task is still pending, but its document could not be resolved."
+              onRetry={() => void refetchInstance()}
+            />
+          ) : (
+            <DecisionCard taskId={task.id} subjectType="DOCUMENT" subjectId={docId} />
           )}
         </Grid.Col>
       </Grid>
