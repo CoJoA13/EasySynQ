@@ -40,7 +40,7 @@
 | M11 | Organization time and audit scalability | 3 | ☑ merged | [#391](https://github.com/CoJoA13/EasySynQ/pull/391) |
 | M12 | Data-model documentation drift | 5 | ☑ merged | [#392](https://github.com/CoJoA13/EasySynQ/pull/392) |
 | M13 | API documentation drift | 4 | ☑ merged | [#393](https://github.com/CoJoA13/EasySynQ/pull/393) |
-| M14 | Infrastructure, deploy, and public edge | 6 | ☑ in PR | pending |
+| M14 | Infrastructure, deploy, and public edge | 6 | ☑ in PR | [#394](https://github.com/CoJoA13/EasySynQ/pull/394) |
 | M15 | Cross-stack naming | 4 | ☐ queued — revalidate | — |
 | M16 | UI copy and terminology | 7 | ☐ queued — revalidate | — |
 | M17 | Test false-PASS traps | 3 | ☐ queued — revalidate | — |
@@ -373,7 +373,7 @@ permission key
   retaining `document.delete_draft` only as a seeded route-less policy seam, and correct both
   duplicated check-in inventory rows to the handler's `document.edit` gate).
 
-### ☑ M14 — Infrastructure, deploy, and public edge
+### ☑ M14 — Infrastructure, deploy, and public edge — [#394](https://github.com/CoJoA13/EasySynQ/pull/394)
 
 `branch: fix/minor-infra-public-edge` · env + container build + compose + runbook + Caddy
 

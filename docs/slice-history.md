@@ -177,7 +177,7 @@
 
 ## REMEDIATION — correctness, accessibility, polish & test reliability
 
-### Minor Batch M14 — infrastructure, deploy, and public-edge hardening (env + web image + Compose + Caddy + tests + runbook; NO migration [head stays `0080`]; NO new permission key [catalog 102]; PR pending)
+### Minor Batch M14 — infrastructure, deploy, and public-edge hardening (env + web image + Compose + Caddy + tests + runbook; NO migration [head stays `0080`]; NO new permission key [catalog 102]; PR [#394](https://github.com/CoJoA13/EasySynQ/pull/394))
 
 **What shipped.** All six finder-only reports were re-located against current deployment source.
 Two were already stale: Batch 13's environment template contains the PostgreSQL and public-origin
