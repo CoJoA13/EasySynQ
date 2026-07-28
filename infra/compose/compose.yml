@@ -74,6 +74,7 @@ services:
       AUDIT_SINK_SECRET_KEY: ${AUDIT_SINK_SECRET_KEY:-audit-sink-secret-change-me}
       AUDIT_SINK_READ_ACCESS_KEY: ${AUDIT_SINK_READ_ACCESS_KEY:-audit-sink-read}
       AUDIT_SINK_READ_SECRET_KEY: ${AUDIT_SINK_READ_SECRET_KEY:-audit-sink-read-secret-change-me}
+      WORM_RETENTION: ${WORM_RETENTION:-30d}
     volumes:
       - ./minio:/init:ro
     networks: [internal]
@@ -215,8 +216,9 @@ services:
       - secrets:/run/secrets   # S7c: shared verify-token signing key (worker mints the QR token)
       - backup:/var/lib/easysynq/backups   # S8b2: durable backup archives + the restore-test drill
       # S-ing-1: the import source tree, mounted READ-ONLY (NG3 — the engine physically cannot write
-      # back). Only the worker walks it; IMPORT_SOURCE_ROOT (=/srv/import/source) is the confinement root.
-      - ${IMPORT_SOURCE_PATH:-./.import-source}:/srv/import/source:ro
+      # back). Only the worker walks it; IMPORT_SOURCE_ROOT (=/srv/import/source) is the confinement
+      # root. Compose resolves relative host paths from this file's directory, so ../../ is repo root.
+      - ${IMPORT_SOURCE_PATH:-../../.import-source}:/srv/import/source:ro
     networks: [internal]
 
   # Scheduler — EXACTLY ONE replica (two would double-fire). Asserted in profile overlays.

@@ -10,7 +10,7 @@
 - The historic denominator remains **104**. One finding was already closed while the MAJOR work was
   underway, leaving **103** to schedule here. Batch M1 closed 4; M2 closed 2; M3 closed 2; M4
   closed 4; M5 closed 3; M6 closed 4; M7 closed 3; M8 closed 2; M9 closed 4; M10 closed 4;
-  M11 closed 3; M12 closed 5; M13 resolves 4; **59 remain queued** after M13.
+  M11 closed 3; M12 closed 5; M13 closed 4; M14 resolves 6; **53 remain queued** after M14.
 - A queued finding is not assumed to still be live. Every batch must re-locate and revalidate its
   findings against then-current `main` before implementation; close, re-scope, or reject it with
   evidence rather than mechanically applying the 2026-07-22 suggestion.
@@ -39,8 +39,8 @@
 | M10 | Schema and index design | 4 | ☑ merged | [#390](https://github.com/CoJoA13/EasySynQ/pull/390) |
 | M11 | Organization time and audit scalability | 3 | ☑ merged | [#391](https://github.com/CoJoA13/EasySynQ/pull/391) |
 | M12 | Data-model documentation drift | 5 | ☑ merged | [#392](https://github.com/CoJoA13/EasySynQ/pull/392) |
-| M13 | API documentation drift | 4 | ☑ in PR | [#393](https://github.com/CoJoA13/EasySynQ/pull/393) |
-| M14 | Infrastructure, deploy, and public edge | 6 | ☐ queued — revalidate | — |
+| M13 | API documentation drift | 4 | ☑ merged | [#393](https://github.com/CoJoA13/EasySynQ/pull/393) |
+| M14 | Infrastructure, deploy, and public edge | 6 | ☑ in PR | pending |
 | M15 | Cross-stack naming | 4 | ☐ queued — revalidate | — |
 | M16 | UI copy and terminology | 7 | ☐ queued — revalidate | — |
 | M17 | Test false-PASS traps | 3 | ☐ queued — revalidate | — |
@@ -50,7 +50,7 @@
 | M21 | Web async and error UX | 8 | ☐ queued — revalidate | — |
 | M22 | Web accessibility | 7 | ☐ queued — revalidate | — |
 
-**Accounting: 1 preclosed + 40 merged + 4 in PR + 59 queued = 104 original findings.**
+**Accounting: 1 preclosed + 44 merged + 6 in PR + 53 queued = 104 original findings.**
 
 ---
 
@@ -373,22 +373,36 @@ permission key
   retaining `document.delete_draft` only as a seeded route-less policy seam, and correct both
   duplicated check-in inventory rows to the handler's `document.edit` gate).
 
-### ☐ M14 — Infrastructure, deploy, and public edge
+### ☑ M14 — Infrastructure, deploy, and public edge
 
 `branch: fix/minor-infra-public-edge` · env + container build + compose + runbook + Caddy
 
-- [ ] `.env.example:15` — omits required PostgreSQL and public-site variables from the documented
-  copy-and-run path `[f]`.
-- [ ] `apps/web/Dockerfile:6` — `npm ci || npm install` tolerates lock drift and the missing
-  `.dockerignore` admits host artifacts into build context `[f]`.
-- [ ] `docs/runbooks/install-online.md:16` — says the installer uses the owner DSN although it now
-  provisions the non-owner app role `[f]`.
-- [ ] `infra/compose/compose.yml:64` — `minio-init` does not receive audit-sink credential/retention
-  settings and falls back to mismatched hard-coded values `[f]`.
-- [ ] `infra/compose/compose.yml:167` — the default import source resolves under `infra/compose`
-  rather than the documented repository root `[f]`.
-- [ ] `infra/compose/caddy/Caddyfile:40` — public API-served HTML lacks CSP and frame protection
-  `[f]`.
+- [x] `.env.example:15` — omits required PostgreSQL and public-site variables from the documented
+  copy-and-run path `[R]` (rejected on current `main`: the template now declares
+  `POSTGRES_USER`/`POSTGRES_PASSWORD`/`POSTGRES_DB`, `SITE_ADDRESS`, `PUBLIC_BASE_URL`, and
+  `APP_BASE_URL`; the runbook's supported path invokes `install.sh`, which copies that template,
+  generates the secrets, and fills the browser origins before Compose starts).
+- [x] `apps/web/Dockerfile:6` — `npm ci || npm install` tolerates lock drift and the missing
+  `.dockerignore` admits host artifacts into build context `[C]` (fixed: require the committed
+  lockfile and a successful `npm ci`, and add an app-context `.dockerignore` that excludes
+  `node_modules`, build/test output, caches, logs, and local env files).
+- [x] `docs/runbooks/install-online.md:16` — says the installer uses the owner DSN although it now
+  provisions the non-owner app role `[R]` (rejected on current `main`: step 2 already says
+  role-separated credentials; `install.sh` gives `DATABASE_URL` to `easysynq_app` and reserves the
+  owner for `DATABASE_URL_SYNC`).
+- [x] `infra/compose/compose.yml:64` — `minio-init` does not receive audit-sink
+  credential/retention settings and falls back to mismatched hard-coded values `[C]` (revalidation
+  found the four write/read credential passthroughs already present; the surviving omission is
+  fixed by declaring `WORM_RETENTION=30d` in the template and passing the selected value to
+  `minio-init`).
+- [x] `infra/compose/compose.yml:167` — the default import source resolves under `infra/compose`
+  rather than the documented repository root `[C]` (fixed: both the Compose fallback and generated
+  env template use `../../.import-source`, which resolves to the repository root; the runbook now
+  recommends an absolute path for an operator-selected tree).
+- [x] `infra/compose/caddy/Caddyfile:40` — public API-served HTML lacks CSP and frame protection
+  `[C]` (fixed: route the exact verify and evidence-pack landing paths through a dedicated,
+  script-free CSP with `frame-ancestors 'none'`, `X-Frame-Options: DENY`, and a no-referrer policy
+  before the generic API handler).
 
 ### ☐ M15 — Cross-stack naming
 

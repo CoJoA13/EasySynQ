@@ -41,6 +41,40 @@ def test_minio_host_publish_is_dev_only_and_loopback_bound() -> None:
     assert ":9000:9000" not in production
 
 
+def test_minio_init_receives_sink_credentials_and_retention() -> None:
+    compose = _read("infra/compose/compose.yml")
+    template = _read(".env.example")
+
+    for key in (
+        "AUDIT_SINK_ACCESS_KEY",
+        "AUDIT_SINK_SECRET_KEY",
+        "AUDIT_SINK_READ_ACCESS_KEY",
+        "AUDIT_SINK_READ_SECRET_KEY",
+        "WORM_RETENTION",
+    ):
+        assert f"{key}: ${{{key}:-" in compose
+    assert "WORM_RETENTION=30d" in template
+
+
+def test_import_source_default_resolves_to_repository_root() -> None:
+    compose = _read("infra/compose/compose.yml")
+    template = _read(".env.example")
+
+    assert "IMPORT_SOURCE_PATH=../../.import-source" in template
+    assert "${IMPORT_SOURCE_PATH:-../../.import-source}:/srv/import/source:ro" in compose
+    assert "${IMPORT_SOURCE_PATH:-./.import-source}" not in compose
+
+
+def test_web_image_uses_lockfile_and_excludes_host_artifacts() -> None:
+    dockerfile = _read("apps/web/Dockerfile")
+    dockerignore = _read("apps/web/.dockerignore").splitlines()
+
+    assert "COPY package.json package-lock.json ./" in dockerfile
+    assert "RUN npm ci" in dockerfile
+    assert "npm ci ||" not in dockerfile
+    assert {"node_modules", "dist", "coverage", ".vite"}.issubset(dockerignore)
+
+
 def test_production_requires_one_consistent_browser_edge() -> None:
     production = _read("infra/compose/compose.production.yml")
     caddy = _read("infra/compose/caddy/Caddyfile.production")

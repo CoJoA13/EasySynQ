@@ -40,6 +40,10 @@ for sizing.
    loopback-bound. The installer validates both complete tuples before migration/start, then appends
    the selected callback without replacing redirect URIs added by an operator or identity provider.
 
+   The ingestion source defaults to the repository-root `.import-source/` directory. Set
+   `IMPORT_SOURCE_PATH` to an absolute host path for a real source tree; Compose resolves relative
+   bind-source paths from `infra/compose/`, regardless of where `.env` lives.
+
 3. **Trust the CA when using `--tls internal`.** Export Caddy's root certificate and distribute it
    through the organization's trusted-root mechanism before workstation use:
 

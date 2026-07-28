@@ -177,6 +177,45 @@
 
 ## REMEDIATION — correctness, accessibility, polish & test reliability
 
+### Minor Batch M14 — infrastructure, deploy, and public-edge hardening (env + web image + Compose + Caddy + tests + runbook; NO migration [head stays `0080`]; NO new permission key [catalog 102]; PR pending)
+
+**What shipped.** All six finder-only reports were re-located against current deployment source.
+Two were already stale: Batch 13's environment template contains the PostgreSQL and public-origin
+keys the report called absent, and the online runbook plus installer already describe and provision
+the non-owner `easysynq_app` runtime DSN while reserving the owner DSN for migrations and backup.
+Those reports are rejected with the current evidence instead of receiving duplicate edits.
+
+The web image now requires the committed `package-lock.json` and a successful `npm ci`; it can no
+longer fall back to dependency re-resolution through `npm install`. A build-context-local
+`.dockerignore` keeps host `node_modules`, `dist`, coverage, Vite cache, logs, and local env files
+out of `COPY . .`. The real Docker build confirms that the reduced app context still produces the
+SPA.
+
+Compose already forwarded all four write/read audit-sink credentials to `minio-init`; M14 closes
+the remaining configuration drift by declaring and forwarding `WORM_RETENTION`, so the script's
+locked documents, records, and checkpoint buckets receive the operator-selected default. The
+worker's import bind now uses `../../.import-source` in both the template and Compose fallback,
+which resolves to the documented repository-root directory instead of
+`infra/compose/.import-source`; the online runbook recommends an absolute path for a real source
+tree and names Compose's relative-path base.
+
+The public controlled-copy verification page and evidence-pack landing page are served by FastAPI
+under `/api/v1`, before the SPA's existing strict-CSP handler. Caddy now matches those two exact
+HTML paths ahead of the generic API route and applies a script-free document policy, denies framing
+with both `frame-ancestors 'none'` and `X-Frame-Options: DENY`, and suppresses token-bearing
+referrers. Static tests pin the matcher order and directives.
+
+**Impact.** No migration, API route/payload, application behavior, or permission-catalog change.
+Fresh installs get deterministic web dependency resolution, the intended repository-root import
+mount, and explicit MinIO WORM retention; public utility HTML gains clickjacking and content-policy
+protection without applying the SPA CSP to JSON, downloads, SSE, or Keycloak. The remediation
+tracker advances M13 to merged, closes all six M14 findings, and preserves the original
+denominator: 1 preclosed + 44 merged + 6 in PR + 53 queued. Validation: `git diff --check`; full API
+Ruff + format; full unit selection (**1186 passed, 1 expected release-only skip**);
+web lint; dev/production/air-gap Compose configs rendered cleanly, with the dev import bind
+resolving to the repository root; Caddy reported a valid adapted configuration; local and
+containerized web production builds passed, with the container executing strict `npm ci`.
+
 ### Minor Batch M13 — shipped API documentation alignment (docs + OpenAPI accuracy; route/payload set unchanged; NO migration [head stays `0080`]; NO new permission key [catalog 102]; PR [#393](https://github.com/CoJoA13/EasySynQ/pull/393))
 
 **What shipped.** All four finder-only reports were re-located and confirmed against the current

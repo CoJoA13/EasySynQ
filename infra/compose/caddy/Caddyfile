@@ -35,6 +35,20 @@
 		}
 	}
 
+	# The two unauthenticated API-served HTML pages sit outside the SPA handle, so they need their
+	# own document policy. They contain inline style attributes but no scripts, forms, embeds, or
+	# external assets. The bearer tokens stay out of referrers, and both CSP + the legacy frame
+	# header deny clickjacking.
+	@public_html path /api/v1/verify /api/v1/evidence-packs/shared
+	handle @public_html {
+		header {
+			Content-Security-Policy "default-src 'none'; style-src 'unsafe-inline'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+			X-Frame-Options "DENY"
+			Referrer-Policy "no-referrer"
+		}
+		reverse_proxy api:8000
+	}
+
 	# API surface and health probes go to the FastAPI service.
 	@api path /api/* /healthz /readyz
 	handle @api {
