@@ -54,6 +54,7 @@ from ..services.records import (
 from ..services.records import repository as records_repo
 from ..services.vault import repository as vault_repo
 from ..services.vault import storage
+from ._validation import Sha256Hex
 
 router = APIRouter(prefix="/api/v1", tags=["records"])
 
@@ -62,12 +63,12 @@ router = APIRouter(prefix="/api/v1", tags=["records"])
 
 
 class RecordInitUpload(BaseModel):
-    sha256: str
+    sha256: Sha256Hex
     content_type: str = "application/octet-stream"
 
 
 class EvidenceRef(BaseModel):
-    sha256: str
+    sha256: Sha256Hex
     content_type: str = "application/octet-stream"
 
 

@@ -98,6 +98,7 @@ from ..services.vault.review import compute_next_review_due, review_state, today
 from ..services.workflow import instantiate_approval
 from ..services.workflow import repository as wf_repo
 from ..tasks.visual_diff import visual_diff as visual_diff_task
+from ._validation import Sha256Hex
 
 router = APIRouter(prefix="/api/v1", tags=["documents"])
 
@@ -139,12 +140,12 @@ class DistributionUpdate(BaseModel):
 
 
 class InitUpload(BaseModel):
-    sha256: str
+    sha256: Sha256Hex
     content_type: str = "application/octet-stream"
 
 
 class CheckIn(BaseModel):
-    sha256: str
+    sha256: Sha256Hex
     change_reason: str = ""
     change_significance: str = ""
     mime_type: str = "application/octet-stream"
