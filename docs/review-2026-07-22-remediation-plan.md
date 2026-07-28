@@ -249,17 +249,15 @@ land the sweep separately from the gate so the gate turns on green rather than r
   components. A structural unit guard pins this precision because live-response validation alone
   cannot detect an over-permissive published superset)
 
-> **Advisory baseline (2026-07-26): 274 operations passed / eight pre-existing violations, named
-> rather than fixed inline.**
-> Two setup responses emit problem codes absent from `Problem.code`
-> (`backup_not_configured`, `auth_unavailable`); `POST /records:init-upload` accepts an empty
-> contract-generated SHA then raises an unhandled botocore validation error; the static
-> `GET /audit-events/export` route is shadowed by `/{event_id}` and returns an undocumented 422; and
-> three requests valid under the published input schemas return undocumented 422s (empty CAPA
-> containment/root-cause content blocks and an empty complaint description); finally, the
-> notification stream publishes SSE `{event,data}` frames while its content schema declares each
-> event as a plain string. These are triaged in `docs/slice-history.md` ⚠ OPEN RESIDUALS; ratchet the
-> job to required only after that baseline is fixed in its own follow-up batch.
+> **Baseline closed by CR1 (2026-07-28, [PR #404](https://github.com/CoJoA13/EasySynQ/pull/404)):
+> all 281 mounted operations passed; the gate is required.**
+> The follow-up aligned the two live setup problem codes, SHA/content-block/complaint request
+> constraints and legitimate 422 responses, plus the parsed SSE event schema. The deliberately
+> unmounted D-9 `GET /audit-events/export` contract shape is now explicitly marked deferred and
+> excluded by exact asserted operation identity, leaving **281 live operations** rather than
+> pretending its path-parameter shadow is an implementation. The corrected authenticated,
+> OPERATIONAL, disposable testcontainers sweep passed **281/281**, so `contract-responses` no longer
+> has `continue-on-error` and is included in `main` branch protection.
 
 ### ☑ Batch 13 — Infra / deploy hardening
 `branch: fix/major-infra-deploy` · [PR #372](https://github.com/CoJoA13/EasySynQ/pull/372) · infra (verify on the live/appliance path)

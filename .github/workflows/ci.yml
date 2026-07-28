@@ -22,11 +22,9 @@ jobs:
       - name: lint OpenAPI
         run: npx --yes @redocly/cli lint --config packages/contracts/redocly.yaml packages/contracts/openapi.yaml
 
-  # Advisory while the first live-response baseline is triaged. The test itself fails loudly on
-  # contract drift or a false-green 401/423 wall; continue-on-error keeps that known debt from
-  # blocking unrelated PRs until the baseline is clean enough to ratchet into a required check.
+  # Required authenticated live-response contract gate. D-9 operations retained as future contract
+  # shapes must be explicitly marked deferred and exactly excluded; every mounted operation runs.
   contract-responses:
-    continue-on-error: true
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:

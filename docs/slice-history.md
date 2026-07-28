@@ -72,24 +72,15 @@
   repoints `get_sessionmaker()` — so no existing fixture can reach it. **Closing it needs** an
   orchestrator harness (inject the sessionmaker, or a settings override the task honours) — a slice,
   not a remediation fix. Raised and named by Codex + this batch's own review on #368.
-- **The advisory response-contract baseline has eight pre-existing violations** (Batch 12.5,
-  [PR #371](https://github.com/CoJoA13/EasySynQ/pull/371)). The gate now genuinely runs all 282
-  operations through an authenticated, OPERATIONAL, disposable testcontainers app and rejects a
-  401/423 wall, so these are server/contract findings rather than harness failures:
-  (1) `Problem.code` omits
-  `backup_not_configured` and `auth_unavailable`, emitted by the restore-test and auth-configuration
-  setup paths; (2) `POST /records:init-upload` permits an empty SHA under the request schema, then
-  lets botocore's invalid-empty-key exception escape instead of returning a response; (3) static
-  `GET /audit-events/export` is shadowed by `/{event_id}` and therefore returns an undocumented
-  validation 422; (4) CAPA containment/root-cause accept `{}` under the published input schema but
-  the service rejects an empty content block with an undocumented 422; and (5) complaint creation
-  accepts an empty description under the contract while Pydantic returns another undocumented 422;
-  and (6) `/notifications/stream` emits parsed SSE `{event,data}` frames while its response content
-  schema declares each event as a plain string. **Closing it needs** a focused follow-up that chooses
-  the honest direction per item (tighten input/stream schema, document a legitimate error
-  response/code, or correct server routing/exception handling), then re-runs the same sweep to zero.
-  Until then `contract-responses` stays advisory; make it required only when the baseline is green.
-  Batch 12.5 deliberately did not mix those unrelated behavior fixes into the gate-wiring slice.
+- ~~**The advisory response-contract baseline has eight pre-existing violations** (Batch 12.5,
+  [PR #371](https://github.com/CoJoA13/EasySynQ/pull/371)).~~ **CLOSED in CR1**
+  ([PR #404](https://github.com/CoJoA13/EasySynQ/pull/404)). Request schemas now stop invalid SHA,
+  empty CAPA stage-block and blank complaint inputs at the documented 422 boundary; `Problem.code`
+  includes both live setup codes; and the notification stream schema describes the parsed
+  `{event,data}` frame. The deliberately unmounted D-9 audit export shape is explicitly marked
+  `deferred` and excluded by exact asserted operation identity rather than being mistaken for a live
+  route. The authenticated disposable sweep is green across all **281 mounted operations**, so
+  `contract-responses` is now a required workflow and branch-protection check.
 - **Pre-cap audit rows for a document with a >512-char identifier are unreachable via the
   per-document history endpoint** (Batch 12; a deliberate trade, not an oversight). Batch 12 caps
   `audit_event.scope_ref` on write so it cannot break its new btree index, and
@@ -176,6 +167,33 @@
 **Tests + review.** Unit `test_authz_resource` (`resource_from_doc` populates `framework_id`+`kind`; mutation-distinguishing deny-wins — blanking a field flips DENY→ALLOW) + integration (a FRAMEWORK-scoped `document.read` DENY 403s the detail gate AND hides the row from the library list + search/suggest; an objective-release deny-wins — FRAMEWORK ALLOW + PROCESS DENY on the satellite process → 403; a foundational `process_ids_for_doc`-unions-the-satellite test). diff-critic CLEAN across the satellite + DCR/records passes (proved the swap identical for non-objectives, the TOCTOU correction floor only gets tighter). api unit 1078→1090. (S-scope-tuple, BE, NO migration [head `0070`], NO new key [catalog 102], PR #346 squash `26360bb`.)
 
 ## REMEDIATION — correctness, accessibility, polish & test reliability
+
+### CR1 — close and ratchet the response-contract baseline (API + OpenAPI + tests + CI + docs; NO migration [head stays `0080`]; NO new permission key [catalog 102]; PR [#404](https://github.com/CoJoA13/EasySynQ/pull/404))
+
+**What shipped.** The eight failures named by Batch 12.5's first authenticated baseline are closed at
+their real boundaries. `Problem.code` includes the restore-test and auth-configuration codes emitted
+by the server. One shared request type constrains document/record upload and evidence SHA-256 values
+to canonical 64-character lowercase hex in both Pydantic and OpenAPI, preventing generated empty
+object keys from reaching storage. CAPA stage blocks are non-empty in every server request model and
+their three published component shapes; complaint text and optional-field bounds now mirror the
+live validator. The response contract documents the legitimate 422s observed by the sweep.
+
+**Deferred-route and stream honesty.** `GET /audit-events/export` remains deliberately unmounted
+under D-9. Its contract operation now carries an explicit deferred marker, and the test excludes only
+that exact operation after asserting both its path/method identity and operation id—no broad filter
+can silently hide a mounted route. Schemathesis parses SSE frames before validating them, so the
+notification stream schema now describes the actual content-free `{event: "notify", data: ""}`
+object rather than a raw string.
+
+**Gate ratchet.** The first corrected advisory run selected all **281 mounted operations** and passed
+all 281 in the authenticated, OPERATIONAL, disposable testcontainers app. With the baseline at zero,
+`contract-responses` no longer has `continue-on-error` and is added to `main` branch protection
+without changing the five existing required contexts.
+
+**Validation.** API Ruff + format; mypy (**427 source files**); API unit (**1,218 passed, 1
+release-only skip**); Redocly; exact deferred-operation collection (**281 selected**); GitHub live
+response sweep (**281 passed, 2,163 deselected**). Local live execution was unavailable because the
+Docker Desktop socket was absent; GitHub CI supplied the authoritative disposable-container result.
 
 ### Minor Batch M22 — web accessibility (web + tests + docs; NO API or contract change; NO migration [head stays `0080`]; NO new permission key [catalog 102]; PR [#402](https://github.com/CoJoA13/EasySynQ/pull/402))
 
