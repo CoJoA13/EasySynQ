@@ -9,8 +9,8 @@
 
 - The historic denominator remains **104**. One finding was already closed while the MAJOR work was
   underway, leaving **103** to schedule here. Batch M1 closed 4; M2 closed 2; M3 closed 2; M4
-  closed 4; M5 closed 3; M6 closed 4; M7 closed 3; M8 closed 2; M9 closed 4; M10 resolves 4;
-  **71 remain queued** after M10.
+  closed 4; M5 closed 3; M6 closed 4; M7 closed 3; M8 closed 2; M9 closed 4; M10 closed 4;
+  M11 resolves 3; **68 remain queued** after M11.
 - A queued finding is not assumed to still be live. Every batch must re-locate and revalidate its
   findings against then-current `main` before implementation; close, re-scope, or reject it with
   evidence rather than mechanically applying the 2026-07-22 suggestion.
@@ -36,8 +36,8 @@
 | M7 | Records and rendering resilience | 3 | ☑ merged | [#387](https://github.com/CoJoA13/EasySynQ/pull/387) |
 | M8 | Vault and retention input guards | 2 | ☑ merged | [#388](https://github.com/CoJoA13/EasySynQ/pull/388) |
 | M9 | Migration and ORM coherence | 4 | ☑ merged | [#389](https://github.com/CoJoA13/EasySynQ/pull/389) |
-| M10 | Schema and index design | 4 | ☑ in PR | [#390](https://github.com/CoJoA13/EasySynQ/pull/390) |
-| M11 | Organization time and audit scalability | 3 | ☐ queued — revalidate | — |
+| M10 | Schema and index design | 4 | ☑ merged | [#390](https://github.com/CoJoA13/EasySynQ/pull/390) |
+| M11 | Organization time and audit scalability | 3 | ☑ resolved — PR pending | — |
 | M12 | Data-model documentation drift | 5 | ☐ queued — revalidate | — |
 | M13 | API documentation drift | 4 | ☐ queued — revalidate | — |
 | M14 | Infrastructure, deploy, and public edge | 6 | ☐ queued — revalidate | — |
@@ -50,7 +50,7 @@
 | M21 | Web async and error UX | 8 | ☐ queued — revalidate | — |
 | M22 | Web accessibility | 7 | ☐ queued — revalidate | — |
 
-**Accounting: 1 preclosed + 28 merged + 4 in PR + 71 queued = 104 original findings.**
+**Accounting: 1 preclosed + 32 merged + 3 resolved pending PR + 68 queued = 104 original findings.**
 
 ---
 
@@ -294,16 +294,26 @@ tests + docs · no new permission key
   constraint `[C]` (fixed: add only the plain `ix_role_assignment_user_id` index in migration
   `0080` and matching ORM metadata, preserving all existing assignment cardinality).
 
-### ☐ M11 — Organization time and audit scalability
+### ☑ M11 — Organization time and audit scalability
 
-`branch: fix/minor-org-time-audit-scale` · API + integration
+`branch: fix/minor-org-time-audit-scale` · API + unit/integration + docs · no migration and no new
+permission key
 
-- [ ] `apps/api/src/easysynq_api/api/objectives.py:416` — objective attainment uses server-local
-  `date.today()` instead of organization-time `today_org()` `[C]`.
-- [ ] `apps/api/src/easysynq_api/services/audit/verify.py:64` — on-demand chain verification loads
-  the entire organization chain as ORM rows in memory `[f]`.
-- [ ] `apps/api/src/easysynq_api/services/audits/service.py:608` — audit start/completion dates use
-  the UTC calendar day instead of the organization calendar day `[f]`.
+- [x] `apps/api/src/easysynq_api/api/objectives.py:416` — objective attainment uses server-local
+  `date.today()` instead of organization-time `today_org()` `[C]` (fixed: route every objective
+  serializer through the canonical request-scoped R56 organization clock; a pinned post-due
+  organization date proves the old host-local implementation returns the opposite attainment
+  band).
+- [x] `apps/api/src/easysynq_api/services/audit/verify.py:64` — on-demand chain verification loads
+  the entire organization chain as ORM rows in memory `[C]` (fixed: consume the ordered chain
+  through a server-side scalar stream in 500-row batches, retaining only the current row, running
+  hash, count, and reported breaks. Bounded windows still seed from the immediately preceding
+  linked hash; checkpoint attestation, pending-tail accounting, and the response shape are
+  unchanged).
+- [x] `apps/api/src/easysynq_api/services/audits/service.py:608` — audit start/completion dates use
+  the UTC calendar day instead of the organization calendar day `[C]` (fixed: stamp
+  `started_at`/`completed_at` from `today_org()` while keeping `audit_event.occurred_at` on the
+  authoritative UTC instant clock).
 
 ---
 

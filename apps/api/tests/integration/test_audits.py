@@ -10,6 +10,7 @@ DB across files, so absolute counts are never asserted.
 
 from __future__ import annotations
 
+import datetime
 import uuid
 from collections.abc import Callable
 
@@ -30,6 +31,7 @@ from easysynq_api.db.session import get_sessionmaker
 from easysynq_api.domain.authz.types import Effect, ScopeLevel
 from easysynq_api.problems import ProblemException
 from easysynq_api.services.audits import advance_audit, create_finding
+from easysynq_api.services.audits import service as audits_service
 
 from .test_vault import _auth, _ensure_user
 
@@ -79,8 +81,12 @@ async def _audit_event_count(object_id: str, event_type: EventType) -> int:
 
 
 async def test_audit_lifecycle_round_trip(
-    app_client: AsyncClient, token_factory: Callable[..., str]
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    org_day = datetime.date(2035, 2, 3)
+    monkeypatch.setattr(audits_service, "today_org", lambda: org_day)
     subject = _subject("aud")
     await _grant(subject, _AUDIT_KEYS)
     h = _auth(token_factory, subject)
@@ -126,6 +132,10 @@ async def test_audit_lifecycle_round_trip(
         r = await app_client.post(f"/api/v1/audits/{audit_id}/{action}", headers=h)
         assert r.status_code == 200, f"{action}: {r.text}"
         assert r.json()["state"] == expected
+        if expected == "InProgress":
+            assert r.json()["started_at"] == org_day.isoformat()
+        if expected == "Closed":
+            assert r.json()["completed_at"] == org_day.isoformat()
 
     # The created + closed events are recorded against the audit's record id.
     assert await _audit_event_count(audit_id, EventType.AUDIT_CREATED) == 1
@@ -149,7 +159,8 @@ async def test_audit_lifecycle_round_trip(
     r = await app_client.get(f"/api/v1/audits/{audit_id}", headers=h)
     assert r.status_code == 200, r.text
     assert r.json()["state"] == "Closed"
-    assert r.json()["completed_at"] is not None
+    assert r.json()["started_at"] == org_day.isoformat()
+    assert r.json()["completed_at"] == org_day.isoformat()
 
 
 async def test_invalid_transition_is_409(

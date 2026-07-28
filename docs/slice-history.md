@@ -177,6 +177,34 @@
 
 ## REMEDIATION — correctness, accessibility, polish & test reliability
 
+### Minor Batch M11 — organization-date coherence and bounded audit verification (API + unit/integration + docs; NO migration [head stays `0080`]; NO new permission key [catalog 102]; PR pending)
+
+**What shipped.** Objective attainment and internal-audit lifecycle dates now use the same canonical
+R56 organization clock as the rest of the application. The objective serializer's shared `_today`
+seam delegates to request-scoped `today_org()`, so create, list, scorecard, detail, measurement,
+plan, revision, and release responses all grade a due date in the organization's calendar rather
+than the API host's local date. Audit transitions likewise stamp `started_at` and `completed_at`
+from `today_org()`. Instant-valued `audit_event.occurred_at` remains on `_now()` in UTC; this change
+only corrects DATE derivation and does not weaken the authoritative server clock.
+
+Full audit-chain verification no longer materializes every linked `AuditEvent` ORM row before
+checking the first hash. It opens a server-side scalar stream with a 500-row `yield_per` batch,
+walks rows in the same per-org ascending-ID order, and retains only the running predecessor hash,
+checked count, current batch, and any reported breaks. A bounded `[from_id,to_id]` walk still seeds
+its first comparison from the immediately preceding linked row. The full-walk checkpoint
+attestation, independent unchained-tail count, break reasons/order, and API/CLI/Beat result contract
+are unchanged. Cryptographic verification necessarily remains linear in chain length, but its ORM
+row memory is now batch-bounded.
+
+**Tests.** Two focused unit regressions require the server-side streaming API, batch execution
+option, explicit result close, pending-tail count, and bounded-window predecessor seed. Integration
+coverage pins an organization date after an objective due date (the old host-local clock returns
+the opposite attainment), pins exact organization dates on both audit lifecycle stamps, and
+re-runs the existing link→verify→privileged-tamper→detect→restore proof against PostgreSQL. The
+complete objective, internal-audit, and audit-chain integration files pass **35 tests**. API
+Ruff/format and strict mypy over **426 source files** are clean; the full unit suite is green
+(**1182 passed, 1 expected release-only skip**).
+
 ### Minor Batch M10 — explicit blob identity contract and live query-path indexes (models + migration + populated migration test + docs; migration `0080` [new head]; NO new permission key [catalog 102]; PR [#390](https://github.com/CoJoA13/EasySynQ/pull/390))
 
 **What shipped.** The reported global-blob-key mismatch was revalidated and rejected as an

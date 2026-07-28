@@ -46,6 +46,7 @@ from ..improvement.repository import get_spawned_initiative
 from ..improvement.service import create_initiative
 from ..records.service import capture_record, emit_record_event
 from ..vault import repository as vault_repo
+from ..vault.review import today_org
 from . import repository as repo
 
 _PROGRAM_PREFIX = (
@@ -603,9 +604,9 @@ async def advance_audit(
     before_state = audit.state
     audit.state = target
     if target is AuditState.InProgress and audit.started_at is None:
-        audit.started_at = _now().date()
+        audit.started_at = today_org()
     if target is AuditState.Closed:
-        audit.completed_at = _now().date()
+        audit.completed_at = today_org()
     emit_record_event(
         session,
         actor,

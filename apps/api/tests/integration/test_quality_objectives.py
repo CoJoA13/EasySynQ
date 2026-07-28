@@ -4,6 +4,7 @@ test_audits precedent — a SYSTEM grant matches any resource)."""
 
 from __future__ import annotations
 
+import datetime
 import uuid
 from collections.abc import Callable
 
@@ -11,6 +12,7 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
 
+from easysynq_api.api import objectives as objectives_api
 from easysynq_api.db.models.authz_grant import PermissionOverride
 from easysynq_api.db.models.permission import Permission
 from easysynq_api.db.models.quality_objective import QualityObjective
@@ -54,8 +56,14 @@ async def _grant(subject: str, keys: tuple[str, ...]) -> uuid.UUID:
 
 
 async def test_create_objective_is_a_document_subtype_mapped_to_6_2(
-    app_client: AsyncClient, token_factory: Callable[..., str]
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # The request auth boundary has already installed the organization's timezone. Objective
+    # attainment must read that clock, not the API host's local calendar day. Pin an org day after
+    # the due date so the old ``date.today()`` implementation returns the opposite band.
+    monkeypatch.setattr(objectives_api, "today_org", lambda: datetime.date(2027, 1, 1))
     subject = f"obj-{uuid.uuid4()}"
     h = _auth(token_factory, subject)
     await _grant(subject, _OBJ_KEYS)
@@ -76,8 +84,7 @@ async def test_create_objective_is_a_document_subtype_mapped_to_6_2(
     body = r.json()
     assert body["unit"] == "%"
     assert body["rag"] == "unmeasured"  # no reading yet
-    # attainment is always one of the three computed bands (guards the contract enum from drifting)
-    assert body["attainment"] in {"in_progress", "met", "missed"}
+    assert body["attainment"] == "missed"
     assert body["identifier"].startswith("OBJ-")
     # the satellite row exists + the base is kind=DOCUMENT type OBJ
     async with get_sessionmaker()() as s:

@@ -68,6 +68,7 @@ from ..services.vault import (
 )
 from ..services.vault import repository as vault_repo
 from ..services.vault.release_scope import enrich_release_sod_scope
+from ..services.vault.review import today_org
 from ..services.workflow import repository as wf_repo
 
 router = APIRouter(prefix="/api/v1", tags=["objectives"])
@@ -413,7 +414,7 @@ _kpi_record = require("kpi.record", async_scope_resolver=_objective_scope)
 
 
 def _today() -> datetime.date:
-    return datetime.date.today()
+    return today_org()
 
 
 # --- endpoints ---

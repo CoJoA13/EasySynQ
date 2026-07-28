@@ -191,12 +191,16 @@ async def test_ac6b_linker_chains_verify_matches_and_tamper_is_first_broken_link
             break
     assert drained, "linker never reached a fixed point (idempotent no-op)"
 
+    org_id = await s5.default_org_id()
     async with get_sessionmaker()() as s:
         rows = (
             (
                 await s.execute(
                     select(AuditEvent.id)
-                    .where(AuditEvent.chained_at.is_not(None))
+                    .where(
+                        AuditEvent.org_id == org_id,
+                        AuditEvent.chained_at.is_not(None),
+                    )
                     .order_by(AuditEvent.id)
                 )
             )
@@ -214,6 +218,20 @@ async def test_ac6b_linker_chains_verify_matches_and_tamper_is_first_broken_link
     assert ok_body["verified"] is True
     assert ok_body["checked"] == len(rows)
     assert ok_body["pending"] == 0 and ok_body["breaks"] == []
+
+    # A bounded mid-chain window uses the linked row immediately before the requested range as its
+    # seed. Exercise that streamed predecessor lookup against PostgreSQL, not only a unit double.
+    start_index = len(rows) // 2
+    window = await app_client.get(
+        "/api/v1/audit-events/verify-chain",
+        headers=headers,
+        params={"from": rows[start_index], "to": rows[-1]},
+    )
+    assert window.status_code == 200, window.text
+    window_body = window.json()
+    assert window_body["verified"] is True
+    assert window_body["checked"] == len(rows) - start_index
+    assert window_body["breaks"] == []
 
     # A privileged operator (the OWNER role) mutates a row out-of-band — bypassing the app grant.
     victim = rows[len(rows) // 2]
