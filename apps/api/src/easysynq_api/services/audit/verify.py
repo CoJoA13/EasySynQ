@@ -26,6 +26,8 @@ from ...db.models.audit_event import AuditEvent
 from .canonical import GENESIS_HASH, audit_row_from_orm, compute_row_hash
 from .checkpoint import verify_checkpoint_signature
 
+_VERIFY_BATCH_SIZE = 500
+
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class ChainBreak:
@@ -87,41 +89,60 @@ async def verify_chain(
         stmt = stmt.where(AuditEvent.id >= from_id)
     if to_id is not None:
         stmt = stmt.where(AuditEvent.id <= to_id)
-    rows = (await session.execute(stmt)).scalars().all()
-
-    # Seed the walking prev_hash. For a full walk it is genesis; for a bounded walk that does not
-    # start at the chain head, seed from the row immediately before ``from_id`` so a legitimate
-    # window is not mis-flagged as a break at its first row.
     prev = GENESIS_HASH
-    if from_id is not None and rows:
+    breaks: list[ChainBreak] = []
+    checked = 0
+    first_id: int | None = None
+    first_prev = GENESIS_HASH
+    first_hash_matches = False
+    rows = await session.stream_scalars(stmt.execution_options(yield_per=_VERIFY_BATCH_SIZE))
+    try:
+        async for event in rows:
+            is_first = checked == 0
+            checked += 1
+            stored = event.row_hash or b""
+            event_prev = event.prev_hash or GENESIS_HASH
+            recomputed = compute_row_hash(audit_row_from_orm(event), event_prev, version=version)
+            if recomputed != stored:
+                breaks.append(ChainBreak(at_id=event.id, reason="row_hash mismatch (row mutated)"))
+            elif not (is_first and from_id is not None) and event_prev != prev:
+                breaks.append(
+                    ChainBreak(at_id=event.id, reason="prev_hash mismatch (chain reorder/deletion)")
+                )
+            if is_first and from_id is not None:
+                first_id = event.id
+                first_prev = event_prev
+                first_hash_matches = recomputed == stored
+            prev = stored
+    finally:
+        await rows.close()
+
+    # A bounded walk that starts after the chain head compares its first row with the immediately
+    # preceding linked row. Do this after consuming/closing the stream, preserving the old query
+    # order (candidate snapshot first, predecessor second) so a concurrent linker commit cannot
+    # make the two observations straddle an older predecessor and a newer streamed batch.
+    if first_id is not None:
         before = (
             await session.execute(
                 select(AuditEvent.row_hash)
                 .where(
                     AuditEvent.org_id == org_id,
                     AuditEvent.chained_at.is_not(None),
-                    AuditEvent.id < rows[0].id,
+                    AuditEvent.id < first_id,
                 )
                 .order_by(AuditEvent.id.desc())
                 .limit(1)
             )
         ).scalar_one_or_none()
-        if before is not None:
-            prev = before
-
-    breaks: list[ChainBreak] = []
-    for event in rows:
-        stored = event.row_hash or b""
-        recomputed = compute_row_hash(
-            audit_row_from_orm(event), event.prev_hash or GENESIS_HASH, version=version
-        )
-        if recomputed != stored:
-            breaks.append(ChainBreak(at_id=event.id, reason="row_hash mismatch (row mutated)"))
-        elif (event.prev_hash or GENESIS_HASH) != prev:
-            breaks.append(
-                ChainBreak(at_id=event.id, reason="prev_hash mismatch (chain reorder/deletion)")
+        expected_prev = before if before is not None else GENESIS_HASH
+        if first_hash_matches and first_prev != expected_prev:
+            breaks.insert(
+                0,
+                ChainBreak(
+                    at_id=first_id,
+                    reason="prev_hash mismatch (chain reorder/deletion)",
+                ),
             )
-        prev = stored
 
     # Signed-checkpoint attestation (doc 12 §4.4) — only on a full walk (a bounded window has no
     # meaningful global-checkpoint compare). A bad signature or a checkpoint↔chain hash mismatch is
@@ -141,7 +162,7 @@ async def verify_chain(
 
     return VerifyResult(
         verified=not breaks,
-        checked=len(rows),
+        checked=checked,
         pending=int(pending),
         breaks=breaks,
         checkpoint=checkpoint_status,
