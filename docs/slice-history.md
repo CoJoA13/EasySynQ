@@ -177,7 +177,7 @@
 
 ## REMEDIATION — correctness, accessibility, polish & test reliability
 
-### Minor Batch M13 — shipped API documentation alignment (docs only; OpenAPI contract unchanged; NO migration [head stays `0080`]; NO new permission key [catalog 102]; PR pending)
+### Minor Batch M13 — shipped API documentation alignment (docs only; OpenAPI contract unchanged; NO migration [head stays `0080`]; NO new permission key [catalog 102]; PR [#393](https://github.com/CoJoA13/EasySynQ/pull/393))
 
 **What shipped.** All four finder-only reports were re-located and confirmed against the current
 FastAPI decorators, service behavior, seeded permission catalog, web OIDC client, and published

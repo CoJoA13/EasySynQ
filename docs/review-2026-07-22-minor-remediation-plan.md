@@ -39,7 +39,7 @@
 | M10 | Schema and index design | 4 | ☑ merged | [#390](https://github.com/CoJoA13/EasySynQ/pull/390) |
 | M11 | Organization time and audit scalability | 3 | ☑ merged | [#391](https://github.com/CoJoA13/EasySynQ/pull/391) |
 | M12 | Data-model documentation drift | 5 | ☑ merged | [#392](https://github.com/CoJoA13/EasySynQ/pull/392) |
-| M13 | API documentation drift | 4 | ☑ in PR | — |
+| M13 | API documentation drift | 4 | ☑ in PR | [#393](https://github.com/CoJoA13/EasySynQ/pull/393) |
 | M14 | Infrastructure, deploy, and public edge | 6 | ☐ queued — revalidate | — |
 | M15 | Cross-stack naming | 4 | ☐ queued — revalidate | — |
 | M16 | UI copy and terminology | 7 | ☐ queued — revalidate | — |
@@ -345,7 +345,7 @@ permission key
   retained shared-PK satellite, and point document versions/drafts/links/distribution directly to
   the root throughout the ERD and API inventory).
 
-### ☑ M13 — API documentation drift
+### ☑ M13 — API documentation drift — [#393](https://github.com/CoJoA13/EasySynQ/pull/393)
 
 `branch: fix/minor-api-docs` · docs + OpenAPI prose
 
