@@ -122,7 +122,9 @@ it("shows an honest 'no published register' line when the register is unpublishe
   renderWithProviders(<PlanCard />);
   const card = await screen.findByRole("group", { name: /plan quadrant/i });
   await waitFor(() =>
-    expect(within(card).getByText(/no published risk register yet/i)).toBeInTheDocument(),
+    expect(
+      within(card).getByText(/no published risk & opportunity register yet/i),
+    ).toBeInTheDocument(),
   );
 });
 

@@ -157,7 +157,7 @@ export function NotificationSettingsPage() {
             <Switch
               label="Email notifications"
               aria-label="Email notifications"
-              description="Emails carry only a summary and a link — never controlled content — and require your administrator to enable email delivery for the organisation."
+              description="Emails carry only a summary and a link — never controlled content — and require your administrator to enable email delivery for the organization."
               checked={working.email_enabled}
               onChange={(e) => setWorking({ ...working, email_enabled: e.currentTarget.checked })}
             />

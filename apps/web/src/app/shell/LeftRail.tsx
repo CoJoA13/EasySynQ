@@ -33,7 +33,7 @@ const NAV: Record<PdcaPhase, NavItem[]> = {
     // Ungated (the CAPA/Library precedent): GET /risks is filter-not-403, so a bound Process-Owner who
     // holds register.read only at PROCESS scope must still see the link (the SYSTEM-scoped `can()` here
     // can't see their grant); a no-grant caller lands on a calm empty register (Codex P2).
-    { to: "/risks", label: "Risk register", prefix: "/risks" },
+    { to: "/risks", label: "Risk & opportunity register", prefix: "/risks" },
     // Ungated, same reasoning: GET /context is filter-not-403 (a no-grant caller → calm empty register).
     { to: "/context", label: "Context", prefix: "/context" },
     // Ungated, same reasoning: GET /interested-parties is filter-not-403 (clause 4.2 register).

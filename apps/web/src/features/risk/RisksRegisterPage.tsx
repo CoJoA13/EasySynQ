@@ -143,9 +143,9 @@ export function RisksRegisterPage() {
     return (
       <Container size="lg" py="md">
         <Title order={2} mb="md">
-          Risks & opportunities
+          Risk & opportunity register
         </Title>
-        <NoAccessState message="You don't have access to the Risk & Opportunity register." />
+        <NoAccessState message="You don't have access to the risk & opportunity register." />
       </Container>
     );
   }
@@ -153,10 +153,10 @@ export function RisksRegisterPage() {
     return (
       <Container size="lg" py="md">
         <Title order={2} mb="md">
-          Risks & opportunities
+          Risk & opportunity register
         </Title>
         <ErrorState
-          title="Couldn't load the risk register"
+          title="Couldn't load the risk & opportunity register"
           message="Something went wrong. Please try again."
           onRetry={() => refetch()}
         />
@@ -174,7 +174,7 @@ export function RisksRegisterPage() {
   return (
     <Container size="lg" py="md">
       <Group justify="space-between" mb="md">
-        <Title order={2}>Risks & opportunities</Title>
+        <Title order={2}>Risk & opportunity register</Title>
         {headEditable && canCreate && <Button onClick={() => setCreateOpen(true)}>New risk</Button>}
       </Group>
 

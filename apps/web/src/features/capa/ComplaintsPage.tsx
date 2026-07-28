@@ -92,7 +92,7 @@ export function ComplaintsPage() {
                     </Anchor>
                   ) : can("capa.create") ? (
                     <Button size="xs" variant="light" onClick={() => setSpawnComplaint(c)}>
-                      Spawn CAPA
+                      Raise CAPA
                     </Button>
                   ) : (
                     <Text c="dimmed" size="sm">

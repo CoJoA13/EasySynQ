@@ -92,6 +92,30 @@ test("DocumentDetailPage shows a no-access state on a 403", async () => {
   expect(await screen.findByText("You don't have access to this document.")).toBeInTheDocument();
 });
 
+test("DocumentDetailPage uses the canonical retry copy and refetches after a generic failure", async () => {
+  let attempts = 0;
+  server.use(
+    http.get("/api/v1/documents/:id", ({ params }) => {
+      attempts += 1;
+      if (attempts === 1) {
+        return HttpResponse.json({ code: "error", title: "Error" }, { status: 500 });
+      }
+      const doc = docFixture.find((d) => d.id === params.id);
+      return HttpResponse.json(doc);
+    }),
+  );
+  const user = userEvent.setup();
+  renderPage();
+  expect(await screen.findByText("Couldn't load this document")).toBeInTheDocument();
+  expect(screen.getByText("Please try again.")).toBeInTheDocument();
+  expect(screen.getByRole("link", { name: /Back to the Library/ })).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "Try again" }));
+  expect(
+    await screen.findByRole("heading", { name: "Supplier Selection & Evaluation" }),
+  ).toBeInTheDocument();
+  expect(attempts).toBe(2);
+});
+
 test("DocumentDetailPage hides author actions without the edit capability (DP-6)", async () => {
   renderPage();
   await screen.findByRole("heading", { name: /Supplier Selection/ });

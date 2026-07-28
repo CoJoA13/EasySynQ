@@ -177,6 +177,37 @@
 
 ## REMEDIATION — correctness, accessibility, polish & test reliability
 
+### Minor Batch M16 — user-facing copy and terminology consistency (API + web + tests + docs; NO migration [head stays `0080`]; NO new permission key [catalog 102]; PR pending)
+
+**What shipped.** All seven finder-only copy reports were re-located against current API problem
+rendering, shared web state primitives, navigation, feature labels, and stable route/URL contracts;
+all seven remained live. Risk-register lifecycle details are now complete, punctuated sentences
+safe to render verbatim. Notification surfaces consistently use the existing en-US “organization”
+spelling, and the audit list, detail breadcrumb, and programme page follow the shell's sentence-case
+heading convention.
+
+CAPA creation actions now say “Raise” on the complaint row, severity-confirm modal, and risk
+treatment drawer. The implementation deliberately retains `spawn-capa`, `spawned_capa_id`,
+`useSpawnCapa`, and technical component names because those are accurate stable API/code contracts;
+only operator-facing jargon changes. A generic full-page document load failure now uses the shared
+`ErrorState` vocabulary and a real refetch action, while its distinct no-access/not-found messages
+and Library return link are preserved.
+
+The document lifecycle label mapping is now reusable outside `StateBadge`, so the Library's Status
+select and active-filter chip show “In review” / “Under revision” while raw enum values remain the
+unchanged URL/query contract. “Risk & opportunity register” is the one operator-facing name across
+the rail, page states, release confirmation, and Home unpublished summary.
+
+**Impact.** Copy and presentation only; no migration, API route/payload, URL filter value,
+permission, event, persistence, or task-name change. The remediation tracker advances M15 to
+merged, closes all seven M16 findings, and preserves the original denominator:
+1 preclosed + 54 merged + 7 in PR + 42 queued.
+
+**Validation.** `git diff --check`; full API Ruff + format; API mypy (**426 source files**);
+focused risk-lifecycle copy proof (**1 passed**); full API unit suite (**1188 passed, 1 expected
+release-only skip**); affected web coverage (**129 passed**); full web suite (**1370 passed across
+237 files**); web lint, TypeScript, and production build.
+
 ### Minor Batch M15 — cross-stack naming without contract churn (API + web + tests + docs; NO migration [head stays `0080`]; NO new permission key [catalog 102]; PR [#395](https://github.com/CoJoA13/EasySynQ/pull/395))
 
 **What shipped.** All four finder-only reports were re-located against current API, ORM, browser,
@@ -213,7 +244,7 @@ the grammatically appropriate stable routes.
 or worker task-name change. Python callers get consistent full Management Review and predicate
 attribute names; browser users get one Import vocabulary and old bookmarks keep working. The
 remediation tracker advances M14 to merged, closes all four M15 findings, and preserves the
-original denominator: 1 preclosed + 50 merged + 4 in PR + 49 queued.
+original denominator: 1 preclosed + 54 merged + 49 queued.
 
 **Validation.** `git diff --check`; full API Ruff + format; API mypy (**426 source files**); full
 API unit suite (**1187 passed, 1 expected release-only skip**); populated migration coherence

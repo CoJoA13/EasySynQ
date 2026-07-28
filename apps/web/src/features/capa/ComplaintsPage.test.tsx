@@ -24,7 +24,7 @@ test("lists complaints from {data}; hides write affordances without the keys (de
   expect(screen.getByText(/Delivered batch missing CoA/)).toBeInTheDocument();
   // Default /me/permissions is empty → neither write affordance renders (negative-gating).
   expect(screen.queryByRole("button", { name: /Log complaint/ })).toBeNull();
-  expect(screen.queryByRole("button", { name: /Spawn CAPA/ })).toBeNull();
+  expect(screen.queryByRole("button", { name: /Raise CAPA/ })).toBeNull();
 });
 
 test("hides 'Log complaint' without record.create; shows + opens it with the key", async () => {
@@ -43,7 +43,16 @@ test("logging a complaint POSTs /complaints and closes the modal", async () => {
     http.post("/api/v1/complaints", () => {
       posted = true;
       return HttpResponse.json(
-        { id: "x", identifier: "CMP-x", customer: null, received_at: null, channel: null, description: "x", severity: null, spawned_capa_id: null },
+        {
+          id: "x",
+          identifier: "CMP-x",
+          customer: null,
+          received_at: null,
+          channel: null,
+          description: "x",
+          severity: null,
+          spawned_capa_id: null,
+        },
         { status: 201 },
       );
     }),
@@ -57,7 +66,7 @@ test("logging a complaint POSTs /complaints and closes the modal", async () => {
   await waitFor(() => expect(posted).toBe(true));
 });
 
-test("spawning a CAPA opens a severity-confirm modal (pre-filled) and POSTs the severity", async () => {
+test("raising a CAPA opens a severity-confirm modal (pre-filled) and POSTs the severity", async () => {
   grant(["capa.create"]);
   let body: { severity?: string } | null = null;
   server.use(
@@ -69,21 +78,31 @@ test("spawning a CAPA opens a severity-confirm modal (pre-filled) and POSTs the 
   const u = userEvent.setup();
   renderWithProviders(<ComplaintsPage />, { route: "/capa/complaints" });
   const row = await screen.findByRole("row", { name: /CMP-000007/ });
-  await u.click(within(row).getByRole("button", { name: /Spawn CAPA/ }));
-  // CMP-000007 has severity Critical → the modal pre-fills it; confirm to spawn.
+  await u.click(within(row).getByRole("button", { name: /Raise CAPA/ }));
+  // CMP-000007 has severity Critical → the modal pre-fills it; confirm to raise.
   const dialog = await screen.findByRole("dialog");
-  await u.click(within(dialog).getByRole("button", { name: /Spawn CAPA/ }));
+  expect(within(dialog).getByText("Raise a CAPA")).toBeInTheDocument();
+  await u.click(within(dialog).getByRole("button", { name: /Raise CAPA/ }));
   await waitFor(() => expect(body).not.toBeNull());
   expect(body!.severity).toBe("Critical");
 });
 
-test("spawning from a severity-LESS complaint requires picking a severity (no dead-end)", async () => {
+test("raising from a severity-LESS complaint requires picking a severity (no dead-end)", async () => {
   grant(["capa.create"]);
   server.use(
     http.get("/api/v1/complaints", () =>
       HttpResponse.json({
         data: [
-          { id: "cm-nosev", identifier: "CMP-000099", customer: null, received_at: null, channel: null, description: "No severity yet", severity: null, spawned_capa_id: null },
+          {
+            id: "cm-nosev",
+            identifier: "CMP-000099",
+            customer: null,
+            received_at: null,
+            channel: null,
+            description: "No severity yet",
+            severity: null,
+            spawned_capa_id: null,
+          },
         ],
       }),
     ),
@@ -98,19 +117,19 @@ test("spawning from a severity-LESS complaint requires picking a severity (no de
   const u = userEvent.setup();
   renderWithProviders(<ComplaintsPage />, { route: "/capa/complaints" });
   const row = await screen.findByRole("row", { name: /CMP-000099/ });
-  await u.click(within(row).getByRole("button", { name: /Spawn CAPA/ }));
+  await u.click(within(row).getByRole("button", { name: /Raise CAPA/ }));
   const dialog = await screen.findByRole("dialog");
   // No severity to inherit → the confirm button is disabled until one is picked (no 422 dead-end).
-  expect(within(dialog).getByRole("button", { name: /Spawn CAPA/ })).toBeDisabled();
+  expect(within(dialog).getByRole("button", { name: /Raise CAPA/ })).toBeDisabled();
   const [sevInput] = within(dialog).getAllByLabelText(/Severity/);
   await u.click(sevInput!);
   await u.click(await screen.findByRole("option", { name: "Major" }));
-  await u.click(within(dialog).getByRole("button", { name: /Spawn CAPA/ }));
+  await u.click(within(dialog).getByRole("button", { name: /Raise CAPA/ }));
   await waitFor(() => expect(body).not.toBeNull());
   expect(body!.severity).toBe("Major");
 });
 
-test("shows 'View CAPA' (not Spawn) for an already-spawned complaint", async () => {
+test("shows 'View CAPA' (not Raise) for an already-spawned complaint", async () => {
   grant(["capa.create"]);
   renderWithProviders(<ComplaintsPage />, { route: "/capa/complaints" });
   const row = await screen.findByRole("row", { name: /CMP-000006/ });
@@ -119,7 +138,7 @@ test("shows 'View CAPA' (not Spawn) for an already-spawned complaint", async () 
     "href",
     "/capa?capa=ca000002-0002-0002-0002-000000000002",
   );
-  expect(within(row).queryByRole("button", { name: /Spawn CAPA/ })).toBeNull();
+  expect(within(row).queryByRole("button", { name: /Raise CAPA/ })).toBeNull();
 });
 
 test("renders a calm no-access panel on a 403", async () => {

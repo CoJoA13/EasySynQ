@@ -62,8 +62,8 @@ export function ConfigAdmin() {
       <Stack gap="md">
         <Title order={2}>Notifications</Title>
         <Switch
-          label="Email delivery (organisation-wide)"
-          aria-label="Email delivery (organisation-wide)"
+          label="Email delivery (organization-wide)"
+          aria-label="Email delivery (organization-wide)"
           description="When on, the worker sends email notifications via the configured SMTP relay. Default off — enable after configuring SMTP. Emails carry a summary + link only, never controlled content."
           checked={working.notifications_email_enabled}
           onChange={(e) =>

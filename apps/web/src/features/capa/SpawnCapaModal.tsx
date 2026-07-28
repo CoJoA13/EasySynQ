@@ -29,16 +29,16 @@ export function SpawnCapaModal({
       await m.mutateAsync({ complaintId: complaint.id, severity });
       onClose();
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : "Could not spawn a CAPA.");
+      setError(e instanceof ApiError ? e.message : "Could not raise a CAPA.");
     }
   }
   return (
-    <Modal opened={opened} onClose={onClose} title="Spawn a CAPA">
+    <Modal opened={opened} onClose={onClose} title="Raise a CAPA">
       <Stack gap="sm">
         {error && <Alert color="red">{error}</Alert>}
         <Text size="sm" c="dimmed">
-          Raise a corrective/preventive action from {complaint.identifier ?? "this complaint"}. Confirm
-          its severity.
+          Raise a corrective/preventive action from {complaint.identifier ?? "this complaint"}.
+          Confirm its severity.
         </Text>
         <Select
           label="Severity"
@@ -54,7 +54,7 @@ export function SpawnCapaModal({
             Cancel
           </Button>
           <Button onClick={() => void submit()} loading={m.isPending} disabled={!severity}>
-            Spawn CAPA
+            Raise CAPA
           </Button>
         </Group>
       </Stack>

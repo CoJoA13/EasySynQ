@@ -4,6 +4,7 @@ import { Link, useParams, useSearchParams } from "react-router-dom";
 import { useDocumentTypes } from "../../app/shell/useDocumentTypes";
 import { useUserDirectory } from "../../app/shell/useUserDirectory";
 import { ApiError } from "../../lib/api";
+import { ErrorState } from "../../lib/states";
 import { AuthorActions } from "../authoring/AuthorActions";
 import { AcknowledgementsTab } from "./AcknowledgementsTab";
 import { ApprovalsTab } from "./ApprovalsTab";
@@ -66,7 +67,15 @@ export function DocumentDetailPage() {
       { replace: true },
     );
 
-  const { data: doc, isLoading, isError, error } = useDocument(id, { enabled: id !== null });
+  const {
+    data: doc,
+    isLoading,
+    isError,
+    error,
+    refetch,
+  } = useDocument(id, {
+    enabled: id !== null,
+  });
   const { data: types } = useDocumentTypes();
   const { data: directory } = useUserDirectory();
   const { data: versions } = useDocumentVersions(id, id !== null);
@@ -90,12 +99,18 @@ export function DocumentDetailPage() {
 
   if (isError || !doc) {
     const status = error instanceof ApiError ? error.status : 0;
+    if (status !== 403 && status !== 404) {
+      return (
+        <Stack gap="sm">
+          <ErrorState title="Couldn't load this document" onRetry={() => void refetch()} />
+          <Anchor component={Link} to="/library">
+            ← Back to the Library
+          </Anchor>
+        </Stack>
+      );
+    }
     const msg =
-      status === 403
-        ? "You don't have access to this document."
-        : status === 404
-          ? "This document does not exist."
-          : "Could not load this document.";
+      status === 403 ? "You don't have access to this document." : "This document does not exist.";
     return (
       <Alert color={status === 403 ? "yellow" : "red"} title="Document unavailable">
         <Stack gap="xs" align="flex-start">
@@ -162,7 +177,9 @@ export function DocumentDetailPage() {
         />
         <Tile
           label="Acknowledged"
-          value={cov === null ? "—" : cov.required === 0 ? "—" : `${cov.acknowledged} / ${cov.required}`}
+          value={
+            cov === null ? "—" : cov.required === 0 ? "—" : `${cov.acknowledged} / ${cov.required}`
+          }
           sub={
             cov === null
               ? "Not yet effective"
