@@ -177,6 +177,37 @@
 
 ## REMEDIATION — correctness, accessibility, polish & test reliability
 
+### Minor Batch M17 — eliminate test false-PASS traps (API + web tests + docs; NO production change; NO migration [head stays `0080`]; NO new permission key [catalog 102]; PR [#397](https://github.com/CoJoA13/EasySynQ/pull/397))
+
+**What shipped.** All three finder-only reports were re-located against the current integration
+harness, org-clock request boundary, Vitest configuration, and TypeScript test declarations; all
+three remained live. The review-date backfill proof now creates and releases its own uniquely named
+document, records its canonical due date, corrupts that exact row, and requires the precise
+old-to-new repair tuple plus second-run idempotence. It no longer skips on a clean shard or borrows
+another test's residue.
+
+The end-to-end org-clock proof now fixes the review serializer at an instant where
+Pacific/Kiritimati is one calendar day ahead of UTC. It seeds a known-wrong UTC context before the
+authenticated GET, so only the auth dependency's canonical-timezone assignment can produce
+`overdue`; omitting that assignment produces `due_soon` regardless of the real UTC hour. A direct
+mutation probe confirmed that failure, and the Docker-free unit complement no longer advertises the
+retired 14-of-24-hours limitation.
+
+The objective hooks test now imports `expect` and `it` from Vitest explicitly, matching every other
+web test file. The focused test remains green with Vitest globals disabled, so the repository's
+global runtime/type declarations are no longer masking that file's dependency.
+
+**Impact.** Test harnesses and remediation documentation only; no runtime source, API contract,
+database schema, migration, permission, event, persistence, or user-facing behavior changes. The
+remediation tracker advances M16 to merged, closes all three M17 findings, and preserves the
+original denominator: 1 preclosed + 61 merged + 3 in PR + 39 queued.
+
+**Validation.** `git diff --check`; full API Ruff + format; API mypy (**426 source files**);
+focused org-clock unit coverage (**6 passed**); affected integration files in fresh disposable
+testcontainers (**4 passed**) plus the auth-propagation mutation probe (**expected red:
+`due_soon` vs `overdue`**); globals-disabled objective-hook coverage (**3 passed**); full web suite
+(**1370 passed across 237 files**); web lint, TypeScript, and production build.
+
 ### Minor Batch M16 — user-facing copy and terminology consistency (API + web + tests + docs; NO migration [head stays `0080`]; NO new permission key [catalog 102]; PR [#396](https://github.com/CoJoA13/EasySynQ/pull/396))
 
 **What shipped.** All seven finder-only copy reports were re-located against current API problem

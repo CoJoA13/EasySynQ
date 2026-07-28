@@ -10,8 +10,8 @@
 - The historic denominator remains **104**. One finding was already closed while the MAJOR work was
   underway, leaving **103** to schedule here. Batch M1 closed 4; M2 closed 2; M3 closed 2; M4
   closed 4; M5 closed 3; M6 closed 4; M7 closed 3; M8 closed 2; M9 closed 4; M10 closed 4;
-  M11 closed 3; M12 closed 5; M13 closed 4; M14 closed 6; M15 closed 4; M16 resolves 7;
-  **42 remain queued** after M16.
+  M11 closed 3; M12 closed 5; M13 closed 4; M14 closed 6; M15 closed 4; M16 closed 7;
+  M17 resolves 3; **39 remain queued** after M17.
 - A queued finding is not assumed to still be live. Every batch must re-locate and revalidate its
   findings against then-current `main` before implementation; close, re-scope, or reject it with
   evidence rather than mechanically applying the 2026-07-22 suggestion.
@@ -43,15 +43,15 @@
 | M13 | API documentation drift | 4 | ☑ merged | [#393](https://github.com/CoJoA13/EasySynQ/pull/393) |
 | M14 | Infrastructure, deploy, and public edge | 6 | ☑ merged | [#394](https://github.com/CoJoA13/EasySynQ/pull/394) |
 | M15 | Cross-stack naming | 4 | ☑ merged | [#395](https://github.com/CoJoA13/EasySynQ/pull/395) |
-| M16 | UI copy and terminology | 7 | ☑ in PR | [#396](https://github.com/CoJoA13/EasySynQ/pull/396) |
-| M17 | Test false-PASS traps | 3 | ☐ queued — revalidate | — |
+| M16 | UI copy and terminology | 7 | ☑ merged | [#396](https://github.com/CoJoA13/EasySynQ/pull/396) |
+| M17 | Test false-PASS traps | 3 | ☑ in PR | [#397](https://github.com/CoJoA13/EasySynQ/pull/397) |
 | M18 | Web shell, layout, and error consistency | 9 | ☐ queued — revalidate | — |
 | M19 | Web state and badge consistency | 9 | ☐ queued — revalidate | — |
 | M20 | Web visual tokens and semantics | 6 | ☐ queued — revalidate | — |
 | M21 | Web async and error UX | 8 | ☐ queued — revalidate | — |
 | M22 | Web accessibility | 7 | ☐ queued — revalidate | — |
 
-**Accounting: 1 preclosed + 54 merged + 7 in PR + 42 queued = 104 original findings.**
+**Accounting: 1 preclosed + 61 merged + 3 in PR + 39 queued = 104 original findings.**
 
 ---
 
@@ -466,16 +466,25 @@ permission key
   unpublished summary consistently call it the “Risk & opportunity register”, with normal
   sentence-context capitalization).
 
-### ☐ M17 — Test false-PASS traps
+### ☑ M17 — Test false-PASS traps — [#397](https://github.com/CoJoA13/EasySynQ/pull/397)
 
-`branch: test/minor-false-pass-traps` · API integration + web unit tests
+`branch: test/minor-false-pass-traps` · API integration + web unit tests · no production change,
+migration, or new permission key
 
-- [ ] `apps/api/tests/integration/test_backfill_review_dates.py:37` — skips unless another test
-  happens to leave a suitable document behind `[f]`.
-- [ ] `apps/api/tests/integration/test_org_clock.py:141` — detects its timezone regression during
-  only 14 of 24 UTC hours `[f]`.
-- [ ] `apps/web/src/features/objectives/hooks.test.tsx:19` — the only web test file relying on
-  implicit Vitest globals remains green only because the environment masks the deviation `[f]`.
+- [x] `apps/api/tests/integration/test_backfill_review_dates.py:37` — skips unless another test
+  happens to leave a suitable document behind `[C]` (fixed: provision a unique Effective document
+  through the real lifecycle harness, corrupt that exact row, require its precise old/new tuple,
+  restore the canonical date, and prove a second backfill omits it; a clean shard now passes instead
+  of skipping).
+- [x] `apps/api/tests/integration/test_org_clock.py:141` — detects its timezone regression during
+  only 14 of 24 UTC hours `[C]` (fixed: freeze the serializer at an instant whose Kiritimati date is
+  one day ahead of UTC, seed a known-wrong UTC request context, and require authentication to
+  replace it. Removing `set_request_org_tz` now deterministically yields `due_soon` instead of
+  `overdue` at every wall-clock hour).
+- [x] `apps/web/src/features/objectives/hooks.test.tsx:19` — the only web test file relying on
+  implicit Vitest globals remains green only because the environment masks the deviation `[C]`
+  (fixed: import `expect` and `it` from Vitest explicitly; the focused file passes with globals
+  disabled as well as under strict TypeScript and the full web suite).
 
 ---
 
