@@ -138,7 +138,7 @@ function ReleaseConfirm({ opened, onClose }: { opened: boolean; onClose: () => v
         await release.mutateAsync();
         onClose();
       }}
-      title="Release the risk register"
+      title="Release the risk & opportunity register"
       consequence="This promotes the approved version to Effective — it becomes the governing read-of-record and the working rows lock until the next revision."
       confirmLabel="Release"
       confirmColor="teal"

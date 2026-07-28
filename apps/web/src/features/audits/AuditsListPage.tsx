@@ -101,7 +101,7 @@ export function AuditsListPage() {
     return (
       <Container size="xl" py="md">
         <Title order={3} mb="md">
-          Internal Audit
+          Internal audit
         </Title>
         <NoAccessState
           message={
@@ -125,7 +125,7 @@ export function AuditsListPage() {
     return (
       <Container size="xl" py="md">
         <Title order={3} mb="md">
-          Internal Audit
+          Internal audit
         </Title>
         <ErrorState title="Couldn't load audits" onRetry={() => refetch()} />
       </Container>
@@ -146,7 +146,7 @@ export function AuditsListPage() {
   return (
     <Container size="xl" py="md">
       <Group justify="space-between" mb="md">
-        <Title order={3}>Internal Audit</Title>
+        <Title order={3}>Internal audit</Title>
         {can("audit.create") && <Button onClick={() => setNewOpen(true)}>＋ New audit</Button>}
       </Group>
       <AsOf at={dataUpdatedAt} />

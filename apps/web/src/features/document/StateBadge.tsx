@@ -16,6 +16,10 @@ const META: Record<DocumentCurrentState, { label: string; tone: Tone }> = {
   Obsolete: { label: "Obsolete", tone: "neutral" },
 };
 
+export function documentStateLabel(state: DocumentCurrentState): string {
+  return META[state].label;
+}
+
 export function StateBadge({
   state,
   size = "sm",
@@ -23,6 +27,7 @@ export function StateBadge({
   state: DocumentCurrentState;
   size?: MantineSize;
 }) {
-  const { label, tone } = META[state];
+  const { tone } = META[state];
+  const label = documentStateLabel(state);
   return <StatusBadge tone={tone} label={label} kind="State" size={size} />;
 }

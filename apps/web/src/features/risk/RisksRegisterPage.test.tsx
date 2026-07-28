@@ -40,6 +40,9 @@ function registerState(state: string, caps?: { can_release?: boolean; can_manage
 
 it("renders the matrix, scorecard, and a row per risk with a band badge", async () => {
   const { container } = renderWithProviders(<RisksRegisterPage />, { route: "/risks" });
+  expect(
+    await screen.findByRole("heading", { name: "Risk & opportunity register" }),
+  ).toBeInTheDocument();
   await waitFor(() =>
     expect(screen.getByText("Supplier single point of failure")).toBeInTheDocument(),
   );
@@ -282,7 +285,11 @@ it("lets Publish proceed (not client-disabled) and surfaces the server's empty-r
     http.get("/api/v1/risks", () => HttpResponse.json({ data: [] })),
     http.post("/api/v1/risks/register/publish", () =>
       HttpResponse.json(
-        { code: "register_empty", title: "Risk register has no rows to publish." },
+        {
+          code: "register_empty",
+          title: "Risk register has no rows to publish",
+          detail: "Add at least one risk or opportunity before publishing the register.",
+        },
         { status: 409 },
       ),
     ),
@@ -297,7 +304,9 @@ it("lets Publish proceed (not client-disabled) and surfaces the server's empty-r
   await user.click(screen.getByRole("button", { name: "Publish" }));
   // the server reason lands in the modal and it stays open
   await waitFor(() =>
-    expect(screen.getByText("Risk register has no rows to publish.")).toBeInTheDocument(),
+    expect(
+      screen.getByText("Add at least one risk or opportunity before publishing the register."),
+    ).toBeInTheDocument(),
   );
   expect(screen.getByText("Publish register revision")).toBeInTheDocument();
 });

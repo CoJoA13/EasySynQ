@@ -2,6 +2,7 @@ import { Button, Group, Select, Stack, Text } from "@mantine/core";
 import { useClauses } from "../../app/shell/useClauses";
 import { useDocumentTypes } from "../../app/shell/useDocumentTypes";
 import { useUserDirectory } from "../../app/shell/useUserDirectory";
+import { documentStateLabel } from "../document/StateBadge";
 import { EFFECTIVE_BUCKETS, STATES, type UrlFilters } from "./filters";
 
 // The faceted filter bar (Type · Status · Owner · Clause · Effective date) + a removable active-
@@ -23,8 +24,11 @@ export function FacetBar({
 
   const typeData = (types ?? []).map((t) => ({ value: t.id, label: t.name }));
   const ownerData = (directory ?? []).map((u) => ({ value: u.id, label: u.display_name ?? u.id }));
-  const clauseData = (clauses ?? []).map((c) => ({ value: c.number, label: `${c.number} ${c.title}` }));
-  const stateData = STATES.map((s) => ({ value: s, label: s }));
+  const clauseData = (clauses ?? []).map((c) => ({
+    value: c.number,
+    label: `${c.number} ${c.title}`,
+  }));
+  const stateData = STATES.map((s) => ({ value: s, label: documentStateLabel(s) }));
   const effData = EFFECTIVE_BUCKETS.map((b) => ({ value: b.value, label: b.label }));
 
   const label = (data: { value: string; label: string }[], v: string) =>
@@ -32,7 +36,7 @@ export function FacetBar({
 
   const chips: { key: keyof UrlFilters; text: string }[] = [];
   if (value.type) chips.push({ key: "type", text: `Type: ${label(typeData, value.type)}` });
-  if (value.state) chips.push({ key: "state", text: `State: ${value.state}` });
+  if (value.state) chips.push({ key: "state", text: `State: ${label(stateData, value.state)}` });
   if (value.owner) chips.push({ key: "owner", text: `Owner: ${label(ownerData, value.owner)}` });
   if (value.clause) chips.push({ key: "clause", text: `Clause: ${value.clause}` });
   if (value.eff) chips.push({ key: "eff", text: `Effective: ${label(effData, value.eff)}` });

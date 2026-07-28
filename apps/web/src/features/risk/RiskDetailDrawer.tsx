@@ -48,7 +48,7 @@ export function RiskDetailDrawer({
     try {
       await spawn.mutateAsync();
     } catch (e) {
-      setSpawnError(e instanceof ApiError ? e.message : "Could not spawn a CAPA.");
+      setSpawnError(e instanceof ApiError ? e.message : "Could not raise a CAPA.");
     }
   }
 
@@ -140,7 +140,7 @@ export function RiskDetailDrawer({
                       onClick={() => void doSpawn()}
                       loading={spawn.isPending}
                     >
-                      Treat → spawn CAPA
+                      Treat → raise CAPA
                     </Button>
                     <Text size="xs" c="dimmed">
                       Raises a corrective action to treat this risk (severity set from the band).

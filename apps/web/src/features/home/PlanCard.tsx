@@ -50,7 +50,9 @@ export function PlanCard() {
     } else {
       // No published register yet → an honest neutral line (never a misleading "0 high-risk"); it
       // doesn't drive the headline RAG.
-      lines.push(<StatLine key="risk" label="no published risk register yet" tone="neutral" />);
+      lines.push(
+        <StatLine key="risk" label="no published risk & opportunity register yet" tone="neutral" />,
+      );
     }
   }
   if (!ctx.forbidden && !ctx.isError && ctx.data) {

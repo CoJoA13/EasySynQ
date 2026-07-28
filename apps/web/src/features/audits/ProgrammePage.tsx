@@ -29,7 +29,7 @@ export function ProgrammePage() {
     return (
       <Container size="xl" py="md">
         <Title order={3} mb="md">
-          Audit Programme
+          Audit programme
         </Title>
         <NoAccessState
           message={
@@ -53,7 +53,7 @@ export function ProgrammePage() {
     return (
       <Container size="xl" py="md">
         <Title order={3} mb="md">
-          Audit Programme
+          Audit programme
         </Title>
         <ErrorState title="Couldn't load programmes" onRetry={() => refetch()} />
       </Container>
@@ -63,7 +63,7 @@ export function ProgrammePage() {
   return (
     <Container size="xl" py="md">
       <Group justify="space-between" mb="md">
-        <Title order={3}>Audit Programme</Title>
+        <Title order={3}>Audit programme</Title>
         {can("audit.plan") && <Button onClick={() => setEditing("new")}>＋ New programme</Button>}
       </Group>
       {rows.length === 0 ? (

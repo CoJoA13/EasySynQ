@@ -10,8 +10,8 @@
 - The historic denominator remains **104**. One finding was already closed while the MAJOR work was
   underway, leaving **103** to schedule here. Batch M1 closed 4; M2 closed 2; M3 closed 2; M4
   closed 4; M5 closed 3; M6 closed 4; M7 closed 3; M8 closed 2; M9 closed 4; M10 closed 4;
-  M11 closed 3; M12 closed 5; M13 closed 4; M14 closed 6; M15 resolves 4;
-  **49 remain queued** after M15.
+  M11 closed 3; M12 closed 5; M13 closed 4; M14 closed 6; M15 closed 4; M16 resolves 7;
+  **42 remain queued** after M16.
 - A queued finding is not assumed to still be live. Every batch must re-locate and revalidate its
   findings against then-current `main` before implementation; close, re-scope, or reject it with
   evidence rather than mechanically applying the 2026-07-22 suggestion.
@@ -42,8 +42,8 @@
 | M12 | Data-model documentation drift | 5 | ☑ merged | [#392](https://github.com/CoJoA13/EasySynQ/pull/392) |
 | M13 | API documentation drift | 4 | ☑ merged | [#393](https://github.com/CoJoA13/EasySynQ/pull/393) |
 | M14 | Infrastructure, deploy, and public edge | 6 | ☑ merged | [#394](https://github.com/CoJoA13/EasySynQ/pull/394) |
-| M15 | Cross-stack naming | 4 | ☑ in PR | [#395](https://github.com/CoJoA13/EasySynQ/pull/395) |
-| M16 | UI copy and terminology | 7 | ☐ queued — revalidate | — |
+| M15 | Cross-stack naming | 4 | ☑ merged | [#395](https://github.com/CoJoA13/EasySynQ/pull/395) |
+| M16 | UI copy and terminology | 7 | ☑ in PR | [#396](https://github.com/CoJoA13/EasySynQ/pull/396) |
 | M17 | Test false-PASS traps | 3 | ☐ queued — revalidate | — |
 | M18 | Web shell, layout, and error consistency | 9 | ☐ queued — revalidate | — |
 | M19 | Web state and badge consistency | 9 | ☐ queued — revalidate | — |
@@ -51,7 +51,7 @@
 | M21 | Web async and error UX | 8 | ☐ queued — revalidate | — |
 | M22 | Web accessibility | 7 | ☐ queued — revalidate | — |
 
-**Accounting: 1 preclosed + 50 merged + 4 in PR + 49 queued = 104 original findings.**
+**Accounting: 1 preclosed + 54 merged + 7 in PR + 42 queued = 104 original findings.**
 
 ---
 
@@ -434,24 +434,37 @@ permission key
   strings for bookmarks; the technical `features/ingestion` package remains named for the pipeline
   activity and that layering is documented).
 
-### ☐ M16 — UI copy and terminology
+### ☑ M16 — UI copy and terminology — [#396](https://github.com/CoJoA13/EasySynQ/pull/396)
 
 `branch: fix/minor-ui-copy-terminology` · API problem copy + web + focused tests
 
-- [ ] `apps/api/src/easysynq_api/services/risk/lifecycle.py:151` — lowercase, unpunctuated problem
-  details are rendered verbatim in user alerts `[f]`.
-- [ ] `apps/web/src/admin/ConfigAdmin.tsx:65` — user copy mixes “organisation” and “organization”
-  `[f]`.
-- [ ] `apps/web/src/features/audits/AuditsListPage.tsx:148` — heading capitalization conflicts
-  with the dominant sentence-case convention `[f]`.
-- [ ] `apps/web/src/features/capa/SpawnCapaModal.tsx:36` — “Spawn CAPA” exposes developer jargon
-  where sibling surfaces use “Raise” `[f]`.
-- [ ] `apps/web/src/features/document/DocumentDetailPage.tsx:98` — error copy mixes incompatible
-  contraction and retry conventions `[f]`.
-- [ ] `apps/web/src/features/library/FacetBar.tsx:27` — lifecycle filters/chips expose raw enum
-  values instead of canonical labels `[f]`.
-- [ ] `apps/web/src/features/risk/RisksRegisterPage.tsx:148` — the risk register has four
-  user-facing names `[f]`.
+- [x] `apps/api/src/easysynq_api/services/risk/lifecycle.py:151` — lowercase, unpunctuated problem
+  details are rendered verbatim in user alerts `[C]` (fixed: every risk-lifecycle problem detail
+  now begins with a capital and ends with punctuation; a focused unit proof pins the empty-register
+  detail that the publish modal renders verbatim).
+- [x] `apps/web/src/admin/ConfigAdmin.tsx:65` — user copy mixes “organisation” and “organization”
+  `[C]` (fixed: notification configuration, delivery health, and personal notification settings
+  consistently use the product's existing en-US “organization” spelling).
+- [x] `apps/web/src/features/audits/AuditsListPage.tsx:148` — heading capitalization conflicts
+  with the dominant sentence-case convention `[C]` (fixed: the audit list states, audit-detail
+  breadcrumb, and programme page use sentence-case “Internal audit” / “Audit programme”; proper
+  role names and operator-entered programme titles remain unchanged).
+- [x] `apps/web/src/features/capa/SpawnCapaModal.tsx:36` — “Spawn CAPA” exposes developer jargon
+  where sibling surfaces use “Raise” `[C]` (fixed: complaint and risk user actions, modal title,
+  submit label, and fallback copy now say “Raise”; stable `spawn-capa` routes, response fields,
+  hooks, and technical component names retain their contract terminology).
+- [x] `apps/web/src/features/document/DocumentDetailPage.tsx:98` — error copy mixes incompatible
+  contraction and retry conventions `[C]` (fixed: a generic detail-load failure uses the shared
+  “Couldn't load…” / “Please try again.” `ErrorState` with a working retry action, while the
+  distinct 403/404 messages and Library return path remain intact).
+- [x] `apps/web/src/features/library/FacetBar.tsx:27` — lifecycle filters/chips expose raw enum
+  values instead of canonical labels `[C]` (fixed: the filter and removable chip reuse the
+  document badge's canonical label mapping, so `InReview` and `UnderRevision` render as “In
+  review” and “Under revision” without changing stable URL values).
+- [x] `apps/web/src/features/risk/RisksRegisterPage.tsx:148` — the risk register has four
+  user-facing names `[C]` (fixed: navigation, page states, lifecycle confirmation, and the Home
+  unpublished summary consistently call it the “Risk & opportunity register”, with normal
+  sentence-context capitalization).
 
 ### ☐ M17 — Test false-PASS traps
 

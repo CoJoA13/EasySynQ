@@ -91,7 +91,7 @@ export function AuditDetailPage() {
     <Container size="xl" py="md">
       <Breadcrumbs mb="sm">
         <Anchor component={Link} to="/audits">
-          Internal Audit
+          Internal audit
         </Anchor>
         <Text>{a.identifier ?? a.id.slice(0, 8)}</Text>
       </Breadcrumbs>

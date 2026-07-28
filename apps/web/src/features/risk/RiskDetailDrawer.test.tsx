@@ -36,7 +36,7 @@ it("shows the score, band, and treatment for a risk", async () => {
   expect(within(dialog).getByText("Roll out the training matrix")).toBeInTheDocument();
 });
 
-it("spawn seam: an unlinked risk with capa.create shows the treat button; spawning links it", async () => {
+it("spawn seam: an unlinked risk with capa.create shows the user-facing raise action; spawning links it", async () => {
   grant("capa.create");
   let spawned = false;
   const unlinked = riskListFixture.data[0]!; // CRITICAL, unlinked
@@ -54,14 +54,14 @@ it("spawn seam: an unlinked risk with capa.create shows the treat button; spawni
   const user = userEvent.setup();
   renderWithProviders(<RiskDetailDrawer riskId={CRITICAL} onClose={noop} headEditable={false} />);
   const dialog = await screen.findByRole("dialog");
-  const treat = await within(dialog).findByRole("button", { name: /treat.*spawn capa/i });
+  const treat = await within(dialog).findByRole("button", { name: /treat.*raise capa/i });
   await user.click(treat);
   // after the spawn + refetch, the linked-CAPA reference appears and the treat button is gone
   await waitFor(() =>
     expect(within(dialog).getByText(/open the linked capa/i)).toBeInTheDocument(),
   );
   expect(
-    within(dialog).queryByRole("button", { name: /treat.*spawn capa/i }),
+    within(dialog).queryByRole("button", { name: /treat.*raise capa/i }),
   ).not.toBeInTheDocument();
 });
 
@@ -72,7 +72,7 @@ it("spawn seam: a linked risk shows the CAPA link and no treat button", async ()
   const link = await within(dialog).findByRole("link", { name: /open the linked capa/i });
   expect(link).toHaveAttribute("href", expect.stringContaining("/capa?capa="));
   expect(
-    within(dialog).queryByRole("button", { name: /treat.*spawn capa/i }),
+    within(dialog).queryByRole("button", { name: /treat.*raise capa/i }),
   ).not.toBeInTheDocument();
 });
 
@@ -87,7 +87,7 @@ it("spawn seam: a linked row keeps its CAPA link even after being reclassified t
     await within(dialog).findByRole("link", { name: /open the linked capa/i }),
   ).toBeInTheDocument();
   expect(
-    within(dialog).queryByRole("button", { name: /treat.*spawn capa/i }),
+    within(dialog).queryByRole("button", { name: /treat.*raise capa/i }),
   ).not.toBeInTheDocument();
 });
 
@@ -98,7 +98,7 @@ it("spawn seam: an opportunity has no corrective-action section", async () => {
   expect(await within(dialog).findByText("Automate the inspection step")).toBeInTheDocument();
   expect(within(dialog).queryByText(/corrective action/i)).not.toBeInTheDocument();
   expect(
-    within(dialog).queryByRole("button", { name: /treat.*spawn capa/i }),
+    within(dialog).queryByRole("button", { name: /treat.*raise capa/i }),
   ).not.toBeInTheDocument();
 });
 
@@ -108,7 +108,7 @@ it("spawn button is hidden without capa.create (gated on the key, never shown to
   const dialog = await screen.findByRole("dialog");
   expect(await within(dialog).findByText(/no corrective action raised/i)).toBeInTheDocument();
   expect(
-    within(dialog).queryByRole("button", { name: /treat.*spawn capa/i }),
+    within(dialog).queryByRole("button", { name: /treat.*raise capa/i }),
   ).not.toBeInTheDocument();
 });
 

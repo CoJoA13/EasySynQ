@@ -73,7 +73,7 @@ export function NotificationHealthPanel() {
 
       {!h.org_email_enabled && (
         <Alert variant="light" color="gray" title="Email delivery is off">
-          Email delivery is off for the organisation — no emails are being sent. The counts below
+          Email delivery is off for the organization — no emails are being sent. The counts below
           stay at zero until you enable email above.
         </Alert>
       )}

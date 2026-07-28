@@ -29,11 +29,9 @@ describe("ConfigAdmin", () => {
     server.use(...statefulConfig({ ...orgConfigFixture, notifications_email_enabled: false }));
     const { container } = renderWithProviders(<ConfigAdmin />);
     expect(
-      await screen.findByRole("switch", { name: "Email delivery (organisation-wide)" }),
+      await screen.findByRole("switch", { name: "Email delivery (organization-wide)" }),
     ).not.toBeChecked();
-    expect(
-      screen.getByRole("switch", { name: "Escalation pierces quiet hours" }),
-    ).toBeChecked();
+    expect(screen.getByRole("switch", { name: "Escalation pierces quiet hours" })).toBeChecked();
     expect(await axe(container)).toHaveNoViolations();
   });
 
@@ -46,14 +44,14 @@ describe("ConfigAdmin", () => {
     );
     const user = userEvent.setup();
     renderWithProviders(<ConfigAdmin />);
-    const sw = await screen.findByRole("switch", { name: "Email delivery (organisation-wide)" });
+    const sw = await screen.findByRole("switch", { name: "Email delivery (organization-wide)" });
     expect(sw).toBeChecked();
     await user.click(sw);
     await user.click(screen.getByRole("button", { name: "Save changes" }));
     await waitFor(() => expect(body).toEqual({ notifications_email_enabled: false }));
     expect(await screen.findByText("Saved.")).toBeInTheDocument();
     expect(
-      screen.getByRole("switch", { name: "Email delivery (organisation-wide)" }),
+      screen.getByRole("switch", { name: "Email delivery (organization-wide)" }),
     ).not.toBeChecked();
   });
 

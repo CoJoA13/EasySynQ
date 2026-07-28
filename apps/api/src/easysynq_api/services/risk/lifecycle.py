@@ -101,7 +101,7 @@ async def start_register_revision(
             status=409,
             code="conflict",
             title="No risk register to revise",
-            detail="create and publish a register first",
+            detail="Create and publish a register first.",
         )
     return await start_revision(session, vault_sink, actor, head)
 
@@ -126,7 +126,7 @@ async def publish_register(
             status=409,
             code="conflict",
             title="No risk register to publish",
-            detail="add a risk before publishing the register",
+            detail="Add a risk before publishing the register.",
         )
     if head.current_state not in _EDITABLE:
         raise ProblemException(
@@ -134,7 +134,8 @@ async def publish_register(
             code="conflict",
             title="Risk register is not editable",
             detail=(
-                f"current_state is {head.current_state.value}; start a revision to publish a change"
+                f"Current state is {head.current_state.value}; "
+                "start a revision to publish a change."
             ),
         )
     working = await _working_register(session, head.id)
@@ -148,7 +149,7 @@ async def publish_register(
             status=409,
             code="conflict",
             title="Risk register has no rows to publish",
-            detail="add at least one risk or opportunity before publishing the register",
+            detail="Add at least one risk or opportunity before publishing the register.",
         )
     latest = await vault_repo.latest_version(session, head.id)
     if register_needs_freeze(
