@@ -352,15 +352,18 @@ permission key
 - [x] `docs/15-api-design.md:524` — documents unshipped NC/complaint promotion endpoints `[C]`
   (fixed: preserve the shipped, idempotent complaint→CAPA route and remove
   `/complaints/{id}/spawn-ncr` plus `/ncrs/{id}/promote-capa`; align the neighboring list/detail
-  filters, expansions, and request shapes with the current CAPA router and OpenAPI).
+  filters, expansions, request shapes, and the replay-time `capa.read` gate with the current CAPA
+  router and OpenAPI).
 - [x] `docs/15-api-design.md:184` — documents unshipped auth-session and `/me/actions` endpoints
-  `[C]` (fixed: document the SPA's direct in-memory OIDC/PKCE relationship with Keycloak, JIT on
-  the first valid bearer request, the absence of API-owned session/refresh/logout routes, the
-  reserved non-enforcing step-up seam, and `/tasks` as the canonical self-scoped work inbox).
+  `[C]` (fixed: document the SPA's direct OIDC/PKCE relationship with Keycloak, its memory-only
+  user/token store and redirect-request state in browser `localStorage`, JIT on the first valid bearer
+  request, the absence of API-owned session/refresh/logout routes, the reserved non-enforcing
+  step-up seam, and `/tasks` as the canonical self-scoped work inbox).
 - [x] `docs/15-api-design.md:457` — documents unshipped task claim/reassign/escalate and workflow
   definition endpoints `[C]` (fixed: inventory only task list/detail/decision plus workflow
-  instance/approval reads, state their real self/candidate or subject-derived gates, and record
-  definitions and manual task mutations as non-public/deferred).
+  instance/approval reads, state their real self/candidate or subject-derived gates, identify
+  `assignee` as an ignored compatibility parameter, and record definitions and manual task
+  mutations as non-public/deferred).
 - [x] `docs/15-api-design.md:339` — names absent permission keys on never-built delete/folder
   routes `[C]` (fixed: identify `folder_path` as a logical document scope value with no entity,
   router, or `folder.*` keys; remove the nonexistent document DELETE/`document.delete`, while

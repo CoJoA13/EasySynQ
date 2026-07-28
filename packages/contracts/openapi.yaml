@@ -3674,7 +3674,13 @@ paths:
       operationId: listTasks
       summary: "My Tasks — tasks assigned to the caller or where the caller is a candidate (self-scoped)."
       parameters:
-        - { name: assignee, in: query, required: false, schema: { type: string, enum: [me] } }
+        - name: assignee
+          in: query
+          required: false
+          description: >-
+            Compatibility no-op. Every value is ignored; the result is always scoped to the caller's
+            assignments and candidate-pool work.
+          schema: { type: string }
         - name: state
           in: query
           required: false
@@ -4546,7 +4552,9 @@ paths:
         Idempotently spawn a CAPA from a complaint (R16). Returns 201 on the first spawn, 200 on an
         idempotent replay (the complaint already spawned — the SAME CAPA is returned; a retry after a
         timed-out first attempt receives 200). severity resolves from the body else the complaint;
-        422 if neither is set. Needs capa.create.
+        422 if neither is set. Every call needs capa.create at the request process scope. A replay
+        additionally needs capa.read at the latched CAPA's own process scope; without it the replay
+        returns 403 instead of the CAPA.
       parameters:
         - { name: complaint_id, in: path, required: true, schema: { type: string, format: uuid } }
       requestBody:
@@ -4561,7 +4569,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Capa" }
         "200":
-          description: The existing CAPA (idempotent replay).
+          description: The existing CAPA after the replay-time capa.read check succeeds.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Capa" }

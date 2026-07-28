@@ -169,10 +169,11 @@ AuthN is brokered entirely by **Keycloak** (`03 §2/§8.3`): local accounts, LDA
 
 ### 5.1 Token handling
 
-| Token | Issuer | Lifetime (Keycloak-configured) | SPA storage | API role |
+| Artifact | Issuer | Lifetime | SPA storage | API role |
 |---|---|---|---|---|
 | Access JWT | Keycloak | short (e.g. 5–15 min) | in-memory | Validated per request against JWKS (signature, `iss`, `aud`, `exp`). Claims read: `sub` (→ `app_user.keycloak_sub`), `realm_access`/group hints, `acr`/`amr` (auth strength), `sid`. **Permissions are NOT taken from the token** — they are resolved server-side per request (§9) so a revocation takes effect immediately, not at token expiry. |
-| OIDC client state (including a provider-issued refresh token when present) | Keycloak | Keycloak-configured | the same in-memory `oidc-client-ts` store; a page reload re-authenticates | Never accepted by an EasySynQ endpoint. Renewal and logout run directly between the SPA and Keycloak. |
+| OIDC user/token bundle (ID token and provider-issued refresh token when present) | Keycloak | Keycloak-configured | in-memory `oidc-client-ts` `userStore`; a page reload discards it and requires re-authentication | Never accepted by an EasySynQ endpoint. Renewal and logout run directly between the SPA and Keycloak. |
+| Authorization-request state (PKCE verifier, nonce, and return path) | SPA / `oidc-client-ts` | one redirect interaction (then removed; stale entries age out) | browser `localStorage` through the library's default `stateStore`, so it survives the full-page Keycloak redirect | Used only to correlate and complete the OIDC callback; never an EasySynQ session or authorization source. |
 
 The JWT `acr`/`amr` (auth-context) is carried onto `signature_event.auth_context` and `audit_event.auth_context` so high-assurance actions (future Part 11 signing, admin config) can demand **step-up** without re-architecting tokens.
 
@@ -462,7 +463,7 @@ atom of the **My Tasks** inbox.
 |---|---|---|---|---|
 | GET | `/workflow-instances/{id}` | `document.read` on the subject | — | `expand=tasks`; returns `current_state`, pinned `definition_version`, and subject. The closed catalog has no `workflow.read`. |
 | GET | `/documents/{id}/approval` | `document.read` (on the subject) | — | **S-web-5 (implemented).** The document → its current approval cycle: the **latest** `workflow_instance` (+ tasks) or `null` when never submitted (calm, not 404). Powers the Approvals stepper. |
-| GET | `/tasks?assignee=me&state=PENDING` | authenticated self | — | Assignments and candidate-pool work for the caller only. Filters: `state`, `type`, and `instance_id`; `assignee=me` is the only accepted value and does not widen scope. |
+| GET | `/tasks?assignee=me&state=PENDING` | authenticated self | — | Assignments and candidate-pool work for the caller only. Filters: `state`, `type`, and `instance_id`; the optional `assignee` string is a compatibility no-op (including values other than `me`) and never widens the self scope. |
 | GET | `/tasks/{id}` | authenticated self | — | Task detail + subject label when the caller is its assignee or a candidate; otherwise sensitive-collapse `404`. |
 | POST | `/tasks/{id}/decision` | subject/outcome-derived | ✓ | `{ outcome:"approve"\|"reject"\|"acknowledge"\|"complete"\|"verify"\|"changes_requested", comment? }`, idempotent via `Idempotency-Key`. Document approval/rejection enforces `document.approve`/`document.review`; DOC_ACK also enforces `document.acknowledge`; CAPA, DCR, management-review, periodic-review, and leadership/improvement branches enforce their live assignee/candidate rules. The service writes the subject-appropriate outcome/audit/signature atoms transactionally. |
 
@@ -522,7 +523,7 @@ Fields: `customer`, `received_at`, `channel`, `description`, `severity`.
 | GET | `/complaints` | `record.read` | — | List the organization's `record_type=COMPLAINT` records; no query filters ship. |
 | POST | `/complaints` | `record.create` | — | `{ customer, received_at, channel, description, severity }`. Creates a `record_type=COMPLAINT` record. |
 | GET | `/complaints/{id}` | `record.read` | — | Complaint fields plus nullable `spawned_capa_id`; there is no expansion parameter. |
-| POST | `/complaints/{id}/spawn-capa` | `capa.create` | — | `{severity?, process_id?}`. Creates a `source=complaint` CAPA whose `Raised` stage cites the complaint and latches `spawned_capa_id`; first call returns `201`, replay returns the same CAPA with `200`. Retry safety comes from that one-CAPA latch, not `Idempotency-Key`. |
+| POST | `/complaints/{id}/spawn-capa` | `capa.create`; replay also `capa.read` | — | `{severity?, process_id?}`. Creates a `source=complaint` CAPA whose `Raised` stage cites the complaint and latches `spawned_capa_id`; the first call returns `201`. A replay re-checks `capa.read` at the latched CAPA's own process scope before returning that CAPA with `200`, so a caller without that independent read grant receives `403`. Retry safety comes from the one-CAPA latch, not `Idempotency-Key`. |
 
 ### 8.10 NCRs (`/ncrs`)
 
@@ -949,7 +950,7 @@ SSE topics: `actions` (My-Actions/`task` changes affecting the caller), `notific
 
 | Concern | Convention |
 |---|---|
-| Auth | Keycloak OIDC + PKCE; the SPA keeps OIDC state in memory and talks directly to Keycloak; the API is a resource server validating access JWTs against JWKS; **permissions resolved server-side, never from the token**. |
+| Auth | Keycloak OIDC + PKCE; the SPA keeps its user/token bundle in memory while `oidc-client-ts` keeps transient redirect-request state in browser `localStorage`, and talks directly to Keycloak; the API is a resource server validating access JWTs against JWKS; **permissions resolved server-side, never from the token**. |
 | Authorization | FastAPI dependency on every route; deny-by-default, deny-wins, SoD against immutable history (§9); list endpoints filter, detail endpoints 403/404 per §9.5. |
 | Idempotency | Retry-sensitive POSTs advertise `Idempotency-Key` explicitly. Task decisions persist the header value in `task.client_token` and replay only on a matching key. |
 | Concurrency | `ETag` + `If-Match` optimistic lock (`412`); document content guarded by the Redis check-out lock (`423`). |
