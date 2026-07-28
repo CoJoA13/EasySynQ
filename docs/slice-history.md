@@ -196,8 +196,8 @@ outline resets.
 
 **Impact.** Web behavior, Vitest/jest-axe coverage, and remediation documentation only; no API
 route, contract, database schema, migration, permission, event, persistence, or task-name change.
-The remediation tracker advances M21 to merged, closes all seven M22 findings, and accounts for the
-complete original inventory: 1 preclosed + 96 merged + 7 in PR = 104; 0 queued.
+The remediation tracker advances M22 to merged, closes all seven M22 findings, and accounts for the
+complete original inventory: 1 preclosed + 103 merged = 104; 0 queued.
 
 **Validation.** `git diff --check`; affected web coverage (**40 passed across 7 files**); full web
 suite (**1,416 passed across 245 files**); web ESLint, strict TypeScript, production build, axe,
