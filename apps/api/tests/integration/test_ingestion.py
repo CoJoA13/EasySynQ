@@ -15,6 +15,7 @@ import pytest
 import sqlalchemy as sa
 from httpx import AsyncClient
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from easysynq_api.config import get_settings
 from easysynq_api.db.models._audit_enums import EventType
@@ -28,6 +29,7 @@ from easysynq_api.db.models._vault_enums import DocumentCurrentState, DocumentKi
 from easysynq_api.db.models.app_user import AppUser, UserStatus
 from easysynq_api.db.models.audit_event import AuditEvent
 from easysynq_api.db.models.authz_grant import PermissionOverride
+from easysynq_api.db.models.blob import Blob
 from easysynq_api.db.models.clause_mapping import ClauseMapping
 from easysynq_api.db.models.document_version import DocumentVersion
 from easysynq_api.db.models.documented_information import DocumentedInformation
@@ -202,14 +204,14 @@ async def test_scan_happy_path(app_client: AsyncClient, token_factory: Callable[
     assert again.status_code == 409
 
 
-def _seed_classifiable() -> None:
+def _seed_classifiable(*, content_suffix: str = "") -> None:
     """Seed a clear SOP (DOCUMENT) + audit report (RECORD) under IA folders for the classifier."""
     root = Path(get_settings().import_source_root)
     proc = root / "Procedures"
     proc.mkdir(exist_ok=True)
     (proc / "SOP-PUR-002 Purchasing.docx").write_text(
         "Standard Operating Procedure Purchasing. supplier and purchasing process steps and "
-        "responsibilities. Revision History. Approved by J Smith"
+        f"responsibilities. Revision History. Approved by J Smith{content_suffix}"
     )
     audits = root / "Records" / "Audits"
     audits.mkdir(parents=True, exist_ok=True)
@@ -748,10 +750,14 @@ async def test_org_isolation_returns_404(
 
 
 async def _proposed_classifiable(
-    app_client: AsyncClient, h: dict[str, str], _stub_tika: None
+    app_client: AsyncClient,
+    h: dict[str, str],
+    _stub_tika: None,
+    *,
+    content_suffix: str = "",
 ) -> tuple[str, dict[str, dict]]:
     """Drive a classifiable corpus to Proposed; return (run_id, {filename: file_row})."""
-    _seed_classifiable()
+    _seed_classifiable(content_suffix=content_suffix)
     run_id = (
         await app_client.post("/api/v1/admin/imports", headers=h, json={"source_root": "."})
     ).json()["id"]
@@ -1454,6 +1460,106 @@ async def _confirm_for_commit(
         },
     )
     assert r2.status_code == 200, r2.text
+
+
+async def test_commit_document_revalidates_blob_after_insert_conflict(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    _stub_tika: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An import first writer must validate the global-sha conflict winner.
+
+    Force the first lookup stale to model a records-domain insert committing after both
+    transactions observed no Blob. Without the post-insert re-read, import creates an Effective
+    document version whose source FK resolves to records-retention bytes.
+    """
+    admin = _subject("avery-blob-race")
+    await _assign_role(admin, "System Administrator")
+    h = _auth(token_factory, admin)
+    run_id, by_name = await _proposed_classifiable(
+        app_client,
+        h,
+        _stub_tika,
+        content_suffix=f" blob-race-{uuid.uuid4().hex}",
+    )
+    sop_row = by_name["SOP-PUR-002 Purchasing.docx"]
+    sop = sop_row["id"]
+    audit = by_name["Internal Audit Report Q2 2023.pdf"]["id"]
+    sha = sop_row["sha256"]
+    assert isinstance(sha, str)
+    identifier = f"SOP-{uuid.uuid4().hex[:6].upper()}-001"
+    await _confirm_for_commit(
+        app_client,
+        h,
+        run_id,
+        sop,
+        audit,
+        doc_identifier=identifier,
+    )
+
+    async with get_sessionmaker()() as s:
+        committer = (
+            await s.execute(select(AppUser).where(AppUser.keycloak_subject == admin))
+        ).scalar_one()
+        s.add(
+            Blob(
+                sha256=sha,
+                org_id=committer.org_id,
+                size_bytes=10,
+                mime_type="application/pdf",
+                bucket=get_settings().s3_bucket_records,
+                object_key=sha,
+                worm_locked=True,
+            )
+        )
+        await s.commit()
+
+    original_get_blob = commit_svc.vault_repo.get_blob
+    target_reads = 0
+
+    async def stale_then_authoritative(
+        session: AsyncSession,
+        requested_sha: str,
+    ) -> Blob | None:
+        nonlocal target_reads
+        if requested_sha == sha:
+            target_reads += 1
+            if target_reads == 1:
+                return None
+        return await original_get_blob(session, requested_sha)
+
+    monkeypatch.setattr(commit_svc.vault_repo, "get_blob", stale_then_authoritative)
+    try:
+        started = await app_client.post(f"/api/v1/admin/imports/{run_id}/commit", headers=h)
+        assert started.status_code == 202, started.text
+        await _drive_commit(uuid.UUID(run_id))
+
+        run = (await app_client.get(f"/api/v1/admin/imports/{run_id}", headers=h)).json()
+        assert run["status"] == "PartiallyCommitted"
+        assert run["counts"]["commit"] == {"committed": 1, "failed": 1}
+        sop_detail = (
+            await app_client.get(f"/api/v1/admin/imports/{run_id}/files/{sop}", headers=h)
+        ).json()
+        assert sop_detail["commit"]["result"] == "failed"
+        assert "source_bytes_in_foreign_bucket" in sop_detail["commit"]["error"]
+        assert target_reads == 2
+
+        async with get_sessionmaker()() as s:
+            blob = await s.get(Blob, sha)
+            assert blob is not None and blob.bucket == get_settings().s3_bucket_records
+            versions = (
+                await s.execute(
+                    select(sa.func.count())
+                    .select_from(DocumentVersion)
+                    .where(DocumentVersion.source_blob_sha256 == sha)
+                )
+            ).scalar_one()
+            assert versions == 0
+    finally:
+        async with get_sessionmaker()() as s:
+            await s.execute(sa.delete(Blob).where(Blob.sha256 == sha))
+            await s.commit()
 
 
 async def test_commit_writes_documents_and_records_to_vault(

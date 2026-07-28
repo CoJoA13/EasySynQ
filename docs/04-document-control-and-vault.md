@@ -78,7 +78,7 @@ Rules the Vault enforces:
 1. **A `document_version` row is immutable once created.** No `UPDATE` of content fields is permitted; the only mutable column on a version is its `version_state` transition (and even that is constrained by the state machine, §3). The blob behind it is WORM in MinIO.
 2. **At most one active Working Draft per Document** (the next-revision-in-progress). It is created on check-out, exists as scratch metadata + an editable source blob, and is "frozen into" a new immutable Version on check-in.
 3. **Authority flows one way:** vault → mirror, vault → index, vault → renditions. Nothing in the mirror, index, or renditions can write back to the version chain.
-4. **Blobs are content-addressed and deduplicated:** identical content (same SHA-256) is stored once; a version references it. Re-uploading unchanged content is detected and surfaced ("no change detected").
+4. **Blobs are content-addressed and deduplicated:** identical content (same SHA-256) is stored once; a version references it. Under D1's single-organization contract, that global content identity owns the row's one canonical bucket/object placement and `org_id` is provenance. Document/record workflows reject cross-bucket retention-domain collisions rather than reusing foreign-domain WORM bytes. Re-uploading unchanged content in the same domain is detected and surfaced ("no change detected").
 5. **Renditions and the index are derived and rebuildable;** only PostgreSQL + MinIO are backup-critical (inherited invariant from doc 03 §5.1/§9).
 
 ### 2.2 Version identity & immutable snapshot contents
@@ -90,7 +90,7 @@ Each Version captures a self-contained, replayable snapshot so that any past sta
 | `rev_label` (e.g. `Rev C`, `v3.0`) | Human revision identity; never reused. |
 | `source_blob_sha256` + `pdf_rendition_sha256` | The exact bytes that were reviewed/approved/effective. |
 | `metadata_snapshot` (JSONB) | Title, type, owner, clause map, process links, classification **as they were** at this revision (later metadata edits create a new revision — see §3.7). |
-| `change_reason` / `change_summary` | Mandatory at check-in; the "why" of the revision (Clause 7.5.2). |
+| `change_reason` + `change_significance` | Mandatory at check-in; the "why" and magnitude of the revision (Clause 7.5.2, INV-3). |
 | `approval_ref` → `signature_event[]` | Who approved, meaning, timestamp, method. |
 | `effective_from` / `effective_to` | When this revision governed (set on Release / Supersession). |
 | `superseded_by_version_id` | Forward link in the supersession chain. |

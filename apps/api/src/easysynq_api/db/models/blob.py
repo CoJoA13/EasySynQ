@@ -2,11 +2,13 @@
 
 Identity **is** the content hash: ``sha256`` (lowercase hex) is the PK, so identical bytes
 are one row globally — that is the point of content-addressing (re-upload of identical bytes
-creates no new blob and, downstream, no new version). ``org_id`` is provenance. Content/identity
-immutable — the ONLY updates are the two D1 operational stamps (``verified_at`` = last passing
-re-hash, S-drift-3; ``verify_failed_at`` = the alarm latch, set on a finding / cleared on a pass,
-sorted first in the rotation sample); WORM object-lock in MinIO backs the storage layer (the
-``documents`` bucket's GOVERNANCE default retention auto-locks on PUT).
+creates no new blob and, downstream, no new version). Under D1's single-organization contract,
+each global identity owns the one ``bucket``/``object_key`` placement stored on its row and
+``org_id`` is provenance; document/record boundaries reject reuse from the other retention domain.
+Content/identity immutable — the ONLY updates are the two D1 operational stamps (``verified_at`` =
+last passing re-hash, S-drift-3; ``verify_failed_at`` = the alarm latch, set on a finding / cleared
+on a pass, sorted first in the rotation sample); WORM object-lock in MinIO backs the storage layer
+(the ``documents`` bucket's GOVERNANCE default retention auto-locks on PUT).
 """
 
 from __future__ import annotations

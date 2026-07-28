@@ -2,12 +2,13 @@
 
 > The running per-slice changelog + the deep per-slice rationale (this file IS the canonical narrative; it
 > also lives in the squash-merge commits). CLAUDE.md holds only the current head pointer.
-> **Migration head: `0079` (next `0080`).** Code: https://github.com/CoJoA13/EasySynQ (`main` protected, PR + green CI).
+> **Migration head: `0080` (next `0081`).** Code: https://github.com/CoJoA13/EasySynQ (`main` protected, PR + green CI).
 > (The pointer had gone stale at `0070` — the 2026-07-22 remediation batches added `0071` audit-chain
 > cursor, `0072` disposition append-only, `0073` pending-blob-purge, `0074` operator alarms and
 > `0075` the audit `scope_ref` index; M5 added `0076`'s import-owner snapshot; M7 added `0077`'s
 > sealed-pack retention policy and `0078`'s record content-hash version; M9 added `0079`'s
-> operational-install coherence repair.)
+> operational-install coherence repair; M10 added `0080`'s dead-field removal and query-path
+> indexes.)
 
 ## ⚠ OPEN RESIDUALS — named, owner-acknowledged, NOT yet done
 
@@ -175,6 +176,44 @@
 **Tests + review.** Unit `test_authz_resource` (`resource_from_doc` populates `framework_id`+`kind`; mutation-distinguishing deny-wins — blanking a field flips DENY→ALLOW) + integration (a FRAMEWORK-scoped `document.read` DENY 403s the detail gate AND hides the row from the library list + search/suggest; an objective-release deny-wins — FRAMEWORK ALLOW + PROCESS DENY on the satellite process → 403; a foundational `process_ids_for_doc`-unions-the-satellite test). diff-critic CLEAN across the satellite + DCR/records passes (proved the swap identical for non-objectives, the TOCTOU correction floor only gets tighter). api unit 1078→1090. (S-scope-tuple, BE, NO migration [head `0070`], NO new key [catalog 102], PR #346 squash `26360bb`.)
 
 ## REMEDIATION — correctness, accessibility, polish & test reliability
+
+### Minor Batch M10 — explicit blob identity contract and live query-path indexes (models + migration + populated migration test + docs; migration `0080` [new head]; NO new permission key [catalog 102]; PR [#390](https://github.com/CoJoA13/EasySynQ/pull/390))
+
+**What shipped.** The reported global-blob-key mismatch was revalidated and rejected as an
+out-of-contract architecture change. D1 is a single-organization deployment, and both the data
+model and `Blob` ORM deliberately define the SHA-256 digest as the global content identity. Each
+identity owns one canonical org/bucket/object placement; existing vault, ingestion, and records
+guards fail closed when the same digest appears from another storage domain so WORM provenance and
+disposition cannot be silently reassigned. The existing foreign-bucket check-in regression pins
+that behavior. PR review caught the concurrency edge behind that claim: the ingestion and records
+first-writer paths could both observe no row, lose `ON CONFLICT DO NOTHING` to the other retention
+domain, and then create a foreign-key reference without examining the winner. Both paths now
+re-read and validate the authoritative row after every conflict-capable blob insert. A design with
+multiple physical placements per digest would require a dedicated placement entity plus
+coordinated changes to backup, verification, retrieval, disposition, purge, and every current blob
+FK, so it remains a separate architecture slice rather than a minor PK edit. The model docs now
+state the actual single-placement invariant.
+
+The nullable `document_version.change_summary` field was genuinely dead: it had no API contract,
+producer, or consumer, while every check-in already enforces `change_reason` and
+`change_significance` as INV-3. Migration `0080` removes the field and refuses to upgrade if any
+unsupported manually inserted non-null summary exists, avoiding silent data loss; downgrade
+restores the nullable compatibility column. The document-control and data-model prose now name the
+enforced fields. The same migration adds plain `record(source_document_id)` and
+`role_assignment(user_id)` indexes with matching ORM metadata. It deliberately adds no assignment
+uniqueness constraint, preserving the existing cardinality.
+
+**Tests.** The disposable-PG16 populated migration regression inserts a live document version with
+unsupported summary data at `0079`, proves `0080` fails before changing the schema, deliberately
+clears that data, and then proves the populated upgrade removes only the dead field and creates
+both indexes. A `0080→0079→0080` cycle verifies the nullable downgrade column, index reversal, row
+survival, and clean re-upgrade; the broader fresh-database head→base→head and ORM-diff gates remain
+the final migration authority. Both live-database gates are clean. API Ruff/format and strict mypy
+over **426 source files** pass; all **81** migration files pass root Ruff/format; the full unit suite
+is green (**1180 passed, 1 expected release-only skip**); and the focused foreign-bucket check-in
+integration regression passes. Two additional mutation-distinguishing integration regressions
+force a stale initial blob lookup over a real conflicting row and prove the records path returns
+423 with no evidence link while ingestion records an isolated failed item with no document version.
 
 ### Minor Batch M9 — populated migration safety and ORM constraint coherence (migrations + CI migration test + docs; migration `0079` [new head]; NO new permission key [catalog 102]; PR [#389](https://github.com/CoJoA13/EasySynQ/pull/389))
 

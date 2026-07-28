@@ -49,6 +49,7 @@ class Record(Base):
             "content_hash_version IN (1, 2)",
             name="ck_record_content_hash_version_supported",
         ),
+        Index("ix_record_source_document_id", "source_document_id"),
         Index("ix_record_source_version_id", "source_version_id"),
         # Beat retention sweep (doc 14 §15.1).
         Index(
