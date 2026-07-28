@@ -123,7 +123,7 @@ async def enqueue_task_notifications(
                         now=_now,
                         event_key=EVENT_TASK_ASSIGNED,
                     )
-    except Exception:  # noqa: BLE001 — best-effort: notification bug must never block transition
+    except Exception:  # best-effort: notification bug must never block transition
         logger.warning("notification.enqueue_failed", exc_info=True)
 
 

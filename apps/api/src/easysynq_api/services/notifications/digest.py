@@ -179,7 +179,7 @@ async def sweep_digests(
                 created = await bundle_user_digest(
                     session, user_id=user_id, settings=settings, now=now
                 )
-        except Exception:  # noqa: BLE001 — one user's failure must not wedge the cohort
+        except Exception:  # one user's failure must not wedge the cohort
             logger.warning(
                 "notifications.digest_user_failed", exc_info=True, extra={"user_id": str(user_id)}
             )

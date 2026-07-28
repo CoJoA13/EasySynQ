@@ -100,7 +100,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     try:
         async with get_sessionmaker()() as _session:
             await ensure_partitions(_session)
-    except Exception:  # noqa: BLE001 - best-effort startup hook; a DB hiccup must not block boot
+    except Exception:  # best-effort startup hook; a DB hiccup must not block boot
         logger.warning("audit.ensure_partitions_on_startup_failed", exc_info=True)
     yield
     await dispose_engine()

@@ -147,7 +147,7 @@ async def fan_out_awareness(
         try:
             async with sessionmaker() as session:
                 n = await process_one_awareness_event(session, event_id=event_id, now=now)
-        except Exception:  # noqa: BLE001 — one event's failure must not wedge the sweep
+        except Exception:  # one event's failure must not wedge the sweep
             logger.warning(
                 "notifications.awareness_event_failed",
                 exc_info=True,
