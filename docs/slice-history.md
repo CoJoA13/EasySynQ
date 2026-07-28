@@ -177,7 +177,7 @@
 
 ## REMEDIATION — correctness, accessibility, polish & test reliability
 
-### Minor Batch M11 — organization-date coherence and bounded audit verification (API + unit/integration + docs; NO migration [head stays `0080`]; NO new permission key [catalog 102]; PR pending)
+### Minor Batch M11 — organization-date coherence and bounded audit verification (API + unit/integration + docs; NO migration [head stays `0080`]; NO new permission key [catalog 102]; PR [#391](https://github.com/CoJoA13/EasySynQ/pull/391))
 
 **What shipped.** Objective attainment and internal-audit lifecycle dates now use the same canonical
 R56 organization clock as the rest of the application. The objective serializer's shared `_today`

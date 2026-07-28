@@ -37,7 +37,7 @@
 | M8 | Vault and retention input guards | 2 | ☑ merged | [#388](https://github.com/CoJoA13/EasySynQ/pull/388) |
 | M9 | Migration and ORM coherence | 4 | ☑ merged | [#389](https://github.com/CoJoA13/EasySynQ/pull/389) |
 | M10 | Schema and index design | 4 | ☑ merged | [#390](https://github.com/CoJoA13/EasySynQ/pull/390) |
-| M11 | Organization time and audit scalability | 3 | ☑ resolved — PR pending | — |
+| M11 | Organization time and audit scalability | 3 | ☑ in PR | [#391](https://github.com/CoJoA13/EasySynQ/pull/391) |
 | M12 | Data-model documentation drift | 5 | ☐ queued — revalidate | — |
 | M13 | API documentation drift | 4 | ☐ queued — revalidate | — |
 | M14 | Infrastructure, deploy, and public edge | 6 | ☐ queued — revalidate | — |
@@ -50,7 +50,7 @@
 | M21 | Web async and error UX | 8 | ☐ queued — revalidate | — |
 | M22 | Web accessibility | 7 | ☐ queued — revalidate | — |
 
-**Accounting: 1 preclosed + 32 merged + 3 resolved pending PR + 68 queued = 104 original findings.**
+**Accounting: 1 preclosed + 32 merged + 3 in PR + 68 queued = 104 original findings.**
 
 ---
 
@@ -294,7 +294,7 @@ tests + docs · no new permission key
   constraint `[C]` (fixed: add only the plain `ix_role_assignment_user_id` index in migration
   `0080` and matching ORM metadata, preserving all existing assignment cardinality).
 
-### ☑ M11 — Organization time and audit scalability
+### ☑ M11 — Organization time and audit scalability — [#391](https://github.com/CoJoA13/EasySynQ/pull/391)
 
 `branch: fix/minor-org-time-audit-scale` · API + unit/integration + docs · no migration and no new
 permission key
