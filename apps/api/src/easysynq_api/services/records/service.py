@@ -350,12 +350,26 @@ async def _attach_evidence(
     staging layer (one server-side copy, no plain-staging hop)."""
     settings = get_settings()
     seen: set[str] = set()
-    shas: list[str] = []
+    normalized_evidence: list[tuple[str, str]] = []
     for raw_sha, content_type in evidence:
         sha256 = raw_sha.lower()
         if sha256 in seen:
             continue
         seen.add(sha256)
+        normalized_evidence.append((sha256, content_type))
+
+    # Capture can attach more than one object. Acquire every physical-object lock in a stable order
+    # before touching storage so two overlapping captures cannot deadlock each other. The locks are
+    # transaction-scoped: ``_commit=False`` callers keep them through their outer atomic commit.
+    for sha256, _content_type in sorted(normalized_evidence):
+        await repo.lock_physical_object(
+            session,
+            bucket=settings.s3_bucket_records,
+            object_key=sha256,
+        )
+
+    shas: list[str] = []
+    for sha256, content_type in normalized_evidence:
         blob = await vault_repo.get_blob(session, sha256)
         if blob is None:
             promoted = await storage.finalize_worm(

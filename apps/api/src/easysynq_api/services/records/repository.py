@@ -554,6 +554,33 @@ async def lock_blob_for_update(session: AsyncSession, blob_sha256: str) -> None:
     await session.execute(select(Blob.sha256).where(Blob.sha256 == blob_sha256).with_for_update())
 
 
+async def lock_physical_object(session: AsyncSession, *, bucket: str, object_key: str) -> None:
+    """Serialize capture and purge for one physical object until transaction end.
+
+    A row lock cannot cover the pending-purge re-capture race because the old ``blob`` row has
+    already been deleted. Both sides instead take the same PostgreSQL transaction advisory lock
+    before either promoting bytes/creating an owner or checking ownership/erasing bytes. The lock
+    is released automatically by commit, rollback, or connection loss. Hash collisions only add
+    harmless serialization; they cannot weaken the exclusion.
+    """
+    identity = f"{bucket}\x1f{object_key}"
+    await session.execute(select(func.pg_advisory_xact_lock(func.hashtext(identity))))
+
+
+async def lock_pending_purge_for_update(session: AsyncSession, purge_id: uuid.UUID) -> bool:
+    """Claim one marker before its physical-object lock.
+
+    The reaper claims marker rows before taking physical-object locks. Immediate purge must use the
+    same order so an overlapping reaper cannot hold the marker while waiting on the object lock
+    that immediate purge holds. ``False`` means another successful path already removed the marker.
+    """
+    return (
+        await session.scalar(
+            select(PendingBlobPurge.id).where(PendingBlobPurge.id == purge_id).with_for_update()
+        )
+    ) is not None
+
+
 async def insert_pending_purge(
     session: AsyncSession,
     *,
