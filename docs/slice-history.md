@@ -173,10 +173,12 @@
 
 **The legal order now reaches every retained copy.** An executed two-person R27 destroy resolves
 every sealed pack whose INCLUDED evidence or synthesized Finding/CAPA dossier embeds the source
-Record, plus the pack Record itself and exact artifact aliases. In the same transaction each header
-moves from `SEALED` to terminal `UNAVAILABLE`, records the source disposition event and invalidation
-time, clears ZIP/portfolio pointers, revokes every live share with a reason/audit event, and
-disposes the registered pack Record through exactly one immutable event hop. Ordinary
+Record, then closes to a fixed point over each selected pack's registered EVIDENCE Record and exact
+artifact aliases. A later pack that copied an earlier pack therefore becomes unavailable in the
+same transaction. Each header moves from `SEALED` to terminal `UNAVAILABLE`, records the source
+disposition event and invalidation time, clears ZIP/portfolio pointers, revokes every live share
+with a reason/audit event, and disposes the registered pack Record through exactly one immutable
+event hop. Ordinary
 retention-driven DESTROY remains deliberately narrower: it preserves the pack's independent
 permanent retention and relies on the conservative destroyed-dependency serve guard.
 
@@ -190,6 +192,9 @@ derivative Blob rows are acquired in one global SHA order. Both artifacts are re
 the database tombstone commits, with Issue-359 physical-object locking and Issue-360
 authority-bound reaper recovery unchanged. A derived marker is accepted only when its target is the
 disposed registered Record of an `UNAVAILABLE` pack invalidated by that exact lawful source event.
+Migration downgrade refuses while derived markers still need that lineage or immutable
+`PACK_INVALIDATED` rows exist; the history-free compatibility mapping uses terminal `SEALED`, not
+retryable `FAILED`.
 Pack Stage 1/2 take an
 organization-scoped shared transaction advisory lock before the pack row; R27 takes the exclusive
 side before its request/source Record and affected pack rows. Build-first therefore seals then gets

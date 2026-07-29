@@ -542,31 +542,41 @@ async def pack_dependency_record_ids(session: AsyncSession, pack: EvidencePack) 
     return dependencies
 
 
-def _artifact_alias_closure(
-    packs: list[EvidencePack], direct_ids: set[uuid.UUID]
+def _pack_invalidation_closure(
+    packs: list[EvidencePack],
+    dependencies_by_pack: dict[uuid.UUID, set[uuid.UUID]],
+    source_record_id: uuid.UUID,
 ) -> set[uuid.UUID]:
-    """Expand direct dependencies across byte-identical ZIP/portfolio pointers."""
-    selected = set(direct_ids)
+    """Close R27 invalidation over nested pack Records and byte-identical artifacts.
+
+    A registered pack Record is ordinary EVIDENCE and can therefore be copied into a later pack.
+    Selecting a pack makes that registered Record another affected source; selecting an artifact
+    alias does the same. Iterate both edges to a fixed point so no outer pack retains bytes copied
+    from a newly invalidated inner pack.
+    """
+    selected: set[uuid.UUID] = set()
+    affected_record_ids = {source_record_id}
     artifact_shas: set[str] = set()
     changed = True
     while changed:
         changed = False
         for pack in packs:
             if pack.id in selected:
-                artifact_shas.update(
-                    sha
-                    for sha in (pack.zip_blob_sha256, pack.portfolio_blob_sha256)
-                    if sha is not None
-                )
-        for pack in packs:
-            if pack.id in selected:
                 continue
-            if any(
+            depends_on_affected_record = bool(dependencies_by_pack[pack.id] & affected_record_ids)
+            aliases_affected_artifact = any(
                 sha is not None and sha in artifact_shas
                 for sha in (pack.zip_blob_sha256, pack.portfolio_blob_sha256)
-            ):
-                selected.add(pack.id)
-                changed = True
+            )
+            if not depends_on_affected_record and not aliases_affected_artifact:
+                continue
+            selected.add(pack.id)
+            if pack.pack_record_id is not None:
+                affected_record_ids.add(pack.pack_record_id)
+            artifact_shas.update(
+                sha for sha in (pack.zip_blob_sha256, pack.portfolio_blob_sha256) if sha is not None
+            )
+            changed = True
     return selected
 
 
@@ -576,9 +586,10 @@ async def affected_sealed_packs_for_r27(
     """Resolve and row-lock every SEALED pack copied from the R27 source.
 
     The caller already holds the organization-exclusive pack-artifact advisory lock. We take pack
-    rows in UUID order, then resolve dependencies from the freshly locked state and close over exact
-    artifact aliases. Locking all SEALED headers in the organization is deliberate: it makes the
-    re-check and alias closure one stable snapshot, and R27 is a rare governance operation.
+    rows in UUID order, then resolve dependencies from the freshly locked state and close over
+    nested registered pack Records plus exact artifact aliases. Locking all SEALED headers in the
+    organization is deliberate: it makes the re-check and closure one stable snapshot, and R27 is
+    a rare governance operation.
     """
     packs = list(
         (
@@ -596,11 +607,14 @@ async def affected_sealed_packs_for_r27(
         .scalars()
         .all()
     )
-    direct_ids: set[uuid.UUID] = set()
-    for pack in packs:
-        if source_record_id in await pack_dependency_record_ids(session, pack):
-            direct_ids.add(pack.id)
-    affected_ids = _artifact_alias_closure(packs, direct_ids)
+    dependencies_by_pack = {
+        pack.id: await pack_dependency_record_ids(session, pack) for pack in packs
+    }
+    affected_ids = _pack_invalidation_closure(
+        packs,
+        dependencies_by_pack,
+        source_record_id,
+    )
     return [pack for pack in packs if pack.id in affected_ids]
 
 

@@ -444,9 +444,10 @@ def test_populated_historical_transitions_and_head_repairs(
                 ).one()
                 assert legacy == (False, None, None, None, True)
 
-            # 0082: a legally erased pack must survive downgrade as an undeliverable FAILED
-            # tombstone. Drop the invalidation CHECK before rewriting the status; erased bytes
-            # cannot be restored. The CHECK must also reject half-populated provenance.
+            # 0082: a legally erased pack must survive downgrade as an undeliverable terminal
+            # SEALED tombstone. FAILED is retryable in the pre-0082 application and would strand
+            # the row in a BUILDING/reaper loop. The downgrade must also refuse while derived
+            # purge authority or an immutable PACK_INVALIDATED event would be lost.
             command.upgrade(config, _PACK_ERASURE_REVISION)
             pack_record_id = uuid.uuid4()
             source_event_id = uuid.uuid4()
@@ -553,13 +554,87 @@ def test_populated_historical_transitions_and_head_repairs(
                     },
                 )
 
+            derived_event_id = uuid.uuid4()
+            derived_purge_id = uuid.uuid4()
+            with engine.begin() as connection:
+                connection.execute(
+                    sa.text(
+                        "INSERT INTO disposition_event "
+                        "(id, org_id, record_id, action, tombstone, approved_by, requested_by, "
+                        "is_worm_destroy, legal_basis, derived_from_disposition_event_id) "
+                        "VALUES (:id, :org, :record, 'DESTROY', true, :approver, :requester, "
+                        "true, 'M361 derived migration proof', :source_event)"
+                    ),
+                    {
+                        "id": derived_event_id,
+                        "org": org_id,
+                        "record": pack_record_id,
+                        "approver": user_id,
+                        "requester": requester_id,
+                        "source_event": source_event_id,
+                    },
+                )
+                connection.execute(
+                    sa.text(
+                        "INSERT INTO pending_blob_purge "
+                        "(id, org_id, sha256, bucket, object_key, bypass_governance, record_id, "
+                        "disposition_event_id) "
+                        "VALUES (:id, :org, :sha, 'records', :key, false, :record, :event)"
+                    ),
+                    {
+                        "id": derived_purge_id,
+                        "org": org_id,
+                        "sha": "derived-" + uuid.uuid4().hex,
+                        "key": uuid.uuid4().hex,
+                        "record": pack_record_id,
+                        "event": derived_event_id,
+                    },
+                )
+            with pytest.raises(sa.exc.DBAPIError, match="derived pending blob purges"):
+                command.downgrade(config, _PURGE_AUTHORITY_REVISION)
+            with engine.begin() as connection:
+                connection.execute(
+                    sa.text("DELETE FROM pending_blob_purge WHERE id = :id"),
+                    {"id": derived_purge_id},
+                )
+                connection.execute(
+                    sa.text("DELETE FROM disposition_event WHERE id = :id"),
+                    {"id": derived_event_id},
+                )
+
+            with engine.begin() as connection:
+                connection.execute(
+                    sa.text(
+                        "INSERT INTO audit_event "
+                        "(org_id, occurred_at, actor_id, actor_type, event_type, object_type, "
+                        "object_id) "
+                        "VALUES (:org, now(), :actor, 'user', 'PACK_INVALIDATED', "
+                        "'evidence_pack', :object_id)"
+                    ),
+                    {
+                        "org": org_id,
+                        "actor": user_id,
+                        "object_id": invalidated_pack_id,
+                    },
+                )
+            with pytest.raises(sa.exc.DBAPIError, match="PACK_INVALIDATED audit events"):
+                command.downgrade(config, _PURGE_AUTHORITY_REVISION)
+            with engine.begin() as connection:
+                connection.execute(
+                    sa.text(
+                        "DELETE FROM audit_event "
+                        "WHERE event_type::text = 'PACK_INVALIDATED' AND object_id = :object_id"
+                    ),
+                    {"object_id": invalidated_pack_id},
+                )
+
             command.downgrade(config, _PURGE_AUTHORITY_REVISION)
             with engine.connect() as connection:
                 downgraded = connection.execute(
                     sa.text("SELECT status::text, error FROM evidence_pack WHERE id = :id"),
                     {"id": invalidated_pack_id},
                 ).one()
-                assert downgraded[0] == "FAILED"
+                assert downgraded[0] == "SEALED"
                 assert "legal erasure" in downgraded[1]
             command.upgrade(config, "head")
             with engine.connect() as connection:
@@ -571,7 +646,7 @@ def test_populated_historical_transitions_and_head_repairs(
                     ),
                     {"id": invalidated_pack_id},
                 ).one()
-                assert reupgraded == ("FAILED", None, None)
+                assert reupgraded == ("SEALED", None, None)
 
             # The downgrade restores a nullable compatibility column and removes only M10's
             # indexes; a clean re-upgrade remains safe with the live version row in place.

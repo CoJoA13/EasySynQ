@@ -16,7 +16,7 @@ from easysynq_api.db.models.evidence_pack import EvidencePack
 from easysynq_api.db.models.record import Record
 from easysynq_api.db.models.worm_destroy_request import WormDestroyRequest
 from easysynq_api.problems import ProblemException
-from easysynq_api.services.packs.repository import _artifact_alias_closure
+from easysynq_api.services.packs.repository import _pack_invalidation_closure
 from easysynq_api.services.records.disposition import (
     _authorized_reaper_bypass,
     _lock_r27_blob_rows,
@@ -107,15 +107,52 @@ def test_r27_authority_rejects_forged_or_deep_lineage() -> None:
     assert not _r27_authority_matches(source, root, request, source_event=None)
 
 
-def test_artifact_alias_closure_is_transitive() -> None:
-    a = EvidencePack(id=uuid.uuid4(), zip_blob_sha256="sha-a", portfolio_blob_sha256="sha-b")
-    b = EvidencePack(id=uuid.uuid4(), zip_blob_sha256="sha-c", portfolio_blob_sha256="sha-a")
-    c = EvidencePack(id=uuid.uuid4(), zip_blob_sha256="sha-c", portfolio_blob_sha256=None)
-    unrelated = EvidencePack(
-        id=uuid.uuid4(), zip_blob_sha256="sha-other", portfolio_blob_sha256=None
+def test_pack_invalidation_closure_spans_aliases_and_nested_pack_records() -> None:
+    source_record_id = uuid.uuid4()
+    a = EvidencePack(
+        id=uuid.uuid4(),
+        pack_record_id=uuid.uuid4(),
+        zip_blob_sha256="sha-a",
+        portfolio_blob_sha256="sha-b",
     )
+    alias = EvidencePack(
+        id=uuid.uuid4(),
+        pack_record_id=uuid.uuid4(),
+        zip_blob_sha256="sha-x",
+        portfolio_blob_sha256="sha-a",
+    )
+    outer = EvidencePack(
+        id=uuid.uuid4(),
+        pack_record_id=uuid.uuid4(),
+        zip_blob_sha256="sha-c",
+        portfolio_blob_sha256=None,
+    )
+    outer_alias = EvidencePack(
+        id=uuid.uuid4(),
+        pack_record_id=uuid.uuid4(),
+        zip_blob_sha256="sha-c",
+        portfolio_blob_sha256=None,
+    )
+    unrelated = EvidencePack(
+        id=uuid.uuid4(),
+        pack_record_id=uuid.uuid4(),
+        zip_blob_sha256="sha-other",
+        portfolio_blob_sha256=None,
+    )
+    dependencies = {
+        a.id: {source_record_id},
+        alias.id: set(),
+        outer.id: {alias.pack_record_id},
+        outer_alias.id: set(),
+        unrelated.id: set(),
+    }
 
-    assert _artifact_alias_closure([a, b, c, unrelated], {a.id}) == {a.id, b.id, c.id}
+    # Deliberately reverse the discovery edges to require more than one pass.
+    assert _pack_invalidation_closure(
+        [outer_alias, outer, alias, a, unrelated],
+        dependencies,
+        source_record_id,
+    ) == {a.id, alias.id, outer.id, outer_alias.id}
 
 
 class _FakeSession:

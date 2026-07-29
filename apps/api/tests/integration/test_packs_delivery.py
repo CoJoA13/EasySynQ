@@ -591,6 +591,164 @@ async def test_r27_destroy_invalidates_and_purges_pack_derivatives(
         )
 
 
+async def test_r27_destroy_closes_over_nested_pack_records(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    """A pack copied into another pack propagates R27 invalidation to the outer artifact.
+
+    Registered pack Records are ordinary EVIDENCE Records. Linking the inner pack Record to a
+    second Process makes its ZIP an INCLUDED member of the outer pack; invalidating only the direct
+    inner pack would leave that derivative copy reachable through the outer pack and old URLs.
+    """
+    requester_subject = _subject("pack-r27-nested-a")
+    approver_subject = _subject("pack-r27-nested-b")
+    requester_id = await _grant(requester_subject, (*_PACK_PERMS, "record.dispose"))
+    await _grant(approver_subject, ("record.read", "record.dispose"))
+    requester_headers = _auth(token_factory, requester_subject)
+    approver_headers = _auth(token_factory, approver_subject)
+    inner_process_id = await _make_process(requester_id, f"Inner-{uuid.uuid4().hex[:8]}")
+    outer_process_id = await _make_process(requester_id, f"Outer-{uuid.uuid4().hex[:8]}")
+    inner_pack_id: uuid.UUID | None = None
+    outer_pack_id: uuid.UUID | None = None
+    inner_pack_record_id: uuid.UUID | None = None
+    outer_pack_record_id: uuid.UUID | None = None
+    rid = ""
+    try:
+        inner_pack_id, rid = await _make_sealed_pack(
+            app_client,
+            requester_headers,
+            inner_process_id,
+        )
+        async with get_sessionmaker()() as s:
+            inner_pack = await s.get(EvidencePack, inner_pack_id)
+            assert inner_pack is not None and inner_pack.pack_record_id is not None
+            inner_pack_record_id = inner_pack.pack_record_id
+
+        await _link_process(
+            app_client,
+            requester_headers,
+            str(inner_pack_record_id),
+            outer_process_id,
+        )
+        created = await app_client.post(
+            "/api/v1/evidence-packs",
+            headers=requester_headers,
+            json={
+                "title": "Outer nested delivery pack",
+                "scope_kind": "PROCESS",
+                "process_ids": [str(outer_process_id)],
+            },
+        )
+        assert created.status_code == 201, created.text
+        outer_pack_id = uuid.UUID(created.json()["id"])
+        await _seal_with_portfolio(outer_pack_id)
+
+        artifact_locations: dict[str, tuple[str, str]] = {}
+        async with get_sessionmaker()() as s:
+            inner_pack = await s.get(EvidencePack, inner_pack_id)
+            outer_pack = await s.get(EvidencePack, outer_pack_id)
+            assert inner_pack is not None and outer_pack is not None
+            assert inner_pack.pack_record_id == inner_pack_record_id
+            assert outer_pack.pack_record_id is not None
+            outer_pack_record_id = outer_pack.pack_record_id
+            assert inner_pack_record_id in await packs_repo.pack_dependency_record_ids(
+                s,
+                outer_pack,
+            )
+            for pack in (inner_pack, outer_pack):
+                assert pack.zip_blob_sha256 is not None
+                assert pack.portfolio_blob_sha256 is not None
+                for sha in (pack.zip_blob_sha256, pack.portfolio_blob_sha256):
+                    blob = await s.get(Blob, sha)
+                    assert blob is not None
+                    artifact_locations[sha] = (blob.bucket, blob.object_key)
+
+        requested = await app_client.post(
+            f"/api/v1/records/{rid}/worm-destroy-requests",
+            headers=requester_headers,
+            json={"legal_basis": "court order PACK-361-NESTED"},
+        )
+        assert requested.status_code == 201, requested.text
+        approved = await app_client.post(
+            f"/api/v1/records/{rid}/worm-destroy-requests/{requested.json()['id']}/approve",
+            headers=approver_headers,
+            json={"reason": "erase every nested derivative"},
+        )
+        assert approved.status_code == 200, approved.text
+
+        for pack_id in (inner_pack_id, outer_pack_id):
+            detail = await app_client.get(
+                f"/api/v1/evidence-packs/{pack_id}",
+                headers=requester_headers,
+            )
+            assert detail.status_code == 200, detail.text
+            assert detail.json()["status"] == "UNAVAILABLE"
+            assert detail.json()["zip_blob_sha256"] is None
+
+        assert inner_pack_record_id is not None and outer_pack_record_id is not None
+        async with get_sessionmaker()() as s:
+            inner_pack = await s.get(EvidencePack, inner_pack_id)
+            outer_pack = await s.get(EvidencePack, outer_pack_id)
+            assert inner_pack is not None and outer_pack is not None
+            assert inner_pack.status is PackStatus.UNAVAILABLE
+            assert outer_pack.status is PackStatus.UNAVAILABLE
+            assert (
+                inner_pack.invalidated_by_disposition_event_id
+                == outer_pack.invalidated_by_disposition_event_id
+            )
+            source_event_id = inner_pack.invalidated_by_disposition_event_id
+            assert source_event_id is not None
+            derived_record_ids = set(
+                (
+                    await s.execute(
+                        select(DispositionEvent.record_id).where(
+                            DispositionEvent.derived_from_disposition_event_id == source_event_id
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            assert derived_record_ids == {inner_pack_record_id, outer_pack_record_id}
+            for record_id in (inner_pack_record_id, outer_pack_record_id):
+                record = await s.get(Record, record_id)
+                assert record is not None
+                assert record.disposition_state is RecordDispositionState.DISPOSED
+            for sha in artifact_locations:
+                assert await s.get(Blob, sha) is None
+
+        for sha, (bucket, object_key) in artifact_locations.items():
+            assert not (await storage.head(object_key, bucket=bucket)).exists, sha
+    finally:
+        record_ids = [uuid.UUID(rid)] if rid else []
+        if inner_pack_record_id is not None:
+            record_ids.append(inner_pack_record_id)
+        if outer_pack_record_id is not None:
+            record_ids.append(outer_pack_record_id)
+        if record_ids:
+            async with get_sessionmaker()() as s:
+                await s.execute(
+                    delete(PendingBlobPurge).where(PendingBlobPurge.record_id.in_(record_ids))
+                )
+                if rid:
+                    await s.execute(
+                        delete(WormDestroyRequest).where(
+                            WormDestroyRequest.record_id == uuid.UUID(rid)
+                        )
+                    )
+                await s.commit()
+        await _delivery_teardown(
+            record_ids=[],
+            pack_id=outer_pack_id,
+            process_id=outer_process_id,
+        )
+        await _delivery_teardown(
+            record_ids=[rid] if rid else [],
+            pack_id=inner_pack_id,
+            process_id=inner_process_id,
+        )
+
+
 async def test_r27_pack_purge_storage_failure_is_reaper_recoverable(
     app_client: AsyncClient,
     token_factory: Callable[..., str],

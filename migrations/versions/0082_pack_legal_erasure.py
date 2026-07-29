@@ -89,13 +89,51 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # A rollback cannot restore erased bytes. Keep those packs failed/undeliverable rather than
-    # leaving a status label an older application cannot deserialize.
+    # Refuse before mutating anything when rollback would discard the only durable information an
+    # older application needs to finish legal erasure, or expose an enum value that it cannot
+    # deserialize. Operators must reap derived work and retain 0082-compatible application code
+    # once an immutable PACK_INVALIDATED event exists.
+    op.execute(
+        """
+        DO $$
+        BEGIN
+            IF EXISTS (
+                SELECT 1
+                FROM pending_blob_purge AS purge
+                JOIN disposition_event AS event
+                  ON event.id = purge.disposition_event_id
+                WHERE event.derived_from_disposition_event_id IS NOT NULL
+            ) THEN
+                RAISE EXCEPTION
+                    'Cannot downgrade 0082: derived pending blob purges must be reaped first';
+            END IF;
+        END $$;
+        """
+    )
+    op.execute(
+        """
+        DO $$
+        BEGIN
+            IF EXISTS (
+                SELECT 1
+                FROM audit_event
+                WHERE event_type::text = 'PACK_INVALIDATED'
+            ) THEN
+                RAISE EXCEPTION
+                    'Cannot downgrade 0082: PACK_INVALIDATED audit events require compatible code';
+            END IF;
+        END $$;
+        """
+    )
+
+    # A rollback cannot restore erased bytes. SEALED is the only pre-0082 terminal state, so retain
+    # the missing artifact pointers and disposed pack Record as an undeliverable tombstone without
+    # exposing the retry loop that FAILED would permit.
     op.drop_constraint(_INVALIDATION_CHECK, "evidence_pack", type_="check")
     op.execute(
         """
         UPDATE evidence_pack
-        SET status = 'FAILED',
+        SET status = 'SEALED',
             error = COALESCE(
                 error,
                 'Pack invalidated by legal erasure; erased artifacts were not restored'

@@ -104,9 +104,11 @@ discovery read that immutable snapshot, not current correction pointers. Legacy 
 the current relation only when the target Record existed no later than `generated_at`.
 
 The R27 transaction resolves affected `SEALED` packs in its organization, locks them in stable UUID
-order, and re-checks the dependency after locking. Artifact-SHA closure also includes any pack that
-points at the exact same ZIP or portfolio bytes: content-addressed equality means it is another
-copy of the artifact, even if reached through a different header.
+order, and re-checks the dependency after locking. Resolution is a fixed point: once a pack is
+selected, its registered `pack_record_id` becomes another affected Record, because that ordinary
+EVIDENCE Record may be an INCLUDED member of a later pack. Artifact-SHA aliases participate in the
+same loop, and an alias-selected pack likewise contributes its registered Record. Thus nested packs
+and content-addressed aliases cannot retain a derivative copy behind a single-pass discovery.
 
 DRAFT and FAILED packs contain no sealed copy and are not invalidated. A BUILDING pack cannot cross
 the exclusive legal-erasure lock; it either finishes before discovery or observes the committed
@@ -159,6 +161,14 @@ If storage deletion fails, the pack is already unavailable, its database pointer
 gone, and an authority-bound marker durably schedules the remaining byte erase. The only residual
 reachability is an already-issued direct S3 URL until the marker reaper succeeds; that storage
 outage case is explicit and recoverable rather than silently reported as complete.
+
+Migration `0082` refuses downgrade before changing schema when any pending purge marker references
+a derived disposition event: dropping that event's source link would make the pre-0082 reaper
+discard the only lawful retry authority. It also refuses once an immutable `PACK_INVALIDATED` audit
+event exists because the additive PostgreSQL enum label cannot be removed and pre-0082 Python code
+cannot deserialize such a row. If neither history class exists, a compatibility-only
+`UNAVAILABLE` header is mapped to pre-0082 terminal `SEALED`, with erased artifact pointers left
+null and an explanatory error; it is never mapped to retryable `FAILED`.
 
 ## 8. Verification
 

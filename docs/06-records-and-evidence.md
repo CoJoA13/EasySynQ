@@ -447,14 +447,20 @@ sequenceDiagram
 > references, and correction identifiers. The dossier-only set is persisted exactly at seal in
 > `embedded_record_ids_at_seal`; legacy seals use a `generated_at`-bounded compatibility resolver,
 > preventing a later correction pointer from rewriting the frozen dependency graph. Affected
-> sealed headers retain their membership, seal, summaries, and audit history as a tombstone but
-> move to terminal `UNAVAILABLE`; their artifact pointers are cleared, all live share rows are
-> revoked, and `PACK_INVALIDATED` records the source request/event lineage. The ZIP uses the normal
-> Record purge; the portfolio uses the same content-addressed last-live-owner rule, where archived
-> or transferred Records remain owners unless a destructive disposition event exists. The source
-> and complete derivative Blob set is locked in global SHA order. Physical removal remains
-> purge-after-commit and reaper-backstopped, so an object-store outage leaves no application route
-> to the bytes and a durable, lawfully bound retry.
+> sealed packs form a fixed-point closure: every selected pack's registered EVIDENCE Record becomes
+> another dependency source, so a later pack that copied an earlier pack is invalidated too;
+> byte-identical artifact aliases participate in the same closure. Headers retain their membership,
+> seal, summaries, and audit history as a tombstone but move to terminal `UNAVAILABLE`; their
+> artifact pointers are cleared, all live share rows are revoked, and `PACK_INVALIDATED` records the
+> source request/event lineage. The ZIP uses the normal Record purge; the portfolio uses the same
+> content-addressed last-live-owner rule, where archived or transferred Records remain owners unless
+> a destructive disposition event exists. The source and complete derivative Blob set is locked in
+> global SHA order. Physical removal remains purge-after-commit and reaper-backstopped, so an
+> object-store outage leaves no application route to the bytes and a durable, lawfully bound retry.
+> Migration `0082` refuses downgrade while a derived purge marker still needs that lineage or any
+> immutable `PACK_INVALIDATED` audit row exists. In the no-history compatibility case, an
+> `UNAVAILABLE` row maps to pre-0082 terminal `SEALED` with null artifact pointers, never retryable
+> `FAILED`.
 
 ### 7.5 Whole-vault portable export (distinct from Evidence Packs)
 
