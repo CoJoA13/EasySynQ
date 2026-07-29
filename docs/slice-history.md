@@ -168,6 +168,27 @@
 
 ## REMEDIATION — correctness, accessibility, polish & test reliability
 
+### Issue #334 — source delegated register facets from caller-visible report data (web + docs; NO API/contract change; NO migration [head stays `0080`]; NO new permission key [catalog 102]; closes [#334](https://github.com/CoJoA13/EasySynQ/issues/334))
+
+**Permission-safe facet sourcing.** The Controlled Document Register now derives its Process and
+Clause choice universes from the distinct `process_links` and `clause_refs` in one unfiltered
+register result that has already passed both `report.read` and `document.read`. The unfiltered query
+stays as a stable React Query baseline while the filtered register uses the existing server-side
+filter grammar, so selecting one facet cannot make unrelated choices disappear. An unfiltered page
+shares and deduplicates the same `{}` query.
+
+`GET /processes` and `GET /clauses` are now optional label enrichments rather than authorization
+prerequisites. A delegated PROCESS-scoped report reader can name its scoped process from
+`provenance.process_scope`, fall back safely to a visible process id, and select every clause number
+present in its rows even when both catalog calls return 403. The shared Library `FacetBar` accepts a
+register-supplied clause universe without changing Library behavior.
+
+**No ghost filters.** A Process or Clause URL value is applied only after the caller-visible baseline
+proves it representable. Stale/bookmarked values outside that boundary are never sent to the report
+API and are removed from the URL. Tests prove both positive facets under denied catalogs, natural
+deduplication/sorting, option membership from visible rows only, interactive and bookmarked filter
+wiring, and the negative stale-value guards for both facets.
+
 ### Issue #332 — interpret date-only effective bounds in the organization timezone (API + web + OpenAPI + integration + docs; NO migration [head stays `0080`]; NO new permission key [catalog 102]; closes [#332](https://github.com/CoJoA13/EasySynQ/issues/332); PR [#409](https://github.com/CoJoA13/EasySynQ/pull/409))
 
 **Shared parser correction.** `filter[effective_from][gte|lte]=YYYY-MM-DD` now means a calendar date

@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { axe } from "jest-axe";
 import { describe, expect, it } from "vitest";
+import { useLocation } from "react-router-dom";
 import { renderWithProviders } from "../../test/render";
 import { server } from "../../test/msw/server";
 import { ReportsRegisterPage } from "./ReportsRegisterPage";
@@ -65,6 +66,10 @@ const REG: DocumentControlRegister = {
     },
   ],
 } satisfies DocumentControlRegister;
+
+function QueryProbe() {
+  return <output aria-label="Current query">{useLocation().search}</output>;
+}
 
 describe("ReportsRegisterPage", () => {
   it("renders the provenance banner + a register row", async () => {
@@ -181,25 +186,62 @@ describe("ReportsRegisterPage", () => {
     );
   });
 
-  // Codex round 4 (P2): a reader with report.read + scoped document.read but WITHOUT process.read
-  // gets an empty GET /processes — rendering the Select anyway would offer an unusable empty facet.
-  // Mutation-distinguishing: if ProcessSelect rendered unconditionally, the "not present" assertion
-  // below would fail (the empty Select would still render, just with no options).
-  it("hides the Process facet when useProcesses() has no options", async () => {
-    server.use(
-      http.get("/api/v1/reports/document-control", () => HttpResponse.json(REG)),
-      http.get("/api/v1/processes", () => HttpResponse.json([])),
-    );
+  // #334: option membership comes from the permission-filtered report, not the broader process
+  // catalog. Even though the default MSW catalog has Purchasing, no visible row links a process.
+  it("hides the Process facet when no caller-visible report row links a process", async () => {
+    const reg: DocumentControlRegister = {
+      ...REG,
+      rows: REG.rows.map((row) => ({ ...row, process_links: [] })),
+    };
+    server.use(http.get("/api/v1/reports/document-control", () => HttpResponse.json(reg)));
     renderWithProviders(<ReportsRegisterPage />);
     await screen.findByText("SOP-QA-001");
     expect(screen.queryByRole("textbox", { name: "Process" })).not.toBeInTheDocument();
   });
 
-  it("shows the Process facet when useProcesses() has options", async () => {
-    server.use(http.get("/api/v1/reports/document-control", () => HttpResponse.json(REG)));
+  // Acceptance proof: the seeded Process Owner has PROCESS-scoped report.read but no process.read
+  // or clauseMap.read. The report rows + process_scope provenance still make both facets usable;
+  // the denied catalogs are label enhancements only, never option authorities.
+  it("populates Process and Clause facets from report data for a delegated reader", async () => {
+    const user = userEvent.setup();
+    const seenUrls: string[] = [];
+    const scopedReg: DocumentControlRegister = {
+      ...REG,
+      provenance: {
+        ...REG.provenance,
+        process_scope: [{ id: "pr000001-0001-0001-0001-000000000001", name: "Purchasing" }],
+      },
+    };
+    server.use(
+      http.get("/api/v1/reports/document-control", ({ request }) => {
+        seenUrls.push(request.url);
+        return HttpResponse.json(scopedReg);
+      }),
+      http.get("/api/v1/processes", () =>
+        HttpResponse.json({ title: "Forbidden" }, { status: 403 }),
+      ),
+      http.get("/api/v1/clauses", () => HttpResponse.json({ title: "Forbidden" }, { status: 403 })),
+    );
     renderWithProviders(<ReportsRegisterPage />);
     await screen.findByText("SOP-QA-001");
-    expect(await screen.findByRole("textbox", { name: "Process" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("textbox", { name: "Process" }));
+    await user.click(await screen.findByRole("option", { name: "Purchasing" }));
+    await waitFor(() =>
+      expect(seenUrls.at(-1)).toContain(
+        "filter%5Bprocess_id%5D%5Beq%5D=pr000001-0001-0001-0001-000000000001",
+      ),
+    );
+
+    await user.click(screen.getByRole("textbox", { name: "Clause" }));
+    await user.click(await screen.findByRole("option", { name: "7.5.3" }));
+    await waitFor(() => {
+      const latest = seenUrls.at(-1) ?? "";
+      expect(latest).toContain(
+        "filter%5Bprocess_id%5D%5Beq%5D=pr000001-0001-0001-0001-000000000001",
+      );
+      expect(latest).toContain("filter%5Bclause_refs%5D%5Bhas%5D=7.5.3");
+    });
   });
 
   // FIX 2 (Codex round 5, P2): the provenance banner must render `generated_at` in the ORG
@@ -220,36 +262,42 @@ describe("ReportsRegisterPage", () => {
     expect(screen.queryByText(/2026-06-19/)).not.toBeInTheDocument();
   });
 
-  // FIX 3 (Codex round 5, P2): a bookmarked/copied `?process=` URL must not silently narrow the
-  // register when the process facet is un-representable (useProcesses() returned no options) —
-  // the round-4 fix already hides the ProcessSelect control in that case, but the URL value was
-  // still being applied to the outbound request with no visible control to see or clear it.
-  // Mutation-distinguishing: fails if `filters.process_id` is set unconditionally from the URL.
-  it("does not apply a stale ?process= URL filter when the process facet is unavailable (FIX 3)", async () => {
+  // #334: a catalog entry is not enough to make a URL facet representable; only values present in
+  // the permission-filtered baseline may narrow the report. This unknown id is never sent.
+  it("does not apply a stale ?process= URL filter absent from report data", async () => {
     const seenUrls: string[] = [];
     server.use(
       http.get("/api/v1/reports/document-control", ({ request }) => {
         seenUrls.push(request.url);
         return HttpResponse.json(REG);
       }),
-      http.get("/api/v1/processes", () => HttpResponse.json([])),
     );
-    renderWithProviders(<ReportsRegisterPage />, {
-      route: "/?process=pr000001-0001-0001-0001-000000000001",
-    });
+    renderWithProviders(
+      <>
+        <ReportsRegisterPage />
+        <QueryProbe />
+      </>,
+      { route: "/?process=pr999999-9999-9999-9999-999999999999" },
+    );
     await screen.findByText("SOP-QA-001");
-    expect(seenUrls.at(-1)).not.toContain("filter%5Bprocess_id%5D");
+    await waitFor(() =>
+      expect(screen.getByLabelText("Current query")).not.toHaveTextContent("process="),
+    );
+    expect(seenUrls.every((url) => !url.includes("filter%5Bprocess_id%5D"))).toBe(true);
   });
 
-  // The flip side: with processes present, a `?process=` URL value IS applied (keeps the existing
-  // facet-change test's contract intact for a pre-set URL, not just an interactive click).
-  it("applies a ?process= URL filter when the process facet is available", async () => {
+  // The flip side: a process id present in a visible baseline row is applied even when the separate
+  // process catalog is forbidden.
+  it("applies a ?process= URL filter when report data represents it", async () => {
     const seenUrls: string[] = [];
     server.use(
       http.get("/api/v1/reports/document-control", ({ request }) => {
         seenUrls.push(request.url);
         return HttpResponse.json(REG);
       }),
+      http.get("/api/v1/processes", () =>
+        HttpResponse.json({ title: "Forbidden" }, { status: 403 }),
+      ),
     );
     renderWithProviders(<ReportsRegisterPage />, {
       route: "/?process=pr000001-0001-0001-0001-000000000001",
@@ -259,6 +307,46 @@ describe("ReportsRegisterPage", () => {
       expect(seenUrls.at(-1)).toContain(
         "filter%5Bprocess_id%5D%5Beq%5D=pr000001-0001-0001-0001-000000000001",
       ),
+    );
+  });
+
+  // The former process-only URL guard is deliberately generalized to clause: 8.4 exists in the
+  // catalog fixture, but not in any caller-visible REG row, so it must never be applied invisibly.
+  it("does not apply a stale ?clause= URL filter absent from report data", async () => {
+    const seenUrls: string[] = [];
+    server.use(
+      http.get("/api/v1/reports/document-control", ({ request }) => {
+        seenUrls.push(request.url);
+        return HttpResponse.json(REG);
+      }),
+    );
+    renderWithProviders(
+      <>
+        <ReportsRegisterPage />
+        <QueryProbe />
+      </>,
+      { route: "/?clause=8.4" },
+    );
+    await screen.findByText("SOP-QA-001");
+    await waitFor(() =>
+      expect(screen.getByLabelText("Current query")).not.toHaveTextContent("clause="),
+    );
+    expect(seenUrls.every((url) => !url.includes("filter%5Bclause_refs%5D"))).toBe(true);
+  });
+
+  it("applies a ?clause= URL filter when report data represents it", async () => {
+    const seenUrls: string[] = [];
+    server.use(
+      http.get("/api/v1/reports/document-control", ({ request }) => {
+        seenUrls.push(request.url);
+        return HttpResponse.json(REG);
+      }),
+      http.get("/api/v1/clauses", () => HttpResponse.json({ title: "Forbidden" }, { status: 403 })),
+    );
+    renderWithProviders(<ReportsRegisterPage />, { route: "/?clause=7.5.3" });
+    await screen.findByText("SOP-QA-001");
+    await waitFor(() =>
+      expect(seenUrls.at(-1)).toContain("filter%5Bclause_refs%5D%5Bhas%5D=7.5.3"),
     );
   });
 

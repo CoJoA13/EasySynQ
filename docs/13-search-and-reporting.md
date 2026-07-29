@@ -421,6 +421,14 @@ report requires `report.read`, and each row must independently satisfy both `rep
 seven Document states; a row does not switch to `document.read_draft` or `document.read_obsolete`
 because its status changes. State-scoped predicates on the `document.read` grant remain authoritative.
 
+The on-screen Process and Clause facet choices are the distinct `process_links` / `clause_refs`
+present in an **unfiltered register materialized through that same permission boundary**. This keeps
+the choice universe stable while filters are active and makes the facets usable for a delegated
+PROCESS-scoped `report.read` holder who lacks the separate `process.read` / `clauseMap.read` catalog
+permissions. Those catalogs may enrich a visible choice's label, but they never add choices or decide
+whether a URL filter is applicable. A bookmarked Process/Clause value absent from the caller-visible
+baseline is removed and is never sent as a hidden report filter.
+
 | Column | Source |
 |---|---|
 | Document identifier (doc code) | `identifier` |
