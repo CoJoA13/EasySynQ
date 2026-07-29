@@ -168,7 +168,7 @@
 
 ## REMEDIATION — correctness, accessibility, polish & test reliability
 
-### Issue #334 — source delegated register facets from caller-visible report data (web + docs; NO API/contract change; NO migration [head stays `0080`]; NO new permission key [catalog 102]; closes [#334](https://github.com/CoJoA13/EasySynQ/issues/334))
+### Issue #334 — source delegated register facets from caller-visible report data (web + docs; NO API/contract change; NO migration [head stays `0080`]; NO new permission key [catalog 102]; closes [#334](https://github.com/CoJoA13/EasySynQ/issues/334); PR [#410](https://github.com/CoJoA13/EasySynQ/pull/410))
 
 **Permission-safe facet sourcing.** The Controlled Document Register now derives its Process and
 Clause choice universes from the distinct `process_links` and `clause_refs` in one unfiltered
