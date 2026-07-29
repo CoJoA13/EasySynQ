@@ -169,7 +169,7 @@
 
 ## REMEDIATION — correctness, accessibility, polish & test reliability
 
-### Issue #361 — physically erase sealed Evidence Pack derivatives under R27 (API + migration + integration + docs; migration `0082` [new head]; NO new permission key [catalog 102]; closes [#361](https://github.com/CoJoA13/EasySynQ/issues/361); PR pending)
+### Issue #361 — physically erase sealed Evidence Pack derivatives under R27 (API + migration + integration + docs; migration `0082` [new head]; NO new permission key [catalog 102]; closes [#361](https://github.com/CoJoA13/EasySynQ/issues/361); PR [#413](https://github.com/CoJoA13/EasySynQ/pull/413))
 
 **The legal order now reaches every retained copy.** An executed two-person R27 destroy resolves
 every sealed pack whose INCLUDED evidence or synthesized Finding/CAPA dossier embeds the source

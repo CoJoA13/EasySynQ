@@ -90,6 +90,6 @@ The owner approved this plan before production implementation.
 - [x] Migration round trip + populated smoke + `alembic check`.
 - [x] Redocly contract lint and response-contract sweep.
 - [x] `git diff --check` and adversarial branch-diff review; fold only verified findings.
-- [ ] Commit intentionally, push, and open a ready (not draft) PR closing Issue #361.
+- [x] Commit intentionally, push, and open a ready (not draft) PR closing Issue #361.
 - [ ] Respond to and resolve addressed review threads.
 - [ ] Monitor all PR checks and a fresh Codex review through completion; do not merge.
