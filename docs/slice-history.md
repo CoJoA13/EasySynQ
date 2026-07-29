@@ -179,18 +179,23 @@ ordering can leave live record evidence pointing at bytes the stale marker remov
 
 **Transaction and lock-order safety.** Commit, rollback, connection loss, and the reaper's explicit
 storage-failure rollback release the lock automatically. Capture normalizes and de-duplicates all
-evidence first, then acquires its complete lock set in sorted object-key order before any blob lookup
-or storage promotion; correction/import callers using `_commit=False` retain those locks through
-their outer atomic transaction. Immediate purge claims its marker row before the physical lock,
-matching the reaper's marker-row → object-lock order and preventing those two consumers from
-deadlocking. The key includes the bucket, preserving Issue #360's rule that the marker SHA is
-untrusted diagnostic data and equal content in another bucket is a distinct object.
+evidence first, resolves PostgreSQL's actual `hashtext` values, and acquires the de-duplicated numeric
+lock keys in sorted order before any blob lookup or storage promotion. Sorting raw object keys is
+insufficient because a collision can invert the effective order. Correction/import callers using
+`_commit=False` retain those locks through their outer atomic transaction. Immediate purge claims
+its marker row before the physical lock; the reaper re-claims every batch snapshot before that same
+lock because each prior per-marker commit/rollback releases the batch's original row claims. This
+keeps every consumer on marker-row → object-lock order. The key includes the bucket, preserving
+Issue #360's rule that the marker SHA is untrusted diagnostic data and equal content in another
+bucket is a distinct object.
 
 **Regression proof.** One Docker-backed, two-mode concurrency test strands a lawful R27 marker,
 pauses immediate purge or reaper recovery after the no-owner check, and starts a byte-identical
 capture in a second PostgreSQL session. It proves that capture is waiting on an advisory lock, then
 releases purge and verifies the recaptured object, live `blob` row, and `evidence_blob` link survive
-while the stale marker is removed.
+while the stale marker is removed. Additional tests prove immediate/reaper overlap cannot invert the
+row/object order, every later reaper snapshot is reclaimed in a new transaction, and colliding
+resolved advisory keys are de-duplicated and sorted by their actual numeric value.
 
 ### Issue #360 — bind pending-purge recovery to lawful disposition authority (API + migration + integration + docs; migration `0081` [new head]; NO new permission key [catalog 102]; closes [#360](https://github.com/CoJoA13/EasySynQ/issues/360); PR [#411](https://github.com/CoJoA13/EasySynQ/pull/411))
 

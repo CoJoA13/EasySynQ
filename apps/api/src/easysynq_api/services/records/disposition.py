@@ -908,6 +908,12 @@ async def reap_pending_blob_purges(session: AsyncSession) -> dict[str, int]:
         ]
         handled.update(marker.purge_id for marker in todo)
         for marker in todo:
+            # A prior per-marker commit/rollback released every row claim from the original batch.
+            # Reclaim this snapshot before the object lock so immediate purge and every reaper
+            # iteration preserve the same marker-row → physical-object order.
+            if not await repo.lock_pending_purge_for_update(session, marker.purge_id):
+                await session.rollback()
+                continue
             await repo.lock_physical_object(
                 session,
                 bucket=marker.bucket,

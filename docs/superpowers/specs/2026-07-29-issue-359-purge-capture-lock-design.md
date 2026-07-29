@@ -31,21 +31,25 @@ The lock is transaction-scoped:
 - a database commit or rollback always releases it;
 - a crashed connection releases it;
 - no application-managed unlock path can strand a session-level lock;
-- hash collisions can only add harmless serialization, not weaken correctness.
+- PostgreSQL's actual `hashtext` values are resolved, de-duplicated, and numerically sorted before
+  multi-object acquisition, so hash collisions can only add harmless serialization.
 
 ## 3. Capture boundary
 
-`_attach_evidence` normalizes and de-duplicates the evidence inputs, then acquires every unique
-records-bucket object lock in sorted object-key order before its first `blob` lookup. It holds those
-locks across:
+`_attach_evidence` normalizes and de-duplicates the evidence inputs, resolves their actual
+PostgreSQL `hashtext` advisory keys, de-duplicates collisions, and acquires those numeric keys in
+sorted order before its first `blob` lookup. Sorting raw object keys is insufficient: a collision
+can make overlapping captures acquire the effective lock set in opposite orders. It holds the locks
+across:
 
 - the WORM `finalize_worm` promotion;
 - the conflict-safe `blob` insert and authoritative re-read;
 - the `evidence_blob` insert; and
 - the enclosing capture transaction's commit.
 
-Sorted acquisition prevents two multi-evidence captures with opposite input ordering from
-deadlocking. The content-hash manifest remains order-independent and unchanged.
+Actual-key acquisition prevents two multi-evidence captures with opposite input ordering or a
+32-bit hash collision from deadlocking. The content-hash manifest remains order-independent and
+unchanged.
 
 `capture_record(_commit=False)` deliberately retains the locks for its caller's larger
 transaction. The correction and ingestion callers already commit or roll back that transaction;
@@ -62,6 +66,9 @@ The reaper already claims marker rows with `FOR UPDATE SKIP LOCKED`. Immediate p
 claims its specific marker row before taking the physical-object lock as well. That common
 marker-row → object-lock order prevents an immediate-purge/reaper deadlock; a missing marker means
 the competing path already completed the work, so immediate purge returns without replaying it.
+Because the reaper commits or rolls back per marker, that transaction end releases every other row
+claim from the original batch. It therefore re-claims each snapshot immediately before taking its
+physical-object lock, skipping a snapshot whose marker a competing consumer already removed.
 
 They hold it through either:
 

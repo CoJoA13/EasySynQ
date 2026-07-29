@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import uuid
+from collections.abc import Iterable
 
 from sqlalchemy import and_, asc, delete, desc, func, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -554,17 +555,34 @@ async def lock_blob_for_update(session: AsyncSession, blob_sha256: str) -> None:
     await session.execute(select(Blob.sha256).where(Blob.sha256 == blob_sha256).with_for_update())
 
 
-async def lock_physical_object(session: AsyncSession, *, bucket: str, object_key: str) -> None:
-    """Serialize capture and purge for one physical object until transaction end.
+async def lock_physical_objects(session: AsyncSession, objects: Iterable[tuple[str, str]]) -> None:
+    """Serialize capture and purge for physical objects until transaction end.
 
     A row lock cannot cover the pending-purge re-capture race because the old ``blob`` row has
     already been deleted. Both sides instead take the same PostgreSQL transaction advisory lock
     before either promoting bytes/creating an owner or checking ownership/erasing bytes. The lock
-    is released automatically by commit, rollback, or connection loss. Hash collisions only add
-    harmless serialization; they cannot weaken the exclusion.
+    is released automatically by commit, rollback, or connection loss.
+
+    Resolve PostgreSQL's actual 32-bit ``hashtext`` keys first, then de-duplicate and sort those
+    numeric keys before acquiring any lock. Sorting raw object names is insufficient: two different
+    names can collide, and overlapping multi-object captures could otherwise acquire the collided
+    key and a non-colliding key in opposite orders. With actual-key ordering, collisions add only
+    harmless serialization; they cannot weaken the exclusion or introduce a deadlock.
     """
-    identity = f"{bucket}\x1f{object_key}"
-    await session.execute(select(func.pg_advisory_xact_lock(func.hashtext(identity))))
+    lock_keys: set[int] = set()
+    for bucket, object_key in objects:
+        identity = f"{bucket}\x1f{object_key}"
+        lock_key = await session.scalar(select(func.hashtext(identity)))
+        if lock_key is None:  # PostgreSQL hashtext(non-NULL text) is total; fail closed on drift.
+            raise RuntimeError("PostgreSQL returned no physical-object advisory lock key")
+        lock_keys.add(int(lock_key))
+    for lock_key in sorted(lock_keys):
+        await session.execute(select(func.pg_advisory_xact_lock(lock_key)))
+
+
+async def lock_physical_object(session: AsyncSession, *, bucket: str, object_key: str) -> None:
+    """Single-object convenience wrapper for ``lock_physical_objects``."""
+    await lock_physical_objects(session, ((bucket, object_key),))
 
 
 async def lock_pending_purge_for_update(session: AsyncSession, purge_id: uuid.UUID) -> bool:

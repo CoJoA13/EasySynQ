@@ -11,7 +11,7 @@ so a stale marker can never erase newly captured evidence.
 - No migration, permission-key, endpoint, response-schema, or OpenAPI change.
 - Preserve purge-after-commit, authority-bound recovery, and R27 dual control.
 - Preserve exact-object ownership semantics from Issue #360.
-- Acquire multiple capture locks in deterministic sorted order.
+- Resolve, de-duplicate, and sort the actual PostgreSQL advisory keys before multi-lock capture.
 - Integration assertions must be run-scoped and deterministic.
 
 ## Task 1 — deterministic regression proof
@@ -21,6 +21,8 @@ so a stale marker can never erase newly captured evidence.
 - [x] Prove the competing capture waits on a PostgreSQL advisory lock.
 - [x] Assert bytes, the live `blob` row, and the new evidence link survive.
 - [x] Mutation-verify that removing either side's lock makes the test fail.
+- [x] Prove later reaper snapshots are re-claimed after the prior per-marker transaction ends.
+- [x] Prove resolved hash collisions are de-duplicated and sorted by actual advisory key.
 
 ## Task 2 — shared physical-object lock
 
@@ -31,7 +33,7 @@ so a stale marker can never erase newly captured evidence.
 ## Task 3 — capture serialization
 
 - [x] Normalize/de-duplicate evidence before DB/storage work.
-- [x] Acquire all unique records-object locks in sorted order.
+- [x] Resolve and acquire all unique PostgreSQL advisory keys in numeric sorted order.
 - [x] Hold them through WORM promotion, blob/evidence inserts, and enclosing commit.
 - [x] Preserve `_commit=False` composition for correction and ingestion.
 
@@ -40,6 +42,7 @@ so a stale marker can never erase newly captured evidence.
 - [x] Acquire the same lock before `_purge_marked` checks ownership.
 - [x] Claim the immediate-purge marker first so it matches the reaper's row→object lock order.
 - [x] Acquire it before the reaper checks ownership or validates authority.
+- [x] Re-claim every later reaper snapshot after per-marker commit/rollback releases batch claims.
 - [x] Hold it through S3 purge, marker deletion, and commit.
 - [x] Roll back a failed reaper purge before continuing so the xact lock is released.
 

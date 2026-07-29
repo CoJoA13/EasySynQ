@@ -1354,6 +1354,83 @@ async def test_reaper_completes_stranded_purge(
         await _cleanup(pol)
 
 
+async def test_reaper_reclaims_every_marker_after_per_marker_commit(
+    app_client: AsyncClient,
+    token_factory: Callable[..., str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Each later batch snapshot regains its row lock before the physical-object lock.
+
+    ``list_pending_purges`` initially claims both rows, but committing the first purge releases the
+    second claim. Mutation distinction: without the per-snapshot reclaim, neither marker is
+    recorded here and the second one can reintroduce the immediate-purge/reaper lock inversion.
+    """
+    subject = _subject("reaper-reclaims")
+    user_id = await _grant(subject, _DISPOSITION_PERMS)
+    approver_id = await _grant(_subject("reaper-reclaims-approver"), _DISPOSITION_PERMS)
+    org_id = await _org_id(user_id)
+    h = _auth(token_factory, subject)
+    pol = await _seed_policy(org_id, action=DispositionAction.DESTROY, review_required=True)
+    try:
+        shas = [
+            await _upload_evidence(
+                app_client,
+                h,
+                f"reaper-reclaims-{index}-{uuid.uuid4().hex}".encode(),
+            )
+            for index in range(2)
+        ]
+        rid = (
+            await _capture(
+                app_client,
+                h,
+                record_type="CALIBRATION",
+                title="reaper reclaims",
+                retention_policy_id=str(pol),
+                evidence=[{"sha256": sha, "content_type": "application/pdf"} for sha in shas],
+            )
+        ).json()["id"]
+        async with get_sessionmaker()() as s:
+            record = await s.get(Record, uuid.UUID(rid))
+            assert record is not None
+            specs = await _mark_r27_for_crash(
+                s,
+                record,
+                requested_by=user_id,
+                approved_by=approver_id,
+            )
+            await s.commit()
+        assert len(specs) == 2
+
+        real_claim = disposition.repo.lock_pending_purge_for_update
+        claims: list[tuple[uuid.UUID, int]] = []
+
+        async def _record_claim(session: AsyncSession, purge_id: uuid.UUID) -> bool:
+            claimed = await real_claim(session, purge_id)
+            if claimed:
+                txid = int(await session.scalar(text("SELECT txid_current()")) or 0)
+                claims.append((purge_id, txid))
+            return claimed
+
+        monkeypatch.setattr(
+            disposition.repo,
+            "lock_pending_purge_for_update",
+            _record_claim,
+        )
+        async with get_sessionmaker()() as s:
+            summary = await disposition.reap_pending_blob_purges(s)
+
+        claimed_tx_by_id = dict(claims)
+        target_ids = {spec.purge_id for spec in specs}
+        assert target_ids <= claimed_tx_by_id.keys()
+        assert len({claimed_tx_by_id[purge_id] for purge_id in target_ids}) == 2
+        assert summary["reaped"] >= 2
+        for sha in shas:
+            assert not (await storage.head(sha, bucket=storage._records_bucket())).exists
+    finally:
+        await _cleanup(pol)
+
+
 async def test_reaper_completes_ordinary_policy_purge_without_bypass(
     app_client: AsyncClient,
     token_factory: Callable[..., str],

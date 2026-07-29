@@ -358,15 +358,14 @@ async def _attach_evidence(
         seen.add(sha256)
         normalized_evidence.append((sha256, content_type))
 
-    # Capture can attach more than one object. Acquire every physical-object lock in a stable order
-    # before touching storage so two overlapping captures cannot deadlock each other. The locks are
-    # transaction-scoped: ``_commit=False`` callers keep them through their outer atomic commit.
-    for sha256, _content_type in sorted(normalized_evidence):
-        await repo.lock_physical_object(
-            session,
-            bucket=settings.s3_bucket_records,
-            object_key=sha256,
-        )
+    # Capture can attach more than one object. Resolve, de-duplicate, and sort the ACTUAL PostgreSQL
+    # advisory keys before acquiring any lock, so even a hash collision cannot invert lock order.
+    # The locks are transaction-scoped: ``_commit=False`` callers keep them through the outer
+    # commit.
+    await repo.lock_physical_objects(
+        session,
+        ((settings.s3_bucket_records, sha256) for sha256, _content_type in normalized_evidence),
+    )
 
     shas: list[str] = []
     for sha256, content_type in normalized_evidence:
